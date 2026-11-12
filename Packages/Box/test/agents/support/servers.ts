@@ -99,8 +99,10 @@ process.stdin.on("data", (chunk) => {
      * its tools' calls (`calls`: it went down partway). */
     notesDown: false as false | "start" | "calls",
     /** The notes server doesn't start, though it answers: an error for its start (`error`), its
-     * company's sign-in page (`redirect`: it sends you there), or nothing at all (`hangs`). */
-    notesStart: undefined as undefined | "error" | "redirect" | "hangs",
+     * company's sign-in page (`redirect`: it sends you there), its address on another host
+     * (`elsewhere`), or nothing at all (`hangs`). Or it does, in its own way: at its address with a
+     * slash (`moved`, a 307 there), or as a stream it keeps open after (`stream`). */
+    notesStart: undefined as undefined | "error" | "redirect" | "elsewhere" | "hangs" | "moved" | "stream",
     /** Your sign-in to the tracker never runs out (the engine keeps none for when). */
     noExpiry: false,
     /** The command server's command, as its settings name it. */
@@ -114,14 +116,20 @@ process.stdin.on("data", (chunk) => {
           const message: any = await request.json().catch(() => ({}))
           // Your sign-in, once it ran out, it turns down.
           if (fake.expiring && request.headers.get("authorization") === `Bearer ${KEYS.tracker}`) return new Response("Expired.", { status: 401 })
-          const path = new URL(request.url).pathname
+          const path = new URL(request.url).pathname.replace(/^\/notes\/$/, "/notes")
           if (path === "/login") return new Response("<html>Sign in to your company</html>", { headers: { "Content-Type": "text/html" } })
           if (path === "/notes" && (fake.notesDown === "start" || (fake.notesDown === "calls" && message.method === "tools/call"))) return new Response("Down.", { status: 500 })
           if (path === "/notes" && message.method === "initialize" && fake.notesStart) {
             if (fake.notesStart === "error") return Response.json({ jsonrpc: "2.0", id: message.id, error: { code: -32603, message: "Its workspace is gone." } })
             if (fake.notesStart === "redirect") return new Response(null, { status: 302, headers: { Location: `http://127.0.0.1:${remote!.port}/login` } })
+            if (fake.notesStart === "elsewhere") return new Response(null, { status: 307, headers: { Location: `http://localhost:${remote!.port}/notes` } })
+            if (fake.notesStart === "moved" && new URL(request.url).pathname === "/notes") return new Response(null, { status: 307, headers: { Location: "/notes/" } })
+            if (fake.notesStart === "stream") {
+              const started = `event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "remote", version: "1" } } })}\n\n`
+              return new Response(new ReadableStream({ start: (controller) => controller.enqueue(new TextEncoder().encode(started)) }), { headers: { "Content-Type": "text/event-stream", "mcp-session-id": "remote-1" } })
+            }
             // (Until the server stops.)
-            return new Promise<Response>(() => {})
+            if (fake.notesStart === "hangs") return new Promise<Response>(() => {})
           }
           // One taken back, every sign-in but the one you made again.
           const turnedDown = fake.refusing === "start" || (fake.refusing === "calls" && message.method === "tools/call")

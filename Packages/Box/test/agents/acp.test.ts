@@ -127,7 +127,20 @@ async function startAll(list) {
     let why
     try {
       const started = await fetch(server.url, { method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "agent", version: "1" } } }) })
-      const answer = started.ok ? await started.json().catch(() => null) : null
+      // (A stream read up to its first event, as MCP's clients do: a server may keep it open.)
+      const first = async () => {
+        if (!(started.headers.get("content-type") ?? "").includes("text/event-stream")) return started.json()
+        const reader = started.body.getReader()
+        let text = ""
+        while (!text.includes("\\n\\n")) {
+          const next = await reader.read()
+          if (next.done) break
+          text += new TextDecoder().decode(next.value)
+        }
+        reader.cancel()
+        return JSON.parse(text.split("\\n").find((line) => line.startsWith("data:")).slice(5))
+      }
+      const answer = started.ok ? await first().catch(() => null) : null
       if (!started.ok) why = started.status === 401 ? "Unauthorized" : "HTTP " + started.status
       else if (!answer || answer.error) why = answer?.error?.message ?? "no answer"
     } catch (error) {
@@ -165,6 +178,7 @@ async function attempt(how, place, through) {
       const headers = { ...Object.fromEntries(server.headers.map((each) => [each.name, each.value])), "Content-Type": "application/json", Accept: "application/json, text/event-stream" }
       const started = await fetch(server.url, { method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "agent", version: "1" } } }) })
       if (!started.ok) return "no"
+      await started.body?.cancel()
       const session = started.headers.get("mcp-session-id")
       const response = await fetch(server.url, { method: "POST", headers: { ...headers, ...(session ? { "mcp-session-id": session } : {}) }, body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: tool, arguments: tool === "env" ? { name: argument } : { path: argument } } }) })
       if (!response.ok) return "no"
@@ -1238,9 +1252,10 @@ describe.skipIf(!canFence)("The computer's MCP servers, for an ACP agent in the 
   for (const [how, said] of [
     ["error", "The notes server couldn't start (Its workspace is gone.)"],
     ["redirect", "The notes server couldn't be reached (HTTP 302: it sent elsewhere, perhaps to sign in)"],
+    ["elsewhere", "The notes server couldn't be reached (HTTP 307: it sent elsewhere, perhaps to sign in)"],
     ["hangs", "The notes server couldn't be reached (no answer)"],
   ] as const) {
-    test(`one that doesn't start though it answers (${how === "error" ? "an error for its start" : how === "redirect" ? "it sends you to a sign-in page" : "nothing, in time"}) doesn't stop the turn`, async () => {
+    test(`one that doesn't start though it answers (${{ error: "an error for its start", redirect: "it sends you to a sign-in page", elsewhere: "it sends you to another site", hangs: "nothing, in time" }[how]}) doesn't stop the turn`, async () => {
       servers.notesStart = how
       const timing = { ...relayTiming }
       relayTiming.starts = relayTiming.check = 300
@@ -1253,6 +1268,34 @@ describe.skipIf(!canFence)("The computer's MCP servers, for an ACP agent in the 
       }
     })
   }
+
+  for (const [how, what] of [["moved", "at its address with a slash (a 307 there)"], ["stream", "as a stream it keeps open after"]] as const) {
+    test(`one that starts in its own way (${what}) is reached`, async () => {
+      servers.notesStart = how
+      const id = await run(startingAll({ notes: ["server", "notes"] }))
+      expect(words(id)).toBe(`notes=auth:none,key:${KEYS.notes},at:/notes`)
+    })
+  }
+
+  test("one still not answering at the next message doesn't hold the message up: it's checked on meanwhile", async () => {
+    servers.notesDown = "start"
+    // (The agent tries nothing itself at its prompts: only its start reaches the server.)
+    const id = await run(startingAll({}))
+    expect(ended(id)).toMatchObject({ type: "idle", outcome: "succeeded" })
+    // Now it hangs: the next message goes on long before the check would end (a minute).
+    servers.notesDown = false
+    servers.notesStart = "hangs"
+    const timing = { ...relayTiming }
+    relayTiming.starts = 60_000
+    relayTiming.check = 100
+    try {
+      send(id, "again")
+      await settled(id, 2)
+      expect(ended(id)).toMatchObject({ type: "idle", outcome: "succeeded" })
+    } finally {
+      Object.assign(relayTiming, timing)
+    }
+  })
 
   test("one that couldn't be reached as the agent started is given to it afresh at the next message once it answers again", async () => {
     servers.notesDown = "start"

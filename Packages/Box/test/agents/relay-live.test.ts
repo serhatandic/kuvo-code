@@ -7,6 +7,9 @@
 // as Integrations adds it) is a stand-in MCP server that turns down every sign-in but the one made
 // again. Skipped unless OPENCODE_TEST_BINARY names the engine.
 //
+// A live check, run by hand on an engine update, outside the deterministic suites: it waits on the
+// real engine as it connects (polling, with a deadline), as the other live tests do.
+//
 // Run with `OPENCODE_TEST_BINARY=<opencode> bun test test/agents/relay-live.test.ts`.
 
 import "../safety"

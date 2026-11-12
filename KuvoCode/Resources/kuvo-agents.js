@@ -7347,7 +7347,8 @@ var running = new Map;
 var standIns = new Map;
 var refusals = new Map;
 var setRight = new Map;
-var relayTiming = { starts: 15000, commandStarts: 30000, check: 5000 };
+var checks = new Map;
+var relayTiming = { starts: 15000, commandStarts: 30000, check: 1000 };
 var IDLE = 60 * 60000;
 setInterval(() => {
   for (const program of running.values())
@@ -7391,16 +7392,31 @@ function relayedServers(sessionID, holder, directory, found) {
 var setupOf = (server) => JSON.stringify(server.kind === "remote" ? [server.url, server.headers] : [server.command, server.env, server.cwd]);
 async function serversKey(sessionID, found) {
   retireChanged(sessionID, found);
-  const checking = new Map;
+  const waiting = new Set;
   for (const standIn of standIns.values()) {
     const now = found.servers.find((each) => each.name === standIn.name);
-    if (standIn.sessionID !== sessionID || standIn.signIn || !now || checking.has(standIn.name))
+    if (standIn.sessionID !== sessionID || standIn.signIn || !now)
       continue;
-    checking.set(standIn.name, answers(now, sessionID, served.get(sessionID)?.directory));
+    const at = `${sessionID}
+${standIn.name}`;
+    let check = checks.get(at);
+    if (!check) {
+      const name = standIn.name;
+      check = answers(now, sessionID, served.get(sessionID)?.directory).then((started) => {
+        checks.delete(at);
+        if (started)
+          retire(sessionID, name);
+        return started;
+      });
+      checks.set(at, check);
+    }
+    waiting.add(check);
   }
-  for (const [name, check] of checking)
-    if (await check)
-      retire(sessionID, name);
+  if (waiting.size) {
+    let timer;
+    await Promise.race([Promise.all(waiting), new Promise((resolve) => timer = setTimeout(resolve, relayTiming.check))]);
+    clearTimeout(timer);
+  }
   const times = [...setRight.get(sessionID) ?? []].sort(([a], [b]) => a.localeCompare(b));
   return times.length ? `${found.key} ${JSON.stringify(times)}` : found.key;
 }
@@ -7433,18 +7449,20 @@ async function answers(entry, sessionID, directory) {
     const started = startServer(entry, sessionID, directory);
     if (typeof started === "string")
       return false;
-    const answer = await started.send(initialize, relayTiming.check, "check");
+    const answer = await started.send(initialize, Math.min(entry.timeout, relayTiming.commandStarts), "check");
     started.stop();
     return Boolean(answer?.result) && !answer.error;
   }
   try {
-    const signal = AbortSignal.timeout(relayTiming.check);
-    const response = await fetch(entry.url, { method: "POST", headers: { ...entry.headers, "Content-Type": "application/json", Accept: "application/json, text/event-stream" }, body: JSON.stringify(initialize), redirect: "manual", signal });
-    const started = response.ok ? await startedBy(response, 1) : `HTTP ${response.status}`;
+    const signal = AbortSignal.timeout(Math.min(entry.timeout, relayTiming.starts));
+    const response = await fetchHere(entry.url, { method: "POST", headers: { ...entry.headers, "Content-Type": "application/json", Accept: "application/json, text/event-stream" }, body: JSON.stringify(initialize), signal });
+    const started = response.ok ? await readStart(response, 1) : { failure: `HTTP ${response.status}`, body: null };
+    if (started.body instanceof ReadableStream)
+      await started.body.cancel().catch(() => {});
     const session = response.headers.get("mcp-session-id");
     if (session)
-      fetch(entry.url, { method: "DELETE", headers: { ...entry.headers, "mcp-session-id": session }, redirect: "manual", signal: AbortSignal.timeout(relayTiming.check) }).catch(() => {});
-    return started === undefined;
+      fetchHere(response.url || entry.url, { method: "DELETE", headers: { ...entry.headers, "mcp-session-id": session }, signal: AbortSignal.timeout(relayTiming.starts) }).catch(() => {});
+    return started.failure === undefined;
   } catch {
     return false;
   }
@@ -7525,7 +7543,7 @@ async function forward(request, url, headers, timeout, body, failed) {
   }
   try {
     const signal = request.method === "POST" ? AbortSignal.any([request.signal, AbortSignal.timeout(timeout)]) : request.signal;
-    const response = await fetch(url, { method: request.method, headers: sent, body, signal, redirect: "manual" });
+    const response = await fetchHere(url, { method: request.method, headers: sent, body, signal });
     const back = new Headers;
     for (const name of ["content-type", "mcp-session-id"]) {
       const value = response.headers.get(name);
@@ -7535,6 +7553,21 @@ async function forward(request, url, headers, timeout, body, failed) {
     return new Response(response.body, { status: response.status, headers: back });
   } catch {
     return new Response(failed, { status: 502 });
+  }
+}
+async function fetchHere(url, init) {
+  let at = new URL(url);
+  for (let hops = 0;; hops++) {
+    const response = await fetch(at, { ...init, redirect: "manual" });
+    const location = response.headers.get("location");
+    if (![307, 308].includes(response.status) || !location || hops >= 3)
+      return response;
+    const next = new URL(location, at);
+    const sameSite = next.hostname === at.hostname && (next.protocol === at.protocol ? next.port === at.port : at.protocol === "http:" && next.protocol === "https:");
+    if (!sameSite)
+      return response;
+    await response.body?.cancel();
+    at = next;
   }
 }
 async function sendAll(program, body, timeout, connection, starts) {
@@ -7560,7 +7593,7 @@ function whyNot(name, status, started) {
   const what = status === 502 ? "no answer" : status >= 300 && status < 400 ? `HTTP ${status}: it sent elsewhere, perhaps to sign in` : `HTTP ${status}`;
   return `The ${name} server couldn't be reached (${what}), so its tools aren't available for now`;
 }
-function notStarted(text, type, id) {
+function startOf(text, type, id) {
   const messages = [];
   const add = (data) => {
     const parsed = jsonOf(data);
@@ -7578,16 +7611,69 @@ function notStarted(text, type, id) {
     add(text);
   const answer = messages.find((message) => message && typeof message === "object" && message.id === id && (("result" in message) || ("error" in message)));
   if (!answer)
-    return "its answer isn't an MCP server's";
-  if (answer.error || !answer.result || typeof answer.result !== "object")
-    return typeof answer.error?.message === "string" ? answer.error.message : "it said no";
-  return;
-}
-async function startedBy(response, id) {
-  const text = await response.text().catch(() => {
     return;
-  });
-  return text === undefined ? "no answer" : notStarted(text, response.headers.get("content-type"), id);
+  if (answer.error || !answer.result || typeof answer.result !== "object") {
+    const said = typeof answer.error?.message === "string" ? answer.error.message.trim() : "it said no";
+    return { failure: said.length > 200 ? `${said.slice(0, 200)}\u2026` : said };
+  }
+  return {};
+}
+async function readStart(response, id) {
+  const type = response.headers.get("content-type");
+  const notOne = "its answer isn't an MCP server's";
+  if (!type?.includes("text/event-stream") || !response.body) {
+    const text = await response.text().catch(() => {
+      return;
+    });
+    if (text === undefined)
+      return { failure: "no answer", body: null };
+    return { failure: (startOf(text, type, id) ?? { failure: notOne }).failure, body: text };
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder;
+  const read = [];
+  let text = "";
+  for (;; ) {
+    let next;
+    try {
+      next = await reader.read();
+    } catch {
+      return { failure: "no answer", body: null };
+    }
+    if (next.value) {
+      read.push(next.value);
+      text += decoder.decode(next.value, { stream: true });
+    }
+    const start = startOf(text, type, id);
+    if (start?.failure || !start && next.done) {
+      await reader.cancel().catch(() => {});
+      return { failure: start?.failure ?? notOne, body: null };
+    }
+    if (!start)
+      continue;
+    const done = next.done;
+    const body = new ReadableStream({
+      start(controller) {
+        for (const chunk of read)
+          controller.enqueue(chunk);
+        if (done)
+          controller.close();
+      },
+      async pull(controller) {
+        try {
+          const more = await reader.read();
+          if (more.done)
+            controller.close();
+          else
+            controller.enqueue(more.value);
+        } catch (error) {
+          controller.error(error);
+        }
+      },
+      cancel: () => reader.cancel().catch(() => {})
+    });
+    return { body };
+  }
 }
 var jsonOf = (text) => {
   try {
@@ -7667,13 +7753,15 @@ async function answerServer(request, sessionID, name) {
     const sent = body === undefined ? undefined : jsonOf(body);
     const messages = sent === undefined ? [] : Array.isArray(sent) ? sent : [sent];
     const initialize = messages.find((message) => message?.method === "initialize");
-    const limit = (server) => initialize ? Math.min(server.timeout, relayTiming.starts) : server.timeout;
-    let current = entry.expires !== undefined && entry.expires < Date.now() + 60000 ? await renewed(sessionID, session, name) ?? entry : entry;
+    const deadline = Date.now() + relayTiming.starts;
+    const limit = (server) => initialize ? Math.max(1, Math.min(server.timeout, deadline - Date.now())) : server.timeout;
+    const renewing = () => initialize ? inTime(renewed(sessionID, session, name), deadline) : renewed(sessionID, session, name);
+    let current = entry.expires !== undefined && entry.expires < Date.now() + 60000 ? await renewing() ?? entry : entry;
     let answer = await forward(request, current.url, current.headers, limit(current), body, failed);
     const at = `${sessionID}
 ${name}`;
     const retried = async () => {
-      const again = await renewed(sessionID, session, name);
+      const again = await renewing();
       if (!again || setupOf(again) === setupOf(current))
         return;
       await answer.body?.cancel();
@@ -7695,15 +7783,13 @@ ${name}`;
       }
     }
     if (initialize) {
-      let text;
       let why;
+      let started = null;
       if (answer.ok) {
-        text = await answer.text().catch(() => {
-          return;
-        });
-        const failure = text === undefined ? "no answer" : notStarted(text, answer.headers.get("content-type"), initialize.id);
-        if (failure)
-          why = whyNot(name, answer.status, failure);
+        const start = await readStart(answer, initialize.id);
+        if (start.failure)
+          why = whyNot(name, answer.status, start.failure);
+        started = start.body;
       } else {
         await answer.body?.cancel();
         why = whyNot(name, answer.status);
@@ -7711,7 +7797,7 @@ ${name}`;
       if (why)
         return standInFor(sessionID, name, setupOf(current), why, messages, Array.isArray(sent), answer.status === 401);
       reached(sessionID, name);
-      return new Response(text, { status: answer.status, headers: answer.headers });
+      return new Response(started, { status: answer.status, headers: answer.headers });
     }
     if (messages.length && failing(answer.status)) {
       await answer.body?.cancel();
@@ -7763,6 +7849,15 @@ ${fresh}`;
   if (!program || program.stopped)
     return new Response("No such connection here.", { status: 404 });
   return sendAll(program, body, entry.timeout, connection, false);
+}
+async function inTime(work, deadline) {
+  let timer;
+  const late = new Promise((resolve) => timer = setTimeout(() => resolve(undefined), Math.max(0, deadline - Date.now())));
+  try {
+    return await Promise.race([work, late]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 async function renewed(sessionID, session, name) {
   const found = (await computerServers(session.directory, true)).servers.find((each) => each.name === name);
@@ -27917,4 +28012,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 275722cceb6d5a5d41cac97f2406d5d11441990b7f0404d805e040cd6baf8de1
+// Built from Packages/Box/src/agents d55a1c57b0e0f71959fae6c1fd30412f51acda70e7f4b81f86e2e06e5f6ef5d3

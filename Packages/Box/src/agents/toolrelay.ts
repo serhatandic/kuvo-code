@@ -47,11 +47,14 @@ const standIns = new Map<string, { sessionID: string; name: string; setup: strin
 const refusals = new Map<string, { setup: string; asked: Promise<void> }>()
 /** How many times each session's server was set right after the relay stood in for it, by name. */
 const setRight = new Map<string, Map<string, number>>()
+/** Whether each session's server that wasn't there answers now, being checked, by session and name: one check at a time. */
+const checks = new Map<string, Promise<boolean>>()
 
 /** How long a server has to start as an agent connects, before the agent goes on without it (some
  * give up their whole session well before a server's own time); a command's longer, as it may fetch
- * its package the first time. And how long one that wasn't there has to answer at the next turn. */
-export const relayTiming = { starts: 15_000, commandStarts: 30_000, check: 5_000 }
+ * its package the first time. And how long an agent's next message waits for word on whether one
+ * that wasn't there answers now (the check goes on without it, for the message after). */
+export const relayTiming = { starts: 15_000, commandStarts: 30_000, check: 1_000 }
 
 /** A command's server no connection has used for an hour is stopped (an agent that started again
  * has a new one), as the engine stops its own; one it comes back to it starts again. */
@@ -129,13 +132,29 @@ const setupOf = (server: ComputerServer) => JSON.stringify(server.kind === "remo
  */
 export async function serversKey(sessionID: string, found: ComputerServers): Promise<string> {
   retireChanged(sessionID, found)
-  const checking = new Map<string, Promise<boolean>>()
+  const waiting = new Set<Promise<boolean>>()
   for (const standIn of standIns.values()) {
     const now = found.servers.find((each) => each.name === standIn.name)
-    if (standIn.sessionID !== sessionID || standIn.signIn || !now || checking.has(standIn.name)) continue
-    checking.set(standIn.name, answers(now, sessionID, served.get(sessionID)?.directory))
+    if (standIn.sessionID !== sessionID || standIn.signIn || !now) continue
+    const at = `${sessionID}\n${standIn.name}`
+    let check = checks.get(at)
+    if (!check) {
+      const name = standIn.name
+      check = answers(now, sessionID, served.get(sessionID)?.directory).then((started) => {
+        checks.delete(at)
+        if (started) retire(sessionID, name)
+        return started
+      })
+      checks.set(at, check)
+    }
+    waiting.add(check)
   }
-  for (const [name, check] of checking) if (await check) retire(sessionID, name)
+  // (Briefly: one that doesn't answer at once is checked on, for the next message.)
+  if (waiting.size) {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    await Promise.race([Promise.all(waiting), new Promise((resolve) => (timer = setTimeout(resolve, relayTiming.check)))])
+    clearTimeout(timer)
+  }
   const times = [...(setRight.get(sessionID) ?? [])].sort(([a], [b]) => a.localeCompare(b))
   return times.length ? `${found.key} ${JSON.stringify(times)}` : found.key
 }
@@ -159,24 +178,26 @@ function retire(sessionID: string, name: string) {
   times.set(name, (times.get(name) ?? 0) + 1)
 }
 
-/** Whether a server that wasn't there starts now (in a moment): connected to, and let go. */
+/** Whether a server that wasn't there starts now (as an agent's start would have it): connected
+ * to, and let go. */
 async function answers(entry: ComputerServer, sessionID: string, directory: string | undefined): Promise<boolean> {
   const initialize = { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "kuvo-code", version: "1" } } }
   if (entry.kind === "local") {
     if (!directory) return false
     const started = startServer(entry, sessionID, directory)
     if (typeof started === "string") return false
-    const answer: any = await started.send(initialize, relayTiming.check, "check")
+    const answer: any = await started.send(initialize, Math.min(entry.timeout, relayTiming.commandStarts), "check")
     started.stop()
     return Boolean(answer?.result) && !answer.error
   }
   try {
-    const signal = AbortSignal.timeout(relayTiming.check)
-    const response = await fetch(entry.url, { method: "POST", headers: { ...entry.headers, "Content-Type": "application/json", Accept: "application/json, text/event-stream" }, body: JSON.stringify(initialize), redirect: "manual", signal })
-    const started = response.ok ? await startedBy(response, 1) : `HTTP ${response.status}`
+    const signal = AbortSignal.timeout(Math.min(entry.timeout, relayTiming.starts))
+    const response = await fetchHere(entry.url, { method: "POST", headers: { ...entry.headers, "Content-Type": "application/json", Accept: "application/json, text/event-stream" }, body: JSON.stringify(initialize), signal })
+    const started = response.ok ? await readStart(response, 1) : { failure: `HTTP ${response.status}`, body: null }
+    if (started.body instanceof ReadableStream) await started.body.cancel().catch(() => {})
     const session = response.headers.get("mcp-session-id")
-    if (session) void fetch(entry.url, { method: "DELETE", headers: { ...entry.headers, "mcp-session-id": session }, redirect: "manual", signal: AbortSignal.timeout(relayTiming.check) }).catch(() => {})
-    return started === undefined
+    if (session) void fetchHere(response.url || entry.url, { method: "DELETE", headers: { ...entry.headers, "mcp-session-id": session }, signal: AbortSignal.timeout(relayTiming.starts) }).catch(() => {})
+    return started.failure === undefined
   } catch {
     return false
   }
@@ -255,8 +276,7 @@ async function forward(request: Request, url: string, headers: Record<string, st
   try {
     // Given up with the agent's own request; a call, not a stream of what comes, after the server's time.
     const signal = request.method === "POST" ? AbortSignal.any([request.signal, AbortSignal.timeout(timeout)]) : request.signal
-    // (Never followed elsewhere: a sign-in page somewhere else isn't the server's answer.)
-    const response = await fetch(url, { method: request.method, headers: sent, body, signal, redirect: "manual" })
+    const response = await fetchHere(url, { method: request.method, headers: sent, body, signal })
     const back = new Headers()
     for (const name of ["content-type", "mcp-session-id"]) {
       const value = response.headers.get(name)
@@ -265,6 +285,26 @@ async function forward(request: Request, url: string, headers: Record<string, st
     return new Response(response.body, { status: response.status, headers: back })
   } catch {
     return new Response(failed, { status: 502 })
+  }
+}
+
+/**
+ * A request to a server, following it only where the server itself moved it on its own site (a 307
+ * or 308 to the same address with a slash, or on to https), as the request it was: never elsewhere,
+ * as a sign-in page somewhere else isn't the server's answer, and its keys aren't for another site.
+ * What else it sends elsewhere comes back as it is (a 3xx).
+ */
+async function fetchHere(url: string, init: RequestInit): Promise<Response> {
+  let at = new URL(url)
+  for (let hops = 0; ; hops++) {
+    const response = await fetch(at, { ...init, redirect: "manual" })
+    const location = response.headers.get("location")
+    if (![307, 308].includes(response.status) || !location || hops >= 3) return response
+    const next = new URL(location, at)
+    const sameSite = next.hostname === at.hostname && (next.protocol === at.protocol ? next.port === at.port : at.protocol === "http:" && next.protocol === "https:")
+    if (!sameSite) return response
+    await response.body?.cancel()
+    at = next
   }
 }
 
@@ -298,9 +338,10 @@ function whyNot(name: string, status: number, started?: string): string {
   return `The ${name} server couldn't be reached (${what}), so its tools aren't available for now`
 }
 
-/** Why a server's answer to `initialize` (numbered `id`), read whole, isn't a start: none if it is.
- * JSON, or the events of a stream (`type`, its content type). */
-function notStarted(text: string, type: string | null, id: unknown): string | undefined {
+/** A server's answer to `initialize` (numbered `id`) in what it has sent so far (`text`: JSON, or
+ * the events of a stream, by `type`, its content type): why it isn't a start (an error's words,
+ * cut short), none for a start, or nothing yet. */
+function startOf(text: string, type: string | null, id: unknown): { failure?: string } | undefined {
   const messages: any[] = []
   const add = (data: string) => {
     const parsed = jsonOf(data)
@@ -313,15 +354,67 @@ function notStarted(text: string, type: string | null, id: unknown): string | un
     }
   } else add(text)
   const answer = messages.find((message) => message && typeof message === "object" && message.id === id && ("result" in message || "error" in message))
-  if (!answer) return "its answer isn't an MCP server's"
-  if (answer.error || !answer.result || typeof answer.result !== "object") return typeof answer.error?.message === "string" ? answer.error.message : "it said no"
-  return undefined
+  if (!answer) return undefined
+  if (answer.error || !answer.result || typeof answer.result !== "object") {
+    const said = typeof answer.error?.message === "string" ? answer.error.message.trim() : "it said no"
+    return { failure: said.length > 200 ? `${said.slice(0, 200)}…` : said }
+  }
+  return {}
 }
 
-/** `notStarted` for a whole answer, or why it couldn't be read. */
-async function startedBy(response: Response, id: unknown): Promise<string | undefined> {
-  const text = await response.text().catch(() => undefined)
-  return text === undefined ? "no answer" : notStarted(text, response.headers.get("content-type"), id)
+/**
+ * A server's answer to `initialize` (numbered `id`), read until it says whether it started: why it
+ * didn't, if so, and the answer to hand on. A stream is read event by event up to that one (a server
+ * may keep it open after), and handed on as it goes on.
+ */
+async function readStart(response: Response, id: unknown): Promise<{ failure?: string; body: ReadableStream<Uint8Array> | string | null }> {
+  const type = response.headers.get("content-type")
+  const notOne = "its answer isn't an MCP server's"
+  if (!type?.includes("text/event-stream") || !response.body) {
+    const text = await response.text().catch(() => undefined)
+    if (text === undefined) return { failure: "no answer", body: null }
+    return { failure: (startOf(text, type, id) ?? { failure: notOne }).failure, body: text }
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  const read: Uint8Array[] = []
+  let text = ""
+  for (;;) {
+    let next: Awaited<ReturnType<typeof reader.read>>
+    try {
+      next = await reader.read()
+    } catch {
+      return { failure: "no answer", body: null }
+    }
+    if (next.value) {
+      read.push(next.value)
+      text += decoder.decode(next.value, { stream: true })
+    }
+    const start = startOf(text, type, id)
+    if (start?.failure || (!start && next.done)) {
+      await reader.cancel().catch(() => {})
+      return { failure: start?.failure ?? notOne, body: null }
+    }
+    if (!start) continue
+    const done = next.done
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of read) controller.enqueue(chunk)
+        if (done) controller.close()
+      },
+      async pull(controller) {
+        try {
+          const more = await reader.read()
+          if (more.done) controller.close()
+          else controller.enqueue(more.value)
+        } catch (error) {
+          controller.error(error)
+        }
+      },
+      cancel: () => reader.cancel().catch(() => {}),
+    })
+    return { body }
+  }
 }
 
 const jsonOf = (text: string): unknown => {
@@ -413,16 +506,18 @@ async function answerServer(request: Request, sessionID: string, name: string): 
     const sent = body === undefined ? undefined : jsonOf(body)
     const messages: any[] = sent === undefined ? [] : Array.isArray(sent) ? sent : [sent]
     const initialize = messages.find((message) => message?.method === "initialize")
-    // (Its start, briefly: an agent may give up its whole session while it waits.)
-    const limit = (server: ComputerServer) => (initialize ? Math.min(server.timeout, relayTiming.starts) : server.timeout)
+    // (Its start, briefly, renewals and all: an agent may give up its whole session while it waits.)
+    const deadline = Date.now() + relayTiming.starts
+    const limit = (server: ComputerServer) => (initialize ? Math.max(1, Math.min(server.timeout, deadline - Date.now())) : server.timeout)
+    const renewing = () => (initialize ? inTime(renewed(sessionID, session, name), deadline) : renewed(sessionID, session, name))
     // Your sign-in to it running out (in a long turn): renewed by the engine first; one it turned
     // down, renewed and tried once more.
-    let current = entry.expires !== undefined && entry.expires < Date.now() + 60_000 ? ((await renewed(sessionID, session, name)) ?? entry) : entry
+    let current = entry.expires !== undefined && entry.expires < Date.now() + 60_000 ? ((await renewing()) ?? entry) : entry
     let answer = await forward(request, current.url, current.headers, limit(current), body, failed)
     const at = `${sessionID}\n${name}`
     /** Tried again with how it's set up now, if that's changed. */
     const retried = async () => {
-      const again = await renewed(sessionID, session, name)
+      const again = await renewing()
       if (!again || setupOf(again) === setupOf(current)) return
       await answer.body?.cancel()
       current = again
@@ -444,20 +539,20 @@ async function answerServer(request: Request, sessionID: string, name: string): 
       }
     }
     if (initialize) {
-      // Read whole before the agent has it: what isn't a start (an error, a page) is a stand-in's.
-      let text: string | undefined
+      // Read before the agent has it: what isn't a start (an error, a page) is a stand-in's.
       let why: string | undefined
+      let started: ReadableStream<Uint8Array> | string | null = null
       if (answer.ok) {
-        text = await answer.text().catch(() => undefined)
-        const failure = text === undefined ? "no answer" : notStarted(text, answer.headers.get("content-type"), initialize.id)
-        if (failure) why = whyNot(name, answer.status, failure)
+        const start = await readStart(answer, initialize.id)
+        if (start.failure) why = whyNot(name, answer.status, start.failure)
+        started = start.body
       } else {
         await answer.body?.cancel()
         why = whyNot(name, answer.status)
       }
       if (why) return standInFor(sessionID, name, setupOf(current), why, messages, Array.isArray(sent), answer.status === 401)
       reached(sessionID, name)
-      return new Response(text, { status: answer.status, headers: answer.headers })
+      return new Response(started, { status: answer.status, headers: answer.headers })
     }
     // A call it turns down partway (or can't take, for now): its answer says why, as a tool's
     // error, rather than an error of the connection's.
@@ -509,6 +604,17 @@ async function answerServer(request: Request, sessionID: string, name: string): 
   // (One that stopped, or a connection it doesn't know: the agent connects again.)
   if (!program || program.stopped) return new Response("No such connection here.", { status: 404 })
   return sendAll(program, body, entry.timeout, connection, false)
+}
+
+/** What `work` comes to, or nothing if that isn't by `deadline`. */
+async function inTime<T>(work: Promise<T>, deadline: number): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<undefined>((resolve) => (timer = setTimeout(() => resolve(undefined), Math.max(0, deadline - Date.now()))))
+  try {
+    return await Promise.race([work, late])
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 /** A URL's server of a session's as the engine has it now (your sign-in renewed), for the rest of its calls. */
