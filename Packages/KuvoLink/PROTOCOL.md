@@ -3544,9 +3544,11 @@ characters) and its `by`, each of a size an event has; what else it says is
 kept as it came, for a client to read (a newer box's `top: false` or `from: null` too).
 
 - `started`: a session's agent said it's working on it (`working: true`), unless it's at it already:
-  linked, with its own last word `started`. A session linked some other way (`sessions`, a
+  linked, with its own last word `started` since the item was last `done`. A session linked some other way (`sessions`, a
   hand-off) says `started` the first time it says it's working; one linked before this box kept
-  events, or whose `started` went past the last 50, says it once more then.
+  events, or whose `started` went past the last 50, says it once more then. (A delete keeps no
+  event: a session linked again to an item brought back, that had said `started` before its
+  delete, says no new `started`.)
 - `stopped`: its link went while its own last word was `started`: it said it stopped (`working:
   false`), or it was unlinked (`unlink`, or its oldest link dropped as it linked a fourth item), by
   the same `by` as that `started` but where it said so itself. One that never said it started says

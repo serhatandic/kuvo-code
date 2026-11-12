@@ -523,6 +523,20 @@ test("a stop with no start before it isn't said, so a start right after it is; n
   assert.deepEqual(await kinds(1), ["started", "stopped", "started"]);
 });
 
+test("a session at work on an item before it was done starts again once it's back on it", async () => {
+  await tool("queue_add", { title: "Again" }, "ses_lead");
+  await tool("queue_hand", { item: 1, to: "ses_child" }, "ses_lead");
+  await tool("queue_update", { item: 1, working: true }, "ses_child");
+  await tool("queue_update", { item: 1, category: "done" }, "ses_child");
+  await route("POST", "kuvo/work-queue/items/1/move", { category: "next" });
+  await tool("queue_update", { item: 1, sessions: ["ses_child"] }, "ses_lead");
+  await tool("queue_update", { item: 1, working: true }, "ses_child");
+  const kinds = async () => (await route("GET", "kuvo/work-queue/items/1")).body.item.events.map(event => event.kind);
+  assert.deepEqual(await kinds(), ["started", "done", "moved", "started"]);
+  await tool("queue_update", { item: 1, working: false }, "ses_child");
+  assert.deepEqual(await kinds(), ["started", "done", "moved", "started", "stopped"]);
+});
+
 test("what's kept of an item's history never folds back in time (a clock ahead on another computer)", async () => {
   await tool("queue_add", { title: "From ahead", working: true }, "ses_lead");
   await tool("queue_update", { item: 1, working: false }, "ses_lead");

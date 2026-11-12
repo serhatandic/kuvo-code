@@ -206,9 +206,15 @@ export function noteEvent(item: Item, event: ItemEvent): void {
   item.events = events.slice(-MOST_EVENTS);
 }
 
-// The latest word of `session`'s work on `item`: that it started, or stopped.
-const lastWord = (item: Item, session: string): ItemEvent | undefined =>
-  [...(item.events ?? [])].reverse().find(each => (each.kind === "started" || each.kind === "stopped") && (each.by as { session?: unknown }).session === session);
+// The latest word of `session`'s work on `item`, that it started or stopped, since the item was
+// last done (Done unlinked everyone, saying no `stopped`: a word from before it is over).
+function lastWord(item: Item, session: string): ItemEvent | undefined {
+  for (const each of [...(item.events ?? [])].reverse()) {
+    if (each.kind === "done") return undefined;
+    if ((each.kind === "started" || each.kind === "stopped") && (each.by as { session?: unknown }).session === session) return each;
+  }
+  return undefined;
+}
 
 /** `sessions` unlinked from `item`: each that had said it started is kept as having stopped (as
  * it said it started), when its agent said so or its link was dropped for it. Done and a delete

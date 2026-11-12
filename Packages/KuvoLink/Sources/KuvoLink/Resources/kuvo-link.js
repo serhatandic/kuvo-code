@@ -20007,7 +20007,15 @@ function noteEvent(item, event) {
   }
   item.events = events.slice(-MOST_EVENTS);
 }
-var lastWord = (item, session) => [...item.events ?? []].reverse().find((each) => (each.kind === "started" || each.kind === "stopped") && each.by.session === session);
+function lastWord(item, session) {
+  for (const each of [...item.events ?? []].reverse()) {
+    if (each.kind === "done")
+      return;
+    if ((each.kind === "started" || each.kind === "stopped") && each.by.session === session)
+      return each;
+  }
+  return;
+}
 function unlinkSessions(item, sessions, now, who) {
   for (const session of sessions) {
     if (!item.sessions.some((each) => each.session === session))
@@ -37246,7 +37254,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "58ff5688b151";
+var BRIDGE_VERSION = "22de3038550f";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
