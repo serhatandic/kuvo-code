@@ -5578,11 +5578,12 @@ Allowed holds, and their submodules' repositories:
 - each submodule's `.git` file in the project (not the folder it's in), and the `.git` file that
   leads the conversation's worktree to its repository, are read-only.
 
-Each is mounted from within it (a folder) or by its path (a file), never through a link one of
-those becomes as the command starts, and then all are checked in the namespace's mount table: each
-the top mount at its path, of what's there, read-only where it should be. A repository that changes
-as the command starts, or a mount that isn't so, runs nothing (126). This is done before what the
-namespace hides is hidden, so no mount there can uncover it.
+A folder is mounted from within it, a file by its path (which a link swapped in at that moment
+could lead elsewhere), and each made read-only by its path; then all are checked in the namespace's
+mount table: each the top mount at its path, of what's there, read-only where it should be. A
+repository that changes as the command starts (git outside the sandbox writing it, or a command
+still running), or a mount that isn't so, runs nothing (126, to run again). This is done before
+what the namespace hides is hidden, so no mount there can uncover it.
 
 The command doesn't run (126, saying why and to ask the user) where one of those is a link (a
 command could trade it for its own, and where it leads isn't kept), where a `commondir` leads git

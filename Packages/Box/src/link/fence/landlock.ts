@@ -74,10 +74,10 @@ keep() {
   else mount -c --bind "$1" "$1" 2>/dev/null; fi && printf 'rw %s\n' "$1" >>"$k_kept" || fail "$1 can't be kept from it."
   [ "$2" != ro ] || ro "$1"
 }
-ro() {
-  if [ -d "$1" ]; then ( cd -P "$1" 2>/dev/null && [ "$(pwd -P)" = "$1" ] && mount -c -o remount,bind,ro . 2>/dev/null )
-  else mount -c -o remount,bind,ro "$1" 2>/dev/null; fi && printf 'ro %s\n' "$1" >>"$k_kept" || fail "$1 can't be kept from it."
-}
+# (Its remount by its path, which libmount finds in the mount table to keep its locked flags: by
+# ".", util-linux before 2.39 finds none, and Linux refuses it. One a link swapped in leads elsewhere
+# is found below.)
+ro() { [ ! -L "$1" ] && mount -c -o remount,bind,ro "$1" 2>/dev/null && printf 'ro %s\n' "$1" >>"$k_kept" || fail "$1 can't be kept from it."; }
 # (Each submodule's work tree's .git file, which its kept settings name: read-only.)
 tree_file() {
   local t
@@ -170,8 +170,9 @@ EOF_FOUND
 # The .git file that leads a folder to its repository (a worktree's), up from it: kept read-only, and
 # the worktree's own folder it names is the conversation's (k_own, one a line); or the .git folder
 # found instead (k_dirs).
-k_own= k_dirs= k_plain=$own/commondir k_kept=$own/kept
-: >"$k_kept" || fail "it isn't set up."
+k_own= k_dirs= k_files= k_plain=$own/commondir k_kept=$own/k/kept
+# (What's kept, noted in a folder of its own with room for a repository's thousands.)
+mkdir "$own/k" && mount -c -t tmpfs -o size=16m,mode=0700 kuvo-kept "$own/k" 2>/dev/null && : >"$k_kept" || fail "it isn't set up."
 printf '../..\n' >"$k_plain" || fail "it isn't set up."
 gitfile() {
   local at
@@ -180,6 +181,8 @@ gitfile() {
     if [ -e "$at/.git" ] || [ -L "$at/.git" ]; then
       if [ -f "$at/.git" ] && [ ! -L "$at/.git" ]; then
         keep "$at/.git" ro
+        k_files="$k_files
+$at/.git"
         k_own="$k_own
 $(cd "$at" && cd -P "$(sed -n 's/^gitdir: *//p' .git | head -n 1)" 2>/dev/null && pwd -P)"
       elif as_is "$at/.git"; then k_dirs="$k_dirs
@@ -214,6 +217,11 @@ done <<EOF_REPOS
 $(case $git in /*.git) printf '%s\n' "$git" ;; esac)
 $k_dirs
 EOF_REPOS
+# (Those .git files again, read-only as they are, where a repository's folder kept since, one
+# they're in, covers what kept them.)
+while IFS= read -r k_at; do [ -z "$k_at" ] || keep "$k_at" ro; done <<EOF_FILES
+$k_files
+EOF_FILES
 # Each kept as noted, as the mount table has it now: the top mount at its path, of what's there in
 # what it's mounted on (its root there is that mount's own and the way to it, on the same device), and
 # read-only where it should be. One a link swapped in led elsewhere, or that's been moved since, isn't.
@@ -228,7 +236,7 @@ END {
     if (p == at[q]) way = ""; else if (at[q] == "/") way = p; else if (substr(p, 1, length(at[q]) + 1) == at[q] "/") way = substr(p, length(at[q]) + 1); else { print p; exit }
     if (root[m] != (root[q] == "/" ? (way == "" ? "/" : way) : root[q] way) || (substr(want[i], 1, 2) == "ro" && how[m] !~ /(^|,)ro(,|$)/)) { print p; exit }
   }
-}' "$k_kept" /proc/self/mountinfo) && [ -z "$k_bad" ]; } || { [ -n "$k_bad" ] || k_bad="git's own files"; fail "$k_bad can't be kept from it."; }
+}' "$k_kept" /proc/self/mountinfo) && [ -z "$k_bad" ]; } || { [ -n "$k_bad" ] || k_bad="git's own files"; fail "$k_bad changed as it started (git outside the sandbox may have been writing it). Run it again, or ask the user."; }
 `;
 
 /**
@@ -390,11 +398,11 @@ export function ownNamespaceLater(own: string, unshare = UNSHARE.find(each => fs
 }
 
 /** Whether a folder can be made read-only in a command's namespace here, as `KEEP_GIT` makes git's
- * own files (a bind, then its remount), tried on `at` (the box's own empty folder, on the disk your
+ * own files (a bind from within it, then its remount by its path), tried on `at` (the box's own empty folder, on the disk your
  * home is on): where it can't, each command in a repository refuses, and the box says so (`gaps`:
  * `git`). `UNFINISHED` where the try didn't finish. */
 export function readOnlyHere(unshare: string, at: string): boolean | typeof UNFINISHED {
-  const tried = spawnSync(unshare, ["-Urm", "/bin/sh", "-c", `mount -c --bind "$0" "$0" 2>/dev/null && mount -c -o remount,bind,ro "$0" 2>/dev/null`, at], { cwd: "/", stdio: "ignore", timeout: TRY_FOR });
+  const tried = spawnSync(unshare, ["-Urm", "/bin/sh", "-c", `cd -P "$0" 2>/dev/null && mount -c --bind . . 2>/dev/null && mount -c -o remount,bind,ro "$0" 2>/dev/null`, at], { cwd: "/", stdio: "ignore", timeout: TRY_FOR });
   if (didntFinish(tried)) return UNFINISHED;
   return tried.status === 0;
 }
