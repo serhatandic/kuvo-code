@@ -17,14 +17,15 @@ export async function groupRoutes(runner: GroupRunner | undefined, store: GroupS
     if (method === "GET") return json({ version, data: runner.list() })
     return error(405, "Not allowed")
   }
-  // What every chat here goes by. The box's link works out its own (`settings/box`: what each
+  // What every chat here goes by. The box's link works out its own (`box-settings`: what each
   // personality tells a bot, who sets what about one, Ask First, what's denied); a client says only
-  // your clock (time zone, how you write dates), which a machine can't know. (An older Mac sends
-  // the rest too, which the box's own stand over.)
-  if (id === "settings" && method === "PUT" && (action === undefined || action === "box")) {
+  // your clock (`clock`: time zone, how you write dates), which a machine can't know. Each on a path
+  // of its own, which a bridge from before turns away (404) rather than taking it for all of them,
+  // the rest emptied. (An older Mac sends all of them to `settings`: only its clock is taken.)
+  if ((id === "box-settings" || id === "clock" || id === "settings") && method === "PUT" && action === undefined) {
     const value = await body()
     const before = store.settings()
-    if (action === "box") {
+    if (id === "box-settings") {
       store.writeSettings({
         personalities: value?.personalities && typeof value.personalities === "object" ? value.personalities : {},
         identityNote: typeof value?.identityNote === "string" ? value.identityNote : "",

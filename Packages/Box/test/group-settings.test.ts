@@ -97,9 +97,13 @@ test("what they go by follows this computer: Auto picked, a rule taken out", asy
 })
 
 test("a Mac says only your clock; an older Mac's Ask First and personalities don't go over the box's own", async () => {
-  const bridgeURL = `http://127.0.0.1:${bridge.port}/api/kuvo/groups/settings`
+  const groups = `http://127.0.0.1:${bridge.port}/api/kuvo/groups`
+  // A Mac now, on a path of its own.
+  expect((await fetch(`${groups}/clock`, { method: "PUT", body: JSON.stringify({ timeZone: "Asia/Tokyo", locale: "ja-JP" }) })).status).toBe(200)
+  expect(store.settings()!.timeZone).toBe("Asia/Tokyo")
+  expect(store.settings()!.askFirst).toBe(false)
   // As a Mac from before sends them: all of its own.
-  await fetch(bridgeURL, { method: "PUT", body: JSON.stringify({ personalities: {}, identityNote: "", askFirst: true, denies: [NEVER_PUSH], timeZone: "Europe/Istanbul", locale: "tr-TR" }) })
+  await fetch(`${groups}/settings`, { method: "PUT", body: JSON.stringify({ personalities: {}, identityNote: "", askFirst: true, denies: [NEVER_PUSH], timeZone: "Europe/Istanbul", locale: "tr-TR" }) })
   const settings = store.settings()!
   expect(settings.timeZone).toBe("Europe/Istanbul")
   expect(settings.locale).toBe("tr-TR")
@@ -111,4 +115,17 @@ test("a Mac says only your clock; an older Mac's Ask First and personalities don
   await round()
   expect(store.settings()!.askFirst).toBe(true)
   expect(store.settings()!.timeZone).toBe("Europe/Istanbul")
+})
+
+test("while this computer's Settings › Permissions can't be read, its group chats keep what they hold back", async () => {
+  put(configFile, JSON.stringify({ permissions: [NEVER_PUSH] }))
+  await round()
+  expect(store.settings()!.denies).toEqual([NEVER_PUSH])
+  // Changed by hand, and not plain JSON any more.
+  put(configFile, `{ "permissions": [], // comment\n}`)
+  ;(await import("../src/link/work/approval")).rememberApproval("auto")
+  await round()
+  expect(store.settings()!.denies).toEqual([NEVER_PUSH])
+  // Nothing given until it can be read.
+  expect(store.settings()!.askFirst).toBe(true)
 })

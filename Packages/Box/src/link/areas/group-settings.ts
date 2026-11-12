@@ -13,7 +13,7 @@ import { botPersonalities } from "../personalities/library";
 import { bridgeTarget } from "../engine/client";
 import { defaultApproval } from "../work/approval";
 
-/** What the box gives the bridge (`PUT api/kuvo/groups/settings/box`). */
+/** What the box gives the bridge (`PUT api/kuvo/groups/box-settings`). */
 export interface GroupSettings {
   personalities: Record<string, string>;
   identityNote: string;
@@ -21,10 +21,13 @@ export interface GroupSettings {
   denies: KitRule[];
 }
 
-/** This computer's, as it keeps them now; null until it has Kuvo Code's words for bots. */
+/** This computer's, as it keeps them now; null until it has Kuvo Code's words for bots, and while
+ * its Settings › Permissions can't be read (a hand edit that isn't plain JSON, a machine's not its
+ * own yet): its chats keep what they have, never going on without what they hold back. */
 export function groupSettingsHere(): GroupSettings | null {
   const words = readWords();
-  if (!words) return null;
+  const permissions = permissionsHere();
+  if (!words || !permissions) return null;
   const told = (name: string, description: string) => words.personalityWords.replaceAll("⟦name⟧", () => name).replaceAll("⟦description⟧", () => description);
   const mac = readMacKit();
   const kit = {
@@ -42,14 +45,14 @@ export function groupSettingsHere(): GroupSettings | null {
     personalities,
     identityNote: words.identityNote,
     askFirst: approval === "askFirst" || approval === "acceptEdits",
-    denies: (permissionsHere() ?? []).filter(holdsBack),
+    denies: permissions.filter(holdsBack),
   };
 }
 
 /** Gives `bridge` this computer's group chats' settings: true once it took them. */
 export async function giveGroupSettings(bridge: Target, settings: GroupSettings, signal?: AbortSignal): Promise<boolean> {
   try {
-    const response = await fetch(`http://127.0.0.1:${bridge.port}/api/kuvo/groups/settings/box`, {
+    const response = await fetch(`http://127.0.0.1:${bridge.port}/api/kuvo/groups/box-settings`, {
       method: "PUT",
       headers: { authorization: `Basic ${Buffer.from(`opencode:${bridge.password}`).toString("base64")}`, "content-type": "application/json" },
       body: JSON.stringify(settings),
@@ -62,10 +65,10 @@ export async function giveGroupSettings(bridge: Target, settings: GroupSettings,
   }
 }
 
-/** Kept so as the box runs: each round, the settings as they are now, given to the bridge running
- * now when they changed, or once as the box starts. `every`: what runs
- * its round (a test's runs each by hand). */
-export function keepGroupSettings(bridge: () => Target | null = bridgeTarget, every: (round: () => Promise<void>) => void = round => { setInterval(round, 5_000).unref?.(); }): void {
+/** Kept so as the box runs: a round as it starts and every five seconds, the settings as they are
+ * now, given to the bridge running now when they changed, or once as the box starts. `every`: what
+ * runs its rounds (a test's runs each by hand). */
+export function keepGroupSettings(bridge: () => Target | null = bridgeTarget, every: (round: () => Promise<void>) => void = round => { void round(); setInterval(round, 5_000).unref?.(); }): void {
   let given: string | null = null;
   let going = false;
   every(async () => {

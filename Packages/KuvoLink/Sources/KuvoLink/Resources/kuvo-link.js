@@ -14468,12 +14468,9 @@ function cleanBranchPrefix(typed) {
   return prefix;
 }
 var settingsHere = (file = CONFIG_FILE) => readSettings(file).settings ?? {};
-function branchPrefixHere(file = CONFIG_FILE, gitFile = BRANCH_PREFIX_FILE) {
+function branchPrefixHere(file = CONFIG_FILE) {
   const set = valueAt(settingsHere(file), [...GIT_SETTINGS.branchPrefix]);
-  if (typeof set === "string")
-    return cleanBranchPrefix(set);
-  const kept = readGitFile(gitFile).branchPrefix;
-  return typeof kept === "string" ? cleanBranchPrefix(kept) : DEFAULT_BRANCH_PREFIX;
+  return typeof set === "string" ? cleanBranchPrefix(set) : DEFAULT_BRANCH_PREFIX;
 }
 function instructionsHere(kind, file = CONFIG_FILE) {
   const set = valueAt(settingsHere(file), [...GIT_SETTINGS[kind === "commit" ? "commitInstructions" : "pullRequestInstructions"]]);
@@ -14497,7 +14494,7 @@ function moveGitSettings(given, file = CONFIG_FILE, lock = CONFIG_LOCK, gitFile 
   if (!isObject(given))
     return { status: 400, message: "Send {branchPrefix?, commitInstructions?, pullRequestInstructions?}." };
   const offered = Object.keys(GIT_SETTINGS).filter((key) => (key in given) && given[key] !== null);
-  if (offered.some((key) => typeof given[key] !== "string" || given[key].length > 1e4))
+  if (offered.some((key) => typeof given[key] !== "string"))
     return { status: 400, message: "Each is text." };
   if (!ownsSettings())
     return { status: 409, message: "This machine's settings still come from your Mac. Connect it from Kuvo Code on your Mac once." };
@@ -14506,13 +14503,13 @@ function moveGitSettings(given, file = CONFIG_FILE, lock = CONFIG_LOCK, gitFile 
     if (problem)
       return { status: 409, message: `The engine's settings file can't be changed from here: ${problem}` };
     if (readGitFile(gitFile).moved === true)
-      return { status: 200, moved: false, settings };
+      return { status: 200, moved: false };
     const changes = offered.filter((key) => valueAt(settings, [...GIT_SETTINGS[key]]) === undefined).map((key) => ({ path: [...GIT_SETTINGS[key]], value: key === "branchPrefix" ? given[key] : given[key].trim() })).filter((change) => change.value !== "" || change.path[0] === GIT_SETTINGS.branchPrefix[0]);
-    const written = changes.length ? writeSettings(settings, changes, file) : { status: 200, settings };
-    if (written.status !== 200)
+    const written = changes.length ? writeSettings(settings, changes, file) : null;
+    if (written && written.status !== 200)
       return { status: written.status, message: written.message };
     keepInGitFile({ moved: true }, gitFile);
-    return { status: 200, moved: changes.length > 0, settings: written.settings };
+    return { status: 200, moved: changes.length > 0 };
   });
 }
 
@@ -14701,8 +14698,7 @@ async function answerWorktrees(method, requestPath, body, engine, signal, bridge
       return { status: 400, value: message(`Send the project's folder on this machine as {"project"}.`) };
     if (!engine?.port)
       return { status: 503, value: message("The engine isn't running.") };
-    const kept = branchPrefixHere();
-    const prefix = typeof body?.branchPrefix === "string" ? body.branchPrefix : kept;
+    const prefix = typeof body?.branchPrefix === "string" ? body.branchPrefix : branchPrefixHere();
     const subpath = gitIn(project, ["rev-parse", "--show-prefix"]);
     if (subpath === null)
       return { status: 409, value: message("That folder isn't in a git repository.") };
@@ -14723,8 +14719,6 @@ async function answerWorktrees(method, requestPath, body, engine, signal, bridge
       await call(engine, "DELETE", "/api/worktree", { projectID: id, directory: root, force: true }, signal, project).catch(() => {});
       return { status: 502, value: message(prefix ? `A branch starting with “${prefix}” couldn’t be made in this repository. Change the branch prefix in Settings › Git, then try again.` : "Its branch couldn't be made.") };
     }
-    if (prefix !== kept)
-      keepInGitFile({ branchPrefix: prefix });
     const tree = { project, root, folder: subpath ? path62.join(root, subpath.replace(/\/$/, "")) : root, branch, ...base ? { base } : {}, made: branch, prefix };
     updateWorktrees((list) => [...list.filter((each) => each.root !== root), tree]);
     return { status: 200, value: tree };
@@ -38187,7 +38181,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "4d396c488ea0";
+var BRIDGE_VERSION = "049c1a994f8e";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -42616,7 +42610,8 @@ function serveBox(password, handle = engineHandler(readEngineFile, { name: os17.
 // Packages/Box/src/link/areas/group-settings.ts
 function groupSettingsHere() {
   const words = readWords();
-  if (!words)
+  const permissions = permissionsHere();
+  if (!words || !permissions)
     return null;
   const told = (name, description) => words.personalityWords.replaceAll("⟦name⟧", () => name).replaceAll("⟦description⟧", () => description);
   const mac = readMacKit();
@@ -42635,12 +42630,12 @@ function groupSettingsHere() {
     personalities,
     identityNote: words.identityNote,
     askFirst: approval === "askFirst" || approval === "acceptEdits",
-    denies: (permissionsHere() ?? []).filter(holdsBack)
+    denies: permissions.filter(holdsBack)
   };
 }
 async function giveGroupSettings(bridge, settings, signal) {
   try {
-    const response = await fetch(`http://127.0.0.1:${bridge.port}/api/kuvo/groups/settings/box`, {
+    const response = await fetch(`http://127.0.0.1:${bridge.port}/api/kuvo/groups/box-settings`, {
       method: "PUT",
       headers: { authorization: `Basic ${Buffer.from(`opencode:${bridge.password}`).toString("base64")}`, "content-type": "application/json" },
       body: JSON.stringify(settings),
@@ -42653,6 +42648,7 @@ async function giveGroupSettings(bridge, settings, signal) {
   }
 }
 function keepGroupSettings(bridge = bridgeTarget, every = (round) => {
+  round();
   setInterval(round, 5000).unref?.();
 }) {
   let given = null;

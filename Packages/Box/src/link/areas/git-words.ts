@@ -21,8 +21,8 @@ export type GitSetting = keyof typeof GIT_SETTINGS;
 
 export const DEFAULT_BRANCH_PREFIX = "kuvo/";
 
-/** What `box/git.json` keeps: the branch prefix a client last gave (before boxes kept their own
- * in their settings), and whether a Mac's settings from before moved here (`moved`). */
+/** What `box/git.json` keeps: whether a Mac's settings from before moved here (`moved`). (A box
+ * from before kept the branch prefix a client last gave there too, no longer read.) */
 function readGitFile(file = BRANCH_PREFIX_FILE): Record<string, unknown> {
   try {
     const kept: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -33,7 +33,7 @@ function readGitFile(file = BRANCH_PREFIX_FILE): Record<string, unknown> {
 }
 
 /** `box/git.json` with `change` made, the rest as it was. */
-export function keepInGitFile(change: Record<string, unknown>, file = BRANCH_PREFIX_FILE): void {
+function keepInGitFile(change: Record<string, unknown>, file = BRANCH_PREFIX_FILE): void {
   writePrivate(file, JSON.stringify({ ...readGitFile(file), ...change }));
 }
 
@@ -50,12 +50,10 @@ export function cleanBranchPrefix(typed: string): string {
 const settingsHere = (file = CONFIG_FILE): Record<string, unknown> => readSettings(file).settings ?? {};
 
 /** What a session's own branch starts with here: as Settings › Git has it on this computer, or
- * else the one a client last gave (an older Mac sends its own with each worktree), or `kuvo/`. */
-export function branchPrefixHere(file = CONFIG_FILE, gitFile = BRANCH_PREFIX_FILE): string {
+ * `kuvo/` where it has none. */
+export function branchPrefixHere(file = CONFIG_FILE): string {
   const set = valueAt(settingsHere(file), [...GIT_SETTINGS.branchPrefix]);
-  if (typeof set === "string") return cleanBranchPrefix(set);
-  const kept = readGitFile(gitFile).branchPrefix;
-  return typeof kept === "string" ? cleanBranchPrefix(kept) : DEFAULT_BRANCH_PREFIX;
+  return typeof set === "string" ? cleanBranchPrefix(set) : DEFAULT_BRANCH_PREFIX;
 }
 
 /** Your instructions here for a commit message or a pull request, "" for none. */
@@ -84,7 +82,7 @@ ${summary}`, instructionsHere("pullRequest", file));
 }
 
 /** What `kuvo/git/settings/move` answers: whether this box took them now, and its settings as they are. */
-export type Moved = { status: 200; moved: boolean; settings: Record<string, unknown> } | { status: 400 | 409 | 500; message: string };
+export type Moved = { status: 200; moved: boolean } | { status: 400 | 409 | 500; message: string };
 
 // COMPAT(0.7 mac-git-settings): a Mac's Settings › Git from before boxes kept their own, moved to each box once. Goes 3 months after 0.8.0.
 /** A Mac's Settings › Git from before, given to this box: each kept where this box has none of its
@@ -93,20 +91,20 @@ export type Moved = { status: 200; moved: boolean; settings: Record<string, unkn
 export function moveGitSettings(given: unknown, file = CONFIG_FILE, lock = CONFIG_LOCK, gitFile = BRANCH_PREFIX_FILE): Moved {
   if (!isObject(given)) return { status: 400, message: "Send {branchPrefix?, commitInstructions?, pullRequestInstructions?}." };
   const offered = (Object.keys(GIT_SETTINGS) as GitSetting[]).filter(key => key in given && given[key] !== null);
-  if (offered.some(key => typeof given[key] !== "string" || (given[key] as string).length > 10_000)) return { status: 400, message: "Each is text." };
+  if (offered.some(key => typeof given[key] !== "string")) return { status: 400, message: "Each is text." };
   if (!ownsSettings()) return { status: 409, message: "This machine's settings still come from your Mac. Connect it from Kuvo Code on your Mac once." };
   return locked(lock, () => {
     const { settings, problem } = readSettings(file);
     if (problem) return { status: 409, message: `The engine's settings file can't be changed from here: ${problem}` };
-    if (readGitFile(gitFile).moved === true) return { status: 200, moved: false, settings: settings! };
+    if (readGitFile(gitFile).moved === true) return { status: 200, moved: false };
     const changes: SettingChange[] = offered
       .filter(key => valueAt(settings, [...GIT_SETTINGS[key]]) === undefined)
       .map(key => ({ path: [...GIT_SETTINGS[key]], value: key === "branchPrefix" ? given[key] : (given[key] as string).trim() }))
       // (No instructions is what a box without any has already.)
       .filter(change => change.value !== "" || change.path[0] === GIT_SETTINGS.branchPrefix[0]);
-    const written = changes.length ? writeSettings(settings!, changes, file) : { status: 200 as const, settings: settings! };
-    if (written.status !== 200) return { status: written.status, message: written.message };
+    const written = changes.length ? writeSettings(settings!, changes, file) : null;
+    if (written && written.status !== 200) return { status: written.status, message: written.message };
     keepInGitFile({ moved: true }, gitFile);
-    return { status: 200, moved: changes.length > 0, settings: written.settings };
+    return { status: 200, moved: changes.length > 0 };
   });
 }

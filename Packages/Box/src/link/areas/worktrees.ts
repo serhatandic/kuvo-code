@@ -19,7 +19,7 @@ import { BY_KUVO, firstCommit, gitAsked, gitIn, gitLater, sizeLater } from "../g
 import { ENGINE_DATA, homeFolder } from "../home";
 import type { AnswerPiece, JSONAnswer, RouteContext } from "../server/context";
 import { readProjects } from "./projects";
-import { branchPrefixHere, keepInGitFile } from "./git-words";
+import { branchPrefixHere } from "./git-words";
 import { readRestorableWorktrees, readWorktrees, updateWorktrees, worktreeFollowers } from "./worktree-records";
 import type { RestorableWorktree, WorktreeRecord } from "./worktree-records";
 
@@ -259,9 +259,8 @@ export async function answerWorktrees(method: string, requestPath: string, body:
     if (typeof project !== "string" || !path.isAbsolute(project) || !fs.existsSync(project)) return { status: 400, value: message("Send the project's folder on this machine as {\"project\"}.") };
     if (!engine?.port) return { status: 503, value: message("The engine isn't running.") };
     // What its branch's name starts with: Settings › Git's on this computer.
-    // COMPAT(beta.1 worktree-prefix): a Mac's own, sent with each, used as given and kept for a client that sends none while this box has none set. Goes when 0.8.0 ships.
-    const kept = branchPrefixHere();
-    const prefix = typeof body?.branchPrefix === "string" ? body.branchPrefix : kept;
+    // COMPAT(beta.1 worktree-prefix): a Mac's own, sent with each, used as given. Goes when 0.8.0 ships.
+    const prefix = typeof body?.branchPrefix === "string" ? body.branchPrefix : branchPrefixHere();
     // Where the project is in its repository, as git sees it (through any links in its path).
     const subpath = gitIn(project, ["rev-parse", "--show-prefix"]);
     if (subpath === null) return { status: 409, value: message("That folder isn't in a git repository.") };
@@ -284,8 +283,6 @@ export async function answerWorktrees(method: string, requestPath: string, body:
       // (Most often a prefix git can't use there: `me/` beside a branch named `me`.)
       return { status: 502, value: message(prefix ? `A branch starting with “${prefix}” couldn’t be made in this repository. Change the branch prefix in Settings › Git, then try again.` : "Its branch couldn't be made.") };
     }
-    // The prefix it was made with, kept for a client that gives none, once a branch with it was made.
-    if (prefix !== kept) keepInGitFile({ branchPrefix: prefix }); // COMPAT(beta.1 worktree-prefix): kept for a client that sends none. Goes when 0.8.0 ships.
     const tree = { project, root, folder: subpath ? path.join(root, subpath.replace(/\/$/, "")) : root, branch, ...(base ? { base } : {}), made: branch, prefix } satisfies WorktreeRecordShape;
     updateWorktrees(list => [...list.filter(each => each.root !== root), tree]);
     return { status: 200, value: tree };

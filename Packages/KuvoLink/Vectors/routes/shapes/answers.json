@@ -5078,6 +5078,11 @@
      "object": {
       "message": "string"
      }
+    },
+    "500": {
+     "object": {
+      "message": "string"
+     }
     }
    }
   },

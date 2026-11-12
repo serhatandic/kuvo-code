@@ -11,8 +11,8 @@ import type { WorktreeRecordShape } from "../../shared/routes/worktrees";
 import { linkedTrees } from "../work/project-trees";
 
 export const WORKTREES_FILE = path.join(K, "box", "worktrees.json");
-// What git-words.ts keeps of Settings › Git besides the box's settings: the branch prefix an older
-// Mac last gave, and whether a Mac's settings from before moved here.
+// What git-words.ts keeps of Settings › Git besides the box's settings: whether a Mac's settings
+// from before moved here.
 export const BRANCH_PREFIX_FILE = path.join(K, "box", "git.json");
 
 /** A worktree this box keeps, as `box/worktrees.json` has it. */

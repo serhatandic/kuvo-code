@@ -3172,13 +3172,15 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   what each personality tells a bot (Kuvo Code's own in its words, yours in its library), who sets
   what about a bot (the words' `identityNote`), Ask First (its default approval is Ask First or
   Accept Edits: a seat fetches no pages) and what its Settings › Permissions hold back. Its link
-  gives them to the coding agents' bridge that runs the chats (`PUT api/kuvo/groups/settings/box`
-  there), as it starts and within five seconds of any of them changing; the bridge keeps them
-  through its restarts. Your clock (time zone, and how you write dates, for meetings and a chat's
-  recap) is a client's to say, as a machine can't know it: `PUT api/kuvo/groups/settings
-  {"timeZone", "locale"}` on the bridge (a Mac to each computer's it reaches, as it connects and as
-  either changes); without one, the computer's own. What an older Mac sends there besides
-  (`personalities`, `identityNote`, `askFirst`, `denies`) is ignored.
+  gives them to the coding agents' bridge that runs the chats (`PUT api/kuvo/groups/box-settings`
+  there), as it starts and within five seconds of any of them changing, never while its Settings ›
+  Permissions can't be read (its chats keep what they have); the bridge keeps them through its
+  restarts. Your clock (time zone, and how you write dates, for meetings and a chat's recap) is a
+  client's to say, as a machine can't know it: `PUT api/kuvo/groups/clock {"timeZone", "locale"}`
+  on the bridge (a Mac to each computer's it reaches, as it connects and as either changes);
+  without one, the computer's own. Each has a path of its own, which a bridge from before turns
+  away (`404`) rather than taking it for all of them. An older Mac sends all of them to `PUT
+  api/kuvo/groups/settings`: only its clock is taken.
 - A client keeps what you change of a bot whose computer is away (its machine not connected) and
   sends it as `PATCH kuvo/bots/<id>` once it's back, a later change on top of what waited; what
   the box then answers is what shows.
@@ -6185,7 +6187,8 @@ can go three months after 0.8.0 ships.
 - Settings › Git (`git.branchPrefix`, `git.commitInstructions`, `git.pullRequestInstructions` in its
   preferences), which each computer keeps its own now (`kuvo/config`, "Changes"): given to each box
   once (`POST kuvo/git/settings/move {branchPrefix?, commitInstructions?, pullRequestInstructions?}`
-  → `{"moved"}`, `409 {"message"}` while a machine's settings aren't its own yet), which keeps
+  → `{"moved"}`, `409 {"message"}` while a machine's settings aren't its own yet, `500
+  {"message"}` when they couldn't be written), which keeps
   each where it has none of its own yet, the first time only (`box/git.json`'s `moved`), so a
   later one, or one after you cleared it there, changes nothing. The Mac notes each box that took
   them, and keeps them in its preferences for a computer you add later.
@@ -6220,6 +6223,6 @@ can go three months after 0.8.0 ships.
   route`), which the box names itself now: it's refused, and that Mac reads the machine's records
   again.
 - It sends its own branch prefix with each worktree (`POST kuvo/worktrees {"project",
-  "branchPrefix"}`): used as given, and kept in `box/git.json` for a client that sends none while
-  the box has none set in Settings › Git.
+  "branchPrefix"}`): used as given. (A box from before kept the last one given in `box/git.json`
+  for a client that sent none: no longer read.)
   <!-- compat: beta.1 worktree-prefix -->

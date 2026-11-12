@@ -23457,10 +23457,10 @@ async function groupRoutes(runner, store, method, parts, body) {
       return json9({ version: version2, data: runner.list() });
     return error(405, "Not allowed");
   }
-  if (id === "settings" && method === "PUT" && (action === undefined || action === "box")) {
+  if ((id === "box-settings" || id === "clock" || id === "settings") && method === "PUT" && action === undefined) {
     const value = await body();
     const before = store.settings();
-    if (action === "box") {
+    if (id === "box-settings") {
       store.writeSettings({
         personalities: value?.personalities && typeof value.personalities === "object" ? value.personalities : {},
         identityNote: typeof value?.identityNote === "string" ? value.identityNote : "",
@@ -28248,4 +28248,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents f59ef1215aa775ac2ffd9ef5ef3929ec7495ecb946a745f963fb2781b4a93b2c
+// Built from Packages/Box/src/agents dc6027c5bdbf84e6dd1e8ea0fd42e0d868b2ea4088da1e7038b3e5d254728411

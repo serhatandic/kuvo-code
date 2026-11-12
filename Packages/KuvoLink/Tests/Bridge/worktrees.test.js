@@ -541,10 +541,12 @@ test("its records followed: a line now, and another when one is made or removed"
   assert.deepEqual(lines.map(line => line.worktrees.some(tree => tree.root === made.root)), [false, true, false]);
 });
 
-test("one a phone asks for starts with the prefix a Mac last gave, and a Mac's old record doesn't undo how the box keeps one", async () => {
+test("one a phone asks for starts with the computer's own prefix, not one an older Mac sent, and a Mac's old record doesn't undo how the box keeps one", async () => {
+  // An older Mac's own, used for its own (the Settings › Git page shows the computer's).
   const mine = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "sa/" })).value;
+  assert.ok(mine.branch.startsWith("sa/"), mine.branch);
   const phones = (await ask("POST", "kuvo/worktrees", { project })).value;
-  assert.ok(phones.branch.startsWith("sa/"), phones.branch);
+  assert.ok(phones.branch.startsWith("kuvo/"), phones.branch);
   // A Mac handing over what it kept of one the box has: the box's stays, still to be named.
   assert.equal((await ask("POST", "kuvo/worktrees/record", { project, root: phones.root, folder: phones.folder, branch: phones.branch })).status, 200);
   const kept = link.readWorktrees().find(each => each.root === phones.root);

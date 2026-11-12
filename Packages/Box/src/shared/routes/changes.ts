@@ -84,7 +84,7 @@ export const CHANGES_ROUTES: RouteShape[] = [
   { route: "POST kuvo/git/pull-request", answers: { 200: PULL_REQUEST } },
   { route: "POST kuvo/git/pull-request/draft", answers: { 200: PULL_REQUEST_DRAFT } },
   { route: "POST kuvo/git/commit-diff", answers: { 200: COMMIT_DIFF } },
-  { route: "POST kuvo/git/settings/move", answers: { 200: object({ moved: bool }), 400: REFUSED, 409: REFUSED } },
+  { route: "POST kuvo/git/settings/move", answers: { 200: object({ moved: bool }), 400: REFUSED, 409: REFUSED, 500: REFUSED } },
   { route: "GET kuvo/git/backups", answers: { 200: BRANCH_BACKUPS, 400: REFUSED } },
   { route: "POST kuvo/git/backups/restore", answers: { 200: BACKUP_RESTORED, 400: REFUSED, 404: REFUSED, 409: REFUSED, 500: REFUSED } },
 ];
