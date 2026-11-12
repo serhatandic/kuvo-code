@@ -15,7 +15,7 @@ enum OwnToolsOnce {
     /// What runs the script: the engine's Bun (`engine`), the pinned build this app downloads,
     /// checked as the box's start checks it (`checked`; not one you named with
     /// `KUVO_OPENCODE_BINARY`); nil while there's none. (A test's: Node.)
-    static var runtime: () async -> (executable: URL, engine: Bool, checked: Bool)? = {
+    static var runtime: @MainActor () async -> (executable: URL, engine: Bool, checked: Bool)? = {
         if let override = AppModel.engineOverride { return (URL(filePath: override), true, false) }
         let installer = EngineInstaller(root: AppInfo.supportDirectory.appending(path: "engine"))
         guard let engine = await Task.detached(operation: { installer.installed() }).value else { return nil }
