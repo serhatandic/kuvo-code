@@ -943,20 +943,23 @@ function writeSecret(file, text, mode = 384) {
 }
 function privateFolder(folder) {
   fs6.mkdirSync(folder, { recursive: true, mode: 448 });
-  const made = fs6.lstatSync(folder);
+  const real = fs6.realpathSync(folder);
+  const made = fs6.statSync(real);
   if (!made.isDirectory())
-    throw new Error(`${folder} isn't a folder of its own: nothing secret is written in it.`);
-  if (process.getuid && made.uid !== process.getuid())
+    throw new Error(`${folder} isn't a folder: nothing secret is written there.`);
+  const me = process.getuid?.();
+  if (me !== undefined && me !== 0 && made.uid !== me)
     throw new Error(`${folder} isn't yours: nothing secret is written in it.`);
   if (made.mode & 63)
-    fs6.chmodSync(folder, 448);
+    fs6.chmodSync(real, 448);
   return folder;
 }
 function placeWhole(file, text, mode = 384) {
   const temporary = `${file}.${process.pid}.${crypto3.randomBytes(4).toString("hex")}.tmp`;
   try {
     fs6.writeFileSync(temporary, text, { mode, flag: "wx" });
-    fs6.chmodSync(temporary, mode);
+    if ((fs6.statSync(temporary).mode & 511) !== mode)
+      fs6.chmodSync(temporary, mode);
     fs6.renameSync(temporary, file);
   } catch (error) {
     try {
@@ -37362,7 +37365,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "44705dceac19";
+var BRIDGE_VERSION = "6f6b8d308706";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
