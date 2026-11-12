@@ -16644,7 +16644,7 @@ var askedOn = new Map;
 var reviewFollowers = new Set;
 var listAskReviews = () => [...askReviews.values()];
 var listSettledReviews = () => [...settledReviews.values()];
-var replying = new Set;
+var replying = new Map;
 var waitsOnReview = (review) => review?.state === "yours" || review?.state === "checking";
 function settle(reviews, state) {
   if (!reviews.length)
@@ -16661,8 +16661,10 @@ function settle(reviews, state) {
     changed();
 }
 function settleAskReview(id) {
-  if (replying.has(id))
+  if (replying.has(id)) {
+    replying.set(id, true);
     return;
+  }
   const review = askReviews.get(id);
   if (waitsOnReview(review))
     settle([review], "answered");
@@ -16951,10 +16953,16 @@ async function answerPermission(source, id, sessionID, signal, found) {
     return null;
   }
   const reply = async (body, decided) => {
-    replying.add(id);
+    replying.set(id, false);
     try {
       await call(source, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, body, signal);
       noteReview(id, sessionID, decided, call2);
+    } catch (error) {
+      if (replying.get(id)) {
+        replying.delete(id);
+        settleAskReview(id);
+      }
+      throw error;
     } finally {
       replying.delete(id);
     }
@@ -37180,7 +37188,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0398a215c3c9";
+var BRIDGE_VERSION = "bc655070a8d1";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
