@@ -91,6 +91,7 @@ export const FEATURES = [
   "search",
   "sessions.agents",
   "sessions.glance",
+  "sessions.models",
   "sessions.start",
   "setup",
   "shell.stop",

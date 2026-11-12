@@ -2148,6 +2148,7 @@ var FEATURES = [
   "search",
   "sessions.agents",
   "sessions.glance",
+  "sessions.models",
   "sessions.start",
   "setup",
   "shell.stop",
@@ -37123,7 +37124,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "6a88312aeade";
+var BRIDGE_VERSION = "7306bd187a42";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -37784,6 +37785,158 @@ async function* glanceRoute(context, match) {
       last = line;
     }
     await changeOrPause(FRESH, seen, signal ?? undefined);
+  }
+}
+
+// Packages/Box/src/link/areas/session-models.ts
+var SESSION_MODELS_ROUTE = "kuvo/sessions/models";
+var ASK_WAIT2 = 5000;
+var PLANS = {
+  openai: { name: "ChatGPT", agent: "Codex", provider: "codex-cli", hidden: (method) => method.startsWith("chatgpt") },
+  xai: { name: "SuperGrok", agent: "Grok", provider: "grok-cli", hidden: (method) => method === "device" }
+};
+var asked6 = (target, route, signal) => {
+  const wait = AbortSignal.timeout(ASK_WAIT2);
+  return call(target, "GET", route, undefined, signal ? AbortSignal.any([signal, wait]) : wait).catch(() => null);
+};
+function modelsIn2(listed) {
+  if (!Array.isArray(listed))
+    return null;
+  return listed.flatMap((each) => {
+    if (!isObject(each) || typeof each.id !== "string" || typeof each.providerID !== "string" || each.enabled === false)
+      return [];
+    const aliases = Array.isArray(each.aliases) ? each.aliases.filter((alias) => typeof alias === "string") : [];
+    return [{ providerID: each.providerID, id: each.id, name: typeof each.name === "string" && each.name ? each.name : each.id, aliases, free: isFree(each) }];
+  });
+}
+function accountsIn(listed) {
+  if (!Array.isArray(listed))
+    return null;
+  const accounts = new Map;
+  for (const each of listed) {
+    if (!isObject(each) || typeof each.id !== "string")
+      continue;
+    const metadata = isObject(each.metadata) ? each.metadata : {};
+    const label = metadata.source === "agent" && typeof metadata.accountLabel === "string" && metadata.accountLabel.trim() ? metadata.accountLabel.trim() : undefined;
+    const methods = (Array.isArray(each.methods) ? each.methods : []).flatMap((method) => isObject(method) && typeof method.type === "string" ? [[method.type, typeof method.id === "string" ? method.id : ""]] : []);
+    accounts.set(each.id, {
+      id: each.id,
+      name: typeof each.name === "string" && each.name.trim() ? each.name.trim() : each.id,
+      ...label ? { label } : {},
+      methods,
+      signedIn: Array.isArray(each.connections) && each.connections.length > 0,
+      installed: metadata.installed !== false
+    });
+  }
+  return accounts;
+}
+var named2 = (ref, models) => models.find((model) => model.providerID === ref.providerID && model.id === ref.id) ?? models.find((model) => model.providerID === ref.providerID && model.aliases.includes(ref.id));
+async function engineLists(engine, signal) {
+  const [providers, listed, integrations, fallback] = await Promise.all(["/api/provider", "/api/model", "/api/integration", "/api/model/default"].map((route) => asked6(engine, route, signal)));
+  const models = modelsIn2(listed), accounts = accountsIn(integrations);
+  if (!Array.isArray(providers) || !models || !accounts)
+    return null;
+  const ready = new Set(providers.flatMap((each) => isObject(each) && typeof each.id === "string" ? [each.id] : []));
+  const given = isObject(fallback) && typeof fallback.providerID === "string" && typeof fallback.id === "string" ? { providerID: fallback.providerID, id: fallback.id } : null;
+  return { ready, models, accounts, fallback: given };
+}
+async function bridgeLists(bridge, signal) {
+  const [listed, integrations, auto] = await Promise.all(["/api/model", "/api/integration", "/api/kuvo/auto"].map((route) => asked6(bridge, route, signal)));
+  const models = modelsIn2(listed), accounts = accountsIn(integrations);
+  if (!models || !accounts)
+    return null;
+  const lists = isObject(auto) && Array.isArray(auto.lists) ? auto.lists.flatMap((each) => isObject(each) && typeof each.id === "string" ? [{ id: each.id, name: typeof each.name === "string" && each.name ? each.name : "Custom Auto", entries: Array.isArray(each.entries) ? each.entries.length : 0 }] : []) : null;
+  return { models, accounts, auto: lists };
+}
+var accountOf = (account) => ({ id: account.id, name: account.name, ...account.label ? { label: account.label } : {} });
+function onEngine(ref, engine) {
+  if (!engine)
+    return;
+  const listed = named2(ref, engine.models);
+  const name = listed ? { name: listed.name } : {};
+  if (listed && ref.providerID === "opencode" && listed.free)
+    return { ...name, runs: true };
+  const account = engine.accounts.get(ref.providerID);
+  const ready = engine.ready.has(ref.providerID) || !account || account.signedIn || account.methods.length === 0;
+  if (ready) {
+    if (listed)
+      return { ...name, runs: true };
+    if (!account && !engine.models.some((model) => model.providerID === ref.providerID))
+      return;
+    return { runs: false, missing: "gone", ...account ? { account: accountOf(account) } : {} };
+  }
+  const plan = PLANS[ref.providerID];
+  const offered = account.methods.filter(([type, id]) => ["oauth", "key", "external"].includes(type) && !(type === "oauth" && plan?.hidden(id)));
+  const key = offered.length > 0 && offered.every(([type]) => type === "key");
+  return { ...name, runs: false, missing: key ? "key" : "signIn", account: accountOf(account), ...key && plan ? { plan: { name: plan.name, agent: plan.agent, provider: plan.provider } } : {} };
+}
+function withAgents(ref, bridge) {
+  if (!bridge)
+    return;
+  if (ref.providerID === "auto") {
+    if (!bridge.auto)
+      return;
+    const list = bridge.auto.find((each) => each.id === ref.id);
+    if (!list)
+      return { runs: false, missing: "gone" };
+    return list.entries ? { name: list.name, runs: true } : { name: list.name, runs: false, missing: "gone" };
+  }
+  const account = bridge.accounts.get(ref.providerID);
+  if (!account)
+    return { runs: false, missing: "gone" };
+  if (!account.installed)
+    return { runs: false, missing: "install", account: accountOf(account) };
+  if (!account.signedIn)
+    return { runs: false, missing: "signIn", account: accountOf(account) };
+  const ofIt = bridge.models.filter((model) => model.providerID === ref.providerID);
+  if (!ofIt.length)
+    return;
+  const listed = named2(ref, ofIt);
+  return listed ? { name: listed.name, runs: true } : { runs: false, missing: "gone", account: accountOf(account) };
+}
+async function sessionModels(ids, engine, bridge, signal) {
+  const targets = [engine, bridge].filter((each) => each !== null);
+  const found = (await Promise.all(ids.map((id) => sessionHere(targets, id, signal)))).filter((each) => each !== null);
+  let engineRead, bridgeRead;
+  const fromEngine = () => engineRead ??= engine ? engineLists(engine, signal) : Promise.resolve(null);
+  const fromBridge = () => bridgeRead ??= bridge ? bridgeLists(bridge, signal) : Promise.resolve(null);
+  const answer = {};
+  await Promise.all(found.map(async ({ target, data }) => {
+    const own = isObject(data.model) && typeof data.model.providerID === "string" && typeof data.model.id === "string" ? data.model : null;
+    const onBridge = bridge !== null && target.port === bridge.port;
+    const ref = own ? { providerID: own.providerID, id: own.id, ...typeof own.variant === "string" ? { variant: own.variant } : {} } : onBridge ? null : (await fromEngine())?.fallback ?? null;
+    if (!ref) {
+      if (!onBridge && !await fromEngine())
+        return;
+      answer[data.id] = { model: null, runs: false, missing: "model" };
+      return;
+    }
+    const state = isEngineModel(ref) && ref.providerID !== "auto" ? onEngine(ref, await fromEngine()) : withAgents(ref, await fromBridge());
+    if (state)
+      answer[data.id] = { model: ref, ...state };
+  }));
+  return answer;
+}
+async function* sessionModelsRoute(context) {
+  const { request, readEngine, bridge, signal, json } = context;
+  if (request.method.toUpperCase() !== "GET")
+    return yield* json(405, {});
+  const ids = sessionsAsked(request.path);
+  if (!ids)
+    return yield* json(400, { message: `Name the sessions: sessions=<id>,<id>… (${GLANCE_MOST} at most).` });
+  const targets = targetsOf({ readEngine, bridge });
+  if (!targets.length)
+    return yield* json(503, { message: "The engine isn't running." });
+  let engine = null;
+  try {
+    engine = readEngine();
+  } catch {}
+  try {
+    return yield* json(200, { sessions: await sessionModels(ids, engine, bridge(), signal ?? undefined) });
+  } catch (error) {
+    if (error instanceof Unreached)
+      return yield* json(503, { message: error.message });
+    throw error;
   }
 }
 
@@ -41523,6 +41676,7 @@ var ROUTES = [
   { when: (route) => SESSION_AUTOPILOT_ROUTE.test(route), answer: autopilotRoute },
   { when: (route) => route.match(QUEUE_ROUTE), answer: queueRoute },
   { when: (route) => route.match(GLANCE_ROUTE), answer: glanceRoute },
+  { when: (route) => route === SESSION_MODELS_ROUTE, answer: sessionModelsRoute },
   { when: (route) => route === READ_ALL_ROUTE, answer: readAllRoute },
   { when: (route) => route.match(WORK_QUEUE_ROUTE), answer: workQueueRoute },
   { when: (route) => route === "kuvo/search", answer: searchRoute },

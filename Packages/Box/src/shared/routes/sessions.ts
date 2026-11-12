@@ -60,6 +60,28 @@ export const GLANCE = object({
 /** The sessions asked for, by id: one this box doesn't have is left out. */
 export const GLANCES = object({ sessions: map(GLANCE) });
 
+/** What a session's model button shows and whether its model can run (`kuvo/sessions/models`):
+ * the model it runs on (its own, else the engine's default; null for none), its name as its
+ * provider or agent lists it, whether it can run here now, and what's missing if not: a model to
+ * choose, a sign-in to its account, a key, its coding agent installed, or the model itself, gone
+ * from its provider's list. `account`: the account to sign in to, add a key for or install, or the
+ * provider it's gone from. `plan`: for a key the engine needs where a plan goes through a coding
+ * agent of its own (the engine's xAI, whose SuperGrok plan is Grok's), that plan, its agent and
+ * the agent's provider. */
+export const SESSION_MODEL = object({
+  model: nullable(object({ providerID: string, id: string, "variant?": string })),
+  "name?": string,
+  runs: bool,
+  "missing?": words("model", "signIn", "key", "install", "gone"),
+  "account?": object({ id: string, name: string, "label?": string }),
+  "plan?": object({ name: string, agent: string, provider: string }),
+});
+
+/** The sessions asked for, by id: one the box doesn't have, or can't say about yet, is left out. */
+export const SESSION_MODELS = object({ sessions: map(SESSION_MODEL) });
+
+export type SessionModel = Infer<typeof SESSION_MODEL>;
+
 export type Glance = Infer<typeof GLANCE>;
 export type GlancePull = Infer<typeof GLANCE_PULL>;
 export type GlanceChecks = Infer<typeof GLANCE_CHECKS>;
@@ -72,6 +94,7 @@ export const SESSION_ROUTES: RouteShape[] = [
   { route: "GET kuvo/sessions/glance", answers: { 200: GLANCES, 400: REFUSED, 503: REFUSED } },
   { route: "POST kuvo/sessions/read", answers: { 200: object({ read: number }), 503: REFUSED } },
   { route: "GET kuvo/sessions/glance/events", answers: { 200: GLANCES, 400: REFUSED, 503: REFUSED } },
+  { route: "GET kuvo/sessions/models", answers: { 200: SESSION_MODELS, 400: REFUSED, 503: REFUSED } },
   { route: "GET kuvo/sessions/:id/queue", answers: { 200: QUEUE } },
   { route: "POST kuvo/sessions/:id/stop", answers: { 200: QUEUE, 404: REFUSED, 502: REFUSED, 503: REFUSED } },
   { route: "POST kuvo/sessions/:id/queue/hold", answers: { 200: QUEUE, 404: REFUSED, 502: REFUSED, 503: REFUSED } },

@@ -143,6 +143,18 @@
       ]
     },
     {
+      "name": "a session's model: one the box doesn't have left out, and none named refused",
+      "steps": [
+        {
+          "send": "GET kuvo/sessions/models?sessions=ses_nowhere",
+          "why": "Whether a session's model can run, by session, as every client draws it: one the box doesn't have is left out, and a client lets it go.",
+          "expect": { "status": 200, "json": { "sessions": { "ses_nowhere": "<absent>" } } }
+        },
+        { "send": "GET kuvo/sessions/models", "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "POST kuvo/sessions/models?sessions=ses_nowhere", "expect": { "status": 405 } }
+      ]
+    },
+    {
       "name": "stopping a command no agent left running",
       "steps": [
         { "send": "POST kuvo/shell/sh_nothing/stop", "body": {}, "expect": { "status": 404 } }

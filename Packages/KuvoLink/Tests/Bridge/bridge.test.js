@@ -1462,6 +1462,7 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     search: ["GET", "kuvo/search?q=none"],
     "sessions.agents": ["GET", "kuvo/sessions/ses_none/agents"],
     "sessions.glance": ["POST", "kuvo/sessions/glance"],
+    "sessions.models": ["POST", "kuvo/sessions/models"],
     "sessions.start": ["POST", "kuvo/sessions"],
     // (Your setup, and who's its main computer.)
     setup: ["GET", "kuvo/setup"],
