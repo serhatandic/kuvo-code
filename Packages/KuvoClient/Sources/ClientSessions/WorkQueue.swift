@@ -284,7 +284,8 @@ public struct WorkItemDetail: Hashable, Sendable, Decodable {
         files = try container.decodeIfPresent([File].self, forKey: .files) ?? []
         links = try container.decodeIfPresent([Link].self, forKey: .links) ?? []
         handed = try container.decodeIfPresent([Handed].self, forKey: .handed) ?? []
-        told = try container.decodeIfPresent(Bool.self, forKey: .told) ?? false
+        // (A box from before `told` answered one on another computer only as it last told it.)
+        told = try container.decodeIfPresent(Bool.self, forKey: .told) ?? (item.computer != nil)
     }
 }
 

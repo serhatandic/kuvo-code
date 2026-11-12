@@ -266,10 +266,10 @@ final class WorkQueues {
         return nil
     }
 
-    /// A file kept with an item: its bytes (`box`: the one it's kept on, `box(of:in:)`).
+    /// A file kept with an item: its bytes (`box`: the one it's kept on where this Mac reaches it,
+    /// `box(of:in:)`, else the panel's, which brings it from there for you).
     func file(box: String, item: String, name: String) async -> Data? {
-        guard let client = client(box) else { return nil }
-        guard let answer = try? await client.send("GET", "kuvo/work-queue/items/\(path(item))/files/\(path(name))"), answer.status == 200 else { return nil }
+        guard let answer = try? await send("GET", "kuvo/work-queue/items/\(path(item))/files/\(path(name))", to: box), answer.status == 200 else { return nil }
         return answer.body
     }
 
@@ -413,8 +413,9 @@ final class WorkQueues {
         guard let client = client(box) else { throw BoxRefusal(status: 503, message: "This Mac can’t reach that computer now.") }
         var headers: [String: String] = [:]
         if BoxClient.needsVaultProof(box) {
-            guard let proof = proof(box, method, path, body ?? Data()) else { throw BoxRefusal(status: 503, message: "This Mac can’t prove it’s yours to that machine right now. Try again in a moment.") }
-            headers["x-kuvo-vault-proof"] = proof
+            // (A read goes without one: the machine answers it, only not what it brings from another computer.)
+            if let proof = proof(box, method, path, body ?? Data()) { headers["x-kuvo-vault-proof"] = proof }
+            else if method != "GET" { throw BoxRefusal(status: 503, message: "This Mac can’t prove it’s yours to that machine right now. Try again in a moment.") }
         }
         return try await client.send(method, path, body: body, headers: headers)
     }
@@ -422,7 +423,11 @@ final class WorkQueues {
     /// What you do, sent as you (`send`) to `box`; what it refused said over the panel `shownOn`.
     @discardableResult
     private func act<T: Decodable>(_ type: T.Type, _ method: String, _ path: String, body: (any Encodable)? = nil, on box: String, shownOn: String? = nil) async -> T? {
-        guard client(box) != nil else { return nil }
+        guard client(box) != nil else {
+            // (A machine's panel read from this Mac's box, with that box out of reach too.)
+            if let shownOn, shownOn != box { refusal = (shownOn, "This Mac can’t reach Kuvo Code’s background service right now. Try again in a moment.") }
+            return nil
+        }
         do {
             let sent = try body.map { try JSONEncoder().encode($0) }
             let (status, data) = try await send(method, path, body: sent, to: box)
