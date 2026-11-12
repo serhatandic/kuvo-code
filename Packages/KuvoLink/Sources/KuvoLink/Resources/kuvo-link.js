@@ -4986,6 +4986,7 @@ function engineCommandsInSandbox() {
 }
 var fencePending = () => fenceWanted() && (checked.unfinished === true || fs20.existsSync(HELD));
 var BEING_CHECKED = "The sandbox is being checked again, so nothing can be let out of it yet: commands still run in it. Try again in a minute, or tell the user what you need.";
+var NOT_ON_NOW = "The sandbox isn't on here now, so Auto lets nothing out of it: run the command with your shell tool, which asks the user first.";
 var agentsCommandsInSandbox = () => fenceWanted() && fs20.existsSync(ON) && !fs20.existsSync(HELD);
 function bridgeSays() {
   if (!agentsCommandsInSandbox())
@@ -5221,8 +5222,10 @@ function hold2() {
   try {
     if (!textOf(HELD))
       writePrivate(HELD, crypto9.randomUUID());
+    return true;
   } catch {
     fs20.rmSync(ON, { force: true });
+    return false;
   }
 }
 var heldMark = () => textOf(HELD) || null;
@@ -5315,13 +5318,14 @@ function setUpFence(found) {
     lastProfiles = "";
     writeProfiles();
     tellLauncher();
+    let held = true;
     let result = namespaceUnfinished ? { passed: false, unfinished: true } : probe();
     unfinishedInARow = result.unfinished ? unfinishedInARow + 1 : 0;
     if (unfinishedInARow >= MOST_UNFINISHED)
       result = { passed: false, check: "didntRun", why: `Its check didn't finish ${unfinishedInARow} times in a row.` };
     if (result.unfinished) {
       checked = { able: true, passed: false, unfinished: true, reason: "checking", why: PENDING_WHY };
-      hold2();
+      held = hold2();
       loosening = null;
     } else if (!result.passed) {
       failures += 1;
@@ -5336,7 +5340,7 @@ function setUpFence(found) {
     if (!fs20.existsSync(READY))
       writePrivate(READY, "");
     givePlugin();
-    if (!textOf(ON)?.trim())
+    if (!textOf(ON)?.trim() && held)
       writePrivate(ON, crypto9.randomUUID());
     if (result.passed)
       fs20.rmSync(HELD, { force: true });
@@ -5432,7 +5436,7 @@ function keepFence(every = (round) => {
       if (checked.passed || checked.unfinished)
         writeProfiles();
       const changed = textOf(PLUGIN) !== pluginScript(places, VERSION);
-      const elsewhere = checked.passed ? fs20.existsSync(HELD) : (checked.unfinished === true || loosening !== null) && !fs20.existsSync(HELD);
+      const elsewhere = checked.passed ? fs20.existsSync(HELD) : (checked.unfinished === true || loosening !== null && looseningMark !== null) && !fs20.existsSync(HELD);
       if (checked.passed ? changed || elsewhere : round % 6 === 0 || elsewhere)
         setUpFence(namespaceKnown ? namespace : undefined);
       else if (checked.unfinished && changed)
@@ -17654,6 +17658,7 @@ function approvalHere() {
   };
   return { fullAccess: fullAccessAllowed(), default: defaultApproval(), auto: { engine: auto(false), agents: auto(true) }, otherComputers: otherComputersAllowed() };
 }
+var MOST_PAGES = 2500;
 async function reapplyApprovals(engine, bridge, settings = false) {
   let done = true;
   const since = approvalsSince();
@@ -17662,7 +17667,9 @@ async function reapplyApprovals(engine, bridge, settings = false) {
     if (!target)
       continue;
     let query = "limit=200&order=desc";
-    while (query) {
+    for (let pages = 0;query; pages++) {
+      if (pages >= MOST_PAGES)
+        return false;
       const page = await engineGet(target, `api/session?${query}`).catch(() => null);
       if (!page)
         return false;
@@ -17671,6 +17678,8 @@ async function reapplyApprovals(engine, bridge, settings = false) {
         if (!data?.id)
           continue;
         const kept = data.metadata?.kuvo?.approval;
+        if (data.parentID && kept === undefined)
+          continue;
         const bot = found2(target, data, agents).bot;
         const now = approvalOf(data, { agents, bot }, since, byDefault);
         if (!data.parentID)
@@ -32136,7 +32145,7 @@ async function askToRun(caller, args, signal) {
   }
   if (verdict?.decision === "allow" && !fenceState().on) {
     forgetFetched(fetched);
-    return { text: BEING_CHECKED, isError: false };
+    return { text: fencePending() ? BEING_CHECKED : NOT_ON_NOW, isError: false };
   }
   const left = Math.floor((CALL_BUDGET - (Date.now() - started)) / 1000);
   const seconds = Math.max(1, Math.min(600, left, Number(args.timeout) || 300));
@@ -32195,7 +32204,7 @@ async function stoppedInAuto(caller, input, printed, calling, signal) {
     return { text: refusalWords(verdict) };
   if (!fenceState().on) {
     forgetFetched(verdict.fetched);
-    return { text: BEING_CHECKED };
+    return { text: fencePending() ? BEING_CHECKED : NOT_ON_NOW };
   }
   const asked = Number(input.timeout);
   const left = Math.floor((CALL_BUDGET - (Date.now() - started)) / 1000);
@@ -38228,7 +38237,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "f5de0b33571e";
+var BRIDGE_VERSION = "ed80a8e0e9b6";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

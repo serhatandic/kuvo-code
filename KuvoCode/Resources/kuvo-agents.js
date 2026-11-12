@@ -21204,6 +21204,8 @@ ${live.agentPrompt}` : ""
       return "ask";
     if (hidesFromBlocks(live.blocks, ask))
       return "ask";
+    if (isShell(ask.action) && autoWithoutSandbox(session) && !this.allowedBefore(live, ask))
+      return "ask";
     return effect === "ask" && !this.allowedBefore(live, ask) ? "ask" : undefined;
   }
   ownedBy(turn) {
@@ -21269,7 +21271,7 @@ ${live.agentPrompt}` : ""
     if (effect === "deny")
       return "reject";
     const unclassified = ask.unclassified && matched === undefined && asksFirst(session.permissions) && !this.allowedBefore(live, ask);
-    const unfenced = isShell(ask.action) && autoWithoutSandbox(session);
+    const unfenced = isShell(ask.action) && autoWithoutSandbox(session) && !this.allowedBefore(live, ask);
     if (!unknown && !unclassified && !unfenced && !hidesFromBlocks(live.blocks, ask) && (effect === "allow" || this.allowedBefore(live, ask)))
       return "once";
     if (turn.isEnded || refusesAsks(live.doing))
@@ -28250,4 +28252,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 4df5f3899d9c7e728335c96d9f6fca7e9dc9c4a2ec1243cb56e0f939075efe11
+// Built from Packages/Box/src/agents 1e2bbe731ce3ff9c66d6a3eaf15cfc6e208d9d8d9219c4e2a91936c6cea85d91

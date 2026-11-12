@@ -26,7 +26,7 @@ import { findConversation, heldUnreached, inAuto, inFullAccess, refusalWords, re
 import { forgetFetched } from "../work/reviewer";
 import { addRule, ownerOf, writeRuleWouldBe } from "./allowed";
 import { askedAbout, fencePolicy, macMayAsk, type FencePolicy } from "./policy";
-import { BEING_CHECKED, fenceState } from "./state";
+import { BEING_CHECKED, fencePending, fenceState, NOT_ON_NOW } from "./state";
 
 /** Your answer, and who gave it: "Mac", or a phone's name. */
 export interface SandboxAnswer {
@@ -233,7 +233,7 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
   }
   // Allowed by Auto's reviewer, which counts on the sandbox: only while it's still on (its check may
   // have failed, or not finished, while the reviewer decided).
-  if (verdict?.decision === "allow" && !fenceState().on) { forgetFetched(fetched); return { text: BEING_CHECKED, isError: false }; }
+  if (verdict?.decision === "allow" && !fenceState().on) { forgetFetched(fetched); return { text: fencePending() ? BEING_CHECKED : NOT_ON_NOW, isError: false }; }
   const left = Math.floor((CALL_BUDGET - (Date.now() - started)) / 1000);
   const seconds = Math.max(1, Math.min(600, left, Number(args.timeout) || 300));
   const { shown, code, timedOut } = await runOutside(fetched?.command ?? command, project, seconds, signal).finally(() => forgetFetched(fetched));
@@ -294,7 +294,7 @@ export async function stoppedInAuto(caller: Caller, input: Record<string, unknow
   if (verdict.decision === "refuse") return { text: refusalWords(verdict) };
   // (Only while the sandbox is still on, which Auto counts on: its check may have failed, or not
   // finished, while the reviewer decided.)
-  if (!fenceState().on) { forgetFetched(verdict.fetched); return { text: BEING_CHECKED }; }
+  if (!fenceState().on) { forgetFetched(verdict.fetched); return { text: fencePending() ? BEING_CHECKED : NOT_ON_NOW }; }
   // (A shell tool's timeout is in milliseconds, and none is the most; within what the call has left.)
   const asked = Number(input.timeout);
   const left = Math.floor((CALL_BUDGET - (Date.now() - started)) / 1000);

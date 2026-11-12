@@ -220,6 +220,9 @@ export function approvalHere(): ApprovalHere {
  * written. With `settings` (Settings › Permissions changed), every one kept with an approval whose
  * rules aren't made from them as they are now, too. True once every one is so; false where the
  * engine didn't answer or take one (tried again on the next round). */
+/** The most pages of 200 conversations the round reads: half a million, far past any computer's. */
+const MOST_PAGES = 2500;
+
 export async function reapplyApprovals(engine: Target | null, bridge: Target | null, settings = false): Promise<boolean> {
   let done = true;
   // (This computer's, read once for the round: thousands of conversations may be looked at.)
@@ -231,13 +234,17 @@ export async function reapplyApprovals(engine: Target | null, bridge: Target | n
     // from their conversation's): once the sandbox is held, it's taken away only once all are made
     // for it being off.
     let query: string | null = "limit=200&order=desc";
-    while (query) {
+    for (let pages = 0; query; pages++) {
+      // (Past this many, not done: a sandbox held for it stays held, the safe side.)
+      if (pages >= MOST_PAGES) return false;
       const page = await engineGet(target, `api/session?${query}`).catch(() => null) as { data?: unknown; cursor?: { next?: string } | null } | null;
       if (!page) return false;
       const listed = Array.isArray(page.data) ? page.data as EngineSession[] : [];
       for (const data of listed) {
         if (!data?.id) continue;
         const kept = data.metadata?.kuvo?.approval;
+        // (A subagent's with no approval of its own has nothing to make.)
+        if (data.parentID && kept === undefined) continue;
         const bot = found(target, data, agents).bot;
         const now = approvalOf(data, { agents, bot }, since, byDefault);
         // (Full Access's list for the sandbox's launcher, as each is now: one from before too. A

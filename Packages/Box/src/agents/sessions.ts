@@ -2858,6 +2858,9 @@ export class Sessions {
     // Blocks not known (the engine didn't answer): asked, which reads them again.
     if (live.blocks === undefined && !looks.has(ask.action)) return "ask"
     if (hidesFromBlocks(live.blocks, ask)) return "ask"
+    // A command in Auto without the sandbox: asked, whatever an agent's own settings allow (Claude
+    // Code's allow lists, the commands it takes for read-only), unless you allowed it here before.
+    if (isShell(ask.action) && autoWithoutSandbox(session) && !this.allowedBefore(live, ask)) return "ask"
     return effect === "ask" && !this.allowedBefore(live, ask) ? "ask" : undefined
   }
 
@@ -2935,7 +2938,7 @@ export class Sessions {
     // First: you answer it, unless you allowed it in this session before.
     const unclassified = ask.unclassified && matched === undefined && asksFirst(session.permissions) && !this.allowedBefore(live, ask)
     // (A command in Auto without the sandbox: you answer it.)
-    const unfenced = isShell(ask.action) && autoWithoutSandbox(session)
+    const unfenced = isShell(ask.action) && autoWithoutSandbox(session) && !this.allowedBefore(live, ask)
     if (!unknown && !unclassified && !unfenced && !hidesFromBlocks(live.blocks, ask) && (effect === "allow" || this.allowedBefore(live, ask))) return "once"
     if (turn.isEnded || refusesAsks(live.doing)) return "reject"
     const request: PermissionRequest = {

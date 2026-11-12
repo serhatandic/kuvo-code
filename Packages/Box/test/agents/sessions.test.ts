@@ -435,6 +435,8 @@ describe("permissions", () => {
       const seen: (boolean | string)[] = []
       a.script = async (_input, _turn, hooks) => {
         seen.push(hooks.approvesAll())
+        // (What an agent checks before its own settings decide, as Claude Code's PreToolUse does.)
+        seen.push(hooks.check({ action: "shell", resources: ["ls"] }) ?? "its own")
         seen.push(await hooks.permission({ action: "shell", resources: ["ls"] }))
         seen.push(await hooks.permission({ action: "edit", resources: ["notes.md"] }))
         return { outcome: "succeeded" }
@@ -446,13 +448,13 @@ describe("permissions", () => {
       expect(sessions.permissions(id)[0].action).toBe("shell")
       sessions.replyPermission(id, sessions.permissions(id)[0].id, "once")
       await settled(id, 1)
-      expect(seen).toEqual([false, "once", "once"])
+      expect(seen).toEqual([false, "ask", "once", "once"])
       // On again: it goes on its own.
       writeFileSync(join(fence, "on"), "on")
       seen.length = 0
       send(id, "again")
       await settled(id, 2)
-      expect(seen).toEqual([true, "once", "once"])
+      expect(seen).toEqual([true, "its own", "once", "once"])
     } finally {
       if (was === undefined) delete process.env.KUVO_FENCE
       else process.env.KUVO_FENCE = was

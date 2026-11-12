@@ -175,6 +175,8 @@ export const fencePending = (): boolean => fenceWanted() && (checked.unfinished 
 
 /** What a command that would leave the sandbox is told while it's held (`fencePending`). */
 export const BEING_CHECKED = "The sandbox is being checked again, so nothing can be let out of it yet: commands still run in it. Try again in a minute, or tell the user what you need.";
+/** And once it isn't on at all (taken away after a failed check): Auto lets nothing out. */
+export const NOT_ON_NOW = "The sandbox isn't on here now, so Auto lets nothing out of it: run the command with your shell tool, which asks the user first.";
 
 /** Whether the coding agents' own programs (Claude Code, Codex, Cursor, Grok, Antigravity, whose
  * commands don't go through the engine) run in it: each runs whole in it, as the bridge starts
@@ -448,12 +450,14 @@ function withdraw(ready: "keep" | "remove" = "remove"): void {
  * written (a full disk, no files left to open), `on` goes instead, which nothing counts on it
  * without either (the coding agents' bridge asks in Auto then, kuvo-wake waits on `ready`), and it's
  * held again on the next try. */
-function hold(): void {
+function hold(): boolean {
   // (One a box before left empty is given one too.)
   try {
     if (!textOf(HELD)) writePrivate(HELD, crypto.randomUUID());
+    return true;
   } catch {
     fs.rmSync(ON, { force: true });
+    return false;
   }
 }
 
@@ -608,6 +612,8 @@ export function setUpFence(found?: string | null): FenceState {
     writeProfiles();
     tellLauncher();
     // (Not while whether commands have a namespace of their own isn't known: it didn't finish either.)
+    // (Whether it's held, where the check didn't finish: only then is `on` written.)
+    let held = true;
     let result: { passed: boolean; unfinished?: boolean; why?: string; check?: FenceCheck } = namespaceUnfinished ? { passed: false, unfinished: true } : probe();
     unfinishedInARow = result.unfinished ? unfinishedInARow + 1 : 0;
     // Not finished time after time: taken for a failed check, so it doesn't stay "checking" for good.
@@ -615,8 +621,8 @@ export function setUpFence(found?: string | null): FenceState {
     if (result.unfinished) {
       // Not known yet: never counted on, never a failure (failures stay as they were).
       checked = { able: true, passed: false, unfinished: true, reason: "checking", why: PENDING_WHY };
-      // (First, so nothing reads `on` as checked meanwhile.)
-      hold();
+      // (First, so nothing reads `on` as checked meanwhile; where it can't be held, `on` stays away.)
+      held = hold();
       // (Nor taken away for a check before it that failed: this one may yet pass.)
       loosening = null;
     } else if (!result.passed) {
@@ -635,7 +641,7 @@ export function setUpFence(found?: string | null): FenceState {
     if (!fs.existsSync(READY)) writePrivate(READY, "");
     givePlugin();
     // Which setup this is, for the agents bridge's note (and an empty one, an older box's, given one).
-    if (!textOf(ON)?.trim()) writePrivate(ON, crypto.randomUUID());
+    if (!textOf(ON)?.trim() && held) writePrivate(ON, crypto.randomUUID());
     // Checked: counted on from now (last, once all the rest is in place).
     if (result.passed) fs.rmSync(HELD, { force: true });
   } catch (error) {
@@ -724,7 +730,7 @@ export function keepFence(every: (round: () => Promise<void>) => void = round =>
       const changed = textOf(PLUGIN) !== pluginScript(places, VERSION);
       // Checked again too where another of the box's processes (`box route`) found its check
       // didn't finish, or since passed it (or found it failed, and took it away).
-      const elsewhere = checked.passed ? fs.existsSync(HELD) : (checked.unfinished === true || loosening !== null) && !fs.existsSync(HELD);
+      const elsewhere = checked.passed ? fs.existsSync(HELD) : (checked.unfinished === true || (loosening !== null && looseningMark !== null)) && !fs.existsSync(HELD);
       if (checked.passed ? changed || elsewhere : round % 6 === 0 || elsewhere) setUpFence(namespaceKnown ? namespace : undefined);
       // While it hasn't finished, its plugin put back at once, as while it's on.
       else if (checked.unfinished && changed) givePlugin();
