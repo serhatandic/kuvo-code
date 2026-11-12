@@ -11553,7 +11553,7 @@ function itemOf(given, owner) {
     order: typeof given.order === "number" && Number.isFinite(given.order) ? given.order : 0,
     ...isObject(given.progress) ? { progress: { ...typeof given.progress.value === "number" ? { value: given.progress.value } : {}, ...typeof given.progress.note === "string" ? { note: given.progress.note } : {} } } : {},
     notes: list(given.notes, (each) => typeof each.at === "number" && typeof each.text === "string" && whoOf(each.by) !== null),
-    ...Array.isArray(given.events) ? { events: list(given.events, (each) => typeof each.at === "number" && typeof each.kind === "string" && whoOf(each.by) !== null).slice(-MOST_EVENTS) } : {},
+    ...Array.isArray(given.events) ? { events: list(given.events, (each) => typeof each.at === "number" && typeof each.kind === "string" && whoOf(each.by) !== null && (each.from === undefined || typeof each.from === "string") && (each.to === undefined || typeof each.to === "string") && (each.top === undefined || each.top === true)).slice(-MOST_EVENTS) } : {},
     files: list(given.files, (each) => typeof each.name === "string" && FILE_NAME.test(each.name) && typeof each.size === "number"),
     links: list(given.links, (each) => typeof each.url === "string"),
     sessions: list(given.sessions, (each) => typeof each.session === "string" && SESSION2.test(each.session)),
@@ -37160,7 +37160,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "2f63f02245ee";
+var BRIDGE_VERSION = "0403a71616d1";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

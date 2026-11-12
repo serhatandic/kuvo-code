@@ -239,25 +239,27 @@ import ClientSessions
     }
 
     @Test func activityMergesNotesAndWhatHappenedToItOldestFirst() throws {
-        // (Out of order on the wire; three things at 4000: a start, a note and a move, said in
-        // another order.)
+        // (Out of order on the wire; three things at 4000: a start and a move as the box kept them,
+        // and a note; at 7000, a move and the work it started, in the box's order.)
         let json = """
         {"id":"wqi_1","number":551,"owner":"ses_lead","title":"T","category":"done","doneAt":9000,"order":1,"inProgress":false,"sessions":[],"noteCount":2,"fileCount":0,"linkCount":0,"created":{"at":1000,"by":{"session":"ses_lead","name":"Kuvo Foreman"}},"updated":{"at":9000,"by":{"session":"ses_b","name":"Sign-in"}},
          "body":"","notes":[{"at":4000,"by":{"session":"ses_b","name":"Sign-in"},"text":"Starting with the tests."},{"at":8500,"by":{"session":"ses_b","name":"Sign-in"},"text":"All pass."}],
-         "events":[{"at":4000,"by":{"user":true},"kind":"moved","from":"next","to":"next","top":true},
-                   {"at":4000,"by":{"session":"ses_b","name":"Sign-in"},"kind":"started"},
+         "events":[{"at":4000,"by":{"session":"ses_b","name":"Sign-in"},"kind":"started"},
+                   {"at":4000,"by":{"user":true},"kind":"moved","from":"next","to":"next","top":true},
                    {"at":2000,"by":{"user":true},"kind":"moved","from":"next","to":"cat_design"},
                    {"at":3000,"by":{"user":true},"kind":"moved","from":"cat_design","to":"next"},
                    {"at":5000,"by":{"user":true},"kind":"moved","from":"next","to":"next"},
                    {"at":6000,"by":{"source":"github","name":"octocat"},"kind":"reopened-upstream"},
                    {"at":6500,"by":{"user":true},"kind":"moved","from":"next","to":"later","top":"yes"},
                    {"at":"soon","by":{"user":true},"kind":"moved"},
+                   {"at":7000,"by":{"session":"ses_b","name":"Sign-in"},"kind":"moved","from":"later","to":"cat_gone"},
+                   {"at":7000,"by":{"session":"ses_b","name":"Sign-in"},"kind":"started"},
                    {"at":8000,"by":{"session":"ses_b","name":"Sign-in"},"kind":"stopped"},
                    {"at":9000,"by":{"session":"ses_b","name":"Sign-in"},"kind":"done"}],
          "files":[],"links":[],"handed":[]}
         """
         let detail = try JSONDecoder().decode(WorkItemDetail.self, from: Data(json.utf8))
-        #expect(detail.events.count == 9, "one the client can't read leaves out only itself")
+        #expect(detail.events.count == 11, "one the client can't read leaves out only itself")
         var view = WorkQueueView(owner: "ses_lead", owners: [])
         view.categories = [WorkCategory(id: "next", name: "Next", builtIn: true), WorkCategory(id: "later", name: "Later", builtIn: true), WorkCategory(id: "cat_design", name: "Design", builtIn: false), WorkCategory(id: "done", name: "Done", builtIn: true)]
         let lines = WorkQueue.activity(of: detail, in: view)
@@ -270,11 +272,13 @@ import ClientSessions
             "You moved it to the top of Next",
             "You moved it within Next",
             "You moved it to Later",
+            "Sign-in moved it to another category",
+            "Sign-in started work",
             "Sign-in stopped work",
             "Sign-in left a note",
             "Sign-in marked it done",
         ], "a kind from a newer box left out; Done once, as the box kept it")
-        #expect(lines.map(\.kind) == [.added, .moved, .moved, .started, .note, .moved, .moved, .moved, .stopped, .note, .done])
+        #expect(lines.map(\.kind) == [.added, .moved, .moved, .started, .note, .moved, .moved, .moved, .moved, .started, .stopped, .note, .done])
         #expect(lines[3].who == .session("ses_b", name: "Sign-in"))
         #expect(Set(lines.map(\.id)).count == lines.count)
     }
@@ -288,6 +292,11 @@ import ClientSessions
         #expect(detail.events.isEmpty)
         let lines = WorkQueue.activity(of: detail, in: WorkQueueView(owner: "ses_lead", owners: []))
         #expect(lines.map { "\($0.whoWords) \($0.what)" } == ["You added the item", "You left a note", "You marked it done"])
+
+        // Done again where no word of it was kept (on an older box), after a Done that was: said.
+        let again = try JSONDecoder().decode(WorkItemDetail.self, from: Data(json.replacingOccurrences(of: #""handed":[]"#, with: #""handed":[],"events":[{"at":1500,"by":{"user":true},"kind":"done"},{"at":1600,"by":{"user":true},"kind":"moved","from":"done","to":"next"}]"#).utf8))
+        #expect(WorkQueue.activity(of: again, in: WorkQueueView(owner: "ses_lead", owners: [])).map { "\($0.whoWords) \($0.what)" }
+            == ["You added the item", "You marked it done", "You moved it to Next", "You left a note", "You marked it done"])
     }
 
     @Test func aRowOpensTheSessionAtWorkElseTheOneLinkedAndSaysItAll() {

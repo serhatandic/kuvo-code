@@ -170,7 +170,8 @@ export function itemOf(given: unknown, owner: string): Item | null {
     order: typeof given.order === "number" && Number.isFinite(given.order) ? given.order : 0,
     ...(isObject(given.progress) ? { progress: { ...(typeof given.progress.value === "number" ? { value: given.progress.value } : {}), ...(typeof given.progress.note === "string" ? { note: given.progress.note } : {}) } } : {}),
     notes: list<Note>(given.notes, each => typeof each.at === "number" && typeof each.text === "string" && whoOf(each.by) !== null),
-    ...(Array.isArray(given.events) ? { events: list<ItemEvent>(given.events, each => typeof each.at === "number" && typeof each.kind === "string" && whoOf(each.by) !== null).slice(-MOST_EVENTS) } : {}),
+    ...(Array.isArray(given.events) ? { events: list<ItemEvent>(given.events, each => typeof each.at === "number" && typeof each.kind === "string" && whoOf(each.by) !== null
+      && (each.from === undefined || typeof each.from === "string") && (each.to === undefined || typeof each.to === "string") && (each.top === undefined || each.top === true)).slice(-MOST_EVENTS) } : {}),
     files: list<KeptFile>(given.files, each => typeof each.name === "string" && FILE_NAME.test(each.name) && typeof each.size === "number"),
     links: list<Link>(given.links, each => typeof each.url === "string"),
     sessions: list<Linked>(given.sessions, each => typeof each.session === "string" && SESSION.test(each.session)),

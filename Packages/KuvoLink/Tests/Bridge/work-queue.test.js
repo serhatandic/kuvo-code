@@ -400,6 +400,17 @@ test("you reordering one item again and again is one move in its feed; another's
   // A move to another category is never folded into a reorder.
   await route("POST", "kuvo/work-queue/items/1/move", { category: "later" });
   assert.equal((await events()).length, 4);
+  // A move that leaves it where it was isn't one: to the top it's at, into its own category, after
+  // the one it's after already; nor is another item moving past it.
+  await route("POST", "kuvo/work-queue/items/2/move", { category: "later" });
+  const before = await events();
+  await route("POST", "kuvo/work-queue/items/1/move", { top: true });
+  await route("POST", "kuvo/work-queue/items/1/move", { category: "later" });
+  await tool("queue_update", { item: 1, category: "later" }, "ses_lead");
+  await route("POST", "kuvo/work-queue/items/2/move", { after: 1 });
+  assert.deepEqual(await events(), before);
+  await route("POST", "kuvo/work-queue/items/2/move", { top: true });
+  assert.deepEqual(await events(), before, "item 2 moving above it says nothing of item 1");
 });
 
 test("an item keeps the last 50 of what happened to it", async () => {
@@ -417,6 +428,11 @@ test("an item keeps the last 50 of what happened to it", async () => {
   assert.equal(events[48].kind, "seen-upstream", "a kind this box doesn't know is kept as it came");
   assert.equal(events.at(-1).kind, "started");
   assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).items[0].events.length, 50);
+  // One whose fields aren't what they should be (a buggy box's) isn't kept.
+  const now = JSON.parse(fs.readFileSync(file, "utf8"));
+  now.items[0].events.push({ at: 99, by: { user: true }, kind: "moved", to: 5 }, { at: 99, by: { user: true }, kind: "moved", from: "next", to: "next", top: "yes" });
+  fs.writeFileSync(file, JSON.stringify(now));
+  assert.equal((await route("GET", "kuvo/work-queue/items/1")).body.item.events.at(-1).kind, "started");
 });
 
 test("an item from before the box kept its history has none, and keeps what happens from now on", async () => {

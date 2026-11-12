@@ -201,12 +201,9 @@ public extension WorkQueue {
         for (index, handed) in detail.handed.enumerated() {
             lines.append(Activity(id: "handed-\(index)", kind: .handed, who: nil, whoWords: ownerWords(handed.from, in: view) ?? "A conversation", what: "handed it to \(ownerWords(handed.to, in: view) ?? "another conversation")", at: handed.at))
         }
-        for (index, event) in detail.events.enumerated() {
-            guard let (kind, what) = eventWords(event, in: view) else { continue }
-            lines.append(Activity(id: "event-\(index)", kind: kind, who: event.by, whoWords: capitalized(event.by.words), what: what, at: event.at))
-        }
-        // (Done, from an item whose box kept no word of it: from when it was done.)
-        if item.isDone, item.keptIn == nil, !detail.events.contains(where: { $0.kind == "done" }), let doneAt = item.doneAt {
+        // (Done, from when it was done, where the box kept no word of it then: an item from before,
+        // or one done again on a box that keeps none.)
+        if item.isDone, item.keptIn == nil, let doneAt = item.doneAt, !detail.events.contains(where: { $0.kind == "done" && $0.at >= doneAt - 1000 }) {
             // (Who marked it done is kept only as its last change, when that's the same moment.)
             let by = abs(item.updated.at - doneAt) < 1000 ? item.updated.by : nil
             lines.append(Activity(id: "done", kind: .done, who: by, whoWords: by.map { capitalized($0.words) } ?? "", what: by == nil ? "Marked done" : "marked it done", at: doneAt))
@@ -215,11 +212,30 @@ public extension WorkQueue {
             lines.append(Activity(id: "deleted", kind: .deleted, who: removed.by, whoWords: capitalized(removed.by.words), what: "deleted it", at: removed.at))
         }
         // (Oldest first; at one moment, by kind, then in the order above.)
-        return lines.enumerated().sorted { a, b in
+        let others = lines.enumerated().sorted { a, b in
             if a.element.at != b.element.at { return a.element.at < b.element.at }
             if a.element.kind.rank != b.element.kind.rank { return a.element.kind.rank < b.element.kind.rank }
             return a.offset < b.offset
         }.map(\.element)
+        // The box's events, oldest first, in the order it kept them at one moment (a move then the
+        // work it started); merged in, each before the others' lines at its moment that rank after it.
+        let events = detail.events.enumerated().compactMap { index, event -> Activity? in
+            guard let (kind, what) = eventWords(event, in: view) else { return nil }
+            return Activity(id: "event-\(index)", kind: kind, who: event.by, whoWords: capitalized(event.by.words), what: what, at: event.at)
+        }.enumerated().sorted { $0.element.at != $1.element.at ? $0.element.at < $1.element.at : $0.offset < $1.offset }.map(\.element)
+        var merged: [Activity] = []
+        var (next, nextEvent) = (0, 0)
+        while next < others.count || nextEvent < events.count {
+            if nextEvent < events.count, next == others.count || events[nextEvent].at < others[next].at
+                || (events[nextEvent].at == others[next].at && events[nextEvent].kind.rank < others[next].kind.rank) {
+                merged.append(events[nextEvent])
+                nextEvent += 1
+            } else {
+                merged.append(others[next])
+                next += 1
+            }
+        }
+        return merged
     }
 
     /// What an event says it did ("started work", "moved it to the top of Next"), and its kind; nil
@@ -231,7 +247,8 @@ public extension WorkQueue {
         case "done": return (.done, "marked it done")
         case "moved":
             guard let to = event.to else { return nil }
-            let name = categoryName(to, in: view.categories)
+            // (One the view doesn't name, a custom one removed since: never its id.)
+            let name = view.categories.contains { $0.id == to } || !to.hasPrefix("cat_") ? categoryName(to, in: view.categories) : "another category"
             if event.top { return (.moved, "moved it to the top of \(name)") }
             return (.moved, event.from == to ? "moved it within \(name)" : "moved it to \(name)")
         default: return nil
