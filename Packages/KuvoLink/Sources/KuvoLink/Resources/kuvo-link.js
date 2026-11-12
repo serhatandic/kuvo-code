@@ -14610,6 +14610,25 @@ function pullRequestPrompt(summary, file = CONFIG_FILE) {
 
 ${summary}`, instructionsHere("pullRequest", file));
 }
+function takeOldBranchPrefix(file, gitFile) {
+  const kept = readGitFile(gitFile);
+  if (!("branchPrefix" in kept))
+    return;
+  const { settings, problem } = readSettings(file);
+  if (problem)
+    return;
+  if (typeof kept.branchPrefix === "string" && valueAt(settings, [...GIT_SETTINGS.branchPrefix]) === undefined && writeSettings(settings, [{ path: [...GIT_SETTINGS.branchPrefix], value: kept.branchPrefix }], file).status !== 200)
+    return;
+  const { branchPrefix: _taken, ...rest } = kept;
+  writePrivate(gitFile, JSON.stringify(rest));
+}
+function keepOldBranchPrefix(file = CONFIG_FILE, lock = CONFIG_LOCK, gitFile = BRANCH_PREFIX_FILE) {
+  if (!("branchPrefix" in readGitFile(gitFile)) || !ownsSettings())
+    return;
+  try {
+    locked(lock, () => takeOldBranchPrefix(file, gitFile));
+  } catch {}
+}
 function moveGitSettings(given, file = CONFIG_FILE, lock = CONFIG_LOCK, gitFile = BRANCH_PREFIX_FILE) {
   if (!isObject(given))
     return { status: 400, message: "Send {branchPrefix?, commitInstructions?, pullRequestInstructions?}." };
@@ -14619,17 +14638,20 @@ function moveGitSettings(given, file = CONFIG_FILE, lock = CONFIG_LOCK, gitFile 
   if (!ownsSettings())
     return { status: 409, message: "This machine's settings still come from your Mac. Connect it from Kuvo Code on your Mac once." };
   return locked(lock, () => {
+    takeOldBranchPrefix(file, gitFile);
     const { settings, problem } = readSettings(file);
     if (problem)
       return { status: 409, message: `The engine's settings file can't be changed from here: ${problem}` };
     if (readGitFile(gitFile).moved === true)
       return { status: 200, moved: false };
     const changes = offered.filter((key) => valueAt(settings, [...GIT_SETTINGS[key]]) === undefined).map((key) => ({ path: [...GIT_SETTINGS[key]], value: key === "branchPrefix" ? given[key] : given[key].trim() })).filter((change) => change.value !== "" || change.path[0] === GIT_SETTINGS.branchPrefix[0]);
-    const written = changes.length ? writeSettings(settings, changes, file) : null;
-    if (written && written.status !== 200)
+    if (!changes.length)
+      return { status: 200, moved: false };
+    const written = writeSettings(settings, changes, file);
+    if (written.status !== 200)
       return { status: written.status, message: written.message };
     keepInGitFile({ moved: true }, gitFile);
-    return { status: 200, moved: changes.length > 0 };
+    return { status: 200, moved: true };
   });
 }
 
@@ -38338,7 +38360,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "7bea024709b9";
+var BRIDGE_VERSION = "5a4aaf3e9c5a";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -42959,6 +42981,7 @@ async function run4() {
   keepFence();
   keepApprovals();
   keepGroupSettings();
+  keepOldBranchPrefix();
   holdVault(engineHandler(readEngineFile, { name: os18.hostname() }));
   setVaultTell(tell);
   watchVaultAsks(tell, answered);
@@ -43248,6 +43271,7 @@ async function serve() {
   keepFence();
   keepApprovals();
   keepGroupSettings();
+  keepOldBranchPrefix();
   keepEngineDefaults();
   holdVault(engineHandler(readEngineFile, { name: os18.hostname() }, readBridgeFile));
   console.log(JSON.stringify({ url: `http://127.0.0.1:${server.address().port}` }));
