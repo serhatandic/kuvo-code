@@ -70,7 +70,7 @@ export function leadOf(caller: Caller): Lead {
 
 /** A session of the caller's as list_sessions shows it: where it stands, its last reply, and how
  * full its context is. */
-export type LiveRow = Row & { lastReply?: string; context?: { used: number } | { summarized: true } };
+export type LiveRow = Row & { lastReply?: string; replyBeforeStop?: true; context?: { used: number } | { summarized: true } };
 
 /** The rows of `lead`'s sessions here, the latest first, at most `most`. */
 export async function liveRows(lead: string, targets: Target[], signal?: AbortSignal, most = 40): Promise<LiveRow[]> {
@@ -91,7 +91,7 @@ export function rowLine(work: LiveRow): string {
   const model = work.model ? ` · ${work.model.providerID}/${work.model.id}${work.model.variant ? ` (${work.model.variant})` : ""}` : "";
   const state = work.state === "asking" ? `asks to ${(work.asks ?? "").replace(/^Wants to /, "").replace(/\.$/, "")}${work.askID ? ` (ask ${work.askID})` : ""}` : work.state;
   const under = work.depth > 1 ? `, started by ${work.startedBy}` : "";
-  const reply = work.lastReply && work.state !== "asking" ? `\n  Last reply: ${work.lastReply}` : "";
+  const reply = work.lastReply && work.state !== "asking" ? `\n  ${work.replyBeforeStop ? "Last reply, from its turn that ended before it was stopped" : "Last reply"}: ${work.lastReply}` : "";
   const held = !work.context ? "" : "used" in work.context ? ` · ${work.context.used.toLocaleString("en-US")} tokens in context now` : " · just summarized, context size known after its next step";
   return `- ${work.title} (address ${work.session}), ${placeWords(work)}: ${state}${model}${under}${held}${work.tokens ? ` · ${work.tokens.toLocaleString("en-US")} tokens used in total` : ""}${reply}`;
 }

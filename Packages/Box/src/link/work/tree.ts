@@ -14,6 +14,7 @@ import { isHiddenRun } from "../engine/sessions";
 import { lastTurn, lastTurnEnd, summaryAtEnd, summaryRowAtEnd, workOutcome } from "../../shared/summaries";
 import { listBots } from "../bots/list";
 import { asksIn } from "./answers";
+import { readStopped } from "./background";
 import type { Target } from "../../shared/records";
 import type { WorkSession, WorksFor } from "../../shared/routes/work";
 import type { EngineSession } from "../engine/sessions";
@@ -284,11 +285,15 @@ export async function settleWorkRead(target: Target, signal?: AbortSignal): Prom
   }
 }
 
+// When a turn's end was written, if it says.
+const endTime = (row: { time?: unknown } | undefined) => (isObject(row?.time) && typeof row.time.created === "number" ? row.time.created : undefined);
+
 const tokensOf = (data: Listed["data"]) => (data.tokens?.input ?? 0) + (data.tokens?.output ?? 0) + (data.tokens?.reasoning ?? 0);
 
 /** A session of a bot's work as clients show it: where it stands now (`working`, what each asks:
- * `asks`), and, with `replies`, its last reply's first lines. */
-export async function describeWork(listed: Listed, working: Set<string>, { replies = false, signal }: { replies?: boolean; signal?: AbortSignal } = {}): Promise<WorkSession & { askID?: string }> {
+ * `asks`), and, with `replies`, its last reply's first lines (`replyBeforeStop`: written in its
+ * turn that ended before it was stopped at rest). */
+export async function describeWork(listed: Listed, working: Set<string>, { replies = false, signal }: { replies?: boolean; signal?: AbortSignal } = {}): Promise<WorkSession & { askID?: string; replyBeforeStop?: true }> {
   const { data } = listed;
   const folder = data.location?.directory ?? data.directory ?? "";
   const asking = await askingNow(listed, signal);
@@ -296,12 +301,20 @@ export async function describeWork(listed: Listed, working: Set<string>, { repli
   const read = replies && !working.has(data.id);
   const page = read ? await lastMessages(listed.target, data.id, signal) : null;
   const outcome = read ? outcomeOf(listed, page) : data.outcome;
-  const state: WorkSession["state"] = asking ? "asking" : working.has(data.id) ? "working"
-    : outcome === "succeeded" ? "finished" : outcome === "failed" ? "failed" : outcome === "interrupted" ? "stopped" : data.time?.idle ? "finished" : "idle";
+  // Stopped at rest (#428): the engine keeps no turn of that stop, so how its last turn went, before
+  // it, isn't how it stands. (Noted before the stop: a turn it cut short ends after.)
+  const stoppedAt = readStopped()[data.id];
+  const endedAt = endTime(lastTurnEnd(page)) ?? data.time?.idle ?? 0;
+  const stoppedAtRest = stoppedAt !== undefined && endedAt < stoppedAt;
+  const ended: WorkSession["state"] = outcome === "succeeded" ? "finished" : outcome === "failed" ? "failed" : outcome === "interrupted" ? "stopped" : data.time?.idle ? "finished" : "idle";
+  const state: WorkSession["state"] = asking ? "asking" : working.has(data.id) ? "working" : stoppedAtRest ? "stopped" : ended;
   // A turn cut short says what it said in that turn, if anything: an earlier turn's reply would
-  // read as how it ended.
+  // read as how it ended. One stopped at rest, what its last turn said, as said before the stop
+  // (its lead may not have heard it: a finish held for what it left running).
+  const beforeStop = stoppedAtRest && state === "stopped";
+  const said = beforeStop ? ended : state;
   const reply = !replies || state === "working" ? null
-    : state === "stopped" || state === "failed" ? replyIn(lastTurn(page))
+    : said === "stopped" || said === "failed" ? replyIn(lastTurn(page))
     : read ? replyIn(page) : await lastReplyOf(listed, signal);
   const project = folder === CHATS ? undefined : projectNameOf(folder, data);
   return {
@@ -318,7 +331,7 @@ export async function describeWork(listed: Listed, working: Set<string>, { repli
     started: data.time?.created ?? 0,
     tokens: tokensOf(data),
     ...(typeof data.cost === "number" && data.cost > 0 ? { cost: data.cost } : {}),
-    ...(reply ? { lastReply: reply } : {}),
+    ...(reply ? { lastReply: reply, ...(beforeStop ? { replyBeforeStop: true as const } : {}) } : {}),
   };
 }
 

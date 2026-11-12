@@ -431,6 +431,66 @@ test("a turn cut short gives as its last reply what it said in that turn, never 
   assert.match((await tool("list_sessions", {}, "ses_pixel")).text, /Previous turn finished/);
 });
 
+test("a session stopped at rest is stopped, its last reply marked as from the turn before the stop (#428)", async () => {
+  const session = startedAddress(await tool("start_session", { task: "One.", title: "Sign-in", project: "Tidepool" }, "ses_pixel"));
+  // (Ids are given again from test to test, and an earlier one stopped this one: new now.)
+  fs.rmSync(path.join(home, "run", "work", "stopped.json"), { force: true });
+  busy.delete(session);
+  const ended = Date.now() - 60_000;
+  Object.assign(sessions.get(session), { outcome: "succeeded" });
+  sessions.get(session).time.idle = ended;
+  const said = (text, id) => ({ id, type: "assistant", content: [{ type: "text", text }] });
+  const earlier = [{ id: "msg_i1", type: "idle", outcome: "succeeded", time: { created: ended } }, said("Previous turn finished.", "msg_s1"), { id: "msg_u1", type: "user" }];
+  kept.set(session, earlier);
+  const line = () => tool("list_sessions", {}, "ses_pixel").then(listed => listed.text.split("\n- ").find(each => each.includes(session)));
+  const row = () => route("GET", "kuvo/work?bot=bot_pixel00001").then(work => work.body.sessions.find(each => each.session === session));
+  assert.match(await line(), /: finished.*\n  Last reply: Previous turn finished/);
+  // Stopped at rest: the engine records no turn, its last one ended before. What it said then may
+  // be news to its lead (a finish held for what it left running), so it's there, said to be from before.
+  assert.equal((await tool("stop_session", { session }, "ses_pixel")).isError, false);
+  let listed = await line();
+  assert.match(listed, /: stopped.*\n  Last reply, from its turn that ended before it was stopped: Previous turn finished\.$/);
+  assert.doesNotMatch(listed, /: finished/);
+  // The work bar can't say so: no reply under a stopped row.
+  let shown = await row();
+  assert.equal(shown.state, "stopped");
+  assert.equal(shown.lastReply, undefined);
+  assert.equal(shown.replyBeforeStop, undefined);
+  // (What happens after, at times of its own between the stop and now.)
+  const stoppedFile = path.join(home, "run", "work", "stopped.json");
+  const stoppedAt = () => JSON.parse(fs.readFileSync(stoppedFile, "utf8"))[session];
+  fs.writeFileSync(stoppedFile, JSON.stringify({ [session]: ended + 10 }));
+  // Summarized after: still stopped.
+  kept.set(session, [{ id: "msg_i2", type: "idle", outcome: "succeeded", time: { created: ended + 20 } }, { id: "msg_c", type: "compaction", status: "completed", reason: "manual" }, ...earlier]);
+  sessions.get(session).time.idle = ended + 20;
+  assert.match(await line(), /: stopped.*\n  Last reply, from its turn that ended before it was stopped: Previous turn finished/);
+  // Written to again and finished since: that turn's reply, as any.
+  const again = ended + 30;
+  sessions.get(session).time.idle = again;
+  kept.set(session, [{ id: "msg_i3", type: "idle", outcome: "succeeded", time: { created: again } }, said("Done again.", "msg_s3"), { id: "msg_u3", type: "user" }, ...earlier]);
+  assert.match(await line(), /: finished.*\n  Last reply: Done again/);
+  // The user's Stop at rest, in the app: the same, and the work bar hears its row changed.
+  const changes = path.join(home, "run", "work", "changes.json");
+  const changed = () => (fs.existsSync(changes) ? JSON.parse(fs.readFileSync(changes, "utf8")).bot_pixel00001 : undefined);
+  const before = changed();
+  assert.equal((await route("POST", `kuvo/sessions/${session}/stop`)).status, 200);
+  assert.notEqual(changed(), before);
+  assert.match(await line(), /: stopped.*\n  Last reply, from its turn that ended before it was stopped: Done again/);
+  // Stopped during a turn: that turn ends as the stop's, what it said in it its last reply (#297).
+  busy.set(session, 1);
+  assert.equal((await tool("stop_session", { session }, "ses_pixel")).isError, false);
+  busy.delete(session);
+  const cut = stoppedAt();
+  Object.assign(sessions.get(session), { outcome: "interrupted" });
+  sessions.get(session).time.idle = cut;
+  kept.set(session, [{ id: "msg_i4", type: "idle", outcome: "interrupted", time: { created: cut } }, said("Halfway through the sign-in.", "msg_s4"), { id: "msg_u4", type: "user" }, ...earlier]);
+  listed = await line();
+  assert.match(listed, /: stopped.*\n  Last reply: Halfway through the sign-in\.$/);
+  shown = await row();
+  assert.equal(shown.state, "stopped");
+  assert.equal(shown.lastReply, "Halfway through the sign-in.");
+});
+
 test("how a lead reads a session past several summaries: what they did isn't how its work went", async () => {
   const session = startedAddress(await tool("start_session", { task: "One.", title: "Sign-in", project: "Tidepool" }, "ses_pixel"));
   busy.delete(session);

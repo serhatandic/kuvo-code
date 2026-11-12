@@ -9306,6 +9306,7 @@ async function settleWorkRead(target, signal) {
     await keepWorkRead(target, data, signal);
   }
 }
+var endTime = (row) => isObject(row?.time) && typeof row.time.created === "number" ? row.time.created : undefined;
 var tokensOf = (data) => (data.tokens?.input ?? 0) + (data.tokens?.output ?? 0) + (data.tokens?.reasoning ?? 0);
 async function describeWork(listed, working, { replies = false, signal } = {}) {
   const { data } = listed;
@@ -9314,8 +9315,14 @@ async function describeWork(listed, working, { replies = false, signal } = {}) {
   const read = replies && !working.has(data.id);
   const page = read ? await lastMessages(listed.target, data.id, signal) : null;
   const outcome = read ? outcomeOf(listed, page) : data.outcome;
-  const state = asking ? "asking" : working.has(data.id) ? "working" : outcome === "succeeded" ? "finished" : outcome === "failed" ? "failed" : outcome === "interrupted" ? "stopped" : data.time?.idle ? "finished" : "idle";
-  const reply = !replies || state === "working" ? null : state === "stopped" || state === "failed" ? replyIn(lastTurn(page)) : read ? replyIn(page) : await lastReplyOf(listed, signal);
+  const stoppedAt = readStopped()[data.id];
+  const endedAt = endTime(lastTurnEnd(page)) ?? data.time?.idle ?? 0;
+  const stoppedAtRest = stoppedAt !== undefined && endedAt < stoppedAt;
+  const ended = outcome === "succeeded" ? "finished" : outcome === "failed" ? "failed" : outcome === "interrupted" ? "stopped" : data.time?.idle ? "finished" : "idle";
+  const state = asking ? "asking" : working.has(data.id) ? "working" : stoppedAtRest ? "stopped" : ended;
+  const beforeStop = stoppedAtRest && state === "stopped";
+  const said = beforeStop ? ended : state;
+  const reply = !replies || state === "working" ? null : said === "stopped" || said === "failed" ? replyIn(lastTurn(page)) : read ? replyIn(page) : await lastReplyOf(listed, signal);
   const project = folder === CHATS ? undefined : projectNameOf(folder, data);
   return {
     session: data.id,
@@ -9331,7 +9338,7 @@ async function describeWork(listed, working, { replies = false, signal } = {}) {
     started: data.time?.created ?? 0,
     tokens: tokensOf(data),
     ...typeof data.cost === "number" && data.cost > 0 ? { cost: data.cost } : {},
-    ...reply ? { lastReply: reply } : {}
+    ...reply ? { lastReply: reply, ...beforeStop ? { replyBeforeStop: true } : {} } : {}
   };
 }
 var placeWords = (work) => work.project ? `in ${work.project}` : work.folder === CHATS ? "in the chats" : `in ${path39.basename(work.folder) || work.folder}`;
@@ -10991,6 +10998,9 @@ async function stopConversation(target, data) {
   const state = await stopWork(target, data.id, true);
   if (lead)
     tellStarters([{ starter: lead, line: stoppedLine(data) }]);
+  const bot = worksFor(data)?.bot;
+  if (bot)
+    noteWorkChanged(bot);
   return state;
 }
 
@@ -18150,7 +18160,7 @@ function rowLine(work) {
   const state = work.state === "asking" ? `asks to ${(work.asks ?? "").replace(/^Wants to /, "").replace(/\.$/, "")}${work.askID ? ` (ask ${work.askID})` : ""}` : work.state;
   const under = work.depth > 1 ? `, started by ${work.startedBy}` : "";
   const reply = work.lastReply && work.state !== "asking" ? `
-  Last reply: ${work.lastReply}` : "";
+  ${work.replyBeforeStop ? "Last reply, from its turn that ended before it was stopped" : "Last reply"}: ${work.lastReply}` : "";
   const held = !work.context ? "" : ("used" in work.context) ? ` · ${work.context.used.toLocaleString("en-US")} tokens in context now` : " · just summarized, context size known after its next step";
   return `- ${work.title} (address ${work.session}), ${placeWords(work)}: ${state}${model}${under}${held}${work.tokens ? ` · ${work.tokens.toLocaleString("en-US")} tokens used in total` : ""}${reply}`;
 }
@@ -24939,7 +24949,7 @@ async function takeCall(sender, given, { send, targets, answer = leaveCallAnswer
       while (rows.length > 1 && size() > LIST_BYTES)
         rows = rows.slice(0, Math.min(rows.length - 1, Math.floor(rows.length * 0.7)));
       if (size() > LIST_BYTES)
-        rows = rows.map((row) => ({ ...row, title: row.title.slice(0, 100), lastReply: undefined, asks: row.asks?.slice(0, 200) }));
+        rows = rows.map((row) => ({ ...row, title: row.title.slice(0, 100), lastReply: undefined, replyBeforeStop: undefined, asks: row.asks?.slice(0, 200) }));
       if (size() > LIST_BYTES)
         rows = [];
       said = { text: JSON.stringify({ rows }), isError: false };
@@ -37113,7 +37123,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "c6362767f84c";
+var BRIDGE_VERSION = "2dba695004c6";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -41107,9 +41117,10 @@ async function botWork(bot, context) {
   const cost = today.reduce((sum, each) => sum + (typeof each.data.cost === "number" ? each.data.cost : 0), 0);
   return {
     bot,
-    sessions: sessions.map(({ askID: _, ...described }) => {
+    sessions: sessions.map(({ askID: _, replyBeforeStop, lastReply, ...described }) => {
       const account = accounts.get(described.session);
-      return account ? { ...described, account } : described;
+      const shown = !replyBeforeStop && lastReply ? { ...described, lastReply } : described;
+      return account ? { ...shown, account } : shown;
     }),
     answered,
     today: {

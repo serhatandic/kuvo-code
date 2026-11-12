@@ -61,9 +61,11 @@ async function botWork(bot: string, context: RouteContext): Promise<BotWork> {
   const cost = today.reduce((sum, each) => sum + (typeof each.data.cost === "number" ? each.data.cost : 0), 0);
   return {
     bot,
-    sessions: sessions.map(({ askID: _, ...described }) => {
+    // (A reply from before it was stopped at rest isn't how the stopped work ended: a row can't say so.)
+    sessions: sessions.map(({ askID: _, replyBeforeStop, lastReply, ...described }) => {
       const account = accounts.get(described.session);
-      return account ? { ...described, account } : described;
+      const shown = !replyBeforeStop && lastReply ? { ...described, lastReply } : described;
+      return account ? { ...shown, account } : shown;
     }),
     answered,
     today: {

@@ -7,7 +7,8 @@ import type { Target } from "../../shared/records";
 import { stopSession } from "../engine/queue";
 import type { EngineSession } from "../engine/sessions";
 import { hasWakeUps, readStopped, stopWork } from "./background";
-import { askingNow, isArchived, startedByOf, wakesOf, workingNow, type Listed } from "./tree";
+import { noteWorkChanged } from "./changes";
+import { askingNow, isArchived, startedByOf, wakesOf, workingNow, worksFor, type Listed } from "./tree";
 import { finishHeld, stoppedLine, tellStarters, toBeTold } from "./wakes";
 
 type Session = Partial<EngineSession> & { id: string };
@@ -34,5 +35,8 @@ export async function stopConversation(target: Target, data: Session): ReturnTyp
   const lead = await leadWaitingOn(target, data).catch(() => null);
   const state = await stopWork(target, data.id, true);
   if (lead) tellStarters([{ starter: lead, line: stoppedLine(data) }]);
+  // (Stopped at rest, its row changes all the same: a bot's work bar shows it stopped.)
+  const bot = worksFor(data)?.bot;
+  if (bot) noteWorkChanged(bot);
   return state;
 }
