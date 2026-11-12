@@ -6,10 +6,12 @@ import os
 
 private let log = Logger(subsystem: "run.kuvo.code", category: "usage")
 
-/// Each box's plan limits, as its agents bridge states them (`api/kuvo/limits`, PROTOCOL.md "Plan
-/// limits"): this Mac's and each machine's, one row per account signed in to Kuvo Code there, drawn
-/// by the menu bar's usage panel in place of its own rows for the services this Mac's box reads
-/// (`HostLimits`). The box reads them; this only follows what it says and names the rows.
+/// Your plans' limits, as this Mac's box lists them (`api/kuvo/limits`'s `rows`, PROTOCOL.md "Plan
+/// limits"): every account signed in to Kuvo Code on any of your computers, one row each, drawn by
+/// the menu bar's usage panel in place of its own rows for the services this Mac's box reads
+/// (`HostLimits`). The boxes read and share them; this only follows what this Mac's box says and
+/// names the rows. COMPAT(#210 box rows): while a machine's box is from before it listed every
+/// computer's rows, each box is asked and they're merged here, as before.
 @MainActor
 final class BoxPlanLimits {
     /// What each box said last, by machine ("" for this Mac's).
@@ -81,9 +83,19 @@ final class BoxPlanLimits {
         }
     }
 
-    /// Asks every box to read them again now (a bar's Refresh): each reads what its makers allow.
+    /// This Mac's box's rows of every computer's accounts, when every box this Mac reaches lists
+    /// them so (an older one's accounts would be missing from them).
+    private var listsEveryComputer: [LimitsAccount]? {
+        guard let rows = boxes[""]?.rows, boxes.values.allSatisfy({ $0.rows != nil }) else { return nil }
+        return rows
+    }
+
+    /// Asks this Mac's box to read them again now (a bar's Refresh), which reads what its makers
+    /// allow and asks the computer each account is on for those it hasn't; every box, while one is
+    /// from before that.
     func refreshAll() {
-        for (key, api) in apis {
+        let only = listsEveryComputer != nil && apis[""] != nil
+        for (key, api) in apis where !only || key.isEmpty {
             let number = next(key)
             Task { [weak self] in
                 let limits = try? await api.client.send(try api.client.request("POST", BoxLimits.bridgeRefreshPath), as: DataEnvelope<BoxLimits>.self, patience: .seconds(60)).data
@@ -122,12 +134,17 @@ final class BoxPlanLimits {
             }
         }
         let now = Date.now
-        // This Mac's first, then each machine's by name: one row per account across them (KuvoClient's
-        // `UsageListing`), its numbers the newest any of them read.
-        let keys = boxes.keys.sorted { a, b in a.isEmpty != b.isEmpty ? a.isEmpty : a.localizedStandardCompare(b) == .orderedAscending }
-        let listed = UsageListing.accounts(keys.map { key in
-            UsageListing.Box(key: key, name: key.isEmpty ? nil : key, accounts: boxes[key]?.accounts ?? [])
-        })
+        let listed: [UsageListing.Account]
+        if let rows = listsEveryComputer {
+            listed = UsageListing.accounts(rows: rows)
+        } else {
+            // COMPAT(#210 box rows): this Mac's first, then each machine's by name: one row per
+            // account across them, its numbers the newest any of them read.
+            let keys = boxes.keys.sorted { a, b in a.isEmpty != b.isEmpty ? a.isEmpty : a.localizedStandardCompare(b) == .orderedAscending }
+            listed = UsageListing.accounts(keys.map { key in
+                UsageListing.Box(key: key, name: key.isEmpty ? nil : key, accounts: boxes[key]?.accounts ?? [])
+            })
+        }
         let mine = boxes[""]?.accounts ?? []
         let own = Set(mine.filter { Self.isOwnLogin($0, among: mine) }.map(\.provider))
         let rows = listed.map { listed in
@@ -165,13 +182,14 @@ final class BoxPlanLimits {
             isLocal: listed.sources.contains { $0.box.isEmpty },
             isOwnLogin: own,
             // (The panel adds it beside a bar of its own of that name.)
-            place: listed.sources.contains { $0.box.isEmpty } ? nil : Self.places(listed.sources)
+            place: listed.sources.contains { $0.box.isEmpty } ? nil : Self.places(listed.sources),
+            isAway: account.away
         )
     }
 
     /// The machines a row is from, by name ("hetzner, lokum").
     static func places(_ sources: [UsageListing.Account.Source]) -> String {
         var seen = Set<String>()
-        return sources.map(\.box).filter { seen.insert($0).inserted }.joined(separator: ", ")
+        return sources.map { $0.name ?? $0.box }.filter { seen.insert($0).inserted }.joined(separator: ", ")
     }
 }

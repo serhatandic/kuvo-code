@@ -224,4 +224,55 @@ struct PlanLimitsTests {
         ])
         #expect(away.map(\.account.title) == ["Claude · hetzner", "Claude · hetzner"])
     }
+
+    // MARK: As the box lists them (#210)
+
+    /// `rows`, as a box from #210 on answers: this box's Claude, read on lokum, and an account
+    /// signed in only on hetzner, which isn't heard from lately.
+    let rowsAnswer = """
+    {"data": {"services": ["claude"], "accounts": [
+      {"provider": "claude-code", "service": "claude", "agent": "claude", "account": "default", "identity": "aaaaaaaaaaaaaaaa", "windows": []}
+    ], "rows": [
+      {"id": "claude#aaaaaaaaaaaaaaaa", "provider": "claude-code", "service": "claude", "agent": "claude", "account": "default", "identity": "aaaaaaaaaaaaaaaa", "plan": "Max 20x", "checked": 1794164000000,
+       "windows": [{"id": "five_hour", "used": 0.53, "minutes": 300, "resetsAt": 1794180000000, "read": 1794164000000, "source": "usage"}],
+       "boxes": [{"key": "kmac", "name": "MacBook Pro", "provider": "claude-code", "agent": "claude", "account": "default", "here": true},
+                 {"key": "klokum", "name": "lokum", "provider": "claude-code", "agent": "claude", "account": "default", "checked": 1794164000000}]},
+      {"id": "claude#bbbbbbbbbbbbbbbb", "provider": "claude-code", "service": "claude", "agent": "claude", "account": "default", "identity": "bbbbbbbbbbbbbbbb", "checked": 1794164500000, "away": true,
+       "windows": [{"id": "five_hour", "used": 0.2, "minutes": 300, "resetsAt": 1794180000000, "read": 1794164500000, "source": "usage"}],
+       "boxes": [{"key": "khetzner", "name": "hetzner", "provider": "claude-code", "agent": "claude", "account": "default", "checked": 1794164500000, "away": true}]}
+    ]}}
+    """
+
+    @Test func aBoxsRowsAreListedAsTheyAreWithTheComputersEachIsOn() throws {
+        let limits = try BoxLimits.decode(Data(rowsAnswer.utf8))
+        let rows = try #require(limits.rows)
+        let panel = [Entry(id: "claude", covers: "claude")]
+        let listed = UsageListing.items(panel: panel, covers: \.covers, rows: rows).map { item -> String in
+            switch item {
+            case .panel(let entry): "panel:\(entry.id)"
+            case .account(let row, let below):
+                row.account.title + (below.map { " +\($0.id)" } ?? "") + " on " + row.sources.map { $0.name ?? "here" }.joined(separator: ",")
+            }
+        }
+        // Its own numbers are lokum's: the box listed it so; the other, only on hetzner, named for it.
+        #expect(listed == ["Claude +claude on here,lokum", "Claude · hetzner on hetzner"])
+        let first = UsageListing.accounts(rows: rows)[0]
+        #expect(first.id == "claude#aaaaaaaaaaaaaaaa")
+        #expect(first.account.tightest(at: now)?.used == 0.53)
+        #expect(first.sources.map(\.box) == ["", "klokum"])
+    }
+
+    @Test func aRowWhoseComputersAreAllAwayIsNeverShownAsLive() throws {
+        let rows = try #require(try BoxLimits.decode(Data(rowsAnswer.utf8)).rows)
+        // Read a moment ago, but its computer isn't heard from: as of then.
+        let soon = Date(timeIntervalSince1970: 1_794_164_600)
+        #expect(rows[1].away)
+        #expect(rows[1].isOutdated(now: soon))
+        #expect(!rows[0].isOutdated(now: soon))
+        #expect(rows[1].boxes.map(\.away) == [true])
+    }
+
+    @Test func aBoxFromBeforeRowsSaysNone() throws {
+        #expect(try BoxLimits.decode(Data(answer.utf8)).rows == nil)
+    }
 }
