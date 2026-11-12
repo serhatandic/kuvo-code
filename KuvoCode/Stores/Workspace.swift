@@ -397,8 +397,8 @@ final class Workspace {
             Analytics.shared.track("chat_moved")
             return
         }
-        // COMPAT(sessions.move): a box from before has no move: the app moves it with the engine and
-        // gives it the project's folders itself. Remove once every supported box has `sessions.move`.
+        // A box from before `sessions.move`: the app moves it with the engine and gives it the
+        // project's folders itself.
         if OutsideAgents.isAgentSession(session) { throw OutsideAgents.Failure.unavailable("Moving a chat into a project") }
         // Moving to another computer: what changes it waits until it's there.
         if Moves.isFrozen(id) { throw Moves.Failure.moving }
@@ -1042,9 +1042,8 @@ final class Workspace {
             trackCreated(session, model: model, agent: agent, approval: session.metadata?["kuvo"]?["applied"]?.string ?? "default", worktree: worktree)
             return session
         }
-        // COMPAT(sessions.start.empty): a box from before makes no session without a task, so the app
-        // makes it here, with the project's folders, approval and Autopilot itself. Remove once
-        // every supported box has `sessions.start.empty`.
+        // A box from before `sessions.start.empty` makes no session without a task: the app makes it
+        // here, with the project's folders, approval and Autopilot itself.
         let folder = worktree ? try await makeWorktree(of: directory) : directory
         // As its engine knows them: a machine's folders are plain paths there.
         let extra = (settings[directory]?.folders ?? []).map(api.enginePath)
