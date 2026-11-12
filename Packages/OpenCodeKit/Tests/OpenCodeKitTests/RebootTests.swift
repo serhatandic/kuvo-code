@@ -621,7 +621,7 @@ import Testing
         until { running() != nil && !FileManager.default.fileExists(atPath: lock.path) }
         // A start under way: it holds the lock, and says so (this test's process, which runs).
         try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: false)
-        try write(lock.appending(path: "pid"), "\(ProcessInfo.processInfo.processIdentifier)\n")
+        try write(run.appending(path: ".launching.pid"), "\(ProcessInfo.processInfo.processIdentifier)\n")
         let stop = Process()
         stop.executableURL = URL(filePath: "/bin/sh")
         stop.arguments = [root.appending(path: "bin/kuvo-start").path, "stop"]
@@ -633,6 +633,7 @@ import Testing
         // The start done, as one that just noted its engine.
         let started = try #require(running())
         try FileManager.default.setAttributes([.modificationDate: Date.now], ofItemAtPath: run.appending(path: "engine.json").path)
+        try FileManager.default.removeItem(at: run.appending(path: ".launching.pid"))
         try FileManager.default.removeItem(at: lock)
         stop.waitUntilExit()
         #expect(stop.terminationStatus == 0)
@@ -656,13 +657,14 @@ import Testing
         func leftBehind() throws {
             try? FileManager.default.removeItem(at: lock)
             try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: false)
-            try write(lock.appending(path: "pid"), "\(gone.processIdentifier)\n")
+            try write(run.appending(path: ".launching.pid"), "\(gone.processIdentifier)\n")
         }
         try leftBehind()
         var began = Date.now
         #expect(try start("stop") == 0)
         #expect(Date.now.timeIntervalSince(began) < 20, "stop took it at once")
         #expect(!FileManager.default.fileExists(atPath: lock.path), "and let it go")
+        #expect(!FileManager.default.fileExists(atPath: run.appending(path: ".launching.pid").path))
         try leftBehind()
         began = Date.now
         #expect(try start("off") == 0)
@@ -672,6 +674,35 @@ import Testing
         #expect(try macLaunch(["KUVO_START=1"]) == 0)
         #expect(Date.now.timeIntervalSince(began) < 30, "a Mac's start took it at once")
         #expect(running() != nil)
+    }
+
+    /// A lock an older Kuvo Code's script took (it says nothing, its folder kept empty for that
+    /// script to let go of) isn't taken away for what an earlier holder left beside it: a stop
+    /// waits for it.
+    @Test func anOlderScriptsLockIsWaitedFor() throws {
+        defer { cleanUp() }
+        let lock = run.appending(path: ".launching")
+        let gone = Process()
+        gone.executableURL = URL(filePath: "/usr/bin/true")
+        try gone.run()
+        gone.waitUntilExit()
+        // Left by one before, a minute ago; the older script's lock taken since.
+        let left = run.appending(path: ".launching.pid")
+        try write(left, "\(gone.processIdentifier)\n")
+        try FileManager.default.setAttributes([.modificationDate: Date.now.addingTimeInterval(-60)], ofItemAtPath: left.path)
+        try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: false)
+        let stop = Process()
+        stop.executableURL = URL(filePath: "/bin/sh")
+        stop.arguments = [root.appending(path: "bin/kuvo-start").path, "stop"]
+        stop.environment = ["HOME": home.path, "PATH": "\(tools.path):/usr/bin:/bin"]
+        try stop.run()
+        usleep(800_000)
+        #expect(stop.isRunning, "it waits for it")
+        // The older script lets it go, as it does: an empty folder, removed.
+        try FileManager.default.removeItem(at: lock)
+        stop.waitUntilExit()
+        #expect(stop.terminationStatus == 0)
+        #expect(FileManager.default.fileExists(atPath: run.appending(path: "stopped").path))
     }
 
     @Test func twoAtOnceStartOne() async throws {

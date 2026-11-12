@@ -845,19 +845,32 @@ public final class RemoteServer: @unchecked Sendable {
     /// of the watchdog each engine had before, and carries on from its new script when that's
     /// replaced. It ends when its script goes or another keeper takes over.
     ///
-    /// The launch's lock (`run/.launching`, a folder, made by whoever takes it, gone as it lets it
-    /// go): the one holding it says who it is in it (`pid`). One whose holder is gone (a start or a
-    /// stop cut off: killed, a crash, `off` ending the keeper as it held it) is taken away by the
-    /// next one waiting for it, at once; one whose holder runs is waited for, however long it takes
-    /// (a Stop waits for a start under way). One that doesn't say (an older Kuvo Code's, or taken
-    /// a moment ago) goes after five minutes, as before. `$R` is the box's `run`.
+    /// The launch's lock (`run/.launching`, an empty folder, made by whoever takes it, gone as it
+    /// lets it go): beside it, the one holding it says who it is (`run/.launching.pid`, believed only
+    /// if it isn't older than the folder: an older Kuvo Code's scripts take it without saying). One
+    /// whose holder is gone (a start or a stop cut off: killed, a crash, `off` ending the keeper as
+    /// it held it) is taken away by the next one waiting for it, at once; one whose holder runs is
+    /// waited for, up to five minutes, as one that doesn't say is (an older Kuvo Code's, or one
+    /// taken a moment ago). Taking one away is one at a time (`run/.launching.breaking`), and only
+    /// if it's still the one found so: two waiting never both take it. Each lets go of its own lock
+    /// only. `$R` is the box's `run`.
     static let launchLock = #"""
-        locked() { echo $$ >"$R/.launching/pid"; }
-        unlock() { rm -f "$R/.launching/pid"; rmdir "$R/.launching" 2>/dev/null; }
+        locked() { echo $$ >"$R/.launching.pid"; }
+        unlock() {
+          [ "$(cat "$R/.launching.pid" 2>/dev/null)" = "$$" ] || return 0
+          rm -f "$R/.launching.pid"; rmdir "$R/.launching" 2>/dev/null
+        }
+        held_by_gone() {
+          holder=$(cat "$R/.launching.pid" 2>/dev/null)
+          [ -n "$holder" ] && [ -d "$R/.launching" ] && [ ! "$R/.launching.pid" -ot "$R/.launching" ] && ! kill -0 "$holder" 2>/dev/null
+        }
+        held_long() { [ -n "$(find "$R/.launching" -maxdepth 0 -mmin +5 2>/dev/null)" ]; }
         unheld() {
-          holder=$(cat "$R/.launching/pid" 2>/dev/null)
-          { [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; } || [ -n "$(find "$R/.launching" -maxdepth 0 -mmin +5 2>/dev/null)" ] || return 1
-          unlock
+          held_by_gone || held_long || return 1
+          [ -z "$(find "$R/.launching.breaking" -maxdepth 0 -mmin +1 2>/dev/null)" ] || rmdir "$R/.launching.breaking" 2>/dev/null
+          mkdir "$R/.launching.breaking" 2>/dev/null || return 1
+          if held_by_gone || held_long; then rm -f "$R/.launching.pid"; rmdir "$R/.launching" 2>/dev/null; fi
+          rmdir "$R/.launching.breaking" 2>/dev/null
         }
         """#
 
