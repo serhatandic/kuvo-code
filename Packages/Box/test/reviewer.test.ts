@@ -717,6 +717,7 @@ test("a review that starts in the very millisecond a place is taken back keeps n
   const change = (where: string) => ({ kind: "file" as const, path: where, access: "write" as const, folder: project, tool: "write", input: { filePath: where } })
   await reviewer.review(change(join(notes, "a.md")), context, given(model(allows)))
   const kept = reviewer.reviewLog(context.session, reviews).decisions.find(each => each.place)!
+  // (Any moment after the first review: both reviews below run on a clock of their own.)
   const at = Date.now() + 60_000
   reviewer.revokePlace(context.session, kept.id!, at, reviews)
   expect(await reviewer.review(change(join(notes, "b.md")), context, { ...given(model(allows)), now: () => at })).toMatchObject({ decision: "allow", by: "model" })
