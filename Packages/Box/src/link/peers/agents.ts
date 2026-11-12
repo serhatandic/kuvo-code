@@ -14,7 +14,8 @@ import { listBots } from "../bots/list";
 import { currentDigest } from "../documents/work";
 import { readBridgeFile } from "../engine/client";
 import { locked, textOf, writePrivate } from "../files";
-import { IS_MAC, K } from "../home";
+import { IS_MAC } from "../home";
+import { isChatsFolder } from "../engine/chats";
 import { awaySessions, movedAway } from "../moves/records";
 import { readLink } from "../state";
 import { AGENTS_FILE, composeAgents, fitsAgent, isPutAway, keptAgent, MAC_AGENTS_FILE, PEER_AGENTS_FILE, PEER_LOCK, readPeerAgents } from "./directory";
@@ -71,7 +72,7 @@ export async function ownAgents(readEngine: () => Target, machine?: string, kit:
   } catch {}
   const projects = boxProjects(kit);
   const named = (directory: string | undefined): string | undefined => projects.find(project => project.directory === directory)?.name
-    ?? (directory === path.join(K, "chats") ? "Chats" : directory ? path.basename(directory) : undefined);
+    ?? (isChatsFolder(directory) ? "Chats" : directory ? path.basename(directory) : undefined);
   const recent = sessions
     .filter(session => !session.parentID && !botSessions.has(session.id) && !away.has(session.id) && !session.metadata?.kuvo?.seat && !isPutAway(session))
     .sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))

@@ -10,6 +10,7 @@ import { finishDeletes } from "../bots/edit";
 import { freshenBot, freshenBots } from "../bots/tell";
 import { ANSWERED, GROUP_NEWS, NEWS, RUN_ENDS, groupNotice, noticeFor, settleHeld } from "../notices/news";
 import { keepReadThroughSummary, keepWorkRead, settleWorkRead } from "../work/tree";
+import { markChatOn } from "./chats";
 import { bridgeTarget, engineGet, peerTargets, readBridgeFile, readEngineFile } from "./client";
 import { applyCompatibility, followSettingsFile, learnCompatibility } from "./compatibility";
 import { modelsDue, settleDueModels, WORK_ENDS } from "./models";
@@ -385,7 +386,11 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         if (work && event.type === "session.deleted" && typeof event.data?.sessionID === "string") markConversation(event.data.sessionID, false);
         // One a client made without a kept approval: the one it was made with, else this computer's
         // default (a client from before never gets Full Access unasked).
-        if (work && event.type === "session.created") adoptConversation(source, event.data?.sessionID ?? event.data?.info?.id, work === "bridge").catch(() => {});
+        const adopted = work && event.type === "session.created" ? adoptConversation(source, event.data?.sessionID ?? event.data?.info?.id, work === "bridge").catch(() => {}) : null;
+        // A chat marked so, and nothing else (engine/chats.ts), as one's made, moved or has its
+        // metadata written (never one from before: a write makes it the newest): once its
+        // approval's written, which reads and writes its metadata too.
+        if (work) Promise.resolve(adopted).then(() => markChatOn(source, event.type, event.data, connection.signal)).catch(() => {});
         if (event.type === "session.deleted" && typeof event.data?.sessionID === "string") {
           letSessionFilesGo(attachmentsLooked, event.data.sessionID);
           forgetReviews(event.data.sessionID);

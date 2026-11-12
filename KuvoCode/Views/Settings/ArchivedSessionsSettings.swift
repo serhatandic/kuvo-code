@@ -12,7 +12,7 @@ struct ArchivedSessionsSettings: View {
         workspace.sessions
             // On a machine that's away, they wait for it: deleting or unarchiving needs it.
             .filter { Workspace.isArchived($0) && $0.parentID == nil && workspace.waitingMachine(for: $0.id) == nil }
-            .filter { search.isEmpty || ($0.title ?? "").localizedCaseInsensitiveContains(search) || workspace.projectName($0.location.directory).localizedCaseInsensitiveContains(search) || machineName($0.location.directory)?.localizedCaseInsensitiveContains(search) == true }
+            .filter { search.isEmpty || ($0.title ?? "").localizedCaseInsensitiveContains(search) || workspace.projectName(of: $0).localizedCaseInsensitiveContains(search) || machineName($0.location.directory)?.localizedCaseInsensitiveContains(search) == true }
             .sorted { $0.time.updated > $1.time.updated }
     }
 
@@ -67,7 +67,7 @@ struct ArchivedSessionsSettings: View {
                     }
                 } header: {
                     HStack {
-                        Label(workspace.projectName(group.directory), systemImage: "folder")
+                        Label(group.sessions.first.map { workspace.projectName(of: $0) } ?? workspace.projectName(group.directory), systemImage: "folder")
                             .lineLimit(1)
                             .layoutPriority(1)
                         // Which machine it's on, as the sidebar says it.
