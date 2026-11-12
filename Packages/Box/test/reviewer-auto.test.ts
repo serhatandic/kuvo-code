@@ -993,3 +993,71 @@ test("in Auto, a file of its own is only one reached plainly: a folder of its ow
     rmSync(fake, { recursive: true, force: true })
   }
 }, 60_000)
+
+// The engine's read, given a name that isn't there, reads the one plain file beside it whose name is
+// the same but for how it's written (engine 2.2.5: composed accents, no-break spaces, curly quotes;
+// never a link). Its sandbox plugin sees the call first; the call the box reads back as it answers
+// the engine's ask keeps the name the agent gave.
+test("in Auto, a read by a look-alike name beside a link a command made to your keys never reads your keys (#434)", async () => {
+  const runsHome = process.env.HOME
+  const fake = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-fake-home-")))
+  process.env.HOME = fake
+  try {
+    mkdirSync(join(fake, ".ssh"))
+    writeFileSync(join(fake, ".ssh", "id_test"), "a key\n")
+    const folder = join(box, "alike-project")
+    mkdirSync(folder)
+    // What a command in the sandbox can make in its folder: a link to your key, and a plain file.
+    symlinkSync(join(fake, ".ssh", "id_test"), join(folder, "look alike.txt"))
+    symlinkSync(join(fake, ".ssh", "id_test"), join(folder, "it's.txt"))
+    writeFileSync(join(folder, "plain notes.txt"), "the project's\n")
+    conversation("ses_alike", "auto", "Read the notes")
+    sessions.ses_alike.location = { directory: folder }
+    reply = () => '{"decision": "refuse", "reason": "Not what the user asked."}'
+    // The engine's plugin, as the box writes it, opened in the folder.
+    const { pluginScript } = await import("../src/link/fence/files")
+    const run = join(box, "alike-run")
+    mkdirSync(run)
+    const places = { folder: run, launcher: join(run, "kuvo-fence"), key: join(run, "socket.key") } as Parameters<typeof pluginScript>[0]
+    writeFileSync(join(run, "kuvo-sandbox.js"), pluginScript(places, "test"))
+    const plugin = (await import(join(run, "kuvo-sandbox.js"))).default
+    const hooks: ((call: { tool: string; input: { path: string } }) => unknown)[] = []
+    await plugin.setup({ location: { directory: folder }, shell: { hook: async () => {} }, tool: { hook: async (name: string, take: (typeof hooks)[number]) => { if (name === "execute.before") hooks.push(take) } } })
+    // The engine's read, a stand-in: the plugin; then, where the path it's given is outside the
+    // folder, its ask, which the box answers (the call as the agent made it); then the file, or the
+    // plain look-alike beside a name that isn't there.
+    const read = async (id: string, given: string) => {
+      const call = { tool: "read", sessionID: "ses_alike", agent: "build", messageID: "msg_1", id: `call_${id}`, input: { path: given } }
+      try { for (const hook of hooks) await hook(call) } catch (error) { return `refused: ${(error as Error).message}` }
+      const opens = call.input.path
+      if (!opens.startsWith(folder + "/")) {
+        calling.ses_alike = [{ type: "tool", id: `call_${id}`, name: "read", state: { input: { path: given } } }]
+        asking.ses_alike = [{ id, action: "external_directory", resources: [join(dirname(opens), "*")], source: { id: `call_${id}`, messageID: "msg_1" } }]
+        const verdict = await reviewing.reviewPermission({ port: engine.port, password: "pw" } as never, { type: "permission.asked", data: { id, sessionID: "ses_alike", action: "external_directory" } })
+        if (verdict?.decision !== "allow") return "refused at the engine"
+      }
+      if (existsSync(opens)) return readFileSync(opens, "utf8")
+      const same = (name: string) => name.normalize("NFC").replace(/[  ]/g, " ").replace(/[‘’]/g, "'")
+      const beside = readdirSync(dirname(opens), { withFileTypes: true }).filter(each => each.isFile() && same(each.name) === same(opens.split("/").at(-1)!))
+      return beside.length === 1 ? readFileSync(join(dirname(opens), beside[0].name), "utf8") : "not found"
+    }
+    const tried = {
+      "by the look-alike name": await read("per_a1", join(folder, "look alike.txt")),
+      "by a curly quote": await read("per_a2", join(folder, "it’s.txt")),
+      "by the link's own name": await read("per_a3", join(folder, "look alike.txt")),
+      "a plain file by its look-alike name": await read("per_a4", join(folder, "plain notes.txt")),
+      "a name nothing looks like": await read("per_a5", join(folder, "missing.txt")),
+    }
+    const refused = expect.stringMatching(/^refused: This names a file that isn't there, beside a link whose name looks the same/)
+    expect(tried).toEqual({
+      "by the look-alike name": refused,
+      "by a curly quote": refused,
+      "by the link's own name": "refused at the engine",
+      "a plain file by its look-alike name": "the project's\n",
+      "a name nothing looks like": "not found",
+    })
+  } finally {
+    process.env.HOME = runsHome
+    rmSync(fake, { recursive: true, force: true })
+  }
+})
