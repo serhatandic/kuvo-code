@@ -40,11 +40,20 @@ final class Sandboxes {
     /// Boxes whose word on them is whole (`sandbox.reviews.whole`): one they haven't listed isn't
     /// yours yet. This Mac's box is this app's version; a machine's says so in its `kuvo/info`.
     private(set) var listAll: Set<String> = [BoxClient.mac]
+    /// Boxes that list the asks their reviewer took up to their end (`sandbox.reviews.settled`):
+    /// answered or gone, so nothing of them is kept here. This Mac's box is this app's version; a
+    /// machine's says so in its `kuvo/info`.
+    private(set) var settling: Set<String> = [BoxClient.mac]
     /// Machines whose `kuvo/info` was read for it on this connection.
     @ObservationIgnored private var featuresRead: Set<String> = []
     /// Told when its box lists an ask as yours (one held back meanwhile), for its notification;
     /// nil when every one held back is to be looked at again (a box whose word isn't whole).
     @ObservationIgnored var onYours: ((String?) -> Void)?
+    /// Told when its box lists an ask its reviewer took up as over (answered or gone), so nothing
+    /// says it waits on you, though its answer or its run's end wasn't heard here.
+    @ObservationIgnored var onOver: ((String) -> Void)?
+    /// Told the asks a box lists now, each time its list changes.
+    @ObservationIgnored var onListed: ((Set<String>) -> Void)?
 
     /// A conversation's open asks, on its box.
     func asks(for session: String, on box: String) -> [SandboxAsk] {
@@ -138,13 +147,14 @@ final class Sandboxes {
                         if let info = try? await client.value(Info.self, "GET", "kuvo/info") {
                             featuresRead.insert(box)
                             takeListsAll(info.features?.contains(AskReview.listsAllFeature) == true, from: box)
+                            takeSettles(info.features?.contains(AskReview.settlesFeature) == true, from: box)
                         }
                     }
                     for try await line in client.follow(SandboxRoutes.asks + "/events") {
                         guard let list = try? JSONDecoder().decode(SandboxAsks.self, from: line) else { continue }
                         take(list.asks, from: box)
                         takeRestart(list.restart == true, from: box)
-                        take(reviews: list.reviews, from: box)
+                        take(reviews: list.everyReview, from: box)
                         setLive(true, box)
                     }
                     // This Mac's box tells each change as it comes: its stream over, it's not
@@ -241,19 +251,35 @@ final class Sandboxes {
         if !whole { onYours?(nil) }
     }
 
+    /// Whether `box` lists the asks its reviewer took up to their end (`sandbox.reviews.settled`).
+    func settles(_ box: String) -> Bool { settling.contains(box) }
+
+    func takeSettles(_ settles: Bool, from box: String) {
+        if settles { settling.insert(box) } else { settling.remove(box) }
+    }
+
+    /// An ask Auto's reviewer took up, as a box last listed it, with that box.
+    func review(of id: String) -> (box: String, review: AskReview)? {
+        for (box, listed) in reviews { if let review = listed[id] { return (box, review) } }
+        return nil
+    }
+
     /// What Auto did with each of `box`'s asks, by the step that asked, for its mark.
     func reviewMarks(on box: String) -> [String: AskReview] {
         Dictionary((reviews[box] ?? [:]).values.compactMap { review in review.call.map { ($0, review) } }, uniquingKeysWith: { $0.at > $1.at ? $0 : $1 })
     }
 
     /// How `box`'s reviewer takes up asks now (nil: a box from before, which doesn't say). Each
-    /// it lists as yours now that wasn't is told (`onYours`), for its notification.
+    /// it lists as yours now that wasn't is told (`onYours`), for its notification, and each it
+    /// lists as over now (`onOver`).
     func take(reviews listed: [AskReview]?, from box: String) {
         let now = Dictionary((listed ?? []).map { ($0.id, $0) }, uniquingKeysWith: { $1 })
         guard now != reviews[box] ?? [:] else { return }
         let before = reviews[box] ?? [:]
         reviews[box] = now.isEmpty ? nil : now
         for (id, review) in now where review.state == .yours && before[id]?.state != .yours { onYours?(id) }
+        for (id, review) in now where [.answered, .gone].contains(review.state) && before[id]?.state != review.state { onOver?(id) }
+        onListed?(Set(now.keys))
     }
 
     private func forgetReviews(of box: String) {

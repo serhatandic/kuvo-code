@@ -4101,6 +4101,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `sandbox` | `kuvo/sandbox` ("Sandbox", bridge 0.9.118) |
 | `sandbox.asks` | `kuvo/sandbox/asks…`, `kuvo/sandbox/allowed…` and `kuvo/sandbox/tools` ("Sandbox", "Asks", bridge 0.9.118) |
 | `sandbox.check` | `reason`, `action` and the rest in `kuvo/sandbox`, and `POST kuvo/sandbox/check` |
+| `sandbox.reviews.settled` | `settled` on `kuvo/sandbox/asks`: each ask Auto's reviewer was checking or left for you that was answered or went since, so no client takes it for one that waits, heard or not ("Sandbox") |
 | `sandbox.reviews.whole` | `reviews` on `kuvo/sandbox/asks` lists every ask to work outside a conversation's folder, so a client shows one only once it's listed `yours` ("Sandbox") |
 | `search` | `kuvo/search` |
 | `sessions.agents` | `POST kuvo/sessions/<id>/agents` |
@@ -5724,7 +5725,7 @@ while the sandbox is `on`) and pass a call to `POST kuvo/sandbox/tools` `{sessio
 making that call. The asks, the tool and the answers live in the box's long-running process, as the
 vault does (`run/vault.sock`); another passes them on.
 
-- `GET kuvo/sandbox/asks` → `{asks: [ask], restart?, reviews?}`, oldest first, with `restart: true` while
+- `GET kuvo/sandbox/asks` → `{asks: [ask], restart?, reviews?, settled?}`, oldest first, with `restart: true` while
   the box asks you to restart its agents (the state's `restart`); `kuvo/sandbox/asks/events`, NDJSON,
   the same at once and on every change. `reviews` (bridge 0.9.192): what Auto's reviewer did with
   the engine's asks to work outside a conversation's folder (`permission.asked`, action
@@ -5741,7 +5742,26 @@ vault does (`run/vault.sock`); another passes them on.
   decided it, whose entry stays for its step's mark. While a client doesn't hear the box's asks
   (its link down or starting again, the stream cut), what it last listed of an ask stands, and one
   it never listed is yours, as nothing would list it. From a box without that word, a client takes
-  one not listed as yours at once. An ask: `{id, at, session?, sessionName?, bot?, botName?,
+  one not listed as yours at once.
+  `settled` (`sandbox.reviews.settled`): each ask the reviewer was checking or had left for you
+  that's over without its word, the latest 200, each `{id, session, call?, state, at}`, `state`
+  `answered` (by you, on any client, or by its engine: `permission.replied`) or `gone` (its run
+  ended, its session was deleted, or its engine let it go while the box wasn't listening: an
+  engine started again, a run that ended unheard). The box keeps them per ask and session, from
+  `checking` to `yours` to `answered` or `gone`: as it hears an engine or the bridge again it reads
+  each session whose ask it still lists as checked or yours there, and one no longer asked is
+  `gone`; one it was about to check and finds no longer asked is `gone` too, never `yours`. A
+  client never takes an ask listed in `settled` for one that waits, heard or not, so none is left
+  with an ask that's over (a session's row saying it asks). Such a client holds nothing of its own
+  for an ask the box takes up but one it heard asked that the box hasn't listed yet (it lists each
+  as it hears it), which is yours, and told, should the box go quiet first, as above. It tells you
+  of one (a notification) once it's listed `yours`,
+  reading it from its engine then (one its engine no longer asks isn't told; where its engine
+  can't be read, it's told without its words), and lets go of one listed in `settled`. The
+  reviewer's own answer isn't listed `answered`: the ask goes from `checking` to what it decided. The box's
+  process started again lists what still waits as it takes it up again (`checking` at once) and
+  none from before. From a box without `settled`, a client keeps what it heard asked until the box
+  lists it, as before. An ask: `{id, at, session?, sessionName?, bot?, botName?,
   project, command, why, stopped?, error?, always?, machine?, owner?, review?}`. `session` is the conversation's root
   (a bot's sub-agent asks as its bot's conversation). `stopped`, on macOS: what the sandbox refused
   that command, from the system's log, each `{kind, path?}` (`kind`: `write`, `read`, `connect`,

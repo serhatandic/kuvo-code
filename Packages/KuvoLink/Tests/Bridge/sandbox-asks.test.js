@@ -542,6 +542,8 @@ test("the asks you follow carry the box's ask to restart the agents that started
   assert.equal(first.restart, undefined);
   // (With how Auto's reviewer takes up asks to work outside a folder: a list a client can rely on.)
   assert.ok(Array.isArray(first.reviews), JSON.stringify(first));
+  // And those it was checking or left for you that were answered or went since (`sandbox.reviews.settled`).
+  assert.ok(Array.isArray(first.settled), JSON.stringify(first));
   fs.writeFileSync(path.join(home, "run", "fence", "agents"), JSON.stringify({ pid, on, outside: true }));
   assert.equal((await lines.next()).value.restart, true);
   assert.equal((await fromMac("POST", "kuvo/sandbox/restart", { restart: false })).status, 200);
