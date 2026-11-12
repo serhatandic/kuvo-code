@@ -487,7 +487,9 @@ async function restoreTree(folder: unknown, engine: Target | null, signal: Abort
 /** git in `folder` doing what you asked for (making or removing a worktree, with the repository's
  * hooks and filters): null when it did it, or what it said when it didn't. */
 function spawnGit(folder: string, args: string[]): string | null {
-  const ran = spawnSync("git", askedArgs(args), { cwd: folder, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, timeout: 60_000 });
+  const asked = askedArgs(args, folder);
+  if (!asked) return "This repository’s commondir leads git to another repository’s settings, so Kuvo Code won’t run git there.";
+  const ran = spawnSync("git", asked, { cwd: folder, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, timeout: 60_000 });
   return ran.status === 0 ? null : String(ran.stderr || ran.stdout || "").trim().replace(/^fatal: /, "");
 }
 

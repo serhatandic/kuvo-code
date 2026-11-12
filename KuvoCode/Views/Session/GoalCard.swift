@@ -24,8 +24,6 @@ struct GoalCard: View {
     @State private var renamesProject = false
     /// Its computer has Autopilot, as last read.
     private var offersAutopilot: Bool { app.workspace.autopilotHere[box] == true }
-    /// The Model row asks, and you've kept the box's pick.
-    @State private var modelAsks = false
     @State private var wake = false
     /// On Autopilot: one setting with the bot's conversation.
     @State private var autopilot = false
@@ -325,8 +323,8 @@ struct GoalCard: View {
         }
     }
 
-    /// How it runs: its deadline, how often you hear, the model the box does the work on (asked once),
-    /// what it may spend, its projects and Wake me, each a row with its control on the right.
+    /// How it runs: its deadline, how often you hear, what it may spend, its projects and Wake me,
+    /// each a row with its control on the right.
     private var settingsSection: some View {
         GoalCardSection(symbol: "slider.horizontal.3", title: "Execution settings", caption: "How the goal runs") {
             VStack(spacing: 0) {
@@ -359,7 +357,6 @@ struct GoalCard: View {
                         }
                     }
                 }
-                GoalModelRow(box: box, asks: $modelAsks)
                 ForEach(Array(plan.spend.enumerated()), id: \.offset) { index, line in
                     Divider().padding(.leading, GoalCardMetrics.markWidth + 12)
                     GoalSettingRow(symbol: "creditcard", title: plan.spend.count == 1 ? "Spending" : "Spending on \(line.what)", subtitle: plan.spend.count == 1 ? "On \(line.what)" : nil) {
@@ -487,11 +484,7 @@ struct GoalCard: View {
         let answer: GoalPlanAnswer = action == .start
             ? Self.start(plan, wake: wake, digest: digest, deadline: deadline, caps: caps, periods: periods, autopilot: offersAutopilot ? autopilot : nil)
             : .decline
-        let client = action == .start && modelAsks ? app.goalPlans.client(box) : nil
         Task {
-            // Started with the box's pick kept: it isn't asked again. A box from before the ask
-            // turns it down, and nothing comes of that.
-            _ = try? await client?.value(ModelRoles.self, "PUT", "kuvo/models/roles", body: ModelRoles.Asked())
             do {
                 try await app.goalPlans.answer(plan, on: box, answer)
             } catch {

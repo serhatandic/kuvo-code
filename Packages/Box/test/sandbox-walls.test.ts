@@ -364,7 +364,7 @@ test.skipIf(!canFence)("a conversation's repository is never your home, a person
   try {
     const { home, run } = walled(root)
     const project = join(home, "Documents", "proj")
-    files(home, { "notes.txt": "mine\n", "code/old/a.txt": "a\n", "Documents/budget.txt": "1000\n", "Documents/proj/.git/HEAD": "ref: refs/heads/main\n", "Documents/proj/sub/a.txt": "a\n" })
+    files(home, { "notes.txt": "mine\n", "code/old/a.txt": "a\n", "Documents/budget.txt": "1000\n", "Documents/proj/.git/HEAD": "ref: refs/heads/main\n", "Documents/proj/.git/config": "[core]\n", "Documents/proj/sub/a.txt": "a\n" })
     mkdirSync(join(project, ".git", "objects"), { recursive: true })
     const at = (git: string, label: string, command: string) => run(join(project, "sub"), tries(label, command), { KUVO_FENCE_GIT: git })
     const out = [
