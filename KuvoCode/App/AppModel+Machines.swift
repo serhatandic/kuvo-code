@@ -330,6 +330,8 @@ extension AppModel {
     // COMPAT(0.7 engine-stop): Start, for an engine an older Mac stopped. Goes 3 months after 0.8.0.
     /// Starts a machine's engine stopped on purpose (Start), and connects to it.
     func startEngine(_ engine: MachineEngine) {
+        // (This Mac's own box starts by its own keeper: connected again, as it is.)
+        if engine.machine.isThisMac { reconnectNow(engine); return }
         engine.disconnect()
         connectionClosed(engine.machine.id)
         engine.startWanted = true
@@ -341,6 +343,9 @@ extension AppModel {
     /// ends it: nothing more of it goes there, and it doesn't connect again itself.
     @discardableResult
     func restartEngine(_ engine: MachineEngine) -> Task<Void, Never> {
+        // This Mac's own box restarts by its own keeper, never from the app (which would run it as
+        // Kuvo Code's): it's connected again as it is.
+        if engine.machine.isThisMac { return reconnectNow(engine) ?? Task {} }
         engine.disconnect()
         connectionClosed(engine.machine.id)
         // Restart asks for it to be connected, as Connect does.
@@ -371,6 +376,8 @@ extension AppModel {
     /// are at work (they'd stop), nor over a box a newer Kuvo Code set up: why not, then.
     func makeHome(_ engine: MachineEngine) async -> String? {
         let name = engine.machine.name
+        // This Mac's own box: making this Mac the main one is the setup's to do (#183), not this.
+        if engine.machine.isThisMac { return "This is this Mac’s own box already." }
         guard engine.isReady else { return "\(name) isn’t connected. Connect it first." }
         guard engine.isAnotherMacsEngine else { return nil }
         guard engine.movingHomeFrom == nil else { return "\(name) is moving to this Mac already." }
@@ -562,8 +569,9 @@ extension AppModel {
             return
         }
         #endif
-        // It takes this Mac's accounts and settings, so this Mac's engine comes first.
-        for _ in 0..<240 where api == nil { try? await Task.sleep(for: .milliseconds(250)) }
+        // It takes this Mac's accounts and settings, so this Mac's engine comes first; attached to
+        // the box already here, there's none of the app's own to wait for.
+        for _ in 0..<240 where api == nil && attached == nil { try? await Task.sleep(for: .milliseconds(250)) }
         // Removed a moment ago and added again: after the removal there has finished.
         await machines.waitForRemoval(of: engine.machine.id)
         // Disconnected while it waited (its tries ended): nothing goes there.
@@ -613,9 +621,10 @@ extension AppModel {
             { await self.bots.refresh(machine) },
             // What it says is moving to or from it.
             { await self.moves.reload(machine) },
-            // What you signed in to here works there too, kept in step while it's connected.
-            { await self.syncSignIns(with: engine) },
-            { await self.syncSignInFiles(with: engine) },
+            // What you signed in to here works there too, kept in step while it's connected. (This
+            // Mac's own box, attached, is where this Mac's sign-ins are: none to bring.)
+            { if !engine.machine.isThisMac { await self.syncSignIns(with: engine) } },
+            { if !engine.machine.isThisMac { await self.syncSignInFiles(with: engine) } },
             { await self.wakeUps.share(with: engine) },
             // Its vault, read as it connects: an older copy of its files put back while it was
             // away is caught now, not only when its page is opened.
@@ -626,10 +635,12 @@ extension AppModel {
             // Its bots' goals, the same way.
             { await self.goalPlans.read(machine) },
         ]) else { return }
-        connection.every(600, "sign-ins", [
-            { await self.syncSignIns(with: engine) },
-            { await self.syncSignInFiles(with: engine) },
-        ])
+        if !engine.machine.isThisMac {
+            connection.every(600, "sign-ins", [
+                { await self.syncSignIns(with: engine) },
+                { await self.syncSignInFiles(with: engine) },
+            ])
+        }
         connection.every(60, "wake-ups", [
             { await self.wakeUps.share(with: engine) },
         ])
@@ -655,6 +666,8 @@ extension AppModel {
     /// bots, group chats and phone link carry on, and are there when you connect again. (A demo or
     /// test copy's stops, unless a session there is working.)
     func disconnect(_ engine: MachineEngine) {
+        // The window is on this Mac's own box: it stays connected.
+        guard !engine.machine.isThisMac else { return }
         engine.startWanted = false
         engine.isDisconnected = true
         // It isn't tried again by itself now, nor does Settings offer Connect Now for it.
@@ -663,7 +676,8 @@ extension AppModel {
         utilities.closeMachineBrowser(engine.machine.id)
         // What runs for its connection ends now, a test copy's too, whose engine stops after.
         engine.endConnection()
-        if leavesMachinesRunning || workspace.isRunning(on: engine.machine.id) { engine.disconnect() } else { Task { await engine.shutDown() } }
+        // (This Mac's own box runs this Mac: never stopped from here.)
+        if leavesMachinesRunning || engine.machine.isThisMac || workspace.isRunning(on: engine.machine.id) { engine.disconnect() } else { Task { await engine.shutDown() } }
         connectionClosed(engine.machine.id)
     }
 
@@ -705,6 +719,8 @@ extension AppModel {
     /// keep; `uninstall`, also stopped there, its sign-ins and keys deleted, and gone from your
     /// phones (`Machines.remove`).
     func removeMachine(_ id: String, uninstall: Bool = false) {
+        // This Mac's own box runs this Mac: it isn't removed from here.
+        guard id != SSHConnection.thisMac else { return }
         planLimits.stopped(id)
         // Left running, as Disconnect leaves it (a test or demo copy's stops).
         if !uninstall, let engine = machines.engine(id) { disconnect(engine) }
@@ -749,7 +765,7 @@ extension AppModel {
         for engine in reached {
             let busy = workspace.isRunning(on: engine.machine.id)
             engine.disconnect()
-            if !leavesMachinesRunning && !busy { stopping.append(engine.machine.connection) }
+            if !leavesMachinesRunning && !busy && !engine.machine.isThisMac { stopping.append(engine.machine.connection) }
         }
         let stops = stopping
         DispatchQueue.concurrentPerform(iterations: stops.count) { RemoteServer.stopNow(on: stops[$0]) }

@@ -259,7 +259,7 @@ final class PhoneLink {
     }
 
     /// This Mac's name, as Sharing settings has it.
-    static var computerName: String {
+    nonisolated static var computerName: String {
         (SCDynamicStoreCopyComputerName(nil, nil) as String?) ?? "Mac"
     }
 

@@ -783,7 +783,8 @@ import Testing
         let process = Process()
         process.executableURL = URL(filePath: "/bin/sh")
         process.arguments = ["-c", RemoteServer.launchScript]
-        process.environment = ["HOME": home.path, "PATH": "\(tools.path):/usr/bin:/bin"]
+        // (Its stand-in crontab and launchctl stand for the account's.)
+        process.environment = ["HOME": home.path, "PATH": "\(tools.path):/usr/bin:/bin", "KUVO_TEST_ACCOUNT_HOME": home.path]
         process.standardInput = try FileHandle(forReadingFrom: input)
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice

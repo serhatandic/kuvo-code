@@ -32,7 +32,14 @@ enum SidebarBox: Hashable, Identifiable {
         self = machine.map(SidebarBox.machine) ?? .mac
     }
 
-    var symbol: String { machine == nil ? "laptopcomputer" : "server.rack" }
+    /// This Mac's own box, already here, which the app attached to in place (#183): a machine to
+    /// the app, reached with no SSH (`SSHConnection.thisMac`).
+    static let attached = SidebarBox.machine(SSHConnection.thisMac)
+
+    /// This Mac: its app's own box, or the box attached in place.
+    var isThisMac: Bool { self == .mac || self == .attached }
+
+    var symbol: String { isThisMac ? "laptopcomputer" : "server.rack" }
 }
 
 extension EnvironmentValues {
