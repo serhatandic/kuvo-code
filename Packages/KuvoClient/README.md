@@ -43,6 +43,11 @@ model under that agent. Only for a box without `sessions.models` (the old-box pa
 it says so itself (`SessionModelState`). `Integration.offeredSignInMethods` is the ways to sign in both apps'
 Accounts offer: not a ChatGPT or SuperGrok plan's own (they go through Codex and Grok), unless one
 was made before; held, with `PlanSignIns`, to the box's cases (`Vectors/plan-sign-ins.json`).
+`ProgramUpdate` is how a coding agent's program's update stands as its box keeps it
+(`Integration.programUpdate`: under way, updated, already the newest, or why it failed, by an id
+that tells one outcome from the next), and `isInUpdateAll` whether its box's Update All updates it;
+`OpenCodeAPI.updateAllPrograms()` and `updateProgram(_:)` ask for them. Both apps draw these; the
+box decides.
 
 ## ClientSessions
 

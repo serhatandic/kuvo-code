@@ -689,17 +689,10 @@ final class OutsideAgents {
         try await api.removeAgentAccount(providerID)
     }
 
-    /// Agents whose program is updating, by program (an added account's update is its agent's):
-    /// updating wherever you look (Settings closed and opened again), and not asked twice.
-    private var updating: Set<String> = []
-    /// Why an update didn't work, by program, until you've seen it (where you look next, when you'd gone).
-    private var updateFailures: [String: String] = [:]
-    /// The version an update left, by program, and whether it brought it, until another starts.
-    private var updated: [String: (version: String, changed: Bool)] = [:]
-
-    func isUpdating(_ providerID: String) -> Bool { updating.contains(Self.base(providerID)) }
-    func updateFailure(_ providerID: String) -> String? { updateFailures[Self.base(providerID)] }
-    func dismissUpdateFailure(_ providerID: String) { updateFailures[Self.base(providerID)] = nil }
+    /// The program updates whose outcome you've seen (`ProgramUpdate.id`): what an update brought
+    /// is said while you're on the page that said it, and why one failed until you've seen it. How
+    /// each stands is its box's (`Integration.programUpdate`), the same for each of your devices.
+    private var seenUpdates: Set<String> = []
 
     /// How an agent's program stands, as its row or tile in Settings › Accounts says it.
     enum UpdateStatus: Equatable {
@@ -714,50 +707,52 @@ final class OutsideAgents {
         case failed(String)
     }
 
+    /// As its box says it: under way (whoever asked), how it went until you've seen it, else
+    /// whether a newer version is out.
     func updateStatus(_ integration: Integration) -> UpdateStatus? {
-        let program = Self.base(integration.id)
-        if updating.contains(program) { return .updating }
-        if let failure = updateFailures[program] { return .failed(failure) }
+        if let update = integration.programUpdate {
+            switch update.state {
+            case .updating: return .updating
+            case .failed(let message) where !seenUpdates.contains(update.id): return .failed(message)
+            case .updated(let version) where !seenUpdates.contains(update.id): return .updated(version)
+            case .current(let version) where !seenUpdates.contains(update.id): return .current(version)
+            default: break
+            }
+        }
         let metadata = integration.metadata
         if metadata?["outdated"]?.bool == true, let latest = metadata?["latestVersion"]?.string { return .available(latest) }
-        // Only while it's still on that version: once it moves on (its own updater), it's news no more.
-        guard let result = updated[program], metadata?["version"]?.string.map({ $0 == result.version }) ?? true else { return nil }
-        return result.changed ? .updated(result.version) : .current(result.version)
+        return nil
+    }
+
+    /// Why its program's update didn't work, until you've seen it.
+    func updateFailure(_ integration: Integration) -> String? {
+        if case .failed(let message) = updateStatus(integration) { return message }
+        return nil
+    }
+
+    func dismissUpdateFailure(_ integration: Integration) {
+        if let id = integration.programUpdate?.id { seenUpdates.insert(id) }
     }
 
     /// Updates an agent's program (Claude Code, Codex, Grok's CLI) through the installer that owns
-    /// it, then `refresh`es what the app shows of it; it's updating until then.
-    @discardableResult
-    func update(_ providerID: String, then refresh: @escaping () async -> Void) -> Task<Void, Never>? {
-        let program = Self.base(providerID)
-        guard let api, !updating.contains(program) else { return nil }
-        updating.insert(program)
-        updateFailures[program] = nil
-        updated[program] = nil
-        return Task {
-            var failure: String?
-            do {
-                let result = try await api.updateAgent(providerID)
-                if let message = result.message, !result.updated {
-                    failure = message
-                } else if let version = result.version {
-                    updated[program] = (version, result.updated)
-                } else {
-                    failure = "The update finished without saying which version it left."
-                }
-            } catch {
-                failure = error.localizedDescription
-            }
-            // Its version and models, as they are now, before its button comes back; and why it
-            // didn't work once it's no longer Updating….
-            await refresh()
-            updating.remove(program)
-            updateFailures[program] = failure
-        }
+    /// it, on its computer, whose box says how it goes (`programUpdate`); then `refresh`es what
+    /// the app shows of it. Throws only when it couldn't be asked.
+    func update(_ providerID: String, then refresh: () async -> Void) async throws {
+        guard let api else { throw Failure.notRunning(failure) }
+        try await api.updateProgram(providerID)
+        await refresh()
     }
 
-    /// What updates brought, said once: gone when you leave the page that said it.
-    func forgetUpdates() { updated = [:] }
+    /// What updates brought, said once: gone when you leave the page that said it (why one failed
+    /// stays until you've seen it).
+    func forgetUpdates(_ integrations: [Integration]) {
+        for update in integrations.compactMap(\.programUpdate) {
+            switch update.state {
+            case .updated, .current: seenUpdates.insert(update.id)
+            case .updating, .failed: break
+            }
+        }
+    }
 
     /// Agents whose program is installing, by the account it was asked for.
     private(set) var installing: Set<String> = []
@@ -963,13 +958,6 @@ extension OpenCodeAPI {
         _ = try await client.send(try client.request("PATCH", "api/kuvo/accounts/\(providerID.pathComponentEscaped)", body: Body(label: label)), as: Empty.self)
     }
 
-    /// Runs the agent's update, which can take minutes (a download, Homebrew updating itself first).
-    func updateAgent(_ providerID: String) async throws -> AgentUpdate {
-        var request = try client.request("POST", "api/integration/\(providerID.pathComponentEscaped)/update")
-        request.timeoutInterval = 15 * 60
-        return try await client.send(request, as: DataEnvelope<AgentUpdate>.self).data
-    }
-
     func installAgent(_ providerID: String) async throws -> AgentInstall {
         var request = try client.request("POST", "api/integration/\(providerID.pathComponentEscaped)/install")
         request.timeoutInterval = 15 * 60
@@ -984,14 +972,6 @@ extension OpenCodeAPI {
     func disconnectAgent(_ providerID: String) async throws {
         _ = try await client.send(try client.request("POST", "api/integration/\(providerID.pathComponentEscaped)/disconnect"), as: Empty.self)
     }
-}
-
-/// How updating an agent's program went.
-nonisolated struct AgentUpdate: Decodable, Sendable {
-    var updated: Bool
-    var version: String?
-    /// What went wrong, in the installer's words.
-    var message: String?
 }
 
 nonisolated struct AgentInstall: Decodable, Sendable {

@@ -1,3 +1,4 @@
+import ClientAccounts
 import OpenCodeKit
 import SwiftUI
 
@@ -69,33 +70,23 @@ extension AppModel {
         return boxes.contains(picked) ? picked : .mac
     }
 
-    /// Coding agents on `box` (while its agents are up) with a newer version that their installer
-    /// can update to, one per program, asked of the agent's own sign-in (where its row or tile in
-    /// Settings › Accounts shows how it goes): what that page's Update All updates.
+    /// What Update All updates on `box` (while its agents are up), as its box picks it, one account
+    /// for each program (an account you added runs its agent's): each shows how it goes on its row
+    /// or tile in Settings › Accounts.
     func outdatedAgents(on box: SidebarBox) -> [Integration] {
         if let machine = box.machine, machines.engine(machine) == nil { return [] }
         guard agents(for: box).api != nil, !agents(for: box).isDown else { return [] }
-        var seen = Set<String>()
-        // An agent's own sign-in ahead of the accounts added to it, which run the same program.
-        let integrations = catalog(for: box).codingAgents
-        let own = integrations.filter { $0.metadata?["accountID"]?.string ?? "default" == "default" }
-        return (own + integrations.filter { !own.contains($0) }).compactMap { integration in
-            let metadata = integration.metadata
-            guard metadata?["outdated"]?.bool == true, metadata?["updates"]?.bool == true,
-                  let kind = metadata?["agent"]?.string, seen.insert(kind).inserted else { return nil }
-            return integration
-        }
+        var programs = Set<String>()
+        return catalog(for: box).codingAgents.filter { $0.isInUpdateAll && programs.insert(OutsideAgents.base($0.id)).inserted }
     }
 
-    /// Updates each of them, on `box`, through the installer that owns it.
-    /// (Each update under way, for a test to wait for.)
-    @discardableResult
-    func updateAllAgents(on box: SidebarBox) -> [Task<Void, Never>] {
-        let agents = agents(for: box), catalog = catalog(for: box)
-        return outdatedAgents(on: box).compactMap { outdated in
-            if agents.isUpdating(outdated.id) { return nil }
-            return agents.update(outdated.id) { await catalog.refreshAgents(fresh: true) }
-        }
+    /// Update All on `box`: its box updates each it picks, through the installer that owns it, and
+    /// says how each goes. Throws only when it couldn't be asked.
+    func updateAllAgents(on box: SidebarBox) async throws {
+        let agents = agents(for: box)
+        guard let api = agents.api else { throw OutsideAgents.Failure.notRunning(agents.failure) }
+        try await api.updateAllPrograms()
+        await catalog(for: box).refreshAgents()
     }
 
     /// A machine that isn't added any more: nothing there to show or change.
