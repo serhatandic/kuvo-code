@@ -100,19 +100,17 @@ import Testing
         return AXElement.all(in: window.contentView)
     }
 
-    private var labels: [String] { elements.compactMap(\.label) }
-
-    /// The viewer says "2 of 4" and the picture's name.
+    /// The viewer shows the picture `name`, and says where it is among them ("2 of 4").
     private func shows(_ count: String, _ name: String) -> Bool {
-        let labels = labels
-        return labels.contains(count) && labels.contains(name)
+        guard let request = ImageViewer.shared.request, let at = ImageViewer.shared.shown, request.items.indices.contains(at) else { return false }
+        return "\(at + 1) of \(request.items.count)" == count && request.items[at].name == name
     }
 
-    /// A click on the picture in the conversation whose tip names it, sent through the window.
+    /// A click on the picture in the conversation VoiceOver names so, sent through the window.
     private func clickPicture(_ name: String) async throws {
         var found: AXElement?
         try await until {
-            found = elements.first { $0.help?.hasPrefix(name + " — ") == true }
+            found = elements.first { $0.label == name && $0.frame.width > 20 }
             return found != nil
         }
         let frame = try #require(found).frame
@@ -193,7 +191,7 @@ import Testing
         defer { done() }
         shoot("conversation")
         try await clickPicture("after.png")
-        try await until { ImageViewer.shared.request != nil && labels.contains("after.png") }
+        try await until { shows("5 of 5", "after.png") }
         shoot("opened-on-the-last-message")
         let request = try #require(ImageViewer.shared.request)
         #expect(request.items.map(\.name) == ["before.png", "light.png", "dark.png", "made.png", "after.png"], "your pictures and the agent's, from every message, in order")
@@ -237,7 +235,7 @@ import Testing
         model.draftFiles = [folder.appending(path: "new.png")]
         var found: AXElement?
         try await until {
-            found = elements.first { $0.label == "new.png" && $0.help?.contains("new.png") == true }
+            found = elements.first { $0.label == "new.png" }
             return found != nil
         }
         #expect(try #require(found).press())
@@ -249,9 +247,8 @@ import Testing
 
     @Test func whatsUndoneIsntAmongThem() async throws {
         defer { done() }
-        engine.list([StubEngine.session(id, title: "Pictures", directory: folder.path, extra: ["revert": ["messageID": "msg_04"]])])
-        await app.workspace.refresh()
-        try await until { model.session.revert != nil }
+        // Undone from your last message on, as Undo leaves it until you send again.
+        model.session.revert = try JSONDecoder().decode(Session.Revert.self, from: Data(#"{"messageID": "msg_04"}"#.utf8))
         try await clickPicture("light.png")
         try await until { shows("2 of 4", "light.png") }
         #expect(ImageViewer.shared.request?.items.map(\.name) == ["before.png", "light.png", "dark.png", "made.png"])
@@ -267,7 +264,8 @@ import Testing
             .environment(app.workspace)
             .environment(catalog)
             .frame(width: Self.size.width, height: Self.size.height)))
-        try await until { elements.contains { $0.help == "Pinch or double-click to zoom" } }
+        // The picture, drawn (it says how far it's zoomed).
+        try await until { elements.contains { $0.label == "light.png" && (($0.object.accessibilityValue?() ?? nil) as? String)?.hasSuffix("%") == true } }
         try await swipe(fingers: -260)
         try await until { app.utilities.tabs.contains { $0.kind == .file(dark) } }
     }

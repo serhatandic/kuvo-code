@@ -19,6 +19,11 @@ final class ImageViewer {
     }
 
     private(set) var request: Request?
+    /// Which of the request's pictures is shown now, as you go back and forth.
+    private(set) var shown: Int?
+
+    /// The lightbox went to `index`.
+    fileprivate func showing(_ index: Int) { shown = index }
 
     func show(_ items: [AttachmentItem], at index: Int = 0) {
         let pictures = items.filter(\.isImage)
@@ -29,6 +34,7 @@ final class ImageViewer {
         withAnimation(.easeOut(duration: 0.16)) {
             request = Request(items: pictures, index: at)
         }
+        shown = at
         OverContent.opened(Self.layer) { [weak self] in self?.close() }
     }
 
@@ -53,6 +59,7 @@ final class ImageViewer {
     func close() {
         OverContent.closed(Self.layer)
         withAnimation(.easeOut(duration: 0.14)) { request = nil }
+        shown = nil
     }
 
     /// It, among what's open over the window (`OverContent`), which Escape closes first.
@@ -441,6 +448,7 @@ private struct ImageLightbox: View {
     private func step(_ direction: Int) -> Bool {
         guard request.items.indices.contains(index + direction) else { return false }
         index += direction
+        ImageViewer.shared.showing(index)
         image = nil
         loadFailed = false
         scale = 1

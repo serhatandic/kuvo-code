@@ -568,6 +568,14 @@ private struct AttachmentPicture: View {
         // Open: in the viewer, where one only its computer has opens in its app too.
         .heldContextMenu { attachmentMenu(item, open: view) }
         .help(isMissing ? "\(item.name) couldn’t be read — click to try again" : "\(item.name) — click to look closer")
+        // One element for VoiceOver, by its name, that opens it.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(item.name)
+        .accessibilityAddTraits([.isImage, .isButton])
+        .accessibilityAction {
+            if isMissing { tries += 1 }
+            view()
+        }
         .task(id: "\(item.contentID)\n\(tries)") {
             if tries > 0 { isMissing = false }
             image = await item.loadImage()
