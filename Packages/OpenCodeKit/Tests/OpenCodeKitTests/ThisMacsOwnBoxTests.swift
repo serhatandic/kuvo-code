@@ -97,14 +97,12 @@ import Testing
         }
     }
 
-    /// The account's crontab and launch agents are written only from the account's own home: a box in
-    /// a home of its own (a test's), run here, never adds to them.
-    @Test func theAccountsStartAtLoginIsOnlyWrittenFromItsOwnHome() async throws {
+    /// Its engine is never launched from here (what a launch writes, its start at login in the
+    /// account's crontab and launch agents, is its own Mac's), and nothing is run there for it.
+    @Test func itsEngineIsNeverLaunchedFromHere() async throws {
         try await withHome { home in
-            let gated = RemoteServer.accountsOwnHome("echo written")
-            #expect(try await connection.run(gated).isEmpty)
-            let own = try await SSHConnection.$scopedHome.withValue(NSHomeDirectory()) { try await connection.run(gated) }
-            #expect(own == "written\n")
+            await #expect(throws: RemoteEngineError.self) { try await RemoteServer.launch(on: connection, environment: [:]) }
+            #expect((try? FileManager.default.contentsOfDirectory(atPath: home.path)) == [])
         }
     }
 

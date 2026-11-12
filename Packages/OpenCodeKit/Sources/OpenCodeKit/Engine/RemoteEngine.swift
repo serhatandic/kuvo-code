@@ -812,6 +812,9 @@ public final class RemoteServer: @unchecked Sendable {
     /// (Start); otherwise it stays stopped, and this throws `stopped`.
     public static func launch(on connection: SSHConnection, environment base: [String: String], notes: [String: String] = [:], withAgents: Bool = false,
                               replace: Int? = nil, start: Bool = false) async throws -> Engine {
+        // Never on this Mac's own box, attached in place: it starts on its own (launchd's), and what
+        // a launch writes (its start at login, the account's crontab) is its own Mac's to write.
+        if connection.isLocal { throw RemoteEngineError.thisMac }
         // What starts it again after a restart, as this launch does.
         try await installBoot(on: connection)
         var lastError: Error = RemoteEngineError.timedOut
@@ -1377,20 +1380,7 @@ public final class RemoteServer: @unchecked Sendable {
         """
         (umask 077; { printf '%s\\n' "$kuvo_env"; printf '%s' "$lines" | grep -v -E '^(OPENCODE_PASSWORD|KUVO_PORT|KUVO_RECORD|KUVO_AGENTS_PORT|KUVO_AGENTS_PASSWORD|KUVO_BOOT|KUVO_VERSION|KUVO_REPLACE|KUVO_START|KUVO_SETTINGS|\(privateSettingsVariable)|KUVO_KEY_[A-Za-z0-9_]*)='; } | grep -v '^$' >"$R/launch.env.new"; mv -f "$R/launch.env.new" "$R/launch.env")
         (umask 077; printf '%s' "$record" | sed -n 's/.*"notes":\\({[^}]*}\\).*/\\1/p' >"$R/launch.notes")
-        \(RemoteEngineInstaller.root == ".kuvo-code" ? accountsOwnHome(rebootCrontabScript + "\n" + launchAgentScript) : "")
-        """
-    }
-
-    /// `script` only where `$HOME` is the account's own home: the crontab and launchd are the
-    /// account's whatever `$HOME` says, so a test's or this Mac's own box run here in a home of its
-    /// own never adds to (or takes from) the account's. (`KUVO_TEST_ACCOUNT_HOME`: a test's
-    /// stand-in crontab and launchctl stand for the account's, in its home.)
-    static func accountsOwnHome(_ script: String) -> String {
-        """
-        kuvo_account_home=${KUVO_TEST_ACCOUNT_HOME-}; [ -n "$kuvo_account_home" ] || eval "kuvo_account_home=~$(id -un)"
-        if [ "$(cd "$HOME" 2>/dev/null && pwd -P)" = "$(cd "$kuvo_account_home" 2>/dev/null && pwd -P)" ]; then
-        \(script)
-        fi
+        \(RemoteEngineInstaller.root == ".kuvo-code" ? rebootCrontabScript + "\n" + launchAgentScript : "")
         """
     }
 
@@ -1462,7 +1452,7 @@ public final class RemoteServer: @unchecked Sendable {
     /// rest: only from Kuvo Code's own folder (a test's or a demo copy's never added it, and
     /// leaves the app's).
     public static var rebootCrontabRemoval: String {
-        RemoteEngineInstaller.root == ".kuvo-code" ? accountsOwnHome(crontabRemovalScript + "\n" + launchAgentRemovalScript) : ""
+        RemoteEngineInstaller.root == ".kuvo-code" ? crontabRemovalScript + "\n" + launchAgentRemovalScript : ""
     }
 
     static var crontabRemovalScript: String {
