@@ -363,6 +363,10 @@ import Testing
             try await until { model.draftText.isEmpty && !model.tuck.isOn(among: [.goal, .background]) }
             try await until { elements.contains { $0.label == "Fold all bars" } }
             try await keep("sent")
+            // Its send is on its way: waited for before `done()` stops the engine, which would
+            // put the words back in the composer (`Drafts.shared`) for the next test's session.
+            await model.messagesSent()
+            #expect(model.draftText.isEmpty, "its words didn't come back")
             #expect(model.failure == nil, "\(model.failure ?? "")")
         }
     }
