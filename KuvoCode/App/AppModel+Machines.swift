@@ -332,6 +332,8 @@ extension AppModel {
     // COMPAT(0.7 engine-stop): Start, for an engine an older Mac stopped. Goes 3 months after 0.8.0.
     /// Starts a machine's engine stopped on purpose (Start), and connects to it.
     func startEngine(_ engine: MachineEngine) {
+        // (This Mac's own box starts by its own keeper: connected again, as it is.)
+        if engine.machine.isThisMac { reconnectNow(engine); return }
         engine.disconnect()
         connectionClosed(engine.machine.id)
         engine.startWanted = true
@@ -343,6 +345,9 @@ extension AppModel {
     /// ends it: nothing more of it goes there, and it doesn't connect again itself.
     @discardableResult
     func restartEngine(_ engine: MachineEngine) -> Task<Void, Never> {
+        // This Mac's own box restarts by its own keeper, never from the app (which would run it as
+        // Kuvo Code's): it's connected again as it is.
+        if engine.machine.isThisMac { return reconnectNow(engine) ?? Task {} }
         engine.disconnect()
         connectionClosed(engine.machine.id)
         // Restart asks for it to be connected, as Connect does.
@@ -373,6 +378,8 @@ extension AppModel {
     /// are at work (they'd stop), nor over a box a newer Kuvo Code set up: why not, then.
     func makeHome(_ engine: MachineEngine) async -> String? {
         let name = engine.machine.name
+        // This Mac's own box: making this Mac the main one is the setup's to do (#183), not this.
+        if engine.machine.isThisMac { return "This is this Mac’s own box already." }
         guard engine.isReady else { return "\(name) isn’t connected. Connect it first." }
         guard engine.isAnotherMacsEngine else { return nil }
         guard engine.movingHomeFrom == nil else { return "\(name) is moving to this Mac already." }
@@ -666,6 +673,8 @@ extension AppModel {
     /// bots, group chats and phone link carry on, and are there when you connect again. (A demo or
     /// test copy's stops, unless a session there is working.)
     func disconnect(_ engine: MachineEngine) {
+        // The window is on this Mac's own box: it stays connected.
+        guard !engine.machine.isThisMac else { return }
         engine.startWanted = false
         engine.isDisconnected = true
         // It isn't tried again by itself now, nor does Settings offer Connect Now for it.

@@ -730,6 +730,9 @@ final class AppModel {
     private func openOnAttached() {
         SSHConnection.thisMacHome = Self.hereHome.path(percentEncoded: false)
         machines.attachHere()
+        // Its stores told of each other, as a start of the app's own box tells them (what follows
+        // the app's own box finds none, and waits).
+        wireStores()
         engine = .ready
         startMachines()
     }

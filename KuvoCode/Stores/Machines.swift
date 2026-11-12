@@ -4,7 +4,6 @@ import CryptoKit
 import Foundation
 import OpenCodeKit
 import os
-import SystemConfiguration
 
 /// Another computer whose engine Kuvo Code runs over SSH (a home server, a VPS), next to this
 /// Mac's: a host from `~/.ssh/config` or `user@host`. Its projects are folders on it.
@@ -21,7 +20,7 @@ nonisolated struct Machine: Codable, Hashable, Identifiable {
 
     var id: String { destination }
     /// Its name here: this Mac's own box goes by this Mac's.
-    var name: String { isThisMac ? (SCDynamicStoreCopyComputerName(nil, nil) as String?) ?? "This Mac" : destination }
+    var name: String { isThisMac ? PhoneLink.computerName : destination }
     /// This Mac's own box, already in its home folder, which the app attached to in place
     /// (`SSHConnection.thisMac`): reached with no SSH, never saved with your machines, and never
     /// removed, stopped or signed out of from here.
@@ -631,7 +630,8 @@ final class MachineEngine {
                 try check()
                 var launch = launch
                 // COMPAT(0.7 settings): the settings an older Mac's start left, made the box's own. Goes 3 months after 0.8.0.
-                let box = try await MachineBox.adopt(on: connection, seed: launch.seed)
+                // (This Mac's own box keeps its keys: none of the app's go into it.)
+                let box = try await MachineBox.adopt(on: connection, seed: machine.isThisMac ? { .init(settings: [:], keys: [:]) } : launch.seed)
                 config.took(box.settings)
                 launch.boxEnvironment = launch.fromBox(config.settings)
                 if box.seeded { seededNow = true }
@@ -842,7 +842,7 @@ final class MachineEngine {
     /// This Mac's own box, attached in place, isn't running its engine: its keeper starts it, never
     /// the app.
     struct OwnBoxDown: LocalizedError {
-        var errorDescription: String? { "This Mac’s box isn’t running its engine. It starts again on its own; try again in a moment." }
+        var errorDescription: String? { "This Mac’s box isn’t running its engine. Try again in a moment; if it stays down, log out and back in to start it again." }
     }
 
     struct NewerBox: LocalizedError {

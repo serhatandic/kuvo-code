@@ -97,6 +97,17 @@ import Testing
         }
     }
 
+    /// The account's crontab and launch agents are written only from the account's own home: a box in
+    /// a home of its own (a test's), run here, never adds to them.
+    @Test func theAccountsStartAtLoginIsOnlyWrittenFromItsOwnHome() async throws {
+        try await withHome { home in
+            let gated = RemoteServer.accountsOwnHome("echo written")
+            #expect(try await connection.run(gated).isEmpty)
+            let own = try await SSHConnection.$scopedHome.withValue(NSHomeDirectory()) { try await connection.run(gated) }
+            #expect(own == "written\n")
+        }
+    }
+
     /// Its engine is reached at its own port on this Mac, with nothing in between.
     @Test func itsEngineIsReachedAtItsOwnPort() async throws {
         let engine = try Engine.answering()
@@ -117,7 +128,9 @@ import Testing
         let port: Int
 
         static func answering() throws -> Engine {
-            let listener = try NWListener(using: .tcp, on: .any)
+            let parameters = NWParameters.tcp
+            parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: .any)
+            let listener = try NWListener(using: parameters)
             let ready = DispatchSemaphore(value: 0)
             listener.stateUpdateHandler = { if case .ready = $0 { ready.signal() } }
             listener.newConnectionHandler = { connection in
