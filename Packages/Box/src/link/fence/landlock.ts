@@ -42,8 +42,11 @@ export function landlockPolicy(policy: FencePolicy): string {
  *   and `config.worktree`, read-only, and each `commondir` must lead back to the repository;
  * - `modules`, and every folder in it but each submodule's repository, read-only: none is made,
  *   moved or removed;
- * - the `.git` file that leads such a worktree to its repository, up from it, read-only;
- * - and the folders those are in, and the conversation's, from the top down (`pin_up`).
+ * - and the `.git` file that leads such a worktree to its repository, up from it, read-only.
+ * (Not the folders these are in, which a command could move away from a folder above that it writes,
+ * an Also Allowed one or /tmp, and put another repository in their place: each mount is a border
+ * files aren't moved or linked across, and the conversation's folder one would keep tools' caches'
+ * links and its agent's moves out of it.)
  * Mounts keep only what's there. A name git reads that isn't there yet would be made in a folder git
  * must make files in (`index.lock` beside `commondir`), which neither Landlock nor a mount tells
  * apart: so the launcher first gives each repository what it lacks of those (`MAKE_GIT`). A
@@ -135,32 +138,6 @@ $at/.git"
     at=$(dirname "$at")
   done
 }
-# The folders the repositories are in, and the conversation's, each from the top down (but /): each
-# mounted on itself with what's in it, so none is moved away and another put in its place, a
-# repository of its own with it, from a folder above that a command writes (Also Allowed's, /tmp).
-pin_up() {
-  local at k_up
-  at=$1 k_up=
-  while [ -n "$at" ] && [ "$at" != / ]; do k_up="$at
-$k_up"; at=$(dirname "$at"); done
-  while IFS= read -r at; do
-    [ -n "$at" ] || continue
-    case "$k_pinned
-" in *"
-$at
-"*) continue ;; esac
-    as_is "$at" || return 0
-    mount -c --rbind "$at" "$at" 2>/dev/null || fail "$at can't be kept from it."
-    k_pinned="$k_pinned
-$at"
-  done <<EOF_UP
-$k_up
-EOF_UP
-}
-k_pinned=
-pin_up "$work"
-case $git in /*.git) pin_up "$git" ;; esac
-[ -z "$allowed" ] || [ ! -f "$allowed" ] || while IFS= read -r k_at; do case $k_at in /*) pin_up "$k_at" </dev/null ;; esac; done <"$allowed"
 gitfile "$work"
 if [ -n "$allowed" ] && [ -f "$allowed" ]; then
   while IFS= read -r k_at; do

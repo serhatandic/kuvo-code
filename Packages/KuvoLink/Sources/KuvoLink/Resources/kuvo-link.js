@@ -4189,32 +4189,6 @@ $at/.git"
     at=$(dirname "$at")
   done
 }
-# The folders the repositories are in, and the conversation's, each from the top down (but /): each
-# mounted on itself with what's in it, so none is moved away and another put in its place, a
-# repository of its own with it, from a folder above that a command writes (Also Allowed's, /tmp).
-pin_up() {
-  local at k_up
-  at=$1 k_up=
-  while [ -n "$at" ] && [ "$at" != / ]; do k_up="$at
-$k_up"; at=$(dirname "$at"); done
-  while IFS= read -r at; do
-    [ -n "$at" ] || continue
-    case "$k_pinned
-" in *"
-$at
-"*) continue ;; esac
-    as_is "$at" || return 0
-    mount -c --rbind "$at" "$at" 2>/dev/null || fail "$at can't be kept from it."
-    k_pinned="$k_pinned
-$at"
-  done <<EOF_UP
-$k_up
-EOF_UP
-}
-k_pinned=
-pin_up "$work"
-case $git in /*.git) pin_up "$git" ;; esac
-[ -z "$allowed" ] || [ ! -f "$allowed" ] || while IFS= read -r k_at; do case $k_at in /*) pin_up "$k_at" </dev/null ;; esac; done <"$allowed"
 gitfile "$work"
 if [ -n "$allowed" ] && [ -f "$allowed" ]; then
   while IFS= read -r k_at; do
@@ -38328,7 +38302,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "a9ee612f612e";
+var BRIDGE_VERSION = "4417b6d4196a";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

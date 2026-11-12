@@ -1,7 +1,6 @@
 import "./safety"
 import { expect, setDefaultTimeout, test } from "bun:test"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
-import { createHash } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { canFence, realFence } from "./agents/support/fence"
@@ -40,8 +39,6 @@ interface Way {
   then?: string
   /** What you do in the repository yourself afterwards, outside the sandbox, before git there. */
   after?: string
-  /** With the folder its folder is in Also Allowed. */
-  above?: boolean
 }
 
 // (Each a shell script; the conversation's folder is the current one, its repository `$G`.)
@@ -65,7 +62,6 @@ const WAYS: Record<string, Way> = {
   "its repository's HEAD taken away first": { tries: `rm -f "$G/HEAD"`, then: `printf '[core]\\n\\tfsmonitor = %s\\n' "$FSMONITOR" >> "$G/config"; echo 'ref: refs/heads/main' > "$G/HEAD"` },
   "a submodule's repository made where it has none": { tries: `mkdir -p "$G/modules" && git clone -q --bare "$LIB" "$G/modules/lib" && git config --file "$G/modules/lib/config" core.bare false && printf '%s\\n' "$HOOK" > "$G/modules/lib/hooks/post-checkout" && chmod +x "$G/modules/lib/hooks/post-checkout" && printf '[submodule "lib"]\\n\\tpath = lib\\n\\turl = %s\\n' "$LIB" > .gitmodules && git update-index --add --cacheinfo "160000,$(git -C "$LIB" rev-parse HEAD),lib" && git add .gitmodules && git commit -q -m lib`, after: "git -c protocol.file.allow=always submodule update --init" },
   "its own settings for worktrees, before they're on": { tries: `printf '[core]\\n\\tfsmonitor = %s\\n' "$FSMONITOR" > "$G/config.worktree"`, after: "git config extensions.worktreeConfig true" },
-  "its folder traded, from the folder above it": { above: true, tries: `W=$PWD; cd / && mv "$W" "$W-old" && mkdir "$W" && cp -R "$W-old/.git" "$W/.git" && git config --file "$W/.git/config" core.fsmonitor "$FSMONITOR"` },
   "a submodule's repository traded": { submodule: true, tries: `cp -R "$G/modules/lib" evil && git config --file evil/config core.fsmonitor "$FSMONITOR" && mv "$G/modules/lib" "$G/modules/lib-old" && mv evil "$G/modules/lib"` },
 }
 
@@ -104,12 +100,6 @@ function fenced(root: string) {
     }
     return { app, git: join(app, ".git"), work: way.worktree ? join(root, slug, "wt") : app }
   }
-  /** `folder` Also Allowed for the conversation at work in `work`, as the box keeps it (fence/allowed.ts). */
-  const allow = (work: string, folder: string) => {
-    const at = join(kuvo, "run", "fence", "allowed")
-    mkdirSync(at, { recursive: true })
-    writeFileSync(join(at, createHash("sha256").update(work).digest("hex").slice(0, 32)), folder + "\n")
-  }
   /** `script` run in the sandbox, from a conversation at work in `work`, its repository `gitDir`. */
   const run = (work: string, gitDir: string, script: string) => {
     const ran = Bun.spawnSync([join(kuvo, "bin", "kuvo-fence"), "-c", script], { cwd: work, env: { ...ENV, HOME: home, KUVO_FENCE_WORK: work, KUVO_FENCE_GIT: gitDir } })
@@ -117,13 +107,13 @@ function fenced(root: string) {
   }
   /** git outside the sandbox, as you'd run it. */
   const outside = (cwd: string, ...args: string[]) => Bun.spawnSync(["git", "-c", "protocol.file.allow=always", ...args], { cwd, env: { ...ENV, HOME: home } })
-  return { kuvo, home, marks, library, repository, allow, run, outside }
+  return { kuvo, home, marks, library, repository, run, outside }
 }
 
 test.skipIf(!canFence)("a command plants nothing git runs outside the sandbox in its repository", () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sandbox-git-")))
   try {
-    const { home, marks, library, repository, allow, run, outside } = fenced(root)
+    const { home, marks, library, repository, run, outside } = fenced(root)
     // (Commands do run in the sandbox: one can't write where the marks go.)
     expect(run(home, "", `touch ${sh(join(marks, "control"))}`).code).not.toBe(0)
     expect(existsSync(join(marks, "control"))).toBe(false)
@@ -132,7 +122,6 @@ test.skipIf(!canFence)("a command plants nothing git runs outside the sandbox in
     for (const [name, way] of Object.entries(WAYS)) {
       const slug = name.replace(/[^a-z]+/g, "-")
       const { app, git: gitDir, work } = repository(slug, way)
-      if (way.above) allow(work, join(root, slug))
       const mark = join(marks, slug)
       const hook = `#!/bin/sh\ntouch ${sh(mark)}`
       const given = `G=${sh(gitDir)}; MARK=${sh(mark)}; FSMONITOR=${sh(`touch ${sh(mark)}; false`)}; HOOK=${sh(hook)}; LIB=${sh(library)}\n`

@@ -5523,8 +5523,10 @@ none is moved, removed or replaced), and its `config`, `config.worktree`, `commo
 and `hooks`, every worktree's own folder but those the conversation works in (its own, and an Also
 Allowed folder's: there its `commondir`, `gitdir` and `config.worktree` are), and every folder in
 `modules` but each submodule's repository, read-only; so is the `.git` file that leads such a
-worktree to its repository; and the folders those are in, and the conversation's, from the top
-down, are mounted on themselves, so none is moved away and another put in its place. A
+worktree to its repository. (Not the folders these are in: from a folder above that it writes, an
+Also Allowed one or `/tmp`, a command can still move the conversation's folder away and put another
+with a repository of its own in its place, as a mount there would keep files from being moved or
+linked across it, tools' caches' links into the project among them.) A
 `commondir` leading git anywhere but the repository itself (or, a worktree's own, its repository),
 a link where one of those is, or one that can't be kept, runs nothing (126, saying why). Mounts keep
 only what's there, and a name git reads that isn't there yet can't be told from the files git makes
