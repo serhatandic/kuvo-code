@@ -4092,6 +4092,19 @@ async function writeRuleWouldBe(where) {
 // Packages/Box/src/link/fence/landlock.ts
 import { spawn as spawn2, spawnSync as spawnSync2 } from "node:child_process";
 import fs19 from "node:fs";
+
+// Packages/Box/src/link/fence/finished.ts
+var LOAD = new Set(["ETIMEDOUT", "EAGAIN", "ENOMEM", "EMFILE", "ENFILE"]);
+function didntFinish(run) {
+  if (run.status !== null)
+    return false;
+  const code = run.error?.code;
+  if (code)
+    return LOAD.has(code);
+  return run.signal === "SIGKILL";
+}
+
+// Packages/Box/src/link/fence/landlock.ts
 function landlockPolicy(policy) {
   return JSON.stringify({
     hidden: [...policy.kuvo, ...policy.secrets],
@@ -4128,27 +4141,34 @@ mkfifo -m 600 "$own/in" "$own/on" || fail "it isn't set up."
 timeout 10 sh -c 'read _ <"$1" && echo "$2 0 1" >/proc/$0/uid_map && echo "$3 0 1" >/proc/$0/gid_map; echo >"$4"' $$ "$own/in" "$u" "$g" "$own/on" </dev/null >/dev/null 2>&1 &
 exec "$0" --user -- /bin/sh -c 'echo >"$0"; read _ <"$1"; [ "$(id -u)" = "$2" ] || { echo "This command can'"'"'t run in the sandbox here: it can'"'"'t run as you." >&2; exit 126; }; PATH=$3; shift 3; exec "$@"' "$own/in" "$own/on" "$u" "$p" "$@"`;
 var UNSHARE = ["/usr/bin/unshare", "/bin/unshare"];
-function ownNamespace(own) {
+var UNFINISHED = "unfinished";
+function triedNamespace(own) {
   const unshare = UNSHARE.find((each) => fs19.existsSync(each));
   if (!unshare)
     return null;
   const tried = spawnSync2(unshare, namespaceTry(unshare, own), { cwd: "/", stdio: "ignore", timeout: TRY_FOR });
+  if (didntFinish(tried))
+    return UNFINISHED;
   return tried.status === 0 ? unshare : null;
 }
-function ownNamespaceLater(own, unshare = UNSHARE.find((each) => fs19.existsSync(each))) {
+function ownNamespaceLater(own, unshare = UNSHARE.find((each) => fs19.existsSync(each)), limit = TRY_FOR) {
   if (!unshare)
     return Promise.resolve(null);
   return new Promise((resolve) => {
     const child = spawn2(unshare, namespaceTry(unshare, own), { cwd: "/", stdio: "ignore" });
-    const late = setTimeout(() => child.kill("SIGKILL"), TRY_FOR);
-    late.unref?.();
-    child.once("error", () => {
-      clearTimeout(late);
-      resolve(null);
+    let late = false;
+    const cut = setTimeout(() => {
+      late = true;
+      child.kill("SIGKILL");
+    }, limit);
+    cut.unref?.();
+    child.once("error", (error) => {
+      clearTimeout(cut);
+      resolve(didntFinish({ status: null, error }) ? UNFINISHED : null);
     });
-    child.once("exit", (status) => {
-      clearTimeout(late);
-      resolve(status === 0 ? unshare : null);
+    child.once("exit", (status, signal) => {
+      clearTimeout(cut);
+      resolve(late || didntFinish({ status, signal }) ? UNFINISHED : status === 0 ? unshare : null);
     });
   });
 }
@@ -4916,11 +4936,16 @@ function fenceState() {
   const base = { able: checked.able, agents: said === "none" || said === "inside", ...said === "outside" ? { outside: true } : {}, ...asksToRestart() ? { restart: true } : {} };
   if (!fenceWanted())
     return { ...base, on: false, why: "Kuvo Code has it turned off on this computer for now." };
-  if (!checked.passed)
+  if (!checked.passed && !checked.unfinished)
     return { ...base, on: false, ...cannot(checked) };
   const now = loaded();
-  return { ...base, ...now, ...now.on && withoutNamespace ? { gaps: ["services"], needs: withoutNamespace } : {} };
+  if (!now.on)
+    return { ...base, ...now };
+  if (checked.unfinished || fs20.existsSync(CHECKING))
+    return { ...base, on: false, ...cannot({ able: true, passed: false, reason: "checking", why: PENDING_WHY }) };
+  return { ...base, ...now, ...withoutNamespace ? { gaps: ["services"], needs: withoutNamespace } : {} };
 }
+var PENDING_WHY = "Its check didn't finish in time (this computer may be busy), so it's checked again in a minute. Until then commands still run in it, and Auto asks first.";
 function fenceWhole() {
   return platform === "darwin" || (textOf(path19.join(FOLDER2, "namespace")) ?? "").startsWith("/");
 }
@@ -5074,10 +5099,11 @@ function writeExecutable(file, text) {
 var WITHOUT_NAMESPACE = "without";
 var namespace = null;
 var namespaceKnown = false;
+var namespaceUnfinished = false;
 var withoutNamespace = null;
 var namespaceHere = () => {
   fs20.mkdirSync(NAMESPACE_FOLDER, { recursive: true, mode: 448 });
-  return ownNamespace(NAMESPACE_FOLDER);
+  return triedNamespace(NAMESPACE_FOLDER);
 };
 function able(found) {
   if (platform === "darwin")
@@ -5087,8 +5113,12 @@ function able(found) {
   if (!fs20.existsSync("/sys/kernel/security/landlock") && !/landlock/.test(textOf("/sys/kernel/security/lsm") ?? "landlock")) {
     return { able: false, passed: false, why: `Linux ${os4.release().split("-")[0]} can't sandbox commands: it needs Landlock (Linux 5.13 or later, with it on).`, reason: "kernel", needs: "Linux 5.13" };
   }
-  namespace = found === undefined ? namespaceHere() : found;
-  namespaceKnown = true;
+  const tried = found === undefined ? namespaceHere() : found;
+  namespaceUnfinished = tried === UNFINISHED;
+  if (!namespaceUnfinished)
+    [namespace, namespaceKnown] = [tried, true];
+  else if (!namespaceKnown)
+    namespace = UNSHARE.find((each) => fs20.existsSync(each)) ?? null;
   withoutNamespace = namespace ? null : UNSHARE.some((each) => fs20.existsSync(each)) ? "user namespaces" : "util-linux";
   if (withoutNamespace && WITHOUT_NAMESPACE === "off") {
     const services = "which the sandbox needs to keep commands from the services your login runs: systemd, your keyring, your agents";
@@ -5097,7 +5127,6 @@ function able(found) {
   return { able: true, passed: false };
 }
 var CHECK_LIMIT = 20000;
-var UNFINISHED = new Set(["ETIMEDOUT", "EAGAIN", "ENOMEM"]);
 function probe() {
   fs20.rmSync(PROBE, { recursive: true, force: true });
   fs20.mkdirSync(PROBE, { recursive: true, mode: 448 });
@@ -5123,9 +5152,9 @@ function probe() {
   if (bun)
     env.KUVO_FENCE_RUNTIME = bun;
   const hold = IN_TEST_FOLDER ? process.env.KUVO_TEST_SANDBOX_CHECK_HOLD : undefined;
-  const limit = IN_TEST_FOLDER && Number(process.env.KUVO_TEST_SANDBOX_CHECK_LIMIT) || CHECK_LIMIT;
+  const held = Boolean(hold && fs20.statSync(hold, { throwIfNoEntry: false })?.isFIFO());
   const args = [places.launcher, "-c", script, PROBE, hidden, escaped];
-  const run = hold ? spawnSync3("/bin/sh", ["-c", `read -r _ <"$0" || :; exec "$@"`, hold, ...args], { env, encoding: "utf8", timeout: limit }) : spawnSync3(args[0], args.slice(1), { env, encoding: "utf8", timeout: limit });
+  const run = held ? spawnSync3("/bin/sh", ["-c", `read -r _ <"$0"; exec "$@"`, hold, ...args], { env, encoding: "utf8", timeout: 250 }) : spawnSync3(args[0], args.slice(1), { env, encoding: "utf8", timeout: CHECK_LIMIT });
   const reasons = {
     10: ["folder", "a command couldn't go to its own folder"],
     11: ["folder", "a command couldn't write in its own folder"],
@@ -5138,7 +5167,7 @@ function probe() {
       return { passed: false, check: "writesOwn", why: "Its check failed: a command could write in Kuvo Code's own folder." };
     if (run.status === 0)
       return { passed: true };
-    if (UNFINISHED.has(run.error?.code ?? ""))
+    if (didntFinish(run))
       return { passed: false, unfinished: true };
     const [check, reason] = (run.status !== null ? reasons[run.status] : undefined) ?? ["didntRun", undefined];
     const said = (run.stderr || "").trim().split(`
@@ -5227,9 +5256,9 @@ function setUpFence(found) {
     lastProfiles = "";
     writeProfiles();
     tellLauncher();
-    const result = probe();
+    const result = namespaceUnfinished ? { passed: false, unfinished: true } : probe();
     if (result.unfinished) {
-      checked = { able: true, passed: false, unfinished: true, reason: "checking", why: "Its check didn't finish in time (this computer may be busy), so it's checked again in a minute. Until then commands still run in it, and Auto asks first." };
+      checked = { able: true, passed: false, unfinished: true, reason: "checking", why: PENDING_WHY };
       if (!fs20.existsSync(CHECKING))
         writePrivate(CHECKING, "");
     } else {
@@ -5242,11 +5271,7 @@ function setUpFence(found) {
     }
     if (!fs20.existsSync(READY))
       writePrivate(READY, "");
-    const plugin = pluginScript(places, VERSION);
-    if (textOf(PLUGIN) !== plugin) {
-      fs20.rmSync(NOTE, { force: true });
-      writePrivate(PLUGIN, plugin);
-    }
+    givePlugin();
     if (!textOf(ON)?.trim())
       writePrivate(ON, crypto9.randomUUID());
     if (result.passed)
@@ -5257,6 +5282,13 @@ function setUpFence(found) {
     failures += 1;
   }
   return fenceState();
+}
+function givePlugin() {
+  const plugin = pluginScript(places, VERSION);
+  if (textOf(PLUGIN) === plugin)
+    return;
+  fs20.rmSync(NOTE, { force: true });
+  writePrivate(PLUGIN, plugin);
 }
 function holdsFiles(folder) {
   return fs20.readdirSync(folder, { withFileTypes: true }).some((entry) => !entry.isDirectory() || holdsFiles(path19.join(folder, entry.name)));
@@ -5336,13 +5368,16 @@ function keepFence(every = (round) => {
     try {
       if (checked.passed || checked.unfinished)
         writeProfiles();
-      if (checked.passed ? textOf(PLUGIN) !== pluginScript(places, VERSION) : round % 6 === 0)
+      const changed = textOf(PLUGIN) !== pluginScript(places, VERSION);
+      if (checked.passed ? changed || fs20.existsSync(CHECKING) : round % 6 === 0)
         setUpFence(namespaceKnown ? namespace : undefined);
+      else if (checked.unfinished && changed)
+        givePlugin();
       if (platform === "linux" && round % 6 === 5 && !trying) {
         fs20.mkdirSync(NAMESPACE_FOLDER, { recursive: true, mode: 448 });
         trying = true;
         checking = ownNamespaceLater(NAMESPACE_FOLDER).then((found) => {
-          if (fenceWanted() && !found !== !namespace)
+          if (fenceWanted() && found !== UNFINISHED && !found !== !namespace)
             setUpFence(found);
         }).catch(() => {}).finally(() => {
           trying = false;
@@ -38041,7 +38076,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "63529b6e5134";
+var BRIDGE_VERSION = "0e3cf74b28f6";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

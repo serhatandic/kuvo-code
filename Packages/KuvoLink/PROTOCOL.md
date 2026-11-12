@@ -5756,7 +5756,7 @@ it's empty.
   | `namespaces` | Linux that doesn't let commands have a namespace of their own, from a box that doesn't run without one (none does now: `gaps`); `needs`: `"user namespaces"`, or `"util-linux"` without `unshare` | `help` | |
   | `macos` | this macOS has no sandbox | `softwareUpdate` | |
   | `engineMissing` | a machine without its engine yet | `retry` | `POST kuvo/sandbox/check` |
-  | `checking` | not checked yet | `retry` | `POST kuvo/sandbox/check` |
+  | `checking` | not checked yet, or its check didn't finish in time (a busy computer: never taken for a failed one). Commands still run in it then, and nothing counts on it (Auto asks first, the vault stays shut) until a check passes; tried again each minute | `retry` | `POST kuvo/sandbox/check` |
   | `checkFailed` | its check failed; `check`: `folder`, `tempFiles`, `readsOwn`, `writesOwn`, `services` (on Linux, a command could reach your session's services), `didntRun` or `setup` | `retry` | `POST kuvo/sandbox/check` |
   | `plugin` | its plugin for the engine was changed or removed | `fix` | `POST kuvo/sandbox/check` |
   | `engineDown` | the engine isn't running | `restartEngine` | `POST kuvo/engine/restart` |

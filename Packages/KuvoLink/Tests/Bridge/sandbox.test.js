@@ -1741,10 +1741,10 @@ test("a check that doesn't finish in time leaves nothing outside the sandbox, an
   const outside = path.join(root, "slow-check-yours");
   fs.writeFileSync(outside, "yours\n");
   const own = path.join(box.home, "run", "engine.json");
-  // What holds the check up, as a busy computer would: a FIFO no one writes. A plain file lets it go.
+  // What holds the check up, as a busy computer would: a FIFO no one writes, there or not.
   const hold = path.join(root, "slow-check-hold");
-  const holdUp = () => { fs.rmSync(hold, { force: true }); assert.equal(spawnSync("mkfifo", [hold]).status, 0); };
-  const letGo = () => { fs.rmSync(hold, { force: true }); fs.writeFileSync(hold, ""); };
+  const holdUp = () => assert.equal(spawnSync("mkfifo", [hold]).status, 0);
+  const letGo = () => fs.rmSync(hold, { force: true });
   const wake = path.join(box.home, "bin", "kuvo-wake");
   const wakes = path.join(box.wakes, "ses_slow");
   // Everything that runs commands, while the check hasn't finished: still in the sandbox.
@@ -1766,7 +1766,7 @@ test("a check that doesn't finish in time leaves nothing outside the sandbox, an
     assert.equal((await running.ask("GET", "kuvo/approval")).value.auto.engine.held, undefined);
   };
   holdUp();
-  const running = await start(box, { KUVO_TEST_SANDBOX_CHECK_HOLD: hold, KUVO_TEST_SANDBOX_CHECK_LIMIT: "300" });
+  const running = await start(box, { KUVO_TEST_SANDBOX_CHECK_HOLD: hold });
   try {
     // Its first check, as the box starts, doesn't finish (the box has decided once it's over).
     assert.equal(decidedBy(box), running.pid);
