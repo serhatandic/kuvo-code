@@ -79,6 +79,10 @@ enum TestEnvironment {
                              "GIT_COMMITTER_NAME": "Tests", "GIT_COMMITTER_EMAIL": "tests@example.com"] {
             setenv(key, value, 1)
         }
+        // A machine's engine and bridge wait through its tunnel on a session of their own
+        // (`MachineEngine.patient`), which `URLProtocol.registerClass` doesn't reach: `StubWeb`
+        // answers it too, as it answers the shared session, while a test has it started.
+        MachineEngine.patient = MachineEngine.waitingSession(answeredBy: [StubWeb.self])
         // Motion as most Macs have it, whatever this one's setting (`ReduceMotion`): before any
         // window, on the main thread, where what it changes is told.
         if Thread.isMainThread {

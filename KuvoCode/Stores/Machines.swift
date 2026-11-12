@@ -937,11 +937,16 @@ final class MachineEngine {
     /// Its engine's requests through the tunnel wait as long as it's working on them: a busy
     /// machine (a heavy load) answers late, and a tunnel that's gone fails them itself (ssh's own
     /// checks), rather than URLSession's own minute calling one still under way "timed out" (#443).
-    nonisolated static let patient: URLSession = {
+    /// (Tests answer it as they answer the shared session: `waitingSession(answeredBy:)`.)
+    nonisolated(unsafe) static var patient = waitingSession(answeredBy: [])
+
+    /// A session that waits as `patient` does, `protocols` first answering what it asks.
+    nonisolated static func waitingSession(answeredBy protocols: [AnyClass]) -> URLSession {
         let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = 600
+        configuration.protocolClasses = protocols + (configuration.protocolClasses ?? [])
         return URLSession(configuration: configuration)
-    }()
+    }
 
     @ObservationIgnored private var downCheck: Task<Void, Never>?
     /// Goes up with each disconnection, so a check from an earlier connection stops.
