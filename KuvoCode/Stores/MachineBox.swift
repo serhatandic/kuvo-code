@@ -157,6 +157,8 @@ enum MachineBox {
     static func adopt(on connection: SSHConnection, seed: () async throws -> Seed) async throws -> (settings: [String: JSONValue], seeded: Bool) {
         // The seed only when there's nothing there: it reads this Mac's keys.
         let fresh = try await connection.run("[ -f \"$HOME/\(RemoteEngineInstaller.root)/box/opencode.json\" ] && echo own || true")
+        // Removed or disconnected as it answered: your settings and keys aren't even read.
+        try await connection.mustBeWanted()
         let given = fresh.trimmingCharacters(in: .whitespacesAndNewlines) == "own" ? nil : try await seed()
         let answer = try await run("adopt", input: given.flatMap { try? JSONEncoder().encode($0) }, on: connection)
         return (answer.settings ?? [:], answer.seeded == true)

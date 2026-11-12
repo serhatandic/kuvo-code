@@ -512,6 +512,9 @@ interface Installed {
   files: Record<string, string>;
 }
 
+// COMPAT(0.7 files): how long a Mac's `run/mac-installing` counts. Goes 3 months after 0.8.0.
+const MAC_INSTALLING = 3600_000;
+
 // COMPAT(0.7 visits): drift, an older Mac's files put back over an update's. Goes 3 months after 0.8.0.
 // Whether a Mac that doesn't leave a newer box as it is (an older Kuvo Code) put its own files back
 // since the box updated itself (seen twice, ten minutes apart, and not while a Mac says it puts its
@@ -519,6 +522,16 @@ interface Installed {
 // says why. Its version mark stays, so no other older Mac takes it further back.
 export function checkDrift(now = Date.now()): boolean {
   const record = path.join(UPDATES, "installed.json"), pending = path.join(RUN, "update-drift");
+  // A Mac's note that it puts its files in place (`run/mac-installing`) counts for an hour. One
+  // whose connect was cut off before it marked the box (Disconnect, Remove, the network) is left
+  // behind: past the hour, it goes.
+  const note = path.join(RUN, "mac-installing");
+  let installing = 0;
+  try { installing = fs.statSync(note).mtimeMs; } catch {}
+  if (installing && now - installing >= MAC_INSTALLING) {
+    fs.rmSync(note, { force: true });
+    installing = 0;
+  }
   // Not while the box updates itself, or tries what it updated to: its files and version change then.
   if (isUpdating() || fs.existsSync(UPDATE_TRIAL)) return false;
   let installed: Installed | null = null;
@@ -532,9 +545,7 @@ export function checkDrift(now = Date.now()): boolean {
   const changed = Object.entries(installed.files).some(([file, sha]) => {
     try { return hexSHA256(fs.readFileSync(path.join(K, file))) !== sha; } catch { return true; }
   });
-  let installing = 0;
-  try { installing = fs.statSync(path.join(RUN, "mac-installing")).mtimeMs; } catch {}
-  if (!changed || isUpdating() || now - installing < 3600_000) {
+  if (!changed || isUpdating() || now - installing < MAC_INSTALLING) {
     fs.rmSync(pending, { force: true });
     return false;
   }
