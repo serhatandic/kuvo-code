@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- “#1” in a chat shows as a Work Queue item only when that item is in the conversation’s own queue; rankings like “the #1 result” stay as written.
 - What a computer notes on a conversation by itself no longer undoes another of its notes made at the same moment: turning on Autopilot while its approval is being set, a bot's answer kept on it while a bot archives it, or its chat mark while it's carried on with a coding agent, say. Before, one of them could quietly be lost. (A change you make in the app, such as archiving or pinning it, can still undo a note the computer makes at the same moment.)
 - Each computer now marks the chats you make from now on, so they show under Chats on your Mac and iPhone even when your iPhone can't ask that computer where it keeps chats (Kuvo Code on that Mac isn't answering, say), where before they showed as a project called "Chats". Chats from before still go by their folder.
 - Removing a machine while it's connecting now stops the connection there: nothing more is sent to the machine (not even your settings and keys, which a new machine is given as it connects). Pressing Connect while a machine's engine restarts now ends the restart, so it no longer restarts the engine again under the connection you just made.

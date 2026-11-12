@@ -3684,8 +3684,18 @@ link or a web address, and not after "PR", "MR", "pull request", "issue" or "ste
 else's numbers; outside sources get a prefix, `gh:owner/repo#12`). `gh:owner/repo#12` (`owner` a
 GitHub owner, `repo` a repository name, the number 1 to 10 digits; then no letter, digit or
 underscore; not in code, a link or an address either) names the item that is that issue or pull
-request. A client asks `refs` for the numbers and the `gh:` refs in a message and draws each one the
-box knows as a chip (its category's color, a ring in progress, a check when done, `#243` and the
+request. Bare numbers resolve only through the conversation's queue view (its own items, those
+of sessions it started, and items linked to it), never the all-items view or another conversation's
+cached refs.
+Numbers 1–10 stay plain when immediately preceded or followed by "ranked", "rank", "number",
+"result", "results", "spot", "place", "position", "priority" or "seller", or followed by
+"on" or "in" and another word, or "Google result(s)" (case-insensitive, allowing whitespace
+between words). "The", "to" and "at" alone do not
+block references: "to #243" and "the #1 reason" can name visible items. Code, links and the other
+exclusions above still apply. With no conversation owner, bare numbers stay plain and cause no
+requests; explicit `gh:` refs keep their computer-wide lookup and chips. Clients follow the
+conversation's queue for numeric chips; only explicit `gh:` refs need
+the computer-wide `refs` lookup. A client draws an eligible known reference as a chip (its category's color, a ring in progress, a check when done, `#243` and the
 title on one line; for an issue or a pull request, GitHub's mark and `source.name` in place of
 `#243`, the title struck through when `seen.state` is `not_planned` or `closed`), leaving one it
 doesn't know as written; the message's words never change. A chip opens the item.

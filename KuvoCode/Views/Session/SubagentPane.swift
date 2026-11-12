@@ -390,6 +390,7 @@ private struct SubagentConversation: View {
             listRoom: ComposerListRoom.height(room: height - BottomStack.conversationRoom, card: stackHeight, list: listShown, bars: 0, barsKept: 0),
             listHeight: $listShown
         )
+        .workChipContext(.init(box: Workspace.box(of: model.session.location.directory), owner: workspace.root(of: model.id)))
     }
 
     private func send() {
