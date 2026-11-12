@@ -18,7 +18,7 @@ import { macSign, readLink, updateLink } from "../state";
 import { announce, toldPeers, writeAgents } from "./agents";
 import { takeAgents } from "./directory";
 import { forgetOldMacs, macsOf, mailFor, openMail, takeLegacyPeers } from "./known";
-import { takeSeat } from "./seats";
+import { takeLimits, takeSeat } from "./seats";
 import { queuesBack, takeWorkQueueMail, tellQueuesAgain } from "../work-queue/across";
 import type { PeerPlaces } from "../engine/client";
 import type { DocsMail } from "../documents/work";
@@ -70,6 +70,8 @@ export function peerMail(sender: MailSender, payload: Record<string, unknown>, h
   if (isObject(payload.moving)) takeMoving(sender, payload.moving);
   // Group chats across your computers: to the coding agents' bridge here.
   if (isObject(payload.seat) || isObject(payload.seatPart)) takeSeat(sender, payload, send).catch(() => {});
+  // Its plan limits, as it read them: to the coding agents' bridge here (PROTOCOL.md, "Plan limits").
+  if (isObject(payload.limits)) takeLimits(sender, payload.limits).catch(() => {});
   // The Work Queue across your computers: what each tells of its queue, numbers' asks and blocks,
   // and items handed between them (PROTOCOL.md, "The Work Queue", "Across your computers").
   if (isObject(payload.workQueue)) takeWorkQueueMail(sender, payload.workQueue, host, places).catch(() => {});

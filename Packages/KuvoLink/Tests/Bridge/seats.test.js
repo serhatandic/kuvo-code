@@ -139,6 +139,8 @@ test("who can be in a chat here from your other computers: each peer, taking a c
   ] });
   link.takeAgents(mac.peer, { at: 2, list: [{ session: "ses_m", name: "Mac bot", kind: "bot", id: "bot_mac", look: { color: "sky" } }] });
   const peers = link.seatPeers(link.readLink());
+  // This box too, as its plan limits' rows name it (PROTOCOL.md, "Plan limits").
+  assert.deepEqual(peers.self, { key: here.pub, name: "devbox" });
   assert.deepEqual(peers.boxes, [{ key: mac.pub, name: "mac", seats: false }, { key: second.pub, name: "second", seats: true }]);
   assert.deepEqual(peers.bots, [
     { id: "bot_mac", name: "Mac bot", job: "", box: mac.pub, session: "ses_m", look: { color: "sky", shape: "round", face: "calm" } },
@@ -339,6 +341,43 @@ test("a bridge that answered and then says nothing for a minute is followed anew
     stop.abort();
     link.bridgeClock.after = after;
     server.closeAllConnections();
+    server.close();
+  }
+});
+
+test("plan limits (PROTOCOL.md, \"Plan limits\"): what the bridge tells a computer goes to it now as mail of its own, kept nowhere; what a computer tells comes to the bridge here", async () => {
+  fresh();
+  const sent = [];
+  const host = { send: bytes => sent.push(bytes) };
+  const accounts = [{ provider: "claude-code", service: "claude", identity: "0123456789abcdef", windows: [{ id: "five_hour", used: 0.4, read: 5, source: "usage" }], checked: 5 }];
+  assert.equal(link.carrySeat(host, { id: "sm_limits001", to: second.pub, durable: false, mail: { kind: "limits", at: 5, accounts, ask: true } }, link.readLink()), true);
+  assert.equal(sent.length, 1);
+  const payload = opened(sent[0], second).payload;
+  assert.deepEqual(payload.limits, { at: 5, accounts, ask: true });
+  assert.equal(payload.seat, undefined, "not as a group chat's");
+  assert.equal(payload.seatID, undefined);
+  const sending = path.join(run, "outbox", "sending");
+  assert.deepEqual(fs.existsSync(sending) ? fs.readdirSync(sending) : [], [], "nothing kept to send again");
+
+  // What another computer tells, opened as any mail of theirs, goes to the bridge here.
+  let heard;
+  const posted = new Promise(resolve => { heard = resolve; });
+  const server = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", chunk => { body += chunk; });
+    request.on("end", () => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{}");
+      heard({ method: request.method, url: request.url, body: JSON.parse(body) });
+    });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  fs.writeFileSync(path.join(run, "bridge.json"), JSON.stringify({ port: server.address().port, password: "bridge-pw" }));
+  try {
+    const mail = link.mailFor(here.peer, { limits: { at: 6, accounts }, at: Date.now() }, { key: k(second.key) });
+    link.receiveMail(link.readFrame(mail.subarray(17)).body, host, (sender, given) => link.peerMail(sender, given, host));
+    assert.deepEqual(await posted, { method: "POST", url: "/api/kuvo/peers/mail", body: { from: second.pub, mail: { at: 6, accounts, kind: "limits" } } });
+  } finally {
     server.close();
   }
 });

@@ -4,7 +4,7 @@
 import { spawn as spawn14 } from "node:child_process";
 import crypto54 from "node:crypto";
 import fs137 from "node:fs";
-import os18 from "node:os";
+import os19 from "node:os";
 import path136 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
@@ -6223,7 +6223,7 @@ async function repairRules(target, here, sessionID) {
 }
 
 // Packages/Box/src/link/notices/news.ts
-import os9 from "node:os";
+import os10 from "node:os";
 import path93 from "node:path";
 
 // Packages/Box/src/link/work/autopilot.ts
@@ -18603,13 +18603,18 @@ function windowName(window) {
   return typeof window.model === "string" && window.model ? `${window.model} ${length}` : length;
 }
 function describePlanLimits(data, now = Date.now()) {
-  const accounts = isObject(data) && Array.isArray(data.accounts) ? data.accounts.filter(isObject) : [];
+  const rows = isObject(data) && Array.isArray(data.rows) ? data.rows.filter(isObject) : null;
+  const accounts = rows ?? (isObject(data) && Array.isArray(data.accounts) ? data.accounts.filter(isObject) : []);
   if (!accounts.length)
     return `No plan limits are known on ${HERE}: no coding agent here is signed in to a plan whose limits can be read.`;
-  const lines = [`Plan limits on ${HERE} (each account's own; used is how much of the window is gone):`];
+  const lines = [rows ? `Plan limits of your accounts (signed in on ${HERE} unless it says where; used is how much of the window is gone):` : `Plan limits on ${HERE} (each account's own; used is how much of the window is gone):`];
   for (const account of accounts) {
     const service = typeof account.agent === "string" ? AGENT_NAMES[account.agent] ?? account.agent : ENGINE_NAMES[String(account.service)] ?? String(account.service);
-    const name = `${service}${typeof account.label === "string" && account.label ? ` (${account.label})` : ""}${typeof account.plan === "string" && account.plan ? `, ${account.plan}` : ""}, provider ${String(account.provider)}`;
+    const boxes = Array.isArray(account.boxes) ? account.boxes.filter(isObject) : [];
+    const elsewhere = rows && !boxes.some((box) => box.here === true) ? boxes.map((box) => String(box.name || "another computer")) : [];
+    const where = elsewhere.length ? `, signed in on ${elsewhere.join(", ")}${account.away === true ? " (not heard from lately: as last told)" : ""}` : "";
+    const provider = rows ? boxes.find((box) => box.here === true)?.provider ?? account.provider : account.provider;
+    const name = `${service}${typeof account.label === "string" && account.label ? ` (${account.label})` : ""}${typeof account.plan === "string" && account.plan ? `, ${account.plan}` : ""}${elsewhere.length ? "" : `, provider ${String(provider)}`}${where}`;
     lines.push(`- ${name}:`);
     const windows = Array.isArray(account.windows) ? account.windows.filter(isObject) : [];
     for (const window of windows) {
@@ -21512,6 +21517,7 @@ class NoticeHold {
 // Packages/Box/src/link/peers/seats.ts
 import crypto33 from "node:crypto";
 import fs76 from "node:fs";
+import os9 from "node:os";
 import path78 from "node:path";
 var SEAT_WHOLE = 48000;
 var seatParts = new Map;
@@ -21564,6 +21570,18 @@ function sendSeat(host, to, mail, id, link = readLink()) {
   const peer = peersOf(link).find((each) => each.key === to);
   if (!peer || !host)
     return false;
+  if (mail.kind === "limits") {
+    const { kind: _, ...limits } = mail;
+    const bytes = mailFor(peer, { limits, at: Date.now() }, link);
+    if (!bytes)
+      return false;
+    try {
+      host.send(bytes);
+    } catch {
+      return false;
+    }
+    return true;
+  }
   const payloads = seatPayloads(mail, id);
   if (!payloads) {
     console.error(`kuvo-link: a group chat's ${String(mail?.kind ?? "mail")} for ${plainName(peer.name) || "another computer"} is too big to send, so it wasn't.`);
@@ -21580,6 +21598,9 @@ function sendSeat(host, to, mail, id, link = readLink()) {
     }
   }
   return true;
+}
+async function takeLimits(sender, limits, ask = bridgeAsk) {
+  await ask("POST", "/mail", { from: sender.key, mail: { ...limits, kind: "limits" } }).catch(() => {});
 }
 async function takeSeat(sender, payload, send, ask = bridgeAsk) {
   let mail = null, id = null;
@@ -21611,7 +21632,10 @@ async function takeSeat(sender, payload, send, ask = bridgeAsk) {
 }
 function seatPeers(link = readLink(), told = readPeerAgents()) {
   const peers = peersOf(link);
+  const key = link ? ownKey(link) : null;
+  const name = plainName(IS_MAC ? macLink.config?.name : link?.name) || os9.hostname();
   return {
+    ...key ? { self: { key, name } } : {},
     boxes: peers.map((peer) => ({ key: peer.key, name: plainName(peer.name) || "another computer", seats: (told[peer.key]?.features ?? []).includes("groups.seats") })),
     bots: peers.flatMap((peer) => (told[peer.key]?.list ?? []).filter((agent) => agent.kind === "bot" && agent.id).map((agent) => ({ id: agent.id, name: agent.name, job: agent.about ?? "", box: peer.key, session: agent.session, ...agent.look ? { look: agent.look } : {} })))
   };
@@ -27591,8 +27615,8 @@ async function noticeFor(event, get) {
       const where = await shown(data.sessionID);
       if (isHiddenRun(where))
         return null;
-      const body = describePermission(data, os9.homedir());
-      return about(where, "permission", body, { request: data.id, ...where.id !== data.sessionID ? { requestSession: data.sessionID } : {}, ...offersAlways(data) ? {} : { always: "0" }, alwaysTitle: masked(alwaysTitle(data, os9.homedir())) }, { answerable: showsAllCovered(data) && showsAll(body), untitled: "Kuvo Code" });
+      const body = describePermission(data, os10.homedir());
+      return about(where, "permission", body, { request: data.id, ...where.id !== data.sessionID ? { requestSession: data.sessionID } : {}, ...offersAlways(data) ? {} : { always: "0" }, alwaysTitle: masked(alwaysTitle(data, os10.homedir())) }, { answerable: showsAllCovered(data) && showsAll(body), untitled: "Kuvo Code" });
     }
     case "form.created": {
       const form = data.form ?? data;
@@ -31868,7 +31892,7 @@ import path112 from "node:path";
 import { spawn as spawn11 } from "node:child_process";
 import crypto45 from "node:crypto";
 import fs108 from "node:fs";
-import os10 from "node:os";
+import os11 from "node:os";
 import path111 from "node:path";
 
 // Packages/Box/src/link/notices/asking.ts
@@ -32232,7 +32256,7 @@ async function askToRun(caller, args, signal) {
     ...stopped.length ? { stopped } : {},
     ...error ? { error } : {},
     ...always ? { always } : {},
-    ...IS_MAC ? {} : { machine: os10.hostname() },
+    ...IS_MAC ? {} : { machine: os11.hostname() },
     owner: ownerOf(project)
   }, signal, undefined, (id) => {
     asking = id;
@@ -32286,7 +32310,7 @@ async function stoppedInAuto(caller, input, printed, calling, signal) {
   if (caller.seat || !command.trim() || command.length > 8000 || !project)
     return null;
   const given = typeof input.workdir === "string" ? input.workdir : typeof input.cwd === "string" ? input.cwd : "";
-  const folder = given ? path111.resolve(project, given.replace(/^~(?=\/|$)/, os10.homedir())) : project;
+  const folder = given ? path111.resolve(project, given.replace(/^~(?=\/|$)/, os11.homedir())) : project;
   await askedAbout([folder]);
   if (!fs108.existsSync(folder))
     return null;
@@ -32540,7 +32564,7 @@ import path115 from "node:path";
 // Packages/Box/src/link/areas/changes.ts
 import { execFile as execFile11, execFileSync as execFileSync3, spawn as spawn12 } from "node:child_process";
 import fs111 from "node:fs";
-import os11 from "node:os";
+import os12 from "node:os";
 import path114 from "node:path";
 
 // Packages/Box/src/link/areas/file.ts
@@ -32752,7 +32776,7 @@ function trash(file) {
   if (IS_MAC && process.platform === "darwin" && !process.env.KUVO_CHANGES_TRASH) {
     if (fs111.existsSync("/usr/bin/trash"))
       return void execFileSync3("/usr/bin/trash", [file], { stdio: "ignore" });
-    const bin = path114.join(os11.homedir(), ".Trash");
+    const bin = path114.join(os12.homedir(), ".Trash");
     into = path114.join(bin, name);
     for (let n = 2;fs111.existsSync(into); n++)
       into = path114.join(bin, `${name} ${n}`);
@@ -33980,7 +34004,7 @@ async function atWork3(target) {
 import { execFileSync as execFileSync4, spawn as spawn13 } from "node:child_process";
 import crypto47 from "node:crypto";
 import fs115 from "node:fs";
-import os12 from "node:os";
+import os13 from "node:os";
 import path117 from "node:path";
 // Packages/Box/src/link/browser/linux.json
 var linux_default = {
@@ -36207,7 +36231,7 @@ function pinned(system) {
   }
   return PINNED[system];
 }
-function runtimeHere(platform = testSystem() ?? process.platform, arch = os12.arch()) {
+function runtimeHere(platform = testSystem() ?? process.platform, arch = os13.arch()) {
   const system = platform === "linux" ? "linux" : platform === "darwin" ? "darwin" : null;
   if (!system)
     return { unsupported: `The browser runs on Linux and macOS; this machine is ${platform}.` };
@@ -37233,7 +37257,7 @@ function macTell(notice) {
 }
 
 // Packages/Box/src/link/mac/relay.ts
-import os16 from "node:os";
+import os17 from "node:os";
 
 // Packages/Box/src/link/peers/mail.ts
 var answeringAsk = null;
@@ -37277,6 +37301,8 @@ function peerMail(sender, payload, host, places = () => ({ targets: [], bridge: 
     takeMoving(sender, payload.moving);
   if (isObject(payload.seat) || isObject(payload.seatPart))
     takeSeat(sender, payload, send).catch(() => {});
+  if (isObject(payload.limits))
+    takeLimits(sender, payload.limits).catch(() => {});
   if (isObject(payload.workQueue))
     takeWorkQueueMail(sender, payload.workQueue, host, places).catch(() => {});
   if (isObject(payload.delivered) && typeof payload.delivered.id === "string") {
@@ -38295,7 +38321,7 @@ async function* artifactsRoute(context) {
 
 // Packages/Box/src/link/areas/info.ts
 import fs124 from "node:fs";
-import os13 from "node:os";
+import os14 from "node:os";
 import path125 from "node:path";
 
 // Packages/Box/src/shared/bundle.ts
@@ -38361,7 +38387,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "26e21b3467a1";
+var BRIDGE_VERSION = "767f9c15be28";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -38387,7 +38413,7 @@ function macInfo(engine, started, chats, agents) {
   const integrations = Object.fromEntries(integrationCatalog().filter((each) => typeof each.title === "string").map((each) => [each.id, each.title]));
   return {
     kind: "mac",
-    name: config?.name || os13.hostname(),
+    name: config?.name || os14.hostname(),
     app: config?.app || MAC_APP_VERSION || "",
     engine: engine.version ?? MAC_ENGINE_VERSION ?? "",
     features: macFeatures(),
@@ -38950,13 +38976,13 @@ function readActivity({ item, bot, session, before, limit = 100 } = {}, now = Da
 }
 
 // Packages/Box/src/link/vault/use.ts
-import os14 from "node:os";
+import os15 from "node:os";
 var AUTOPILOT_HOW = "autopilot";
 var tell2 = () => false;
 var setVaultTell = (to) => {
   tell2 = to;
 };
-var machineName = () => IS_MAC ? undefined : os14.hostname();
+var machineName = () => IS_MAC ? undefined : os15.hostname();
 var whoOf3 = (caller) => ({
   ...caller.bot ? { bot: caller.bot } : {},
   ...caller.botName ? { botName: caller.botName } : {},
@@ -39835,7 +39861,7 @@ function askHolder(request, signal) {
 // Packages/Box/src/link/vault/tools.ts
 import crypto51 from "node:crypto";
 import fs129 from "node:fs";
-import os15 from "node:os";
+import os16 from "node:os";
 import path131 from "node:path";
 
 // Packages/Box/src/link/vault/mask.ts
@@ -39985,7 +40011,7 @@ async function askForItem(caller, args, signal) {
     ...caller.group ? { group: caller.group } : {},
     ...site ? { site } : {},
     ...asker,
-    ...IS_MAC ? {} : { machine: os15.hostname() }
+    ...IS_MAC ? {} : { machine: os16.hostname() }
   }, stops));
   if (onAutopilot)
     return leftUndone();
@@ -42640,7 +42666,7 @@ async function* toApp(request, phone, signal) {
   yield { head: { status: 503, headers: { "content-type": "application/json" } } };
   yield { body: Buffer.from(JSON.stringify({ message: APP_NOT_ANSWERING })) };
 }
-function macFront(handle = engineHandler(readEngineFile, { name: os16.hostname() }), timing) {
+function macFront(handle = engineHandler(readEngineFile, { name: os17.hostname() }), timing) {
   return async function* (request, phone, signal) {
     const route = String(request.path ?? "").split("?")[0];
     if (isMachinesRoute(route))
@@ -42727,11 +42753,11 @@ async function runMacLink() {
 // Packages/Box/src/link/server/serve.ts
 import crypto53 from "node:crypto";
 import http from "node:http";
-import os17 from "node:os";
+import os18 from "node:os";
 var IDLE_TOLD = 5000;
 var IDLE_KEPT = 60000;
 var HEARTBEAT = 20000;
-function serveBox(password, handle = engineHandler(readEngineFile, { name: os17.hostname() })) {
+function serveBox(password, handle = engineHandler(readEngineFile, { name: os18.hostname() })) {
   const expected = Buffer.from("Basic " + Buffer.from(`opencode:${password}`).toString("base64"));
   return http.createServer({ keepAliveTimeout: IDLE_TOLD, keepAliveTimeoutBuffer: IDLE_KEPT }, async (request, response) => {
     const given = Buffer.from(request.headers.authorization ?? "");
@@ -42983,7 +43009,7 @@ async function run4() {
   keepApprovals();
   keepGroupSettings();
   keepOldBranchPrefix();
-  holdVault(engineHandler(readEngineFile, { name: os18.hostname() }));
+  holdVault(engineHandler(readEngineFile, { name: os19.hostname() }));
   setVaultTell(tell);
   watchVaultAsks(tell, answered);
   watchSandboxAsks(tell, answered);
@@ -43077,11 +43103,11 @@ async function run4() {
     } catch {}
     const host = new LinkHost({
       key: Buffer.from(link.key, "base64url"),
-      hello: { v: 1, kind: "machine", name: link.name || os18.hostname(), app: BRIDGE_VERSION, engine: engine.version ?? null },
+      hello: { v: 1, kind: "machine", name: link.name || os19.hostname(), app: BRIDGE_VERSION, engine: engine.version ?? null },
       authorize: authorizePhone,
       confirmed: confirmPhone,
       mail: (_from, body) => receiveMail(body, host, (sender, payload) => peerMail(sender, payload, host, peerPlaces), (mac, given, at) => hold.attend(`mac:${mac}`, given, at)),
-      handle: engineHandler(readEngineFile, { name: link.name || os18.hostname() }, readBridgeFile, (changed) => host.keepOnly(new Set((changed.phones ?? []).map((phone) => phone.key))), hold),
+      handle: engineHandler(readEngineFile, { name: link.name || os19.hostname() }, readBridgeFile, (changed) => host.keepOnly(new Set((changed.phones ?? []).map((phone) => phone.key))), hold),
       connect: engineConnect(readEngineFile),
       send: () => {}
     });
@@ -43147,7 +43173,7 @@ async function box(command) {
       try {
         given = JSON.parse(await input());
       } catch {}
-      const handle = engineHandler(readEngineFile, { name: os18.hostname() }, readBridgeFile);
+      const handle = engineHandler(readEngineFile, { name: os19.hostname() }, readBridgeFile);
       const folder = given?.headers?.["x-opencode-directory"];
       const vaultHeaders = {};
       for (const name of ["x-kuvo-vault-key", "x-kuvo-vault-proof"]) {
@@ -43261,7 +43287,7 @@ async function serve() {
   } catch {}
   if (IS_MAC)
     macLink.hold = macNoticeHold();
-  const server = serveBox(password, engineHandler(readEngineFile, { name: os18.hostname() }, readBridgeFile, () => {}, macLink.hold));
+  const server = serveBox(password, engineHandler(readEngineFile, { name: os19.hostname() }, readBridgeFile, () => {}, macLink.hold));
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
@@ -43274,7 +43300,7 @@ async function serve() {
   keepApprovals();
   keepGroupSettings();
   keepEngineDefaults();
-  holdVault(engineHandler(readEngineFile, { name: os18.hostname() }, readBridgeFile));
+  holdVault(engineHandler(readEngineFile, { name: os19.hostname() }, readBridgeFile));
   console.log(JSON.stringify({ url: `http://127.0.0.1:${server.address().port}` }));
   if (IS_MAC)
     (async () => {
@@ -43374,7 +43400,7 @@ async function setup() {
     if (!next.phones.length && !peersOf(next).length)
       return current ? next : null;
     next.relay = String(input.relay);
-    next.name = String(input.name || next.name || os18.hostname()).slice(0, 100);
+    next.name = String(input.name || next.name || os19.hostname()).slice(0, 100);
     link = next;
     return next;
   });
@@ -43449,7 +43475,7 @@ function leave(mac) {
 }
 function pair(relay) {
   const link = updateLink((current) => {
-    const next = current ?? { secret: crypto54.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), name: os18.hostname(), phones: [] };
+    const next = current ?? { secret: crypto54.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), name: os19.hostname(), phones: [] };
     next.sign ??= newSigningSeed();
     if (relay)
       next.relay = relay;
@@ -43919,6 +43945,7 @@ export {
   takeDoc,
   takeLegacyPeers,
   takeLetter,
+  takeLimits,
   takeMoveMail,
   takeNumber,
   takeNumbersMail,
