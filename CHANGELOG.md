@@ -17,7 +17,6 @@ release, Unreleased is renamed to the version; the release notes come from that 
 ### All Changes
 
 - Work Queue chips in chats now use only that conversation’s queue. Rankings such as “the #1 Google result” stay as written on Mac and iPhone.
-
 - Each computer now marks the chats you make from now on, so they show under Chats on your Mac and iPhone even when your iPhone can't ask that computer where it keeps chats (Kuvo Code on that Mac isn't answering, say), where before they showed as a project called "Chats". Chats from before still go by their folder.
 - Starting or stopping a computer's engine no longer waits minutes when an earlier start or stop there was cut short (by removing the computer, a crash, or the computer going to sleep): the next one goes ahead at once. One still under way is waited for, as before.
 - In a group chat, a bot that has nothing to report on its part of the work now says nothing in the chat: its part shows as done, as before, but "PASS" no longer appears there as its report, nor in a notification that it finished its part. This holds for a bot on another of your computers too.

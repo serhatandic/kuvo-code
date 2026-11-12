@@ -29,6 +29,8 @@ import Textual
         store.standIn(WorkQueueView(owner: "ses_ours", items: [first, second]), for: .init(box: BoxClient.mac, owner: "ses_ours"))
         store.standIn(WorkQueueView(owner: "ses_other"), for: .init(box: BoxClient.mac, owner: "ses_other"))
         #expect(store.refs(in: "see #1", box: BoxClient.mac, owner: "ses_ours")["1"] != nil)
+        #expect(store.refs(in: "#1 gh:o/r#1", box: BoxClient.mac).isEmpty)
+        #expect(store.refs(in: "#1 gh:o/r#1", box: BoxClient.mac, owner: "").isEmpty)
         #expect(store.refs(in: "see #1", box: BoxClient.mac, owner: "ses_other").isEmpty)
         #expect(store.refs(in: "#1 #2", box: BoxClient.mac, owner: "ses_ours", typing: true).keys.sorted() == ["1"])
         #expect(store.refs(in: "the #1 Google result", box: BoxClient.mac, owner: "ses_ours").isEmpty)
@@ -242,9 +244,9 @@ import Textual
         let store = app.workQueues
         let message = "Picked up #243, not `#243` and not #9."
         // Not known yet: plain text, and the box is asked.
-        #expect(store.refs(in: message, box: BoxClient.mac).isEmpty)
-        try await until { store.refs[BoxClient.mac]?["243"] != nil }
-        let refs = store.refs(in: message, box: BoxClient.mac)
+        #expect(store.refs(in: message, box: BoxClient.mac, owner: "ses_lead").isEmpty)
+        await store.read(.init(box: BoxClient.mac, owner: "ses_lead"))
+        let refs = store.refs(in: message, box: BoxClient.mac, owner: "ses_lead")
         #expect(refs.keys.sorted() == ["243"], "#9 isn't an item: it stays as written")
 
         let parsed = try FileLinkingParser(folders: { [] }, refs: refs).attributedString(for: message)
@@ -265,7 +267,8 @@ import Textual
         var done = Self.item(243, "Work Queue panel", category: "done", order: 1)
         done["doneAt"] = Date.now.timeIntervalSince1970 * 1000
         try keep([done], for: "ses_lead", on: machine)
-        try await until { store.refs(in: message, box: BoxClient.mac)["243"]?.category == "done" }
+        await store.read(.init(box: BoxClient.mac, owner: "ses_lead"))
+        #expect(store.refs(in: message, box: BoxClient.mac, owner: "ses_lead")["243"]?.category == "done")
 
         // Clicked: the panel shows the Work Queue with the item open.
         app.openWorkItem("243")
@@ -305,9 +308,10 @@ import Textual
 
         // Named in a message by its ref, or by its old number: GitHub's chip either way.
         let message = "Fixed gh:kuvo-test/app#12 (was #250)."
-        _ = store.refs(in: message, box: BoxClient.mac)
-        try await until { store.refs(in: message, box: BoxClient.mac).count == 2 }
-        let parsed = try FileLinkingParser(folders: { [] }, refs: store.refs(in: message, box: BoxClient.mac)).attributedString(for: message)
+        await store.read(.init(box: BoxClient.mac, owner: "ses_lead"))
+        _ = store.refs(in: message, box: BoxClient.mac, owner: "ses_lead")
+        try await until { store.refs(in: message, box: BoxClient.mac, owner: "ses_lead").count == 2 }
+        let parsed = try FileLinkingParser(folders: { [] }, refs: store.refs(in: message, box: BoxClient.mac, owner: "ses_lead")).attributedString(for: message)
         let chips = parsed.runs.compactMap { $0.textual.attachment?.base as? WorkItemChipAttachment }
         #expect(chips.map(\.name) == ["app#12", "app#12"])
         #expect(chips.map(\.written) == ["gh:kuvo-test/app#12", "#250"])

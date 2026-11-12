@@ -8,8 +8,8 @@ import Foundation
 ///   letter, digit or underscore;
 /// - not inside a code span or block, a Markdown link or a web address;
 /// - not after "PR", "MR", "pull request", "issue" or "step": those are someone else's numbers;
-/// - not after "the", "to", "at", "ranked", "rank" or "number", or before "result", "spot",
-///   "place" or "position": those describe ranks.
+/// - numbers 1–10 next to rank words or before "on Google", "in search" or "Google result"
+///   describe ranks, not queue items.
 ///
 /// An outside source's reference has a prefix (`gh:owner/repo#12`), so a bare `#n` is always ours.
 /// One names the item that is that GitHub issue or pull request, by the same rule: at the start or
@@ -35,7 +35,7 @@ public enum WorkItemRefs {
             if end < text.endIndex, text[end].isLetter || text[end].isNumber || text[end] == "_" { continue }
             guard let number = Int(text[index..<end]), number > 0 else { continue }
             let range = hash..<end
-            guard !skipped.contains(where: { $0.overlaps(range) }), !afterOthersWord(text, hash), !beforeOrdinalWord(text, end) else { continue }
+            guard !skipped.contains(where: { $0.overlaps(range) }), !afterOthersWord(text, hash), !(number <= 10 && isOrdinal(text, hash, end)) else { continue }
             found.append((range, number))
             index = end
         }
@@ -107,7 +107,7 @@ public enum WorkItemRefs {
     public static let scheme = "kuvo-item"
 
     private static let opens: Set<Character> = ["(", "[", "{", "\"", "'", "/", ",", "–", "-", "“", "‘"]
-    private static let othersWords = ["pr", "mr", "pull request", "issue", "step", "the", "to", "at", "ranked", "rank", "number"]
+    private static let othersWords = ["pr", "mr", "pull request", "issue", "step"]
 
     /// "PR #12", "issue #5", "Step #3": another's number, not ours.
     private static func afterOthersWord(_ text: String, _ hash: String.Index) -> Bool {
@@ -121,10 +121,13 @@ public enum WorkItemRefs {
         }
     }
 
-    private static func beforeOrdinalWord(_ text: String, _ end: String.Index) -> Bool {
+    private static func isOrdinal(_ text: String, _ hash: String.Index, _ end: String.Index) -> Bool {
+        let words: Set<String> = ["ranked", "rank", "number", "result", "spot", "place", "position"]
+        let before = text[..<hash].reversed().drop(while: { $0.isWhitespace }).prefix(while: { $0.isLetter }).reversed()
         let after = text[end...].drop(while: { $0.isWhitespace })
-        let word = after.prefix(while: { $0.isLetter }).lowercased()
-        return ["result", "spot", "place", "position"].contains(word)
+        if words.contains(String(before).lowercased()) || words.contains(after.prefix(while: { $0.isLetter }).lowercased()) { return true }
+        let following = after.split(whereSeparator: { $0.isWhitespace }).prefix(2).map { $0.lowercased().trimmingCharacters(in: .punctuationCharacters) }
+        return following == ["on", "google"] || following == ["in", "search"] || following == ["google", "result"]
     }
 
     /// Resolves references for a conversation. Bare numbers must be in its visible queue;

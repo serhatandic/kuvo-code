@@ -676,12 +676,16 @@ public extension WorkQueue {
     /// Bare references are local to the box's conversation view (own, bot and linked items).
     /// The all-items panel and the global ref cache never grant conversation visibility.
     static func chipRefs(in text: String, known: [String: WorkRef], view: WorkQueueView?) -> [String: WorkRef] {
+        WorkItemRefs.chipRefs(in: text, known: known, visible: visibleRefs(in: view))
+    }
+
+    static func visibleRefs(in view: WorkQueueView?) -> [String: WorkRef] {
         var visible: [String: WorkRef] = [:]
         if let view, view.owner != WorkQueueView.all {
             for item in view.items + view.removed {
                 if let number = item.number { visible[String(number)] = WorkRef(item) }
             }
         }
-        return WorkItemRefs.chipRefs(in: text, known: known, visible: visible)
+        return visible
     }
 }
