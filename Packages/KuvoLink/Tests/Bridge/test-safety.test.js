@@ -190,7 +190,7 @@ test("a test can't read, copy or write the coding agents' sign-ins in the real h
   write(".grok/bin/grok", "#!/bin/sh\necho ran\n", 0o755);
   write("bin/codex", "#!/bin/sh\necho ran\n", 0o755);
   write("bin/kuvo-tool", "#!/bin/sh\necho ran\n", 0o755);
-  const script = `import { allowRealAgents } from "${path.join(here, "test-safety.js")}";
+  const script = `import { allowRealAgents, withRealProgram } from "${path.join(here, "test-safety.js")}";
     import fs from "node:fs"; import os from "node:os"; import path from "node:path"; import { spawnSync } from "node:child_process";
     const real = process.argv[1], seen = {};
     const tried = (name, act) => { try { act(); seen[name] = "allowed"; } catch (error) { seen[name] = "refused"; } };
@@ -209,8 +209,12 @@ test("a test can't read, copy or write the coding agents' sign-ins in the real h
     seen["its programs' folder on the PATH"] = process.env.PATH.split(":").includes(path.join(real, ".grok", "bin")) ? "kept" : "dropped";
     seen["what it starts finds them on the PATH"] = spawnSync("/bin/sh", ["-c", "command -v grok codex || echo none"], { encoding: "utf8" }).stdout.trim();
     seen["what it starts finds the rest there"] = spawnSync("/bin/sh", ["-c", "command -v kuvo-tool"], { encoding: "utf8" }).stdout.trim().endsWith("/kuvo-tool") ? "yes" : "no";
+    seen["what it starts with a PATH of its own finds them"] = spawnSync("/bin/sh", ["-c", "command -v codex || echo none"], { encoding: "utf8", env: { PATH: path.join(real, "bin") + ":/usr/bin:/bin" } }).stdout.trim();
+    seen["a runtime started with no home has the run's"] = spawnSync(process.execPath, ["-e", "process.stdout.write(require('os').homedir())"], { encoding: "utf8", env: { PATH: "/usr/bin:/bin" } }).stdout === process.env.HOME ? "yes" : "no";
+    tried("start its real program, allowed, with your real home", () => withRealProgram(path.join(real, "bin", "codex"), () => spawnSync(path.join(real, "bin", "codex"), { env: { ...process.env, HOME: real } })));
+    seen["start its real program, allowed, with a home of its own"] = withRealProgram(path.join(real, "bin", "codex"), () => spawnSync(path.join(real, "bin", "codex"), { encoding: "utf8" }).stdout);
     tried("start Grok's program", () => spawnSync(path.join(real, ".grok", "bin", "grok")));
-    tried("start Codex, found on a PATH of its own", () => spawnSync("codex", { env: { PATH: path.join(real, "bin") } }));
+    seen["start Codex, on a PATH of its own"] = spawnSync("codex", { env: { PATH: path.join(real, "bin") } }).error?.code ?? "ran";
     fs.writeFileSync(path.join(mine, "grok"), "#!/bin/sh\\necho stand-in\\n", { mode: 0o755 });
     tried("start a stand-in of its own", () => { if (spawnSync("grok", { env: { PATH: mine }, encoding: "utf8" }).stdout !== "stand-in\\n") throw new Error("not run"); });
     tried("start the bridge with the real home", () => spawnSync(process.execPath, ["-e", "0"], { env: { ...process.env, HOME: real } }));
@@ -235,8 +239,12 @@ test("a test can't read, copy or write the coding agents' sign-ins in the real h
     "its programs' folder on the PATH": "dropped",
     "what it starts finds them on the PATH": "none",
     "what it starts finds the rest there": "yes",
+    "what it starts with a PATH of its own finds them": "none",
+    "a runtime started with no home has the run's": "yes",
+    "start its real program, allowed, with your real home": "refused",
+    "start its real program, allowed, with a home of its own": "ran\n",
     "start Grok's program": "refused",
-    "start Codex, found on a PATH of its own": "refused",
+    "start Codex, on a PATH of its own": "ENOENT",
     "start a stand-in of its own": "allowed",
     "start the bridge with the real home": "refused",
     "start a shell with it": "allowed",
