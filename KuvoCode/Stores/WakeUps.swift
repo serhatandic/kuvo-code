@@ -75,10 +75,6 @@ final class WakeUps {
         path.hasPrefix("$HOME/") ? "\"$HOME\"/" + SSHConnection.quoted(String(path.dropFirst("$HOME/".count))) : SSHConnection.quoted(path)
     }
 
-    private static func path(_ owner: Owner, _ parts: String...) -> String {
-        parts.reduce(owner.folder) { ($0 as NSString).appendingPathComponent($1) }
-    }
-
     // MARK: Reading
 
     /// A conversation's wake-ups, watches and pause, as its box lists them (`kuvo/wakes/<session>`).
@@ -160,23 +156,6 @@ final class WakeUps {
     }
 
     // MARK: Changing them
-
-    /// A session's folder on this Mac, made as kuvo-wake makes it, before its agent's first wake-up
-    /// or watch: its session, where it works, and for a coding agent's, that its wake-ups go through
-    /// the agents' bridge (`via`). A bot's is made with it. An archived session's is held from the
-    /// start, as its wake-ups would be had it had some when it was archived.
-    private func makeFolder(of owner: Owner) async throws {
-        guard !owner.isBot, owner.machine == nil else { return }
-        let manager = FileManager.default
-        guard !manager.fileExists(atPath: Self.path(owner, "session")) else { return }
-        let directory = RemoteFolder.parse(owner.directory)?.path ?? owner.directory
-        try manager.createDirectory(atPath: owner.folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        try Data(owner.session.utf8).write(to: URL(filePath: Self.path(owner, "session")))
-        try Data(directory.utf8).write(to: URL(filePath: Self.path(owner, "directory")))
-        if owner.agents { try Data("bridge".utf8).write(to: URL(filePath: Self.path(owner, "via"))) }
-        // (Held only: its archiving stopped it already, if it waited on you.)
-        if app?.workspace.session(owner.session).map(Workspace.isArchived) == true { try await setPaused(true, owner, byArchiving: true, stops: false) }
-    }
 
     /// A wake-up you add: at `due`, `note` arrives in the conversation, and again at each repeat,
     /// by the computer it lives on's own kuvo-wake (its clock, its weekends).
@@ -260,74 +239,6 @@ final class WakeUps {
                                                        errors: errors ? .withOutput : .discard, limit: .seconds(stopAfter),
                                                        cancellable: false) else { return ("", -1) }
         return (result.outputText, result.status)
-    }
-
-    // MARK: The agent's tools
-
-    /// The wake-up tools' calls from this Mac's conversations (`BrowserTools.wakeTools`): for the
-    /// conversation `caller` is part of (a subagent's, the one that started it; a bot's, the bot's
-    /// folder), through kuvo-wake, as a machine's run there. Never a group chat's seat: meetings
-    /// are the chat's.
-    func call(_ name: String, arguments: [String: Any], caller: String?) async -> (text: String, isError: Bool) {
-        guard let app, let caller else { return ("This needs a conversation of its own.", true) }
-        let root = app.workspace.root(of: caller)
-        if app.workspace.seats.contains(root) || app.workspace.seats.contains(caller) {
-            return ("Not from a group chat: a chat can meet on a schedule instead (its editor's Meets on a Schedule).", true)
-        }
-        let owner: Owner
-        if let bot = app.bots.bot(forSession: root) {
-            owner = bot.wakeOwner
-        } else if let session = app.workspace.session(root) {
-            owner = Self.owner(of: session)
-        } else {
-            return ("Kuvo Code doesn't know this conversation yet. Try again in a moment.", true)
-        }
-        func given(_ key: String) -> String? {
-            (arguments[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-        }
-        // A watch runs a command whenever it's due: in Ask First, only once you've been asked (the
-        // engine asks for the tool in a conversation made since it does; not for one from before,
-        // nor through the coding agents' bridge).
-        if name == "watch_for_change" {
-            let calling = app.workspace.session(caller)
-            var rules = calling?.permissions
-            if calling == nil, let api = app.workspace.api(forSession: caller) { rules = (try? await api.session(caller))?.permissions }
-            let agents = calling.map(OutsideAgents.isAgentSession) ?? owner.agents
-            if ToolApproval.watchWentUnasked(rules, agents: agents) { return (ToolApproval.watchAsCommand, true) }
-        }
-        var verb: [String]
-        switch name {
-        case "schedule_wake_up":
-            guard let when = given("when") else { return ("Say when (when): +20m, +2h, +1d, or a time like 2026-10-21T09:00.", true) }
-            guard let note = given("note") else { return ("Add a note for yourself (note): what to do when you wake up.", true) }
-            verb = ["add", when] + (given("every").map { ["--every", $0] } ?? []) + (given("summary").map { ["--summary", $0] } ?? []) + [note]
-        case "watch_for_change":
-            guard let every = given("every"), let check = given("check"), let note = given("note") else {
-                return ("Give how often (every), the check (a shell command) and a note for when it changes.", true)
-            }
-            verb = ["watch", every, check] + (given("summary").map { ["--summary", $0] } ?? []) + [note]
-        case "list_wake_ups":
-            verb = ["list"]
-        case "cancel_wake_up":
-            guard let id = given("id") else { return ("Say which one (id), from list_wake_ups.", true) }
-            verb = ["cancel", id]
-        default:
-            return ("Unknown tool \(name).", true)
-        }
-        // A session's folder, made as it works in its own folder, before its first one.
-        if !owner.isBot, name == "schedule_wake_up" || name == "watch_for_change" {
-            do { try await makeFolder(of: owner) } catch { return ("Couldn't keep it: \(error.localizedDescription)", true) }
-        } else if !owner.isBot, !FileManager.default.fileExists(atPath: owner.folder) {
-            return (name == "list_wake_ups" ? "No wake-ups scheduled." : "No wake-up \"\(given("id") ?? "")\". See list_wake_ups.", name != "list_wake_ups")
-        }
-        try? Self.installCommand()
-        let (output, status) = await runWithStatus([owner.folder] + verb, stopAfter: 30, adding: ["KUVO_WAKE_TOOL": "1"])
-        await read(owner)
-        if status == 0, name == "schedule_wake_up" || name == "watch_for_change" {
-            Analytics.shared.track(owner.isBot ? "bot_wake_added" : "session_wake_added", ["repeats": name == "watch_for_change" || given("every") != nil, "by": "agent"])
-        }
-        let text = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (text.isEmpty ? (status == 0 ? "Done." : "That didn't work.") : text, status != 0)
     }
 
     // MARK: Pausing

@@ -141,10 +141,11 @@ final class AgentMail {
     /// A tool's call from one of this Mac's conversations (`caller`; nil from outside one): this
     /// Mac's box answers it (`kuvo/agent-tools`). Stopped (its turn ended), the box stops waiting
     /// for an answer, which then reaches the conversation as a message.
-    func call(_ name: String, arguments: [String: Any], caller: String?) async -> (text: String, isError: Bool) {
+    func call(_ name: String, arguments: [String: Any], caller: String?, inView: Bool? = nil) async -> (text: String, isError: Bool) {
         guard let client = box() else { return ("Kuvo Code isn't ready yet.", true) }
         var body: [String: Any] = ["name": name, "arguments": arguments]
         if let caller { body["session"] = caller }
+        if let inView { body["inView"] = inView }
         guard JSONSerialization.isValidJSONObject(body), let data = try? JSONSerialization.data(withJSONObject: body) else {
             return ("Those arguments couldn't be read.", true)
         }
@@ -161,18 +162,22 @@ final class AgentMail {
             return (said?.message ?? "Kuvo Code’s background service on this Mac didn’t answer. Try again in a moment.", true)
         }
         let failed = said?.isError ?? false
-        if !failed { track(name, arguments) }
+        if !failed { track(name, arguments, caller: caller) }
         // A session started: there as you name it.
         if !failed, name == "start_session" { Task { await refresh() } }
         return (text, failed)
     }
 
-    private func track(_ name: String, _ arguments: [String: Any]) {
+    private func track(_ name: String, _ arguments: [String: Any], caller: String?) {
         let waits = (arguments["wait"] as? NSNumber)?.boolValue ?? false
         switch name {
         case "send_message": Analytics.shared.track("agent_message_sent", ["waits": waits])
         case "read_conversation": Analytics.shared.track("agent_conversation_read", ["query": (arguments["query"] as? String)?.isEmpty == false])
         case "start_session": Analytics.shared.track("agent_started_session", ["waits": waits])
+        case "schedule_wake_up", "watch_for_change":
+            let isBot = caller.flatMap { caller in app?.bots.bot(forSession: app?.workspace.root(of: caller) ?? caller) } != nil
+            let repeats = name == "watch_for_change" || (arguments["every"] as? String)?.isEmpty == false
+            Analytics.shared.track(isBot ? "bot_wake_added" : "session_wake_added", ["repeats": repeats, "by": "agent"])
         default: break
         }
     }

@@ -59,6 +59,18 @@ import Testing
         try? FileManager.default.removeItem(at: WakeUps.root)
     }
 
+    /// Its agent's wake-up tool, as this Mac's tool server passes the call on to the box
+    /// (`kuvo/agent-tools`), then the app reading its wake-ups again, as it would on hearing of them
+    /// (`kuvo/wakes/events`).
+    private func tool(_ box: TestBox?, _ name: String, _ arguments: [String: Any]) async -> (text: String, isError: Bool) {
+        guard let box else { return ("This Mac's box isn't running.", true) }
+        let mail = AgentMail()
+        mail.box = { box.client(engine: Self.engine) }
+        let said = await mail.call(name, arguments: arguments, caller: id)
+        if let session = app.workspace.session(id) { await app.wakeUps.read(WakeUps.owner(of: session)) }
+        return said
+    }
+
     private func folder(_ session: String, _ parts: String...) -> String {
         parts.reduce(WakeUps.root.appending(path: session)) { $0.appending(path: $1) }.path
     }
@@ -96,7 +108,7 @@ import Testing
     @Test func aWakeUpMadeWhileArchivedWaits() async throws {
         let box = try await start(archived: true)
         defer { done(box) }
-        let made = await app.wakeUps.call("schedule_wake_up", arguments: ["when": "+2h", "note": "Look again"], caller: id)
+        let made = await tool(box, "schedule_wake_up", ["when": "+2h", "note": "Look again"])
         #expect(!made.isError, "\(made.text)")
         #expect(FileManager.default.fileExists(atPath: folder(id, "paused")))
         #expect(app.wakeUps.paused.contains(id))
@@ -113,14 +125,14 @@ import Testing
         let box = try await start()
         defer { done(box) }
         let note = "Look at the last CI run. If it failed, read the log and tell the user what broke."
-        let made = await app.wakeUps.call("schedule_wake_up", arguments: ["when": "+2h", "note": note, "summary": "Check CI"], caller: id)
+        let made = await tool(box, "schedule_wake_up", ["when": "+2h", "note": note, "summary": "Check CI"])
         #expect(!made.isError, "\(made.text)")
         let wake = try #require(FileManager.default.contentsOfDirectory(atPath: folder(id, "wakes")).first)
         let letters = try #require(Wakes.Pending(id: wake, note: "")).letters
         #expect(try String(contentsOfFile: folder(id, "wakes", wake), encoding: .utf8) == note)
         #expect(try String(contentsOfFile: folder(id, "summaries", letters), encoding: .utf8) == "Check CI")
 
-        let watched = await app.wakeUps.call("watch_for_change", arguments: ["every": "10m", "check": "cat state.txt", "note": "Tell the user what changed", "summary": "State changed"], caller: id)
+        let watched = await tool(box, "watch_for_change", ["every": "10m", "check": "cat state.txt", "note": "Tell the user what changed", "summary": "State changed"])
         #expect(!watched.isError, "\(watched.text)")
         let watch = try #require(FileManager.default.contentsOfDirectory(atPath: folder(id, "watches")).first)
         #expect(try String(contentsOfFile: folder(id, "watches", watch, "summary"), encoding: .utf8) == "State changed")
@@ -131,7 +143,7 @@ import Testing
     @Test func aPhoneSeesWhichSessionsWait() async throws {
         let box = try await start()
         defer { done(box) }
-        let made = await app.wakeUps.call("schedule_wake_up", arguments: ["when": "+2h", "note": "Look again"], caller: id)
+        let made = await tool(box, "schedule_wake_up", ["when": "+2h", "note": "Look again"])
         #expect(!made.isError, "\(made.text)")
         let link = PhoneLink()
         var listed = Data()
@@ -169,8 +181,8 @@ import Testing
             }
             return (status, try? JSONSerialization.jsonObject(with: data) as? [String: Any])
         }
-        #expect(!(await app.wakeUps.call("schedule_wake_up", arguments: ["when": "+2h", "note": "Look at the build", "every": "1d"], caller: id)).isError)
-        #expect(!(await app.wakeUps.call("schedule_wake_up", arguments: ["when": "+3h", "note": "Ask about the release"], caller: id)).isError)
+        #expect(!(await tool(box, "schedule_wake_up", ["when": "+2h", "note": "Look at the build", "every": "1d"])).isError)
+        #expect(!(await tool(box, "schedule_wake_up", ["when": "+3h", "note": "Ask about the release"])).isError)
         let wakes = try #require(try await ask("kuvo/wakes/\(id)").json?["wakes"] as? [[String: Any]])
         #expect(wakes.compactMap { $0["note"] as? String } == ["Look at the build", "Ask about the release"])
         let daily = try #require(wakes.first?["id"] as? String), once = try #require(wakes.last?["id"] as? String)
@@ -373,7 +385,7 @@ import Testing
 
         // Opened from search and worked in, archived still: a first wake-up its agent makes holds,
         // and stops nothing (the stand-in still says it waits).
-        let made = await app.wakeUps.call("schedule_wake_up", arguments: ["when": "+2h", "note": "Check again"], caller: id)
+        let made = await tool(box, "schedule_wake_up", ["when": "+2h", "note": "Check again"])
         #expect(!made.isError, "\(made.text)")
         #expect(app.wakeUps.paused.contains(id))
         #expect(stopped() == 1, "a wake-up isn't an archive")

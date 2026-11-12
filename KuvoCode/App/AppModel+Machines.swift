@@ -45,20 +45,12 @@ extension AppModel {
                 }
             }
         }
-        BrowserTools.mail = { name, arguments, caller in await AgentMail.shared.call(name, arguments: arguments, caller: caller) }
+        BrowserTools.mail = { name, arguments, caller, inView in await AgentMail.shared.call(name, arguments: arguments, caller: caller, inView: inView) }
         // A conversation at work, or waiting for you, keeps its tabs (see `Utilities.tidyAgentTabs`).
         utilities.isBusy = { [weak self] id in
             guard let self else { return false }
             let session = bots.bot(id)?.sessionID ?? id
             return [session, workspace.root(of: session)].contains { workspace.isWorking($0) || workspace.needsAttention($0) }
-        }
-        // Their wake-ups, set with the tools of Kuvo Code's own.
-        BrowserTools.wake = { [weak self] name, arguments, caller in
-            await self?.wakeUps.call(name, arguments: arguments, caller: caller) ?? ("Kuvo Code isn't ready yet.", true)
-        }
-        // A bot on this Mac keeping its job: its box keeps it.
-        BrowserTools.job = { [weak self] arguments, caller in
-            await self?.bots.setJob(arguments, caller: caller) ?? ("Kuvo Code isn't ready yet.", true)
         }
         // The vault's tools and fills, through this Mac's box.
         wireVault()
