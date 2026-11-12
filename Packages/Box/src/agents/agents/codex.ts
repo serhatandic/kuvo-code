@@ -14,7 +14,7 @@ import { fileDiff, fromPatch } from "../diff"
 import { emit } from "../events"
 import { allowedFolders, fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceRules, seatBot, fullAccessMark } from "../fence"
 import { kuvoTools, toolServerName } from "../kuvotools"
-import { dropRelayed, relayedServers, relayedTools, relayPort } from "../toolrelay"
+import { dropRelayed, relayedServers, relayedTools, relayPort, serversKey } from "../toolrelay"
 import { computerServers } from "../servers"
 import { pictureData, pictureFile, withPictures } from "../pictures"
 import { elicitationField } from "../forms"
@@ -1086,13 +1086,14 @@ class CodexThread implements Thread {
     // relay, which keeps their keys.
     const computer = await computerServers(directory)
     const servers = relayedServers(this.session.id, this.agent, directory, computer)
+    const serversNow = serversKey(this.session.id, computer)
     // Your subagents (Settings › Agents), as its roles, and the model its subagents use.
     const subagents = codexSubagents(await subagentsFor(directory))
     // Loaded again when Kuvo Code's tools moved (the app started again), to reach them, or the
     // skills, the servers or the subagents changed.
-    if (this.nativeID && this.loaded && instructions === this.instructions && tools?.key === this.toolsKey && skillsKey === this.skillsKey && computer.key === this.serversKey && subagents.key === this.subagentsKey) return rpc
+    if (this.nativeID && this.loaded && instructions === this.instructions && tools?.key === this.toolsKey && skillsKey === this.skillsKey && serversNow === this.serversKey && subagents.key === this.subagentsKey) return rpc
     this.toolsKey = tools?.key
-    this.serversKey = computer.key
+    this.serversKey = serversNow
     this.skillsKey = skillsKey
     this.subagentsKey = subagents.key
     this.instructions = instructions

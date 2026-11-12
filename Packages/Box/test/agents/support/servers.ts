@@ -9,7 +9,7 @@ import { EngineLink } from "../../../src/agents/engine"
 import { forgetServers, setServerSource } from "../../../src/agents/servers"
 
 /** The keys in the settings: none of them may reach an agent. */
-export const KEYS = { shared: "shared-key-1111", bot: "bot-key-2222", notes: "notes-key-3333", tracker: "tracker-access-4444", renewed: "tracker-renewed-5555" }
+export const KEYS = { shared: "shared-key-1111", bot: "bot-key-2222", notes: "notes-key-3333", tracker: "tracker-access-4444", renewed: "tracker-renewed-5555", again: "tracker-again-6666" }
 
 /** The command server's name on the PATH. */
 export const SERVER_COMMAND = "kuvo-test-files"
@@ -70,7 +70,7 @@ process.stdin.on("data", (chunk) => {
 
   /** This computer's settings: Settings › MCP Servers' and the integrations'. */
   const computer = () => ({
-    files: { type: "local", command: [SERVER_COMMAND], environment: { SERVICE_KEY: KEYS.shared, ...fake.filesEnvironment } },
+    files: { type: "local", command: [fake.filesCommand], environment: { SERVICE_KEY: KEYS.shared, ...fake.filesEnvironment } },
     notes: { type: "remote", url: `${remoteURL()}/notes`, headers: { "X-Api-Key": KEYS.notes }, oauth: false },
     // One you signed in to (its maker's sign-in, which the engine keeps).
     tracker: { type: "remote", url: `${remoteURL()}/tracker` },
@@ -86,6 +86,14 @@ process.stdin.on("data", (chunk) => {
     expiring: false,
     /** How many times the engine was asked to connect the tracker again. */
     connects: 0,
+    /** The tracker turns down your sign-in, whatever it is (it was taken back): from the start
+     * (`start`), or only its tools' calls (`calls`: it ended partway). The engine, connecting it
+     * again, finds it needs signing in. */
+    refusing: false as false | "start" | "calls",
+    /** You signed in to the tracker again (Settings › Integrations): the engine has another sign-in. */
+    signedInAgain: false,
+    /** The command server's command, as its settings name it. */
+    filesCommand: SERVER_COMMAND,
     async serve() {
       // A URL's server: its tool says the sign-in and key it was sent.
       remote = Bun.serve({
@@ -95,6 +103,11 @@ process.stdin.on("data", (chunk) => {
           const message: any = await request.json().catch(() => ({}))
           // Your sign-in, once it ran out, it turns down.
           if (fake.expiring && request.headers.get("authorization") === `Bearer ${KEYS.tracker}`) return new Response("Expired.", { status: 401 })
+          // One taken back, every sign-in but the one you made again.
+          const turnedDown = fake.refusing === "start" || (fake.refusing === "calls" && message.method === "tools/call")
+          if (turnedDown && new URL(request.url).pathname === "/tracker" && request.headers.get("authorization") !== `Bearer ${KEYS.again}`) {
+            return new Response("Unauthorized.", { status: 401, headers: { "WWW-Authenticate": 'Bearer error="invalid_token"' } })
+          }
           if (message.method === "initialize") return Response.json({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "remote", version: "1" } } }, { headers: { "mcp-session-id": "remote-1" } })
           const said = `auth:${request.headers.get("authorization") ?? "none"},key:${request.headers.get("x-api-key") ?? "none"},at:${new URL(request.url).pathname}`
           return Response.json({ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: said }] } })
@@ -107,7 +120,7 @@ process.stdin.on("data", (chunk) => {
           const at = new URL(request.url).pathname
           if (at === "/api/event") return new Response(new ReadableStream({ start() {} }), { headers: { "Content-Type": "text/event-stream" } })
           if (at === "/api/config") return Response.json([{ type: "document", path: "opencode.json", info: { mcp: { servers: computer() } } }, ...(fake.botLayer ? [{ type: "document", path: ".opencode/opencode.json", info: { mcp: { servers: fake.botLayer } } }] : [])])
-          if (at === "/api/mcp") return Response.json([{ name: "tracker", status: "connected", integrationID: "int_tracker" }])
+          if (at === "/api/mcp") return Response.json([{ name: "tracker", status: fake.refusing && fake.connects && !fake.signedInAgain ? "needs_auth" : "connected", integrationID: "int_tracker" }])
           if (at === "/api/experimental/mcp/tracker/connect" && request.method === "POST") {
             fake.connects += 1
             fake.expiring = false
@@ -115,7 +128,7 @@ process.stdin.on("data", (chunk) => {
           }
           if (at === "/api/credential") {
             // (About to run out: within the minute it's renewed before.)
-            const value = fake.expiring ? { access: KEYS.tracker, expires: Date.now() + 1_000 } : { access: fake.connects ? KEYS.renewed : KEYS.tracker, expires: Date.now() + 3_600_000 }
+            const value = fake.expiring ? { access: KEYS.tracker, expires: Date.now() + 1_000 } : { access: fake.signedInAgain ? KEYS.again : fake.connects ? KEYS.renewed : KEYS.tracker, expires: Date.now() + 3_600_000 }
             return Response.json({ data: [{ integrationID: "int_tracker", active: true, value: { type: "oauth", refresh: "r", ...value } }] })
           }
           return new Response("Not found.", { status: 404 })

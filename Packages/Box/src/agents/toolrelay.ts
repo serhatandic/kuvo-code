@@ -10,6 +10,13 @@
 // sandbox (in the conversation's folder, as its commands are) with its keys in its environment; a
 // URL's reached with its headers and sign-in added. The agent is given only the relay's address
 // and its session's key.
+//
+// One that can't be reached, or turns down its sign-in, never stops the agent's turn: some agents
+// (Antigravity) end their whole session when one server fails to start. The relay connects the
+// agent to it anyway, as a server of no tools whose instructions say why (and a call to one that
+// turns down its sign-in later says so as its result), so the agent goes on with the rest; the
+// engine is told to connect it again, to renew the sign-in or find it needs one (which Settings ›
+// Integrations then says). Once it's set right (you signed in again), its agent connects afresh.
 
 import { randomBytes } from "node:crypto"
 import { spawn, type ChildProcess } from "node:child_process"
@@ -17,7 +24,7 @@ import { dirname, join, relative } from "node:path"
 import { fenceRules, fenceServer } from "./fence"
 import { kuvoTools, type KuvoTools } from "./kuvotools"
 import { onMachine, ownEnvironment } from "./machine"
-import { computerServers, type ComputerServer, type ComputerServers } from "./servers"
+import { computerServers, reconnectServer, type ComputerServer, type ComputerServers } from "./servers"
 
 let server: ReturnType<typeof Bun.serve> | undefined
 /** Each session's key, and the session each key is for. */
@@ -31,6 +38,14 @@ const holders = new Map<string, Set<object>>()
 const served = new Map<string, { directory: string; servers: Map<string, ComputerServer> }>()
 /** The command servers running, each for one of an agent's connections: by session, name and connection. */
 const running = new Map<string, Program>()
+/** The relay's own stand-ins for servers that couldn't be reached, by the connection it gave each
+ * agent: the server, how it was set up then (`setup`), and why it isn't there. */
+const standIns = new Map<string, { sessionID: string; name: string; setup: string; why: string }>()
+/** How each session's servers were set up when they last turned down their sign-in or key, by
+ * session and name: the engine isn't asked again until that changes. */
+const refusals = new Map<string, string>()
+/** How many times each session's server was set right after the relay stood in for it, by name. */
+const setRight = new Map<string, Map<string, number>>()
 
 /** A command's server no connection has used for an hour is stopped (an agent that started again
  * has a new one), as the engine stops its own; one it comes back to it starts again. */
@@ -80,13 +95,42 @@ export function relayedTools(sessionID: string, holder: object): Extract<KuvoToo
  * renewed): a command's server already running for a connection goes on as it started.
  */
 export function relayedServers(sessionID: string, holder: object, directory: string, found: ComputerServers): RelayedServer[] {
+  // (Those set right since the relay stood in for them, noted.)
+  serversKey(sessionID, found)
   if (!found.servers.length) {
     served.delete(sessionID)
     return []
   }
   const key = hold(sessionID, holder)
   served.set(sessionID, { directory, servers: new Map(found.servers.map((each) => [each.name, each])) })
-  return found.servers.map((each) => ({ name: each.name, url: `http://127.0.0.1:${relayPort()}/mcp/${encodeURIComponent(each.name)}`, headers: { Authorization: `Bearer ${key}` }, timeout: each.timeout }))
+  // (One set right since the relay stood in for it at another address, so its agent connects afresh.)
+  return found.servers.map((each) => {
+    const times = setRight.get(sessionID)?.get(each.name)
+    return { name: each.name, url: `http://127.0.0.1:${relayPort()}/mcp/${encodeURIComponent(each.name)}${times ? `?again=${times}` : ""}`, headers: { Authorization: `Bearer ${key}` }, timeout: each.timeout }
+  })
+}
+
+/** How a server is set up: its address and headers (your sign-in), or its command and environment. */
+const setupOf = (server: ComputerServer) => JSON.stringify(server.kind === "remote" ? [server.url, server.headers] : [server.command, server.env, server.cwd])
+
+/**
+ * What tells the computer's servers a session's agent is given now from those it was given, with
+ * their names (`found.key`): a server the relay stood in for that's set up otherwise since (you
+ * signed in again, changed its key, or took it away) counts as another, so the agent is started
+ * again or told, and connects to it afresh. Each agent's thread asks as it decides that.
+ */
+export function serversKey(sessionID: string, found: ComputerServers): string {
+  for (const [connection, standIn] of standIns) {
+    if (standIn.sessionID !== sessionID) continue
+    const now = found.servers.find((each) => each.name === standIn.name)
+    if (now && setupOf(now) === standIn.setup) continue
+    standIns.delete(connection)
+    let times = setRight.get(sessionID)
+    if (!times) setRight.set(sessionID, (times = new Map()))
+    times.set(standIn.name, (times.get(standIn.name) ?? 0) + 1)
+  }
+  const times = [...(setRight.get(sessionID) ?? [])].sort(([a], [b]) => a.localeCompare(b))
+  return times.length ? `${found.key} ${JSON.stringify(times)}` : found.key
 }
 
 /** The relay's port (listening from then on). */
@@ -108,6 +152,8 @@ export function dropRelayed(sessionID: string, holder: object) {
   programs.delete(sessionID)
   served.delete(sessionID)
   for (const [at, program] of running) if (at.startsWith(sessionID + "\n")) program.stop()
+  for (const [connection, standIn] of standIns) if (standIn.sessionID === sessionID) standIns.delete(connection)
+  for (const at of refusals.keys()) if (at.startsWith(sessionID + "\n")) refusals.delete(at)
 }
 
 async function answer(request: Request): Promise<Response> {
@@ -176,10 +222,86 @@ async function forward(request: Request, url: string, headers: Record<string, st
 async function sendAll(program: Program, body: any, timeout: number, connection: string, starts: boolean): Promise<Response> {
   const messages: any[] = Array.isArray(body) ? body : [body]
   const answers = await Promise.all(messages.map((message) => program.send(message, timeout, connection)))
-  const replies = answers.filter((each) => each !== undefined)
-  const headers = starts ? { "mcp-session-id": connection } : undefined
-  if (!replies.length) return new Response(null, { status: 202, headers })
-  return Response.json(Array.isArray(body) ? replies : replies[0], { headers })
+  return replies(body, answers, starts ? { "mcp-session-id": connection } : undefined)
+}
+
+/** The answers to a message (or several), as MCP's HTTP sends them: none (notifications), 202. */
+function replies(body: any, answers: unknown[], headers?: Record<string, string>): Response {
+  const said = answers.filter((each) => each !== undefined)
+  if (!said.length) return new Response(null, { status: 202, headers })
+  return Response.json(Array.isArray(body) ? said : said[0], { headers })
+}
+
+/** Turned down: its sign-in or key refused. */
+const refused = (status: number) => status === 401 || status === 403
+
+/** Why a server's tools aren't there, as the agent is told it: one that turned down its sign-in or key. */
+const signInRefused = (name: string) =>
+  `The ${name} server turned down its sign-in, so its tools aren't available for now. If the user asks for something from it, tell them to sign in to it again in Kuvo Code (Settings › Integrations, or its key in Settings › MCP Servers), and carry on with the rest`
+
+const jsonOf = (text: string): unknown => {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * A server that couldn't be reached as an agent connected to it: the relay connects the agent
+ * anyway, to a stand-in of its own with no tools, whose instructions say `why`, so an agent that
+ * gives up its whole session when one server fails to start goes on with the rest.
+ */
+function standInFor(sessionID: string, name: string, setup: string, why: string, messages: any[]): Response {
+  const connection = `unavailable-${randomBytes(12).toString("hex")}`
+  standIns.set(connection, { sessionID, name, setup, why })
+  return standInAnswers(messages, why, messages.length > 1, { "mcp-session-id": connection })
+}
+
+/** A request to a stand-in, answered by the relay. */
+async function answerStandIn(request: Request, connection: string, why: string): Promise<Response> {
+  if (request.method === "DELETE") {
+    standIns.delete(connection)
+    return new Response(null, { status: 200 })
+  }
+  // (No stream of its own to offer.)
+  if (request.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST, DELETE" } })
+  const body = jsonOf(await request.text())
+  if (body === undefined) return Response.json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } }, { status: 400 })
+  return standInAnswers(Array.isArray(body) ? body : [body], why, Array.isArray(body), undefined)
+}
+
+/** What a server that isn't there answers: it starts, it has no tools, and anything asked of it says `why`. */
+function standInAnswers(messages: any[], reason: string, many: boolean, headers: Record<string, string> | undefined): Response {
+  const why = reason.replace(/[.\s]+$/, "")
+  const answers = messages.map((message) => {
+    if (message?.id === undefined || message.id === null) return undefined
+    const result = (value: unknown) => ({ jsonrpc: "2.0", id: message.id, result: value })
+    switch (message.method) {
+      case "initialize":
+        return result({
+          protocolVersion: typeof message.params?.protocolVersion === "string" ? message.params.protocolVersion : "2025-06-18",
+          capabilities: { tools: {} },
+          serverInfo: { name: "unavailable", version: "1" },
+          instructions: `${why}.`,
+        })
+      case "ping":
+        return result({})
+      case "tools/list":
+        return result({ tools: [] })
+      case "resources/list":
+        return result({ resources: [] })
+      case "resources/templates/list":
+        return result({ resourceTemplates: [] })
+      case "prompts/list":
+        return result({ prompts: [] })
+      case "tools/call":
+        return result({ content: [{ type: "text", text: `${why}.` }], isError: true })
+      default:
+        return failure(message.id, `${why}.`)
+    }
+  })
+  return replies(many ? messages : messages[0], answers, headers)
 }
 
 /** A request to one of the computer's servers, from a session's agent. */
@@ -188,17 +310,48 @@ async function answerServer(request: Request, sessionID: string, name: string): 
   const entry = session?.servers.get(name)
   if (!session || !entry) return new Response("No such server here.", { status: 404 })
   const failed = `The ${name} server didn't answer.`
+  const connection = request.headers.get("mcp-session-id") ?? ""
+  const standIn = standIns.get(connection)
+  if (standIn?.sessionID === sessionID && standIn.name === name) return answerStandIn(request, connection, standIn.why)
   if (entry.kind === "remote") {
     const body = request.method === "POST" ? await request.text() : undefined
     // Your sign-in to it running out (in a long turn): renewed by the engine first; one it turned
     // down, renewed and tried once more.
-    const current = entry.expires !== undefined && entry.expires < Date.now() + 60_000 ? ((await renewed(sessionID, session, name)) ?? entry) : entry
-    const answer = await forward(request, current.url, current.headers, current.timeout, body, failed)
-    if (answer.status !== 401 || current.expires === undefined) return answer
-    const again = await renewed(sessionID, session, name)
-    return again ? forward(request, again.url, again.headers, again.timeout, body, failed) : answer
+    let current = entry.expires !== undefined && entry.expires < Date.now() + 60_000 ? ((await renewed(sessionID, session, name)) ?? entry) : entry
+    let answer = await forward(request, current.url, current.headers, current.timeout, body, failed)
+    const at = `${sessionID}\n${name}`
+    /** Tried again with how it's set up now, if that's changed. */
+    const retried = async () => {
+      const again = await renewed(sessionID, session, name)
+      if (!again || setupOf(again) === setupOf(current)) return
+      await answer.body?.cancel()
+      current = again
+      answer = await forward(request, again.url, again.headers, again.timeout, body, failed)
+    }
+    if (refused(answer.status) && current.expires !== undefined) await retried()
+    if (refused(answer.status) && refusals.get(at) !== setupOf(current)) {
+      // (Once for how it's set up now: the engine renews your sign-in if it can, or finds it needs
+      // one, for Settings › Integrations to say.)
+      await reconnectServer(session.directory, name)
+      await retried()
+    }
+    if (refused(answer.status)) refusals.set(at, setupOf(current))
+    else if (answer.ok) refusals.delete(at)
+    const sent = body === undefined ? undefined : jsonOf(body)
+    const messages: any[] = sent === undefined ? [] : Array.isArray(sent) ? sent : [sent]
+    const why = refused(answer.status) ? signInRefused(name) : `The ${name} server couldn't be reached (${answer.status === 502 ? "no answer" : `HTTP ${answer.status}`})`
+    if (messages.some((message) => message?.method === "initialize") && !answer.ok) {
+      await answer.body?.cancel()
+      return standInFor(sessionID, name, setupOf(current), why, messages)
+    }
+    // A call it turns down partway (or can't take, for now): its answer says why, as a tool's
+    // error, rather than an error of the connection's.
+    if (messages.length && (refused(answer.status) || answer.status >= 500)) {
+      await answer.body?.cancel()
+      return standInAnswers(messages, why, Array.isArray(sent), undefined)
+    }
+    return answer
   }
-  const connection = request.headers.get("mcp-session-id") ?? ""
   const at = `${sessionID}\n${name}\n${connection}`
   if (request.method === "DELETE") {
     running.get(at)?.stop()
@@ -212,15 +365,23 @@ async function answerServer(request: Request, sessionID: string, name: string): 
     return Response.json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } }, { status: 400 })
   }
   const messages: any[] = Array.isArray(body) ? body : [body]
-  if (messages.some((message) => message?.method === "initialize")) {
+  const initialize = messages.find((message) => message?.method === "initialize")
+  if (initialize) {
     // Each connection a server of its own, as an agent that starts it itself has it.
     const started = startServer(entry, sessionID, session.directory)
-    if (typeof started === "string") return Response.json(failure(messages.find((message) => message?.method === "initialize").id, started))
+    if (typeof started === "string") return standInFor(sessionID, name, setupOf(entry), started, messages)
     const fresh = randomBytes(12).toString("hex")
     const key = `${sessionID}\n${name}\n${fresh}`
     running.set(key, started)
     started.whenStopped(() => running.get(key) === started && running.delete(key))
-    return sendAll(started, body, entry.timeout, fresh, true)
+    const answers = await Promise.all(messages.map((message) => started.send(message, entry.timeout, fresh)))
+    // (One that ends, or says no, before it's started: the agent goes on without it.)
+    const answered: any = answers[messages.indexOf(initialize)]
+    if (!answered || answered.error) {
+      started.stop()
+      return standInFor(sessionID, name, setupOf(entry), `The ${name} server couldn't start${answered?.error?.message ? `: ${answered.error.message}` : ""}`, messages)
+    }
+    return replies(body, answers, { "mcp-session-id": fresh })
   }
   const program = running.get(at)
   // (One that stopped, or a connection it doesn't know: the agent connects again.)

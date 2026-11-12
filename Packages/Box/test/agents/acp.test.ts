@@ -68,6 +68,9 @@ interface Script {
   fails?: string
   /** What it says again as a session is loaded, before it answers (Grok's replay of what it said before). */
   replays?: [string, any][]
+  /** As Antigravity does, it starts every MCP server it's given as it makes or loads its session,
+   * and gives up the whole session (with Antigravity's words) when one of them doesn't start. */
+  startsServers?: boolean
 }
 
 /**
@@ -114,6 +117,24 @@ if (${JSON.stringify(Boolean(script.readsItsFolder || script.fails))}) {
   }
 }
 let servers = []
+const startsServers = ${JSON.stringify(Boolean(script.startsServers))}
+/** Why one of \`list\` didn't start, as Antigravity says it; none if they all did. */
+async function startAll(list) {
+  for (const server of list) {
+    if (server.type !== "http") continue
+    const headers = { ...Object.fromEntries(server.headers.map((each) => [each.name, each.value])), "Content-Type": "application/json", Accept: "application/json, text/event-stream" }
+    let why
+    try {
+      const started = await fetch(server.url, { method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "agent", version: "1" } } }) })
+      const answer = started.ok ? await started.json().catch(() => null) : null
+      if (!started.ok) why = started.status === 401 ? "Unauthorized" : "HTTP " + started.status
+      else if (!answer || answer.error) why = answer?.error?.message ?? "no answer"
+    } catch (error) {
+      why = String(error)
+    }
+    if (why) return "The MCP server '" + server.name + "' failed to initialize: calling 'initialize': sending 'initialize': " + why + ". Fix the MCP server, or remove it from your configuration and start a new session, to continue."
+  }
+}
 async function attempt(how, place, through) {
   if (how === "env") return process.env[place] ?? "none"
   if (how === "arg") return process.argv.includes(place) ? "yes" : "no"
@@ -177,7 +198,11 @@ process.stdin.on("data", (chunk) => {
     log(message)
     if (refuses.some((refused) => refused.method === message.method && Object.entries(refused.params ?? {}).every(([key, value]) => message.params?.[key] === value))) send({ id: message.id, error: { code: -32603, message: "Refused." } })
     else if (message.method === "initialize") send({ id: message.id, result: { protocolVersion: 1, authMethods: [], agentCapabilities: { loadSession: true, mcpCapabilities: { http: true } } } })
-    else if (message.method === "session/new" || message.method === "session/load") {
+    else if ((message.method === "session/new" || message.method === "session/load") && startsServers) {
+      servers = message.params?.mcpServers ?? []
+      const id = message.id
+      void startAll(servers).then((failed) => send(failed ? { id, error: { code: -32603, message: failed } } : { id, result: setup }))
+    } else if (message.method === "session/new" || message.method === "session/load") {
       servers = message.params?.mcpServers ?? []
       if (message.method === "session/load") for (const [sessionId, value] of replays) update(sessionId, value)
       send({ id: message.id, result: setup })
@@ -1142,6 +1167,46 @@ describe.skipIf(!canFence)("The computer's MCP servers, for an ACP agent in the 
     send(id, "again")
     await settled(id, 2)
     expect(words(id)).toBe(`files=key:${KEYS.shared}files=key:${KEYS.bot}`)
+  })
+
+  /** One like Antigravity, which gives up its whole session when one server it's given doesn't start. */
+  const startingAll = (tries: Record<string, [string, string]>) => new TestGrok(program(fakeAcp([], [], undefined, { tries, startsServers: true }), join(root, "grok")), root)
+  const given = () => received().filter((message) => message.method === "session/new" || message.method === "session/load").map((message) => message.params.mcpServers as any[])
+
+  test("one whose sign-in is turned down (taken back) doesn't stop the turn: the agent goes on with the rest, is told to have you sign in again, and the engine finds it needs signing in", async () => {
+    servers.refusing = "start"
+    const id = await run(startingAll(everyKind))
+    expect(ended(id)).toMatchObject({ type: "idle", outcome: "succeeded" })
+    const said = words(id)
+    expect(said).toContain(`files=key:${KEYS.shared} notes=auth:none,key:${KEYS.notes},at:/notes`)
+    expect(said).toMatch(/tracker=The tracker server turned down its sign-in.*sign in to it again in Kuvo Code \(Settings › Integrations/)
+    // The engine connected it again, so Settings › Integrations says it needs signing in.
+    expect(servers.connects).toBeGreaterThan(0)
+    // Signed in again: the next message reaches it, the agent given it afresh.
+    servers.signedInAgain = true
+    forgetServers()
+    send(id, "again")
+    await settled(id, 2)
+    expect(words(id).slice(said.length)).toContain(`tracker=auth:Bearer ${KEYS.again},key:none,at:/tracker`)
+    const [first, ...later] = given()
+    const tracker = (list: any[]) => list.find((server) => server.name === "tracker").url
+    expect(later.map(tracker)).not.toContain(tracker(first!))
+  })
+
+  test("one that turns down its sign-in partway, at a call, answers it as the tool's error saying to sign in again, rather than failing the agent's connection", async () => {
+    servers.refusing = "calls"
+    const id = await run(startingAll({ tracker: ["server", "tracker"], notes: ["server", "notes"] }))
+    expect(ended(id)).toMatchObject({ type: "idle", outcome: "succeeded" })
+    expect(words(id)).toMatch(/^tracker=The tracker server turned down its sign-in.* notes=auth:none/)
+    expect(servers.connects).toBeGreaterThan(0)
+  })
+
+  test("a command's server that can't start (its program isn't installed) doesn't stop the turn: the agent goes on with the rest, told why", async () => {
+    servers.filesCommand = "kuvo-test-not-installed"
+    forgetServers()
+    const id = await run(startingAll({ files: ["server", "files"], notes: ["server", "notes"] }))
+    expect(ended(id)).toMatchObject({ type: "idle", outcome: "succeeded" })
+    expect(words(id)).toMatch(/^files=The files server can't start: kuvo-test-not-installed isn't installed here.* notes=auth:none/)
   })
 
   test("a call that doesn't carry the conversation's key to the bridge reaches none of them", async () => {

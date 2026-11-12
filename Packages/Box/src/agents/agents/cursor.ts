@@ -372,7 +372,7 @@ class CursorThread implements Thread {
     // mode, other skills or other tools (Kuvo Code's, or another set of the computer's servers),
     // or other subagents, start it again.
     const skills = options.local?.dirs?.[0] as string | undefined
-    const tools = JSON.stringify([kuvoTools(this.session.id)?.key, Object.keys(options.mcpServers ?? {}).sort(), options.agents ?? {}])
+    const tools = JSON.stringify([kuvoTools(this.session.id)?.key, Object.entries(options.mcpServers ?? {}).map(([name, server]: [string, any]) => [name, server?.url ?? ""]).sort(), options.agents ?? {}])
     // In the sandbox: its rules and the folders Also Allowed gives the project, as it starts.
     const fence = fenceRules() ? fenceKey() + JSON.stringify(allowedFolders(this.session.location.directory)) + fullAccessMark(this.session.id) : ""
     // (And the worker it runs in, as it starts again, or once it has stopped.)

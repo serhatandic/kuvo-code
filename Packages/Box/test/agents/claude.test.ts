@@ -13,6 +13,7 @@ import { subscribe } from "../../src/agents/events"
 import { repositoryOf } from "../../src/agents/fence"
 import { setToolServer } from "../../src/agents/kuvotools"
 import { callServer, computerServers, KEYS } from "./support/servers"
+import { forgetServers } from "../../src/agents/servers"
 import { subagentEngine } from "./support/subagents"
 import { Auto } from "../../src/agents/auto"
 import { agentAccounts, Limits } from "../../src/agents/limits"
@@ -1247,6 +1248,30 @@ describe("Claude Code and the computer's MCP servers", () => {
       expect(await callServer(given.files)).toBe(`key:${KEYS.shared}`)
       expect(await callServer(given.notes)).toBe(`auth:none,key:${KEYS.notes},at:/notes`)
       // (On the same pipe as before: its conversation goes on.)
+      expect(fake.closed).toBe(false)
+    } finally {
+      servers.stop()
+    }
+  })
+
+  test("one whose sign-in is turned down (taken back) still connects, its call saying to sign in again; signed in again, the same Claude Code is told it afresh at its next message, and reaches it", async () => {
+    const servers = computerServers(root)
+    servers.refusing = "start"
+    await servers.serve()
+    try {
+      const { id, first } = await begin()
+      const before = (fake.mcpServers as Record<string, any>).tracker
+      expect(await callServer(before)).toMatch(/^The tracker server turned down its sign-in.*sign in to it again in Kuvo Code \(Settings › Integrations/)
+      fake.result([first])
+      await until(() => sessions.messages(id).some((message) => message.type === "idle"))
+      servers.signedInAgain = true
+      forgetServers()
+      const sent = fake.sent.length
+      sessions.prompt(id, { id: "msg_claude_turn_0141", text: "again", files: [], delivery: "steer" })
+      await until(() => fake.sent.length === sent + 1)
+      const after = (fake.mcpServers as Record<string, any>).tracker
+      expect(after.url).not.toBe(before.url)
+      expect(await callServer(after)).toBe(`auth:Bearer ${KEYS.again},key:none,at:/tracker`)
       expect(fake.closed).toBe(false)
     } finally {
       servers.stop()

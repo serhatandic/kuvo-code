@@ -15,7 +15,7 @@ import { RPC, RPCError } from "./rpc"
 import { allowedFolders, fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceRules, seatBot, fullAccessMark } from "./fence"
 import { isKuvoTool, kuvoToolName, kuvoTools, loadKuvoTools, toolServerName } from "./kuvotools"
 import { computerServers, type ComputerServers } from "./servers"
-import { dropRelayed, relayedServers, relayedTools, relayPort } from "./toolrelay"
+import { dropRelayed, relayedServers, relayedTools, relayPort, serversKey } from "./toolrelay"
 import { pictureData, withPictures } from "./pictures"
 import { elicitationField } from "./forms"
 import type { Turn } from "./turn"
@@ -244,7 +244,7 @@ export class AcpThread implements Thread {
     const fence = this.flavor.whole && fenceRules() ? fenceKey() + JSON.stringify(allowedFolders(this.session.location.directory)) + fullAccessMark(this.session.id) : ""
     // And the computer's MCP servers, another set of them (one you added, or took away).
     const computer = await computerServers(this.session.location.directory)
-    const key = JSON.stringify({ ...mode, program: this.flavor.program?.() ?? 0, tools: kuvoTools(this.session.id)?.key, fence, servers: computer.key })
+    const key = JSON.stringify({ ...mode, program: this.flavor.program?.() ?? 0, tools: kuvoTools(this.session.id)?.key, fence, servers: serversKey(this.session.id, computer) })
     this.computer = computer
     // (What each reaches, a key you changed, a sign-in renewed, for the same agent going on too.)
     if (this.rpc && !this.rpc.isClosed) relayedServers(this.session.id, this, this.session.location.directory, computer)

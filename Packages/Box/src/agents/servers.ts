@@ -86,6 +86,18 @@ async function readServers(directory: string): Promise<ComputerServers> {
   return { servers, key: servers.map((server) => server.name).sort().join(" ") }
 }
 
+/**
+ * A server that turned down an agent's call (its sign-in or key refused): the engine connects it
+ * again, for `directory` and its own, so it renews your sign-in if it can, or finds that it can't,
+ * and Settings › Integrations says it needs signing in again.
+ */
+export async function reconnectServer(directory: string, name: string) {
+  if (!link?.ready) return
+  const connect = `/api/experimental/mcp/${encodeURIComponent(name)}/connect`
+  await link.request("POST", `${connect}?location%5Bdirectory%5D=${encodeURIComponent(directory)}`, {}, 30_000).catch(() => {})
+  await link.request("POST", connect, {}, 30_000).catch(() => {})
+}
+
 const strings = (value: unknown): Record<string, string> => {
   const found: Record<string, string> = {}
   if (value && typeof value === "object" && !Array.isArray(value)) for (const [name, text] of Object.entries(value)) if (typeof text === "string") found[name] = text
