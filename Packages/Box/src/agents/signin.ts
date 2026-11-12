@@ -4,7 +4,7 @@
 // once, and can open it again. Some also print a page to use when no browser opens, which ends on
 // a code to paste back (Claude Code's): that's taken too, typed into the command.
 
-import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs"
 import { privateFolder, writeSecret } from "../shared/files"
 import { join } from "node:path"
 import type { SignInAttempt } from "./agent"
@@ -74,15 +74,32 @@ function ownScript(path: string, script: string): boolean {
   }
 }
 
-/** Where an attempt's own folder is, in the bridge's temporary folder (one a bridge that stopped
- * mid-way left goes as the next starts). */
-export const SIGN_IN_FOLDER = "kuvo-signin-"
+/** An attempt's own folder, in the bridge's temporary folder, by the bridge's process: one a bridge
+ * that stopped mid-way left goes as the next starts (`leftSignIns`), never another's still running. */
+const SIGN_IN_FOLDER = /^kuvo-signin-(\d+)-/
+
+/** The sign-ins' folders a bridge that's gone left in `temporary`, removed. */
+export function leftSignIns(temporary: string) {
+  let names: string[] = []
+  try {
+    names = readdirSync(temporary)
+  } catch {}
+  for (const name of names) {
+    const pid = Number(SIGN_IN_FOLDER.exec(name)?.[1])
+    if (!pid || pid === process.pid) continue
+    try {
+      process.kill(pid, 0)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") rmSync(join(temporary, name), { recursive: true, force: true })
+    }
+  }
+}
 
 export async function commandSignIn(options: CommandSignInOptions): Promise<SignInAttempt> {
   // The page it hands its browser, written down in a folder of this attempt's own that only you can
   // open, and gone with it.
   const browser = catcher(options.temporary)
-  const own = mkdtempSync(join(options.temporary, SIGN_IN_FOLDER))
+  const own = mkdtempSync(join(options.temporary, `kuvo-signin-${process.pid}-`))
   const urlFile = join(own, "url")
   const env: Record<string, string | undefined> = { ...process.env, ...options.env, BROWSER: browser, KUVO_URL_FILE: urlFile }
   // A value left `undefined` is unset, as in `run`.

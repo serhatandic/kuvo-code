@@ -3,7 +3,7 @@ import { expect, test } from "bun:test"
 import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, relative } from "node:path"
-import { commandSignIn } from "../../src/agents/signin"
+import { commandSignIn, leftSignIns } from "../../src/agents/signin"
 
 // Signing in with an agent's own command: the page it hands its browser (with what the sign-in
 // needs in it) is written down only you can read, in a folder only you can open, and is gone once
@@ -55,6 +55,19 @@ test("a sign-in's page: only you can read it, in a folder only you can open, and
     expect(readdirSync(temporary).sort()).toEqual(["bin", "login"])
   } finally {
     process.umask(umask)
+    rmSync(temporary, { recursive: true, force: true })
+  }
+})
+
+test("a sign-in a bridge that's gone left is removed as the next starts; one still running, and anything else, stays", () => {
+  const temporary = mkdtempSync(join(tmpdir(), "kuvo-signin-left-"))
+  try {
+    // (A process that has ended: its number names no one now.)
+    const gone = Bun.spawnSync(["/usr/bin/true"]).pid
+    for (const name of [`kuvo-signin-${gone}-ab12`, `kuvo-signin-${process.pid}-cd34`, "kuvo-signin-other", "bin"]) mkdirSync(join(temporary, name))
+    leftSignIns(temporary)
+    expect(readdirSync(temporary).sort()).toEqual(["bin", `kuvo-signin-${process.pid}-cd34`, "kuvo-signin-other"])
+  } finally {
     rmSync(temporary, { recursive: true, force: true })
   }
 })

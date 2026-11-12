@@ -38,14 +38,17 @@ export function writeSecret(file: string, text: string | Uint8Array, mode = 0o60
   placeWhole(file, text, mode);
 }
 
-/** `folder`, made if it isn't there, and closed to everyone but you; one that's a link, or someone
- * else's, is refused (what's written in it could be read or swapped). */
+/** `folder`, made if it isn't there, and closed to everyone but you, where it really is (a link to
+ * one elsewhere, as when you've moved it to another disk, is followed); one that's someone else's is
+ * refused, as what's written in it could be read or swapped (root may write in anyone's). */
 export function privateFolder(folder: string): string {
   fs.mkdirSync(folder, { recursive: true, mode: 0o700 });
-  const made = fs.lstatSync(folder);
-  if (!made.isDirectory()) throw new Error(`${folder} isn't a folder of its own: nothing secret is written in it.`);
-  if (process.getuid && made.uid !== process.getuid()) throw new Error(`${folder} isn't yours: nothing secret is written in it.`);
-  if (made.mode & 0o077) fs.chmodSync(folder, 0o700);
+  const real = fs.realpathSync(folder);
+  const made = fs.statSync(real);
+  if (!made.isDirectory()) throw new Error(`${folder} isn't a folder: nothing secret is written there.`);
+  const me = process.getuid?.();
+  if (me !== undefined && me !== 0 && made.uid !== me) throw new Error(`${folder} isn't yours: nothing secret is written in it.`);
+  if (made.mode & 0o077) fs.chmodSync(real, 0o700);
   return folder;
 }
 
@@ -56,7 +59,8 @@ export function placeWhole(file: string, text: string | Uint8Array, mode = 0o600
   const temporary = `${file}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
   try {
     fs.writeFileSync(temporary, text, { mode, flag: "wx" });
-    fs.chmodSync(temporary, mode);
+    // (Only a mode your umask took bits from, as a script's.)
+    if ((fs.statSync(temporary).mode & 0o777) !== mode) fs.chmodSync(temporary, mode);
     fs.renameSync(temporary, file);
   } catch (error) {
     try { fs.rmSync(temporary, { force: true }); } catch {}
