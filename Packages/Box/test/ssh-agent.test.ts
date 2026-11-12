@@ -177,10 +177,28 @@ test("a watch on its folder hears of its socket, and a closed agent leaves none 
     const look = () => (heard.has(name) ? resolve() : void (changed = look));
     look();
   });
-  // (A watch starts a moment after it's made: once it hears a file of the test's, it's watching.)
-  fs.writeFileSync(path.join(folder, "probe"), "");
-  await heardOf("probe");
-  fs.rmSync(path.join(folder, "probe"));
+  // (A watch starts a moment after it's made, and never hears what changed before: on macOS, Bun's
+  // watches share one stream, made again on a thread of its own whenever a watch is added or closed,
+  // which hears only what changes once it runs. So a file of the test's is made again and again
+  // until the watch hears it: from then, it's watching. Its folder gone, at the file's end after a
+  // test that timed out, it stops.)
+  const probe = path.join(folder, "probe");
+  const poke = () => {
+    try {
+      fs.rmSync(probe, { force: true });
+      fs.writeFileSync(probe, "");
+    } catch {
+      clearInterval(poking);
+    }
+  };
+  const poking = setInterval(poke, 100);
+  poke();
+  try {
+    await heardOf("probe");
+  } finally {
+    clearInterval(poking);
+  }
+  fs.rmSync(probe);
   const server = serveAgent(socket, { keys: async () => [], allow: async () => false });
   await new Promise(resolve => server.once("listening", resolve));
   await heardOf("agent.sock");
