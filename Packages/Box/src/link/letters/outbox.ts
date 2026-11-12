@@ -33,7 +33,7 @@ import type { BridgeAsk, SeatLetter } from "../peers/seats";
 import type { LinkHost } from "../relay/host";
 import type { LinkState } from "../state";
 import type { OutboxCall } from "./calls";
-import { answerResumed, callLife, callRefused, sendCall } from "./calls";
+import { answerResumed, boxName, callLife, callRefused, sendCall } from "./calls";
 
 /** A letter as it goes by mail (`{"letter": …}`): its id, from and for which conversations, its
  * words, whether its sender waits for the answer, when it was left (ms), and the letter it answers. */
@@ -173,11 +173,11 @@ export function givenUp(id: string): void {
 }
 
 // A letter for the outbox, from this box (an answer, say); false if it couldn't be left.
-function leaveLetter(letter: OutboxLetter, now = Date.now(), id = "ltr_" + crypto.randomBytes(16).toString("base64url"), wake = true): boolean {
+function leaveLetter(letter: OutboxLetter, now = Date.now(), id = "ltr_" + crypto.randomBytes(16).toString("base64url")): boolean {
   try {
     fs.mkdirSync(SENDING, { recursive: true, mode: 0o700 });
     writePrivate(path.join(SENDING, `${id}.json`), JSON.stringify({ ...letter, wait: false, at: now }));
-    if (wake) outboxSoon.send();
+    outboxSoon.send();
     return true;
   } catch {
     return false;
@@ -241,22 +241,57 @@ export function letterWent(sender: Pick<Peer, "key">, { id, ok, why, retry, answ
       return;
     } catch {}
   }
-  // A send without waiting already returned "On its way". Keep the failure as the box's
-  // own word to its sender: the outbox delivers it here, or follows a sender that moved.
-  // Notes and answers mustn't produce failure notices about failure notices.
-  let notice = false;
-  if (!ok && letter.wait !== true && !note && !call && !letter.answers && !letter.read && letter.from) {
-    const text = `Your message to ${letter.to} wasn't delivered: ${words ?? "It wasn't accepted there."}`;
-    const mine = ownKey(readLink() ?? {});
-    if (!mine || !leaveLetter({ to: letter.from, text, peer: mine, note: { from: "Kuvo Code", words: text, delivery: "steer" } }, now, undefined, false)) return;
-    notice = true;
-  }
+  // Not there, for good: its sender hears why, in that box's words (one that ran out of time, in ours).
+  if (!ok) return failLetter(id, file, letter, retry === true ? { why: "It couldn't be delivered within two days.", on: sender.key }
+    : { why: words || "It wasn't accepted there.", on: sender.key, said: Boolean(words) }, now);
   fs.rmSync(file, { force: true });
-  if (notice) outboxSoon.send();
   // Only a tool waiting for its answer reads how it went.
   if (letter.wait !== true) return;
-  if (!ok) reply(id, { failed: words ?? "It wasn't delivered." });
-  else if (answer === false) reply(id, { note: words ?? "It got your message, but its answer can't come back to you here." });
+  if (answer === false) reply(id, { note: words ?? "It got your message, but its answer can't come back to you here." });
+}
+
+/** Why a letter won't be delivered (`failLetter`): in words, the box its agent is on (`on`, its key),
+ * whether those words are that box's own (`said`), and what its conversation's called there. */
+interface Failure {
+  why: string;
+  on?: string;
+  said?: boolean;
+  title?: string;
+}
+
+// A letter that won't be delivered: a tool waiting hears why; one sent without waiting (its tool
+// said "On its way") is the box's own word to its sender instead, as a call's lead hears of its call
+// (`tellLead`), once: queued, marked, by its agent's name and computer, in the letter's own place in
+// the outbox (taken out of sending first, `.failed`, so it never goes again; a round finishes one cut
+// short). The box's own words (notes, answers), reads and calls just go.
+function failLetter(id: string, file: string, letter: InSending, { why, on, said = false, title }: Failure, now = Date.now()): void {
+  letterTries.delete(id);
+  if (letter.wait === true) {
+    reply(id, { failed: why });
+    fs.rmSync(file, { force: true });
+    return;
+  }
+  if (!letter.from || noteOf(letter.note) || letter.answers || letter.read || isObject(letter.call)) {
+    fs.rmSync(file, { force: true });
+    return;
+  }
+  const failed = path.join(SENDING, `${id}.failed`);
+  try {
+    if (file !== failed) fs.renameSync(file, failed);
+    const link = readLink();
+    const mine = ownKey(link ?? {});
+    const peer = peersOf(link).find(each => each.key === on);
+    const told = readPeerAgents();
+    const listed = [...(on ? [on] : []), ...Object.keys(told)].map(key => told[key]?.list?.find(each => each?.session === letter.to)?.name).find(name => typeof name === "string");
+    const name = plainName(title ?? listed ?? ownListed().find(each => each.session === letter.to)?.name ?? "") || "that chat";
+    const computer = on && on === mine ? HERE : peer ? boxName(peer) : "another computer";
+    const line = `Your message to ${name} on ${computer} wasn't delivered`;
+    const text = `[Not delivered] ${line}. ${said ? `${computer.charAt(0).toUpperCase()}${computer.slice(1)} said: ${why}` : why}`;
+    writePrivate(failed, JSON.stringify({ to: letter.from, text, ...(mine ? { peer: mine } : {}), at: now,
+      note: { from: "Your other computers", words: text, line, delivery: "queue" } } satisfies OutboxLetter));
+    fs.renameSync(failed, path.join(SENDING, `${id}.json`));
+    outboxSoon.send();
+  } catch {}
 }
 
 // Letters being delivered here (`deliverHere`), so the next round doesn't too.
@@ -279,11 +314,13 @@ async function deliverHere(id: string, file: string, letter: OutboxLetter, step:
       letterTries.delete(id);
       if (value && letter.wait === true) reply(id, value);
     };
-    if (!place) return done({ failed: "There's no such conversation here." });
+    // (Here, in this box's words.)
+    const fail = (why: string, title?: string) => failLetter(id, file, letter, { why, on: ownKey(readLink() ?? {}) ?? undefined, title });
+    if (!place) return fail("There's no such conversation here.");
     const kuvo = place.data?.metadata?.kuvo ?? {};
     // The box's word for one put away here waits until it's brought back, as it does anywhere.
     if (noteOf(letter.note) && isPutAway(place.data as PutAwayable) && !place.data?.parentID && !kuvo.seat) return;
-    if (place.data?.parentID || kuvo.seat || isPutAway(place.data as PutAwayable)) return done({ failed: "That conversation doesn't take messages." });
+    if (place.data?.parentID || kuvo.seat || isPutAway(place.data as PutAwayable)) return fail("That conversation doesn't take messages.", place.data?.title);
     const name = nameOf(letter.to) ?? (place.data?.title || "New session");
     if (isObject(letter.read)) {
       const query = typeof letter.read.query === "string" && letter.read.query.trim() ? letter.read.query.trim() : null;
@@ -465,6 +502,17 @@ export function sendOutbox(host: Pick<LinkHost, "send">, link: LinkState | null 
     fs.rmSync(path.join(REPLIES, `${id}.wait`), { force: true });
     givenUp(id);
   }
+  // Letters that won't be delivered whose senders' notices were cut short (`failLetter`): finished
+  // (why, if it wasn't kept, in a word), never sent.
+  for (const name of listOf(SENDING)) {
+    if (!name.endsWith(".failed")) continue;
+    const file = path.join(SENDING, name), id = name.slice(0, -7);
+    try {
+      const letter: InSending = JSON.parse(fs.readFileSync(file, "utf8"));
+      if (noteOf(letter.note)) fs.renameSync(file, path.join(SENDING, `${id}.json`));
+      else failLetter(id, file, letter, { why: "It couldn't be delivered.", on: letter.sentTo ?? letter.peer }, now);
+    } catch {}
+  }
   const listed = new Set<string>();
   // The boxes not answering that a call went to this round: one each, the oldest.
   const awaySent = new Set<string>();
@@ -522,8 +570,7 @@ export function sendOutbox(host: Pick<LinkHost, "send">, link: LinkState | null 
     const peer = lives ? peers.find(each => each.key === lives) ?? null
       : typeof letter.peer === "string" ? peers.find(each => each.key === letter.peer) ?? null : peerOf(letter.to, peers, told, moved);
     if (now - made > (note ? NOTE_MEMORY : LETTER_MEMORY)) {
-      fs.rmSync(file, { force: true });
-      if (letter.wait === true) reply(id, { failed: "Its agent couldn't be reached." });
+      failLetter(id, file, letter, { why: "It couldn't be delivered within two days.", on: lives ?? (ownHere.has(letter.to) ? mine ?? undefined : peer?.key ?? letter.sentTo) }, now);
       continue;
     }
     // Moved here since it was left (as the box it went from says, or as this box lists it now): here,
@@ -563,8 +610,7 @@ export function sendOutbox(host: Pick<LinkHost, "send">, link: LinkState | null 
       ...(letter.answers ? { answers: letter.answers } : {}), ...(isObject(letter.read) ? { read: typeof letter.read.query === "string" ? { query: letter.read.query } : {} } : {}),
       ...(note ? { note, made } : {}), ...(letter.refused === true ? { refused: true } : {}) }, link, now);
     if (!bytes) {
-      fs.rmSync(file, { force: true });
-      if (letter.wait === true) reply(id, { failed: "It's too long to send." });
+      failLetter(id, file, letter, { why: "It's too long to send.", on: peer.key }, now);
       continue;
     }
     // Which box it went to: only that one's word on how it went counts.

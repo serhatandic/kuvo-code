@@ -2108,6 +2108,14 @@ function droppedHere(now = Date.now()) {
     return [];
   }
 }
+function switchedHere(now = Date.now()) {
+  try {
+    const kept = JSON.parse(fs11.readFileSync(ENDED_FILE, "utf8"));
+    return new Set(Object.values(kept ?? {}).filter((one) => one.as === "switched" && typeof one.at === "number" && now - one.at < MOVED_FOR && Array.isArray(one.sessions)).flatMap((one) => one.sessions.filter((each) => typeof each === "string")));
+  } catch {
+    return new Set;
+  }
+}
 
 // Packages/Box/src/link/peers/agents.ts
 import fs93 from "node:fs";
@@ -15154,7 +15162,7 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
       return notDelivered("That conversation doesn't take messages.");
     if (note)
       went = await deliverNote(place.target, letter.to, messageID(), cutText(letter.text), note);
-    else if (!await listedOrUnder(letter.from, letter.to, targets))
+    else if (!await listedOrUnder(letter.from, letter.to, targets, now))
       return notDelivered("That conversation isn't one this computer lists, nor one you started: write to one that list_agents names.");
     else {
       const switched = typeof letter.from === "string" ? switchedMove(letter.from) : null;
@@ -15191,9 +15199,9 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
   if (text)
     answer({ from: letter.to, to: letter.from, text, answers: id, peer: sender.key });
 }
-async function listedOrUnder(from, session, targets) {
+async function listedOrUnder(from, session, targets, now) {
   const listed = ownListed();
-  if (!listed.length || listed.some((agent) => agent.session === session))
+  if (!listed.length || listed.some((agent) => agent.session === session) || switchedHere(now).has(session))
     return true;
   return typeof from === "string" && under(from, await workSessions(targets)).some((each) => each.data.id === session);
 }
@@ -19351,9 +19359,7 @@ function targetsOf(place) {
 }
 async function everyone(place) {
   const link = readLink();
-  const fresh = await ownAgents(place.readEngine, link?.id).catch(() => null);
-  if (fresh)
-    keepOwn(fresh, link?.id ?? null);
+  const fresh = await ownAgentsNow(place.readEngine, link?.id ?? null).catch(() => null);
   const here = IS_MAC ? null : link?.id ?? null;
   return { here, agents: composeAgents(fresh ?? ownAsLast(link?.id ?? null), here, peersOf(link), readPeerAgents(), movedOf(link)).agents };
 }
@@ -24597,17 +24603,9 @@ async function moveMail(sender, given, id) {
           return;
         });
         await switchHere(mine);
-        noteEnded(id, "switched", Date.now(), [], last);
+        noteEnded(id, "switched", Date.now(), mine.sessions, last);
         forgetMove(id);
-        const list = await refreshOwn(readEngineFile);
-        if (mine.kind === "chat" && mine.sessions[0]) {
-          const machine = readLink()?.id ?? null;
-          const own = list ?? ownAsLast(machine);
-          if (!own.some((agent) => agent.session === mine.sessions[0])) {
-            keepOwn([...own, { session: mine.sessions[0], name: mine.name, kind: "session" }], machine);
-            writeAgents();
-          }
-        }
+        await refreshOwn(readEngineFile).catch(() => {});
         return void tell(sender.key, { op: "switched", id });
       }
       if (mine?.role === "to")
@@ -28289,10 +28287,15 @@ var ownList = null;
 var ownMachine = null;
 var refreshes = 0;
 var keptRefresh = 0;
-function keepOwn(list, machine) {
-  ownList = list;
-  keptRefresh = refreshes;
-  ownMachine = machine;
+async function ownAgentsNow(readEngine, machine) {
+  const turn = ++refreshes;
+  const list = await ownAgents(readEngine, machine ?? undefined);
+  if (list && turn > keptRefresh) {
+    ownList = list;
+    keptRefresh = turn;
+    ownMachine = machine;
+  }
+  return list && ownList;
 }
 function ownAsLast(ownID) {
   if (ownList)
@@ -28389,12 +28392,11 @@ function givenUp(id) {
       writePrivate(file, JSON.stringify({ ...letter, wait: false }));
   } catch {}
 }
-function leaveLetter2(letter, now = Date.now(), id = "ltr_" + crypto39.randomBytes(16).toString("base64url"), wake = true) {
+function leaveLetter2(letter, now = Date.now(), id = "ltr_" + crypto39.randomBytes(16).toString("base64url")) {
   try {
     fs94.mkdirSync(SENDING, { recursive: true, mode: 448 });
     writePrivate(path97.join(SENDING, `${id}.json`), JSON.stringify({ ...letter, wait: false, at: now }));
-    if (wake)
-      outboxSoon.send();
+    outboxSoon.send();
     return true;
   } catch {
     return false;
@@ -28452,23 +28454,48 @@ function letterWent(sender, { id, ok, why, retry, answer, lives }, now = Date.no
         return;
       } catch {}
   }
-  let notice = false;
-  if (!ok && letter.wait !== true && !note && !call && !letter.answers && !letter.read && letter.from) {
-    const text = `Your message to ${letter.to} wasn't delivered: ${words ?? "It wasn't accepted there."}`;
-    const mine = ownKey(readLink() ?? {});
-    if (!mine || !leaveLetter2({ to: letter.from, text, peer: mine, note: { from: "Kuvo Code", words: text, delivery: "steer" } }, now, undefined, false))
-      return;
-    notice = true;
-  }
+  if (!ok)
+    return failLetter(id, file, letter, retry === true ? { why: "It couldn't be delivered within two days.", on: sender.key } : { why: words || "It wasn't accepted there.", on: sender.key, said: Boolean(words) }, now);
   fs94.rmSync(file, { force: true });
-  if (notice)
-    outboxSoon.send();
   if (letter.wait !== true)
     return;
-  if (!ok)
-    reply2(id, { failed: words ?? "It wasn't delivered." });
-  else if (answer === false)
+  if (answer === false)
     reply2(id, { note: words ?? "It got your message, but its answer can't come back to you here." });
+}
+function failLetter(id, file, letter, { why, on, said = false, title }, now = Date.now()) {
+  letterTries.delete(id);
+  if (letter.wait === true) {
+    reply2(id, { failed: why });
+    fs94.rmSync(file, { force: true });
+    return;
+  }
+  if (!letter.from || noteOf(letter.note) || letter.answers || letter.read || isObject(letter.call)) {
+    fs94.rmSync(file, { force: true });
+    return;
+  }
+  const failed = path97.join(SENDING, `${id}.failed`);
+  try {
+    if (file !== failed)
+      fs94.renameSync(file, failed);
+    const link = readLink();
+    const mine = ownKey(link ?? {});
+    const peer = peersOf(link).find((each) => each.key === on);
+    const told = readPeerAgents();
+    const listed = [...on ? [on] : [], ...Object.keys(told)].map((key) => told[key]?.list?.find((each) => each?.session === letter.to)?.name).find((name) => typeof name === "string");
+    const name = plainName(title ?? listed ?? ownListed().find((each) => each.session === letter.to)?.name ?? "") || "that chat";
+    const computer = on && on === mine ? HERE : peer ? boxName(peer) : "another computer";
+    const line = `Your message to ${name} on ${computer} wasn't delivered`;
+    const text = `[Not delivered] ${line}. ${said ? `${computer.charAt(0).toUpperCase()}${computer.slice(1)} said: ${why}` : why}`;
+    writePrivate(failed, JSON.stringify({
+      to: letter.from,
+      text,
+      ...mine ? { peer: mine } : {},
+      at: now,
+      note: { from: "Your other computers", words: text, line, delivery: "queue" }
+    }));
+    fs94.renameSync(failed, path97.join(SENDING, `${id}.json`));
+    outboxSoon.send();
+  } catch {}
 }
 var deliveringHere = new Set;
 async function deliverHere(id, file, letter, step) {
@@ -28489,13 +28516,14 @@ async function deliverHere(id, file, letter, step) {
       if (value && letter.wait === true)
         reply2(id, value);
     };
+    const fail = (why, title) => failLetter(id, file, letter, { why, on: ownKey(readLink() ?? {}) ?? undefined, title });
     if (!place)
-      return done({ failed: "There's no such conversation here." });
+      return fail("There's no such conversation here.");
     const kuvo = place.data?.metadata?.kuvo ?? {};
     if (noteOf(letter.note) && isPutAway(place.data) && !place.data?.parentID && !kuvo.seat)
       return;
     if (place.data?.parentID || kuvo.seat || isPutAway(place.data))
-      return done({ failed: "That conversation doesn't take messages." });
+      return fail("That conversation doesn't take messages.", place.data?.title);
     const name = nameOf(letter.to) ?? (place.data?.title || "New session");
     if (isObject(letter.read)) {
       const query = typeof letter.read.query === "string" && letter.read.query.trim() ? letter.read.query.trim() : null;
@@ -28668,6 +28696,18 @@ function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0, ask 
     fs94.rmSync(path97.join(REPLIES, `${id}.wait`), { force: true });
     givenUp(id);
   }
+  for (const name of listOf(SENDING)) {
+    if (!name.endsWith(".failed"))
+      continue;
+    const file = path97.join(SENDING, name), id = name.slice(0, -7);
+    try {
+      const letter = JSON.parse(fs94.readFileSync(file, "utf8"));
+      if (noteOf(letter.note))
+        fs94.renameSync(file, path97.join(SENDING, `${id}.json`));
+      else
+        failLetter(id, file, letter, { why: "It couldn't be delivered.", on: letter.sentTo ?? letter.peer }, now);
+    } catch {}
+  }
   const listed = new Set;
   const awaySent = new Set;
   const mine = ownKey(link);
@@ -28727,9 +28767,7 @@ function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0, ask 
     const lives = (note && !ownHere.has(letter.to) ? homes.get(letter.to) : undefined) ?? moved.get(letter.to) ?? (note && letter.peer === mine ? mine : undefined);
     const peer = lives ? peers.find((each) => each.key === lives) ?? null : typeof letter.peer === "string" ? peers.find((each) => each.key === letter.peer) ?? null : peerOf(letter.to, peers, told, moved);
     if (now - made > (note ? NOTE_MEMORY : LETTER_MEMORY)) {
-      fs94.rmSync(file, { force: true });
-      if (letter.wait === true)
-        reply2(id, { failed: "Its agent couldn't be reached." });
+      failLetter(id, file, letter, { why: "It couldn't be delivered within two days.", on: lives ?? (ownHere.has(letter.to) ? mine ?? undefined : peer?.key ?? letter.sentTo) }, now);
       continue;
     }
     if (lives === mine || !lives && ownHere.has(letter.to)) {
@@ -28779,9 +28817,7 @@ function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0, ask 
       ...letter.refused === true ? { refused: true } : {}
     }, link, now);
     if (!bytes) {
-      fs94.rmSync(file, { force: true });
-      if (letter.wait === true)
-        reply2(id, { failed: "It's too long to send." });
+      failLetter(id, file, letter, { why: "It's too long to send.", on: peer.key }, now);
       continue;
     }
     if (letter.sentTo !== peer.key)
@@ -38043,7 +38079,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "8e925cf5588f";
+var BRIDGE_VERSION = "5500d20c57e0";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -38129,9 +38165,7 @@ async function* namedRoute(context) {
   if (request.method.toUpperCase() !== "GET")
     return yield* json(405, {});
   const link = readLink();
-  const fresh = await ownAgents(readEngine, link?.id).catch(() => null);
-  if (fresh)
-    keepOwn(fresh, link?.id ?? null);
+  const fresh = await ownAgentsNow(readEngine, link?.id ?? null).catch(() => null);
   const own = fresh ?? ownAsLast(link?.id ?? null);
   return yield* json(200, { agents: namedAgents(own, peersOf(link), readPeerAgents(), movedOf(link)) });
 }

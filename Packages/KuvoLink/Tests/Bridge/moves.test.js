@@ -319,8 +319,8 @@ test("where something can go: each of your other computers", { timeout: 60_000 }
 
 test("a chat moves from this Mac to the machine, with its wake-ups; here it's gone, kept in the trash", { timeout: 60_000 }, async t => {
   signal = t.signal;
-  // The imported chat is older than the destination's latest forty: it is still ours
-  // immediately at landing, even when a normal directory refresh would leave it out.
+  // The machine's latest forty, all newer than the chat once it's there: the list it tells of leaves
+  // the chat out (the next test writes to it all the same).
   for (let i = 0; i < 45; i++) labEngine.sessions.set(`ses_recent${i}`, { id: `ses_recent${i}`, title: `Recent ${i}`, directory: labChats, messages: [] });
   const said = macEngine.sessions.get("ses_chat1").messages;
   const moved = await ask("POST", "kuvo/moves", { kind: "chat", id: "ses_chat1", to: lab.key });
@@ -347,13 +347,25 @@ test("a chat moves from this Mac to the machine, with its wake-ups; here it's go
 
 test("the chat that moved takes messages where it lives now", { timeout: 60_000 }, async t => {
   signal = t.signal;
+  // The machine works out its list again (each minute, as asked, as list_agents does) after the
+  // move, and before the message comes: asked, once in ten seconds at most, until it's told this Mac.
+  const told = () => { try { return JSON.parse(fs.readFileSync(path.join(macHome, "run", "peer-agents.json"), "utf8"))[lab.key]?.at ?? 0; } catch { return 0; } };
+  const before = told();
+  let asked = 0;
+  await eventually(() => {
+    if (Date.now() - asked >= 1000) {
+      asked = Date.now();
+      link.macLink.host.send(link.mailFor({ key: lab.key, address: lab.address }, { ask: "agents" }, link.readLink()));
+    }
+    return told() > before;
+  });
   const listed = JSON.parse(fs.readFileSync(path.join(machineHome, "run", "agents.json"), "utf8"));
-  assert.ok(listed.agents.some(agent => agent.session === "ses_chat1" && agent.machine === listed.machine), "the receiving box lists the chat before acknowledging the move");
+  assert.ok(!listed.agents.some(agent => agent.session === "ses_chat1" && agent.machine === listed.machine), "older than the machine's latest forty, the chat isn't in its list");
   const sent = await ask("POST", "kuvo/agent-tools", { name: "send_message", arguments: { to: "ses_chat1", text: "Did you book it?", wait: false }, session: "ses_chat2" });
   assert.equal(sent.status, 200);
   assert.equal(sent.json.isError, false, sent.json.text);
 
-  // Stop on a refusal too: a stale receiving list must fail this test immediately.
+  // There, or refused (it'd be sent again only after a minute): whichever comes first.
   const result = await eventually(() => {
     const prompt = labEngine.prompts.find(each => each.session === "ses_chat1");
     if (prompt) return { prompt };

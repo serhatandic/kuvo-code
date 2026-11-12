@@ -11,7 +11,6 @@
 
 import crypto from "node:crypto";
 import fs from "node:fs";
-import { keepOwn, ownAsLast, refreshOwn, writeAgents } from "../peers/agents";
 import path from "node:path";
 import { isObject } from "../../shared/json";
 import type { Target } from "../../shared/records";
@@ -26,6 +25,7 @@ import { bridgeTarget, call, readBridgeFile, readEngineFile } from "../engine/cl
 import { CantCarry, forgetQueue, packQueues, queueOf, resumeQueue, unpackQueues } from "../engine/queue";
 import { writePrivate } from "../files";
 import { HERE, IS_MAC, K } from "../home";
+import { refreshOwn } from "../peers/agents";
 import { readPeerAgents } from "../peers/directory";
 import { mailFor, ownKey, peersOf } from "../peers/known";
 import type { MailSender, Peer } from "../peers/known";
@@ -1356,21 +1356,12 @@ async function moveMail(sender: MailSender, given: Record<string, unknown>, id: 
         // (Its newest message as it came, before anything could run it here.)
         const last = mine.kind === "group" ? undefined : await newestMessage(mine.lane === true, mine.sessions[0]!).catch(() => undefined);
         await switchHere(mine);
-        noteEnded(id, "switched", Date.now(), [], last);
+        noteEnded(id, "switched", Date.now(), mine.sessions, last);
         forgetMove(id);
-        // The copy is ours now (ownAgents omits moves still held here). Before the source
-        // hears it switched, accept letters to it without waiting for the minute's list.
-        const list = await refreshOwn(readEngineFile);
-        // A chat older than the latest forty (or a list the engine couldn't refresh) is
-        // still ours at landing. Include its root, never the subagents it brought.
-        if (mine.kind === "chat" && mine.sessions[0]) {
-          const machine = readLink()?.id ?? null;
-          const own = list ?? ownAsLast(machine);
-          if (!own.some(agent => agent.session === mine.sessions[0])) {
-            keepOwn([...own, { session: mine.sessions[0], name: mine.name, kind: "session" }], machine);
-            writeAgents();
-          }
-        }
+        // The copy is ours now (ownAgents omits moves still held here): listed before the source
+        // hears it switched, not at the minute's list. Letters to it are taken while it's switched
+        // here lately (`switchedHere`), even once it's older than the latest that list keeps.
+        await refreshOwn(readEngineFile).catch(() => {});
         return void tell(sender.key, { op: "switched", id });
       }
       if (mine?.role === "to") return letGoOf(sender, id);

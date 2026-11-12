@@ -15,7 +15,7 @@ import { listBots } from "../bots/list";
 import { asked } from "../engine/client";
 import { sendInto } from "../engine/queue";
 import { messageID } from "../engine/sessions";
-import { keepOwn, ownAgents, ownAsLast } from "../peers/agents";
+import { ownAgentsNow, ownAsLast } from "../peers/agents";
 import { composeAgents, isPutAway, peerOf, readPeerAgents } from "../peers/directory";
 import { movedOf, peersOf } from "../peers/known";
 import { frozen } from "../moves/records";
@@ -82,8 +82,7 @@ export function targetsOf(place: Pick<ToolPlace, "readEngine" | "bridge">): Targ
  * can't say), then each peer's it alone lists. */
 export async function everyone(place: Pick<ToolPlace, "readEngine">): Promise<Everyone> {
   const link = readLink();
-  const fresh = await ownAgents(place.readEngine, link?.id).catch(() => null);
-  if (fresh) keepOwn(fresh, link?.id ?? null);
+  const fresh = await ownAgentsNow(place.readEngine, link?.id ?? null).catch(() => null);
   const here = IS_MAC ? null : link?.id ?? null;
   return { here, agents: composeAgents(fresh ?? ownAsLast(link?.id ?? null), here, peersOf(link), readPeerAgents(), movedOf(link)).agents };
 }

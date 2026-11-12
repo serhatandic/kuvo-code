@@ -256,8 +256,8 @@ export function endedLast(id: string, now = Date.now()): string | undefined {
   }
 }
 
-/** `sessions`: those of a copy here let go of, which live on where they came from. `last`: the newest
- * message of one switched to, as it came (what's after it ran here, whatever the clocks say). */
+/** `sessions`: those of the copy (switched to here, or let go of to live on where it came from). `last`:
+ * the newest message of one switched to, as it came (what's after it ran here, whatever the clocks say). */
 export function noteEnded(id: string, as: "switched" | "dropped", now = Date.now(), sessions: readonly string[] = [], last?: string): void {
   let kept: Record<string, { as: string; at: number; sessions?: string[]; last?: string }> = {};
   try { kept = JSON.parse(fs.readFileSync(ENDED_FILE, "utf8")) ?? {}; } catch {}
@@ -275,5 +275,17 @@ export function droppedHere(now = Date.now()): string[] {
       .flatMap(one => (one.sessions as unknown[]).filter((each): each is string => typeof each === "string"));
   } catch {
     return [];
+  }
+}
+
+/** The conversations of copies switched to here in the last two days (`MOVED_FOR`): another computer's
+ * agents may write to them as to one listed, even once they're older than the latest the list keeps. */
+export function switchedHere(now = Date.now()): Set<string> {
+  try {
+    const kept = JSON.parse(fs.readFileSync(ENDED_FILE, "utf8")) as Record<string, { as?: unknown; at?: unknown; sessions?: unknown }>;
+    return new Set(Object.values(kept ?? {}).filter(one => one.as === "switched" && typeof one.at === "number" && now - one.at < MOVED_FOR && Array.isArray(one.sessions))
+      .flatMap(one => (one.sessions as unknown[]).filter((each): each is string => typeof each === "string")));
+  } catch {
+    return new Set();
   }
 }
