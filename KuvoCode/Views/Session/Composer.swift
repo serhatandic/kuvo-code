@@ -115,6 +115,7 @@ struct Composer: View {
     @Environment(Catalog.self) private var catalog
     @Environment(Workspace.self) private var workspace
     @Environment(AppModel.self) private var app
+    @Environment(\.workChipQueue) private var workChipQueue
     @Environment(\.colorScheme) private var scheme
     @Environment(\.cardIsFocused) private var cardIsFocused
     @Environment(\.messageFont) private var messageFont
@@ -264,7 +265,7 @@ struct Composer: View {
                     marks: !isShell,
                     images: imageFiles.count,
                     token: token,
-                    refs: isShell || !text.contains("#") || text.utf16.count > 20_000 ? [:] : app.workQueues.refs(in: text, box: app.utilities.queueBox, typing: true),
+                    refs: isShell || !text.contains("#") || text.utf16.count > 20_000 ? [:] : app.workQueues.refs(in: text, box: workChipQueue?.box ?? BoxClient.mac, owner: workChipQueue?.owner, typing: true),
                     example: example,
                     onKey: key,
                     onFocus: { focused in

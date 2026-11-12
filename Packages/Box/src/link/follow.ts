@@ -5,6 +5,7 @@
 // instead (`whole`), the same on both.
 
 import fs from "node:fs";
+import { watchFolder } from "../shared/watch";
 import type { AnswerPiece } from "./server/context";
 
 /** A watch on folders: whether the system tells of every change in them, and how to stop it. */
@@ -15,14 +16,15 @@ export interface FolderWatch {
 
 /** `folders` watched, with what's in them (`recursive`) or only their own files, for `changed`:
  * whether the system tells of every change (a watch it can't keep goes, and so does that), and how
- * to stop. */
-export function watchFolders(folders: string[], changed: () => void, { recursive = true }: { recursive?: boolean } = {}): FolderWatch {
+ * to stop. `missed` (`changed`, unless given) is told a moment after any watch starts or stops, for
+ * what the system missed then (`watchFolder`). */
+export function watchFolders(folders: string[], changed: () => void, { recursive = true, missed = changed }: { recursive?: boolean; missed?: () => void } = {}): FolderWatch {
   let whole = folders.length > 0;
   const watchers: fs.FSWatcher[] = [];
   for (const folder of folders) {
     try {
       fs.mkdirSync(folder, { recursive: true });
-      const watcher = fs.watch(folder, { recursive }, changed);
+      const watcher = watchFolder(folder, changed, { recursive, missed });
       watcher.on("error", () => {
         whole = false;
         watcher.close();

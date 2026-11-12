@@ -6,11 +6,12 @@ import { chmodSync, linkSync, mkdtempSync, readFileSync, rmSync, writeFileSync }
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { pathToFileURL } from "node:url"
-import { existsSync, mkdirSync, readdirSync, realpathSync, symlinkSync, watch } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, realpathSync, symlinkSync } from "node:fs"
 import { createHash } from "node:crypto"
 import { createServer } from "node:net"
 import { CodexAgent, codexTiming } from "../../src/agents/agents/codex"
 import { Auto } from "../../src/agents/auto"
+import { watchFolder } from "../../src/shared/watch"
 import { canFence, realFence } from "./support/fence"
 import { callServer, computerServers, KEYS } from "./support/servers"
 import { forgetServers } from "../../src/agents/servers"
@@ -352,10 +353,11 @@ async function until(condition: () => boolean, ms = 10_000) {
   }
 }
 
-/** Once `file` is there, as its folder says it changed: no clock, so as slow as the Mac is. */
+/** Once `file` is there, as its folder says it changed (or as it looks again, for what the watch
+ * didn't tell as it started): no clock, so as slow as the Mac is. */
 function made(file: string): Promise<void> {
   return new Promise((resolve) => {
-    const watcher = watch(dirname(file), () => there())
+    const watcher = watchFolder(dirname(file), () => there())
     const there = () => {
       if (!existsSync(file)) return
       watcher.close()
