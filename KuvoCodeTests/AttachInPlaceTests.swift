@@ -52,6 +52,8 @@ import Testing
     private func prepared(ownSessions: Bool = false, hereFails: Bool = false, _ setUp: () throws -> Void) throws -> URL {
         let binary = try fakeEngine(hereFails: hereFails)
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        // (No projects of another test's: a new session with none is a chat. `setUp` can keep some.)
+        for key in ["projectFolders", "projectSettings", "worktrees"] { UserDefaults.standard.removeObject(forKey: key) }
         try setUp()
         try? FileManager.default.removeItem(at: BoxProcess.home)
         for database in databases { try? FileManager.default.removeItem(at: database) }
@@ -61,8 +63,6 @@ import Testing
             try Data().write(to: data.appending(path: "opencode.db"))
         }
         AppModel.hereHome = home
-        // (No projects of another test's: a new session with none is a chat.)
-        for key in ["projectFolders", "projectSettings", "worktrees"] { UserDefaults.standard.removeObject(forKey: key) }
         return binary
     }
 
@@ -115,6 +115,7 @@ import Testing
             let pid = box.appending(path: "run/box.pid").path(percentEncoded: false)
             try FileManager.default.createDirectory(at: start.deletingLastPathComponent(), withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: box.appending(path: "run"), withIntermediateDirectories: true)
+            try Data().write(to: box.appending(path: "run/asked.log"))
             try """
                 #!/bin/sh
                 if [ "$1" = keep ]; then while [ -d '\(folder.path(percentEncoded: false))' ]; do sleep 0.2; done; exit 0; fi
@@ -129,16 +130,35 @@ import Testing
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: engine.path(percentEncoded: false))
             try """
                 const fs = require("fs"), path = require("path"), run = path.join(process.env.KUVO_HOME, "run");
+                const read = name => { try { return JSON.parse(fs.readFileSync(path.join(run, name), "utf8")); } catch { return {}; } };
                 fs.writeFileSync(path.join(run, "app-attached.json"), "{}");
                 fs.writeFileSync(path.join(run, "setup-card.json"), JSON.stringify({ app: true, by: "its own" }));
-                // The route asked (noted, in order), answered as the test says it is there (`answers.json`);
-                // any other with where its chats go, as its `kuvo/info` says.
-                let asked = {}, answers = {};
+                // The route asked, noted first, in order (a worktree handed over with its root); then
+                // answered as the test says it is there (`answers.json`, with `statuses.json`'s status,
+                // or its status for each time it's asked, then 200); any other with where its chats
+                // go, as its `kuvo/info` says.
+                let asked = {};
                 try { asked = JSON.parse(fs.readFileSync(0, "utf8")); } catch {}
-                try { answers = JSON.parse(fs.readFileSync(path.join(run, "answers.json"), "utf8")); } catch {}
-                if (asked.path) fs.appendFileSync(path.join(run, "asked.log"), asked.method + " " + asked.path + "\\n");
+                const line = asked.method + " " + asked.path + (asked.body && asked.body.root ? " " + asked.body.root : "");
+                if (asked.path) fs.appendFileSync(path.join(run, "asked.log"), line + "\\n");
+                const nth = asked.path ? fs.readFileSync(path.join(run, "asked.log"), "utf8").split("\\n").filter(each => each === line).length : 0;
+                const given = read("statuses.json")[asked.path], answers = read("answers.json");
+                const status = (Array.isArray(given) ? given[nth - 1] : given) || 200;
+                // One the test holds (`hold.json`: by path, how many of its asks go through) waits,
+                // with what it read, until it's let go (or the test's folder goes); noted as it does
+                // ("held <nth> <line>").
+                if (read("hold.json")[asked.path] < nth) fs.appendFileSync(path.join(run, "asked.log"), "held " + nth + " " + line + "\\n");
+                while (fs.existsSync(run) && read("hold.json")[asked.path] < nth) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+                // A worktree handed over is one it keeps from then on.
+                const records = "kuvo/worktrees?records=1";
+                if (asked.path === "kuvo/worktrees/record" && status === 200) {
+                    const kept = read("answers.json");
+                    kept[records] = { worktrees: [...((kept[records] || {}).worktrees || []), asked.body] };
+                    fs.writeFileSync(path.join(run, "answers.json.new"), JSON.stringify(kept));
+                    fs.renameSync(path.join(run, "answers.json.new"), path.join(run, "answers.json"));
+                }
                 const body = asked.path in answers ? answers[asked.path] : { chats: path.join(process.env.KUVO_HOME, "box-chats") };
-                console.log(JSON.stringify({ status: 200, body: JSON.stringify(body) }));
+                console.log(JSON.stringify({ status, body: JSON.stringify(body) }));
 
                 """.write(to: box.appending(path: "bin/kuvo-link.js"), atomically: true, encoding: .utf8)
             if runs == .running {
@@ -324,6 +344,53 @@ import Testing
         return ((try? String(contentsOf: log, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
     }
 
+    /// How many times the box here was asked `line` ("GET kuvo/info").
+    private func asked(_ line: String) -> Int {
+        askedOfTheBoxHere.filter { $0 == line }.count
+    }
+
+    /// Which time it was asked `line` that the box here holds now, the first (`hold`).
+    private func held(_ line: String) -> Int? {
+        askedOfTheBoxHere.lazy.compactMap { entry -> Int? in
+            let parts = entry.split(separator: " ", maxSplits: 2).map(String.init)
+            return parts.count == 3 && parts[0] == "held" && parts[2] == line ? Int(parts[1]) : nil
+        }.first
+    }
+
+    /// The box here's asks, followed: each one noted beats `TestPulse`, so a wait on them looks
+    /// again. Ended by the test.
+    private func followAsks() -> DispatchSourceFileSystemObject {
+        let log = home.appending(path: "\(RemoteEngineInstaller.root)/run/asked.log")
+        let file = open(log.path(percentEncoded: false), O_EVTONLY)
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: file, eventMask: [.write, .extend], queue: .main)
+        source.setEventHandler { TestPulse.beat() }
+        source.setCancelHandler { close(file) }
+        source.resume()
+        return source
+    }
+
+    /// The box here's status for each of `routes` (by its path), for each time it's asked in turn,
+    /// then 200; any other answers 200. (For asks made one at a time.)
+    private func boxHereStatuses(_ routes: [String: [Int]]) throws {
+        let file = home.appending(path: "\(RemoteEngineInstaller.root)/run/statuses.json")
+        try JSONSerialization.data(withJSONObject: routes).write(to: file, options: .atomic)
+    }
+
+    /// The box here answers `path` the first `through` times it's asked (0: holds every ask from
+    /// now on), and holds the asks after those, answered with what it read as it was asked, until
+    /// it's let go (`nil`). (For asks made one at a time.)
+    private func hold(_ path: String, through: Int?) throws {
+        let file = home.appending(path: "\(RemoteEngineInstaller.root)/run/hold.json")
+        var held = (try? JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Int]) ?? [:]
+        held[path] = through
+        try JSONSerialization.data(withJSONObject: held).write(to: file, options: .atomic)
+    }
+
+    /// Worktrees this Mac kept from before, by folder, as `Workspace` keeps them.
+    private func keptWorktrees(_ trees: [String: Workspace.Worktree]) throws {
+        UserDefaults.standard.set(try JSONEncoder().encode(trees), forKey: "worktrees")
+    }
+
     private func library(_ names: [String]) -> [String: Any] {
         ["personalities": names.map { ["id": "custom.\($0.lowercased())", "name": $0, "description": "Talks like \($0).", "symbol": "person", "updated": 1] }, "removed": []]
     }
@@ -375,6 +442,55 @@ import Testing
         try await until { model.wakeUps.wakes["bot_ci"] == nil }
     }
 
+    /// A bot on the box here moved to one of your machines: its wake-ups aren't forgotten as the box
+    /// here no longer lists them, as they're that machine's to say now (#645).
+    @Test func aBotMovedFromTheBoxHereKeepsItsWakeUps() async throws {
+        var app: AppModel?
+        var asks: DispatchSourceFileSystemObject?
+        defer {
+            asks?.cancel()
+            cleanUp(app)
+            try? FileManager.default.removeItem(at: Bots.file)
+        }
+        try? FileManager.default.removeItem(at: Bots.file)
+        connectsReady()
+        BoxClient.readAgainAfter = .milliseconds(100)
+        let bot: [String: Any] = ["id": "bot_ci", "session": "ses_ci", "name": "Ci", "look": ["color": "mint", "shape": "round", "face": "calm"]]
+        app = try await started {
+            try memberOfMacBooks()
+            try boxHereAnswers(["kuvo/bots": ["bots": [bot]],
+                                "kuvo/wakes/events": ["sessions": [["session": "ses_ci", "wakes": [["id": "4102444800-abcd", "note": "Check CI"]], "watches": [], "paused": false]]]])
+        }
+        let model = try #require(app)
+        asks = followAsks()
+        try await until { model.wakeUps.wakes["bot_ci"]?.map(\.note) == ["Check CI"] }
+        // Moved to the machine "lab": the box here no longer has it.
+        model.bots.take(try JSONDecoder().decode([ListedBot].self, from: JSONSerialization.data(withJSONObject: [bot])), from: "lab")
+        #expect(model.bots.bot("bot_ci")?.machine == "lab")
+        try boxHereAnswers(["kuvo/bots": ["bots": []], "kuvo/wakes/events": ["sessions": []]])
+        let reads = asked("GET kuvo/wakes/events")
+        try await until { asked("GET kuvo/wakes/events") >= reads + 2 }
+        #expect(model.wakeUps.wakes["bot_ci"]?.map(\.note) == ["Check CI"])
+    }
+
+    /// Attached, your time zone or how you write dates changing reaches the box here's group chats,
+    /// as it reaches this Mac's own (#645).
+    @Test func aNewTimeZoneReachesTheBoxHeresGroupChats() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        connectsReady()
+        engine.on("PUT", "/api/kuvo/groups/clock", json: [String: Any]())
+        app = try await started { try memberOfMacBooks() }
+        let model = try #require(app)
+        let here = try #require(model.machines.engine(SSHConnection.thisMac))
+        try await until { here.isReady }
+        // Its group chats' bridge, at the stand-in.
+        let bridge = engine.api
+        model.boxGroups.bridge = { $0 == SSHConnection.thisMac ? bridge : nil }
+        NotificationCenter.default.post(name: .NSSystemTimeZoneDidChange, object: nil)
+        try await until { !engine.requests("PUT", "/api/kuvo/groups/clock").isEmpty }
+    }
+
     /// A worktree the box here removed (from a phone, say) goes here too, as it's read again (#333).
     @Test func theBoxHeresWorktreesAreFollowed() async throws {
         var app: AppModel?
@@ -395,6 +511,107 @@ import Testing
         try boxHereAnswers(["kuvo/worktrees?records=1": ["worktrees": []]])
         try await until { model.workspace.worktrees[root] == nil }
         #expect(!askedOfTheBoxHere.contains { $0.hasPrefix("POST kuvo/worktrees/record") }, "what it removed isn't handed back to it")
+    }
+
+    /// Attached, the worktrees the app's own box kept (in this Mac's own folders) aren't the box
+    /// here's: none is handed to it, nor taken for gone as it doesn't list them (#645).
+    @Test func theAppsOwnWorktreesArentHandedToTheBoxHere() async throws {
+        var app: AppModel?
+        var asks: DispatchSourceFileSystemObject?
+        defer {
+            asks?.cancel()
+            cleanUp(app)
+            for key in ["worktrees", "removedWorktrees"] { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        connectsReady()
+        BoxClient.readAgainAfter = .milliseconds(100)
+        let own = "/Users/me/.worktrees/api-old"
+        app = try await started {
+            try memberOfMacBooks()
+            try boxHereAnswers(["kuvo/worktrees?records=1": ["worktrees": [["project": "/Users/me/api", "root": "/Users/me/.worktrees/api-1", "branch": "kuvo/fix"]]]])
+            try keptWorktrees([own: Workspace.Worktree(project: "/Users/me/api", root: own, branch: "kuvo/old")])
+        }
+        let model = try #require(app)
+        asks = followAsks()
+        try await until { model.workspace.worktrees[RemoteFolder.folder("/Users/me/.worktrees/api-1", on: SSHConnection.thisMac)] != nil }
+        // Read as it connected, and again after.
+        let read = asked("GET kuvo/worktrees?records=1")
+        try await until { asked("GET kuvo/worktrees?records=1") >= read + 2 }
+        #expect(model.workspace.worktrees[own]?.branch == "kuvo/old", "still the app's own box's")
+        #expect(!askedOfTheBoxHere.contains { $0.hasPrefix("POST kuvo/worktrees/record") })
+    }
+
+    /// One this Mac kept on the box here that it couldn't hand over as it connected (the box didn't
+    /// answer) isn't taken for removed there as it's read again: it's handed over then, once (#645).
+    @Test func aWorktreeTheBoxHereNeverGotIsKept() async throws {
+        var app: AppModel?
+        var asks: DispatchSourceFileSystemObject?
+        defer {
+            asks?.cancel()
+            cleanUp(app)
+            for key in ["worktrees", "removedWorktrees"] { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        connectsReady()
+        BoxClient.readAgainAfter = .milliseconds(100)
+        let root = "/Users/me/.worktrees/api-2"
+        let folder = RemoteFolder.folder(root, on: SSHConnection.thisMac)
+        let read = "GET kuvo/worktrees?records=1", handOver = "POST kuvo/worktrees/record " + root
+        app = try await started {
+            try memberOfMacBooks()
+            try boxHereAnswers(["kuvo/worktrees?records=1": ["worktrees": []]])
+            // (It doesn't answer as it connects, nor as it's read again once.)
+            try boxHereStatuses(["kuvo/worktrees/record": [500, 500]])
+            try keptWorktrees([folder: Workspace.Worktree(project: RemoteFolder.folder("/Users/me/api", on: SSHConnection.thisMac), root: folder, branch: "kuvo/two")])
+        }
+        let model = try #require(app)
+        asks = followAsks()
+        // As it connected, and as it's read again (taken in by the time it's read once more).
+        try await until { asked(read) >= 3 }
+        #expect(asked(handOver) >= 2, "handed over again")
+        #expect(model.workspace.worktrees[folder]?.branch == "kuvo/two")
+        // It answers the next time, and keeps it.
+        try await until { asked(handOver) >= 3 }
+        let after = asked(read)
+        try await until { asked(read) >= after + 2 }
+        #expect(model.workspace.worktrees[folder]?.branch == "kuvo/two")
+        #expect(asked(handOver) == 3, "taken, it's handed over no more")
+    }
+
+    /// A worktree removed here while the box here was being read: what it said before isn't taken
+    /// over that, bringing it back (#645).
+    @Test func whatTheBoxHereSaidBeforeAChangeHereIsntTaken() async throws {
+        var app: AppModel?
+        var asks: DispatchSourceFileSystemObject?
+        defer {
+            asks?.cancel()
+            cleanUp(app)
+            for key in ["worktrees", "removedWorktrees"] { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        connectsReady()
+        BoxClient.readAgainAfter = .milliseconds(100)
+        let records = "kuvo/worktrees?records=1", read = "GET kuvo/worktrees?records=1"
+        app = try await started {
+            try memberOfMacBooks()
+            try boxHereAnswers([records: ["worktrees": [["project": "/Users/me/api", "root": "/Users/me/.worktrees/api-1", "branch": "kuvo/fix"]]]])
+        }
+        let model = try #require(app)
+        let here = try #require(model.machines.engine(SSHConnection.thisMac))
+        asks = followAsks()
+        let root = RemoteFolder.folder("/Users/me/.worktrees/api-1", on: SSHConnection.thisMac)
+        try await until { here.isReady && model.workspace.worktrees[root] != nil }
+        // The next read waits, with what it read: the worktree.
+        try hold(records, through: 0)
+        try await until { held(read) != nil }
+        let waiting = try #require(held(read))
+        try await model.workspace.removeWorktree(root)
+        #expect(model.workspace.worktrees[root] == nil)
+        // Gone there too. The read that waited goes on (taken in by the time it's read again), and
+        // the one after waits.
+        try boxHereAnswers([records: ["worktrees": []]])
+        try hold(records, through: waiting)
+        try await until { asked(read) > waiting }
+        #expect(model.workspace.worktrees[root] == nil, "not brought back by what was read before")
+        try hold(records, through: nil)
     }
 
     /// Attached, this Mac's engine is the box here's: the usage panel reads its accounts (#333).

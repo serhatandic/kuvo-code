@@ -9,7 +9,9 @@
 // Mac's own routes (`MAC_APP_ROUTES`), which go to the app through the host (`link/route`); of
 // those it answers what it can of its machines while the app isn't there (`machines`).
 
+import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import { engineConnect } from "../areas/engine";
 import { docsChanged } from "../documents/exchange";
 import { peerPlaces, readBridgeFile, readEngineFile } from "../engine/client";
@@ -19,6 +21,7 @@ import { authorizePhone, confirmPhone } from "../phones";
 import { connectOnce, nextTry } from "../relay/connection";
 import { LinkHost } from "../relay/host";
 import { engineHandler } from "../server/router";
+import { RUN } from "../home";
 import { macLink, readLink } from "../state";
 import { appAnswer, passedOn } from "./app-route";
 import { macKeys, macLinkCheck, macLinkWait, macNeeded, savedMacConfig, setLinkStatus, tellUntold } from "./link";
@@ -30,12 +33,34 @@ import type { LinkState } from "../state";
 
 // What only this Mac's app answers a phone, by area: its machines (which this box answers in part
 // with the app closed: machines.ts), the machines your phones reach directly, its usage panel's
-// numbers, what its panel's browser asks you, its macOS services (`kuvo/mac`), Claude Code's
-// agents and commands it reads from ~/.claude, and its engine's restart. The one list of them: the
-// app keeps none, and hands its own requests for anything else to this box. Everything else a phone
-// asks this box answers itself, as a machine's does, with the app open or closed.
-export const MAC_APP_ROUTES = ["kuvo/machines", "kuvo/hosts", "kuvo/usage", "kuvo/asks", "kuvo/mac", "kuvo/claude-code", "kuvo/engine"];
+// numbers, what its panel's browser asks you, its macOS services (`kuvo/mac`), and its engine's
+// restart while the app runs this box itself (`boxAnswers`). The one list of them: the app keeps
+// none, and hands its own requests for anything else to this box. Everything else a phone asks
+// this box answers itself, as a machine's does, with the app open or closed.
+export const MAC_APP_ROUTES = ["kuvo/machines", "kuvo/hosts", "kuvo/usage", "kuvo/asks", "kuvo/mac", "kuvo/engine"];
 export const macAppAnswers = (route: string): boolean => MAC_APP_ROUTES.some(area => route === area || route.startsWith(`${area}/`));
+
+/** Those of the app's areas this box answers itself now, with the app closed too: its engine's
+ * restart while the keeper runs this box (`kuvo-start restart` asks it, as a machine's box asks
+ * its own). While the app runs the box itself, the app restarts the engine: `bin/kuvo-start` stays
+ * once a keeper has run, and would answer 202 with nothing to ask. */
+export const boxAnswers = (route: string): boolean => route === "kuvo/engine/restart" && keeperRuns();
+
+/** Whether this Mac's keeper runs this box now: its record in `run/keeper.json` names the process
+ * that started it, alive. (A record a keeper left as it crashed, its ID another's since, isn't.)
+ * So the keeper starts the box itself, nothing between them: `MacBoxTests.theBoxIsItsKeepersOwnChild`. */
+export function keeperRuns(): boolean {
+  let pid = 0;
+  try { pid = Number(JSON.parse(fs.readFileSync(path.join(RUN, "keeper.json"), "utf8"))?.pid); } catch { return false; }
+  if (!Number.isInteger(pid) || pid <= 0 || pid !== process.ppid) return false;
+  // (Another user's process with its ID, after a restart, isn't it: the keeper is always yours.)
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 const APP_NOT_ANSWERING = "Kuvo Code on this Mac isn't answering. Try again in a moment.";
 
@@ -55,7 +80,7 @@ export function macFront(handle: LinkHandler = engineHandler(readEngineFile, { n
   return async function* (request: LinkRequest, phone: Asker | undefined, signal?: AbortSignal): AsyncGenerator<AnswerPiece> {
     const route = String(request.path ?? "").split("?")[0];
     if (isMachinesRoute(route)) return yield* machinesRoute(request, phone, signal, route, timing);
-    if (macAppAnswers(route)) return yield* toApp(request, phone, signal);
+    if (macAppAnswers(route) && !boxAnswers(route)) return yield* toApp(request, phone, signal);
     yield* handle(request, phone, signal);
   };
 }

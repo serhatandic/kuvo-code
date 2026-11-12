@@ -146,7 +146,8 @@ final class MachineBrowser {
     func takeOver(_ on: Bool) {
         guard let page = shownPage else { return }
         hold(page, on)
-        if on { Analytics.shared.track("browser_taken_over", ["machine": true]) }
+        // (The browser of the box attached in place runs on this Mac: counted as this Mac's.)
+        if on { Analytics.shared.track("browser_taken_over", ["machine": BoxClient.isMachine(machine.id)]) }
     }
 
     /// You moved on from a page you took over: back to its agent.
