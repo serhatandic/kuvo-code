@@ -3206,6 +3206,9 @@
             "literal": "queue"
            },
            {
+            "literal": "queue.once"
+           },
+           {
             "literal": "queue.waits"
            },
            {
@@ -3572,6 +3575,9 @@
            },
            {
             "literal": "queue"
+           },
+           {
+            "literal": "queue.once"
            },
            {
             "literal": "queue.waits"

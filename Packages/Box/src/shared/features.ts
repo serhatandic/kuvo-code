@@ -80,6 +80,7 @@ export const FEATURES = [
   "projects",
   "providers.models",
   "queue",
+  "queue.once",
   "queue.waits",
   "reviews",
   "reviews.parts",

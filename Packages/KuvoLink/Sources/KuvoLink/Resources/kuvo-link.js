@@ -2137,6 +2137,7 @@ var FEATURES = [
   "projects",
   "providers.models",
   "queue",
+  "queue.once",
   "queue.waits",
   "reviews",
   "reviews.parts",
@@ -37333,7 +37334,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "738f99114b82";
+var BRIDGE_VERSION = "d3d950a72041";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
