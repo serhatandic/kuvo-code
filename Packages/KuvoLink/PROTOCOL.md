@@ -5511,17 +5511,20 @@ as your own uv links its cache's into a project's `.venv`; bunx's packages in `/
 folder at the top of `~/.cache`, which it can't make (Landlock's right to make one would reach the
 folders it only reads); other projects' hooks, git settings and agents' settings in your home, which
 it writes as it writes the files beside them; the engine's and the coding agents' settings in the
-conversation's folder; a new repository made in it (a `.git` anywhere below the folder, which git
-outside works in too once it's added as a submodule), and a `.git` in it that's a link; and before Linux 6.2 (Landlock 3), truncating a file it only reads by its
+conversation's folder; a repository in it but its own (one there already, or one a command makes,
+then adds to the index as a submodule, which a plain `git status` outside then runs the settings
+of), and a `.git` in it that's a link; and before Linux 6.2 (Landlock 3), truncating a file it only reads by its
 path (`truncate`), which Landlock checks only from then.
 On Linux, where Landlock grants a folder whole, git's own files in the repositories a command writes
 are kept by its namespace instead (`fence/landlock.ts`, `KEEP_GIT`, #429): before the command
 starts, in its conversation's repository, each repository Also Allowed holds, and their submodules'
 repositories, the repository's folder, `worktrees` and `modules` are mounted on themselves (so
 none is moved, removed or replaced), and its `config`, `config.worktree`, `commondir`, `gitdir`
-and `hooks`, every worktree's own folder but the conversation's own (where its `commondir`,
-`gitdir` and `config.worktree` are), and every folder in `modules` but each submodule's repository,
-read-only; so is the `.git` file that leads the conversation's worktree to its repository. A
+and `hooks`, every worktree's own folder but those the conversation works in (its own, and an Also
+Allowed folder's: there its `commondir`, `gitdir` and `config.worktree` are), and every folder in
+`modules` but each submodule's repository, read-only; so is the `.git` file that leads such a
+worktree to its repository; and the folders those are in, and the conversation's, from the top
+down, are mounted on themselves, so none is moved away and another put in its place. A
 `commondir` leading git anywhere but the repository itself (or, a worktree's own, its repository),
 a link where one of those is, or one that can't be kept, runs nothing (126, saying why). Mounts keep
 only what's there, and a name git reads that isn't there yet can't be told from the files git makes
@@ -5992,11 +5995,13 @@ repository written by anything.
   there.
 - What you ask git for yourself (Stage, Commit, Push, Pull and the rest in Changes, a worktree made,
   switched, removed with what wasn't committed in it, or brought back, a project cloned) gets only
-  the first set, and `-c safe.bareRepository=explicit` (no bare repository found by sitting in a
-  folder, which a folder's own files could make of it): the repository's hooks, filters and sign-ins run as in your terminal, so husky,
+  the first set: the repository's hooks, filters and sign-ins run as in your terminal, so husky,
   LFS and git-crypt work, and what's kept of a removed worktree is stored as your `git add` would.
 - Neither runs (but what only reads names and objects, which starts nothing) where the repository's
-  `commondir` leads git anywhere but where it should (#429): none, or the repository's own folder
+  `commondir` leads git anywhere but where it should (#429), or where git finds a bare repository
+  by sitting in a folder that has a `.git` of its own (what its own files make of it once that
+  `.git` is broken: `HEAD`, `objects`, `refs` and settings beside it; not by
+  `safe.bareRepository`, which would reach your hooks' own git too). Where it should is: none, or the repository's own folder
   (`.`, as the sandbox leaves it on Linux), or, in a linked worktree's own folder
   (`.git/worktrees/<name>`), the repository it's one of. One leading elsewhere would have git read
   another repository's settings and run its hooks; Changes then says so, as for a program it won't

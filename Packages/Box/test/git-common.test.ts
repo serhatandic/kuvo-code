@@ -72,6 +72,22 @@ test("a repository whose commondir leads to another's: the box runs no git there
   expect(existsSync(mark)).toBe(true)
 })
 
+test("a folder whose broken .git has a bare repository made around it: the box runs no git there that could start a program", async () => {
+  const top = repository()
+  const { elsewhere, mark } = planted(top)
+  writeFileSync(join(top, ".git", "HEAD"), "broken\n")
+  for (const name of ["HEAD", "config", "hooks", "objects", "refs"]) spawnSync("cp", ["-R", join(elsewhere, name), join(top, name)])
+  git(top, "--git-dir=.", "config", "core.bare", "false")
+  git(top, "--git-dir=.", "config", "core.worktree", top)
+  expect(shared.askedArgs(["commit", "-m", "x"], top)).toBeUndefined()
+  expect(await shared.askedArgsLater(["commit", "-m", "x"], top)).toBeUndefined()
+  expect(await changes.commit(top, "second", false, AUTHOR)).toMatchObject({ committed: false })
+  expect(existsSync(mark)).toBe(false)
+  // (git itself, as your terminal runs it, takes it for one.)
+  spawnSync("git", ["status"], { cwd: top, env: { ...process.env, ...AUTHOR } })
+  expect(existsSync(mark)).toBe(true)
+})
+
 test("a repository's own commondir naming itself, or none, and a worktree's naming its repository, are as ever", async () => {
   const own = repository(".\n")
   const none = repository()

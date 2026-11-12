@@ -37,13 +37,13 @@ export function landlockPolicy(policy: FencePolicy): string {
  * - the repository's folder, kept; its `config`, `config.worktree`, `commondir`, `gitdir` and
  *   `hooks`, read-only;
  * - `worktrees`, and every worktree's own folder in it (`worktrees/<name>`), read-only: none is
- *   made, moved, removed or written, but the conversation's own, where it works in a worktree (the
- *   one its `.git` file names): written as git works there, but for its `commondir`, `gitdir` and
- *   `config.worktree`, read-only, and its `commondir` must lead back to the repository;
+ *   made, moved, removed or written, but those it works in (the one its folder's `.git` file names,
+ *   and an Also Allowed worktree's): written as git works there, but for their `commondir`, `gitdir`
+ *   and `config.worktree`, read-only, and each `commondir` must lead back to the repository;
  * - `modules`, and every folder in it but each submodule's repository, read-only: none is made,
  *   moved or removed;
- * - and the `.git` file that leads the conversation's folder to its repository (a worktree's), up
- *   from it, read-only.
+ * - the `.git` file that leads such a worktree to its repository, up from it, read-only;
+ * - and the folders those are in, and the conversation's, from the top down (`pin_up`).
  * Mounts keep only what's there. A name git reads that isn't there yet would be made in a folder git
  * must make files in (`index.lock` beside `commondir`), which neither Landlock nor a mount tells
  * apart: so the launcher first gives each repository what it lacks of those (`MAKE_GIT`). A
@@ -60,7 +60,7 @@ const KEEP_GIT = String.raw`keep() {
 ro() { mount -c -o remount,bind,ro "$1" 2>/dev/null || fail "$1 can't be kept from it."; }
 # Where a commondir leads, as git reads it: one line, with no NUL or carriage return (which the shell
 # and git would read differently), from its folder.
-leads() { [ -f "$1/$2" ] && [ "$(tr -d '\000\r' <"$1/$2" | wc -c)" -eq "$(wc -c <"$1/$2")" ] && [ "$(wc -l <"$1/$2")" -le 1 ] && (cd "$1" 2>/dev/null && cd -P "$(head -c 4096 "$2")" 2>/dev/null && pwd -P); }
+leads() { [ -f "$1/$2" ] && [ "$(wc -c <"$1/$2")" -le 4096 ] && [ "$(tr -d '\000\r' <"$1/$2" | wc -c)" -eq "$(wc -c <"$1/$2")" ] && [ "$(wc -l <"$1/$2")" -le 1 ] && (cd "$1" 2>/dev/null && cd -P "$(head -c 4096 "$2")" 2>/dev/null && pwd -P); }
 # (A real folder's path as it is, no link on the way: what's compared with git's.)
 as_is() { [ -d "$1" ] && [ ! -L "$1" ] && [ "$(cd -P "$1" 2>/dev/null && pwd -P)" = "$1" ]; }
 repo() {
@@ -135,6 +135,32 @@ $at/.git"
     at=$(dirname "$at")
   done
 }
+# The folders the repositories are in, and the conversation's, each from the top down (but /): each
+# mounted on itself with what's in it, so none is moved away and another put in its place, a
+# repository of its own with it, from a folder above that a command writes (Also Allowed's, /tmp).
+pin_up() {
+  local at k_up
+  at=$1 k_up=
+  while [ -n "$at" ] && [ "$at" != / ]; do k_up="$at
+$k_up"; at=$(dirname "$at"); done
+  while IFS= read -r at; do
+    [ -n "$at" ] || continue
+    case "$k_pinned
+" in *"
+$at
+"*) continue ;; esac
+    as_is "$at" || return 0
+    mount -c --rbind "$at" "$at" 2>/dev/null || fail "$at can't be kept from it."
+    k_pinned="$k_pinned
+$at"
+  done <<EOF_UP
+$k_up
+EOF_UP
+}
+k_pinned=
+pin_up "$work"
+case $git in /*.git) pin_up "$git" ;; esac
+[ -z "$allowed" ] || [ ! -f "$allowed" ] || while IFS= read -r k_at; do case $k_at in /*) pin_up "$k_at" </dev/null ;; esac; done <"$allowed"
 gitfile "$work"
 if [ -n "$allowed" ] && [ -f "$allowed" ]; then
   while IFS= read -r k_at; do
@@ -168,8 +194,8 @@ EOF_REPOS
  * isn't there yet: an empty `hooks`, `modules`, `worktrees` and `config.worktree` (git reads that only
  * once `extensions.worktreeConfig` is on, which `git sparse-checkout` turns on), and a `commondir`
  * that names the repository itself; in each worktree's own folder, an empty `config.worktree` and
- * `modules`. (A file is made by a name of its own and linked into place, so never written through a
- * FIFO or a link put there.) Where one can't be made, the command is told so once (`$F/unkept`), and
+ * `modules`. (A file only where there's none, never through a link put there, and given up after
+ * a few seconds rather than waiting on a FIFO.) Where one can't be made, the command is told so once (`$F/unkept`), and
  * runs: what keeps the rest still keeps it. `git_made_all <work> <git> <allowed>`.
  */
 export const MAKE_GIT = String.raw`git_unkept() {
@@ -180,10 +206,8 @@ export const MAKE_GIT = String.raw`git_unkept() {
 }
 git_made() {
   [ ! -e "$1" ] && [ ! -L "$1" ] || return 0
-  if [ "$3" = / ]; then mkdir "$1" 2>/dev/null || git_unkept "$2"; return 0; fi
-  k_t=$(mktemp "$1.XXXXXXXX" 2>/dev/null) || { git_unkept "$2"; return 0; }
-  { [ -z "$3" ] || timeout 5 sh -c 'printf "%s\n" "$0" >"$1"' "$3" "$k_t"; } && ln "$k_t" "$1" 2>/dev/null || [ -e "$1" ] || git_unkept "$2"
-  rm -f "$k_t"
+  if [ "$3" = / ]; then mkdir "$1" 2>/dev/null || [ -d "$1" ] || git_unkept "$2"; return 0; fi
+  timeout 5 sh -c 'set -C; if [ -n "$0" ]; then printf "%s\n" "$0" >"$1"; else : >"$1"; fi' "$3" "$1" 2>/dev/null || [ -f "$1" ] || git_unkept "$2"
 }
 git_repo() {
   [ -d "$1" ] && [ ! -L "$1" ] || return 0
@@ -217,7 +241,7 @@ git_made_all() {
     git_all "$k_g"; k_seen=$k_g
   done
   [ -f "$3" ] || return 0
-  while IFS= read -r k_a; do case $k_a in /*) [ "$k_a/.git" = "$2" ] || git_all "$k_a/.git" ;; esac; done <"$3"
+  while IFS= read -r k_a; do case $k_a in /*) [ "$k_a/.git" != "$2" ] && [ "$(cd -P "$k_a" 2>/dev/null && pwd -P)" = "$k_a" ] && git_all "$k_a/.git" ;; esac; done <"$3"
 }`;
 
 /**
@@ -254,9 +278,9 @@ fail() { echo "This command can't run in the sandbox here: $1" >&2; exit 126; }
 over() { ( cd -P "$1" 2>/dev/null || exit 1; [ -z "$3" ] || [ "$(pwd -P)" = "$1" ] || exit 1; [ "$3" != mine ] || [ -O . ] || exit 1; mount -c -t tmpfs -o "size=64k,mode=$2" kuvo-hidden . 2>/dev/null || exit 2 ) || { [ $? = 1 ] || fail "$1 can't be kept from it."; return 1; }; }
 off() { [ -S "$1" ] && { [ -z "$2" ] || [ ! -L "$1" ]; } || return 1; mount -c --bind /dev/null "$1" 2>/dev/null && [ -c "$1" ] && { [ -z "$2" ] || [ ! -L "$1" ]; } || fail "$1 can't be kept from it."; }
 [ -r "$sockets" ] || fail "it isn't set up."
-# (Where a folder can't be made read-only here, as git's own files are kept, nothing runs: the box's
-# check, which runs this too, finds the machine can't give commands a namespace.)
-mount -c --bind "$own" "$own" 2>/dev/null && mount -c -o remount,bind,ro "$own" 2>/dev/null || fail "its folders can't be kept read-only here."
+# (Whether a folder can be made read-only here, as git's own files are kept: where it can't, they
+# aren't, and each repository says so once.)
+k_can=; mount -c --bind "$own" "$own" 2>/dev/null && mount -c -o remount,bind,ro "$own" 2>/dev/null && k_can=1
 over "$own" 0700 || fail "it isn't set up."
 while IFS= read -r s; do case $s in /*'*'*) for f in $s; do [ ! -S "$f" ] || off "$f"; done ;; /*) over "$s" 0700 || off "$s" ;; esac; done <"$sockets"
 over "/run/user/$u" 0700
@@ -267,7 +291,15 @@ fi
 for d in "/tmp/tmux-$u" /tmp/ssh-* "/run/screen/S-$n" "/tmp/nvim.$n" "/tmp/emacs$u"; do over "$d" 0700 mine; done
 over /tmp/.X11-unix 1777 here
 for s in /tmp/vscode-ipc-*.sock /tmp/vscode-ssh-auth-*.sock /tmp/vscode-git-*.sock; do [ -O "$s" ] && off "$s" here; done
+if [ -n "$k_can" ]; then
 ${KEEP_GIT}
+else
+  k_note=$(dirname "$own")/unkept/ro
+  [ -e "$k_note" ] || { mkdir -p "$(dirname "$k_note")" 2>/dev/null; : >"$k_note" 2>/dev/null; echo "Note: git's own files in the repositories commands write aren't kept from them by Kuvo Code's sandbox here (this computer can't make a folder read-only in their namespace)." >&2; }
+fi
+# (Its folder again, by its name, so what it reaches by a relative path goes through the mounts made
+# since it was there, not round them.)
+k_here=$(pwd -P 2>/dev/null) && cd "$k_here" 2>/dev/null
 [ "$XDG_RUNTIME_DIR" != "/run/user/$u" ] || unset XDG_RUNTIME_DIR
 case $DBUS_SESSION_BUS_ADDRESS in *"=/run/user/$u/"*) unset DBUS_SESSION_BUS_ADDRESS ;; esac
 mkfifo -m 600 "$own/in" "$own/on" || fail "it isn't set up."

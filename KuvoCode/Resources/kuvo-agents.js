@@ -501,11 +501,10 @@ import { delimiter, join as join4 } from "path";
 
 // Packages/Box/src/shared/git.ts
 import { execFile, spawnSync } from "child_process";
-import { accessSync, closeSync, constants, fstatSync, openSync, promises as fsp, readSync, realpathSync } from "fs";
+import { accessSync, closeSync, constants, fstatSync, lstatSync, openSync, promises as fsp, readSync, realpathSync } from "fs";
 import { basename as basename2, dirname, join as join3, resolve } from "path";
 var EVERY = ["-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "log.showSignature=false"];
 var OWN = [...EVERY, "-c", "safe.bareRepository=explicit", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", "-c", "tag.gpgSign=false", "-c", "credential.helper="];
-var ASKED = [...EVERY, "-c", "safe.bareRepository=explicit"];
 var GIT_QUIET = { GIT_TERMINAL_PROMPT: "0" };
 var DRIVERS = String.raw`^(filter\..+\.(clean|smudge|process)|diff\..+\.textconv|hook\..+\.command)$`;
 var KNOWN = /^"?([^"\s]+)"? (?:filter-process|clean|smudge|diff)(?: --skip| --key-name=[\w-]+| -- %f)*$/;
@@ -682,6 +681,15 @@ async function readNamedLater(file) {
 }
 var gitDirArgs = (lead) => [...lead, ...EVERY, "rev-parse", "--absolute-git-dir"];
 var MAKING = new Set(["clone", "init"]);
+var madeBare = (lead, folder) => !lead.some((each) => each === "--git-dir" || each.startsWith("--git-dir=")) && !process.env.GIT_DIR && exists(join3(folder, ".git"));
+var exists = (where) => {
+  try {
+    lstatSync(where);
+    return true;
+  } catch {
+    return false;
+  }
+};
 function strayCommon(lead, rest, cwd) {
   if (MAKING.has(rest[0] ?? ""))
     return false;
@@ -689,6 +697,8 @@ function strayCommon(lead, rest, cwd) {
   const folder = ran.status === 0 ? String(ran.stdout ?? "").trim() : "";
   if (!folder)
     return false;
+  if (madeBare(lead, folder))
+    return true;
   const named = readNamed(join3(folder, "commondir"));
   if (named === null)
     return false;
@@ -700,6 +710,8 @@ async function strayCommonLater(lead, rest, cwd) {
   const folder = await new Promise((done) => execFile("git", gitDirArgs(lead), { cwd, encoding: "utf8", env: { ...process.env, ...GIT_QUIET }, timeout: 30000 }, (error, out) => done(error ? "" : String(out ?? "").trim())));
   if (!folder)
     return false;
+  if (madeBare(lead, folder))
+    return true;
   const named = await readNamedLater(join3(folder, "commondir"));
   if (named === null)
     return false;
@@ -5236,7 +5248,7 @@ async function handoffRoutes(handoffs, method, parts, body) {
 }
 
 // Packages/Box/src/agents/reviews.ts
-import { lstatSync, mkdirSync as mkdirSync6, readdirSync as readdirSync6, readFileSync as readFileSync11, realpathSync as realpathSync2, renameSync as renameSync6, writeFileSync as writeFileSync8 } from "fs";
+import { lstatSync as lstatSync2, mkdirSync as mkdirSync6, readdirSync as readdirSync6, readFileSync as readFileSync11, realpathSync as realpathSync2, renameSync as renameSync6, writeFileSync as writeFileSync8 } from "fs";
 import { lstat, readFile } from "fs/promises";
 import { dirname as dirname4, join as join13, sep as sep8 } from "path";
 function readsFiles(scope) {
@@ -5915,7 +5927,7 @@ async function gitChanges(directory, from) {
   for (const file of untracked.stdout.split("\x00").filter(Boolean).slice(0, 50)) {
     try {
       const path = join13(directory, file);
-      const kind = lstatSync(path);
+      const kind = lstatSync2(path);
       if (!kind.isFile())
         continue;
       const named = `
@@ -6020,7 +6032,7 @@ function walk3(top, under) {
         found.push(name);
     }
   };
-  if (under && !lstatSync(join13(top, under)).isDirectory())
+  if (under && !lstatSync2(join13(top, under)).isDirectory())
     return [under];
   visit(under);
   return found;
@@ -6782,7 +6794,7 @@ function kuvoToolName(name, args) {
 
 // Packages/Box/src/agents/snapshots.ts
 import { createHash as createHash2 } from "crypto";
-import { existsSync as existsSync6, lstatSync as lstatSync2, mkdirSync as mkdirSync7, readdirSync as readdirSync8, readFileSync as readFileSync12, realpathSync as realpathSync3, rmdirSync, rmSync as rmSync5, writeFileSync as writeFileSync9 } from "fs";
+import { existsSync as existsSync6, lstatSync as lstatSync3, mkdirSync as mkdirSync7, readdirSync as readdirSync8, readFileSync as readFileSync12, realpathSync as realpathSync3, rmdirSync, rmSync as rmSync5, writeFileSync as writeFileSync9 } from "fs";
 import { dirname as dirname6, join as join15, relative as relative4, resolve as resolve3, sep as sep9 } from "path";
 var quiet = { GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_OPTIONAL_LOCKS: "0", GIT_LITERAL_PATHSPECS: "1" };
 var patchLimit2 = 50000;
@@ -6954,7 +6966,7 @@ class Snapshots {
       const back = paths.filter((path) => !isRules(path) && there.has(path));
       for (const path of back) {
         const full = join15(repository.top, path);
-        if (this.isInside(repository.top, full) && existsSync6(full) && lstatSync2(full).isDirectory() && !existsSync6(join15(full, ".git")))
+        if (this.isInside(repository.top, full) && existsSync6(full) && lstatSync3(full).isDirectory() && !existsSync6(join15(full, ".git")))
           rmSync5(full, { recursive: true, force: true });
       }
       await this.checkout(repository, tree, back);
@@ -6986,7 +6998,7 @@ class Snapshots {
   }
   madeBefore(full, time) {
     try {
-      const born = lstatSync2(full).birthtimeMs;
+      const born = lstatSync3(full).birthtimeMs;
       return born > 0 && born < time;
     } catch {
       return false;
@@ -6999,7 +7011,7 @@ class Snapshots {
     let folder = dirname6(target);
     while (folder.length > top.length) {
       try {
-        if (lstatSync2(folder).isSymbolicLink())
+        if (lstatSync3(folder).isSymbolicLink())
           return false;
       } catch {
         return true;
@@ -7013,7 +7025,7 @@ class Snapshots {
     if (!this.isInside(top, full))
       return;
     try {
-      const stat = lstatSync2(full);
+      const stat = lstatSync3(full);
       if (stat.isDirectory() && !stat.isSymbolicLink() && existsSync6(join15(full, ".git")))
         return;
       rmSync5(full, { recursive: stat.isDirectory() && !stat.isSymbolicLink(), force: true });
@@ -7196,7 +7208,7 @@ class RPC {
 
 // Packages/Box/src/agents/fence.ts
 import { createHash as createHash3, randomBytes as randomBytes3 } from "crypto";
-import { constants as constants3, copyFileSync, existsSync as existsSync7, lstatSync as lstatSync3, mkdirSync as mkdirSync8, readdirSync as readdirSync9, readFileSync as readFileSync13, realpathSync as realpathSync4, renameSync as renameSync7, rmSync as rmSync6, statSync as statSync5, unlinkSync, writeFileSync as writeFileSync10 } from "fs";
+import { constants as constants3, copyFileSync, existsSync as existsSync7, lstatSync as lstatSync4, mkdirSync as mkdirSync8, readdirSync as readdirSync9, readFileSync as readFileSync13, realpathSync as realpathSync4, renameSync as renameSync7, rmSync as rmSync6, statSync as statSync5, unlinkSync, writeFileSync as writeFileSync10 } from "fs";
 import { basename as basename6, dirname as dirname7, join as join16, resolve as resolve4 } from "path";
 var folder = () => process.env.KUVO_FENCE ?? (machineHome ? join16(machineHome, "run", "fence") : undefined);
 function noteToolServer(url) {
@@ -7314,7 +7326,7 @@ var fenceKey = () => JSON.stringify(fenceRules() ?? null);
 var sum = (place) => createHash3("sha256").update(place).digest("hex").slice(0, 32);
 function isRepository(git) {
   try {
-    if (lstatSync3(git).isSymbolicLink() || !statSync5(join16(git, "HEAD")).isFile())
+    if (lstatSync4(git).isSymbolicLink() || !statSync5(join16(git, "HEAD")).isFile())
       return false;
     return statSync5(join16(git, "objects")).isDirectory() && statSync5(join16(git, "refs")).isDirectory();
   } catch {
@@ -7333,7 +7345,7 @@ function repositoryOf2(folder) {
     const git = join16(at, ".git");
     let link;
     try {
-      link = lstatSync3(git);
+      link = lstatSync4(git);
     } catch {
       continue;
     }
@@ -9424,7 +9436,7 @@ function questionFields(questions) {
 }
 
 // Packages/Box/src/agents/signin.ts
-import { existsSync as existsSync9, lstatSync as lstatSync4, mkdtempSync, readdirSync as readdirSync10, readFileSync as readFileSync15, rmSync as rmSync7 } from "fs";
+import { existsSync as existsSync9, lstatSync as lstatSync5, mkdtempSync, readdirSync as readdirSync10, readFileSync as readFileSync15, rmSync as rmSync7 } from "fs";
 import { join as join18 } from "path";
 
 // Packages/Box/src/agents/screen.ts
@@ -9764,7 +9776,7 @@ printf '%s\\n' "$1" >> "$KUVO_URL_FILE"
 }
 function ownScript(path, script) {
   try {
-    const there = lstatSync4(path);
+    const there = lstatSync5(path);
     return there.isFile() && there.uid === process.getuid?.() && (there.mode & 511) === 448 && readFileSync15(path, "utf8") === script;
   } catch {
     return false;
@@ -10201,7 +10213,7 @@ function copySkillsInto(folder, skills) {
 
 // Packages/Box/src/agents/subagents.ts
 import { createHash as createHash5 } from "crypto";
-import { existsSync as existsSync11, lstatSync as lstatSync5, mkdirSync as mkdirSync11, readdirSync as readdirSync12, readFileSync as readFileSync17, realpathSync as realpathSync5, renameSync as renameSync9, rmSync as rmSync9, statSync as statSync7, utimesSync as utimesSync2, writeFileSync as writeFileSync13 } from "fs";
+import { existsSync as existsSync11, lstatSync as lstatSync6, mkdirSync as mkdirSync11, readdirSync as readdirSync12, readFileSync as readFileSync17, realpathSync as realpathSync5, renameSync as renameSync9, rmSync as rmSync9, statSync as statSync7, utimesSync as utimesSync2, writeFileSync as writeFileSync13 } from "fs";
 import { join as join20 } from "path";
 
 // Packages/Box/src/shared/subagents.ts
@@ -10392,13 +10404,13 @@ function antigravityCustomAgents(home, subagents) {
     const config = join20(home, "config");
     const folder = join20(config, "agents");
     mkdirSync11(folder, { recursive: true, mode: 448 });
-    if (lstatSync5(config).isSymbolicLink() || lstatSync5(folder).isSymbolicLink() || realpathSync5(folder) !== join20(realpathSync5(home), "config", "agents")) {
+    if (lstatSync6(config).isSymbolicLink() || lstatSync6(folder).isSymbolicLink() || realpathSync5(folder) !== join20(realpathSync5(home), "config", "agents")) {
       throw new Error("its agents folder isn't its own");
     }
     const record = join20(folder, ".kuvo-code");
     let before = {};
     try {
-      const read = lstatSync5(record).isFile() ? JSON.parse(readFileSync17(record, "utf8")) : {};
+      const read = lstatSync6(record).isFile() ? JSON.parse(readFileSync17(record, "utf8")) : {};
       if (read && typeof read === "object" && !Array.isArray(read))
         before = read;
     } catch {}
@@ -14301,7 +14313,7 @@ function describe(status) {
 }
 
 // Packages/Box/src/agents/agents/codex.ts
-import { existsSync as existsSync15, lstatSync as lstatSync6, mkdirSync as mkdirSync15, readdirSync as readdirSync15, readFileSync as readFileSync22, readlinkSync, rmSync as rmSync12, symlinkSync as symlinkSync2 } from "fs";
+import { existsSync as existsSync15, lstatSync as lstatSync7, mkdirSync as mkdirSync15, readdirSync as readdirSync15, readFileSync as readFileSync22, readlinkSync, rmSync as rmSync12, symlinkSync as symlinkSync2 } from "fs";
 import { homedir as homedir2 } from "os";
 import { basename as basename10, join as join25 } from "path";
 
@@ -16633,7 +16645,7 @@ function shadowHome(home, own) {
     const link = join25(home, name);
     const target = join25(own, name);
     try {
-      const stat = lstatSync6(link, { throwIfNoEntry: false });
+      const stat = lstatSync7(link, { throwIfNoEntry: false });
       if (stat?.isSymbolicLink() && readlinkSync(link) === target)
         continue;
       if (stat && !stat.isSymbolicLink())
@@ -16646,7 +16658,7 @@ function shadowHome(home, own) {
   for (const name of readdirSync15(home)) {
     const link = join25(home, name);
     try {
-      if (lstatSync6(link).isSymbolicLink() && !wanted.includes(name))
+      if (lstatSync7(link).isSymbolicLink() && !wanted.includes(name))
         rmSync12(link, { force: true });
     } catch {}
   }
@@ -28329,4 +28341,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 5f62854814c4e32d8b9a11d50f8c58afb9f1bd3e6d23bd63bba98f48faf821a6
+// Built from Packages/Box/src/agents 9ba95e336354f4fd8845f5c6b8f72c0c57656c65d56fe4a23f5f1a37ea846aab

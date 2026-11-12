@@ -4114,7 +4114,7 @@ var KEEP_GIT = String.raw`keep() {
 ro() { mount -c -o remount,bind,ro "$1" 2>/dev/null || fail "$1 can't be kept from it."; }
 # Where a commondir leads, as git reads it: one line, with no NUL or carriage return (which the shell
 # and git would read differently), from its folder.
-leads() { [ -f "$1/$2" ] && [ "$(tr -d '\000\r' <"$1/$2" | wc -c)" -eq "$(wc -c <"$1/$2")" ] && [ "$(wc -l <"$1/$2")" -le 1 ] && (cd "$1" 2>/dev/null && cd -P "$(head -c 4096 "$2")" 2>/dev/null && pwd -P); }
+leads() { [ -f "$1/$2" ] && [ "$(wc -c <"$1/$2")" -le 4096 ] && [ "$(tr -d '\000\r' <"$1/$2" | wc -c)" -eq "$(wc -c <"$1/$2")" ] && [ "$(wc -l <"$1/$2")" -le 1 ] && (cd "$1" 2>/dev/null && cd -P "$(head -c 4096 "$2")" 2>/dev/null && pwd -P); }
 # (A real folder's path as it is, no link on the way: what's compared with git's.)
 as_is() { [ -d "$1" ] && [ ! -L "$1" ] && [ "$(cd -P "$1" 2>/dev/null && pwd -P)" = "$1" ]; }
 repo() {
@@ -4189,6 +4189,32 @@ $at/.git"
     at=$(dirname "$at")
   done
 }
+# The folders the repositories are in, and the conversation's, each from the top down (but /): each
+# mounted on itself with what's in it, so none is moved away and another put in its place, a
+# repository of its own with it, from a folder above that a command writes (Also Allowed's, /tmp).
+pin_up() {
+  local at k_up
+  at=$1 k_up=
+  while [ -n "$at" ] && [ "$at" != / ]; do k_up="$at
+$k_up"; at=$(dirname "$at"); done
+  while IFS= read -r at; do
+    [ -n "$at" ] || continue
+    case "$k_pinned
+" in *"
+$at
+"*) continue ;; esac
+    as_is "$at" || return 0
+    mount -c --rbind "$at" "$at" 2>/dev/null || fail "$at can't be kept from it."
+    k_pinned="$k_pinned
+$at"
+  done <<EOF_UP
+$k_up
+EOF_UP
+}
+k_pinned=
+pin_up "$work"
+case $git in /*.git) pin_up "$git" ;; esac
+[ -z "$allowed" ] || [ ! -f "$allowed" ] || while IFS= read -r k_at; do case $k_at in /*) pin_up "$k_at" </dev/null ;; esac; done <"$allowed"
 gitfile "$work"
 if [ -n "$allowed" ] && [ -f "$allowed" ]; then
   while IFS= read -r k_at; do
@@ -4221,10 +4247,8 @@ var MAKE_GIT = String.raw`git_unkept() {
 }
 git_made() {
   [ ! -e "$1" ] && [ ! -L "$1" ] || return 0
-  if [ "$3" = / ]; then mkdir "$1" 2>/dev/null || git_unkept "$2"; return 0; fi
-  k_t=$(mktemp "$1.XXXXXXXX" 2>/dev/null) || { git_unkept "$2"; return 0; }
-  { [ -z "$3" ] || timeout 5 sh -c 'printf "%s\n" "$0" >"$1"' "$3" "$k_t"; } && ln "$k_t" "$1" 2>/dev/null || [ -e "$1" ] || git_unkept "$2"
-  rm -f "$k_t"
+  if [ "$3" = / ]; then mkdir "$1" 2>/dev/null || [ -d "$1" ] || git_unkept "$2"; return 0; fi
+  timeout 5 sh -c 'set -C; if [ -n "$0" ]; then printf "%s\n" "$0" >"$1"; else : >"$1"; fi' "$3" "$1" 2>/dev/null || [ -f "$1" ] || git_unkept "$2"
 }
 git_repo() {
   [ -d "$1" ] && [ ! -L "$1" ] || return 0
@@ -4258,7 +4282,7 @@ git_made_all() {
     git_all "$k_g"; k_seen=$k_g
   done
   [ -f "$3" ] || return 0
-  while IFS= read -r k_a; do case $k_a in /*) [ "$k_a/.git" = "$2" ] || git_all "$k_a/.git" ;; esac; done <"$3"
+  while IFS= read -r k_a; do case $k_a in /*) [ "$k_a/.git" != "$2" ] && [ "$(cd -P "$k_a" 2>/dev/null && pwd -P)" = "$k_a" ] && git_all "$k_a/.git" ;; esac; done <"$3"
 }`;
 var HIDE = String.raw`u=$1 g=$2 n=$3 own=$4 sockets=$5 t_own=$6 t_name=$7; shift 7
 work=$1 git=$2 allowed=$3; shift 3
@@ -4267,9 +4291,9 @@ fail() { echo "This command can't run in the sandbox here: $1" >&2; exit 126; }
 over() { ( cd -P "$1" 2>/dev/null || exit 1; [ -z "$3" ] || [ "$(pwd -P)" = "$1" ] || exit 1; [ "$3" != mine ] || [ -O . ] || exit 1; mount -c -t tmpfs -o "size=64k,mode=$2" kuvo-hidden . 2>/dev/null || exit 2 ) || { [ $? = 1 ] || fail "$1 can't be kept from it."; return 1; }; }
 off() { [ -S "$1" ] && { [ -z "$2" ] || [ ! -L "$1" ]; } || return 1; mount -c --bind /dev/null "$1" 2>/dev/null && [ -c "$1" ] && { [ -z "$2" ] || [ ! -L "$1" ]; } || fail "$1 can't be kept from it."; }
 [ -r "$sockets" ] || fail "it isn't set up."
-# (Where a folder can't be made read-only here, as git's own files are kept, nothing runs: the box's
-# check, which runs this too, finds the machine can't give commands a namespace.)
-mount -c --bind "$own" "$own" 2>/dev/null && mount -c -o remount,bind,ro "$own" 2>/dev/null || fail "its folders can't be kept read-only here."
+# (Whether a folder can be made read-only here, as git's own files are kept: where it can't, they
+# aren't, and each repository says so once.)
+k_can=; mount -c --bind "$own" "$own" 2>/dev/null && mount -c -o remount,bind,ro "$own" 2>/dev/null && k_can=1
 over "$own" 0700 || fail "it isn't set up."
 while IFS= read -r s; do case $s in /*'*'*) for f in $s; do [ ! -S "$f" ] || off "$f"; done ;; /*) over "$s" 0700 || off "$s" ;; esac; done <"$sockets"
 over "/run/user/$u" 0700
@@ -4280,7 +4304,15 @@ fi
 for d in "/tmp/tmux-$u" /tmp/ssh-* "/run/screen/S-$n" "/tmp/nvim.$n" "/tmp/emacs$u"; do over "$d" 0700 mine; done
 over /tmp/.X11-unix 1777 here
 for s in /tmp/vscode-ipc-*.sock /tmp/vscode-ssh-auth-*.sock /tmp/vscode-git-*.sock; do [ -O "$s" ] && off "$s" here; done
+if [ -n "$k_can" ]; then
 ${KEEP_GIT}
+else
+  k_note=$(dirname "$own")/unkept/ro
+  [ -e "$k_note" ] || { mkdir -p "$(dirname "$k_note")" 2>/dev/null; : >"$k_note" 2>/dev/null; echo "Note: git's own files in the repositories commands write aren't kept from them by Kuvo Code's sandbox here (this computer can't make a folder read-only in their namespace)." >&2; }
+fi
+# (Its folder again, by its name, so what it reaches by a relative path goes through the mounts made
+# since it was there, not round them.)
+k_here=$(pwd -P 2>/dev/null) && cd "$k_here" 2>/dev/null
 [ "$XDG_RUNTIME_DIR" != "/run/user/$u" ] || unset XDG_RUNTIME_DIR
 case $DBUS_SESSION_BUS_ADDRESS in *"=/run/user/$u/"*) unset DBUS_SESSION_BUS_ADDRESS ;; esac
 mkfifo -m 600 "$own/in" "$own/on" || fail "it isn't set up."
@@ -6771,11 +6803,10 @@ import path30 from "node:path";
 
 // Packages/Box/src/shared/git.ts
 import { execFile as execFile3, spawnSync as spawnSync4 } from "node:child_process";
-import { accessSync, closeSync, constants, fstatSync, openSync, promises as fsp, readSync, realpathSync } from "node:fs";
+import { accessSync, closeSync, constants, fstatSync, lstatSync, openSync, promises as fsp, readSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 var EVERY = ["-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "log.showSignature=false"];
 var OWN = [...EVERY, "-c", "safe.bareRepository=explicit", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", "-c", "tag.gpgSign=false", "-c", "credential.helper="];
-var ASKED = [...EVERY, "-c", "safe.bareRepository=explicit"];
 var GIT_QUIET = { GIT_TERMINAL_PROMPT: "0" };
 var DRIVERS = String.raw`^(filter\..+\.(clean|smudge|process)|diff\..+\.textconv|hook\..+\.command)$`;
 var KNOWN = /^"?([^"\s]+)"? (?:filter-process|clean|smudge|diff)(?: --skip| --key-name=[\w-]+| -- %f)*$/;
@@ -6952,6 +6983,15 @@ async function readNamedLater(file) {
 }
 var gitDirArgs = (lead) => [...lead, ...EVERY, "rev-parse", "--absolute-git-dir"];
 var MAKING = new Set(["clone", "init"]);
+var madeBare = (lead, folder) => !lead.some((each) => each === "--git-dir" || each.startsWith("--git-dir=")) && !process.env.GIT_DIR && exists(join(folder, ".git"));
+var exists = (where) => {
+  try {
+    lstatSync(where);
+    return true;
+  } catch {
+    return false;
+  }
+};
 function strayCommon(lead, rest, cwd) {
   if (MAKING.has(rest[0] ?? ""))
     return false;
@@ -6959,6 +6999,8 @@ function strayCommon(lead, rest, cwd) {
   const folder = ran.status === 0 ? String(ran.stdout ?? "").trim() : "";
   if (!folder)
     return false;
+  if (madeBare(lead, folder))
+    return true;
   const named = readNamed(join(folder, "commondir"));
   if (named === null)
     return false;
@@ -6970,6 +7012,8 @@ async function strayCommonLater(lead, rest, cwd) {
   const folder = await new Promise((done) => execFile3("git", gitDirArgs(lead), { cwd, encoding: "utf8", env: { ...process.env, ...GIT_QUIET }, timeout: 30000 }, (error, out) => done(error ? "" : String(out ?? "").trim())));
   if (!folder)
     return false;
+  if (madeBare(lead, folder))
+    return true;
   const named = await readNamedLater(join(folder, "commondir"));
   if (named === null)
     return false;
@@ -7010,13 +7054,13 @@ function askedArgs(args, cwd) {
   const { lead, rest } = split(args);
   if (strayCommon(lead, rest, cwd))
     return;
-  return [...lead, ...ASKED, ...withOptions(rest, false) ?? rest];
+  return [...lead, ...EVERY, ...withOptions(rest, false) ?? rest];
 }
 async function askedArgsLater(args, cwd) {
   const { lead, rest } = split(args);
   if (await strayCommonLater(lead, rest, cwd))
     return;
-  return [...lead, ...ASKED, ...withOptions(rest, false) ?? rest];
+  return [...lead, ...EVERY, ...withOptions(rest, false) ?? rest];
 }
 
 // Packages/Box/src/link/git.ts
@@ -21396,11 +21440,11 @@ var RESTORED_WAIT = 20000;
 var RETRY_EVERY = 5000;
 var TRY_FOR2 = 10 * 60000;
 var MOST_ANSWERED = 200;
-var ASKED2 = new Set(["permission", "question", "ask"]);
-var holdFor = (category) => ASKED2.has(category) ? ASK_HOLD : NEWS_HOLD;
+var ASKED = new Set(["permission", "question", "ask"]);
+var holdFor = (category) => ASKED.has(category) ? ASK_HOLD : NEWS_HOLD;
 var shownIn = (notice) => notice?.data?.session ?? notice?.data?.group ?? notice?.thread;
 var answeredBy = (notice) => notice?.data?.request ?? notice?.data?.ask;
-var showsNotice = (shown, notice) => shown.request !== undefined ? shown.request === answeredBy(notice) : shown.session === shownIn(notice) && shown.ask === ASKED2.has(notice.category);
+var showsNotice = (shown, notice) => shown.request !== undefined ? shown.request === answeredBy(notice) : shown.session === shownIn(notice) && shown.ask === ASKED.has(notice.category);
 function attentionGiven(given) {
   if (!isObject(given) || typeof given.for !== "number" || !Number.isFinite(given.for) || given.for < 0)
     return null;
@@ -21509,7 +21553,7 @@ class NoticeHold {
         kept.push(entry);
         continue;
       }
-      if (entry.seen && !ASKED2.has(entry.notice.category))
+      if (entry.seen && !ASKED.has(entry.notice.category))
         continue;
       if (entry.seen && waiting) {
         kept.push({ ...entry, due: Infinity });
@@ -32318,7 +32362,7 @@ function watchVaultAsks(tell, answered = () => {}, after = 2000) {
 
 // Packages/Box/src/link/glance/asked.ts
 var ASKS_FILE2 = path112.join(RUN, "glance", "asks.json");
-var ASKED3 = new Set(["permission.asked", "form.created"]);
+var ASKED2 = new Set(["permission.asked", "form.created"]);
 var ANSWERED3 = new Set(["permission.replied", "permission.rejected", "form.replied", "form.cancelled"]);
 var ENDS = new Set(["session.execution.succeeded", "session.execution.failed", "session.execution.interrupted", "session.deleted"]);
 var open = new Map;
@@ -32330,7 +32374,7 @@ function noteAskEvent(event, place, now = Date.now()) {
   const data = event.data ?? {};
   let changed = false;
   const asked = event.type === "form.created" && isObject(data.form) ? data.form : data;
-  if (ASKED3.has(event.type)) {
+  if (ASKED2.has(event.type)) {
     if (typeof asked.id === "string" && typeof asked.sessionID === "string" && asked.sessionID.startsWith("ses") && !open.has(asked.id)) {
       open.set(asked.id, { session: asked.sessionID, at: now, ...place ? { place } : {} });
       changed = true;
@@ -38284,7 +38328,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "3f71faf1b268";
+var BRIDGE_VERSION = "a9ee612f612e";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

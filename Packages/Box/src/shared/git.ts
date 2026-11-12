@@ -11,7 +11,7 @@
 // repository's `commondir` leads git to another repository's settings and hooks (`strayCommon`).
 
 import { execFile, spawnSync } from "node:child_process"
-import { accessSync, closeSync, constants, fstatSync, openSync, promises as fsp, readSync, realpathSync } from "node:fs"
+import { accessSync, closeSync, constants, fstatSync, lstatSync, openSync, promises as fsp, readSync, realpathSync } from "node:fs"
 import { basename, dirname, join, resolve } from "node:path"
 
 /** What every git the box runs gets. */
@@ -19,10 +19,6 @@ export const EVERY = ["-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c"
 
 /** And what the box runs by itself. */
 export const OWN = [...EVERY, "-c", "safe.bareRepository=explicit", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", "-c", "tag.gpgSign=false", "-c", "credential.helper="]
-
-/** And what you ask for: never a bare repository found by sitting in its folder, which a folder's
- * files could make of it (a broken `.git`, and `HEAD`, `objects`, `refs` and settings beside it). */
-const ASKED = [...EVERY, "-c", "safe.bareRepository=explicit"]
 
 /** Never asking anything. */
 export const GIT_QUIET = { GIT_TERMINAL_PROMPT: "0" }
@@ -238,13 +234,23 @@ const gitDirArgs = (lead: string[]) => [...lead, ...EVERY, "rev-parse", "--absol
 // Commands that make a repository rather than work in one.
 const MAKING = new Set(["clone", "init"])
 
+// A repository git found in a folder that has a `.git` of its own, which no repository's own folder
+// has: what a folder's files make of it once its `.git` is broken (`HEAD`, `objects`, `refs` and
+// settings beside it), a bare one or one naming its work tree. (Not refused by
+// `safe.bareRepository`, which would reach your hooks' own git too, through GIT_CONFIG_PARAMETERS.)
+const madeBare = (lead: string[], folder: string) =>
+  !lead.some(each => each === "--git-dir" || each.startsWith("--git-dir=")) && !process.env.GIT_DIR && exists(join(folder, ".git"))
+const exists = (where: string) => { try { lstatSync(where); return true } catch { return false } }
+
 /** Whether the repository git would work in, with `lead` from `cwd`, has a `commondir` that leads
- * anywhere but where it should (none, itself, or a worktree's repository). Not in one: no. */
+ * anywhere but where it should (none, itself, or a worktree's repository), or is a bare one a
+ * folder's own files made (`madeBare`). Not in one: no. */
 function strayCommon(lead: string[], rest: string[], cwd?: string): boolean {
   if (MAKING.has(rest[0] ?? "")) return false
   const ran = spawnSync("git", gitDirArgs(lead), { cwd, encoding: "utf8", env: { ...process.env, ...GIT_QUIET }, timeout: 30_000 })
   const folder = ran.status === 0 ? String(ran.stdout ?? "").trim() : ""
   if (!folder) return false
+  if (madeBare(lead, folder)) return true
   const named = readNamed(join(folder, "commondir"))
   if (named === null) return false
   return named === undefined || !leadsHome(folder, places(folder, named).map(realOrNull))
@@ -255,6 +261,7 @@ async function strayCommonLater(lead: string[], rest: string[], cwd?: string): P
   const folder = await new Promise<string>(done =>
     execFile("git", gitDirArgs(lead), { cwd, encoding: "utf8", env: { ...process.env, ...GIT_QUIET }, timeout: 30_000 }, (error, out) => done(error ? "" : String(out ?? "").trim())))
   if (!folder) return false
+  if (madeBare(lead, folder)) return true
   const named = await readNamedLater(join(folder, "commondir"))
   if (named === null) return false
   if (named === undefined) return true
@@ -296,17 +303,17 @@ export async function ownArgsLater(args: string[], cwd?: string): Promise<string
   return built(lead, rest, found)
 }
 
-/** `args` as you asked for them, from `cwd`: [ASKED], the repository's hooks, filters and sign-ins as
+/** `args` as you asked for them, from `cwd`: [EVERY], the repository's hooks, filters and sign-ins as
  * they are. Undefined: don't run it (its `commondir` leads elsewhere, so they'd be another's). */
 export function askedArgs(args: string[], cwd?: string): string[] | undefined {
   const { lead, rest } = split(args)
   if (strayCommon(lead, rest, cwd)) return undefined
-  return [...lead, ...ASKED, ...(withOptions(rest, false) ?? rest)]
+  return [...lead, ...EVERY, ...(withOptions(rest, false) ?? rest)]
 }
 
 /** [askedArgs], without holding up the bridge. */
 export async function askedArgsLater(args: string[], cwd?: string): Promise<string[] | undefined> {
   const { lead, rest } = split(args)
   if (await strayCommonLater(lead, rest, cwd)) return undefined
-  return [...lead, ...ASKED, ...(withOptions(rest, false) ?? rest)]
+  return [...lead, ...EVERY, ...(withOptions(rest, false) ?? rest)]
 }
