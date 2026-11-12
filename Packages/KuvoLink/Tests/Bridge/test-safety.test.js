@@ -173,6 +173,91 @@ test("the account's own home folders can't be a test's own either, whatever HOME
   assert.equal(accountHome, account, "found from the system, not from HOME");
 });
 
+// A test once copied a real Grok sign-in. Nothing in the coding agents' own folders in the real home
+// is read, written or copied, through a link too, no program of theirs is started, nor the bridge with
+// that home; only what a path is is asked. Each refusal fails the run, however it was caught, unless a
+// live test you asked for allows them. (A decoy of the real home here, made in another process.)
+test("a test can't read, copy or write the coding agents' sign-ins in the real home, or start their real programs, and a run that tried fails", () => {
+  const real = execFileSync("mktemp", ["-d", path.join(os.tmpdir(), "kuvo-real-home.XXXXXX")], { encoding: "utf8" }).trim();
+  atEnd(() => void execFileSync("rm", ["-rf", real]));
+  const write = (name, text, mode = 0o600) => {
+    fs.mkdirSync(path.dirname(path.join(real, name)), { recursive: true });
+    fs.writeFileSync(path.join(real, name), text, { mode });
+  };
+  write(".grok/auth.json", '{"decoy":{"key":"not-a-real-token"}}');
+  write(".codex/auth.json", "{}");
+  write(".local/share/opencode/auth.json", "{}");
+  write(".grok/bin/grok", "#!/bin/sh\necho ran\n", 0o755);
+  write("bin/codex", "#!/bin/sh\necho ran\n", 0o755);
+  write("bin/kuvo-tool", "#!/bin/sh\necho ran\n", 0o755);
+  const script = `import { allowRealAgents, withRealProgram } from "${path.join(here, "test-safety.js")}";
+    import fs from "node:fs"; import os from "node:os"; import path from "node:path"; import { spawnSync } from "node:child_process";
+    const real = process.argv[1], seen = {};
+    const tried = (name, act) => { try { act(); seen[name] = "allowed"; } catch (error) { seen[name] = "refused"; } };
+    const mine = fs.mkdtempSync(path.join(os.tmpdir(), "mine-"));
+    tried("read Grok's sign-in", () => fs.readFileSync(path.join(real, ".grok", "auth.json")));
+    seen["read it later"] = await fs.promises.readFile(path.join(real, ".grok", "auth.json")).then(() => "allowed", () => "refused");
+    tried("copy Codex's", () => fs.copyFileSync(path.join(real, ".codex", "auth.json"), path.join(mine, "copy")));
+    tried("write Claude Code's settings", () => fs.writeFileSync(path.join(real, ".claude", "settings.json"), "{}"));
+    tried("read opencode's", () => fs.readFileSync(path.join(real, ".local", "share", "opencode", "auth.json")));
+    tried("copy the home they're in", () => fs.cpSync(real, path.join(mine, "all"), { recursive: true }));
+    tried("read it as a blob", () => fs.openAsBlob(path.join(real, ".grok", "auth.json")));
+    tried("link to it", () => fs.symlinkSync(path.join(real, ".grok"), path.join(mine, "linked")));
+    spawnSync("/bin/ln", ["-s", path.join(real, ".grok"), path.join(mine, "linked")]);
+    tried("read it through a link", () => fs.readFileSync(path.join(mine, "linked", "auth.json")));
+    tried("ask whether it's there", () => fs.statSync(path.join(real, ".grok", "auth.json")));
+    seen["its programs' folder on the PATH"] = process.env.PATH.split(":").includes(path.join(real, ".grok", "bin")) ? "kept" : "dropped";
+    seen["what it starts finds them on the PATH"] = spawnSync("/bin/sh", ["-c", "command -v grok codex || echo none"], { encoding: "utf8" }).stdout.trim();
+    seen["what it starts finds the rest there"] = spawnSync("/bin/sh", ["-c", "command -v kuvo-tool"], { encoding: "utf8" }).stdout.trim().endsWith("/kuvo-tool") ? "yes" : "no";
+    seen["what it starts with a PATH of its own finds them"] = spawnSync("/bin/sh", ["-c", "command -v codex || echo none"], { encoding: "utf8", env: { PATH: path.join(real, "bin") + ":/usr/bin:/bin" } }).stdout.trim();
+    seen["a runtime started with no home has the run's"] = spawnSync(process.execPath, ["-e", "process.stdout.write(require('os').homedir())"], { encoding: "utf8", env: { PATH: "/usr/bin:/bin" } }).stdout === process.env.HOME ? "yes" : "no";
+    tried("start its real program, allowed, with your real home", () => withRealProgram(path.join(real, "bin", "codex"), () => spawnSync(path.join(real, "bin", "codex"), { env: { ...process.env, HOME: real } })));
+    seen["start its real program, allowed, with a home of its own"] = withRealProgram(path.join(real, "bin", "codex"), () => spawnSync(path.join(real, "bin", "codex"), { encoding: "utf8" }).stdout);
+    tried("start Grok's program", () => spawnSync(path.join(real, ".grok", "bin", "grok")));
+    seen["start Codex, on a PATH of its own"] = spawnSync("codex", { env: { PATH: path.join(real, "bin") } }).error?.code ?? "ran";
+    fs.writeFileSync(path.join(mine, "grok"), "#!/bin/sh\\necho stand-in\\n", { mode: 0o755 });
+    tried("start a stand-in of its own", () => { if (spawnSync("grok", { env: { PATH: mine }, encoding: "utf8" }).stdout !== "stand-in\\n") throw new Error("not run"); });
+    tried("start the bridge with the real home", () => spawnSync(process.execPath, ["-e", "0"], { env: { ...process.env, HOME: real } }));
+    tried("start a shell with it", () => spawnSync("/bin/sh", ["-c", "true"], { env: { ...process.env, HOME: real } }));
+    tried("start the engine as Bun with it", () => spawnSync("/bin/sh", ["-c", "true"], { env: { ...process.env, HOME: real, BUN_BE_BUN: "1" } }));
+    allowRealAgents();
+    tried("read it in a live test you asked for", () => fs.readFileSync(path.join(real, ".grok", "auth.json")));
+    fs.rmSync(mine, { recursive: true });
+    console.log(JSON.stringify(seen));`;
+  const run = spawnSync(process.execPath, ["--input-type=module", "-e", script, real], { encoding: "utf8", env: { ...process.env, HOME: real, KUVO_TEST_REAL_HOME: real, PATH: `${path.join(real, ".grok", "bin")}:${path.join(real, "bin")}:${process.env.PATH}` } });
+  assert.deepEqual(JSON.parse(run.stdout || "{}"), {
+    "read Grok's sign-in": "refused",
+    "read it later": "refused",
+    "copy Codex's": "refused",
+    "write Claude Code's settings": "refused",
+    "read opencode's": "refused",
+    "copy the home they're in": "refused",
+    "read it as a blob": "refused",
+    "link to it": "refused",
+    "read it through a link": "refused",
+    "ask whether it's there": "allowed",
+    "its programs' folder on the PATH": "dropped",
+    "what it starts finds them on the PATH": "none",
+    "what it starts finds the rest there": "yes",
+    "what it starts with a PATH of its own finds them": "none",
+    "a runtime started with no home has the run's": "yes",
+    "start its real program, allowed, with your real home": "refused",
+    "start its real program, allowed, with a home of its own": "ran\n",
+    "start Grok's program": "refused",
+    "start Codex, on a PATH of its own": "ENOENT",
+    "start a stand-in of its own": "allowed",
+    "start the bridge with the real home": "refused",
+    "start a shell with it": "allowed",
+    "start the engine as Bun with it": "refused",
+    "read it in a live test you asked for": "allowed",
+  }, run.stderr);
+  assert.equal(run.status, 1, "a run that reached them fails");
+  assert.match(run.stderr, /this run reached your real coding agents 13 time\(s\)/);
+  // Nothing of them was written or copied.
+  assert.deepEqual(fs.readdirSync(real).sort(), [".codex", ".grok", ".kuvo-code-test", ".local", "bin"].filter(name => fs.existsSync(path.join(real, name))));
+  assert.equal(fs.existsSync(path.join(real, ".claude")), false);
+});
+
 test("every bridge test file, in any folder under this one, loads test-safety.js before anything else", () => {
   const found = fs.readdirSync(here, { recursive: true }).filter(name => !name.split(path.sep).includes("node_modules") && /([._-]test|[._]spec)\.[cm]?[jt]sx?$|(^|\/)test\.[cm]?[jt]s$/.test(name));
   assert.ok(found.length > 10, "the test files were found");

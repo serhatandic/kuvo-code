@@ -4,6 +4,7 @@ import ClientText
 import Foundation
 import KuvoLink
 import OpenCodeKit
+import Observation
 import Testing
 import Textual
 @testable import KuvoCode
@@ -20,6 +21,47 @@ import Textual
     init() {
         TestEnvironment.prepare()
         app.workQueues.app = app
+    }
+
+    @Test func chipVisibilityAndTypingStayInTheirConversation() throws {
+        let store = app.workQueues
+        let first = try JSONDecoder().decode(WorkItem.self, from: JSONSerialization.data(withJSONObject: Self.item(1, "First", order: 0)))
+        let second = try JSONDecoder().decode(WorkItem.self, from: JSONSerialization.data(withJSONObject: Self.item(2, "Second", order: 1)))
+        store.standIn(WorkQueueView(owner: "ses_ours", items: [first, second]), for: .init(box: BoxClient.mac, owner: "ses_ours"))
+        store.standIn(WorkQueueView(owner: "ses_other"), for: .init(box: BoxClient.mac, owner: "ses_other"))
+        #expect(store.refs(in: "see #1", box: BoxClient.mac, owner: "ses_ours")["1"] != nil)
+        #expect(store.refs(in: "#1 gh:o/r#1", box: BoxClient.mac).isEmpty)
+        #expect(store.refs(in: "#1 gh:o/r#1", box: BoxClient.mac, owner: "").isEmpty)
+        #expect(store.refs(in: "see #1", box: BoxClient.mac, owner: "ses_other").isEmpty)
+        #expect(store.refs(in: "#1 #2", box: BoxClient.mac, owner: "ses_ours", typing: true).keys.sorted() == ["1"])
+        #expect(store.refs(in: "the #1 Google result", box: BoxClient.mac, owner: "ses_ours").isEmpty)
+    }
+
+    @Test func aDraftCanChipQualifiedRefsWithoutAQueue() throws {
+        let store = app.workQueues
+        var item = try JSONDecoder().decode(WorkItem.self, from: JSONSerialization.data(withJSONObject: Self.item(243, "Issue", order: 0)))
+        item.source = WorkSource(kind: "github", ref: "gh:owner/repo#12")
+        store.standIn(WorkQueueView(owner: "ses_ours", items: [item]), for: .init(box: BoxClient.mac, owner: "ses_ours"))
+        #expect(store.refs(in: "#243 gh:owner/repo#12", box: BoxClient.mac).keys.sorted() == ["gh:owner/repo#12"])
+        #expect(store.refs(in: "#243 gh:owner/repo#12", box: BoxClient.mac, owner: "").keys.sorted() == ["gh:owner/repo#12"])
+    }
+
+    @Test func unrelatedQueueUpdatesDoNotInvalidateNumericChips() throws {
+        let store = app.workQueues
+        let item = try JSONDecoder().decode(WorkItem.self, from: JSONSerialization.data(withJSONObject: Self.item(243, "Ours", order: 0)))
+        let key = WorkQueues.Key(box: "lab", owner: "ses_ours")
+        store.standIn(WorkQueueView(owner: key.owner, items: [item]), for: key)
+        @MainActor final class Changes { var called = false }
+        let changes = Changes()
+        withObservationTracking {
+            #expect(store.refs(in: "to #243", box: key.box, owner: key.owner)["243"] != nil)
+        } onChange: { MainActor.assumeIsolated { changes.called = true } }
+        store.standIn(WorkQueueView(owner: "ses_other"), for: .init(box: key.box, owner: "ses_other"))
+        #expect(!changes.called)
+        store.standIn(WorkQueueView(owner: key.owner), for: key)
+        #expect(changes.called)
+        app.openWorkItem("243", box: key.box)
+        #expect(store.opened[app.utilities.panelKey]?.box == "lab")
     }
 
     /// The box, as this Mac's app reaches it (as you, not an agent).
@@ -230,9 +272,9 @@ import Textual
         let store = app.workQueues
         let message = "Picked up #243, not `#243` and not #9."
         // Not known yet: plain text, and the box is asked.
-        #expect(store.refs(in: message, box: BoxClient.mac).isEmpty)
-        try await until { store.refs[BoxClient.mac]?["243"] != nil }
-        let refs = store.refs(in: message, box: BoxClient.mac)
+        #expect(store.refs(in: message, box: BoxClient.mac, owner: "ses_lead").isEmpty)
+        await store.read(.init(box: BoxClient.mac, owner: "ses_lead"))
+        let refs = store.refs(in: message, box: BoxClient.mac, owner: "ses_lead")
         #expect(refs.keys.sorted() == ["243"], "#9 isn't an item: it stays as written")
 
         let parsed = try FileLinkingParser(folders: { [] }, refs: refs).attributedString(for: message)
@@ -253,7 +295,8 @@ import Textual
         var done = Self.item(243, "Work Queue panel", category: "done", order: 1)
         done["doneAt"] = Date.now.timeIntervalSince1970 * 1000
         try keep([done], for: "ses_lead", on: machine)
-        try await until { store.refs(in: message, box: BoxClient.mac)["243"]?.category == "done" }
+        await store.read(.init(box: BoxClient.mac, owner: "ses_lead"))
+        #expect(store.refs(in: message, box: BoxClient.mac, owner: "ses_lead")["243"]?.category == "done")
 
         // Clicked: the panel shows the Work Queue with the item open.
         app.openWorkItem("243")
@@ -293,9 +336,10 @@ import Textual
 
         // Named in a message by its ref, or by its old number: GitHub's chip either way.
         let message = "Fixed gh:kuvo-test/app#12 (was #250)."
-        _ = store.refs(in: message, box: BoxClient.mac)
-        try await until { store.refs(in: message, box: BoxClient.mac).count == 2 }
-        let parsed = try FileLinkingParser(folders: { [] }, refs: store.refs(in: message, box: BoxClient.mac)).attributedString(for: message)
+        await store.read(.init(box: BoxClient.mac, owner: "ses_lead"))
+        _ = store.refs(in: message, box: BoxClient.mac, owner: "ses_lead")
+        try await until { store.refs(in: message, box: BoxClient.mac, owner: "ses_lead").count == 2 }
+        let parsed = try FileLinkingParser(folders: { [] }, refs: store.refs(in: message, box: BoxClient.mac, owner: "ses_lead")).attributedString(for: message)
         let chips = parsed.runs.compactMap { $0.textual.attachment?.base as? WorkItemChipAttachment }
         #expect(chips.map(\.name) == ["app#12", "app#12"])
         #expect(chips.map(\.written) == ["gh:kuvo-test/app#12", "#250"])

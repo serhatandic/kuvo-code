@@ -1,6 +1,8 @@
 // What a group chat on a machine asks of where its bots' seats run: the machine's engine, or this
 // bridge itself for a seat on a coding agent's model. Both answer the engine's API.
 
+import { withNotes } from "../../shared/session-notes"
+import { rewriteVia } from "../notes"
 import type { ModelRef } from "../wire"
 import type { Rule } from "./rules"
 
@@ -102,8 +104,11 @@ export class SeatAPI {
     await this.requester.request("PATCH", at(id), { permissions: rules })
   }
 
-  async setMetadata(id: string, metadata: Record<string, unknown>) {
-    await this.requester.request("PATCH", at(id), { metadata })
+  /** Marked as a group chat's seat (`kuvo.seat`), in its turn (`../notes.ts`), the rest of its
+   * notes as they are then. */
+  async markSeat(id: string, seat: Record<string, unknown>) {
+    const done = await rewriteVia(this.requester, id, (now) => ({ metadata: withNotes(now.metadata, { seat }) }))
+    if (!done) throw new Error("There's no such conversation.")
   }
 
   async setInstruction(id: string, key: string, text: string) {

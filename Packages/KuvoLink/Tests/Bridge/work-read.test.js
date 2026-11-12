@@ -8,6 +8,7 @@
 // `node --test Packages/KuvoLink/Tests/Bridge/work-read.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
+import { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -19,6 +20,8 @@ const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-wo
 process.env.KUVO_HOME = home;
 removeAtEnd(home);
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
+// The folder the stand-in engine says each session works in (not a repository on this machine).
+const WORK = "/home/me/kuvo-store";
 
 // The engine: its sessions (each one's `time.idle` and `time.viewed`), each one's messages (newest
 // first), what each asks, and every client told what was read (`session.viewed`), as the engine does.
@@ -82,7 +85,20 @@ const engine = http.createServer((request, response) => {
   });
 });
 await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
-atEnd(() => { engine.closeAllConnections(); engine.close(); });
+// The box backs a session up as its run ends, in a git process of its own (work/backups.ts), which
+// the watcher's abort doesn't wait for: here its folder isn't a repository, so it says so and exits.
+// Stop that one still running by its own pid and wait for it, so the file's clean-up finds no process
+// the test left (a loaded machine made it outlive the tests). Only this folder's backup: another git
+// left behind still fails the file, as it should.
+const ended = child => child.exitCode !== null || child.signalCode !== null;
+const settleChildren = () => Promise.all(process._getActiveHandles()
+  .filter(handle => handle instanceof ChildProcess && handle.spawnfile === "git"
+    && handle.spawnargs.includes(WORK) && handle.spawnargs.includes("rev-parse") && !ended(handle))
+  .map(child => new Promise(resolve => {
+    child.once("exit", resolve);
+    child.kill("SIGKILL");
+  })));
+atEnd(async () => { engine.closeAllConnections(); engine.close(); await settleChildren(); });
 const target = { port: engine.address().port, password: "pw" };
 const following = [];
 const send = event => { for (const follower of followers) follower.write(`data: ${JSON.stringify(event)}\n\n`); };
@@ -104,7 +120,7 @@ beforeEach(() => {
 // A session, unread: its last turn ended at 2000, and it was last read at 1000.
 const BOT = { bot: "bot_1", name: "Kuvo Foreman" };
 const session = (id, metadata) => {
-  sessions[id] = { id, title: id, location: { directory: "/home/me/kuvo-store" }, time: { created: 1, updated: 2000, idle: 2000, viewed: 1000 }, ...(metadata ? { metadata } : {}) };
+  sessions[id] = { id, title: id, location: { directory: WORK }, time: { created: 1, updated: 2000, idle: 2000, viewed: 1000 }, ...(metadata ? { metadata } : {}) };
   return sessions[id];
 };
 const bots = id => session(id, { kuvo: { startedBy: "ses_foreman", by: BOT, depth: 1, wake: ["finished", "asks"] } });
