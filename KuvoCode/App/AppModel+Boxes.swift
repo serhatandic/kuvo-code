@@ -75,20 +75,20 @@ extension AppModel {
     }
 
     /// What Update All updates on `box` (while its agents are up), as its box picks it, once for
-    /// each program: each shows how it goes on its row or tile in Settings › Accounts.
+    /// each program, but not one being asked already: each shows how it goes on its row or tile in
+    /// Settings › Accounts.
     func outdatedAgents(on box: SidebarBox) -> [Integration] {
         if let machine = box.machine, machines.engine(machine) == nil { return [] }
         guard agents(for: box).api != nil, !agents(for: box).isDown else { return [] }
-        return catalog(for: box).codingAgents.filter(\.isInUpdateAll)
+        return catalog(for: box).codingAgents.filter { $0.isInUpdateAll && !agents(for: box).isAskedToUpdate($0) }
     }
 
     /// Update All on `box`: its box updates each it picks, through the installer that owns it, and
     /// says how each goes. Throws only when it couldn't be asked.
     func updateAllAgents(on box: SidebarBox) async throws {
         let agents = agents(for: box)
-        guard let api = agents.api else { throw OutsideAgents.Failure.notRunning(agents.failure) }
-        try await api.updateAllPrograms(catalog(for: box).codingAgents)
-        await catalog(for: box).refreshAgents()
+        let catalog = catalog(for: box)
+        try await agents.updateAll(catalog.codingAgents) { await catalog.refreshAgents() }
     }
 
     /// A machine that isn't added any more: nothing there to show or change.

@@ -32,8 +32,6 @@ struct SubscriptionsSection: View {
     @State private var addRequest: AddRequest?
     /// Why Update All couldn't be asked of this page's computer.
     @State private var updateAllFailure: String?
-    /// Update All being asked of it, until its box says what's under way.
-    @State private var askingAll = false
 
     struct AddRequest: Equatable {
         let product: String
@@ -76,7 +74,7 @@ struct SubscriptionsSection: View {
                     .help(shows == .agents ? "Another account, signed in on its own: each shows in the model picker" : "Another account: the engine uses one at a time")
                 }
                 // Only while its agents show: a machine's that aren't running show none.
-                if shows == .agents, !askingAll, !updatable.isEmpty, machine.map(isRunning) != false {
+                if shows == .agents, !updatable.isEmpty, machine.map(isRunning) != false {
                     Button(action: updateAll) {
                         Label("Update All", systemImage: "arrow.down.circle")
                             .font(.callout)
@@ -158,10 +156,8 @@ struct SubscriptionsSection: View {
 
     private func updateAll() {
         let app = app, box = box
-        askingAll = true
         Task {
             do { try await app.updateAllAgents(on: box) } catch { updateAllFailure = error.localizedDescription }
-            askingAll = false
         }
     }
 
@@ -274,8 +270,6 @@ private struct ProductBlock: View {
     @State private var failure: String?
     /// Why its update couldn't be asked of its computer (how one goes is its box's).
     @State private var updateRefused: String?
-    /// Its update being asked of its computer, until its box says it's under way.
-    @State private var asking = false
 
     private var main: Integration { product.main }
     private var isAgent: Bool { product.isAgent }
@@ -396,7 +390,6 @@ private struct ProductBlock: View {
     private var action: Action? {
         if isInstalling { return .installing }
         if isAgent, !isInstalled, let installCommand { return .install(command: installCommand) }
-        if asking { return .updating }
         switch agents.updateStatus(main) {
         case .updating: return .updating
         case .available(let latest): return .update(to: latest)
@@ -502,11 +495,9 @@ private struct ProductBlock: View {
     }
 
     private func update() {
-        let catalog = catalog, agents = agents, id = main.id
-        asking = true
+        let catalog = catalog, agents = agents, main = main
         Task {
-            do { try await agents.update(id) { await catalog.refreshAgents() } } catch { updateRefused = error.localizedDescription }
-            asking = false
+            do { try await agents.update(main) { await catalog.refreshAgents() } } catch { updateRefused = error.localizedDescription }
         }
     }
 

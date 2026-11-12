@@ -101,8 +101,7 @@ extension OpenCodeAPI {
         _ = try await client.send(try client.request("DELETE", "api/kuvo/updates/\(Self.escaped(provider))", query: ["at": String(at)]), as: Empty.self)
     }
 
-    /// COMPAT(0.7 update-answer): an update answered once it's done, by a box from before
-    /// `kuvo/updates`; what went wrong thrown. Goes 3 months after 0.8.0.
+    /// COMPAT(0.7 update-answer): an update answered once it's done, by a box from before `kuvo/updates`; what went wrong thrown. Goes 3 months after 0.8.0.
     private func updateProgramAnswered(_ provider: String) async throws {
         nonisolated struct Answer: Decodable, Sendable { var updated: Bool; var version: String?; var message: String? }
         var request = try client.request("POST", "api/integration/\(Self.escaped(provider))/update")

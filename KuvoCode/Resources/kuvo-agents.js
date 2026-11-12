@@ -18288,6 +18288,7 @@ function updateProgram(agent, accounts, noted) {
   kept2.set(program, { state: "updating", at: Date.now() });
   const done = (async () => {
     let result = { updated: false, message: "The update stopped without saying how it went." };
+    await null;
     try {
       result = agent.update ? await agent.update() : { updated: false, message: `Update ${agent.name} the way you installed it.` };
       const maintained = await agent.maintenance?.().catch(() => {
@@ -28403,4 +28404,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents a106d7e2c78b8e9fcee403e79fe380d60af8177363118d6aa87572ebc87919f9
+// Built from Packages/Box/src/agents 817f7850244b3ae2c811a17d32c60165eac7771d9934e195dba1a203dfe4161d

@@ -693,6 +693,19 @@ final class OutsideAgents {
     /// once while their box forgets them for every device (`seen`). How each stands is its box's
     /// (`Integration.programUpdate`).
     private var seenUpdates: Set<String> = []
+    /// The programs (`metadata.agent`) whose update, or Update All, is being asked of the box: said
+    /// to be updating until it says so itself. (A box from before `kuvo/updates` answers only once
+    /// they're done, and says nothing meanwhile.)
+    private var askedUpdates: Set<String> = []
+
+    private static func program(_ integration: Integration) -> String {
+        integration.metadata?["agent"]?.string ?? integration.id
+    }
+
+    /// Whether its program's update, or Update All, is being asked of its box now.
+    func isAskedToUpdate(_ integration: Integration) -> Bool {
+        askedUpdates.contains(Self.program(integration))
+    }
 
     /// How an agent's program stands, as its row or tile in Settings › Accounts says it.
     enum UpdateStatus: Equatable {
@@ -710,6 +723,7 @@ final class OutsideAgents {
     /// As its box says it: under way (whoever asked), how it went until you've seen it, else
     /// whether a newer version is out.
     func updateStatus(_ integration: Integration) -> UpdateStatus? {
+        if isAskedToUpdate(integration) { return .updating }
         if let update = integration.programUpdate {
             switch update.state {
             case .updating: return .updating
@@ -743,10 +757,29 @@ final class OutsideAgents {
     /// Updates an agent's program (Claude Code, Codex, Grok's CLI) through the installer that owns
     /// it, on its computer, whose box says how it goes (`programUpdate`); then `refresh`es what
     /// the app shows of it. Throws only when it couldn't be asked.
-    func update(_ providerID: String, then refresh: () async -> Void) async throws {
+    func update(_ integration: Integration, then refresh: () async -> Void) async throws {
         guard let api else { throw Failure.notRunning(failure) }
+        try await asking([integration], then: refresh) { try await api.updateProgram(integration.id) }
+    }
+
+    /// Update All on its computer, as its box picks it from `accounts` (its coding agents as last
+    /// read); then `refresh`es what the app shows. Throws only when it couldn't be asked, or (a box
+    /// from before `kuvo/updates`) why those that didn't update didn't.
+    func updateAll(_ accounts: [Integration], then refresh: () async -> Void) async throws {
+        guard let api else { throw Failure.notRunning(failure) }
+        // Not one being asked already (a box from before `kuvo/updates` would run it twice).
+        let accounts = accounts.filter { !isAskedToUpdate($0) }
+        try await asking(accounts.filter(\.isInUpdateAll), then: refresh) { try await api.updateAllPrograms(accounts) }
+    }
+
+    /// `ask`s the box to update `integrations`' programs, which say they're updating meanwhile;
+    /// then `refresh`es, before they say what their box says.
+    private func asking(_ integrations: [Integration], then refresh: () async -> Void, _ ask: () async throws -> Void) async throws {
+        let programs = Set(integrations.map(Self.program)).subtracting(askedUpdates)
+        askedUpdates.formUnion(programs)
+        defer { askedUpdates.subtract(programs) }
         do {
-            try await api.updateProgram(providerID)
+            try await ask()
         } catch {
             await refresh()
             throw error

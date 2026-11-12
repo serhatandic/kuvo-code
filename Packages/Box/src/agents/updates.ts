@@ -94,6 +94,9 @@ export function updateProgram(agent: Agent, accounts: () => Agent[], noted: Note
   kept.set(program, { state: "updating", at: Date.now() })
   const done = (async (): Promise<UpdateResult> => {
     let result: UpdateResult = { updated: false, message: "The update stopped without saying how it went." }
+    // Under way before the agent is asked: an update that throws as it's asked still ends (and
+    // isn't left under way for good, holding a newer bridge back).
+    await null
     try {
       result = agent.update ? await agent.update() : { updated: false, message: `Update ${agent.name} the way you installed it.` }
       // Its version as it is now (the update read it afresh): what its accounts list from here.

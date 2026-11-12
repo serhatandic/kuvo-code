@@ -10,6 +10,7 @@ import type { Agent } from "../../src/agents/agent"
 import { subscribe } from "../../src/agents/events"
 import type { Maintenance, UpdateResult } from "../../src/agents/maintenance"
 import { handler } from "../../src/agents/server"
+import { updatesUnderWay } from "../../src/agents/updates"
 
 /** A stand-in agent's program: its version, the newest, whether its installer can update it, and its update, finished when the test says. */
 class Program {
@@ -180,6 +181,32 @@ describe("updating the agents' programs", () => {
     const after = (await box.accounts())["codex-broken-cli"]
     expect(after.programUpdate).toMatchObject({ state: "failed", message: "spawn npm ENOENT" })
     expect(after.updateAll).toBe(true)
+  })
+
+  test("an update that throws as it's asked ends failed, is offered again, and doesn't hold a newer bridge back", async () => {
+    let asked = 0
+    const broken = {
+      ...new Program("codex-throws", "0.9.0", "1.0.0").account(),
+      update: () => {
+        asked++
+        throw new Error("spawnSync npm ENOENT")
+      },
+    } as unknown as Agent
+    const box = bridge([broken])
+    await box.accounts()
+    const ended = told("codex-throws-cli", 2)
+    await box.ask("kuvo/updates/codex-throws-cli", "POST")
+    await ended
+    const after = (await box.accounts())["codex-throws-cli"]
+    expect(after.programUpdate).toMatchObject({ state: "failed", message: "spawnSync npm ENOENT" })
+    expect(after.updateAll).toBe(true)
+    // Nothing under way: renewal (a newer bridge) isn't waiting on it.
+    expect(updatesUnderWay()).toBe(false)
+    // Asked again, it's tried again, not answered with the one before.
+    const again = told("codex-throws-cli", 2)
+    expect((await box.ask("kuvo/updates/codex-throws-cli", "POST")).value.data).toEqual({ updating: ["codex-throws"] })
+    await again
+    expect(asked).toBe(2)
   })
 
   test("an update a client asked for goes on after it stops waiting (the app quit), and the client opened again sees it, then that it was already the newest", async () => {

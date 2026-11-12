@@ -97,6 +97,84 @@ import ClientAccounts
         var endpoint: ServerEndpoint { ServerEndpoint(url: URL(string: url)!, password: "test") }
     }
 
+    /// A bridge from before `kuvo/updates` (0.7's, 0.8.0-beta.1's): an old Claude Code, with an
+    /// account you added. It answers 404 there, says nothing of an update under way, and answers
+    /// the old `integration/<id>/update` once it's done, when the test says.
+    nonisolated final class OldBridge: @unchecked Sendable {
+        private let lock = NSLock()
+        private var version = "2.1.305"
+        private var asked: [String] = []
+        private var waiting: [@Sendable (StubWeb.Answer) -> Void] = []
+        let url: String
+
+        init(port: Int) {
+            url = "http://127.0.0.1:\(port)"
+            StubWeb.handle(url + "/api/model") { _, _ in StubWeb.json(["data": []]) }
+            StubWeb.hold(url + "/api/integration/claude-code/update") { [weak self] request, _, reply in
+                guard let self, request.httpMethod == "POST" else { return reply(StubWeb.Answer(status: 405)) }
+                self.lock.withLock {
+                    self.asked.append("claude-code")
+                    self.waiting.append(reply)
+                }
+            }
+            StubWeb.handle(url + "/api/integration") { [weak self] _, _ in
+                guard let self else { return StubWeb.Answer(status: 503) }
+                return self.lock.withLock {
+                    let accounts = ["claude-code@1f2e", "claude-code"].map { id -> [String: Any] in
+                        let parts = id.split(separator: "@").map(String.init)
+                        let metadata: [String: Any] = [
+                            "source": "agent", "agent": "claude-code", "accountID": parts.count == 2 ? parts[1] : "default", "installed": true,
+                            "version": self.version, "latestVersion": "2.1.309", "outdated": self.version != "2.1.309", "updates": true,
+                        ]
+                        return ["id": id, "name": "claude-code", "methods": [], "connections": [], "metadata": metadata]
+                    }
+                    return StubWeb.json(["data": accounts])
+                }
+            }
+        }
+
+        /// The update ends, updated to `version`: the answer it waited for.
+        func end(version: String) {
+            let replies = lock.withLock {
+                self.version = version
+                defer { waiting = [] }
+                return waiting
+            }
+            for reply in replies { reply(StubWeb.json(["data": ["updated": true, "version": version]])) }
+        }
+
+        var asks: [String] { lock.withLock { asked } }
+        var endpoint: ServerEndpoint { ServerEndpoint(url: URL(string: url)!, password: "test") }
+    }
+
+    @Test func onABoxFromBeforeItKeptThemEachSaysUpdatingWhileUpdateAllWaits() async throws {
+        TestEnvironment.prepare()
+        StubWeb.start(hosts: ["127.0.0.1"])
+        defer { StubWeb.stop() }
+        let bridge = OldBridge(port: 47979)
+        let app = AppModel()
+        app.catalog.outsideAgents = app.agents
+        app.agents.connect(bridge.endpoint, folderPrefix: "")
+        defer { app.agents.disconnect() }
+        await app.catalog.refreshAgents()
+        func status(_ id: String) -> OutsideAgents.UpdateStatus? {
+            app.catalog.codingAgents.first { $0.id == id }.flatMap(app.agents.updateStatus)
+        }
+        #expect(app.outdatedAgents(on: .mac).map(\.id) == ["claude-code"], "by what it says of its version, once")
+
+        let updating = Task { try await app.updateAllAgents(on: .mac) }
+        try await until { bridge.asks == ["claude-code"] }
+        // Its box says nothing until it's done: not "Update to 2.1.309" meanwhile.
+        #expect(status("claude-code") == .updating)
+        #expect(status("claude-code@1f2e") == .updating, "on each account with the program")
+        #expect(app.outdatedAgents(on: .mac).isEmpty, "Update All isn't offered again while it's asked")
+
+        bridge.end(version: "2.1.309")
+        try await updating.value
+        #expect(status("claude-code") == nil, "updated: nothing left to update")
+        #expect(bridge.asks == ["claude-code"], "asked once")
+    }
+
     @Test func updateAllAsksOnlyThatPagesComputerForWhatItsBoxPicked() async throws {
         TestEnvironment.prepare()
         StubWeb.start(hosts: ["127.0.0.1"])

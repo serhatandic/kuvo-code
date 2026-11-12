@@ -6194,6 +6194,14 @@ before connects (the box notes one: `run/attached`).
   "Notices"), which stays until a box tells its news without its bridge: removing it before then
   loses those notices.
   <!-- compat: 0.7 box-notices -->
+- **Updating an agent's program**: such a Mac asks `POST kuvo/agents/api/integration/<provider>/update`
+  and waits for its answer, `{data: {updated, version?, message?}}`, so the agents bridge still
+  answers that once the update is done (the same update every client sees, "Installing and
+  updating an agent's program"). The other way round, a Mac or phone of this version meeting a box
+  from before `kuvo/updates` (a 404, the bridges of 0.7.x and 0.8.0-beta.1 Macs) asks it each
+  program that way, picking what's behind from `metadata.outdated` and `metadata.updates` on the
+  own sign-in.
+  <!-- compat: 0.7 update-answer -->
 
 **This Mac's own group chats, from 0.5 to 0.8.0-beta.1.** Those Macs ran their group chats in the
 app (`groups.json`, each chat's messages in `groups/<id>.json`). A Mac with this version moves
