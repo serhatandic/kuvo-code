@@ -1,47 +1,24 @@
-import AppKit
+import Foundation
 
-/// Replying to a message, or a part of one: what you selected (else the whole message) goes into
-/// the composer as a quote, for you to answer under.
-enum Quoting {
-    /// The text selected in the window, copied as ⌘C would, with your clipboard put back as it
-    /// was; nil when nothing's selected.
-    static func selection() -> String? {
-        // Asked of what holds it, where that can say: copying through the clipboard and putting
-        // it back changes it twice, which clipboard histories keep and password managers notice.
-        if let responder = NSApp.keyWindow?.firstResponder {
-            if let stack = responder as? RowStackView { return trimmed(stack.selectedText()) }
-            if let text = responder as? NSTextView, !text.isEditable {
-                // One of its own, let go once read: a named one would keep the words readable.
-                let board = NSPasteboard.withUniqueName()
-                defer { board.releaseGlobally() }
-                guard text.writeSelection(to: board, types: [.string]) else { return nil }
-                return trimmed(board.string(forType: .string))
-            }
-        }
-        let board = NSPasteboard.general
-        let saved = (board.pasteboardItems ?? []).map { item in
-            let copy = NSPasteboardItem()
-            for type in item.types {
-                if let data = item.data(forType: type) { copy.setData(data, forType: type) }
-            }
-            return copy
-        }
-        let before = board.changeCount
-        NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil)
-        guard board.changeCount != before else { return nil }
-        let text = board.string(forType: .string)
-        board.clearContents()
-        if !saved.isEmpty { board.writeObjects(saved) }
-        return trimmed(text)
+/// Something you're replying to, with your answer under it.
+public struct Quote: Codable, Hashable, Identifiable, Sendable {
+    public var id = UUID()
+    public var text: String
+    public var response = ""
+
+    public init(id: UUID = UUID(), text: String, response: String = "") {
+        self.id = id
+        self.text = text
+        self.response = response
     }
+}
 
-    private static func trimmed(_ text: String?) -> String? {
-        let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
+/// Replying to a message, or a part of one, the same in both apps (the Mac also reads what's
+/// selected in its window, `Quoting.selection()`): the same Markdown, so a reply written on the
+/// phone shows its quotes on the Mac, and the other way round.
+public enum Quoting {
     /// The message to send: the quote you're replying to, as Markdown, ahead of your words.
-    static func message(quote: String?, text: String) -> String {
+    public static func message(quote: String?, text: String) -> String {
         guard let quote, !quote.isEmpty else { return text }
         let block = quote.trimmingCharacters(in: .whitespacesAndNewlines)
             .split(separator: "\n", omittingEmptySubsequences: false)
@@ -53,7 +30,7 @@ enum Quoting {
     /// The message to send: each quote you're replying to, as Markdown, with your answer to it
     /// under it, then the rest of your words: after a line of their own (`ownWords`) when the last
     /// quote has an answer, so the two stay apart; as its answer when it has none.
-    static func message(quotes: [Drafts.Quote], text: String) -> String {
+    public static func message(quotes: [Quote], text: String) -> String {
         let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let lastAnswered = quotes.last.map { !$0.response.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? false
         let parts = quotes.flatMap { quote in
@@ -64,14 +41,14 @@ enum Quoting {
 
     /// The line between your answers to quotes and the words after them: a Markdown rule, which
     /// the model reads as a break.
-    static let ownWords = "---"
+    public static let ownWords = "---"
 
     /// A message as what it quotes and what it says: each quote (lines of "> ", as `message`
     /// writes them, starting the message or after a blank line, and ending at one) with the words
     /// after it, in order; the first part's quote is nil when it starts with words, and so is a
     /// last part of words after an answer (after `ownWords`, after a blank line). Lines in a code
     /// block, or like ">>> x" or a merge marker, are words.
-    static func segments(_ message: String) -> [(quote: String?, text: String)] {
+    public static func segments(_ message: String) -> [(quote: String?, text: String)] {
         var segments: [(quote: String?, text: String)] = []
         var quote: [String]?
         var words: [String] = []
@@ -108,17 +85,17 @@ enum Quoting {
     }
 
     /// A message's own words, without what it quotes.
-    static func words(of message: String) -> String {
+    public static func words(of message: String) -> String {
         segments(message).map(\.text).filter { !$0.isEmpty }.joined(separator: "\n\n")
     }
 
     /// A sent message back as a draft (after an undo, say): its quotes, each with its answer, and
     /// the words that came first or last.
-    static func draft(of message: String) -> (quotes: [Drafts.Quote], text: String) {
-        var quotes: [Drafts.Quote] = []
+    public static func draft(of message: String) -> (quotes: [Quote], text: String) {
+        var quotes: [Quote] = []
         var words: [String] = []
         for segment in segments(message) {
-            if let quote = segment.quote { quotes.append(Drafts.Quote(text: quote, response: segment.text)) } else { words.append(segment.text) }
+            if let quote = segment.quote { quotes.append(Quote(text: quote, response: segment.text)) } else { words.append(segment.text) }
         }
         return (quotes, words.filter { !$0.isEmpty }.joined(separator: "\n\n"))
     }

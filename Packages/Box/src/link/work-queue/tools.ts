@@ -33,14 +33,14 @@ export interface ToolAnswer { text: string; isError: boolean }
 const said = (text: string): ToolAnswer => ({ text, isError: false });
 const refused = (text: string): ToolAnswer => ({ text, isError: true });
 
-const ITEM = { type: ["string", "integer"], description: "Its number, like #243; or the GitHub issue or pull request it is, like gh:owner/repo#12." };
-const ISSUE = { type: "string", description: "A GitHub issue or pull request, as gh:owner/repo#12 or its address: its title, and Done once it's closed or merged, come from GitHub." };
+const ITEM = { type: ["string", "integer"], description: "Like #243 or gh:owner/repo#12." };
+const ISSUE = { type: "string", description: "gh:owner/repo#12 or its URL." };
 const TOP = { type: "boolean", description: "At the top of its category." };
 const CATEGORY = { type: "string", description: "Next, Later, Parked, Done or a custom one." };
 const LINKS = { type: "array", items: { type: "string" }, description: "Web links (a PR, a doc)." };
 const FILES = { type: "array", items: { type: "string" }, description: "Full paths of files to keep with it (in the body: ![](name))." };
 const PROGRESS = { type: ["number", "null"], description: "0 to 1, where it can be counted." };
-const PROGRESS_NOTE = { type: ["string", "null"], description: "What's being done now, in a few words." };
+const PROGRESS_NOTE = { type: ["string", "null"], description: "What's being done now, briefly." };
 const WORKING = { type: "boolean", description: "You're on it now (false: you stopped)." };
 const NAMES = { type: "array", items: { type: "string" } };
 
@@ -48,7 +48,7 @@ const NAMES = { type: "array", items: { type: "string" } };
 export const QUEUE_TOOLS = [
   {
     name: "queue_list",
-    description: "List your Work Queue (and that of sessions you oversee) by category, In progress first.",
+    description: "List your Work Queue (and those of sessions you oversee) by category, In progress first.",
     inputSchema: { type: "object", properties: {
       category: { type: "string", description: "Only this one (or In progress)." },
       query: { type: "string", description: "Words in the title or description." },
@@ -57,12 +57,12 @@ export const QUEUE_TOOLS = [
   },
   {
     name: "queue_show",
-    description: "Read one item whole: description, progress, notes, files, links, sessions.",
+    description: "Read one item whole, with its notes, files, links and sessions.",
     inputSchema: { type: "object", properties: { item: ITEM }, required: ["item"], additionalProperties: false },
   },
   {
     name: "queue_add",
-    description: "Add an item to your Work Queue (Next, at the bottom, by default). You get its number. With issue, the item is that GitHub issue or pull request (no title then).",
+    description: "Add an item to your Work Queue (at the bottom of Next by default); you get its number. With issue, it's that GitHub issue or PR (no title).",
     inputSchema: { type: "object", properties: {
       title: { type: "string", description: "One short line." },
       issue: ISSUE,
@@ -78,10 +78,10 @@ export const QUEUE_TOOLS = [
   },
   {
     name: "queue_update",
-    description: "Change an item of yours (or of a session you oversee). category: done marks it done; note adds a note; issue makes it that GitHub issue or pull request.",
+    description: "Change an item of yours (or of a session you oversee): note adds a note; issue makes it that GitHub issue or PR.",
     inputSchema: { type: "object", properties: {
       item: ITEM,
-      issue: ISSUE,
+      issue: { type: "string" },
       title: { type: "string" },
       body: { type: "string", description: "Replaces the description." },
       category: CATEGORY,
@@ -101,7 +101,7 @@ export const QUEUE_TOOLS = [
   },
   {
     name: "queue_hand",
-    description: "Hand an item to a session or bot (here or on another of the user's computers): it moves to its queue, linked to it, and stays in your view.",
+    description: "Hand an item to a session or bot, here or on another computer: it moves to their queue, linked to them, and stays in your view.",
     inputSchema: { type: "object", properties: {
       item: ITEM,
       to: { type: "string", description: "Its address, or a bot's name." },
@@ -109,7 +109,7 @@ export const QUEUE_TOOLS = [
   },
   {
     name: "queue_remove",
-    description: "Delete an item (the user can bring it back for 30 days); undo brings back one an agent deleted.",
+    description: "Delete an item (the user can restore it for 30 days); undo restores one an agent deleted.",
     inputSchema: { type: "object", properties: { item: ITEM, undo: { type: "boolean" } }, required: ["item"], additionalProperties: false },
   },
   {
@@ -135,7 +135,7 @@ export const QUEUE_TOOLS = [
 export const QUEUE_TOOL_NAMES: readonly string[] = QUEUE_TOOLS.map(tool => tool.name);
 
 /** What the tool servers add to what they tell agents, with the tools. */
-export const QUEUE_INSTRUCTIONS = " Keep work items in your Work Queue (queue_*), not a file: add what the user asks for or what's left to do. Refer to them as #243 (outside ones with their source, like gh:owner/repo#12). On one: working: true, progress_note, then category: done. A GitHub issue or pull request you work on is an item itself (queue_add issue:), Done when it's closed on GitHub; never write a bare #243 in commits, branches or pull requests.";
+export const QUEUE_INSTRUCTIONS = " Keep work items in your Work Queue (queue_*), not a file: what the user asks for, what's left to do, and GitHub issues or PRs you work on (queue_add issue:, Done once closed). Refer to them as #243 (GitHub ones as gh:owner/repo#12), never a bare #243 in commits, branches or PRs. On one: working: true, progress_note, then category: done.";
 
 /** Who calls, as the queue knows them: the owner of the queue they write to, the session that
  * works when they say working, their name, and where their files may come from. */

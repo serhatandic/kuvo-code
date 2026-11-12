@@ -2,16 +2,16 @@ import Foundation
 import OpenCodeKit
 
 /// "/" at the start of a message runs one of the engine's commands ("/init", "/review main"),
-/// or a project's own.
-nonisolated enum SlashCommands {
+/// or a project's own, read the same in both apps.
+public enum SlashCommands {
     /// The command name being typed: what follows a "/" that starts the message, until a space.
-    static func query(in text: String) -> String? {
+    public static func query(in text: String) -> String? {
         guard text.hasPrefix("/"), !text.contains(where: \.isWhitespace) else { return nil }
         return String(text.dropFirst())
     }
 
     /// Names starting with `query` first, then names containing it.
-    static func matches(_ query: String, in commands: [Command]) -> [Command] {
+    public static func matches(_ query: String, in commands: [Command]) -> [Command] {
         let query = query.lowercased()
         let starting = commands.filter { $0.name.lowercased().hasPrefix(query) }
         let containing = commands.filter { !$0.name.lowercased().hasPrefix(query) && $0.name.lowercased().contains(query) }
@@ -19,13 +19,13 @@ nonisolated enum SlashCommands {
     }
 
     /// A message that runs one of `commands`: "/review main" is ("review", "main").
-    static func parse(_ text: String, commands: [Command]) -> (name: String, arguments: String)? {
+    public static func parse(_ text: String, commands: [Command]) -> (name: String, arguments: String)? {
         guard let (name, arguments) = split(text), commands.contains(where: { $0.name == name }) else { return nil }
         return (name, arguments)
     }
 
     /// "/name arguments", whatever the name.
-    static func split(_ text: String) -> (name: String, arguments: String)? {
+    public static func split(_ text: String) -> (name: String, arguments: String)? {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard text.hasPrefix("/") else { return nil }
         let body = text.dropFirst()

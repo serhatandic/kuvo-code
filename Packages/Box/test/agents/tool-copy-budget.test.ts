@@ -65,7 +65,9 @@ test("what each agent kind carries of the box's own words, on every call, stays 
     "a bot's seat in a group chat": tokens(seat),
   }
   // (The Work Queue's eight tools and their line, #243, came to about 1,250 tokens once trimmed from
-  // 2,130: what every agent kind carries now to keep work items in the queue, not a file.)
+  // 2,130: what every agent kind carries now to keep work items in the queue, not a file. #393's
+  // GitHub items added ~220 to them, and #553 ~50 to what a bot is told, past five budgets; #579
+  // trimmed both back.)
   const budget = {
     "an engine session": 2_950,
     "an engine session on Autopilot": 3_200,

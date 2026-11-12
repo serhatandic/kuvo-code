@@ -581,10 +581,10 @@ export function agentsNote(platform: "darwin" | "linux", tmuxFits = true): strin
     "",
     ...(tmuxFits
       ? []
-      : ["This computer's home folder's path is too long for tmux in the sandbox: its socket in `$TMPDIR` would pass the system's limit, so tmux fails with \"File name too long\", as can other programs that make a socket there. Don't start tmux with sandbox_ask instead: outside the sandbox it would be the user's own. For another program that needs a socket, ask with sandbox_ask, or tell the user why it can't run in the sandbox here.", ""]),
+      : ["This computer's home folder's path is too long for tmux in the sandbox: its socket in `$TMPDIR` would pass the system's limit, so tmux fails with \"File name too long\" (as can other programs' sockets there). Don't start tmux with sandbox_ask instead (outside the sandbox it would be the user's own); for another program that needs a socket, use sandbox_ask or tell the user why it can't run here.", ""]),
     "`ssh` and git over SSH use only the keys the user lets this conversation use from Kuvo Code's vault, through `$SSH_AUTH_SOCK`. With none, use HTTPS or ask the user.",
     "",
-    "When the sandbox refuses something a task needs (\"Operation not permitted\" or \"Permission denied\"), don't work around it: ask the user with sandbox_ask.",
+    "When the sandbox refuses something a task needs, don't work around it: ask the user with sandbox_ask.",
     "",
   ].join("\n");
 }
