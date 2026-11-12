@@ -18,7 +18,7 @@ import { processRuns, sandboxGeneration } from "../../shared/platform";
 import { accountHome, BOTS, BRIDGE_FILE, CHATS, ENGINE_CONFIG, ENGINE_DATA, ENGINE_FILE, K, RUN, SANDBOX_NOTE, SESSION_WAKES, SOCKET_KEY_FILE, SSH_AGENTS, SSH_FOR } from "../home";
 import { tellLauncher } from "./allowed";
 import { agentShellScript, agentsNote, launcherScript, pluginScript, type FencePlaces } from "./files";
-import { LANDLOCK_RUNNER, landlockPolicy, namespaceReadOnlyFailed, ownNamespace, ownNamespaceLater, UNSHARE } from "./landlock";
+import { LANDLOCK_RUNNER, landlockPolicy, ownNamespace, ownNamespaceLater, UNSHARE } from "./landlock";
 import { appTemporary, fencePolicy, realish, sandboxCaches, whenReadLate } from "./policy";
 import { seatbeltProfile } from "./seatbelt";
 
@@ -310,7 +310,7 @@ function able(found?: string | null): Checked {
   }
   namespace = found === undefined ? namespaceHere() : found;
   namespaceKnown = true;
-  withoutNamespace = namespace ? null : namespaceReadOnlyFailed() ? "read-only mounts" : UNSHARE.some(each => fs.existsSync(each)) ? "user namespaces" : "util-linux";
+  withoutNamespace = namespace ? null : UNSHARE.some(each => fs.existsSync(each)) ? "user namespaces" : "util-linux";
   if (withoutNamespace && WITHOUT_NAMESPACE === "off") {
     const services = "which the sandbox needs to keep commands from the services your login runs: systemd, your keyring, your agents";
     return withoutNamespace === "user namespaces"

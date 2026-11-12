@@ -5524,14 +5524,15 @@ it writes as it writes the files beside them; the engine's and the coding agents
 conversation's folder; and, in the repositories it works in on Linux (below): a repository in the
 folder but its own, one there already or one a command makes (in a folder with no repository,
 `git init` and a hook in one command; in a repository, one it then adds to the index as a
-submodule, whose settings a plain `git status` outside runs); a submodule's `.git` file a command
-leads to such a repository of its own when its submodule has no repository in `.git/modules`; the
+submodule, whose settings a plain `git status` outside runs); a submodule's folder in the project
+moved away and another put in its place whose `.git` leads to such a repository (the `.git` file
+itself is read-only, the folder holding it isn't: a mount there would be a border, as below), and a
+submodule's `.git` a command leads there when its submodule has no repository in `.git/modules`; the
 repositories one level down in an Also Allowed folder (each would take its own keeping, on every
 command); the conversation's folder moved away from a folder above it that a command writes (an
 Also Allowed one, `/tmp`) and another, with a repository of its own, put in its place (a mount
 there would keep files from being moved or linked across it, tools' caches' links into the project
-among them); a `.git` in the folder that's a link, and a hooks folder or settings file `.git` links
-to, which a command can trade for its own (where it leads stays read-only); a rebase it left
+among them); a `.git` in the folder that's a link; a rebase it left
 stopped, whose `exec` lines run as you go on with it (as on a Mac); and the race below. Before Linux
 6.2 (Landlock 3), truncating a file it only reads by its path (`truncate`), which Landlock checks
 only from then.
@@ -5541,10 +5542,11 @@ starts, in its conversation's repository, the `.git` folder up from its folder, 
 Allowed holds, and their submodules' repositories, the repository's folder, `worktrees` and
 `modules` are mounted on themselves (so none is moved, removed or replaced); its `config`,
 `config.worktree`, `commondir`, `gitdir` and `hooks` are read-only (a `config` or `hooks` that's a
-link: where it leads); `worktrees` and every folder in `modules` but each submodule's repository
+link, which a command could trade for its own: where it leads, and the repository whole, said once);
+`worktrees` and every folder in `modules` but each submodule's repository
 are read-only, as are each worktree's own `commondir`, `gitdir`, `config.worktree` and `modules`
 (the folders themselves written as git works in them and tidies their reflogs); so are each
-submodule's `.git` file and the `.git` file that leads the conversation's worktree to its
+submodule's `.git` file in the project (not the folder it's in) and the `.git` file that leads the conversation's worktree to its
 repository. A `commondir` leading git anywhere but the repository itself (or, the conversation's
 worktree's, its repository), a link where one of those is, or one that can't be kept, runs nothing
 (126, saying why). Mounts keep only what's there, and a name git reads that isn't there yet can't be
@@ -5561,10 +5563,13 @@ still prints `.git`), so a script that compares the two as strings to tell a lin
 the repository for one. It never changes one that's there, and makes them as you, in the folder as
 it is (never through a link put there), so never in a folder you made read-only: a repository it
 can't give one to is read-only whole to commands (they can't make it writable either), and the
-command runs, told so once in what it prints (again once it can and then can't). Where a folder
-can't be made read-only in a namespace at all (util-linux before 2.39 on a mount whose flags are
-locked, say), commands have no namespace (`gaps`: `services`, `needs`: `"read-only mounts"`): the
-box's check tries that too. What a namespace keeps is what was there as the command started: git
+command runs, told so once in what it prints (again once it can and then can't); so is one whose
+submodules' work trees' `.git` files are kept all the same. Each is made read-only in two steps, a
+bind and then its remount, which libmount makes with the flags a mount from outside the namespace
+keeps locked (`nosuid`, `nodev`): in one step, util-linux before 2.39 drops them and Linux refuses
+it (checked with util-linux 2.36.1, 2.38.1 and 2.41.5 on `/dev/shm`). Where it still can't be made
+read-only, a command in such a repository doesn't run (126, saying why); the namespace, and all
+else it hides, stays. What a namespace keeps is what was there as the command started: git
 outside the sandbox writes `.git/config` anew (`git config`, a push that sets its upstream, a branch
 that tracks one, `git submodule sync`) by putting a new file in its place, which Linux lets through
 and then no longer keeps in the namespaces of commands still running, so a sandboxed process still
@@ -5807,8 +5812,7 @@ it's empty.
   changed reaches the relay alone, from the agent's next turn.
   While it's on, `gaps` lists what it can't keep commands from on this computer: `services`, the
   services your login runs, and git's own files in the repositories they write (a Linux machine
-  whose commands can't have a namespace of their own, or where a folder can't be made read-only in
-  one: `needs` `"read-only mounts"`;
+  whose commands can't have a namespace of their own;
   `needs`: `"user namespaces"`, or `"util-linux"` without `unshare`). A client says so beside it.
   When it isn't on, also `reason`, a word for a client to map rather than reading `why`, with what
   you can do (`action`) and the box's route that does it (`route`, where there is one):

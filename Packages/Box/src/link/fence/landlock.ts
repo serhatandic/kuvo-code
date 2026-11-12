@@ -36,14 +36,16 @@ export function landlockPolicy(policy: FencePolicy): string {
  * folder up from its folder, each repository Also Allowed holds (`<folder>/.git`), and each
  * submodule's repository below theirs:
  * - the repository's folder, kept; its `config`, `config.worktree`, `commondir`, `gitdir` and
- *   `hooks`, read-only (`config` and `hooks` that are links: where they lead, read-only);
+ *   `hooks`, read-only (`config` or `hooks` that's a link, which a command could trade for its own:
+ *   where it leads, read-only, and the repository read-only whole, said once);
  * - `worktrees`, read-only: none is made, moved or removed; each worktree's own folder in it kept,
  *   written as git works there (and as `git gc` tidies every worktree's reflogs, locking its
  *   `HEAD`), but for its `commondir`, `gitdir`, `config.worktree` and `modules`, read-only; its
  *   `commondir` must lead back to the repository (the conversation's own runs nothing otherwise, and
  *   another's is kept read-only whole); the conversation's own `modules` kept as a repository's;
  * - `modules`, and every folder in it but each submodule's repository, read-only: none is made,
- *   moved or removed; and the `.git` file of each submodule's work tree, read-only;
+ *   moved or removed; and the `.git` file of each submodule's work tree, read-only (not the folder
+ *   it's in, which a command can move away and put another in its place);
  * - and the `.git` file that leads a worktree it works in to its repository, up from it, read-only.
  * (Not the folders these are in, which a command could move away from a folder above that it writes,
  * an Also Allowed one or /tmp, and put another repository in their place: each mount is a border
@@ -57,19 +59,39 @@ export function landlockPolicy(policy: FencePolicy): string {
  * (`info/attributes` names drivers only settings define, `objects/info/alternates` and `remotes` name
  * objects and addresses), or isn't read in a worktree's own folder (its `hooks`, `config`, `info`).
  */
-const KEEP_GIT = String.raw`keep() {
+const KEEP_GIT = String.raw`# (Read-only in two steps, a bind and then its remount, which libmount makes with the flags a mount
+# from outside the namespace keeps locked, nosuid and nodev: in one, util-linux before 2.39 drops
+# them, and Linux refuses it. Where even that fails, the command doesn't run: its namespace stays.)
+keep() {
   [ ! -L "$1" ] || fail "$1 is a link, which it can't keep as it is. Ask the user."
   [ -e "$1" ] || return 0
-  if [ "$2" = ro ]; then mount -c --bind -o ro "$1" "$1" 2>/dev/null; else mount -c --bind "$1" "$1" 2>/dev/null; fi && [ ! -L "$1" ] || fail "$1 can't be kept from it."
+  mount -c --bind "$1" "$1" 2>/dev/null && [ ! -L "$1" ] && { [ "$2" != ro ] || mount -c -o remount,bind,ro "$1" 2>/dev/null; } || fail "$1 can't be kept from it."
 }
 ro() { mount -c -o remount,bind,ro "$1" 2>/dev/null || fail "$1 can't be kept from it."; }
-# (Settings and hooks that are links, to a hooks folder kept in the project say: where they lead,
-# read-only. One that leads nowhere could be made there.)
-keep_led() {
+# (Settings or hooks that are a link, to a hooks folder kept in the project say: where it leads,
+# read-only; and, as a command could trade the link for its own, the repository read-only whole,
+# said once. One that leads nowhere could be made there.)
+led() {
   local to
-  [ -L "$1" ] || { keep "$1" ro; return 0; }
   to=$(readlink -f "$1" 2>/dev/null) && [ -e "$to" ] || fail "$1 is a link to nothing, which it can't keep. Ask the user."
-  mount --bind -o ro "$to" "$to" 2>/dev/null || fail "$to can't be kept from it."
+  mount --bind "$to" "$to" 2>/dev/null && mount -o remount,bind,ro "$to" 2>/dev/null || fail "$to can't be kept from it."
+}
+led_note() {
+  [ ! -e "$k_notes$1" ] || return 0
+  mkdir -p "$k_notes$1" 2>/dev/null
+  echo "Note: commands only read git's own files in $1: its hooks folder or settings are a link, which Kuvo Code's sandbox can't keep from being traded for another (make it a folder or file of its own to let git write there)." >&2
+}
+# (Each submodule's work tree's .git file, which its kept settings name: read-only.)
+tree_file() {
+  local t
+  t=$(sed -n 's/^[[:space:]]*worktree[[:space:]]*=[[:space:]]*//p' "$1/config" 2>/dev/null | head -n 1)
+  [ -n "$t" ] || return 0
+  t=$(cd "$1" 2>/dev/null && cd -P "$t" 2>/dev/null && pwd -P) && [ -f "$t/.git" ] && [ ! -L "$t/.git" ] || return 0
+  keep "$t/.git" ro
+}
+trees() {
+  [ -d "$1" ] && [ ! -L "$1" ] || return 0
+  find "$1" \( -name objects -o -name refs -o -name logs -o -name lfs -o -name rr-cache -o -name hooks -o -name info \) -prune -o -name HEAD -type f -print 2>/dev/null | while IFS= read -r k_h; do tree_file "$(dirname "$k_h")"; done || exit 126
 }
 # Where a commondir leads, as git reads it: one line, with no NUL or carriage return (which the shell
 # and git would read differently), from its folder. (A worktree's own as git writes it, first: one
@@ -87,11 +109,14 @@ repo() {
   local r e f
   r=$1
   keep "$r"
-  # (One that still lacks what the launcher gives it: read-only whole.)
-  for f in commondir hooks config.worktree modules worktrees; do [ -e "$r/$f" ] || [ -L "$r/$f" ] || { ro "$r"; return 0; }; done
-  keep_led "$r/config"
-  keep_led "$r/hooks"
-  for f in config.worktree commondir gitdir; do keep "$r/$f" ro; done
+  # (One that still lacks what the launcher gives it, or whose settings or hooks are a link:
+  # read-only whole, its submodules' work trees' .git files too.)
+  e=
+  for f in commondir hooks config.worktree modules worktrees; do [ -e "$r/$f" ] || [ -L "$r/$f" ] || e=lacks; done
+  for f in config hooks; do [ ! -L "$r/$f" ] || { led "$r/$f"; e=led; }; done
+  if [ "$e" = led ]; then led_note "$r"; elif [ -e "$k_notes$r" ]; then rmdir "$k_notes$r" 2>/dev/null; fi
+  if [ -n "$e" ]; then ro "$r"; trees "$r/modules"; return 0; fi
+  for f in config config.worktree commondir gitdir hooks; do keep "$r/$f" ro; done
   [ "$(leads "$r" commondir "$r")" = "$r" ] || fail "$r/commondir leads git to another repository. Ask the user."
   keep "$r/worktrees"
   for e in "$r/worktrees"/* "$r/worktrees"/.[!.]* "$r/worktrees"/..?*; do [ ! -L "$e" ] || keep "$e"; [ ! -d "$e" ] || keep "$e"; done
@@ -121,7 +146,7 @@ $e
   mods "$r/modules"
 }
 mods() {
-  local m k_found k_done h d k_in p k_tree
+  local m k_found k_done h d k_in p
   m=$1
   [ -e "$m" ] || [ -L "$m" ] || return 0
   if [ ! -L "$m" ] && [ -d "$m" ] && empty "$m"; then keep "$m" ro; return 0; fi
@@ -140,10 +165,7 @@ EOF_DONE
     repo "$d" </dev/null
     k_done="$k_done
 $d"
-    # The .git file of its work tree (the submodule's folder in the project), which its settings,
-    # kept now, name: read-only.
-    k_tree=$(sed -n 's/^[[:space:]]*worktree[[:space:]]*=[[:space:]]*//p' "$d/config" 2>/dev/null | head -n 1)
-    [ -z "$k_tree" ] || { k_tree=$(cd "$d" 2>/dev/null && cd -P "$k_tree" 2>/dev/null && pwd -P) && [ -f "$k_tree/.git" ] && [ ! -L "$k_tree/.git" ] && keep "$k_tree/.git" ro; } || :
+    tree_file "$d"
   done <<EOF_FOUND
 $k_found
 EOF_FOUND
@@ -152,7 +174,7 @@ EOF_FOUND
 # The .git file that leads a folder to its repository (a worktree's), up from it: kept read-only, and
 # the worktree's own folder it names is the conversation's (k_own, one a line); or the .git folder
 # found instead (k_dirs).
-k_own= k_dirs= k_plain=$own/commondir
+k_own= k_dirs= k_plain=$own/commondir k_notes=$(dirname "$own")/unkept/led
 printf '../..\n' >"$k_plain" || fail "it isn't set up."
 gitfile() {
   local at
@@ -293,9 +315,6 @@ fail() { echo "This command can't run in the sandbox here: $1" >&2; exit 126; }
 over() { ( cd -P "$1" 2>/dev/null || exit 1; [ -z "$3" ] || [ "$(pwd -P)" = "$1" ] || exit 1; [ "$3" != mine ] || [ -O . ] || exit 1; mount -c -t tmpfs -o "size=64k,mode=$2" kuvo-hidden . 2>/dev/null || exit 2 ) || { [ $? = 1 ] || fail "$1 can't be kept from it."; return 1; }; }
 off() { [ -S "$1" ] && { [ -z "$2" ] || [ ! -L "$1" ]; } || return 1; mount -c --bind /dev/null "$1" 2>/dev/null && [ -c "$1" ] && { [ -z "$2" ] || [ ! -L "$1" ]; } || fail "$1 can't be kept from it."; }
 [ -r "$sockets" ] || fail "it isn't set up."
-# (Where a folder can't be made read-only, as git's own files are kept, nothing runs: the box's check
-# runs this too, and finds commands can't have a namespace of their own here, for that: 125.)
-mount -c --bind -o ro "$own" "$own" 2>/dev/null || { echo "This command can't run in the sandbox here: a folder can't be made read-only in its namespace." >&2; exit 125; }
 over "$own" 0700 || fail "it isn't set up."
 while IFS= read -r s; do case $s in /*'*'*) for f in $s; do [ ! -S "$f" ] || off "$f"; done ;; /*) over "$s" 0700 || off "$s" ;; esac; done <"$sockets"
 over "/run/user/$u" 0700
@@ -328,16 +347,8 @@ export function ownNamespace(own: string): string | null {
   const unshare = UNSHARE.find(each => fs.existsSync(each));
   if (!unshare) return null;
   const tried = spawnSync(unshare, namespaceTry(unshare, own), { cwd: "/", stdio: "ignore", timeout: TRY_FOR });
-  readOnlyFailed = tried.status === READ_ONLY_FAILED;
   return tried.status === 0 ? unshare : null;
 }
-
-// HIDE's exit where a folder can't be made read-only in the namespace (util-linux before 2.39 on a
-// mount whose flags are locked, say), as the last try found it: git's own files couldn't be kept.
-const READ_ONLY_FAILED = 125;
-let readOnlyFailed = false;
-/** Whether the last try failed only as a folder can't be made read-only there. */
-export const namespaceReadOnlyFailed = () => readOnlyFailed;
 
 /** The same, while the box goes on answering (it's tried again each minute): `unshare`, the one to
  * try. */
@@ -348,7 +359,7 @@ export function ownNamespaceLater(own: string, unshare = UNSHARE.find(each => fs
     const late = setTimeout(() => child.kill("SIGKILL"), TRY_FOR);
     late.unref?.();
     child.once("error", () => { clearTimeout(late); resolve(null); });
-    child.once("exit", status => { clearTimeout(late); readOnlyFailed = status === READ_ONLY_FAILED; resolve(status === 0 ? unshare : null); });
+    child.once("exit", status => { clearTimeout(late); resolve(status === 0 ? unshare : null); });
   });
 }
 

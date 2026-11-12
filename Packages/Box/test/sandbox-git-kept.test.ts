@@ -1,6 +1,6 @@
 import "./safety"
 import { expect, setDefaultTimeout, test } from "bun:test"
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { canFence, realFence } from "./agents/support/fence"
@@ -39,6 +39,8 @@ interface Way {
   then?: string
   /** What you do in the repository yourself afterwards, outside the sandbox, before git there. */
   after?: string
+  /** A way in Linux's sandbox doesn't close yet (PROTOCOL.md, "Sandbox"), which a Mac's does. */
+  openOnLinux?: boolean
 }
 
 // (Each a shell script; the conversation's folder is the current one, its repository `$G`.)
@@ -63,6 +65,11 @@ const WAYS: Record<string, Way> = {
   "a submodule's repository made where it has none": { tries: `mkdir -p "$G/modules" && git clone -q --bare "$LIB" "$G/modules/lib" && git config --file "$G/modules/lib/config" core.bare false && printf '%s\\n' "$HOOK" > "$G/modules/lib/hooks/post-checkout" && chmod +x "$G/modules/lib/hooks/post-checkout" && printf '[submodule "lib"]\\n\\tpath = lib\\n\\turl = %s\\n' "$LIB" > .gitmodules && git update-index --add --cacheinfo "160000,$(git -C "$LIB" rev-parse HEAD),lib" && git add .gitmodules && git commit -q -m lib`, after: "git -c protocol.file.allow=always submodule update --init" },
   "its own settings for worktrees, before they're on": { tries: `printf '[core]\\n\\tfsmonitor = %s\\n' "$FSMONITOR" > "$G/config.worktree"`, after: "git config extensions.worktreeConfig true" },
   "a submodule's folder led to another repository": { submodule: true, tries: `cp -R "$G/modules/lib" evil && git config --file evil/config --unset core.worktree; git config --file evil/config core.fsmonitor "$FSMONITOR" && printf 'gitdir: %s\\n' "$PWD/evil" > lib/.git` },
+  "a hook, its linked folder traded for one of its own": { before: "mv .git/hooks ../hooks-kept && ln -s ../../hooks-kept .git/hooks", tries: `rm "$G/hooks" && mkdir "$G/hooks" && printf '%s\\n' "$HOOK" > "$G/hooks/pre-commit" && chmod +x "$G/hooks/pre-commit"` },
+  "its git settings, their link traded for a file of its own": { before: "mv .git/config ../config-kept && ln -s ../../config-kept .git/config", tries: `rm "$G/config" && cp "$G/../../config-kept" "$G/config" && printf '[core]\\n\\tfsmonitor = %s\\n' "$FSMONITOR" >> "$G/config"` },
+  "its git settings, its folder made read-only first": { before: "rm -rf .git/hooks && chmod a-w .git", tries: `chmod u+w "$G"; printf '[core]\\n\\tfsmonitor = %s\\n' "$FSMONITOR" >> "$G/config"`, after: "chmod u+w .git" },
+  "a submodule's folder led elsewhere, its repository read-only whole": { submodule: true, before: "mv .git/hooks ../hooks-kept && ln -s ../../hooks-kept .git/hooks", tries: `cp -R "$G/modules/lib" evil && git config --file evil/config --unset core.worktree; git config --file evil/config core.fsmonitor "$FSMONITOR" && printf 'gitdir: %s\\n' "$PWD/evil" > lib/.git` },
+  "a submodule's folder traded for another": { submodule: true, openOnLinux: true, tries: `cp -R "$G/modules/lib" evil && git config --file evil/config --unset core.worktree; git config --file evil/config core.fsmonitor "$FSMONITOR" && mv lib lib-old && mkdir lib && printf 'gitdir: %s\\n' "$PWD/evil" > lib/.git` },
   "a submodule's repository traded": { submodule: true, tries: `cp -R "$G/modules/lib" evil && git config --file evil/config core.fsmonitor "$FSMONITOR" && mv "$G/modules/lib" "$G/modules/lib-old" && mv evil "$G/modules/lib"` },
 }
 
@@ -137,8 +144,7 @@ test.skipIf(!canFence)("a command plants nothing git runs outside the sandbox in
       if (existsSync(mark)) escaped.push(name)
     }
     if (escaped.length) console.log("What the commands said:\n" + escaped.map(name => `- ${name}: ${said[name]}`).join("\n"))
-    expect(escaped).toEqual([])
-    expect(readdirSync(marks)).toEqual([])
+    expect(escaped).toEqual(Object.entries(WAYS).filter(([, way]) => way.openOnLinux && process.platform === "linux").map(([name]) => name))
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -198,9 +204,14 @@ test.skipIf(!canFence || process.platform !== "linux")("on Linux, a repository w
   const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sandbox-git-unkept-")))
   try {
     const { repository, run } = fenced(root)
-    // A hooks folder linked to one kept in the project: where it leads, read-only.
+    // A hooks folder linked to one kept in the project: where it leads, read-only, and the repository
+    // too (the link could be traded for a folder of its own), said once.
     const linked = repository("linked", { before: "mv .git/hooks ../hooks && ln -s ../../hooks .git/hooks" })
-    expect(run(linked.work, linked.git, "(echo hook > .git/hooks/pre-commit) 2>/dev/null && echo wrote || echo kept")).toEqual({ code: 0, out: "kept", said: "kept" })
+    const tries = "(echo hook > .git/hooks/pre-commit) 2>/dev/null && echo wrote || echo kept; (echo x > .git/HEAD.lock) 2>/dev/null && echo wrote || echo kept"
+    const once = run(linked.work, linked.git, tries)
+    expect([once.code, once.out]).toEqual([0, "kept\nkept"])
+    expect(once.said).toContain(`Note: commands only read git's own files in ${linked.git}: its hooks folder or settings are a link`)
+    expect(run(linked.work, linked.git, tries)).toEqual({ code: 0, out: "kept\nkept", said: "kept\nkept" })
     const led = repository("led", { before: "cp -R .git ../elsewhere && echo ../../elsewhere > .git/commondir" })
     expect(run(led.work, led.git, "echo ran")).toEqual({ code: 126, out: "", said: `This command can't run in the sandbox here: ${led.git}/commondir leads git to another repository. Ask the user.` })
     // (git reads up to a NUL, the shell past it, which leads it home: neither is taken.)
