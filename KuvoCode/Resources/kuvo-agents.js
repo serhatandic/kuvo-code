@@ -18232,6 +18232,109 @@ async function branchRoutes(places, method, parts, body) {
   }
 }
 
+// Packages/Box/src/agents/updates.ts
+var NEWS_KEPT = 60 * 60000;
+var kept2 = new Map;
+var underWay2 = new Map;
+function isUpdating(program) {
+  return underWay2.has(program);
+}
+function updatesUnderWay() {
+  return underWay2.size > 0;
+}
+function programUpdate(program, installed, now = Date.now()) {
+  const update = kept2.get(program);
+  if (!update || update.state === "updating")
+    return update;
+  const movedOn = installed !== undefined && update.version !== undefined && installed !== update.version;
+  const old = update.state !== "failed" && now - update.at > NEWS_KEPT;
+  if (!movedOn && !old)
+    return update;
+  kept2.delete(program);
+  return;
+}
+function inUpdateAll(agent, maintained) {
+  return Boolean(agent.update && maintained?.command && isOutdated(maintained) && !isUpdating(agent.id));
+}
+function told3(agent, accounts) {
+  for (const each of accounts)
+    if (each.id === agent.id)
+      emit("integration.updated", { integrationID: each.providerID });
+}
+function outcome(result) {
+  const at = Date.now();
+  if (result.message && !result.updated)
+    return { state: "failed", message: result.message, version: result.version, at };
+  if (result.version)
+    return { state: result.updated ? "updated" : "current", version: result.version, at };
+  return { state: "failed", message: "The update finished without saying which version it left.", at };
+}
+function updateProgram(agent, accounts, noted) {
+  const program = agent.id;
+  const running = underWay2.get(program);
+  if (running)
+    return running;
+  kept2.set(program, { state: "updating", at: Date.now() });
+  const done = (async () => {
+    let result;
+    try {
+      result = agent.update ? await agent.update() : { updated: false, message: `Update ${agent.name} the way you installed it.` };
+    } catch (error) {
+      result = { updated: false, message: String(error?.message ?? error) };
+    }
+    const maintained = await agent.maintenance?.().catch(() => {
+      return;
+    });
+    if (maintained)
+      noted(agent, maintained);
+    if (result.updated) {
+      for (const each of accounts())
+        if (each.id === program)
+          each.programUpdated?.();
+    }
+    kept2.set(program, outcome(result));
+    underWay2.delete(program);
+    told3(agent, accounts());
+    if (result.updated)
+      emit("model.updated", {});
+    return result;
+  })();
+  underWay2.set(program, done);
+  told3(agent, accounts());
+  return done;
+}
+async function updateAll(agents, accounts, noted) {
+  const byProgram = new Map;
+  const ordered = [...agents.filter((agent) => agent.instance.id === "default"), ...agents.filter((agent) => agent.instance.id !== "default")];
+  for (const agent of ordered) {
+    if (!agent.update || !agent.maintenance)
+      continue;
+    byProgram.set(agent.id, [...byProgram.get(agent.id) ?? [], agent]);
+  }
+  const picked = await Promise.all([...byProgram.values()].map(async (candidates) => {
+    if (isUpdating(candidates[0].id))
+      return;
+    for (const agent of candidates) {
+      const maintained = await agent.maintenance().catch(() => {
+        return;
+      });
+      if (maintained && noted(agent, maintained))
+        emit("integration.updated", { integrationID: agent.providerID });
+      if (inUpdateAll(agent, maintained))
+        return agent;
+    }
+    return;
+  }));
+  const started = [];
+  for (const agent of picked) {
+    if (!agent || isUpdating(agent.id))
+      continue;
+    updateProgram(agent, accounts, noted);
+    started.push(agent.id);
+  }
+  return started;
+}
+
 // Packages/Box/src/agents/sessions.ts
 import { createHash as createHash10 } from "crypto";
 import { spawn as spawnProcess } from "child_process";
@@ -26859,18 +26962,22 @@ var located = (value) => json12({ location: { directory: process.cwd() }, data: 
 var error2 = (status, message) => json12({ message }, status);
 var lastSeen = new Map;
 var lastMaintained = new Map;
+function maintainedNow(agent, value) {
+  const changed = JSON.stringify(lastMaintained.get(agent.id)) !== JSON.stringify(value);
+  lastMaintained.set(agent.id, value);
+  return changed;
+}
 async function maintainedSoon(agent, fresh) {
   if (!agent.maintenance)
     return;
   let answered = false;
   const asked = agent.maintenance(fresh).then((value) => {
-    const changed = JSON.stringify(lastMaintained.get(agent.providerID)) !== JSON.stringify(value);
-    lastMaintained.set(agent.providerID, value);
+    const changed = maintainedNow(agent, value);
     if (answered && changed)
       emit("integration.updated", { integrationID: agent.providerID });
     return value;
-  }, () => lastMaintained.get(agent.providerID));
-  const value = await Promise.race([asked, Bun.sleep(2000).then(() => lastMaintained.get(agent.providerID))]);
+  }, () => lastMaintained.get(agent.id));
+  const value = await Promise.race([asked, Bun.sleep(2000).then(() => lastMaintained.get(agent.id))]);
   answered = true;
   return value;
 }
@@ -26909,6 +27016,8 @@ async function integration(agent, fresh = false, auto) {
       outdated: maintained ? isOutdated(maintained) : false,
       updateCommand: maintained?.shown,
       updates: Boolean(agent.update && maintained?.command),
+      programUpdate: programUpdate(agent.id, maintained?.installed),
+      updateAll: inUpdateAll(agent, maintained),
       remoteSignIn: Boolean(agent.signIn && agent.signsInRemotely),
       modelsComplete: agent.listsEveryModel ? agent.listsEveryModel() : true
     },
@@ -27020,17 +27129,9 @@ function handler(context) {
           return json12({});
         }
         if (b === "update" && method === "POST") {
-          if (!agent.update)
+          if (!agent.update || !agent.maintenance)
             return error2(400, `Update ${agent.name} the way you installed it.`);
-          const result = await agent.update();
-          if (result.updated) {
-            for (const each of roster.all())
-              if (each.id === agent.id)
-                each.programUpdated?.();
-            emit("integration.updated", { integrationID: agent.providerID });
-            emit("model.updated", {});
-          }
-          return json12({ data: result });
+          return json12({ data: await updateProgram(agent, () => roster.all(), maintainedNow) });
         }
         if (b === "install" && method === "POST") {
           if (!agent.installProgram)
@@ -27250,6 +27351,17 @@ function handler(context) {
           emit("model.updated", {});
           return json12({});
         }
+      }
+      if (area === "kuvo" && a === "updates" && method === "POST" && !c) {
+        if (!b)
+          return json12({ data: { updating: await updateAll(roster.all(), () => roster.all(), maintainedNow) } });
+        const agent = agentFor(b);
+        if (!agent)
+          return error2(404, `No agent ${b}.`);
+        if (!agent.update || !agent.maintenance)
+          return error2(400, `Update ${agent.name} the way you installed it.`);
+        updateProgram(agent, () => roster.all(), maintainedNow);
+        return json12({ data: { updating: [agent.id] } });
       }
       if (area === "kuvo" && a === "sandbox" && b === "restart" && !c && method === "POST") {
         context.restartOutside?.();
@@ -28152,7 +28264,7 @@ renewal = onMachine && build ? new Renewal({
   work: () => {
     const here = sessions.work();
     const turns = here.turns || answering > 0 || (groups?.runner.busy() ?? false);
-    const other = here.other || goals.busy() || sideQuestions.busy() || reviews.busy() || handoffs.busy() || signInsWaiting();
+    const other = here.other || goals.busy() || sideQuestions.busy() || reviews.busy() || handoffs.busy() || signInsWaiting() || updatesUnderWay();
     return { turns, other };
   },
   hold: (on) => sessions.hold(on),
@@ -28242,4 +28354,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents b42cec805c3b61390cc0183e84f9929e53518bb37146b40f924a6d02f72ae29e
+// Built from Packages/Box/src/agents f1f27e4618ee5e16acd68a53097f2900b77f22f1c8519c51e0d8ec4b6f2a1195

@@ -16,6 +16,7 @@ import { reviewRoutes, type Reviews } from "./reviews"
 import { voiceRoutes, type VoiceWords } from "./voice"
 import { limitsRoutes, type Limits } from "./limits"
 import { isOutdated, type Maintenance } from "./maintenance"
+import { inUpdateAll, programUpdate, updateAll, updateProgram } from "./updates"
 import { refreshLoginPath } from "./proc"
 import { setToolServer } from "./kuvotools"
 import { noteToolServer } from "./fence"
@@ -95,26 +96,33 @@ const error = (status: number, message: string) => json({ message }, status)
 
 /** What each agent's account looked like when last asked: a change means other models. */
 const lastSeen = new Map<string, { installed: boolean; signedIn: boolean; label?: string }>()
-/** Each agent's program's version and the newest, as last known. */
+/** Each agent's program's version and the newest, as last known, by program (`agent.id`: one
+ * program serves every account with it). */
 const lastMaintained = new Map<string, Maintenance>()
 
 /**
  * Its version and the newest, if they come soon (checking may ask Homebrew or npm): what was
  * known before otherwise, and the account is said again once they do.
  */
+/** What `agent`'s program is now, as just read; whether that's news. */
+function maintainedNow(agent: Agent, value: Maintenance): boolean {
+  const changed = JSON.stringify(lastMaintained.get(agent.id)) !== JSON.stringify(value)
+  lastMaintained.set(agent.id, value)
+  return changed
+}
+
 async function maintainedSoon(agent: Agent, fresh: boolean): Promise<Maintenance | undefined> {
   if (!agent.maintenance) return undefined
   let answered = false
   const asked = agent.maintenance(fresh).then(
     (value) => {
-      const changed = JSON.stringify(lastMaintained.get(agent.providerID)) !== JSON.stringify(value)
-      lastMaintained.set(agent.providerID, value)
+      const changed = maintainedNow(agent, value)
       if (answered && changed) emit("integration.updated", { integrationID: agent.providerID })
       return value
     },
-    () => lastMaintained.get(agent.providerID),
+    () => lastMaintained.get(agent.id),
   )
-  const value = await Promise.race([asked, Bun.sleep(2_000).then(() => lastMaintained.get(agent.providerID))])
+  const value = await Promise.race([asked, Bun.sleep(2_000).then(() => lastMaintained.get(agent.id))])
   answered = true
   return value
 }
@@ -160,6 +168,10 @@ export async function integration(agent: Agent, fresh = false, auto?: Auto): Pro
       outdated: maintained ? isOutdated(maintained) : false,
       updateCommand: maintained?.shown,
       updates: Boolean(agent.update && maintained?.command),
+      // How its update stands, the same for every account with its program, and whether Update
+      // All updates it: the box's to say, so every client shows the same (updates.ts).
+      programUpdate: programUpdate(agent.id, maintained?.installed),
+      updateAll: inUpdateAll(agent, maintained),
       // Whether its sign-in can finish on another device (`remote: true`).
       remoteSignIn: Boolean(agent.signIn && agent.signsInRemotely),
       // Its list (`api/model?hidden=1`) is every model it runs: one missing from it is gone.
@@ -273,17 +285,11 @@ export function handler(context: Context) {
           await agent.signInWithKey(String(key ?? "").trim())
           return json({})
         }
-        // Its program updated through the installer that owns it; then what it lists anew.
+        // COMPAT(0.7 update-answer): its program updated, answered once it's done, for a client
+        // from before `api/kuvo/updates` (which answers at once). Goes 3 months after 0.8.0.
         if (b === "update" && method === "POST") {
-          if (!agent.update) return error(400, `Update ${agent.name} the way you installed it.`)
-          const result = await agent.update()
-          if (result.updated) {
-            // Every account with it runs that program.
-            for (const each of roster.all()) if (each.id === agent.id) each.programUpdated?.()
-            emit("integration.updated", { integrationID: agent.providerID })
-            emit("model.updated", {})
-          }
-          return json({ data: result })
+          if (!agent.update || !agent.maintenance) return error(400, `Update ${agent.name} the way you installed it.`)
+          return json({ data: await updateProgram(agent, () => roster.all(), maintainedNow) })
         }
         // Its program installed with its maker's installer (the command `metadata.install` shows),
         // as you'd run it in Terminal; then what it lists.
@@ -499,6 +505,18 @@ export function handler(context: Context) {
           emit("model.updated", {})
           return json({})
         }
+      }
+
+      // Updating the agents' programs, answered as it starts: every account with the program says
+      // how it goes (`metadata.programUpdate`). `POST kuvo/updates`: Update All, each program it
+      // picks (`metadata.updateAll`); `POST kuvo/updates/<provider>`: that account's program.
+      if (area === "kuvo" && a === "updates" && method === "POST" && !c) {
+        if (!b) return json({ data: { updating: await updateAll(roster.all(), () => roster.all(), maintainedNow) } })
+        const agent = agentFor(b)
+        if (!agent) return error(404, `No agent ${b}.`)
+        if (!agent.update || !agent.maintenance) return error(400, `Update ${agent.name} the way you installed it.`)
+        void updateProgram(agent, () => roster.all(), maintainedNow)
+        return json({ data: { updating: [agent.id] } })
       }
 
       // Where Kuvo Code's own tools are (the app says each time they start), for every agent here.
