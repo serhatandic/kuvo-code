@@ -287,9 +287,12 @@ computer. Changing the main computer and joining two setups come later: #183.)
   now) answers, with `primary` the main computer's static key and words naming it for a client to
   show as they are:
   - `POST kuvo/phones/pair`: `409 {"message": "Pair new phones from <main>.", primary}`, and
-    `kuvo-link.js pair` prints those words and stops (exit 3), with no pairing made, saying too
-    how to let a main computer that's gone for good go there (`kuvo-link.js leave <its key>`, as
-    removing the computer from it would; then it pairs by itself), until a takeover can be made; a
+    `kuvo-link.js pair` prints those words and stops (exit 3), with no pairing made, saying too,
+    until a takeover can be made, how to let a main computer that's gone for good go there
+    (`kuvo-link.js leave <its key>`, as removing the computer from it would) and what that costs:
+    the computer leaves that setup, so its other computers, and phones paired with that main
+    computer, no longer reach it; then it pairs by itself, or names another Mac's setup's main
+    computer. `leave` says what it did, or exits 1 for a key that isn't one of its Macs. A
     pairing link made before the box became a member pairs no one;
   - adding, changing or removing computers, `kuvo/machines…` and `kuvo/hosts/…` but `GET`, and
     `kuvo/link/peers` from an app or `box route` there: `409 {"message": "Add and remove

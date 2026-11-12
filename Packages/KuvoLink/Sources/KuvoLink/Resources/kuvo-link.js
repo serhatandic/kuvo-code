@@ -39278,7 +39278,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "1dad8202399d";
+var BRIDGE_VERSION = "914888724388";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -44198,7 +44198,8 @@ function pair(relay) {
   const main = mainElsewhere(readLink());
   if (main) {
     console.error(pairElsewhere(main).message);
-    console.error(`If ${main.name || "it"} is gone for good, let it go here first: kuvo-link.js leave ${main.key}`);
+    const name = main.name || "it";
+    console.error(`If ${name} is gone for good, \`kuvo-link.js leave ${main.key}\` takes this computer out of its setup: your other computers, and phones paired with ${name}, no longer reach it here. Then it pairs phones itself, or names another main computer.`);
     process.exit(3);
   }
   const link = updateLink((current) => {
@@ -44245,9 +44246,14 @@ if (main) {
     await box(argument);
   else if (mode === "serve")
     await serve();
-  else if (mode === "leave")
-    leave(argument);
-  else if (mode === "here") {
+  else if (mode === "leave") {
+    const name = typeof argument === "string" ? readLink()?.macNames?.[argument] : undefined;
+    if (!leave(argument)) {
+      console.error("That isn't one of the Macs that set this computer up.");
+      process.exit(1);
+    }
+    console.error(`${name || "That Mac"} is let go: this computer is no longer one of its computers.`);
+  } else if (mode === "here") {
     try {
       console.log(JSON.stringify(hereNow(argument)));
     } catch (error) {

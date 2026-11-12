@@ -896,8 +896,9 @@ function pair(relay: string | undefined): void {
   if (main) {
     console.error(pairElsewhere(main).message);
     // (Until a takeover can be made: a main computer that's gone for good is let go here, as
-    // removing this computer from it would, and then this box pairs by itself.)
-    console.error(`If ${main.name || "it"} is gone for good, let it go here first: kuvo-link.js leave ${main.key}`);
+    // removing this computer from it would. What that costs is said with it.)
+    const name = main.name || "it";
+    console.error(`If ${name} is gone for good, \`kuvo-link.js leave ${main.key}\` takes this computer out of its setup: your other computers, and phones paired with ${name}, no longer reach it here. Then it pairs phones itself, or names another main computer.`);
     process.exit(3);
   }
   const link = updateLink(current => {
@@ -940,7 +941,15 @@ if (main) {
   else if (mode === "pair") pair(argument);
   else if (mode === "box") await box(argument);
   else if (mode === "serve") await serve();
-  else if (mode === "leave") leave(argument);
+  else if (mode === "leave") {
+    // (A Mac removing this machine runs it over SSH, and reads nothing it says.)
+    const name = typeof argument === "string" ? readLink()?.macNames?.[argument] : undefined;
+    if (!leave(argument)) {
+      console.error("That isn't one of the Macs that set this computer up.");
+      process.exit(1);
+    }
+    console.error(`${name || "That Mac"} is let go: this computer is no longer one of its computers.`);
+  }
   // Kuvo Code as it opens on a Mac, before it starts a box (PROTOCOL.md, "Your setup", "Already in a
   // setup?"): whether it uses its own box, or the one already on this Mac, in place. `here <root>`,
   // root the machines' folder's name in the home folder (`.kuvo-code`, or a test's own), with
