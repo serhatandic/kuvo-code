@@ -20,6 +20,10 @@ export const EVERY = ["-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c"
 /** And what the box runs by itself. */
 export const OWN = [...EVERY, "-c", "safe.bareRepository=explicit", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", "-c", "tag.gpgSign=false", "-c", "credential.helper="]
 
+/** And what you ask for: never a bare repository found by sitting in its folder, which a folder's
+ * files could make of it (a broken `.git`, and `HEAD`, `objects`, `refs` and settings beside it). */
+const ASKED = [...EVERY, "-c", "safe.bareRepository=explicit"]
+
 /** Never asking anything. */
 export const GIT_QUIET = { GIT_TERMINAL_PROMPT: "0" }
 
@@ -292,17 +296,17 @@ export async function ownArgsLater(args: string[], cwd?: string): Promise<string
   return built(lead, rest, found)
 }
 
-/** `args` as you asked for them, from `cwd`: [EVERY], the repository's hooks, filters and sign-ins as
+/** `args` as you asked for them, from `cwd`: [ASKED], the repository's hooks, filters and sign-ins as
  * they are. Undefined: don't run it (its `commondir` leads elsewhere, so they'd be another's). */
 export function askedArgs(args: string[], cwd?: string): string[] | undefined {
   const { lead, rest } = split(args)
   if (strayCommon(lead, rest, cwd)) return undefined
-  return [...lead, ...EVERY, ...(withOptions(rest, false) ?? rest)]
+  return [...lead, ...ASKED, ...(withOptions(rest, false) ?? rest)]
 }
 
 /** [askedArgs], without holding up the bridge. */
 export async function askedArgsLater(args: string[], cwd?: string): Promise<string[] | undefined> {
   const { lead, rest } = split(args)
   if (await strayCommonLater(lead, rest, cwd)) return undefined
-  return [...lead, ...EVERY, ...(withOptions(rest, false) ?? rest)]
+  return [...lead, ...ASKED, ...(withOptions(rest, false) ?? rest)]
 }

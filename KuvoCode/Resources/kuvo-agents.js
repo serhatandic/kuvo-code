@@ -505,6 +505,7 @@ import { accessSync, closeSync, constants, fstatSync, openSync, promises as fsp,
 import { basename as basename2, dirname, join as join3, resolve } from "path";
 var EVERY = ["-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "log.showSignature=false"];
 var OWN = [...EVERY, "-c", "safe.bareRepository=explicit", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", "-c", "tag.gpgSign=false", "-c", "credential.helper="];
+var ASKED = [...EVERY, "-c", "safe.bareRepository=explicit"];
 var GIT_QUIET = { GIT_TERMINAL_PROMPT: "0" };
 var DRIVERS = String.raw`^(filter\..+\.(clean|smudge|process)|diff\..+\.textconv|hook\..+\.command)$`;
 var KNOWN = /^"?([^"\s]+)"? (?:filter-process|clean|smudge|diff)(?: --skip| --key-name=[\w-]+| -- %f)*$/;
@@ -28328,4 +28329,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 0d608e9418748512e4a16fdd2aefbbe671564ff652d1ccb7cbcb6853e59200ba
+// Built from Packages/Box/src/agents 5f62854814c4e32d8b9a11d50f8c58afb9f1bd3e6d23bd63bba98f48faf821a6

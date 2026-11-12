@@ -32,8 +32,13 @@ interface Way {
   /** The repository as it's set up first, outside the sandbox (in `app`). */
   before?: string
   /** What the command tries, in the conversation's folder; `$MARK` is what the code it plants
-   * makes, `$FSMONITOR` a setting that makes it, `$HOOK` a hook that does. */
+   * makes, `$FSMONITOR` a setting that makes it, `$HOOK` a hook that does, `$LIB` a repository to
+   * take a submodule from. */
   tries: string
+  /** And then, in a command of its own after it. */
+  then?: string
+  /** What you do in the repository yourself afterwards, outside the sandbox, before git there. */
+  after?: string
 }
 
 // (Each a shell script; the conversation's folder is the current one, its repository `$G`.)
@@ -53,6 +58,9 @@ const WAYS: Record<string, Way> = {
   "a submodule's settings": { submodule: true, tries: `printf '[core]\\n\\tfsmonitor = %s\\n' "$FSMONITOR" >> "$G/modules/lib/config"` },
   "a submodule's hook": { submodule: true, tries: `printf '%s\\n' "$HOOK" > "$G/modules/lib/hooks/post-checkout" && chmod +x "$G/modules/lib/hooks/post-checkout"` },
   "a submodule's common folder": { submodule: true, tries: `cp -R "$G/modules/lib" evil && git config --file evil/config --unset core.worktree; git config --file evil/config core.fsmonitor "$FSMONITOR" && printf '%s\\n' "$PWD/evil" > "$G/modules/lib/commondir"` },
+  "its repository's HEAD taken away first": { tries: `rm -f "$G/HEAD"`, then: `printf '[core]\\n\\tfsmonitor = %s\\n' "$FSMONITOR" >> "$G/config"; echo 'ref: refs/heads/main' > "$G/HEAD"` },
+  "a submodule's repository made where it has none": { tries: `mkdir -p "$G/modules" && git clone -q --bare "$LIB" "$G/modules/lib" && git config --file "$G/modules/lib/config" core.bare false && printf '%s\\n' "$HOOK" > "$G/modules/lib/hooks/post-checkout" && chmod +x "$G/modules/lib/hooks/post-checkout" && printf '[submodule "lib"]\\n\\tpath = lib\\n\\turl = %s\\n' "$LIB" > .gitmodules && git update-index --add --cacheinfo "160000,$(git -C "$LIB" rev-parse HEAD),lib" && git add .gitmodules && git commit -q -m lib`, after: "git -c protocol.file.allow=always submodule update --init" },
+  "its own settings for worktrees, before they're on": { tries: `printf '[core]\\n\\tfsmonitor = %s\\n' "$FSMONITOR" > "$G/config.worktree"`, after: "git config extensions.worktreeConfig true" },
   "a submodule's repository traded": { submodule: true, tries: `cp -R "$G/modules/lib" evil && git config --file evil/config core.fsmonitor "$FSMONITOR" && mv "$G/modules/lib" "$G/modules/lib-old" && mv evil "$G/modules/lib"` },
 }
 
@@ -104,7 +112,7 @@ function fenced(root: string) {
 test.skipIf(!canFence)("a command plants nothing git runs outside the sandbox in its repository", () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sandbox-git-")))
   try {
-    const { home, marks, repository, run, outside } = fenced(root)
+    const { home, marks, library, repository, run, outside } = fenced(root)
     // (Commands do run in the sandbox: one can't write where the marks go.)
     expect(run(home, "", `touch ${sh(join(marks, "control"))}`).code).not.toBe(0)
     expect(existsSync(join(marks, "control"))).toBe(false)
@@ -115,7 +123,9 @@ test.skipIf(!canFence)("a command plants nothing git runs outside the sandbox in
       const { app, git: gitDir, work } = repository(slug, way)
       const mark = join(marks, slug)
       const hook = `#!/bin/sh\ntouch ${sh(mark)}`
-      said[name] = run(work, gitDir, `G=${sh(gitDir)}; MARK=${sh(mark)}; FSMONITOR=${sh(`touch ${sh(mark)}; false`)}; HOOK=${sh(hook)}\n${way.tries}`).said
+      const given = `G=${sh(gitDir)}; MARK=${sh(mark)}; FSMONITOR=${sh(`touch ${sh(mark)}; false`)}; HOOK=${sh(hook)}; LIB=${sh(library)}\n`
+      said[name] = [way.tries, ...(way.then ? [way.then] : [])].map(script => run(work, gitDir, given + script).said).join("\n")
+      if (way.after) Bun.spawnSync(["/bin/sh", "-c", way.after], { cwd: app, env: { ...ENV, HOME: home } })
       // Then git there, outside the sandbox: what it shows, a commit, and a submodule checked out.
       for (const folder of [work, ...(way.submodule ? [join(app, "lib")] : [])]) {
         outside(folder, "status")
@@ -159,7 +169,8 @@ test.skipIf(!canFence)("git works in the sandbox as ever in a repository kept so
     if (process.platform === "linux") {
       for (const gitDir of [main.git, join(main.git, "modules", "lib"), tree.git]) {
         expect(readFileSync(join(gitDir, "commondir"), "utf8")).toBe(".\n")
-        expect(statSync(join(gitDir, "hooks")).isDirectory()).toBe(true)
+        for (const folder of ["hooks", "modules", "worktrees"]) expect(statSync(join(gitDir, folder)).isDirectory()).toBe(true)
+        expect(readFileSync(join(gitDir, "config.worktree"), "utf8")).toBe("")
       }
     }
     // And outside, git reads them as before.
@@ -184,6 +195,9 @@ test.skipIf(!canFence || process.platform !== "linux")("on Linux, a repository w
     expect(run(linked.work, linked.git, "echo ran")).toEqual({ code: 126, out: "", said: `This command can't run in the sandbox here: ${linked.git}/hooks is a link, which it can't keep as it is. Ask the user.` })
     const led = repository("led", { before: "cp -R .git ../elsewhere && echo ../../elsewhere > .git/commondir" })
     expect(run(led.work, led.git, "echo ran")).toEqual({ code: 126, out: "", said: `This command can't run in the sandbox here: ${led.git}/commondir leads git to another repository. Ask the user.` })
+    // (git reads up to a NUL, the shell past it: neither is taken.)
+    const nul = repository("nul", { before: "cp -R .git ../evil && printf 'evil\\000/..' > .git/commondir" })
+    expect(run(nul.work, nul.git, "echo ran").code).toBe(126)
     const tree = repository("tree", { worktree: true, before: "echo ../../../led/app/.git > .git/worktrees/wt/commondir" })
     expect(run(tree.work, tree.git, "echo ran").code).toBe(126)
     const fixed = repository("fixed", { before: "rm -rf .git/hooks && chmod a-w .git" })

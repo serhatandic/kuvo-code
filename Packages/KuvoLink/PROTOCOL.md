@@ -5526,15 +5526,26 @@ read-only; so is the `.git` file that leads the conversation's worktree to its r
 a link where one of those is, or one that can't be kept, runs nothing (126, saying why). Mounts keep
 only what's there, and a name git reads that isn't there yet can't be told from the files git makes
 beside it (`index.lock` beside `commondir`), so the launcher first leaves in each of those
-repositories what it lacks of them: `.git/commondir` holding `.` (git takes the repository's own
-folder as its common one, as with none), an empty `.git/hooks`, and, where its settings turn on
-`extensions.worktreeConfig`, an empty `config.worktree`. These are the files Kuvo Code leaves in a
-repository's `.git` on Linux. git reads them as before, but for one thing it prints: with a
-`commondir` there, `git rev-parse --git-common-dir` at the repository's top prints its absolute path
-rather than `.git` (`--git-dir` still prints `.git`), so a script that compares the two as strings
-to tell a linked worktree takes the repository for one. It never changes one that's there, and makes them as you, so never in
-a folder you made read-only: there the command runs, told so once in what it prints. Without a
-namespace of its own (`gaps`: `services`), none of this holds. It can't read
+repositories (and the `.git` folder up from the conversation's, whatever its state) what it lacks of
+them: `.git/commondir` holding `.` (git takes the repository's own folder as its common one, as with
+none), and empty `.git/hooks`, `.git/modules`, `.git/worktrees` and `.git/config.worktree` (read
+only once `extensions.worktreeConfig` is on, as `git sparse-checkout` turns it on), and an empty
+`config.worktree` and `modules` in each worktree's own folder. These are the files Kuvo Code leaves
+in a repository's `.git` on Linux. git reads them as before, but for what it prints: with a
+`commondir` there, `git rev-parse --git-common-dir` and `--git-path` (`hooks`, `info/…`) at the
+repository's top print absolute paths rather than ones under `.git` (`--git-dir` still prints
+`.git`), so a script that compares the two as strings to tell a linked worktree takes the repository
+for one. It never changes one that's there, and makes them as you, so never in a folder you made
+read-only: there the command runs, told so once in what it prints. Where a folder can't be made
+read-only at all (a mount that won't take it), commands have no namespace (the box's check runs
+that too). What a namespace keeps is what was there as the command started: git outside the sandbox
+writes `.git/config` anew (`git config`, a push that sets its upstream, a branch that tracks one) by
+putting a new file in its place, which Linux lets through and then no longer keeps in the namespaces
+of commands still running, so a sandboxed process still running then (a server left running, or a
+coding agent run whole in the sandbox, which keeps one namespace for its session) can win that race
+and write the new file. What the box runs by itself never runs what that file names (Git, below);
+git you run yourself, and what you ask the box for (Commit in Changes), would. Without a namespace of its own (`gaps`: `services`), none of this holds.
+It can't read
 Kuvo Code's own folders (on a machine `~/.kuvo-code`; on this Mac the app's folders under `Library`,
 any `run.kuvo.code…` copy's, its temporary folder and `/tmp/kuvo-ssh-<uid>`) but its `bin`, nor your
 secrets (cloud, package and git tokens, browsers' and password managers' data, the coding agents'
@@ -5981,7 +5992,8 @@ repository written by anything.
   there.
 - What you ask git for yourself (Stage, Commit, Push, Pull and the rest in Changes, a worktree made,
   switched, removed with what wasn't committed in it, or brought back, a project cloned) gets only
-  the first set: the repository's hooks, filters and sign-ins run as in your terminal, so husky,
+  the first set, and `-c safe.bareRepository=explicit` (no bare repository found by sitting in a
+  folder, which a folder's own files could make of it): the repository's hooks, filters and sign-ins run as in your terminal, so husky,
   LFS and git-crypt work, and what's kept of a removed worktree is stored as your `git add` would.
 - Neither runs (but what only reads names and objects, which starts nothing) where the repository's
   `commondir` leads git anywhere but where it should (#429): none, or the repository's own folder

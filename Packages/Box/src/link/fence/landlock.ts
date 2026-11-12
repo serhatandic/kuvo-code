@@ -58,25 +58,37 @@ const KEEP_GIT = String.raw`keep() {
   mount -c --bind "$1" "$1" 2>/dev/null && [ ! -L "$1" ] && { [ "$2" != ro ] || mount -c -o remount,bind,ro "$1" 2>/dev/null; } || fail "$1 can't be kept from it."
 }
 ro() { mount -c -o remount,bind,ro "$1" 2>/dev/null || fail "$1 can't be kept from it."; }
-leads() { (cd "$1" 2>/dev/null && cd -P "$(head -c 4096 "$2")" 2>/dev/null && pwd -P); }
+# Where a commondir leads, as git reads it: one line, with no NUL or carriage return (which the shell
+# and git would read differently), from its folder.
+leads() { [ -f "$1/$2" ] && [ "$(tr -d '\000\r' <"$1/$2" | wc -c)" -eq "$(wc -c <"$1/$2")" ] && [ "$(wc -l <"$1/$2")" -le 1 ] && (cd "$1" 2>/dev/null && cd -P "$(head -c 4096 "$2")" 2>/dev/null && pwd -P); }
+# (A real folder's path as it is, no link on the way: what's compared with git's.)
+as_is() { [ -d "$1" ] && [ ! -L "$1" ] && [ "$(cd -P "$1" 2>/dev/null && pwd -P)" = "$1" ]; }
 repo() {
-  local r k_wt e f
-  r=$1 k_wt=$2
+  local r e f
+  r=$1
   keep "$r"
   for f in config config.worktree commondir gitdir hooks; do keep "$r/$f" ro; done
-  [ ! -e "$r/commondir" ] || { [ -f "$r/commondir" ] && [ "$(leads "$r" commondir)" = "$r" ]; } || fail "$r/commondir leads git to another repository. Ask the user."
+  [ ! -e "$r/commondir" ] || [ "$(leads "$r" commondir)" = "$r" ] || fail "$r/commondir leads git to another repository. Ask the user."
   if [ -e "$r/worktrees" ] || [ -L "$r/worktrees" ]; then
     keep "$r/worktrees"
-    for e in "$r/worktrees"/* "$r/worktrees"/.[!.]* "$r/worktrees"/..?*; do [ ! -L "$e" ] || keep "$e"; done
-    e=
-    case $k_wt in "$r/worktrees"/*/*) ;; "$r/worktrees"/?*) [ -d "$k_wt" ] && e=$k_wt ;; esac
-    [ -z "$e" ] || keep "$e"
+    for e in "$r/worktrees"/* "$r/worktrees"/.[!.]* "$r/worktrees"/..?*; do
+      [ ! -L "$e" ] || keep "$e"
+      case "$k_own
+" in *"
+$e
+"*) [ -d "$e" ] && keep "$e" ;; esac
+    done
     ro "$r/worktrees"
-    if [ -n "$e" ]; then
+    for e in "$r/worktrees"/* "$r/worktrees"/.[!.]* "$r/worktrees"/..?*; do
+      case "$k_own
+" in *"
+$e
+"*) ;; *) continue ;; esac
+      [ -d "$e" ] || continue
       for f in commondir gitdir config.worktree; do keep "$e/$f" ro; done
-      [ -f "$e/commondir" ] && [ "$(leads "$e" commondir)" = "$r" ] || fail "$e/commondir doesn't lead git back to its repository. Ask the user."
+      [ "$(leads "$e" commondir)" = "$r" ] || fail "$e/commondir doesn't lead git back to its repository. Ask the user."
       mods "$e/modules"
-    fi
+    done
   fi
   mods "$r/modules"
 }
@@ -85,8 +97,8 @@ mods() {
   m=$1
   [ -e "$m" ] || [ -L "$m" ] || return 0
   keep "$m"
-  [ -z "$(find "$m" -name '*
-*' 2>/dev/null | head -c 1)" ] || fail "$m holds a name it can't keep. Ask the user."
+  [ -z "$(find "$m" \( -name objects -o -name refs -o -name logs -o -name lfs -o -name rr-cache -o -name hooks -o -name info \) -prune -o -name '*
+*' -print 2>/dev/null | head -c 1)" ] || fail "$m holds a name it can't keep. Ask the user."
   k_found=$(find "$m" \( -name objects -o -name refs -o -name logs -o -name lfs -o -name rr-cache -o -name hooks -o -name info \) -prune -o -name HEAD -type f -print 2>/dev/null | awk -F / '{ print NF "\t" $0 }' | LC_ALL=C sort -n | cut -f 2-)
   k_done=
   while IFS= read -r h; do
@@ -95,40 +107,70 @@ mods() {
     while IFS= read -r p; do [ -n "$p" ] && case "$d/" in "$p"/modules/*|"$p"/worktrees/*) k_in=1 ;; esac; done <<EOF_DONE
 $k_done
 EOF_DONE
-    [ -n "$k_in" ] || { repo "$d" "" </dev/null; k_done="$k_done
+    [ -n "$k_in" ] || { repo "$d" </dev/null; k_done="$k_done
 $d"; }
   done <<EOF_FOUND
 $k_found
 EOF_FOUND
   ro "$m"
 }
-k_at=$work k_wt=
-while [ -n "$k_at" ] && [ "$k_at" != / ]; do
-  if [ -e "$k_at/.git" ] || [ -L "$k_at/.git" ]; then
-    if [ -f "$k_at/.git" ] && [ ! -L "$k_at/.git" ]; then keep "$k_at/.git" ro; k_wt=$(cd "$k_at" && cd -P "$(sed -n 's/^gitdir: *//p' .git | head -n 1)" 2>/dev/null && pwd -P); fi
-    break
-  fi
-  k_at=$(dirname "$k_at")
-done
-case $git in /*.git) [ ! -d "$git" ] || [ -L "$git" ] || [ ! -f "$git/HEAD" ] || repo "$git" "$k_wt" </dev/null ;; esac
+# The .git file that leads a folder to its repository (a worktree's), up from it: kept read-only, and
+# the worktree's own folder it names is written as git works there (k_own, one a line); or the .git
+# folder found instead (k_dirs).
+k_own= k_dirs=
+gitfile() {
+  local at
+  at=$1
+  while [ -n "$at" ] && [ "$at" != / ]; do
+    if [ -e "$at/.git" ] || [ -L "$at/.git" ]; then
+      if [ -f "$at/.git" ] && [ ! -L "$at/.git" ]; then
+        keep "$at/.git" ro
+        k_own="$k_own
+$(cd "$at" && cd -P "$(sed -n 's/^gitdir: *//p' .git | head -n 1)" 2>/dev/null && pwd -P)"
+      elif as_is "$at/.git"; then k_dirs="$k_dirs
+$at/.git"
+      fi
+      return 0
+    fi
+    at=$(dirname "$at")
+  done
+}
+gitfile "$work"
 if [ -n "$allowed" ] && [ -f "$allowed" ]; then
   while IFS= read -r k_at; do
-    case $k_at in /*) ;; *) continue ;; esac
-    [ "$k_at/.git" != "$git" ] || continue
-    if [ -d "$k_at/.git" ] && [ ! -L "$k_at/.git" ] && [ -f "$k_at/.git/HEAD" ]; then repo "$k_at/.git" "" </dev/null
-    elif [ -f "$k_at/.git" ] && [ ! -L "$k_at/.git" ]; then keep "$k_at/.git" ro; fi
+    case $k_at in /*) as_is "$k_at" || continue ;; *) continue ;; esac
+    if [ -f "$k_at/.git" ]; then gitfile "$k_at" </dev/null; elif as_is "$k_at/.git"; then k_dirs="$k_dirs
+$k_at/.git"; fi
   done <"$allowed"
-fi`;
+fi
+k_done=
+while IFS= read -r k_at; do
+  case $k_at in /*) ;; *) continue ;; esac
+  case "$k_done
+" in *"
+$k_at
+"*) continue ;; esac
+  as_is "$k_at" || continue
+  repo "$k_at" </dev/null
+  k_done="$k_done
+$k_at"
+done <<EOF_REPOS
+$(case $git in /*.git) printf '%s\n' "$git" ;; esac)
+$k_dirs
+EOF_REPOS
+`;
 
 /**
  * The launcher's part, before a command's namespace keeps them (`KEEP_GIT`), run as you, with no
- * more rights than yours (so never in a folder you made read-only): in the repositories it keeps (the
- * conversation's <git>, Also Allowed's in <allowed>, and their submodules' and its worktrees'
- * submodules'), an empty `hooks` folder where there's none, a `commondir` that names the repository
- * itself where there's none, and, where its settings turn worktrees' own settings on, an empty
- * `config.worktree` in it and each of its worktrees' own folders where there's none. Where one can't
- * be made, the command is told so once (`$F/unkept`), and runs: what keeps the rest still keeps it.
- * `git_made_all <git> <allowed>`.
+ * more rights than yours (so never in a folder you made read-only): in each repository it keeps (the
+ * conversation's <git>, the `.git` folder up from its folder, Also Allowed's in <allowed>, and their
+ * submodules' and worktrees' submodules'), what git would read, or keep its repositories in, that
+ * isn't there yet: an empty `hooks`, `modules`, `worktrees` and `config.worktree` (git reads that only
+ * once `extensions.worktreeConfig` is on, which `git sparse-checkout` turns on), and a `commondir`
+ * that names the repository itself; in each worktree's own folder, an empty `config.worktree` and
+ * `modules`. (A file is made by a name of its own and linked into place, so never written through a
+ * FIFO or a link put there.) Where one can't be made, the command is told so once (`$F/unkept`), and
+ * runs: what keeps the rest still keeps it. `git_made_all <work> <git> <allowed>`.
  */
 export const MAKE_GIT = String.raw`git_unkept() {
   k_note=$F/unkept/$(printf '%s' "$1" | cksum | cut -d ' ' -f 1)
@@ -136,25 +178,46 @@ export const MAKE_GIT = String.raw`git_unkept() {
   (umask 077; mkdir -p "$F/unkept" && : >"$k_note") 2>/dev/null
   echo "Note: git's own files in $1 aren't kept from commands by Kuvo Code's sandbox (it can't add a hooks folder or commondir there)." >&2
 }
-git_made() { [ -e "$1" ] || [ -L "$1" ] || (set -C; if [ "$3" = / ]; then mkdir "$1"; else printf '%s\n' "$3" >"$1"; fi) 2>/dev/null || git_unkept "$2"; }
+git_made() {
+  [ ! -e "$1" ] && [ ! -L "$1" ] || return 0
+  if [ "$3" = / ]; then mkdir "$1" 2>/dev/null || git_unkept "$2"; return 0; fi
+  k_t=$(mktemp "$1.XXXXXXXX" 2>/dev/null) || { git_unkept "$2"; return 0; }
+  { [ -z "$3" ] || timeout 5 sh -c 'printf "%s\n" "$0" >"$1"' "$3" "$k_t"; } && ln "$k_t" "$1" 2>/dev/null || [ -e "$1" ] || git_unkept "$2"
+  rm -f "$k_t"
+}
 git_repo() {
-  [ -d "$1" ] && [ ! -L "$1" ] && [ -f "$1/HEAD" ] || return 0
-  git_made "$1/hooks" "$1" /
+  [ -d "$1" ] && [ ! -L "$1" ] || return 0
+  for k_n in hooks modules worktrees; do git_made "$1/$k_n" "$1" /; done
   git_made "$1/commondir" "$1" .
-  if [ -f "$1/config" ] && timeout 5 grep -qi worktreeconfig "$1/config" 2>/dev/null; then
-    git_made "$1/config.worktree" "$1" ""
-    for k_e in "$1/worktrees"/* "$1/worktrees"/.[!.]* "$1/worktrees"/..?*; do [ ! -d "$k_e" ] || [ -L "$k_e" ] || git_made "$k_e/config.worktree" "$1" ""; done
-  fi
+  git_made "$1/config.worktree" "$1" ""
+  for k_e in "$1/worktrees"/* "$1/worktrees"/.[!.]* "$1/worktrees"/..?*; do
+    [ -d "$k_e" ] && [ ! -L "$k_e" ] || continue
+    git_made "$k_e/config.worktree" "$1" ""
+    git_made "$k_e/modules" "$1" /
+  done
 }
 git_all() {
   git_repo "$1"
   [ -d "$1" ] && [ ! -L "$1" ] || return 0
   find "$1/modules" "$1/worktrees" \( -name objects -o -name refs -o -name logs -o -name lfs -o -name rr-cache -o -name hooks -o -name info \) -prune -o -path '*/modules/*' -name HEAD -type f -print 2>/dev/null | while IFS= read -r k_h; do git_repo "$(dirname "$k_h")"; done
 }
+# (The .git folder up from a folder, where it's one and not a link.)
+git_up() {
+  k_at=$1
+  while [ -n "$k_at" ] && [ "$k_at" != / ]; do
+    if [ -e "$k_at/.git" ] || [ -L "$k_at/.git" ]; then [ ! -d "$k_at/.git" ] || [ -L "$k_at/.git" ] || printf '%s\n' "$k_at/.git"; return 0; fi
+    k_at=$(dirname "$k_at")
+  done
+}
 git_made_all() {
-  case $1 in /*.git) git_all "$1" ;; esac
-  [ -f "$2" ] || return 0
-  while IFS= read -r k_a; do case $k_a in /*) [ "$k_a/.git" = "$1" ] || git_all "$k_a/.git" ;; esac; done <"$2"
+  k_seen=
+  for k_g in "$2" "$(git_up "$1")"; do
+    case $k_g in /*.git) ;; *) continue ;; esac
+    [ "$k_g" != "$k_seen" ] || continue
+    git_all "$k_g"; k_seen=$k_g
+  done
+  [ -f "$3" ] || return 0
+  while IFS= read -r k_a; do case $k_a in /*) [ "$k_a/.git" = "$2" ] || git_all "$k_a/.git" ;; esac; done <"$3"
 }`;
 
 /**
@@ -191,6 +254,9 @@ fail() { echo "This command can't run in the sandbox here: $1" >&2; exit 126; }
 over() { ( cd -P "$1" 2>/dev/null || exit 1; [ -z "$3" ] || [ "$(pwd -P)" = "$1" ] || exit 1; [ "$3" != mine ] || [ -O . ] || exit 1; mount -c -t tmpfs -o "size=64k,mode=$2" kuvo-hidden . 2>/dev/null || exit 2 ) || { [ $? = 1 ] || fail "$1 can't be kept from it."; return 1; }; }
 off() { [ -S "$1" ] && { [ -z "$2" ] || [ ! -L "$1" ]; } || return 1; mount -c --bind /dev/null "$1" 2>/dev/null && [ -c "$1" ] && { [ -z "$2" ] || [ ! -L "$1" ]; } || fail "$1 can't be kept from it."; }
 [ -r "$sockets" ] || fail "it isn't set up."
+# (Where a folder can't be made read-only here, as git's own files are kept, nothing runs: the box's
+# check, which runs this too, finds the machine can't give commands a namespace.)
+mount -c --bind "$own" "$own" 2>/dev/null && mount -c -o remount,bind,ro "$own" 2>/dev/null || fail "its folders can't be kept read-only here."
 over "$own" 0700 || fail "it isn't set up."
 while IFS= read -r s; do case $s in /*'*'*) for f in $s; do [ ! -S "$f" ] || off "$f"; done ;; /*) over "$s" 0700 || off "$s" ;; esac; done <"$sockets"
 over "/run/user/$u" 0700

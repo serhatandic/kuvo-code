@@ -90,7 +90,7 @@ export function launcherScript(places: FencePlaces): string {
         `ns=$(cat "$F/namespace" 2>/dev/null)`,
         MAKE_GIT,
         `set -- "$runtime" --config=/dev/null --no-env-file ${sh(places.runner)} "$F/policy.json" "$work" "$git" "$tmp" "$own" "$allowed" "$shell" "$@"`,
-        `case $ns in /*) git_made_all "$git" "$allowed"; set -- "$ns" -Urm /bin/sh -c ${sh(HIDE)} "$ns" "$(id -u)" "$(id -g)" "$(id -un 2>/dev/null)" "$F/ns" "$F/sockets" "$t_own" "$t_name" "$work" "$git" "$allowed" "$@" ;; -) ;; *) echo "This command can't run in the sandbox here: it isn't set up." >&2; exit 126 ;; esac`,
+        `case $ns in /*) git_made_all "$work" "$git" "$allowed"; set -- "$ns" -Urm /bin/sh -c ${sh(HIDE)} "$ns" "$(id -u)" "$(id -g)" "$(id -un 2>/dev/null)" "$F/ns" "$F/sockets" "$t_own" "$t_name" "$work" "$git" "$allowed" "$@" ;; -) ;; *) echo "This command can't run in the sandbox here: it isn't set up." >&2; exit 126 ;; esac`,
         `PATH=$user_path KUVO_FENCE_OWN="$own_list" KUVO_FENCE_READ="$read_list" KUVO_FENCE_MEMORY="$memory" KUVO_FENCE_BUN="$as_bun" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 exec "$@"`,
       ];
   return [
