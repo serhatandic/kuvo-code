@@ -14242,6 +14242,7 @@ class CodexThread {
   asking = new Set;
   answers = [];
   answered = [];
+  retelling = new Set;
   sleep;
   turnedDown = 0;
   toolsKey;
@@ -14763,6 +14764,8 @@ ${others.map((path) => `- ${path}`).join(`
 ${said.map((each) => each.text).join(`
 
 `)}`, files: [] };
+        for (const each of said)
+          this.retelling.add(each);
         this.keep(this.steerIn(active, words).then(async (took) => {
           if (took)
             return;
@@ -14773,11 +14776,14 @@ ${said.map((each) => each.text).join(`
           }
           this.answered.push(...said.filter((each) => each.heard));
           this.answers.push(...said.filter((each) => !each.heard).map((each) => ({ text: each.text, files: each.files ?? [] })));
+        }).finally(() => {
+          for (const each of said)
+            this.retelling.delete(each);
         }));
       }
     } else if (item?.type === "userMessage") {
       const text = (item.content ?? []).find((part) => part?.type === "text")?.text;
-      const heard = typeof text === "string" ? this.answered.find((each) => !each.heard && text.startsWith(each.text)) : undefined;
+      const heard = typeof text === "string" ? [...this.answered, ...this.retelling].find((each) => !each.heard && text.startsWith(each.text)) : undefined;
       if (heard)
         heard.heard = true;
     } else if (WORK_ITEMS.has(item?.type)) {
@@ -27446,4 +27452,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 2018364d9713c63593cbc77563fa4be0fa66f127df0f75688b325b58df4660b0
+// Built from Packages/Box/src/agents 9aa47d4e9dba22f8a341089598b7742c0f9dfaf795f8f9eb29a69fc8cbcca303
