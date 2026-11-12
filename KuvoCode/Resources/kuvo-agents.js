@@ -1,7 +1,7 @@
 // @bun
 // Packages/Box/src/agents/main.ts
-import { mkdirSync as mkdirSync25, readdirSync as readdirSync18, readFileSync as readFileSync36, rmSync as rmSync16 } from "fs";
-import { basename as basename12, dirname as dirname23, join as join36 } from "path";
+import { mkdirSync as mkdirSync25, readdirSync as readdirSync19, readFileSync as readFileSync36, rmSync as rmSync17 } from "fs";
+import { basename as basename12, dirname as dirname22, join as join36 } from "path";
 
 // Packages/Box/src/agents/accounts.ts
 import { randomBytes } from "crypto";
@@ -18487,7 +18487,7 @@ async function branchRoutes(places, method, parts, body) {
 
 // Packages/Box/src/agents/usage/usage.ts
 import { mkdirSync as mkdirSync20, readFileSync as readFileSync28, renameSync as renameSync16, writeFileSync as writeFileSync21 } from "fs";
-import { dirname as dirname17, join as join31 } from "path";
+import { dirname as dirname16, join as join31 } from "path";
 
 // Packages/Box/src/agents/usage/claude-log.ts
 var USAGE = Buffer.from('"usage":{');
@@ -19586,35 +19586,35 @@ class PricingStore {
 }
 
 // Packages/Box/src/agents/usage/history.ts
-var HOUR2 = 3600000;
-var DAY = 24 * HOUR2;
+var SLOT = 15 * 60000;
+var DAY = 24 * 60 * 60000;
 var KEPT_DAYS = 35;
-var noHours = () => ({ used: new Map, unknown: new Map });
+var noSlots = () => ({ used: new Map, unknown: new Map });
 var UNATTRIBUTED = "Unattributed";
-var hourOf = (at) => Math.floor(at / HOUR2) * HOUR2;
-function claudeHours(entries, pricing, since) {
-  const hours = noHours();
+var slotOf = (at) => Math.floor(at / SLOT) * SLOT;
+function claudeSlots(entries, pricing, since) {
+  const slots = noSlots();
   for (const entry of entries) {
     if (entry.at < since)
       continue;
-    const hour = hourOf(entry.at);
+    const slot = slotOf(entry.at);
     const model = entry.model?.trim() || undefined;
     let cost = entry.cost;
     if (cost === undefined && model !== undefined)
       cost = pricing.cost(model, entry.tokens);
     if (cost === undefined) {
       if (model !== undefined && totalTokens(entry.tokens) > 0)
-        addUnknown(hours, hour, model);
+        addUnknown(slots, slot, model);
       continue;
     }
-    add(hours, hour, model ?? UNATTRIBUTED, totalTokens(entry.tokens), cost);
+    add(slots, slot, model ?? UNATTRIBUTED, totalTokens(entry.tokens), cost);
   }
-  return hours;
+  return slots;
 }
-function add(hours, hour, model, tokens, cost) {
-  let models = hours.used.get(hour);
+function add(slots, slot, model, tokens, cost) {
+  let models = slots.used.get(slot);
   if (!models)
-    hours.used.set(hour, models = new Map);
+    slots.used.set(slot, models = new Map);
   const use = models.get(model);
   if (use) {
     use[0] += tokens;
@@ -19622,33 +19622,33 @@ function add(hours, hour, model, tokens, cost) {
   } else
     models.set(model, [tokens, cost]);
 }
-function addUnknown(hours, hour, model) {
-  let models = hours.unknown.get(hour);
+function addUnknown(slots, slot, model) {
+  let models = slots.unknown.get(slot);
   if (!models)
-    hours.unknown.set(hour, models = new Set);
+    slots.unknown.set(slot, models = new Set);
   models.add(model);
 }
 function summed(all) {
-  const sum = noHours();
-  for (const hours of all) {
-    for (const [hour, models] of hours.used)
+  const sum = noSlots();
+  for (const slots of all) {
+    for (const [slot, models] of slots.used)
       for (const [model, [tokens, cost]] of models)
-        add(sum, hour, model, tokens, cost);
-    for (const [hour, models] of hours.unknown)
+        add(sum, slot, model, tokens, cost);
+    for (const [slot, models] of slots.unknown)
       for (const model of models)
-        addUnknown(sum, hour, model);
+        addUnknown(sum, slot, model);
   }
   return sum;
 }
-function trimmed(hours, now) {
+function trimmed(slots, now) {
   const since = now - KEPT_DAYS * DAY;
-  const kept = noHours();
-  for (const [hour, models] of hours.used)
-    if (hour >= since)
-      kept.used.set(hour, models);
-  for (const [hour, models] of hours.unknown)
-    if (hour >= since)
-      kept.unknown.set(hour, models);
+  const kept = noSlots();
+  for (const [slot, models] of slots.used)
+    if (slot >= since)
+      kept.used.set(slot, models);
+  for (const [slot, models] of slots.unknown)
+    if (slot >= since)
+      kept.unknown.set(slot, models);
   return kept;
 }
 var formats = new Map;
@@ -19681,7 +19681,7 @@ function windowDays(now, zone, previous = 30) {
   const noon = Date.UTC(year, month - 1, day, 12);
   return Array.from({ length: previous + 1 }, (_, back) => new Date(noon - back * DAY).toISOString().slice(0, 10));
 }
-function daysIn(hours, zone, now) {
+function daysIn(slots, zone, now) {
   const window = new Set(windowDays(now, zone));
   const days = new Map;
   const dayOf = (date) => {
@@ -19690,8 +19690,8 @@ function daysIn(hours, zone, now) {
       days.set(date, found = { models: new Map, unknown: new Set });
     return found;
   };
-  for (const [hour, models] of hours.used) {
-    const date = dayIn(hour, zone);
+  for (const [slot, models] of slots.used) {
+    const date = dayIn(slot, zone);
     if (!window.has(date))
       continue;
     const day = dayOf(date);
@@ -19704,8 +19704,8 @@ function daysIn(hours, zone, now) {
         day.models.set(model, [tokens, cost]);
     }
   }
-  for (const [hour, models] of hours.unknown) {
-    const date = dayIn(hour, zone);
+  for (const [slot, models] of slots.unknown) {
+    const date = dayIn(slot, zone);
     if (!window.has(date))
       continue;
     for (const model of models)
@@ -19722,7 +19722,7 @@ function daysIn(hours, zone, now) {
     };
   });
 }
-function keptHours(hours) {
+function keptSlots(slots) {
   const models = [];
   const index = (model) => {
     let at = models.indexOf(model);
@@ -19731,45 +19731,45 @@ function keptHours(hours) {
     return at;
   };
   const used = [];
-  for (const [hour, uses] of [...hours.used].sort(([a], [b]) => a - b))
+  for (const [slot, uses] of [...slots.used].sort(([a], [b]) => a - b))
     for (const [model, [tokens, cost]] of uses)
-      used.push([hour / HOUR2, index(model), tokens, Math.round(cost * 1e6) / 1e6]);
+      used.push([slot / SLOT, index(model), tokens, Math.round(cost * 1e6) / 1e6]);
   const unknown = [];
-  for (const [hour, names] of [...hours.unknown].sort(([a], [b]) => a - b))
+  for (const [slot, names] of [...slots.unknown].sort(([a], [b]) => a - b))
     for (const model of names)
-      unknown.push([hour / HOUR2, index(model)]);
+      unknown.push([slot / SLOT, index(model)]);
   return { models, used, ...unknown.length ? { unknown } : {} };
 }
-function hoursFrom(given, most = 20000) {
-  const hours = noHours();
+function slotsFrom(given, most = 50000) {
+  const slots = noSlots();
   if (!given || typeof given !== "object")
-    return hours;
+    return slots;
   const kept = given;
   const models = Array.isArray(kept.models) ? kept.models.map((model) => typeof model === "string" ? model.slice(0, 200) : undefined) : [];
-  const hourAt = (value) => typeof value === "number" && Number.isInteger(value) && value > 0 && value < 1e8 ? value * HOUR2 : undefined;
+  const slotAt = (value) => typeof value === "number" && Number.isInteger(value) && value > 0 && value < 1e9 ? value * SLOT : undefined;
   for (const use of (Array.isArray(kept.used) ? kept.used : []).slice(0, most)) {
     if (!Array.isArray(use))
       continue;
-    const [hour, model, tokens, cost] = [hourAt(use[0]), typeof use[1] === "number" ? models[use[1]] : undefined, use[2], use[3]];
-    if (hour === undefined || model === undefined || typeof tokens !== "number" || !Number.isFinite(tokens) || tokens < 0 || typeof cost !== "number" || !Number.isFinite(cost) || cost < 0)
+    const [slot, model, tokens, cost] = [slotAt(use[0]), typeof use[1] === "number" ? models[use[1]] : undefined, use[2], use[3]];
+    if (slot === undefined || model === undefined || !Number.isSafeInteger(tokens) || tokens < 0 || typeof cost !== "number" || !Number.isFinite(cost) || cost < 0)
       continue;
-    add(hours, hour, model, tokens, cost);
+    add(slots, slot, model, tokens, cost);
   }
   for (const each of (Array.isArray(kept.unknown) ? kept.unknown : []).slice(0, most)) {
     if (!Array.isArray(each))
       continue;
-    const [hour, model] = [hourAt(each[0]), typeof each[1] === "number" ? models[each[1]] : undefined];
-    if (hour !== undefined && model !== undefined)
-      addUnknown(hours, hour, model);
+    const [slot, model] = [slotAt(each[0]), typeof each[1] === "number" ? models[each[1]] : undefined];
+    if (slot !== undefined && model !== undefined)
+      addUnknown(slots, slot, model);
   }
-  return hours;
+  return slots;
 }
 
 // Packages/Box/src/agents/usage/jsonl.ts
 import { createHash as createHash10 } from "crypto";
-import { mkdirSync as mkdirSync19, readFileSync as readFileSync27, renameSync as renameSync15, writeFileSync as writeFileSync20 } from "fs";
+import { mkdirSync as mkdirSync19, readdirSync as readdirSync16, readFileSync as readFileSync27, renameSync as renameSync15, rmSync as rmSync14, writeFileSync as writeFileSync20 } from "fs";
 import { open, readdir, stat as stat2 } from "fs/promises";
-import { dirname as dirname16, join as join30 } from "path";
+import { join as join30 } from "path";
 var CHUNK = 1 << 20;
 var LONGEST_LINE = 64 << 20;
 var HEAD = 4096;
@@ -19804,33 +19804,39 @@ async function jsonlFiles(folder) {
 class JSONLFiles {
   parse;
   at;
-  file;
+  folder;
   version;
   records = new Map;
-  dirty = false;
+  changed = new Set;
+  forgotten = new Set;
   seen = new Set;
-  constructor(parse, at, file, version = 1) {
+  constructor(parse, at, folder, version = 1) {
     this.parse = parse;
     this.at = at;
-    this.file = file;
+    this.folder = folder;
     this.version = version;
-    if (!file)
+    if (!folder)
       return;
+    let names = [];
     try {
-      const saved = JSON.parse(readFileSync27(file, "utf8"));
-      if (saved?.version !== version || !saved.files || typeof saved.files !== "object")
-        return;
-      for (const [path, record] of Object.entries(saved.files)) {
-        if (record && Array.isArray(record.items) && typeof record.offset === "number" && typeof record.size === "number")
-          this.records.set(path, record);
-      }
+      names = readdirSync16(folder);
     } catch {}
+    for (const name of names) {
+      if (!/^[0-9a-f]{32}\.json$/.test(name))
+        continue;
+      try {
+        const saved = JSON.parse(readFileSync27(join30(folder, name), "utf8"));
+        const record = saved?.record;
+        if (saved?.version === version && typeof saved.path === "string" && keptName(saved.path) === name && record && Array.isArray(record.items) && typeof record.offset === "number" && typeof record.size === "number")
+          this.records.set(saved.path, record);
+        else
+          rmSync14(join30(folder, name), { force: true });
+      } catch {}
+    }
   }
-  async items(files, since, cancelled = () => false) {
+  async items(files, since) {
     const all = [];
     for (const file of files) {
-      if (cancelled())
-        return;
       if (file.mtime < since)
         continue;
       this.seen.add(file.path);
@@ -19847,21 +19853,32 @@ class JSONLFiles {
         if (this.seen.has(path))
           continue;
         this.records.delete(path);
-        this.dirty = true;
+        this.changed.delete(path);
+        this.forgotten.add(path);
       }
     }
     this.seen.clear();
     this.save();
   }
   save() {
-    if (!this.file || !this.dirty)
+    if (!this.folder)
       return;
     try {
-      mkdirSync19(dirname16(this.file), { recursive: true });
-      writeFileSync20(this.file + ".new", JSON.stringify({ version: this.version, files: Object.fromEntries(this.records) }), { mode: 384 });
-      renameSync15(this.file + ".new", this.file);
-      this.dirty = false;
-    } catch {}
+      mkdirSync19(this.folder, { recursive: true, mode: 448 });
+    } catch {
+      return;
+    }
+    for (const path of this.forgotten)
+      rmSync14(join30(this.folder, keptName(path)), { force: true });
+    this.forgotten.clear();
+    for (const path of this.changed) {
+      const file = join30(this.folder, keptName(path));
+      try {
+        writeFileSync20(file + ".new", JSON.stringify({ version: this.version, path, record: this.records.get(path) }), { mode: 384 });
+        renameSync15(file + ".new", file);
+      } catch {}
+    }
+    this.changed.clear();
   }
   async read(file, since) {
     const before = this.records.get(file.path);
@@ -19875,7 +19892,7 @@ class JSONLFiles {
     }
     try {
       let record;
-      const appended = before && file.size >= before.size && await headOf(handle, before.headLength) === before.head;
+      const appended = before && file.size > before.size && await headOf(handle, before.headLength) === before.head;
       if (appended)
         record = { ...before, items: before.items.filter((item) => this.at(item) >= since) };
       else {
@@ -19894,7 +19911,7 @@ class JSONLFiles {
         record.head = await headOf(handle, record.headLength);
       }
       this.records.set(file.path, record);
-      this.dirty = true;
+      this.changed.add(file.path);
       return record;
     } finally {
       await handle.close().catch(() => {});
@@ -19938,6 +19955,7 @@ class JSONLFiles {
     return consumed;
   }
 }
+var keptName = (path) => createHash10("sha256").update(path).digest("hex").slice(0, 32) + ".json";
 async function headOf(handle, length) {
   if (!length)
     return "";
@@ -19990,7 +20008,7 @@ function usageRows(boxes) {
         ...box.here ? { here: true } : {},
         ...box.away ? { away: true } : {}
       })),
-      hours: summed(members.map((member) => member.account.hours))
+      slots: summed(members.map((member) => member.account.slots))
     };
     if (members.every((member) => member.box.away))
       row.away = true;
@@ -20055,19 +20073,19 @@ class Usage {
     const sources = this.sources();
     let complete = true;
     for (const source of sources) {
-      let hours;
+      let slots;
       try {
-        hours = await source.hours(pricing, since, () => false);
+        slots = await source.slots(pricing, since);
       } catch (error) {
         console.error(`usage of ${source.provider}:`, error);
       }
-      const entry = this.entries.get(source.provider) ?? { hours: noHours() };
-      if (hours) {
-        entry.hours = hours;
+      const entry = this.entries.get(source.provider) ?? { slots: noSlots() };
+      if (slots) {
+        entry.slots = slots;
         entry.scanned = this.now();
       } else {
         complete = false;
-        entry.hours = trimmed(entry.hours, at);
+        entry.slots = trimmed(entry.slots, at);
       }
       this.entries.set(source.provider, entry);
     }
@@ -20096,7 +20114,7 @@ class Usage {
           ...source.label ? { label: source.label } : {},
           ...identity ? { identity } : {},
           ...entry.scanned ? { scanned: entry.scanned } : {},
-          hours: entry.hours
+          slots: entry.slots
         }
       ];
     });
@@ -20116,21 +20134,25 @@ class Usage {
     for (const service of USAGE_SERVICES) {
       const of = rows.filter((row) => row.service === service);
       if (of.length)
-        services[service] = daysIn(summed(of.map((row) => row.hours)), asked, now);
+        services[service] = daysIn(summed(of.map((row) => row.slots)), asked, now);
     }
     const scanned = Math.max(0, ...this.own().map((account) => account.scanned ?? 0));
     return {
       zone: asked,
       services: USAGE_SERVICES,
       ...scanned ? { scanned } : {},
-      rows: rows.map(({ hours, ...row }) => ({ ...row, days: daysIn(hours, asked, now) })),
+      rows: rows.map(({ slots, ...row }) => ({ ...row, days: daysIn(slots, asked, now) })),
       totals: services
     };
   }
+  ownSaid = "";
   changed(own) {
-    const now = JSON.stringify(this.rows().map((row) => ({ ...row, hours: keptHours(row.hours) })));
-    if (own)
-      this.peers?.tell(true);
+    if (own) {
+      const mine = JSON.stringify(this.own().map(({ scanned: _, slots, ...account }) => ({ ...account, slots: keptSlots(slots) })));
+      this.peers?.tell(mine !== this.ownSaid);
+      this.ownSaid = mine;
+    }
+    const now = JSON.stringify(this.rows().map(({ scanned: _, slots, boxes, ...row }) => ({ ...row, boxes: boxes.map(({ scanned: _, ...box }) => box), slots: keptSlots(slots) })));
     if (now === this.said)
       return;
     this.said = now;
@@ -20147,7 +20169,7 @@ class Usage {
         this.entries.set(provider, {
           ...typeof kept.identity === "string" && /^[0-9a-f]{16}$/.test(kept.identity) ? { identity: kept.identity } : {},
           ...typeof kept.scanned === "number" ? { scanned: kept.scanned } : {},
-          hours: trimmed(hoursFrom(kept.hours, 200000), this.now())
+          slots: trimmed(slotsFrom(kept.slots, 200000), this.now())
         });
       }
     } catch {}
@@ -20156,9 +20178,9 @@ class Usage {
   save() {
     if (!this.file)
       return;
-    const accounts = Object.fromEntries([...this.entries].map(([provider, entry]) => [provider, { ...entry.identity ? { identity: entry.identity } : {}, ...entry.scanned ? { scanned: entry.scanned } : {}, hours: keptHours(entry.hours) }]));
+    const accounts = Object.fromEntries([...this.entries].map(([provider, entry]) => [provider, { ...entry.identity ? { identity: entry.identity } : {}, ...entry.scanned ? { scanned: entry.scanned } : {}, slots: keptSlots(entry.slots) }]));
     try {
-      mkdirSync20(dirname17(this.file), { recursive: true });
+      mkdirSync20(dirname16(this.file), { recursive: true });
       writeFileSync21(this.file + ".new", JSON.stringify({ accounts }), { mode: 384 });
       renameSync16(this.file + ".new", this.file);
     } catch {}
@@ -20179,7 +20201,7 @@ async function usageRoutes(usage, method, rest, params) {
   return json8({ message: "Not available for this agent." }, 404);
 }
 function claudeSources(folder) {
-  const files = new JSONLFiles((line) => claudeLine(line).map(keptClaude), (entry) => entry[0], folder ? join31(folder, "claude-files.json") : undefined, 1);
+  const files = new JSONLFiles((line) => claudeLine(line).map(keptClaude), (entry) => entry[0], folder ? join31(folder, "claude-files") : undefined, 1);
   return (agents) => agents.flatMap((agent) => {
     const parsed = parseProvider(agent.providerID);
     if (parsed?.kind !== "claude" || !agent.conversationRoots)
@@ -20190,14 +20212,13 @@ function claudeSources(folder) {
       service: "claude",
       agent: { kind: "claude", account: parsed.id },
       ...agent.instance.label ? { label: agent.instance.label } : {},
-      hours: async (pricing, since, cancelled) => {
+      slots: async (pricing, since) => {
         const found = new Map;
         for (const root of roots())
           for (const file of await jsonlFiles(root))
             found.set(file.path, file);
         const ordered = [...found.values()].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
-        const kept = await files.items(ordered, since, cancelled);
-        return kept ? claudeHours(dedupClaude(kept.map(fromKeptClaude)), pricing, since) : undefined;
+        return claudeSlots(dedupClaude((await files.items(ordered, since)).map(fromKeptClaude)), pricing, since);
       },
       files
     };
@@ -20325,7 +20346,7 @@ import { createHash as createHash11 } from "crypto";
 import { spawn as spawnProcess } from "child_process";
 import { readFileSync as readFileSync29, realpathSync as realpathSync7, statSync as statSync11 } from "fs";
 import { homedir as homedir5 } from "os";
-import { dirname as dirname18, join as join32, resolve as resolve8 } from "path";
+import { dirname as dirname17, join as join32, resolve as resolve8 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
 
 // Packages/Box/src/agents/handover.ts
@@ -21370,7 +21391,7 @@ var fileActions = new Set(["read", "edit", "write", "patch", "list", "grep", "gl
 function ownPlaces() {
   const places = [process.env.KUVO_AGENTS_HOME, process.env.TMPDIR?.replace(/\/$/, ""), join32(homedir5(), ".claude", "plans")].filter((place) => Boolean(place));
   if (process.env.KUVO_AGENTS_HOME && !onMachine)
-    places.push(join32(dirname18(process.env.KUVO_AGENTS_HOME), "Attachments"));
+    places.push(join32(dirname17(process.env.KUVO_AGENTS_HOME), "Attachments"));
   return [...places, ...skillFolders()];
 }
 function outsidePaths(ask, directory, attached, own = ownPlaces(), owns) {
@@ -21388,7 +21409,7 @@ function realFolder(folder) {
   }
 }
 function outsideFolders(ask, paths) {
-  return [...new Set(paths.map((path) => join32(isFolder(path, ask.action) ? path : dirname18(path), "*")))];
+  return [...new Set(paths.map((path) => join32(isFolder(path, ask.action) ? path : dirname17(path), "*")))];
 }
 function outsideRefusable(ask, paths, folders) {
   return [...paths.filter((path) => !isFolder(path, ask.action)), ...folders];
@@ -23957,7 +23978,7 @@ function followed(store, read, signal) {
 import { createHash as createHash12 } from "crypto";
 import { createReadStream } from "fs";
 import { copyFile, lstat as lstat2, mkdir, readFile as readFile3, readdir as readdir2, rename, rm, stat as stat3, writeFile } from "fs/promises";
-import { basename as basename11, dirname as dirname19, isAbsolute as isAbsolute3, join as join33, normalize, sep as sep11 } from "path";
+import { basename as basename11, dirname as dirname18, isAbsolute as isAbsolute3, join as join33, normalize, sep as sep11 } from "path";
 var WORKING = 423;
 
 class CantCarry extends Error {
@@ -24080,7 +24101,7 @@ class Carrying {
         if (name === "messages.json")
           records.push({ path, size: (await stat3(file)).size, sha256: await hashOf(file) });
         if (into) {
-          await mkdir(dirname19(join33(into, path)), { recursive: true });
+          await mkdir(dirname18(join33(into, path)), { recursive: true });
           await copyFile(file, join33(into, path));
         }
       }
@@ -24108,7 +24129,7 @@ class Carrying {
           left.push({ provider, paths: files.items.map((item) => item.path), ...files.memory && !files.memoryShared ? { memory: files.memory } : {}, directory: record.session.location.directory });
         if (into) {
           for (const { from, file } of list) {
-            await mkdir(dirname19(join33(into, file.path)), { recursive: true });
+            await mkdir(dirname18(join33(into, file.path)), { recursive: true });
             await copyFile(from, join33(into, file.path));
           }
         }
@@ -24430,12 +24451,12 @@ class Undo {
     await this.write();
   }
   async put(from, dest, file, merges) {
-    await mkdir(dirname19(dest), { recursive: true });
+    await mkdir(dirname18(dest), { recursive: true });
     let there = await lstat2(dest).then(() => true, () => false);
     if (there && merges) {
       if (await hashOf(dest).catch(() => "") === file.sha256)
         return;
-      dest = join33(dirname19(dest), `moved-${file.sha256.slice(0, 8)}-${basename11(dest)}`);
+      dest = join33(dirname18(dest), `moved-${file.sha256.slice(0, 8)}-${basename11(dest)}`);
       there = await lstat2(dest).then(() => true, () => false);
       if (there)
         return;
@@ -24446,7 +24467,7 @@ class Undo {
     this.list.placed.push(placed);
     await this.write();
     if (placed.replaced) {
-      await mkdir(dirname19(placed.replaced), { recursive: true });
+      await mkdir(dirname18(placed.replaced), { recursive: true });
       await rename(dest, placed.replaced);
     }
     await copyFile(from, dest);
@@ -25087,7 +25108,7 @@ function seatRules(folder, askFirst, denies) {
 }
 
 // Packages/Box/src/agents/groups/store.ts
-import { existsSync as existsSync17, mkdirSync as mkdirSync21, readdirSync as readdirSync16, readFileSync as readFileSync30, renameSync as renameSync17, rmSync as rmSync14, writeFileSync as writeFileSync22 } from "fs";
+import { existsSync as existsSync17, mkdirSync as mkdirSync21, readdirSync as readdirSync17, readFileSync as readFileSync30, renameSync as renameSync17, rmSync as rmSync15, writeFileSync as writeFileSync22 } from "fs";
 import { join as join34 } from "path";
 var version2 = 1;
 function isTurning(value) {
@@ -25164,7 +25185,7 @@ class GroupStore {
     const all = new Map;
     let names = [];
     try {
-      names = readdirSync16(this.root);
+      names = readdirSync17(this.root);
     } catch {}
     for (const id of names) {
       if (!/^grp_[a-z0-9]+$/.test(id))
@@ -25197,7 +25218,7 @@ class GroupStore {
     if (awake && !existsSync17(file) && existsSync17(this.folder(id)))
       writeFileSync22(file, "");
     if (!awake)
-      rmSync14(file, { force: true });
+      rmSync15(file, { force: true });
   }
   trash(id, trash) {
     if (!existsSync17(this.folder(id)))
@@ -25227,7 +25248,7 @@ class GroupStore {
   allBots() {
     let names = [];
     try {
-      names = readdirSync16(this.bots);
+      names = readdirSync17(this.bots);
     } catch {}
     return names.flatMap((name) => this.bot(name) ?? []);
   }
@@ -25320,7 +25341,7 @@ class GroupStore {
   }
   setPendingMemory(pending) {
     if (Object.keys(pending).length === 0)
-      rmSync14(join34(this.root, "pending-memory.json"), { force: true });
+      rmSync15(join34(this.root, "pending-memory.json"), { force: true });
     else
       write(join34(this.root, "pending-memory.json"), pending);
   }
@@ -25337,7 +25358,7 @@ class GroupStore {
     renameSync17(path + ".new", path);
   }
   removeFile(path) {
-    rmSync14(path, { force: true });
+    rmSync15(path, { force: true });
   }
 }
 
@@ -25956,16 +25977,17 @@ import { existsSync as existsSync18, readFileSync as readFileSync33, renameSync 
 var SEAT_MAIL_KINDS = ["turn", "state", "result", "steer", "stop", "drop", "work", "held", "report", "memory"];
 
 // Packages/Box/src/agents/usage/usage-peers.ts
+import { createHash as createHash13 } from "crypto";
 import { mkdirSync as mkdirSync22, readFileSync as readFileSync32, renameSync as renameSync18, writeFileSync as writeFileSync23 } from "fs";
-import { dirname as dirname20 } from "path";
+import { dirname as dirname19 } from "path";
 var isUsageMail = (value) => value !== null && typeof value === "object" && value.kind === "usage";
 var MINUTE3 = 60000;
 var TELL_AGAIN = 10 * MINUTE3;
 var PEER_AWAY = 25 * MINUTE3;
-var CHANGED_EVERY = MINUTE3;
 var SKEW = MINUTE3;
 var MOST_ACCOUNTS = 50;
-var MOST_USES = 20000;
+var MOST_USES = 50000;
+var MOST_BYTES2 = 400000;
 var SERVICE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 var text4 = (value, most = 200) => typeof value === "string" && value ? value.slice(0, most) : undefined;
 
@@ -25978,6 +26000,10 @@ class UsagePeers {
   peers = new Map;
   told = new Map;
   answered = new Map;
+  askedBack = new Map;
+  readFor = new Map;
+  refreshedElsewhere = -Infinity;
+  reading = new Set;
   constructor(usage, transport, directory, file, now = Date.now) {
     this.usage = usage;
     this.transport = transport;
@@ -25995,52 +26021,78 @@ class UsagePeers {
     const boxes = [{ key: self?.key ?? "", name: self?.name ?? "", here: true, away: false, accounts: own }];
     const peers = [...this.peers.entries()].sort(([, a], [, b]) => a.name.localeCompare(b.name));
     for (const [key, kept] of peers)
-      boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY, accounts: kept.accounts.map((account) => ({ ...account, hours: trimmed(account.hours, now) })) });
+      boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY, accounts: kept.accounts.map((account) => ({ ...account, slots: trimmed(account.slots, now) })) });
     return usageRows(boxes);
   }
-  tell(urgent = false) {
+  tell(changed = false) {
     if (!this.transport.followed || !this.directory.told)
       return;
     const now = this.now();
-    const accounts = this.shared();
-    const json = JSON.stringify(accounts);
+    const { accounts, digest } = this.shared();
     for (const { key } of this.directory.peerBoxes()) {
       const last = this.told.get(key);
-      const due = !last || now - last.at >= TELL_AGAIN || last.json !== json && (urgent || now - last.at >= CHANGED_EVERY);
-      if (!due)
+      if (!last || changed && last.digest !== digest)
+        this.transport.send(key, { kind: "usage", at: now, accounts, digest, ...!last ? { ask: true } : {} }, false);
+      else if (now - last.at >= TELL_AGAIN)
+        this.transport.send(key, { kind: "usage", at: now, digest, ...last.digest === digest ? {} : { accounts } }, false);
+      else
         continue;
-      this.transport.send(key, { kind: "usage", at: now, accounts, ...!last ? { ask: true } : {} }, false);
-      this.told.set(key, { json, at: now });
+      this.told.set(key, { digest, at: now });
     }
   }
   refreshElsewhere() {
     if (!this.transport.followed || !this.directory.told)
       return;
     const now = this.now();
-    const accounts = this.shared();
+    if (now - this.refreshedElsewhere < MINUTE3)
+      return;
+    this.refreshedElsewhere = now;
+    const { digest } = this.shared();
     for (const { key } of this.directory.peerBoxes())
-      this.transport.send(key, { kind: "usage", at: now, accounts, refresh: true }, false);
+      this.transport.send(key, { kind: "usage", at: now, digest, refresh: true }, false);
   }
   take(from, mail) {
-    if (!isUsageMail(mail) || !Array.isArray(mail.accounts))
+    if (!isUsageMail(mail))
       return;
     if (this.directory.told && !this.directory.peerBoxes().some((box) => box.key === from))
       return;
     const now = this.now();
-    const off = typeof mail.at === "number" && Number.isFinite(mail.at) && Math.abs(now - mail.at) >= SKEW ? now - mail.at : 0;
-    const accounts = mail.accounts.slice(0, MOST_ACCOUNTS).flatMap((account) => {
-      const taken = takenAccount(account, off, now);
-      return taken ? [taken] : [];
-    });
     const before = this.peers.get(from);
     const name = this.directory.peerBoxes().find((box) => box.key === from)?.name ?? before?.name ?? "another computer";
-    this.peers.set(from, { name, heard: now, accounts });
-    this.save();
-    this.usage.peersChanged();
+    const digest = text4(mail.digest, 64);
+    if (Array.isArray(mail.accounts)) {
+      const off = typeof mail.at === "number" && Number.isFinite(mail.at) && Math.abs(now - mail.at) >= SKEW ? now - mail.at : 0;
+      const accounts = mail.accounts.slice(0, MOST_ACCOUNTS).flatMap((account) => {
+        const taken = takenAccount(account, off, now);
+        return taken ? [taken] : [];
+      });
+      this.peers.set(from, { name, heard: now, ...digest ? { digest } : {}, accounts });
+      this.save();
+      this.usage.peersChanged();
+    } else if (before && digest && before.digest === digest) {
+      const away = now - before.heard > PEER_AWAY;
+      before.heard = now;
+      before.name = name;
+      if (away)
+        this.usage.peersChanged();
+    } else if (now - (this.askedBack.get(from) ?? -Infinity) >= MINUTE3) {
+      this.askedBack.set(from, now);
+      const mine = this.shared();
+      this.transport.send(from, { kind: "usage", at: now, ...mine, ask: true }, false);
+      this.told.set(from, { digest: mine.digest, at: now });
+    }
     if (mail.ask === true || before && now - before.heard > PEER_AWAY)
       this.answer(from);
-    if (mail.refresh === true)
-      this.usage.refresh().then(() => this.answer(from, true));
+    if (mail.refresh === true && now - (this.readFor.get(from) ?? -Infinity) >= MINUTE3) {
+      this.readFor.set(from, now);
+      const reading = this.usage.refresh().then(() => this.answer(from, true));
+      this.reading.add(reading);
+      reading.finally(() => this.reading.delete(reading));
+    }
+  }
+  async idle() {
+    while (this.reading.size)
+      await Promise.all([...this.reading]);
   }
   answer(key, urgent = false) {
     if (!this.transport.followed)
@@ -26049,12 +26101,20 @@ class UsagePeers {
     if (!urgent && now - (this.answered.get(key) ?? -Infinity) < MINUTE3)
       return;
     this.answered.set(key, now);
-    const accounts = this.shared();
-    this.transport.send(key, { kind: "usage", at: now, accounts }, false);
-    this.told.set(key, { json: JSON.stringify(accounts), at: now });
+    const mine = this.shared();
+    this.transport.send(key, { kind: "usage", at: now, ...mine }, false);
+    this.told.set(key, { digest: mine.digest, at: now });
   }
   shared() {
-    return this.usage.own().slice(0, MOST_ACCOUNTS).map(({ hours, ...account }) => ({ ...account, hours: keptHours(hours) }));
+    const accounts = this.usage.own().slice(0, MOST_ACCOUNTS).map(({ slots, ...account }) => ({ ...account, slots: keptSlots(slots) }));
+    while (Buffer.byteLength(JSON.stringify(accounts)) > MOST_BYTES2) {
+      const oldest = accounts.filter((account) => account.slots.used.length).sort((a, b) => a.slots.used[0][0] - b.slots.used[0][0])[0];
+      if (!oldest)
+        break;
+      oldest.slots = { ...oldest.slots, used: oldest.slots.used.slice(Math.max(1, Math.floor(oldest.slots.used.length / 10))) };
+    }
+    const digest = createHash13("sha256").update(JSON.stringify(accounts.map(({ scanned: _, ...account }) => account))).digest("hex").slice(0, 32);
+    return { accounts, digest };
   }
   directorySaid() {
     const here = new Set(this.directory.peerBoxes().map((box) => box.key));
@@ -26065,12 +26125,10 @@ class UsagePeers {
       this.peers.delete(key);
       gone = true;
     }
-    for (const key of [...this.told.keys()])
-      if (!here.has(key))
-        this.told.delete(key);
-    for (const key of [...this.answered.keys()])
-      if (!here.has(key))
-        this.answered.delete(key);
+    for (const map of [this.told, this.answered, this.askedBack, this.readFor])
+      for (const key of [...map.keys()])
+        if (!here.has(key))
+          map.delete(key);
     if (gone) {
       this.save();
       this.usage.peersChanged();
@@ -26085,7 +26143,8 @@ class UsagePeers {
       for (const [key, kept] of Object.entries(saved.peers ?? {})) {
         if (!kept || typeof kept.heard !== "number" || !Array.isArray(kept.accounts))
           continue;
-        this.peers.set(key, { name: typeof kept.name === "string" ? kept.name : "another computer", heard: kept.heard, accounts: kept.accounts.flatMap((account) => takenAccount(account, 0, Infinity) ?? []) });
+        const digest = text4(kept.digest, 64);
+        this.peers.set(key, { name: typeof kept.name === "string" ? kept.name : "another computer", heard: kept.heard, ...digest ? { digest } : {}, accounts: kept.accounts.flatMap((account) => takenAccount(account, 0, Infinity) ?? []) });
       }
     } catch {}
   }
@@ -26093,8 +26152,8 @@ class UsagePeers {
     if (!this.file)
       return;
     try {
-      mkdirSync22(dirname20(this.file), { recursive: true });
-      const peers = Object.fromEntries([...this.peers].map(([key, kept]) => [key, { ...kept, accounts: kept.accounts.map(({ hours, ...account }) => ({ ...account, hours: keptHours(hours) })) }]));
+      mkdirSync22(dirname19(this.file), { recursive: true });
+      const peers = Object.fromEntries([...this.peers].map(([key, kept]) => [key, { ...kept, accounts: kept.accounts.map(({ slots, ...account }) => ({ ...account, slots: keptSlots(slots) })) }]));
       writeFileSync23(this.file + ".new", JSON.stringify({ peers }), { mode: 384 });
       renameSync18(this.file + ".new", this.file);
     } catch {}
@@ -26115,7 +26174,7 @@ function takenAccount(given, off, now) {
     ...text4(account.label, 100) ? { label: text4(account.label, 100) } : {},
     ...typeof account.identity === "string" && /^[0-9a-f]{16}$/.test(account.identity) ? { identity: account.identity } : {},
     ...scanned ? { scanned } : {},
-    hours: hoursFrom(account.hours, MOST_USES)
+    slots: slotsFrom(account.slots, MOST_USES)
   };
 }
 
@@ -29703,7 +29762,7 @@ ${all}`;
 
 // Packages/Box/src/agents/renewal.ts
 import { statSync as statSync12 } from "fs";
-import { dirname as dirname21 } from "path";
+import { dirname as dirname20 } from "path";
 
 // Packages/Box/src/shared/bundle.ts
 import fs6 from "fs";
@@ -29777,7 +29836,7 @@ class Renewal {
     this.looking = setInterval(() => this.look(), renewalTiming.look);
     this.looking.unref?.();
     try {
-      this.watching = watchFolder(dirname21(this.options.script), () => this.look());
+      this.watching = watchFolder(dirname20(this.options.script), () => this.look());
     } catch {}
     this.look();
   }
@@ -29969,7 +30028,7 @@ function updateUnderWay(run) {
 import { spawn as spawn6 } from "child_process";
 
 // Packages/Box/src/agents/store.ts
-import { mkdirSync as mkdirSync23, readdirSync as readdirSync17, readFileSync as readFileSync34, renameSync as renameSync20, rmSync as rmSync15, statSync as statSync13, writeFileSync as writeFileSync25 } from "fs";
+import { mkdirSync as mkdirSync23, readdirSync as readdirSync18, readFileSync as readFileSync34, renameSync as renameSync20, rmSync as rmSync16, statSync as statSync13, writeFileSync as writeFileSync25 } from "fs";
 import { join as join35 } from "path";
 
 class Store {
@@ -29979,7 +30038,7 @@ class Store {
   constructor(root) {
     this.root = root;
     mkdirSync23(root, { recursive: true });
-    for (const id of readdirSync17(root)) {
+    for (const id of readdirSync18(root)) {
       try {
         const folder = join35(root, id);
         const session = JSON.parse(readFileSync34(join35(folder, "session.json"), "utf8"));
@@ -30023,7 +30082,7 @@ class Store {
     this.records.delete(id);
     clearTimeout(this.pending.get(id));
     this.pending.delete(id);
-    rmSync15(join35(this.root, id), { recursive: true, force: true });
+    rmSync16(join35(this.root, id), { recursive: true, force: true });
   }
   save(id, now = false) {
     clearTimeout(this.pending.get(id));
@@ -30236,13 +30295,13 @@ var isEngine = (command) => /\bserve\b/.test(command) && !command.includes("kuvo
 
 // Packages/Box/src/agents/limits-peers.ts
 import { mkdirSync as mkdirSync24, readFileSync as readFileSync35, renameSync as renameSync21, writeFileSync as writeFileSync26 } from "fs";
-import { dirname as dirname22 } from "path";
+import { dirname as dirname21 } from "path";
 var MINUTE4 = 60000;
 var TELL_AGAIN2 = 10 * MINUTE4;
 var PEER_AWAY2 = 25 * MINUTE4;
 var HEARD_EVERY = MINUTE4;
 var SKEW2 = MINUTE4;
-var MOST_BYTES2 = 40000;
+var MOST_BYTES3 = 40000;
 var SERVICE2 = /^[a-z0-9][a-z0-9-]{0,39}$/;
 var PROBLEMS = new Set(["rate-limited", "expired", "unreadable", "failed"]);
 
@@ -30367,7 +30426,7 @@ class LimitsPeers {
   }
   shared() {
     const accounts = this.limits.list(false);
-    while (accounts.length && Buffer.byteLength(JSON.stringify(accounts)) > MOST_BYTES2 - 200 * 60)
+    while (accounts.length && Buffer.byteLength(JSON.stringify(accounts)) > MOST_BYTES3 - 200 * 60)
       accounts.pop();
     return accounts;
   }
@@ -30408,7 +30467,7 @@ class LimitsPeers {
     if (!this.file)
       return;
     try {
-      mkdirSync24(dirname22(this.file), { recursive: true });
+      mkdirSync24(dirname21(this.file), { recursive: true });
       writeFileSync26(this.file + ".new", JSON.stringify({ peers: Object.fromEntries(this.peers) }), { mode: 384 });
       renameSync21(this.file + ".new", this.file);
     } catch {}
@@ -30500,12 +30559,12 @@ for (const name of ["KUVO_TEST_RENEW_HOLD", "KUVO_TEST_RENEW_SETTLE", "KUVO_TEST
   delete process.env[name];
 var temporary = process.env.TMPDIR?.replace(/\/$/, "") || join36(home3, "tmp");
 mkdirSync25(temporary, { recursive: true });
-rmSync16(join36(temporary, "antigravity"), { recursive: true, force: true });
+rmSync17(join36(temporary, "antigravity"), { recursive: true, force: true });
 leftSignIns(temporary);
 try {
-  for (const name of readdirSync18(join36(home3, "antigravity")))
+  for (const name of readdirSync19(join36(home3, "antigravity")))
     if (name.startsWith(".install-"))
-      rmSync16(join36(home3, "antigravity", name), { recursive: true, force: true });
+      rmSync17(join36(home3, "antigravity", name), { recursive: true, force: true });
 } catch {}
 delete process.env.BUN_BE_BUN;
 process.env.KUVO_WAKE_VIA = "bridge";
@@ -30520,7 +30579,7 @@ if (onMachine) {
   dropOwnPrograms(join36(home3, "runtime"));
   useSavedLoginPath();
 }
-rmSync16(join36(home3, "cache", "install"), { recursive: true, force: true });
+rmSync17(join36(home3, "cache", "install"), { recursive: true, force: true });
 var context = { home: home3, temporary, deps };
 var roster = new Roster(new Accounts(home3), context);
 var store = new Store(join36(home3, "sessions"));
@@ -30747,7 +30806,7 @@ renewal = onMachine && build ? new Renewal({
   paused: () => updateUnderWay(join36(machineHome, "run")),
   ready: () => {
     const kept = keeperEngine(machineHome);
-    return !kept || kept === basename12(dirname23(process.execPath));
+    return !kept || kept === basename12(dirname22(process.execPath));
   },
   lets: () => {
     const now = Date.now();
@@ -30803,7 +30862,7 @@ function stop() {
   cancelSignIns();
   try {
     if (record2 && JSON.parse(readFileSync36(record2, "utf8")).pid === process.pid)
-      rmSync16(record2, { force: true });
+      rmSync17(record2, { force: true });
   } catch {}
   sessions.closeAll();
   store.flush();
@@ -30825,4 +30884,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents f24fbe07a27eb6513b1af615323492d6be0fc76e0807090b6e8c656e089a398a
+// Built from Packages/Box/src/agents 3ba47ceb91d113c419b2691869c78b3c48f708ebdc19af31dceb023851b7d110

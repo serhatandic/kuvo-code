@@ -146,7 +146,7 @@ function sendSeat(host: SeatHost | null | undefined, to: string, mail: SeatMail,
   }
   const payloads = seatPayloads(mail, id);
   if (!payloads) {
-    console.error(`kuvo-link: a group chat's ${String(mail?.kind ?? "mail")} for ${plainName(peer.name) || "another computer"} is too big to send, so it wasn't.`);
+    console.error(`kuvo-link: ${mail.kind === "usage" ? "this computer's usage" : `a group chat's ${String(mail?.kind ?? "mail")}`} for ${plainName(peer.name) || "another computer"} is too big to send, so it wasn't.`);
     return "too big";
   }
   for (const payload of payloads) {

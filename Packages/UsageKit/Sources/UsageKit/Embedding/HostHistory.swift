@@ -44,11 +44,15 @@ public final class HostHistory {
     public private(set) var covered: Set<String> = []
     /// Each covered family's days, newest first.
     public private(set) var days: [String: [HostHistoryDay]] = [:]
+    /// Whether the host has said them since launch (until then, what the cards last had stays).
+    private var answered = false
     /// Has the host's boxes read their logs again now (the panel's Refresh).
     @ObservationIgnored public var refresh: (() -> Void)?
 
-    public func update(days: [String: [HostHistoryDay]], covered: Set<String>) {
-        guard days != self.days || covered != self.covered else { return }
+    /// `answered`: what the host said (else what it last said, kept from before, while it starts).
+    public func update(days: [String: [HostHistoryDay]], covered: Set<String>, answered: Bool = true) {
+        guard days != self.days || covered != self.covered || answered != self.answered else { return }
+        self.answered = answered
         let touched = Set(self.days.keys).union(days.keys).union(self.covered).union(covered)
         self.days = days
         self.covered = covered
@@ -59,14 +63,16 @@ public final class HostHistory {
         UsageMenuBar.shared.refresh(providerIDs: quiet.sorted())
     }
 
-    /// A covered provider's history as the panel's own scan of its logs would have been (nil inside
-    /// for none in the window), or nil for one the host doesn't cover: only its main card (`claude`,
-    /// not one for another login of yours).
+    /// A covered provider's history as the panel's own scan of its logs would have been, or nil for
+    /// one the host doesn't cover. Only its main card (`claude`) takes the host's days; its cards for
+    /// other logins of yours read none (nil inside: nothing of their own), as does the main one until
+    /// the host has answered (what it last showed stays). Every account the host runs is in the
+    /// main card's: none is counted on two cards.
     func scan(for providerID: String) -> LogUsageScan?? {
-        guard covered.contains(providerID) else { return nil }
-        // (None in the window: "No data", as for a Mac without logs.)
-        guard let days = days[providerID], !days.isEmpty else { return .some(nil) }
-        return .some(Self.scan(days))
+        let family = ProviderAccountID.family(of: providerID)
+        guard covered.contains(family) else { return nil }
+        guard providerID == family, answered else { return .some(nil) }
+        return .some(Self.scan(days[family] ?? []))
     }
 
     static func scan(_ days: [HostHistoryDay]) -> LogUsageScan {

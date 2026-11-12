@@ -23463,7 +23463,7 @@ function sendSeat(host, to, mail, id, link = readLink()) {
   }
   const payloads = seatPayloads(mail, id);
   if (!payloads) {
-    console.error(`kuvo-link: a group chat's ${String(mail?.kind ?? "mail")} for ${plainName(peer.name) || "another computer"} is too big to send, so it wasn't.`);
+    console.error(`kuvo-link: ${mail.kind === "usage" ? "this computer's usage" : `a group chat's ${String(mail?.kind ?? "mail")}`} for ${plainName(peer.name) || "another computer"} is too big to send, so it wasn't.`);
     return "too big";
   }
   for (const payload of payloads) {
@@ -39050,7 +39050,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "dbc35151f7ca";
+var BRIDGE_VERSION = "f87614614158";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

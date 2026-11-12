@@ -1,6 +1,6 @@
 // What your accounts used and cost, by the day: each account this box runs that's signed in to Kuvo
 // Code (Claude Code's, so far), read from its agent's own logs on this computer, priced
-// (pricing.ts), and kept by the hour (history.ts). This box's own, with your other computers' boxes'
+// (pricing.ts), and kept by the quarter hour (history.ts). This box's own, with your other computers' boxes'
 // (usage-peers.ts), one row per account: an account used on two computers is the sum of both. A
 // client asks for its own days (`zone`): the box answers them. Read every five minutes, or when a
 // client asks, one round at a time. PROTOCOL.md, "Usage history".
@@ -15,7 +15,7 @@ import type { Agent } from "../agent"
 import { emit } from "../events"
 import type { LimitsService } from "../limits"
 import { claudeLine, dedupClaude, fromKeptClaude, keptClaude, type KeptClaudeEntry } from "./claude-log"
-import { claudeHours, daysIn, hoursFrom, keptHours, knownZone, noHours, ownZone, summed, trimmed, type Day, type Hours, KEPT_DAYS } from "./history"
+import { claudeSlots, daysIn, slotsFrom, keptSlots, knownZone, noSlots, ownZone, summed, trimmed, type Day, type Slots, KEPT_DAYS } from "./history"
 import { JSONLFiles, jsonlFiles } from "./jsonl"
 import type { Pricing, PricingStore } from "./pricing"
 import type { UsagePeers } from "./usage-peers"
@@ -34,8 +34,8 @@ export interface UsageSource {
   service: LimitsService
   agent?: { kind: AgentKind; account: string }
   label?: string
-  /** Its hours from `since` (ms) on, priced; undefined when the round was called off. */
-  hours(pricing: Pricing, since: number, cancelled: () => boolean): Promise<Hours | undefined>
+  /** Its slots from `since` (ms) on, priced (throws when its logs can't be read now). */
+  slots(pricing: Pricing, since: number): Promise<Slots>
   /** What it keeps of the logs it read, shared by the accounts of its kind: told once a round is over. */
   files?: { endRound(complete: boolean): void }
 }
@@ -51,7 +51,7 @@ export interface OwnUsage {
   identity?: string
   /** When its logs were last read here, in ms. */
   scanned?: number
-  hours: Hours
+  slots: Slots
 }
 
 /** A computer an account's usage comes from, as a row names it. */
@@ -82,7 +82,7 @@ export interface UsageRow {
   boxes: UsageRowBox[]
   /** Every computer it's on is away: its numbers are as of then. */
   away?: true
-  hours: Hours
+  slots: Slots
 }
 
 /** A box's accounts, as `rows` takes them: this one's, or what a peer last told. */
@@ -134,7 +134,7 @@ export function usageRows(boxes: UsageBox[]): UsageRow[] {
         ...(box.here ? { here: true as const } : {}),
         ...(box.away ? { away: true as const } : {}),
       })),
-      hours: summed(members.map((member) => member.account.hours)),
+      slots: summed(members.map((member) => member.account.slots)),
     }
     if (members.every((member) => member.box.away)) row.away = true
     return row
@@ -144,7 +144,7 @@ export function usageRows(boxes: UsageBox[]): UsageRow[] {
 interface Entry {
   identity?: string
   scanned?: number
-  hours: Hours
+  slots: Slots
 }
 
 export class Usage {
@@ -212,19 +212,19 @@ export class Usage {
     const sources = this.sources()
     let complete = true
     for (const source of sources) {
-      let hours: Hours | undefined
+      let slots: Slots | undefined
       try {
-        hours = await source.hours(pricing, since, () => false)
+        slots = await source.slots(pricing, since)
       } catch (error) {
         console.error(`usage of ${source.provider}:`, error)
       }
-      const entry = this.entries.get(source.provider) ?? { hours: noHours() }
-      if (hours) {
-        entry.hours = hours
+      const entry = this.entries.get(source.provider) ?? { slots: noSlots() }
+      if (slots) {
+        entry.slots = slots
         entry.scanned = this.now()
       } else {
         complete = false
-        entry.hours = trimmed(entry.hours, at)
+        entry.slots = trimmed(entry.slots, at)
       }
       this.entries.set(source.provider, entry)
     }
@@ -252,7 +252,7 @@ export class Usage {
           ...(source.label ? { label: source.label } : {}),
           ...(identity ? { identity } : {}),
           ...(entry.scanned ? { scanned: entry.scanned } : {}),
-          hours: entry.hours,
+          slots: entry.slots,
         },
       ]
     })
@@ -280,22 +280,34 @@ export class Usage {
     const services: Record<string, Day[]> = {}
     for (const service of USAGE_SERVICES) {
       const of = rows.filter((row) => row.service === service)
-      if (of.length) services[service] = daysIn(summed(of.map((row) => row.hours)), asked, now)
+      if (of.length) services[service] = daysIn(summed(of.map((row) => row.slots)), asked, now)
     }
     const scanned = Math.max(0, ...this.own().map((account) => account.scanned ?? 0))
     return {
       zone: asked,
       services: USAGE_SERVICES,
       ...(scanned ? { scanned } : {}),
-      rows: rows.map(({ hours, ...row }) => ({ ...row, days: daysIn(hours, asked, now) })),
+      rows: rows.map(({ slots, ...row }) => ({ ...row, days: daysIn(slots, asked, now) })),
       totals: services,
     }
   }
 
+  /** What this box's own accounts used, as last told: a round that read nothing new tells no one. */
+  private ownSaid = ""
+
+  /**
+   * After a round (`own`) or a peer's word: your other computers are told what this box's accounts
+   * used, and the clients that the rows changed, only when what they used did (when each was read
+   * isn't news).
+   */
   private changed(own: boolean) {
-    const now = JSON.stringify(this.rows().map((row) => ({ ...row, hours: keptHours(row.hours) })))
-    // (A round is minutes from the last: what it read goes at once.)
-    if (own) this.peers?.tell(true)
+    if (own) {
+      const mine = JSON.stringify(this.own().map(({ scanned: _, slots, ...account }) => ({ ...account, slots: keptSlots(slots) })))
+      // (A round is minutes from the last: what changed goes at once; else, now and then, that nothing did.)
+      this.peers?.tell(mine !== this.ownSaid)
+      this.ownSaid = mine
+    }
+    const now = JSON.stringify(this.rows().map(({ scanned: _, slots, boxes, ...row }) => ({ ...row, boxes: boxes.map(({ scanned: _, ...box }) => box), slots: keptSlots(slots) })))
     if (now === this.said) return
     this.said = now
     emit("kuvo.usage.updated", { services: USAGE_SERVICES })
@@ -310,7 +322,7 @@ export class Usage {
         this.entries.set(provider, {
           ...(typeof kept.identity === "string" && /^[0-9a-f]{16}$/.test(kept.identity) ? { identity: kept.identity } : {}),
           ...(typeof kept.scanned === "number" ? { scanned: kept.scanned } : {}),
-          hours: trimmed(hoursFrom(kept.hours, 200_000), this.now()),
+          slots: trimmed(slotsFrom(kept.slots, 200_000), this.now()),
         })
       }
     } catch {}
@@ -319,7 +331,7 @@ export class Usage {
 
   private save() {
     if (!this.file) return
-    const accounts = Object.fromEntries([...this.entries].map(([provider, entry]) => [provider, { ...(entry.identity ? { identity: entry.identity } : {}), ...(entry.scanned ? { scanned: entry.scanned } : {}), hours: keptHours(entry.hours) }]))
+    const accounts = Object.fromEntries([...this.entries].map(([provider, entry]) => [provider, { ...(entry.identity ? { identity: entry.identity } : {}), ...(entry.scanned ? { scanned: entry.scanned } : {}), slots: keptSlots(entry.slots) }]))
     try {
       mkdirSync(dirname(this.file), { recursive: true })
       writeFileSync(this.file + ".new", JSON.stringify({ accounts }), { mode: 0o600 })
@@ -352,10 +364,10 @@ export async function usageRoutes(usage: Usage | undefined, method: string, rest
  * The Claude Code accounts whose usage is read here, from the folders each runs Claude Code with
  * (`conversationRoots`, each a `projects` folder): an added account's own, Kuvo Code's on a
  * machine, and on a Mac its own sign-in's (your `~/.claude`, where Claude Code runs with it).
- * `folder`: where what was read of the logs is kept (`claude-files.json`).
+ * `folder`: where what was read of the logs is kept (`claude-files`, a file a log).
  */
 export function claudeSources(folder?: string): (agents: Agent[]) => UsageSource[] {
-  const files = new JSONLFiles<KeptClaudeEntry>((line) => claudeLine(line).map(keptClaude), (entry) => entry[0], folder ? join(folder, "claude-files.json") : undefined, 1)
+  const files = new JSONLFiles<KeptClaudeEntry>((line) => claudeLine(line).map(keptClaude), (entry) => entry[0], folder ? join(folder, "claude-files") : undefined, 1)
   return (agents) => agents.flatMap((agent) => {
     const parsed = parseProvider(agent.providerID)
     if (parsed?.kind !== "claude" || !agent.conversationRoots) return []
@@ -365,12 +377,11 @@ export function claudeSources(folder?: string): (agents: Agent[]) => UsageSource
       service: "claude",
       agent: { kind: "claude", account: parsed.id },
       ...(agent.instance.label ? { label: agent.instance.label } : {}),
-      hours: async (pricing, since, cancelled) => {
+      slots: async (pricing, since) => {
         const found = new Map<string, Awaited<ReturnType<typeof jsonlFiles>>[number]>()
         for (const root of roots()) for (const file of await jsonlFiles(root)) found.set(file.path, file)
         const ordered = [...found.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
-        const kept = await files.items(ordered, since, cancelled)
-        return kept ? claudeHours(dedupClaude(kept.map(fromKeptClaude)), pricing, since) : undefined
+        return claudeSlots(dedupClaude((await files.items(ordered, since)).map(fromKeptClaude)), pricing, since)
       },
       files,
     }

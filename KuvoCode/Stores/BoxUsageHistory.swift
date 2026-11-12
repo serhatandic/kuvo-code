@@ -26,7 +26,7 @@ final class BoxUsageHistory {
 
     init() {
         HostHistory.shared.refresh = { [weak self] in self?.refresh() }
-        HostHistory.shared.update(days: HostHistory.shared.days, covered: services)
+        HostHistory.shared.update(days: HostHistory.shared.days, covered: services, answered: false)
         // Another time zone: other days.
         zoneObserver = NotificationCenter.default.addObserver(forName: .NSSystemTimeZoneDidChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.read() }

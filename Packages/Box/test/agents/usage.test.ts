@@ -15,7 +15,7 @@ import { subscribe } from "../../src/agents/events"
 import { LinkDirectory, PeerPost, peerRoutes, type PeerParts } from "../../src/agents/groups/post"
 import type { Clock } from "../../src/agents/groups/peer"
 import { claudeLine, dedupClaude } from "../../src/agents/usage/claude-log"
-import { claudeHours, daysIn } from "../../src/agents/usage/history"
+import { claudeSlots, daysIn } from "../../src/agents/usage/history"
 import { bundledPricing, catalogFromCompact, Pricing, PricingStore, supplementFrom, type PricingFetch } from "../../src/agents/usage/pricing"
 import { claudeSources, Usage, usageRoutes } from "../../src/agents/usage/usage"
 import { UsagePeers, type UsageMail } from "../../src/agents/usage/usage-peers"
@@ -38,7 +38,7 @@ describe("as UsageKit reads and prices them", () => {
         .filter(Boolean)
         .flatMap((line) => claudeLine(Buffer.from(line))),
     )
-    const days = daysIn(claudeHours(dedupClaude(entries), pricing, Date.parse(expected.since)), "UTC", Date.parse(expected.now))
+    const days = daysIn(claudeSlots(dedupClaude(entries), pricing, Date.parse(expected.since)), "UTC", Date.parse(expected.now))
     const priced = days.filter((day) => day.models.length)
     expect(priced.map((day) => day.date)).toEqual(expected.days.map((day: any) => day.date))
     priced.forEach((day, index) => {
@@ -144,6 +144,10 @@ describe("one box", () => {
       ["2026-11-12", 2000],
       ["2026-11-11", 2000],
     ])
+    // India's half hour: a quarter past midnight there is the 12th.
+    writeFileSync(join(account, "projects", "-work-site", "two.jsonl"), reply("2026-11-11T18:45:00Z", "3", "claude-opus-4-5", 5, 0))
+    await usage.refresh()
+    expect((await route(usage, "Asia/Kolkata")).rows[0].days.map((day: any) => [day.date, day.tokens])).toEqual([["2026-11-12", 4005]])
     // A zone this computer doesn't know: its own.
     expect((await route(usage, "Mars/Olympus")).zone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone)
   })
@@ -167,7 +171,8 @@ describe("one box", () => {
     // A restart: what was read is there before the logs are read again.
     usage = make()
     expect((await route(usage, "UTC")).rows[0].days[0].tokens).toBe(1507)
-    expect(readdirSync(join(home, "usage")).sort()).toEqual(["claude-files.json", "usage.json"])
+    expect(readdirSync(join(home, "usage")).sort()).toEqual(["claude-files", "usage.json"])
+    expect(readdirSync(join(home, "usage", "claude-files"))).toHaveLength(1)
 
     // The log rewritten, shorter: only what it says now.
     writeFileSync(log, reply("2026-11-12T11:00:00Z", "9", "claude-opus-4-5", 42, 0))
@@ -403,7 +408,28 @@ describe("across your computers", () => {
     const shared = mac.usage.view("UTC").rows[0]!
     expect(shared.boxes.map((each) => [each.name, each.here ?? false])).toEqual([["MacBook", true], ["devbox", false]])
 
-    // What went: hours, models and numbers, hashed identities; no path, log or sign-in.
+    // A round that read nothing new tells no one, and the clients nothing.
+    const sent = relay.sent.length
+    const events: unknown[] = []
+    const listening = subscribe((event) => event.type === "kuvo.usage.updated" && events.push(event))
+    at += 5 * MINUTE
+    await mac.usage.refresh()
+    await dev.usage.refresh()
+    await relay.settled()
+    expect(relay.sent.length).toBe(sent)
+    expect(events).toEqual([])
+    // Ten minutes on: only that it's as it was, and the other keeps what it had, not away.
+    at += 6 * MINUTE
+    await mac.usage.refresh()
+    await relay.settled()
+    const word = relay.sent.slice(sent)
+    expect(word.map((each) => [each.from, each.to, each.mail.accounts === undefined, typeof each.mail.digest])).toEqual([["mac-key", "dev-key", true, "string"]])
+    at += 20 * MINUTE
+    const onDev = dev.usage.view("UTC").rows[0]!
+    expect([onDev.days[0]!.tokens, onDev.boxes.map((each) => [each.name, each.away ?? false])]).toEqual([1300, [["devbox", false], ["MacBook", false]]])
+    listening()
+
+    // What went: slots, models and numbers, hashed identities; no path, log or sign-in.
     const told = JSON.stringify(relay.sent.map((each) => each.mail))
     expect(told).not.toContain(macHome)
     expect(told).not.toContain("msg_")
@@ -439,12 +465,20 @@ describe("across your computers", () => {
     appendFileSync(join(bHome, "accounts", "default", "projects", "p", "log.jsonl"), reply("2026-11-12T11:00:00Z", "b2", "claude-opus-4-5", 5, 0))
     at += MINUTE
     await usageRoutes(a.usage, "POST", ["refresh"], new URLSearchParams())
-    for (let round = 0; round < 20; round++) {
-      await relay.settled()
-      if (a.usage.view("UTC").rows[1]!.days[0]!.tokens === 55) break
-      await new Promise((resolve) => setTimeout(resolve, 5))
-    }
+    await relay.settled()
+    await b.peers.idle()
+    await relay.settled()
     expect(a.usage.view("UTC").rows[1]!.days[0]!.tokens).toBe(55)
+
+    // A word that what the Pro told is as it was, when it isn't what the Air has: the Air asks again.
+    at += MINUTE
+    const before = relay.sent.length
+    a.peers.take("b-key", { kind: "usage", at, digest: "not what the air has" })
+    await relay.settled()
+    expect(relay.sent.slice(before).map((each) => [each.from, !!each.mail.ask, !!each.mail.accounts])).toEqual([
+      ["a-key", true, true],
+      ["b-key", false, true],
+    ])
 
     // The Air restarts: the Pro's usage is there before it tells again.
     a.stop()

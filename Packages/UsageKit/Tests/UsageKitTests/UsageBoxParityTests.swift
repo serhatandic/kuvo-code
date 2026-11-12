@@ -108,6 +108,27 @@ final class UsageBoxParityTests: XCTestCase {
         XCTAssertEqual(scan.unknownModelsByDay.mapValues { $0.sorted() }, unknown)
     }
 
+    /// While the host covers Claude, no Claude card reads the logs here: the main card shows the
+    /// host's days once it has answered (until then, what it showed stays), the cards of your other
+    /// logins none (their use is in the host's); a provider it doesn't cover reads its own.
+    @MainActor
+    func testWhileTheHostCoversClaudeNoCardReadsTheLogsAndOnlyTheMainOneShowsItsDays() {
+        let history = HostHistory.shared
+        defer { history.update(days: [:], covered: []) }
+        let day = HostHistoryDay(date: "2026-11-12", models: [.init(name: "claude-opus-4-5", tokens: 10, cost: 0.5)])
+        history.update(days: ["claude": [day]], covered: ["claude"], answered: false)
+        XCTAssertNotNil(history.scan(for: "claude"))
+        XCTAssertNil(history.scan(for: "claude")!, "nothing yet: what the card showed stays")
+        history.update(days: ["claude": [day]], covered: ["claude"])
+        XCTAssertEqual(history.scan(for: "claude")??.series.daily.map(\.totalTokens), [10])
+        XCTAssertNotNil(history.scan(for: "claude@1a2b3c4d"))
+        XCTAssertNil(history.scan(for: "claude@1a2b3c4d")!, "another login's card: none of its own")
+        XCTAssertNil(history.scan(for: "codex"), "not covered: it reads its own")
+        // Covered, with nothing in the window: an empty history, not the last one kept.
+        history.update(days: [:], covered: ["claude"])
+        XCTAssertEqual(history.scan(for: "claude")??.series.daily, [])
+    }
+
     /// While both price, the box ships this package's snapshots as they are.
     func testTheBoxShipsTheseSnapshots() throws {
         let box = Self.fixtures.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()

@@ -1,56 +1,58 @@
-// An account's usage by the hour: what its requests used and cost in each UTC hour, by model, and
-// the models that couldn't be priced. Kept by the hour, not the day, so any client gets its own days
-// (`daysIn`, a time zone's calendar days, as UsageKit's `DailyUsageAccumulator` keys them), and
-// every box's hours of one account add up (rows.ts).
+// An account's usage by the quarter hour: what its requests used and cost in each 15 minutes (UTC),
+// by model, and the models that couldn't be priced. Kept that finely, not by the day, so any client
+// gets its own days (`daysIn`, a time zone's calendar days, as UsageKit's `DailyUsageAccumulator`
+// keys them): every zone's midnight falls on a quarter hour (India's +5:30, Nepal's +5:45). And
+// every box's slots of one account add up (`usageRows`).
 
 import { totalTokens, type Pricing } from "./pricing"
 import type { ClaudeEntry } from "./claude-log"
 
-const HOUR = 3_600_000
-const DAY = 24 * HOUR
+/** A slot: a quarter hour. */
+export const SLOT = 15 * 60_000
+const DAY = 24 * 60 * 60_000
 
-/** How far back a box keeps and shares an account's hours: a month and a few days, so a client's 31 days are whole in any zone. */
+/** How far back a box keeps and shares an account's slots: a month and a few days, so a client's 31 days are whole in any zone. */
 export const KEPT_DAYS = 35
 
-/** One model's tokens and dollars in an hour. */
+/** One model's tokens and dollars in a slot. */
 export type Use = [tokens: number, cost: number]
 
-export interface Hours {
-  /** Each hour's start (ms, UTC) to each model's use in it. */
+export interface Slots {
+  /** Each slot's start (ms, UTC) to each model's use in it. */
   used: Map<number, Map<string, Use>>
-  /** Each hour's start to the models in it that couldn't be priced (and counted nowhere). */
+  /** Each slot's start to the models in it that couldn't be priced (and counted nowhere). */
   unknown: Map<number, Set<string>>
 }
 
-export const noHours = (): Hours => ({ used: new Map(), unknown: new Map() })
+export const noSlots = (): Slots => ({ used: new Map(), unknown: new Map() })
 
 /** What `Unattributed` is in UsageKit: a line with a cost of its own but no model. */
 export const UNATTRIBUTED = "Unattributed"
 
-export const hourOf = (at: number) => Math.floor(at / HOUR) * HOUR
+export const slotOf = (at: number) => Math.floor(at / SLOT) * SLOT
 
-/** Claude's entries (deduplicated) by the hour, priced (a line's own `costUSD` first). */
-export function claudeHours(entries: ClaudeEntry[], pricing: Pricing, since: number): Hours {
-  const hours = noHours()
+/** Claude's entries (deduplicated) by the slot, priced (a line's own `costUSD` first). */
+export function claudeSlots(entries: ClaudeEntry[], pricing: Pricing, since: number): Slots {
+  const slots = noSlots()
   for (const entry of entries) {
     if (entry.at < since) continue
-    const hour = hourOf(entry.at)
+    const slot = slotOf(entry.at)
     // One trimmed name for the price, the unknown model and the breakdown alike.
     const model = entry.model?.trim() || undefined
     let cost = entry.cost
     if (cost === undefined && model !== undefined) cost = pricing.cost(model, entry.tokens)
     if (cost === undefined) {
-      if (model !== undefined && totalTokens(entry.tokens) > 0) addUnknown(hours, hour, model)
+      if (model !== undefined && totalTokens(entry.tokens) > 0) addUnknown(slots, slot, model)
       continue
     }
-    add(hours, hour, model ?? UNATTRIBUTED, totalTokens(entry.tokens), cost)
+    add(slots, slot, model ?? UNATTRIBUTED, totalTokens(entry.tokens), cost)
   }
-  return hours
+  return slots
 }
 
-export function add(hours: Hours, hour: number, model: string, tokens: number, cost: number) {
-  let models = hours.used.get(hour)
-  if (!models) hours.used.set(hour, (models = new Map()))
+export function add(slots: Slots, slot: number, model: string, tokens: number, cost: number) {
+  let models = slots.used.get(slot)
+  if (!models) slots.used.set(slot, (models = new Map()))
   const use = models.get(model)
   if (use) {
     use[0] += tokens
@@ -58,28 +60,28 @@ export function add(hours: Hours, hour: number, model: string, tokens: number, c
   } else models.set(model, [tokens, cost])
 }
 
-export function addUnknown(hours: Hours, hour: number, model: string) {
-  let models = hours.unknown.get(hour)
-  if (!models) hours.unknown.set(hour, (models = new Set()))
+export function addUnknown(slots: Slots, slot: number, model: string) {
+  let models = slots.unknown.get(slot)
+  if (!models) slots.unknown.set(slot, (models = new Set()))
   models.add(model)
 }
 
-/** Several boxes' (or accounts') hours, added up. */
-export function summed(all: Hours[]): Hours {
-  const sum = noHours()
-  for (const hours of all) {
-    for (const [hour, models] of hours.used) for (const [model, [tokens, cost]] of models) add(sum, hour, model, tokens, cost)
-    for (const [hour, models] of hours.unknown) for (const model of models) addUnknown(sum, hour, model)
+/** Several boxes' (or accounts') slots, added up. */
+export function summed(all: Slots[]): Slots {
+  const sum = noSlots()
+  for (const slots of all) {
+    for (const [slot, models] of slots.used) for (const [model, [tokens, cost]] of models) add(sum, slot, model, tokens, cost)
+    for (const [slot, models] of slots.unknown) for (const model of models) addUnknown(sum, slot, model)
   }
   return sum
 }
 
-/** Hours older than what's kept, let go. */
-export function trimmed(hours: Hours, now: number): Hours {
+/** Slots older than what's kept, let go. */
+export function trimmed(slots: Slots, now: number): Slots {
   const since = now - KEPT_DAYS * DAY
-  const kept = noHours()
-  for (const [hour, models] of hours.used) if (hour >= since) kept.used.set(hour, models)
-  for (const [hour, models] of hours.unknown) if (hour >= since) kept.unknown.set(hour, models)
+  const kept = noSlots()
+  for (const [slot, models] of slots.used) if (slot >= since) kept.used.set(slot, models)
+  for (const [slot, models] of slots.unknown) if (slot >= since) kept.unknown.set(slot, models)
   return kept
 }
 
@@ -136,11 +138,11 @@ export function windowDays(now: number, zone: string, previous = 30): string[] {
 }
 
 /**
- * The hours as days in `zone`, within today and the 30 days before: newest first, only days with
+ * The slots as days in `zone`, within today and the 30 days before: newest first, only days with
  * priced use listed with their totals (as UsageKit's series), a day with only unknown models listed
  * with none. Models in each day by name.
  */
-export function daysIn(hours: Hours, zone: string, now: number): Day[] {
+export function daysIn(slots: Slots, zone: string, now: number): Day[] {
   const window = new Set(windowDays(now, zone))
   const days = new Map<string, { models: Map<string, Use>; unknown: Set<string> }>()
   const dayOf = (date: string) => {
@@ -148,8 +150,8 @@ export function daysIn(hours: Hours, zone: string, now: number): Day[] {
     if (!found) days.set(date, (found = { models: new Map(), unknown: new Set() }))
     return found
   }
-  for (const [hour, models] of hours.used) {
-    const date = dayIn(hour, zone)
+  for (const [slot, models] of slots.used) {
+    const date = dayIn(slot, zone)
     if (!window.has(date)) continue
     const day = dayOf(date)
     for (const [model, [tokens, cost]] of models) {
@@ -160,8 +162,8 @@ export function daysIn(hours: Hours, zone: string, now: number): Day[] {
       } else day.models.set(model, [tokens, cost])
     }
   }
-  for (const [hour, models] of hours.unknown) {
-    const date = dayIn(hour, zone)
+  for (const [slot, models] of slots.unknown) {
+    const date = dayIn(slot, zone)
     if (!window.has(date)) continue
     for (const model of models) dayOf(date).unknown.add(model)
   }
@@ -181,44 +183,44 @@ export function daysIn(hours: Hours, zone: string, now: number): Day[] {
 
 // --- Kept and told: compact ---
 
-/** Hours as JSON: models named once, each use `[hour (h since 1970), model's index, tokens, dollars]`. */
-export interface KeptHours {
+/** Slots as JSON: models named once, each use `[slot (quarter hours since 1970), model's index, tokens, dollars]`. */
+export interface KeptSlots {
   models: string[]
   used: [number, number, number, number][]
   unknown?: [number, number][]
 }
 
-export function keptHours(hours: Hours): KeptHours {
+export function keptSlots(slots: Slots): KeptSlots {
   const models: string[] = []
   const index = (model: string) => {
     let at = models.indexOf(model)
     if (at < 0) at = models.push(model) - 1
     return at
   }
-  const used: KeptHours["used"] = []
-  for (const [hour, uses] of [...hours.used].sort(([a], [b]) => a - b)) for (const [model, [tokens, cost]] of uses) used.push([hour / HOUR, index(model), tokens, Math.round(cost * 1e6) / 1e6])
+  const used: KeptSlots["used"] = []
+  for (const [slot, uses] of [...slots.used].sort(([a], [b]) => a - b)) for (const [model, [tokens, cost]] of uses) used.push([slot / SLOT, index(model), tokens, Math.round(cost * 1e6) / 1e6])
   const unknown: [number, number][] = []
-  for (const [hour, names] of [...hours.unknown].sort(([a], [b]) => a - b)) for (const model of names) unknown.push([hour / HOUR, index(model)])
+  for (const [slot, names] of [...slots.unknown].sort(([a], [b]) => a - b)) for (const model of names) unknown.push([slot / SLOT, index(model)])
   return { models, used, ...(unknown.length ? { unknown } : {}) }
 }
 
-/** Kept or told hours back, checked: what isn't one is left out; at most `most` uses. */
-export function hoursFrom(given: unknown, most = 20_000): Hours {
-  const hours = noHours()
-  if (!given || typeof given !== "object") return hours
-  const kept = given as Partial<KeptHours>
+/** Kept or told slots back, checked: what isn't one is left out (tokens are whole numbers); at most `most` uses. */
+export function slotsFrom(given: unknown, most = 50_000): Slots {
+  const slots = noSlots()
+  if (!given || typeof given !== "object") return slots
+  const kept = given as Partial<KeptSlots>
   const models = Array.isArray(kept.models) ? kept.models.map((model) => (typeof model === "string" ? model.slice(0, 200) : undefined)) : []
-  const hourAt = (value: unknown) => (typeof value === "number" && Number.isInteger(value) && value > 0 && value < 1e8 ? value * HOUR : undefined)
+  const slotAt = (value: unknown) => (typeof value === "number" && Number.isInteger(value) && value > 0 && value < 1e9 ? value * SLOT : undefined)
   for (const use of (Array.isArray(kept.used) ? kept.used : []).slice(0, most)) {
     if (!Array.isArray(use)) continue
-    const [hour, model, tokens, cost] = [hourAt(use[0]), typeof use[1] === "number" ? models[use[1]] : undefined, use[2], use[3]]
-    if (hour === undefined || model === undefined || typeof tokens !== "number" || !Number.isFinite(tokens) || tokens < 0 || typeof cost !== "number" || !Number.isFinite(cost) || cost < 0) continue
-    add(hours, hour, model, tokens, cost)
+    const [slot, model, tokens, cost] = [slotAt(use[0]), typeof use[1] === "number" ? models[use[1]] : undefined, use[2], use[3]]
+    if (slot === undefined || model === undefined || !Number.isSafeInteger(tokens) || tokens < 0 || typeof cost !== "number" || !Number.isFinite(cost) || cost < 0) continue
+    add(slots, slot, model, tokens, cost)
   }
   for (const each of (Array.isArray(kept.unknown) ? kept.unknown : []).slice(0, most)) {
     if (!Array.isArray(each)) continue
-    const [hour, model] = [hourAt(each[0]), typeof each[1] === "number" ? models[each[1]] : undefined]
-    if (hour !== undefined && model !== undefined) addUnknown(hours, hour, model)
+    const [slot, model] = [slotAt(each[0]), typeof each[1] === "number" ? models[each[1]] : undefined]
+    if (slot !== undefined && model !== undefined) addUnknown(slots, slot, model)
   }
-  return hours
+  return slots
 }

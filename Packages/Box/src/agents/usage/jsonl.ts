@@ -4,9 +4,9 @@
 // can be thrown away: it's rebuilt from the logs). Files changed before the window aren't read.
 
 import { createHash } from "node:crypto"
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { open, readdir, stat } from "node:fs/promises"
-import { dirname, join } from "node:path"
+import { join } from "node:path"
 
 export interface FoundFile {
   path: string
@@ -61,7 +61,9 @@ export async function jsonlFiles(folder: string): Promise<FoundFile[]> {
 
 export class JSONLFiles<T> {
   private records = new Map<string, Record<T>>()
-  private dirty = false
+  /** Files whose record changed since it was last kept, and those forgotten. */
+  private changed = new Set<string>()
+  private forgotten = new Set<string>()
   /** The files a round asked for (`items`), until it ends (`endRound`). */
   private seen = new Set<string>()
 
@@ -70,28 +72,33 @@ export class JSONLFiles<T> {
     private readonly parse: (line: Buffer) => T[],
     /** When an item happened (ms): one before the window is let go. */
     private readonly at: (item: T) => number,
-    /** Where what was read is kept (none in a test that doesn't), and its format's version. */
-    private readonly file?: string,
+    /** The folder what was read is kept in, a file a log (none in a test that doesn't), and its format's version. */
+    private readonly folder?: string,
     private readonly version = 1,
   ) {
-    if (!file) return
+    if (!folder) return
+    let names: string[] = []
     try {
-      const saved = JSON.parse(readFileSync(file, "utf8"))
-      if (saved?.version !== version || !saved.files || typeof saved.files !== "object") return
-      for (const [path, record] of Object.entries(saved.files as { [path: string]: Record<T> })) {
-        if (record && Array.isArray(record.items) && typeof record.offset === "number" && typeof record.size === "number") this.records.set(path, record)
-      }
+      names = readdirSync(folder)
     } catch {}
+    for (const name of names) {
+      if (!/^[0-9a-f]{32}\.json$/.test(name)) continue
+      try {
+        const saved = JSON.parse(readFileSync(join(folder, name), "utf8"))
+        const record = saved?.record
+        if (saved?.version === version && typeof saved.path === "string" && keptName(saved.path) === name && record && Array.isArray(record.items) && typeof record.offset === "number" && typeof record.size === "number") this.records.set(saved.path, record)
+        else rmSync(join(folder, name), { force: true })
+      } catch {}
+    }
   }
 
   /**
    * The items of `files` (path order, then file order) from `since` (ms) on: each read as far as it
-   * was appended to since; undefined once `cancelled`.
+   * was appended to since.
    */
-  async items(files: FoundFile[], since: number, cancelled: () => boolean = () => false): Promise<T[] | undefined> {
+  async items(files: FoundFile[], since: number): Promise<T[]> {
     const all: T[] = []
     for (const file of files) {
-      if (cancelled()) return undefined
       if (file.mtime < since) continue
       this.seen.add(file.path)
       const record = await this.read(file, since)
@@ -100,28 +107,38 @@ export class JSONLFiles<T> {
     return all
   }
 
-  /** A round of `items` is over: files none of it asked for are forgotten, and what was read is kept. */
+  /** A round of `items` is over: files none of it asked for are forgotten, and what changed is kept. */
   endRound(complete = true) {
     if (complete) {
       for (const path of [...this.records.keys()]) {
         if (this.seen.has(path)) continue
         this.records.delete(path)
-        this.dirty = true
+        this.changed.delete(path)
+        this.forgotten.add(path)
       }
     }
     this.seen.clear()
     this.save()
   }
 
-  /** Keeps what was read, if anything changed. */
+  /** Keeps the records that changed, each in a file of its own (a log that grew rewrites its own only). */
   private save() {
-    if (!this.file || !this.dirty) return
+    if (!this.folder) return
     try {
-      mkdirSync(dirname(this.file), { recursive: true })
-      writeFileSync(this.file + ".new", JSON.stringify({ version: this.version, files: Object.fromEntries(this.records) }), { mode: 0o600 })
-      renameSync(this.file + ".new", this.file)
-      this.dirty = false
-    } catch {}
+      mkdirSync(this.folder, { recursive: true, mode: 0o700 })
+    } catch {
+      return
+    }
+    for (const path of this.forgotten) rmSync(join(this.folder, keptName(path)), { force: true })
+    this.forgotten.clear()
+    for (const path of this.changed) {
+      const file = join(this.folder, keptName(path))
+      try {
+        writeFileSync(file + ".new", JSON.stringify({ version: this.version, path, record: this.records.get(path) }), { mode: 0o600 })
+        renameSync(file + ".new", file)
+      } catch {}
+    }
+    this.changed.clear()
   }
 
   private async read(file: FoundFile, since: number): Promise<Record<T>> {
@@ -136,7 +153,7 @@ export class JSONLFiles<T> {
     }
     try {
       let record: Record<T>
-      const appended = before && file.size >= before.size && (await headOf(handle, before.headLength)) === before.head
+      const appended = before && file.size > before.size && (await headOf(handle, before.headLength)) === before.head
       if (appended) record = { ...before, items: before.items.filter((item) => this.at(item) >= since) }
       else {
         const headLength = Math.min(HEAD, file.size)
@@ -153,7 +170,7 @@ export class JSONLFiles<T> {
         record.head = await headOf(handle, record.headLength)
       }
       this.records.set(file.path, record)
-      this.dirty = true
+      this.changed.add(file.path)
       return record
     } finally {
       await handle.close().catch(() => {})
@@ -197,6 +214,9 @@ export class JSONLFiles<T> {
     return consumed
   }
 }
+
+/** A log's record's file: its path, hashed. */
+const keptName = (path: string) => createHash("sha256").update(path).digest("hex").slice(0, 32) + ".json"
 
 async function headOf(handle: Awaited<ReturnType<typeof open>>, length: number): Promise<string> {
   if (!length) return ""
