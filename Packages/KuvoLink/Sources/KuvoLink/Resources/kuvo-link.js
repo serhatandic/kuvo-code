@@ -30252,6 +30252,8 @@ import fs100 from "node:fs";
 import path106 from "node:path";
 var MODELS_DUE_FILE = path106.join(RUN, "models-due.json");
 var REFRESHABLE = ["digitalocean", "github-copilot", "gitlab", "modal", "opencode"];
+var ENGINE_WIDE = { digitalocean: "twenty minutes", "github-copilot": "twenty minutes", modal: "twenty minutes", opencode: "two minutes" };
+var CLOSING_WAIT = 1e4;
 var WORK_ENDS = new Set([
   "session.execution.succeeded",
   "session.execution.failed",
@@ -30366,6 +30368,15 @@ async function refreshModels(engine, provider, file = MODELS_DUE_FILE) {
   } catch {
     return unreachable;
   }
+  if (provider in ENGINE_WIDE) {
+    try {
+      return await refreshEngineWide(engine, provider, folders);
+    } catch (error) {
+      if (error instanceof CantClose)
+        return { status: 503, message: "This engine can't ask for its models again without restarting. Restart it in Settings › Engine." };
+      throw error;
+    }
+  }
   let waiting;
   try {
     waiting = await closeQuiet(engine, folders);
@@ -30379,6 +30390,29 @@ async function refreshModels(engine, provider, file = MODELS_DUE_FILE) {
   writeDue(file, { engine: engineOf(engine), folders: [...new Set([...kept, ...waiting])] });
   await learnCompatibility(engine).catch(() => {});
   return { status: 200, waiting };
+}
+async function refreshEngineWide(engine, provider, folders) {
+  const later = { status: 409, message: `Something's going on in a project on this computer (a run, a terminal, a command or a question waiting on you), and its engine asks for these models again only once every project is closed: they show by themselves within ${ENGINE_WIDE[provider]}.` };
+  const end = Date.now() + CLOSING_WAIT;
+  let open = folders;
+  while (open.length) {
+    if ((await atWork2(engine, open)).size)
+      return later;
+    if ((await closeQuiet(engine, open)).length)
+      return later;
+    try {
+      open = await openFolders(engine);
+    } catch {
+      return { status: 503, message: "The engine isn't answering. Try again in a moment." };
+    }
+    if (!open.length)
+      break;
+    if (Date.now() >= end)
+      return { status: 409, message: `A project on this computer kept opening again as its engine closed them, so it couldn't ask for these models again now: try again in a moment, or they show by themselves within ${ENGINE_WIDE[provider]}.` };
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  await learnCompatibility(engine).catch(() => {});
+  return { status: 200, waiting: [] };
 }
 var settling = null;
 var settleAgain2 = false;
@@ -37189,7 +37223,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "6b9016df6fa8";
+var BRIDGE_VERSION = "bd9b0a501f82";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
