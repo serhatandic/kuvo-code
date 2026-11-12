@@ -23102,9 +23102,10 @@ var FORWARDS = path85.join(WORK_QUEUE, "forward");
 var DONE_FILE = path85.join(WORK_QUEUE, "acted.json");
 var ID2 = /^wqa_[A-Za-z0-9_-]{16,40}$/;
 var LEFT = /^(wqa_[A-Za-z0-9_-]{16,40})\.json$/;
-var forwardTiming = { wait: 20000 };
+var forwardTiming = { wait: 20000, file: 60000 };
+var waitFor = (act) => act.action === "file" ? forwardTiming.file : forwardTiming.wait;
 var AGAIN_AFTER = 5000;
-var answerAgainAfter = (act) => act.action === "file" ? 15000 : 4000;
+var answerAgainAfter = (act) => act.action === "file" ? 60000 : 4000;
 var ACT_MEMORY = 600000;
 var forwardsSoon = { send: () => {} };
 var left = (id) => path85.join(FORWARDS, `${id}.json`);
@@ -23132,22 +23133,25 @@ async function forwardAct(computer, named, act, signal, link = readLink(), now =
   } catch {
     return { status: 503, refused: `${here} couldn't send it to ${computer.name}. Try again in a moment.` };
   }
+  madeHere.add(id);
   forwardsSoon.send();
   try {
-    const answer = await answered3(id, peer.key, signal);
+    const answer = await answered3(id, peer.key, waitFor(act), signal);
     if (answer === "away")
       return { status: 503, refused: `${computer.name} stopped answering, so ${here} can't tell whether it was done there. Look again once it's back.` };
     if (answer === "late")
       return { status: 503, refused: `${computer.name} didn't answer in time, so ${here} can't tell whether it was done there. Look again in a moment.` };
     return answer;
   } finally {
+    madeHere.delete(id);
     fs85.rmSync(left(id), { force: true });
     fs85.rmSync(answerOf2(id), { force: true });
   }
 }
-function answered3(id, key, signal) {
+var madeHere = new Set;
+function answered3(id, key, wait, signal) {
   return new Promise((resolve) => {
-    const until = Date.now() + forwardTiming.wait;
+    const until = Date.now() + wait;
     let done = false;
     const finish = (value) => {
       if (done)
@@ -23175,7 +23179,7 @@ function answered3(id, key, signal) {
   });
 }
 var sent2 = new Map;
-function sendForwards(host, link = readLink(), now = Date.now()) {
+function sendForwards(host, link = readLink(), now = Date.now(), { ownOnly = IS_MAC } = {}) {
   const names = listOf(FORWARDS);
   const here = new Set;
   for (const name of names) {
@@ -23185,13 +23189,13 @@ function sendForwards(host, link = readLink(), now = Date.now()) {
     here.add(id);
     const kept = read2(path85.join(FORWARDS, name));
     const act = isObject(kept?.act) ? kept.act : null;
-    if (!act || typeof act.at !== "number" || now - act.at > forwardTiming.wait + AGAIN_AFTER) {
+    if (!act || typeof act.at !== "number" || now - act.at > waitFor(act) + AGAIN_AFTER) {
       fs85.rmSync(path85.join(FORWARDS, name), { force: true });
       fs85.rmSync(answerOf2(id), { force: true });
       here.delete(id);
       continue;
     }
-    if (!host?.welcomed || !link || fs85.existsSync(answerOf2(id)) || now - (sent2.get(id) ?? -Infinity) < AGAIN_AFTER)
+    if (ownOnly && !madeHere.has(id) || !host?.welcomed || !link || fs85.existsSync(answerOf2(id)) || now - (sent2.get(id) ?? -Infinity) < AGAIN_AFTER)
       continue;
     const peer = peersOf(link).find((each) => each.key === kept.to);
     const mails = peer ? mailsFor(peer, { act }, link, now) : null;
@@ -23258,9 +23262,9 @@ async function takeAct(sender, given, reply, run, now = Date.now()) {
   const key = `${sender.key} ${act.id}`;
   const changes = act.method !== "GET";
   const mine = did.get(key);
-  if (mine) {
-    if (!mine.answer || mine.answered !== undefined && now - mine.answered < answerAgainAfter(act))
-      return;
+  if (mine && (mine.answered === undefined || now - mine.answered < answerAgainAfter(act)))
+    return;
+  if (mine?.answer) {
     mine.answered = now;
     return answer(mine.answer);
   }
@@ -23287,6 +23291,8 @@ async function takeAct(sender, given, reply, run, now = Date.now()) {
     keepDone(key, entry, now);
   entry.answered = Date.now();
   answer(entry.answer);
+  if (!changes)
+    entry.answer = null;
 }
 function forgetActs() {
   did.clear();
@@ -39584,7 +39590,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "243cfe63caa5";
+var BRIDGE_VERSION = "e687834a87cf";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -42573,7 +42579,7 @@ async function* workQueueRoute(context, match) {
     try {
       name = decodeURIComponent(rawFile ?? "");
     } catch {}
-    const far = !find(allItems()) && fromClient(context) ? itemElsewhere(ref) : null;
+    const far = !find(allItems()) && fromClient(context) && name && name.length <= 300 ? itemElsewhere(ref) : null;
     let file = far ? null : fileOf4(ref, name);
     if (far) {
       const there = await forwardAct(far.computer, nameOf2(far), { method: "GET", item: far.id, action: "file", name }, signal);

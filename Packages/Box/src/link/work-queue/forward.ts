@@ -20,6 +20,7 @@ import { readPeerAgents } from "../peers/directory";
 import { peersOf } from "../peers/known";
 import { awaySince } from "../peers/reach";
 import { offRelay } from "../letters/leave";
+import { IS_MAC } from "../home";
 import { sharedMachine } from "../setup/settle";
 import { readLink } from "../state";
 import { computerName } from "./across";
@@ -44,12 +45,14 @@ const DONE_FILE = path.join(WORK_QUEUE, "acted.json");
 const ID = /^wqa_[A-Za-z0-9_-]{16,40}$/;
 const LEFT = /^(wqa_[A-Za-z0-9_-]{16,40})\.json$/;
 
-/** How long a box waits for the computer that keeps an item to answer (a test's shorter). */
-export const forwardTiming = { wait: 20_000 };
+/** How long a box waits for the computer that keeps an item to answer; a file longer, as its
+ * answer comes in parts (a test's shorter). */
+export const forwardTiming = { wait: 20_000, file: 60_000 };
+const waitFor = (act: { action?: unknown }) => (act.action === "file" ? forwardTiming.file : forwardTiming.wait);
 /** How often what's waiting goes again while it's waited for (the keeper takes each id once). */
 const AGAIN_AFTER = 5_000;
-/** How soon a keeper sends an answer again, to an ask sent again: a file's later (it can be big). */
-const answerAgainAfter = (act: Act) => (act.action === "file" ? 15_000 : 4_000);
+/** How soon a keeper answers an ask sent again: a file's not while it's waited for (it can be big). */
+const answerAgainAfter = (act: Act) => (act.action === "file" ? 60_000 : 4_000);
 /** How long a keeper remembers what it did for each id, and how far off an ask's `at` may be. */
 export const ACT_MEMORY = 600_000;
 
@@ -104,24 +107,31 @@ export async function forwardAct(computer: Computer, named: string, act: Omit<Ac
   } catch {
     return { status: 503, refused: `${here} couldn't send it to ${computer.name}. Try again in a moment.` };
   }
+  madeHere.add(id);
   forwardsSoon.send();
   try {
-    const answer = await answered(id, peer.key, signal);
+    const answer = await answered(id, peer.key, waitFor(act), signal);
     // (It may have got there before that computer stopped answering, or its answer was lost.)
     if (answer === "away") return { status: 503, refused: `${computer.name} stopped answering, so ${here} can't tell whether it was done there. Look again once it's back.` };
     if (answer === "late") return { status: 503, refused: `${computer.name} didn't answer in time, so ${here} can't tell whether it was done there. Look again in a moment.` };
     return answer;
   } finally {
+    madeHere.delete(id);
     fs.rmSync(left(id), { force: true });
     fs.rmSync(answerOf(id), { force: true });
   }
 }
 
+// The asks this process left. This Mac's box answers its routes in the process that sends, so it
+// sends only these: what anything else on this Mac leaves there never goes out as you (on a machine,
+// a Mac's `box route` leaves them, and anything there could read the box's keys anyway).
+const madeHere = new Set<string>();
+
 // The answer to `id` once it's left beside it; "away" once the relay finds that computer not there
 // (after it was sent), "late" past the wait or once its asker went.
-function answered(id: string, key: string, signal?: AbortSignal | null): Promise<Acted | "away" | "late"> {
+function answered(id: string, key: string, wait: number, signal?: AbortSignal | null): Promise<Acted | "away" | "late"> {
   return new Promise(resolve => {
-    const until = Date.now() + forwardTiming.wait;
+    const until = Date.now() + wait;
     let done = false;
     const finish = (value: Acted | "away" | "late") => {
       if (done) return;
@@ -150,8 +160,9 @@ function answered(id: string, key: string, signal?: AbortSignal | null): Promise
 const sent = new Map<string, number>();
 
 /** What's left to forward, sent by this process's relay connection (each round, and as it's left):
- * each again every few seconds while it's waited for. What's past its wait is cleared. */
-export function sendForwards(host: Pick<LinkHost, "send" | "welcomed"> | null | undefined, link: LinkState | null = readLink(), now = Date.now()): void {
+ * each again every few seconds while it's waited for. What's past its wait is cleared. `ownOnly`
+ * (this Mac's box): only what this process left. */
+export function sendForwards(host: Pick<LinkHost, "send" | "welcomed"> | null | undefined, link: LinkState | null = readLink(), now = Date.now(), { ownOnly = IS_MAC }: { ownOnly?: boolean } = {}): void {
   const names = listOf(FORWARDS);
   const here = new Set<string>();
   for (const name of names) {
@@ -161,13 +172,13 @@ export function sendForwards(host: Pick<LinkHost, "send" | "welcomed"> | null | 
     const kept = read(path.join(FORWARDS, name));
     const act = isObject(kept?.act) ? kept.act : null;
     // (Its asker is gone: a process that stopped mid-wait leaves it.)
-    if (!act || typeof act.at !== "number" || now - act.at > forwardTiming.wait + AGAIN_AFTER) {
+    if (!act || typeof act.at !== "number" || now - act.at > waitFor(act) + AGAIN_AFTER) {
       fs.rmSync(path.join(FORWARDS, name), { force: true });
       fs.rmSync(answerOf(id), { force: true });
       here.delete(id);
       continue;
     }
-    if (!host?.welcomed || !link || fs.existsSync(answerOf(id)) || now - (sent.get(id) ?? -Infinity) < AGAIN_AFTER) continue;
+    if ((ownOnly && !madeHere.has(id)) || !host?.welcomed || !link || fs.existsSync(answerOf(id)) || now - (sent.get(id) ?? -Infinity) < AGAIN_AFTER) continue;
     const peer = peersOf(link).find(each => each.key === kept!.to);
     const mails = peer ? mailsFor(peer, { act }, link, now) : null;
     if (!mails) continue;
@@ -233,9 +244,9 @@ export async function takeAct(sender: MailSender, given: unknown, reply: (payloa
   const key = `${sender.key} ${act.id}`;
   const changes = act.method !== "GET";
   const mine = did.get(key);
-  if (mine) {
-    // (Under way now, or answered a moment ago.)
-    if (!mine.answer || (mine.answered !== undefined && now - mine.answered < answerAgainAfter(act))) return;
+  // (Under way now, or answered a moment ago; a change as it went, a read done again.)
+  if (mine && (mine.answered === undefined || now - mine.answered < answerAgainAfter(act))) return;
+  if (mine?.answer) {
     mine.answered = now;
     return answer(mine.answer);
   }
@@ -247,7 +258,8 @@ export async function takeAct(sender: MailSender, given: unknown, reply: (payloa
     did.set(key, { at: kept.at, answer: value, answered: now });
     return answer(value);
   }
-  // (From a machine Macs share outside one setup: another person may use it.)
+  // (From a machine Macs share outside one setup: another person may use it. Such a machine never
+  // hands one on itself; this holds against one that would, once it has told it's shared.)
   if (readTold(sender.key)?.shared) return answer({ status: 409, value: { message: `${here} doesn't take changes from ${computerName(peer)}, a machine shared with other Macs: change it from ${here}.` } });
   // (One from long ago, sent again, or from a computer whose clock is far off: not done.)
   if (Math.abs(now - act.at) > ACT_MEMORY) return answer({ status: 409, value: { message: `${here}'s clock and ${computerName(peer)}'s are too far apart to take it: check both computers' time.` } });
@@ -262,6 +274,8 @@ export async function takeAct(sender: MailSender, given: unknown, reply: (payloa
   if (changes) keepDone(key, entry, now);
   entry.answered = Date.now();
   answer(entry.answer);
+  // (A read's answer isn't kept: a file's can be big, and one asked again is read again.)
+  if (!changes) entry.answer = null;
 }
 
 /** All this box did for others forgotten, in this process (a test's: what's on disk stays, as for a

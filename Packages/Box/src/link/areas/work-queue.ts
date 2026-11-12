@@ -212,7 +212,7 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
     let name = "";
     try { name = decodeURIComponent(rawFile ?? ""); } catch {}
     // One kept with an item on another of your computers: from there, for a client (up to a few MB).
-    const far = !find(allItems()) && fromClient(context) ? itemElsewhere(ref) : null;
+    const far = !find(allItems()) && fromClient(context) && name && name.length <= 300 ? itemElsewhere(ref) : null;
     let file = far ? null : fileOf(ref, name);
     if (far) {
       const there = await forwardAct(far.computer, nameOf(far), { method: "GET", item: far.id, action: "file", name }, signal);

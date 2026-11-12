@@ -893,6 +893,23 @@ test("what you do to an item another computer keeps, asked of this box, is done 
   assert.deepEqual({ method: file.workQueue.act.method, action: file.workQueue.act.action, name: file.workQueue.act.name }, { method: "GET", action: "file", name: "notes one.txt" });
   receive(lab, { workQueue: { acted: { id: file.workQueue.act.id, status: 200, value: { type: "text/plain", data: Buffer.from("From lab.").toString("base64") } } } });
   assert.deepEqual(await fetching, { status: 200, body: "From lab." });
+  // A picture too big for one mail: in parts, put together here.
+  const picture = crypto.randomBytes(120_000);
+  const fetchingPicture = (async () => {
+    const pieces = [];
+    for await (const piece of handle({ method: "GET", path: "kuvo/work-queue/items/500/files/shot.png", headers: {}, fromApp: true }, undefined)) pieces.push(piece);
+    return { status: pieces.find(each => each.head).head.status, bytes: Buffer.concat(pieces.filter(each => each.body).map(each => each.body)) };
+  })();
+  const [shot] = await sentTo(lab);
+  const answer = { acted: { id: shot.workQueue.act.id, status: 200, value: { type: "image/png", data: picture.toString("base64") } } };
+  const d = Buffer.from(JSON.stringify(answer)).toString("base64url");
+  const of = Math.ceil(d.length / 40_000);
+  assert.ok(of > 1);
+  const digest = crypto.createHash("sha256").update(d).digest("base64url");
+  for (let i = 0; i < of; i++) receive(lab, { workQueue: { part: { whole: digest, i, of, d: d.slice(i * 40_000, (i + 1) * 40_000), s: "" } } });
+  const got = await fetchingPicture;
+  assert.equal(got.status, 200);
+  assert.ok(got.bytes.equals(picture), "its bytes as they are");
   // An answer that isn't a status is never taken.
   const odd = route("GET", "kuvo/work-queue/items/500/files/big.png");
   const [big] = await sentTo(lab);
@@ -923,11 +940,19 @@ test("a Mac's request over SSH (`box route`, a process with no relay connection)
       if (fs.readdirSync(forwards).some(name => /^wqa_.+\.json$/.test(name))) { watch.close(); resolve(); }
     });
   });
+  // (And one left by something else on this computer.)
+  const planted = actID();
+  write(path.join(forwards, `${planted}.json`), { to: lab.pub, act: { id: planted, method: "DELETE", item: told(500).id, at: Date.now() } });
   const deleting = route("DELETE", "kuvo/work-queue/items/500");
   await left;
   const { connection } = relay();
-  link.sendQueueForwards(connection);
-  const [asked] = mailTo(lab);
+  // This Mac's box, whose routes run where it sends, sends only what they left: what anything else
+  // on the Mac leaves there never goes out as you.
+  link.sendQueueForwards(connection, undefined, undefined, { ownOnly: true });
+  const [asked, ...others] = mailTo(lab);
+  assert.deepEqual(others, []);
+  assert.notEqual(asked.workQueue.act.id, planted);
+  fs.rmSync(path.join(forwards, `${planted}.json`));
   assert.equal(asked.workQueue.act.method, "DELETE");
   // Sent again only after a few seconds while it's waited for (lab takes each id once anyway).
   link.sendQueueForwards(connection);

@@ -290,9 +290,10 @@ final class WorkQueues {
 
     /// The box an item's files are read from: the one the view is from, or the computer it says
     /// it's on, by its key: this Mac's own box, or one of your machines by its id on this Mac. Nil for
-    /// one on another Mac (or a machine only another Mac set up). (Only for its files' bytes, which
-    /// a box doesn't bring from another computer yet: what you do to an item, and reading it whole,
-    /// go to the box the panel shows, which hands them on itself.)
+    /// one on another Mac (or a machine only another Mac set up), whose files the panel's box brings
+    /// (a few MB at most). (Only for files: read straight from a computer this Mac reaches, they can
+    /// be any size and need no relay. What you do to an item, and reading it whole, go to the box the
+    /// panel shows, which hands them on itself.)
     func box(of item: WorkItem, in box: String) -> String? {
         guard let computer = item.computer else { return box }
         let known = known

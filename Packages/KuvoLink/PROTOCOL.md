@@ -3866,8 +3866,8 @@ any of your boxes, whichever computer keeps it: one on another computer is done 
 computer's box, which this box asks ("Across your computers", Done where it's kept), and the answer
 is that box's, its `item` with `computer` as this box names it. When it can't be done there, it
 answers `{message, computer}`: 503 while that computer isn't answering or this box isn't on the
-relay (said at once, nothing sent), or when no answer came in 20 seconds or that computer stopped
-answering meanwhile (it may have been done: a client looks again); 409 for one that doesn't take it
+relay (said at once, nothing sent), or when no answer came in 20 seconds (a file's, 60) or that
+computer stopped answering meanwhile (it may have been done: a client looks again); 409 for one that doesn't take it
 from another box (an older box), and on a machine Macs share outside one setup ("Your setup":
 another person's computers may tell it theirs), changed there. One on its way to another computer (`handing`) is refused (400) until it's there,
 but for `DELETE`, which calls its hand-off off (a note says so) and deletes it.
@@ -4121,7 +4121,8 @@ item on its way to another computer (`handing`) goes with the move and is sent f
   from a machine that told it's shared (`told.shared`), which it refuses (409); it does it as its
   own client's (`by: {user: true}`, numbered and told as any change of yours there), and answers
   each `id` once: one that comes again is answered as it was (a few seconds after its last answer at
-  the soonest, a file's 15), never done twice. It remembers a change's ten minutes, on disk
+  the soonest, a file not again while it's waited for), never done twice; a read's answer isn't
+  kept, and one asked again later is read again. It remembers a change's ten minutes, on disk
   (`run/work-queue/acted.json`), so a restart doesn't do it again; one under way as it stopped is
   answered 409, that it can't tell whether it was done. One whose `at` is more than ten minutes off
   its clock is refused (409). One it doesn't have (it moved on meanwhile) is 404, never handed on
@@ -4129,7 +4130,8 @@ item on its way to another computer (`handing`) goes with the move and is sent f
   it in `run/work-queue/forward/<id>.json` (`{to, act}`) and waits for `<id>.answer.json` beside
   it, so its link sends it whichever process took the request (on a machine, a Mac's `box route`
   over SSH, which has no relay connection); what's past its wait is cleared at the link's next
-  round.
+  round. This Mac's box, whose routes run in the process that sends, sends only what its own
+  routes left there: what anything else on the Mac leaves never goes out as you.
 
 ### Side questions, handoffs and reviews
 
