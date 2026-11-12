@@ -33,6 +33,7 @@ import { cancelSignIns, handler, signInsWaiting } from "./server"
 import { launchLets, Renewal } from "./renewal"
 import { keeperEngine } from "../shared/engines"
 import { writeSecret } from "../shared/files"
+import { SIGN_IN_FOLDER } from "./signin"
 import { commandLineOf } from "../shared/platform"
 import { updateUnderWay } from "../shared/updating"
 import { spawn } from "node:child_process"
@@ -106,6 +107,10 @@ mkdirSync(temporary, { recursive: true })
 // What an agent left unpacked when the bridge last stopped without cleaning up (Antigravity's
 // agent unpacks itself, about 1 GB, for each run), and half-finished downloads.
 rmSync(join(temporary, "antigravity"), { recursive: true, force: true })
+// And the page of a sign-in it was in the middle of.
+try {
+  for (const name of readdirSync(temporary)) if (name.startsWith(SIGN_IN_FOLDER)) rmSync(join(temporary, name), { recursive: true, force: true })
+} catch {}
 try {
   for (const name of readdirSync(join(home, "antigravity"))) if (name.startsWith(".install-")) rmSync(join(home, "antigravity", name), { recursive: true, force: true })
 } catch {}

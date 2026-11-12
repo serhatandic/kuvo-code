@@ -4,7 +4,7 @@
 // once, and can open it again. Some also print a page to use when no browser opens, which ends on
 // a code to paste back (Claude Code's): that's taken too, typed into the command.
 
-import { chmodSync, existsSync, lstatSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { privateFolder, writeSecret } from "../shared/files"
 import { join } from "node:path"
 import type { SignInAttempt } from "./agent"
@@ -48,6 +48,8 @@ export interface CommandSignInOptions {
   refusedCode?: RegExp
   /** A refused code ends the sign-in, with these words (its program takes no second one). */
   refusedEnds?: string
+  /** Its command has ended, and what it left (the page it handed its browser) is gone. */
+  onEnd?: () => void
 }
 
 /**
@@ -58,10 +60,7 @@ export interface CommandSignInOptions {
 export function catcher(temporary: string): string {
   const path = join(privateFolder(join(temporary, "bin")), "kuvo-catch-url")
   const script = '#!/bin/sh\numask 077\nprintf \'%s\\n\' "$1" >> "$KUVO_URL_FILE"\n'
-  if (!ownScript(path, script)) {
-    writeSecret(path, script)
-    chmodSync(path, 0o700)
-  }
+  if (!ownScript(path, script)) writeSecret(path, script, 0o700)
   return path
 }
 
@@ -75,11 +74,15 @@ function ownScript(path: string, script: string): boolean {
   }
 }
 
+/** Where an attempt's own folder is, in the bridge's temporary folder (one a bridge that stopped
+ * mid-way left goes as the next starts). */
+export const SIGN_IN_FOLDER = "kuvo-signin-"
+
 export async function commandSignIn(options: CommandSignInOptions): Promise<SignInAttempt> {
   // The page it hands its browser, written down in a folder of this attempt's own that only you can
   // open, and gone with it.
   const browser = catcher(options.temporary)
-  const own = mkdtempSync(join(options.temporary, "kuvo-signin-"))
+  const own = mkdtempSync(join(options.temporary, SIGN_IN_FOLDER))
   const urlFile = join(own, "url")
   const env: Record<string, string | undefined> = { ...process.env, ...options.env, BROWSER: browser, KUVO_URL_FILE: urlFile }
   // A value left `undefined` is unset, as in `run`.
@@ -176,6 +179,7 @@ export async function commandSignIn(options: CommandSignInOptions): Promise<Sign
   }
   void child.exited.then(async (code) => {
     rmSync(own, { recursive: true, force: true })
+    options.onEnd?.()
     if (status.status !== "pending") return
     const signedIn = await options.signedIn().catch(() => false)
     if (status.status !== "pending") return

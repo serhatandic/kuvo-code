@@ -27,11 +27,13 @@ test("a sign-in's page: only you can read it, in a folder only you can open, and
   writeFileSync(join(temporary, "bin", "kuvo-catch-url"), `#!/bin/sh\nprintf '%s\\n' "$1" >> "${stolen}"\n`)
   chmodSync(join(temporary, "bin", "kuvo-catch-url"), 0o777)
   const script = join(temporary, "login")
-  writeFileSync(script, `#!/bin/sh\n"$BROWSER" "https://example.test/sign-in?state=SECRET-STATE"\nprintf "Code > "\nread code\nexit 1\n`)
+  writeFileSync(script, `#!/bin/sh\n"$BROWSER" "https://example.test/sign-in?state=SECRET-STATE"\nread code\n`)
   chmodSync(script, 0o755)
   const umask = process.umask(0o022)
   try {
-    const sign = await commandSignIn({ command: script, args: [], home: temporary, temporary, instructions: "", signedIn: async () => false, codePrompt: /Code > /g })
+    let ended!: () => void
+    const end = new Promise<void>((resolve) => (ended = resolve))
+    const sign = await commandSignIn({ command: script, args: [], home: temporary, temporary, instructions: "", signedIn: async () => false, onEnd: () => ended() })
     expect(sign.url).toBe("https://example.test/sign-in?state=SECRET-STATE")
     expect(lstatSync(stolen, { throwIfNoEntry: false })).toBeUndefined()
 
@@ -46,9 +48,9 @@ test("a sign-in's page: only you can read it, in a folder only you can open, and
     expect(mode(join(temporary, "bin"))).toBe(0o700)
     expect(mode(join(temporary, "bin", "kuvo-catch-url")) & 0o077).toBe(0)
 
-    // Ended (a code it turns away): nothing of it left.
-    await sign.complete!("wrong").catch(() => {})
-    while (sign.status().status === "pending") await Bun.sleep(10)
+    // Ended: nothing of it left.
+    sign.cancel()
+    await end
     expect(everything(temporary).filter((where) => statSync(where).isFile() && readFileSync(where, "utf8").includes("SECRET-STATE") && where !== script)).toEqual([])
     expect(readdirSync(temporary).sort()).toEqual(["bin", "login"])
   } finally {

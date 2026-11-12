@@ -33,25 +33,30 @@ export function writePrivate(file: string, text: string | Uint8Array) {
  * A key, token or sign-in in `file`: as `writePrivate`, and in a folder only you can open however
  * it was made (one others could read is closed to them first).
  */
-export function writeSecret(file: string, text: string | Uint8Array) {
+export function writeSecret(file: string, text: string | Uint8Array, mode = 0o600) {
   privateFolder(path.dirname(file));
-  placeWhole(file, text);
+  placeWhole(file, text, mode);
 }
 
-/** `folder`, made if it isn't there, and closed to everyone but you when it's yours. */
+/** `folder`, made if it isn't there, and closed to everyone but you; one that's a link, or someone
+ * else's, is refused (what's written in it could be read or swapped). */
 export function privateFolder(folder: string): string {
   fs.mkdirSync(folder, { recursive: true, mode: 0o700 });
-  const made = fs.statSync(folder);
-  if ((made.mode & 0o077) && made.uid === process.getuid?.()) fs.chmodSync(folder, 0o700);
+  const made = fs.lstatSync(folder);
+  if (!made.isDirectory()) throw new Error(`${folder} isn't a folder of its own: nothing secret is written in it.`);
+  if (process.getuid && made.uid !== process.getuid()) throw new Error(`${folder} isn't yours: nothing secret is written in it.`);
+  if (made.mode & 0o077) fs.chmodSync(folder, 0o700);
   return folder;
 }
 
 // Through a new file only you can read (one of that name already there, or a link, isn't written
 // through), renamed into place: never seen half-written, and nothing left beside it if it fails.
-function placeWhole(file: string, text: string | Uint8Array) {
+// (`mode` 0o700 for a script that runs as it lands.)
+export function placeWhole(file: string, text: string | Uint8Array, mode = 0o600) {
   const temporary = `${file}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
   try {
-    fs.writeFileSync(temporary, text, { mode: 0o600, flag: "wx" });
+    fs.writeFileSync(temporary, text, { mode, flag: "wx" });
+    fs.chmodSync(temporary, mode);
     fs.renameSync(temporary, file);
   } catch (error) {
     try { fs.rmSync(temporary, { force: true }); } catch {}
