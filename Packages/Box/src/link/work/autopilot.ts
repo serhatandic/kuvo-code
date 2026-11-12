@@ -10,7 +10,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
 import { boxNote } from "../../shared/queues";
+import { withNotes } from "../../shared/session-notes";
 import { call, engineGet } from "../engine/client";
+import { rewriteOn } from "../engine/notes";
 import { sendInto } from "../engine/queue";
 import { locked, textOf, writePrivate } from "../files";
 import { askedBy, asksIn, decisionChanged, recommendationOf, sessionsWaitingOnServer, type PendingQuestion, type Recommendation } from "./answers";
@@ -109,10 +111,12 @@ export function forgetDecided(session: string, file = DECIDED_FILE): void {
 export async function setAutopilot(target: Target, session: Partial<EngineSession> & { id: string }, on: boolean, signal?: AbortSignal): Promise<boolean> {
   const metadata = isObject(session.metadata) ? session.metadata : {};
   const kuvo = isObject(metadata.kuvo) ? metadata.kuvo : {};
-  const { autopilot: _, ...rest } = kuvo;
-  // (Off is written as false, whether the engine replaces its notes or merges them.)
-  const keep = () => (kuvo.autopilot === true) === on ? Promise.resolve()
-    : call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, { metadata: { ...metadata, kuvo: { ...rest, autopilot: on } } }, signal);
+  // Kept in its turn, on its notes as they are then (`../engine/notes.ts`). (Off is written as
+  // false.)
+  const keep = async () => {
+    const done = await rewriteOn(target, session.id, now => (now.metadata?.kuvo?.autopilot === true) === on ? null : { metadata: withNotes(now.metadata, { autopilot: on }) }, signal);
+    if (!done) throw new Error("It isn't there.");
+  };
   try {
     if (!on) {
       await keep();

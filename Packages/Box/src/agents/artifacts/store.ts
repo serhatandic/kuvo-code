@@ -18,6 +18,7 @@ import { fromPatch, unified } from "../diff"
 import { isBinary, isText, kindOf, typeOf, type Kind } from "./kinds"
 import { CopyPolicy, freeSpace, privateReasons, type NoCopy } from "./policy"
 import { inScratch } from "./turnfiles"
+import { writeSecret } from "../../shared/files"
 
 /** The biggest file a copy is kept of (as `kuvo/file` sends at most). */
 export const copyLimit = 25 * 1024 * 1024
@@ -193,8 +194,7 @@ export class ArtifactStore {
       if (key.length === 32) return key
     } catch {}
     const key = randomBytes(32)
-    writeFileSync(file + ".new", key, { mode: 0o600 })
-    renameSync(file + ".new", file)
+    writeSecret(file, key)
     return key
   }
 
@@ -233,16 +233,36 @@ export class ArtifactStore {
     return this.artifacts.get(ArtifactStore.idOf(path))
   }
 
+  /** Whether `path` is as the record last saw it: its newest version, or gone (or never there) as it
+   * says; or about to be, a change of it waiting its turn. */
+  asSeen(path: string): boolean {
+    if (this.waiting.has(path)) return true
+    const artifact = this.at(path)
+    const read = this.read(path)
+    if (read === null) return true
+    if (!read) return !artifact || artifact.gone !== null
+    return !!artifact && !artifact.gone && artifact.versions.at(-1)?.hash === read.hash
+  }
+
   /** What's being recorded: one at a time, in the order asked, each once git has said what it ignores. */
   private queue: Promise<unknown> = Promise.resolve()
+  /** Paths with something waiting its turn there, and how much. */
+  private waiting = new Map<string, number>()
 
   private inTurn<T>(paths: string[], work: () => T): Promise<T | undefined> {
+    for (const path of paths) this.waiting.set(path, (this.waiting.get(path) ?? 0) + 1)
     const next = this.queue.then(async () => {
       await this.policy.learn(paths)
       return work()
     }).catch((error) => {
       console.error("artifacts:", error?.message ?? error)
       return undefined
+    }).finally(() => {
+      for (const path of paths) {
+        const left = (this.waiting.get(path) ?? 1) - 1
+        if (left > 0) this.waiting.set(path, left)
+        else this.waiting.delete(path)
+      }
     })
     this.queue = next
     return next

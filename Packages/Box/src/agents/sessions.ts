@@ -2548,7 +2548,8 @@ export class Sessions {
   private async listedModels(providerID: string): Promise<Model[]> {
     const agent = this.agent(providerID)
     if (!agent) return []
-    return await Promise.race([agent.models().catch(() => [] as Model[]), Bun.sleep(3_000).then(() => [] as Model[])])
+    // (Those it keeps out of its picker too: it names whatever ran.)
+    return await Promise.race([agent.models({ hidden: true }).catch(() => [] as Model[]), Bun.sleep(3_000).then(() => [] as Model[])])
   }
 
   /** The model `id` names among `models`: by its own id, or one it's known by (Claude Code's `default`). */

@@ -10,7 +10,7 @@
 import fs from "node:fs";
 import { isObject } from "../../shared/json";
 import { CHATS, located } from "../home";
-import { call, engineGet, type EngineAnswer } from "./client";
+import { rewriteOn } from "./notes";
 import type { EngineSession } from "./sessions";
 import type { Target } from "../../shared/records";
 
@@ -50,11 +50,9 @@ export function chatNotes(metadata: unknown, directory: unknown): Record<string,
 // it's marked again once this one's done, from what it is then.
 const marking = new Map<string, boolean>();
 
-/** Session `id` on `target` (the engine, or the coding agents' bridge) marked as its folder says:
- * read just before it's written, so what a client wrote before stays, and only written when its mark
- * is wrong. Whether it was written. (Their API writes metadata whole, with nothing to say "only if
- * unchanged": a client's write landing between the read and the write is lost, as with the box's
- * other writers of a session's metadata; #581 serializes them.) */
+/** Session `id` on `target` (the engine, or the coding agents' bridge) marked as its folder says, in
+ * its turn (`notes.ts`): read just before it's written, so what was written before stays, and only
+ * written when its mark is wrong. Whether it was written. */
 export async function markChat(target: Target, id: unknown, signal?: AbortSignal): Promise<boolean> {
   if (typeof id !== "string" || !id) return false;
   const key = `${target.port}:${id}`;
@@ -67,10 +65,8 @@ export async function markChat(target: Target, id: unknown, signal?: AbortSignal
   try {
     do {
       marking.set(key, false);
-      const session = (await engineGet(target, `api/session/${encodeURIComponent(id)}`) as EngineAnswer<EngineSession> | null)?.data;
-      if (!session?.id || markedRight(session)) continue;
-      await call(target, "PATCH", `/api/session/${encodeURIComponent(id)}`, { metadata: chatNotes(session.metadata, folderOf(session)) }, signal);
-      written = true;
+      const done = await rewriteOn(target, id, session => (markedRight(session) ? null : { metadata: chatNotes(session.metadata, folderOf(session)) }), signal);
+      if (done?.written) written = true;
     } while (marking.get(key) && !signal?.aborted);
   } finally {
     marking.delete(key);

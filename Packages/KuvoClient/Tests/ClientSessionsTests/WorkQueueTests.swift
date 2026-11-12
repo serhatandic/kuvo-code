@@ -29,6 +29,21 @@ import ClientSessions
         return try! JSONDecoder().decode(WorkQueueView.self, from: Data(json.utf8))
     }()
 
+    @Test func conversationChipsUseOnlyTheirQueue() throws {
+        let item = try JSONDecoder().decode(WorkItem.self, from: Data(Self.item(243, "Our item", "next").utf8))
+        let unrelated = try JSONDecoder().decode(WorkItem.self, from: Data(Self.item(1, "Other bot", "next", owner: "bot_other").utf8))
+        let known = ["243": WorkRef(item), "1": WorkRef(unrelated)]
+        let ours = WorkQueueView(owner: "ses_lead", items: [item])
+        #expect(WorkQueue.chipRefs(in: "see #243", known: known, view: ours)["243"] == WorkRef(item))
+        #expect(WorkQueue.chipRefs(in: "#243", known: known, view: WorkQueueView(owner: "ses_other")).isEmpty)
+        #expect(WorkQueue.chipRefs(in: "#1", known: known, view: ours).isEmpty)
+        #expect(WorkQueue.chipRefs(in: "the #1 Google result", known: known, view: WorkQueueView(owner: "bot_other", items: [unrelated])).isEmpty)
+        #expect(WorkQueue.chipRefs(in: "#243", known: known, view: nil).isEmpty)
+        #expect(WorkQueue.chipRefs(in: "#243", known: known, view: WorkQueueView(owner: WorkQueueView.all, items: [item])).isEmpty)
+        // A linked item's owner differs: the box's view grants visibility, not owner equality.
+        #expect(WorkQueue.chipRefs(in: "see #1", known: [:], view: WorkQueueView(owner: "ses_lead", items: [unrelated]))["1"] != nil)
+    }
+
     @Test func inProgressComesFirstThenEachCategoryInTheBoxsOrder() {
         let sections = WorkQueue.sections(Self.view)
         #expect(sections.map(\.name) == ["In progress", "Next", "Later", "Design", "Parked", "Done"])

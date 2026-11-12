@@ -6,11 +6,12 @@ import { chmodSync, linkSync, mkdtempSync, readFileSync, rmSync, writeFileSync }
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { pathToFileURL } from "node:url"
-import { existsSync, mkdirSync, readdirSync, realpathSync, symlinkSync, watch } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, realpathSync, symlinkSync } from "node:fs"
 import { createHash } from "node:crypto"
 import { createServer } from "node:net"
 import { CodexAgent, codexTiming } from "../../src/agents/agents/codex"
 import { Auto } from "../../src/agents/auto"
+import { watchFolder } from "../../src/shared/watch"
 import { canFence, realFence } from "./support/fence"
 import { callServer, computerServers, KEYS } from "./support/servers"
 import { subagentEngine } from "./support/subagents"
@@ -45,6 +46,8 @@ const refusesNextSteer: [string, any] = ["(refuses the next steer)", {}]
 const refusesAsItSleeps: [string, any] = ["(refuses as it starts to sleep)", {}]
 /** In a turn's events: Codex takes what's steered, and says its turn is over in the same breath. */
 const endsAsTold: [string, any] = ["(ends as told)", {}]
+/** In a turn's events: Codex works until something's steered in, and as it takes it, says a sleep's started, that it ended, and that its turn is over, in the same breath. */
+const takesAsItSleeps: [string, any] = ["(takes it as it starts to sleep, and ends)", {}]
 /** In a turn's events: Codex leaves `command` running in a background terminal, until a file `terminal-done` is in its folder. */
 const leavesTerminal = (command: string): [string, any] => ["(leaves a terminal)", { processId: "p1", command }]
 
@@ -77,6 +80,7 @@ let sleptInBreath
 let refusedOne
 let turning = false
 let endsAsTold = false
+let takesAsItSleeps = false
 let summaryWorks = false
 let summarizing = false
 let terminals = []
@@ -99,6 +103,10 @@ async function turn() {
     }
     if (method === ${JSON.stringify(endsAsTold[0])}) {
       endsAsTold = true
+      return
+    }
+    if (method === ${JSON.stringify(takesAsItSleeps[0])}) {
+      takesAsItSleeps = true
       return
     }
     if (method === ${JSON.stringify(refusesSteers[0])}) {
@@ -221,6 +229,19 @@ process.stdin.on("data", (chunk) => {
         process.stdout.write(JSON.stringify({ id: message.id, result: { turnId: "u1" } }) + "\\n" + JSON.stringify({ method: "turn/completed", params: { threadId: thread, turn: { id: "u1", status: "completed" } } }) + "\\n")
         continue
       }
+      if (takesAsItSleeps && turning) {
+        takesAsItSleeps = turning = false
+        const sleep = { type: "sleep", id: "sleep" + ++sleeps, durationMs: 43200000 }
+        const told = [
+          { method: "item/started", params: inTurn({ item: sleep }) },
+          { id: message.id, result: { turnId: "u1" } },
+          { method: "item/started", params: inTurn({ item: { type: "userMessage", id: "steer" + steers++, content: message.params.input } }) },
+          { method: "item/completed", params: inTurn({ item: sleep }) },
+          { method: "turn/completed", params: { threadId: thread, turn: { id: "u1", status: "completed" } } },
+        ]
+        process.stdout.write(told.map((each) => JSON.stringify(each) + "\\n").join(""))
+        continue
+      }
       if (refusingAsItSleeps) {
         refusingAsItSleeps = false
         sleptInBreath = { type: "sleep", id: "sleep" + ++sleeps, durationMs: 43200000 }
@@ -262,7 +283,11 @@ process.stdin.on("data", (chunk) => {
     } else if (message.method === "thread/backgroundTerminals/clean") {
       terminals = []
       send({ id: message.id, result: {} })
-    } else if (message.method === "model/list") send({ id: message.id, result: { data: [{ id: "gpt-test", model: "gpt-test", displayName: "GPT Test", isDefault: true }] } })
+    } else if (message.method === "model/list") {
+      // (Those it hides from its picker only when asked for, as the real one lists them.)
+      const hidden = message.params?.includeHidden === true ? [{ id: "gpt-mini", model: "gpt-mini", displayName: "GPT Mini", hidden: true }] : []
+      send({ id: message.id, result: { data: [{ id: "gpt-test", model: "gpt-test", displayName: "GPT Test", isDefault: true }, ...hidden] } })
+    }
     else if (message.id !== undefined) send({ id: message.id, result: {} })
   }
 })
@@ -331,10 +356,11 @@ async function until(condition: () => boolean, ms = 10_000) {
   }
 }
 
-/** Once `file` is there, as its folder says it changed: no clock, so as slow as the Mac is. */
+/** Once `file` is there, as its folder says it changed (or as it looks again, for what the watch
+ * didn't tell as it started): no clock, so as slow as the Mac is. */
 function made(file: string): Promise<void> {
   return new Promise((resolve) => {
-    const watcher = watch(dirname(file), () => there())
+    const watcher = watchFolder(dirname(file), () => there())
     const there = () => {
       if (!existsSync(file)) return
       watcher.close()
@@ -983,6 +1009,19 @@ describe("A question Codex asks (request_user_input_async)", () => {
     expect(steered().length).toBeGreaterThanOrEqual(2)
     expect(starts()).toEqual(["go"])
     expect(said(id)).toContain("Writing it in Turkish.")
+  })
+
+  test("an answer it takes in the breath a sleep starts, its turn ending there: told again and turned down, it isn't sent again in a turn of its own", async () => {
+    // (As when an answer it turned down goes in again as it goes on, and it sleeps before it says
+    // it took it: the sleep is told again, and finds its turn over.)
+    const id = start([...asking, takesAsItSleeps], {}, answered)
+    await until(() => sessions.forms(id).length === 1)
+    sessions.replyForm(id, sessions.forms(id)[0].id, { [sessions.forms(id)[0].fields[0].key]: "Turkish" })
+    await until(() => ended(id))
+    expect(steered()).toHaveLength(2)
+    expect(steered()[0]).toBe("Turkish")
+    expect(steered()[1]).toContain("Turkish")
+    expect(starts()).toEqual(["go"])
   })
 
   test("an answer turned down as its sleep gives way to another goes into the new one, and ends it", async () => {
@@ -1952,6 +1991,16 @@ describe("Codex's context", () => {
     expect(last.tokens).toMatchObject({ input: 4_000, output: 600, reasoning: 300, cache: { read: 48_000 } })
     const models = await codex!.models()
     expect(models.find((model) => model.id === "gpt-test")?.limit.context).toBe(258_400)
+  })
+
+  test("a model Codex keeps out of its picker isn't offered, and is still listed, marked, for what asks whether one runs", async () => {
+    codex = new TestCodex(fakeCodex(root, []), root)
+    // Not before it's listed those it hides: one missing then may be one of them.
+    expect(codex.listsEveryModel()).toBe(false)
+    expect((await codex!.models()).map((model) => model.id)).toEqual(["gpt-test"])
+    const all = await codex!.models({ hidden: true })
+    expect(all.map((model) => [model.id, model.hidden ?? false])).toEqual([["gpt-test", false], ["gpt-mini", true]])
+    expect(codex!.listsEveryModel()).toBe(true)
   })
 
   test("what a turn used: each of its model calls counted once, those that only ran commands too", async () => {

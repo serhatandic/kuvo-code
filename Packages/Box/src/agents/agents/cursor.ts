@@ -21,6 +21,7 @@ import { computerServers } from "../servers"
 import type { Turn } from "../turn"
 import type { Model, OAuthStatus, Session } from "../wire"
 import { CursorWorker, cursorWorker } from "./cursor-worker"
+import { privateFolder } from "../../shared/files"
 
 /** A file's bytes as base64, or nothing when it can't be read. */
 function readable(path: string): string | undefined {
@@ -97,7 +98,8 @@ export class CursorAgent implements Agent {
   }
 
   private async store(sdk: any) {
-    mkdirSync(this.folder, { recursive: true, mode: 0o700 })
+    // (Its sign-in, which the SDK writes: in a folder only you can open.)
+    privateFolder(this.folder)
     return new sdk.FileCredentialStore(this.authFile)
   }
 

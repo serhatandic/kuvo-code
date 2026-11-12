@@ -411,12 +411,16 @@ import Testing
 }
 
 /// One HTTP/1.1 connection, written and read as bytes: what a client that keeps its connection
-/// sends on it, in order.
+/// sends on it, in order. Each wait ends: with what came, with the connection's error, or with the
+/// test's time limit, which closes the connection (a wait on it alone would hold the test past
+/// its limit for good, the test process with it).
 @MainActor
 final class RawClient {
     private let connection: NWConnection
     /// What came past what was read so far.
     private var pending = Data()
+    /// Why the connection ended, once it did: in what a read returns, so a failure says.
+    private var ended: String?
 
     private init(connection: NWConnection) {
         self.connection = connection
@@ -424,45 +428,81 @@ final class RawClient {
 
     static func connect(port: UInt16) async throws -> RawClient {
         let connection = NWConnection(host: .ipv4(.loopback), port: try #require(NWEndpoint.Port(rawValue: port)), using: .tcp)
-        try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
-            let once = OSAllocatedUnfairLock(initialState: false)
-            connection.stateUpdateHandler = { state in
-                switch state {
-                case .ready: if !once.withLock({ let was = $0; $0 = true; return was }) { done.resume() }
-                case .failed(let error): if !once.withLock({ let was = $0; $0 = true; return was }) { done.resume(throwing: error) }
-                default: break
-                }
-            }
-            connection.start(queue: .main)
+        do {
+            try await opened(connection)
+        } catch {
+            // (One left waiting would go on trying.)
+            connection.cancel()
+            throw error
         }
+        connection.stateUpdateHandler = nil
         return RawClient(connection: connection)
     }
 
-    func send(_ text: String) async {
-        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
-            connection.send(content: Data(text.utf8), completion: .contentProcessed { _ in done.resume() })
+    /// Starts `connection`, until it's open, or it can't be, or the test stops.
+    private static func opened(_ connection: NWConnection) async throws {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
+                let once = OSAllocatedUnfairLock(initialState: false)
+                let resume = { @Sendable (outcome: Result<Void, Error>) in
+                    if !once.withLock({ let was = $0; $0 = true; return was }) { done.resume(with: outcome) }
+                }
+                connection.stateUpdateHandler = { state in
+                    switch state {
+                    case .ready: resume(.success(()))
+                    // TCP's refusals and failures wait for the network to change, which on loopback
+                    // never comes: they're the outcome.
+                    case .failed(let error), .waiting(let error): resume(.failure(error))
+                    case .cancelled: resume(.failure(CancellationError()))
+                    default: break
+                    }
+                }
+                connection.start(queue: .main)
+                // Stopped before it started: what cancelled it then may not have reached it.
+                if Task.isCancelled { connection.cancel() }
+            }
+        } onCancel: {
+            connection.cancel()
         }
     }
 
-    /// What comes, up to and including `marker`; or, once the other side has closed, all there was.
+    func send(_ text: String) async {
+        let connection = connection
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+                connection.send(content: Data(text.utf8), completion: .contentProcessed { _ in done.resume() })
+            }
+        } onCancel: {
+            connection.cancel()
+        }
+    }
+
+    /// What comes, up to and including `marker`; or, once the connection has ended, all there was,
+    /// and why it ended.
     func read(through marker: String) async -> String {
         let marker = Data(marker.utf8)
+        let connection = connection
         while true {
             if let found = pending.range(of: marker) {
                 let read = pending[..<found.upperBound]
                 pending.removeSubrange(..<found.upperBound)
                 return String(decoding: read, as: UTF8.self)
             }
-            let (data, ended) = await withCheckedContinuation { (done: CheckedContinuation<(Data?, Bool), Never>) in
-                connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, complete, error in
-                    done.resume(returning: (data, complete || error != nil))
+            if let ended {
+                defer { pending = Data() }
+                return String(decoding: pending, as: UTF8.self) + " (\(ended))"
+            }
+            let (data, complete, error) = await withTaskCancellationHandler {
+                await withCheckedContinuation { (done: CheckedContinuation<(Data?, Bool, NWError?), Never>) in
+                    connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, complete, error in
+                        done.resume(returning: (data, complete, error))
+                    }
                 }
+            } onCancel: {
+                connection.cancel()
             }
             if let data { pending.append(data) }
-            if ended, pending.range(of: marker) == nil {
-                defer { pending = Data() }
-                return String(decoding: pending, as: UTF8.self)
-            }
+            if let error { ended = "ended: \(error)" } else if complete { ended = "closed by the server" }
         }
     }
 

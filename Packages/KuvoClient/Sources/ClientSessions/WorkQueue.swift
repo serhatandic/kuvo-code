@@ -1,4 +1,5 @@
 import Foundation
+import ClientText
 
 // The Work Queue as the box states it (PROTOCOL.md, "The Work Queue"), and what both apps work
 // out from it to draw: its sections (In progress, then each category), "Updated 8m ago", an
@@ -678,4 +679,22 @@ public extension WorkRef {
     var spokenName: String { source.map { "\($0.spokenKind) \($0.shownName)" } ?? number.map { "Work item \($0)" } ?? "New work item" }
     var isStruck: Bool { struck == true }
     var isGone: Bool { seen?.gone == true }
+}
+
+public extension WorkQueue {
+    /// Bare references use the conversation's own items, those of sessions it started, and linked items.
+    /// The all-items panel and the global ref cache never grant conversation visibility.
+    static func chipRefs(in text: String, known: [String: WorkRef], view: WorkQueueView?) -> [String: WorkRef] {
+        WorkItemRefs.chipRefs(in: text, known: known, visible: visibleRefs(in: view))
+    }
+
+    static func visibleRefs(in view: WorkQueueView?) -> [String: WorkRef] {
+        var visible: [String: WorkRef] = [:]
+        if let view, view.owner != WorkQueueView.all {
+            for item in view.items + view.removed {
+                if let number = item.number { visible[String(number)] = WorkRef(item) }
+            }
+        }
+        return visible
+    }
 }

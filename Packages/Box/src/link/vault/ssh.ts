@@ -17,6 +17,7 @@ import fs from "node:fs";
 import type net from "node:net";
 import path from "node:path";
 import type { VaultItem } from "../../shared/routes/vault";
+import { watchFolder } from "../../shared/watch";
 import { listBots } from "../bots/list";
 import { readBridgeFile, readEngineFile } from "../engine/client";
 import { SSH_AGENTS, SSH_FOR } from "../home";
@@ -199,9 +200,9 @@ export function keepSshAgents(): () => void {
       try { if (Date.now() - fs.statSync(path.join(SSH_FOR, note)).mtimeMs > NOTE_KEPT) fs.rmSync(path.join(SSH_FOR, note), { force: true }); } catch {}
     }
   } catch {}
-  look();
   let watcher: fs.FSWatcher | null = null;
-  try { watcher = fs.watch(SSH_FOR, () => look()); watcher.unref?.(); } catch {}
+  try { watcher = watchFolder(SSH_FOR, () => look()); watcher.unref?.(); } catch {}
+  look();
   // On a busy Mac the watch tells late or not at all, and the launcher waits for the agent only a
   // moment before the command runs without it (git over SSH then finds no key): the notes' folder
   // is looked at each second too (its time, which a note moved in changes), and looked into when

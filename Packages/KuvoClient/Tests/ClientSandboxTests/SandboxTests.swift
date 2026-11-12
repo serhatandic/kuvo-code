@@ -35,6 +35,25 @@ import Testing
         #expect(!AskReview.isYours(action: outside, review: reviews[0], listsAll: true, heard: false))
     }
 
+    /// An ask the box took up that's over (answered, or gone with its run or its engine) is listed
+    /// so (`settled`), and is never yours, though its box isn't heard now: no session's row is left
+    /// saying it asks (#575). A state a newer box adds leaves that one out, not the list.
+    @Test func anAskTheBoxListsAsOverIsNeverYours() throws {
+        let line = #"{"asks":[],"reviews":[{"id":"per_1","session":"ses_a","state":"yours","at":1},{"id":"per_9","session":"ses_a","state":"somethingNew","at":9}],"settled":[{"id":"per_2","session":"ses_a","call":"call_2","state":"gone","at":2},{"id":"per_3","session":"ses_a","state":"answered","at":3}]}"#
+        let list = try JSONDecoder().decode(SandboxAsks.self, from: Data(line.utf8))
+        #expect(list.reviews?.map(\.id) == ["per_1"])
+        let every = Dictionary(uniqueKeysWithValues: try #require(list.everyReview).map { ($0.id, $0) })
+        let outside = "external_directory"
+        #expect(AskReview.isYours(action: outside, review: every["per_1"], listsAll: true))
+        for id in ["per_2", "per_3"] {
+            #expect(!AskReview.isYours(action: outside, review: every[id], listsAll: true), "over")
+            #expect(!AskReview.isYours(action: outside, review: every[id], listsAll: true, heard: false), "over, its box not heard")
+            #expect(every[id]?.mark == nil, "no mark on its step")
+        }
+        // A box from before says nothing of them.
+        #expect(try JSONDecoder().decode(SandboxAsks.self, from: Data(#"{"asks":[]}"#.utf8)).everyReview == nil)
+    }
+
     @Test func aStateThatIsntOnSaysWhyAndWhatToDo() throws {
         let state = try JSONDecoder().decode(SandboxState.self, from: Data("""
         {"on":false,"why":"Its check failed: a command could write outside its folder.","able":true,"agents":false,

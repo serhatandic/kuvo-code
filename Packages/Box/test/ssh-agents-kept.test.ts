@@ -1,7 +1,8 @@
 // A conversation's SSH agent (vault/ssh.ts) opens soon after the sandbox's launcher notes it, even
 // when the folder's watch says nothing: on a busy Mac, FSEvents tells late or not at all, and the
 // launcher waits only a moment for the agent before the command runs without it (git over SSH then
-// finds no key). Here the watch never tells.
+// finds no key). Here the watch never tells, and the note comes once it's done looking again (as a
+// watch does a moment after one starts, src/shared/watch.ts): what finds it is the look each second.
 import "./safety"
 import { ownPath } from "../../KuvoLink/Tests/Bridge/test-safety.js"
 import { afterAll, expect, test } from "bun:test"
@@ -16,6 +17,7 @@ const watch = fs.watch
 ;(fs as { watch: unknown }).watch = () => ({ close() {}, unref() {}, ref() {}, on() { return this } })
 const { keepSshAgents } = await import("../src/link/vault/ssh")
 const { SSH_AGENTS, SSH_FOR } = await import("../src/link/home")
+const { WATCH_LOOKS_AGAIN } = await import("../src/shared/watch")
 // (Its agents' folder, in Kuvo Code's short folder in /tmp, named for this test's home: its own.)
 ownPath(SSH_AGENTS)
 const stop = keepSshAgents()
@@ -30,6 +32,7 @@ afterAll(() => {
 
 test("a conversation the launcher notes gets its agent at once, though the folder's watch says nothing", async () => {
   const folder = fs.mkdtempSync(path.join(path.dirname(SSH_FOR), "project-"))
+  await Bun.sleep(Math.max(...WATCH_LOOKS_AGAIN) + 200)
   // As the launcher notes it: written aside, then moved in.
   fs.writeFileSync(path.join(SSH_FOR, ".ses_kept.1"), folder)
   fs.renameSync(path.join(SSH_FOR, ".ses_kept.1"), path.join(SSH_FOR, "ses_kept"))

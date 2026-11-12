@@ -9,7 +9,7 @@ import path from "node:path";
 import type { SignedDoc } from "../shared/documents";
 import { isObject } from "../shared/json";
 import { SIGN } from "./documents/format";
-import { locked } from "./files";
+import { locked, writeSecret } from "./files";
 import { IS_MAC, LINK_FILE, RUN } from "./home";
 import type { NoticeHold } from "./notices/hold";
 import type { Peer } from "./peers/known";
@@ -152,12 +152,10 @@ export function readLink(): LinkState | null {
 }
 
 export function writeLink(link: LinkState) {
-  fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
-  const temporary = `${LINK_FILE}.${process.pid}.tmp`;
   // This Mac's keys and what its app says stay out of the file.
   const kept = IS_MAC ? Object.fromEntries(Object.entries(link).filter(([key]) => !MAC_OVERLAY.includes(key))) : link;
-  fs.writeFileSync(temporary, JSON.stringify(kept, null, 2), { mode: 0o600 });
-  fs.renameSync(temporary, LINK_FILE);
+  // (Its keys, on a machine.)
+  writeSecret(LINK_FILE, JSON.stringify(kept, null, 2));
   for (const then of written) then(link);
 }
 

@@ -1168,6 +1168,77 @@ the branch, the model, effort and account, and the pull request with its checks 
 - What a client draws from it (which mark, which lines on the card) is the clients' to decide
   alike; a box without `sessions.glance` gives no marks beyond the worktree's branch, as before.
 
+### A session's model
+
+What a conversation's model button names, and whether its model can run (`sessions.models`): the
+box decides it from what its engine and coding agents list, so every client shows the same.
+
+- `GET kuvo/sessions/models?sessions=<id>,<id>…` (at most 200) → `{"sessions": {<id>: {model,
+  name?, runs, missing?, account?: {id, name, label?}, plan?: {name, agent, provider}}}}`. `400
+  {"message"}` for none named, `405` for anything but `GET`, `503` with neither the engine nor the
+  coding agents' bridge running, or while one that might have a session isn't answering.
+- `model`: the model it runs on, `{providerID, id, variant?}` as the session names it: its own,
+  else (a session of the engine's with none) the engine's default; `null` when the engine says it
+  has none (`api/model/default` answers `data: null`). `name`:
+  as its provider lists it, or its coding agent (Claude Code's `default` by the model it stands
+  for now), or a Custom Auto list's name; left out for one gone from the list.
+- `runs`: it can run here now. Else `missing` says what it needs:
+  - `model`: none to run on: choose one.
+  - `signIn`: a sign-in to `account` (an engine provider's, or a coding agent's account, `label`
+    the name you gave one you added).
+  - `key`: a key for `account`, where the only way Accounts offers to sign in to it is a key. The
+    engine's OpenAI and xAI are offered only a key, as their ChatGPT and SuperGrok plans sign in
+    through Codex and Grok: those come with `plan` (`{name: "SuperGrok", agent: "Grok", provider:
+    "grok-cli"}`), where its models are.
+  - `install`: `account`'s coding agent installed on this box.
+  - `gone`: the model is no longer in its provider's list (`account`, while its account is still
+    there), its account signed in: retired, or a coding agent's it no longer lists. It can't run:
+    choose another. Also a coding agent's account you removed, and a Custom Auto list emptied (one
+    deleted runs on your first list, as the bridge runs it).
+- The engine's lists (its providers, models, accounts and default) are read in the session's
+  folder, where a project's own settings may add to them.
+- An engine provider counts as signed in when the engine says it's ready (`api/provider`), it has
+  a connection, or nothing to sign in to (a local one's); OpenCode Zen's free models need no
+  account, and its others need its account or a key (the engine lists it ready for its free ones,
+  and lists its others only then). A model missing from a provider signed in is `gone` only while
+  the engine lists others of that provider. A coding
+  agent's model runs while its account is installed, signed in, and its agent lists it (by its own
+  id or one it's known by), one it keeps out of its picker too (Codex's hidden ones, from the
+  bridge's `api/model?hidden=1`): only one absent from its list is `gone`, and only where its
+  account says its list is every model it runs (`metadata.modelsComplete` in the bridge's
+  `api/integration`: not while Claude Code lists its usual ones, nor for a Codex that listed none
+  it hides, nor from a bridge before it). Custom Auto runs while its list has models: it
+  picks among them each turn, so whether one entry's account is signed in isn't said.
+- Left out, as not known yet: a session the box doesn't have; one whose place didn't answer just
+  now; an engine's session while the engine lists no provider ready or no models for its folder
+  (one it hasn't loaded yet answers so at first), or, for one with no model of its own, while it
+  didn't answer for its default; a coding agent's model while that account, signed in, lists no
+  models, or only its usual ones (`provisional: true` on the bridge's `api/model`, Claude Code's
+  until it says which your account has), or one missing from a list its account doesn't say is
+  whole; and a model of a provider the engine doesn't know at all. A client decides such a one as
+  it would from a box without `sessions.models`.
+- What the engine and the bridge list is read once for every session asked about, and used again
+  for ten seconds, or until the box hears either say accounts, models, settings or Custom Auto's
+  lists changed (`integration.updated`, `model.updated`, `provider.updated`, `config.updated`,
+  `global.disposed`, `kuvo.auto.updated`), or hears them again after it couldn't; what one of them
+  couldn't wholly say (its default, Custom Auto's lists) isn't kept.
+- A client asks again as what it's drawn from changes: the session opens, its model changes, or its
+  box's accounts, models, default model or Custom Auto lists do (as it reads them again on
+  `integration.updated`, `model.updated`, `provider.updated`, `config.updated`,
+  `kuvo.auto.updated`), and once a model it picked is set. What the box said is of the model it
+  names: a client draws it only while that's still the session's (another just picked is drawn as
+  without the box's word until the box is asked again).
+- Clients draw it alike from ClientSessions' `SessionModelState`: the model button names the model
+  while it runs or its account needs something, and says "Choose a Model" for `gone` and `model`;
+  Send follows `ComposerSend` with that, so it waits for a model for those two, and for the others
+  a message is refused with what to do (a sign-in, a key, an install, where), kept in the field;
+  a failed turn's card, for the model the conversation is on, names its button by what it does
+  (Add Key, Install, Sign In, or Sign In Again for a sign-in that ended). How a signed-out engine
+  provider is signed in to is held to `Vectors/plan-sign-ins.json` in the box and KuvoClient's
+  `PlanSignIns` and `Integration.offeredSignInMethods`, which both apps' Accounts offer from. A
+  box without `sessions.models` leaves the clients deciding from its accounts and models as they
+  did before.
+
 ### Work
 
 A bot runs sessions as you would (bridge 0.9.106): it starts them in your projects on the model,
@@ -2260,7 +2331,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
 - `kuvo/agents/api/…`: the coding agents you already have (Claude Code, Codex, Cursor, Grok,
   Antigravity), through the agents bridge beside the host's engine, which answers the same paths
   as the engine for them: sessions, messages, prompts, permissions, questions, events
-  (`kuvo/agents/api/event`) and models (`kuvo/agents/api/model`, only signed-in agents'). Its
+  (`kuvo/agents/api/event`) and models (`kuvo/agents/api/model`, only signed-in agents'; with
+  `?hidden=1`, also those an agent still runs but keeps out of its own picker, Codex's hidden ones,
+  each `hidden: true`, which pickers don't offer). Its
   sessions carry `metadata.kuvoAgent` and run where that bridge does; a new session with one of
   their models (providers `claude-code`, `codex-cli`, `cursor`, `grok-cli`, `antigravity`) is
   made there, never on the engine. A Mac answers for its own; a machine's bridge for the
@@ -3685,8 +3758,19 @@ link or a web address, and not after "PR", "MR", "pull request", "issue" or "ste
 else's numbers; outside sources get a prefix, `gh:owner/repo#12`). `gh:owner/repo#12` (`owner` a
 GitHub owner, `repo` a repository name, the number 1 to 10 digits; then no letter, digit or
 underscore; not in code, a link or an address either) names the item that is that issue or pull
-request (a live one here, else on another computer, and a deleted one only where none is live). A client asks `refs` for the numbers and the `gh:` refs in a message and draws each one the
-box knows as a chip (its category's color, a ring in progress, a check when done, `#243` and the
+request (a live one here, else on another computer, and a deleted one only where none is live).
+Bare numbers resolve only through the conversation's queue view (its own items, those
+of sessions it started, and items linked to it), never the all-items view or another conversation's
+cached refs.
+Numbers 1–10 stay plain when immediately preceded or followed by "ranked", "rank", "number",
+"result", "results", "spot", "place", "position", "priority" or "seller", or followed by
+"on" or "in" and another word, or "Google result(s)" (case-insensitive, allowing whitespace
+between words). "The", "to" and "at" alone do not
+block references: "to #243" and "the #1 reason" can name visible items. Code, links and the other
+exclusions above still apply. With no conversation owner, bare numbers stay plain and cause no
+requests; explicit `gh:` refs keep their computer-wide lookup and chips. Clients follow the
+conversation's queue for numeric chips; only explicit `gh:` refs need
+the computer-wide `refs` lookup. A client draws an eligible known reference as a chip (its category's color, a ring in progress, a check when done, `#243` and the
 title on one line; for an issue or a pull request, GitHub's mark and `source.name` in place of
 `#243`, the title struck through when `seen.state` is `not_planned` or `closed`), leaving one it
 doesn't know as written; the message's words never change. A chip opens the item.
@@ -4120,11 +4204,13 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `sandbox` | `kuvo/sandbox` ("Sandbox", bridge 0.9.118) |
 | `sandbox.asks` | `kuvo/sandbox/asks…`, `kuvo/sandbox/allowed…` and `kuvo/sandbox/tools` ("Sandbox", "Asks", bridge 0.9.118) |
 | `sandbox.check` | `reason`, `action` and the rest in `kuvo/sandbox`, and `POST kuvo/sandbox/check` |
+| `sandbox.reviews.settled` | `settled` on `kuvo/sandbox/asks`: each ask Auto's reviewer was checking or left for you that was answered or went since, so no client takes it for one that waits, heard or not ("Sandbox") |
 | `sandbox.reviews.whole` | `reviews` on `kuvo/sandbox/asks` lists every ask to work outside a conversation's folder, so a client shows one only once it's listed `yours` ("Sandbox") |
 | `search` | `kuvo/search` |
 | `sessions.agents` | `POST kuvo/sessions/<id>/agents` |
 | `sessions.chat` | A chat made, moved or with its metadata written since carries `kuvo.chat` in its metadata, naming the chats folder it's in; older ones go by their folder ("Chats") |
 | `sessions.glance` | `kuvo/sessions/glance`, `…/events`, and `session` in `POST kuvo/git/pull-request` ("A session at a glance") |
+| `sessions.models` | `GET kuvo/sessions/models` ("A session's model") |
 | `sessions.start` | `POST kuvo/sessions`: a session started with a task (bridge 0.9.100) |
 | `setup` | `kuvo/setup`, `…/events`: your setup and its main computer ("Your setup") |
 | `shell.stop` | `POST kuvo/shell/<id>/stop` |
@@ -4534,12 +4620,57 @@ Nothing else writes it: a chat from before the mark that's only written to (a me
 title), or one changed while the box wasn't hearing its engine, stays without it. The box decides it
 from its own chats folder (the same folder through a link counts too). Their APIs write metadata
 whole, with nothing to say "only if it's unchanged": the box reads a session just before it writes
-the mark, and writes only when it's wrong (a client's write between the two is lost, as with the
-box's other writers of a session's metadata, #581). A client keeps the mark as it keeps the rest of
+the mark, in its turn, and writes only when it's wrong (see "Session notes" for what can still be
+lost). A client keeps the mark as it keeps the rest of
 the metadata when it writes it back. A session without the mark (a chat from before, or on a box
 from before `sessions.chat`, which marks nothing) goes by its folder, as before (the folder its
 box's `kuvo/info` names, kept for when that isn't answered). What both apps read is `SessionChat`
 (`Packages/KuvoClient`, ClientSessions).
+
+#### Session notes
+
+A session's metadata (its notes: `kuvo.*` and the rest) is written whole: the engine (2.2.5) and
+the coding agents' bridge keep what a `PATCH api/session/<id>` sends as its `metadata` in place of
+what was there (`{}` empties it; a key left out goes; a PATCH without `metadata`, a title or its
+rules alone, leaves it as it is), with nothing to say "only if it's unchanged". So every writer
+reads it, changes what it owns and sends it all back (the bridge keeps its own `kuvoAgent` and
+`kuvo.messages` whatever is sent).
+
+The box's own writers (#581: the chat mark, a new conversation's approval and any change to it,
+Autopilot, an agent's answers, archiving by a tool or a project's removal, a carry to the coding
+agents, the marks of a session it starts and of a bot it makes, a bot's rules repaired) each take
+their turn on the session: in their process, and across the box's processes on that computer and
+its coding agents' bridge by a lock folder per session in the box's `run/notes` (named for the
+session's ID, so the engine's and the bridge's sessions alike). Each reads the session as it is
+then, changes only its own keys on it, and writes it straight away. The bridge's writers through
+the API (a branch's mark, a handoff's, a group chat seat's) take the same turn. A client's
+`PATCH api/session/<id>` that comes through the box (a phone's, another computer's) waits for it
+too, so the box doesn't write over it with what it read before (but see below).
+
+A turn's read and its write are each cut short at half a minute, so none lasts more than a minute;
+a lock folder older than that (65 seconds) was left by a process cut off: another process takes it
+over then, and the box clears those as it starts. Another process waits for a turn's folder that
+long at most, then goes ahead without it. While a box from before #581 runs beside a newer one (an
+update taking over), the newer one waits for that box's one lock (`run/work/.notes.lock`, held for
+its answers and archiving) as it would have, without taking it.
+
+What can still be lost, as long as the engine has no "only if unchanged", is a write that lands
+between a writer's read and its write (a few milliseconds), when it's
+
+- a client's that doesn't come through the box: the Mac's app writes a session's metadata whole
+  straight to its own engine (archiving or pinning it, say), taking no turn (an iPhone's, and the
+  Mac's to another computer, come through that computer's box and wait for the turn, but are whole
+  too: below);
+- one that doesn't wait as long as a turn can last: a client's PATCH through the box gives up its
+  turn after half a minute, its write still on its way, and a process that waited 65 seconds for a
+  turn's folder goes ahead without it;
+- a session's rules (`permissions`) written alone, outside a turn (a group chat seat's, the
+  bridge's for an engine run of its own), against the box's approval writes, which send them whole;
+- or a client's whole write made from what it read before the box wrote: the box's change is lost
+  (the chat mark is put back as that write's `session.metadata.updated` comes; the box's other
+  notes aren't).
+
+A client writes back what it read with only its own change, as late as it can.
 
 ### Artifacts
 
@@ -5698,7 +5829,7 @@ while the sandbox is `on`) and pass a call to `POST kuvo/sandbox/tools` `{sessio
 making that call. The asks, the tool and the answers live in the box's long-running process, as the
 vault does (`run/vault.sock`); another passes them on.
 
-- `GET kuvo/sandbox/asks` → `{asks: [ask], restart?, reviews?}`, oldest first, with `restart: true` while
+- `GET kuvo/sandbox/asks` → `{asks: [ask], restart?, reviews?, settled?}`, oldest first, with `restart: true` while
   the box asks you to restart its agents (the state's `restart`); `kuvo/sandbox/asks/events`, NDJSON,
   the same at once and on every change. `reviews` (bridge 0.9.192): what Auto's reviewer did with
   the engine's asks to work outside a conversation's folder (`permission.asked`, action
@@ -5715,7 +5846,26 @@ vault does (`run/vault.sock`); another passes them on.
   decided it, whose entry stays for its step's mark. While a client doesn't hear the box's asks
   (its link down or starting again, the stream cut), what it last listed of an ask stands, and one
   it never listed is yours, as nothing would list it. From a box without that word, a client takes
-  one not listed as yours at once. An ask: `{id, at, session?, sessionName?, bot?, botName?,
+  one not listed as yours at once.
+  `settled` (`sandbox.reviews.settled`): each ask the reviewer was checking or had left for you
+  that's over without its word, the latest 200, each `{id, session, call?, state, at}`, `state`
+  `answered` (by you, on any client, or by its engine: `permission.replied`) or `gone` (its run
+  ended, its session was deleted, or its engine let it go while the box wasn't listening: an
+  engine started again, a run that ended unheard). The box keeps them per ask and session, from
+  `checking` to `yours` to `answered` or `gone`: as it hears an engine or the bridge again it reads
+  each session whose ask it still lists as checked or yours there, and one no longer asked is
+  `gone`; one it was about to check and finds no longer asked is `gone` too, never `yours`. A
+  client never takes an ask listed in `settled` for one that waits, heard or not, so none is left
+  with an ask that's over (a session's row saying it asks). Such a client holds nothing of its own
+  for an ask the box takes up but one it heard asked that the box hasn't listed yet (it lists each
+  as it hears it), which is yours, and told, should the box go quiet first, as above. It tells you
+  of one (a notification) once it's listed `yours`,
+  reading it from its engine then (one its engine no longer asks isn't told; where its engine
+  can't be read, it's told without its words), and lets go of one listed in `settled`. The
+  reviewer's own answer isn't listed `answered`: the ask goes from `checking` to what it decided. The box's
+  process started again lists what still waits as it takes it up again (`checking` at once) and
+  none from before. From a box without `settled`, a client keeps what it heard asked until the box
+  lists it, as before. An ask: `{id, at, session?, sessionName?, bot?, botName?,
   project, command, why, stopped?, error?, always?, machine?, owner?, review?}`. `session` is the conversation's root
   (a bot's sub-agent asks as its bot's conversation). `stopped`, on macOS: what the sandbox refused
   that command, from the system's log, each `{kind, path?}` (`kind`: `write`, `read`, `connect`,

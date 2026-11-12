@@ -9,7 +9,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { isObject, parsed } from "../../shared/json";
 import { BOX } from "../home";
-import { bridgeTarget, call, engineGet, readEngineFile } from "../engine/client";
+import { bridgeTarget, engineGet, readEngineFile } from "../engine/client";
+import { rewriteOn } from "../engine/notes";
 import { allowFullAccess, allowOtherComputers, APPROVALS, approvalOf, approvalRules, approvalsSince, defaultApproval, effectiveApproval, fullAccessAllowed, heldOf, isApproval, madeBefore, otherComputersAllowed, rememberApproval, unavailable } from "../work/approval";
 import { resumeReviewedSession } from "../work/goals";
 import { sandboxOn } from "../work/sandbox";
@@ -23,6 +24,7 @@ import type { Approval } from "../work/approval";
 import type { KitRule } from "../bots/kit";
 import type { EngineAnswer } from "../engine/client";
 import type { EngineSession } from "../engine/sessions";
+import type { Rewritten } from "../../shared/session-notes";
 import type { Target } from "../../shared/records";
 import type { ApprovalHere, SessionApproval } from "../../shared/routes/approval";
 import type { AnswerPiece, RouteContext } from "../server/context";
@@ -30,9 +32,6 @@ import type { AnswerPiece, RouteContext } from "../server/context";
 export const SESSION_APPROVAL_ROUTE = /^kuvo\/sessions\/([^/]+)\/approval$/;
 /** A conversation's decisions by Auto's reviewer. */
 export const SESSION_DECISIONS_ROUTE = /^kuvo\/sessions\/([^/]+)\/decisions$/;
-
-/** How long the box waits on the engine for one conversation. */
-const WAIT = 30_000;
 
 /** A conversation where it is: on the engine, or the coding agents' (`agents`); a bot's own or its
  * work's (`bot`). */
@@ -86,37 +85,52 @@ function changeFor(at: Found, wanted: Approval): { permissions: KitRule[]; metad
   return { permissions, metadata: { ...metadata, kuvo: { ...kuvo, approval: wanted, applied: approval } } };
 }
 
-/** Writes `change` to the conversation, and takes what the engine kept: true once it's there. */
-async function write(at: Found, change: NonNullable<ReturnType<typeof changeFor>>, signal?: AbortSignal): Promise<boolean> {
-  const wait = AbortSignal.timeout(WAIT);
+/** The conversation changed in its turn (`../engine/notes.ts`): read as it is then, and given the
+ * rules and notes of the approval `wanted` says for it as it is (null: none to change), changing
+ * only those and the approval's own notes. `at` takes it as it is then. True once it's so; false
+ * where the engine didn't answer or take it, or it's gone. */
+async function write(at: Found, wanted: (now: Found) => Approval | null, signal?: AbortSignal): Promise<boolean> {
+  let done: Rewritten<EngineSession> | null;
   try {
-    await call(at.target, "PATCH", `/api/session/${encodeURIComponent(at.data.id)}`, change, signal ? AbortSignal.any([signal, wait]) : wait);
+    done = await rewriteOn(at.target, at.data.id, data => {
+      const now = found(at.target, data, at.agents);
+      const approval = wanted(now);
+      return approval ? changeFor(now, approval) : null;
+    }, signal);
   } catch {
     return false;
   }
-  at.data = { ...at.data, permissions: change.permissions as EngineSession["permissions"], metadata: change.metadata };
+  if (!done) return false;
+  Object.assign(at, found(at.target, done.session, at.agents));
   return true;
 }
 
-/** A conversation kept with an approval whose rules are made for something else than it comes to
- * now (the sandbox started or stopped, the switch changed, and the box hasn't come round to it):
- * its rules made for what it comes to. A bot's from before there were approvals is kept with the
- * one its rules say (Ask First, or this computer's default), so it comes to what that does here, and stays so. True
- * where nothing's left to do. */
-async function settle(at: Found, signal?: AbortSignal): Promise<boolean> {
+/** The approval a conversation is to be kept with now, where its rules are made for something else
+ * than it comes to (the sandbox started or stopped, the switch changed, and the box hasn't come
+ * round to it), or it's a bot's from before there were approvals (kept with the one its rules
+ * say: Ask First, or this computer's default), or a new one waiting for its own; null where
+ * nothing's left to do. */
+function toSettle(at: Found): Approval | null {
   const now = approvalOf(at.data, { agents: at.agents, bot: at.bot });
-  if (now.stored ? now.applied === now.effective && !madeBefore(at.data.permissions ?? [], now.effective) : !(at.bot || now.pending)) return true;
-  const change = changeFor(at, now.approval);
-  return !change || await write(at, change, signal);
+  if (now.stored ? now.applied === now.effective && !madeBefore(at.data.permissions ?? [], now.effective) : !(at.bot || now.pending)) return null;
+  return now.approval;
+}
+
+/** A conversation kept with an approval whose rules are made for something else than it comes to
+ * now, its rules made for what it comes to (`toSettle`), as it is in its turn. True where
+ * nothing's left to do. */
+async function settle(at: Found, signal?: AbortSignal): Promise<boolean> {
+  return !toSettle(at) || await write(at, toSettle, signal);
 }
 
 /** A conversation kept with an approval, its rules made again for it with Settings › Permissions
- * as they are now. True where nothing's left to do. */
+ * as they are now, as it is in its turn. True where nothing's left to do. */
 async function remake(at: Found, signal?: AbortSignal): Promise<boolean> {
-  const now = approvalOf(at.data, { agents: at.agents, bot: at.bot });
-  if (!now.stored) return true;
-  const change = changeFor(at, now.approval);
-  return !change || await write(at, change, signal);
+  const kept = (now: Found) => {
+    const is = approvalOf(now.data, { agents: now.agents, bot: now.bot });
+    return is.stored ? is.approval : null;
+  };
+  return !kept(at) || await write(at, kept, signal);
 }
 
 /** A conversation a client just made, without a kept approval: the one it was made with
@@ -176,8 +190,7 @@ export async function setApproval(id: string, wanted: Approval, engine: Target |
   if (!at) return { status: 404, value: { message: "That conversation isn't here." } };
   const not = unavailable(wanted, { agents: at.agents });
   if (not && not.reason !== "sandbox") return { status: 409, value: { message: not.why, reason: not.reason } };
-  const change = changeFor(at, wanted);
-  if (change && !await write(at, change, signal)) return { status: 502, value: { message: "It couldn't be changed: the engine didn't take it. Try again." } };
+  if (!await write(at, () => wanted, signal)) return { status: 502, value: { message: "It couldn't be changed: the engine didn't take it. Try again." } };
   // (The next new conversation here starts with it, a bot's pick too: never a subagent's.)
   if (!at.data.parentID) rememberApproval(wanted);
   // (What it comes to may have changed while it was written.)

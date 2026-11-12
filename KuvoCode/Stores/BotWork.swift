@@ -35,8 +35,49 @@ final class BotWork {
     /// Whether the box a bot lives on runs its work (one from before doesn't).
     func runsWork(_ bot: Bot) -> Bool { !older.contains(bot.box) }
 
-    /// The bot's work, read again from its box.
+    /// The bot's work, read again from its box: one read at a time for each bot, each caller's done
+    /// once a read that started after it asked is in. A read isn't let go when the one who asked
+    /// stops waiting (the bar's read starts again as each of the bot's sessions changes), so with
+    /// many changing, the report still keeps up, and an older answer never comes in after a newer
+    /// one.
     func read(_ bot: Bot) async {
+        readsWanted[bot.id, default: 0] += 1
+        let wanted = readsWanted[bot.id] ?? 0
+        while (readsDone[bot.id] ?? 0) < wanted, !Task.isCancelled {
+            await reading(bot).value
+        }
+    }
+
+    /// How long a read may take before it's let go.
+    static let readLimit: Duration = .seconds(60)
+
+    /// Reads asked for and read, by bot, and the read under way.
+    @ObservationIgnored private var readsWanted: [String: Int] = [:]
+    @ObservationIgnored private var readsDone: [String: Int] = [:]
+    @ObservationIgnored private var reads: [String: Task<Void, Never>] = [:]
+
+    private func reading(_ bot: Bot) -> Task<Void, Never> {
+        if let reading = reads[bot.id] { return reading }
+        let task = Task { [weak self] in
+            while let self, (self.readsDone[bot.id] ?? 0) < (self.readsWanted[bot.id] ?? 0) {
+                let wanted = self.readsWanted[bot.id] ?? 0
+                // (One that hangs, a machine's over SSH, is let go after a while, so the next can go.)
+                let read = Task { await self.readNow(bot) }
+                let limit = Task {
+                    try? await Task.sleep(for: BotWork.readLimit)
+                    read.cancel()
+                }
+                await read.value
+                limit.cancel()
+                self.readsDone[bot.id] = wanted
+            }
+            self?.reads[bot.id] = nil
+        }
+        reads[bot.id] = task
+        return task
+    }
+
+    private func readNow(_ bot: Bot) async {
         #if DEBUG
         // KUVO_DEMO_BOT_WORK=<bot's name>: its work, a sample, for a look at the bar and its list.
         if ProcessInfo.processInfo.environment["KUVO_DEMO_BOT_WORK"] == bot.name {
@@ -75,7 +116,28 @@ final class BotWork {
         // A project it made on a machine since its projects were read there: read again.
         if let machine = bot.machine, let workspace = app?.workspace,
            report.projects.contains(where: { !workspace.folders.contains(RemoteFolder.folder($0.directory, on: machine)) }) {
-            await workspace.loadProjects(on: machine)
+            loadProjects(on: machine, in: workspace)
+        }
+    }
+
+    /// Machines whose projects are being read again for a bot's work, and those to read once more
+    /// after (one at a time, however many reads ask).
+    @ObservationIgnored private var loadingProjects: Set<String> = []
+    @ObservationIgnored private var loadProjectsAgain: Set<String> = []
+
+    /// `machine`'s projects read again, on their own, so the next read of a bot's work never waits
+    /// on them: one read under way, one more after it at most.
+    private func loadProjects(on machine: String, in workspace: Workspace) {
+        guard loadingProjects.insert(machine).inserted else {
+            loadProjectsAgain.insert(machine)
+            return
+        }
+        Task { [weak self, weak workspace] in
+            repeat {
+                self?.loadProjectsAgain.remove(machine)
+                await workspace?.loadProjects(on: machine)
+            } while self?.loadProjectsAgain.contains(machine) == true
+            self?.loadingProjects.remove(machine)
         }
     }
 
