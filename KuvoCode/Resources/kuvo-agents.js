@@ -25987,6 +25987,7 @@ import { mkdirSync as mkdirSync22, readFileSync as readFileSync32, renameSync as
 import { dirname as dirname19 } from "path";
 var isUsageMail = (value) => value !== null && typeof value === "object" && value.kind === "usage";
 var MINUTE3 = 60000;
+var DAY3 = 24 * 60 * MINUTE3;
 var TELL_AGAIN = 10 * MINUTE3;
 var PEER_AWAY = 25 * MINUTE3;
 var SKEW = MINUTE3;
@@ -26003,6 +26004,7 @@ class UsagePeers {
   directory;
   file;
   now;
+  most;
   peers = new Map;
   told = new Map;
   answered = new Map;
@@ -26010,12 +26012,13 @@ class UsagePeers {
   readFor = new Map;
   refreshedElsewhere = -Infinity;
   reading = new Set;
-  constructor(usage, transport, directory, file, now = Date.now) {
+  constructor(usage, transport, directory, file, now = Date.now, most = MOST_BYTES2) {
     this.usage = usage;
     this.transport = transport;
     this.directory = directory;
     this.file = file;
     this.now = now;
+    this.most = most;
     this.load();
     usage.peers = this;
     directory.listen(() => this.directorySaid());
@@ -26123,18 +26126,22 @@ class UsagePeers {
   }
   lastDigest;
   shared() {
-    const accounts = this.usage.own().slice(0, MOST_ACCOUNTS).map(({ slots, ...account }) => ({ ...account, slots: keptSlots(slots) }));
-    for (let bytes = Buffer.byteLength(JSON.stringify(accounts));bytes > MOST_BYTES2; bytes = Buffer.byteLength(JSON.stringify(accounts))) {
+    const start = Math.floor(Math.floor((this.now() - KEPT_DAYS * DAY3) / DAY3) * DAY3) / SLOT;
+    const accounts = this.usage.own().slice(0, MOST_ACCOUNTS).flatMap((own) => {
+      const taken = takenAccount(toldOf2(own), 0, Infinity);
+      return taken ? [{ ...toldOf2(taken), slots: fromSlot(keptSlots(taken.slots), start), whole: start }] : [];
+    });
+    for (let bytes = Buffer.byteLength(JSON.stringify(accounts));bytes > this.most; bytes = Buffer.byteLength(JSON.stringify(accounts))) {
       const uses = accounts.reduce((sum, account) => sum + account.slots.used.length, 0);
       if (!uses)
         break;
-      const over = Math.ceil((bytes - MOST_BYTES2) / bytes * uses) + 16;
+      const over = Math.ceil((bytes - this.most) / bytes * uses) + 16;
       const cutoff = accounts.flatMap((account) => account.slots.used.map((use) => use[0])).sort((a, b) => a - b)[Math.min(over, uses) - 1];
       for (const account of accounts) {
-        const kept = account.slots.used.filter((use) => use[0] > cutoff);
-        if (kept.length === account.slots.used.length)
+        if (!account.slots.used.some((use) => use[0] <= cutoff))
           continue;
-        account.slots = keptSlots(slotsFrom({ ...account.slots, used: kept, ...account.slots.unknown ? { unknown: account.slots.unknown.filter((each) => each[0] > cutoff) } : {} }, Infinity));
+        account.slots = fromSlot(account.slots, cutoff + 1);
+        account.whole = Math.max(account.whole ?? 0, cutoff + 1);
         account.cut = true;
       }
     }
@@ -26190,6 +26197,9 @@ function digestOf2(accounts) {
   return createHash13("sha256").update(JSON.stringify(canonical)).digest("hex").slice(0, 32);
 }
 var toldOf2 = ({ slots, ...account }) => ({ ...account, slots: keptSlots(slots) });
+function fromSlot(slots, first) {
+  return keptSlots(slotsFrom({ ...slots, used: slots.used.filter((use) => use[0] >= first), ...slots.unknown ? { unknown: slots.unknown.filter((each) => each[0] >= first) } : {} }, Infinity));
+}
 function recentOf(accounts, from) {
   return accounts.map((account) => ({
     ...account,
@@ -26198,11 +26208,12 @@ function recentOf(accounts, from) {
 }
 function withOlder(account, kept, since) {
   const slots = noSlots();
+  const first = (account.whole ?? 0) * SLOT;
   for (const [slot, models] of kept?.slots.used ?? [])
-    if (slot < since)
+    if (slot < since && slot >= first)
       slots.used.set(slot, models);
   for (const [slot, models] of kept?.slots.unknown ?? [])
-    if (slot < since)
+    if (slot < since && slot >= first)
       slots.unknown.set(slot, models);
   for (const [slot, models] of account.slots.used)
     if (slot >= since)
@@ -26228,7 +26239,8 @@ function takenAccount(given, off, now) {
     ...typeof account.identity === "string" && /^[0-9a-f]{16}$/.test(account.identity) ? { identity: account.identity } : {},
     ...scanned ? { scanned } : {},
     slots: slotsFrom(account.slots, MOST_USES),
-    ...account.cut === true ? { cut: true } : {}
+    ...account.cut === true ? { cut: true } : {},
+    ...Number.isSafeInteger(account.whole) && account.whole > 0 ? { whole: account.whole } : {}
   };
 }
 
@@ -30938,4 +30950,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 3e23abaca59d2c254e836a880c6d6ae8e00d1e48abb9859e4c5da2badee21fd3
+// Built from Packages/Box/src/agents 5ca0c91264660d5a5067fcb3eb34f2c412da919cf4a65a5700b405967458af08

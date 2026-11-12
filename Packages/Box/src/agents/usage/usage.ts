@@ -54,6 +54,8 @@ export interface OwnUsage {
   slots: Slots
   /** A peer's whose oldest use was left out of its mail (too much to tell): this box has less of it. */
   cut?: true
+  /** A peer's: its slots are all there from this one (quarter hours since 1970) on, none before. */
+  whole?: number
 }
 
 /** A computer an account's usage comes from, as a row names it. */

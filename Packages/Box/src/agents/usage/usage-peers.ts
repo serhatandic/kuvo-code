@@ -16,7 +16,7 @@ import { dirname } from "node:path"
 import { kinds, type AgentKind } from "../accounts"
 import type { LimitsDirectory, LimitsTransport } from "../limits-peers"
 import type { LimitsService } from "../limits"
-import { keptSlots, noSlots, slotsFrom, SLOT, trimmed, type KeptSlots } from "./history"
+import { KEPT_DAYS, keptSlots, noSlots, slotsFrom, SLOT, trimmed, type KeptSlots } from "./history"
 import { usageRows, type OwnUsage, type Usage, type UsageBox, type UsageRow } from "./usage"
 
 /** One account as a box tells it. */
@@ -53,6 +53,7 @@ interface Kept {
 }
 
 const MINUTE = 60_000
+const DAY = 24 * 60 * MINUTE
 /** Said again this often though nothing changed (the relay keeps nothing). */
 const TELL_AGAIN = 10 * MINUTE
 /** A peer not heard from this long is away: what it said stays. */
@@ -89,6 +90,8 @@ export class UsagePeers {
     /** Where what peers told is kept between runs (`usage/peers.json`); none in a test that doesn't. */
     private readonly file?: string,
     private readonly now: () => number = Date.now,
+    /** The most a mail says, its JSON in UTF-8 (smaller in tests). */
+    private readonly most = MOST_BYTES,
   ) {
     this.load()
     usage.peers = this
@@ -162,6 +165,8 @@ export class UsagePeers {
       this.save()
       this.usage.peersChanged()
     } else if (before) {
+      // Only its word that what it told is as it was: there still (whether this box has all of it
+      // is below).
       before.heard = now
       before.name = name
       if (wasAway) this.usage.peersChanged()
@@ -206,21 +211,27 @@ export class UsagePeers {
   private lastDigest?: string
 
   private shared(): { accounts: ToldUsage[]; digest: string } {
+    // From the first slot of what's kept (a UTC midnight), each account as a receiver will take it
+    // (its names cut to length, its slots checked: `takenAccount`), so the two digests agree.
+    const start = Math.floor(Math.floor((this.now() - KEPT_DAYS * DAY) / DAY) * DAY) / SLOT
     const accounts: ToldUsage[] = this.usage
       .own()
       .slice(0, MOST_ACCOUNTS)
-      .map(({ slots, ...account }) => ({ ...account, slots: keptSlots(slots) }))
-    for (let bytes = Buffer.byteLength(JSON.stringify(accounts)); bytes > MOST_BYTES; bytes = Buffer.byteLength(JSON.stringify(accounts))) {
-      // The oldest uses across the accounts left out, about as many as are too many (and a few more).
+      .flatMap((own) => {
+        const taken = takenAccount(toldOf(own), 0, Infinity)
+        return taken ? [{ ...toldOf(taken), slots: fromSlot(keptSlots(taken.slots), start), whole: start }] : []
+      })
+    for (let bytes = Buffer.byteLength(JSON.stringify(accounts)); bytes > this.most; bytes = Buffer.byteLength(JSON.stringify(accounts))) {
+      // The oldest uses across the accounts left out, about as many as are too many (and a few more),
+      // each account so cut whole from the slot after.
       const uses = accounts.reduce((sum, account) => sum + account.slots.used.length, 0)
       if (!uses) break
-      const over = Math.ceil(((bytes - MOST_BYTES) / bytes) * uses) + 16
+      const over = Math.ceil(((bytes - this.most) / bytes) * uses) + 16
       const cutoff = accounts.flatMap((account) => account.slots.used.map((use) => use[0])).sort((a, b) => a - b)[Math.min(over, uses) - 1]!
       for (const account of accounts) {
-        const kept = account.slots.used.filter((use) => use[0] > cutoff)
-        if (kept.length === account.slots.used.length) continue
-        // (Kept as a receiver keeps it, its models only those still used: the digests agree.)
-        account.slots = keptSlots(slotsFrom({ ...account.slots, used: kept, ...(account.slots.unknown ? { unknown: account.slots.unknown.filter((each) => each[0] > cutoff) } : {}) }, Infinity))
+        if (!account.slots.used.some((use) => use[0] <= cutoff)) continue
+        account.slots = fromSlot(account.slots, cutoff + 1)
+        account.whole = Math.max(account.whole ?? 0, cutoff + 1)
         account.cut = true
       }
     }
@@ -280,6 +291,11 @@ export function digestOf(accounts: ToldUsage[]): string {
 /** An account as this box keeps a peer's, as it was told. */
 const toldOf = ({ slots, ...account }: OwnUsage): ToldUsage => ({ ...account, slots: keptSlots(slots) })
 
+/** Kept slots from `first` (quarter hours since 1970) on, as a receiver keeps them (its models only those still used). */
+function fromSlot(slots: KeptSlots, first: number): KeptSlots {
+  return keptSlots(slotsFrom({ ...slots, used: slots.used.filter((use) => use[0] >= first), ...(slots.unknown ? { unknown: slots.unknown.filter((each) => each[0] >= first) } : {}) }, Infinity))
+}
+
 /** Each account with only its slots from `from` (quarter hours since 1970) on. */
 function recentOf(accounts: ToldUsage[], from: number): ToldUsage[] {
   return accounts.map((account) => ({
@@ -291,8 +307,10 @@ function recentOf(accounts: ToldUsage[], from: number): ToldUsage[] {
 /** A peer's account told from `since` (ms) on, with what this box kept of it before then. */
 function withOlder(account: OwnUsage, kept: OwnUsage | undefined, since: number): OwnUsage {
   const slots = noSlots()
-  for (const [slot, models] of kept?.slots.used ?? []) if (slot < since) slots.used.set(slot, models)
-  for (const [slot, models] of kept?.slots.unknown ?? []) if (slot < since) slots.unknown.set(slot, models)
+  // (None from before what it still has: what it cut, or let age out.)
+  const first = (account.whole ?? 0) * SLOT
+  for (const [slot, models] of kept?.slots.used ?? []) if (slot < since && slot >= first) slots.used.set(slot, models)
+  for (const [slot, models] of kept?.slots.unknown ?? []) if (slot < since && slot >= first) slots.unknown.set(slot, models)
   for (const [slot, models] of account.slots.used) if (slot >= since) slots.used.set(slot, models)
   for (const [slot, models] of account.slots.unknown) if (slot >= since) slots.unknown.set(slot, models)
   return { ...account, slots }
@@ -314,5 +332,6 @@ function takenAccount(given: unknown, off: number, now: number): OwnUsage | null
     ...(scanned ? { scanned } : {}),
     slots: slotsFrom(account.slots, MOST_USES),
     ...(account.cut === true ? { cut: true as const } : {}),
+    ...(Number.isSafeInteger(account.whole) && account.whole > 0 ? { whole: account.whole } : {}),
   }
 }

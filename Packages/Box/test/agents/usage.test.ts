@@ -324,13 +324,14 @@ class PeerBox {
     agents: TestClaude[],
     identity: (provider: string) => string | undefined,
     now: () => number,
+    most?: number,
   ) {
     this.agents = agents as unknown as Agent[]
     this.post = new Post(() => relay.posted++)
     this.directory = new LinkDirectory(this.post, still)
     const sources = claudeSources(join(home, "usage"))
     this.usage = new Usage(() => sources(this.agents), new PricingStore(undefined, undefined), identity, join(home, "usage", "usage.json"), now)
-    this.peers = new UsagePeers(this.usage, this.post, this.directory, join(home, "usage", "peers.json"), now)
+    this.peers = new UsagePeers(this.usage, this.post, this.directory, join(home, "usage", "peers.json"), now, most)
     this.parts = { post: this.post, directory: this.directory, usage: this.peers }
     relay.boxes.set(key, this)
     void this.link(relay)
@@ -458,6 +459,36 @@ describe("across your computers", () => {
     expect(mac.usage.view("UTC").rows.map((row) => [row.id, row.days[0]!.tokens])).toEqual([["claude#aaaaaaaaaaaaaaaa", 1009]])
     mac.stop()
     dev.stop()
+  })
+
+  test("an account too big for a mail is cut from its oldest uses and says so; a long name; what changes after costs no more than its last two days", async () => {
+    const lines = Array.from({ length: 200 }, (_, i) => reply(new Date(Date.parse("2026-11-02T00:00:00Z") + i * 75 * MINUTE).toISOString(), `c${i}`, i % 2 ? "claude-opus-4-5" : "claude-sonnet-4-5", 100 + i, 0)).join("")
+    const oneHome = mkdtempSync(join(base, "one-"))
+    const twoHome = mkdtempSync(join(base, "two-"))
+    const busy = account(oneHome, "busy", lines)
+    busy.instance.label = "B".repeat(150)
+    const one = new PeerBox("one-key", "one", relay, oneHome, [busy], () => "cccccccccccccccc", now, 3_000)
+    const two = new PeerBox("two-key", "two", relay, twoHome, [], () => undefined, now, 3_000)
+    await one.meet([two])
+    await two.meet([one])
+    await one.usage.refresh()
+    await two.usage.refresh()
+    await relay.settled()
+    const told = two.usage.view("UTC").rows[0]!
+    expect(told.cut).toBe(true)
+    expect(told.label).toBe("B".repeat(100))
+    // (The newest days whole, as the box itself has them.)
+    expect(told.days[0]).toEqual(one.usage.view("UTC").rows[0]!.days[0]!)
+
+    appendFileSync(join(oneHome, "accounts", "busy", "projects", "p", "log.jsonl"), reply("2026-11-12T11:00:00Z", "new", "claude-opus-4-5", 5, 0))
+    at += 2 * MINUTE
+    const before = relay.sent.length
+    await one.usage.refresh()
+    await relay.settled()
+    expect(relay.sent.slice(before).map((each) => [each.from, typeof each.mail.from, each.mail.ask ?? false])).toEqual([["one-key", "number", false]])
+    expect(two.usage.view("UTC").rows[0]!.days[0]).toEqual(one.usage.view("UTC").rows[0]!.days[0]!)
+    one.stop()
+    two.stop()
   })
 
   test("a box a peer vouches for (another Mac beside a shared machine) shares usage too; a refresh asks the others to read now; a restart keeps what peers said", async () => {

@@ -3787,11 +3787,13 @@ hourly, kept in the bridge's `usage/pricing`): estimates, not your bill. A clien
   `provider`, `service`, `agent`, `account`, `label`, `identity`, `cut` and slots as kept); a
   receiver whose own, put together, isn't that asks for all of it (`ask`, at most once a minute),
   and is answered at once. Each account is `{provider, service, agent?, account?, label?,
-  identity?, scanned?, cut?, slots: {models, used: [[slot, model, tokens, dollars]], unknown?:
-  [[slot, model]]}}`: `slot`, quarter hours since 1970 (UTC), `model`, an index into `models`,
-  `tokens` a whole number. As many as fit in 400 KB, the oldest left out first, an account so cut
-  marked `cut` (and its rows elsewhere `cut: true`: their oldest days are short). Never a log, a
-  message, a path or a sign-in. `refresh: true`: read yours now and tell (each box asks at most once a minute, and
+  identity?, scanned?, cut?, whole, slots: {models, used: [[slot, model, tokens, dollars]],
+  unknown?: [[slot, model]]}}`: `slot`, quarter hours since 1970 (UTC), `model`, an index into
+  `models`, `tokens` a whole number; `whole`, the first slot the sender has all of (a UTC midnight
+  35 days back, or past what it cut): the receiver keeps none older. Told as the receiver keeps it
+  (`label` 100 characters, `provider` and model names 200), so the digests agree. As many as fit in
+  400 KB, the oldest left out first, an account so cut marked `cut` (and its rows elsewhere `cut:
+  true`: their oldest days are short). Never a log, a message, a path or a sign-in. `refresh: true`: read yours now and tell (each box asks at most once a minute, and
   reads for each at most once a minute). The receiver keeps the last from each
   (`usage/peers.json`), through a restart; a box not heard from for 25 minutes is away (its rows
   `away` when every box of theirs is), what it said kept; a computer you removed goes, with what
