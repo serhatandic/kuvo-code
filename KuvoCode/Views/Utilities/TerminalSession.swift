@@ -72,15 +72,15 @@ final class TerminalSession: NSObject {
             let missing = Self.note("That folder isn’t there anymore: \(remote.path). This is your home folder.")
             let swallow = typing ? "; stty -echo; IFS= read -r _; stty echo" : ""
             let script = "cd \(SSHConnection.quoted(remote.path)) 2>/dev/null || { printf '%s\\r\\n' \(SSHConnection.quoted(missing))\(swallow); }; exec \"${SHELL:-/bin/sh}\" -l"
-            let started = SSHConnection(destination: remote.machine).invocation(running: script, extra: ["-t"])
+            let shell = SSHConnection(destination: remote.machine).invocation(running: script, extra: ["-t"])
             // ssh's own environment, which sends the terminal's kind along; this Mac's own box's
             // shell gets it too.
             let kind = environment.filter { ["TERM", "COLORTERM", "TERM_PROGRAM"].contains($0.key) }
             view.startProcess(
-                executable: started.executable,
-                args: started.arguments,
-                environment: (started.environment.map { $0.merging(kind) { $1 } } ?? environment).map { "\($0.key)=\($0.value)" },
-                currentDirectory: started.directory?.path ?? NSHomeDirectory()
+                executable: shell.executable,
+                args: shell.arguments,
+                environment: (shell.environment.map { $0.merging(kind) { $1 } } ?? environment).map { "\($0.key)=\($0.value)" },
+                currentDirectory: shell.directory?.path ?? NSHomeDirectory()
             )
             started()
             return true

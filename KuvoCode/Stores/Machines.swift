@@ -4,6 +4,7 @@ import CryptoKit
 import Foundation
 import OpenCodeKit
 import os
+import SystemConfiguration
 
 /// Another computer whose engine Kuvo Code runs over SSH (a home server, a VPS), next to this
 /// Mac's: a host from `~/.ssh/config` or `user@host`. Its projects are folders on it.
@@ -19,7 +20,12 @@ nonisolated struct Machine: Codable, Hashable, Identifiable {
     var reachedAt: String?
 
     var id: String { destination }
-    var name: String { destination }
+    /// Its name here: this Mac's own box goes by this Mac's.
+    var name: String { isThisMac ? (SCDynamicStoreCopyComputerName(nil, nil) as String?) ?? "This Mac" : destination }
+    /// This Mac's own box, already in its home folder, which the app attached to in place
+    /// (`SSHConnection.thisMac`): reached with no SSH, never saved with your machines, and never
+    /// removed, stopped or signed out of from here.
+    var isThisMac: Bool { destination == SSHConnection.thisMac }
     /// Every address it has, its name first.
     var addresses: [String] { [destination] + (otherAddresses ?? []) }
     /// To it, at the address in use (see `SSHConnection.route`).
@@ -1336,6 +1342,18 @@ final class Machines {
         id.flatMap { engines[$0] }
     }
 
+    /// This Mac's own box, attached in place (`Machine.isThisMac`): first among them, never saved
+    /// (the list's file is in the app's own box's folder, which an attached app never makes).
+    @discardableResult
+    func attachHere() -> MachineEngine {
+        if let engine = engines[SSHConnection.thisMac] { return engine }
+        let machine = Machine(destination: SSHConnection.thisMac)
+        list.insert(machine, at: 0)
+        let engine = makeEngine(machine)
+        engines[machine.id] = engine
+        return engine
+    }
+
     @discardableResult
     func add(_ destination: String) -> MachineEngine {
         let machine = Machine(destination: destination.trimmingCharacters(in: .whitespaces))
@@ -1464,6 +1482,8 @@ final class Machines {
     /// `uninstall` also stops its engine there and deletes the sign-ins and keys it keeps, and how
     /// it starts after a restart (its sessions stay, for when it's added again).
     func remove(_ id: String, uninstall: Bool) {
+        // This Mac's own box isn't one of yours to remove from here: it runs this Mac.
+        guard id != SSHConnection.thisMac else { return }
         // Nothing more goes there for its connection, nor does it connect again.
         engines[id]?.retire()
         if !uninstall {
@@ -1504,7 +1524,7 @@ final class Machines {
     }
 
     private func save() {
-        var list = list
+        var list = list.filter { !$0.isThisMac }
         #if DEBUG
         list.removeAll { DemoMachines.standIn($0.id) != nil }
         #endif

@@ -80,6 +80,8 @@ import Testing
         BackgroundWork.heldBack = nil
         for database in databases { try? FileManager.default.removeItem(at: database) }
         AppModel.hereHome = AppModel.defaultHereHome
+        SSHConnection.thisMacHome = AppModel.defaultHereHome.path(percentEncoded: false)
+        MachineEngine.standIn = nil
         unsetenv("KUVO_OPENCODE_BINARY")
         try? FileManager.default.removeItem(at: folder)
         engine.stop()
@@ -144,7 +146,7 @@ import Testing
         let attached = try #require(app?.attached)
         #expect(attached.use == .attach && attached.verdict == "elsewhere" && attached.runs == .running)
         #expect(attached.box?.primary?.name == "MacBook" && attached.box?.role == "member")
-        #expect(app?.engine != .ready)
+        #expect(app?.api == nil, "no engine of its own")
         #expect(!BackgroundWork.shared.register() && BackgroundWork.shared.failure?.contains("already here") == true, "Turn On registers no keeper beside it")
         #expect(!FileManager.default.fileExists(atPath: BoxProcess.home.path), "no box of its own: not even its folder")
         // Told so, by its own CLI and engine, its card says Kuvo Code is on this Mac: a Mac adding it
@@ -159,8 +161,45 @@ import Testing
         defer { cleanUp(app) }
         app = try await started { try memberOfMacBooks(runs: .stopped) }
         #expect(app?.attached?.runs == .running)
-        #expect(app?.engine != .ready)
+        #expect(app?.api == nil)
         #expect(!FileManager.default.fileExists(atPath: BoxProcess.home.path))
+    }
+
+    /// The window opens on the box here (#333): this Mac is that box, reached as a machine with no SSH,
+    /// from its own home folder, named as this Mac; never saved with your machines (whose list is in
+    /// the app's own box's folder, never made) nor removed from here; and the app starts no engine.
+    @Test func theWindowOpensOnTheBoxHere() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        // Its connection isn't followed here: only that it's tried.
+        MachineEngine.standIn = { _ in nil }
+        app = try await started { try memberOfMacBooks() }
+        let model = try #require(app)
+        #expect(model.engine == .ready && model.api == nil)
+        #expect(model.boxes == [.attached] && model.boxInView == .attached && model.thisMacsBox == .attached)
+        #expect(model.name(of: .attached) == PhoneLink.computerName)
+        let box = try #require(model.machines.engine(SSHConnection.thisMac))
+        #expect(box.machine.connection.isLocal && box.machine.name == PhoneLink.computerName)
+        #expect(SSHConnection.thisMacHome == home.path(percentEncoded: false))
+        #expect(engine.requests("GET", "/api/info").isEmpty, "the app's own engine never started")
+        model.removeMachine(SSHConnection.thisMac, uninstall: true)
+        #expect(model.machines.engine(SSHConnection.thisMac) != nil, "not removed from here")
+        #expect(!FileManager.default.fileExists(atPath: Machines.file.path(percentEncoded: false)) && !FileManager.default.fileExists(atPath: BoxProcess.home.path))
+        // Its name is never one of your machines to add.
+        #expect(MachineForm.problem(with: SSHConnection.thisMac) == "That’s this Mac.")
+    }
+
+    /// Its routes go to its own CLI here, in its own home folder, with no SSH: as a machine's do.
+    @Test func itsRoutesGoToItsOwnCLIHere() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        MachineEngine.standIn = { _ in nil }
+        app = try await started { try memberOfMacBooks() }
+        let card = home.appending(path: "\(RemoteEngineInstaller.root)/run/setup-card.json")
+        try FileManager.default.removeItem(at: card)
+        let (status, _) = try await BoxClient.machine(SSHConnection.thisMac).send("POST", "kuvo/setup/attached")
+        #expect(status == 200)
+        #expect(self.card()?["by"] as? String == "its own", "answered by the box's own CLI, in its home folder")
     }
 
     /// One that won't start is said so, to try again, rather than waited on.

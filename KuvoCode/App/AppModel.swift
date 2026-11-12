@@ -561,6 +561,8 @@ final class AppModel {
                     }
                     // Running, it's told the app is here, for good.
                     await Here.sayAttached(home: Self.hereHome)
+                    guard launch == self.launch else { return }
+                    openOnAttached()
                     return
                 case .unknown(let why):
                     let couldnt = "Kuvo Code couldn’t check the box already on this Mac, so it didn’t start one of its own."
@@ -717,6 +719,19 @@ final class AppModel {
     nonisolated(unsafe) static var hereHome = defaultHereHome
     nonisolated static var defaultHereHome: URL {
         AppInfo.isHostingTests ? AppInfo.testRoot.appending(path: "here-home") : FileManager.default.homeDirectoryForCurrentUser
+    }
+
+    /// The window opens on the box already here, attached in place: this Mac is that box, reached as
+    /// a machine with no SSH (`SSHConnection.thisMac`), from its own home folder, its engine at its
+    /// own ports, its keys, paths and start at login as they are. The app has no engine, box or
+    /// keeper of its own (`api` stays nil), so `.ready` here says the window can open on it.
+    /// What else the app's own box would do while it runs (its phone link, its stores' follows)
+    /// is that box's own.
+    private func openOnAttached() {
+        SSHConnection.thisMacHome = Self.hereHome.path(percentEncoded: false)
+        machines.attachHere()
+        engine = .ready
+        startMachines()
     }
 
     /// This Mac's engine once it's up: the keeper's (started, or made way for after an update, as
