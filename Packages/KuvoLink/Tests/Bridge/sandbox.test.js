@@ -1871,6 +1871,15 @@ test("a failed check takes the sandbox away only once Auto asks first, and one t
     await engineRuns(box, project, "true", "ses_auto");
     assert.equal((await running.ask("GET", "kuvo/sandbox")).value.on, true);
     await applied("auto");
+    // An agent's command adds a watch whose check deletes a file of yours outside its folder.
+    const outside = path.join(root, "failed-check-yours");
+    fs.writeFileSync(outside, "yours\n");
+    const wake = path.join(box.home, "bin", "kuvo-wake");
+    assert.equal((await engineRuns(box, project, `${wake} watch 1d 'rm -f ${outside}; echo seen' 'The build'`, "ses_auto")).status, 0);
+    await fire(box);
+    await changeIn(box.wakes, () => !fs.existsSync(path.join(box.wakes, ".watching")));
+    const wakes = path.join(box.wakes, "ses_auto");
+    const [letters] = fs.readdirSync(path.join(wakes, "watches"));
 
     // The check fails while the engine is slow to list its conversations.
     engine.hold();
@@ -1888,6 +1897,10 @@ test("a failed check takes the sandbox away only once Auto asks first, and one t
     await changeIn(path.dirname(box.plugin), () => !fs.existsSync(box.plugin));
     const askFirst = changes.find(each => each.applied === "askFirst");
     assert.deepEqual(askFirst && [askFirst.asks, askFirst.plugin], [true, true], JSON.stringify(changes));
+    // The watch's check, which can't ask, waits for the sandbox rather than run outside it.
+    const tried = byHand(box, wakes, "try", letters);
+    assert.match(tried.stdout, /isn't ready/, tried.stderr);
+    assert.equal(fs.existsSync(outside), true, "a watch's check ran outside the sandbox");
 
     // Checked again: it passes, and Auto goes on its own again.
     fs.rmSync(hold);
@@ -1913,5 +1926,40 @@ test("a failed check takes the sandbox away only once Auto asks first, and one t
     await running.stop();
     await engine.close();
     fs.rmSync(hold, { force: true });
+  }
+});
+
+// A machine that stops letting commands have a namespace of their own (an upgrade that restricts user
+// namespaces): they keep theirs while that's checked and until Auto asks first, then the sandbox goes
+// on without one, as on a machine that never let them, never off for good.
+test("where commands lose their own namespace, the sandbox goes on without one once Auto asks first", { skip: !canBlock && "a Linux machine whose user namespaces this test can block" }, async () => {
+  const box = boxAt("namespace-gone");
+  const project = path.join(root, "namespace-gone-project");
+  fs.mkdirSync(project);
+  const engine = await approvalEngine(box, new Map(), () => {});
+  const namespaceFile = path.join(box.home, "run", "fence", "namespace");
+  try {
+    const before = await start(box);
+    await engineRuns(box, project, "true");
+    assert.equal((await before.ask("GET", "kuvo/sandbox")).value.on, true);
+    await before.stop();
+    assert.match(fs.readFileSync(namespaceFile, "utf8"), /^\//, "set up with a namespace of their own");
+    // Started again where namespaces can't be had.
+    engine.hold();
+    const running = await start(box, {}, blocked);
+    try {
+      let state = (await running.ask("GET", "kuvo/sandbox")).value;
+      assert.equal(state.on, false, state.why);
+      assert.match(fs.readFileSync(namespaceFile, "utf8"), /^\//, "kept until nothing counts on the sandbox");
+      engine.go();
+      await changeIn(path.dirname(namespaceFile), () => fs.readFileSync(namespaceFile, "utf8") === "-");
+      await engineRuns(box, project, "true");
+      state = (await running.ask("GET", "kuvo/sandbox")).value;
+      assert.deepEqual([state.on, state.gaps], [true, ["services"]], state.why);
+    } finally {
+      await running.stop();
+    }
+  } finally {
+    await engine.close();
   }
 });

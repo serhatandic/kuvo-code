@@ -287,7 +287,7 @@ function writeProfiles(): void {
   const files: [string, string][] = platform === "darwin"
     ? [["project.sb", seatbeltProfile(policy, { inside: false })], ["inside.sb", seatbeltProfile(policy, { inside: true })],
         ["project-agent.sb", seatbeltProfile(policy, { inside: false, agent: true })], ["inside-agent.sb", seatbeltProfile(policy, { inside: true, agent: true })], ["policy.json", landlockPolicy(policy)]]
-    : [["policy.json", landlockPolicy(policy)], ["runtime", runtime() ?? ""], ["namespace", namespace ?? "-"], ["sockets", (policy.sockets ?? []).map(each => each + "\n").join("")]];
+    : [["policy.json", landlockPolicy(policy)], ["runtime", runtime() ?? ""], ["namespace", inUse() ?? "-"], ["sockets", (policy.sockets ?? []).map(each => each + "\n").join("")]];
   if (platform === "linux") fs.mkdirSync(NAMESPACE_FOLDER, { recursive: true, mode: 0o700 });
   const text = files.map(([name, body]) => name + body).join("");
   if (text === lastProfiles) return;
@@ -317,6 +317,10 @@ let namespaceKnown = false;
 let namespaceUnfinished = false;
 /** Where it runs without one, what the machine needs for it (`FenceState.needs`). */
 let withoutNamespace: string | null = null;
+/** One in effect that the last try says commands can't have, kept while that's checked and until
+ * nothing counts on the sandbox (`setUpFence`): what commands' namespace comes from meanwhile. */
+let kept: string | null = null;
+const inUse = (): string | null => kept ?? namespace;
 const namespaceHere = (): string | null | typeof UNFINISHED => {
   fs.mkdirSync(NAMESPACE_FOLDER, { recursive: true, mode: 0o700 });
   return triedNamespace(NAMESPACE_FOLDER);
@@ -368,7 +372,7 @@ function probe(): { passed: boolean; unfinished?: boolean; why?: string; check?:
     `echo ok > "$TMPDIR/probe" || exit 12`,
     `cat "$1" >/dev/null 2>&1 && exit 13`,
     // (In its namespace, your session's folder is empty.)
-    ...(namespace ? [`[ -z "$(ls -A "/run/user/$(id -u)" 2>/dev/null)" ] || exit 14`] : []),
+    ...(inUse() ? [`[ -z "$(ls -A "/run/user/$(id -u)" 2>/dev/null)" ] || exit 14`] : []),
     `(echo escaped > "$2") 2>/dev/null`,
     `exit 0`,
   ].join("\n");
@@ -422,17 +426,29 @@ export function tellAgents(on = fenceState().on || (fencePending() && loaded().o
 }
 
 /** The engine's plugin taken away, and kuvo-wake and agents told: commands run as before. What the
- * engine noted of the plugin goes too, so it's on again only once the engine has loaded it again. */
-function withdraw(): void {
+ * engine noted of the plugin goes too, so it's on again only once the engine has loaded it again.
+ * `ready` kept after a failed check: kuvo-wake's watches' checks then wait for it to be back rather
+ * than run outside it, as they can't ask (only where it can't run here, or with the kill switch, do
+ * they run as commands do). */
+function withdraw(ready: "keep" | "remove" = "remove"): void {
   try { tellAgents(false); } catch {}
   fs.rmSync(PLUGIN, { force: true });
   fs.rmSync(ON, { force: true });
-  fs.rmSync(READY, { force: true });
+  if (ready === "remove") fs.rmSync(READY, { force: true });
   fs.rmSync(NOTE, { force: true });
   // (Last: never `on` without it while it was held.)
   fs.rmSync(HELD, { force: true });
   loosening = null;
 }
+
+/** Holds it: nothing counts on it from now, a new hold each time (`heldMark`). */
+function hold(): void {
+  if (!fs.existsSync(HELD)) writePrivate(HELD, crypto.randomUUID());
+}
+
+/** Which hold is on now, if any: the approvals' round lets go of one only if it was on throughout
+ * its pass (`nothingCountsOnIt`). */
+export const heldMark = (): string | null => textOf(HELD) || null;
 
 /** How many checks in a row may not finish before it counts as failed: one a minute, so about
  * five minutes of "Checking the sandbox…" at most. */
@@ -442,6 +458,8 @@ let unfinishedInARow = 0;
 /** What waits for nothing to count on the sandbox before it's done (`nothingCountsOnIt`): taking
  * it away, or on Linux dropping the namespace of each command's own that's in effect. */
 let loosening: "withdraw" | "namespace" | null = null;
+// Whether taking it away keeps `ready` (after a failed check: `withdraw`).
+let keepReady = false;
 // Set while that's being done: the namespace may go.
 let mayLoosen = false;
 
@@ -451,24 +469,26 @@ let mayLoosen = false;
  * conversation's rules are made for it being off (`nothingCountsOnIt`, the approvals' round), so no
  * command in Auto runs outside it without asking meanwhile. With nothing set up, at once.
  */
-function loosen(what: "withdraw" | "namespace", why: Checked): FenceState {
+function loosen(what: "withdraw" | "namespace", why: Checked, ready: "keep" | "remove"): FenceState {
   checked = why;
-  if (![PLUGIN, ON, READY].some(file => fs.existsSync(file))) {
-    withdraw();
+  if (![PLUGIN, ON].some(file => fs.existsSync(file))) {
+    withdraw(ready);
     return fenceState();
   }
-  if (!fs.existsSync(HELD)) writePrivate(HELD, "");
+  hold();
   loosening = what === "withdraw" || loosening === "withdraw" ? "withdraw" : "namespace";
+  keepReady = ready === "keep";
   return fenceState();
 }
 
-/** Every conversation's rules here are made for the sandbox being off (Auto asks first): what was
- * held for that is done now. */
-export function nothingCountsOnIt(): void {
+/** Every conversation's rules here are made for the sandbox being off (Auto asks first), all
+ * through the hold `mark` names (`heldMark`, as the round began): what was held for that is done
+ * now. */
+export function nothingCountsOnIt(mark: string | null): void {
   const what = loosening;
-  if (!what || !fenceWanted()) return;
+  if (!what || !fenceWanted() || !mark || heldMark() !== mark) return;
   loosening = null;
-  if (what === "withdraw") return withdraw();
+  if (what === "withdraw") return withdraw(keepReady ? "keep" : "remove");
   // (Without its namespace, as the last try found: checked again, and held while it is.)
   mayLoosen = true;
   try {
@@ -550,13 +570,13 @@ export function setUpFence(found?: string | null): FenceState {
     checked = can;
     return fenceState();
   }
-  if (!can.able) return loosen("withdraw", can);
+  if (!can.able) return loosen("withdraw", can, "remove");
   // On Linux, a namespace in effect that the last try says commands can't have (it may have failed
   // only as the machine was busy): kept, and the check says whether it still works; dropped only
   // once nothing counts on the sandbox.
   const inEffect = platform === "linux" ? textOf(path.join(FOLDER, "namespace")) ?? "" : "";
   const dropping = !namespace && !namespaceUnfinished && inEffect.startsWith("/") && !mayLoosen;
-  if (dropping) [namespace, withoutNamespace] = [inEffect, null];
+  kept = dropping ? inEffect : null;
   try {
     fs.mkdirSync(path.join(FOLDER, "tmp"), { recursive: true, mode: 0o700 });
     writeTemporary();
@@ -579,19 +599,19 @@ export function setUpFence(found?: string | null): FenceState {
       // Not known yet: never counted on, never a failure (failures stay as they were).
       checked = { able: true, passed: false, unfinished: true, reason: "checking", why: PENDING_WHY };
       // (First, so nothing reads `on` as checked meanwhile.)
-      if (!fs.existsSync(HELD)) writePrivate(HELD, "");
+      hold();
       // (Nor taken away for a check before it that failed: this one may yet pass.)
       loosening = null;
     } else if (!result.passed) {
       failures += 1;
       // Held, then taken away once nothing counts on it; with a namespace being dropped, that first
       // (the check went through it).
-      return loosen(dropping ? "namespace" : "withdraw", { able: true, ...result, reason: "checkFailed" });
+      return loosen(dropping ? "namespace" : "withdraw", { able: true, ...result, reason: "checkFailed" }, "keep");
     } else {
       checked = { able: true, ...result };
       failures = 0;
       // (The namespace in effect still works: kept as found.)
-      if (dropping) [namespaceKnown, withoutNamespace] = [true, null];
+      if (dropping) [namespace, namespaceKnown, withoutNamespace, kept] = [inEffect, true, null, null];
       // (Nothing to take away now.)
       loosening = null;
     }
@@ -603,7 +623,7 @@ export function setUpFence(found?: string | null): FenceState {
     if (result.passed) fs.rmSync(HELD, { force: true });
   } catch (error) {
     failures += 1;
-    return loosen("withdraw", { able: true, passed: false, why: `It couldn't be set up: ${(error as Error).message}`, reason: "checkFailed", check: "setup" });
+    return loosen("withdraw", { able: true, passed: false, why: `It couldn't be set up: ${(error as Error).message}`, reason: "checkFailed", check: "setup" }, "keep");
   }
   return fenceState();
 }

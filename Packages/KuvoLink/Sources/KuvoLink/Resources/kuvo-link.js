@@ -5079,7 +5079,7 @@ function writeProfiles() {
     ["project-agent.sb", seatbeltProfile(policy, { inside: false, agent: true })],
     ["inside-agent.sb", seatbeltProfile(policy, { inside: true, agent: true })],
     ["policy.json", landlockPolicy(policy)]
-  ] : [["policy.json", landlockPolicy(policy)], ["runtime", runtime() ?? ""], ["namespace", namespace ?? "-"], ["sockets", (policy.sockets ?? []).map((each) => each + `
+  ] : [["policy.json", landlockPolicy(policy)], ["runtime", runtime() ?? ""], ["namespace", inUse() ?? "-"], ["sockets", (policy.sockets ?? []).map((each) => each + `
 `).join("")]];
   if (platform === "linux")
     fs20.mkdirSync(NAMESPACE_FOLDER, { recursive: true, mode: 448 });
@@ -5101,6 +5101,8 @@ var namespace = null;
 var namespaceKnown = false;
 var namespaceUnfinished = false;
 var withoutNamespace = null;
+var kept = null;
+var inUse = () => kept ?? namespace;
 var namespaceHere = () => {
   fs20.mkdirSync(NAMESPACE_FOLDER, { recursive: true, mode: 448 });
   return triedNamespace(NAMESPACE_FOLDER);
@@ -5142,7 +5144,7 @@ function probe() {
     `echo ok > written && [ "$(cat written)" = ok ] || exit 11`,
     `echo ok > "$TMPDIR/probe" || exit 12`,
     `cat "$1" >/dev/null 2>&1 && exit 13`,
-    ...namespace ? [`[ -z "$(ls -A "/run/user/$(id -u)" 2>/dev/null)" ] || exit 14`] : [],
+    ...inUse() ? [`[ -z "$(ls -A "/run/user/$(id -u)" 2>/dev/null)" ] || exit 14`] : [],
     `(echo escaped > "$2") 2>/dev/null`,
     `exit 0`
   ].join(`
@@ -5191,39 +5193,46 @@ function tellAgents(on = fenceState().on || fencePending() && loaded().on) {
   if (textOf(SANDBOX_NOTE) !== note)
     writePrivate(SANDBOX_NOTE, note);
 }
-function withdraw() {
+function withdraw(ready = "remove") {
   try {
     tellAgents(false);
   } catch {}
   fs20.rmSync(PLUGIN, { force: true });
   fs20.rmSync(ON, { force: true });
-  fs20.rmSync(READY, { force: true });
+  if (ready === "remove")
+    fs20.rmSync(READY, { force: true });
   fs20.rmSync(NOTE, { force: true });
   fs20.rmSync(HELD, { force: true });
   loosening = null;
 }
+function hold2() {
+  if (!fs20.existsSync(HELD))
+    writePrivate(HELD, crypto9.randomUUID());
+}
+var heldMark = () => textOf(HELD) || null;
 var MOST_UNFINISHED = 5;
 var unfinishedInARow = 0;
 var loosening = null;
+var keepReady = false;
 var mayLoosen = false;
-function loosen(what, why) {
+function loosen(what, why, ready) {
   checked = why;
-  if (![PLUGIN, ON, READY].some((file) => fs20.existsSync(file))) {
-    withdraw();
+  if (![PLUGIN, ON].some((file) => fs20.existsSync(file))) {
+    withdraw(ready);
     return fenceState();
   }
-  if (!fs20.existsSync(HELD))
-    writePrivate(HELD, "");
+  hold2();
   loosening = what === "withdraw" || loosening === "withdraw" ? "withdraw" : "namespace";
+  keepReady = ready === "keep";
   return fenceState();
 }
-function nothingCountsOnIt() {
+function nothingCountsOnIt(mark) {
   const what = loosening;
-  if (!what || !fenceWanted())
+  if (!what || !fenceWanted() || !mark || heldMark() !== mark)
     return;
   loosening = null;
   if (what === "withdraw")
-    return withdraw();
+    return withdraw(keepReady ? "keep" : "remove");
   mayLoosen = true;
   try {
     setUpFence(null);
@@ -5270,11 +5279,10 @@ function setUpFence(found) {
     return fenceState();
   }
   if (!can.able)
-    return loosen("withdraw", can);
+    return loosen("withdraw", can, "remove");
   const inEffect = platform === "linux" ? textOf(path19.join(FOLDER2, "namespace")) ?? "" : "";
   const dropping = !namespace && !namespaceUnfinished && inEffect.startsWith("/") && !mayLoosen;
-  if (dropping)
-    [namespace, withoutNamespace] = [inEffect, null];
+  kept = dropping ? inEffect : null;
   try {
     fs20.mkdirSync(path19.join(FOLDER2, "tmp"), { recursive: true, mode: 448 });
     writeTemporary();
@@ -5294,17 +5302,16 @@ function setUpFence(found) {
       result = { passed: false, check: "didntRun", why: `Its check didn't finish ${unfinishedInARow} times in a row.` };
     if (result.unfinished) {
       checked = { able: true, passed: false, unfinished: true, reason: "checking", why: PENDING_WHY };
-      if (!fs20.existsSync(HELD))
-        writePrivate(HELD, "");
+      hold2();
       loosening = null;
     } else if (!result.passed) {
       failures += 1;
-      return loosen(dropping ? "namespace" : "withdraw", { able: true, ...result, reason: "checkFailed" });
+      return loosen(dropping ? "namespace" : "withdraw", { able: true, ...result, reason: "checkFailed" }, "keep");
     } else {
       checked = { able: true, ...result };
       failures = 0;
       if (dropping)
-        [namespaceKnown, withoutNamespace] = [true, null];
+        [namespace, namespaceKnown, withoutNamespace, kept] = [inEffect, true, null, null];
       loosening = null;
     }
     if (!fs20.existsSync(READY))
@@ -5316,7 +5323,7 @@ function setUpFence(found) {
       fs20.rmSync(HELD, { force: true });
   } catch (error) {
     failures += 1;
-    return loosen("withdraw", { able: true, passed: false, why: `It couldn't be set up: ${error.message}`, reason: "checkFailed", check: "setup" });
+    return loosen("withdraw", { able: true, passed: false, why: `It couldn't be set up: ${error.message}`, reason: "checkFailed", check: "setup" }, "keep");
   }
   return fenceState();
 }
@@ -17718,8 +17725,9 @@ function keepApprovals(engine = ownEngine2, bridge = bridgeTarget, every = (roun
   const adopted = new Set;
   every(async () => {
     const [here, agents] = [engine(), bridge()];
+    const mark = heldMark();
     const off = !sandboxOn(false);
-    const now = `${!off} ${sandboxOn(true)} ${fullAccessAllowed()} ${here?.port ?? 0} ${agents?.port ?? 0}`;
+    const now = `${!off} ${sandboxOn(true)} ${fullAccessAllowed()} ${here?.port ?? 0} ${agents?.port ?? 0} ${mark ?? ""}`;
     if (going || following)
       return;
     going = true;
@@ -17727,8 +17735,8 @@ function keepApprovals(engine = ownEngine2, bridge = bridgeTarget, every = (roun
       const settings = JSON.stringify(permissionsHere());
       if ((now !== last || settings !== settingsMade) && await reapplyApprovals(here, agents, settings !== settingsMade))
         [last, settingsMade] = [now, settings];
-      if (off && last === now)
-        nothingCountsOnIt();
+      if (off && last === now && here && (agents || !fs66.existsSync(BRIDGE_FILE)))
+        nothingCountsOnIt(mark);
       await adoptPending(here, agents);
       await adoptBots(here, agents, adopted);
     } catch {} finally {
@@ -21780,10 +21788,10 @@ function packageName(spec) {
   return at > 0 ? spec.slice(0, at) : spec;
 }
 var leftForItsMaker = (entry, server) => entry.way === "official" && isObject(entry.settings) && Array.isArray(server.command) && server.command[0] === LAUNCHER;
-var kept = (server, names) => Object.fromEntries(names.filter((name) => server[name] !== undefined).map((name) => [name, server[name]]));
+var kept2 = (server, names) => Object.fromEntries(names.filter((name) => server[name] !== undefined).map((name) => [name, server[name]]));
 function broughtUpToDate(entry, server) {
   if (leftForItsMaker(entry, server))
-    return { ...entry.settings, ...kept(server, ["disabled", "codemode"]) };
+    return { ...entry.settings, ...kept2(server, ["disabled", "codemode"]) };
   const next = { ...server };
   if (next.codemode === undefined)
     next.codemode = false;
@@ -23768,7 +23776,7 @@ var pausedText = (folder) => {
     return null;
   }
 };
-function hold2(record) {
+function hold3(record) {
   if (!record.folder || !fs87.existsSync(record.folder))
     return;
   const was = pausedText(record.folder);
@@ -23831,7 +23839,7 @@ async function carryOn(id) {
       return;
     record = now;
   }
-  hold2(record);
+  hold3(record);
   record.holdSince = Date.now();
   saveMove(record);
   const takenBack = () => {
@@ -33250,29 +33258,29 @@ var asked6 = (target, route, folder) => call(target, "GET", route, undefined, Ab
   return;
 });
 var KEPT_FOR2 = 1e4;
-var kept2 = new Map;
+var kept3 = new Map;
 function keptOr(key, read, whole) {
   const now = Date.now();
-  const before = kept2.get(key);
+  const before = kept3.get(key);
   if (before && now - before.at < KEPT_FOR2)
     return before.lists;
   const lists = read();
-  kept2.set(key, { at: now, lists });
+  kept3.set(key, { at: now, lists });
   lists.then((value) => {
-    if ((value === null || !whole(value)) && kept2.get(key)?.lists === lists)
-      kept2.delete(key);
+    if ((value === null || !whole(value)) && kept3.get(key)?.lists === lists)
+      kept3.delete(key);
   });
-  if (kept2.size > 200)
-    kept2.delete(kept2.keys().next().value);
+  if (kept3.size > 200)
+    kept3.delete(kept3.keys().next().value);
   return lists;
 }
 var CHANGES = new Set(["integration.updated", "model.updated", "provider.updated", "config.updated", "global.disposed", "kuvo.auto.updated"]);
 function noteModelsEvent(event) {
   if (event.type && CHANGES.has(event.type))
-    kept2.clear();
+    kept3.clear();
 }
 function forgetModelLists() {
-  kept2.clear();
+  kept3.clear();
 }
 function modelsIn2(listed) {
   if (!Array.isArray(listed))
@@ -35993,7 +36001,7 @@ function hasBrowser(build) {
   }
   return false;
 }
-function inUse() {
+function inUse2() {
   let build;
   try {
     build = fs114.realpathSync(CURRENT());
@@ -36069,7 +36077,7 @@ function installing() {
 function browserStatus() {
   const here = runtimeHere();
   const chromium = "runtime" in here ? here.runtime.chromium.version : null;
-  const now = inUse();
+  const now = inUse2();
   const installed = now ? now.chromium : null;
   if (IS_MAC)
     return { state: "missing", chromium: null, installed: null, progress: null, message: "This Mac's agents browse in its app's panel.", retryAt: null };
@@ -36355,7 +36363,7 @@ function decide({ now, repair }) {
     repair = false;
   if (repair && waits)
     repair = false;
-  const current = inUse();
+  const current = inUse2();
   if (repair && !current)
     repair = false;
   if (!repair && current && compareVersions(current.chromium, here.runtime.chromium.version) >= 0)
@@ -36386,7 +36394,7 @@ async function installBrowser(asked = {}) {
   if (!takeLock2())
     return "busy";
   const failedBefore = (before.failures ?? 0) > 0 && before.id === here.id;
-  const current = inUse();
+  const current = inUse2();
   const folder = BROWSER();
   let staging = null;
   const stop = new AbortController;
@@ -38117,7 +38125,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "43f0da13ca01";
+var BRIDGE_VERSION = "01f62f1e2a60";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
