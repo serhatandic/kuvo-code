@@ -23,7 +23,9 @@ const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
 // The engine's commands: its own, and one a plugin brings, besides one in your settings.
 const engine = http.createServer((request, response) => {
-  if (request.url !== "/api/command") return response.writeHead(404).end();
+  // (Its providers first, as the box asks once its plugins are set up.)
+  if (request.url.startsWith("/api/provider")) return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ data: [] }));
+  if (request.url.split("?")[0] !== "/api/command") return response.writeHead(404).end();
   response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ data: [{ name: "init" }, { name: "deploy" }, { name: "mine" }] }));
 });
 await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
@@ -45,6 +47,8 @@ const claude = path.join(user, ".claude");
 write(path.join(claude, "agents", "reviewer.md"), "---\nname: Code Reviewer\ndescription: \"Reviews code.\\nThoroughly.\"\n---\nYou review code.\n");
 write(path.join(claude, "agents", "plan.md"), "---\ndescription: |\n  Plans\n  ahead\n---\nPlan first.\n");
 write(path.join(claude, "agents", "notes.txt"), "not an agent");
+// No header at all: by its file's name.
+write(path.join(claude, "agents", "Release Notes.md"), "Write release notes.\n");
 write(path.join(claude, "commands", "frontend", "component.md"), "---\ndescription: A component\n---\nMake $ARGUMENTS.\n");
 write(path.join(claude, "commands", "deploy.md"), "Ship it.\n");
 write(path.join(claude, "commands", "init.md"), "Set up.\n");
@@ -63,6 +67,7 @@ test("a machine lists Claude Code's agents and commands from its own ~/.claude, 
     { name: "Code Reviewer", description: "Reviews code.\nThoroughly.", path: ["agents", "code-reviewer"], settings: { mode: "subagent", description: "Reviews code.\nThoroughly.", system: "You review code." }, imported: true },
     // (One by an engine's own agent's name comes over beside it.)
     { name: "plan", description: "Plans\nahead", path: ["agents", "plan-claude"], settings: { mode: "subagent", description: "Plans\nahead", system: "Plan first." }, imported: false },
+    { name: "Release Notes", description: "", path: ["agents", "release-notes"], settings: { mode: "subagent", description: "", system: "Write release notes." }, imported: false },
   ]);
   // Named so they take none of the engine's (its own, a plugin's), but yours stays yours; one with
   // nothing to say isn't one.
@@ -80,6 +85,7 @@ test("with its engine down it still lists them, the engine's own commands named 
   const { status, json } = await answer(handle, "GET", "kuvo/claude-code");
   assert.equal(status, 200);
   assert.deepEqual(json.commands.map(command => command.name), ["deploy", "frontend-component", "init-claude", "mine"]);
+  assert.equal(json.agents.length, 3);
 });
 
 test("a computer with no ~/.claude has nothing to bring over; another's list, or a change, isn't asked here", async () => {
@@ -122,14 +128,38 @@ test("only ordinary files in ~/.claude are offered: not a link out of it, a pipe
     write(path.join(folder, "commands", "long.md"), "y".repeat(256 * 1024));
     // A folder named like a file isn't one.
     fs.mkdirSync(path.join(folder, "agents", "folder.md"));
+    // Nor is a file with another name too (a hard link: to one the agent couldn't read, say).
+    write(path.join(folder, "notes", "twice.md"), "Twice.\n");
+    fs.linkSync(path.join(folder, "notes", "twice.md"), path.join(folder, "commands", "twice.md"));
+    // Commands' folders are read four deep, no further.
+    write(path.join(folder, "commands", "a", "b", "c", "d", "deep.md"), "Deep.\n");
+    write(path.join(folder, "commands", "a", "b", "c", "d", "e", "deeper.md"), "Deeper.\n");
 
     const handle = link.engineHandler(() => { throw new Error("not running"); });
     const { status, json } = await answer(handle, "GET", "kuvo/claude-code");
     assert.equal(status, 200);
     assert.deepEqual(json.agents.map(agent => agent.name), ["kept"]);
-    assert.deepEqual(json.commands.map(command => command.name), ["long", "shared"]);
-    assert.equal(json.commands[0].settings.template.length, 256 * 1024);
-    assert.equal(json.commands[1].settings.template, "Shared.");
+    assert.deepEqual(json.commands.map(command => command.name), ["a-b-c-d-deep", "long", "shared"]);
+    assert.equal(json.commands[1].settings.template.length, 256 * 1024);
+    assert.equal(json.commands[2].settings.template, "Shared.");
+  } finally {
+    process.env.HOME = saved;
+  }
+});
+
+test("however many files are there, no more than 4 MB of them is read", async () => {
+  const saved = process.env.HOME;
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-claude-code-many-"));
+  removeAtEnd(other);
+  process.env.HOME = other;
+  try {
+    // Twenty of 250 KB: about 5 MB together.
+    for (let index = 10; index < 30; index++) write(path.join(other, ".claude", "commands", `c${index}.md`), "z".repeat(250 * 1024));
+    const handle = link.engineHandler(() => { throw new Error("not running"); });
+    const { status, json } = await answer(handle, "GET", "kuvo/claude-code");
+    assert.equal(status, 200);
+    // (In order, until the next would pass it.)
+    assert.deepEqual(json.commands.map(command => command.name), Array.from({ length: 16 }, (_, index) => `c${index + 10}`));
   } finally {
     process.env.HOME = saved;
   }

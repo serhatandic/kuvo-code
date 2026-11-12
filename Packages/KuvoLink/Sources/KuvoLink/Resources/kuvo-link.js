@@ -38915,14 +38915,27 @@ function unquote(text) {
 }
 var claudeID = (name) => [...name.toLowerCase()].map((each) => /[\p{L}\p{N}_-]/u.test(each) ? each : "-").join("");
 var CLAUDE_FILE_LIMIT = 256 * 1024;
-async function readClaudeFile(file, root) {
+var CLAUDE_TOTAL_LIMIT = 4 * 1024 * 1024;
+var CLAUDE_ENTRY_LIMIT = 2000;
+var CLAUDE_DEPTH_LIMIT = 4;
+async function openedAt(handle) {
+  if (process.platform !== "linux")
+    return null;
+  try {
+    return await fs123.promises.readlink(`/proc/self/fd/${handle.fd}`);
+  } catch {
+    return null;
+  }
+}
+async function readClaudeFile(file, root, budget) {
+  const inside = (where) => where.startsWith(root + path125.sep);
   let real;
   try {
     real = await fs123.promises.realpath(file);
   } catch {
     return null;
   }
-  if (!real.startsWith(root + path125.sep))
+  if (!inside(real))
     return null;
   let handle;
   try {
@@ -38932,7 +38945,13 @@ async function readClaudeFile(file, root) {
   }
   try {
     const stat = await handle.stat();
-    if (!stat.isFile() || stat.size > CLAUDE_FILE_LIMIT)
+    if (!stat.isFile() || stat.nlink > 1 || stat.size > CLAUDE_FILE_LIMIT || stat.size > budget.bytes)
+      return null;
+    const at = await openedAt(handle);
+    if (at !== null && !inside(at))
+      return null;
+    const again = await fs123.promises.stat(real).catch(() => null);
+    if (!again || again.dev !== stat.dev || again.ino !== stat.ino)
       return null;
     const buffer = Buffer.alloc(stat.size);
     let read = 0;
@@ -38942,6 +38961,9 @@ async function readClaudeFile(file, root) {
         break;
       read += bytesRead;
     }
+    if (await fs123.promises.realpath(file).catch(() => null) !== real)
+      return null;
+    budget.bytes -= read;
     return buffer.subarray(0, read).toString("utf8");
   } catch {
     return null;
@@ -38949,23 +38971,32 @@ async function readClaudeFile(file, root) {
     await handle.close().catch(() => {});
   }
 }
-async function markdownFiles(folder, root, nested = false) {
+async function markdownFiles(folder, root, budget, depth = 0) {
   let entries = [];
   try {
     entries = await fs123.promises.readdir(folder, { withFileTypes: true });
   } catch {
     return [];
   }
-  const found = await Promise.all(entries.map(async (entry) => {
+  const found = [];
+  for (const entry of entries.sort((one, other) => one.name < other.name ? -1 : one.name > other.name ? 1 : 0)) {
+    if (budget.entries-- <= 0 || budget.bytes <= 0)
+      break;
     const file = path125.join(folder, entry.name);
-    if (entry.isDirectory())
-      return nested && !entry.name.startsWith(".") ? (await markdownFiles(file, root, true)).map((each) => ({ name: `${entry.name}/${each.name}`, text: each.text })) : [];
+    if (entry.isDirectory()) {
+      if (depth > 0 && !entry.name.startsWith(".")) {
+        for (const each of await markdownFiles(file, root, budget, depth - 1))
+          found.push({ name: `${entry.name}/${each.name}`, text: each.text });
+      }
+      continue;
+    }
     if (path125.extname(entry.name) !== ".md")
-      return [];
-    const text = await readClaudeFile(file, root);
-    return text === null ? [] : [{ name: entry.name.slice(0, -3), text }];
-  }));
-  return found.flat();
+      continue;
+    const text = await readClaudeFile(file, root, budget);
+    if (text !== null)
+      found.push({ name: entry.name.slice(0, -3), text });
+  }
+  return found;
 }
 async function claudeCodeList(folder, settings, others) {
   const entry = (name, description, at, value) => ({ name, description, path: at, settings: value, imported: valueAt(settings, at) !== undefined });
@@ -38975,7 +39006,8 @@ async function claudeCodeList(folder, settings, others) {
   } catch {
     return { agents: [], commands: [] };
   }
-  const agents = (await markdownFiles(path125.join(folder, "agents"), root)).flatMap((file) => {
+  const budget = { bytes: CLAUDE_TOTAL_LIMIT, entries: CLAUDE_ENTRY_LIMIT };
+  const agents = (await markdownFiles(path125.join(folder, "agents"), root, budget)).flatMap((file) => {
     const { fields, body } = parseClaudeFile(file.text);
     const name = fields.name || file.name;
     let id = claudeID(name);
@@ -38987,7 +39019,7 @@ async function claudeCodeList(folder, settings, others) {
 `);
     return [{ id, name, description, body }];
   }).sort((one, other) => one.name.localeCompare(other.name, undefined, { sensitivity: "base" }));
-  const commands = (await markdownFiles(path125.join(folder, "commands"), root, true)).flatMap((file) => {
+  const commands = (await markdownFiles(path125.join(folder, "commands"), root, budget, CLAUDE_DEPTH_LIMIT)).flatMap((file) => {
     const { fields, body } = parseClaudeFile(file.text);
     const id = claudeID(file.name);
     return id && body ? [{ id, description: fields.description ?? "", body }] : [];
@@ -39004,8 +39036,8 @@ async function otherCommands(engine, settings) {
   if (!engine?.port)
     return new Set;
   const yours = valueAt(settings, ["commands"]);
-  const listed = await engineGet(engine, "api/command").catch(() => null);
-  return new Set((Array.isArray(listed?.data) ? listed.data : []).map((each) => each?.name).filter((name) => typeof name === "string" && !(yours && typeof yours === "object" && (name in yours))));
+  const listed = await engineList(engine, "api/command");
+  return new Set((listed ?? []).map((each) => each?.name).filter((name) => typeof name === "string" && !(yours && typeof yours === "object" && (name in yours))));
 }
 async function* claudeCodeRoute({ request, readEngine, json }) {
   if (request.method.toUpperCase() !== "GET")
@@ -39201,7 +39233,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0c23f9826b81";
+var BRIDGE_VERSION = "c6ae47c798ee";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -43471,15 +43503,9 @@ function engineHandler(readEngine = readEngineFile, info = {}, readBridge = read
 }
 
 // Packages/Box/src/link/mac/relay.ts
-var MAC_APP_ROUTES = ["kuvo/machines", "kuvo/hosts", "kuvo/usage", "kuvo/asks", "kuvo/mac", "kuvo/claude-code", "kuvo/engine"];
-var macAppAnswers = (route, request) => MAC_APP_ROUTES.some((area) => route === area || route.startsWith(`${area}/`)) && !(request && boxAnswers(route));
-function boxAnswers(route) {
-  if (route === "kuvo/claude-code")
-    return true;
-  if (route === "kuvo/engine/restart")
-    return keeperRuns();
-  return false;
-}
+var MAC_APP_ROUTES = ["kuvo/machines", "kuvo/hosts", "kuvo/usage", "kuvo/asks", "kuvo/mac", "kuvo/engine"];
+var macAppAnswers = (route) => MAC_APP_ROUTES.some((area) => route === area || route.startsWith(`${area}/`));
+var boxAnswers = (route) => route === "kuvo/engine/restart" && keeperRuns();
 function keeperRuns() {
   let pid = 0;
   try {
@@ -43509,7 +43535,7 @@ function macFront(handle = engineHandler(readEngineFile, { name: os18.hostname()
     const route = String(request.path ?? "").split("?")[0];
     if (isMachinesRoute(route))
       return yield* machinesRoute(request, phone, signal, route, timing);
-    if (macAppAnswers(route, request))
+    if (macAppAnswers(route) && !boxAnswers(route))
       return yield* toApp(request, phone, signal);
     yield* handle(request, phone, signal);
   };

@@ -821,9 +821,7 @@ final class PhoneLink {
         // Those that read the query get the request whole; the rest, its route.
         let route = request.path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? request.path
         // All but this Mac's own areas are its box's: answered there, as a machine's box answers them.
-        // (The app's own read of this Mac's Claude Code too, which every box lists for itself; what
-        // a box hands here of a phone's is an older box's, which doesn't.)
-        if !Self.appAnswers(route) || asking == nil && route == "kuvo/claude-code" {
+        if !Self.appAnswers(route) {
             guard let box = Self.box.withLock({ $0 }) else { return Self.boxUnavailable() }
             let base = box.url.absoluteString.hasSuffix("/") ? box.url : URL(string: box.url.absoluteString + "/")!
             // The app's own requests (no phone asking) say so: they aren't a phone using the box.
@@ -871,15 +869,6 @@ final class PhoneLink {
                     Self.sendJSON(status, body, to: continuation)
                 }
                 if route == "kuvo/machines" { continuation.onTermination = { _ in task.cancel() } }
-            }
-        }
-        // COMPAT(0.7 claude-code): a phone's From Claude Code that an older box of this Mac hands here (one from before it listed them), answered with this Mac's ~/.claude read here. Goes 3 months after 0.8.0.
-        if route == "kuvo/claude-code" {
-            return AsyncThrowingStream { continuation in
-                Task { @MainActor in
-                    let (status, body) = request.method.uppercased() == "GET" ? await link?.claudeCodeJSON() ?? (503, Data()) : (405, Data("{}".utf8))
-                    Self.sendJSON(status, body, to: continuation)
-                }
             }
         }
         // Settings › General's While Agents Work: whether it's kept awake now can be the keeper's
@@ -1088,7 +1077,7 @@ final class PhoneLink {
     /// This Mac's own areas, which the app answers itself: what its box hands it of a phone's
     /// (the box's `MAC_APP_ROUTES`, the one list of them, which a test holds this to). Everything
     /// else, a phone's or the app's own (`BoxClient`), is its box's (`BoxProcess`).
-    nonisolated static let appRoutes = ["kuvo/machines", "kuvo/hosts", "kuvo/usage", "kuvo/asks", "kuvo/mac", "kuvo/claude-code", "kuvo/engine"]
+    nonisolated static let appRoutes = ["kuvo/machines", "kuvo/hosts", "kuvo/usage", "kuvo/asks", "kuvo/mac", "kuvo/engine"]
     /// Where this Mac's box is reached while it runs.
     nonisolated static let box = OSAllocatedUnfairLock<ServerEndpoint?>(initialState: nil)
     /// Connections of its own to this Mac's box, plenty of them: the streams that follow it

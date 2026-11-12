@@ -34,25 +34,17 @@ import type { LinkState } from "../state";
 // What only this Mac's app answers a phone, by area: its machines (which this box answers in part
 // with the app closed: machines.ts), the machines your phones reach directly, its usage panel's
 // numbers, what its panel's browser asks you, its macOS services (`kuvo/mac`), and its engine's
-// restart while the app runs this box itself (`boxAnswers` says when this box takes them). The one
-// list of them: the app keeps none, and hands its own requests for anything else to this box.
-// Everything else a phone asks this box answers itself, as a machine's does, with the app open or
-// closed.
-// COMPAT(0.7 claude-code): `kuvo/claude-code` on the list for the app's answer to what an older box hands it; this box answers it itself (`boxAnswers`). Goes 3 months after 0.8.0.
-export const MAC_APP_ROUTES = ["kuvo/machines", "kuvo/hosts", "kuvo/usage", "kuvo/asks", "kuvo/mac", "kuvo/claude-code", "kuvo/engine"];
-export const macAppAnswers = (route: string, request?: LinkRequest): boolean =>
-  MAC_APP_ROUTES.some(area => route === area || route.startsWith(`${area}/`)) && !(request && boxAnswers(route));
+// restart while the app runs this box itself (`boxAnswers`). The one list of them: the app keeps
+// none, and hands its own requests for anything else to this box. Everything else a phone asks
+// this box answers itself, as a machine's does, with the app open or closed.
+export const MAC_APP_ROUTES = ["kuvo/machines", "kuvo/hosts", "kuvo/usage", "kuvo/asks", "kuvo/mac", "kuvo/engine"];
+export const macAppAnswers = (route: string): boolean => MAC_APP_ROUTES.some(area => route === area || route.startsWith(`${area}/`));
 
-// Those of the app's areas this box answers itself, with the app closed too: this Mac's own Claude
-// Code agents and commands (each box lists its own: `kuvo/claude-code`), and its engine's restart
-// while the keeper runs this box (`kuvo-start restart` asks it, as a machine's box asks its own).
-// While the app runs the box itself, the app restarts the engine: `bin/kuvo-start` stays once a
-// keeper has run, and would answer 202 with nothing to ask.
-function boxAnswers(route: string): boolean {
-  if (route === "kuvo/claude-code") return true;
-  if (route === "kuvo/engine/restart") return keeperRuns();
-  return false;
-}
+/** Those of the app's areas this box answers itself now, with the app closed too: its engine's
+ * restart while the keeper runs this box (`kuvo-start restart` asks it, as a machine's box asks
+ * its own). While the app runs the box itself, the app restarts the engine: `bin/kuvo-start` stays
+ * once a keeper has run, and would answer 202 with nothing to ask. */
+export const boxAnswers = (route: string): boolean => route === "kuvo/engine/restart" && keeperRuns();
 
 /** Whether this Mac's keeper runs this box now: its record in `run/keeper.json` names the process
  * that started it, alive. (A record a keeper left as it crashed, its ID another's since, isn't.) */
@@ -87,7 +79,7 @@ export function macFront(handle: LinkHandler = engineHandler(readEngineFile, { n
   return async function* (request: LinkRequest, phone: Asker | undefined, signal?: AbortSignal): AsyncGenerator<AnswerPiece> {
     const route = String(request.path ?? "").split("?")[0];
     if (isMachinesRoute(route)) return yield* machinesRoute(request, phone, signal, route, timing);
-    if (macAppAnswers(route, request)) return yield* toApp(request, phone, signal);
+    if (macAppAnswers(route) && !boxAnswers(route)) return yield* toApp(request, phone, signal);
     yield* handle(request, phone, signal);
   };
 }

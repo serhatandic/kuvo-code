@@ -3120,7 +3120,8 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `["commands", "<name>"]`) through this computer's `kuvo/config`; `imported` says whether its
   settings have it there. A computer with no `~/.claude` lists none. Only ordinary files of 256 KB
   at most are read, where their links lead inside `~/.claude` (itself a link, to dotfiles say, is
-  read where it leads): a link out of it, a pipe or a device isn't. Each computer offers its own:
+  read where it leads): a link out of it, a hard link, a pipe or a device isn't. Commands' folders
+  are read four deep, and no more than 2,000 entries and 4 MB in all. Each computer offers its own:
   a client asks a machine's box for the machine's, never a Mac for it (`?machine=`, which a Mac's
   app once answered with the Mac's `~/.claude`, is `404`).
 - `POST kuvo/engine/restart`: the computer's engine starts over, as Settings › Engine's Restart
@@ -4608,9 +4609,10 @@ from 0.9.201, while it waits for its next try, `run/engine.retry`, that it's try
 machine's, while its keeper's next start is more than half a minute away (`run/engine.retry`, when,
 in seconds since 1970), "This machine's engine keeps stopping. It's started again in about N
 minutes." The Mac's own routes (`MAC_APP_ROUTES`, the one list of them: `kuvo/machines…`,
-`kuvo/hosts…`, `kuvo/usage…`, `kuvo/asks…`, `kuvo/mac`, `kuvo/claude-code`, `kuvo/engine/…`), it
-hands the app (`link/route`), but for those it answers itself (from #341): `kuvo/claude-code`,
-and `kuvo/engine/restart` while its keeper runs (`run/keeper.json`, its process alive). Those it hands the app as it comes, whether its app or its keeper runs the box (the keeper's
+`kuvo/hosts…`, `kuvo/usage…`, `kuvo/asks…`, `kuvo/mac`, `kuvo/engine/…`), it hands the app
+(`link/route`), but `kuvo/engine/restart` while its keeper runs (`run/keeper.json`, its process
+alive), which it answers itself (from #341). (`kuvo/claude-code` was one of them before #341: every
+box answers it now.) Those it hands the app as it comes, whether its app or its keeper runs the box (the keeper's
 host passes on the app's answer as it came, `x-kuvo-answer` with it), `503 {"message"}` at once when
 the app isn't answering (of its machines and hosts it says what it can itself then: "Machines").
 The app answers those alone, and hands its box everything else it's asked, its own requests
@@ -6392,12 +6394,6 @@ before connects (the box notes one: `run/attached`).
   program that way, picking what's behind from `metadata.outdated` and `metadata.updates` on the
   own sign-in.
   <!-- compat: 0.7 update-answer -->
-- **Claude Code's agents and commands** (#341): this Mac's box from before `kuvo/claude-code` (an
-  older one a keeper still runs, 0.7's included) doesn't list them. This Mac's app reads its own
-  `~/.claude` then (Settings › Agents and Commands on this Mac's page), and answers a phone's
-  `kuvo/claude-code` that such a box hands it, which is why the route stays on `MAC_APP_ROUTES`.
-  A machine's box from before it lists none.
-  <!-- compat: 0.7 claude-code -->
 
 **This Mac's own group chats, from 0.5 to 0.8.0-beta.1.** Those Macs ran their group chats in the
 app (`groups.json`, each chat's messages in `groups/<id>.json`). A Mac with this version moves

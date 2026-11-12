@@ -58,7 +58,7 @@ import Testing
         }
         let client = box.client(engine: engine.url)
         #expect(try await client.send("GET", "kuvo/claude-code").status == 200)
-        let listed = await ClaudeCodeImports.read(for: client, others: [])
+        let listed = await ClaudeCodeImports.read(for: client)
         #expect(listed.agents.map(\.path) == [["agents", "reviewer"]])
         #expect(listed.agents.first?.name == "Reviewer")
         #expect(listed.agents.first?.settings == .object(["mode": .string("subagent"), "description": .string("Reviews code"), "system": .string("Review it.")]))
@@ -81,7 +81,7 @@ import Testing
         }
         let local = box.client(engine: engine.url)
         let machine = BoxClient(box: "m_lab", transport: local.transport)
-        let listed = await ClaudeCodeImports.read(for: machine, others: [])
+        let listed = await ClaudeCodeImports.read(for: machine)
         #expect(listed.agents.map(\.path) == [["agents", "tester"]])
         #expect(listed.commands.map(\.path) == [["commands", "ship"]])
         #expect(listed.commands.first?.settings == .object(["template": .string("Ship $ARGUMENTS."), "description": .string("")]))
@@ -96,7 +96,7 @@ import Testing
                 }
             }
         }
-        let older = await ClaudeCodeImports.read(for: BoxClient(box: "m_old", transport: Missing()), others: [])
+        let older = await ClaudeCodeImports.read(for: BoxClient(box: "m_old", transport: Missing()))
         #expect(older.agents.isEmpty && older.commands.isEmpty)
     }
 }
