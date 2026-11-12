@@ -33574,7 +33574,7 @@ function worktreeOf(directory) {
   const real = realOr2(directory);
   return readWorktrees().find((tree) => real === realOr2(tree.root) || real.startsWith(realOr2(tree.root) + path116.sep));
 }
-async function mergeInto(directory, into, author = {}) {
+async function mergeInto(directory, given, author = {}) {
   const tree = worktreeOf(directory);
   if (!tree || !fs113.existsSync(tree.project))
     return { status: 409, failed: "Only a worktree’s branch is merged here. Create a pull request instead." };
@@ -33583,7 +33583,8 @@ async function mergeInto(directory, into, author = {}) {
     return { status: 409, failed: "This folder isn’t on a branch." };
   const target = tree.project;
   const checkedOut = await branchOf(target);
-  if (checkedOut !== into) {
+  const into = given ?? tree.base ?? checkedOut;
+  if (!into || checkedOut !== into) {
     return { status: 409, failed: checkedOut ? `The project’s folder is on ${checkedOut} now. Switch it back to ${into} to merge, or create a pull request.` : "The project’s folder isn’t on a branch." };
   }
   if ((await git2(target, ["rev-parse", "-q", "--verify", "MERGE_HEAD"])).ok)
@@ -33594,14 +33595,14 @@ async function mergeInto(directory, into, author = {}) {
   const said = refusal(target, author);
   const failed = await said(["merge", "--no-edit", branch]);
   if (!failed)
-    return null;
+    return { into };
   const conflicts = (await text4(target, ["-c", "core.quotepath=off", "diff", "--name-only", "-z", "--diff-filter=U"]) ?? "").split("\x00").filter(Boolean);
   if ((await git2(target, ["rev-parse", "-q", "--verify", "MERGE_HEAD"])).ok)
     await said(["merge", "--abort"]);
   if (!conflicts.length)
     return { status: 422, failed };
   const named = conflicts.slice(0, 5).join(", ") + (conflicts.length > 5 ? ` and ${conflicts.length - 5} more` : "");
-  return { status: 409, failed: `${into} changed some of the same lines: ${named}. Nothing was merged.`, conflicts };
+  return { status: 409, failed: `${into} changed some of the same lines: ${named}. Nothing was merged.`, conflicts, into };
 }
 function webPage(remote) {
   let address = remote.trim().replace(/\.git$/, "");
@@ -33856,11 +33857,11 @@ async function* changesRoute(context) {
       return yield* failed ? json(422, { message: failed }) : json(200, {});
     }
     if (route === "kuvo/git/merge") {
-      const into = body.into;
-      if (typeof into !== "string" || !into || into.startsWith("-"))
+      const into = body.into ?? undefined;
+      if (into !== undefined && (typeof into !== "string" || !into || into.startsWith("-")))
         return yield* json(400, { message: "Name the branch to merge into." });
-      const failed = await mergeInto(directory, into, authorOf(body));
-      return yield* failed ? json(failed.status, { message: failed.failed, ...failed.conflicts ? { conflicts: failed.conflicts } : {} }) : json(200, {});
+      const merged = await mergeInto(directory, into, authorOf(body));
+      return yield* "failed" in merged ? json(merged.status, { message: merged.failed, ...merged.conflicts ? { conflicts: merged.conflicts, into: merged.into } : {} }) : json(200, merged);
     }
     const words = (value) => typeof value === "string" && value.trim() ? value.trim() : undefined;
     const made = await pullRequest(directory, words(body.title), words(body.body));
@@ -39045,7 +39046,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "b2d67f9bdecf";
+var BRIDGE_VERSION = "5ebd007d1421";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

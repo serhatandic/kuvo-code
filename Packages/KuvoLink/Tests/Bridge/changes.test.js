@@ -488,6 +488,30 @@ test("Merge into…: a worktree's commits go into the project's branch; work not
   assert.equal((await route("POST", "kuvo/git/merge", { directory: tree.folder, into: "--abort" })).status, 400);
 });
 
+test("Merge into… with no branch named goes into the one the worktree was made from, and says which, as a conflict does", async () => {
+  const tree = await worktree();
+  tree.write("README.md", "Hello\nFrom the worktree\n");
+  tree.there("commit", "-q", "-am", "From the worktree");
+  let answer = await route("POST", "kuvo/git/merge", { directory: tree.folder });
+  assert.equal(answer.status, 200);
+  assert.deepEqual(answer.json, { into: "main" });
+  assert.equal(git("log", "-1", "--format=%s", "main").trim(), "From the worktree");
+
+  write("src/app.js", "let a = 2\n");
+  git("commit", "-q", "-am", "Two on main");
+  tree.write("src/app.js", "let a = 3\n");
+  tree.there("commit", "-q", "-am", "Three on the branch");
+  answer = await route("POST", "kuvo/git/merge", { directory: tree.folder });
+  assert.equal(answer.status, 409);
+  assert.deepEqual(answer.json, { message: "main changed some of the same lines: src/app.js. Nothing was merged.", conflicts: ["src/app.js"], into: "main" });
+
+  // The project's folder on another branch now: refused, the branch it was made from named.
+  git("checkout", "-q", "-b", "elsewhere");
+  answer = await route("POST", "kuvo/git/merge", { directory: tree.folder });
+  assert.equal(answer.status, 409);
+  assert.equal(answer.json.message, "The project’s folder is on elsewhere now. Switch it back to main to merge, or create a pull request.");
+});
+
 test("Create Pull Request pushes the branch and makes it with gh against the worktree's base, or gives the host's page without gh", async () => {
   const tree = await worktree();
   const remote = fs.mkdtempSync(path.join(root, "remote-"));

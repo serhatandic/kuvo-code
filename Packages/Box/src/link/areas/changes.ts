@@ -393,16 +393,19 @@ export function worktreeOf(directory: string) {
 }
 
 /** Merge into…: what's committed on a worktree's branch merged into `into`, in the project's
- * folder, which must have `into` checked out (as the Mac's own Merge into… does). A merge that
- * conflicts is taken back, so the project's folder is as it was, and names the files. */
-export async function mergeInto(directory: string, into: string, author: Record<string, string> = {}): Promise<{ status: number; failed: string; conflicts?: string[] } | null> {
+ * folder, which must have `into` checked out. Without `into`, the branch the worktree was made from
+ * (its record's `base`), else the one the project's folder has checked out. A merge that conflicts
+ * is taken back, so the project's folder is as it was, and names the files. `into`: the branch it
+ * went into, or would have. */
+export async function mergeInto(directory: string, given: string | undefined, author: Record<string, string> = {}): Promise<{ status: number; failed: string; conflicts?: string[]; into?: string } | { into: string }> {
   const tree = worktreeOf(directory);
   if (!tree || !fs.existsSync(tree.project)) return { status: 409, failed: "Only a worktree’s branch is merged here. Create a pull request instead." };
   const branch = await branchOf(directory);
   if (!branch) return { status: 409, failed: "This folder isn’t on a branch." };
   const target = tree.project;
   const checkedOut = await branchOf(target);
-  if (checkedOut !== into) {
+  const into = given ?? tree.base ?? checkedOut;
+  if (!into || checkedOut !== into) {
     return { status: 409, failed: checkedOut ? `The project’s folder is on ${checkedOut} now. Switch it back to ${into} to merge, or create a pull request.` : "The project’s folder isn’t on a branch." };
   }
   // One you're in the middle of there is yours: never taken back with this one.
@@ -411,7 +414,7 @@ export async function mergeInto(directory: string, into: string, author: Record<
   if (why) return { status: 409, failed: why };
   const said = refusal(target, author);
   const failed = await said(["merge", "--no-edit", branch]);
-  if (!failed) return null;
+  if (!failed) return { into };
   // By their names as they are: not quoted or escaped, whatever letters are in them.
   const conflicts = ((await text(target, ["-c", "core.quotepath=off", "diff", "--name-only", "-z", "--diff-filter=U"])) ?? "").split("\0").filter(Boolean);
   // Stopped partway for another reason (a hook, signing the commit): taken back too, or the folder
@@ -419,7 +422,7 @@ export async function mergeInto(directory: string, into: string, author: Record<
   if ((await git(target, ["rev-parse", "-q", "--verify", "MERGE_HEAD"])).ok) await said(["merge", "--abort"]);
   if (!conflicts.length) return { status: 422, failed };
   const named = conflicts.slice(0, 5).join(", ") + (conflicts.length > 5 ? ` and ${conflicts.length - 5} more` : "");
-  return { status: 409, failed: `${into} changed some of the same lines: ${named}. Nothing was merged.`, conflicts };
+  return { status: 409, failed: `${into} changed some of the same lines: ${named}. Nothing was merged.`, conflicts, into };
 }
 
 /** A remote's web page: `git@github.com:me/app.git` and `https://github.com/me/app.git` are both
@@ -674,10 +677,13 @@ export async function* changesRoute(context: RouteContext): AsyncGenerator<Answe
       return yield* failed ? json(422, { message: failed }) : json(200, {});
     }
     if (route === "kuvo/git/merge") {
-      const into = body.into;
-      if (typeof into !== "string" || !into || into.startsWith("-")) return yield* json(400, { message: "Name the branch to merge into." });
-      const failed = await mergeInto(directory, into, authorOf(body));
-      return yield* failed ? json(failed.status, { message: failed.failed, ...(failed.conflicts ? { conflicts: failed.conflicts } : {}) }) : json(200, {});
+      // Left out: the branch the worktree was made from.
+      const into = body.into ?? undefined;
+      if (into !== undefined && (typeof into !== "string" || !into || into.startsWith("-"))) return yield* json(400, { message: "Name the branch to merge into." });
+      const merged = await mergeInto(directory, into, authorOf(body));
+      return yield* "failed" in merged
+        ? json(merged.status, { message: merged.failed, ...(merged.conflicts ? { conflicts: merged.conflicts, into: merged.into } : {}) })
+        : json(200, merged);
     }
     const words = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : undefined);
     const made = await pullRequest(directory, words(body.title), words(body.body));

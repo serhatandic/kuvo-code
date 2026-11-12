@@ -4993,14 +4993,17 @@
    "route": "POST kuvo/git/merge",
    "answers": {
     "200": {
-     "object": {}
+     "object": {
+      "into?": "string"
+     }
     },
     "409": {
      "object": {
       "message": "string",
       "conflicts?": {
        "list": "string"
-      }
+      },
+      "into?": "string"
      }
     }
    }

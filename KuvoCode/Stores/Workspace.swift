@@ -3615,28 +3615,26 @@ final class Workspace {
         if !lastingShellJobs.isSubset(of: running) { lastingShellJobs.formIntersection(running) }
     }
 
-    /// Stops a command an agent left running: its process group is sent SIGTERM, on this Mac or
-    /// on its machine, so the engine sees it end and tells the agent, with what it printed. The
-    /// engine's own stop also deletes the output, and the agent hears the command was never
-    /// found, so it's only for when that can't be done.
-    /// How it went: "signal" or "removed" (the engine's stop), for a phone that asked.
+    /// Stops a command an agent left running, on the box its session's folder is on
+    /// (`kuvo/shell/<id>/stop`), as a phone asks it: its process group is sent SIGTERM there, so the
+    /// engine sees it end and tells the agent, with what it printed. The engine's own stop deletes
+    /// the output too, and the agent hears the command was never found, so the box does that only
+    /// when it can't send the signal.
+    /// How it went: "signal" or "removed", or nil when it couldn't be stopped (none such runs there).
     @discardableResult
-    func stopShellJob(_ job: ShellJob, in session: String) async -> String {
+    func stopShellJob(_ job: ShellJob, in session: String) async -> String? {
         let directory = self.session(session)?.location.directory ?? ""
-        let engine = api(forSession: session)
-        // Its process as the engine knows it now: one noted earlier (announced before it had one,
-        // or from before a machine restarted, when it can be another process's) isn't signalled.
-        let current = try? await engine?.shell(job.id, directory: directory)
-        if let current, current.status == "running", let pid = current.pid, pid > 1 {
-            let machine = RemoteFolder.machine(of: directory)
-            let sent = await Task.detached { () -> Bool in
-                guard let machine else { return kill(-pid_t(pid), SIGTERM) == 0 }
-                return RemoteShell.run("kill -TERM -\(pid) 2>/dev/null && echo sent", on: machine).map { String(decoding: $0, as: UTF8.self).contains("sent") } ?? false
-            }.value
-            if sent { return "signal" }
-        }
-        try? await engine?.removeShell(job.id, directory: directory)
-        return "removed"
+        struct Stopped: Decodable { var stopped: String }
+        // As JavaScript's `encodeURIComponent` writes them, as the engine reads its folder.
+        let plain = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()")
+        let id = job.id.addingPercentEncoding(withAllowedCharacters: plain) ?? job.id
+        // The engine looks for it in the session's folder, as its box names it.
+        let folder = Self.onBox(directory).addingPercentEncoding(withAllowedCharacters: plain) ?? directory
+        guard let client = boxes?(Self.box(of: directory)),
+              let (status, data) = try? await client.send("POST", "kuvo/shell/\(id)/stop", body: try? JSONSerialization.data(withJSONObject: ["session": session]),
+                                                          headers: directory.isEmpty ? [:] : ["x-opencode-directory": folder]),
+              (200..<300).contains(status) else { return nil }
+        return (try? JSONDecoder().decode(Stopped.self, from: data))?.stopped
     }
 
     /// Hears a conversation go on Autopilot, from any client: what it has waiting on you here stops waiting.

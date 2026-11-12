@@ -152,7 +152,9 @@ import Testing
         // without saying its changes go.
         try Data("total = sum(items)\n".utf8).write(to: URL(filePath: folder).appending(path: "checkout.py"))
         let named = try #require(workspace.worktrees[folder])
-        guard case .failed(let notCommitted) = named.mergeBack(from: folder, environment: [:]) else { Issue.record("merged uncommitted work"); return }
+        // As the Changes panel's Merge asks: its box, this Mac's.
+        let place = GitPlace(client: box.client(engine: Self.engine), path: folder, machine: nil)
+        guard case .failed(let notCommitted) = await named.mergeBack(at: place, author: [:]) else { Issue.record("merged uncommitted work"); return }
         #expect(notCommitted.contains("Commit the changes first"))
         let kept = await #expect(throws: BoxRefusal.self) { try await workspace.removeWorktree(folder, discardingChanges: false) }
         #expect(kept?.status == 409 && kept?.message.contains("changes that aren’t committed") == true)
@@ -161,9 +163,9 @@ import Testing
         // Committed: it merges into main, in the project's folder.
         _ = try git("add", "-A", in: folder)
         _ = try git("commit", "-q", "-m", "Fix the total", in: folder)
-        #expect(named.mergeBack(from: folder, environment: [:]) == .merged(into: "main"))
+        #expect(await named.mergeBack(at: place, author: [:]) == .merged(into: "main"))
         #expect(repository.read("checkout.py") == "total = sum(items)\n")
-        #expect(named.mergeBack(from: folder, environment: [:]) == .failed("\(branch) has nothing main doesn’t have yet."))
+        #expect(await named.mergeBack(at: place, author: [:]) == .failed("\(branch) has nothing main doesn’t have yet."))
 
         // Removed, then archived: the worktree and its merged branch go; the session is still the
         // project's.
@@ -197,7 +199,8 @@ import Testing
         _ = try git("commit", "-q", "-m", "x", in: folder)
         try repository.git("switch", "-q", "-c", "release")
         let tree = try #require(workspace.worktrees[folder])
-        guard case .failed(let message) = tree.mergeBack(from: folder, environment: [:]) else { Issue.record("merged into release"); return }
+        let place = GitPlace(client: box.client(engine: Self.engine), path: folder, machine: nil)
+        guard case .failed(let message) = await tree.mergeBack(at: place, author: [:]) else { Issue.record("merged into release"); return }
         #expect(message.contains("on release now"))
         #expect(!repository.exists("x.txt"))
     }

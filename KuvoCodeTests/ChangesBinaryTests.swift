@@ -10,15 +10,18 @@ import Testing
 @Suite struct ChangesBinaryTests {
     let repo: TestRepository
     let changes: ProjectChanges
+    /// This Mac's box, which runs git for it.
+    let box: GitTestBox
     /// A PNG's first bytes, then bytes no text has.
     let logo = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0xFF, 0x00, 0x10])
 
-    init() throws {
+    init() async throws {
         repo = try TestRepository()
         try repo.write("README.md", "Hello\n")
         try logo.write(to: repo.url.appending(path: "logo.png"))
         try repo.commitAll("Start")
-        changes = ProjectChanges(directory: repo.path)
+        box = try await GitTestBox()
+        changes = box.changes(repo.path)
     }
 
     private func row(_ path: String) async throws -> ChangedFile {

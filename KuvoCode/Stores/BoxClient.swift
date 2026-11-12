@@ -54,6 +54,14 @@ struct BoxClient: Sendable {
     nonisolated static func isMachine(_ machine: String?) -> Bool { machine.map { !isThisMac($0) } ?? false }
 
 
+    /// A box's routes by its id, as the app reaches them (`AppModel.box`, which sets this as it
+    /// starts): for a store made where the app's model isn't at hand (the Changes panel's). Until
+    /// then, a machine's only: this Mac's isn't reached.
+    @MainActor static var routes: (String) -> BoxClient = { id in
+        guard id == mac else { return .machine(id) }
+        return BoxClient(box: id, transport: LocalBox { _ in AsyncThrowingStream { $0.finish(throwing: URLError(.cannotConnectToHost)) } })
+    }
+
     /// A machine's box, by the machine's id, through `kuvo-link.js box route` over its SSH connection.
     nonisolated static func machine(_ id: String) -> BoxClient {
         BoxClient(box: id, transport: MachineBoxTransport(connection: SSHConnection(destination: id)))
@@ -176,8 +184,9 @@ struct MachineBoxTransport: BoxTransport {
                     // This Mac's proof for a request to the machine's vault (PROTOCOL.md, "Vault"),
                     // which covers its body as sent: that body as it is, not as JSON again.
                     let vault = request.headers["x-kuvo-vault-proof"] != nil
+                    // And the folder it's about, as a phone's request names it (a command to stop).
                     let (status, data) = try await MachineBox.route(request.method, request.path, body: body, bodyText: vault ? String(decoding: request.body, as: UTF8.self) : nil,
-                                                                    headers: request.headers.filter { $0.key == "x-kuvo-vault-proof" }, on: connection)
+                                                                    headers: request.headers.filter { $0.key == "x-kuvo-vault-proof" || $0.key == "x-opencode-directory" }, on: connection)
                     continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
                     continuation.yield(.body(data))
                     continuation.finish()

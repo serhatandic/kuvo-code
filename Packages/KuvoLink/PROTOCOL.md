@@ -2350,7 +2350,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   engine sees it end and tells the agent, with what it printed; only if that can't be sent, the
   engine's own remove (which deletes the output, and the agent hears the command wasn't found).
   Answers `200 {"stopped": "signal"}` or `200 {"stopped": "removed"}`, or `404 {}` when no such
-  command runs. The engine's commands, and a coding agent's (`shl_…`, through their bridge: bridge
+  command runs. A client sends `x-opencode-directory`, the session's folder (as the engine's API
+  takes it), for the engine to find it there; the Mac's Stop asks this of the box the session is
+  on, its own too. The engine's commands, and a coding agent's (`shl_…`, through their bridge: bridge
   0.9.64; while the engine is down too, from 0.9.66). Every box does it for its own, a machine's
   with the Mac closed too.
 - `kuvo/info`: what the host is and runs: `kind` (`mac` or `machine`), `name`, `engine` (its
@@ -2959,7 +2961,8 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     files).
 - Changes (`git`, bridge 0.9.94): a project's changes as the Changes panel shows and works them,
   by the box's own git in its own folders, so a machine's work with the Mac closed and from a
-  phone. A client parses the diff itself. Scopes: `uncommitted` (the default), `unstaged`,
+  phone. Every client asks the box the folder is on, a Mac for its own folders too, and runs no
+  git of its own for them. A client parses the diff itself. Scopes: `uncommitted` (the default), `unstaged`,
   `staged`, `branch`. `404 {"message"}` for a folder that isn't there, `400` for a scope or a
   file that makes no sense (a file is a path in the repository, never absolute or climbing out).
   - `POST kuvo/git/changes {"directory", "scope"?, "base"?}` → `{"repository": false}` outside a
@@ -3003,13 +3006,15 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     client, which sends it to a model as it is.
   - `POST kuvo/git/push {"directory"}` (`git.push`, bridge 0.9.143) pushes what the folder has
     checked out (a new branch pushed and tracked) → `200 {}`, or `422 {"message"}` with git's words.
-  - `POST kuvo/git/merge {"directory", "into", "author"?}` (`git.merge`, bridge 0.9.143): Merge
+  - `POST kuvo/git/merge {"directory", "into"?, "author"?}` (`git.merge`, bridge 0.9.143): Merge
     into…, what's committed on a worktree's branch (`directory`, a folder in one of the box's
     worktrees) merged into `into` (its `base` in `kuvo/worktrees`), in the project's folder, which
-    must have `into` checked out → `200 {}`. `author` as for a commit, for a merge commit. `409
+    must have `into` checked out → `200 {"into"}`. Without `into` (boxes after #341; before, `400`),
+    the worktree's `base`, else the branch the project's folder has checked out; `into` in the
+    answer says which. `author` as for a commit, for a merge commit. `409
     {"message"}` when it can't go: not a worktree's folder, the project's folder on another branch
     or in the middle of a merge of yours (left as it is), changes not committed, or nothing `into`
-    doesn't have; and for a merge that would conflict, `409 {"message", "conflicts": [path]}`, the
+    doesn't have; and for a merge that would conflict, `409 {"message", "conflicts": [path], "into"}`, the
     merge taken back and nothing merged. `422 {"message"}` with git's words when it stopped for
     another reason (taken back too).
   - `POST kuvo/git/pull-request {"directory", "title"?, "body"?, "session"?}` (`git.pull-request`, bridge
