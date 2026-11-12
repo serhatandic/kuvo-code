@@ -368,6 +368,84 @@ import Testing
         #expect(clock.waits == [], "no syncs run for it")
     }
 
+    /// Disconnected while its engine starts over: it stays disconnected, and nothing more of the
+    /// start over goes there (its engine isn't started over behind your back, nor connected to).
+    /// (Not connected first, as `removedWhileStartingOver` says.)
+    @Test func disconnectedWhileItsEngineStartsOverItStaysDisconnected() async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        // Its first step, held until it's disconnected; the rest answered.
+        let gate = Gate()
+        let sending = Gate()
+        defer { gate.open() }
+        SSHConnection.standIn = { [ssh] address, script in
+            ssh.note(script, to: address)
+            if address == id, script.contains(#".kuvo-boot" 2>/dev/null"#) {
+                sending.open()
+                gate.wait()
+            }
+            return ""
+        }
+        let restart = app.restartEngine(engine)
+        try await until { sending.isOpen }
+        #expect(sending.isOpen, "it began starting over")
+        let sent = ssh.scripts(to: id).count
+        app.disconnect(engine)
+        gate.open()
+        await restart.value
+        #expect(!engine.isReady, "it didn't connect again")
+        #expect(engine.connection == .notConnected)
+        #expect(Array(ssh.scripts(to: id).dropFirst(sent)) == [], "nothing more went to it over SSH once it was disconnected")
+    }
+
+    /// Removed while it connects, as it notes that it puts its files there: nothing more goes there
+    /// (its keeper, its engine, its settings), over SSH that answers each script.
+    @Test func removedAsItsConnectBeginsNothingMoreGoesThere() async throws {
+        try await cutOffWhileConnecting(at: #"touch "$R/mac-installing""#) { app.removeMachine($0.machine.id) }
+    }
+
+    /// And while its keeper goes there, a step that's let finish (cut off halfway, it would leave
+    /// the keeper broken): nothing after it.
+    @Test func removedAsItsKeeperGoesThereNothingMoreGoesThere() async throws {
+        try await cutOffWhileConnecting(at: "$name.new") { app.removeMachine($0.machine.id) }
+    }
+
+    /// Disconnected then: the same, and it stays disconnected.
+    @Test func disconnectedAsItsKeeperGoesThereNothingMoreGoesThere() async throws {
+        try await cutOffWhileConnecting(at: "$name.new") { app.disconnect($0) }
+    }
+
+    /// Its real start over SSH (no stand-in engine), every script answered, held at the one that has
+    /// `step` in it while `cut` (Remove, Disconnect) happens: nothing more goes there after.
+    private func cutOffWhileConnecting(at step: String, by cut: (MachineEngine) -> Void) async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        MachineEngine.standIn = nil
+        let gate = Gate()
+        let sending = Gate()
+        defer { gate.open() }
+        SSHConnection.standIn = { [ssh] address, script in
+            ssh.note(script, to: address)
+            if address == id, script.contains(step) {
+                sending.open()
+                gate.wait()
+            }
+            return ""
+        }
+        let start = app.connect(engine)
+        try await until { sending.isOpen }
+        #expect(sending.isOpen, "its connect got to that step")
+        let sent = ssh.scripts(to: id).count
+        cut(engine)
+        gate.open()
+        await start.value
+        #expect(Array(ssh.scripts(to: id).dropFirst(sent)) == [], "nothing more went to it over SSH once it was cut off")
+        #expect(!engine.isReady, "it didn't connect")
+        #expect(engine.connection == .notConnected)
+    }
+
     // MARK: Helpers
 
     /// A machine's name no one can reach.

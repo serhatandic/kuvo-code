@@ -490,12 +490,15 @@ final class MachineEngine {
         case .preparing, .failed: break
         case .downloading, .starting, .ready: return nil
         }
-        // One that left this Mac, from a retry or a start over that came after: nothing goes there.
-        guard !isRetired else { return nil }
+        // One that left this Mac, from a retry or a start over that came after, or one
+        // disconnected: nothing goes there.
+        guard !isRetired, !isDisconnected else { return nil }
         isStopping = false
-        // Disconnecting (Connect Now) or a newer attempt ends this one at its next step.
+        // Disconnect, Remove, Connect Now or a newer attempt ends this one before its next step:
+        // asked before each script that goes there, so nothing more does once it's cut off.
         let attempt = connections
-        let check = { if self.connections != attempt { throw Superseded() } }
+        let check = { if !self.isCurrent(attempt) { throw Superseded() } }
+        let wanted = stillWanted()
         #if DEBUG
         if let standIn = Self.standIn {
             state = .starting
@@ -503,11 +506,11 @@ final class MachineEngine {
             do {
                 api = try await standIn(machine)
             } catch {
-                guard connections == attempt else { return nil }
+                guard isCurrent(attempt) else { return nil }
                 failed(error)
                 return nil
             }
-            guard connections == attempt else { return nil }
+            guard isCurrent(attempt) else { return nil }
             guard let api else {
                 failureKind = .away
                 lastTryAway = true
@@ -541,8 +544,10 @@ final class MachineEngine {
             // COMPAT(0.7 files): `run/mac-installing` while this app puts its files there. Goes 3 months after 0.8.0.
             // What follows puts this app's files there: the box doesn't take them for an older Mac's.
             if !boxIsNewer { try? await BoxVersion.installing(on: connection) }
+            try check()
             // The box's own tool and keeper first, which what follows counts on.
-            try await RemoteServer.installBoot(on: connection)
+            try await RemoteServer.installBoot(on: connection, while: wanted)
+            try check()
             var found = try await RemoteServer.find(on: connection)
             try check()
             let starting = startWanted
@@ -573,6 +578,7 @@ final class MachineEngine {
             // quit or updated): kept, with its work, until a connection finds it with none.
             var busy: RemoteServer?
             // (One that can't be reached to ask is updated, as before.)
+            try check()
             if updates, let old = engine, let probe = try? await attach(old, launch) {
                 attached = probe
                 try check()
@@ -585,9 +591,10 @@ final class MachineEngine {
                     attached = nil
                 }
             }
+            try check()
             if updates {
                 state = .downloading(progress: 0)
-                try await RemoteEngineInstaller(connection: connection, cache: cache).install { progress in
+                try await RemoteEngineInstaller(connection: connection, cache: cache).install(progress: { progress in
                     Task { @MainActor in
                         guard case .downloading = self.state else { return }
                         switch progress {
@@ -598,7 +605,7 @@ final class MachineEngine {
                             self.step = .copying(sent: sent, total: total)
                         }
                     }
-                }
+                }, while: wanted)
                 try check()
                 state = .starting
             }
@@ -606,6 +613,7 @@ final class MachineEngine {
             // Its own settings, a box of its own: made so once (from what it runs with, or this
             // Mac's on one with none), then read, for what its engine starts with.
             try await MachineBox.install(on: connection)
+            try check()
             var launch = launch
             // COMPAT(0.7 settings): the settings an older Mac's start left, made the box's own. Goes 3 months after 0.8.0.
             let box = try await MachineBox.adopt(on: connection, seed: launch.seed)
@@ -615,6 +623,7 @@ final class MachineEngine {
             try check()
             // The browser tools' helper, and the agents bridge, which an engine starts with.
             try await MachineBrowserInstaller.installHelper(launch.helper, on: connection)
+            try check()
             if let agents = launch.agents { try await Self.installAgents(agents, on: connection) }
             try check()
             let running: RemoteServer.Engine
@@ -635,7 +644,9 @@ final class MachineEngine {
                 try check()
                 server.disconnect()
                 attached = nil
-                server = try await attach(launchEngine(launch, replace: server.engine.pid), launch)
+                let replaced = try await launchEngine(launch, replace: server.engine.pid)
+                try check()
+                server = try await attach(replaced, launch)
                 attached = server
                 try check()
             }
@@ -669,7 +680,7 @@ final class MachineEngine {
         } catch is Superseded {
             // What it connected is its own to close; the newer attempt has the rest.
             if let attached, attached !== server { attached.disconnect() }
-        } catch where connections != attempt {
+        } catch where !isCurrent(attempt) {
             // Failed after a newer attempt began: that one's state isn't this one's to change.
             if let attached, attached !== server { attached.disconnect() }
         // COMPAT(0.7 engine-stop): an engine an older Mac stopped. Goes 3 months after 0.8.0.
@@ -739,6 +750,20 @@ final class MachineEngine {
     }
 
     private struct Superseded: Error {}
+
+    /// The start that began at `attempt` is still wanted: nothing disconnected or removed it since,
+    /// nor began another.
+    private func isCurrent(_ attempt: Int) -> Bool {
+        connections == attempt && !isRetired && !isDisconnected
+    }
+
+    /// Whether what begins for it now (a start, a start over) is still wanted, each time it's
+    /// asked: not once it's disconnected or removed, or connected again from the start (Connect
+    /// Now), so nothing more of it goes there.
+    func stillWanted() -> @Sendable () async -> Bool {
+        let attempt = connections
+        return { @MainActor [weak self] in self?.isCurrent(attempt) ?? false }
+    }
 
     #if DEBUG
     /// For the app's tests: the engine a machine's connection reaches (nil: it can't be reached),

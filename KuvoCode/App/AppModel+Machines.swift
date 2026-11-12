@@ -338,13 +338,16 @@ extension AppModel {
         connect(engine)
     }
 
-    /// Starts a machine's engine over (its Settings › Engine), and connects to it again.
+    /// Starts a machine's engine over (its Settings › Engine), and connects to it again. Disconnect,
+    /// Remove or Connect Now meanwhile ends it: nothing more goes there, and it isn't connected again.
     @discardableResult
     func restartEngine(_ engine: MachineEngine) -> Task<Void, Never> {
         engine.disconnect()
         connectionClosed(engine.machine.id)
+        let wanted = engine.stillWanted()
         return Task {
-            _ = try? await RemoteServer.restartEngine(on: engine.machine.connection, while: { @MainActor in !engine.isRetired })
+            _ = try? await RemoteServer.restartEngine(on: engine.machine.connection, while: wanted)
+            guard await wanted() else { return }
             await connect(engine).value
         }
     }

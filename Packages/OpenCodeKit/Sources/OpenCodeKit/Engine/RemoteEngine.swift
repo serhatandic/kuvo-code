@@ -395,10 +395,13 @@ public struct RemoteEngineInstaller: Sendable {
 
     /// Makes sure the engine is on the machine. `progress` hears how far it's come: the download,
     /// when there is one (this Mac keeps the package for the next machine), then the copy.
-    public func install(progress: @escaping @Sendable (Progress) -> Void = { _ in }) async throws {
+    /// `wanted`, asked once it's downloaded: no longer (the machine removed or disconnected
+    /// meanwhile), and nothing is copied there (`CancellationError`).
+    public func install(progress: @escaping @Sendable (Progress) -> Void = { _ in }, while wanted: @Sendable () async -> Bool = { true }) async throws {
         let (release, isInstalled, _) = try await check()
         if isInstalled { return }
         let package = try await checkedPackage(release) { progress(.downloading(fraction: $0)) }
+        guard await wanted() else { throw CancellationError() }
         let total = Int64((try? package.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
         progress(.copying(sent: 0, total: total))
         let folder = "$HOME/\(Self.root)/engine"
@@ -1519,7 +1522,7 @@ public final class RemoteServer: @unchecked Sendable {
 
     /// Starts the machine's engine over, as it was last started there (Restart). False when it
     /// didn't come up. `wanted`, asked before each step after the first: no longer (the machine
-    /// removed meanwhile), and nothing more goes there.
+    /// removed or disconnected meanwhile), and nothing more goes there.
     @discardableResult
     public static func restartEngine(on connection: SSHConnection, while wanted: @Sendable () async -> Bool) async throws -> Bool {
         try await installBoot(on: connection, while: wanted)
