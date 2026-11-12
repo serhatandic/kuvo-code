@@ -1,0 +1,4 @@
+{
+ "about": "What in Kuvo Code's own box folder says a box ran there (judge.ts, OWN_BOX_RAN): the box judges by it (kuvo-link.js here), and the app counts it when the box can't be asked (Here.ownBoxFiles). The bridge's tests hold the box's list to it, the app's tests the app's.",
+ "files": ["setup-card.json", "link.json", "serve.json", "keeper.json"]
+}

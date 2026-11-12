@@ -185,7 +185,7 @@ export { leadsNow, noteSetupNow, settleOwnSetup } from "./setup/lead";
 export { settleSetup, sharedMachine } from "./setup/settle";
 export { followedSetup, newSetupID, startsFromOthers } from "./setup/record";
 export { setupView } from "./setup/view";
-export { foundOf, hereNow, judgeComputer, judgeHere, oursNow } from "./setup/judge";
+export { foundOf, hereNow, judgeComputer, judgeHere, oursNow, OWN_BOX_RAN } from "./setup/judge";
 export { cardNow, SETUP_CARD, writeCard } from "./setup/card";
 export { keptFeatures, peerOf, readPeerAgents, takeAgents } from "./peers/directory";
 export { composeLetter } from "./letters/letter";

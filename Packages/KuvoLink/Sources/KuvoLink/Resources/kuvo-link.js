@@ -37123,7 +37123,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "2dba695004c6";
+var BRIDGE_VERSION = "6a88312aeade";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -42464,6 +42464,7 @@ export {
   NEWS_HOLD,
   NOTICE_LIMIT,
   NoticeHold,
+  OWN_BOX_RAN,
   PLACE_TRIES,
   PROLOGUE,
   PUSHED_FILE,
