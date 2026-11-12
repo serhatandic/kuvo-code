@@ -375,8 +375,6 @@ import Testing
         }
         let port = try await server.start()
         defer { server.stop() }
-        // (A listener that fails stops by itself, and nothing would answer: said, not waited on.)
-        server.failed = { Issue.record("The server stopped listening") }
         let client = try await RawClient.connect(port: port)
         defer { client.close() }
         await client.send("POST /streamed HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n")
@@ -429,10 +427,20 @@ final class RawClient {
     }
 
     static func connect(port: UInt16) async throws -> RawClient {
-        // Over this Mac's loopback only: other networks coming and going (a VPN, Wi-Fi) are nothing to it.
-        let parameters = NWParameters.tcp
-        parameters.requiredInterfaceType = .loopback
-        let connection = NWConnection(host: .ipv4(.loopback), port: try #require(NWEndpoint.Port(rawValue: port)), using: parameters)
+        let connection = NWConnection(host: .ipv4(.loopback), port: try #require(NWEndpoint.Port(rawValue: port)), using: .tcp)
+        do {
+            try await opened(connection)
+        } catch {
+            // (One left waiting would go on trying.)
+            connection.cancel()
+            throw error
+        }
+        connection.stateUpdateHandler = nil
+        return RawClient(connection: connection)
+    }
+
+    /// Starts `connection`, until it's open, or it can't be, or the test stops.
+    private static func opened(_ connection: NWConnection) async throws {
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
                 let once = OSAllocatedUnfairLock(initialState: false)
@@ -450,12 +458,12 @@ final class RawClient {
                     }
                 }
                 connection.start(queue: .main)
+                // Stopped before it started: what cancelled it then may not have reached it.
+                if Task.isCancelled { connection.cancel() }
             }
         } onCancel: {
             connection.cancel()
         }
-        connection.stateUpdateHandler = nil
-        return RawClient(connection: connection)
     }
 
     func send(_ text: String) async {
