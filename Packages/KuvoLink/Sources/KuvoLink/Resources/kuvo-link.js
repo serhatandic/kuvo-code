@@ -2218,6 +2218,7 @@ var FEATURES = [
   "skills",
   "skills.trash",
   "update",
+  "usage.history",
   "vault",
   "wakes",
   "wakes.edit",
@@ -23445,7 +23446,7 @@ function seatPayloads(mail, id) {
   return Array.from({ length: of }, (_, i) => ({ seatPart: { whole, i, of, d: d.slice(i * DOC_PART, (i + 1) * DOC_PART), s: id ?? "" } }));
 }
 function sendSeat(host, to, mail, id, link = readLink()) {
-  const peer = peersOf(link).find((each) => each.key === to) ?? (mail.kind === "limits" ? vouchedOf(link).find((each) => each.key === to) : undefined);
+  const peer = peersOf(link).find((each) => each.key === to) ?? (mail.kind === "limits" || mail.kind === "usage" ? vouchedOf(link).find((each) => each.key === to) : undefined);
   if (!peer || !host)
     return false;
   if (mail.kind === "limits") {
@@ -23480,7 +23481,7 @@ function sendSeat(host, to, mail, id, link = readLink()) {
 async function takeLimits(sender, limits, ask = bridgeAsk) {
   await ask("POST", "/mail", { from: sender.key, mail: { ...limits, kind: "limits" } }).catch(() => {});
 }
-async function takeSeat(sender, payload, send, ask = bridgeAsk) {
+async function takeSeat(sender, payload, send, ask = bridgeAsk, only) {
   let mail = null, id = null;
   if (isObject(payload.seat)) {
     mail = payload.seat;
@@ -23497,6 +23498,8 @@ async function takeSeat(sender, payload, send, ask = bridgeAsk) {
     id = whole.s || null;
   }
   if (!isObject(mail) || id !== null && !LETTER_ID.test(id))
+    return;
+  if (only && !only.includes(String(mail.kind)))
     return;
   try {
     await ask("POST", "/mail", { from: sender.key, mail });
@@ -37972,6 +37975,8 @@ function receiveMail(body, host, peerMail = () => {}, attended = () => {}) {
   if (opened.vouched) {
     if (isObject(payload.limits))
       takeLimits(sender, payload.limits).catch(() => {});
+    if (isObject(payload.seat) || isObject(payload.seatPart))
+      takeSeat(sender, payload, () => {}, bridgeAsk, ["usage"]).catch(() => {});
     return;
   }
   if (noteHeard(sender.key)) {
@@ -39045,7 +39050,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "b2d67f9bdecf";
+var BRIDGE_VERSION = "dbc35151f7ca";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

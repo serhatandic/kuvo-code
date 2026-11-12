@@ -3724,6 +3724,65 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   used, when each resets and as of when, and why one couldn't be read just now.
 - Times are ms since 1970.
 
+### Usage history
+
+What each account signed in to Kuvo Code used, and what that cost, by the day (#631: OpenUsage's
+history, moving to the box). Each box reads its own accounts' agents' logs on its computer, a
+machine's with the Mac closed too: so far Claude Code's, in the folders Kuvo Code runs it with (an
+account you added: its own folder; a machine: Kuvo Code's; a Mac's own sign-in: your `~/.claude`,
+where Claude Code runs with it, your Terminal's conversations there included), never another login's
+(Claude's desktop app, Cowork, claude-swap, Pi). It prices them as OpenUsage does (its supplement,
+LiteLLM's catalog, models.dev's; snapshots ship with the bridge, and each feed is fetched again
+hourly, kept in the bridge's `usage/pricing`): estimates, not your bill. A client reaches them as
+`kuvo/agents/api/kuvo/usage…` (the Mac app at `api/kuvo/usage…` on the bridge itself), where
+`features` has `usage.history`.
+
+- `GET kuvo/agents/api/kuvo/usage?zone=<IANA time zone>` → `{data: {zone, services, scanned?, rows:
+  [row], totals: {<service>: [day]}}}`. The box works out the days in `zone` (the client's, so a
+  Mac in Istanbul reading a machine in UTC gets its own days); one it doesn't know is its own,
+  `zone` says which. `services`: what this box states the usage of (`claude`): a client shows those
+  from here, and reads the rest as it did. `scanned`: when this box last read its logs.
+  - A `row` is one account across your computers, with the same `id` as its plan limits row
+    (`<service>#<identity>`, or `<box key>/<provider>` for one that can't say who it is), so a
+    client puts an account's limits and its usage side by side: `{id, service, provider, agent?,
+    account?, label?, identity?, scanned?, boxes, away?, days}`, `boxes` as limits' rows have them
+    (`{key, name, provider, agent?, account?, label?, scanned?, here?, away?}`). Its `days` are the
+    **sum** of every box's own (each box reads only its own logs: none is counted twice).
+  - `totals`: each service's days, every row of it added up: what the Mac's Claude card shows.
+  - A `day`: `{date, tokens, cost, models: [{model, tokens, cost}], unknown?}`, newest first, for
+    today and the 30 days before it in `zone`; `date` is `yyyy-MM-dd`, `cost` US dollars,
+    `models` by name; `unknown`, models used that day that couldn't be priced, which count
+    nowhere (a day with only those has no tokens and no models). A model with no name but a cost
+    of its own is `Unattributed`.
+  - What counts (OpenUsage's rules, from ccusage): a log line with `"usage":{` that parses, with a
+    valid time and version and no `null` where Claude Code never writes one; once per
+    `(message.id, requestId)`, a subagent's line replaying its parent's message under another
+    request counting as the parent's; an advisor's work as its own model's; a line's `costUSD`
+    where it has one, else its tokens at its model's rates (1-hour cache writes at twice the input
+    rate, a request whose prompt passes the model's long-context threshold at those rates
+    throughout, a fast request at its model's fast multiplier).
+- `POST kuvo/agents/api/kuvo/usage/refresh[?zone=]` reads the logs now, asks your other computers
+  to read theirs and tell (below), and answers as `GET` once it's read here (or after five
+  seconds, the rest coming as the event).
+- The bridge's events carry `kuvo.usage.updated` `{services}` when the rows change (a read here, a
+  peer's word): ask again, in your zone.
+- How often: every five minutes, and when asked; one round at a time. A log is read on from where
+  it was last read as it grows, and again whole when it shrank or was rewritten; what each log held
+  is kept in the bridge's folder (`usage/claude-files.json`, rebuilt from the logs when it's lost),
+  and each account's hours (`usage/usage.json`), so a restart answers at once. Kept 35 days.
+- **Across your computers**, as plan limits are ("Plan limits", "Across your computers": the same
+  boxes, no hub, each working with the others off): each box tells each of them its own accounts'
+  hours, `{"seat": {"kind": "usage", at, accounts, ask?, refresh?}}` through its link (in parts
+  when it's big, as a group chat's mail is; to and from a box a peer vouches for too, which sends
+  nothing else that's taken), after each read that changed them, every ten minutes though nothing
+  did, and at once with `ask` to one it hasn't told since its bridge or link started. Each account
+  is `{provider, service, agent?, account?, label?, identity?, scanned?, hours: {models, used:
+  [[hour, model, tokens, dollars]], unknown?: [[hour, model]]}}`: `hour`, hours since 1970 (UTC),
+  `model`, an index into `models`. Never a log, a message, a path or a sign-in. `refresh: true`:
+  read yours now and tell. The receiver keeps the last from each (`usage/peers.json`), through a
+  restart; a box not heard from for 25 minutes is away (its rows `away` when every box of theirs
+  is), what it said kept; a computer you removed goes, with what it said.
+
 ### The Work Queue
 
 Each conversation keeps its work items in a Work Queue of its own, on the box it lives on, the

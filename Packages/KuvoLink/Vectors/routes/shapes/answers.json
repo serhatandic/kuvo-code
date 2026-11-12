@@ -3275,6 +3275,9 @@
             "literal": "update"
            },
            {
+            "literal": "usage.history"
+           },
+           {
             "literal": "vault"
            },
            {
@@ -3650,6 +3653,9 @@
            },
            {
             "literal": "update"
+           },
+           {
+            "literal": "usage.history"
            },
            {
             "literal": "vault"

@@ -34,9 +34,10 @@ import type { MailSender, Peer } from "./known";
 
 /** A mail between two computers' bridges: its kind, and for what a bot remembers of a chat
  * (`memory`), whose and which chat's. The rest goes as it is. `limits`: the bridge's plan limits
- * (PROTOCOL.md, "Plan limits"), which go as `{"limits": …}`, not as a seat's. */
+ * (PROTOCOL.md, "Plan limits"), which go as `{"limits": …}`, not as a seat's; `usage`: what its
+ * accounts used (PROTOCOL.md, "Usage history"), which goes as a seat's, in parts when it's big. */
 export interface SeatMail {
-  kind: SeatMailKind | "limits";
+  kind: SeatMailKind | "limits" | "usage";
   memory?: { bot: string; chat: string; [field: string]: unknown };
   [field: string]: unknown;
 }
@@ -132,8 +133,8 @@ export function seatPayloads(mail: SeatMail, id?: string): SeatPayload[] | null 
 // The bridge's mail for `to`, sent now, each part as a mail of its own: whether it all went, or
 // "too big" for one that can't go at all (said in the log).
 function sendSeat(host: SeatHost | null | undefined, to: string, mail: SeatMail, id: string | undefined, link: LinkState | null = readLink()): boolean | "too big" {
-  // (Plan limits go to a box a peer vouches for too.)
-  const peer = peersOf(link).find(each => each.key === to) ?? (mail.kind === "limits" ? vouchedOf(link).find(each => each.key === to) : undefined);
+  // (Plan limits and usage go to a box a peer vouches for too.)
+  const peer = peersOf(link).find(each => each.key === to) ?? (mail.kind === "limits" || mail.kind === "usage" ? vouchedOf(link).find(each => each.key === to) : undefined);
   if (!peer || !host) return false;
   // Its plan limits: a mail of their own, whole (the bridge sends no more than fits).
   if (mail.kind === "limits") {
@@ -165,7 +166,8 @@ export async function takeLimits(sender: MailSender, limits: Record<string, unkn
 
 // A seat mail that came (whole, or once its parts are all here), to the bridge; one that mustn't be
 // lost said to have come, once the bridge has it, or to be sent again when it couldn't be given.
-export async function takeSeat(sender: MailSender, payload: Record<string, unknown>, send: (to: MailSender, message: { delivered: { id: string; ok: boolean; why?: string; retry?: boolean } }) => void, ask: BridgeAsk = bridgeAsk): Promise<void> {
+// `only`: the kinds taken from this sender (a box a peer vouches for: `usage`), the rest dropped.
+export async function takeSeat(sender: MailSender, payload: Record<string, unknown>, send: (to: MailSender, message: { delivered: { id: string; ok: boolean; why?: string; retry?: boolean } }) => void, ask: BridgeAsk = bridgeAsk, only?: string[]): Promise<void> {
   let mail: unknown = null, id: string | null = null;
   if (isObject(payload.seat)) {
     mail = payload.seat;
@@ -178,6 +180,7 @@ export async function takeSeat(sender: MailSender, payload: Record<string, unkno
     id = whole.s || null;
   }
   if (!isObject(mail) || (id !== null && !LETTER_ID.test(id))) return;
+  if (only && !only.includes(String(mail.kind))) return;
   try {
     await ask("POST", "/mail", { from: sender.key, mail });
   } catch {
