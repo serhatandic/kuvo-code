@@ -92,13 +92,39 @@ test("one whose tool gave up waiting just before: its sender hears it, not the t
   }
 })
 
-test("one a tool waits for, a note, or an answer: no notice", () => {
+test("one whose tool's process is gone (it noted it waits a minute ago, and no more): its sender hears it", async () => {
   const replies = path.join(RUN, "replies")
+  fs.mkdirSync(replies, { recursive: true })
+  const alive = path.join(replies, "ltr_failure.alive")
+  fs.writeFileSync(alive, "")
+  fs.utimesSync(alive, (now - 60_000) / 1000, (now - 60_000) / 1000)
+  write({ wait: true })
+  try {
+    letterWent({ key }, { id: "ltr_failure", ok: false, why: "No." }, now)
+    notice()
+    expect(fs.existsSync(path.join(replies, "ltr_failure.json"))).toBe(false)
+    // One cut short as it was told is finished for its sender too, whatever the letter says.
+    for (const name of fs.readdirSync(SENDING)) fs.rmSync(path.join(SENDING, name))
+    fs.writeFileSync(path.join(SENDING, "ltr_failure.failed"), JSON.stringify({ from: "ses_sender", to: "ses_target", text: "Hello", wait: true, at: now, peer: key, sentTo: key }))
+    fs.utimesSync(alive, now / 1000, now / 1000)
+    await sendOutbox(host, readLink(), now, 1)
+    expect(notice().text).toBe("[Not delivered] Your message to Planning on studio wasn't delivered.")
+    expect(fs.existsSync(path.join(replies, "ltr_failure.json"))).toBe(false)
+  } finally {
+    fs.rmSync(alive, { force: true })
+  }
+})
+
+test("one a tool still waits for, a note, or an answer: no notice", () => {
+  const replies = path.join(RUN, "replies")
+  fs.mkdirSync(replies, { recursive: true })
+  fs.writeFileSync(path.join(replies, "ltr_failure.alive"), "")
   write({ wait: true })
   letterWent({ key }, { id: "ltr_failure", ok: false, why: "No." }, now)
   expect(fs.readdirSync(SENDING)).toEqual([])
   expect(JSON.parse(fs.readFileSync(path.join(replies, "ltr_failure.json"), "utf8"))).toEqual({ failed: "No." })
   fs.rmSync(path.join(replies, "ltr_failure.json"))
+  fs.rmSync(path.join(replies, "ltr_failure.alive"))
   write({ from: "ses_sender", note: { from: "Its sessions", words: "Hi", delivery: "queue", line: "News" } })
   letterWent({ key }, { id: "ltr_failure", ok: false, why: "No." }, now)
   write({ answers: "ltr_asked" })

@@ -425,8 +425,9 @@ connection.
     tool; otherwise it reaches the sender's conversation as a message.
   - **Sender side**: a sender takes `delivered` only from the box it sent to, and an answer for a
     waiting tool only from that box; an answer from it stands for `delivered` should that be lost. Until `delivered` comes, it sends again each minute, for two
-    days, oldest first, and a letter whose agent no box lists now waits. One sent without `wait`
-    that won't be delivered (refused by the box it went to, its two days over, too long to send, or
+    days, oldest first, and a letter whose agent no box lists now waits. One sent without `wait`, or
+    whose tool no longer waits (on a Mac, its conversation's gone; on a machine, it gave up or hasn't
+    noted it waits in ten seconds), that won't be delivered (refused by the box it went to, its two days over, too long to send, or
     refused where it moved to) is told to its sender once, as the sending box's own word: a `note`
     from "Your other computers", queued, whose `line` names the conversation as it's listed and its
     computer (never its address), with why as that computer said it, or for its two days over, in

@@ -28477,9 +28477,22 @@ function sendNoticesSoon() {
     outboxSoon.send();
   });
 }
+function toolWaits(id, now = Date.now()) {
+  if (IS_MAC) {
+    const waiter = macWaiting.get(id);
+    return Boolean(waiter && !waiter.gone());
+  }
+  if (fs94.existsSync(path97.join(REPLIES, `${id}.gaveup`)))
+    return false;
+  let alive = 0;
+  try {
+    alive = fs94.statSync(path97.join(REPLIES, `${id}.alive`)).mtimeMs;
+  } catch {}
+  return now - alive <= 1e4;
+}
 function failLetter(id, file, letter, { why, on, said = false, title }, now = Date.now()) {
   letterTries.delete(id);
-  if (letter.wait === true && (IS_MAC || !fs94.existsSync(path97.join(REPLIES, `${id}.gaveup`)))) {
+  if (letter.wait === true && toolWaits(id, now)) {
     reply2(id, { failed: why || "It wasn't delivered." });
     fs94.rmSync(file, { force: true });
     return;
@@ -28722,7 +28735,7 @@ function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0, ask 
     const file = path97.join(SENDING, name), id = name.slice(0, -7);
     try {
       const letter = JSON.parse(fs94.readFileSync(file, "utf8"));
-      failLetter(id, file, letter, { on: letter.sentTo ?? letter.peer }, now);
+      failLetter(id, file, { ...letter, wait: false }, { on: letter.sentTo ?? letter.peer }, now);
     } catch {}
   }
   const listed = new Set;
@@ -28783,7 +28796,7 @@ function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0, ask 
     const note = noteOf(letter.note);
     const lives = (note && !ownHere.has(letter.to) ? homes.get(letter.to) : undefined) ?? moved.get(letter.to) ?? (note && letter.peer === mine ? mine : undefined);
     const peer = lives ? peers.find((each) => each.key === lives) ?? null : typeof letter.peer === "string" ? peers.find((each) => each.key === letter.peer) ?? null : peerOf(letter.to, peers, told, moved);
-    if (now - made > (note ? NOTE_MEMORY : LETTER_MEMORY)) {
+    if (!deliveringHere.has(id) && now - made > (note ? NOTE_MEMORY : LETTER_MEMORY)) {
       failLetter(id, file, letter, { why: EXPIRED, on: lives ?? (ownHere.has(letter.to) ? mine ?? undefined : peer?.key ?? letter.sentTo) }, now);
       continue;
     }
@@ -38096,7 +38109,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0e2cf49630f4";
+var BRIDGE_VERSION = "6848e3bdeada";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

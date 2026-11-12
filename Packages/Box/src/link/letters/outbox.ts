@@ -279,14 +279,28 @@ function sendNoticesSoon(): void {
   });
 }
 
-// A letter that won't be delivered: a tool waiting hears why; one sent without waiting (its tool
-// said "On its way", or gave up waiting) is the box's own word to its sender instead, as a call's
+// Whether a tool still waits for letter `id`'s answer, whatever the letter says: on this Mac, its
+// conversation (`macWaiting`, empty once the box started again); on a machine, one that hasn't given
+// up and noted it waits in the last ten seconds (`<id>.alive`), as `answered` reads it.
+function toolWaits(id: string, now = Date.now()): boolean {
+  if (IS_MAC) {
+    const waiter = macWaiting.get(id);
+    return Boolean(waiter && !waiter.gone());
+  }
+  if (fs.existsSync(path.join(REPLIES, `${id}.gaveup`))) return false;
+  let alive = 0;
+  try { alive = fs.statSync(path.join(REPLIES, `${id}.alive`)).mtimeMs; } catch {}
+  return now - alive <= 10_000;
+}
+
+// A letter that won't be delivered: a tool still waiting hears why; one sent without waiting (its tool
+// said "On its way", or is gone) is the box's own word to its sender instead, as a call's
 // lead hears of its call (`tellLead`), once: queued, marked, by its agent's name and computer. The
 // letter's taken out of sending first (`.failed`, which the next round finishes should this be cut
 // short), so it never goes again. The box's own words (notes, answers), reads and calls just go.
 function failLetter(id: string, file: string, letter: InSending, { why, on, said = false, title }: Failure, now = Date.now()): void {
   letterTries.delete(id);
-  if (letter.wait === true && (IS_MAC || !fs.existsSync(path.join(REPLIES, `${id}.gaveup`)))) {
+  if (letter.wait === true && toolWaits(id, now)) {
     reply(id, { failed: why || "It wasn't delivered." });
     fs.rmSync(file, { force: true });
     return;
@@ -524,13 +538,13 @@ export function sendOutbox(host: Pick<LinkHost, "send">, link: LinkState | null 
     givenUp(id);
   }
   // Letters that won't be delivered whose senders' notices were cut short (`failLetter`): finished
-  // (without why, which wasn't kept), never sent.
+  // (without why, which wasn't kept), never sent. (Only a sender no tool waited for has one.)
   for (const name of listOf(SENDING)) {
     if (!name.endsWith(".failed")) continue;
     const file = path.join(SENDING, name), id = name.slice(0, -7);
     try {
       const letter: InSending = JSON.parse(fs.readFileSync(file, "utf8"));
-      failLetter(id, file, letter, { on: letter.sentTo ?? letter.peer }, now);
+      failLetter(id, file, { ...letter, wait: false }, { on: letter.sentTo ?? letter.peer }, now);
     } catch {}
   }
   const listed = new Set<string>();
@@ -589,7 +603,8 @@ export function sendOutbox(host: Pick<LinkHost, "send">, link: LinkState | null 
     const lives = (note && !ownHere.has(letter.to) ? homes.get(letter.to) : undefined) ?? moved.get(letter.to) ?? (note && letter.peer === mine ? mine! : undefined);
     const peer = lives ? peers.find(each => each.key === lives) ?? null
       : typeof letter.peer === "string" ? peers.find(each => each.key === letter.peer) ?? null : peerOf(letter.to, peers, told, moved);
-    if (now - made > (note ? NOTE_MEMORY : LETTER_MEMORY)) {
+    // (Not one being delivered here now: that ends it.)
+    if (!deliveringHere.has(id) && now - made > (note ? NOTE_MEMORY : LETTER_MEMORY)) {
       failLetter(id, file, letter, { why: EXPIRED, on: lives ?? (ownHere.has(letter.to) ? mine ?? undefined : peer?.key ?? letter.sentTo) }, now);
       continue;
     }
