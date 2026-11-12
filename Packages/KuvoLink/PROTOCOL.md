@@ -5256,7 +5256,7 @@ In a conversation that's in Auto here now (`approval.reviewer` in `features`, br
 below since 0.9.185, `approval.held`), what its agent wants beyond the sandbox's walls is judged on
 the box: a command it asks to run outside the sandbox (`sandbox_ask`), a file the agent's own tools
 want to change outside its folder (the engine's or the bridge's `external_directory` ask, by the
-file the tool call names, where it lands: through its links, one to a name that isn't there yet too,
+file the tool call names (`~` your home, one not from `/` from its folder), where it lands: through its links, one to a name that isn't there yet too,
 which a write makes and a read takes a look-alike beside, and shown so to the model; where no tool
 call names one, as when Codex asks for room of its own, by
 each path the ask names, judged as a write (`~` as your home, one not from `/` from its folder; a
@@ -5700,9 +5700,9 @@ quotes; never a link, engine 2.2.5), without asking about it again. So where a l
 name that looks the same (by a wider rule, `fence/lookalike.ts`: compatibility-composed, any space,
 any apostrophe-like mark, any case), in the folder or out of it, the plugin refuses the read rather
 than send it where the link leads, and a read it would send through a link out of the folder to a
-file that isn't there beside one whose name looks the same; and Auto's reviewer judges a read naming its file from `/` by each file
-beside where it lands whose name looks the same too, as by that name (one named otherwise is judged
-by the folder the engine asks about, as a write). And it refuses
+file that isn't there beside one whose name looks the same; and Auto's reviewer judges a read by each file beside
+the file it names (as the engine takes it: `~` your home, one not from `/` from the conversation's
+folder), and beside where that lands, whose name looks the same too, as by that name. And it refuses
 `session_move` (the engine's, or code mode's `opencode_session_move`) of another conversation, or to
 a folder outside the conversation's own and its repository's worktrees: commands would write
 wherever it moved. A command's folder is where it really was as the engine opened it (for a

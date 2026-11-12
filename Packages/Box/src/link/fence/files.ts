@@ -473,10 +473,10 @@ export default {
     }
     // A read of a file that isn't there, beside a link whose name looks the same: refused, in the
     // folder or out of it (where the link leads is never what the box judged, nor asked about).
-    const LOOKALIKE = "This names a file that isn't there, beside a link whose name looks the same, which Kuvo Code's sandbox doesn't let the engine's read tool open in its place. Name the file exactly as it's written, or ask the user."
+    const LOOKALIKE = "This names a file that isn't there, where a link has that name or one that looks the same, which Kuvo Code's sandbox doesn't let the engine's read tool open in its place. Name a file that's there exactly as it's written, or ask the user."
     // And one through a link out of the folder to a file that isn't there, beside one whose name looks
     // the same, which read would take in its place.
-    const NOWHERE = "This leads, through a link out of the conversation's folder, to a file that isn't there, beside one whose name looks the same, which Kuvo Code's sandbox doesn't let the engine's read tool open in its place. Ask the user."
+    const NOWHERE = "This leads, through a link out of the conversation's folder, to a file that isn't there, beside one whose name looks the same, which Kuvo Code's sandbox doesn't let the engine's read tool open in its place. Name the file exactly as it's written, or ask the user."
     // The engine reads a \\ in a path as a / where it weighs your rules for folders outside the
     // project, and the system doesn't: \`notes\\x\` would pass for a file in \`notes\` (one
     // you allowed) while it's a folder beside it. So no file tool's path has one.

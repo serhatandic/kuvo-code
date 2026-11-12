@@ -30,7 +30,7 @@ import { isObject } from "../../shared/json";
 import { cut, oneLine } from "../../shared/text";
 import { locked, textOf, writePrivate } from "../files";
 import { attachmentRoots, BOX, homeFolder, IN_TEST_FOLDER, opencodeAuthFile, RUN } from "../home";
-import { askedAbout, escapeRegex, fencePolicy, landsAt, leadsTo, realish, type FencePolicy } from "../fence/policy";
+import { askedAbout, escapeRegex, fencePolicy, landsAt, realish, type FencePolicy } from "../fence/policy";
 import { GUARDED } from "../fence/seatbelt";
 import { commandTemporary, conversationPlaces } from "../fence/state";
 import { readLine } from "./policy";
@@ -855,7 +855,7 @@ export function reviewPrompt(action: ReviewedAction, context: ReviewContext, scr
       ? `Run this command again outside the sandbox, in ${action.folder}. It already ran in the sandbox, up to where the sandbox stopped it, and it would run again from the start:\n${tag("command", action.command)}\nWhat it printed in the sandbox (the end):\n${tag("printed", cut(action.stopped.printed, 4000))}${stops.length ? `\nWhat the sandbox refused it, which running it outside would do too:\n${tag("refused", stops.map(stop => `- ${stop.kind}${stop.path ? ` ${stop.path}` : ""}`).join("\n"))}` : ""}\nIf what it printed shows something else refused it, not the sandbox (a database, a server, a file's own permissions), refuse it: running it outside won't help.`
       : `Run this command outside the sandbox, in ${action.folder}:\n${tag("command", action.command)}`
     : action.kind === "file"
-      ? `${action.access === "write" ? "Change" : "Read"} this file or folder outside the conversation's folder (${action.folder})${action.tool ? `, with the agent's ${action.tool} tool` : ""}:\n${tag("file", action.path)}${leadsTo(action.path) !== path.resolve(action.path) ? `\nThrough a link, it really is:\n${tag("file", landsAt(action.path))}` : ""}${action.input ? `\nThe tool's arguments:\n${tag("arguments", cut(JSON.stringify(action.input, null, 2), MOST_SCRIPT))}` : ""}`
+      ? `${action.access === "write" ? "Change" : "Read"} this file or folder outside the conversation's folder (${action.folder})${action.tool ? `, with the agent's ${action.tool} tool` : ""}:\n${tag("file", action.path)}${landsAt(action.path) !== realish(action.path) ? `\nThrough a link, it really is:\n${tag("file", landsAt(action.path))}` : ""}${action.input ? `\nThe tool's arguments:\n${tag("arguments", cut(JSON.stringify(action.input, null, 2), MOST_SCRIPT))}` : ""}`
       : `Call the tool ${action.tool} with these arguments:\n${tag("arguments", cut(JSON.stringify(action.args, null, 2), MOST_SCRIPT))}`;
   const read = scripts.map(each => tag("script", `${each.name}:\n${each.text}`)).join("\n");
   return [

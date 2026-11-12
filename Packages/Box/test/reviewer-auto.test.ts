@@ -1039,7 +1039,8 @@ test("in Auto, a read by a look-alike name beside a link a command made to your 
     const read = async (id: string, given: string) => {
       const call = { tool: "read", sessionID: "ses_alike", agent: "build", messageID: "msg_1", id: `call_${id}`, input: { path: given } }
       try { for (const hook of hooks) await hook(call) } catch (error) { return `refused: ${(error as Error).message}` }
-      const opens = call.input.path
+      // (\`~\` as your home, as the engine takes it.)
+      const opens = call.input.path.replace(/^~(?=\/|$)/, process.env.HOME!)
       if (!opens.startsWith(folder + "/")) {
         calling.ses_alike = [{ type: "tool", id: `call_${id}`, name: "read", state: { input: { path: given } } }]
         asking.ses_alike = [{ id, action: "external_directory", resources: [join(dirname(opens), "*")], source: { id: `call_${id}`, messageID: "msg_1" } }]
@@ -1061,8 +1062,9 @@ test("in Auto, a read by a look-alike name beside a link a command made to your 
       "a key itself, by a look-alike name": await read("per_a7", join(fake, ".ssh", "work\u00a0key")),
       "through a link to a look-alike of a key": await read("per_a8", join(folder, "notes.txt")),
       "through a link to a name nothing looks like": await read("per_a10", join(folder, "typo.txt")),
+      "a key itself, by a look-alike name from ~": await read("per_a11", "~/.ssh/work\u00a0key"),
     }
-    const refused = expect.stringMatching(/^refused: This names a file that isn't there, beside a link whose name looks the same/)
+    const refused = expect.stringMatching(/^refused: This names a file that isn't there, where a link has that name or one that looks the same/)
     expect(tried).toEqual({
       "by the look-alike name": refused,
       "by a curly quote": refused,
@@ -1075,15 +1077,20 @@ test("in Auto, a read by a look-alike name beside a link a command made to your 
       "through a link to a look-alike of a key": expect.stringMatching(/^refused: This leads, through a link out of the conversation's folder, to a file that isn't there, beside one whose name looks the same/),
       // (A typo through a link: the engine says it isn't there.)
       "through a link to a name nothing looks like": "not found",
+      "a key itself, by a look-alike name from ~": "refused at the engine",
     })
-    // (The reviewer was asked about the key itself, not only the name given.)
-    expect(prompts.at(-1)).toContain(join(fake, "dotfiles", "ssh", "work key"))
+    // (The reviewer was asked about the key itself, not only the name given, or its folder.)
+    expect(prompts.at(-1)).toContain("ssh/work key\n")
+    expect(prompts.at(-2)).toContain("ssh/work key\n")
     // Asked about that link all the same (by an engine without the plugin's refusal), the reviewer
-    // judges where it leads, and the key beside that.
+    // judges where it leads, and the key beside that. (In a conversation of its own: three refusals
+    // in a row pause Auto in the first.)
+    conversation("ses_alike_link", "auto", "Read the notes")
+    sessions.ses_alike_link.location = { directory: folder }
     const before = prompts.length
-    calling.ses_alike = [{ type: "tool", id: "call_per_a9", name: "read", state: { input: { path: join(folder, "notes.txt") } } }]
-    asking.ses_alike = [{ id: "per_a9", action: "external_directory", resources: [join(fake, ".ssh", "*")], source: { id: "call_per_a9", messageID: "msg_1" } }]
-    expect((await reviewing.reviewPermission({ port: engine.port, password: "pw" } as never, { type: "permission.asked", data: { id: "per_a9", sessionID: "ses_alike", action: "external_directory" } }))?.decision).toBe("refuse")
+    calling.ses_alike_link = [{ type: "tool", id: "call_per_a9", name: "read", state: { input: { path: join(folder, "notes.txt") } } }]
+    asking.ses_alike_link = [{ id: "per_a9", action: "external_directory", resources: [join(fake, ".ssh", "*")], source: { id: "call_per_a9", messageID: "msg_1" } }]
+    expect((await reviewing.reviewPermission({ port: engine.port, password: "pw" } as never, { type: "permission.asked", data: { id: "per_a9", sessionID: "ses_alike_link", action: "external_directory" } }))?.decision).toBe("refuse")
     expect(prompts.length).toBe(before + 1)
     expect(prompts.at(-1)).toContain(join(fake, "dotfiles", "ssh", "work key"))
   } finally {
