@@ -69,6 +69,14 @@ final class SettingsTabs {
     }
 
     private(set) var tabs: [Tab] = []
+    /// This Mac's box (`AppModel.thisMacsBox`): the app's own, or the one attached in place, where a
+    /// page with no computer given opens. Its tabs go with it when it changes.
+    var thisMac: SidebarBox = .mac {
+        didSet {
+            guard thisMac != oldValue else { return }
+            for index in tabs.indices where tabs[index].box.isThisMac { tabs[index].box = thisMac }
+        }
+    }
     private(set) var selectedID = ""
     private var sites: [String: Site] = [:]
     /// Where the page's card starts in the window, for the tabs to start there too.
@@ -100,16 +108,17 @@ final class SettingsTabs {
         let text = defaults.string(forKey: Self.tabsKey) ?? ""
         let saved: [(page: SettingsPage, box: SidebarBox)] = if text.hasPrefix("[") {
             ((try? JSONDecoder().decode([Saved].self, from: Data(text.utf8))) ?? []).compactMap { saved in
-                SettingsPage(rawValue: saved.page).map { ($0, saved.box.map(SidebarBox.init(id:)) ?? .mac) }
+                // (This Mac's kept as no box, either way it's reached.)
+                SettingsPage(rawValue: saved.page).map { ($0, saved.box.flatMap { BoxClient.isThisMac($0) ? nil : SidebarBox.machine($0) } ?? thisMac) }
             }
         } else {
-            text.split(separator: ",").compactMap { SettingsPage(rawValue: String($0)) }.map { ($0, .mac) }
+            text.split(separator: ",").compactMap { SettingsPage(rawValue: String($0)) }.map { ($0, thisMac) }
         }
         let kept = saved.filter { $0.page.isShown(on: $0.box) }
         let current = defaults.string(forKey: SettingsPage.storageKey).flatMap(SettingsPage.init).flatMap { SettingsPage.shown.contains($0) ? $0 : nil } ?? kept.first?.page ?? .general
-        tabs = (kept.isEmpty ? [(current, .mac)] : kept).map { Tab(id: UUID().uuidString, kind: .page($0.page), box: $0.box) }
+        tabs = (kept.isEmpty ? [(current, thisMac)] : kept).map { Tab(id: UUID().uuidString, kind: .page($0.page), box: $0.box) }
         let place = defaults.object(forKey: Self.selectedKey) as? Int
-        let selected = place.flatMap { tabs.indices.contains($0) && kept.count == saved.count ? tabs[$0] : nil } ?? tabs.first { $0.shows(current, on: .mac) } ?? tabs[0]
+        let selected = place.flatMap { tabs.indices.contains($0) && kept.count == saved.count ? tabs[$0] : nil } ?? tabs.first { $0.shows(current, on: thisMac) } ?? tabs[0]
         selectedID = selected.id
         lastPageTab = selected.id
         // The first time, the page Settings opens on is one you've only looked at.
@@ -142,7 +151,7 @@ final class SettingsTabs {
 
     /// The computer that page is about.
     var box: SidebarBox {
-        pageTab?.box ?? .mac
+        pageTab?.box ?? thisMac
     }
 
     private var pageTab: Tab? {
@@ -161,8 +170,8 @@ final class SettingsTabs {
     /// else in a new preview tab, beside the one in view. `inNewTab` (⌘-click) opens one more,
     /// kept. Without the tab bar, there's one page at a time: `page` takes the place of the one in
     /// view. A page a machine doesn't have (one of the app's own) is this Mac's.
-    func show(_ page: SettingsPage, on box: SidebarBox = .mac, inNewTab: Bool = false, isBusy: (String) -> Bool = { _ in false }) {
-        let box = page.isShown(on: box) ? box : .mac
+    func show(_ page: SettingsPage, on box: SidebarBox? = nil, inNewTab: Bool = false, isBusy: (String) -> Bool = { _ in false }) {
+        let box = box.flatMap { page.isShown(on: $0) ? $0 : nil } ?? thisMac
         if !TabBar.isShown {
             replace(with: page, on: box)
         } else if inNewTab {
@@ -174,8 +183,8 @@ final class SettingsTabs {
     }
 
     /// `page` as `show` has it, without counting it as opened: what searching finds first.
-    func preview(_ page: SettingsPage, on box: SidebarBox = .mac, isBusy: (String) -> Bool = { _ in false }) {
-        let box = page.isShown(on: box) ? box : .mac
+    func preview(_ page: SettingsPage, on box: SidebarBox? = nil, isBusy: (String) -> Bool = { _ in false }) {
+        let box = box.flatMap { page.isShown(on: $0) ? $0 : nil } ?? thisMac
         if !TabBar.isShown {
             replace(with: page, on: box)
         } else if let open = tabs.first(where: { $0.shows(page, on: box) }) {
@@ -209,7 +218,7 @@ final class SettingsTabs {
     func closeTabs(notOn added: Set<String>, machines: Machines) {
         let gone = tabs.filter { $0.box.machine.map { !added.contains($0) } ?? false }
         guard !gone.isEmpty else { return }
-        if gone.count == tabs.count { insert(Tab(id: UUID().uuidString, kind: .page(.machines))) }
+        if gone.count == tabs.count { insert(Tab(id: UUID().uuidString, kind: .page(.machines), box: thisMac)) }
         for tab in gone { close(tab.id, machines: machines) }
     }
 
@@ -223,7 +232,8 @@ final class SettingsTabs {
 
     /// Signs in to `service` in a tab of its own (the one there is, if it's open), in the browser
     /// of the computer `box` is.
-    func open(_ service: Integrations.Service, on box: SidebarBox = .mac) {
+    func open(_ service: Integrations.Service, on box: SidebarBox? = nil) {
+        let box = box ?? thisMac
         if let tab = tabs.first(where: { $0.kind == .site(service.id) }) {
             sites[service.id]?.place = box.machine ?? ""
             select(tab.id)
@@ -287,7 +297,7 @@ final class SettingsTabs {
     private func save() {
         let defaults = UserDefaults.standard
         let pages = tabs.filter { $0.page != nil }
-        let saved = pages.compactMap { tab in tab.page.map { Saved(page: $0.rawValue, box: tab.box.machine) } }
+        let saved = pages.compactMap { tab in tab.page.map { Saved(page: $0.rawValue, box: tab.box.isThisMac ? nil : tab.box.machine) } }
         defaults.set((try? JSONEncoder().encode(saved)).map { String(decoding: $0, as: UTF8.self) } ?? "", forKey: Self.tabsKey)
         defaults.set(page.rawValue, forKey: SettingsPage.storageKey)
         defaults.set(pages.firstIndex { $0.id == pageTab?.id }, forKey: Self.selectedKey)

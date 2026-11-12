@@ -3014,6 +3014,9 @@
             "literal": "agent-tools"
            },
            {
+            "literal": "agent-tools.own"
+           },
+           {
             "literal": "agents"
            },
            {
@@ -3386,6 +3389,9 @@
            },
            {
             "literal": "agent-tools"
+           },
+           {
+            "literal": "agent-tools.own"
            },
            {
             "literal": "agents"

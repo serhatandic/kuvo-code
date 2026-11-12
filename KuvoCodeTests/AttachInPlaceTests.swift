@@ -61,6 +61,8 @@ import Testing
             try Data().write(to: data.appending(path: "opencode.db"))
         }
         AppModel.hereHome = home
+        // (No projects of another test's: a new session with none is a chat.)
+        for key in ["projectFolders", "projectSettings", "worktrees"] { UserDefaults.standard.removeObject(forKey: key) }
         return binary
     }
 
@@ -80,6 +82,9 @@ import Testing
         BackgroundWork.heldBack = nil
         for database in databases { try? FileManager.default.removeItem(at: database) }
         AppModel.hereHome = AppModel.defaultHereHome
+        SSHConnection.thisMacHome = AppModel.defaultHereHome.path(percentEncoded: false)
+        MachineEngine.standIn = nil
+        BoxClient.thisMac = BoxClient.mac
         unsetenv("KUVO_OPENCODE_BINARY")
         try? FileManager.default.removeItem(at: folder)
         engine.stop()
@@ -118,7 +123,8 @@ import Testing
                 const fs = require("fs"), path = require("path"), run = path.join(process.env.KUVO_HOME, "run");
                 fs.writeFileSync(path.join(run, "app-attached.json"), "{}");
                 fs.writeFileSync(path.join(run, "setup-card.json"), JSON.stringify({ app: true, by: "its own" }));
-                console.log(JSON.stringify({ status: 200, body: "{}" }));
+                // (Where its chats go, as its `kuvo/info` says; every route answers the same.)
+                console.log(JSON.stringify({ status: 200, body: JSON.stringify({ chats: path.join(process.env.KUVO_HOME, "box-chats") }) }));
 
                 """.write(to: box.appending(path: "bin/kuvo-link.js"), atomically: true, encoding: .utf8)
             if runs == .running {
@@ -144,7 +150,7 @@ import Testing
         let attached = try #require(app?.attached)
         #expect(attached.use == .attach && attached.verdict == "elsewhere" && attached.runs == .running)
         #expect(attached.box?.primary?.name == "MacBook" && attached.box?.role == "member")
-        #expect(app?.engine != .ready)
+        #expect(app?.api == nil, "no engine of its own")
         #expect(!BackgroundWork.shared.register() && BackgroundWork.shared.failure?.contains("already here") == true, "Turn On registers no keeper beside it")
         #expect(!FileManager.default.fileExists(atPath: BoxProcess.home.path), "no box of its own: not even its folder")
         // Told so, by its own CLI and engine, its card says Kuvo Code is on this Mac: a Mac adding it
@@ -159,8 +165,174 @@ import Testing
         defer { cleanUp(app) }
         app = try await started { try memberOfMacBooks(runs: .stopped) }
         #expect(app?.attached?.runs == .running)
-        #expect(app?.engine != .ready)
+        #expect(app?.api == nil)
         #expect(!FileManager.default.fileExists(atPath: BoxProcess.home.path))
+    }
+
+    /// The window opens on the box here (#333): this Mac is that box, reached as a machine with no SSH,
+    /// from its own home folder, named as this Mac; never saved with your machines (whose list is in
+    /// the app's own box's folder, never made) nor removed from here; and the app starts no engine.
+    @Test func theWindowOpensOnTheBoxHere() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        // Its connection isn't followed here: only that it's tried.
+        MachineEngine.standIn = { _ in nil }
+        app = try await started { try memberOfMacBooks() }
+        let model = try #require(app)
+        #expect(model.engine == .ready && model.api == nil)
+        #expect(model.boxes == [.attached] && model.boxInView == .attached && model.thisMacsBox == .attached)
+        #expect(model.name(of: .attached) == PhoneLink.computerName)
+        let box = try #require(model.machines.engine(SSHConnection.thisMac))
+        #expect(box.machine.connection.isLocal && box.machine.name == PhoneLink.computerName)
+        #expect(SSHConnection.thisMacHome == home.path(percentEncoded: false))
+        #expect(engine.requests("GET", "/api/info").isEmpty, "the app's own engine never started")
+        model.removeMachine(SSHConnection.thisMac, uninstall: true)
+        #expect(model.machines.engine(SSHConnection.thisMac) != nil, "not removed from here")
+        #expect(!FileManager.default.fileExists(atPath: Machines.file.path(percentEncoded: false)) && !FileManager.default.fileExists(atPath: BoxProcess.home.path))
+        // Its name is never one of your machines to add.
+        #expect(MachineForm.problem(with: SSHConnection.thisMac) == "That’s this Mac.")
+    }
+
+    /// What has no computer of its own is on the box here (#333): Settings and ⌘, open on it, this
+    /// Mac's own pages with it; a new session with no project is a chat in its chats folder, and a
+    /// folder you open is one of its folders; and Settings › Machines offers nothing that would
+    /// disconnect, start or remove this Mac's box.
+    @Test func whatHasNoComputerIsOnTheBoxHere() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        MachineEngine.standIn = { _ in nil }
+        app = try await started { try memberOfMacBooks() }
+        let model = try #require(app)
+        // (As ⌘, and Settings… open it, without bringing the window forward.)
+        model.settingsTabs.show(.general)
+        #expect(model.settingsTabs.page == .general && model.settingsTabs.box == .attached)
+        model.settingsTabs.show(.accounts)
+        #expect(model.settingsTabs.page == .accounts && model.settingsTabs.box == .attached)
+        // Its chats where its box says they go.
+        try await model.readChatsHere()
+        model.tabs.newSession(in: nil, conversation: true)
+        let chats = RemoteFolder.folder(home.path(percentEncoded: false) + "/\(RemoteEngineInstaller.root)/box-chats", on: SSHConnection.thisMac)
+        #expect(model.tabs.selection == .draft(chats))
+        #expect(Workspace.onThisMac("/Users/me/project") == RemoteFolder.folder("/Users/me/project", on: SSHConnection.thisMac))
+        #expect(Workspace.box(of: "/Users/me/project") == SSHConnection.thisMac)
+    }
+
+    /// A new chat before the box here has said where its chats go: it's asked then, and the chat
+    /// opens there.
+    @Test func aNewChatAsksTheBoxHereWhereItsChatsGo() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        MachineEngine.standIn = { _ in nil }
+        app = try await started { try memberOfMacBooks() }
+        let model = try #require(app)
+        model.workspace.attachedChats = nil
+        model.tabs.newChat()
+        let chats = RemoteFolder.folder(home.path(percentEncoded: false) + "/\(RemoteEngineInstaller.root)/box-chats", on: SSHConnection.thisMac)
+        try await until { model.tabs.selection == .draft(chats) }
+        #expect(model.tabs.selection == .draft(chats))
+    }
+
+    /// The box here went (its Mac removed it) and the app starts again: it runs its own box, and
+    /// this Mac shows once, as its own; nothing of the box that was is left: listed, its sessions,
+    /// their tabs, or a new one in a folder there.
+    @Test func aBoxThatWentIsNoLongerListed() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        connectsReady()
+        engine.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 1])
+        engine.list([StubEngine.session("ses_there", directory: "/Users/me/project")])
+        app = try await started { try memberOfMacBooks() }
+        let model = try #require(app)
+        #expect(model.boxes == [.attached])
+        let here = try #require(model.machines.engine(SSHConnection.thisMac))
+        try await until { here.isReady && !onTheBoxHere(model.workspace.sessions.map(\.location.directory)).isEmpty }
+        model.tabs.open(.session("ses_there"))
+        try await model.readChatsHere()
+        model.tabs.newSession(in: nil, conversation: true)
+        // Its Mac removed it: its way to start and its engine went, its card stayed. (The app's own
+        // engine lists none.)
+        engine.list([])
+        let box = home.appending(path: RemoteEngineInstaller.root)
+        for gone in ["bin", "engine", "run/box.pid"] { try FileManager.default.removeItem(at: box.appending(path: gone)) }
+        await model.restart()
+        #expect(model.attached == nil && model.engine == .ready)
+        #expect(model.boxes == [.mac] && model.machines.engine(SSHConnection.thisMac) == nil)
+        #expect(BoxClient.thisMac == BoxClient.mac && model.settingsTabs.box == .mac)
+        // (As the window drops tabs whose sessions went.)
+        model.tabs.dropClosed()
+        #expect(onTheBoxHere(model.workspace.sessions.map(\.location.directory)).isEmpty)
+        #expect(!model.tabs.keys.contains(.session("ses_there")), "its session's tab went with it")
+        let drafts = model.tabs.keys.compactMap { key -> String? in if case .draft(let folder) = key { folder } else { nil } }
+        #expect(onTheBoxHere(drafts).isEmpty, "and a new one in a folder there")
+    }
+
+    /// A check that can't tell, as the app starts again: what was attached is let go of as well.
+    @Test func aBoxThatCantBeToldIsLetGoOf() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        MachineEngine.standIn = { _ in nil }
+        app = try await started { try memberOfMacBooks() }
+        let model = try #require(app)
+        #expect(model.attached != nil)
+        _ = try fakeEngine(hereFails: true)
+        await model.restart()
+        #expect(model.attached == nil && model.machines.engine(SSHConnection.thisMac) == nil && BoxClient.thisMac == BoxClient.mac)
+        guard case .failed = model.engine else { Issue.record("started something: \(model.engine)"); return }
+    }
+
+    /// Connected, the box here keeps its own link: this Mac's is never laid over it.
+    @Test func theBoxHereKeepsItsOwnLink() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        connectsReady()
+        app = try await started { try memberOfMacBooks() }
+        let model = try #require(app)
+        let here = try #require(model.machines.engine(SSHConnection.thisMac))
+        try await until { here.isReady }
+        let link = home.appending(path: "\(RemoteEngineInstaller.root)/bin/kuvo-link.js")
+        let before = try Data(contentsOf: link)
+        await model.phoneLink.sync(here, asked: true)
+        #expect(try Data(contentsOf: link) == before)
+        #expect(model.phoneLink.setupFailed[SSHConnection.thisMac] == nil)
+    }
+
+    /// Folders, of `folders`, on the box here.
+    private func onTheBoxHere(_ folders: [String]) -> [String] {
+        folders.filter { RemoteFolder.machine(of: $0) == SSHConnection.thisMac }
+    }
+
+    /// The box here's engine reached at the stand-in, which answers as a machine's does.
+    private func connectsReady() {
+        engine.on("GET", "/api/mcp", json: ["location": ["directory": "/"], "data": []])
+        engine.on("GET", "/api/credential", json: ["data": []])
+        let api = OpenCodeAPI(endpoint: ServerEndpoint(url: URL(string: engine.url)!, password: "test"), folderPrefix: RemoteFolder.prefix(for: SSHConnection.thisMac))
+        MachineEngine.standIn = { _ in api }
+    }
+
+    /// Connected, this Mac's own box offers nothing in Settings › Machines (or to a phone): it's
+    /// never disconnected from the window that's on it, nor started or removed from here.
+    @Test func thisMacsBoxIsntDisconnectedFromHere() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        engine.list([])
+        connectsReady()
+        app = try await started { try memberOfMacBooks() }
+        let box = try #require(app?.machines.engine(SSHConnection.thisMac))
+        try await until { box.isReady }
+        #expect(box.offer == nil, "no Disconnect")
+    }
+
+    /// Its routes go to its own CLI here, in its own home folder, with no SSH: as a machine's do.
+    @Test func itsRoutesGoToItsOwnCLIHere() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        MachineEngine.standIn = { _ in nil }
+        app = try await started { try memberOfMacBooks() }
+        let card = home.appending(path: "\(RemoteEngineInstaller.root)/run/setup-card.json")
+        try FileManager.default.removeItem(at: card)
+        let (status, _) = try await BoxClient.machine(SSHConnection.thisMac).send("POST", "kuvo/setup/attached")
+        #expect(status == 200)
+        #expect(self.card()?["by"] as? String == "its own", "answered by the box's own CLI, in its home folder")
     }
 
     /// One that won't start is said so, to try again, rather than waited on.
@@ -176,18 +348,20 @@ import Testing
     }
 
     /// Started again by launchd, through the launch agent its Mac put in place, as at login (never
-    /// under Kuvo Code's own permissions); by its own script where there's none.
+    /// under Kuvo Code's own permissions): started, or loaded where launchd hasn't it loaded yet,
+    /// and never by the app then; by its own script only where there's no agent.
     @Test func aStoppedBoxIsStartedByLaunchdWhereItCanBe() throws {
         defer { try? FileManager.default.removeItem(at: folder) }
-        let own = Here.startCommand(home: home, root: ".kuvo-code", user: 501, real: true)
-        #expect(own.path == "/bin/sh" && own.arguments == [home.appending(path: ".kuvo-code/bin/kuvo-start").path])
+        let own = Here.startCommands(home: home, root: ".kuvo-code", user: 501, real: true)
+        #expect(own.map(\.path) == ["/bin/sh"] && own.first?.arguments == [home.appending(path: ".kuvo-code/bin/kuvo-start").path])
         let agent = home.appending(path: "Library/LaunchAgents/\(RemoteServer.launchAgent).plist")
         try FileManager.default.createDirectory(at: agent.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data().write(to: agent)
-        let launchd = Here.startCommand(home: home, root: ".kuvo-code", user: 501, real: true)
-        #expect(launchd.path == "/bin/launchctl" && launchd.arguments == ["kickstart", "gui/501/run.kuvo.code.machine"])
+        let launchd = Here.startCommands(home: home, root: ".kuvo-code", user: 501, real: true)
+        #expect(launchd.map(\.path) == ["/bin/launchctl", "/bin/launchctl"])
+        #expect(launchd.map(\.arguments) == [["kickstart", "gui/501/run.kuvo.code.machine"], ["bootstrap", "gui/501", agent.path]])
         // A test's home is never the account's, whose agent launchd would start.
-        #expect(Here.startCommand(home: home, root: ".kuvo-code", user: 501).path == "/bin/sh")
+        #expect(Here.startCommands(home: home, root: ".kuvo-code", user: 501).map(\.path) == ["/bin/sh"])
     }
 
     /// MacBook removed this Mac as a machine (its way to start and keys went, its card stayed): no box

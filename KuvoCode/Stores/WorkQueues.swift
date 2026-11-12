@@ -147,7 +147,7 @@ final class WorkQueues {
             #if DEBUG
             if isStandIn { return }
             #endif
-            var wait: Duration = key.box == BoxClient.mac ? .seconds(2) : .seconds(4)
+            var wait: Duration = BoxClient.streams(key.box) ? .seconds(2) : .seconds(4)
             if let client = client(key.box) {
                 do {
                     for try await line in client.follow("kuvo/work-queue/events?owner=\(query(key.owner))") {
@@ -189,9 +189,10 @@ final class WorkQueues {
     /// This Mac's own items in it say so ("on" this Mac), as another box's view says of them: what
     /// you do to them goes to this Mac's box, and they're never taken for the machine's.
     private func fallBack(_ key: Key) async -> Bool {
-        guard key.box != BoxClient.mac, following[key] != nil, let client = client(BoxClient.mac),
+        let thisMac = BoxClient.thisMac
+        guard !BoxClient.isThisMac(key.box), following[key] != nil, let client = client(thisMac),
               var view = try? await client.value(WorkQueueView.self, "GET", "kuvo/work-queue?owner=\(query(key.owner))") else { return false }
-        let here = WorkComputer(key: known.mac ?? "", name: PhoneLink.computerName, kind: "mac", id: BoxClient.mac)
+        let here = WorkComputer(key: known.mac ?? "", name: PhoneLink.computerName, kind: "mac", id: thisMac)
         for index in view.items.indices where view.items[index].computer == nil { view.items[index].computer = here }
         for index in view.removed.indices where view.removed[index].computer == nil { view.removed[index].computer = here }
         take(view, for: key, refs: false)
@@ -245,8 +246,8 @@ final class WorkQueues {
             loadFailures[box + "|" + item] = nil
         } catch {
             // A machine that isn't answering: as this Mac's own box has it (as it last told it).
-            if box != BoxClient.mac, let mac = self.client(BoxClient.mac), var told = try? await mac.value(DetailAnswer.self, "GET", "kuvo/work-queue/items/\(path(refs[box]?[item]?.id ?? item))").item {
-                if told.item.computer == nil { told.item.computer = WorkComputer(key: known.mac ?? "", name: PhoneLink.computerName, kind: "mac", id: BoxClient.mac) }
+            if !BoxClient.isThisMac(box), let mac = self.client(BoxClient.thisMac), var told = try? await mac.value(DetailAnswer.self, "GET", "kuvo/work-queue/items/\(path(refs[box]?[item]?.id ?? item))").item {
+                if told.item.computer == nil { told.item.computer = WorkComputer(key: known.mac ?? "", name: PhoneLink.computerName, kind: "mac", id: BoxClient.thisMac) }
                 details[box + "|" + told.item.id] = told
                 if let number = told.item.number { details[box + "|#\(number)"] = told }
                 loadFailures[box + "|" + item] = nil
@@ -296,8 +297,8 @@ final class WorkQueues {
         guard let computer = item.computer else { return box }
         let known = known
         // (This Mac's own, in a view read from its box for a machine that isn't answering.)
-        if computer.kind == "mac", computer.id == BoxClient.mac { return BoxClient.mac }
-        if computer.kind == "mac" { return computer.key == known.mac ? BoxClient.mac : nil }
+        if computer.kind == "mac", let id = computer.id, BoxClient.isThisMac(id) { return BoxClient.thisMac }
+        if computer.kind == "mac" { return computer.key == known.mac ? BoxClient.thisMac : nil }
         if let id = known.machines.first(where: { $0.value == computer.key })?.key { return id }
         // (A machine this Mac has, whose key it doesn't know yet: by the id the box gave, unless
         // that's another of this Mac's machines.)
@@ -430,7 +431,7 @@ final class WorkQueues {
         do {
             let sent = try body.map { try JSONEncoder().encode($0) }
             var headers: [String: String] = [:]
-            if box != BoxClient.mac {
+            if BoxClient.needsVaultProof(box) {
                 guard let proof = proof(box, method, path, sent ?? Data()) else { throw BoxRefusal(status: 503, message: "This Mac can’t prove it’s yours to that machine right now. Try again in a moment.") }
                 headers["x-kuvo-vault-proof"] = proof
             }
@@ -439,7 +440,7 @@ final class WorkQueues {
             let answer = try JSONDecoder().decode(T.self, from: data)
             refusal = nil
             // A box that doesn't stream shows the change once it's asked again.
-            if box != BoxClient.mac { for key in views.keys where key.box == box { await read(key) } }
+            if !BoxClient.streams(box) { for key in views.keys where key.box == box { await read(key) } }
             return answer
         } catch let refused as BoxRefusal {
             refusal = (shownOn ?? box, refused.message)

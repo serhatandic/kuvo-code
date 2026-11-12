@@ -29,7 +29,7 @@ enum Passwords {
 
     static var neverSites: [String] { UserDefaults.standard.stringArray(forKey: neverKey) ?? [] }
 
-    private static var vault: Vault? { Vaults.shared[BoxClient.mac].vault }
+    private static var vault: Vault? { Vaults.shared[BoxClient.thisMac].vault }
 
     /// The vault's sign-in for each saved login.
     private static var signIns: [VaultItem] { vault?.items.filter { $0.kind == .login } ?? [] }
@@ -53,9 +53,9 @@ enum Passwords {
     /// Lets every agent sign in to `host` with the saved login for `account` on their own (or not),
     /// as this Mac's vault has it now.
     static func setAgentSignIn(_ host: String, _ allowed: Bool, account: String? = nil) async {
-        await Vaults.shared.refresh(BoxClient.mac)
+        await Vaults.shared.refresh(BoxClient.thisMac)
         for item in vault?.signIns(for: host) ?? [] where (account == nil || (item.username ?? "") == account) {
-            try? await Vaults.shared.grant(item, to: .init(everyone: true), how: allowed ? .own : nil, on: BoxClient.mac)
+            try? await Vaults.shared.grant(item, to: .init(everyone: true), how: allowed ? .own : nil, on: BoxClient.thisMac)
         }
     }
 
@@ -69,18 +69,18 @@ enum Passwords {
     /// `allowAgents`, every agent signs in there with it on its own. Nil when it couldn't be saved.
     @discardableResult
     static func save(host: String, account: String, password: String, allowAgents: Bool = false) async -> VaultItem? {
-        await Vaults.shared.refresh(BoxClient.mac)
-        guard Vaults.shared[BoxClient.mac].vault != nil else { return nil }
+        await Vaults.shared.refresh(BoxClient.thisMac)
+        guard Vaults.shared[BoxClient.thisMac].vault != nil else { return nil }
         do {
             let item: VaultItem
             // One saved for the site it's under (example.com's, signing in on www.example.com) too.
-            if let existing = Vaults.shared[BoxClient.mac].vault?.signIns(for: host).first(where: { ($0.username ?? "") == account }) {
-                item = try await Vaults.shared.change(existing, to: VaultDraft(kind: .login, name: existing.name, sites: existing.sites, username: existing.username, values: ["password": password]), on: BoxClient.mac)
+            if let existing = Vaults.shared[BoxClient.thisMac].vault?.signIns(for: host).first(where: { ($0.username ?? "") == account }) {
+                item = try await Vaults.shared.change(existing, to: VaultDraft(kind: .login, name: existing.name, sites: existing.sites, username: existing.username, values: ["password": password]), on: BoxClient.thisMac)
             } else {
                 // Saved from the browser: for signing in there, never handed to a command.
-                item = try await Vaults.shared.add(VaultDraft(kind: .login, name: freeName(host: host, account: account), sites: [host], username: account.isEmpty ? nil : account, signInOnly: true, values: ["password": password]), on: BoxClient.mac)
+                item = try await Vaults.shared.add(VaultDraft(kind: .login, name: freeName(host: host, account: account), sites: [host], username: account.isEmpty ? nil : account, signInOnly: true, values: ["password": password]), on: BoxClient.thisMac)
             }
-            if allowAgents { try await Vaults.shared.grant(item, to: .init(everyone: true), how: .own, on: BoxClient.mac) }
+            if allowAgents { try await Vaults.shared.grant(item, to: .init(everyone: true), how: .own, on: BoxClient.thisMac) }
             return item
         } catch {
             return nil
@@ -106,8 +106,8 @@ enum Passwords {
     /// it, each with whether agents signed in with it on their own, each old one taken away once
     /// it's there. True once its box answered and there's none left to move.
     static func ready() async -> Bool {
-        await Vaults.shared.refresh(BoxClient.mac)
-        guard Vaults.shared[BoxClient.mac].vault != nil else { return false }
+        await Vaults.shared.refresh(BoxClient.thisMac)
+        guard Vaults.shared[BoxClient.thisMac].vault != nil else { return false }
         if UserDefaults.standard.bool(forKey: movedKey) { return true }
         guard let found = await Task.detached(operation: { Legacy.found(for: nil) }).value else { return false }
         let allowed = Legacy.agentSites
@@ -120,13 +120,13 @@ enum Passwords {
                 let item: VaultItem
                 if let moved = signIns.first(where: { $0.sites.contains(old.host) && ($0.username ?? "") == old.account }) {
                     // (Moved by a build from before sign-ins could be only for signing in: made so now.)
-                    item = moved.signInOnly == true ? moved : try await Vaults.shared.change(moved, to: VaultDraft(kind: .login, name: moved.name, sites: moved.sites, username: moved.username, signInOnly: true), on: BoxClient.mac)
+                    item = moved.signInOnly == true ? moved : try await Vaults.shared.change(moved, to: VaultDraft(kind: .login, name: moved.name, sites: moved.sites, username: moved.username, signInOnly: true), on: BoxClient.thisMac)
                 } else {
                     // What it was before: a sign-in the browser fills in, never handed to a command.
-                    item = try await Vaults.shared.add(VaultDraft(kind: .login, name: freeName(host: old.host, account: old.account), sites: [old.host], username: old.account.isEmpty ? nil : old.account, signInOnly: true, values: ["password": password]), on: BoxClient.mac)
+                    item = try await Vaults.shared.add(VaultDraft(kind: .login, name: freeName(host: old.host, account: old.account), sites: [old.host], username: old.account.isEmpty ? nil : old.account, signInOnly: true, values: ["password": password]), on: BoxClient.thisMac)
                 }
                 if allowed.contains(old.host), accounts[old.host] == old.account {
-                    try await Vaults.shared.grant(item, to: .init(everyone: true), how: .own, on: BoxClient.mac)
+                    try await Vaults.shared.grant(item, to: .init(everyone: true), how: .own, on: BoxClient.thisMac)
                 }
                 Legacy.delete(old)
             } catch {
