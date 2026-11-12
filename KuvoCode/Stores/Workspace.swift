@@ -2437,7 +2437,7 @@ final class Workspace {
     /// them.
     private var removedMachines: Set<String> = []
 
-    private func isRemoved(_ box: String) -> Bool { !BoxClient.isThisMac(box) && removedMachines.contains(box) }
+    private func isRemoved(_ box: String) -> Bool { box != BoxClient.mac && removedMachines.contains(box) }
 
     /// A machine you removed, or one of yours that isn't connected now: nothing is asked of it.
     private func isAway(_ box: String) -> Bool {

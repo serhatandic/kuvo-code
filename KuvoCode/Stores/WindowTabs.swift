@@ -853,10 +853,15 @@ final class WindowTabs {
         if let chats = workspace.thisMacsChats { return newSession(in: chats) }
         Task { [weak self] in
             guard let self else { return }
-            await app.readChatsHere()
-            guard let chats = workspace.thisMacsChats else {
-                return Modal.show(BoxRefusal(status: 503, message: "This Mac’s box hasn’t said where its chats go yet. Try again in a moment."))
+            do {
+                try await app.readChatsHere()
+            } catch let older as AppModel.ChatsNeedNewerBox {
+                return Modal.show(older)
+            } catch {
+                return Modal.show(BoxRefusal(status: 503, message: "This Mac’s box didn’t answer. Try again in a moment."))
             }
+            // (Let go of meanwhile: none to start it in.)
+            guard let chats = workspace.thisMacsChats else { return }
             newSession(in: chats)
         }
     }

@@ -749,23 +749,44 @@ final class AppModel {
         engine = .ready
         startMachines()
         // Where its chats go, as it says, for a new chat with no project.
-        Task { await readChatsHere() }
+        Task { try? await readChatsHere() }
     }
 
     /// No longer attached to a box here (none now, or it can't be told): it's no longer listed or
     /// followed, and what has no computer of its own is the app's own box's again.
+    /// What this Mac showed of it goes as a removed machine's does (`removeMachine`), with nothing
+    /// run there.
     private func detachHere() {
+        let id = SSHConnection.thisMac
         attached = nil
-        machines.detachHere()
         workspace.attachedChats = nil
+        guard machines.engine(id) != nil else { return }
+        planLimits.stopped(id)
+        closeAll(on: id)
+        machines.detachHere()
+        forgetAll(of: id)
+        moves.forget(id)
+        // Its sessions' tabs go with them; a new one not sent yet, in a folder there, too.
+        for key in tabs.keys {
+            if case .draft(let folder) = key, RemoteFolder.machine(of: folder) == id { tabs.close(key, remember: false) }
+        }
+    }
+
+    /// The box here answered, without a chats folder: it's from before chats had one there.
+    struct ChatsNeedNewerBox: LocalizedError {
+        var errorDescription: String? { "This Mac’s box needs a newer Kuvo Code to start chats there. It updates by itself overnight." }
     }
 
     /// The chats folder of the box attached in place, as it names it (`kuvo/info`'s `chats`), as a
-    /// machine's is read for a new chat there.
-    func readChatsHere() async {
+    /// machine's is read for a new chat there. Throws why not: it didn't answer, or it's from
+    /// before chats had a folder there.
+    func readChatsHere() async throws {
         guard attached != nil, workspace.attachedChats == nil else { return }
         struct Info: Decodable { var chats: String? }
-        guard let chats = try? await box(SSHConnection.thisMac).value(Info.self, "GET", "kuvo/info").chats else { return }
+        let info = try await box(SSHConnection.thisMac).value(Info.self, "GET", "kuvo/info")
+        // (Let go of meanwhile: nothing of it is kept.)
+        guard attached != nil else { return }
+        guard let chats = info.chats else { throw ChatsNeedNewerBox() }
         workspace.attachedChats = RemoteFolder.folder(chats, on: SSHConnection.thisMac)
     }
 

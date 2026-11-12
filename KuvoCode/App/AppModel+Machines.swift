@@ -724,6 +724,18 @@ extension AppModel {
         planLimits.stopped(id)
         // Left running, as Disconnect leaves it (a test or demo copy's stops).
         if !uninstall, let engine = machines.engine(id) { disconnect(engine) }
+        closeAll(on: id)
+        machines.remove(id, uninstall: uninstall)
+        if uninstall { phoneLink.forget(machine: id) } else { phoneLink.machineRemoved(id) }
+        forgetAll(of: id)
+        // Your others hear of it: one uninstalled stops being their peer (one only removed stays,
+        // as your phones keep it); the last gone, no relay for it.
+        phoneLink.machinesChanged()
+        moves.forget(id)
+    }
+
+    /// What's open here on machine `id`, closed: its browser, browser asks and terminals.
+    func closeAll(on id: String) {
         if let engine = machines.engine(id) {
             stopRetrying(engine)
             engine.browser.reset()
@@ -732,8 +744,11 @@ extension AppModel {
         utilities.closeMachineBrowser(id)
         utilities.closeTerminals(on: id)
         mainTerminals.close(on: id)
-        machines.remove(id, uninstall: uninstall)
-        if uninstall { phoneLink.forget(machine: id) } else { phoneLink.machineRemoved(id) }
+    }
+
+    /// What this Mac keeps of machine `id` (once it's off the list), forgotten: its sessions and
+    /// their tabs, group chats, vault and sandbox, and its pages in Settings.
+    func forgetAll(of id: String) {
         workspace.machines = Set(machines.list.map(\.id))
         workspace.forget(id, forGood: true)
         boxGroups.forget(machine: id)
@@ -741,10 +756,6 @@ extension AppModel {
         Sandboxes.shared.forget(id)
         // Its pages in Settings.
         settingsTabs.closeTabs(notOn: Set(machines.list.map(\.id)), machines: machines)
-        // Your others hear of it: one uninstalled stops being their peer (one only removed stays,
-        // as your phones keep it); the last gone, no relay for it.
-        phoneLink.machinesChanged()
-        moves.forget(id)
     }
 
     /// When the app quits: each machine runs on, as a box of its own. (A demo or test copy's
