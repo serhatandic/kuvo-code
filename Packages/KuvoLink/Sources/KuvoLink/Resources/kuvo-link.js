@@ -4820,10 +4820,10 @@ export default {
     }
     // A read of a file that isn't there, beside a link whose name looks the same: refused, in the
     // folder or out of it (where the link leads is never what the box judged, nor asked about).
-    const LOOKALIKE = "This names a file that isn't there, beside a link whose name looks the same, which Kuvo Code's sandbox doesn't let the engine's read tool open in its place. Name the file exactly as it's written, or ask the user."
+    const LOOKALIKE = "This names a file that isn't there, where a link has that name or one that looks the same, which Kuvo Code's sandbox doesn't let the engine's read tool open in its place. Name a file that's there exactly as it's written, or ask the user."
     // And one through a link out of the folder to a file that isn't there, beside one whose name looks
     // the same, which read would take in its place.
-    const NOWHERE = "This leads, through a link out of the conversation's folder, to a file that isn't there, beside one whose name looks the same, which Kuvo Code's sandbox doesn't let the engine's read tool open in its place. Ask the user."
+    const NOWHERE = "This leads, through a link out of the conversation's folder, to a file that isn't there, beside one whose name looks the same, which Kuvo Code's sandbox doesn't let the engine's read tool open in its place. Name the file exactly as it's written, or ask the user."
     // The engine reads a \\ in a path as a / where it weighs your rules for folders outside the
     // project, and the system doesn't: \`notes\\x\` would pass for a file in \`notes\` (one
     // you allowed) while it's a folder beside it. So no file tool's path has one.
@@ -16548,7 +16548,7 @@ ${tag("refused", stops.map((stop) => `- ${stop.kind}${stop.path ? ` ${stop.path}
 `))}` : ""}
 If what it printed shows something else refused it, not the sandbox (a database, a server, a file's own permissions), refuse it: running it outside won't help.` : `Run this command outside the sandbox, in ${action.folder}:
 ${tag("command", action.command)}` : action.kind === "file" ? `${action.access === "write" ? "Change" : "Read"} this file or folder outside the conversation's folder (${action.folder})${action.tool ? `, with the agent's ${action.tool} tool` : ""}:
-${tag("file", action.path)}${leadsTo(action.path) !== path65.resolve(action.path) ? `
+${tag("file", action.path)}${landsAt(action.path) !== realish(action.path) ? `
 Through a link, it really is:
 ${tag("file", landsAt(action.path))}` : ""}${action.input ? `
 The tool's arguments:
@@ -17508,7 +17508,8 @@ async function answerPermission(source, id, sessionID, signal, found) {
     noteReview(id, sessionID, "yours", call2);
     return null;
   }
-  const file = seen && [seen.input.filePath, seen.input.file_path, seen.input.notebook_path, seen.input.path, seen.input.file].find((each) => typeof each === "string" && each.startsWith("/"));
+  const given = seen && [seen.input.filePath, seen.input.file_path, seen.input.notebook_path, seen.input.path, seen.input.file].find((each) => typeof each === "string" && each !== "");
+  const file = given ? path66.resolve(folder, given === "~" ? homeFolder() : given.startsWith("~/") ? path66.join(homeFolder(), given.slice(2)) : given) : undefined;
   const named = permission.resources.filter((each) => each !== "*").map((each) => path66.resolve(folder, each.replace(/^~(?=\/|$)/, homeFolder()).replace(/\/\*$/, "") || "/"));
   const actions = seen && file ? [{ kind: "file", path: file, access: READING.has(seen.tool.toLowerCase()) ? "read" : "write", folder, tool: seen.tool, input: seen.input }] : named.length ? named.map((each) => ({ kind: "file", path: each, access: "write", folder })) : [{ kind: "tool", tool: seen?.tool || "work outside its folder", args: seen?.input ?? { asked: permission.resources }, folder }];
   const readsOwn = [commandTemporary(folder), ...[at.data.id, at.data.parentID].filter((each) => typeof each === "string").flatMap(attachedOf)].filter((each) => Boolean(each));
@@ -17527,7 +17528,7 @@ async function answerPermission(source, id, sessionID, signal, found) {
   const reads = Boolean(seen && file && seen.tool.toLowerCase() === "read");
   if (reads)
     await askedAbout([folder, path66.resolve(file)]);
-  const alikes = reads ? lookalikesOf(landsAt(file)) : [];
+  const alikes = reads ? [...new Map([...lookalikesOf(file), ...lookalikesOf(landsAt(file))].map((each) => [landsAt(each), each])).values()] : [];
   actions.push(...alikes.map((each) => ({ ...actions[0], path: each })));
   const reply = async (body, decided) => {
     replying.set(id, false);
@@ -38589,7 +38590,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "36ed3d7e79bf";
+var BRIDGE_VERSION = "4d2882edac7f";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
