@@ -5646,8 +5646,9 @@ one that's there, and makes them as you, in the folder as it is (never through a
 never in a folder you made read-only. A repository that lacks one of them (it can't give one, or one,
 `config` included, isn't there as it's kept) is checked as every other,
 then its folder is read-only to commands (they can't make it writable either), but for its
-worktrees' own folders and its submodules' repositories, each kept as above; the command runs, told
-so once in what it prints (again once it can and then can't).
+worktrees' own folders and its submodules' repositories, each kept as above; the command runs. Where
+the launcher couldn't make one, the command is told so once in what it prints (again once it can
+and then can't); a repository with no `.git/config` is read-only the same way and nothing says so.
 
 Still open on Linux: what a namespace keeps is what was there as the command started (#617). git
 outside the sandbox writes `.git/config` anew (`git config`, a push that sets its upstream, a branch
