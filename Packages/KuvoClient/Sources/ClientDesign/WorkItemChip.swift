@@ -182,7 +182,7 @@ public struct WorkItemChip: View {
         .fixedSize()
         .environment(\.colorScheme, dark ? .dark : .light)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Self.spoken(name: spokenAs, title: title, mark: mark))
+        .accessibilityLabel(Self.spoken(name: spokenAs, title: title, mark: mark, gone: gone))
     }
 
     /// "Work item 243, Fix the sign-in, in progress".
@@ -190,8 +190,9 @@ public struct WorkItemChip: View {
         spoken(name: "Work item \(number)", title: title, mark: mark)
     }
 
-    /// "GitHub issue app#12, Upload retries drop the file name, done".
-    public static func spoken(name: String, title: String, mark: WorkItemMark) -> String {
-        [name, title, mark.words].filter { !$0.isEmpty }.joined(separator: ", ")
+    /// "GitHub issue app#12, Upload retries drop the file name, done"; one gone there, ", gone"
+    /// after (its dimmed mark, in words).
+    public static func spoken(name: String, title: String, mark: WorkItemMark, gone: Bool = false) -> String {
+        [name, title, mark.words, gone ? "gone" : ""].filter { !$0.isEmpty }.joined(separator: ", ")
     }
 }

@@ -91,6 +91,8 @@ export const ISSUES: Reader<IssueAsk, IssueRead> = register<IssueAsk, IssueRead>
   freshFor: value => (!value ? FRESH_MISSING : DONE_STATES.has(value.state) ? FRESH_DONE : FRESH_OPEN),
   keptFor: 30 * 86_400_000,
   keepsLast: true,
+  // (Missing where it was: by GitHub's id for it, moved to another repository say.)
+  again: (ask, before) => (!ask.id && before?.value?.id ? { ...ask, id: before.value.id } : null),
 });
 
 /** At most this many read at once, for one view or one ask of chips: those read longest ago first. */

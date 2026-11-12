@@ -66,7 +66,8 @@ public extension WorkQueue {
         var properties: [Property] = []
         if status(of: item) == nil {
             if let kept = item.keptIn {
-                // (The box's words; an older box's, worked out from what it read.)
+                // (The box's words; an older box's, worked out from what it read, until no box from
+                // before #541 is about.)
                 let words = item.doneAs ?? (item.seen?.state == "merged" ? "Merged on GitHub" : "Closed on GitHub")
                 let back = categoryName(kept, in: view.categories)
                 properties.append(Property(kind: .category(item.category), words: words,

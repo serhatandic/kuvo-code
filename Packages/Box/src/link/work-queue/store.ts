@@ -419,8 +419,10 @@ export function noteQueuesChanged(): void {
   for (const tell of queueFollowers) tell();
 }
 
-/** The items `ref` names, by id, number, or source (a linked item's old number names it too). */
-export const matching = <T extends Pick<Item, "id" | "number" | "source">>(items: T[], ref: ItemRef): T[] => items.filter(item => refNames(ref, item));
+/** The items `ref` names, by id, number, or source (a linked item's old number names it too): those
+ * not deleted first, so an issue's ref names the live item that's it, not one deleted before. */
+export const matching = <T extends Pick<Item, "id" | "number" | "source"> & { removed?: unknown }>(items: T[], ref: ItemRef): T[] =>
+  items.filter(item => refNames(ref, item)).sort((a, b) => Number(Boolean(a.removed)) - Number(Boolean(b.removed)));
 
 /** Whether `ref` names `item`. */
 export const refNames = (ref: ItemRef, item: Pick<Item, "id" | "number" | "source">): boolean =>

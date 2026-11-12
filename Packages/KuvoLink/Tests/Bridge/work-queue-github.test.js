@@ -31,6 +31,8 @@ fs.mkdirSync(bin);
 const asked = path.join(home, "gh-asked");
 const answer = path.join(home, "gh-answer.json");
 const fail = path.join(home, "gh-fail");
+// (What it answers a query by GitHub's id instead, while `gh-answer-id.json` is there.)
+const answerByID = path.join(home, "gh-answer-id.json");
 // (While `gh-hold` is there, it doesn't answer: GitHub slow to.)
 const hold = path.join(home, "gh-hold");
 fs.writeFileSync(path.join(bin, "gh"), `#!/bin/sh
@@ -39,6 +41,7 @@ printf '%s\\n' "$last" | tr '\\n' ' ' >> '${asked}'
 echo >> '${asked}'
 while [ -f '${hold}' ]; do sleep 0.05; done
 if [ -f '${fail}' ]; then cat '${fail}' >&2; exit 1; fi
+case "$last" in *"node(id:"*) if [ -f '${answerByID}' ]; then cat '${answerByID}'; exit 0; fi ;; esac
 cat '${answer}'
 `, { mode: 0o755 });
 process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`;
@@ -99,6 +102,7 @@ beforeEach(() => {
   fs.rmSync(queues, { recursive: true, force: true });
   fs.rmSync(asked, { force: true });
   fs.rmSync(fail, { force: true });
+  fs.rmSync(answerByID, { force: true });
   calling.clear();
 });
 
@@ -285,7 +289,7 @@ test("what gh can't read is said in words, and nothing is added; one gone later 
   ageReads();
   await view();
   await view();
-  assert.equal(queries().length, 5, "added, found gone twice, back, then signed out: held off since");
+  assert.equal(queries().length, 6, "added, found gone (asked by its id too), gone again, back, then signed out: held off since");
 });
 
 test("an issue's own description is GitHub's: fenced off for agents as outside text, its bare #n that repository's", async () => {
@@ -373,4 +377,39 @@ test("a glance at a queue (a count, as the phone's ••• shows it) never rea
   // A panel's view reads it.
   assert.equal((await view()).items[0].category, "done");
   assert.equal(queries().length, 2);
+});
+
+test("only what GitHub didn't find is gone: one it wouldn't answer for (an organization's SAML sign-on, an IP allow list) stays as it was, and one moved is found by its id in the same read", async () => {
+  github(issue(12));
+  await tool("queue_add", { issue: "gh:kuvo-test/app#12" });
+  github(issue(14));
+  await tool("queue_add", { issue: "gh:kuvo-test/app#14" });
+  fs.rmSync(asked);
+  // #12 behind SSO this time; #14 moved to another repository (GitHub's id stays).
+  fs.writeFileSync(answer, JSON.stringify({ data: { p0: null, p1: { issueOrPullRequest: null } }, errors: [{ type: "FORBIDDEN", path: ["p0"], message: "Resource protected by organization SAML enforcement." }, { type: "NOT_FOUND", path: ["p1", "issueOrPullRequest"], message: "Could not resolve." }] }));
+  fs.writeFileSync(answerByID, JSON.stringify({ data: { p0: { ...issue(14), url: "https://github.com/kuvo-test/moved/issues/3", number: 3 } } }));
+  ageReads();
+  const items = (await view()).items;
+  const [sso, moved] = ["gh:kuvo-test/app#12", "gh:kuvo-test/app#14"].map(ref => items.find(item => item.source.ref === ref));
+  assert.deepEqual([sso.category, sso.seen.state, sso.seen.gone, sso.struck], ["next", "open", undefined, undefined], "not gone: GitHub wouldn't say");
+  assert.deepEqual([moved.category, moved.seen.gone, moved.source.url, moved.source.name], ["next", undefined, "https://github.com/kuvo-test/moved/issues/3", "app#14"]);
+  assert.equal(queries().length, 2, "the two, then the moved one by its id");
+  assert.match(queries()[1], /p0: node\(id: "I_kw14"\)/);
+  // (#12 asked now: not again at once.)
+  await view();
+  assert.equal(queries().length, 2);
+});
+
+test("a deleted item doesn't stand for its issue while another item is that issue: its ref names the live one", async () => {
+  github(issue(12));
+  await tool("queue_add", { issue: "gh:kuvo-test/app#12" });
+  await tool("queue_remove", { item: "gh:kuvo-test/app#12" });
+  // Another item for it comes (handed here from another computer, say): written beside it.
+  const file = path.join(queues, "queues", "ses_other.json");
+  const whole = JSON.parse(fs.readFileSync(path.join(queues, "queues", "ses_lead.json"), "utf8"));
+  const { removed: _, ...live } = whole.items[0];
+  fs.writeFileSync(file, JSON.stringify({ ...whole, owner: "ses_other", items: [{ ...live, id: "wqi_livesameissue0000012", owner: "ses_other", order: 9 }] }));
+  const refs = (await route("POST", "kuvo/work-queue/refs", { refs: ["gh:kuvo-test/app#12"] })).body.refs;
+  assert.equal(refs["gh:kuvo-test/app#12"].id, "wqi_livesameissue0000012");
+  assert.equal(refs["gh:kuvo-test/app#12"].removed, undefined);
 });

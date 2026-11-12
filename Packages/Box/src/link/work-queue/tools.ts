@@ -184,7 +184,7 @@ function itemFor(items: Item[], given: unknown, caller: QueueCaller, overseen: S
   const ref = refOf(given);
   if (!ref) throw new Refusal("Say which item (item), by its number, like #243 (or the id an item without one was given), or the GitHub issue or pull request it is, like gh:owner/repo#12.");
   const found = matching(items, ref);
-  const item = found.find(each => inView(caller.owner, each, overseen)) ?? found[0];
+  const item = found.find(each => !each.removed && inView(caller.owner, each, overseen)) ?? found.find(each => inView(caller.owner, each, overseen)) ?? found[0];
   if (!item) {
     // One on another of your computers is changed there, by the conversation it belongs to.
     const far = itemElsewhere(ref);

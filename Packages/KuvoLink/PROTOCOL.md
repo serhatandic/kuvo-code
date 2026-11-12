@@ -3647,7 +3647,7 @@ link or a web address, and not after "PR", "MR", "pull request", "issue" or "ste
 else's numbers; outside sources get a prefix, `gh:owner/repo#12`). `gh:owner/repo#12` (`owner` a
 GitHub owner, `repo` a repository name, the number 1 to 10 digits; then no letter, digit or
 underscore; not in code, a link or an address either) names the item that is that issue or pull
-request. A client asks `refs` for the numbers and the `gh:` refs in a message and draws each one the
+request (the one not deleted, where a deleted one is that issue too). A client asks `refs` for the numbers and the `gh:` refs in a message and draws each one the
 box knows as a chip (its category's color, a ring in progress, a check when done, `#243` and the
 title on one line; for an issue or a pull request, GitHub's mark and `source.name` in place of
 `#243`, the title struck through when `seen.state` is `not_planned` or `closed`), leaving one it
@@ -3679,7 +3679,9 @@ never written to: nothing here changes anything on GitHub.
   3 s at most for it; the events stream doesn't wait, and its next line has it; a request answered
   once (`box route`) never waits: a read that's due goes on in a process of its own (`kuvo-link.js
   box github-read`), kept for the next ask. One found missing where it was is read again by GitHub's
-  id (moved, or a discussion now). Agents' tools never read GitHub: they say what was last read.
+  id in the same read (moved, or a discussion now), and only then taken as gone; one GitHub wouldn't
+  answer for (its `errors` say anything but `NOT_FOUND` for it: an organization's SAML sign-on or IP
+  allow list) stays as it was. Agents' tools never read GitHub: they say what was last read.
 - Kept beside the queues, `run/work-queue/seen.json` (`{reads: {"<host>/<owner>/<repo>#<n>": {at,
   value, checked?, gone?}}, hosts}`), never in them: a read changes no item and no `updated`. `at`
   is since when GitHub has said what it says (a read that finds the same moves only `checked`, so

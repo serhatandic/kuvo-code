@@ -11778,7 +11778,7 @@ function noteQueuesChanged() {
   for (const tell of queueFollowers2)
     tell();
 }
-var matching2 = (items, ref) => items.filter((item) => refNames(ref, item));
+var matching2 = (items, ref) => items.filter((item) => refNames(ref, item)).sort((a, b) => Number(Boolean(a.removed)) - Number(Boolean(b.removed)));
 var refNames = (ref, item) => ("id" in ref) ? item.id === ref.id : ("number" in ref) ? item.number === ref.number : Boolean(item.source) && sourceKeyOf(item.source) === ref.source;
 var filesOf = (item) => path49.join(FILES2, item);
 function placeIn(items, category, { top = false } = {}) {
@@ -19331,6 +19331,14 @@ var answeringOnce = () => answersOnce;
 var HOLD = 3 * 60000;
 var BACK_OFF = 5 * 60000;
 var PER_QUERY = 50;
+function heldOf2(errors) {
+  const held = new Set;
+  for (const error of Array.isArray(errors) ? errors : []) {
+    if (isObject(error) && error.type !== "NOT_FOUND" && Array.isArray(error.path) && typeof error.path[0] === "string")
+      held.add(error.path[0]);
+  }
+  return held.size ? held : undefined;
+}
 function askGitHub(host, query, timeout = 30000) {
   return new Promise((resolve) => {
     execFile8("gh", ["api", "graphql", "--hostname", host, "-f", `query=${query}`], {
@@ -19341,8 +19349,10 @@ function askGitHub(host, query, timeout = 30000) {
     }, (error, stdout, stderr) => {
       try {
         const answer = JSON.parse(String(stdout));
-        if (isObject(answer) && isObject(answer.data))
-          return resolve({ data: answer.data });
+        if (isObject(answer) && isObject(answer.data)) {
+          const held = heldOf2(answer.errors);
+          return resolve({ data: answer.data, ...held ? { held } : {} });
+        }
       } catch {}
       const code = error?.code;
       if (code === "ENOENT")
@@ -19466,10 +19476,36 @@ async function readDue(reader, asks, now) {
           held.set(host, now() + BACK_OFF);
           break;
         }
+        const values = new Map;
         part.forEach((ask, index) => {
           const key = reader.keyOf(ask);
-          read.set(key, readOf(kept.reads[key], reader.valueOf(answer.data[`p${index}`], ask), reader.keepsLast, now()));
+          const before = kept.reads[key];
+          if (answer.held?.has(`p${index}`)) {
+            if (before)
+              read.set(key, { ...before, checked: now() });
+            return;
+          }
+          values.set(key, reader.valueOf(answer.data[`p${index}`], ask));
         });
+        const again = part.flatMap((ask) => {
+          const key = reader.keyOf(ask);
+          const other = values.has(key) && values.get(key) === null ? reader.again?.(ask, kept.reads[key]) : null;
+          return other ? [other] : [];
+        });
+        if (again.length) {
+          const second = await askGitHub(host, reader.query(again));
+          if (!("unread" in second)) {
+            again.forEach((ask, index) => {
+              if (second.held?.has(`p${index}`))
+                return void values.delete(reader.keyOf(ask));
+              const value = reader.valueOf(second.data[`p${index}`], ask);
+              if (value !== null)
+                values.set(reader.keyOf(ask), value);
+            });
+          }
+        }
+        for (const [key, value] of values)
+          read.set(key, readOf(kept.reads[key], value, reader.keepsLast, now()));
       }
     }
     const latest = readKept3(reader.file);
@@ -19571,7 +19607,8 @@ async function readOne2(reader, ask, query, valueOf, now = Date.now) {
       kept.hosts[host] = Math.max(kept.hosts[host] ?? 0, now() + BACK_OFF);
     else {
       delete kept.hosts[host];
-      kept.reads[reader.keyOf(ask)] = readOf(kept.reads[reader.keyOf(ask)], valueOf(answer.data), reader.keepsLast, now());
+      if (!answer.held?.size)
+        kept.reads[reader.keyOf(ask)] = readOf(kept.reads[reader.keyOf(ask)], valueOf(answer.data), reader.keepsLast, now());
     }
     keep2(reader, kept, now());
     return answer;
@@ -19620,7 +19657,8 @@ var ISSUES = register({
   valueOf: (found, ask) => issueReadOf(found, Boolean(ask.id)),
   freshFor: (value) => !value ? FRESH_MISSING : DONE_STATES.has(value.state) ? FRESH_DONE : FRESH_OPEN,
   keptFor: 30 * 86400000,
-  keepsLast: true
+  keepsLast: true,
+  again: (ask, before) => !ask.id && before?.value?.id ? { ...ask, id: before.value.id } : null
 });
 var MOST_READ2 = 200;
 var TOLD_FRESH = 5 * 60000;
@@ -37214,7 +37252,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "ea457c2c55a3";
+var BRIDGE_VERSION = "3c04a3bcaab0";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -39856,7 +39894,7 @@ function itemFor(items, given, caller, overseen) {
   if (!ref)
     throw new Refusal("Say which item (item), by its number, like #243 (or the id an item without one was given), or the GitHub issue or pull request it is, like gh:owner/repo#12.");
   const found = matching2(items, ref);
-  const item = found.find((each) => inView(caller.owner, each, overseen)) ?? found[0];
+  const item = found.find((each) => !each.removed && inView(caller.owner, each, overseen)) ?? found.find((each) => inView(caller.owner, each, overseen)) ?? found[0];
   if (!item) {
     const far = itemElsewhere(ref);
     if (far && !itemsElsewhere(caller.owner).items.some((each) => each.id === far.id))
