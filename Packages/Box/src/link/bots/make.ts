@@ -180,7 +180,7 @@ async function makeOnce(given: GivenBot | null | undefined, readEngine: () => Ta
     const marked = await rewriteOn(target, session.id, now => ({
       metadata: withNotes(now.metadata, { bot: id, approval: kept.approval, applied: kept.effective }),
       permissions: approvalRules(kept.effective, rules),
-    }), AbortSignal.timeout(BOT_STEP));
+    }));
     if (!marked) throw new Error("The conversation it made went.");
     const told = botInstructions(kit, name, folder, personality?.instruction, project as string | undefined);
     await call(target, "PUT", `/api/experimental/session/${encodeURIComponent(session.id)}/instructions/entries/kuvo.bot`, { value: told }, AbortSignal.timeout(BOT_STEP));

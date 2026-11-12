@@ -72,9 +72,6 @@ const promptFiles = (payload: WaitingPayload | undefined): AgentFile[] => (Array
 /** `kuvo/sessions/<id>/agents`: a conversation carried on with the coding agents, on every box. */
 export const CARRY_ROUTE = /^kuvo\/sessions\/([^/]+)\/agents$/;
 
-// How long the engine has to mark the conversation as carried on.
-const COMMIT_TIMEOUT = 30_000;
-
 // Why a move failed, in words: the engine's or the coding agents' own, or that one of them didn't
 // answer (a request that timed out, or a connection refused).
 function failedWords(error: unknown): string {
@@ -236,10 +233,12 @@ export async function carryToAgents(id: string, model: unknown, readEngine: () =
       // unsure.)
       let elsewhere = false;
       try {
-        await rewriteOn(engine, id, now => {
+        // (Its read and its write each given half a minute, from when its turn comes.)
+        const done = await rewriteOn(engine, id, now => {
           elsewhere = Boolean(now.metadata?.["kuvo.carriedTo"]) && now.metadata?.["kuvo.carriedTo"] !== moved;
           return elsewhere ? null : { metadata: withNotes(now.metadata, null, { "kuvo.archived": true, "kuvo.carriedTo": moved }) };
-        }, AbortSignal.timeout(COMMIT_TIMEOUT));
+        });
+        if (!done) throw new Error("The engine didn’t say what it is now.");
       } catch (error) {
         const now = (await engineGet(engine, route).catch(() => undefined) as EngineAnswer<EngineSession> | null | undefined);
         if (now === undefined) {

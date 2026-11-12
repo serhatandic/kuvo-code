@@ -37,10 +37,11 @@ beforeAll(async () => {
           session = { ...session, ...(body.metadata ? { metadata: body.metadata } : {}), ...(body.permissions ? { permissions: body.permissions } : {}), time: { ...session.time, updated: Date.now() } }
           return new Response(null, { status: 204 })
         }
+        // (Read as it is now, and answered after a while: what lands meanwhile isn't in it.)
+        const answer = structuredClone(session)
         const held = nextRead
         nextRead = null
         await held
-        const answer = structuredClone(session)
         await new Promise(resolve => setTimeout(resolve, readDelay))
         return Response.json({ data: answer })
       }
@@ -101,14 +102,14 @@ test("a phone's change forwarded while a box writer is between its read and its 
   await new Promise(resolve => setTimeout(resolve, 30))
   release()
   await Promise.all([answering, pieces])
-  // The box's write went first, then the phone's: the phone's change stands. (Its whole metadata,
-  // as it read it before, without the box's answer: that's what a client's whole write still
-  // loses, PROTOCOL.md "Session notes".)
-  expect(patches.map(each => each.by)).toEqual(["box", "phone"])
+  // The phone's change stands: the box's write went first, then the phone's. (The phone's is its
+  // whole metadata, as it read it before, without the box's answer: that's what a client's whole
+  // write still loses, PROTOCOL.md "Session notes".)
   expect(session.metadata["kuvo.pinned"]).toBe(false)
+  expect(patches.map(each => each.by)).toEqual(["box", "phone"])
 })
 
-test("a session's projects archive, its carry and a bot's marks write only their own notes", async () => {
+test("writers at once of a top-level note, and of kuvo's with the rules, each write only their own", async () => {
   const { rewriteOn } = await import("../src/link/engine/notes")
   const { withNotes } = await import("../src/shared/session-notes")
   session.metadata = { "kuvo.pinned": true, kuvo: { chat: chats } }

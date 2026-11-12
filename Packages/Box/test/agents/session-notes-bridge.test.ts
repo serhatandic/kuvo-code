@@ -8,7 +8,7 @@ import type { GoalPlaces } from "../../src/agents/goals"
 // and a seat's, each in its turn, on its notes as they are then, never on what it read before. The
 // place keeps a conversation as the engine (2.2.5) does: a PATCH's metadata replaces it whole.
 
-function place() {
+function place({ forkSaysMetadata = true } = {}) {
   const sessions = new Map<string, { id: string; metadata?: Record<string, any> }>()
   // What another writer does to a conversation as it's made (the box's approval and chat mark, as it
   // hears of it), before the one that made it writes its own.
@@ -22,7 +22,7 @@ function place() {
         const source = sessions.get(decodeURIComponent(fork[1]!))!
         const copy = { id: `ses_copy${++made}`, metadata: structuredClone(source.metadata) }
         sessions.set(copy.id, copy)
-        const answer = structuredClone(copy)
+        const answer = forkSaysMetadata ? structuredClone(copy) : { id: copy.id }
         onMade(copy.id)
         return { data: answer }
       }
@@ -57,6 +57,14 @@ test("a branch's mark keeps what was written to the copy since it was made, and 
   const copy = await branch(places, "ses_work", "msg_1")
   expect(sessions.get(copy.id)!.metadata).toEqual({ "kuvo.pinned": "again", color: "blue", kuvo: { goal: "g", approval: "acceptEdits", applied: "acceptEdits", chat: "/chats", branchedFrom: "ses_work" } })
   expect(copy.metadata).toEqual(sessions.get(copy.id)!.metadata)
+})
+
+test("a branch whose place answers the copy without its metadata takes off what it carried of its source all the same", async () => {
+  const { api, sessions } = place({ forkSaysMetadata: false })
+  sessions.set("ses_work", { id: "ses_work", metadata: { "kuvo.pinned": true, kuvo: { startedBy: "ses_lead", goal: "g" } } })
+  const places: GoalPlaces = { engine: { api, listen: () => () => {} }, bridge: { api, listen: () => () => {} }, isBridge: () => false }
+  const copy = await branch(places, "ses_work", "msg_1")
+  expect(sessions.get(copy.id)!.metadata).toEqual({ kuvo: { goal: "g", branchedFrom: "ses_work" } })
 })
 
 test("a seat's mark keeps what was written to it since it was made", async () => {

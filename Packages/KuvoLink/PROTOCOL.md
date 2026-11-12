@@ -4499,16 +4499,22 @@ agents, the marks of a session it starts and of a bot it makes, a bot's rules re
 their turn on the session, by place and session, in that box process and across its processes on
 that computer (a lock folder in `run/notes`): each reads the session as it is then, changes only its
 own keys on it, and writes it straight away. A client's `PATCH api/session/<id>` that comes through
-the box (a phone's, another computer's) waits for that turn too, so the box never writes over it
-with what it read before. The coding agents' bridge does the same for its writers through the API
+the box (a phone's, another computer's) waits for that turn too, so the box doesn't write over it
+with what it read before (but see below). The coding agents' bridge does the same for its writers through the API
 (a branch's mark, a handoff's, a group chat seat's), in its own process.
 
-What can still be lost, as long as the engine has no "only if unchanged": a write that lands
+What can still be lost, as long as the engine has no "only if unchanged", is a write that lands
 between a writer's read and its write (a few milliseconds), when it's
 
 - a client's that doesn't come through the box (a Mac to its own engine), or a write by another
   program: the bridge's writers on the engine's sessions and the box's on the bridge's take no turn
   with each other;
+- one that doesn't wait as long as a turn can last: a turn's read and its write are each cut short
+  at half a minute (a client's PATCH through the box gives up its turn after that time too, its
+  write still on its way), and another box process waits at most half a minute for a turn's lock
+  folder before it goes ahead without it;
+- a session's rules (`permissions`) written alone, outside a turn (a group chat seat's, the
+  bridge's for an engine run of its own), against the box's approval writes, which send them whole;
 - or a client's whole write made from what it read before the box wrote: the box's change is lost
   (the chat mark is put back as that write's `session.metadata.updated` comes; the box's other
   notes aren't).

@@ -93,7 +93,8 @@ export async function* forward(target: Target, path: string, request: LinkReques
   let wasArchived: boolean | null = null;
   const readBefore = async () => {
     try {
-      const before = await fetch(url, { headers, signal });
+      const patience = AbortSignal.timeout(NOTES_STEP);
+      const before = await fetch(url, { headers, signal: signal ? AbortSignal.any([signal, patience]) : patience });
       if (before.ok) wasArchived = (await before.json() as { data?: EngineSession } | null)?.data?.metadata?.["kuvo.archived"] === true;
     } catch {}
   };

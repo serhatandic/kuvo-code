@@ -17454,15 +17454,19 @@ async function branch(places, session, before) {
   const copy = made?.data;
   if (typeof copy?.id !== "string")
     throw new BranchError(503, "The new conversation couldn't be started.");
-  const came = copy.metadata ?? {};
+  const carried = [copy.metadata ?? {}, info.metadata ?? {}];
+  const from = (key, value, inKuvo) => carried.some((notes) => {
+    const where = inKuvo ? notes.kuvo ?? {} : notes;
+    return key in where && sameJSON(value, where[key]);
+  });
   const marked = await rewriteVia(place.api, copy.id, (now) => {
     const metadata = { ...now.metadata ?? {} };
     for (const key of listed2)
-      if (key in came && sameJSON(metadata[key], came[key]))
+      if (key in metadata && from(key, metadata[key], false))
         delete metadata[key];
     const kuvo = { ...metadata.kuvo ?? {} };
     for (const key of origins)
-      if (key in (came.kuvo ?? {}) && sameJSON(kuvo[key], came.kuvo[key]))
+      if (key in kuvo && from(key, kuvo[key], true))
         delete kuvo[key];
     return { metadata: { ...metadata, kuvo: { ...kuvo, branchedFrom: session } } };
   }).catch(() => null);
@@ -27540,4 +27544,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents d9046ccd730042c0b1d17897c30ee01000816761449c87ac8b5067d14b517802
+// Built from Packages/Box/src/agents af784325d65884b6d91381c34468c97edd03dde9993a81544c1a5f240287b699
