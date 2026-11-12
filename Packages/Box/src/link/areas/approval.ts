@@ -13,6 +13,7 @@ import { bridgeTarget, engineGet, readEngineFile } from "../engine/client";
 import { rewriteOn } from "../engine/notes";
 import { allowFullAccess, allowOtherComputers, APPROVALS, approvalOf, approvalRules, approvalsSince, defaultApproval, effectiveApproval, fullAccessAllowed, heldOf, isApproval, madeBefore, otherComputersAllowed, rememberApproval, unavailable } from "../work/approval";
 import { resumeReviewedSession } from "../work/goals";
+import { nothingCountsOnIt } from "../fence/state";
 import { sandboxOn } from "../work/sandbox";
 import { approveHeld, clearFetched, clearPlaces, resumeReviews, reviewLog, revokePlace, seeHeld, shownReviews } from "../work/reviewer";
 import { noteFolderFound, tellApproved } from "../work/reviewing";
@@ -314,7 +315,8 @@ export function keepApprovals(engine: () => Target | null = ownEngine, bridge: (
   const adopted = new Set<string>();
   every(async () => {
     const [here, agents] = [engine(), bridge()];
-    const now = `${sandboxOn(false)} ${sandboxOn(true)} ${fullAccessAllowed()} ${here?.port ?? 0} ${agents?.port ?? 0}`;
+    const off = !sandboxOn(false);
+    const now = `${!off} ${sandboxOn(true)} ${fullAccessAllowed()} ${here?.port ?? 0} ${agents?.port ?? 0}`;
     if (going || following) return;
     going = true;
     try {
@@ -322,6 +324,9 @@ export function keepApprovals(engine: () => Target | null = ownEngine, bridge: (
       // yet as the box runs: they reach every conversation within a round.)
       const settings = JSON.stringify(permissionsHere());
       if ((now !== last || settings !== settingsMade) && await reapplyApprovals(here, agents, settings !== settingsMade)) [last, settingsMade] = [now, settings];
+      // Every conversation's rules made for the sandbox being off (Auto asks first): what the
+      // sandbox held for that, taking itself away after a failed check, goes ahead (fence/state.ts).
+      if (off && last === now) nothingCountsOnIt();
       await adoptPending(here, agents);
       await adoptBots(here, agents, adopted);
     } catch {} finally {

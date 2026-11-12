@@ -4908,7 +4908,7 @@ var NAMESPACE_FOLDER = path19.join(FOLDER2, "ns");
 var ON = path19.join(FOLDER2, "on");
 var READY = path19.join(FOLDER2, "ready");
 var DECIDED = path19.join(FOLDER2, "decided");
-var CHECKING = path19.join(FOLDER2, "checking");
+var HELD = path19.join(FOLDER2, "held");
 var platform = process.platform === "darwin" ? "darwin" : "linux";
 var places = {
   folder: FOLDER2,
@@ -4941,7 +4941,7 @@ function fenceState() {
   const now = loaded();
   if (!now.on)
     return { ...base, ...now };
-  if (checked.unfinished || fs20.existsSync(CHECKING))
+  if (checked.unfinished || fs20.existsSync(HELD))
     return { ...base, on: false, ...cannot({ able: true, passed: false, reason: "checking", why: PENDING_WHY }) };
   return { ...base, ...now, ...withoutNamespace ? { gaps: ["services"], needs: withoutNamespace } : {} };
 }
@@ -4971,10 +4971,10 @@ function loaded() {
   return { on: false, why: "Waiting for the engine to load it.", reason: "waiting", action: "restartEngine", route: RESTART };
 }
 function engineCommandsInSandbox() {
-  return fenceWanted() && fs20.existsSync(ON) && !fs20.existsSync(CHECKING) && loaded().on;
+  return fenceWanted() && fs20.existsSync(ON) && !fs20.existsSync(HELD) && loaded().on;
 }
-var fencePending = () => fenceWanted() && (checked.unfinished === true || fs20.existsSync(CHECKING));
-var agentsCommandsInSandbox = () => fenceWanted() && fs20.existsSync(ON) && !fs20.existsSync(CHECKING);
+var fencePending = () => fenceWanted() && (checked.unfinished === true || checked.passed && fs20.existsSync(HELD));
+var agentsCommandsInSandbox = () => fenceWanted() && fs20.existsSync(ON) && !fs20.existsSync(HELD);
 function bridgeSays() {
   if (!agentsCommandsInSandbox())
     return;
@@ -5153,8 +5153,9 @@ function probe() {
     env.KUVO_FENCE_RUNTIME = bun;
   const hold = IN_TEST_FOLDER ? process.env.KUVO_TEST_SANDBOX_CHECK_HOLD : undefined;
   const held = Boolean(hold && fs20.statSync(hold, { throwIfNoEntry: false })?.isFIFO());
+  const fails = Boolean(hold && !held && textOf(hold)?.trim() === "fail");
   const args = [places.launcher, "-c", script, PROBE, hidden, escaped];
-  const run = held ? spawnSync3("/bin/sh", ["-c", `read -r _ <"$0"; exec "$@"`, hold, ...args], { env, encoding: "utf8", timeout: 250 }) : spawnSync3(args[0], args.slice(1), { env, encoding: "utf8", timeout: CHECK_LIMIT });
+  const run = held ? spawnSync3("/bin/sh", ["-c", `read -r _ <"$0"; exec "$@"`, hold, ...args], { env, encoding: "utf8", timeout: 250 }) : fails ? spawnSync3("/bin/sh", ["-c", "exit 13"], { encoding: "utf8" }) : spawnSync3(args[0], args.slice(1), { env, encoding: "utf8", timeout: CHECK_LIMIT });
   const reasons = {
     10: ["folder", "a command couldn't go to its own folder"],
     11: ["folder", "a command couldn't write in its own folder"],
@@ -5198,7 +5199,37 @@ function withdraw() {
   fs20.rmSync(ON, { force: true });
   fs20.rmSync(READY, { force: true });
   fs20.rmSync(NOTE, { force: true });
-  fs20.rmSync(CHECKING, { force: true });
+  fs20.rmSync(HELD, { force: true });
+  loosening = null;
+}
+var MOST_UNFINISHED = 5;
+var unfinishedInARow = 0;
+var loosening = null;
+var mayLoosen = false;
+function loosen(what, why) {
+  checked = why;
+  if (![PLUGIN, ON, READY].some((file) => fs20.existsSync(file))) {
+    withdraw();
+    return fenceState();
+  }
+  if (!fs20.existsSync(HELD))
+    writePrivate(HELD, "");
+  loosening = what === "withdraw" || loosening === "withdraw" ? "withdraw" : "namespace";
+  return fenceState();
+}
+function nothingCountsOnIt() {
+  const what = loosening;
+  if (!what || !fenceWanted())
+    return;
+  loosening = null;
+  if (what === "withdraw")
+    return withdraw();
+  mayLoosen = true;
+  try {
+    setUpFence(null);
+  } finally {
+    mayLoosen = false;
+  }
 }
 var TEMPORARY = realish(path19.join(K, "t"));
 var SOCKET_PATH = platform === "darwin" ? 103 : 107;
@@ -5238,11 +5269,12 @@ function setUpFence(found) {
     checked = can;
     return fenceState();
   }
-  if (!can.able) {
-    withdraw();
-    checked = can;
-    return fenceState();
-  }
+  if (!can.able)
+    return loosen("withdraw", can);
+  const inEffect = platform === "linux" ? textOf(path19.join(FOLDER2, "namespace")) ?? "" : "";
+  const dropping = !namespace && !namespaceUnfinished && inEffect.startsWith("/") && !mayLoosen;
+  if (dropping)
+    [namespace, withoutNamespace] = [inEffect, null];
   try {
     fs20.mkdirSync(path19.join(FOLDER2, "tmp"), { recursive: true, mode: 448 });
     writeTemporary();
@@ -5256,18 +5288,24 @@ function setUpFence(found) {
     lastProfiles = "";
     writeProfiles();
     tellLauncher();
-    const result = namespaceUnfinished ? { passed: false, unfinished: true } : probe();
+    let result = namespaceUnfinished ? { passed: false, unfinished: true } : probe();
+    unfinishedInARow = result.unfinished ? unfinishedInARow + 1 : 0;
+    if (unfinishedInARow >= MOST_UNFINISHED)
+      result = { passed: false, check: "didntRun", why: `Its check didn't finish ${unfinishedInARow} times in a row.` };
     if (result.unfinished) {
       checked = { able: true, passed: false, unfinished: true, reason: "checking", why: PENDING_WHY };
-      if (!fs20.existsSync(CHECKING))
-        writePrivate(CHECKING, "");
+      if (!fs20.existsSync(HELD))
+        writePrivate(HELD, "");
+      loosening = null;
+    } else if (!result.passed) {
+      failures += 1;
+      return loosen(dropping ? "namespace" : "withdraw", { able: true, ...result, reason: "checkFailed" });
     } else {
-      checked = { able: true, ...result, ...result.passed ? {} : { reason: "checkFailed" } };
-      failures = result.passed ? 0 : failures + 1;
-    }
-    if (!result.passed && !result.unfinished) {
-      withdraw();
-      return fenceState();
+      checked = { able: true, ...result };
+      failures = 0;
+      if (dropping)
+        [namespaceKnown, withoutNamespace] = [true, null];
+      loosening = null;
     }
     if (!fs20.existsSync(READY))
       writePrivate(READY, "");
@@ -5275,11 +5313,10 @@ function setUpFence(found) {
     if (!textOf(ON)?.trim())
       writePrivate(ON, crypto9.randomUUID());
     if (result.passed)
-      fs20.rmSync(CHECKING, { force: true });
+      fs20.rmSync(HELD, { force: true });
   } catch (error) {
-    withdraw();
-    checked = { able: true, passed: false, why: `It couldn't be set up: ${error.message}`, reason: "checkFailed", check: "setup" };
     failures += 1;
+    return loosen("withdraw", { able: true, passed: false, why: `It couldn't be set up: ${error.message}`, reason: "checkFailed", check: "setup" });
   }
   return fenceState();
 }
@@ -5369,7 +5406,7 @@ function keepFence(every = (round) => {
       if (checked.passed || checked.unfinished)
         writeProfiles();
       const changed = textOf(PLUGIN) !== pluginScript(places, VERSION);
-      const elsewhere = checked.passed ? fs20.existsSync(CHECKING) : checked.unfinished === true && !fs20.existsSync(CHECKING);
+      const elsewhere = checked.passed ? fs20.existsSync(HELD) : checked.unfinished === true && !fs20.existsSync(HELD);
       if (checked.passed ? changed || elsewhere : round % 6 === 0 || elsewhere)
         setUpFence(namespaceKnown ? namespace : undefined);
       else if (checked.unfinished && changed)
@@ -17681,7 +17718,8 @@ function keepApprovals(engine = ownEngine2, bridge = bridgeTarget, every = (roun
   const adopted = new Set;
   every(async () => {
     const [here, agents] = [engine(), bridge()];
-    const now = `${sandboxOn(false)} ${sandboxOn(true)} ${fullAccessAllowed()} ${here?.port ?? 0} ${agents?.port ?? 0}`;
+    const off = !sandboxOn(false);
+    const now = `${!off} ${sandboxOn(true)} ${fullAccessAllowed()} ${here?.port ?? 0} ${agents?.port ?? 0}`;
     if (going || following)
       return;
     going = true;
@@ -17689,6 +17727,8 @@ function keepApprovals(engine = ownEngine2, bridge = bridgeTarget, every = (roun
       const settings = JSON.stringify(permissionsHere());
       if ((now !== last || settings !== settingsMade) && await reapplyApprovals(here, agents, settings !== settingsMade))
         [last, settingsMade] = [now, settings];
+      if (off && last === now)
+        nothingCountsOnIt();
       await adoptPending(here, agents);
       await adoptBots(here, agents, adopted);
     } catch {} finally {
@@ -38077,7 +38117,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "18ccf5502427";
+var BRIDGE_VERSION = "43f0da13ca01";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

@@ -1801,11 +1801,117 @@ test("a check that doesn't finish in time leaves nothing outside the sandbox, an
     await allInIt();
     letGo();
     const fence = path.join(box.home, "run", "fence");
-    await changeIn(fence, () => !fs.existsSync(path.join(fence, "checking")));
+    await changeIn(fence, () => !fs.existsSync(path.join(fence, "held")));
     const state = (await running.ask("GET", "kuvo/sandbox")).value;
     assert.equal(state.on, true, state.why);
   } finally {
     await running.stop();
+    fs.rmSync(hold, { force: true });
+  }
+});
+
+// The engine, as far as conversations' approvals go: `sessions` by id, which the box's PATCHes change
+// (each told to `patched`); its list held back while `listing` is false, as a busy engine's would be.
+async function approvalEngine(box, sessions, patched) {
+  const waiting = [];
+  let listing = true;
+  const server = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", chunk => { body += chunk; });
+    request.on("end", () => {
+      const reply = value => { response.writeHead(value ? 200 : 404, { "content-type": "application/json" }); response.end(JSON.stringify(value ?? { message: "Not here." })); };
+      const url = new URL(request.url, "http://x");
+      if (url.pathname === "/api/session" && request.method === "GET") {
+        const list = () => reply({ data: [...sessions.values()] });
+        return listing ? list() : waiting.push(list);
+      }
+      const one = url.pathname.match(/^\/api\/session\/([^/]+)$/);
+      const id = one && decodeURIComponent(one[1]);
+      if (one && request.method === "GET" && sessions.has(id)) return reply({ data: sessions.get(id) });
+      if (one && request.method === "PATCH" && sessions.has(id)) {
+        sessions.set(id, { ...sessions.get(id), ...JSON.parse(body) });
+        patched(sessions.get(id));
+        return reply({ data: sessions.get(id) });
+      }
+      reply(null);
+    });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  fs.writeFileSync(path.join(box.home, "run", "engine.json"), JSON.stringify({ pid: process.pid, port: server.address().port, password: "engine-pw", version: "test" }));
+  return {
+    hold: () => { listing = false; },
+    go: () => { listing = true; for (const list of waiting.splice(0)) list(); },
+    close: () => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); },
+  };
+}
+
+// A sandboxed agent can make the check fail (fill the disk, use up its processes): the sandbox is
+// taken away only once every conversation's rules ask first, so nothing in Auto runs outside it
+// unasked meanwhile. The same once its check hasn't finished time after time.
+test("a failed check takes the sandbox away only once Auto asks first, and one that never finishes counts as failed", async () => {
+  const box = boxAt("failed-check");
+  const project = path.join(root, "failed-check-project");
+  fs.mkdirSync(project);
+  const own = path.join(box.home, "run", "engine.json");
+  const hold = path.join(root, "failed-check-hold");
+  // A conversation in Auto, its rules made for the sandbox being on.
+  const NEVER_HELD = [{ action: "read", resource: "*.env", effect: "allow" }, { action: "read", resource: "*.env.*", effect: "allow" }, { action: "doom_loop", resource: "*", effect: "allow" }];
+  const sessions = new Map([["ses_auto", { id: "ses_auto", title: "Auto", location: { directory: project }, permissions: NEVER_HELD, metadata: { kuvo: { approval: "auto", applied: "auto" } }, time: { created: 1, updated: 1 } }]]);
+  // What the box's rules come to, as it writes them, and whether the sandbox's plugin was still there.
+  let told = () => {};
+  const changes = [];
+  const engine = await approvalEngine(box, sessions, now => { changes.push({ applied: now.metadata?.kuvo?.applied, asks: now.permissions.some(rule => rule.action === "shell" && rule.effect === "ask"), plugin: fs.existsSync(box.plugin) }); told(); });
+  const applied = want => new Promise(resolve => {
+    told = () => { if (sessions.get("ses_auto").metadata?.kuvo?.applied === want) resolve(); };
+    told();
+  });
+  const running = await start(box, { KUVO_TEST_SANDBOX_CHECK_HOLD: hold });
+  try {
+    // On, with the engine's plugin loaded, and the conversation in Auto as it was.
+    await engineRuns(box, project, "true", "ses_auto");
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.on, true);
+    await applied("auto");
+
+    // The check fails while the engine is slow to list its conversations.
+    engine.hold();
+    fs.writeFileSync(hold, "fail\n");
+    const state = (await running.ask("POST", "kuvo/sandbox/check")).value;
+    assert.deepEqual([state.on, state.reason, state.check], [false, "checkFailed", "readsOwn"], state.why);
+    // Before its rules are made again, a command it runs is still in the sandbox, and nothing counts on it.
+    assert.equal(sessions.get("ses_auto").metadata.kuvo.applied, "auto");
+    const ran = await engineRuns(box, project, `cat ${JSON.stringify(own)}`, "ses_auto");
+    assert.notEqual(ran.status, 0, `a command in Auto ran outside the sandbox without asking: ${ran.out}`);
+    assert.equal((await running.ask("GET", "kuvo/approval")).value.auto.engine.held?.reason, "sandbox");
+    // Then its rules ask first, and only then does the sandbox go.
+    engine.go();
+    await applied("askFirst");
+    await changeIn(path.dirname(box.plugin), () => !fs.existsSync(box.plugin));
+    const askFirst = changes.find(each => each.applied === "askFirst");
+    assert.deepEqual(askFirst && [askFirst.asks, askFirst.plugin], [true, true], JSON.stringify(changes));
+
+    // Checked again: it passes, and Auto goes on its own again.
+    fs.rmSync(hold);
+    assert.equal((await running.ask("POST", "kuvo/sandbox/check")).value.reason, "waiting");
+    await engineRuns(box, project, "true", "ses_auto");
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.on, true);
+    await applied("auto");
+
+    // A check that never finishes: "checking" a few times, then failed, and taken away the same way.
+    assert.equal(spawnSync("mkfifo", [hold]).status, 0);
+    let tries = 0;
+    let now;
+    do {
+      now = (await running.ask("POST", "kuvo/sandbox/check")).value;
+      tries += 1;
+    } while (now.reason === "checking" && tries < 10);
+    assert.deepEqual([now.reason, now.check], ["checkFailed", "didntRun"], now.why);
+    assert.ok(tries <= 5, `still checking after ${tries} checks`);
+    await applied("askFirst");
+    await changeIn(path.dirname(box.plugin), () => !fs.existsSync(box.plugin));
+    assert.equal(changes.filter(each => each.applied === "askFirst").at(-1).plugin, true, JSON.stringify(changes));
+  } finally {
+    await running.stop();
+    await engine.close();
     fs.rmSync(hold, { force: true });
   }
 });
