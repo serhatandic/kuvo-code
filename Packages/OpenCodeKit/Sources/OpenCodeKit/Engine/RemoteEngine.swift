@@ -847,36 +847,73 @@ public final class RemoteServer: @unchecked Sendable {
     ///
     /// The launch's lock (`run/.launching`, an empty folder, made by whoever takes it, gone as it
     /// lets it go): beside it, the one holding it says who it is (`run/.launching.pid`, believed only
-    /// if it isn't older than the folder: an older Kuvo Code's scripts take it without saying). One
-    /// whose holder is gone (a start or a stop cut off: killed, a crash, `off` ending the keeper as
-    /// it held it) is taken away by the next one waiting for it, at once; one whose holder runs is
-    /// waited for, up to five minutes, as one that doesn't say is (an older Kuvo Code's, or one
-    /// taken a moment ago). Taking one away is one at a time (`run/.launching.breaking`, itself
-    /// taken away after a minute by one that couldn't make it), looked at again first: two waiting
-    /// for one whose holder is gone don't both take it. Each lets go of its lock only while it's
-    /// still said to be its own. (A folder lock can't close every gap: one held over five minutes
-    /// that's let go and taken again in the very moment it's taken away, or one an older script
-    /// took after taking away a newer one's, can still be had twice, as between older scripts
-    /// before.) `$R` is the box's `run`.
+    /// if the folder isn't newer: an older Kuvo Code's scripts take it without saying, and what
+    /// one before left beside it is older. Where times are whole seconds, as busybox's `find`
+    /// reads them, what was left within the same second as the folder is believed). One whose
+    /// holder is gone (a start or a stop cut off: killed, a crash, `off` ending the keeper as it
+    /// held it) is taken away by the next one waiting for it, at once: gone is a number nothing
+    /// of Kuvo Code's runs as now (another's after a restart, or the waiting one's own), whoever's
+    /// it is. One whose holder runs is waited for, up to five minutes, as one that doesn't say is
+    /// (an older Kuvo Code's, or one taken a moment ago). Taking one away is one at a time
+    /// (`run/.launching.breaking`, with who's doing it in it; one whose taker is gone, or that
+    /// never said, a minute on, is moved aside and removed by one alone), looked at again
+    /// first: two waiting for one whose holder is gone don't both take it. Each lets go of its
+    /// lock only while it's still said to be its own, or, where it couldn't say so, as it took it.
+    /// Taking it and saying so, and letting go of it (each two steps), are done whole, apart from
+    /// what ends the one doing it (TERM to it or its group, a connection gone): what's left then is
+    /// a lock that says whose it is, taken away at once, or none; only one killed outright in
+    /// between leaves it to the five minutes. (A folder lock can't close every gap: one held over
+    /// five minutes that's let go and taken again in the very moment it's taken away, or one an
+    /// older script took after taking away a newer one's, can still be had twice, as between
+    /// older scripts before.) `$R` is the box's `run`.
+    ///
+    /// `take_lock <tenths>` takes it, waiting that many tenths of a second at most: false if it
+    /// isn't had. `unlock` lets go of it, if it's still its own.
     static let launchLock = #"""
-        locked() { echo $$ >"$R/.launching.pid"; }
+        holding() {
+          [ -n "$1" ] && [ "$1" != "$$" ] || return 1
+          if [ -d /proc/self ]; then grep -q kuvo "/proc/$1/cmdline" 2>/dev/null; else ps -ww -o command= -p "$1" 2>/dev/null | grep -q kuvo; fi
+        }
+        locked() { unsaid=; { echo $$ >"$R/.launching.pid"; } 2>/dev/null || unsaid=1; }
         unlock() {
-          [ "$(cat "$R/.launching.pid" 2>/dev/null)" = "$$" ] || return 0
-          rm -f "$R/.launching.pid"; rmdir "$R/.launching" 2>/dev/null
+          ( trap '' HUP INT TERM
+            [ -n "${unsaid-}" ] || [ "$(cat "$R/.launching.pid" 2>/dev/null)" = "$$" ] || exit 0
+            rm -f "$R/.launching.pid"; rmdir "$R/.launching" ) 2>/dev/null
+          unsaid=
         }
         held_by_gone() {
           holder=$(cat "$R/.launching.pid" 2>/dev/null)
-          [ -n "$holder" ] && [ -d "$R/.launching" ] && [ ! "$R/.launching.pid" -ot "$R/.launching" ] && ! kill -0 "$holder" 2>/dev/null
+          [ -n "$holder" ] && newer=$(find "$R/.launching" -maxdepth 0 -newer "$R/.launching.pid" 2>/dev/null) && [ -z "$newer" ] && ! holding "$holder"
         }
         held_long() { [ -n "$(find "$R/.launching" -maxdepth 0 -mmin +5 2>/dev/null)" ]; }
         unheld() {
           held_by_gone || held_long || return 1
-          if ! mkdir "$R/.launching.breaking" 2>/dev/null; then
-            [ -z "$(find "$R/.launching.breaking" -maxdepth 0 -mmin +1 2>/dev/null)" ] || rmdir "$R/.launching.breaking" 2>/dev/null
-            return 1
+          taker=$(cat "$R/.launching.breaking/pid" 2>/dev/null)
+          if { [ -n "$taker" ] && ! holding "$taker"; } || { [ -z "$taker" ] && [ -n "$(find "$R/.launching.breaking" -maxdepth 0 -mmin +1 2>/dev/null)" ]; }; then
+            if mv "$R/.launching.breaking" "$R/.launching.breaking.$$" 2>/dev/null; then
+              if [ "$(cat "$R/.launching.breaking.$$/pid" 2>/dev/null)" != "$taker" ]; then
+                [ -e "$R/.launching.breaking" ] || mv "$R/.launching.breaking.$$" "$R/.launching.breaking" 2>/dev/null
+                rm -rf "$R/.launching.breaking.$$"
+                return 1
+              fi
+              rm -rf "$R/.launching.breaking.$$"
+            fi
           fi
-          if held_by_gone || held_long; then rm -f "$R/.launching.pid"; rmdir "$R/.launching" 2>/dev/null; fi
-          rmdir "$R/.launching.breaking" 2>/dev/null
+          ( trap '' HUP INT TERM
+            mkdir "$R/.launching.breaking" 2>/dev/null || exit 1
+            echo $$ >"$R/.launching.breaking/pid"
+            if held_by_gone || held_long; then rm -f "$R/.launching.pid"; rmdir "$R/.launching" 2>/dev/null; fi
+            [ "$(cat "$R/.launching.breaking/pid" 2>/dev/null)" != "$$" ] || rm -rf "$R/.launching.breaking" )
+        }
+        take_lock() {
+          waited=0
+          while :; do
+            ( trap '' HUP INT TERM; mkdir "$R/.launching" 2>/dev/null || exit 1; locked; [ -z "$unsaid" ] || exit 2 )
+            case $? in 0) unsaid=; return 0 ;; 2) unsaid=1; return 0 ;; esac
+            unheld
+            waited=$((waited + 1)); [ $waited -lt "$1" ] || return 1
+            sleep 0.1
+          done
         }
         """#
 
@@ -913,15 +950,7 @@ public final class RemoteServer: @unchecked Sendable {
         # One start or stop at a time, as the launch takes it; one whose holder is gone goes
         # (`launchLock`). False when it isn't had within $1 tenths of a second.
         \#(launchLock)
-        lock() {
-          n=0
-          until mkdir "$R/.launching" 2>/dev/null; do
-            unheld
-            n=$((n + 1)); [ $n -lt "${1:-2400}" ] || return 1
-            sleep 0.1
-          done
-          locked
-        }
+        lock() { take_lock "${1:-2400}"; }
         # The engine and its coding agents' bridge, stopped (under the lock).
         halt() {
           a=$(cat "$R/agents.pid" 2>/dev/null)
@@ -1082,8 +1111,8 @@ public final class RemoteServer: @unchecked Sendable {
           ;;
         engine)
           # As Kuvo Code last started it, with a new port and passwords: not when it's stopped on
-          # purpose, or running.
-          [ -f "$R/stopped" ] && exit 0
+          # purpose, or off (the machine removed), or running.
+          { [ -f "$R/stopped" ] || [ -f "$R/off" ]; } && exit 0
           [ -f "$R/launch.env" ] && [ -f "$K/bin/kuvo-launch" ] && [ -n "$V" ] || exit 0
           up && exit 0
           notes=$(cat "$R/launch.notes" 2>/dev/null); [ -n "$notes" ] || notes='{}'
@@ -1095,7 +1124,7 @@ public final class RemoteServer: @unchecked Sendable {
             if [ -f "$K/bin/kuvo-agents.js" ]; then aport=$(number); apassword=$(word); record="$record,\"agentsPort\":$aport,\"agentsPassword\":\"$apassword\""; agents="KUVO_AGENTS_PORT=$aport
         KUVO_AGENTS_PASSWORD=$apassword"; fi
             { cat "$R/launch.env"; printf 'KUVO_BOOT=1\nKUVO_VERSION=%s\nOPENCODE_PASSWORD=%s\nKUVO_PORT=%s\nKUVO_RECORD=%s}\n' "$V" "$password" "$port" "$record"; [ -z "$agents" ] || printf '%s\n' "$agents"; printf '\n'; } | sh "$K/bin/kuvo-launch" >/dev/null 2>&1 && up && exit 0
-            [ -f "$R/stopped" ] && exit 0
+            { [ -f "$R/stopped" ] || [ -f "$R/off" ]; } && exit 0
             sleep 2
           done
           exit 1
@@ -1128,11 +1157,17 @@ public final class RemoteServer: @unchecked Sendable {
           # first, which would start the keeper again, then the keeper, which would start the
           # rest again, then the engine and its agents' bridge. Then it's as before its first
           # start, for when it's added again; marked off (`run/off`) until a Mac starts it there
-          # again, so nothing takes it for a box that runs, or starts it, meanwhile.
+          # again, so nothing takes it for a box that runs, or starts it, meanwhile: no start
+          # under way goes on to start the engine once it sees it.
           touch "$R/off" "$R/stopped"
           rm -f "$R/link.needed"
           l=$(cat "$R/link.pid" 2>/dev/null); is "$l" kuvo-link && kill "$l" 2>/dev/null
-          b=$(cat "$R/box.pid" 2>/dev/null); is "$b" kuvo-start && kill "$b" 2>/dev/null; rm -f "$R/box.pid"
+          # The keeper with the start it's at (its engine's tries and their launch, in its session),
+          # which would go on after it.
+          b=$(cat "$R/box.pid" 2>/dev/null); if is "$b" kuvo-start; then kill -- "-$b" 2>/dev/null || kill "$b" 2>/dev/null; fi; rm -f "$R/box.pid"
+          # A start that holds the lock (a Mac's, or the keeper's where it has no session of its
+          # own), ended rather than waited for: it stops the engine it hasn't noted, and lets go.
+          h=$(cat "$R/.launching.pid" 2>/dev/null); holding "$h" && kill "$h" 2>/dev/null
           if lock 600; then halt; unlock; else halt; fi
           rm -f "$R/stopped"
           ;;
@@ -1187,18 +1222,12 @@ public final class RemoteServer: @unchecked Sendable {
         # One launch at a time; one whose holder is gone goes (`launchLock`: a launch takes three
         # minutes at most). Never one without it.
         \(launchLock)
-        i=0
-        until mkdir "$R/.launching" 2>/dev/null; do
-          unheld
-          i=$((i + 1))
-          [ $i -lt 2400 ] || \(boot ? "exit 0" : "{ echo \"Another start of the engine is under way there.\" >&2; exit 4; }")
-          sleep 0.1
-        done
-        # The lock goes as it ends, and an engine it started but didn't get to note with it: nothing
-        # else would know to stop that one.
-        locked
-        trap 'unlock; [ -z "${pid-}" ] || [ -n "${noted-}" ] || kill "$pid" 2>/dev/null' EXIT
+        take_lock 2400 || \(boot ? "exit 0" : "{ echo \"Another start of the engine is under way there.\" >&2; exit 4; }")
+        # The lock goes as it ends, after an engine it started but didn't get to note with it:
+        # nothing else would know to stop that one.
+        trap '[ -z "${pid-}" ] || [ -n "${noted-}" ] || kill "$pid" 2>/dev/null; unlock' EXIT
         trap 'exit 1' HUP INT TERM PIPE
+        \(boot ? "# Off (the machine removed): it starts nothing until a Mac starts it there.\n[ -f \"$R/off\" ] && exit 0" : "")
         # COMPAT(0.7 engine-stop): an engine an older Mac stopped stays down until Start. Goes 3 months after 0.8.0.
         # Stopped on purpose (Stop, from the Mac or a phone): it stays stopped, unless this is Start.
         if [ -f "$R/stopped" ]; then

@@ -106,11 +106,12 @@ import Testing
         try write(run.appending(path: "engine.json"), #"{"pid":\#(pid),"port":1,"password":"old","version":"\#(OpenCodeEngine.version)","notes":{"mac":"test-mac","settings":"abc"}}"#)
     }
 
-    /// `kuvo-start` as cron runs it (next to nothing in its environment), or with `command`.
+    /// `kuvo-start` as cron runs it (next to nothing in its environment), or with `command`, by
+    /// `shell`.
     @discardableResult
-    private func start(_ command: String? = nil) throws -> Int32 {
+    private func start(_ command: String? = nil, shell: String = "/bin/sh") throws -> Int32 {
         let process = Process()
-        process.executableURL = URL(filePath: "/bin/sh")
+        process.executableURL = URL(filePath: shell)
         process.arguments = [root.appending(path: "bin/kuvo-start").path] + (command.map { [$0] } ?? [])
         process.environment = ["HOME": home.path, "PATH": "\(tools.path):/usr/bin:/bin"]
         process.standardOutput = FileHandle.nullDevice
@@ -152,6 +153,67 @@ import Testing
     private func until(_ condition: () throws -> Bool) rethrows {
         let end = Date.now.addingTimeInterval(60)
         while try !condition(), Date.now < end { usleep(20_000) }
+    }
+
+    /// The shells the scripts run under that this computer has: its own `sh`, and `dash` (Debian's
+    /// and Ubuntu's `sh`) where it's here.
+    static let shells = ["/bin/sh", "/bin/dash", "/usr/bin/dash"].filter { FileManager.default.isExecutableFile(atPath: $0) }
+
+    /// A process at work as the box's scripts are (its command line names Kuvo Code's), standing in
+    /// for one holding the lock: ended with the test.
+    private func atWork() throws -> Process {
+        let process = Process()
+        process.executableURL = URL(filePath: "/bin/sh")
+        process.arguments = ["-c", "while :; do /bin/sleep 1; done", "kuvo-start", home.path]
+        try process.run()
+        return process
+    }
+
+    /// A process that ran and has ended: its number, nobody's now.
+    private func ended() throws -> Int32 {
+        let gone = Process()
+        gone.executableURL = URL(filePath: "/usr/bin/true")
+        try gone.run()
+        gone.waitUntilExit()
+        return gone.processIdentifier
+    }
+
+    /// `lines` run by `shell` beside the launch's lock's own (`launchLock`, as both scripts have it),
+    /// in this box: started.
+    private func withLock(_ shell: String, _ lines: String) throws -> Process {
+        let process = Process()
+        process.executableURL = URL(filePath: shell)
+        process.arguments = ["-c", "R=\(SSHConnection.quoted(run.path))\n" + RemoteServer.launchLock + "\n" + lines]
+        process.environment = ["HOME": home.path, "PATH": "\(tools.path):/usr/bin:/bin"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        return process
+    }
+
+    /// Lines that take the launch's lock as a start waits for it, looking again `every` so often,
+    /// within `tenths` tries, or exit 3.
+    private static func taking(within tenths: Int, every: String = "0.1") -> String {
+        "n=0\nuntil mkdir \"$R/.launching\" 2>/dev/null; do unheld; n=$((n + 1)); [ $n -lt \(tenths) ] || exit 3; /bin/sleep \(every); done\nlocked"
+    }
+
+    /// Whether `shell` takes the launch's lock within `tenths` of a second.
+    private func takes(_ shell: String, within tenths: Int = 30) throws -> Bool {
+        let process = try withLock(shell, Self.taking(within: tenths))
+        process.waitUntilExit()
+        return process.terminationStatus == 0
+    }
+
+    /// The lock as one that held it left it: its folder, and what it said beside it, from `pid`;
+    /// each made `ago` seconds before now.
+    private func leftHeld(by pid: Int32?, ago: TimeInterval = 0) throws {
+        let lock = run.appending(path: ".launching")
+        try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: false)
+        try FileManager.default.setAttributes([.modificationDate: Date.now.addingTimeInterval(-ago)], ofItemAtPath: lock.path)
+        guard let pid else { return }
+        let said = run.appending(path: ".launching.pid")
+        try write(said, "\(pid)\n")
+        try FileManager.default.setAttributes([.modificationDate: Date.now.addingTimeInterval(-ago)], ofItemAtPath: said.path)
     }
 
     @Test func itComesBackAsTheMacLastStartedIt() throws {
@@ -619,9 +681,11 @@ import Testing
         try start()
         // Its keeper's start done.
         until { running() != nil && !FileManager.default.fileExists(atPath: lock.path) }
-        // A start under way: it holds the lock, and says so (this test's process, which runs).
+        // A start under way: it holds the lock, and says so.
+        let holder = try atWork()
+        defer { holder.terminate() }
         try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: false)
-        try write(run.appending(path: ".launching.pid"), "\(ProcessInfo.processInfo.processIdentifier)\n")
+        try write(run.appending(path: ".launching.pid"), "\(holder.processIdentifier)\n")
         let stop = Process()
         stop.executableURL = URL(filePath: "/bin/sh")
         stop.arguments = [root.appending(path: "bin/kuvo-start").path, "stop"]
@@ -720,6 +784,176 @@ import Testing
         #expect(letGo.terminationStatus == 0)
         #expect(FileManager.default.fileExists(atPath: lock.path), "still the other's")
         #expect(FileManager.default.fileExists(atPath: run.appending(path: ".launching.pid").path))
+    }
+
+    /// Many waiting at once for a lock whose holder is gone take it away one at a time: none takes
+    /// it from one that has just taken it. Each leaves it as one cut off does, for the rest to take
+    /// away again.
+    @Test(arguments: Self.shells) func manyWaitingForAGoneHoldersLockTakeItInTurn(_ shell: String) throws {
+        defer { cleanUp() }
+        let overlaps = run.appending(path: "overlaps")
+        let inside = """
+            \(Self.taking(within: 3000, every: "0.01"))
+            mkdir "$R/inside" 2>/dev/null || echo $$ >>"$R/overlaps"
+            /bin/sleep 0.02
+            rmdir "$R/inside" 2>/dev/null
+            exit 0
+            """
+        for round in 1...6 {
+            try? FileManager.default.removeItem(at: run.appending(path: ".launching"))
+            try leftHeld(by: try ended())
+            let waiting = try (1...12).map { _ in try withLock(shell, inside) }
+            waiting.forEach { $0.waitUntilExit() }
+            #expect(waiting.allSatisfy { $0.terminationStatus == 0 }, "round \(round): each had it in turn")
+        }
+        #expect(!FileManager.default.fileExists(atPath: overlaps.path), "never two at once")
+    }
+
+    /// A lock nobody said was theirs (an older Kuvo Code's, or one cut off as it took it) is taken
+    /// away once it's five minutes old.
+    @Test(arguments: Self.shells) func aLockNobodySaidIsTakenAfterFiveMinutes(_ shell: String) throws {
+        defer { cleanUp() }
+        try leftHeld(by: nil, ago: 360)
+        #expect(try takes(shell))
+    }
+
+    /// A taking away left over a minute ago by one that never said it was theirs (an older
+    /// script's, or one cut off as it began) is no longer in the way.
+    @Test(arguments: Self.shells) func aTakingAwayLeftOverAMinuteIsntWaitedFor(_ shell: String) throws {
+        defer { cleanUp() }
+        try leftHeld(by: try ended())
+        let breaking = run.appending(path: ".launching.breaking")
+        try FileManager.default.createDirectory(at: breaking, withIntermediateDirectories: false)
+        try FileManager.default.setAttributes([.modificationDate: Date.now.addingTimeInterval(-120)], ofItemAtPath: breaking.path)
+        #expect(try takes(shell))
+    }
+
+    /// One taking it away says it's theirs: one whose taker is gone (killed as it took it away)
+    /// isn't in the way, at once.
+    @Test(arguments: Self.shells) func aTakingAwayWhoseTakerIsGoneIsntWaitedFor(_ shell: String) throws {
+        defer { cleanUp() }
+        try leftHeld(by: try ended())
+        let breaking = run.appending(path: ".launching.breaking")
+        try FileManager.default.createDirectory(at: breaking, withIntermediateDirectories: false)
+        try write(breaking.appending(path: "pid"), "\(try ended())\n")
+        #expect(try takes(shell))
+        #expect(!FileManager.default.fileExists(atPath: breaking.path), "nor left behind")
+    }
+
+    /// One whose taker is still at it is left to it, however long it's been (a box that slept as it
+    /// took it away).
+    @Test(arguments: Self.shells) func aTakingAwayWhoseTakerRunsIsLeftToIt(_ shell: String) throws {
+        defer { cleanUp() }
+        try leftHeld(by: try ended())
+        let taker = try atWork()
+        defer { taker.terminate() }
+        let breaking = run.appending(path: ".launching.breaking")
+        try FileManager.default.createDirectory(at: breaking, withIntermediateDirectories: false)
+        try write(breaking.appending(path: "pid"), "\(taker.processIdentifier)\n")
+        try FileManager.default.setAttributes([.modificationDate: Date.now.addingTimeInterval(-120)], ofItemAtPath: breaking.path)
+        #expect(try !takes(shell, within: 10))
+        #expect(try String(contentsOf: breaking.appending(path: "pid"), encoding: .utf8) == "\(taker.processIdentifier)\n", "still its")
+    }
+
+    /// What a holder said is believed only if it isn't older than the lock: what one before left
+    /// beside it isn't, within the same second too (an older Kuvo Code's script took the lock since,
+    /// without saying), and that lock is waited for.
+    @Test(arguments: Self.shells) func whatWasSaidBeforeTheLockIsntBelievedWithinTheSameSecond(_ shell: String) throws {
+        defer { cleanUp() }
+        let second = (Date.now.timeIntervalSince1970 - 30).rounded(.down)
+        let said = run.appending(path: ".launching.pid")
+        try write(said, "\(try ended())\n")
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: second + 0.1)], ofItemAtPath: said.path)
+        let lock = run.appending(path: ".launching")
+        try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: false)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: second + 0.6)], ofItemAtPath: lock.path)
+        #expect(try !takes(shell, within: 10))
+    }
+
+    /// One that took the lock but couldn't say so (its file couldn't be written) still lets go of it.
+    @Test(arguments: Self.shells) func oneThatCouldntSayItHadTheLockLetsGoOfIt(_ shell: String) throws {
+        defer { cleanUp() }
+        try FileManager.default.createDirectory(at: run.appending(path: ".launching.pid"), withIntermediateDirectories: false)
+        #expect(try start("stop", shell: shell) == 0)
+        #expect(!FileManager.default.fileExists(atPath: run.appending(path: ".launching").path))
+    }
+
+    /// A stop ended (TERM, or its connection gone) just as it takes the lock or lets go of it leaves
+    /// no lock that nobody says is theirs, which would be waited for minutes: it's let go of, or
+    /// says it's the stop's, which is gone, and the next takes it at once.
+    @Test(arguments: Self.shells) func aStopEndedAsItTakesOrLetsGoOfTheLockLeavesNoneBehind(_ shell: String) throws {
+        defer { cleanUp() }
+        let lock = run.appending(path: ".launching")
+        // Each of those steps slow, and said as it's under way.
+        try tool("mkdir", "/bin/mkdir \"$@\" || exit\ncase \"$*\" in *\"/run/.launching\") touch \"$HOME/taking\"; /bin/sleep 1 ;; esac")
+        try tool("rm", "/bin/rm \"$@\" || exit\ncase \"$*\" in *\"/run/.launching.pid\") touch \"$HOME/letting-go\"; /bin/sleep 1 ;; esac")
+        for mark in ["taking", "letting-go"] {
+            let stop = Process()
+            stop.executableURL = URL(filePath: shell)
+            stop.arguments = [root.appending(path: "bin/kuvo-start").path, "stop"]
+            stop.environment = ["HOME": home.path, "PATH": "\(tools.path):/usr/bin:/bin"]
+            stop.standardError = FileHandle.nullDevice
+            try stop.run()
+            until { FileManager.default.fileExists(atPath: home.appending(path: mark).path) }
+            stop.terminate()
+            stop.waitUntilExit()
+            // (Its step finishing, a moment after it.)
+            usleep(1_500_000)
+            #expect(try takes(shell, within: 10), "ended as it was \(mark)")
+            try? FileManager.default.removeItem(at: lock)
+            for each in [".launching.pid", "stopped"] { try? FileManager.default.removeItem(at: run.appending(path: each)) }
+            for each in ["taking", "letting-go"] { try? FileManager.default.removeItem(at: home.appending(path: each)) }
+        }
+    }
+
+    /// What a holder said names a process that runs but isn't one of these scripts (its number
+    /// another's since, after a restart): it's gone, and its lock is taken at once.
+    @Test(arguments: Self.shells) func aHolderWhoseNumberIsAnothersNowIsGone(_ shell: String) throws {
+        defer { cleanUp() }
+        let other = Process()
+        other.executableURL = URL(filePath: "/bin/sleep")
+        other.arguments = ["30"]
+        try other.run()
+        defer { other.terminate() }
+        try leftHeld(by: other.processIdentifier)
+        #expect(try takes(shell))
+    }
+
+    /// Nor is one that names the one waiting for it.
+    @Test(arguments: Self.shells) func aHolderWithTheWaitersOwnNumberIsGone(_ shell: String) throws {
+        defer { cleanUp() }
+        let waiter = try withLock(shell, "mkdir \"$R/.launching\"; echo $$ >\"$R/.launching.pid\"\n" + Self.taking(within: 30))
+        waiter.waitUntilExit()
+        #expect(waiter.terminationStatus == 0)
+    }
+
+    /// `off` while the keeper's start is under way (an engine slow to start) ends that start, and
+    /// the engine it was starting, rather than waiting for it: nothing runs after it, and nothing
+    /// starts again.
+    @Test func offEndsAStartUnderWay() throws {
+        defer { cleanUp() }
+        // An engine that listens only once it's told to.
+        try write(root.appending(path: "engine/\(OpenCodeEngine.version)/opencode"), """
+            #!/bin/sh
+            echo $$ >>"$HOME/engines"
+            until [ -f "$HOME/listen" ]; do /bin/sleep 0.05; done
+            echo "server listening on http://127.0.0.1:$3"
+            while :; do /bin/sleep 1; done
+            """, executable: true)
+        let engines = home.appending(path: "engines")
+        try start()
+        until { FileManager.default.fileExists(atPath: engines.path) }
+        #expect(FileManager.default.fileExists(atPath: run.appending(path: ".launching").path), "its start under way")
+        let began = Date.now
+        #expect(try start("off") == 0)
+        #expect(Date.now.timeIntervalSince(began) < 10, "off didn't wait for it")
+        try write(home.appending(path: "listen"), "")
+        usleep(1_000_000)
+        let pids = try String(contentsOf: engines, encoding: .utf8).split(separator: "\n").compactMap { Int($0) }
+        #expect(pids.count == 1, "nothing started again")
+        #expect(pids.allSatisfy { !alive($0) }, "nothing runs after off")
+        #expect(running() == nil && keeper == nil)
+        #expect(!FileManager.default.fileExists(atPath: run.appending(path: ".launching").path))
     }
 
     @Test func twoAtOnceStartOne() async throws {

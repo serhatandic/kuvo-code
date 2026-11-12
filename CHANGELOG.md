@@ -16,7 +16,9 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
-- Starting or stopping a computer's engine no longer waits minutes when an earlier start or stop there was cut short (by removing the computer, a crash, or the computer going to sleep): the next one goes ahead at once. One still under way is waited for, as before.
+- Starting or stopping a computer's engine no longer waits minutes when an earlier start or stop there was cut short (removing the computer, or a start or stop that was killed): the next one goes ahead at once. One still under way is waited for, as before.
+- Removing a computer while its engine is starting there no longer leaves that engine running: the start under way ends with it, and nothing starts there again until a Mac adds the computer back.
+- A computer whose settings a newer Kuvo Code makes its own as it connects (one set up by Kuvo Code 0.7 or before) no longer does that in the middle of its engine starting: it waits for the start, rather than going ahead after a few seconds.
 - In a group chat, a bot that has nothing to report on its part of the work now says nothing in the chat: its part shows as done, as before, but "PASS" no longer appears there as its report, nor in a notification that it finished its part. This holds for a bot on another of your computers too.
 - In a group chat, the line under the bot that's talking now changes from one step to the next cleanly, and so does "… is thinking…" as the next bot takes its turn, also after one that had nothing to add: before, the old words and the new ones showed over each other for a moment as they changed.
 - A session you stop while Auto is checking what it asked no longer shows as asking you later: in its bot's sessions bar its row kept saying "Asks to …" (and the Dock counted it) after the session went on, with nothing in it to answer.
