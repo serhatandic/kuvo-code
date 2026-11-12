@@ -355,7 +355,13 @@ function refuseStart(program, env) {
   if ((runtimeOf(program, at, given) || allowed) && [given.HOME, ...(allowed ? [given.CODEX_HOME, given.GROK_HOME, given.CLAUDE_CONFIG_DIR] : [])].some(isRealHome))
     refuseAgents(`Refusing to start ${String(program)} with your real home as its HOME (test-safety.js): a test's own reaches its agents' sign-ins.`);
 }
-const runtimeOf = (program, at, env) => /^(bun|node)(-[a-z]+)?$/.test(path.basename(String(at ?? program))) || String(at ?? program) === process.execPath || Boolean(env?.BUN_BE_BUN);
+// (A program given BUN_BE_BUN is the engine run as Bun. But a run on the engine, `BUN_BE_BUN=1
+// <engine> test` as on a machine, hands that to everything it starts, git and the shell too: there it
+// says nothing of a program, and only the run's own runtime, by its file, is Bun.)
+const runsOnEngine = Boolean(process.env.BUN_BE_BUN);
+const runner = (() => { try { return fs.realpathSync(process.execPath); } catch { return process.execPath; } })();
+const isRunner = at => { try { return Boolean(at) && fs.realpathSync(String(at)) === runner; } catch { return false; } };
+const runtimeOf = (program, at, env) => /^(bun|node)(-[a-z]+)?$/.test(path.basename(String(at ?? program))) || String(at ?? program) === process.execPath || isRunner(at) || (Boolean(env?.BUN_BE_BUN) && !runsOnEngine);
 
 // What a test starts (the bridge, a box) finds programs on the PATH it's handed, outside this guard:
 // a folder there with an agent's real program (`~/.local/bin/grok`) is swapped for a copy in the run's
