@@ -50,6 +50,14 @@ fi
 short() { echo "$1" | cut -c1-9; }
 took() { echo "$(($1 / 60))m$(printf %02d $(($1 % 60)))s"; }
 
+# Whether a build of the platform has a name of this second: a batch's folder, or a failed build's stamp.
+taken() {
+    for file in "$ROOT/$platform/$1"-* "$ROOT/$platform/failed-$1"-*; do
+        [ ! -e "$file" ] || return 0
+    done
+    return 1
+}
+
 # A commit's files, exported into a new folder.
 export_tree() {
     mkdir -p "$3"
@@ -100,12 +108,16 @@ one() {
     commit=$mac_commit
     [ "$platform" = mac ] || commit=$phone_commit
     if [ "$mode" = batch ]; then
-        name="$(date +%Y%m%d-%H%M%S)-$(echo "$commit" | cut -c1-7)"
-        # (Two in one second: the second waits for the next.)
-        while [ -e "$ROOT/$platform/$name" ]; do
+        # Names sort by when they were built (scripts/batch.sh: the newest is the last), and within
+        # one second by their commit: so one second has one build of a platform. A build in the same
+        # second as another's folder or failed stamp, of any commit, waits for the next. (Under the
+        # platform's build lock, so no other build names one meanwhile.)
+        when=$(date +%Y%m%d-%H%M%S)
+        while taken "$when"; do
             sleep 1
-            name="$(date +%Y%m%d-%H%M%S)-$(echo "$commit" | cut -c1-7)"
+            when=$(date +%Y%m%d-%H%M%S)
         done
+        name="$when-$(echo "$commit" | cut -c1-7)"
         dir="$ROOT/$platform/$name"
         src="$dir/src"
         build="$dir/build"
