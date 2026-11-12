@@ -103,6 +103,7 @@ import type { EngineRecord } from "../shared/records";
 import { fenceOwnPort, keepFence } from "./fence/state";
 import { keepApprovals } from "./areas/approval";
 import { keepGroupSettings } from "./areas/group-settings";
+import { keepOldBranchPrefix } from "./areas/git-words";
 import type { KeptNotice } from "./notices/hold";
 import type { Notice } from "./notices/notice";
 import type { GivenLibrary } from "./personalities/library";
@@ -372,6 +373,8 @@ async function run(): Promise<void> {
   keepApprovals();
   // What its group chats go by, worked out here and given to the bridge that runs them.
   keepGroupSettings();
+  // The branch prefix it kept before Settings › Git was each computer's, made its setting.
+  keepOldBranchPrefix();
   // The vault, held here: its key in this process's memory, its asks told to your phones.
   holdVault(engineHandler(readEngineFile, { name: os.hostname() }));
   setVaultTell(tell);
@@ -491,6 +494,8 @@ async function box(command: string): Promise<void> {
       let seed: { settings?: unknown; keys?: unknown } | null = null;
       try { seed = JSON.parse((await input()) || "null"); } catch {}
       const adopted = adoptBox(seed);
+      // Its settings its own now: the branch prefix it kept before, taken into them.
+      keepOldBranchPrefix();
       // As its catalogs have them now: a Mac runs this as it connects, having just put newer ones here,
       // whether or not this box has a bridge or starts its engine again. (Stays when adopting goes.)
       await upgradeIntegrations().catch(() => {});
