@@ -47,8 +47,9 @@ export interface FenceState {
   /** Checks failed in a row (`checkFailed`, `checking`). */
   failures?: number;
   /** While it's on, what it can't keep commands from on this computer: `services`, the services
-   * your login runs (systemd, your keyring, your SSH agent), where commands can't have a namespace
-   * of their own (`needs` says what for). The vault isn't open to agents there, nor do goals go on
+   * your login runs (systemd, your keyring, your SSH agent), and git's own files in the repositories
+   * they write (fence/landlock.ts, KEEP_GIT), where commands can't have a namespace of their own
+   * (`needs` says what for). The vault isn't open to agents there, nor do goals go on
    * alone: `fenceWhole`. */
   gaps?: FenceGap[];
 }

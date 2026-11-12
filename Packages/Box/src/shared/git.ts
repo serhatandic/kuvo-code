@@ -7,11 +7,12 @@
 // sitting in its folder, and switches off the filters and diff converters the repository names,
 // but for git-lfs's and git-crypt's, run as installed. What you ask git for yourself (Commit, Push
 // or Pull in Changes, a worktree) runs its hooks, filters and sign-ins as your terminal would.
-// Your own settings (`~/.gitconfig`) count as yours, but for hooks.
+// Your own settings (`~/.gitconfig`) count as yours, but for hooks. Neither runs where the
+// repository's `commondir` leads git to another repository's settings and hooks (`strayCommon`).
 
 import { execFile, spawnSync } from "node:child_process"
-import { accessSync, constants, realpathSync } from "node:fs"
-import { basename, join } from "node:path"
+import { accessSync, closeSync, constants, fstatSync, openSync, promises as fsp, readSync, realpathSync } from "node:fs"
+import { basename, dirname, join, resolve } from "node:path"
 
 /** What every git the box runs gets. */
 export const EVERY = ["-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "log.showSignature=false"]
@@ -163,15 +164,109 @@ function built(lead: string[], rest: string[], found: Found | undefined | "retry
 
 const NOTHING: Found = { settings: [], converters: false }
 
+// Where git takes a repository's common folder from (its settings, hooks, objects): its folder's
+// `commondir`, when there's one. A repository's own folder names none, or itself (`.`, which Kuvo
+// Code's sandbox gives one on Linux: fence/landlock.ts, MAKE_GIT), and a linked worktree's own
+// folder (`<repository>/worktrees/<name>`) names the repository it's one of. One that leads anywhere
+// else was put there to have git read another's settings and run its hooks, so the box runs no git
+// there that could start a program (`strayCommon`).
+const MOST_NAMED = 4096
+const O_NONBLOCK = constants.O_NONBLOCK ?? 0
+const O_NOFOLLOW = constants.O_NOFOLLOW ?? 0
+
+/** The real places a `commondir` in `folder` (the repository's or worktree's own folder git found)
+ * names, and that it should name: [the folder, where it leads, the folder's repository's if it's a
+ * worktree's own]. `named`, what the file says. */
+const places = (folder: string, named: string) => [folder, resolve(folder, named.replace(/[\r\n]+$/, "")), dirname(dirname(folder))]
+
+/** Whether a `commondir` leads where it should, from its places' real paths (null: not there). */
+function leadsHome(folder: string, [own, common, above]: (string | null)[]): boolean {
+  if (!own || !common) return false
+  return common === own || (basename(dirname(own)) === "worktrees" && dirname(dirname(own)) === dirname(dirname(folder)) && above === common)
+}
+
+const realOrNull = (where: string) => { try { return realpathSync(where) } catch { return null } }
+
+/** A `commondir` read only as a small regular file, never waiting on one (a FIFO put in its place):
+ * what it says, null where there's none, undefined where it can't be read so. */
+function readNamed(file: string): string | null | undefined {
+  let fd: number
+  try {
+    fd = openSync(file, constants.O_RDONLY | O_NONBLOCK | O_NOFOLLOW)
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? null : undefined
+  }
+  try {
+    const stat = fstatSync(fd)
+    if (!stat.isFile() || stat.size > MOST_NAMED) return undefined
+    const buffer = Buffer.alloc(MOST_NAMED)
+    return buffer.subarray(0, readSync(fd, buffer, 0, MOST_NAMED, 0)).toString("utf8")
+  } catch {
+    return undefined
+  } finally {
+    closeSync(fd)
+  }
+}
+
+async function readNamedLater(file: string): Promise<string | null | undefined> {
+  let handle: fsp.FileHandle
+  try {
+    handle = await fsp.open(file, constants.O_RDONLY | O_NONBLOCK | O_NOFOLLOW)
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? null : undefined
+  }
+  try {
+    const stat = await handle.stat()
+    if (!stat.isFile() || stat.size > MOST_NAMED) return undefined
+    const buffer = Buffer.alloc(MOST_NAMED)
+    const { bytesRead } = await handle.read(buffer, 0, MOST_NAMED, 0)
+    return buffer.subarray(0, bytesRead).toString("utf8")
+  } catch {
+    return undefined
+  } finally {
+    await handle.close()
+  }
+}
+
+// (Asked of git itself, which finds the repository from `cwd` and the options before its command as
+// it will for the command: a plain command, so nothing the repository names runs.)
+const gitDirArgs = (lead: string[]) => [...lead, ...EVERY, "rev-parse", "--absolute-git-dir"]
+// Commands that make a repository rather than work in one.
+const MAKING = new Set(["clone", "init"])
+
+/** Whether the repository git would work in, with `lead` from `cwd`, has a `commondir` that leads
+ * anywhere but where it should (none, itself, or a worktree's repository). Not in one: no. */
+function strayCommon(lead: string[], rest: string[], cwd?: string): boolean {
+  if (MAKING.has(rest[0] ?? "")) return false
+  const ran = spawnSync("git", gitDirArgs(lead), { cwd, encoding: "utf8", env: { ...process.env, ...GIT_QUIET }, timeout: 30_000 })
+  const folder = ran.status === 0 ? String(ran.stdout ?? "").trim() : ""
+  if (!folder) return false
+  const named = readNamed(join(folder, "commondir"))
+  if (named === null) return false
+  return named === undefined || !leadsHome(folder, places(folder, named).map(realOrNull))
+}
+
+async function strayCommonLater(lead: string[], rest: string[], cwd?: string): Promise<boolean> {
+  if (MAKING.has(rest[0] ?? "")) return false
+  const folder = await new Promise<string>(done =>
+    execFile("git", gitDirArgs(lead), { cwd, encoding: "utf8", env: { ...process.env, ...GIT_QUIET }, timeout: 30_000 }, (error, out) => done(error ? "" : String(out ?? "").trim())))
+  if (!folder) return false
+  const named = await readNamedLater(join(folder, "commondir"))
+  if (named === null) return false
+  if (named === undefined) return true
+  return !leadsHome(folder, await Promise.all(places(folder, named).map(where => fsp.realpath(where).catch(() => null))))
+}
+
 /**
  * `args` as the box runs them by itself: [OWN], and the programs settings name switched off (read
  * first, unless the command never runs one). Undefined: don't run it (the
- * repository names a program it can't switch off).
+ * repository names a program it can't switch off, or its `commondir` leads elsewhere).
  */
 export function ownArgs(args: string[], cwd?: string): string[] | undefined {
   const { lead, rest } = split(args)
   let found: Found | undefined | "retry" = NOTHING
   if (!plain(rest)) {
+    if (strayCommon(lead, rest, cwd)) return undefined
     for (const scoped of [true, false]) {
       const ran = spawnSync("git", reading(lead, scoped), { cwd, encoding: "utf8", env: { ...process.env, ...GIT_QUIET }, timeout: 30_000 })
       found = answer((ran.error as NodeJS.ErrnoException | undefined)?.code ?? ran.status, String(ran.stdout ?? ""), scoped)
@@ -186,6 +281,7 @@ export async function ownArgsLater(args: string[], cwd?: string): Promise<string
   const { lead, rest } = split(args)
   let found: Found | undefined | "retry" = NOTHING
   if (!plain(rest)) {
+    if (await strayCommonLater(lead, rest, cwd)) return undefined
     for (const scoped of [true, false]) {
       found = await new Promise<Found | undefined | "retry">(resolve =>
         execFile("git", reading(lead, scoped), { cwd, encoding: "utf8", env: { ...process.env, ...GIT_QUIET }, timeout: 30_000 }, (error, out) =>
@@ -196,8 +292,17 @@ export async function ownArgsLater(args: string[], cwd?: string): Promise<string
   return built(lead, rest, found)
 }
 
-/** `args` as you asked for them: [EVERY], the repository's hooks, filters and sign-ins as they are. */
-export function askedArgs(args: string[]): string[] {
+/** `args` as you asked for them, from `cwd`: [EVERY], the repository's hooks, filters and sign-ins as
+ * they are. Undefined: don't run it (its `commondir` leads elsewhere, so they'd be another's). */
+export function askedArgs(args: string[], cwd?: string): string[] | undefined {
   const { lead, rest } = split(args)
+  if (strayCommon(lead, rest, cwd)) return undefined
+  return [...lead, ...EVERY, ...(withOptions(rest, false) ?? rest)]
+}
+
+/** [askedArgs], without holding up the bridge. */
+export async function askedArgsLater(args: string[], cwd?: string): Promise<string[] | undefined> {
+  const { lead, rest } = split(args)
+  if (await strayCommonLater(lead, rest, cwd)) return undefined
   return [...lead, ...EVERY, ...(withOptions(rest, false) ?? rest)]
 }

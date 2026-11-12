@@ -4,16 +4,16 @@
 // granting each neighbour on the way down to it; in your home, files added and changed but never
 // removed or moved, but for what runs later and your personal folders (only read); everything in
 // the conversation's folder, its repository, the temporary folders, devices and tools' caches; signals and abstract sockets only
-// inside the sandbox (from Linux's Landlock 6). What it can't refuse inside a folder it writes (git's
-// hooks, the engine's and the coding agents' settings there), it doesn't: Landlock grants a folder
-// whole.
+// inside the sandbox (from Linux's Landlock 6). Landlock grants a folder whole, so what it can't
+// refuse inside a folder it writes (the engine's and the coding agents' settings there), it doesn't.
 //
 // Nor can Landlock refuse a socket, and your session's services listen on them: systemd's in
 // `/run/user/<uid>` runs whatever it's asked outside the sandbox (`systemd-run --user`), beside your
 // bus, keyring and agents; tmux's server types into your sessions; an X server takes keystrokes. So
 // each command first gets a namespace of its own (`unshare`, util-linux's, which the machine has: a
 // process with threads, like Bun, can't make one itself) where those folders are empty, and then its
-// Landlock rules (`HIDE`).
+// Landlock rules (`HIDE`). There too, what git runs or is led by in the repositories it writes is
+// kept as it is (`KEEP_GIT`), as macOS's rules keep it (seatbelt.ts, GIT_GUARDED).
 
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -26,7 +26,139 @@ export function landlockPolicy(policy: FencePolicy): string {
 }
 
 /**
- * `sh -c HIDE <unshare> <uid> <gid> <name> <own> <sockets> <t_own> <t_name> <program> [args…]`, run by `unshare -Urm`
+ * What git runs, or is led by, in a repository a command writes runs outside the sandbox the next
+ * time git works there (in your terminal, Changes' Commit): its settings, its hooks, where its common
+ * folder is (`commondir`), a linked worktree's way back to it, its submodules' repositories, and the
+ * folders that hold those. Landlock grants a folder whole, so it can't keep these; each command's
+ * namespace does, before the command starts (part of HIDE, as its root): each is mounted on itself,
+ * which a command can't move, remove or replace, and those git reads, read-only (`keep`), as macOS's
+ * rules have them (seatbelt.ts, GIT_GUARDED). In the conversation's repository <git>, in each
+ * repository Also Allowed holds (`<folder>/.git`), and in each submodule's repository below theirs:
+ * - the repository's folder, kept; its `config`, `config.worktree`, `commondir`, `gitdir` and
+ *   `hooks`, read-only;
+ * - `worktrees`, and every worktree's own folder in it (`worktrees/<name>`), read-only: none is
+ *   made, moved, removed or written, but the conversation's own, where it works in a worktree (the
+ *   one its `.git` file names): written as git works there, but for its `commondir`, `gitdir` and
+ *   `config.worktree`, read-only, and its `commondir` must lead back to the repository;
+ * - `modules`, and every folder in it but each submodule's repository, read-only: none is made,
+ *   moved or removed;
+ * - and the `.git` file that leads the conversation's folder to its repository (a worktree's), up
+ *   from it, read-only.
+ * Mounts keep only what's there. A name git reads that isn't there yet would be made in a folder git
+ * must make files in (`index.lock` beside `commondir`), which neither Landlock nor a mount tells
+ * apart: so the launcher first gives each repository what it lacks of those (`MAKE_GIT`). A
+ * `commondir` that leads anywhere else, a link where these are, or one that can't be kept, runs
+ * nothing. The rest git reads there starts no program (`info/attributes` names drivers only
+ * settings define, `objects/info/alternates` and `remotes` name objects and addresses), or isn't read
+ * in a worktree's own folder (its `hooks`, `config`, `info`).
+ */
+const KEEP_GIT = String.raw`keep() {
+  [ ! -L "$1" ] || fail "$1 is a link, which it can't keep as it is. Ask the user."
+  [ -e "$1" ] || return 0
+  mount -c --bind "$1" "$1" 2>/dev/null && [ ! -L "$1" ] && { [ "$2" != ro ] || mount -c -o remount,bind,ro "$1" 2>/dev/null; } || fail "$1 can't be kept from it."
+}
+ro() { mount -c -o remount,bind,ro "$1" 2>/dev/null || fail "$1 can't be kept from it."; }
+leads() { (cd "$1" 2>/dev/null && cd -P "$(head -c 4096 "$2")" 2>/dev/null && pwd -P); }
+repo() {
+  local r k_wt e f
+  r=$1 k_wt=$2
+  keep "$r"
+  for f in config config.worktree commondir gitdir hooks; do keep "$r/$f" ro; done
+  [ ! -e "$r/commondir" ] || { [ -f "$r/commondir" ] && [ "$(leads "$r" commondir)" = "$r" ]; } || fail "$r/commondir leads git to another repository. Ask the user."
+  if [ -e "$r/worktrees" ] || [ -L "$r/worktrees" ]; then
+    keep "$r/worktrees"
+    for e in "$r/worktrees"/* "$r/worktrees"/.[!.]* "$r/worktrees"/..?*; do [ ! -L "$e" ] || keep "$e"; done
+    e=
+    case $k_wt in "$r/worktrees"/*/*) ;; "$r/worktrees"/?*) [ -d "$k_wt" ] && e=$k_wt ;; esac
+    [ -z "$e" ] || keep "$e"
+    ro "$r/worktrees"
+    if [ -n "$e" ]; then
+      for f in commondir gitdir config.worktree; do keep "$e/$f" ro; done
+      [ -f "$e/commondir" ] && [ "$(leads "$e" commondir)" = "$r" ] || fail "$e/commondir doesn't lead git back to its repository. Ask the user."
+      mods "$e/modules"
+    fi
+  fi
+  mods "$r/modules"
+}
+mods() {
+  local m k_found k_done h d k_in p
+  m=$1
+  [ -e "$m" ] || [ -L "$m" ] || return 0
+  keep "$m"
+  [ -z "$(find "$m" -name '*
+*' 2>/dev/null | head -c 1)" ] || fail "$m holds a name it can't keep. Ask the user."
+  k_found=$(find "$m" \( -name objects -o -name refs -o -name logs -o -name lfs -o -name rr-cache -o -name hooks -o -name info \) -prune -o -name HEAD -type f -print 2>/dev/null | awk -F / '{ print NF "\t" $0 }' | LC_ALL=C sort -n | cut -f 2-)
+  k_done=
+  while IFS= read -r h; do
+    [ -n "$h" ] || continue
+    d=$(dirname "$h") k_in=
+    while IFS= read -r p; do [ -n "$p" ] && case "$d/" in "$p"/modules/*|"$p"/worktrees/*) k_in=1 ;; esac; done <<EOF_DONE
+$k_done
+EOF_DONE
+    [ -n "$k_in" ] || { repo "$d" "" </dev/null; k_done="$k_done
+$d"; }
+  done <<EOF_FOUND
+$k_found
+EOF_FOUND
+  ro "$m"
+}
+k_at=$work k_wt=
+while [ -n "$k_at" ] && [ "$k_at" != / ]; do
+  if [ -e "$k_at/.git" ] || [ -L "$k_at/.git" ]; then
+    if [ -f "$k_at/.git" ] && [ ! -L "$k_at/.git" ]; then keep "$k_at/.git" ro; k_wt=$(cd "$k_at" && cd -P "$(sed -n 's/^gitdir: *//p' .git | head -n 1)" 2>/dev/null && pwd -P); fi
+    break
+  fi
+  k_at=$(dirname "$k_at")
+done
+case $git in /*.git) [ ! -d "$git" ] || [ -L "$git" ] || [ ! -f "$git/HEAD" ] || repo "$git" "$k_wt" </dev/null ;; esac
+if [ -n "$allowed" ] && [ -f "$allowed" ]; then
+  while IFS= read -r k_at; do
+    case $k_at in /*) ;; *) continue ;; esac
+    [ "$k_at/.git" != "$git" ] || continue
+    if [ -d "$k_at/.git" ] && [ ! -L "$k_at/.git" ] && [ -f "$k_at/.git/HEAD" ]; then repo "$k_at/.git" "" </dev/null
+    elif [ -f "$k_at/.git" ] && [ ! -L "$k_at/.git" ]; then keep "$k_at/.git" ro; fi
+  done <"$allowed"
+fi`;
+
+/**
+ * The launcher's part, before a command's namespace keeps them (`KEEP_GIT`), run as you, with no
+ * more rights than yours (so never in a folder you made read-only): in the repositories it keeps (the
+ * conversation's <git>, Also Allowed's in <allowed>, and their submodules' and its worktrees'
+ * submodules'), an empty `hooks` folder where there's none, a `commondir` that names the repository
+ * itself where there's none, and, where its settings turn worktrees' own settings on, an empty
+ * `config.worktree` in it and each of its worktrees' own folders where there's none. Where one can't
+ * be made, the command is told so once (`$F/unkept`), and runs: what keeps the rest still keeps it.
+ * `git_made_all <git> <allowed>`.
+ */
+export const MAKE_GIT = String.raw`git_unkept() {
+  k_note=$F/unkept/$(printf '%s' "$1" | cksum | cut -d ' ' -f 1)
+  [ ! -e "$k_note" ] || return 0
+  (umask 077; mkdir -p "$F/unkept" && : >"$k_note") 2>/dev/null
+  echo "Note: git's own files in $1 aren't kept from commands by Kuvo Code's sandbox (it can't add a hooks folder or commondir there)." >&2
+}
+git_made() { [ -e "$1" ] || [ -L "$1" ] || (set -C; if [ "$3" = / ]; then mkdir "$1"; else printf '%s\n' "$3" >"$1"; fi) 2>/dev/null || git_unkept "$2"; }
+git_repo() {
+  [ -d "$1" ] && [ ! -L "$1" ] && [ -f "$1/HEAD" ] || return 0
+  git_made "$1/hooks" "$1" /
+  git_made "$1/commondir" "$1" .
+  if [ -f "$1/config" ] && timeout 5 grep -qi worktreeconfig "$1/config" 2>/dev/null; then
+    git_made "$1/config.worktree" "$1" ""
+    for k_e in "$1/worktrees"/* "$1/worktrees"/.[!.]* "$1/worktrees"/..?*; do [ ! -d "$k_e" ] || [ -L "$k_e" ] || git_made "$k_e/config.worktree" "$1" ""; done
+  fi
+}
+git_all() {
+  git_repo "$1"
+  [ -d "$1" ] && [ ! -L "$1" ] || return 0
+  find "$1/modules" "$1/worktrees" \( -name objects -o -name refs -o -name logs -o -name lfs -o -name rr-cache -o -name hooks -o -name info \) -prune -o -path '*/modules/*' -name HEAD -type f -print 2>/dev/null | while IFS= read -r k_h; do git_repo "$(dirname "$k_h")"; done
+}
+git_made_all() {
+  case $1 in /*.git) git_all "$1" ;; esac
+  [ -f "$2" ] || return 0
+  while IFS= read -r k_a; do case $k_a in /*) [ "$k_a/.git" = "$1" ] || git_all "$k_a/.git" ;; esac; done <"$2"
+}`;
+
+/**
+ * `sh -c HIDE <unshare> <uid> <gid> <name> <own> <sockets> <t_own> <t_name> <work> <git> <allowed> <program> [args…]`, run by `unshare -Urm`
  * (as its own root, in a mount namespace of its own), with the system's programs only, never ones a
  * command could have put on your PATH: your session's folder (`/run/user/<uid>`), your tmux's,
  * screen's and shell-started SSH agents' in `/tmp` and `/run/screen`, the X server's, Neovim's,
@@ -47,8 +179,13 @@ export function landlockPolicy(policy: FencePolicy): string {
  * one by its path. So the command's own (<t_name> in it) is all it has there: kept aside in <own>,
  * the folder emptied, and it put back alone. The same folder in each of its conversation's
  * commands, so a tmux server one starts is there for the next.
+ *
+ * <work> is the conversation's folder, <git> its repository and <allowed> the file of folders Also
+ * Allowed gives it (each `""` for none): in each repository there git's own files are kept as they
+ * are (`KEEP_GIT`).
  */
 export const HIDE = String.raw`u=$1 g=$2 n=$3 own=$4 sockets=$5 t_own=$6 t_name=$7; shift 7
+work=$1 git=$2 allowed=$3; shift 3
 p=$PATH; PATH=/usr/sbin:/usr/bin:/sbin:/bin
 fail() { echo "This command can't run in the sandbox here: $1" >&2; exit 126; }
 over() { ( cd -P "$1" 2>/dev/null || exit 1; [ -z "$3" ] || [ "$(pwd -P)" = "$1" ] || exit 1; [ "$3" != mine ] || [ -O . ] || exit 1; mount -c -t tmpfs -o "size=64k,mode=$2" kuvo-hidden . 2>/dev/null || exit 2 ) || { [ $? = 1 ] || fail "$1 can't be kept from it."; return 1; }; }
@@ -64,6 +201,7 @@ fi
 for d in "/tmp/tmux-$u" /tmp/ssh-* "/run/screen/S-$n" "/tmp/nvim.$n" "/tmp/emacs$u"; do over "$d" 0700 mine; done
 over /tmp/.X11-unix 1777 here
 for s in /tmp/vscode-ipc-*.sock /tmp/vscode-ssh-auth-*.sock /tmp/vscode-git-*.sock; do [ -O "$s" ] && off "$s" here; done
+${KEEP_GIT}
 [ "$XDG_RUNTIME_DIR" != "/run/user/$u" ] || unset XDG_RUNTIME_DIR
 case $DBUS_SESSION_BUS_ADDRESS in *"=/run/user/$u/"*) unset DBUS_SESSION_BUS_ADDRESS ;; esac
 mkfifo -m 600 "$own/in" "$own/on" || fail "it isn't set up."
@@ -99,7 +237,7 @@ export function ownNamespaceLater(own: string, unshare = UNSHARE.find(each => fs
 }
 
 const TRY_FOR = 10_000;
-const namespaceTry = (unshare: string, own: string) => ["-Urm", "/bin/sh", "-c", HIDE, unshare, String(process.getuid?.() ?? -1), String(process.getgid?.() ?? -1), "", own, "/dev/null", "", "", "/bin/sh", "-c", "[ \"$(id -u)\" = \"$0\" ]", String(process.getuid?.() ?? -1)];
+const namespaceTry = (unshare: string, own: string) => ["-Urm", "/bin/sh", "-c", HIDE, unshare, String(process.getuid?.() ?? -1), String(process.getgid?.() ?? -1), "", own, "/dev/null", "", "", "", "", "", "/bin/sh", "-c", "[ \"$(id -u)\" = \"$0\" ]", String(process.getuid?.() ?? -1)];
 
 /**
  * The script: `kuvo-fence.js <policy.json> <WORK> <GIT> <TMP> <WAKES> <ALLOWED> <shell> [args…]`, ALLOWED

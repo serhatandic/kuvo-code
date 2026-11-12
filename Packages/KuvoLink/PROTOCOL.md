@@ -5459,8 +5459,8 @@ Linux, nothing is made or removed right in a folder that holds what's kept (your
 `~/.local` and the like), only in the folders there: Landlock grants each thing that's there. Besides, each command
 writes and deletes freely in its conversation's folder, that folder's git repository (a real one: a `.git` that's
 a link, or names a folder that isn't a repository or a worktree the repository doesn't name back,
-counts for nothing; on macOS never its hooks or config, its submodules' or its worktrees', nor the
-engine's settings in the folder: `.opencode/`, `opencode.json`, nor the coding agents' settings
+counts for nothing; never its hooks or config, its submodules' or its worktrees' (on Linux, as
+below), nor, on macOS, the engine's settings in the folder: `.opencode/`, `opencode.json`, nor the coding agents' settings
 files, whose hooks and servers they run as they start there, nor, on macOS, any other project's in
 your home: `.claude/settings.json` and
 `settings.local.json`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json` and `mcp.json`,
@@ -5510,8 +5510,31 @@ store and Bun's cache link theirs into a project's `node_modules` and pnpm's int
 as your own uv links its cache's into a project's `.venv`; bunx's packages in `/tmp`; and a new
 folder at the top of `~/.cache`, which it can't make (Landlock's right to make one would reach the
 folders it only reads); other projects' hooks, git settings and agents' settings in your home, which
-it writes as it writes the files beside them; and before Linux 6.2 (Landlock 3), truncating a file it only reads by its
-path (`truncate`), which Landlock checks only from then. It can't read
+it writes as it writes the files beside them; the engine's and the coding agents' settings in the
+conversation's folder; a new repository made in it (a `.git` anywhere below the folder, which git
+outside works in too once it's added as a submodule), and a `.git` in it that's a link; and before Linux 6.2 (Landlock 3), truncating a file it only reads by its
+path (`truncate`), which Landlock checks only from then.
+On Linux, where Landlock grants a folder whole, git's own files in the repositories a command writes
+are kept by its namespace instead (`fence/landlock.ts`, `KEEP_GIT`, #429): before the command
+starts, in its conversation's repository, each repository Also Allowed holds, and their submodules'
+repositories, the repository's folder, `worktrees` and `modules` are mounted on themselves (so
+none is moved, removed or replaced), and its `config`, `config.worktree`, `commondir`, `gitdir`
+and `hooks`, every worktree's own folder but the conversation's own (where its `commondir`,
+`gitdir` and `config.worktree` are), and every folder in `modules` but each submodule's repository,
+read-only; so is the `.git` file that leads the conversation's worktree to its repository. A
+`commondir` leading git anywhere but the repository itself (or, a worktree's own, its repository),
+a link where one of those is, or one that can't be kept, runs nothing (126, saying why). Mounts keep
+only what's there, and a name git reads that isn't there yet can't be told from the files git makes
+beside it (`index.lock` beside `commondir`), so the launcher first leaves in each of those
+repositories what it lacks of them: `.git/commondir` holding `.` (git takes the repository's own
+folder as its common one, as with none), an empty `.git/hooks`, and, where its settings turn on
+`extensions.worktreeConfig`, an empty `config.worktree`. These are the files Kuvo Code leaves in a
+repository's `.git` on Linux. git reads them as before, but for one thing it prints: with a
+`commondir` there, `git rev-parse --git-common-dir` at the repository's top prints its absolute path
+rather than `.git` (`--git-dir` still prints `.git`), so a script that compares the two as strings
+to tell a linked worktree takes the repository for one. It never changes one that's there, and makes them as you, so never in
+a folder you made read-only: there the command runs, told so once in what it prints. Without a
+namespace of its own (`gaps`: `services`), none of this holds. It can't read
 Kuvo Code's own folders (on a machine `~/.kuvo-code`; on this Mac the app's folders under `Library`,
 any `run.kuvo.code…` copy's, its temporary folder and `/tmp/kuvo-ssh-<uid>`) but its `bin`, nor your
 secrets (cloud, package and git tokens, browsers' and password managers' data, the coding agents'
@@ -5745,7 +5768,8 @@ it's empty.
   starts Codex's thread, Cursor's agent and an ACP agent again and is told to Claude Code; a key you
   changed reaches the relay alone, from the agent's next turn.
   While it's on, `gaps` lists what it can't keep commands from on this computer: `services`, the
-  services your login runs (a Linux machine whose commands can't have a namespace of their own;
+  services your login runs, and git's own files in the repositories they write (a Linux machine
+  whose commands can't have a namespace of their own;
   `needs`: `"user namespaces"`, or `"util-linux"` without `unshare`). A client says so beside it.
   When it isn't on, also `reason`, a word for a client to map rather than reading `why`, with what
   you can do (`action`) and the box's route that does it (`route`, where there is one):
@@ -5932,8 +5956,9 @@ an add.
 
 A repository's own settings (its `.git/config` and what that includes) never start a program when
 the box runs git there (bridge 0.9.183), since whatever could write in the folder (a download, a command the sandbox
-let out) could have named one. The fence keeps a sandboxed command from writing them on macOS (above);
-this holds on every box, for a repository written by anything.
+let out) could have named one. The fence keeps a sandboxed command from writing them on macOS, and on
+Linux where commands have a namespace of their own (above); this holds on every box, for a
+repository written by anything.
 
 - Every git the box runs in a repository gets `-c core.fsmonitor=false -c core.pager=cat -c
   log.showSignature=false`, and its diffs (`diff`, `log`, `show`, `stash show`) `--no-ext-diff`.
@@ -5958,6 +5983,13 @@ this holds on every box, for a repository written by anything.
   switched, removed with what wasn't committed in it, or brought back, a project cloned) gets only
   the first set: the repository's hooks, filters and sign-ins run as in your terminal, so husky,
   LFS and git-crypt work, and what's kept of a removed worktree is stored as your `git add` would.
+- Neither runs (but what only reads names and objects, which starts nothing) where the repository's
+  `commondir` leads git anywhere but where it should (#429): none, or the repository's own folder
+  (`.`, as the sandbox leaves it on Linux), or, in a linked worktree's own folder
+  (`.git/worktrees/<name>`), the repository it's one of. One leading elsewhere would have git read
+  another repository's settings and run its hooks; Changes then says so, as for a program it won't
+  run. (git is asked where the repository is, `rev-parse --absolute-git-dir`, and the file read only
+  as a small regular one.)
 - The engine's own git (its `vcs` routes and the session's diff) has fsmonitor off and no external
   diff by itself, and keeps its snapshots outside the repository; a filter or converter the repository
   names still runs in its status and diffs. Submodules' own settings aren't read: the

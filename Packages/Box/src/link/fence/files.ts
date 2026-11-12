@@ -8,7 +8,7 @@
 // now is used from the next command on, with no restart.
 
 import { MOST_FOLDERS } from "./allowed";
-import { HIDE } from "./landlock";
+import { HIDE, MAKE_GIT } from "./landlock";
 import { AGENT_FOLDERS } from "./seatbelt";
 
 /** Where the box keeps the sandbox's own files (profiles, the plugin's note, commands' temporary
@@ -85,9 +85,12 @@ export function launcherScript(places: FencePlaces): string {
         `[ -x "$runtime" ] || { echo "This command can't run in the sandbox here: the engine's runtime wasn't given." >&2; exit 126; }`,
         // In a namespace of its own, where your session's services aren't (fence/landlock.ts, HIDE):
         // the box names the `unshare` that gives it one, or `-` where it runs without, as it was set up.
+        // There, git's own files in the repositories it writes are kept as they are, once the
+        // launcher has given each what it lacks of them (`MAKE_GIT`, `KEEP_GIT`).
         `ns=$(cat "$F/namespace" 2>/dev/null)`,
+        MAKE_GIT,
         `set -- "$runtime" --config=/dev/null --no-env-file ${sh(places.runner)} "$F/policy.json" "$work" "$git" "$tmp" "$own" "$allowed" "$shell" "$@"`,
-        `case $ns in /*) set -- "$ns" -Urm /bin/sh -c ${sh(HIDE)} "$ns" "$(id -u)" "$(id -g)" "$(id -un 2>/dev/null)" "$F/ns" "$F/sockets" "$t_own" "$t_name" "$@" ;; -) ;; *) echo "This command can't run in the sandbox here: it isn't set up." >&2; exit 126 ;; esac`,
+        `case $ns in /*) git_made_all "$git" "$allowed"; set -- "$ns" -Urm /bin/sh -c ${sh(HIDE)} "$ns" "$(id -u)" "$(id -g)" "$(id -un 2>/dev/null)" "$F/ns" "$F/sockets" "$t_own" "$t_name" "$work" "$git" "$allowed" "$@" ;; -) ;; *) echo "This command can't run in the sandbox here: it isn't set up." >&2; exit 126 ;; esac`,
         `PATH=$user_path KUVO_FENCE_OWN="$own_list" KUVO_FENCE_READ="$read_list" KUVO_FENCE_MEMORY="$memory" KUVO_FENCE_BUN="$as_bun" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 exec "$@"`,
       ];
   return [
@@ -568,7 +571,8 @@ export function agentsNote(platform: "darwin" | "linux", tmuxFits = true): strin
     "- A conversation the user started in one of those folders (a project in Documents, `~/.config/nvim`) writes its own folder freely. A session you start can't be in what runs later" + (mac ? ", `~/Library`" : "") + " or a personal folder itself: ask the user to start it there.",
     "- A tool that moves a new copy over a file (`sed -i`, some installers) can't change one outside the folders it writes freely: make the copy in the project or `$TMPDIR`, then `cp` it over.",
     "- Docker's socket, SSH's shared connections and terminals' and editors' servers aren't reachable.",
-    ...(mac ? ["- It can't change git's hooks or config, or the settings opencode and the coding agents start with (`.opencode/`, `opencode.json`, `.claude/settings.json`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json` and the like, and their hooks' scripts), in any project, nor make, move or remove the folders that hold them (`.git`, `.claude`, `.codex`, `.cursor` and the like); writing other files in them is fine. If a task needs one changed, ask the user."] : []),
+    ...(mac ? ["- It can't change git's hooks or config, or the settings opencode and the coding agents start with (`.opencode/`, `opencode.json`, `.claude/settings.json`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json` and the like, and their hooks' scripts), in any project, nor make, move or remove the folders that hold them (`.git`, `.claude`, `.codex`, `.cursor` and the like); writing other files in them is fine. If a task needs one changed, ask the user."]
+      : ["- In this conversation's git repository it can't change git's hooks or settings (`git config` fails), where its common folder is (`.git/commondir`), its worktrees' links or its submodules' repositories; git commits, branches and fetches as ever. If a task needs one changed, ask the user."]),
     ...(mac
       ? [
           "",
