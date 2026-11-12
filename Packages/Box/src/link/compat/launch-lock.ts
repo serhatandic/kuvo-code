@@ -2,9 +2,10 @@
 // The engine's launch's lock as the box's own scripts take it (OpenCodeKit's `RemoteServer.launchLock`,
 // which says more): `run/.launching`, an empty folder, made by whoever takes it; beside it its holder
 // says who it is (`run/.launching.pid`, believed only if the folder isn't newer). One whose holder is
-// gone (a number nothing of Kuvo Code's runs as now, this process's own included) is taken away at
-// once, one at a time (`run/.launching.breaking`, with who's doing it in it); one whose holder runs,
-// or that says nothing (an older script's), is waited for until it's `stale`.
+// gone (a number that runs as none of the scripts that take it now, this process's own included) is
+// taken away at once, one at a time (`run/.launching.breaking`, with who's doing it in it; one whose
+// taker is gone taken over by one alone, `.launching.breaking.gone-<taker>`); one whose holder runs,
+// or that says nothing (an older script's), is waited for until it's `stale`. Never gone ahead without.
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -16,6 +17,12 @@ const LOCK = path.join(RUN, ".launching");
 const SAID = `${LOCK}.pid`;
 const BREAKING = `${LOCK}.breaking`;
 const TAKER = path.join(BREAKING, "pid");
+const GONE = `${BREAKING}.gone-`;
+// The scripts that take it, as `holding` there knows them.
+const SCRIPTS = /kuvo-start|kuvo-launch|kuvo_script|kuvo-link/;
+
+/** The launch's lock wasn't had in time: one holding it runs. */
+export class LaunchLockBusy extends Error {}
 
 const said = (file: string) => textOf(file)?.trim() ?? "";
 const changed = (file: string) => {
@@ -30,12 +37,12 @@ const olderThan = (file: string, ms: number) => {
   return at !== null && Date.now() - Number(at / 1_000_000n) > ms;
 };
 
-// Whether `pid` runs as one of Kuvo Code's (its command line says so), and isn't this one.
+// Whether `pid` runs as one of the scripts that take it (its command line says so), and isn't this one.
 function holding(pid: string): boolean {
   if (!/^\d+$/.test(pid) || Number(pid) === process.pid) return false;
   try {
-    if (fs.existsSync("/proc/self")) return fs.readFileSync(`/proc/${pid}/cmdline`, "latin1").includes("kuvo");
-    return spawnSync("ps", ["-ww", "-o", "command=", "-p", pid], { encoding: "utf8" }).stdout?.includes("kuvo") ?? false;
+    if (fs.existsSync("/proc/self")) return SCRIPTS.test(fs.readFileSync(`/proc/${pid}/cmdline`, "latin1"));
+    return SCRIPTS.test(spawnSync("ps", ["-ww", "-o", "command=", "-p", pid], { encoding: "utf8" }).stdout ?? "");
   } catch {
     return false;
   }
@@ -56,12 +63,27 @@ function unheld(stale: number) {
   try {
     const taker = said(TAKER);
     if ((taker && !holding(taker)) || (!taker && olderThan(BREAKING, 60_000))) {
+      // One alone takes over from a given taker that's gone (one that never said, by its folder).
+      let gone = taker;
+      if (!gone) try { gone = `n${fs.statSync(BREAKING).ino}`; } catch { gone = "n"; }
+      for (const name of fs.readdirSync(RUN)) {
+        const marker = path.join(RUN, name);
+        if (marker.startsWith(GONE) && olderThan(marker, 60_000)) try { fs.rmdirSync(marker); } catch {}
+      }
+      try {
+        fs.mkdirSync(`${GONE}${gone}`);
+      } catch {
+        return;
+      }
       const aside = `${BREAKING}.${process.pid}`;
       try {
         fs.renameSync(BREAKING, aside);
-        const was = said(path.join(aside, "pid"));
+        if (said(path.join(aside, "pid")) !== taker) {
+          // Another's: back where it was.
+          if (!fs.existsSync(BREAKING)) fs.renameSync(aside, BREAKING);
+          return;
+        }
         fs.rmSync(aside, { recursive: true, force: true });
-        if (was !== taker) return;
       } catch {}
     }
     try {
@@ -76,7 +98,10 @@ function unheld(stale: number) {
         const aside = `${SAID}.${process.pid}`;
         fs.renameSync(SAID, aside);
         if (said(aside) === holder) {
-          try { fs.rmdirSync(LOCK); } catch {}
+          // Only that holder's: one newer than what it said was taken since.
+          const lock = changed(LOCK);
+          const saying = changed(aside);
+          if (lock !== null && saying !== null && lock <= saying) try { fs.rmdirSync(LOCK); } catch {}
         } else {
           try { fs.linkSync(aside, SAID); } catch {}
         }
@@ -91,8 +116,8 @@ function unheld(stale: number) {
   } catch {}
 }
 
-// `work` done holding the launch's lock, saying so. One not had in `wait` ms goes ahead all the same:
-// by then one that was held all along is `stale`, and taken away.
+// `work` done holding the launch's lock, saying so. Not had in `wait` ms (past `stale`, so it's one taken
+// again and again, or whose holder took over five minutes): LaunchLockBusy, never without it.
 export function launchLocked<T>(work: () => T, { stale = 300_000, wait = 330_000 } = {}): T {
   fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
   const nap = new Int32Array(new SharedArrayBuffer(4));
@@ -106,6 +131,7 @@ export function launchLocked<T>(work: () => T, { stale = 300_000, wait = 330_000
       Atomics.wait(nap, 0, 0, 100);
     }
   }
+  if (!held) throw new LaunchLockBusy("Another start of the engine there is still under way, after five minutes: try again once it's done.");
   let saying = false;
   if (held) try { fs.writeFileSync(SAID, `${process.pid}\n`); saying = true; } catch {}
   try {

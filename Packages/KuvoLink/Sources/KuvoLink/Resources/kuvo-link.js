@@ -29904,6 +29904,11 @@ var LOCK14 = path103.join(RUN, ".launching");
 var SAID = `${LOCK14}.pid`;
 var BREAKING = `${LOCK14}.breaking`;
 var TAKER = path103.join(BREAKING, "pid");
+var GONE = `${BREAKING}.gone-`;
+var SCRIPTS = /kuvo-start|kuvo-launch|kuvo_script|kuvo-link/;
+
+class LaunchLockBusy extends Error {
+}
 var said3 = (file) => textOf(file)?.trim() ?? "";
 var changed2 = (file) => {
   try {
@@ -29921,8 +29926,8 @@ function holding(pid) {
     return false;
   try {
     if (fs98.existsSync("/proc/self"))
-      return fs98.readFileSync(`/proc/${pid}/cmdline`, "latin1").includes("kuvo");
-    return spawnSync8("ps", ["-ww", "-o", "command=", "-p", pid], { encoding: "utf8" }).stdout?.includes("kuvo") ?? false;
+      return SCRIPTS.test(fs98.readFileSync(`/proc/${pid}/cmdline`, "latin1"));
+    return SCRIPTS.test(spawnSync8("ps", ["-ww", "-o", "command=", "-p", pid], { encoding: "utf8" }).stdout ?? "");
   } catch {
     return false;
   }
@@ -29939,13 +29944,34 @@ function unheld(stale) {
   try {
     const taker = said3(TAKER);
     if (taker && !holding(taker) || !taker && olderThan(BREAKING, 60000)) {
+      let gone = taker;
+      if (!gone)
+        try {
+          gone = `n${fs98.statSync(BREAKING).ino}`;
+        } catch {
+          gone = "n";
+        }
+      for (const name of fs98.readdirSync(RUN)) {
+        const marker = path103.join(RUN, name);
+        if (marker.startsWith(GONE) && olderThan(marker, 60000))
+          try {
+            fs98.rmdirSync(marker);
+          } catch {}
+      }
+      try {
+        fs98.mkdirSync(`${GONE}${gone}`);
+      } catch {
+        return;
+      }
       const aside = `${BREAKING}.${process.pid}`;
       try {
         fs98.renameSync(BREAKING, aside);
-        const was = said3(path103.join(aside, "pid"));
-        fs98.rmSync(aside, { recursive: true, force: true });
-        if (was !== taker)
+        if (said3(path103.join(aside, "pid")) !== taker) {
+          if (!fs98.existsSync(BREAKING))
+            fs98.renameSync(aside, BREAKING);
           return;
+        }
+        fs98.rmSync(aside, { recursive: true, force: true });
       } catch {}
     }
     try {
@@ -29961,9 +29987,12 @@ function unheld(stale) {
         const aside = `${SAID}.${process.pid}`;
         fs98.renameSync(SAID, aside);
         if (said3(aside) === holder) {
-          try {
-            fs98.rmdirSync(LOCK14);
-          } catch {}
+          const lock = changed2(LOCK14);
+          const saying = changed2(aside);
+          if (lock !== null && saying !== null && lock <= saying)
+            try {
+              fs98.rmdirSync(LOCK14);
+            } catch {}
         } else {
           try {
             fs98.linkSync(aside, SAID);
@@ -29995,6 +30024,8 @@ function launchLocked(work, { stale = 300000, wait = 330000 } = {}) {
       Atomics.wait(nap, 0, 0, 100);
     }
   }
+  if (!held)
+    throw new LaunchLockBusy("Another start of the engine there is still under way, after five minutes: try again once it's done.");
   let saying = false;
   if (held)
     try {
@@ -37454,7 +37485,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "84da80cb4b1f";
+var BRIDGE_VERSION = "f1dfe1748902";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -42323,7 +42354,16 @@ async function box(command) {
       try {
         seed = JSON.parse(await input() || "null");
       } catch {}
-      const adopted = adoptBox(seed);
+      let adopted;
+      try {
+        adopted = adoptBox(seed);
+      } catch (error) {
+        if (!(error instanceof LaunchLockBusy))
+          throw error;
+        console.error(error.message);
+        process.exitCode = 1;
+        return;
+      }
       await upgradeIntegrations().catch(() => {});
       return say({ ...adopted, settings: readSettings().settings ?? adopted.settings });
     }
