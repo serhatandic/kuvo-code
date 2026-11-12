@@ -8,7 +8,7 @@ import { execFile, execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { askedArgs, ownArgsLater } from "../../shared/git";
+import { askedArgsLater, ownArgsLater } from "../../shared/git";
 import { parsed } from "../../shared/json";
 import type { GitChanges, GitChangesCount, PullRequestDraft } from "../../shared/routes/changes";
 import { IS_MAC, K } from "../home";
@@ -41,8 +41,8 @@ interface Ran {
  * hooks, a push), takes as long as it takes.
  */
 async function git(folder: string, given: string[], changing = false, more: Record<string, string> = {}, program = "git", timeout = 600_000): Promise<Ran> {
-  const args = program !== "git" ? given : changing ? askedArgs(given) : await ownArgsLater(given, folder);
-  if (!args) return { ok: false, out: Buffer.alloc(0), said: "This repository’s own settings name a program Kuvo Code won’t run for it." };
+  const args = program !== "git" ? given : changing ? await askedArgsLater(given, folder) : await ownArgsLater(given, folder);
+  if (!args) return { ok: false, out: Buffer.alloc(0), said: "This repository’s own settings name a program Kuvo Code won’t run for it, or lead git to another repository’s." };
   const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", ...(changing ? {} : { GIT_OPTIONAL_LOCKS: "0" }), ...more };
   if (!changing) {
     return new Promise(resolve => {

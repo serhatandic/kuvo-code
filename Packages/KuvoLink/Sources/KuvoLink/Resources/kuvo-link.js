@@ -4135,13 +4135,263 @@ function landlockPolicy(policy) {
   }) + `
 `;
 }
+var KEPT_CHECK = String.raw`function plain(p) { gsub(/\\040/, " ", p); gsub(/\\011/, "\t", p); gsub(/\\012/, "\n", p); gsub(/\\134/, "\\", p); return p }
+function bad(p) { print (p == "" ? "a mount" : p); exit 1 }
+function from(m, p,   q, way) {
+  q = under[m]
+  if (!(q in seen) || dev[q] != dev[m]) return 0
+  if (p == at[q]) way = ""; else if (at[q] == "/") way = p; else if (substr(p, 1, length(at[q]) + 1) == at[q] "/") way = substr(p, length(at[q]) + 1); else return 0
+  return root[m] == (root[q] == "/" ? (way == "" ? "/" : way) : root[q] way)
+}
+FILENAME == ARGV[1] { old[$1] = 1; next }
+FILENAME == ARGV[2] { want[++n] = $0; noted[substr($0, 4)] = 1; next }
+{ seen[$1] = 1; at[$1] = plain($5); root[$1] = plain($4); dev[$1] = $3; under[$1] = $2; how[$1] = $6; top[plain($5)] = $1; on[$2, plain($5)] = 1; ids[++k] = $1 }
+END {
+  if (!k) bad("")
+  for (i = 1; i <= k; i++) { m = ids[i]; if (!(m in old) && (!(at[m] in noted) || !from(m, at[m]))) bad(at[m]) }
+  for (i = 1; i <= n; i++) {
+    p = substr(want[i], 4); m = top[p]
+    if (m == "" || !from(m, p) || (substr(want[i], 1, 2) == "ro" && how[m] !~ /(^|,)ro(,|$)/)) bad(p)
+    for (a = p; (j = match(a, /\/[^\/]*$/)) > 1; ) { a = substr(a, 1, j - 1); if ((under[m], a) in on) bad(p) }
+  }
+}`;
+var KEEP_GIT = String.raw`# (Read-only in two steps, a bind and then its remount, which libmount makes with the flags a mount
+# from outside the namespace keeps locked, nosuid and nodev: in one, util-linux before 2.39 drops
+# them, and Linux refuses it. Where even that fails, the command doesn't run: its namespace stays.)
+# (Each mounted on itself never by a path a link swapped in meanwhile could lead elsewhere, which
+# mount would follow, mounting what it leads to anew: a folder from within it, as it is; a file by its
+# path. Each noted, and all checked once kept, below.)
+keep() {
+  [ ! -L "$1" ] || fail "$1 is a link, which it can't keep as it is. Ask the user."
+  [ -e "$1" ] || return 1
+  if [ -d "$1" ]; then ( cd -P "$1" 2>/dev/null && [ "$(pwd -P)" = "$1" ] && mount -c --bind . . 2>/dev/null )
+  else mount -c --bind "$1" "$1" 2>/dev/null; fi && printf 'rw %s\n' "$1" >>"$k_kept" || fail "$1 can't be kept from it."
+  [ "$2" != ro ] || ro "$1"
+}
+# (Its remount by its path, which libmount finds in the mount table to keep its locked flags: by
+# ".", util-linux before 2.39 finds none, and Linux refuses it. One a link swapped in leads elsewhere
+# is found below.)
+ro() { [ ! -L "$1" ] && mount -c -o remount,bind,ro "$1" 2>/dev/null && printf 'ro %s\n' "$1" >>"$k_kept" || fail "$1 can't be kept from it."; }
+# (One that was there and isn't as it's kept, one a command still running moved away for a moment,
+# runs nothing.)
+must() { keep "$@" || fail "$1 changed as it started. Run it again, or ask the user."; }
+# (Each submodule's work tree's .git file, which its kept settings name: read-only.)
+tree_file() {
+  local t
+  t=$(sed -n 's/^[[:space:]]*worktree[[:space:]]*=[[:space:]]*//p' "$1/config" 2>/dev/null | head -n 1)
+  [ -n "$t" ] || return 0
+  t=$(cd "$1" 2>/dev/null && cd -P "$t" 2>/dev/null && pwd -P) && [ -f "$t/.git" ] && [ ! -L "$t/.git" ] || return 0
+  must "$t/.git" ro
+}
+# Where a commondir leads, as git reads it: one line, with no NUL or carriage return (which the shell
+# and git would read differently), from its folder. (A worktree's own as git writes it, first: one
+# compare.)
+leads() {
+  [ -f "$1/$2" ] || return 0
+  if [ "$1" != "$3" ] && cmp -s "$1/$2" "$k_plain"; then (cd "$1/../.." 2>/dev/null && pwd -P); return 0; fi
+  [ "$(wc -c <"$1/$2")" -le 4096 ] && [ "$(tr -d '\000\r' <"$1/$2" | wc -c)" -eq "$(wc -c <"$1/$2")" ] && [ "$(wc -l <"$1/$2")" -le 1 ] && (cd "$1" 2>/dev/null && cd -P "$(head -c 4096 "$2")" 2>/dev/null && pwd -P)
+}
+# (A real folder's path as it is, no link on the way: what's compared with git's.)
+as_is() { [ -d "$1" ] && [ ! -L "$1" ] && [ "$(cd -P "$1" 2>/dev/null && pwd -P)" = "$1" ]; }
+# (Whether a folder has nothing in it.)
+empty() { for k_x in "$1"/* "$1"/.[!.]* "$1"/..?*; do [ -e "$k_x" ] || [ -L "$k_x" ] && return 1; done; return 0; }
+repo() {
+  local r e f k_lacks
+  r=$1
+  must "$r"
+  # (Each a link refuses: one a command could trade for its own, or that leads where commands are
+  # kept from. One that still lacks what the launcher gives it, or isn't there as it's kept: every
+  # check all the same, then its folder read-only but for what's kept on its own in it, which are
+  # checked as ever, so none of those can be made. A main repository's own gitdir git doesn't read.)
+  k_lacks=
+  for f in config config.worktree commondir hooks; do keep "$r/$f" ro || k_lacks=1; done
+  keep "$r/gitdir" ro || :
+  for f in modules worktrees; do [ -e "$r/$f" ] || [ -L "$r/$f" ] || k_lacks=1; done
+  [ ! -e "$r/commondir" ] || [ "$(leads "$r" commondir "$r")" = "$r" ] || fail "$r/commondir leads git to another repository. Ask the user."
+  if { [ -e "$r/worktrees" ] || [ -L "$r/worktrees" ]; } && keep "$r/worktrees"; then
+    # (One gone as it's kept is read-only within worktrees.)
+    for e in "$r/worktrees"/* "$r/worktrees"/.[!.]* "$r/worktrees"/..?*; do [ ! -L "$e" ] || keep "$e"; [ ! -d "$e" ] || keep "$e" || :; done
+    ro "$r/worktrees"
+    # (Another's, many at once: each its own few mounts, side by side.)
+    k_failed=$own/failed
+    for e in "$r/worktrees"/* "$r/worktrees"/.[!.]* "$r/worktrees"/..?*; do
+      [ -d "$e" ] || continue
+      case "$k_own
+" in *"
+$e
+"*) continue ;; esac
+      ( if [ ! -e "$e/config.worktree" ] || [ ! -e "$e/modules" ] || [ "$(leads "$e" commondir "$r")" != "$r" ]; then ro "$e"
+        else for f in commondir gitdir config.worktree modules; do keep "$e/$f" ro || { ro "$e"; break; }; done; fi ) </dev/null || : >"$k_failed" &
+    done
+    wait
+    [ ! -e "$k_failed" ] || exit 126
+    for e in "$r/worktrees"/* "$r/worktrees"/.[!.]* "$r/worktrees"/..?*; do
+      case "$k_own
+" in *"
+$e
+"*) [ -d "$e" ] || continue ;; *) continue ;; esac
+      [ -e "$e/config.worktree" ] && [ -e "$e/modules" ] || fail "$e lacks config.worktree or modules, which it can't keep from being made. Ask the user."
+      [ "$(leads "$e" commondir "$r")" = "$r" ] || fail "$e/commondir doesn't lead git back to its repository. Ask the user."
+      for f in commondir gitdir config.worktree; do must "$e/$f" ro; done
+      mods "$e/modules" || fail "$e/modules changed as it started. Run it again, or ask the user."
+    done
+  else k_lacks=1
+  fi
+  mods "$r/modules" || k_lacks=1
+  [ -z "$k_lacks" ] || ro "$r"
+}
+mods() {
+  local m k_found k_done h d k_in p
+  m=$1
+  [ -e "$m" ] || [ -L "$m" ] || return 1
+  if [ ! -L "$m" ] && [ -d "$m" ] && empty "$m"; then must "$m" ro; return 0; fi
+  must "$m"
+  [ -z "$(find "$m" \( -name objects -o -name refs -o -name logs -o -name lfs -o -name rr-cache -o -name hooks -o -name info \) -prune -o -name '*
+*' -print 2>/dev/null | head -c 1)" ] || fail "$m holds a name it can't keep. Ask the user."
+  k_found=$(find "$m" \( -name objects -o -name refs -o -name logs -o -name lfs -o -name rr-cache -o -name hooks -o -name info \) -prune -o -name HEAD -type f -print 2>/dev/null | awk -F / '{ print NF "\t" $0 }' | LC_ALL=C sort -n | cut -f 2-)
+  k_done=
+  while IFS= read -r h; do
+    [ -n "$h" ] || continue
+    d=$(dirname "$h") k_in=
+    while IFS= read -r p; do [ -n "$p" ] && case "$d/" in "$p"/modules/*|"$p"/worktrees/*) k_in=1 ;; esac; done <<EOF_DONE
+$k_done
+EOF_DONE
+    [ -z "$k_in" ] || continue
+    repo "$d" </dev/null
+    k_done="$k_done
+$d"
+    tree_file "$d"
+  done <<EOF_FOUND
+$k_found
+EOF_FOUND
+  ro "$m"
+}
+# The .git file that leads a folder to its repository (a worktree's), up from it: kept read-only once
+# the repositories are (one of them could cover it otherwise), still leading where it led, and the
+# worktree's own folder it names is the conversation's (k_own, one a line); or the .git folder found
+# instead (k_dirs).
+k_own= k_dirs= k_files= k_plain=$own/commondir k_kept=$own/k/kept
+# (What's kept, noted in a folder of its own with room for a repository's thousands; and the mounts
+# there were before, so each made since must be one of those.)
+mkdir "$own/k" && mount -c -t tmpfs -o size=16m,mode=0700 kuvo-kept "$own/k" 2>/dev/null && : >"$k_kept" && awk '{ print $1 }' /proc/self/mountinfo >"$own/k/before" || fail "it isn't set up."
+leads_to() { (cd "$1" 2>/dev/null && cd -P "$(sed -n 's/^gitdir: *//p' .git | head -n 1)" 2>/dev/null && pwd -P); }
+printf '../..\n' >"$k_plain" || fail "it isn't set up."
+gitfile() {
+  local at
+  at=$1
+  while [ -n "$at" ] && [ "$at" != / ]; do
+    if [ -e "$at/.git" ] || [ -L "$at/.git" ]; then
+      if [ -f "$at/.git" ] && [ ! -L "$at/.git" ]; then
+        k_to=$(leads_to "$at")
+        k_files="$k_files$at/.git
+$k_to
+"
+        k_own="$k_own
+$k_to"
+      elif as_is "$at/.git"; then k_dirs="$k_dirs
+$at/.git"
+      fi
+      return 0
+    fi
+    at=$(dirname "$at")
+  done
+}
+gitfile "$work"
+if [ -n "$allowed" ] && [ -f "$allowed" ]; then
+  while IFS= read -r k_at; do
+    case $k_at in /*) as_is "$k_at" || continue ;; *) continue ;; esac
+    if [ -f "$k_at/.git" ]; then gitfile "$k_at" </dev/null; elif as_is "$k_at/.git"; then k_dirs="$k_dirs
+$k_at/.git"; fi
+  done <"$allowed"
+fi
+k_done=
+while IFS= read -r k_at; do
+  case $k_at in /*) ;; *) continue ;; esac
+  case "$k_done
+" in *"
+$k_at
+"*) continue ;; esac
+  # (Each was found as it is: one that's changed since, by a command still running, runs nothing.)
+  as_is "$k_at" || fail "$k_at changed as it started. Ask the user."
+  repo "$k_at" </dev/null
+  k_done="$k_done
+$k_at"
+done <<EOF_REPOS
+$(case $git in /*.git) printf '%s\n' "$git" ;; esac)
+$k_dirs
+EOF_REPOS
+while IFS= read -r k_at && IFS= read -r k_to; do
+  [ -n "$k_at" ] || continue
+  must "$k_at" ro
+  [ "$(leads_to "$(dirname "$k_at")")" = "$k_to" ] || fail "$k_at changed as it started. Run it again, or ask the user."
+done <<EOF_FILES
+$k_files
+EOF_FILES
+# Each kept as noted, as the mount table has it now: the top mount at its path, of what's there in
+# what it's mounted on (its root there is that mount's own and the way to it, on the same device),
+# not covered by a folder mounted since above it, and read-only where it should be; and each mount made
+# since it started one of those, so a link swapped in can't have led one elsewhere.
+[ ! -s "$k_kept" ] || k_bad=$(awk '
+${KEPT_CHECK}' "$own/k/before" "$k_kept" /proc/self/mountinfo) || { [ -n "$k_bad" ] || k_bad="git's own files"; fail "$k_bad changed as it started. Run it again, or ask the user."; }
+`;
+var MAKE_GIT = String.raw`git_made() {
+  [ ! -e "$1" ] && [ ! -L "$1" ] || return 0
+  if [ "$2" = / ]; then mkdir "$1" 2>/dev/null || [ -d "$1" ]; return; fi
+  timeout 5 sh -c 'set -C; if [ -n "$0" ]; then printf "%s\n" "$0" >"$1"; else : >"$1"; fi' "$2" "$1" 2>/dev/null || [ -f "$1" ]
+}
+git_repo() {
+  [ -d "$1" ] && [ ! -L "$1" ] || return 0
+  k_note=$F/unkept/$(printf '%s' "$1" | cksum | cut -d ' ' -f 1)
+  if ( cd -P "$1" 2>/dev/null && [ "$(pwd -P)" = "$1" ] || exit 0
+    k_ok=0
+    for k_n in hooks modules worktrees; do git_made "$k_n" / || k_ok=1; done
+    git_made commondir ./ || k_ok=1
+    git_made config.worktree "" || k_ok=1
+    for k_e in worktrees/* worktrees/.[!.]* worktrees/..?*; do
+      [ -d "$k_e" ] && [ ! -L "$k_e" ] || continue
+      git_made "$k_e/config.worktree" "" || k_ok=1
+      git_made "$k_e/modules" / || k_ok=1
+    done
+    exit $k_ok ); then
+    rm -f "$k_note"
+  elif [ ! -e "$k_note" ]; then
+    (umask 077; mkdir -p "$F/unkept" && : >"$k_note") 2>/dev/null
+    echo "Note: git can't change its own files in $1 from Kuvo Code's sandbox here (the sandbox couldn't add a hooks folder or commondir there, so commands only read it)." >&2
+  fi
+}
+git_all() {
+  git_repo "$1"
+  [ -d "$1" ] && [ ! -L "$1" ] || return 0
+  find "$1/modules" "$1/worktrees" \( -name objects -o -name refs -o -name logs -o -name lfs -o -name rr-cache -o -name hooks -o -name info \) -prune -o -path '*/modules/*' -name HEAD -type f -print 2>/dev/null | while IFS= read -r k_h; do git_repo "$(dirname "$k_h")"; done
+}
+# (The .git folder up from a folder, where it's one and not a link.)
+git_up() {
+  k_at=$1
+  while [ -n "$k_at" ] && [ "$k_at" != / ]; do
+    if [ -e "$k_at/.git" ] || [ -L "$k_at/.git" ]; then [ ! -d "$k_at/.git" ] || [ -L "$k_at/.git" ] || printf '%s\n' "$k_at/.git"; return 0; fi
+    k_at=$(dirname "$k_at")
+  done
+}
+git_made_all() {
+  k_seen=
+  for k_g in "$2" "$(git_up "$1")"; do
+    case $k_g in /*.git) ;; *) continue ;; esac
+    [ "$k_g" != "$k_seen" ] || continue
+    git_all "$k_g"; k_seen=$k_g
+  done
+  [ -f "$3" ] || return 0
+  while IFS= read -r k_a; do case $k_a in /*) [ "$k_a/.git" != "$2" ] && [ "$(cd -P "$k_a" 2>/dev/null && pwd -P)" = "$k_a" ] && git_all "$k_a/.git" ;; esac; done <"$3"
+}`;
 var HIDE = String.raw`u=$1 g=$2 n=$3 own=$4 sockets=$5 t_own=$6 t_name=$7; shift 7
+work=$1 git=$2 allowed=$3; shift 3
 p=$PATH; PATH=/usr/sbin:/usr/bin:/sbin:/bin
 fail() { echo "This command can't run in the sandbox here: $1" >&2; exit 126; }
 over() { ( cd -P "$1" 2>/dev/null || exit 1; [ -z "$3" ] || [ "$(pwd -P)" = "$1" ] || exit 1; [ "$3" != mine ] || [ -O . ] || exit 1; mount -c -t tmpfs -o "size=64k,mode=$2" kuvo-hidden . 2>/dev/null || exit 2 ) || { [ $? = 1 ] || fail "$1 can't be kept from it."; return 1; }; }
 off() { [ -S "$1" ] && { [ -z "$2" ] || [ ! -L "$1" ]; } || return 1; mount -c --bind /dev/null "$1" 2>/dev/null && [ -c "$1" ] && { [ -z "$2" ] || [ ! -L "$1" ]; } || fail "$1 can't be kept from it."; }
 [ -r "$sockets" ] || fail "it isn't set up."
 over "$own" 0700 || fail "it isn't set up."
+# (git's own files kept first, while nothing's hidden yet: no mount there can uncover what is.)
+${KEEP_GIT}
 while IFS= read -r s; do case $s in /*'*'*) for f in $s; do [ ! -S "$f" ] || off "$f"; done ;; /*) over "$s" 0700 || off "$s" ;; esac; done <"$sockets"
 over "/run/user/$u" 0700
 if [ -n "$t_own" ]; then
@@ -4151,6 +4401,9 @@ fi
 for d in "/tmp/tmux-$u" /tmp/ssh-* "/run/screen/S-$n" "/tmp/nvim.$n" "/tmp/emacs$u"; do over "$d" 0700 mine; done
 over /tmp/.X11-unix 1777 here
 for s in /tmp/vscode-ipc-*.sock /tmp/vscode-ssh-auth-*.sock /tmp/vscode-git-*.sock; do [ -O "$s" ] && off "$s" here; done
+# (Its folder again, by its name, so what it reaches by a relative path goes through the mounts made
+# since it was there, not round them.)
+k_here=$(pwd -P 2>/dev/null) && cd "$k_here" 2>/dev/null
 [ "$XDG_RUNTIME_DIR" != "/run/user/$u" ] || unset XDG_RUNTIME_DIR
 case $DBUS_SESSION_BUS_ADDRESS in *"=/run/user/$u/"*) unset DBUS_SESSION_BUS_ADDRESS ;; esac
 mkfifo -m 600 "$own/in" "$own/on" || fail "it isn't set up."
@@ -4188,8 +4441,14 @@ function ownNamespaceLater(own, unshare = UNSHARE.find((each) => fs19.existsSync
     });
   });
 }
+function readOnlyHere(unshare, at) {
+  const tried = spawnSync2(unshare, ["-Urm", "/bin/sh", "-c", `cd -P "$0" 2>/dev/null && mount -c --bind . . 2>/dev/null && mount -c -o remount,bind,ro "$0" 2>/dev/null`, at], { cwd: "/", stdio: "ignore", timeout: TRY_FOR });
+  if (didntFinish(tried))
+    return UNFINISHED;
+  return tried.status === 0;
+}
 var TRY_FOR = 1e4;
-var namespaceTry = (unshare, own) => ["-Urm", "/bin/sh", "-c", HIDE, unshare, String(process.getuid?.() ?? -1), String(process.getgid?.() ?? -1), "", own, "/dev/null", "", "", "/bin/sh", "-c", '[ "$(id -u)" = "$0" ]', String(process.getuid?.() ?? -1)];
+var namespaceTry = (unshare, own) => ["-Urm", "/bin/sh", "-c", HIDE, unshare, String(process.getuid?.() ?? -1), String(process.getgid?.() ?? -1), "", own, "/dev/null", "", "", "", "", "", "/bin/sh", "-c", '[ "$(id -u)" = "$0" ]', String(process.getuid?.() ?? -1)];
 var LANDLOCK_RUNNER = String.raw`// Kuvo Code writes this each time its box starts: changes here don't last.
 // Runs a command's shell in the sandbox (Landlock), as bin/kuvo-fence asks.
 import { dlopen, FFIType, ptr, read } from "bun:ffi";
@@ -4495,8 +4754,9 @@ function launcherScript(places) {
     `[ -n "$runtime" ] || runtime=$(cat "$F/runtime" 2>/dev/null)`,
     `[ -x "$runtime" ] || { echo "This command can't run in the sandbox here: the engine's runtime wasn't given." >&2; exit 126; }`,
     `ns=$(cat "$F/namespace" 2>/dev/null)`,
+    MAKE_GIT,
     `set -- "$runtime" --config=/dev/null --no-env-file ${sh(places.runner)} "$F/policy.json" "$work" "$git" "$tmp" "$own" "$allowed" "$shell" "$@"`,
-    `case $ns in /*) set -- "$ns" -Urm /bin/sh -c ${sh(HIDE)} "$ns" "$(id -u)" "$(id -g)" "$(id -un 2>/dev/null)" "$F/ns" "$F/sockets" "$t_own" "$t_name" "$@" ;; -) ;; *) echo "This command can't run in the sandbox here: it isn't set up." >&2; exit 126 ;; esac`,
+    `case $ns in /*) git_made_all "$work" "$git" "$allowed"; set -- "$ns" -Urm /bin/sh -c ${sh(HIDE)} "$ns" "$(id -u)" "$(id -g)" "$(id -un 2>/dev/null)" "$F/ns" "$F/sockets" "$t_own" "$t_name" "$work" "$git" "$allowed" "$@" ;; -) ;; *) echo "This command can't run in the sandbox here: it isn't set up." >&2; exit 126 ;; esac`,
     `PATH=$user_path KUVO_FENCE_OWN="$own_list" KUVO_FENCE_READ="$read_list" KUVO_FENCE_MEMORY="$memory" KUVO_FENCE_BUN="$as_bun" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 exec "$@"`
   ];
   return [
@@ -4907,7 +5167,7 @@ export default {
 }
 `;
 }
-function agentsNote(platform, tmuxFits = true) {
+function agentsNote(platform, tmuxFits = true, gitKept = false) {
   const mac = platform === "darwin";
   return [
     "# Commands run in a sandbox here",
@@ -4922,7 +5182,7 @@ function agentsNote(platform, tmuxFits = true) {
     "- A conversation the user started in one of those folders (a project in Documents, `~/.config/nvim`) writes its own folder freely. A session you start can't be in what runs later" + (mac ? ", `~/Library`" : "") + " or a personal folder itself: ask the user to start it there.",
     "- A tool that moves a new copy over a file (`sed -i`, some installers) can't change one outside the folders it writes freely: make the copy in the project or `$TMPDIR`, then `cp` it over.",
     "- Docker's socket, SSH's shared connections and terminals' and editors' servers aren't reachable.",
-    ...mac ? ["- It can't change git's hooks or config, or the settings opencode and the coding agents start with (`.opencode/`, `opencode.json`, `.claude/settings.json`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json` and the like, and their hooks' scripts), in any project, nor make, move or remove the folders that hold them (`.git`, `.claude`, `.codex`, `.cursor` and the like); writing other files in them is fine. If a task needs one changed, ask the user."] : [],
+    ...mac ? ["- It can't change git's hooks or config, or the settings opencode and the coding agents start with (`.opencode/`, `opencode.json`, `.claude/settings.json`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json` and the like, and their hooks' scripts), in any project, nor make, move or remove the folders that hold them (`.git`, `.claude`, `.codex`, `.cursor` and the like); writing other files in them is fine. If a task needs one changed, ask the user."] : gitKept ? ["- In this conversation's git repository it can't change git's hooks or settings, where its common folder is, its worktrees' links or its submodules' repositories: `git config`, `git worktree add`, `git submodule update --init` and `git sparse-checkout` fail, and `git checkout -b x origin/x` makes the branch without its upstream; git commits, branches and fetches as ever. If a task needs one of those, ask the user."] : [],
     ...mac ? [
       "",
       "On this Mac:",
@@ -4989,7 +5249,8 @@ function fenceState() {
     return { ...base, ...now };
   if (checked.unfinished || fs21.existsSync(HELD))
     return { ...base, on: false, ...cannot({ able: true, passed: false, reason: "checking", why: PENDING_WHY }) };
-  return { ...base, ...now, ...withoutNamespace ? { gaps: ["services"], needs: withoutNamespace } : {} };
+  const gaps = [...withoutNamespace ? ["services"] : [], ...namespace && !readOnly ? ["git"] : []];
+  return { ...base, ...now, ...gaps.length ? { gaps } : {}, ...withoutNamespace ? { needs: withoutNamespace } : {} };
 }
 var PENDING_WHY = "Its check didn't finish in time (this computer may be busy), so it's checked again in a minute. Until then commands still run in it, and Auto asks first.";
 function fenceWhole() {
@@ -5159,6 +5420,8 @@ var namespace = null;
 var namespaceKnown = false;
 var namespaceUnfinished = false;
 var withoutNamespace = null;
+var readOnly = true;
+var readOnlyFor = null;
 var kept = null;
 var inUse = () => kept ?? namespace;
 var namespaceHere = () => {
@@ -5180,6 +5443,12 @@ function able(found) {
   else if (!namespaceKnown)
     namespace = UNSHARE.find((each) => fs21.existsSync(each)) ?? null;
   withoutNamespace = namespace ? null : UNSHARE.some((each) => fs21.existsSync(each)) ? "user namespaces" : "util-linux";
+  if (namespace && !namespaceUnfinished && readOnlyFor !== namespace) {
+    fs21.mkdirSync(NAMESPACE_FOLDER, { recursive: true, mode: 448 });
+    const found = readOnlyHere(namespace, NAMESPACE_FOLDER);
+    if (found !== UNFINISHED)
+      [readOnly, readOnlyFor] = [found, namespace];
+  }
   if (withoutNamespace && WITHOUT_NAMESPACE === "off") {
     const services = "which the sandbox needs to keep commands from the services your login runs: systemd, your keyring, your agents";
     return withoutNamespace === "user namespaces" ? { able: false, passed: false, why: `This machine doesn't let commands have a namespace of their own (it restricts unprivileged user namespaces, as Ubuntu 24.04 and later do), ${services}.`, reason: "namespaces", needs: withoutNamespace } : { able: false, passed: false, why: `This machine has no unshare (util-linux's), ${services}.`, reason: "namespaces", needs: withoutNamespace };
@@ -5247,7 +5516,7 @@ function probe() {
   }
 }
 function tellAgents(on = fenceState().on || fencePending() && loaded().on) {
-  const note = on ? agentsNote(platform, fitsTmux(appTemporary() ?? TEMPORARY)) : "";
+  const note = on ? agentsNote(platform, fitsTmux(appTemporary() ?? TEMPORARY), platform === "linux" && namespaceKnown && !withoutNamespace) : "";
   if (textOf(SANDBOX_NOTE) !== note)
     writePrivate(SANDBOX_NOTE, note);
 }
@@ -6776,8 +7045,8 @@ import path31 from "node:path";
 
 // Packages/Box/src/shared/git.ts
 import { execFile as execFile3, spawnSync as spawnSync4 } from "node:child_process";
-import { accessSync, constants, realpathSync } from "node:fs";
-import { basename, join } from "node:path";
+import { accessSync, closeSync, constants, fstatSync, lstatSync, openSync, promises as fsp, readSync, realpathSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 var EVERY = ["-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "log.showSignature=false"];
 var OWN = [...EVERY, "-c", "safe.bareRepository=explicit", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", "-c", "tag.gpgSign=false", "-c", "credential.helper="];
 var GIT_QUIET = { GIT_TERMINAL_PROMPT: "0" };
@@ -6899,10 +7168,107 @@ function built(lead, rest, found) {
   return shown && [...lead, ...OWN, ...found.settings, ...shown];
 }
 var NOTHING2 = { settings: [], converters: false };
+var MOST_NAMED = 4096;
+var O_NONBLOCK = constants.O_NONBLOCK ?? 0;
+var O_NOFOLLOW = constants.O_NOFOLLOW ?? 0;
+var places2 = (folder, named) => [folder, resolve(folder, named.replace(/[\r\n]+$/, "")), dirname(dirname(folder))];
+function leadsHome(folder, [own, common, above]) {
+  if (!own || !common)
+    return false;
+  return common === own || basename(dirname(own)) === "worktrees" && dirname(dirname(own)) === dirname(dirname(folder)) && above === common;
+}
+var realOrNull = (where) => {
+  try {
+    return realpathSync(where);
+  } catch {
+    return null;
+  }
+};
+function readNamed(file) {
+  let fd;
+  try {
+    fd = openSync(file, constants.O_RDONLY | O_NONBLOCK | O_NOFOLLOW);
+  } catch (error) {
+    return error.code === "ENOENT" ? null : undefined;
+  }
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > MOST_NAMED)
+      return;
+    const buffer = Buffer.alloc(MOST_NAMED);
+    return buffer.subarray(0, readSync(fd, buffer, 0, MOST_NAMED, 0)).toString("utf8");
+  } catch {
+    return;
+  } finally {
+    closeSync(fd);
+  }
+}
+async function readNamedLater(file) {
+  let handle;
+  try {
+    handle = await fsp.open(file, constants.O_RDONLY | O_NONBLOCK | O_NOFOLLOW);
+  } catch (error) {
+    return error.code === "ENOENT" ? null : undefined;
+  }
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size > MOST_NAMED)
+      return;
+    const buffer = Buffer.alloc(MOST_NAMED);
+    const { bytesRead } = await handle.read(buffer, 0, MOST_NAMED, 0);
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } catch {
+    return;
+  } finally {
+    await handle.close();
+  }
+}
+var gitDirArgs = (lead) => [...lead, ...EVERY, "rev-parse", "--absolute-git-dir"];
+var MAKING = new Set(["clone", "init"]);
+var madeBare = (lead, folder) => !lead.some((each) => each === "--git-dir" || each.startsWith("--git-dir=")) && !process.env.GIT_DIR && exists(join(folder, ".git"));
+var exists = (where) => {
+  try {
+    lstatSync(where);
+    return true;
+  } catch {
+    return false;
+  }
+};
+function strayCommon(lead, rest, cwd) {
+  if (MAKING.has(rest[0] ?? ""))
+    return false;
+  const ran = spawnSync4("git", gitDirArgs(lead), { cwd, encoding: "utf8", env: { ...process.env, ...GIT_QUIET }, timeout: 30000 });
+  const folder = ran.status === 0 ? String(ran.stdout ?? "").trim() : "";
+  if (!folder)
+    return false;
+  if (madeBare(lead, folder))
+    return true;
+  const named = readNamed(join(folder, "commondir"));
+  if (named === null)
+    return false;
+  return named === undefined || !leadsHome(folder, places2(folder, named).map(realOrNull));
+}
+async function strayCommonLater(lead, rest, cwd) {
+  if (MAKING.has(rest[0] ?? ""))
+    return false;
+  const folder = await new Promise((done) => execFile3("git", gitDirArgs(lead), { cwd, encoding: "utf8", env: { ...process.env, ...GIT_QUIET }, timeout: 30000 }, (error, out) => done(error ? "" : String(out ?? "").trim())));
+  if (!folder)
+    return false;
+  if (madeBare(lead, folder))
+    return true;
+  const named = await readNamedLater(join(folder, "commondir"));
+  if (named === null)
+    return false;
+  if (named === undefined)
+    return true;
+  return !leadsHome(folder, await Promise.all(places2(folder, named).map((where) => fsp.realpath(where).catch(() => null))));
+}
 function ownArgs(args, cwd) {
   const { lead, rest } = split(args);
   let found = NOTHING2;
   if (!plain(rest)) {
+    if (strayCommon(lead, rest, cwd))
+      return;
     for (const scoped of [true, false]) {
       const ran = spawnSync4("git", reading(lead, scoped), { cwd, encoding: "utf8", env: { ...process.env, ...GIT_QUIET }, timeout: 30000 });
       found = answer(ran.error?.code ?? ran.status, String(ran.stdout ?? ""), scoped);
@@ -6916,6 +7282,8 @@ async function ownArgsLater(args, cwd) {
   const { lead, rest } = split(args);
   let found = NOTHING2;
   if (!plain(rest)) {
+    if (await strayCommonLater(lead, rest, cwd))
+      return;
     for (const scoped of [true, false]) {
       found = await new Promise((resolve) => execFile3("git", reading(lead, scoped), { cwd, encoding: "utf8", env: { ...process.env, ...GIT_QUIET }, timeout: 30000 }, (error, out) => resolve(answer(error ? error.code ?? 128 : 0, String(out ?? ""), scoped))));
       if (found !== "retry")
@@ -6924,8 +7292,16 @@ async function ownArgsLater(args, cwd) {
   }
   return built(lead, rest, found);
 }
-function askedArgs(args) {
+function askedArgs(args, cwd) {
   const { lead, rest } = split(args);
+  if (strayCommon(lead, rest, cwd))
+    return;
+  return [...lead, ...EVERY, ...withOptions(rest, false) ?? rest];
+}
+async function askedArgsLater(args, cwd) {
+  const { lead, rest } = split(args);
+  if (await strayCommonLater(lead, rest, cwd))
+    return;
   return [...lead, ...EVERY, ...withOptions(rest, false) ?? rest];
 }
 
@@ -6954,7 +7330,7 @@ function firstCommit(folder) {
   return commit !== null && gitIn(folder, ["update-ref", "-m", "commit (initial): Initial commit", "HEAD", commit, ""]) !== null || has();
 }
 function gitAsked(folder, args, env = {}) {
-  return ranIn(folder, askedArgs(args), env);
+  return ranIn(folder, askedArgs(args, folder), env);
 }
 async function gitLater(folder, args) {
   const own = await ownArgsLater(args, folder);
@@ -7133,7 +7509,10 @@ function cloneInto(address, folder) {
   return new Promise((resolve) => {
     const ownSSH = Boolean(process.env.GIT_SSH_COMMAND || process.env.GIT_SSH) || gitIn(path31.dirname(folder), ["config", "--get", "core.sshCommand"]) !== null;
     const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", ...ownSSH ? {} : { GIT_SSH_COMMAND: "ssh -o BatchMode=yes" } };
-    execFile5("git", askedArgs(["clone", "--quiet", "--", address, folder]), { encoding: "utf8", env, timeout: 600000 }, (error, _stdout, stderr) => {
+    const args = askedArgs(["clone", "--quiet", "--", address, folder]);
+    if (!args)
+      return resolve("Kuvo Code won’t run git there.");
+    execFile5("git", args, { encoding: "utf8", env, timeout: 600000 }, (error, _stdout, stderr) => {
       resolve(error ? String(stderr ?? "").trim().split(`
 `).pop() || String(error.message) : null);
     });
@@ -14369,12 +14748,12 @@ import path62 from "node:path";
 // Packages/Box/src/link/work/project-trees.ts
 import fs59 from "node:fs";
 import path61 from "node:path";
-var fsp = fs59.promises;
+var fsp2 = fs59.promises;
 var MOST_READ = 4096;
 async function real(where) {
   await askedAbout([where]);
   try {
-    return await fsp.realpath(where);
+    return await fsp2.realpath(where);
   } catch {
     return null;
   }
@@ -14392,7 +14771,7 @@ async function realishLater(where) {
 async function smallFile(file) {
   let handle;
   try {
-    handle = await fsp.open(file, fs59.constants.O_RDONLY | fs59.constants.O_NONBLOCK | fs59.constants.O_NOFOLLOW);
+    handle = await fsp2.open(file, fs59.constants.O_RDONLY | fs59.constants.O_NONBLOCK | fs59.constants.O_NOFOLLOW);
     const kind = await handle.stat();
     if (!kind.isFile() || kind.size > MOST_READ)
       return null;
@@ -14407,9 +14786,9 @@ async function smallFile(file) {
 }
 async function isRepository(git) {
   try {
-    if ((await fsp.lstat(git)).isSymbolicLink() || !(await fsp.lstat(path61.join(git, "HEAD"))).isFile())
+    if ((await fsp2.lstat(git)).isSymbolicLink() || !(await fsp2.lstat(path61.join(git, "HEAD"))).isFile())
       return false;
-    return (await fsp.stat(path61.join(git, "objects"))).isDirectory() && (await fsp.stat(path61.join(git, "refs"))).isDirectory();
+    return (await fsp2.stat(path61.join(git, "objects"))).isDirectory() && (await fsp2.stat(path61.join(git, "refs"))).isDirectory();
   } catch {
     return false;
   }
@@ -14423,7 +14802,7 @@ async function repositoryOf(folder) {
     const git = path61.join(at, ".git");
     let kind;
     try {
-      kind = await fsp.lstat(git);
+      kind = await fsp2.lstat(git);
     } catch {}
     if (kind?.isDirectory())
       return await isRepository(git) ? { top: at, main: at } : null;
@@ -14450,7 +14829,7 @@ async function linkedWorktrees(main) {
     return [];
   let names = [];
   try {
-    names = await fsp.readdir(trees);
+    names = await fsp2.readdir(trees);
   } catch {
     return [];
   }
@@ -14458,7 +14837,7 @@ async function linkedWorktrees(main) {
   for (const name of names) {
     const own = path61.join(trees, name);
     try {
-      if (!(await fsp.lstat(own)).isDirectory() || await real(own) !== own)
+      if (!(await fsp2.lstat(own)).isDirectory() || await real(own) !== own)
         continue;
       const gitdir = (await smallFile(path61.join(own, "gitdir")))?.trim();
       if (!gitdir)
@@ -15067,7 +15446,10 @@ async function restoreTree(folder, engine, signal, bridge) {
   return { status: 200, value: record };
 }
 function spawnGit(folder, args) {
-  const ran = spawnSync7("git", askedArgs(args), { cwd: folder, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, timeout: 60000 });
+  const asked = askedArgs(args, folder);
+  if (!asked)
+    return "This repository’s commondir leads git to another repository’s settings, so Kuvo Code won’t run git there.";
+  const ran = spawnSync7("git", asked, { cwd: folder, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, timeout: 60000 });
   return ran.status === 0 ? null : String(ran.stderr || ran.stdout || "").trim().replace(/^fatal: /, "");
 }
 var sweeping = null;
@@ -32841,9 +33223,9 @@ var AUTHOR = ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_
 var SCOPES = ["uncommitted", "unstaged", "staged", "branch"];
 var STATUSES = ["added", "deleted", "modified", "renamed"];
 async function git2(folder, given, changing = false, more = {}, program = "git", timeout = 600000) {
-  const args = program !== "git" ? given : changing ? askedArgs(given) : await ownArgsLater(given, folder);
+  const args = program !== "git" ? given : changing ? await askedArgsLater(given, folder) : await ownArgsLater(given, folder);
   if (!args)
-    return { ok: false, out: Buffer.alloc(0), said: "This repository’s own settings name a program Kuvo Code won’t run for it." };
+    return { ok: false, out: Buffer.alloc(0), said: "This repository’s own settings name a program Kuvo Code won’t run for it, or lead git to another repository’s." };
   const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", ...changing ? {} : { GIT_OPTIONAL_LOCKS: "0" }, ...more };
   if (!changing) {
     return new Promise((resolve) => {
@@ -38590,7 +38972,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "4d2882edac7f";
+var BRIDGE_VERSION = "4a95dbb32e04";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

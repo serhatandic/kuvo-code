@@ -30,6 +30,7 @@ import { dropCarriedSignIns, dropOwnPrograms, machineHome, onMachine, takeOwnFol
 import { Snapshots } from "./snapshots"
 import { Roster } from "./roster"
 import { cancelSignIns, handler, signInsWaiting } from "./server"
+import { updatesUnderWay } from "./updates"
 import { launchLets, Renewal } from "./renewal"
 import { keeperEngine } from "../shared/engines"
 import { writeSecret } from "../shared/files"
@@ -408,7 +409,8 @@ renewal =
         build,
         work: () => {
           const here = sessions.work()
-          const turns = here.turns || answering > 0 || (groups?.runner.busy() ?? false)
+          // (An agent's program updating is cut by nothing: an installer stopped halfway can leave it broken.)
+          const turns = here.turns || answering > 0 || (groups?.runner.busy() ?? false) || updatesUnderWay()
           const other = here.other || goals.busy() || sideQuestions.busy() || reviews.busy() || handoffs.busy() || signInsWaiting()
           return { turns, other }
         },

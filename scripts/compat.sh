@@ -19,7 +19,7 @@ esac
 
 # The same files the test reads: the code as written (a bundle leaves comments out), new files too.
 git grep --untracked -n -I -E 'COMPAT\((0\.7|beta\.1) [a-z0-9-]+\)' -- \
-  'KuvoCode' 'Packages/Box/src' 'Packages/OpenCodeKit/Sources' 'Packages/KuvoLink/Sources' 'scripts' \
+  'KuvoCode' 'Packages/Box/src' 'Packages/OpenCodeKit/Sources' 'Packages/KuvoClient/Sources' 'Packages/KuvoLink/Sources' 'scripts' \
   ':(exclude)KuvoCode/Resources/kuvo-agents.js' ':(exclude)scripts/compat.sh' |
   grep -E '^[^:]+\.(swift|ts|js|mjs|sh|py):' |
   awk -v want="$want" '
