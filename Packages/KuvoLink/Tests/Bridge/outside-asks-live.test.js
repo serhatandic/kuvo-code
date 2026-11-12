@@ -170,16 +170,21 @@ for (const mac of [false, true]) {
     const engine = await engineOf(box);
     assert.equal(fs.existsSync(path.join(box.config, "opencode", "plugins", "kuvo-defaults.js")), false, "the box hasn't written its plugin yet");
     for (const agent of AGENTS) assert.equal(await engine.effect(agent, path.join(box.home, ".ssh")), "allow", `without the plugin, ${agent} doesn't ask`);
-    const reloaded = engine.changed("plugin.updated");
+    let reloaded = engine.changed("agent.updated");
     reloaded.catch(() => {});
     // (With its sandbox off, so its plugin is the only one that changes: after an update the
     // sandbox's is there already.)
     await startBox(box, { KUVO_SANDBOX: "off" });
     // The engine sees its plugins folder change and sets up its plugins and agents again, for the
-    // folders it has open (its agents first).
-    await reloaded;
-    // (Its plugins set up again, as its providers wait for.)
-    await engine.api("GET", "api/provider");
+    // folders it has open, and says its agents changed: once with the plugin's rules in them (the
+    // box may change its settings too, each read again on its own).
+    const plugged = agent => agent.permissions?.some(rule => rule.action === "external_directory" && rule.resource === "*" && rule.effect === "ask");
+    for (;;) {
+      await reloaded;
+      reloaded = engine.changed("agent.updated");
+      reloaded.catch(() => {});
+      if ((await engine.api("GET", "api/agent")).data.filter(each => AGENTS.includes(each.id)).every(plugged)) break;
+    }
     for (const agent of AGENTS) {
       assert.equal(await engine.effect(agent, path.join(box.home, ".ssh")), "ask", `${agent} asks before reading your SSH keys`);
       assert.equal(await engine.effect(agent, path.join(box.home, "shared")), "allow", `${agent}: your allow wins`);
