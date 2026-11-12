@@ -1728,3 +1728,62 @@ test("Check Now runs a watch's check in the sandbox, and none whose folder is go
     await running.stop().catch(() => {});
   }
 });
+
+// A busy computer (a Mac mini running the box's whole suite) can keep the sandbox's check from
+// finishing in time: that says nothing of whether the sandbox works, so it's never taken for a
+// failed check, which would leave commands outside it.
+test("a check that doesn't finish in time leaves nothing outside the sandbox, and nothing counts on it until a check passes", async () => {
+  const box = boxAt("slow-check");
+  const project = path.join(root, "slow-check-project");
+  fs.mkdirSync(project);
+  // A file of yours, which a watch's check may never delete, and one of Kuvo Code's own, which a
+  // command may never read.
+  const outside = path.join(root, "slow-check-yours");
+  fs.writeFileSync(outside, "yours\n");
+  const own = path.join(box.home, "run", "engine.json");
+  // What holds the check up, as a busy computer would: a FIFO no one writes. A plain file lets it go.
+  const hold = path.join(root, "slow-check-hold");
+  const holdUp = () => { fs.rmSync(hold, { force: true }); assert.equal(spawnSync("mkfifo", [hold]).status, 0); };
+  const letGo = () => { fs.rmSync(hold, { force: true }); fs.writeFileSync(hold, ""); };
+  const wake = path.join(box.home, "bin", "kuvo-wake");
+  const wakes = path.join(box.wakes, "ses_slow");
+  // Everything that runs commands, while the check hasn't finished: still in the sandbox.
+  const allInIt = async () => {
+    const state = (await running.ask("GET", "kuvo/sandbox")).value;
+    assert.deepEqual([state.on, state.reason, state.check], [false, "checking", undefined], `not a failed check: ${state.why}`);
+    const ran = await engineRuns(box, project, `cat ${JSON.stringify(own)}`, "ses_slow");
+    assert.notEqual(ran.status, 0, `a command ran outside the sandbox: ${ran.out}`);
+    const [letters] = fs.readdirSync(path.join(wakes, "watches"));
+    const tried = byHand(box, wakes, "try", letters);
+    assert.equal(fs.existsSync(outside), true, `a watch's check ran outside the sandbox: ${tried.stdout}${tried.stderr}`);
+    // And nothing counts on it: Auto asks first meanwhile.
+    assert.equal((await running.ask("GET", "kuvo/approval")).value.auto.engine.held?.reason, "sandbox");
+  };
+  const checkedAgain = async () => {
+    letGo();
+    const state = (await running.ask("POST", "kuvo/sandbox/check")).value;
+    assert.equal(state.on, true, state.why);
+    assert.equal((await running.ask("GET", "kuvo/approval")).value.auto.engine.held, undefined);
+  };
+  holdUp();
+  const running = await start(box, { KUVO_TEST_SANDBOX_CHECK_HOLD: hold, KUVO_TEST_SANDBOX_CHECK_LIMIT: "300" });
+  try {
+    // Its first check, as the box starts, doesn't finish (the box has decided once it's over).
+    assert.equal(decidedBy(box), running.pid);
+    // An agent's command adds a watch whose check deletes outside its conversation's folder.
+    const added = await engineRuns(box, project, `${wake} watch 1d 'rm -f ${outside}; echo seen' 'The build'`, "ses_slow");
+    assert.equal(added.status, 0, added.out);
+    await fire(box);
+    await changeIn(box.wakes, () => !fs.existsSync(path.join(box.wakes, ".watching")));
+    await allInIt();
+    await checkedAgain();
+    // On, then checked again as a busy computer's box is, and that check doesn't finish either.
+    holdUp();
+    await running.ask("POST", "kuvo/sandbox/check");
+    await allInIt();
+    await checkedAgain();
+  } finally {
+    await running.stop();
+    fs.rmSync(hold, { force: true });
+  }
+});

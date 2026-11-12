@@ -15,7 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import { listOf, textOf, writePrivate } from "../files";
 import { processRuns, sandboxGeneration } from "../../shared/platform";
-import { accountHome, BOTS, BRIDGE_FILE, CHATS, ENGINE_CONFIG, ENGINE_DATA, ENGINE_FILE, K, RUN, SANDBOX_NOTE, SESSION_WAKES, SOCKET_KEY_FILE, SSH_AGENTS, SSH_FOR } from "../home";
+import { accountHome, BOTS, BRIDGE_FILE, CHATS, ENGINE_CONFIG, ENGINE_DATA, ENGINE_FILE, IN_TEST_FOLDER, K, RUN, SANDBOX_NOTE, SESSION_WAKES, SOCKET_KEY_FILE, SSH_AGENTS, SSH_FOR } from "../home";
 import { tellLauncher } from "./allowed";
 import { agentShellScript, agentsNote, launcherScript, pluginScript, type FencePlaces } from "./files";
 import { LANDLOCK_RUNNER, landlockPolicy, ownNamespace, ownNamespaceLater, UNSHARE } from "./landlock";
@@ -77,6 +77,12 @@ const READY = path.join(FOLDER, "ready");
 // That this box, as it runs now, has set it up or found it can't run here (its pid): the agents
 // bridge waits for it before it starts any coding agent.
 const DECIDED = path.join(FOLDER, "decided");
+// That its check didn't finish in time (a busy computer), so whether it works here isn't known yet:
+// commands still go through it, as the engine's plugin, the agents bridge and kuvo-wake send them
+// (`on` and `ready` stay), and nothing counts on it until a check passes (`engineCommandsInSandbox`,
+// `agentsCommandsInSandbox`): Auto asks first, bots allow no command, the vault stays shut. A slow
+// check never leaves commands outside it.
+const CHECKING = path.join(FOLDER, "checking");
 const platform: "darwin" | "linux" = process.platform === "darwin" ? "darwin" : "linux";
 
 const places: FencePlaces = {
@@ -103,7 +109,8 @@ export function fenceWanted(): boolean {
   return process.env.KUVO_SANDBOX !== "off";
 }
 
-type Checked = { able: boolean; passed: boolean; why?: string; reason?: FenceReason; needs?: string; check?: FenceCheck };
+/** `unfinished`: the check didn't finish in time, which says nothing of whether it works here. */
+type Checked = { able: boolean; passed: boolean; unfinished?: boolean; why?: string; reason?: FenceReason; needs?: string; check?: FenceCheck };
 let checked: Checked = { able: false, passed: false, why: "It hasn't been checked yet.", reason: "checking" };
 let failures = 0;
 let lastProfiles = "";
@@ -149,16 +156,20 @@ function loaded(): Pick<FenceState, "on" | "why" | "reason" | "action" | "route"
 
 /** Whether the engine's commands run in the sandbox now, as any of the box's processes can tell
  * (only the one that set it up knows why not): set up and checked (`run/fence/on`, which goes as a
- * check fails), and loaded by the engine. */
+ * check fails, and no `checking` while one didn't finish), and loaded by the engine. */
 export function engineCommandsInSandbox(): boolean {
-  return fenceWanted() && fs.existsSync(ON) && loaded().on;
+  return fenceWanted() && fs.existsSync(ON) && !fs.existsSync(CHECKING) && loaded().on;
 }
+
+/** Whether its check didn't finish in time, so commands go through it but nothing counts on it. */
+export const fencePending = (): boolean => fenceWanted() && checked.unfinished === true;
 
 /** Whether the coding agents' own programs (Claude Code, Codex, Cursor, Grok, Antigravity, whose
  * commands don't go through the engine) run in it: each runs whole in it, as the bridge starts
- * it, while it's set up and checked (`run/fence/on`, which the bridge reads too). One begun before
- * finishes its turn as it started; the next starts it again in it. */
-export const agentsCommandsInSandbox = (): boolean => fenceWanted() && fs.existsSync(ON);
+ * it, while it's set up and checked (`run/fence/on`, which the bridge reads too; and no `checking`:
+ * while a check hasn't finished, the bridge still starts them in it, but nothing counts on it). One
+ * begun before finishes its turn as it started; the next starts it again in it. */
+export const agentsCommandsInSandbox = (): boolean => fenceWanted() && fs.existsSync(ON) && !fs.existsSync(CHECKING);
 
 /** What the agents bridge says of its agents' processes, for the sandbox as it is now: all inside
  * it, some started before it was on still running (`outside`), none running, or nothing yet (it
@@ -319,11 +330,18 @@ function able(found?: string | null): Checked {
   return { able: true, passed: false };
 }
 
+/** How long the check may take: it holds the box up while it runs. One that takes longer didn't
+ * finish (`UNFINISHED`), which isn't a failed one. */
+const CHECK_LIMIT = 20_000;
+/** What ends a check that didn't finish: its limit (ETIMEDOUT), or the system out of processes or
+ * memory to start it in. */
+const UNFINISHED = new Set(["ETIMEDOUT", "EAGAIN", "ENOMEM"]);
+
 /**
  * Runs one command through the launcher, as the engine would, and checks what the sandbox must
  * do: it writes in its folder and its temporary folder, and can neither read nor write Kuvo Code's.
  */
-function probe(): { passed: boolean; why?: string; check?: FenceCheck } {
+function probe(): { passed: boolean; unfinished?: boolean; why?: string; check?: FenceCheck } {
   fs.rmSync(PROBE, { recursive: true, force: true });
   fs.mkdirSync(PROBE, { recursive: true, mode: 0o700 });
   const hidden = path.join(FOLDER, "hidden");
@@ -344,7 +362,15 @@ function probe(): { passed: boolean; why?: string; check?: FenceCheck } {
   const env: Record<string, string> = { PATH: process.env.PATH || "/usr/bin:/bin", HOME: accountHome(), KUVO_FENCE_SHELL: "/bin/sh", KUVO_FENCE_WORK: PROBE };
   const bun = runtime();
   if (bun) env.KUVO_FENCE_RUNTIME = bun;
-  const run = spawnSync(places.launcher, ["-c", script, PROBE, hidden, escaped], { env, encoding: "utf8", timeout: 20_000 });
+  // A test's box can hold its check up (`KUVO_TEST_SANDBOX_CHECK_HOLD`: until a line can be read
+  // from that file, which a FIFO no one writes never gives) and give it less time
+  // (`KUVO_TEST_SANDBOX_CHECK_LIMIT`, in milliseconds), standing in for a busy computer.
+  const hold = IN_TEST_FOLDER ? process.env.KUVO_TEST_SANDBOX_CHECK_HOLD : undefined;
+  const limit = (IN_TEST_FOLDER && Number(process.env.KUVO_TEST_SANDBOX_CHECK_LIMIT)) || CHECK_LIMIT;
+  const args = [places.launcher, "-c", script, PROBE, hidden, escaped];
+  const run = hold
+    ? spawnSync("/bin/sh", ["-c", `read -r _ <"$0" || :; exec "$@"`, hold, ...args], { env, encoding: "utf8", timeout: limit })
+    : spawnSync(args[0]!, args.slice(1), { env, encoding: "utf8", timeout: limit });
   const reasons: Record<number, [FenceCheck, string]> = {
     10: ["folder", "a command couldn't go to its own folder"], 11: ["folder", "a command couldn't write in its own folder"],
     12: ["tempFiles", "a command couldn't write its temporary files"], 13: ["readsOwn", "a command could read Kuvo Code's own files"],
@@ -353,6 +379,8 @@ function probe(): { passed: boolean; why?: string; check?: FenceCheck } {
   try {
     if (fs.existsSync(escaped)) return { passed: false, check: "writesOwn", why: "Its check failed: a command could write in Kuvo Code's own folder." };
     if (run.status === 0) return { passed: true };
+    // Cut off at its limit, or no process to run it in: it didn't finish, which isn't a failure.
+    if (UNFINISHED.has((run.error as NodeJS.ErrnoException | undefined)?.code ?? "")) return { passed: false, unfinished: true };
     const [check, reason] = (run.status !== null ? reasons[run.status] : undefined) ?? ["didntRun", undefined];
     const said = (run.stderr || "").trim().split("\n").pop();
     return { passed: false, check, why: `Its check failed: ${reason ?? said ?? run.error?.message ?? "the command didn't run"}.` };
@@ -369,8 +397,9 @@ function probe(): { passed: boolean; why?: string; check?: FenceCheck } {
 }
 
 // What the engine tells its agents of the sandbox, as the engine watches the file it was named: what
-// it does once commands really run in it (the engine has loaded its plugin), and nothing until then.
-export function tellAgents(on = fenceState().on): void {
+// it does once commands really run in it (the engine has loaded its plugin; checked, or a check that
+// hasn't finished yet), and nothing until then.
+export function tellAgents(on = fenceState().on || (fencePending() && loaded().on)): void {
   const note = on ? agentsNote(platform, fitsTmux(appTemporary() ?? TEMPORARY)) : "";
   if (textOf(SANDBOX_NOTE) !== note) writePrivate(SANDBOX_NOTE, note);
 }
@@ -383,6 +412,8 @@ function withdraw(): void {
   fs.rmSync(ON, { force: true });
   fs.rmSync(READY, { force: true });
   fs.rmSync(NOTE, { force: true });
+  // (Last: never `on` without it while it was pending.)
+  fs.rmSync(CHECKING, { force: true });
 }
 
 /**
@@ -444,7 +475,9 @@ export function conversationPlaces(at = { bots: BOTS, engineData: ENGINE_DATA, c
 /**
  * Sets the sandbox up: its files written and checked, then its plugin given to the engine; where it
  * can't run or the check fails (or with the kill switch), the plugin taken away, so commands run as
- * before rather than not at all. `found`: as `able`'s.
+ * before rather than not at all. Where the check didn't finish (a busy computer), that isn't known:
+ * commands go through it all the same, `checking` keeping anything from counting on it, until it's
+ * checked again (each minute, or `POST kuvo/sandbox/check`). `found`: as `able`'s.
  */
 export function setUpFence(found?: string | null): FenceState {
   // Whether it can be on here, known while it's off too.
@@ -473,9 +506,16 @@ export function setUpFence(found?: string | null): FenceState {
     writeProfiles();
     tellLauncher();
     const result = probe();
-    checked = { able: true, ...result, ...(result.passed ? {} : { reason: "checkFailed" as const }) };
-    failures = result.passed ? 0 : failures + 1;
-    if (!result.passed) {
+    if (result.unfinished) {
+      // Not known yet: never counted on, never a failure (failures stay as they were).
+      checked = { able: true, passed: false, unfinished: true, reason: "checking", why: "Its check didn't finish in time (this computer may be busy), so it's checked again in a minute. Until then commands still run in it, and Auto asks first." };
+      // (First, so nothing reads `on` as checked meanwhile.)
+      if (!fs.existsSync(CHECKING)) writePrivate(CHECKING, "");
+    } else {
+      checked = { able: true, ...result, ...(result.passed ? {} : { reason: "checkFailed" as const }) };
+      failures = result.passed ? 0 : failures + 1;
+    }
+    if (!result.passed && !result.unfinished) {
       withdraw();
       return fenceState();
     }
@@ -487,6 +527,8 @@ export function setUpFence(found?: string | null): FenceState {
     }
     // Which setup this is, for the agents bridge's note (and an empty one, an older box's, given one).
     if (!textOf(ON)?.trim()) writePrivate(ON, crypto.randomUUID());
+    // Checked: counted on from now (last, once all the rest is in place).
+    if (result.passed) fs.rmSync(CHECKING, { force: true });
   } catch (error) {
     withdraw();
     checked = { able: true, passed: false, why: `It couldn't be set up: ${(error as Error).message}`, reason: "checkFailed", check: "setup" };
@@ -538,7 +580,7 @@ export function sweepWakeFolders(now = Date.now()): void {
 export function keepFence(every: (round: () => Promise<void>) => void = round => { setInterval(round, 10_000).unref?.(); }): void {
   // (A file of yours the walls are read from that waited on macOS, read since: written in at once.)
   whenReadLate(() => {
-    try { if (fenceWanted() && checked.passed) writeProfiles(); } catch {}
+    try { if (fenceWanted() && (checked.passed || checked.unfinished)) writeProfiles(); } catch {}
   });
   try { setUpFence(); } catch {}
   try { tellAgents(); } catch {}
@@ -559,9 +601,9 @@ export function keepFence(every: (round: () => Promise<void>) => void = round =>
     if (!fenceWanted()) return;
     let checking: Promise<void> | undefined;
     try {
-      if (checked.passed) writeProfiles();
-      // A failed check, tried again each minute (it holds the box up while it runs), with commands'
-      // namespace as last found.
+      if (checked.passed || checked.unfinished) writeProfiles();
+      // A failed check, or one that didn't finish, tried again each minute (it holds the box up
+      // while it runs), with commands' namespace as last found.
       if (checked.passed ? textOf(PLUGIN) !== pluginScript(places, VERSION) : round % 6 === 0) setUpFence(namespaceKnown ? namespace : undefined);
       // And on Linux, set up again once commands can have a namespace of their own after all
       // (allowed since), or no longer can (each would fail at unshare): found while the box goes on
