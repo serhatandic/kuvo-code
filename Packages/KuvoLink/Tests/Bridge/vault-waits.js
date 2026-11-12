@@ -61,8 +61,10 @@ export function appears(folder, found) {
         }
       }
       // On macOS a folder's watch starts a moment after fs.watch returns, and what changes in that
-      // moment is never told; closing one waits until every watch left is watching, so one opened
-      // and closed here has these watching before the first look. (On Linux, as fs.watch returns.)
+      // moment is never told; nor, to any watch, what changes as another starts or stops (the
+      // process's watches share one stream, made anew then). One opened and closed here has these
+      // watching before the first look, more often than not; the look every 100 ms finds the rest.
+      // (On Linux, as fs.watch returns.)
       try { fs.watch(above).close(); } catch {}
     }
     function changed() {

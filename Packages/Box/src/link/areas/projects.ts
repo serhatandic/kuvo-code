@@ -4,9 +4,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { isObject, parsed } from "../../shared/json";
 import { processRuns as runs } from "../../shared/platform";
+import { withNotes } from "../../shared/session-notes";
 import type { BridgeRecord, EngineRecord, Target } from "../../shared/records";
 import type { Project, Projects } from "../../shared/routes/projects";
 import { call, readBridgeFile, readEngineFile } from "../engine/client";
+import { rewriteOn } from "../engine/notes";
 import type { EngineSession } from "../engine/sessions";
 import { locked, writePrivate } from "../files";
 import { followed } from "../follow";
@@ -164,7 +166,9 @@ async function archiveProject(directory: string, also: string[], readEngine: () 
           while (taken < archiving.length) {
             const session = archiving[taken++]!;
             try {
-              await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, { metadata: { ...(session.metadata ?? {}), "kuvo.archived": true } }, signal);
+              // (In its turn, onto its notes as they are then: `../engine/notes.ts`.)
+              const done = await rewriteOn(target, session.id, now => (now.metadata?.["kuvo.archived"] === true ? null : { metadata: withNotes(now.metadata, null, { "kuvo.archived": true }) }), signal);
+              if (!done) throw new Error("It went.");
               holdArchived(session.id, true);
               // One that waits on you stops, as any archived one does.
               if (!working || working.has(session.id)) await stopIfWaiting(target, session.id);

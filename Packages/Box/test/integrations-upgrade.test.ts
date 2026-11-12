@@ -5,7 +5,7 @@
 // as a Mac is what its `EngineConfig` sent: each server's whole value at its path.
 import "./safety"
 import { afterAll, beforeEach, expect, spyOn, test } from "bun:test"
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, watch, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import crypto from "node:crypto"
@@ -14,6 +14,7 @@ import { upgradeIntegrations } from "../src/link/areas/integrations"
 import { addressOf, newKey, publicOf } from "../src/link/crypto/keys"
 import { BOT_KEYS, BOTS, BOX_KEYS, RUN, shownRoot } from "../src/link/home"
 import { keyWork } from "../src/link/keys"
+import { watchFolder } from "../src/shared/watch"
 // @ts-expect-error (The bridge tests' stand-in, in plain JavaScript.)
 import { relayStandIn } from "../../KuvoLink/Tests/Bridge/relay-stand-in.js"
 
@@ -248,7 +249,8 @@ async function machineStarts(servers: unknown, { before = () => {}, alsoAtStart 
     await also
     const now = () => JSON.parse(readFileSync(settings, "utf8"))
     if (until) {
-      const watcher = watch(join(home, "box"), () => poke())
+      // (Looked at again as it starts, too: what changed before it watched it never tells.)
+      const watcher = watchFolder(join(home, "box"), () => poke())
       try {
         while (!until(now()) && !ended) await new Promise<void>(resolve => { poke = resolve })
       } finally {

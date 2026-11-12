@@ -10,7 +10,10 @@ import { machineHome, onMachine } from "./machine"
 
 /** The program's path on PATH (or the extra places given), if it's there. */
 export function which(name: string, extra: string[] = []): string | undefined {
-  const folders = [...(process.env.PATH ?? "").split(delimiter), ...extra].filter(Boolean)
+  // (A test's run says to look in the system's folders only through its PATH, which has none of your
+  // agents' programs: never the ones you installed there, beside it.)
+  const skipped = process.env.KUVO_TEST_PATH_ONLY === "1" ? new Set(["/opt/homebrew/bin", "/usr/local/bin"]) : new Set<string>()
+  const folders = [...(process.env.PATH ?? "").split(delimiter), ...extra.filter((folder) => !skipped.has(folder))].filter(Boolean)
   for (const folder of folders) {
     const path = join(folder, name)
     try {

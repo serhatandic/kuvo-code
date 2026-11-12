@@ -52,6 +52,7 @@ import { docsWork, ownDocs, pruneDocs } from "./documents/work";
 import { bridgeTarget, peerPlaces, peerTargets, readBridgeFile, readEngineFile } from "./engine/client";
 import { applyCompatibility, engineConfigContent, knowsEngineSettings } from "./engine/compatibility";
 import { keepEngineDefaults } from "./engine/defaults";
+import { clearNotesLocks } from "./engine/notes";
 import { watchBox } from "./engine/watch";
 import { watchMoves } from "./moves/move";
 import { writePrivate } from "./files";
@@ -274,6 +275,8 @@ async function run(): Promise<void> {
     if (isBridge(old)) process.kill(old, "SIGTERM");
   } catch {}
   fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
+  // (Sessions' turns' lock folders left by a box cut off: `engine/notes.ts`.)
+  clearNotesLocks();
   fs.writeFileSync(PID_FILE, String(process.pid), { mode: 0o600 });
   fs.writeFileSync(VERSION_FILE, BRIDGE_VERSION, { mode: 0o600 });
   // The programs it looks for (an MCP server's `npx`) found where the engine finds them: on the
@@ -633,6 +636,8 @@ async function serve(): Promise<void> {
     process.exit(2);
   }
   fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
+  // (Sessions' turns' lock folders left by a box cut off: `engine/notes.ts`.)
+  clearNotesLocks();
   // This Mac's settings with what its engine starts with, before a client reads them.
   if (IS_MAC) addMacDefaults();
   // And as its catalogs have them now, before it says where it is: this Mac's engine starts only after

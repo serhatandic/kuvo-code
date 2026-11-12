@@ -3,7 +3,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { locked, writePrivate } from "../files";
+import { locked, writeSecret } from "../files";
 import { BOX_KEYS, CONFIG_LOCK } from "../home";
 import { KeysUnavailable } from "../host-interface";
 import { deleteKey, keyNames, keyWork, readKey, STORED_KEY, writeKey } from "../keys";
@@ -53,7 +53,7 @@ export function setBoxKey(name: string, value: string | null): { status: number;
   if (!KEY_NAME.test(String(name)) || String(name).includes("__")) return { status: 400, message: "That isn't a key's name." };
   return locked(CONFIG_LOCK, () => {
     if (value == null) fs.rmSync(path.join(BOX_KEYS, name), { force: true });
-    else writePrivate(path.join(BOX_KEYS, name), String(value));
+    else writeSecret(path.join(BOX_KEYS, name), String(value));
     return { status: 200 };
   });
 }
