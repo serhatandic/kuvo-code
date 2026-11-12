@@ -388,6 +388,10 @@ import UniformTypeIdentifiers
                 Text("Row").frame(width: 300, height: 50).heldContextMenu { HeldRow.button("Row") {} }
                 Text("Send").frame(width: 80, height: 50).background(.background).heldContextMenu { HeldRow.button("Send") {} }
             }
+            ZStack(alignment: .trailing) {
+                Text("Queued").frame(width: 300, height: 50).heldContextMenu { HeldRow.button("Queued") {} }.disabled(true)
+                Text("Card").frame(width: 80, height: 50).background(.background)
+            }
             Spacer()
         }
         let shown = Shown(view)
@@ -396,6 +400,11 @@ import UniformTypeIdentifiers
         #expect(try shown.rightClick(at: NSPoint(x: 260, y: 275)) == nil, "the card's")
         #expect(titles(try shown.rightClick(at: NSPoint(x: 50, y: 225))) == ["Row"])
         #expect(titles(try shown.rightClick(at: NSPoint(x: 260, y: 225))) == ["Send"])
+        // A disabled row: its menu, its rows disabled; under the card, still the card's.
+        let disabled = try #require(try shown.rightClick(at: NSPoint(x: 50, y: 175)))
+        #expect(titles(disabled) == ["Queued"])
+        #expect(disabled.items.first?.isEnabled == false)
+        #expect(try shown.rightClick(at: NSPoint(x: 260, y: 175)) == nil, "the card's")
     }
 
     @Test func aRowInAHostingViewOfItsOwnOpensItsMenu() throws {
@@ -469,6 +478,14 @@ import UniformTypeIdentifiers
 
     // MARK: VoiceOver
 
+    /// What VoiceOver says of an element: its label, or a text's words, which SwiftUI gives as
+    /// its value (a text's `.accessibilityLabel` too).
+    private func spoken(_ element: AXElement) -> String? {
+        if let label = element.label, !label.isEmpty { return label }
+        guard let object = element.object as? NSObject, object.responds(to: Selector(("accessibilityValue"))) else { return nil }
+        return object.perform(Selector(("accessibilityValue")))?.takeUnretainedValue() as? String
+    }
+
     @Test func voiceOversShowMenuOpensIt() async throws {
         AXElement.reading(true)
         defer { AXElement.reading(false) }
@@ -492,7 +509,7 @@ import UniformTypeIdentifiers
         #expect(row.object.accessibilityPerformShowMenu?() == true)
         try await until { caught != nil }
         #expect(titles(caught) == ["Unarchive", "Delete…"])
-        let plain = try #require(elements.first { $0.label == "Plain" })
+        let plain = try #require(elements.first { spoken($0) == "Plain" })
         #expect(plain.object.accessibilityPerformShowMenu?() != true, "only what has a menu offers it")
     }
 
@@ -518,7 +535,7 @@ import UniformTypeIdentifiers
 
         let elements = AXElement.all(in: shown.host)
         for label in ["Write the tests", "#243"] {
-            let element = try #require(elements.first { $0.label == label }, "among \(elements.compactMap(\.label))")
+            let element = try #require(elements.first { spoken($0) == label }, "among \(elements.compactMap(spoken))")
             #expect(element.object.accessibilityPerformShowMenu?() == true, "\(label)")
         }
         try await until { caught.count == 2 }
