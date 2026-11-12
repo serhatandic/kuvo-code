@@ -10,8 +10,8 @@ private let log = Logger(subsystem: "run.kuvo.code", category: "usage")
 /// limits"): every account signed in to Kuvo Code on any of your computers, one row each, drawn by
 /// the menu bar's usage panel in place of its own rows for the services this Mac's box reads
 /// (`HostLimits`). The boxes read and share them; this only follows what this Mac's box says and
-/// names the rows. COMPAT(#210 box rows): while a machine's box is from before it listed every
-/// computer's rows, each box is asked and they're merged here, as before.
+/// names the rows (KuvoClient's `UsageListing.listing`, which merges each box's own, as before, only
+/// while one is from before every box listed all of them, #210).
 @MainActor
 final class BoxPlanLimits {
     /// What each box said last, by machine ("" for this Mac's).
@@ -83,19 +83,19 @@ final class BoxPlanLimits {
         }
     }
 
-    /// This Mac's box's rows of every computer's accounts, when every box this Mac reaches lists
-    /// them so (an older one's accounts would be missing from them).
-    private var listsEveryComputer: [LimitsAccount]? {
-        guard let rows = boxes[""]?.rows, boxes.values.allSatisfy({ $0.rows != nil }) else { return nil }
-        return rows
+    /// Every account across your computers, one row each: this Mac's box's list, as it is, when it
+    /// has every computer this Mac reaches (this Mac's first, then each machine's by name).
+    private var listing: UsageListing.Listing {
+        let keys = boxes.keys.sorted { a, b in a.isEmpty != b.isEmpty ? a.isEmpty : a.localizedStandardCompare(b) == .orderedAscending }
+        return UsageListing.listing(keys.compactMap { key in boxes[key].map { UsageListing.Answer(key: key, name: key.isEmpty ? nil : key, limits: $0) } })
     }
 
-    /// Asks this Mac's box to read them again now (a bar's Refresh), which reads what its makers
-    /// allow and asks the computer each account is on for those it hasn't; every box, while one is
-    /// from before that.
+    /// Asks the box whose list the panel shows to read them again now (a bar's Refresh), which
+    /// reads what its makers allow and asks the computer each account is on for those it doesn't
+    /// read; every box, while their lists are merged here.
     func refreshAll() {
-        let only = listsEveryComputer != nil && apis[""] != nil
-        for (key, api) in apis where !only || key.isEmpty {
+        let lister = listing.lister
+        for (key, api) in apis where lister == nil || key == lister {
             let number = next(key)
             Task { [weak self] in
                 let limits = try? await api.client.send(try api.client.request("POST", BoxLimits.bridgeRefreshPath), as: DataEnvelope<BoxLimits>.self, patience: .seconds(60)).data
@@ -134,17 +134,7 @@ final class BoxPlanLimits {
             }
         }
         let now = Date.now
-        let listed: [UsageListing.Account]
-        if let rows = listsEveryComputer {
-            listed = UsageListing.accounts(rows: rows)
-        } else {
-            // COMPAT(#210 box rows): this Mac's first, then each machine's by name: one row per
-            // account across them, its numbers the newest any of them read.
-            let keys = boxes.keys.sorted { a, b in a.isEmpty != b.isEmpty ? a.isEmpty : a.localizedStandardCompare(b) == .orderedAscending }
-            listed = UsageListing.accounts(keys.map { key in
-                UsageListing.Box(key: key, name: key.isEmpty ? nil : key, accounts: boxes[key]?.accounts ?? [])
-            })
-        }
+        let listed = listing.accounts
         let mine = boxes[""]?.accounts ?? []
         let own = Set(mine.filter { Self.isOwnLogin($0, among: mine) }.map(\.provider))
         let rows = listed.map { listed in

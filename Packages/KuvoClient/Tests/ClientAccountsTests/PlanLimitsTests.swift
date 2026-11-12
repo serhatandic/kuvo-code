@@ -247,7 +247,9 @@ struct PlanLimitsTests {
         let limits = try BoxLimits.decode(Data(rowsAnswer.utf8))
         let rows = try #require(limits.rows)
         let panel = [Entry(id: "claude", covers: "claude")]
-        let listed = UsageListing.items(panel: panel, covers: \.covers, rows: rows).map { item -> String in
+        let listing = UsageListing.listing([.init(key: "", name: nil, limits: limits)])
+        #expect(listing.lister == "")
+        let listed = UsageListing.items(panel: panel, covers: \.covers, listing: listing).map { item -> String in
             switch item {
             case .panel(let entry): "panel:\(entry.id)"
             case .account(let row, let below):
@@ -274,5 +276,31 @@ struct PlanLimitsTests {
 
     @Test func aBoxFromBeforeRowsSaysNone() throws {
         #expect(try BoxLimits.decode(Data(answer.utf8)).rows == nil)
+    }
+
+    /// The first box's list stands for every computer the client reached only when it has each of
+    /// their own accounts: one from before rows, or one it hasn't heard from yet (just added, or
+    /// cut off from the relay), has each box's own merged here, so none goes missing.
+    @Test func theFirstBoxsListIsShownOnlyWhenItHasEveryComputerTheClientReached() throws {
+        let mac = try BoxLimits.decode(Data(rowsAnswer.utf8))
+        // hetzner, as it says itself: its Athas, which the Mac's list has.
+        let hetzner = try BoxLimits.decode(Data(#"""
+        {"data": {"services": ["claude"], "accounts": [], "rows": [
+          {"id": "claude#bbbbbbbbbbbbbbbb", "provider": "claude-code", "service": "claude", "identity": "bbbbbbbbbbbbbbbb", "windows": [],
+           "boxes": [{"key": "khetzner", "name": "hetzner", "provider": "claude-code", "here": true}]}]}}
+        """#.utf8))
+        #expect(UsageListing.listing([.init(key: "", name: nil, limits: mac), .init(key: "hetzner", name: "hetzner", limits: hetzner)]).lister == "")
+        // A machine just added, whose account the Mac's box hasn't heard of: each box's own, merged.
+        let added = try BoxLimits.decode(Data(#"""
+        {"data": {"services": ["grok"], "accounts": [{"provider": "grok-cli", "service": "grok", "agent": "grok", "identity": "6600660066006600", "windows": []}], "rows": [
+          {"id": "grok#6600660066006600", "provider": "grok-cli", "service": "grok", "identity": "6600660066006600", "windows": [],
+           "boxes": [{"key": "kadded", "name": "added", "provider": "grok-cli", "here": true}]}]}}
+        """#.utf8))
+        let merged = UsageListing.listing([.init(key: "", name: nil, limits: mac), .init(key: "added", name: "added", limits: added)])
+        #expect(merged.lister == nil)
+        #expect(merged.accounts.map(\.account.title) == ["Claude", "Grok"])
+        // One from before rows: the same.
+        let old = try BoxLimits.decode(Data(answer.utf8))
+        #expect(UsageListing.listing([.init(key: "", name: nil, limits: mac), .init(key: "old", name: "old", limits: old)]).lister == nil)
     }
 }

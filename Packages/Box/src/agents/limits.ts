@@ -164,6 +164,12 @@ interface Entry {
   heardAs?: string
   /** When another of your computers' reading of it last stood for a read here, in ms: listed, so your computers know it's signed in here too. */
   elsewhere?: number
+  /**
+   * For one whose sign-in doesn't say who it is (GitHub Copilot's: its maker's answer does), the
+   * sign-in (`LimitsSource.signIn`) `identity` was last read with: signed in again since, who it
+   * is isn't known until it's read, so no peer's reading stands for it.
+   */
+  identityAs?: string
 }
 
 interface Saved {
@@ -273,6 +279,11 @@ export class Limits {
     return listed
   }
 
+  /** The accounts this box reads from their makers itself (not only from what turns hear), by provider. */
+  reads(): Set<string> {
+    return new Set(this.accounts().filter((account) => account.limits.read).map((account) => account.provider))
+  }
+
   /** The services whose limits this box reads (`claude`, `codex`…), so a client knows what it covers. */
   services(): LimitsService[] {
     return [...new Set([...this.accounts().map((account) => account.service), ...this.alsoServices])]
@@ -321,7 +332,8 @@ export class Limits {
         this.entries.set(account.provider, entry)
       }
       this.switched(entry, source)
-      this.identify(entry, source.identity?.())
+      const says = source.identity?.()
+      this.identify(entry, says)
       if (!source.read) continue
       const at = this.now()
       if (at < entry.next) continue
@@ -333,7 +345,8 @@ export class Limits {
       }
       // Read on another of your computers lately: not asked again here, but a little after that
       // computer's next read, should it not have read it by then (PROTOCOL.md, "Plan limits").
-      const elsewhere = entry.identity ? this.peers?.fresh(account.service, entry.identity) : undefined
+      const known = says || (entry.identityAs !== undefined && entry.identityAs === source.signIn?.()) ? entry.identity : undefined
+      const elsewhere = known ? this.peers?.fresh(account.service, known) : undefined
       if (elsewhere !== undefined && at - elsewhere < source.every) {
         entry.elsewhere = elsewhere
         entry.next = elsewhere + source.every + SHARED_SLACK
@@ -378,6 +391,7 @@ export class Limits {
       const at = this.now()
       // (Another account's since: what was kept goes, before this one's is kept.)
       if (reading) this.identify(entry, reading.identity)
+      if (reading?.identity) entry.identityAs = source.signIn?.()
       entry.next = at + source.every
       // Nothing to read now: as it was.
       if (!reading) return false
@@ -598,7 +612,7 @@ export async function limitsRoutes(limits: Limits | undefined, method: string, r
   if (rest.length === 1 && rest[0] === "refresh" && method === "POST") {
     // Here first, then on the computer each account only elsewhere is on: what's read here reaches
     // that computer before it's asked, so it doesn't read it too.
-    const reading = limits.refresh().finally(() => limits.peers?.refreshElsewhere(limits.rows()))
+    const reading = limits.refresh().finally(() => limits.peers?.refreshElsewhere(limits.rows(), limits.reads()))
     // What's read within a couple of seconds is in the answer; the rest comes as kuvo.limits.updated.
     await Promise.race([reading, new Promise((resolve) => setTimeout(resolve, 2_000).unref?.())])
     return answer()

@@ -332,8 +332,8 @@ extension Date {
 /// What a client lists of a computer's usage, in one order on every client: the Mac panel's own
 /// providers (`kuvo/usage`) in its order, where one says it `covers` a service, that box's rows of
 /// it there (the first with what that provider had besides: spend, its trend); then the box's
-/// other rows (a machine has no panel: all of them). One row per account, as the box lists them
-/// (`rows`, from its `BoxLimits.rows`); only from boxes from before those, merged here (`accounts`).
+/// other rows (a machine has no panel: all of them). One row per account, as one box lists them
+/// (`listing`, from its `BoxLimits.rows`); merged here only from boxes from before those.
 public enum UsageListing {
     public enum Item<Panel> {
         case panel(Panel)
@@ -350,16 +350,15 @@ public enum UsageListing {
 
     /// Every box's accounts, one row per account across them (`accounts(_:)`), placed where the
     /// panel (the client's own computer's, or the first Mac's) says each service goes, as the Mac's
-    /// menu bar lists this Mac's and its machines'. COMPAT(#210 box rows): for boxes from before
-    /// they listed every computer's rows themselves (`items(panel:covers:rows:)`).
+    /// menu bar lists this Mac's and its machines'. For boxes from before they listed every
+    /// computer's rows themselves (#210; goes once every box has had that three months).
     public static func items<Panel>(panel: [Panel], covers: (Panel) -> String?, boxes: [Box]) -> [Item<Panel>] {
         place(Self.accounts(boxes), panel: panel, covers: covers)
     }
 
-    /// One box's rows of every account across your computers (`BoxLimits.rows`), as it lists them,
-    /// placed where the panel says each service goes.
-    public static func items<Panel>(panel: [Panel], covers: (Panel) -> String?, rows: [LimitsAccount]) -> [Item<Panel>] {
-        place(Self.accounts(rows: rows), panel: panel, covers: covers)
+    /// What the boxes a client reached said (`listing`), placed where the panel says each service goes.
+    public static func items<Panel>(panel: [Panel], covers: (Panel) -> String?, listing: Listing) -> [Item<Panel>] {
+        place(listing.accounts, panel: panel, covers: covers)
     }
 
     private static func place<Panel>(_ listed: [Account], panel: [Panel], covers: (Panel) -> String?) -> [Item<Panel>] {
@@ -422,12 +421,52 @@ extension UsageListing {
         }
     }
 
+    /// What one box a client reached said of your accounts.
+    public struct Answer: Sendable {
+        /// Which computer it is to the client ("" for the Mac's own).
+        public var key: String
+        /// Its name; nil for the client's own computer.
+        public var name: String?
+        public var limits: BoxLimits
+
+        public init(key: String, name: String?, limits: BoxLimits) {
+            self.key = key
+            self.name = name
+            self.limits = limits
+        }
+    }
+
+    /// Every account across your computers, one row each, and the box whose list it is.
+    public struct Listing: Sendable {
+        public var accounts: [Account]
+        /// The box (`Answer.key`) whose rows these are, as it listed them: the one a refresh goes
+        /// to (it asks the others for what it hasn't). Nil when they're each box's own, merged here.
+        public var lister: String?
+    }
+
+    /// What a client lists of every computer it reached (`answers`, in its order, its own computer
+    /// first): the first box's rows, as they are (it works them out with your other computers'
+    /// boxes, PROTOCOL.md "Plan limits"), when they have every account each other box it reached
+    /// says is signed in there; else (a box from before rows, #210, or one the first hasn't heard
+    /// from yet) each box's own, merged here (goes once every box has had #210 three months).
+    public static func listing(_ answers: [Answer]) -> Listing {
+        if let first = answers.first, let rows = first.limits.rows {
+            let ids = Set(rows.compactMap(\.rowID))
+            let covered = answers.dropFirst().allSatisfy { other in
+                guard let theirs = other.limits.rows else { return false }
+                return theirs.filter { $0.boxes.contains(where: \.here) }.allSatisfy { $0.rowID.map(ids.contains) ?? false }
+            }
+            if covered { return Listing(accounts: accounts(rows: rows, here: first.key), lister: first.key) }
+        }
+        return Listing(accounts: accounts(answers.map { Box(key: $0.key, name: $0.name, accounts: $0.limits.accounts) }), lister: nil)
+    }
+
     /// A box's rows (`BoxLimits.rows`) as they are, each from the computers it says, the box that
-    /// answered taken as the client's own; named as below.
-    public static func accounts(rows: [LimitsAccount]) -> [Account] {
+    /// answered (`here`, the client's key for it) taken as the client's own; named as below.
+    public static func accounts(rows: [LimitsAccount], here: String = "") -> [Account] {
         var listed = rows.map { row in
             Account(id: row.rowID ?? row.provider, account: row,
-                    sources: row.boxes.map { Account.Source(box: $0.here ? "" : $0.key, provider: $0.provider, name: $0.here ? nil : $0.name) })
+                    sources: row.boxes.map { Account.Source(box: $0.here ? here : $0.key, provider: $0.provider, name: $0.here ? nil : $0.name) })
         }
         named(&listed, members: rows.map { row in
             row.boxes.map { (name: $0.here ? nil : Optional($0.name), account: LimitsAccount(provider: $0.provider, service: row.service, agent: $0.agent, account: $0.account, label: $0.label)) }
@@ -437,8 +476,8 @@ extension UsageListing {
 
     /// One row per account across the boxes, in their order (the client's own computer first): rows
     /// of one service that say they're one account (`identity`) are one, from any box, whatever each
-    /// calls it; a row that doesn't say is its box's own, as before. COMPAT(#210 box rows): only for
-    /// boxes from before they said `rows` (the box merges them now, `limits-rows.ts`).
+    /// calls it; a row that doesn't say is its box's own, as before. Only for boxes from before they
+    /// said `rows` (the box merges them now, `limits-rows.ts`; #210).
     public static func accounts(_ boxes: [Box]) -> [Account] {
         var groups: [(id: String, members: [(box: Box, account: LimitsAccount)])] = []
         var found: [String: Int] = [:]

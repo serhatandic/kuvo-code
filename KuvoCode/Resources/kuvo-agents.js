@@ -11451,6 +11451,9 @@ class Limits {
     }
     return listed;
   }
+  reads() {
+    return new Set(this.accounts().filter((account) => account.limits.read).map((account) => account.provider));
+  }
   services() {
     return [...new Set([...this.accounts().map((account) => account.service), ...this.alsoServices])];
   }
@@ -11489,7 +11492,8 @@ class Limits {
         this.entries.set(account.provider, entry);
       }
       this.switched(entry, source);
-      this.identify(entry, source.identity?.());
+      const says = source.identity?.();
+      this.identify(entry, says);
       if (!source.read)
         continue;
       const at = this.now();
@@ -11500,7 +11504,8 @@ class Limits {
         entry.next = hold;
         continue;
       }
-      const elsewhere = entry.identity ? this.peers?.fresh(account.service, entry.identity) : undefined;
+      const known = says || entry.identityAs !== undefined && entry.identityAs === source.signIn?.() ? entry.identity : undefined;
+      const elsewhere = known ? this.peers?.fresh(account.service, known) : undefined;
       if (elsewhere !== undefined && at - elsewhere < source.every) {
         entry.elsewhere = elsewhere;
         entry.next = elsewhere + source.every + SHARED_SLACK;
@@ -11539,6 +11544,8 @@ class Limits {
       const at = this.now();
       if (reading)
         this.identify(entry, reading.identity);
+      if (reading?.identity)
+        entry.identityAs = source.signIn?.();
       entry.next = at + source.every;
       if (!reading)
         return false;
@@ -11742,7 +11749,7 @@ async function limitsRoutes(limits, method, rest) {
   if (!rest.length && method === "GET")
     return answer();
   if (rest.length === 1 && rest[0] === "refresh" && method === "POST") {
-    const reading = limits.refresh().finally(() => limits.peers?.refreshElsewhere(limits.rows()));
+    const reading = limits.refresh().finally(() => limits.peers?.refreshElsewhere(limits.rows(), limits.reads()));
     await Promise.race([reading, new Promise((resolve) => setTimeout(resolve, 2000).unref?.())]);
     return answer();
   }
@@ -26893,12 +26900,16 @@ async function peerRoutes(parts, method, path, body, signal) {
       parts.limits?.take(given.from, given.mail);
       return json11({});
     }
+    if (!parts.server || !parts.runner)
+      return json11({ message: "Group chats don't run here." }, 404);
     if (typeof given?.from !== "string" || !given.from || !isSeatMail(given.mail))
       return json11({ message: "That isn't group chat mail." }, 400);
     receive(parts, given.from, given.mail);
     return json11({});
   }
   if (what === "gaveup" && method === "POST") {
+    if (!parts.server || !parts.runner)
+      return json11({ message: "Group chats don't run here." }, 404);
     const given = await body().catch(() => {
       return;
     });
@@ -28142,15 +28153,17 @@ class LimitsPeers {
         this.limits.refresh((account, identity) => ids.has(this.idOf(account, identity)));
     }
   }
-  refreshElsewhere(rows) {
+  refreshElsewhere(rows, reads) {
     if (!this.transport.followed)
       return;
     const asks = new Map;
     for (const row of rows) {
-      if (row.boxes.some((box) => box.here))
+      if (row.boxes.some((box) => box.here && reads.has(box.provider)))
         continue;
-      const box = row.boxes.find((each) => !each.away) ?? row.boxes[0];
+      const box = row.boxes.find((each) => !each.here && !each.away) ?? row.boxes.find((each) => !each.here);
       if (!box?.key)
+        continue;
+      if ((asks.get(box.key)?.length ?? 0) >= 200)
         continue;
       asks.set(box.key, [...asks.get(box.key) ?? [], row.id]);
     }
@@ -28172,7 +28185,7 @@ class LimitsPeers {
   }
   shared() {
     const accounts = this.limits.list();
-    while (accounts.length && JSON.stringify(accounts).length > MOST_BYTES)
+    while (accounts.length && Buffer.byteLength(JSON.stringify(accounts)) > MOST_BYTES - 200 * 60)
       accounts.pop();
     return accounts;
   }
@@ -28622,4 +28635,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents c152b613c2cf198e75ff9cf3eb8c0b31f70fc77cbd5fde57c8f9b6b367adca8b
+// Built from Packages/Box/src/agents 934e4adfd6d55bb7cfe5cb3fd0d91865156d9854096180b3bf85bdbcf5776fb3

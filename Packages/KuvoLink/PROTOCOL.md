@@ -3622,19 +3622,21 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     of their `read`, never live, however recent. A row a box can't say who it is (no `identity`) is
     never merged by its numbers: two accounts can read alike (a personal plan and a team's, each
     at 12%).
-- Listing them (KuvoClient's `UsageListing`, as the Mac and the phone do): one box's `rows` as
-  they are, merging nothing (the Mac: its own box's; the phone: the box of the first Mac whose
+- Listing them (KuvoClient's `UsageListing.listing`, as the Mac and the phone do): one box's `rows`
+  as they are, merging nothing (the Mac: its own box's; the phone: the box of the first Mac whose
   usage panel answers, else the first that answers, that panel placing the rows), refreshed
-  through that box alone. A row whose computers are all away shows "As of" its reading's time.
+  through that box alone, while they have every row each other box the client reaches says is
+  signed in there (`here`). A row whose computers are all away shows "As of" its reading's time.
   Naming, a view: a row's name is its account's ("Claude", "Codex", "ChatGPT", "Claude · Work");
   where two rows would have one name: a row whose sign-in on the answering box is the engine's
   takes the service's name ("ChatGPT"); rows not on the answering box add the names of the boxes
   they're from ("Claude · hetzner, lokum"), as does one beside a bar the Mac panel shows of its
   own of that name (a provider's card that reads your own login's limits, when this Mac's box has
   no row of it: Codex's, say; Claude's card has none, so the accounts take its place, `covers`);
-  rows still alike add their other boxes' names. COMPAT(#210 box rows): while any computer a
-  client reaches answers without `rows` (a box from before them), the client asks each box and
-  merges their `accounts` itself, by the rules for `rows` above, and refreshes each.
+  rows still alike add their other boxes' names. Otherwise (a computer the client reaches answers
+  without `rows`, a box from before them, or one the first box hasn't heard from yet), the client
+  merges each box's `accounts` itself, by the rules for `rows` above, and refreshes each; that goes
+  once every box has had #210 three months.
 - What's read: Claude Code's accounts, on Linux from Anthropic with Claude Code's own sign-in in
   Kuvo Code's folder; on a Mac only from what its turns hear (Claude Code's rate-limit events, every
   window from each response's headers), as the token Kuvo Code signs in with there can only run

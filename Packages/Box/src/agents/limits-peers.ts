@@ -61,7 +61,7 @@ export const PEER_AWAY = 25 * MINUTE
 const HEARD_EVERY = MINUTE
 /** A clock this far off or more is moved onto this box's (a mail's way takes less). */
 const SKEW = MINUTE
-/** A mail's accounts at most this big, as JSON, so it fits in one mail. */
+/** A mail at most this big, its JSON in UTF-8, so it fits in one sealed mail (65,600 bytes) with room to spare. */
 const MOST_BYTES = 40_000
 
 const SERVICES = new Set<LimitsService>(["claude", "codex", "grok", "cursor", "antigravity", "copilot", "openrouter", "zai", "ollama", "opencode"])
@@ -151,16 +151,19 @@ export class LimitsPeers {
   }
 
   /**
-   * A refresh asked here: each account only on your other computers is asked of the one it's on
-   * (the first that isn't away), which reads it if its maker allows.
+   * A refresh asked here: each account this box doesn't read itself (one only on your other
+   * computers, or one only its turns tell of here: a Mac's Claude) is asked of a computer it's on
+   * (the first that isn't away), which reads it if its maker allows. `reads`: the providers this
+   * box reads itself.
    */
-  refreshElsewhere(rows: LimitRow[]) {
+  refreshElsewhere(rows: LimitRow[], reads: Set<string>) {
     if (!this.transport.followed) return
     const asks = new Map<string, string[]>()
     for (const row of rows) {
-      if (row.boxes.some((box) => box.here)) continue
-      const box = row.boxes.find((each) => !each.away) ?? row.boxes[0]
+      if (row.boxes.some((box) => box.here && reads.has(box.provider))) continue
+      const box = row.boxes.find((each) => !each.here && !each.away) ?? row.boxes.find((each) => !each.here)
       if (!box?.key) continue
+      if ((asks.get(box.key)?.length ?? 0) >= 200) continue
       asks.set(box.key, [...(asks.get(box.key) ?? []), row.id])
     }
     const now = this.now()
@@ -181,10 +184,10 @@ export class LimitsPeers {
     this.told.set(key, { json: JSON.stringify(accounts), at: now })
   }
 
-  /** This box's own accounts, as many as fit in one mail. */
+  /** This box's own accounts, as many as fit in one mail (with up to 200 rows' ids asked of it besides). */
   private shared(): AccountLimits[] {
     const accounts = this.limits.list()
-    while (accounts.length && JSON.stringify(accounts).length > MOST_BYTES) accounts.pop()
+    while (accounts.length && Buffer.byteLength(JSON.stringify(accounts)) > MOST_BYTES - 200 * 60) accounts.pop()
     return accounts
   }
 

@@ -356,6 +356,95 @@ describe("plan limits across your computers", () => {
     }
   })
 
+  test("a computer signed in to another account since, whose sign-in doesn't say who it is (Copilot's), reads it rather than taking a peer's reading of the one before", async () => {
+    // Copilot's sign-in doesn't say whose it is: GitHub's answer does.
+    const logins = new Map<string, string>([["mac", "octocat"], ["hetzner", "octocat"]])
+    const copilot = (box: string): LimitedAccount => ({
+      provider: "github-copilot",
+      service: "copilot",
+      limits: {
+        every: 10 * MINUTE,
+        signIn: () => `token-of-${logins.get(box)}`,
+        read: async () => {
+          const login = logins.get(box)!
+          maker.reads.push({ box, who: login })
+          return { identity: `github:${login}`, windows: [{ id: "premium_interactions", used: login === "octocat" ? 0.4 : 0.1, minutes: 43_200 }] }
+        },
+      },
+    })
+    const mac = new Box("key-mac", "MacBook Pro", relay, [copilot("mac")])
+    const hetzner = new Box("key-hetzner", "hetzner", relay, [copilot("hetzner")])
+    await mac.meet([hetzner])
+    await hetzner.meet([mac])
+    // Each reads it once to learn who it is; then hetzner takes the Mac's readings.
+    await mac.limits.tick()
+    await relay.settled()
+    await hetzner.limits.tick()
+    await relay.settled()
+    pass(10 * MINUTE)
+    await mac.limits.tick()
+    await relay.settled()
+    pass(MINUTE)
+    await hetzner.limits.tick()
+    expect(maker.reads.map((read) => read.box)).toEqual(["mac", "hetzner", "mac"])
+
+    // hetzner signs in as someone else: past its next read, it reads its own, though the Mac read octocat's just now.
+    logins.set("hetzner", "hubot")
+    pass(10 * MINUTE)
+    await mac.limits.tick()
+    await relay.settled()
+    pass(3 * MINUTE)
+    await hetzner.limits.tick()
+    await relay.settled()
+    expect(maker.reads.slice(3)).toEqual([{ box: "mac", who: "octocat" }, { box: "hetzner", who: "hubot" }])
+    // Two rows on each: octocat's on the Mac, hubot's on hetzner.
+    for (const box of [mac, hetzner]) expect(box.rows().map((row) => `${row.windows[0]?.used} on ${row.boxes.map((each) => each.name).join(",")}`).sort()).toEqual(["0.1 on hetzner", "0.4 on MacBook Pro"])
+  })
+
+  test("Refresh on a Mac, whose Claude only its turns tell of, asks the computer that reads that account", async () => {
+    // The Mac's Claude: no read of Anthropic there, only what its turns hear.
+    const turns: LimitsSource = { every: EVERY, identity: () => "anthropic:work|org" }
+    const mac = new Box("key-mac", "MacBook Pro", relay, [{ provider: "claude-code", service: "claude", agent: { kind: "claude", account: "default" }, limits: turns }])
+    const hetzner = new Box("key-hetzner", "hetzner", relay, [claude(maker, "hetzner", "anthropic:work|org")])
+    await mac.meet([hetzner])
+    await hetzner.meet([mac])
+    await mac.limits.tick()
+    turns.heard!({ id: "five_hour", used: 0.3, minutes: 300 })
+    await hetzner.limits.tick()
+    await relay.settled()
+    expect(maker.reads.map((read) => read.box)).toEqual(["hetzner"])
+    // A while on, Refresh on the Mac: hetzner, asked, reads it now.
+    pass(EVERY + MINUTE)
+    maker.used.set("anthropic:work|org", 0.66)
+    await mac.route("POST", ["refresh"])
+    await until(() => mac.rows().some((row) => row.windows.some((window) => window.used === 0.66)))
+    expect(maker.reads.map((read) => read.box)).toEqual(["hetzner", "hetzner"])
+  })
+
+  test("an agent's plan_limits says the numbers its computer's accounts were read with anywhere, and the accounts on your other computers, where", async () => {
+    // (The tool tells how long until a reset by the computer's own clock.)
+    time = Date.now()
+    const { mac, hetzner } = await threeComputers()
+    maker.used.set("anthropic:work|org", 0.42)
+    maker.used.set("anthropic:home|org", 0.77)
+    await mac.limits.tick()
+    await relay.settled()
+    const lokum = relay.boxes.get("key-lokum")!
+    await lokum.limits.tick()
+    await relay.settled()
+    await hetzner.limits.tick()
+    // The bridge as the link reaches it, on hetzner, which never read either.
+    const bridge = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: (request) => limitsRoutes(hetzner.limits, request.method, new URL(request.url).pathname.split("/").slice(4)) })
+    try {
+      const { planLimitsTool } = await import("../../src/link/work/plan-limits")
+      const { text } = await planLimitsTool({ port: bridge.port, password: "x" } as never)
+      expect(text).toContain("- Claude Code, Max 20x, provider claude-code:\n  - 5-hour window: 42% used")
+      expect(text).toContain("- Claude Code, Max 20x, signed in on lokum:\n  - 5-hour window: 77% used")
+    } finally {
+      bridge.stop(true)
+    }
+  })
+
   test("a computer you removed goes from the list, with its accounts", async () => {
     const { mac, hetzner, lokum } = await threeComputers()
     await lokum.limits.tick()

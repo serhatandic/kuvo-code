@@ -186,11 +186,14 @@ export async function peerRoutes(parts: PeerParts | undefined, method: string, p
       parts.limits?.take(given.from, given.mail)
       return json({})
     }
+    // Group chats that didn't start here: the link says not now, so what mustn't be lost comes again.
+    if (!parts.server || !parts.runner) return json({ message: "Group chats don't run here." }, 404)
     if (typeof given?.from !== "string" || !given.from || !isSeatMail(given.mail)) return json({ message: "That isn't group chat mail." }, 400)
     receive(parts, given.from, given.mail)
     return json({})
   }
   if (what === "gaveup" && method === "POST") {
+    if (!parts.server || !parts.runner) return json({ message: "Group chats don't run here." }, 404)
     const given = await body().catch(() => undefined)
     if (typeof given?.to !== "string" || !given.to || !isSeatMail(given.mail)) return json({ message: "That isn't group chat mail." }, 400)
     // Not before the link has said who your computers are: what comes of it depends on that.
