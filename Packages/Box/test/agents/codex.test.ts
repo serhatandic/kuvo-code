@@ -351,9 +351,9 @@ afterEach(() => {
 })
 
 /** What `condition` says, looked at every 10 ms: a busy Mac's fake Codex can take over 10 s to start
- * and answer (the Approve All test took 12.9 s in a full box suite at load 23), so a wait gets as
- * long as the test itself. */
-async function until(condition: () => boolean, ms = 30_000) {
+ * and answer (the Approve All test took 12.9 s in a full box suite at load 23). 25 s is under the
+ * test's 30 s, so a wait that gives up says so itself rather than at the test's limit. */
+async function until(condition: () => boolean, ms = 25_000) {
   const start = Date.now()
   while (!condition()) {
     if (Date.now() - start > ms) throw new Error("timed out")
