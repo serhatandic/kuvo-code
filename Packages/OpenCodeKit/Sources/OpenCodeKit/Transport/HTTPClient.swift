@@ -96,9 +96,11 @@ public struct HTTPClient: Sendable {
     /// file shared over a phone's slow connection took longer than that (#358).
     static func waitingForBody(_ request: URLRequest, idle: TimeInterval) -> URLRequest {
         var request = request
-        request.timeoutInterval = max(request.timeoutInterval, idle)
+        // Set only to wait longer: a request's own wait, once set (even to what it was), is the
+        // one URLSession keeps, and a session made to wait less (a test's) would wait the minute.
+        if idle > request.timeoutInterval { request.timeoutInterval = idle }
         guard let size = request.httpBody?.count, size >= slowUpload else { return request }
-        request.timeoutInterval += TimeInterval(size / slowUpload)
+        request.timeoutInterval = max(request.timeoutInterval, idle) + TimeInterval(size / slowUpload)
         return request
     }
 
