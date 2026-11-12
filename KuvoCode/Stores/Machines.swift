@@ -537,7 +537,7 @@ final class MachineEngine {
             // (`SSHConnection.sendsWhile`), so nothing more does once it's cut off: none of the
             // steps' own probes, a seed with your keys, a launch. (Only these steps: what runs for
             // the connection after has its own end.) Nil: its engine was stopped on purpose.
-            let ready = try await SSHConnection.$sendsWhile.withValue(wanted) { () async throws -> RemoteServer? in
+            let ready = try await SSHConnection.$sendsWhile.withValue((machine.id, wanted)) { () async throws -> RemoteServer? in
                 state = .starting
                 step = .checking
                 // At whichever of its addresses answers.

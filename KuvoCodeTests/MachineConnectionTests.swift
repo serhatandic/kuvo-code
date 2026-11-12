@@ -415,9 +415,9 @@ import Testing
         try await removedWhileConnecting(at: "$name.new")
     }
 
-    /// And as it's asked whether it has settings of its own, the first of the two scripts that
-    /// make them its own: the second, which brings it this Mac's settings and keys when it has
-    /// none, doesn't go.
+    /// And as it's asked whether it has settings of its own (it has), the first of the two scripts
+    /// that make them its own: the second doesn't go (which, on a machine with none, brings it this
+    /// Mac's settings and keys).
     @Test func removedAsItsSettingsAreLookedAtItIsntSentYours() async throws {
         try await removedWhileConnecting(at: #"opencode.json" ] && echo own"#)
     }
@@ -439,7 +439,8 @@ import Testing
                 sending.open()
                 gate.wait()
             }
-            return script.contains("uname -sm") ? "Linux x86_64\nglibc\nopencode \(OpenCodeEngine.version)\n" : ""
+            if script.contains("uname -sm") { return "Linux x86_64\nglibc\nopencode \(OpenCodeEngine.version)\n" }
+            return script.contains(#"opencode.json" ] && echo own"#) ? "own\n" : ""
         }
         let start = app.connect(engine)
         try await until { sending.isOpen }
