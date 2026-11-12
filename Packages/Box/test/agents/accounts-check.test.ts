@@ -21,6 +21,7 @@ let root: string
 let bin: string
 const path = process.env.PATH
 const keychain = ClaudeAgent.keychain
+const realFetch = globalThis.fetch
 
 beforeAll(() => {
   // Claude Code's own sign-in, as a machine's is (a Mac's is Kuvo Code's own: its describe below).
@@ -30,11 +31,17 @@ beforeAll(() => {
   mkdirSync(bin)
   // The fake programs first: they're the ones found.
   process.env.PATH = [bin, path].join(delimiter)
+  // Reading an account also asks its maker's npm registry for the newest program version: here,
+  // the programs are fakes, and a slow registry under load would hold each read for its 2 s and
+  // answer after the read, announcing an update this test doesn't ask about. This file asks nothing
+  // else of the network, so every fetch is answered at once, as a registry that can't answer does.
+  globalThis.fetch = (async () => new Response("unavailable", { status: 503 })) as unknown as typeof fetch
 })
 
 afterAll(() => {
   ClaudeAgent.keychain = keychain
   process.env.PATH = path
+  globalThis.fetch = realFetch
   rmSync(root, { recursive: true, force: true })
 })
 
