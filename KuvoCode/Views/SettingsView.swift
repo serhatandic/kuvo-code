@@ -176,9 +176,10 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         [.agents, .permissions, .commands, .skills, .integrations, .mcp, .git].contains(self)
     }
 
-    /// The pages Settings lists for `box`.
+    /// The pages Settings lists for `box`: every page for this Mac (the app's, and its box's, the
+    /// app's own or the one attached in place), a machine's box pages for a machine.
     static func shown(on box: SidebarBox) -> [SettingsPage] {
-        box.machine == nil ? shown : shown.filter(boxPages.contains)
+        box.isThisMac ? shown : shown.filter(boxPages.contains)
     }
 
     func isShown(on box: SidebarBox) -> Bool {
@@ -376,7 +377,7 @@ private struct SettingsSidebar: View {
     @Environment(AppModel.self) private var app
     @AppStorage(TabBar.showsKey) private var showsTabBar = TabBar.showsByDefault
     /// The computer whose pages are in view: the tab's, until you switch to another.
-    @State private var shownBox = SidebarBox.mac
+    @State private var shownBox = SidebarBox.thisMac
     /// The page a click in this list opened, which is in sight already.
     @State private var clicked: SettingsPage?
 
@@ -386,7 +387,7 @@ private struct SettingsSidebar: View {
     @State private var boxMotion = BoxPagerMotion()
 
     private var shownBinding: Binding<SidebarBox> {
-        Binding { boxes.contains(shownBox) ? shownBox : .mac } set: { shownBox = $0 }
+        Binding { boxes.contains(shownBox) ? shownBox : app.thisMacsBox } set: { shownBox = $0 }
     }
 
     var body: some View {
@@ -414,7 +415,7 @@ private struct SettingsSidebar: View {
                     pages(of: box)
                 }
             } else {
-                pages(of: .mac)
+                pages(of: app.thisMacsBox)
             }
         }
         .padding(.top, 10)

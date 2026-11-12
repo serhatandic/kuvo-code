@@ -314,7 +314,8 @@ struct AddPluginPage: View {
     }
 
     private func chooseFolder() {
-        guard box == BoxClient.mac else {
+        // (This Mac's box, attached in place too, has its folders on this disk.)
+        guard BoxClient.isThisMac(box) else {
             choosingFolder = true
             return
         }

@@ -16,6 +16,7 @@ export const FEATURES = [
   "accounts.found",
   "accounts.refresh",
   "agent-tools",
+  "agent-tools.own",
   "agents",
   "approval",
   "approval.default",
