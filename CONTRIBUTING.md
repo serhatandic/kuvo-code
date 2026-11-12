@@ -262,7 +262,9 @@ warning from a compile with both kinds of path crashed Xcode 27.2's build servic
 system has crashed", #562).
 The compiler sees the sources as `/^src/…` (the project's folder), so `#filePath` is that too, and so
 are the places a failed test names: what `xcodebuild` builds finds its files through its bundle, never
-`#filePath` (the app's `scripts/test-app.sh` checks).
+`#filePath` (the app's `scripts/test-app.sh` checks). An app test that reads the sources themselves finds
+them with `SourceRoot.url()` (`KuvoCodeTests/Support/SourceRoot.swift`): `scripts/test-app.sh` gives it
+the checkout, or the batch's exported sources, as `KUVO_SOURCE_ROOT`.
 
 Before it joins its lane's line, a new job waits while the Mac is thrashing: swapping more than 10 MB
 a second (`KUVO_HEAVY_SWAP`) or its memory pressure critical, two minutes at most from when any job

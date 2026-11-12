@@ -90,10 +90,18 @@ if lockf -ks -t 0 "$LOCK" true; then
     exit 1
 fi
 
-# The checks of the sources below look at the batch's, from a batch.
+# The checks of the sources below look at the batch's, from a batch: the sources it exported and
+# built (its stamp's kuvo_ai_src; a stamp from before it said so, its src/kuvo-ai).
 SOURCES=.
-[ -z "$BATCH" ] || SOURCES="$BATCH/src/kuvo-ai"
+if [ -n "$BATCH" ]; then
+    SOURCES=$(sed -n 's/^kuvo_ai_src=//p' "$BATCH/stamp" | head -n 1)
+    [ -n "$SOURCES" ] || SOURCES="$BATCH/src/kuvo-ai"
+fi
 cd "$SOURCES"
+# And the tests that read the sources themselves (KuvoCodeTests/Support/SourceRoot.swift) find them
+# there: passed as KUVO_SOURCE_ROOT (xcodebuild hands TEST_RUNNER_ variables on).
+TEST_RUNNER_KUVO_SOURCE_ROOT=$(pwd)
+export TEST_RUNNER_KUVO_SOURCE_ROOT
 
 # The app reaches the Keychain only through `Keychain` (KuvoCode/Stores/Keychain.swift), which is
 # one in memory for the tests: a test reaching the real one would wait on macOS asking whether
@@ -104,10 +112,11 @@ if grep -rnE '\bSec(Item(CopyMatching|Add|Update|Delete)|Keychain[A-Za-z]*)\(' -
 fi
 
 # Built with Xcode's compilation cache (scripts/xcode-cache.sh), the compiler sees the sources as
-# /^src/…, and so does #filePath: a test finds its files through its bundle, never #filePath, which
-# names no file on this Mac. (As where an issue was recorded, `file: … = #filePath`, it's only said.)
+# /^src/…, and so does #filePath: a test finds its files through its bundle, or the sources through
+# KUVO_SOURCE_ROOT (KuvoCodeTests/Support/SourceRoot.swift), never #filePath, which names no file on
+# this Mac. (As where an issue was recorded, `file: … = #filePath`, it's only said.)
 if grep -rn '#filePath' --include='*.swift' KuvoCode KuvoCodeTests | grep -v '= #filePath'; then
-    echo "The app and its tests find their files through their bundles, never #filePath: built with the compilation cache, it's /^src/…, no file on this Mac." >&2
+    echo "The app and its tests find their files through their bundles (and the sources through KuvoCodeTests/Support/SourceRoot.swift), never #filePath: built with the compilation cache, it's /^src/…, no file on this Mac." >&2
     exit 1
 fi
 cd - >/dev/null
