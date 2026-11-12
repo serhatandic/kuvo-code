@@ -69,6 +69,41 @@ public struct WorkNote: Hashable, Sendable, Decodable {
     public var date: Date { Date(timeIntervalSince1970: at / 1000) }
 }
 
+/// Something that happened to an item, as the box kept it for its feed: a session `started` or
+/// `stopped` work on it, it `moved` (`from` and `to` its categories' ids, `top` when it went to the
+/// top), it was `done`. A newer box may say other kinds, which a client leaves out.
+public struct WorkEvent: Hashable, Sendable, Decodable {
+    public var at: Double
+    public var by: WorkWho
+    public var kind: String
+    public var from: String?
+    public var to: String?
+    public var top: Bool
+    public var date: Date { Date(timeIntervalSince1970: at / 1000) }
+
+    public init(at: Double, by: WorkWho, kind: String, from: String? = nil, to: String? = nil, top: Bool = false) {
+        self.at = at
+        self.by = by
+        self.kind = kind
+        self.from = from
+        self.to = to
+        self.top = top
+    }
+
+    private enum Keys: String, CodingKey { case at, by, kind, from, to, top }
+
+    // (What a newer box adds, or says otherwise, never keeps the rest of the item from being read.)
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: Keys.self)
+        at = try container.decode(Double.self, forKey: .at)
+        by = try container.decode(WorkWho.self, forKey: .by)
+        kind = try container.decode(String.self, forKey: .kind)
+        from = try? container.decodeIfPresent(String.self, forKey: .from)
+        to = try? container.decodeIfPresent(String.self, forKey: .to)
+        top = ((try? container.decodeIfPresent(Bool.self, forKey: .top)) ?? nil) ?? false
+    }
+}
+
 /// What's being done, and how far along.
 public struct WorkProgress: Hashable, Sendable, Decodable {
     public var value: Double?
@@ -222,17 +257,26 @@ public struct WorkItemDetail: Hashable, Sendable, Decodable {
     public var item: WorkItem
     public var body: String
     public var notes: [WorkNote]
+    /// What happened to it, as the box kept it (none from a box from before it kept them).
+    public var events: [WorkEvent]
     public var files: [File]
     public var links: [Link]
     public var handed: [Handed]
 
-    private enum Keys: String, CodingKey { case body, notes, files, links, handed }
+    private enum Keys: String, CodingKey { case body, notes, events, files, links, handed }
+
+    // (An event this client can't read leaves out only itself, never the item.)
+    private struct Lossy<Value: Decodable>: Decodable {
+        var value: Value?
+        init(from decoder: any Decoder) throws { value = try? Value(from: decoder) }
+    }
 
     public init(from decoder: any Decoder) throws {
         item = try WorkItem(from: decoder)
         let container = try decoder.container(keyedBy: Keys.self)
         body = try container.decodeIfPresent(String.self, forKey: .body) ?? ""
         notes = try container.decodeIfPresent([WorkNote].self, forKey: .notes) ?? []
+        events = ((try? container.decodeIfPresent([Lossy<WorkEvent>].self, forKey: .events)) ?? nil)?.compactMap(\.value) ?? []
         files = try container.decodeIfPresent([File].self, forKey: .files) ?? []
         links = try container.decodeIfPresent([Link].self, forKey: .links) ?? []
         handed = try container.decodeIfPresent([Handed].self, forKey: .handed) ?? []

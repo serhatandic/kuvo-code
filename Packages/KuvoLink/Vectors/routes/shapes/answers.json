@@ -11894,6 +11894,35 @@
           }
          }
         },
+        "events": {
+         "list": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             },
+             {
+              "map": "any"
+             }
+            ]
+           },
+           "kind": "string",
+           "from?": "string",
+           "to?": "string",
+           "top?": "bool"
+          }
+         }
+        },
         "files": {
          "list": {
           "object": {
