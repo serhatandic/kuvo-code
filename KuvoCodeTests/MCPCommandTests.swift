@@ -3,26 +3,9 @@ import OpenCodeKit
 import Testing
 @testable import KuvoCode
 
-/// An MCP server's command as you type it in Settings › MCP Servers, read as a shell would, and
-/// written back so it reads the same.
+/// An MCP server as you set it in Settings › MCP Servers: on the web, and its address. (Its command
+/// read as a shell would, and written back so it reads the same: OpenCodeKit's CommandWordsTests.)
 @Suite struct MCPCommandTests {
-    @Test(arguments: [
-        ("npx -y @acme/server --root \"/Users/me/My Projects\"", ["npx", "-y", "@acme/server", "--root", "/Users/me/My Projects"]),
-        ("grep --pattern \"a\\.b\" 'it''s'", ["grep", "--pattern", "a\\.b", "its"]),
-        ("echo \"say \\\"hi\\\"\" back\\ slash", ["echo", "say \"hi\"", "back slash"]),
-        ("cmd ''  \"\"", ["cmd", "", ""]),
-        ("node 'C:\\path\\x'", ["node", "C:\\path\\x"]),
-    ])
-    func readAsAShellWould(line: String, words: [String]) {
-        #expect(CommandWords.split(line) == words)
-    }
-
-    /// Written back, a command reads as the same words.
-    @Test(arguments: [["npx", "-y", "@acme/server"], ["run", "two words", "it's", "a\\.b", "say \"hi\"", ""]])
-    func writtenBackItReadsTheSame(words: [String]) {
-        #expect(CommandWords.split(words.map(CommandWords.quoted).joined(separator: " ")) == words)
-    }
-
     /// A server switched to "On the web" is never written without a URL, which the engine doesn't
     /// take; given one, it's on; switched back, its command comes back as it was.
     @Test func aServerOnTheWebIsWrittenOnlyWithItsURL() throws {
