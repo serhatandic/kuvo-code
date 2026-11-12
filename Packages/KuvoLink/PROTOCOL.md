@@ -425,7 +425,15 @@ connection.
     tool; otherwise it reaches the sender's conversation as a message.
   - **Sender side**: a sender takes `delivered` only from the box it sent to, and an answer for a
     waiting tool only from that box; an answer from it stands for `delivered` should that be lost. Until `delivered` comes, it sends again each minute, for two
-    days, oldest first, and a letter whose agent no box lists now waits. One for a conversation that
+    days, oldest first, and a letter whose agent no box lists now waits. One sent without `wait`, or
+    whose tool no longer waits (on a Mac, its conversation's gone; on a machine, it gave up or hasn't
+    noted it waits in ten seconds), that won't be delivered (refused by the box it went to, its two days over, too long to send, or
+    refused where it moved to) is told to its sender once, as the sending box's own word: a `note`
+    from "Your other computers", queued, whose `line` names the conversation as it's listed and its
+    computer (never its address), with why as that computer said it, or for its two days over, in
+    the sending box's words. The letter's taken out of sending first (`<id>.failed`, which the next
+    round finishes should that be cut short), so it never goes again; the notice is a letter of its
+    own, its id made from the letter's, so no word on the letter acts on it. One for a conversation that
     moved (`moved`) goes where it lives now, whichever box it was left for; one that moved to the
     sending box itself is delivered there, as a tool's there is (its answer to the tool waiting,
     relay or not). Before a
@@ -975,7 +983,9 @@ its own, which a `SIGTERM` stops waiting.
     `read_conversation` reads one here, or asks a peer with `letters-read` for it by letter.
   - A letter (not a note, nor an answer) to a conversation the receiving box doesn't list to its
     peers (its bots and latest 40) is delivered only when it's under the letter's `from`: a lead
-    following up a session it started, by address; anyone else's is refused (bridge 0.9.204). A
+    following up a session it started, by address; anyone else's is refused (bridge 0.9.204). One
+    that moved to the receiving box in the last two days takes it as one listed, from the moment it's
+    switched to there, older than the latest 40 or not. A
     conversation here named by its address still takes a message from any conversation here.
   - An address the lists don't name (older than the latest 40) is found on the computer that told
     this one of it as one of a lead's sessions ("Work", rows from elsewhere), or where it's known
@@ -5475,7 +5485,7 @@ outside it, with `sandbox_ask`) and the
 agents' `.claude`, `.codex`, `.cursor`, `.gemini` and `.grok`, can't be made, moved or removed, only written in, and
 neither can the conversation's folder itself and its repository's, so neither is traded for a link to
 another bot's), its conversation's own temporary
-folder (`TMPDIR`), its conversation's wake-ups' inbox (below), its bot's memory (`MEMORY.md` in the folder of the bot
+folder (`TMPDIR`; on Linux it can be emptied but not removed, as in the command's namespace it's mounted in place, `HIDE` in fence/landlock.ts), its conversation's wake-ups' inbox (below), its bot's memory (`MEMORY.md` in the folder of the bot
 whose conversation it is; for its seat in a group chat, the bot the agents bridge names
 (`KUVO_FENCE_BOT`, from the seat's `kuvo.seat.bot`), or, run by the engine, the bot whose own folder
 (not a link) it works in: that file alone, and only while it has no other name (a hard link), read

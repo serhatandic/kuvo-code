@@ -3,7 +3,7 @@ import "./safety"
 // Node's. Decoys stand for the real folders, as `mktemp` in another process, so they aren't a test's own.
 import { afterAll, expect, test } from "bun:test"
 import { execFileSync } from "node:child_process"
-import fs, { mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync, existsSync } from "node:fs"
+import fs, { copyFileSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync, existsSync } from "node:fs"
 import { rm } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { dirname, join, relative, resolve, sep } from "node:path"
@@ -93,6 +93,32 @@ test("run from another folder, a test is kept from what its shell names, and has
   rmSync(scratch, { recursive: true, force: true })
 })
 
+// The files of a run share one process, in an order of the system's (by name on a Mac, not on Linux):
+// one that names a KUVO_HOME of its own before it loads the link, whichever comes first, still gets
+// the run's.
+test("a test that names a KUVO_HOME of its own before it loads the link gets the run's", () => {
+  const scratch = mkdtempSync(join(tmpdir(), "first-"))
+  const box = resolve(import.meta.dir, "..")
+  writeFileSync(join(scratch, "first.test.ts"), `
+    import "${join(box, "test", "safety")}"
+    import { writeFileSync } from "node:fs"
+    import { test } from "bun:test"
+    test("first to load the link", async () => {
+      const run = process.env.KUVO_HOME
+      process.env.KUVO_HOME = ${JSON.stringify(join(scratch, "its-own"))}
+      const { K } = await import("${join(box, "src", "link", "home")}")
+      process.env.KUVO_HOME = run
+      writeFileSync(${JSON.stringify(join(scratch, "seen.json"))}, JSON.stringify({ K, run }))
+    })
+  `)
+  const run = Bun.spawnSync([process.execPath, "test", "./first.test.ts"], { cwd: scratch, env: { ...process.env, KUVO_TEST_REAL_HOME: scratch } })
+  expect(run.exitCode, run.stderr.toString()).toBe(0)
+  const seen = JSON.parse(readFileSync(join(scratch, "seen.json"), "utf8"))
+  expect(seen.K).toBe(seen.run)
+  expect(seen.K.startsWith(`${join(fs.realpathSync(scratch), ".kuvo-code-test")}/ku-`)).toBe(true)
+  rmSync(scratch, { recursive: true, force: true })
+})
+
 // Bun's own `os.userInfo()` follows HOME, so the guard asks the system (the box's lookup, home.ts, does the same).
 test("under Bun the account's own home is found from the system, whatever HOME says, and can't be a test's own", () => {
   const scratch = mkdtempSync(join(tmpdir(), "account-"))
@@ -117,6 +143,29 @@ test("with the preload, the run's home is gone as the run ends", () => {
   const run = Bun.spawnSync([process.execPath, "test", join(scratch, "run.test.ts")], { cwd: box, env: { ...process.env, KUVO_TEST_REAL_HOME: scratch } })
   expect(run.exitCode).toBe(0)
   expect(existsSync(join(scratch, ".kuvo-code-test"))).toBe(false)
+  rmSync(scratch, { recursive: true, force: true })
+})
+
+// A run on the engine (`BUN_BE_BUN=1 <engine> test`, as on a machine) hands BUN_BE_BUN to all it
+// starts: a program that isn't Bun may still have your home (as a test judging it gives git and the
+// shell), and Bun, the run's own runtime, by a link, a hard link or a copy, never does.
+test("on the engine, what isn't Bun may have your real home and the run's own runtime never does", () => {
+  const scratch = realpathSync(mkdtempSync(join(tmpdir(), "on-engine-")))
+  symlinkSync(process.execPath, join(scratch, "engine"))
+  linkSync(process.execPath, join(scratch, "engine-linked"))
+  copyFileSync(process.execPath, join(scratch, "engine-copy"))
+  const script = `import ${JSON.stringify(join(import.meta.dir, "../../KuvoLink/Tests/Bridge/test-safety.js"))}
+    import { spawnSync } from "node:child_process"
+    const env = { ...process.env, HOME: process.env.KUVO_TEST_REAL_HOME }
+    const seen = {}
+    for (const [name, program, args] of [["shell", "/bin/sh", ["-c", "true"]], ["git", "git", ["--version"]], ["runtime", process.execPath, ["-e", "0"]], ["runtime by a link", ${JSON.stringify(join(scratch, "engine"))}, ["-e", "0"]], ["runtime by a hard link", ${JSON.stringify(join(scratch, "engine-linked"))}, ["-e", "0"]], ["a copy of it", ${JSON.stringify(join(scratch, "engine-copy"))}, ["-e", "0"]]]) {
+      try { spawnSync(program, args, { env }); seen[name] = "allowed" } catch { seen[name] = "refused" }
+    }
+    console.log(JSON.stringify(seen))`
+  const run = Bun.spawnSync([process.execPath, "-e", script], { cwd: scratch, env: { ...process.env, BUN_BE_BUN: "1", HOME: scratch, KUVO_TEST_REAL_HOME: scratch } })
+  expect(JSON.parse(run.stdout.toString() || "{}"), run.stderr.toString()).toEqual({ shell: "allowed", git: "allowed", runtime: "refused", "runtime by a link": "refused", "runtime by a hard link": "refused", "a copy of it": "refused" })
+  expect(run.exitCode).toBe(1)
+  expect(run.stderr.toString()).toContain("this run reached your real coding agents 4 time(s)")
   rmSync(scratch, { recursive: true, force: true })
 })
 
