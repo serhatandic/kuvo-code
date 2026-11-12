@@ -407,6 +407,19 @@ describe("Stop", () => {
   })
 })
 
+describe("notes", () => {
+  test("a session's metadata written alone (a pin, an archive, a box's chat mark) leaves it as new as it was, as the engine's does; a new title makes it newer", async () => {
+    const id = create()
+    // (Last changed long ago: a chat from months back.)
+    sessions.get(id).time.updated = 1
+    sessions.update(id, { metadata: { kuvo: { chat: "/tmp/project" } } })
+    expect(sessions.get(id).time.updated).toBe(1)
+    expect(sessions.get(id).metadata?.kuvo).toEqual({ chat: "/tmp/project" })
+    sessions.update(id, { title: "Trip plans" })
+    expect(sessions.get(id).time.updated).toBeGreaterThan(1)
+  })
+})
+
 describe("permissions", () => {
   test("Approve All with a rule that refuses something asks here, and the rule answers", async () => {
     const seen: (boolean | string)[] = []

@@ -83,7 +83,7 @@ import Testing
     @Test func aChatItsBoxMarkedIsAChatWhateverItsFolder() async throws {
         defer { StubWeb.stop() }
         var marked = Self.session("s_marked", in: "/tmp/kuvo-tests/box/chats", updated: 70)
-        marked["metadata"] = ["kuvo": ["chat": true]]
+        marked["metadata"] = ["kuvo": ["chat": "/tmp/kuvo-tests/box/chats"]]
         sessions.add(marked)
         await workspace.refresh()
         #expect(workspace.chats.map(\.id) == ["s_marked", "s_chat"])

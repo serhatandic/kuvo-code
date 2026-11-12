@@ -18877,7 +18877,8 @@ class Sessions {
         session.metadata.kuvo = { ...body.metadata.kuvo ?? {}, messages };
       emit("session.metadata.updated", { sessionID: id }, directory);
     }
-    session.time.updated = Date.now();
+    if (body.title !== undefined || body.permissions !== undefined)
+      session.time.updated = Date.now();
     this.store.save(id, true);
   }
   async remove(id) {
@@ -27434,4 +27435,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents da5522da5b3f4a335e25d10de9179a5f9f87b6dfacdfb6c41c185565efd38175
+// Built from Packages/Box/src/agents 14b294a33d4f63025d580bce79455ef4c84abc4a96a7d96d88ded96357ee85ee

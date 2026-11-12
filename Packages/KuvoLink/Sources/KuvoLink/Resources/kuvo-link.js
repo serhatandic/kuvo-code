@@ -13879,40 +13879,54 @@ import fs64 from "node:fs";
 import path66 from "node:path";
 
 // Packages/Box/src/link/engine/chats.ts
-function isChatsFolder(directory) {
+function isChatsFolder(directory, real = new Map) {
   if (typeof directory !== "string" || !directory)
     return false;
   if (directory === CHATS)
     return true;
-  return located(directory) === located(CHATS);
+  const where = (folder) => {
+    let found = real.get(folder);
+    if (found === undefined)
+      real.set(folder, found = located(folder));
+    return found;
+  };
+  return where(directory) === where(CHATS);
 }
 var folderOf = (session) => session.location?.directory ?? session.directory;
-var isMarkedChat = (session) => session?.metadata?.kuvo?.chat === true;
-var markedRight = (session) => isMarkedChat(session) === isChatsFolder(folderOf(session));
+var markFor = (directory, real) => isChatsFolder(directory, real) ? directory : undefined;
+var markedRight = (session, real) => session.metadata?.kuvo?.chat === markFor(folderOf(session), real);
 function chatNotes(metadata, directory) {
   const notes = isObject(metadata) ? metadata : {};
   const { chat: _, ...kuvo } = isObject(notes.kuvo) ? notes.kuvo : {};
-  if (isChatsFolder(directory))
-    return { ...notes, kuvo: { ...kuvo, chat: true } };
+  const mark = markFor(directory);
+  if (mark)
+    return { ...notes, kuvo: { ...kuvo, chat: mark } };
   return isObject(notes.kuvo) ? { ...notes, kuvo } : notes;
 }
-var marking = new Set;
+var marking = new Map;
 async function markChat(target, id, signal) {
   if (typeof id !== "string" || !id)
     return false;
   const key = `${target.port}:${id}`;
-  if (marking.has(key))
+  if (marking.has(key)) {
+    marking.set(key, true);
     return false;
-  marking.add(key);
+  }
+  marking.set(key, false);
+  let written = false;
   try {
-    const session = (await engineGet(target, `api/session/${encodeURIComponent(id)}`))?.data;
-    if (!session?.id || markedRight(session))
-      return false;
-    await call(target, "PATCH", `/api/session/${encodeURIComponent(id)}`, { metadata: chatNotes(session.metadata, folderOf(session)) }, signal);
-    return true;
+    do {
+      marking.set(key, false);
+      const session = (await engineGet(target, `api/session/${encodeURIComponent(id)}`))?.data;
+      if (!session?.id || markedRight(session))
+        continue;
+      await call(target, "PATCH", `/api/session/${encodeURIComponent(id)}`, { metadata: chatNotes(session.metadata, folderOf(session)) }, signal);
+      written = true;
+    } while (marking.get(key) && !signal?.aborted);
   } finally {
     marking.delete(key);
   }
+  return written;
 }
 function sessionIn(data) {
   if (!isObject(data))
@@ -13931,6 +13945,7 @@ function markChatOn(target, type, data, signal) {
 }
 async function markAllChats(target, signal) {
   const wrong = [];
+  const real = new Map;
   let query = "limit=200&order=desc";
   for (let pages = 0;query && pages < 500; pages++) {
     if (signal?.aborted)
@@ -13938,7 +13953,7 @@ async function markAllChats(target, signal) {
     const page = await engineGet(target, `api/session?${query}`);
     const data = Array.isArray(page?.data) ? page.data : [];
     for (const session of data)
-      if (session?.id && !markedRight(session))
+      if (session?.id && !markedRight(session, real))
         wrong.push(session.id);
     const next = page?.cursor?.next;
     query = data.length === 200 && next ? `limit=200&cursor=${encodeURIComponent(next)}` : null;
@@ -17719,10 +17734,11 @@ async function startSession(given, by, place) {
     ...remote ? { call: remote.call, lead: { box: remote.computer, key: remote.key, name: by.name }, ...brought.length ? { held: brought } : {} } : {}
   };
   const starter = Boolean(by?.place || remote);
-  const marks = { ...starter ? { startedBy: by.session } : {}, ...asBefore ? {} : { approval: kept, applied }, ...autopilot ? { autopilot: true } : {}, ...filed ? { filed } : {}, ...isChatsFolder(folder) ? { chat: true } : {}, ...marksOfLine };
+  const chat = isChatsFolder(folder) ? { chat: folder } : {};
+  const marks = { ...starter ? { startedBy: by.session } : {}, ...asBefore ? {} : { approval: kept, applied }, ...autopilot ? { autopilot: true } : {}, ...filed ? { filed } : {}, ...chat, ...marksOfLine };
   const waits = given.wait === true && !remote;
   const wakes = wakesFrom(given.wait === true && remote ? given.wake ?? "both" : given.wake, remote ? remote.own : Boolean(ownBot), waits);
-  const kuvo = { ...starter ? { startedBy: by.session, ...bot ? { by: bot, depth } : {}, ...wakes.length ? { wake: wakes } : {} } : {}, ...asBefore ? {} : { approval: kept, applied }, ...autopilot ? { autopilot: true } : {}, ...filed ? { filed } : {}, ...marksOfLine };
+  const kuvo = { ...starter ? { startedBy: by.session, ...bot ? { by: bot, depth } : {}, ...wakes.length ? { wake: wakes } : {} } : {}, ...asBefore ? {} : { approval: kept, applied }, ...autopilot ? { autopilot: true } : {}, ...filed ? { filed } : {}, ...chat, ...marksOfLine };
   const from_ = remote ? `${by.name} on ${remote.computer}` : by?.name ?? "";
   const textFor = (heard) => by ? composeLetter(from_, by.session, task, waits, heard) + (bot ? `
 
@@ -37201,7 +37217,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "ac7cd7b1c53d";
+var BRIDGE_VERSION = "f7f6d4179479";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

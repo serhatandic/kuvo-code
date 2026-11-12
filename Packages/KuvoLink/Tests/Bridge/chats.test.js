@@ -1,6 +1,6 @@
 // Chats, marked by the box (PROTOCOL.md, "Chats"): every session in its chats folder carries
-// `kuvo.chat: true` in its metadata and no other does, so a client draws a chat from the session
-// itself, never from its folder. As the box follows its engine again it marks those from before
+// `kuvo.chat` in its metadata, naming that folder, and no other does, so a client draws a chat from
+// the session itself, never from its folder. As the box follows its engine again it marks those from before
 // (and unmarks one moved out meanwhile), and as sessions are made, moved and written to it keeps
 // the mark right, leaving the rest of their metadata as it was. The real link's watch, in this
 // process; only the engine is a stand-in.
@@ -64,9 +64,9 @@ const engine = keepsIdle(http.createServer((request, response) => {
     if (session && request.method === "GET") return send({ data: session });
     if (session && request.method === "PATCH") {
       const given = JSON.parse(body);
-      const was = session.metadata?.kuvo?.chat === true;
+      const was = session.metadata?.kuvo?.chat;
       Object.assign(session, given);
-      if ((session.metadata?.kuvo?.chat === true) !== was) writes.push({ id: session.id, chat: !was });
+      if (session.metadata?.kuvo?.chat !== was) writes.push({ id: session.id, chat: session.metadata?.kuvo?.chat ?? null });
       onWrite();
       return send({ data: session });
     }
@@ -98,8 +98,10 @@ test("as the box follows its engine, every chat from before is marked, one moved
   made("ses_oldchat", chats, { "kuvo.archived": true, kuvo: { approval: "auto" } });
   made("ses_linked", linked);
   made("ses_sub", chats, undefined, { parentID: "ses_oldchat" });
-  made("ses_movedout", project, { kuvo: { chat: true, filed: { folder: project, project } } });
-  made("ses_marked", chats, { kuvo: { chat: true } });
+  made("ses_movedout", project, { kuvo: { chat: chats, filed: { folder: project, project } } });
+  made("ses_marked", chats, { kuvo: { chat: chats } });
+  // And a chat brought here by a box from before the mark, from a box that marked it there.
+  made("ses_brought", chats, { kuvo: { chat: "/Users/me/Library/Application Support/run.kuvo.code/Chats" } });
   // Then a page and more of a project's sessions, newer: the chats are on the last page.
   for (let i = 0; i < 230; i++) made(`ses_shop${i}`, project, i % 2 ? { kuvo: { approval: "auto" } } : undefined);
   const stop = new AbortController();
@@ -110,10 +112,11 @@ test("as the box follows its engine, every chat from before is marked, one moved
   // (Written oldest last: once the oldest is, every one before it was.)
   await writtenTo("ses_oldchat");
 
-  assert.deepEqual(writes.map(each => each.id).sort(), ["ses_linked", "ses_movedout", "ses_oldchat", "ses_sub"], "only those whose mark was wrong");
-  assert.deepEqual(sessions.get("ses_oldchat").metadata, { "kuvo.archived": true, kuvo: { approval: "auto", chat: true } }, "marked, the rest of its metadata as it was");
-  assert.equal(sessions.get("ses_linked").metadata.kuvo.chat, true, "the chats folder through a link is the chats folder");
-  assert.equal(sessions.get("ses_sub").metadata.kuvo.chat, true, "a chat's subagent works in the chats too");
+  assert.deepEqual(writes.map(each => each.id).sort(), ["ses_brought", "ses_linked", "ses_movedout", "ses_oldchat", "ses_sub"], "only those whose mark was wrong");
+  assert.deepEqual(sessions.get("ses_oldchat").metadata, { "kuvo.archived": true, kuvo: { approval: "auto", chat: chats } }, "marked, the rest of its metadata as it was");
+  assert.equal(sessions.get("ses_linked").metadata.kuvo.chat, linked, "the chats folder through a link is the chats folder, named as the session names it");
+  assert.equal(sessions.get("ses_sub").metadata.kuvo.chat, chats, "a chat's subagent works in the chats too");
+  assert.equal(sessions.get("ses_brought").metadata.kuvo.chat, chats, "marked for where it is now");
   assert.deepEqual(sessions.get("ses_movedout").metadata, { kuvo: { filed: { folder: project, project } } }, "a project's session carries no mark");
   assert.equal(sessions.get("ses_shop0").metadata, undefined);
   stop.abort();
@@ -137,11 +140,11 @@ test("a chat made, moved into a project, and written whole by a client keeps the
   made("ses_new", chats, { kuvo: { approval: "askFirst" } });
   tell("session.created", { sessionID: "ses_new", location: { directory: chats }, metadata: { kuvo: { approval: "askFirst" } } });
   await writtenTo("ses_new");
-  assert.deepEqual(sessions.get("ses_new").metadata, { kuvo: { approval: "askFirst", applied: "askFirst", chat: true } });
+  assert.deepEqual(sessions.get("ses_new").metadata, { kuvo: { approval: "askFirst", applied: "askFirst", chat: chats } });
 
   // Made marked already (by a box's own start, a move): nothing to write; nor for a project's.
-  made("ses_given", chats, { kuvo: { chat: true } });
-  tell("session.created", { sessionID: "ses_given", location: { directory: chats }, metadata: { kuvo: { chat: true } } });
+  made("ses_given", chats, { kuvo: { chat: chats } });
+  tell("session.created", { sessionID: "ses_given", location: { directory: chats }, metadata: { kuvo: { chat: chats } } });
   made("ses_work", project);
   tell("session.created", { sessionID: "ses_work", location: { directory: project } });
 
@@ -153,12 +156,12 @@ test("a chat made, moved into a project, and written whole by a client keeps the
 
   // A client wrote a chat's metadata whole without the mark (a pin, from what it read before):
   // marked again, the pin kept.
-  made("ses_pinned", chats, { kuvo: { chat: true } });
+  made("ses_pinned", chats, { kuvo: { chat: chats } });
   sessions.get("ses_pinned").metadata = { "kuvo.pinned": true };
   tell("session.metadata.updated", { sessionID: "ses_pinned", metadata: { "kuvo.pinned": true } });
   await writtenTo("ses_pinned");
-  assert.deepEqual(sessions.get("ses_pinned").metadata, { "kuvo.pinned": true, kuvo: { chat: true } });
+  assert.deepEqual(sessions.get("ses_pinned").metadata, { "kuvo.pinned": true, kuvo: { chat: chats } });
 
-  assert.deepEqual(writes, [{ id: "ses_new", chat: true }, { id: "ses_new", chat: false }, { id: "ses_pinned", chat: true }], "no mark changed for one marked right");
+  assert.deepEqual(writes, [{ id: "ses_new", chat: chats }, { id: "ses_new", chat: null }, { id: "ses_pinned", chat: chats }], "no mark changed for one marked right");
   stop.abort();
 });

@@ -350,7 +350,8 @@ final class Workspace {
     /// without the mark goes by its folder (`isChat(_ directory:)`): the old-box path, for a machine
     /// whose box is from before the mark, and for a chat its box hasn't marked yet.
     static func isChat(_ session: Session) -> Bool {
-        SessionChat.isChat(session) { isChat($0) }
+        // (The mark names its folder as its box does.)
+        SessionChat.isChat(session, folder: onBox(session.location.directory)) { isChat($0) }
     }
 
     /// Whether `directory` is the chats folder: this Mac's, or a machine's in Kuvo Code's folder
