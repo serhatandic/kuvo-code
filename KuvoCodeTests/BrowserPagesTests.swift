@@ -30,6 +30,12 @@ import WebKit
 
     private var tabCount: Int { utilities.browserTabs(of: utilities.panelKey).count }
 
+    /// Whether a tab has its page titled `title` loaded. A window the page opens is a tab the
+    /// moment it's asked for, and its page comes after, however long that takes on a busy Mac.
+    private func loaded(_ title: String) -> Bool {
+        utilities.browserTabs(of: utilities.panelKey).contains { $0.browser.title == title && !$0.browser.isLoading }
+    }
+
     @Test func aWindowThePageOpensIsATabOfItsOwn() async throws {
         defer { try? FileManager.default.removeItem(at: folder) }
         let start = try write("start.html", """
@@ -53,6 +59,7 @@ import WebKit
         _ = await agent.click(try #require(number(of: "Open the report", in: page), "\(page)"))
         try await until { tabCount == 2 }
         #expect(tabCount == 2)
+        try await until { loaded("Report") }
         let listed = await agent.tabs("list", tab: nil)
         #expect(listed.contains("Report"), "\(listed)")
         let report = await agent.tabs("switch", tab: try #require(number(of: "Report —", in: listed)))
@@ -63,6 +70,7 @@ import WebKit
         _ = await agent.click(try #require(number(of: "Sign in with Lighthouse", in: shop), "\(shop)"))
         try await until { tabCount == 3 }
         #expect(tabCount == 3)
+        try await until { loaded("Sign in") }
         let three = await agent.tabs("list", tab: nil)
         let signIn = await agent.tabs("switch", tab: try #require(number(of: "Sign in —", in: three), "\(three)"))
         _ = await agent.click(try #require(number(of: "Continue as Ada", in: signIn), "\(signIn)"))
