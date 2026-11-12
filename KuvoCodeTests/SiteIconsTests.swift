@@ -31,8 +31,9 @@ import Testing
         return NSBitmapImageRep(data: image.tiffRepresentation!)!.representation(using: .png, properties: [:])!
     }
 
-    @Test func iconsThatReadWell() {
-        #expect(SiteIcons.usable(png(oneInk: false)) != nil, "two colors")
+    @Test func iconsThatReadWell() throws {
+        let kept = try #require(SiteIcons.usable(png(oneInk: false)), "two colors")
+        #expect(NSImage(data: kept) != nil, "kept as the app reads it back")
         #expect(SiteIcons.usable(png(oneInk: true)) == nil, "a black glyph on clear: the globe")
         #expect(SiteIcons.usable(png(oneInk: true, ink: .systemBlue)) != nil, "a colored mark reads on either card")
         #expect(SiteIcons.usable(Data("not a picture".utf8)) == nil)

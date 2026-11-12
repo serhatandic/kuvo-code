@@ -70,7 +70,7 @@ What a client shows of a computer's sessions, the same in both apps. Rules only,
 - `SlashCommands`: "/" starting a message: the command name being typed, the commands it matches
   (names starting with it first), and a message that runs one ("/review main"), else as written.
 - `CommandMessages`: which messages a command made, with the command as you wrote it, shown in
-  place of the long prompt it sent; the latest 500, kept where the app hands it (its settings).
+  place of the long prompt it sent; the latest 500, kept where each app says (its settings).
 - `GoalChart.labeledDays`, `.labeledHours`: which days and hours along a goal's timeline get a
   label, clear of each other, counted from Today; each app gives the room its own labels take.
 - `MachinePieces`: which version a machine's link, coding agents and engine each run, as its box
@@ -116,8 +116,9 @@ the Mac's own git). Foundation only.
 
 ## ClientDesign
 
-The look both apps draw with, the same on each: SwiftUI, no app state. It's taking the place of the
-phone's copies of the Mac's design files, a piece at a time.
+The look both apps draw with, the same on each: SwiftUI, no app state (except the site-icon cache,
+`SiteIcons`, in a folder each app hands it). It's taking the place of the phone's copies of the
+Mac's design files, a piece at a time.
 
 - `MachineWords`: a machine's words in both apps: the step its first connection is on ("Copying
   the engine"), and what Remove's dialog says Uninstall would stop it for (your other Macs, your
@@ -185,9 +186,9 @@ Only what both apps call, with a small public surface: rules and formatting both
 tested here. Not:
 
 - text views (each app's composer field, reply renderers), where AppKit and UIKit differ;
-- anything bound to an app's state, stores or settings (drafts), unless the app hands it in: where
-  it keeps what it keeps (`CommandMessages`' settings, `SiteIcons`' folder), so a package run never
-  reaches an app's real data;
+- anything bound to an app's state, stores or settings (drafts), unless each app hands it in:
+  where it keeps what it keeps (`CommandMessages`' settings, `SiteIcons`' folder, each app's own
+  `shared`), so a package run never reaches an app's real data;
 - what only one app uses.
 
 A change here is a change to both apps: run this package's tests (`swift test`), the Mac app's

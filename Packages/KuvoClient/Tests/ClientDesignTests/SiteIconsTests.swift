@@ -1,6 +1,6 @@
 #if os(macOS)
 import AppKit
-import ClientDesign
+@testable import ClientDesign
 import Foundation
 import Testing
 
@@ -23,8 +23,8 @@ import Testing
     }
 
     /// The store as an app's launch has it, reaching the stand-in sites.
-    private func icons() -> SiteIcons {
-        let icons = SiteIcons(folder: folder, drawsSVG: true, picture: { NSImage(data: $0) },
+    private func icons(drawsSVG: Bool = true) -> SiteIcons {
+        let icons = SiteIcons(folder: folder, drawsSVG: drawsSVG, picture: { NSImage(data: $0) },
                               usable: { NSImage(data: $0)?.isValid == true ? $0 : nil })
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [Sites.self]
@@ -76,6 +76,18 @@ import Testing
         #expect(icons.icon(for: "plain-icons.com") != nil)
     }
 
+    /// An app that can't draw SVG (the phone) never asks for one a page declares: its favicon.
+    @Test func anAppThatDrawsNoSVGTakesTheFavicon() async throws {
+        defer { done() }
+        Sites.serve("https://vector-icons.com/", Data(#"<link rel="icon" type="image/svg+xml" href="/mark.svg">"#.utf8))
+        Sites.serve("https://vector-icons.com/mark.svg", Data(#"<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" fill="orange"/></svg>"#.utf8))
+        Sites.serve("https://vector-icons.com/favicon.ico", png)
+        let icons = icons(drawsSVG: false)
+        await load(icons, "https://vector-icons.com/", site: "vector-icons.com")
+        #expect(icons.icon(for: "vector-icons.com") != nil)
+        #expect(!Sites.asked.contains("https://vector-icons.com/mark.svg"))
+    }
+
     /// An icon that doesn't read well (here, not a picture), or nothing at all: the globe, and the
     /// site isn't asked again.
     @Test(arguments: ["glyph-icons.com", "bare-icons.com"])
@@ -117,6 +129,31 @@ import Testing
         #expect(!icon(covering: 0.3, (0, 0.48, 1)), "a colored mark")
         #expect(!icon(covering: 0.9, (0, 0, 0)), "a tile of its own")
         #expect(!icon(covering: 0.3, (0, 0, 0), and: (1, 1, 1)), "black and white across it")
+    }
+}
+
+/// A site's redirect is followed only to another public address, and never from https down to
+/// http; asked on URLSession's own queue, off the main actor.
+@Suite struct SiteRedirectsTests {
+    private func follows(_ from: String, to: String) async -> Bool {
+        let session = URLSession(configuration: .ephemeral)
+        let task = session.dataTask(with: URL(string: from)!)
+        defer { task.cancel() }
+        let response = HTTPURLResponse(url: URL(string: from)!, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: ["Location": to])!
+        return await withCheckedContinuation { done in
+            PublicRedirects().urlSession(session, task: task, willPerformHTTPRedirection: response, newRequest: URLRequest(url: URL(string: to)!)) {
+                done.resume(returning: $0 != nil)
+            }
+        }
+    }
+
+    @Test func onlyToPublicAddressesAndNeverDownToHTTP() async {
+        #expect(await follows("https://brand-icons.com/favicon.ico", to: "https://cdn.brand-icons.net/favicon.ico"))
+        #expect(await follows("http://brand-icons.com/favicon.ico", to: "https://brand-icons.com/favicon.ico"))
+        #expect(await follows("http://brand-icons.com/favicon.ico", to: "http://cdn.brand-icons.net/favicon.ico"))
+        #expect(!(await follows("https://brand-icons.com/favicon.ico", to: "http://cdn.brand-icons.net/favicon.ico")), "down to http")
+        #expect(!(await follows("https://brand-icons.com/favicon.ico", to: "https://localhost/favicon.ico")), "this computer")
+        #expect(!(await follows("https://brand-icons.com/favicon.ico", to: "https://192.168.1.20/favicon.ico")), "its network")
     }
 }
 

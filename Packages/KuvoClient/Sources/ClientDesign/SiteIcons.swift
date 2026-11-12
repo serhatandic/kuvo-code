@@ -210,7 +210,7 @@ public typealias PlatformImage = UIImage
 }
 
 /// Redirects only to another public address, and never from https down to http.
-private final class PublicRedirects: NSObject, URLSessionTaskDelegate {
+final class PublicRedirects: NSObject, URLSessionTaskDelegate {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
         let from = task.originalRequest?.url?.scheme?.lowercased()

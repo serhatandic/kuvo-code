@@ -4,11 +4,10 @@ import OpenCodeKit
 
 /// A message that ran a command shows the command ("/review main") rather than the long
 /// prompt the command sent for it, the same in both apps. The engine doesn't mark these messages,
-/// so the app notes each one as it arrives, and keeps the notes across launches.
+/// so the app notes each one as it arrives, and keeps the notes across launches, where it says
+/// (each app's own `shared`, in its settings).
 @MainActor @Observable
 public final class CommandMessages {
-    /// The app's own, kept in its settings.
-    public static let shared = CommandMessages(defaults: .standard)
     private static let key = "commandMessages"
     private static let limit = 500
 
