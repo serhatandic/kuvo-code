@@ -72,7 +72,8 @@ esac
 
 
 # A clock of the test's own (the seconds in $FAKE_CLOCK), which only a whole number of seconds'
-# sleep moves, at once; a shorter sleep (heavy.sh's polls) sleeps.
+# sleep moves, at once, without waiting: for builds one at a time, where only batch-build.sh's
+# naming sleeps whole seconds (heavy.sh's waits for a turn would spin). A shorter sleep sleeps.
 DATE = r"""#!/bin/sh
 exec /bin/date -r "$(cat "$FAKE_CLOCK")" "$@"
 """
@@ -154,6 +155,14 @@ class Batches(unittest.TestCase):
         clock = os.path.join(self.root, "clock")
         write(clock, f"{int(time.time())}\n")
         self.env = dict(self.env, PATH=bin_folder + os.pathsep + self.env["PATH"], FAKE_CLOCK=clock)
+
+    def amend_until(self, wanted):
+        """Main's last commit, made again at other times (each a new hash) until its hash is one wanted."""
+        for second in range(64):
+            if wanted(git(self.mac, "rev-parse", "main")):
+                return True
+            git(self.mac, "commit", "-q", "--amend", "--no-edit", f"--date={1700000000 + second} +0000")
+        return False
 
     def repo(self, name, files):
         path = os.path.join(self.root, name)
@@ -258,16 +267,15 @@ class Building(Batches):
 
     def test_builds_in_one_second_are_named_in_the_order_they_were_built(self):
         self.stop_the_clock()
+        # A good commit whose name sorts in the upper half, so a few tries find one below it.
+        self.assertTrue(self.amend_until(lambda commit: commit[0] >= "8"))
         self.assertEqual(self.build("mac").returncode, 0)
         good = git(self.mac, "rev-parse", "main")
         # A broken commit whose name sorts before the good one's: in the same second, its failed
         # build would look older than the batch, and runs would test that.
         write(os.path.join(self.mac, "KuvoCode/App.swift"), "struct App { var broken }\n")
         git(self.mac, "commit", "-qam", "Breaks it")
-        second = 0
-        while git(self.mac, "rev-parse", "main")[:7] >= good[:7]:
-            second += 1
-            git(self.mac, "commit", "-q", "--amend", "--no-edit", f"--date={1700000000 + second} +0000")
+        self.assertTrue(self.amend_until(lambda commit: commit[:7] < good[:7]))
         broken = git(self.mac, "rev-parse", "main")
         self.assertEqual(self.build("mac", FAKE_XCODE_FAIL="1").returncode, 1)
         opened = self.batch("open", "mac", str(os.getpid()))
