@@ -241,24 +241,6 @@ extension Integration {
     var isListed: Bool { isConnected || metadata?["signInEnded"]?.bool == true }
 }
 
-extension Integration {
-    /// The ways to sign in Accounts offers. A ChatGPT plan is used through Codex and a SuperGrok
-    /// plan through Grok's CLI (Subscriptions), so the engine's own sign-ins with those plans
-    /// aren't offered: two ways to one plan read as two accounts. One made before still works,
-    /// shows as connected, and can be signed in to again.
-    var offeredSignInMethods: [Method] {
-        if connections.contains(where: { $0.method == "oauth" }) { return signInMethods }
-        return signInMethods.filter { method in
-            guard case .oauth(let id, _, _) = method else { return true }
-            switch self.id {
-            case "openai": return !id.hasPrefix("chatgpt")
-            case "xai": return id != "device"
-            default: return true
-            }
-        }
-    }
-}
-
 // MARK: A product
 
 private struct ProductBlock: View {

@@ -1168,6 +1168,77 @@ the branch, the model, effort and account, and the pull request with its checks 
 - What a client draws from it (which mark, which lines on the card) is the clients' to decide
   alike; a box without `sessions.glance` gives no marks beyond the worktree's branch, as before.
 
+### A session's model
+
+What a conversation's model button names, and whether its model can run (`sessions.models`): the
+box decides it from what its engine and coding agents list, so every client shows the same.
+
+- `GET kuvo/sessions/models?sessions=<id>,<id>…` (at most 200) → `{"sessions": {<id>: {model,
+  name?, runs, missing?, account?: {id, name, label?}, plan?: {name, agent, provider}}}}`. `400
+  {"message"}` for none named, `405` for anything but `GET`, `503` with neither the engine nor the
+  coding agents' bridge running, or while one that might have a session isn't answering.
+- `model`: the model it runs on, `{providerID, id, variant?}` as the session names it: its own,
+  else (a session of the engine's with none) the engine's default; `null` when the engine says it
+  has none (`api/model/default` answers `data: null`). `name`:
+  as its provider lists it, or its coding agent (Claude Code's `default` by the model it stands
+  for now), or a Custom Auto list's name; left out for one gone from the list.
+- `runs`: it can run here now. Else `missing` says what it needs:
+  - `model`: none to run on: choose one.
+  - `signIn`: a sign-in to `account` (an engine provider's, or a coding agent's account, `label`
+    the name you gave one you added).
+  - `key`: a key for `account`, where the only way Accounts offers to sign in to it is a key. The
+    engine's OpenAI and xAI are offered only a key, as their ChatGPT and SuperGrok plans sign in
+    through Codex and Grok: those come with `plan` (`{name: "SuperGrok", agent: "Grok", provider:
+    "grok-cli"}`), where its models are.
+  - `install`: `account`'s coding agent installed on this box.
+  - `gone`: the model is no longer in its provider's list (`account`, while its account is still
+    there), its account signed in: retired, or a coding agent's it no longer lists. It can't run:
+    choose another. Also a coding agent's account you removed, and a Custom Auto list emptied (one
+    deleted runs on your first list, as the bridge runs it).
+- The engine's lists (its providers, models, accounts and default) are read in the session's
+  folder, where a project's own settings may add to them.
+- An engine provider counts as signed in when the engine says it's ready (`api/provider`), it has
+  a connection, or nothing to sign in to (a local one's); OpenCode Zen's free models need no
+  account, and its others need its account or a key (the engine lists it ready for its free ones,
+  and lists its others only then). A model missing from a provider signed in is `gone` only while
+  the engine lists others of that provider. A coding
+  agent's model runs while its account is installed, signed in, and its agent lists it (by its own
+  id or one it's known by), one it keeps out of its picker too (Codex's hidden ones, from the
+  bridge's `api/model?hidden=1`): only one absent from its list is `gone`, and only where its
+  account says its list is every model it runs (`metadata.modelsComplete` in the bridge's
+  `api/integration`: not while Claude Code lists its usual ones, nor for a Codex that listed none
+  it hides, nor from a bridge before it). Custom Auto runs while its list has models: it
+  picks among them each turn, so whether one entry's account is signed in isn't said.
+- Left out, as not known yet: a session the box doesn't have; one whose place didn't answer just
+  now; an engine's session while the engine lists no provider ready or no models for its folder
+  (one it hasn't loaded yet answers so at first), or, for one with no model of its own, while it
+  didn't answer for its default; a coding agent's model while that account, signed in, lists no
+  models, or only its usual ones (`provisional: true` on the bridge's `api/model`, Claude Code's
+  until it says which your account has), or one missing from a list its account doesn't say is
+  whole; and a model of a provider the engine doesn't know at all. A client decides such a one as
+  it would from a box without `sessions.models`.
+- What the engine and the bridge list is read once for every session asked about, and used again
+  for ten seconds, or until the box hears either say accounts, models, settings or Custom Auto's
+  lists changed (`integration.updated`, `model.updated`, `provider.updated`, `config.updated`,
+  `global.disposed`, `kuvo.auto.updated`), or hears them again after it couldn't; what one of them
+  couldn't wholly say (its default, Custom Auto's lists) isn't kept.
+- A client asks again as what it's drawn from changes: the session opens, its model changes, or its
+  box's accounts, models, default model or Custom Auto lists do (as it reads them again on
+  `integration.updated`, `model.updated`, `provider.updated`, `config.updated`,
+  `kuvo.auto.updated`), and once a model it picked is set. What the box said is of the model it
+  names: a client draws it only while that's still the session's (another just picked is drawn as
+  without the box's word until the box is asked again).
+- Clients draw it alike from ClientSessions' `SessionModelState`: the model button names the model
+  while it runs or its account needs something, and says "Choose a Model" for `gone` and `model`;
+  Send follows `ComposerSend` with that, so it waits for a model for those two, and for the others
+  a message is refused with what to do (a sign-in, a key, an install, where), kept in the field;
+  a failed turn's card, for the model the conversation is on, names its button by what it does
+  (Add Key, Install, Sign In, or Sign In Again for a sign-in that ended). How a signed-out engine
+  provider is signed in to is held to `Vectors/plan-sign-ins.json` in the box and KuvoClient's
+  `PlanSignIns` and `Integration.offeredSignInMethods`, which both apps' Accounts offer from. A
+  box without `sessions.models` leaves the clients deciding from its accounts and models as they
+  did before.
+
 ### Work
 
 A bot runs sessions as you would (bridge 0.9.106): it starts them in your projects on the model,
@@ -2260,7 +2331,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
 - `kuvo/agents/api/…`: the coding agents you already have (Claude Code, Codex, Cursor, Grok,
   Antigravity), through the agents bridge beside the host's engine, which answers the same paths
   as the engine for them: sessions, messages, prompts, permissions, questions, events
-  (`kuvo/agents/api/event`) and models (`kuvo/agents/api/model`, only signed-in agents'). Its
+  (`kuvo/agents/api/event`) and models (`kuvo/agents/api/model`, only signed-in agents'; with
+  `?hidden=1`, also those an agent still runs but keeps out of its own picker, Codex's hidden ones,
+  each `hidden: true`, which pickers don't offer). Its
   sessions carry `metadata.kuvoAgent` and run where that bridge does; a new session with one of
   their models (providers `claude-code`, `codex-cli`, `cursor`, `grok-cli`, `antigravity`) is
   made there, never on the engine. A Mac answers for its own; a machine's bridge for the
@@ -4117,6 +4190,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `sessions.agents` | `POST kuvo/sessions/<id>/agents` |
 | `sessions.chat` | A chat made, moved or with its metadata written since carries `kuvo.chat` in its metadata, naming the chats folder it's in; older ones go by their folder ("Chats") |
 | `sessions.glance` | `kuvo/sessions/glance`, `…/events`, and `session` in `POST kuvo/git/pull-request` ("A session at a glance") |
+| `sessions.models` | `GET kuvo/sessions/models` ("A session's model") |
 | `sessions.start` | `POST kuvo/sessions`: a session started with a task (bridge 0.9.100) |
 | `setup` | `kuvo/setup`, `…/events`: your setup and its main computer ("Your setup") |
 | `shell.stop` | `POST kuvo/shell/<id>/stop` |

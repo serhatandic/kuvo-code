@@ -27,6 +27,9 @@ struct Composer: View {
     let agent: String
     let approval: ToolApproval
     let model: ModelRef?
+    /// What the conversation's box says of its model (`kuvo/sessions/models`), which the chip and
+    /// Send draw; nil for a new one, or a box from before it (the old-box path).
+    var modelState: SessionModelState?
     /// On Auto, the model of your list at work now (its latest reply's).
     var modelInUse: ModelRef?
     let isRunning: Bool
@@ -187,7 +190,7 @@ struct Composer: View {
     /// What Send and Return do (`ComposerSend`): with no model chosen, the chip asks for one and
     /// Return opens its picker, what's written kept.
     private var sendAction: ComposerSend {
-        ComposerSend(ready: canSend, text: text, hasModel: !showsModel || catalog.chipModel(model, in: modelScope) != nil)
+        ComposerSend(ready: canSend, text: text, hasModel: !showsModel || catalog.chipModel(model, in: modelScope, said: modelState) != nil)
     }
     /// Opens the model picker when it changes (Return with no model chosen).
     @State private var pickModelRequest = 0
@@ -377,7 +380,7 @@ struct Composer: View {
                                         .layoutPriority(-1)
                                 }
                                 if showsModel {
-                                    ModelChip(selection: model, onSelect: onSelectModel, scope: modelScope, inUse: modelInUse, openRequest: modelMenuRequest + pickModelRequest)
+                                    ModelChip(selection: model, onSelect: onSelectModel, scope: modelScope, said: modelState, inUse: modelInUse, openRequest: modelMenuRequest + pickModelRequest)
                                         .disabled(isOffline)
                                 }
                                 if let worktree {

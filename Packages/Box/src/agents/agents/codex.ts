@@ -649,15 +649,23 @@ export class CodexAgent implements Agent {
     this.known.reset()
   }
 
-  async models(): Promise<Model[]> {
-    if (this.modelList && Date.now() - this.modelList.at < 30 * 60_000) return this.modelList.models
+  async models(options: { hidden?: boolean } = {}): Promise<Model[]> {
+    // (Those Codex hides from its picker it still runs: listed only when asked for.)
+    const shown = (models: Model[]) => (options.hidden ? models : models.filter((each) => !each.hidden))
+    if (this.modelList && Date.now() - this.modelList.at < 30 * 60_000) return shown(this.modelList.models)
     try {
-      return await this.listModels()
+      return shown(await this.listModels())
     } catch (error) {
       // Codex couldn't list them just now (busy, or starting): the ones it listed last.
-      if (this.modelList) return this.modelList.models
+      if (this.modelList) return shown(this.modelList.models)
       throw error
     }
+  }
+
+  /** Only once it listed those it hides from its picker (asked for: a Codex too old to take
+   * `includeHidden` lists none), so one missing from its list isn't one it hides. */
+  listsEveryModel(): boolean {
+    return this.modelList?.models.some((model) => model.hidden) === true
   }
 
   private async listModels(): Promise<Model[]> {
@@ -666,9 +674,9 @@ export class CodexAgent implements Agent {
     let cursor: string | undefined
     let order = 1000
     do {
-      const page: any = await rpc.request("model/list", cursor ? { cursor } : {}, 30_000)
+      // (With those it hides from its picker, which it lists only when asked: they still run.)
+      const page: any = await rpc.request("model/list", { includeHidden: true, ...(cursor ? { cursor } : {}) }, 30_000)
       for (const info of page?.data ?? []) {
-        if (info.hidden) continue
         models.push(
           model(this.providerID, info.model ?? info.id, info.displayName ?? info.model, {
             variants: (info.supportedReasoningEfforts ?? []).map((effort: any) => effort.reasoningEffort),
@@ -676,6 +684,7 @@ export class CodexAgent implements Agent {
             context: this.windows.get(info.model ?? info.id) ?? 400_000,
             // Listed in Codex's order: its default first.
             released: info.isDefault ? 2000 : order--,
+            hidden: Boolean(info.hidden),
           }),
         )
       }

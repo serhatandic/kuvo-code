@@ -606,7 +606,9 @@ struct BottomStack: View {
                         quoteFocus: model.quoteFocus,
                         agent: model.agent,
                         approval: model.approval,
-                        model: model.session.model ?? catalog.startingModel(lastModel),
+                        // None of its own: the one its box says it runs on (the engine's default).
+                        model: catalog.composerModel(model.session.model, said: model.modelState, lastModel: lastModel),
+                        modelState: model.modelState,
                         modelInUse: model.modelInUse,
                         isRunning: model.isRunning,
                         hasQueue: !model.waiting.isEmpty,
@@ -686,6 +688,9 @@ struct BottomStack: View {
             }
             // A machine's box removes and restores worktrees without telling this Mac: read as it shows.
             .task(id: model.session.location.directory) { await workspace.refreshWorktrees(for: model.session) }
+            // What its box says of its model, read again as its model changes, and as its
+            // computer's accounts, models or Custom Auto lists do.
+            .task(id: ModelStateAsk(session: model.id, model: model.session.model, lists: catalog.listsKey)) { await model.readModelState() }
             // A bot's work read from its box as it changes (a session of it started, at work,
             // asking, done), wherever the bot lives.
             .task(id: workChanges) {
@@ -887,7 +892,8 @@ struct BottomStack: View {
             return
         }
         let machine = RemoteFolder.machine(of: model.session.location.directory).map { id in app.machines.list.first { $0.id == id }?.name ?? id }
-        let unavailable = model.session.model.flatMap { catalog.refusal($0, on: machine) }
+        // (One with no model of its own runs on the one its box names.)
+        let unavailable = (model.session.model ?? model.modelState?.model).flatMap { catalog.refusal($0, on: machine, said: model.modelState) }
         model.submitDraft(for: catalog.model(model.session.model), queue: queue, commands: catalog.commands(in: model.session.location.directory), unavailable: unavailable)
     }
 }
@@ -1130,4 +1136,12 @@ struct LastModel: DynamicProperty {
     var projectedValue: Binding<ModelRef?> {
         Binding(get: { wrappedValue }, set: { wrappedValue = $0 })
     }
+}
+
+/// What a conversation's box is asked of its model for: the conversation, its model, and its
+/// computer's accounts and models as last read.
+private struct ModelStateAsk: Hashable {
+    let session: String
+    let model: ModelRef?
+    let lists: Int
 }
