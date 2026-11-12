@@ -1,5 +1,6 @@
 import AppKit
 import ClientDesign
+import ClientText
 import Foundation
 
 /// The icons of the sites agents' replies link to, shown before each link (`SiteIconCell`): KuvoClient's
@@ -11,7 +12,7 @@ extension SiteIcons {
         folder: AppInfo.isHostingTests
             ? AppInfo.testRoot.appending(path: "Caches/Site Icons")
             : URL.cachesDirectory.appending(path: Bundle.main.bundleIdentifier ?? "run.kuvo.code").appending(path: "Site Icons"),
-        drawsSVG: true, picture: { NSImage(data: $0) }, usable: { Self.usable($0) })
+        drawsSVG: true, picture: { NSImage(data: $0) }, usable: { SiteIcons.usable($0) })
 
     // MARK: Whether it reads
 
