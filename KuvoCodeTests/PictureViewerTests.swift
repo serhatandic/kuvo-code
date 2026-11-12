@@ -264,8 +264,8 @@ import Testing
             .environment(app.workspace)
             .environment(catalog)
             .frame(width: Self.size.width, height: Self.size.height)))
-        // The picture, drawn (it says how far it's zoomed).
-        try await until { elements.contains { $0.label == "light.png" && (($0.object.accessibilityValue?() ?? nil) as? String)?.hasSuffix("%") == true } }
+        // The picture, drawn: as large as the panel lets it be, not its name in the header.
+        try await until { elements.contains { $0.label == "light.png" && $0.frame.height > 100 } }
         try await swipe(fingers: -260)
         try await until { app.utilities.tabs.contains { $0.kind == .file(dark) } }
     }
