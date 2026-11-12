@@ -8,6 +8,7 @@ import path from "node:path";
 import { isObject } from "../../shared/json";
 import { categories, keepCategory } from "./categories";
 import { categoryNamed } from "./categories";
+import { intoNext } from "./ops";
 import { changeQueues, FILE_NAME, filesOf, itemOf, OWNER, readKeptQueue, readQueueSettingAside, type Item } from "./store";
 
 /** What a move carries: each owner's items, the custom categories they're in, and which items
@@ -56,7 +57,7 @@ export function placeWorkQueues(carried: unknown, owners: readonly string[], ope
   const items = carried.items.flatMap(each => (isObject(each) && typeof each.owner === "string" && allowed.has(each.owner) ? [itemOf(each, each.owner)] : [])).filter((each): each is Item => each !== null);
   if (!items.length) return;
   for (const each of Array.isArray(carried.categories) ? carried.categories : []) if (isObject(each) && typeof each.id === "string" && typeof each.name === "string") keepCategory(each.id, each.name);
-  for (const item of items) if (!categoryNamed(item.category)) item.category = "next";
+  for (const item of items) if (!categoryNamed(item.category)) intoNext(item, item.category, Date.now());
   changeQueues(book => {
     for (const item of items) {
       // (Into a queue of a kind a newer box keeps here that this one can't read whole: refused, so

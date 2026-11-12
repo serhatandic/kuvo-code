@@ -12,8 +12,8 @@ import { BOTS, IS_MAC, K } from "../home";
 import { categoryNamed } from "./categories";
 import { takeNumber, type Primary } from "./numbers";
 import {
-  FILES, filesOf, matching, MOST_BODY, MOST_FILE, MOST_FILES, MOST_ITEMS, MOST_LINKS, MOST_NOTE, MOST_NOTES, MOST_TITLE, newItemID, noteHanded, placeBeside, placeIn, Refusal,
-  type Book, type Item, type KeptFile, type Source, type Who,
+  FILES, filesOf, matching, MOST_BODY, MOST_EVENTS, MOST_FILE, MOST_FILES, MOST_ITEMS, MOST_LINKS, MOST_NOTE, MOST_NOTES, MOST_TITLE, newItemID, noteHanded, placeBeside, placeIn, Refusal,
+  type Book, type Item, type ItemEvent, type KeptFile, type Source, type Who,
 } from "./store";
 import { nameOf, refOf } from "./view";
 import { doneOnGitHub, seenOf } from "./github";
@@ -165,15 +165,90 @@ export function categoryFor(given: unknown): string {
   return found.id;
 }
 
-/** `session` linked to `item`, its oldest other link dropped when it has `LINKS_EACH` already. */
+/** `session` linked to `item`, its oldest other link dropped when it has `LINKS_EACH` already
+ * (said there as its work stopped, where it had said it started). */
 export function linkSession(book: Book, item: Item, session: string, now: number): void {
   if (item.sessions.some(each => each.session === session)) return;
   const others = book.items().filter(each => each.id !== item.id && each.sessions.some(link => link.session === session));
   if (others.length >= LINKS_EACH) {
     const oldest = others.sort((a, b) => a.sessions.find(link => link.session === session)!.since - b.sessions.find(link => link.session === session)!.since)[0];
-    oldest.sessions = oldest.sessions.filter(link => link.session !== session);
+    unlinkSessions(oldest, [session], now);
   }
   item.sessions.push({ session, since: now });
+}
+
+// Reorders within one category by the same one, each soon after the last, are one move in the feed.
+const FOLD_REORDERS = 10 * 60_000;
+// A session that stops and starts again this soon never stopped, as the feed says it.
+const FOLD_RESTART = 2 * 60_000;
+
+/** Who did something, the same one: you, or one agent. */
+const sameWho = (a: Who, b: Who): boolean => JSON.stringify(a) === JSON.stringify(b);
+
+/** What happened to `item` kept with it, its last `MOST_EVENTS`. A reorder right after the same
+ * one's reorder in the same category is folded into it; a start right after the same one's stop
+ * is no stop at all: each with nothing said between (no note, no hand-off), and never back in time
+ * (a clock ahead on another computer). */
+export function noteEvent(item: Item, event: ItemEvent): void {
+  const events = [...(item.events ?? [])];
+  const last = events.at(-1);
+  const reorder = (each: ItemEvent) => each.kind === "moved" && each.from === each.to;
+  const quiet = (since: number) => !item.notes.some(note => note.at >= since) && !(item.handed ?? []).some(each => each.at >= since);
+  const within = (most: number) => last !== undefined && event.at >= last.at && event.at - last.at < most;
+  if (last && reorder(last) && reorder(event) && last.to === event.to && sameWho(last.by, event.by) && within(FOLD_REORDERS) && quiet(last.at)) {
+    const { top: _, ...folded } = last;
+    events[events.length - 1] = { ...folded, at: event.at, ...(event.top ? { top: true as const } : {}) };
+  } else if (last && last.kind === "stopped" && event.kind === "started" && sameWho(last.by, event.by) && within(FOLD_RESTART) && quiet(last.at)) {
+    events.pop();
+  } else {
+    events.push(event);
+  }
+  item.events = events.slice(-MOST_EVENTS);
+}
+
+// The latest word of `session`'s work on `item`, that it started or stopped, since the item was
+// last done (Done unlinked everyone, saying no `stopped`: a word from before it is over).
+function lastWord(item: Item, session: string): ItemEvent | undefined {
+  for (const each of [...(item.events ?? [])].reverse()) {
+    if (each.kind === "done") return undefined;
+    if ((each.kind === "started" || each.kind === "stopped") && (each.by as { session?: unknown }).session === session) return each;
+  }
+  return undefined;
+}
+
+/** `sessions` unlinked from `item`: each that had said it started is kept as having stopped (as
+ * it said it started), when its agent said so or its link was dropped for it. Done and a delete
+ * unlink everyone without this: they say it themselves. */
+export function unlinkSessions(item: Item, sessions: Iterable<string>, now: number, who?: Who): void {
+  for (const session of sessions) {
+    if (!item.sessions.some(each => each.session === session)) continue;
+    item.sessions = item.sessions.filter(each => each.session !== session);
+    const word = lastWord(item, session);
+    if (word?.kind === "started") noteEvent(item, { at: now, by: who ?? word.by, kind: "stopped" });
+  }
+}
+
+/** `session` at work on `item`, as its agent said (`working: true`): linked to it, and kept as
+ * having started, unless it's at it already (linked, its last word that it started). */
+export function startWork(book: Book, item: Item, session: string, { who, now }: Pick<Acting, "who" | "now">): void {
+  const linked = item.sessions.some(each => each.session === session);
+  linkSession(book, item, session, now);
+  if (!linked || lastWord(item, session)?.kind !== "started") noteEvent(item, { at: now, by: who, kind: "started" });
+}
+
+/** `session` no longer at work on `item`, as its agent said (`working: false`): unlinked, and kept
+ * as having stopped, when its last word was that it started. */
+export function stopWork(item: Item, session: string, { who, now }: Pick<Acting, "who" | "now">): void {
+  unlinkSessions(item, [session], now, who);
+}
+
+/** Who moves an item the box itself moves (one whose category isn't kept here goes to Next). */
+export const THE_BOX: Who = { source: "kuvo", name: "Kuvo Code" };
+
+/** `item`, whose category `from` this box doesn't keep, in Next, said in its feed. */
+export function intoNext(item: Item, from: string, now: number): void {
+  item.category = "next";
+  noteEvent(item, { at: now, by: THE_BOX, kind: "moved", from, to: "next" });
 }
 
 /** What an add or a change gives: the fields, as the tools name them. */
@@ -231,8 +306,8 @@ export function addItem(book: Book, owner: string, fields: Fields, acting: Actin
     ...(source ? { source } : {}),
   };
   book.queue(owner).items.push(item);
-  // (Its details as a change makes them, so the same checks hold.)
-  changeItem(book, item, { ...fields, title: undefined, category: undefined, top: undefined }, acting);
+  // (Its details as a change makes them, so the same checks hold: where it's put isn't a move.)
+  changeItem(book, item, { ...fields, title: undefined, category: undefined, top: undefined }, acting, { added: true });
   // (An outside source's item is named by its ref, never numbered.)
   if (item.source) return item;
   const number = takeNumber(primary);
@@ -244,8 +319,11 @@ export function addItem(book: Book, owner: string, fields: Fields, acting: Actin
 const refuseDone = (name: string): never => refuse(`${name} is Done once it's closed on GitHub (or, a pull request, merged): close it there, or let the pull request that fixes it close it.`);
 
 /** `item` changed as `fields` say. */
-export function changeItem(book: Book, item: Item, fields: Fields, acting: Acting): void {
+export function changeItem(book: Book, item: Item, fields: Fields, acting: Acting, { added = false }: { added?: boolean } = {}): void {
   const { who, now } = acting;
+  // (Where it is among its category's items: a move that leaves it there isn't one.)
+  const placeNow = () => ({ category: item.category, index: book.items().filter(each => each.id !== item.id && !each.removed && each.category === item.category && each.order < item.order).length });
+  const was = placeNow();
   if (fields.title !== undefined) {
     const title = plainName(text(fields.title, MOST_TITLE * 4, "The title")).slice(0, MOST_TITLE);
     if (!title) refuse("A title can't be empty.");
@@ -280,6 +358,14 @@ export function changeItem(book: Book, item: Item, fields: Fields, acting: Actin
   if (fields.before !== undefined) item.order = placeBeside(book.items(), beside(fields.before), false, item);
   else if (fields.after !== undefined) item.order = placeBeside(book.items(), beside(fields.after), true, item);
   else if (fields.top === true && fields.category === undefined) item.order = placeIn(book.items().filter(each => each.id !== item.id), item.category, { top: true });
+  const placed = placeNow();
+  if (added) {
+    // (An item just added isn't moved, wherever it's put.)
+  } else if (placed.category !== was.category && placed.category === "done") noteEvent(item, { at: now, by: who, kind: "done" });
+  else if (placed.category !== was.category || placed.index !== was.index) {
+    const top = placed.index === 0 && (fields.top === true || fields.before !== undefined || fields.after !== undefined);
+    noteEvent(item, { at: now, by: who, kind: "moved", from: was.category, to: placed.category, ...(top ? { top: true as const } : {}) });
+  }
   if (fields.progress !== undefined) {
     if (fields.progress === null) {
       if (item.progress) delete item.progress.value;
@@ -358,7 +444,7 @@ export function removeItem(item: Item, who: Who, now: number): void {
 /** `item` brought back, at the end of its category (Next, for one whose category is gone). */
 export function restoreItem(book: Book, item: Item, who: Who, now: number): void {
   delete item.removed;
-  if (!categoryNamed(item.category)) item.category = "next";
+  if (!categoryNamed(item.category)) intoNext(item, item.category, now);
   item.order = placeIn(book.items(), item.category);
   item.updated = { at: now, by: who };
 }

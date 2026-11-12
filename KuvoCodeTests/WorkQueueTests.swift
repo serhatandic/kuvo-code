@@ -114,6 +114,40 @@ import Textual
         #expect(store.refusal == nil)
     }
 
+    /// #563: what you do to an item from the Mac, and an item from before, as its page's feed reads
+    /// them from the box: your moves and Done, who and when, with its notes, oldest first.
+    @Test func whatYouDoToAnItemShowsInItsFeedFromTheBox() async throws {
+        let machine = try await MachineTestBox(name: "lab")
+        defer { machine.stop() }
+        use(machine)
+        var first = Self.item(1, "First", order: 1)
+        first["notes"] = [["at": 2_000, "by": ["session": "ses_lead", "name": "Lead"], "text": "From before the box kept events."]]
+        try keep([first, Self.item(2, "Second", order: 2)], for: "ses_lead", on: machine)
+        let key = WorkQueues.Key(box: BoxClient.mac, owner: "ses_lead")
+        let following = Task { await app.workQueues.follow(key) }
+        defer { following.cancel() }
+        try await until { titles(key, in: "next").count == 2 }
+        let store = app.workQueues
+        let items = try #require(store.views[key]?.items)
+        let view = try #require(store.views[key])
+
+        // From before: its notes, no events.
+        let before = try #require(await store.load(box: BoxClient.mac, item: items[0].id))
+        #expect(before.events.isEmpty)
+        #expect(WorkQueue.activity(of: before, in: view).map { "\($0.whoWords) \($0.what)" } == ["You added the item", "Lead left a note"])
+
+        await store.move(items[1], to: .before(items[0]), on: BoxClient.mac)
+        await store.move(items[0], to: .category("later"), on: BoxClient.mac)
+        await store.move(items[0], to: .category("done"), on: BoxClient.mac)
+        #expect(store.refusal == nil)
+        let moved = try #require(await store.load(box: BoxClient.mac, item: items[0].id))
+        #expect(moved.events.map(\.kind) == ["moved", "done"])
+        #expect(moved.events.allSatisfy { $0.by == .user })
+        #expect(WorkQueue.activity(of: moved, in: view).map { "\($0.whoWords) \($0.what)" } == ["You added the item", "Lead left a note", "You moved it to Later", "You marked it done"])
+        let second = try #require(await store.load(box: BoxClient.mac, item: items[1].id))
+        #expect(WorkQueue.activity(of: second, in: view).map { "\($0.whoWords) \($0.what)" } == ["You added the item", "You moved it to the top of Next"])
+    }
+
     @Test func onAMachineYouActOnlyWithThisMacsProofForThatRequest() async throws {
         let machine = try await MachineTestBox(name: "lab")
         defer { machine.stop() }

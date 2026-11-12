@@ -11505,6 +11505,7 @@ var MOST_NOTES = 200;
 var MOST_FILE = 25000000;
 var MOST_FILES = 50;
 var MOST_LINKS = 50;
+var MOST_EVENTS = 50;
 var MOST_HANDED = 20;
 var whoWords = (who) => {
   const given = who;
@@ -11529,12 +11530,14 @@ var whoOf = (given) => {
   return Object.keys(kept).length ? kept : null;
 };
 var FILE_NAME = /^(?!\.\.?$)[^/\\\0]{1,200}$/;
-var KNOWN2 = new Set(["id", "number", "owner", "title", "body", "category", "order", "progress", "notes", "files", "links", "sessions", "handed", "handedBy", "wanted", "importedAs", "backGranted", "stays", "source", "handing", "created", "updated", "doneAt", "removed"]);
+var KNOWN2 = new Set(["id", "number", "owner", "title", "body", "category", "order", "progress", "notes", "events", "files", "links", "sessions", "handed", "handedBy", "wanted", "importedAs", "backGranted", "stays", "source", "handing", "created", "updated", "doneAt", "removed"]);
 var handingOf = (given) => {
   if (!isObject(given) || typeof given.id !== "string" || !/^wqh_[A-Za-z0-9_-]{8,40}$/.test(given.id) || typeof given.to !== "string" || !OWNER2.test(given.to) || typeof given.key !== "string" || typeof given.at !== "number")
     return null;
   return { id: given.id, to: given.to, key: given.key, name: typeof given.name === "string" ? given.name : "", at: given.at, by: whoOf(given.by) ?? { user: true }, ...typeof given.sent === "number" ? { sent: given.sent } : {}, ...typeof given.missing === "number" ? { missing: given.missing } : {} };
 };
+var MOST_EVENT = 2000;
+var eventKept = (each) => typeof each.at === "number" && Number.isFinite(each.at) && typeof each.kind === "string" && each.kind.length > 0 && each.kind.length <= 40 && whoOf(each.by) !== null && JSON.stringify(each.by).length <= 500 && JSON.stringify(each).length <= MOST_EVENT;
 function itemOf(given, owner) {
   if (!isObject(given) || typeof given.id !== "string" || !ITEM_ID.test(given.id) || typeof given.title !== "string" || typeof given.category !== "string")
     return null;
@@ -11553,6 +11556,7 @@ function itemOf(given, owner) {
     order: typeof given.order === "number" && Number.isFinite(given.order) ? given.order : 0,
     ...isObject(given.progress) ? { progress: { ...typeof given.progress.value === "number" ? { value: given.progress.value } : {}, ...typeof given.progress.note === "string" ? { note: given.progress.note } : {} } } : {},
     notes: list(given.notes, (each) => typeof each.at === "number" && typeof each.text === "string" && whoOf(each.by) !== null),
+    ...Array.isArray(given.events) ? { events: list(given.events, eventKept).slice(-MOST_EVENTS) } : {},
     files: list(given.files, (each) => typeof each.name === "string" && FILE_NAME.test(each.name) && typeof each.size === "number"),
     links: list(given.links, (each) => typeof each.url === "string"),
     sessions: list(given.sessions, (each) => typeof each.session === "string" && SESSION2.test(each.session)),
@@ -19791,7 +19795,7 @@ function summaryOf(item, working, titles) {
   });
 }
 function wholeOf(item, working, titles) {
-  return { ...summaryOf(item, working, titles), body: item.body, notes: item.notes, files: item.files, links: item.links, handed: item.handed ?? [] };
+  return { ...summaryOf(item, working, titles), body: item.body, notes: item.notes, events: item.events ?? [], files: item.files, links: item.links, handed: item.handed ?? [] };
 }
 async function ownersOf(owner, items, facts, targets, cache) {
   const keys = new Set([...owner === "all" ? [] : [owner], ...items.map((item) => item.owner), ...items.flatMap((item) => item.handedBy ? [item.handedBy] : [])]);
@@ -19980,9 +19984,61 @@ function linkSession2(book, item, session, now) {
   const others = book.items().filter((each) => each.id !== item.id && each.sessions.some((link) => link.session === session));
   if (others.length >= LINKS_EACH) {
     const oldest = others.sort((a, b) => a.sessions.find((link) => link.session === session).since - b.sessions.find((link) => link.session === session).since)[0];
-    oldest.sessions = oldest.sessions.filter((link) => link.session !== session);
+    unlinkSessions(oldest, [session], now);
   }
   item.sessions.push({ session, since: now });
+}
+var FOLD_REORDERS = 10 * 60000;
+var FOLD_RESTART = 2 * 60000;
+var sameWho2 = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+function noteEvent(item, event) {
+  const events = [...item.events ?? []];
+  const last = events.at(-1);
+  const reorder = (each) => each.kind === "moved" && each.from === each.to;
+  const quiet = (since) => !item.notes.some((note) => note.at >= since) && !(item.handed ?? []).some((each) => each.at >= since);
+  const within = (most) => last !== undefined && event.at >= last.at && event.at - last.at < most;
+  if (last && reorder(last) && reorder(event) && last.to === event.to && sameWho2(last.by, event.by) && within(FOLD_REORDERS) && quiet(last.at)) {
+    const { top: _, ...folded } = last;
+    events[events.length - 1] = { ...folded, at: event.at, ...event.top ? { top: true } : {} };
+  } else if (last && last.kind === "stopped" && event.kind === "started" && sameWho2(last.by, event.by) && within(FOLD_RESTART) && quiet(last.at)) {
+    events.pop();
+  } else {
+    events.push(event);
+  }
+  item.events = events.slice(-MOST_EVENTS);
+}
+function lastWord(item, session) {
+  for (const each of [...item.events ?? []].reverse()) {
+    if (each.kind === "done")
+      return;
+    if ((each.kind === "started" || each.kind === "stopped") && each.by.session === session)
+      return each;
+  }
+  return;
+}
+function unlinkSessions(item, sessions, now, who) {
+  for (const session of sessions) {
+    if (!item.sessions.some((each) => each.session === session))
+      continue;
+    item.sessions = item.sessions.filter((each) => each.session !== session);
+    const word = lastWord(item, session);
+    if (word?.kind === "started")
+      noteEvent(item, { at: now, by: who ?? word.by, kind: "stopped" });
+  }
+}
+function startWork(book, item, session, { who, now }) {
+  const linked = item.sessions.some((each) => each.session === session);
+  linkSession2(book, item, session, now);
+  if (!linked || lastWord(item, session)?.kind !== "started")
+    noteEvent(item, { at: now, by: who, kind: "started" });
+}
+function stopWork2(item, session, { who, now }) {
+  unlinkSessions(item, [session], now, who);
+}
+var THE_BOX = { source: "kuvo", name: "Kuvo Code" };
+function intoNext(item, from, now) {
+  item.category = "next";
+  noteEvent(item, { at: now, by: THE_BOX, kind: "moved", from, to: "next" });
 }
 function applyFileOps(acting) {
   for (const op of acting.fileOps.splice(0))
@@ -20016,7 +20072,7 @@ function addItem2(book, owner, fields, acting, primary, source) {
     ...source ? { source } : {}
   };
   book.queue(owner).items.push(item);
-  changeItem2(book, item, { ...fields, title: undefined, category: undefined, top: undefined }, acting);
+  changeItem2(book, item, { ...fields, title: undefined, category: undefined, top: undefined }, acting, { added: true });
   if (item.source)
     return item;
   const number = takeNumber(primary);
@@ -20025,8 +20081,10 @@ function addItem2(book, owner, fields, acting, primary, source) {
   return item;
 }
 var refuseDone = (name) => refuse(`${name} is Done once it's closed on GitHub (or, a pull request, merged): close it there, or let the pull request that fixes it close it.`);
-function changeItem2(book, item, fields, acting) {
+function changeItem2(book, item, fields, acting, { added = false } = {}) {
   const { who, now } = acting;
+  const placeNow = () => ({ category: item.category, index: book.items().filter((each) => each.id !== item.id && !each.removed && each.category === item.category && each.order < item.order).length });
+  const was = placeNow();
   if (fields.title !== undefined) {
     const title = plainName(text2(fields.title, MOST_TITLE * 4, "The title")).slice(0, MOST_TITLE);
     if (!title)
@@ -20068,6 +20126,13 @@ function changeItem2(book, item, fields, acting) {
     item.order = placeBeside(book.items(), beside(fields.after), true, item);
   else if (fields.top === true && fields.category === undefined)
     item.order = placeIn(book.items().filter((each) => each.id !== item.id), item.category, { top: true });
+  const placed = placeNow();
+  if (added) {} else if (placed.category !== was.category && placed.category === "done")
+    noteEvent(item, { at: now, by: who, kind: "done" });
+  else if (placed.category !== was.category || placed.index !== was.index) {
+    const top = placed.index === 0 && (fields.top === true || fields.before !== undefined || fields.after !== undefined);
+    noteEvent(item, { at: now, by: who, kind: "moved", from: was.category, to: placed.category, ...top ? { top: true } : {} });
+  }
   if (fields.progress !== undefined) {
     if (fields.progress === null) {
       if (item.progress)
@@ -20154,7 +20219,7 @@ function removeItem2(item, who, now) {
 function restoreItem(book, item, who, now) {
   delete item.removed;
   if (!categoryNamed(item.category))
-    item.category = "next";
+    intoNext(item, item.category, now);
   item.order = placeIn(book.items(), item.category);
   item.updated = { at: now, by: who };
 }
@@ -20450,7 +20515,7 @@ async function handArrived(sender, given, reply, places, now = Date.now()) {
       return;
     }
     if (!categoryNamed(item.category))
-      item.category = "next";
+      intoNext(item, item.category, now);
     item.owner = owner;
     item.order = placeIn(book.items(), item.category);
     delete item.removed;
@@ -22377,7 +22442,7 @@ function placeWorkQueues(carried, owners, opened) {
       keepCategory(each.id, each.name);
   for (const item of items)
     if (!categoryNamed(item.category))
-      item.category = "next";
+      intoNext(item, item.category, Date.now());
   changeQueues((book) => {
     for (const item of items) {
       const before = book.find({ id: item.id });
@@ -37189,7 +37254,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "6b9016df6fa8";
+var BRIDGE_VERSION = "22de3038550f";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -39902,7 +39967,7 @@ async function run3(name, args, caller, targets, signal) {
         if (issue)
           made.body = issue.body.slice(0, MOST_BODY);
         if (args.working === true && !caller.seat)
-          linkSession2(book, made, caller.session, now);
+          startWork(book, made, caller.session, acting);
         applyFileOps(acting);
         return made;
       }));
@@ -39940,14 +40005,13 @@ async function run3(name, args, caller, targets, signal) {
         const named = (value) => (Array.isArray(value) ? value : value === undefined ? [] : [value]).map(String).filter((each) => /^ses_[A-Za-z0-9]{1,60}$/.test(each));
         if (item.category !== "done") {
           if (args.working === true && !caller.seat)
-            linkSession2(book, item, caller.session, now);
+            startWork(book, item, caller.session, acting);
           for (const session of named(args.sessions))
             linkSession2(book, item, session, now);
         }
         if (args.working === false)
-          item.sessions = item.sessions.filter((each) => each.session !== caller.session);
-        const unlinked = new Set(named(args.unlink));
-        item.sessions = item.sessions.filter((each) => !unlinked.has(each.session));
+          stopWork2(item, caller.session, acting);
+        unlinkSessions(item, named(args.unlink), now);
         applyFileOps(acting);
         return item;
       }));
@@ -40379,7 +40443,7 @@ async function* workQueueRoute(context, match) {
         await readSeen([itemElsewhere(ref, readLink(), { asTold: true }) ?? far], GITHUB_WAIT);
         far = itemElsewhere({ id: far.id }) ?? far;
         const { handedFrom: _, ...summary } = far;
-        return yield* json(200, { item: { ...summary, body: "", notes: [], files: [], links: [], handed: [] } });
+        return yield* json(200, { item: { ...summary, body: "", notes: [], events: [], files: [], links: [], handed: [] } });
       }
       return yield* json(404, { message: "There's no such item." });
     }

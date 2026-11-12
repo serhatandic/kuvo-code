@@ -9,7 +9,7 @@ import { atWorkNow } from "../work/background";
 import { startedByOf, under, workSessions, worksFor } from "../work/tree";
 import type { Listed } from "../work/tree";
 import type { Target } from "../../shared/records";
-import type { Item, ItemRef, KeptFile, Link, Note, Source, Who } from "./store";
+import type { Item, ItemEvent, ItemRef, KeptFile, Link, Note, Source, Who } from "./store";
 import { ITEM_ID } from "./store";
 import { issueAt, sourceKey } from "./sources";
 import { seenOf, withSeen, type Seen } from "./github";
@@ -137,6 +137,8 @@ export interface Computer { key: string; name: string; kind: "mac" | "machine"; 
 export interface ItemWhole extends ItemSummary {
   body: string;
   notes: Note[];
+  /** What happened to it, oldest first: none for an item from before the box kept them. */
+  events: ItemEvent[];
   files: KeptFile[];
   links: Link[];
   handed: { from: string; to: string; at: number }[];
@@ -169,7 +171,7 @@ export function summaryOf(item: Item, working: Set<string>, titles: Map<string, 
 }
 
 export function wholeOf(item: Item, working: Set<string>, titles: Map<string, { title: string }>): ItemWhole {
-  return { ...summaryOf(item, working, titles), body: item.body, notes: item.notes, files: item.files, links: item.links, handed: item.handed ?? [] };
+  return { ...summaryOf(item, working, titles), body: item.body, notes: item.notes, events: item.events ?? [], files: item.files, links: item.links, handed: item.handed ?? [] };
 }
 
 /** The owners of `items`, and `owner` itself, as a view names them. */
