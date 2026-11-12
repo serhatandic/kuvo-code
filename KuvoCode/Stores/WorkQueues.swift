@@ -132,7 +132,8 @@ final class WorkQueues {
             }
         }
         // Cancellation of the view's task ends its subscription; the final subscriber stops SSE.
-        for await _ in AsyncStream<Void>({ _ in }) {}
+        let lifetime = AsyncStream<Void> { _ in }
+        for await _ in lifetime {}
     }
 
     private func stream(_ key: Key) async {
