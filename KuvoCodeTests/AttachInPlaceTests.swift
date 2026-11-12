@@ -348,7 +348,12 @@ import Testing
     /// canceled there (from a phone, say) goes, as the box is read again (#333).
     @Test func theBoxHeresBotsWakeUpsAreFollowed() async throws {
         var app: AppModel?
-        defer { cleanUp(app) }
+        defer {
+            cleanUp(app)
+            // (Its bot, kept with the others, isn't the next test's.)
+            try? FileManager.default.removeItem(at: Bots.file)
+        }
+        try? FileManager.default.removeItem(at: Bots.file)
         connectsReady()
         BoxClient.readAgainAfter = .milliseconds(100)
         let bot: [String: Any] = ["id": "bot_ci", "session": "ses_ci", "name": "Ci", "look": ["color": "mint", "shape": "round", "face": "calm"]]
@@ -368,7 +373,10 @@ import Testing
     /// A worktree the box here removed (from a phone, say) goes here too, as it's read again (#333).
     @Test func theBoxHeresWorktreesAreFollowed() async throws {
         var app: AppModel?
-        defer { cleanUp(app) }
+        defer {
+            cleanUp(app)
+            for key in ["worktrees", "removedWorktrees"] { UserDefaults.standard.removeObject(forKey: key) }
+        }
         connectsReady()
         BoxClient.readAgainAfter = .milliseconds(100)
         let tree: [String: Any] = ["project": "/Users/me/api", "root": "/Users/me/.worktrees/api-1", "branch": "kuvo/fix"]
