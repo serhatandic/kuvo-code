@@ -268,7 +268,7 @@ struct Composer: View {
                     marks: !isShell,
                     images: imageFiles.count,
                     token: token,
-                    refs: isShell || !text.contains("#") || text.utf16.count > 20_000 ? [:] : app.workQueues.refs(in: text, box: workChipQueue?.box ?? BoxClient.mac, owner: workChipQueue?.owner, typing: true),
+                    refs: isShell || !text.contains("#") || text.utf16.count > 20_000 ? [:] : app.workQueues.refs(in: text, box: workChipQueue?.box ?? BoxClient.thisMac, owner: workChipQueue?.owner, typing: true),
                     example: example,
                     onKey: key,
                     onFocus: { focused in

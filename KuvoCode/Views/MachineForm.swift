@@ -155,7 +155,9 @@ extension MachineForm {
     /// one, or a Host from ~/.ssh/config.
     static func problem(with destination: String) -> String? {
         let fits = !destination.hasPrefix("-") && destination.rangeOfCharacter(from: CharacterSet(charactersIn: "/:").union(.whitespacesAndNewlines)) == nil
-        return fits ? nil : "Give a host name, or user@host. For a port or an IPv6 address, add a Host for the machine to ~/.ssh/config and give its name."
+        guard fits else { return "Give a host name, or user@host. For a port or an IPv6 address, add a Host for the machine to ~/.ssh/config and give its name." }
+        // The name this Mac's own box goes by, attached in place, which is never a machine to add.
+        return destination.lowercased() == SSHConnection.thisMac ? "That’s this Mac." : nil
     }
 }
 

@@ -27,7 +27,7 @@ struct SubscriptionsStep: View {
     }
 
     private var onboarding: Onboarding { app.onboarding }
-    private var box: BoxClient { app.box(BoxClient.mac) }
+    private var box: BoxClient { app.box(BoxClient.thisMac) }
 
     var body: some View {
         let offers = onboarding.offers

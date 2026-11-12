@@ -196,7 +196,8 @@ struct MachinesSettings: View {
                 } else if engine.boxIsNewer || engine.engineIsNewer {
                     Text("A newer Kuvo Code runs it. Update Kuvo Code on this Mac to run it from here.")
                         .fixedSize(horizontal: false, vertical: true)
-                } else {
+                } else if !engine.machine.isThisMac {
+                    // (This Mac's own box, attached in place, is here already.)
                     Button("Make This Mac Its Home…") { takingHome = engine }
                         .buttonStyle(TextButtonStyle(outset: true))
                         // A way out, in the accent: not the grey of the lines above it.
@@ -266,7 +267,10 @@ struct MachinesSettings: View {
                 case nil:
                     EmptyView()
                 }
-                Button("Remove…") { askToRemove(engine.machine) }
+                // This Mac's own box, attached in place, is never removed from here.
+                if !engine.machine.isThisMac {
+                    Button("Remove…") { askToRemove(engine.machine) }
+                }
             }
         }
         .heldContextMenu {
@@ -274,8 +278,9 @@ struct MachinesSettings: View {
                 HeldRow.button("Stop Using \(address)") { app.machines.removeAddress(address, from: engine.machine.id) }
             }
             // The same computer at another address, when one of them can't be reached to tell.
-            let others = app.machines.list.filter { $0.id != engine.machine.id }
-            if !others.isEmpty {
+            // (Never this Mac's own box, attached in place: it's this computer.)
+            let others = app.machines.list.filter { $0.id != engine.machine.id && !$0.isThisMac }
+            if !others.isEmpty, !engine.machine.isThisMac {
                 HeldRow.submenu("Same Computer As") {
                     for other in others {
                         HeldRow.button(other.name) {

@@ -226,7 +226,7 @@ struct SandboxSettings: View {
                 do { try await sandboxes.readAllowed(on: id) } catch is CancellationError {} catch { failure = Self.words(error) }
                 if home?.box != id {
                     let box = id
-                    let path = box == BoxClient.mac ? NSHomeDirectory() : try? await app.box(box).folders(at: nil).home
+                    let path = BoxClient.isThisMac(box) ? NSHomeDirectory() : try? await app.box(box).folders(at: nil).home
                     home = (box, path)
                 }
             }

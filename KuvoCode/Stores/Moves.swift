@@ -388,6 +388,9 @@ final class Moves {
 
     /// This Mac's box's moves, from now on, as they change (your machines', as below).
     func follow() async {
+        // (Only the app's own box streams them: one attached in place is read as a machine's is,
+        // as it connects and while something's moving.)
+        guard BoxClient.streams(BoxClient.thisMac) else { return }
         while !Task.isCancelled, app != nil {
             do {
                 for try await line in client(BoxClient.mac)?.follow("kuvo/moves/events") ?? AsyncThrowingStream { $0.finish() } {
@@ -420,7 +423,8 @@ final class Moves {
     func reload(_ box: String) async {
         guard let app, let client = client(box) else { return }
         // A machine out of reach for now: what it said last stands (a move isn't over for that).
-        if box != BoxClient.mac, boxes == nil, app.machines.engine(box)?.isReady != true {
+        // (This Mac's box, attached in place too, is reached with no connection.)
+        if !BoxClient.isThisMac(box), boxes == nil, app.machines.engine(box)?.isReady != true {
             // (A read begun before isn't taken: it would say it's back.)
             reads[box, default: 0] += 1
             return outOfReach(box)
@@ -448,7 +452,8 @@ final class Moves {
 
     /// Each machine's moves read again (as the app starts, or a machine connects).
     func reloadAll() async {
-        await reload(BoxClient.mac)
+        // (Attached in place, this Mac's box is one of the machines.)
+        if BoxClient.thisMac == BoxClient.mac { await reload(BoxClient.mac) }
         for machine in app?.machines.list.map(\.id) ?? [] { await reload(machine) }
         readPlacesAhead()
     }
@@ -490,7 +495,7 @@ final class Moves {
         // Held a moment longer, until each is shown where it lives now: what's here of it (a bot's
         // draft) isn't let go of meanwhile as gone, its box saying it no longer has it.
         for move in over {
-            let to = place(move.to).map { $0 ?? BoxClient.mac }
+            let to = place(move.to).map { $0 ?? BoxClient.thisMac }
             settling[box + " " + move.id] = ([move.thing] + move.sessions, to)
             // (A minute at most, should a computer at its other end not answer: what waits to go
             // to it isn't held for ever.)
@@ -500,7 +505,7 @@ final class Moves {
             }
         }
         show()
-        if box != BoxClient.mac { keepReading(box) }
+        if !BoxClient.streams(box) { keepReading(box) }
         // A machine whose moves started, went on or ended, as it told this Mac's box: read there.
         if box == BoxClient.mac {
             // (One of this Mac's own is read through its own list: each move once.)
@@ -548,7 +553,7 @@ final class Moves {
     }
 
     private func keepReading(_ machine: String) {
-        let heard = app?.phoneLink.key(of: machine).map { key in told[BoxClient.mac]?.elsewhere?.contains { $0.box == key && !$0.moves.isEmpty } == true } ?? false
+        let heard = app?.phoneLink.key(of: machine).map { key in told[BoxClient.thisMac]?.elsewhere?.contains { $0.box == key && !$0.moves.isEmpty } == true } ?? false
         guard told[machine]?.moves.isEmpty == false || heard else {
             rereading.removeValue(forKey: machine)?.cancel()
             return
@@ -575,7 +580,7 @@ final class Moves {
         if let there = place(move.peer) { ends.insert(there, at: move.role == "from" ? 0 : 1) }
         switch move.kind {
         case "bot":
-            for end in ends { await app.bots.refresh(end ?? BoxClient.mac) }
+            for end in ends { await app.bots.refresh(end ?? BoxClient.thisMac) }
             // Its conversation too, on both: a coding agent's (on the agents bridges) as well.
             await rereadSessions(on: ends)
             settled(move, on: box)
@@ -633,7 +638,7 @@ final class Moves {
         var away: [String: Set<String>] = [:]
         var copies: [String: Set<String>] = [:]
         // What this Mac's own box has coming here: it says itself whether it hears from where it comes.
-        let incoming = Dictionary((told[BoxClient.mac]?.moves ?? []).filter { $0.role == "to" }.map { ($0.id, $0) }) { $1 }
+        let incoming = Dictionary((told[BoxClient.thisMac]?.moves ?? []).filter { $0.role == "to" }.map { ($0.id, $0) }) { $1 }
         // What a box read now says of a thing wins over what one out of reach said last (it's taken last).
         for (box, said) in told.sorted(by: { unread.contains($0.key) && !unread.contains($1.key) }) {
             let machine: String? = box == BoxClient.mac ? nil : box
