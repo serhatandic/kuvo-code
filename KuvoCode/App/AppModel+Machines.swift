@@ -431,6 +431,8 @@ extension AppModel {
             // Its group chats, as it runs them.
             if event.type.hasPrefix("kuvo.group.") { self?.boxGroups.handle(event, machine: machine); return }
             self?.planLimits.handle(event, machine: machine)
+            // This Mac's own box, attached in place: its usage is this Mac's.
+            if machine == SSHConnection.thisMac { self?.usageHistory.handle(event) }
             engine?.catalog.handle(event)
             self?.workspace.handleAgents(event, machine: machine)
         }
@@ -438,6 +440,7 @@ extension AppModel {
         engine.agents.onConnected = { [weak self, weak engine] in
             guard let self, let engine else { return }
             planLimits.connected(machine, api: engine.agents.api)
+            if machine == SSHConnection.thisMac { usageHistory.connected(api: engine.agents.api) }
             Task {
                 await engine.catalog.refreshAgents()
                 _ = await self.workspace.refresh(engine)
