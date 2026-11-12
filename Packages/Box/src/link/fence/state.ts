@@ -340,6 +340,7 @@ let withoutNamespace: string | null = null;
 /** Whether a folder can be made read-only in commands' namespace, as each command's keeps git's own
  * files (`gaps`: `git` where it can't), as `able` last found it. */
 let readOnly = true;
+let readOnlyFor: string | null = null;
 /** One in effect that the last try says commands can't have, kept while that's checked and until
  * nothing counts on the sandbox (`setUpFence`): what commands' namespace comes from meanwhile. */
 let kept: string | null = null;
@@ -364,11 +365,11 @@ function able(found?: string | null | typeof UNFINISHED): Checked {
   if (!namespaceUnfinished) [namespace, namespaceKnown] = [tried as string | null, true];
   else if (!namespaceKnown) namespace = UNSHARE.find(each => fs.existsSync(each)) ?? null;
   withoutNamespace = namespace ? null : UNSHARE.some(each => fs.existsSync(each)) ? "user namespaces" : "util-linux";
-  // (One that didn't finish says nothing new.)
-  if (namespace && !namespaceUnfinished) {
+  // (Once for each `unshare` found; one that didn't finish says nothing new.)
+  if (namespace && !namespaceUnfinished && readOnlyFor !== namespace) {
     fs.mkdirSync(NAMESPACE_FOLDER, { recursive: true, mode: 0o700 });
     const found = readOnlyHere(namespace, NAMESPACE_FOLDER);
-    if (found !== UNFINISHED) readOnly = found;
+    if (found !== UNFINISHED) [readOnly, readOnlyFor] = [found, namespace];
   }
   if (withoutNamespace && WITHOUT_NAMESPACE === "off") {
     const services = "which the sandbox needs to keep commands from the services your login runs: systemd, your keyring, your agents";

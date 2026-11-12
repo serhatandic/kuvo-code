@@ -410,7 +410,7 @@ test("a coding agent's commands in a worktree are in the sandbox, and commit to 
     ])], { cwd: project, encoding: "utf8", env: { PATH: process.env.PATH, HOME: root, KUVO_FENCE_SHELL: "/bin/sh", KUVO_FENCE_WORK: project, KUVO_FENCE_GIT: path.join(repository, ".git"), KUVO_FENCE_OWN: path.join(root, "agent-home"), KUVO_FENCE_PORT: "0", OPENCODE_SESSION_ID: "ses_agentTest" } });
     assert.deepEqual(outcome(ran.stdout), {
       "write in its project": "allowed", "commit in its worktree": "allowed", "read the box's files": "refused",
-      "delete outside its project": "refused", "add a git hook": linux ? "allowed" : "refused",
+      "delete outside its project": "refused", "add a git hook": "refused",
     }, ran.stdout + ran.stderr);
     assert.equal(fs.readFileSync(yours, "utf8"), "yours\n");
     assert.equal(spawnSync("git", ["-C", repository, "log", "--all", "--format=%s"], { encoding: "utf8" }).stdout.includes("made"), true);

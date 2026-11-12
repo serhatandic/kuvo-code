@@ -6916,6 +6916,9 @@
         "oneOf": [
          {
           "literal": "services"
+         },
+         {
+          "literal": "git"
          }
         ]
        }
@@ -7018,6 +7021,9 @@
         "oneOf": [
          {
           "literal": "services"
+         },
+         {
+          "literal": "git"
          }
         ]
        }
@@ -7120,6 +7126,9 @@
         "oneOf": [
          {
           "literal": "services"
+         },
+         {
+          "literal": "git"
          }
         ]
        }

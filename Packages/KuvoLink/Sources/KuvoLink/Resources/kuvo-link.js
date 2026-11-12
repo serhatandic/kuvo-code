@@ -4194,7 +4194,8 @@ $e
 " in *"
 $e
 "*) [ -d "$e" ] || continue ;; *) continue ;; esac
-      [ -e "$e/config.worktree" ] && [ -e "$e/modules" ] && [ "$(leads "$e" commondir "$r")" = "$r" ] || fail "$e/commondir doesn't lead git back to its repository. Ask the user."
+      [ -e "$e/config.worktree" ] && [ -e "$e/modules" ] || fail "$e lacks config.worktree or modules, which it can't keep from being made. Ask the user."
+      [ "$(leads "$e" commondir "$r")" = "$r" ] || fail "$e/commondir doesn't lead git back to its repository. Ask the user."
       for f in commondir gitdir config.worktree; do keep "$e/$f" ro; done
       mods "$e/modules"
     done
@@ -5330,6 +5331,7 @@ var namespaceKnown = false;
 var namespaceUnfinished = false;
 var withoutNamespace = null;
 var readOnly = true;
+var readOnlyFor = null;
 var kept = null;
 var inUse = () => kept ?? namespace;
 var namespaceHere = () => {
@@ -5351,11 +5353,11 @@ function able(found) {
   else if (!namespaceKnown)
     namespace = UNSHARE.find((each) => fs20.existsSync(each)) ?? null;
   withoutNamespace = namespace ? null : UNSHARE.some((each) => fs20.existsSync(each)) ? "user namespaces" : "util-linux";
-  if (namespace && !namespaceUnfinished) {
+  if (namespace && !namespaceUnfinished && readOnlyFor !== namespace) {
     fs20.mkdirSync(NAMESPACE_FOLDER, { recursive: true, mode: 448 });
     const found = readOnlyHere(namespace, NAMESPACE_FOLDER);
     if (found !== UNFINISHED)
-      readOnly = found;
+      [readOnly, readOnlyFor] = [found, namespace];
   }
   if (withoutNamespace && WITHOUT_NAMESPACE === "off") {
     const services = "which the sandbox needs to keep commands from the services your login runs: systemd, your keyring, your agents";
@@ -38662,7 +38664,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "a4f0b78ce22e";
+var BRIDGE_VERSION = "c8c9968d90b5";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

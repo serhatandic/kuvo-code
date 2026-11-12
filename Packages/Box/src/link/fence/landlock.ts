@@ -55,7 +55,8 @@ export function landlockPolicy(policy: FencePolicy): string {
  * Mounts keep only what's there. A name git reads that isn't there yet would be made in a folder git
  * must make files in (`index.lock` beside `commondir`), which neither Landlock nor a mount tells
  * apart: so the launcher first gives each repository what it lacks of those (`MAKE_GIT`), and one
- * that still lacks one is checked as every other, then kept read-only whole. A `commondir` that leads
+ * that still lacks one is checked as every other, then its folder is read-only (but the worktrees'
+ * own folders and submodules' repositories in it, each kept on its own as above). A `commondir` that leads
  * anywhere else, a link where these are, or one that can't be kept, runs nothing. The rest git reads there starts no program
  * (`info/attributes` names drivers only settings define, `objects/info/alternates` and `remotes` name
  * objects and addresses), or isn't read in a worktree's own folder (its `hooks`, `config`, `info`).
@@ -123,7 +124,8 @@ $e
 " in *"
 $e
 "*) [ -d "$e" ] || continue ;; *) continue ;; esac
-      [ -e "$e/config.worktree" ] && [ -e "$e/modules" ] && [ "$(leads "$e" commondir "$r")" = "$r" ] || fail "$e/commondir doesn't lead git back to its repository. Ask the user."
+      [ -e "$e/config.worktree" ] && [ -e "$e/modules" ] || fail "$e lacks config.worktree or modules, which it can't keep from being made. Ask the user."
+      [ "$(leads "$e" commondir "$r")" = "$r" ] || fail "$e/commondir doesn't lead git back to its repository. Ask the user."
       for f in commondir gitdir config.worktree; do keep "$e/$f" ro; done
       mods "$e/modules"
     done
@@ -215,8 +217,8 @@ EOF_REPOS
  * empty `config.worktree` and `modules`. Each in the folder as it is (taken by `cd`, so never through
  * a link put in its place since), a file only where there's none, never through a link, and given up
  * after a few seconds rather than waiting on a FIFO. Where one can't be made, the command is told so
- * once (`$F/unkept`, which goes once all can be), and runs: every check as ever, and the repository
- * read-only to it then but for what's kept on its own in it (`KEEP_GIT`). `git_made_all <work> <git> <allowed>`.
+ * once (`$F/unkept`, which goes once all can be), and runs: every check as ever, and the
+ * repository's folder read-only to it then (`KEEP_GIT`). `git_made_all <work> <git> <allowed>`.
  */
 export const MAKE_GIT = String.raw`git_made() {
   [ ! -e "$1" ] && [ ! -L "$1" ] || return 0

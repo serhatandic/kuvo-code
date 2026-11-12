@@ -5577,10 +5577,12 @@ Allowed holds, and their submodules' repositories:
   leads the conversation's worktree to its repository, are read-only.
 
 The command doesn't run (126, saying why and to ask the user) where one of those is a link (a
-command could trade it for its own, and where it leads isn't kept: a `.git/hooks` that's a link to a
-folder in the project asks before each command in Auto, while `core.hooksPath` works as ever), where
-a `commondir` leads git anywhere but the repository itself (or, a worktree's, its repository), or
-where one can't be kept. Each is made read-only in two steps, a bind and then its remount, which
+command could trade it for its own, and where it leads isn't kept), where a `commondir` leads git
+anywhere but the repository itself (or, a worktree's, its repository), or where one can't be kept.
+So with a `.git/hooks` that's a link to a folder in the project, each command in that repository,
+or in a project that holds it (Also Allowed, or as a submodule), runs only once allowed outside the
+sandbox (`sandbox_ask`: you, or in Auto its reviewer). `core.hooksPath` is untouched: the hooks it
+names are files in the project, which commands write as any other, on a Mac too. Each is made read-only in two steps, a bind and then its remount, which
 libmount makes with the flags a mount from outside the namespace keeps locked (`nosuid`, `nodev`):
 in one step, util-linux before 2.39 drops them and Linux refuses it (checked with util-linux 2.36.1,
 2.38.1 and 2.41.5 on `/dev/shm`). Where a folder still can't be made read-only in a command's
@@ -5600,8 +5602,9 @@ absolute paths rather than ones under `.git` (`--git-dir` still prints `.git`), 
 compares the two as strings to tell a linked worktree takes the repository for one. It never changes
 one that's there, and makes them as you, in the folder as it is (never through a link put there), so
 never in a folder you made read-only. A repository it can't give one to is checked as every other,
-then is read-only to commands (they can't make it writable either) but for what's kept on its own in
-it; the command runs, told so once in what it prints (again once it can and then can't).
+then its folder is read-only to commands (they can't make it writable either), but for its
+worktrees' own folders and its submodules' repositories, each kept as above; the command runs, told
+so once in what it prints (again once it can and then can't).
 
 Still open on Linux: what a namespace keeps is what was there as the command started (#617). git
 outside the sandbox writes `.git/config` anew (`git config`, a push that sets its upstream, a branch
@@ -5854,7 +5857,8 @@ it's empty.
   `needs`: `"user namespaces"`, or `"util-linux"` without `unshare`); `git`, git's own files in the
   repositories they write (a Linux machine where a folder can't be made read-only in a command's
   namespace, tried in the box's own folder as it's checked: commands in a repository there don't
-  run, 126, rather than run with those open to them). A client says so beside it.
+  run, 126, rather than run with those open to them). A client says so beside it (`services`;
+  the apps don't show `git` yet).
   When it isn't on, also `reason`, a word for a client to map rather than reading `why`, with what
   you can do (`action`) and the box's route that does it (`route`, where there is one):
 

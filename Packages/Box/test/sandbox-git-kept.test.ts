@@ -3,6 +3,7 @@ import { expect, setDefaultTimeout, test } from "bun:test"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { readOnlyHere, triedNamespace, UNSHARE } from "../src/link/fence/landlock"
 import { canFence, realFence } from "./agents/support/fence"
 
 // What git runs, or is led by, in the repository a conversation's commands write (its settings, its
@@ -159,8 +160,8 @@ test.skipIf(!canFence)("a command plants nothing git runs outside the sandbox in
   }
 })
 
-// What keeps those leaves git working in the sandbox as ever: committing, branching, stashing and
-// tagging in its folder or its worktree, committing and fetching in a submodule, and tidying every
+// What keeps those leaves git working in the sandbox as ever: committing, branching, stashing,
+// tagging and rebasing in its folder or its worktree, committing and fetching in a submodule, and tidying every
 // worktree's reflogs from the main checkout. On Linux the repository gets what keeps names git would
 // read from being made (a `commondir` naming itself, empty `hooks`, `modules`, `worktrees` and
 // `config.worktree` where it has none), which git outside reads as before.
@@ -175,6 +176,7 @@ test.skipIf(!canFence)("git works in the sandbox as ever in a repository kept so
       "git checkout -q -b topic && echo topic > topic.txt && git add topic.txt && git commit -q -m topic && git checkout -q main && git merge -q --no-edit topic",
       "echo change >> README.md && git stash -q && git stash pop -q && git checkout -q -- README.md",
       "git tag v1",
+      "git checkout -q -b onto HEAD~1 && echo onto > onto.txt && git add onto.txt && git commit -q -m onto && git rebase -q main && git checkout -q main",
       `git -C lib commit -q --allow-empty -m in-lib && git -c protocol.file.allow=always -C lib fetch -q ${sh(library)} main`,
       "git log --oneline | wc -l | tr -d ' '",
     ].join("\n"))
@@ -246,6 +248,21 @@ test.skipIf(!canFence || process.platform !== "linux")("on Linux, a repository w
     } finally {
       chmodSync(fixed.git, 0o755)
     }
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// And where a folder can't be made read-only in a command's namespace (each command in a repository
+// then refuses), the box finds so as it checks the sandbox, to say it (\`gaps\`: \`git\`), as it does
+// on this machine's own unshare.
+test.skipIf(process.platform !== "linux")("on Linux, the box finds whether a folder can be made read-only in a command's namespace", () => {
+  const unshare = UNSHARE.find(each => existsSync(each))
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sandbox-git-ro-")))
+  try {
+    mkdirSync(join(root, "ns"))
+    if (!unshare || !triedNamespace(join(root, "ns"))?.startsWith("/")) return
+    expect([readOnlyHere(unshare, join(root, "ns")), readOnlyHere(unshare, join(root, "none"))]).toEqual([true, false])
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
