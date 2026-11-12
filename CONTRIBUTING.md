@@ -111,7 +111,7 @@ a `ci/` branch and runs the full CI suites on GitHub (pass a local branch name t
 one). It prints the run URL, job conclusions and failed logs; it never pushes `main` or tags. Only
 committed changes run.
 
-Run quick, targeted box and bridge tests with `scripts/test-box.sh [box|bridge|all] [extra test args]`. It queues under the box heavy slot, installs locked dependencies when needed, and summarizes results.
+Run quick, targeted box and bridge tests with `scripts/test-box.sh [box|bridge|all] [extra test args]`. It queues for one of the box lane's two heavy slots, installs locked dependencies when needed, and summarizes results.
 
 The runner uses `~/.bun/bin/bun` by default; set `KUVO_TEST_BUN` to another Bun or an engine (a machine's `~/.kuvo-code/engine/<version>/opencode`,
 which they run as Bun). Run them on a Linux machine too, in a test folder of your own with
@@ -242,7 +242,12 @@ scripts/test-box.sh box <test-filter>
   (`""` or `-2`: put it on a build folder, since two builds in one folder break). Without
   `KUVO_HEAVY_SLOTS=2` a job only ever takes slot 1, whose lock and simulator are what they always
   were, so an older script and a new one on slot 1 still exclude each other;
-- `box`: the box's whole suites (`bun test`, `node --test`) and runs on a test machine.
+- `box`: the box's whole suites (`bun test`, `node --test`) and runs on a test machine. It has two
+  slots, for every caller, so two of these run at once: two runs share no port, folder, socket or
+  build output (each has a home of its own in `~/.kuvo-code-test` and a temporary folder of its own,
+  and the built `kuvo-link.js` and `kuvo-agents.js` are only read). A job finds its slot in
+  `KUVO_HEAVY_SLOT`. Keep it that way: a box or bridge test never listens on a fixed port or uses a
+  fixed path outside its own folders.
 
 Every job of the Xcode lanes (`mac`, `mac-build`, `phone-build`, `phone`) builds with Xcode's
 compilation cache, one for all checkouts (`scripts/xcode-cache.sh`): a content-addressed store in

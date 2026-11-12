@@ -21,7 +21,8 @@
 #              KuvoShared-PhoneBuild-2, so a suffix on that name would collide.
 #   phone      the phone's test runs that boot a simulator: anything that builds in
 #              KuvoShared-PhoneBuild or KuvoCodeMobileTests-build, its scripts/test-app.sh
-#   box        the box's whole suites (bun test, node --test) and runs on a test machine
+#   box        the box's whole suites (bun test, node --test) and runs on a test machine. Two slots,
+#              as mac-build has (below).
 #
 # (phone-build is mac-build below: everything said of mac-build holds for it.)
 #
@@ -54,6 +55,18 @@
 # job that still says mac builds in, nor KuvoCodeTests-build, which the app suite builds in, so
 # nothing builds twice in one folder. (A package's .build and a checkout's build/ are its own to each
 # checkout.) Never start a build in a folder that isn't the slot's.
+#
+# box has two slots the same way, for every caller: slot 1 is kuvo-code-heavy-box-<uid>.lock, the
+# lock it always had (an older copy's job holds it alone, and a new one runs beside it in slot 2),
+# slot 2 kuvo-code-heavy-box-2-<uid>.lock. A job finds out which in KUVO_HEAVY_SLOT (1 or 2); it has
+# no build folder or simulator to choose. Two of its runs share nothing that either changes: each
+# run of the box's suite (bun test) and the bridge's (node --test) has a home of its own in
+# ~/.kuvo-code-test (test-safety.js, named by its pid) and scripts/test-box.sh a temporary folder of
+# its own; their servers listen on port 0, their sockets are in those folders, and the built
+# kuvo-link.js and kuvo-agents.js are only read; a run on a test machine (scripts/test-linux.sh) has
+# a folder of its own in that machine's ~/.kuvo-code-test. Two whole suites at once, from two
+# checkouts and from one, passed as one alone does, each in about the time one alone takes (7
+# minutes on the Mini, 7.5 to 8.5 beside another).
 #
 # For phone, slot 2 is only for a caller that handles slots (KUVO_HEAVY_SLOTS=2): an older caller would take it
 # and still build in slot 1's folder and drive slot 1's simulator, beside whoever holds slot 1.
@@ -239,8 +252,8 @@ case "$kind" in mac | mac-build | phone-build | phone | box) ;; *) usage ;; esac
 DIR="${KUVO_HEAVY_DIR:-$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || echo /tmp/)}"
 DIR="${DIR%/}"
 LOCK="$DIR/kuvo-code-heavy-$kind-$(id -u).lock"
-# A second slot, for phone and mac-build; no other kind has one. SLOTS is how many this caller may
-# take: a phone caller says so (KUVO_HEAVY_SLOTS=2), a mac-build one always may.
+# A second slot, for phone, mac-build and box; mac has none. SLOTS is how many this caller may
+# take: a phone caller says so (KUVO_HEAVY_SLOTS=2), a mac-build or box one always may.
 LOCK2=
 SLOTS=1
 case "$kind" in
@@ -248,7 +261,7 @@ case "$kind" in
         LOCK2="$DIR/kuvo-code-heavy-$kind-2-$(id -u).lock"
         [ "${KUVO_HEAVY_SLOTS:-1}" = 2 ] && SLOTS=2
         ;;
-    mac-build)
+    mac-build | box)
         LOCK2="$DIR/kuvo-code-heavy-$kind-2-$(id -u).lock"
         SLOTS=2
         ;;
@@ -308,13 +321,17 @@ just_taken() {
     fi
 }
 
-# What a phone or mac-build job knows of its slot, from the slot's lock: a job inside another takes
-# it from the lock it runs under, not from the environment it inherited (a shell started in a slot-2
-# job keeps slot 2's values). A phone job has a simulator, a mac-build job a build folder of its own
-# in each slot (slot 1's suffix isn't empty: that folder is the older scripts' mac). A job that
-# only runs under the old single lock holds no slot, and gets none of these.
+# What a phone, mac-build or box job knows of its slot, from the slot's lock: a job inside another
+# takes it from the lock it runs under, not from the environment it inherited (a shell started in a
+# slot-2 job keeps slot 2's values). A phone job has a simulator, a mac-build job a build folder of
+# its own in each slot (slot 1's suffix isn't empty: that folder is the older scripts' mac), a box
+# job only its slot's number. A job that only runs under the old single lock holds no slot, and gets
+# none of these.
 slot_env() {
-    if [ "$kind" = mac-build ]; then
+    if [ "$kind" = box ]; then
+        unset KUVO_TEST_SIMULATOR KUVO_HEAVY_BUILD_SUFFIX
+        if [ "$1" = "$LOCK2" ]; then export KUVO_HEAVY_SLOT=2; else export KUVO_HEAVY_SLOT=1; fi
+    elif [ "$kind" = mac-build ]; then
         unset KUVO_TEST_SIMULATOR
         if [ "$1" = "$LOCK2" ]; then
             export KUVO_HEAVY_SLOT=2 KUVO_HEAVY_BUILD_SUFFIX=-2

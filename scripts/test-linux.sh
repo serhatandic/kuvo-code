@@ -54,10 +54,12 @@ case $(ssh "$host" uname -sm) in
     *) echo "$host isn't a Linux machine on x86_64 or arm64" >&2; exit 1 ;;
 esac
 
-# The tools, fetched once and checked against the checksums above each time they're sent.
+# The tools, fetched once and checked against the checksums above each time they're sent. (Each run
+# downloads under a name of its own: two runs at once in one checkout, in the box lane's two slots,
+# never write one file together.)
 tools=$root/build/linux-test/$arch
 mkdir -p "$tools"
-fetch() { [ -f "$tools/$1" ] || { curl -fsSL -o "$tools/$1.part" "$2" && mv "$tools/$1.part" "$tools/$1"; } || { echo "Couldn't download $2" >&2; exit 1; }; }
+fetch() { [ -f "$tools/$1" ] || { curl -fsSL -o "$tools/$1.part.$$" "$2" && mv "$tools/$1.part.$$" "$tools/$1"; } || { rm -f "$tools/$1.part.$$"; echo "Couldn't download $2" >&2; exit 1; }; }
 node=node-v$NODE_VERSION-linux-$arch.tar.xz
 fetch "$node" "https://nodejs.org/dist/v$NODE_VERSION/$node"
 [ "$(shasum -a 256 "$tools/$node" | cut -d' ' -f1)" = "$node_sha" ] || { echo "$node doesn't match nodejs.org's checksum" >&2; exit 1; }
@@ -122,7 +124,7 @@ fi
 status=$?
 seen > "$T/after"
 if ! diff -q "$T/before" "$T/after" > /dev/null; then
-    echo "New in $HOME or /tmp while it ran (check they're not from these tests):"
+    echo "New in $HOME or /tmp while it ran (check they're not from these tests, or from another run beside this one):"
     diff "$T/before" "$T/after" | sed -n 's/^> /  /p'
 fi
 exit $status
