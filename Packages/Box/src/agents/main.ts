@@ -57,6 +57,7 @@ import { queueFiles } from "../shared/queues"
 import { HangWatch, isEngine } from "../shared/hang"
 import { notesBeside } from "./notes"
 import { agentAccounts, Limits } from "./limits"
+import { LimitsPeers } from "./limits-peers"
 import { ENGINE_SERVICES, EngineAccounts } from "./engine-limits"
 
 const version = "1"
@@ -199,6 +200,11 @@ const groupFolders = onMachine
     ? { root: process.env.KUVO_GROUPS, bots: process.env.KUVO_BOTS, trash: process.env.KUVO_TRASH }
     : undefined
 const groupMemoryKey = process.env.KUVO_GROUPS_MEMORY_KEY || undefined
+// What this bridge tells your other computers (its group chats' mail, its plan limits), through the
+// box's link, and who they are, as the link says.
+const post = new PeerPost(groupFolders ? join(groupFolders.root, "peer-outbox.json") : undefined)
+const directory = new LinkDirectory(post)
+const peers: PeerParts = { post, directory }
 // The record of what agents made here: on a machine, in its Kuvo Code folder; on the Mac, where
 // the app says (its box's own folder). Its bots' folders, where their memory is.
 const artifactsFolder = onMachine ? join(machineHome!, "artifacts") : process.env.KUVO_ARTIFACTS || undefined
@@ -215,8 +221,6 @@ if (groupFolders) {
   try {
     const store = new GroupStore(groupFolders.root, groupFolders.bots, agentsFile)
     // Its bots in chats on your other computers, and theirs in chats here, through the box's link.
-    const post = new PeerPost(join(groupFolders.root, "peer-outbox.json"))
-    const directory = new LinkDirectory(post)
     const runner = new GroupRunner({
       store,
       engine: link,
@@ -237,7 +241,9 @@ if (groupFolders) {
       queues: runFolder ? queueFiles(runFolder) : undefined,
     })
     const server = new SeatServer(runner.seats, post, { store, remembered: (from, memory) => runner.remembered(from, memory) })
-    groups = { store, runner, peers: { post, directory, server, runner } }
+    peers.server = server
+    peers.runner = runner
+    groups = { store, runner, peers }
   } catch (error) {
     console.error("group chats:", error)
   }
@@ -278,6 +284,8 @@ const voice = new VoiceWords(places)
 const engineAccounts = new EngineAccounts(() => link.request("GET", "/api/credential"))
 const limits = new Limits(() => [...agentAccounts(roster.all()), ...engineAccounts.accounts()], join(home, "limits.json"), Date.now, () => engineAccounts.refresh(), () => engineAccounts.answered)
 limits.alsoServices = ENGINE_SERVICES
+// Shared with your other computers' boxes: each account read once across them, and listed on each.
+peers.limits = new LimitsPeers(limits, post, directory, join(home, "limits-peers.json"))
 
 // What every conversation here makes, recorded as it's made: the engine's and this bridge's own.
 // One that fails to start leaves the rest of the bridge as it is.
@@ -332,7 +340,7 @@ const carrying = new Carrying(sessions, store, (provider) => sessions.agent(prov
 let server: ReturnType<typeof Bun.serve>
 /** Making way for a newer bridge in its place, on a machine (below). */
 let renewal: Renewal | undefined
-const answer = handler({ roster, sessions, auto, link, password, version, build, groups, goals, sideQuestions, handoffs, places, reviews, voice, artifacts, noted, restartOutside, carrying, limits })
+const answer = handler({ roster, sessions, auto, link, password, version, build, groups, peers, goals, sideQuestions, handoffs, places, reviews, voice, artifacts, noted, restartOutside, carrying, limits })
 /** Requests being answered now (but the event feed's, which stays open): a newer bridge waits for them. */
 let answering = 0
 try {
@@ -369,7 +377,7 @@ void link.whenReady().then(() => {
   reviews.resume()
   try {
     groups?.runner.start()
-    groups?.peers.server.start()
+    groups?.peers.server?.start()
     // What bots are still to be told of their chats, now and each minute, as your other computers' bots become known.
     if (groups) {
       const runner = groups.runner

@@ -533,6 +533,12 @@ test("a box tells its peers its agents as they change, and every ten minutes", a
   const to = bytes => [mac, second].find(each => k(bytes.subarray(1, 17)) === each.address);
   assert.deepEqual(sent.map(bytes => opened(bytes, to(bytes)).address).sort(), [mac.address, second.address].sort());
   assert.deepEqual(opened(sent[0], to(sent[0])).payload.agents.list, []);
+  // With the boxes it knows, but the one it's for (for plan limits: "Plan limits", "Across your computers").
+  for (const bytes of sent) {
+    const peer = to(bytes);
+    const other = peer === mac ? second : mac;
+    assert.deepEqual(opened(bytes, peer).payload.agents.boxes, [{ key: other.peer.key, address: other.peer.address, kind: other.peer.kind, name: other.peer.name }]);
+  }
   await link.announce(host, readEngine, link.readLink(), now + 60_000);
   assert.equal(sent.length, 2, "the same, within ten minutes: not again");
   await link.announce(host, readEngine, link.readLink(), now + 601_000);

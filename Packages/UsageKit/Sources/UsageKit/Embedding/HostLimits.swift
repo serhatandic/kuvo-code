@@ -32,6 +32,9 @@ public struct HostLimitRow: Sendable, Hashable, Identifiable {
     /// It's the agent's own sign-in on this Mac (not one you added): the panel's own card for the
     /// provider takes its numbers.
     public var isOwnLogin: Bool
+    /// Every computer it's on hasn't been heard from for a while: what it shows is as of `readAt`
+    /// however recent, never live.
+    public var isAway: Bool
 
     public struct Meter: Sendable, Hashable {
         /// "Session", "Weekly", "Sonnet", "Premium requests".
@@ -74,8 +77,9 @@ public struct HostLimitRow: Sendable, Hashable, Identifiable {
         }
     }
 
-    public init(id: String, providerID: String, name: String, plan: String? = nil, meters: [Meter], balance: Balance? = nil, notice: String? = nil, readAt: Date? = nil, isLocal: Bool = true, isOwnLogin: Bool = false, place: String? = nil) {
+    public init(id: String, providerID: String, name: String, plan: String? = nil, meters: [Meter], balance: Balance? = nil, notice: String? = nil, readAt: Date? = nil, isLocal: Bool = true, isOwnLogin: Bool = false, place: String? = nil, isAway: Bool = false) {
         self.isLocal = isLocal
+        self.isAway = isAway
         self.place = place
         self.isOwnLogin = isOwnLogin
         self.id = id
@@ -295,11 +299,11 @@ enum HostLimitData {
         return rows
     }
 
-    /// "As of …" once what it shows was read longer ago than that.
+    /// "As of …" once what it shows was read longer ago than that, or its computers aren't heard from.
     static func staleness(_ row: HostLimitRow, now: Date = .now) -> StalenessHint? {
         guard let readAt = row.readAt else { return nil }
         let age = now.timeIntervalSince(readAt)
-        guard age >= HostLimits.outdated, let duration = Formatters.compactDuration(age) else { return nil }
+        guard age >= HostLimits.outdated || row.isAway, let duration = Formatters.compactDuration(max(age, 60)) else { return nil }
         let when = readAt.formatted(date: Calendar.current.isDate(readAt, inSameDayAs: now) ? .omitted : .abbreviated, time: .shortened)
         return StalenessHint(label: "As of \(when)", tooltip: "Last read \(duration) ago")
     }

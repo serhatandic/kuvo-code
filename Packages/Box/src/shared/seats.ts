@@ -2,7 +2,8 @@
 // them to each other: the coding agents' bridge (src/agents/groups/post.ts) and the link
 // (src/link/peers/seats.ts), which carries the bridge's mail to your other computers and says who
 // they are. The mail itself is the bridge's (`SeatMail`, src/agents/groups/peer.ts); the link
-// reads only its kind, and for what a bot remembers, whose it is.
+// reads only its kind, and for what a bot remembers, whose it is. The bridge's plan limits go the
+// same way, as mail of their own (`limits`, src/agents/limits-peers.ts).
 
 import type { BotLook } from "./routes/bots";
 
@@ -38,8 +39,12 @@ export interface SeatBot {
   look?: BotLook;
 }
 
-/** Who can be in this box's group chats from your other computers (`PUT /api/kuvo/peers`). */
+/** Who can be in this box's group chats from your other computers (`PUT /api/kuvo/peers`), and
+ * this box itself, as its peers name it (its key, and its name: what its plan limits' rows call it). */
 export interface SeatPeers {
+  self?: { key: string; name: string };
+  /** Boxes a peer knows that aren't this box's peers (another Mac's, beside a machine two Macs share): for plan limits alone. */
+  also?: { key: string; name: string }[];
   boxes: SeatBox[];
   bots: SeatBot[];
 }

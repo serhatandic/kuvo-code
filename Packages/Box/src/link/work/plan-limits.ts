@@ -44,14 +44,20 @@ function windowName(window: Record<string, unknown>): string {
   return typeof window.model === "string" && window.model ? `${window.model} ${length}` : length;
 }
 
-/** The limits as an agent reads them. */
+/** The limits as an agent reads them: every account across your computers where the box lists
+ * them so (`rows`, read wherever it was read last), this computer's first; else this one's own. */
 export function describePlanLimits(data: unknown, now = Date.now()): string {
-  const accounts = isObject(data) && Array.isArray(data.accounts) ? data.accounts.filter(isObject) : [];
+  const rows = isObject(data) && Array.isArray(data.rows) ? data.rows.filter(isObject) : null;
+  const accounts = rows ?? (isObject(data) && Array.isArray(data.accounts) ? data.accounts.filter(isObject) : []);
   if (!accounts.length) return `No plan limits are known on ${HERE}: no coding agent here is signed in to a plan whose limits can be read.`;
-  const lines = [`Plan limits on ${HERE} (each account's own; used is how much of the window is gone):`];
+  const lines = [rows ? `Plan limits of your accounts (signed in on ${HERE} unless it says where; used is how much of the window is gone):` : `Plan limits on ${HERE} (each account's own; used is how much of the window is gone):`];
   for (const account of accounts) {
     const service = typeof account.agent === "string" ? (AGENT_NAMES[account.agent] ?? account.agent) : (ENGINE_NAMES[String(account.service)] ?? String(account.service));
-    const name = `${service}${typeof account.label === "string" && account.label ? ` (${account.label})` : ""}${typeof account.plan === "string" && account.plan ? `, ${account.plan}` : ""}, provider ${String(account.provider)}`;
+    const boxes = Array.isArray(account.boxes) ? account.boxes.filter(isObject) : [];
+    const elsewhere = rows && !boxes.some(box => box.here === true) ? boxes.map(box => String(box.name || "another computer")) : [];
+    const where = elsewhere.length ? `, signed in on ${elsewhere.join(", ")}${account.away === true ? " (not heard from lately: as last told)" : ""}` : "";
+    const provider = rows ? (boxes.find(box => box.here === true)?.provider ?? account.provider) : account.provider;
+    const name = `${service}${typeof account.label === "string" && account.label ? ` (${account.label})` : ""}${typeof account.plan === "string" && account.plan ? `, ${account.plan}` : ""}${elsewhere.length ? "" : `, provider ${String(provider)}`}${where}`;
     lines.push(`- ${name}:`);
     const windows = Array.isArray(account.windows) ? account.windows.filter(isObject) : [];
     for (const window of windows) {

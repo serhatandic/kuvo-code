@@ -75,6 +75,8 @@ export interface ToldAgents {
   features?: string[];
   /** Conversations it moved away lately, by the key of the box each lives on now, and when. */
   moved?: { session: string; key: string; at: number }[];
+  /** The boxes it knows (its own peers), which this box may take plan limits from and tell its own to (PROTOCOL.md, "Plan limits"). */
+  boxes?: { key: string; address: string; kind: "mac" | "machine"; name: string }[];
 }
 
 /** `run/agents.json`: everyone, for list_agents here (kuvo-browser.js reads it), and this box's

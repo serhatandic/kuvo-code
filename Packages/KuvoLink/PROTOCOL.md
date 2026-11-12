@@ -369,7 +369,10 @@ connection.
   about?, machine?, look?}], "features"?}}`: a bot's `id` (`bot_…`, as group chats name their
   members) and `look` (`{color, shape, face}`, as `kuvo/bots` has it: a colour, shape or face the
   apps don't draw is kept as the plain look's, `graphite`, `round`, `calm`), and `features` as the box's
-  `kuvo/info` names them (the box that takes them keeps the first 300 names). A box sends its bots and its 40 latest
+  `kuvo/info` names them (the box that takes them keeps the first 300 names), and `boxes`
+  (`[{key, address, kind, name}]`, 64 at most), the sender's other peers, which the receiver takes
+  plan limits from and tells its own to where they aren't its peers too ("Plan limits", "Across your
+  computers"; nothing else). A box sends its bots and its 40 latest
   sessions (its engine's and its coding agents') when they change and every ten minutes. Each box
   keeps the newest list from each peer. The relay keeps nothing, so a box that has just connected adds `"ask": "agents"` to
   what it sends first (its agents; a Mac's digest), and whoever gets it tells that box its agents
@@ -647,6 +650,13 @@ connection.
   word three minutes after it last came (that peer went away mid-move), at its next look, with a
   `kuvo/moves/events` line so a client stops showing it. A box from before 0.9.169 ignores
   `moving`.
+- **Plan limits** (#210): `{"limits": {at, accounts, ask?, refresh?}}`, what a box's coding agents'
+  bridge read of its accounts' limits ("Plan limits", "Across your computers"). The bridge hands it
+  to its link on its mail (as group chats' below, `kind: "limits"`), which sends it now, whole,
+  to that peer, and keeps it nowhere; the receiving link gives it to its bridge (`POST
+  /api/kuvo/peers/mail`), or lets it go when the bridge isn't there (it comes again in ten
+  minutes). The link tells its bridge which key and name are this box's own (`self` in `PUT
+  /api/kuvo/peers`). A box from before this ignores it.
 - **Group chats**: a chat lives on one box (its host) and runs there. A member that lives on
   another box (its home, a peer whose `features` say `groups.seats`) takes its turn there, in a
   seat of the home's own, and does its part of the work and remembers the chat in its own
@@ -3564,11 +3574,16 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
 `kuvo/agents/api/kuvo/limits…` (the Mac app at `api/kuvo/limits…` on the bridge itself), while
 `kuvo/info` has `agents: true` (503 otherwise), where `features` has `limits`.
 
-- `GET kuvo/agents/api/kuvo/limits` → `{data: {accounts: [account], services}}`. `services`: what
+- `GET kuvo/agents/api/kuvo/limits` → `{data: {accounts: [account], services, rows: [row]}}`.
+  `accounts`: this box's own (one a peer's reading stood for a read of here, with that reading's
+  windows, plan and credits where they're newer than its own, for clients from before `rows`);
+  `rows`: every account across your computers (below, "Across your computers"), what a client
+  lists. `services`: what
   this box reads the limits of (`claude`, `codex`, `grok`, `cursor`, `antigravity`, `copilot`,
   `openrouter`, `zai`, `ollama`, `opencode`), whether or not one is signed in now: a client shows
   those from here, and anything else from where it had them before. An account is listed once it's
-  been read (or a turn told of it); one with no plan limits to read (signed out, an API key) isn't.
+  been read (or a turn told of it, or a peer's reading stood for a read here); one with no plan
+  limits to read (signed out, an API key) isn't.
   Each `account`:
   - `provider` (`claude-code`, `claude-code@1f2e3d4c` for one you added, the engine's
     `github-copilot`…), `service` (its mark and color, as above), and for a coding agent's,
@@ -3606,30 +3621,86 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     time it runs), `unreadable` (the sign-in can run the agent but not read its plan's limits) or
     `failed`. Show `message` as it is.
 - `POST kuvo/agents/api/kuvo/limits/refresh` reads now each account read over a minute ago, as
-  often as its maker allows and never inside a hold, and answers as `GET` with what's read within
-  a couple of seconds; what comes later comes as `kuvo.limits.updated`.
-- The bridge's events (`kuvo/agents/api/event`) carry `kuvo.limits.updated` `{accounts}` each time
-  the list changes.
-- Listing them (KuvoClient's `UsageListing`, as the Mac and the phone do): one row per account
-  across the boxes a client lists (the Mac: its own and its machines'; the phone: every computer
-  it reaches, the first Mac whose usage panel answers taken as its own, that panel placing the
-  rows), in their order (its own computer's first): rows of one
-  `service` with one `identity` are one row, from any box, and a row without one is its box's
-  own. Two windows are one limit when they have the same `model` (ignoring case), `name` and
-  `minutes` (by `id` where a window has none of the three): a coding agent and the engine name a
-  model's own limit differently. Each is the one read last (`read`) among them. The newest
-  reading is the one checked last (`checked`, else its newest window's `read`): the plan and the
-  credits are its, where it has them, else the next newest's; `checked` is the latest and `next`
-  the earliest; a `problem` shows only when every box has one, the newest's. Its name is the
-  coding agent's ("Claude", "Codex") where one is among them, else the service's ("ChatGPT"),
-  with the first `label` among them ("Claude · Work"). Where two rows would have one name: a row
-  whose own computer's sign-in is the engine's takes the service's name ("ChatGPT"); rows not on
-  the client's own computer add the names of the boxes they're from ("Claude · hetzner, lokum"),
-  as does one beside a bar the Mac panel shows of its own of that name (a provider's card that
-  reads your own login's limits, when this Mac's box has no row of it: Codex's, say; Claude's card
-  has none, so the accounts take its place, `covers`); rows still alike add their other boxes'
-  names. A row a box can't say who it is (no `identity`) is never merged by its numbers: two
-  accounts can read alike (a personal plan and a team's, each at 12%).
+  often as its maker allows and never inside a hold (nor one a peer read within its time between
+  reads), then asks a computer that reads it for each account this box doesn't read itself (one
+  only on another computer, or one only its turns tell of here, a Mac's Claude) to do the same for
+  it, and
+  answers as `GET` with what's read within a couple of seconds; what comes later comes as
+  `kuvo.limits.updated`.
+- The bridge's events (`kuvo/agents/api/event`) carry `kuvo.limits.updated` `{accounts, rows}`
+  each time either changes (a peer's word included).
+- **Across your computers** (#210): every box is equal, none is a hub, and each works with any
+  other off.
+  - **Who**: a box's limits peers are its peers ("Peers") and the boxes they say they know
+    (`agents.boxes`, 16 from each peer at most) that it doesn't: so two Macs that share a machine,
+    which aren't each other's peers, and each Mac's other machines, share their limits through no
+    one. It takes only `limits`
+    from those (any other mail from them is dropped, as from anyone else), and they go when no peer
+    names them any more. A box two hops away (known only to a box only a peer knows) isn't one.
+  - Each box's bridge tells each limits peer what it read of its own accounts, through its link:
+    `{"limits": {at, accounts, ask?, refresh?}}`, `accounts` as its `GET` lists them, but its own
+    numbers only (each account's hashed `identity`, its windows with when each was read, `checked`,
+    `next`, its plan, credits and problem; never a sign-in, a token or an ID), as many as fit in 28
+    KB; `at`, the sender's clock. It's sent at once after a read, at most once a minute for what
+    turns hear, again every ten minutes though nothing changed (the relay keeps nothing), and at once
+    to a peer it hasn't told since its bridge started, or since its link started carrying its mail
+    again (what went meanwhile was lost), with `ask: true` (tell me yours). A box answers `ask`,
+    and a peer back after being away, with its own (no `ask`), at most once a minute for each peer,
+    whatever it told that peer lately.
+    A box from before this ignores it, and sends none. A sealed mail that doesn't fit isn't sent.
+  - The receiver keeps the last from each peer (`limits-peers.json` in the bridge's folder, through
+    a restart), its times moved onto its own clock where the sender's `at` is a minute or more off
+    (`resetsAt`, its maker's, as it is), and a `service` it doesn't know (a newer box's) as its name
+    (lowercase letters, digits and dashes, 40 at most). A computer you removed goes, with what it
+    said.
+  - **One read per account**: before asking a maker, a box looks for a peer's reading of the same
+    account (`service` and `identity`) that its maker answered without a problem within the
+    account's time between reads (15 minutes for Claude's, 10 for the rest). Then it doesn't ask,
+    lists the account as its own still (with no numbers of its own, if it never read it), and looks
+    again past that peer's next read and two minutes more: a peer that's off, or turned away, is
+    taken over then. Computers that read at the same moment settle on one by the next round (the
+    one that read last is fresh to the other). Holds and the one-a-minute spacing stay each box's
+    own (Anthropic's limit is per computer): a 429 on one holds that one alone, and a reading with a
+    problem never stands for a read. An account a box can't say who it is is always read there;
+    one whose sign-in doesn't say who it is (GitHub Copilot's: its maker's answer does) counts as
+    who it was last read as only while the lasting part of its sign-in (a refresh token or a key,
+    not a renewed token) is as it was then: signed in again, what was kept of it goes (`problem`,
+    `failed`, as above) and it's read soon.
+  - `refresh: [row id]`: a refresh asked of the sender (above) for accounts it doesn't read
+    itself; the receiver refreshes those of its own as it would its own refresh.
+  - **`rows`**: one row per account across this box and its peers, this box's first, then each
+    peer's by name. Rows of one `service` with one `identity` are one row, from any box; a row
+    without one is its box's own. Two windows are one limit when they have the same `model`
+    (ignoring case), `name` and `minutes` (by `id` where a window has none of the three): a coding
+    agent and the engine name a model's own limit differently. Each is the one read last (`read`)
+    among them. The newest reading is the one checked last (`checked`, else its newest window's
+    `read`): the plan and the credits are its, where it has them, else the next newest's; `checked`
+    is the latest and `next` the earliest; a `problem` shows only when every box has one, the
+    newest's. A row is as an account, named as the coding agent's where one is among them (else
+    the engine's sign-in's), with the first `label` among them, and adds `id` (`<service>#<identity>`,
+    or `<box key>/<provider>` for one that can't say who it is: the same on every box), `boxes`
+    (each computer it's on, `{key, name, provider, agent?, account?, label?, checked?, here?,
+    away?}`: `here`, the box that answered; `away`, a peer not heard from for 25 minutes, whose
+    word stays as it was) and `away: true` when every computer it's on is away: its numbers are as
+    of their `read`, never live, however recent. A row a box can't say who it is (no `identity`) is
+    never merged by its numbers: two accounts can read alike (a personal plan and a team's, each
+    at 12%).
+- Listing them (KuvoClient's `UsageListing.listing`, as the Mac and the phone do): one box's `rows`
+  as they are, merging nothing (the Mac: its own box's; the phone: the box of the first Mac whose
+  usage panel answers, else the first that answers, that panel placing the rows), refreshed
+  through that box alone, while they have every row each other box the client reaches says is
+  signed in there (`here`), with that box among the row's `boxes` and not `away`. A row whose computers are all away shows "As of" its reading's time.
+  Naming, a view: a row's name is its account's ("Claude", "Codex", "ChatGPT", "Claude · Work");
+  where two rows would have one name: a row whose sign-in on the answering box is the engine's
+  takes the service's name ("ChatGPT"); rows not on the answering box add the names of the boxes
+  they're from ("Claude · hetzner, lokum"), as does one beside a bar the Mac panel shows of its
+  own of that name (a provider's card that reads your own login's limits, when this Mac's box has
+  no row of it: Codex's, say; Claude's card has none, so the accounts take its place, `covers`);
+  rows still alike add their other boxes' names. Otherwise (a computer the client reaches answers
+  without `rows`, a box from before them, or one whose own rows the first box doesn't have from it
+  as it hears it now, not `away`: just added, or the relay down), the client merges each box's
+  `accounts` itself, by the rules for `rows` above, and refreshes each ("For released Macs",
+  `limits-merge`).
 - What's read: Claude Code's accounts, on Linux from Anthropic with Claude Code's own sign-in in
   Kuvo Code's folder; on a Mac only from what its turns hear (Claude Code's rate-limit events, every
   window from each response's headers), as the token Kuvo Code signs in with there can only run
@@ -6296,6 +6367,16 @@ before connects (the box notes one: `run/attached`).
   "Notices"), which stays until a box tells its news without its bridge: removing it before then
   loses those notices.
   <!-- compat: 0.7 box-notices -->
+- **Plan limits from before `rows`** (#210): a client from before them (a released Mac, a phone)
+  reads each box's own `accounts` and merges them itself. A box that let a peer's reading stand
+  for a read of an account lists it there with that reading's numbers (`accounts`, "Plan limits"),
+  so such a client doesn't show it stale or empty.
+  <!-- compat: 0.7 limits-own-numbers -->
+- **Boxes from before `rows`**: a client asks each box it reaches and merges their `accounts`
+  itself while one of them answers without `rows` ("Plan limits", "Listing them"). The same merge
+  covers a computer the first box doesn't hear from now (the relay down); removing the fallback
+  needs an answer for that first.
+  <!-- compat: 0.7 limits-merge -->
 - **Updating an agent's program**: such a Mac asks `POST kuvo/agents/api/integration/<provider>/update`
   and waits for its answer, `{data: {updated, version?, message?}}`, so the agents bridge still
   answers that once the update is done (the same update every client sees, "Installing and

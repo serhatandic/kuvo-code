@@ -44,6 +44,8 @@ export interface Context {
   build?: string | null
   /** The group chats that live on this computer (groups/runner.ts), and its part in those on your others; none where they don't run here. */
   groups?: { runner: GroupRunner; store: GroupStore; peers?: PeerParts }
+  /** What this bridge tells your other computers and hears from them, through the box's link (groups/post.ts): its group chats' mail, its plan limits. */
+  peers?: PeerParts
   /** Restarts the agents' processes started before the box's sandbox was on, as you said to (main.ts). */
   restartOutside?: () => void
   /** Goals that conversations here and on the engine work toward (goals.ts). */
@@ -554,8 +556,8 @@ export function handler(context: Context) {
       // What this computer's agents made (`kuvo/artifacts`, which the box's link passes on).
       if (area === "kuvo" && a === "artifacts" && b === "noted" && !c) return await notedRoute(context.noted, method, body)
       if (area === "kuvo" && a === "link" && b === "artifacts") return await artifactRoutes(context.artifacts, method, parts.slice(4), url.searchParams, body, request.signal)
-      // Group chats across your computers, as the box's link carries their mail (groups/post.ts).
-      if (area === "kuvo" && a === "peers") return await peerRoutes(context.groups?.peers, method, parts.slice(3), body, request.signal)
+      // Group chats and plan limits across your computers, as the box's link carries their mail (groups/post.ts).
+      if (area === "kuvo" && a === "peers") return await peerRoutes(context.peers ?? context.groups?.peers, method, parts.slice(3), body, request.signal)
 
       if (area === "kuvo" && a === "tools" && method === "PUT") {
         const { url: address, token, timeout } = await body()

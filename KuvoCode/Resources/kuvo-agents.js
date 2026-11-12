@@ -1,7 +1,7 @@
 // @bun
 // Packages/Box/src/agents/main.ts
-import { mkdirSync as mkdirSync20, readdirSync as readdirSync18, readFileSync as readFileSync31, rmSync as rmSync16 } from "fs";
-import { basename as basename12, dirname as dirname19, join as join33 } from "path";
+import { mkdirSync as mkdirSync21, readdirSync as readdirSync18, readFileSync as readFileSync32, rmSync as rmSync16 } from "fs";
+import { basename as basename12, dirname as dirname20, join as join33 } from "path";
 
 // Packages/Box/src/agents/accounts.ts
 import { randomBytes } from "crypto";
@@ -11376,6 +11376,92 @@ function homebrewLatest(json, cask) {
 import { createHash as createHash7 } from "crypto";
 import { mkdirSync as mkdirSync13, readFileSync as readFileSync19, renameSync as renameSync11, writeFileSync as writeFileSync15 } from "fs";
 import { dirname as dirname12 } from "path";
+
+// Packages/Box/src/agents/limits-rows.ts
+function limitRows(boxes) {
+  const groups = [];
+  const found = new Map;
+  for (const box of boxes) {
+    for (const account of box.accounts) {
+      const id = account.identity ? `${account.service}#${account.identity}` : `${box.key}/${account.provider}`;
+      const index = found.get(id);
+      if (index !== undefined)
+        groups[index].members.push({ box, account });
+      else {
+        found.set(id, groups.length);
+        groups.push({ id, members: [{ box, account }] });
+      }
+    }
+  }
+  return groups.map(({ id, members }) => {
+    const row = {
+      ...merged(members.map((member) => member.account)),
+      id,
+      boxes: members.map(({ box, account }) => ({
+        key: box.key,
+        name: box.name,
+        provider: account.provider,
+        ...account.agent ? { agent: account.agent } : {},
+        ...account.account ? { account: account.account } : {},
+        ...account.label ? { label: account.label } : {},
+        ...account.checked ? { checked: account.checked } : {},
+        ...box.here ? { here: true } : {},
+        ...box.away ? { away: true } : {}
+      }))
+    };
+    if (members.every((member) => member.box.away))
+      row.away = true;
+    return row;
+  });
+}
+var newestOf = (account) => account.checked ?? Math.max(0, ...account.windows.map((window) => window.read));
+function merged(members) {
+  const base = members.find((member) => member.agent) ?? members[0];
+  if (members.length === 1)
+    return base;
+  const account = { ...base };
+  const label = members.map((member) => member.label?.trim()).find(Boolean);
+  if (label)
+    account.label = label;
+  else
+    delete account.label;
+  const windows = [];
+  for (const member of members) {
+    for (const window of member.windows) {
+      const index = windows.findIndex((each) => limitOf2(each) === limitOf2(window));
+      if (index < 0)
+        windows.push(window);
+      else if (window.read > windows[index].read)
+        windows[index] = window;
+    }
+  }
+  account.windows = windows;
+  const newest = [...members].sort((a, b) => newestOf(b) - newestOf(a));
+  const plan = newest.find((member) => member.plan)?.plan;
+  const balance = newest.find((member) => member.balance)?.balance;
+  const checked = Math.max(0, ...members.map((member) => member.checked ?? 0));
+  const next = Math.min(...members.map((member) => member.next ?? Infinity));
+  for (const key of ["plan", "balance", "checked", "next", "problem"])
+    delete account[key];
+  if (plan)
+    account.plan = plan;
+  if (balance)
+    account.balance = balance;
+  if (checked)
+    account.checked = checked;
+  if (Number.isFinite(next))
+    account.next = next;
+  if (members.every((member) => member.problem))
+    account.problem = newest[0].problem;
+  return account;
+}
+function limitOf2(window) {
+  if (window.model === undefined && window.name === undefined && window.minutes === undefined)
+    return "id:" + window.id;
+  return `${window.model?.toLowerCase() ?? ""}|${window.name ?? ""}|${window.minutes ?? ""}`;
+}
+
+// Packages/Box/src/agents/limits.ts
 class LimitsProblem extends Error {
   kind;
   until;
@@ -11394,6 +11480,7 @@ var FIRST_RETRY = 5 * MINUTE;
 var LONGEST_RETRY = 30 * MINUTE;
 var NOTHING_AGAIN = 30 * MINUTE;
 var FRESH_ENOUGH = MINUTE;
+var SHARED_SLACK = 2 * MINUTE;
 
 class Limits {
   accounts;
@@ -11415,7 +11502,18 @@ class Limits {
     this.prepare = prepare;
     this.settled = settled;
     this.load();
-    this.said = JSON.stringify(this.list());
+    this.said = this.saying();
+  }
+  peers;
+  rows() {
+    const own = this.list(false);
+    return this.peers ? this.peers.rows(own) : limitRows([{ key: "", name: "", here: true, away: false, accounts: own }]);
+  }
+  peersChanged() {
+    this.changed(true, false);
+  }
+  saying() {
+    return JSON.stringify([this.list(), this.rows()]);
   }
   start() {
     this.timer ??= setInterval(() => void this.tick(), MINUTE);
@@ -11427,15 +11525,31 @@ class Limits {
       clearInterval(this.timer);
     this.timer = undefined;
   }
-  list() {
+  list(borrowed = true) {
     const listed = [];
     for (const account of this.accounts()) {
       const entry = this.entries.get(account.provider);
       if (!entry || entry.problem?.kind === "none")
         continue;
-      if (!entry.checked && !entry.windows.length && !entry.problem)
+      if (!entry.checked && !entry.windows.length && !entry.problem && !entry.elsewhere)
         continue;
       const problem = entry.problem ? { kind: entry.problem.kind, message: entry.problem.message, ...entry.problem.until ? { until: entry.problem.until } : {} } : undefined;
+      const peer = borrowed && entry.elsewhere && entry.identity ? this.peers?.freshest(account.service, entry.identity) : undefined;
+      if (peer?.checked && peer.checked > (entry.checked ?? 0)) {
+        listed.push({
+          provider: account.provider,
+          service: account.service,
+          ...account.agent ? { agent: account.agent.kind, account: account.agent.account } : {},
+          ...account.label ? { label: account.label } : {},
+          identity: entry.identity,
+          ...peer.plan ?? entry.plan ? { plan: peer.plan ?? entry.plan } : {},
+          windows: peer.windows,
+          ...peer.balance ?? entry.balance ? { balance: peer.balance ?? entry.balance } : {},
+          ...entry.checked ? { checked: entry.checked } : {},
+          ...account.limits.read ? { next: entry.next } : {}
+        });
+        continue;
+      }
       listed.push({
         provider: account.provider,
         service: account.service,
@@ -11452,16 +11566,21 @@ class Limits {
     }
     return listed;
   }
+  reads() {
+    return new Set(this.accounts().filter((account) => account.limits.read).map((account) => account.provider));
+  }
   services() {
     return [...new Set([...this.accounts().map((account) => account.service), ...this.alsoServices])];
   }
   alsoServices = [];
-  async refresh() {
+  async refresh(only) {
     const at = this.now();
     for (const account of this.accounts()) {
       const source = account.limits;
       const entry = this.entries.get(account.provider);
       if (!source.read || !entry || this.heldBack(source, entry, at))
+        continue;
+      if (only && !only(account, entry.identity))
         continue;
       if (entry.checked && at - entry.checked < Math.max(FRESH_ENOUGH, source.every))
         continue;
@@ -11488,7 +11607,14 @@ class Limits {
         this.entries.set(account.provider, entry);
       }
       this.switched(entry, source);
-      this.identify(entry, source.identity?.());
+      const says = source.identity?.();
+      this.identify(entry, says);
+      const as = source.account?.() ?? source.signIn?.();
+      if (!says && entry.identityAs !== undefined && as !== undefined && as !== entry.identityAs) {
+        this.forget(entry);
+        entry.identity = undefined;
+        entry.identityAs = undefined;
+      }
       if (!source.read)
         continue;
       const at = this.now();
@@ -11497,6 +11623,13 @@ class Limits {
       const hold = source.bucket ? this.holds.get(source.bucket) ?? 0 : 0;
       if (at < hold) {
         entry.next = hold;
+        continue;
+      }
+      const known = says || entry.identityAs !== undefined && entry.identityAs === as ? entry.identity : undefined;
+      const elsewhere = known ? this.peers?.fresh(account.service, known) : undefined;
+      if (elsewhere !== undefined && at - elsewhere < source.every) {
+        entry.elsewhere = elsewhere;
+        entry.next = elsewhere + source.every + SHARED_SLACK;
         continue;
       }
       const last = source.bucket ? this.asked.get(source.bucket) ?? 0 : 0;
@@ -11532,6 +11665,8 @@ class Limits {
       const at = this.now();
       if (reading)
         this.identify(entry, reading.identity);
+      if (reading?.identity)
+        entry.identityAs = source.account?.() ?? source.signIn?.();
       entry.next = at + source.every;
       if (!reading)
         return false;
@@ -11589,18 +11724,21 @@ class Limits {
     const identity = identityOf(raw);
     if (entry.identity === identity)
       return;
-    if (entry.identity) {
-      entry.windows = [];
-      entry.plan = undefined;
-      entry.balance = undefined;
-      entry.checked = undefined;
-      entry.problem = { kind: "failed", message: "Signed in to another account here: its limits show once they're read." };
-      entry.signIn = undefined;
-      entry.refusals = 0;
-      entry.failures = 0;
-      entry.next = 0;
-    }
+    if (entry.identity)
+      this.forget(entry);
     entry.identity = identity;
+  }
+  forget(entry) {
+    entry.windows = [];
+    entry.plan = undefined;
+    entry.balance = undefined;
+    entry.checked = undefined;
+    entry.problem = { kind: "failed", message: "Signed in to another account here: its limits show once they're read." };
+    entry.signIn = undefined;
+    entry.elsewhere = undefined;
+    entry.refusals = 0;
+    entry.failures = 0;
+    entry.next = 0;
   }
   switched(entry, source) {
     if (source.read || !source.signIn)
@@ -11615,6 +11753,7 @@ class Limits {
       entry.checked = undefined;
       entry.problem = undefined;
       entry.identity = undefined;
+      entry.elsewhere = undefined;
     }
     entry.heardAs = now;
   }
@@ -11661,18 +11800,21 @@ class Limits {
         this.entries.delete(provider);
   }
   lastHeardSave = 0;
-  changed(heard = false) {
+  changed(heard = false, own = true) {
     const list = this.list();
-    const now = JSON.stringify(list);
-    if (!heard || this.now() - this.lastHeardSave >= 30000) {
+    const rows = this.rows();
+    const now = JSON.stringify([list, rows]);
+    if (own && (!heard || this.now() - this.lastHeardSave >= 30000)) {
       if (heard)
         this.lastHeardSave = this.now();
       this.save();
     }
+    if (own)
+      this.peers?.tell(!heard);
     if (now === this.said)
       return;
     this.said = now;
-    emit("kuvo.limits.updated", { accounts: list });
+    emit("kuvo.limits.updated", { accounts: list, rows });
   }
   load() {
     if (!this.file)
@@ -11726,11 +11868,12 @@ var json6 = (value, status = 200) => new Response(JSON.stringify(value), { statu
 async function limitsRoutes(limits, method, rest) {
   if (!limits)
     return json6({ message: "Plan limits aren't read on this computer." }, 503);
-  const answer = () => json6({ data: { accounts: limits.list(), services: limits.services() } });
+  const answer = () => json6({ data: { accounts: limits.list(), services: limits.services(), rows: limits.rows() } });
   if (!rest.length && method === "GET")
     return answer();
   if (rest.length === 1 && rest[0] === "refresh" && method === "POST") {
-    await Promise.race([limits.refresh(), new Promise((resolve) => setTimeout(resolve, 2000).unref?.())]);
+    const reading = limits.refresh().finally(() => limits.peers?.refreshElsewhere(limits.rows(), limits.reads()));
+    await Promise.race([reading, new Promise((resolve) => setTimeout(resolve, 2000).unref?.())]);
     return answer();
   }
   return json6({ message: "Not available for this agent." }, 404);
@@ -17292,7 +17435,7 @@ ${text}`;
         return { outcome: "interrupted" };
       if (result?.status === "error") {
         const message = errorWords(result.error) ?? "Cursor stopped with an error.";
-        const limit = limitOf2(message, result.error);
+        const limit = limitOf3(message, result.error);
         return limit ? { outcome: "failed", error: { type: "limit", message }, limit } : { outcome: "failed", error: failure(message) };
       }
       return { outcome: "succeeded" };
@@ -17302,7 +17445,7 @@ ${text}`;
       if (hooks.signal.aborted)
         return { outcome: "interrupted" };
       const message = errorWords(error) ?? "Cursor stopped with an error.";
-      const limit = limitOf2(message, error);
+      const limit = limitOf3(message, error);
       if (limit)
         return { outcome: "failed", error: { type: "limit", message }, limit };
       if (/Cannot use this model/i.test(message))
@@ -17478,7 +17621,7 @@ ${text}`;
     dropRelayed(this.session.id, this);
   }
 }
-function limitOf2(message, error) {
+function limitOf3(message, error) {
   const code = String(error?.code ?? error?.name ?? "");
   if (/resource_exhausted|RateLimit/i.test(code) || /resource.?exhausted|usage limit (?:reached|exceeded)|quota exceeded|rate limit exceeded|too many requests/i.test(message))
     return { scope: "provider", message };
@@ -17720,6 +17863,10 @@ class EngineAccounts {
             identity: () => {
               const value = this.credentials.find((each) => each.integrationID === integration)?.value;
               return value ? READERS[integration]?.identity?.(value) : undefined;
+            },
+            account: () => {
+              const value = this.credentials.find((each) => each.integrationID === integration)?.value;
+              return fingerprint(value?.refresh || value?.key || value?.access);
             }
           }
         };
@@ -26879,7 +27026,7 @@ class PeerPost {
     const line = { id: "sm_" + crypto.randomUUID().replaceAll("-", ""), to, mail, durable };
     if (durable) {
       if (mail.kind === "memory")
-        this.kept = this.kept.filter((each) => !(each.to === to && sameMemory(each.mail, mail)));
+        this.kept = this.kept.filter((each) => !(each.to === to && each.mail.kind === "memory" && sameMemory(each.mail, mail)));
       this.kept.push(line);
       this.save();
     }
@@ -26938,18 +27085,29 @@ class PeerPost {
         signal?.addEventListener("abort", stop, { once: true });
         for (const line of this.kept)
           write(line);
+        const first = this.followers.size === 0;
         this.followers.add(write);
+        if (first)
+          for (const listener of this.carried)
+            listener();
         beating();
       },
       cancel: () => stop()
     });
     return new Response(stream, { headers: { "Content-Type": "application/x-ndjson", "Cache-Control": "no-cache" } });
   }
+  carried = [];
+  onFollowed(listener) {
+    this.carried.push(listener);
+  }
   get followed() {
     return this.followers.size > 0;
   }
 }
+var isLimitsMail = (value) => value !== null && typeof value === "object" && value.kind === "limits";
 function receive(parts, from, mail) {
+  if (!parts.server || !parts.runner)
+    return;
   parts.directory.existing(from)?.heardFrom(from);
   if (mail.kind === "state" || mail.kind === "result")
     parts.directory.existing(from)?.take(from, mail);
@@ -26961,6 +27119,8 @@ function receive(parts, from, mail) {
     parts.server.take(from, mail);
 }
 function gaveUp(parts, to, mail, at) {
+  if (!parts.server || !parts.runner)
+    return;
   switch (mail.kind) {
     case "work":
       return parts.runner.workGaveUp(to, mail.work, at);
@@ -26986,12 +27146,20 @@ async function peerRoutes(parts, method, path, body, signal) {
     const given = await body().catch(() => {
       return;
     });
+    if (typeof given?.from === "string" && given.from && isLimitsMail(given.mail)) {
+      parts.limits?.take(given.from, given.mail);
+      return json11({});
+    }
+    if (!parts.server || !parts.runner)
+      return json11({ message: "Group chats don't run here." }, 404);
     if (typeof given?.from !== "string" || !given.from || !isSeatMail(given.mail))
       return json11({ message: "That isn't group chat mail." }, 400);
     receive(parts, given.from, given.mail);
     return json11({});
   }
   if (what === "gaveup" && method === "POST") {
+    if (!parts.server || !parts.runner)
+      return json11({ message: "Group chats don't run here." }, 404);
     const given = await body().catch(() => {
       return;
     });
@@ -27024,6 +27192,9 @@ class LinkDirectory {
   boxes = new Map;
   listed = [];
   homes = new Map;
+  self;
+  also = new Map;
+  listeners = [];
   told = false;
   constructor(transport, clock = realClock) {
     this.transport = transport;
@@ -27038,6 +27209,13 @@ class LinkDirectory {
         boxes.set(box.key, { name: typeof box.name === "string" && box.name ? box.name : "another computer", seats: box.seats === true });
     }
     this.boxes = boxes;
+    const self = given.self;
+    this.self = self && typeof self === "object" && typeof self.key === "string" ? { key: self.key, name: typeof self.name === "string" ? self.name : "" } : undefined;
+    this.also = new Map;
+    for (const box of Array.isArray(given.also) ? given.also : []) {
+      if (box && typeof box.key === "string" && box.key && !boxes.has(box.key))
+        this.also.set(box.key, typeof box.name === "string" && box.name ? box.name : "another computer");
+    }
     this.told = true;
     this.listed = given.bots.filter((bot) => bot && typeof bot.id === "string" && /^bot_[A-Za-z0-9]+$/.test(bot.id) && typeof bot.name === "string" && typeof bot.box === "string" && boxes.has(bot.box)).map((bot) => ({
       id: bot.id,
@@ -27047,7 +27225,18 @@ class LinkDirectory {
       ...typeof bot.session === "string" ? { session: bot.session } : {},
       ...bot.look && typeof bot.look === "object" && !Array.isArray(bot.look) ? { look: bot.look } : {}
     }));
+    for (const listener of this.listeners)
+      listener();
     return true;
+  }
+  peerBoxes() {
+    return [...[...this.boxes].map(([key, box]) => ({ key, name: box.name })), ...[...this.also].map(([key, name]) => ({ key, name }))];
+  }
+  own() {
+    return this.self;
+  }
+  listen(listener) {
+    this.listeners.push(listener);
   }
   bots() {
     return this.listed;
@@ -27541,7 +27730,7 @@ function handler(context) {
       if (area === "kuvo" && a === "link" && b === "artifacts")
         return await artifactRoutes(context.artifacts, method, parts.slice(4), url.searchParams, body, request.signal);
       if (area === "kuvo" && a === "peers")
-        return await peerRoutes(context.groups?.peers, method, parts.slice(3), body, request.signal);
+        return await peerRoutes(context.peers ?? context.groups?.peers, method, parts.slice(3), body, request.signal);
       if (area === "kuvo" && a === "tools" && method === "PUT") {
         const { url: address, token, timeout } = await body();
         setToolServer(typeof address === "string" && address && typeof token === "string" ? { url: address, token, timeout: Number(timeout) || 960000 } : undefined);
@@ -28152,6 +28341,237 @@ class HangWatch {
 }
 var isEngine = (command) => /\bserve\b/.test(command) && !command.includes("kuvo-link");
 
+// Packages/Box/src/agents/limits-peers.ts
+import { mkdirSync as mkdirSync20, readFileSync as readFileSync31, renameSync as renameSync17, writeFileSync as writeFileSync22 } from "fs";
+import { dirname as dirname19 } from "path";
+var MINUTE2 = 60000;
+var TELL_AGAIN = 10 * MINUTE2;
+var PEER_AWAY = 25 * MINUTE2;
+var HEARD_EVERY = MINUTE2;
+var SKEW = MINUTE2;
+var MOST_BYTES = 40000;
+var SERVICE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+var PROBLEMS = new Set(["rate-limited", "expired", "unreadable", "failed"]);
+
+class LimitsPeers {
+  limits;
+  transport;
+  directory;
+  file;
+  now;
+  peers = new Map;
+  told = new Map;
+  answered = new Map;
+  constructor(limits, transport, directory, file, now = Date.now) {
+    this.limits = limits;
+    this.transport = transport;
+    this.directory = directory;
+    this.file = file;
+    this.now = now;
+    this.load();
+    limits.peers = this;
+    directory.listen(() => this.directorySaid());
+    transport.onFollowed?.(() => this.told.clear());
+  }
+  fresh(service, identity) {
+    return this.freshest(service, identity)?.checked;
+  }
+  freshest(service, identity) {
+    let newest;
+    for (const kept of this.peers.values()) {
+      for (const account of kept.accounts) {
+        if (account.service !== service || account.identity !== identity || account.problem || !account.checked)
+          continue;
+        if (!newest || account.checked > newest.checked)
+          newest = account;
+      }
+    }
+    return newest;
+  }
+  rows(own) {
+    const now = this.now();
+    const self = this.directory.own();
+    const boxes = [{ key: self?.key ?? "", name: self?.name ?? "", here: true, away: false, accounts: own }];
+    const peers = [...this.peers.entries()].sort(([, a], [, b]) => a.name.localeCompare(b.name));
+    for (const [key, kept] of peers)
+      boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY, accounts: kept.accounts });
+    return limitRows(boxes);
+  }
+  tell(urgent = false) {
+    if (!this.transport.followed || !this.directory.told)
+      return;
+    const now = this.now();
+    const accounts = this.shared();
+    const json = JSON.stringify(accounts);
+    for (const { key } of this.directory.peerBoxes()) {
+      const last = this.told.get(key);
+      const due = !last || now - last.at >= TELL_AGAIN || last.json !== json && (urgent || now - last.at >= HEARD_EVERY);
+      if (!due)
+        continue;
+      this.transport.send(key, { kind: "limits", at: now, accounts, ...!last ? { ask: true } : {} }, false);
+      this.told.set(key, { json, at: now });
+    }
+  }
+  take(from, mail) {
+    if (!mail || typeof mail !== "object")
+      return;
+    const given = mail;
+    if (!Array.isArray(given.accounts))
+      return;
+    if (this.directory.told && !this.directory.peerBoxes().some((box) => box.key === from))
+      return;
+    const now = this.now();
+    const off = typeof given.at === "number" && Number.isFinite(given.at) && Math.abs(now - given.at) >= SKEW ? now - given.at : 0;
+    const accounts = given.accounts.slice(0, 100).flatMap((account) => {
+      const taken = takenAccount(account, off, now);
+      return taken ? [taken] : [];
+    });
+    const before = this.peers.get(from);
+    const name = this.directory.peerBoxes().find((box) => box.key === from)?.name ?? before?.name ?? "another computer";
+    this.peers.set(from, { name, heard: now, accounts });
+    this.save();
+    this.limits.peersChanged();
+    if (given.ask === true || before && now - before.heard > PEER_AWAY)
+      this.answer(from);
+    if (Array.isArray(given.refresh)) {
+      const ids = new Set(given.refresh.filter((id) => typeof id === "string").slice(0, 200));
+      if (ids.size)
+        this.limits.refresh((account, identity) => ids.has(this.idOf(account, identity)));
+    }
+  }
+  refreshElsewhere(rows, reads) {
+    if (!this.transport.followed)
+      return;
+    const asks = new Map;
+    for (const row of rows) {
+      if (row.boxes.some((box) => box.here && reads.has(box.provider)))
+        continue;
+      const box = row.boxes.find((each) => !each.here && !each.away) ?? row.boxes.find((each) => !each.here);
+      if (!box?.key)
+        continue;
+      if ((asks.get(box.key)?.length ?? 0) >= 200)
+        continue;
+      asks.set(box.key, [...asks.get(box.key) ?? [], row.id]);
+    }
+    const now = this.now();
+    const accounts = this.shared();
+    for (const [key, refresh] of asks)
+      this.transport.send(key, { kind: "limits", at: now, accounts, refresh }, false);
+  }
+  idOf(account, identity) {
+    return identity ? `${account.service}#${identity}` : `${this.directory.own()?.key ?? ""}/${account.provider}`;
+  }
+  answer(key) {
+    if (!this.transport.followed)
+      return;
+    const now = this.now();
+    if (now - (this.answered.get(key) ?? -Infinity) < HEARD_EVERY)
+      return;
+    this.answered.set(key, now);
+    const accounts = this.shared();
+    this.transport.send(key, { kind: "limits", at: now, accounts }, false);
+    this.told.set(key, { json: JSON.stringify(accounts), at: now });
+  }
+  shared() {
+    const accounts = this.limits.list(false);
+    while (accounts.length && Buffer.byteLength(JSON.stringify(accounts)) > MOST_BYTES - 200 * 60)
+      accounts.pop();
+    return accounts;
+  }
+  directorySaid() {
+    const here = new Set(this.directory.peerBoxes().map((box) => box.key));
+    let gone = false;
+    for (const key of [...this.peers.keys()]) {
+      if (here.has(key))
+        continue;
+      this.peers.delete(key);
+      gone = true;
+    }
+    for (const key of [...this.told.keys()])
+      if (!here.has(key))
+        this.told.delete(key);
+    for (const key of [...this.answered.keys()])
+      if (!here.has(key))
+        this.answered.delete(key);
+    if (gone) {
+      this.save();
+      this.limits.peersChanged();
+    }
+    this.tell();
+  }
+  load() {
+    if (!this.file)
+      return;
+    try {
+      const saved = JSON.parse(readFileSync31(this.file, "utf8"));
+      for (const [key, kept] of Object.entries(saved.peers ?? {})) {
+        if (!kept || typeof kept.heard !== "number" || !Array.isArray(kept.accounts))
+          continue;
+        this.peers.set(key, { name: typeof kept.name === "string" ? kept.name : "another computer", heard: kept.heard, accounts: kept.accounts.flatMap((account) => takenAccount(account, 0, Infinity) ?? []) });
+      }
+    } catch {}
+  }
+  save() {
+    if (!this.file)
+      return;
+    try {
+      mkdirSync20(dirname19(this.file), { recursive: true });
+      writeFileSync22(this.file + ".new", JSON.stringify({ peers: Object.fromEntries(this.peers) }), { mode: 384 });
+      renameSync17(this.file + ".new", this.file);
+    } catch {}
+  }
+}
+var text4 = (value, most = 200) => typeof value === "string" && value ? value.slice(0, most) : undefined;
+var time = (value) => typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+function takenAccount(given, off, now) {
+  if (!given || typeof given !== "object")
+    return null;
+  const account = given;
+  const provider = text4(account.provider);
+  if (!provider || typeof account.service !== "string" || !SERVICE.test(account.service))
+    return null;
+  const moved = (value) => {
+    const at = time(value);
+    return at === undefined ? undefined : Math.min(at + off, now);
+  };
+  const windows = (Array.isArray(account.windows) ? account.windows : []).slice(0, 30).flatMap((window) => {
+    const read = moved(window?.read);
+    if (!window || typeof window !== "object" || !text4(window.id) || typeof window.used !== "number" || !Number.isFinite(window.used) || read === undefined)
+      return [];
+    const amount = window.amount;
+    return [
+      {
+        id: text4(window.id),
+        used: Math.min(Math.max(window.used, 0), 1),
+        ...time(window.resetsAt) ? { resetsAt: window.resetsAt } : {},
+        ...time(window.minutes) ? { minutes: window.minutes } : {},
+        ...text4(window.model) ? { model: text4(window.model) } : {},
+        ...text4(window.name) ? { name: text4(window.name) } : {},
+        ...amount && typeof amount === "object" && typeof amount.used === "number" && typeof amount.limit === "number" && ["requests", "usd", "credits"].includes(amount.unit) ? { amount: { used: amount.used, limit: amount.limit, unit: amount.unit } } : {},
+        read,
+        source: window.source === "turn" ? "turn" : "usage"
+      }
+    ];
+  });
+  const balance = account.balance;
+  const problem = account.problem;
+  const checked = moved(account.checked);
+  const next = time(account.next) === undefined ? undefined : account.next + off;
+  return {
+    provider,
+    service: account.service,
+    ...kinds.includes(account.agent) ? { agent: account.agent, ...text4(account.account) ? { account: text4(account.account) } : {} } : {},
+    ...text4(account.label, 100) ? { label: text4(account.label, 100) } : {},
+    ...typeof account.identity === "string" && /^[0-9a-f]{16}$/.test(account.identity) ? { identity: account.identity } : {},
+    ...text4(account.plan, 100) ? { plan: text4(account.plan, 100) } : {},
+    windows,
+    ...balance && typeof balance === "object" && typeof balance.left === "number" && (balance.unit === "usd" || balance.unit === "credits") ? { balance: { left: balance.left, ...typeof balance.limit === "number" ? { limit: balance.limit } : {}, unit: balance.unit } } : {},
+    ...checked ? { checked } : {},
+    ...next ? { next } : {},
+    ...problem && typeof problem === "object" && PROBLEMS.has(problem.kind) && text4(problem.message, 500) ? { problem: { kind: problem.kind, message: text4(problem.message, 500), ...time(problem.until) ? { until: problem.until + off } : {} } } : {}
+  };
+}
+
 // Packages/Box/src/agents/main.ts
 var version3 = "1";
 var script = Bun.main;
@@ -28186,7 +28606,7 @@ var renewUptime = process.env.KUVO_TEST_RENEW_UPTIME ? Number(process.env.KUVO_T
 for (const name of ["KUVO_TEST_RENEW_HOLD", "KUVO_TEST_RENEW_SETTLE", "KUVO_TEST_RENEW_UPTIME"])
   delete process.env[name];
 var temporary = process.env.TMPDIR?.replace(/\/$/, "") || join33(home3, "tmp");
-mkdirSync20(temporary, { recursive: true });
+mkdirSync21(temporary, { recursive: true });
 rmSync16(join33(temporary, "antigravity"), { recursive: true, force: true });
 leftSignIns(temporary);
 try {
@@ -28245,6 +28665,9 @@ var partGiven;
 var groups;
 var groupFolders = onMachine ? { root: join33(machineHome, "groups"), bots: process.env.KUVO_BOTS ?? join33(machineHome, "bots"), trash: join33(machineHome, "trash") } : process.env.KUVO_GROUPS && process.env.KUVO_BOTS && process.env.KUVO_TRASH ? { root: process.env.KUVO_GROUPS, bots: process.env.KUVO_BOTS, trash: process.env.KUVO_TRASH } : undefined;
 var groupMemoryKey = process.env.KUVO_GROUPS_MEMORY_KEY || undefined;
+var post = new PeerPost(groupFolders ? join33(groupFolders.root, "peer-outbox.json") : undefined);
+var directory = new LinkDirectory(post);
+var peers = { post, directory };
 var artifactsFolder = onMachine ? join33(machineHome, "artifacts") : process.env.KUVO_ARTIFACTS || undefined;
 var botsFolder = groupFolders?.bots ?? (onMachine ? join33(machineHome, "bots") : process.env.KUVO_BOTS || undefined);
 var agentsFile = onMachine ? join33(machineHome, "run", "agents.json") : process.env.KUVO_AGENTS_FILE || undefined;
@@ -28255,8 +28678,6 @@ for (const name of ["KUVO_GROUPS", "KUVO_TRASH", "KUVO_GROUPS_MEMORY_KEY", "KUVO
 if (groupFolders) {
   try {
     const store = new GroupStore(groupFolders.root, groupFolders.bots, agentsFile);
-    const post = new PeerPost(join33(groupFolders.root, "peer-outbox.json"));
-    const directory = new LinkDirectory(post);
     const runner = new GroupRunner({
       store,
       engine: link4,
@@ -28277,7 +28698,9 @@ if (groupFolders) {
       queues: runFolder ? queueFiles(runFolder) : undefined
     });
     const server = new SeatServer(runner.seats, post, { store, remembered: (from, memory) => runner.remembered(from, memory) });
-    groups = { store, runner, peers: { post, directory, server, runner } };
+    peers.server = server;
+    peers.runner = runner;
+    groups = { store, runner, peers };
   } catch (error) {
     console.error("group chats:", error);
   }
@@ -28309,6 +28732,7 @@ var voice = new VoiceWords(places5);
 var engineAccounts = new EngineAccounts(() => link4.request("GET", "/api/credential"));
 var limits = new Limits(() => [...agentAccounts(roster.all()), ...engineAccounts.accounts()], join33(home3, "limits.json"), Date.now, () => engineAccounts.refresh(), () => engineAccounts.answered);
 limits.alsoServices = ENGINE_SERVICES;
+peers.limits = new LimitsPeers(limits, post, directory, join33(home3, "limits-peers.json"));
 var artifacts;
 var noted2;
 if (artifactsFolder) {
@@ -28354,7 +28778,7 @@ limits.start();
 var carrying = new Carrying(sessions, store, (provider) => sessions.agent(provider), (kind) => roster.all().filter((agent) => parseProvider(agent.providerID)?.kind === kind));
 var server4;
 var renewal;
-var answer3 = handler({ roster, sessions, auto, link: link4, password, version: version3, build, groups, goals, sideQuestions, handoffs, places: places5, reviews, voice, artifacts, noted: noted2, restartOutside, carrying, limits });
+var answer3 = handler({ roster, sessions, auto, link: link4, password, version: version3, build, groups, peers, goals, sideQuestions, handoffs, places: places5, reviews, voice, artifacts, noted: noted2, restartOutside, carrying, limits });
 var answering = 0;
 try {
   server4 = Bun.serve({
@@ -28384,7 +28808,7 @@ link4.whenReady().then(() => {
   reviews.resume();
   try {
     groups?.runner.start();
-    groups?.peers.server.start();
+    groups?.peers.server?.start();
     if (groups) {
       const runner = groups.runner;
       runner.catchUpMemory().catch((error) => console.error("group memory:", error));
@@ -28425,7 +28849,7 @@ renewal = onMachine && build ? new Renewal({
   paused: () => updateUnderWay(join33(machineHome, "run")),
   ready: () => {
     const kept = keeperEngine(machineHome);
-    return !kept || kept === basename12(dirname19(process.execPath));
+    return !kept || kept === basename12(dirname20(process.execPath));
   },
   lets: () => {
     const now = Date.now();
@@ -28433,7 +28857,7 @@ renewal = onMachine && build ? new Renewal({
       return launchSaid.lets;
     const lets = launchLets(commandLineOf(process.ppid), () => {
       try {
-        return readFileSync31(join33(machineHome, "run", "agents.log"), "utf8");
+        return readFileSync32(join33(machineHome, "run", "agents.log"), "utf8");
       } catch {
         return;
       }
@@ -28480,7 +28904,7 @@ function stop() {
   reviews.stopAll();
   cancelSignIns();
   try {
-    if (record2 && JSON.parse(readFileSync31(record2, "utf8")).pid === process.pid)
+    if (record2 && JSON.parse(readFileSync32(record2, "utf8")).pid === process.pid)
       rmSync16(record2, { force: true });
   } catch {}
   sessions.closeAll();
@@ -28503,4 +28927,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 1f4b982136d678d86c2e2815b2a6802420313f43240456f03a45715dc49e34f2
+// Built from Packages/Box/src/agents 04f2e852d7238843bdf4a562b05f9684171838b9ca911c4066a4f427d93510a8
