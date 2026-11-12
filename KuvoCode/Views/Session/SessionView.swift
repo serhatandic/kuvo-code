@@ -1016,7 +1016,7 @@ struct DraftSessionView: View {
                 listRoom: listRoom,
                 listHeight: $listShown
             )
-            .workChipContext(nil)
+            .workChipContext(.init(box: Workspace.box(of: directory), owner: ""))
             .padding(.horizontal, Metrics.gutter)
             .readableColumn()
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
