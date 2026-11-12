@@ -49,6 +49,11 @@ struct ConfigTextField: View {
     var choicesTitle = "Choices"
     var choicesHelp = "What it’s often set to"
     var chose: (String) -> Void = { _ in }
+    /// What it shows where the computer has none: its box's own default (Settings › Git's
+    /// `kuvo/`). With one, emptied is kept empty (none), not removed.
+    var unset: String?
+    /// The field alone, its label hidden, for a row or group that names it.
+    var bare = false
     @Environment(AppModel.self) private var app
     @Environment(\.settingsBox) private var box
     @Environment(\.editedConfig) private var edited
@@ -58,7 +63,10 @@ struct ConfigTextField: View {
     private var config: EngineConfig { edited ?? app.config(for: box) }
 
     var body: some View {
-        if multiline {
+        if bare {
+            text
+                .labelsHidden()
+        } else if multiline {
             VStack(alignment: .leading, spacing: 6) {
                 Text(title)
                 text
@@ -89,7 +97,7 @@ struct ConfigTextField: View {
     }
 
     private var text: some View {
-        let stored = config.value(at: path)?.string ?? ""
+        let stored = config.value(at: path)?.string ?? unset ?? ""
         return TextField(title, text: $field.text, prompt: Text(prompt), axis: multiline ? .vertical : .horizontal)
             .focused($isFocused)
             .onSubmit(commit)
@@ -104,7 +112,7 @@ struct ConfigTextField: View {
 
     private func commit() {
         guard let value = field.edit(trimming: true) else { return }
-        config.set(value.isEmpty ? nil : .string(value), at: path)
+        config.set(value.isEmpty && unset == nil ? nil : .string(value), at: path)
     }
 }
 

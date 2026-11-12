@@ -23137,7 +23137,8 @@ class GroupStore {
     };
   }
   writeSettings(settings) {
-    write(join31(this.root, "settings.json"), { kuvo: version2, ...settings });
+    const kept = read2(join31(this.root, "settings.json"));
+    write(join31(this.root, "settings.json"), { ...kept && typeof kept === "object" ? kept : {}, kuvo: version2, ...settings });
   }
   allBots() {
     let names = [];
@@ -23473,17 +23474,22 @@ async function groupRoutes(runner, store, method, parts, body) {
       return json9({ version: version2, data: runner.list() });
     return error(405, "Not allowed");
   }
-  if (id === "settings" && method === "PUT") {
+  if ((id === "box-settings" || id === "clock" || id === "settings") && method === "PUT" && action === undefined) {
     const value = await body();
     const before = store.settings();
-    store.writeSettings({
-      personalities: value?.personalities && typeof value.personalities === "object" ? value.personalities : {},
-      identityNote: typeof value?.identityNote === "string" ? value.identityNote : "",
-      askFirst: value?.askFirst === true,
-      denies: Array.isArray(value?.denies) ? value.denies : [],
-      timeZone: typeof value?.timeZone === "string" ? value.timeZone : undefined,
-      locale: typeof value?.locale === "string" ? value.locale : undefined
-    });
+    if (id === "box-settings") {
+      store.writeSettings({
+        personalities: value?.personalities && typeof value.personalities === "object" ? value.personalities : {},
+        identityNote: typeof value?.identityNote === "string" ? value.identityNote : "",
+        askFirst: value?.askFirst === true,
+        denies: Array.isArray(value?.denies) ? value.denies : []
+      });
+    } else {
+      store.writeSettings({
+        timeZone: typeof value?.timeZone === "string" ? value.timeZone : undefined,
+        locale: typeof value?.locale === "string" ? value.locale : undefined
+      });
+    }
     const after = store.settings();
     if (JSON.stringify([before?.askFirst, before?.denies]) !== JSON.stringify([after?.askFirst, after?.denies]))
       runner.rulesChanged();
@@ -28259,4 +28265,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 7b465832cd014554d8fe6c0e538f1f15d7ed9c3778edc1f5dfc883541d4e6537
+// Built from Packages/Box/src/agents c9ad4d39644a60fbebe0a3737953405f37e0f7f0db55c6ae163b53df9e7ecece

@@ -80,8 +80,6 @@ extension AppModel {
         // One machine at two addresses: the one added later is one of the other's addresses, and
         // what's kept under its name is the other's.
         machines.onFolded = { [weak self] address, machine in self?.machineFolded(address, into: machine) }
-        // This Mac's settings changed (a mode, a rule), wherever from: its group chats follow.
-        engineConfig.onChanged = { [weak self] in self?.settingsSaved() }
         engineConfig.onRulesChanged = { [weak self] in self?.workspace.syncPermissions() }
         // Each machine's settings are its own: its sessions, bots and group chats go by them.
         EngineConfig.machine = { [weak self] machine in self?.machines.engine(machine)?.config }
@@ -423,16 +421,9 @@ extension AppModel {
             if event.type == "credential.updated" { self?.nudgeSignIns(engine) }
         }
         engine.onReconnect = { [weak self] in _ = await self?.workspace.refresh(engine) }
-        // Its Settings › Permissions changed: its open sessions follow, and what its group chats
-        // and new bots there start with.
-        engine.config.onRulesChanged = { [weak self] in
-            guard let self else { return }
-            workspace.syncPermissions()
-            Task {
-                await self.boxGroups.giveSettings(to: machine)
-                await self.bots.writeKit(on: machine)
-            }
-        }
+        // Its Settings › Permissions changed: its open sessions follow. (Its group chats and new
+        // bots go by them as its box has them.)
+        engine.config.onRulesChanged = { [weak self] in self?.workspace.syncPermissions() }
         // Its coding agents, beside its engine: their sessions as its engine's, their accounts,
         // models and Custom Auto lists (its own) in its catalog.
         engine.agents.onEvent = { [weak self, weak engine] event in
@@ -610,6 +601,8 @@ extension AppModel {
             },
             // Its worktrees, as it keeps them (some this Mac made there before, handed over once).
             { await self.workspace.takeWorktrees(from: machine) },
+            // COMPAT(0.7 mac-git-settings): Settings › Git as this Mac kept it before, to its box once. Goes 3 months after 0.8.0.
+            { await GitPreferences.move(to: self.box(machine)) },
             // Its bots' keys of their own are its own: any this Mac kept from before go to it, and
             // its bots' folders' settings follow its integrations as they are now.
             { await BotKeys.applyAll(on: machine, app: self) },
@@ -808,20 +801,6 @@ extension AppModel {
         }
     }
 
-    /// This Mac's settings changed (a mode, a permission rule…), here, from a phone or by hand:
-    /// what its group chats go by follows, a moment after the last change, so typing in a field
-    /// doesn't tell them for each letter.
-    func settingsSaved() {
-        settingsSync?.cancel()
-        settingsSync = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(3))
-            guard let self, !Task.isCancelled else { return }
-            // Machines keep their own settings (`MachineBox`): this Mac's stay here. What their
-            // group chats go by (Ask First, what's denied).
-            boxGroups.settingsChanged()
-        }
-    }
-
     /// This Mac's copy of your personalities met with `engine`'s machine's: both end up as one
     /// (see `Personalities`). One that changed here goes to the other machines too, and bots with
     /// it hear its new words.
@@ -836,10 +815,9 @@ extension AppModel {
     func personalitiesChanged(except machine: String? = nil) {
         // (Every machine hears it by mail too, connected or not: this Mac's box tells them,
         // PROTOCOL.md "Documents".)
-        // This Mac's bots with one of them are told what it is now, by its box.
+        // This Mac's bots with one of them are told what it is now, by its box. (Its group chats
+        // hear it from its box too.)
         bots.personalitiesChanged()
-        // This Mac's group chats, what each personality tells a bot.
-        Task { await boxGroups.giveSettings(to: nil) }
         for engine in machines.engines.values where engine.machine.id != machine {
             // A moment on, the last change's round only.
             engine.activeConnection?.run("personalities") { [weak self] in
@@ -848,7 +826,6 @@ extension AppModel {
                 await MachineConnection.inTurn([
                     { await self.syncPersonalities(with: engine) },
                     { await self.bots.writeKit(on: engine.machine.id) },
-                    { await self.boxGroups.giveSettings(to: engine.machine.id) },
                 ])
             }
         }

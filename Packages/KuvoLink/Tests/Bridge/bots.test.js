@@ -321,7 +321,8 @@ const words = {
 write(path.join(home, "bin", "bot-words.json"), JSON.stringify(words));
 
 // What's the machine's own that its Mac gives it as it connects (Bots.MachineKit): the model a
-// bot starts on there, its projects, the rules a new conversation gets, and your time zone.
+// bot starts on there, its projects and your time zone (and, from an older Mac, the rules a new
+// conversation gets, which the machine makes itself now).
 const kit = {
   kuvo: 1,
   personalities: [],
@@ -449,7 +450,9 @@ test("with the Mac closed, a bot is made here as New Bot makes it: its folder, c
     assert.deepEqual({ ...described, created: undefined, updated: undefined, look: undefined }, { created: undefined, updated: undefined, look: undefined, id: listed.id, job: "", kuvo: 1, model: kit.startingModel, name: "Inbox Helper", personality: "preset.straight", project: "/home/me/app" });
     const session = engine.asked.find(each => each.method === "POST" && each.url === "/api/session");
     assert.equal(session.body.location.directory, "/home/me/app");
-    assert.deepEqual(session.body.permissions, [...kit.rules, { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" }]);
+    // Its own folder; the rest made for this machine's default and its Settings › Permissions (below),
+    // never from a Mac's last pick.
+    assert.deepEqual(session.body.permissions, [{ action: "external_directory", resource: path.join(folder, "*"), effect: "allow" }]);
     const told = engine.asked.find(each => each.url === "/api/experimental/session/ses_made1/instructions/entries/kuvo.bot").body.value;
     assert.equal(told, `You are Inbox Helper, one of the user's bots.\n\nYour personality: Straight Shooter. Direct.\n\nMemory: the file "${folder}/MEMORY.md" is yours.\n\nYou work in one of the user's projects.\n\nWho sets what.`);
     // Marked as a bot's, and kept with Auto, which asks first here: the sandbox doesn't run.
@@ -914,14 +917,16 @@ test("a machine makes bots with its own words, whatever a Mac's kit says, filled
   }
 
   // An older Mac's kit, with its own words: the machine's words still, filled in with the name the
-  // Mac calls it, and the Mac's time zone, projects, rules and the personalities you made.
+  // Mac calls it, and the Mac's time zone, projects and the personalities you made; not its rules,
+  // which the machine makes from its own default.
   const custom = { id: "custom.calm", name: "Calm", description: "Calm.", custom: true, instruction: "Your personality: Calm." };
   write(path.join(bots, "kit.json"), JSON.stringify({ ...kit, version: "0.8.0", machine: "lab", personalities: [{ id: "preset.straight", name: "Straight Shooter", description: "Direct.", custom: false, instruction: "Older." }, custom],
     instructions: "Older words.", jobInstructions: "Older words: ⟦job⟧.", personalityWords: "Older." }));
   const kitNow = link.readKit();
   assert.equal(link.botInstructions(kitNow, "Scout", "/f", undefined, undefined), "You are Scout, one of the user's bots.\n\nMemory: the file \"/f/MEMORY.md\" is yours.\n\nWho sets what.");
   assert.equal(kitNow.timeZone, "Europe/Istanbul");
-  assert.deepEqual([kitNow.projects, kitNow.rules], [kit.projects, kit.rules]);
+  assert.deepEqual(kitNow.projects, kit.projects);
+  assert.equal("rules" in kitNow, false);
   assert.deepEqual(link.botPersonalities(kitNow).map(each => [each.id, each.instruction]), [["preset.straight", "Your personality: Straight Shooter. Direct."], ["custom.calm", "Your personality: Calm."]]);
 
   // Without its words (a box that's lost them), New Bot says what to do.

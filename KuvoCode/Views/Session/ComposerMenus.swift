@@ -18,20 +18,6 @@ enum ToolApproval: String, CaseIterable, Codable {
     /// No sandbox, no reviewer, nothing asks. Confirmed once on each computer.
     case fullAccess
 
-    /// This Mac's last pick, for what isn't a conversation's own (a bot's kit, group chats).
-    static let key = "toolApproval"
-
-    /// One kept by name: an older version's Approve All is Auto now.
-    init?(kept: String) {
-        if kept == "approveAll" { self = .auto } else { self.init(rawValue: kept) }
-    }
-
-    /// This Mac's last pick (`key`), Auto where there's none.
-    static var lastPicked: ToolApproval {
-        get { UserDefaults.standard.string(forKey: key).flatMap(ToolApproval.init(kept:)) ?? .auto }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
-    }
-
     // Its words, the same on every client (KuvoClient's ApprovalWords).
     var title: String { ApprovalWords.title(rawValue) }
     var detail: String { ApprovalWords.detail(rawValue) }

@@ -131,7 +131,7 @@ nonisolated enum RouteScenarios {
     @MainActor static func boxFiles() -> [String: Data] {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        let macKit = Bots.MachineKit(machine: nil, personalities: [], startingModel: nil, projects: [], rules: [], timeZone: "UTC", zoneinfo: nil)
+        let macKit = Bots.MachineKit(machine: nil, personalities: [], startingModel: nil, projects: [], timeZone: "UTC", zoneinfo: nil)
         let pretty = { (data: Data) -> Data in
             let value = (try? JSONSerialization.jsonObject(with: data)) ?? [:]
             return ((try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])) ?? Data()) + Data("\n".utf8)

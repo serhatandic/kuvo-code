@@ -123,8 +123,6 @@ final class AppModel {
     /// This Mac's engine settings, for Settings, as its box keeps them (in the engine's settings
     /// file, where they've always been).
     @ObservationIgnored private(set) lazy var engineConfig = EngineConfig(remote: BoxSettings(client: box(BoxClient.mac)), file: engineFolders.configFile)
-    /// Machines taking settings changed here, a moment after the last change (`settingsSaved`).
-    @ObservationIgnored var settingsSync: Task<Void, Never>?
     /// This Mac's settings being read (`prepareSettings`).
     @ObservationIgnored private var settingsPreparation: Task<Void, Never>?
     /// Engines to start again with new settings once nothing's at work in them: "" for this Mac's,
@@ -612,6 +610,8 @@ final class AppModel {
             // What it makes and tells this Mac's bots with, as this version has it.
             bots.writeMacKit()
             Task {
+                // COMPAT(0.7 mac-git-settings): Settings › Git as this Mac kept it before, to its box once. Goes 3 months after 0.8.0.
+                await GitPreferences.move(to: box(BoxClient.mac))
                 // Your personalities, as it keeps them, before they're followed.
                 await Personalities.shared.refresh()
                 // Its worktrees, projects and wake-ups, as this Mac's box keeps them, from now on

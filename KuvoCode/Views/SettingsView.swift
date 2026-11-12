@@ -168,12 +168,12 @@ enum SettingsPage: String, CaseIterable, Identifiable {
 
     /// The pages each computer has of its own, a machine as this Mac: its engine's settings, its
     /// accounts and its models. The rest are the app's, on this Mac.
-    static let boxPages: [SettingsPage] = [.accounts, .auto, .agents, .permissions, .commands, .skills, .integrations, .vault, .mcp, .engine, .worktrees]
+    static let boxPages: [SettingsPage] = [.accounts, .auto, .agents, .permissions, .commands, .skills, .integrations, .vault, .mcp, .engine, .git, .worktrees]
 
     /// The pages that are a computer's engine settings, and nothing else: they wait for them to be
     /// read. (Engine shows its status too, and says so in a group.)
     var isEngineSettings: Bool {
-        [.agents, .permissions, .commands, .skills, .integrations, .mcp].contains(self)
+        [.agents, .permissions, .commands, .skills, .integrations, .mcp, .git].contains(self)
     }
 
     /// The pages Settings lists for `box`.
