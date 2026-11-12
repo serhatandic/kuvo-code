@@ -4460,7 +4460,7 @@ again as its event comes, `kuvo/search`'s `info`, a session a move brought), not
 mark naming another folder than the session's own is no mark: one moved out of the chats while no
 box could take its mark off is never kept a chat by it.
 
-The engine (2.2.5) and the coding agents' bridge make a session the newest for any write, its
+The engine (2.2.6) and the coding agents' bridge make a session the newest for any write, its
 metadata alone too, so a mark is written only as a session is made, moved or has its metadata
 written (each of which made it the newest already), never on a session from before:
 
@@ -4613,7 +4613,7 @@ settings file of the box's own beside yours in its engine's settings folder (`op
 under the engine's `XDG_CONFIG_HOME`: a machine's `~/.kuvo-code/config`, this Mac's
 `KUVO_ENGINE_CONFIG`), never in your settings. opencode reads it with `opencode.json` and reads it
 again as it changes, so what the box learns applies to the engine running now, with no restart: a
-conversation going on uses it from its next message. (opencode 2.2.5 reads `OPENCODE_CONFIG_CONTENT`
+conversation going on uses it from its next message. (opencode 2.2.6 reads `OPENCODE_CONFIG_CONTENT`
 only as it starts, `POST api/location/reload` stops every terminal and command and drops the
 questions waiting on you, `PATCH api/experimental/config` takes only `shell`, and a machine's
 `OPENCODE_CONFIG` is your settings.) The file's first line starts `// Kept by Kuvo Code`; one there
@@ -4880,7 +4880,7 @@ and as a box starts.
 ### Working outside the project
 
 Settings › Permissions shows "Work outside the project: Ask" as the default, and every box keeps
-to it, sandbox or not: opencode 2.2.5's agents allow `external_directory` on their own, so each box
+to it, sandbox or not: opencode 2.2.6's agents allow `external_directory` on their own, so each box
 writes the engine a plugin, `kuvo-defaults.js` in its settings' `opencode/plugins` (as it starts,
 and back each minute if it's gone or changed), that gives the engine's agents
 `{external_directory, "*", ask}`. The engine sets up plugins before it adds the rules in your

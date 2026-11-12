@@ -2,7 +2,7 @@
 // engine's lists made afresh without a restart, and what providers need learned again at once.
 //
 // The engine reads some providers' lists from your account as it opens a folder (GitHub Copilot's,
-// with the models your plan has), and again only when the account in use changes. opencode (2.2.5)
+// with the models your plan has), and again only when the account in use changes. opencode (2.2.6)
 // has no way to ask again but to close the folder (`DELETE api/debug/location`): its next use opens
 // it afresh. Closing one stops its terminals and its commands, and drops a question waiting on
 // you, so only a folder where nothing's going on is closed now; one at work is noted here
@@ -20,7 +20,7 @@ import { learnCompatibility } from "./compatibility";
 
 export const MODELS_DUE_FILE = path.join(RUN, "models-due.json");
 
-/** The providers whose models opencode (2.2.5) reads from your account as it opens a folder, and
+/** The providers whose models opencode (2.2.6) reads from your account as it opens a folder, and
  * again only when the account in use changes: those a refresh brings new models to. (The rest come
  * from models.dev's catalog, which the engine reads again by itself every few minutes.) */
 export const REFRESHABLE = ["digitalocean", "github-copilot", "gitlab", "modal", "opencode"];

@@ -4,7 +4,7 @@ import ClientAccounts
 /// Which of the engine's integrations Accounts lists as providers, the same on the Mac and the
 /// phone.
 @Suite struct EngineProvidersTests {
-    /// Some of what engine 2.2.5 lists at `api/integration` on a box that runs Claude Code, by id,
+    /// Some of what engine 2.2.6 lists at `api/integration` on a box that runs Claude Code, by id,
     /// and whether each is signed in.
     private func listed(claudeAgentConnected: Bool) -> [String] {
         let integrations = [("anthropic", false), ("claude-agent", claudeAgentConnected), ("openai", true), ("tavily", false), ("exa", true)]
