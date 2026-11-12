@@ -109,12 +109,13 @@ public final class WebSocketRelay: RelayTransport, @unchecked Sendable {
                 // relay that stops answering (frozen, or a path gone dead that sends no reset)
                 // never pongs: after 10 s it counts as gone, and everything connects again. The
                 // ping goes out behind what's on its way (a picture on LTE, #144), and its pong
-                // with it: it has a second more for each `Link.slowUpload` bytes of that.
+                // with it: it has a second more for each `Link.slowUpload` bytes of that, a minute
+                // more at most (so a path gone dead behind a big body is still noticed soon).
                 let (sent, behind) = handed.withLock { ($0.sent, $0.sent - $0.arrived) }
                 let answered = await firstAnswer { answer in
                     socket.sendPing { answer($0 == nil) }
                     Task {
-                        await clock.sleep(Self.pongWithin + .seconds(behind / Link.slowUpload))
+                        await clock.sleep(Self.pongWithin + Self.behind(behind))
                         answer(false)
                     }
                 }
@@ -127,6 +128,8 @@ public final class WebSocketRelay: RelayTransport, @unchecked Sendable {
     /// How often it pings the relay, and how long a pong may take with nothing on its way ahead of it.
     static let pingEvery: Duration = .seconds(25)
     static let pongWithin: Duration = .seconds(10)
+    /// What a pong has more, with `bytes` on their way ahead of its ping.
+    static func behind(_ bytes: Int) -> Duration { .seconds(min(bytes / Link.slowUpload, 60)) }
 
     deinit { close() }
 

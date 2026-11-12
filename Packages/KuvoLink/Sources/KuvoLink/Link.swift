@@ -181,9 +181,9 @@ public actor LinkClient {
     private var arrived = 0
     /// How many times `disconnect` was asked: a request waiting to go again from before it doesn't.
     private var disconnects = 0
-    /// Requests waiting out the time before they go again, by their wait: each goes when it's over,
-    /// or as soon as a relay connection is made, whichever is first.
-    private var waitingToGo: [Int: (attempt: Repeat, error: LinkError)] = [:]
+    /// Each host's line of requests waiting to go again (`Line`).
+    private var lines: [LinkAddress: Line] = [:]
+    private var lineCount = 0
     private var waits = 0
     private var orders = 0
     private func nextOrder() -> Int {
@@ -255,7 +255,11 @@ public actor LinkClient {
     /// or cancelling the task that reads) cancels the request on the host.
     public nonisolated func send(_ request: LinkRequest, to host: PairedHost) -> LinkResponse {
         let ticket = Ticket()
-        let stop: @Sendable () -> Void = { Task { await self.cancel(ticket, on: host) } }
+        // (Stopped at once: one waiting to go again doesn't go, whenever the actor gets to it.)
+        let stop: @Sendable () -> Void = {
+            ticket.stop()
+            Task { await self.cancel(ticket, on: host) }
+        }
         let stream = AsyncThrowingStream<LinkResponsePart, Error> { continuation in
             let task = Task { await self.start(request, to: host, ticket: ticket, continuation: continuation) }
             continuation.onTermination = { termination in
@@ -271,7 +275,11 @@ public actor LinkClient {
     public nonisolated func socket(_ request: LinkRequest, to host: PairedHost) -> LinkSocket {
         let request = LinkRequest.socket(request.path, headers: request.headers)
         let ticket = Ticket()
-        let stop: @Sendable () -> Void = { Task { await self.cancel(ticket, on: host) } }
+        // (Stopped at once: one waiting to go again doesn't go, whenever the actor gets to it.)
+        let stop: @Sendable () -> Void = {
+            ticket.stop()
+            Task { await self.cancel(ticket, on: host) }
+        }
         let events = AsyncThrowingStream<LinkSocketEvent, Error> { continuation in
             let task = Task { await self.start(request, to: host, ticket: ticket, for: .socket(continuation)) }
             continuation.onTermination = { termination in
@@ -345,9 +353,12 @@ public actor LinkClient {
     /// Ends every session and the relay connection, and what waited to go again.
     public func disconnect() {
         disconnects += 1
-        let waiting = waitingToGo
-        waitingToGo = [:]
-        for (_, entry) in waiting { entry.attempt.continuation.finish(throwing: LinkError.closed) }
+        let waiting = lines
+        lines = [:]
+        for line in waiting.values {
+            for each in line.waiting { each.attempt.continuation.finish(throwing: LinkError.closed) }
+            line.wake?.resume()
+        }
         for session in sessions.values { end(session, with: .closed, repeating: false) }
         relay?.close()
         relay = nil
@@ -435,7 +446,11 @@ public actor LinkClient {
 
     private func start(_ request: LinkRequest, to host: PairedHost, ticket: Ticket, continuation: AsyncThrowingStream<LinkResponsePart, Error>.Continuation) async {
         guard request.isRepeatable else { return await start(request, to: host, ticket: ticket, for: .response(continuation)) }
-        await start(request, to: host, ticket: ticket, for: .response(continuation), repeating: Repeat(request: request, host: host, ticket: ticket, continuation: continuation, disconnects: disconnects, order: nextOrder()))
+        let attempt = Repeat(request: request, host: host, ticket: ticket, continuation: continuation, disconnects: disconnects, order: nextOrder())
+        // Behind what waits to go again to that host, which goes first, now (sending is a sign the
+        // link may be back).
+        if lines[host.linkAddress] != nil { return line(attempt, after: .closed, wait: .zero, allNow: true) }
+        await start(request, to: host, ticket: ticket, for: .response(continuation), repeating: attempt)
     }
 
     /// A request that's safe to send again (`LinkRequest.isRepeatable`), as it goes: who hears its
@@ -474,34 +489,93 @@ public actor LinkClient {
         var next = attempt
         next.since = since
         next.tries += 1
-        let wait = Link.repeatWait(try: next.tries - 1)
-        guard wait > .zero else {
-            Task { await self.resend(next, after: error) }
-            return
-        }
+        line(next, after: error, wait: Link.repeatWait(try: next.tries - 1))
+    }
+
+    /// A host's line of requests waiting to go again, in the order they first went (`Repeat.order`):
+    /// the first goes once its wait is over, a relay connection's made, or a new one joins, and
+    /// none goes ahead of one before it (#144). One task takes them from it, each on its way before
+    /// the next.
+    private struct Line {
+        let id: Int
+        var waiting: [Waiting] = []
+        /// The task taking them, waiting for the first to be due.
+        var wake: CheckedContinuation<Void, Never>?
+    }
+
+    private struct Waiting {
+        var attempt: Repeat
+        var error: LinkError
+        var due: Bool
+        let key: Int
+    }
+
+    /// `attempt` in its host's line, in its place, to go after `wait` (or with everything there
+    /// `allNow`).
+    private func line(_ attempt: Repeat, after error: LinkError, wait: Duration, allNow: Bool = false) {
+        let address = attempt.host.linkAddress
         waits += 1
-        let (key, clock) = (waits, clock)
-        waitingToGo[key] = (next, error)
-        Task {
-            await clock.sleep(wait)
-            await self.waitOver(key)
+        let key = waits
+        let isNew = lines[address] == nil
+        var line = lines[address] ?? {
+            lineCount += 1
+            return Line(id: lineCount)
+        }()
+        let place = line.waiting.firstIndex { $0.attempt.order > attempt.order } ?? line.waiting.endIndex
+        line.waiting.insert(Waiting(attempt: attempt, error: error, due: wait == .zero, key: key), at: place)
+        if allNow { for index in line.waiting.indices { line.waiting[index].due = true } }
+        lines[address] = line
+        if wait > .zero {
+            let clock = clock
+            Task {
+                await clock.sleep(wait)
+                await self.due(key, at: address)
+            }
+        }
+        if isNew {
+            let id = line.id
+            Task { await self.take(from: address, line: id) }
+        } else {
+            wake(address)
         }
     }
 
-    /// A wait's over: its request goes, unless a relay connection made meanwhile sent it already.
-    private func waitOver(_ key: Int) async {
-        guard let (attempt, error) = waitingToGo.removeValue(forKey: key) else { return }
-        await resend(attempt, after: error)
+    /// A wait's over.
+    private func due(_ key: Int, at address: LinkAddress) {
+        guard let index = lines[address]?.waiting.firstIndex(where: { $0.key == key }) else { return }
+        lines[address]?.waiting[index].due = true
+        wake(address)
     }
 
-    /// A relay connection's made: what waits to go again goes now, in the order it first went.
+    private func wake(_ address: LinkAddress) {
+        guard let wake = lines[address]?.wake else { return }
+        lines[address]?.wake = nil
+        wake.resume()
+    }
+
+    /// Sends what's in a host's line, first first, each once it's due, until it's empty (or let go of).
+    private func take(from address: LinkAddress, line id: Int) async {
+        while let line = lines[address], line.id == id {
+            guard let first = line.waiting.first else {
+                lines[address] = nil
+                return
+            }
+            guard first.due else {
+                await withCheckedContinuation { lines[address]?.wake = $0 }
+                continue
+            }
+            lines[address]?.waiting.removeFirst()
+            await resend(first.attempt, after: first.error)
+        }
+    }
+
+    /// A relay connection's made: everything waiting to go again goes now, in its order.
     private func linkIsBack() {
-        let waiting = waitingToGo.values.sorted { $0.attempt.order < $1.attempt.order }
-        waitingToGo = [:]
-        guard !waiting.isEmpty else { return }
-        // One after another, so each is on its way before the next.
-        Task {
-            for (attempt, error) in waiting { await self.resend(attempt, after: error) }
+        for address in Array(lines.keys) {
+            guard var line = lines[address] else { continue }
+            for index in line.waiting.indices { line.waiting[index].due = true }
+            lines[address] = line
+            wake(address)
         }
     }
 

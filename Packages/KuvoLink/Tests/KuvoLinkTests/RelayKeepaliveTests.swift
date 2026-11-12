@@ -43,6 +43,20 @@ struct RelayKeepaliveTests {
         _ = relay
     }
 
+    /// However much is on its way (20 MB on a path gone dead), the relay is counted gone within
+    /// about a minute and ten seconds, not minutes later.
+    @Test(.timeLimit(.minutes(1))) func aPingBehindAHugeBodyIsGivenUpOnWithinAMinuteMore() async throws {
+        let clock = ManualClock()
+        let socket = StandInSocket()
+        let relay = WebSocketRelay(socket: socket, address: Self.address, clock: clock.link)
+        await socket.took(Self.send(20_000_000, on: relay))
+        await clock.advance(by: WebSocketRelay.pingEvery)
+        await socket.pinged(1)
+        await clock.advance(by: WebSocketRelay.pongWithin + .seconds(60))
+        await socket.cancelled()
+        _ = relay
+    }
+
     /// With nothing on its way, a relay that doesn't answer a ping counts as gone after 10 s, as
     /// before.
     @Test(.timeLimit(.minutes(1))) func aPingNeverAnsweredOnAQuietConnectionEndsItAfterTenSeconds() async throws {

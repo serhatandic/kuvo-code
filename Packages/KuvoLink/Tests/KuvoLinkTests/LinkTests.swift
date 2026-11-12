@@ -446,10 +446,14 @@ private func listen(_ client: LinkClient, to host: PairedHost) async throws -> L
 
 /// A phone paired with a host whose relay connection is then gone (as the app comes back from the
 /// background), with no new one to be had until `offline` is false; `tries` counts its connects.
-private func offlinePhone() async throws -> (LinkClient, PairedHost, ManualClock, Locked<Bool>, Count) {
+private func offlinePhone(seen: Locked<[String]> = Locked([])) async throws -> (LinkClient, PairedHost, ManualClock, Locked<Bool>, Count) {
     let relay = MemoryRelay()
     let clock = ManualClock()
-    let host = TestHost(relay: relay, handle: echo)
+    // (What it was sent, in the order it came: each POST's body.)
+    let host = TestHost(relay: relay) { request, phone in
+        if request.method == "POST" { seen.value.append(String(decoding: request.body, as: UTF8.self)) }
+        return echo(request, phone)
+    }
     let offline = Locked(false)
     let tries = Count()
     let client = LinkClient(relay: URL(string: "wss://relay.test")!, key: LinkKey(), secret: RelaySecret(), name: "Test iPhone", app: "0.0.1") { _, secret in
@@ -462,6 +466,11 @@ private func offlinePhone() async throws -> (LinkClient, PairedHost, ManualClock
     offline.value = true
     client.relayMayBeGone()
     return (client, paired, clock, offline, tries)
+}
+
+/// A message safe to send again, its id its body.
+private func safeToRepeat(_ id: String) -> LinkRequest {
+    LinkRequest(method: "POST", path: "api/session/ses_1/prompt", headers: ["idempotency-key": id], body: Data(id.utf8))
 }
 
 /// Whether `sending` waits to go again (a wait due within `within`) rather than failing at once,
@@ -1099,6 +1108,41 @@ private func collect(_ stream: LinkResponse) async throws -> (status: Int, heade
         #expect(next.status == 200)
         let answered = try await sending.value
         #expect(answered.body == Data("first".utf8))
+    }
+
+    /// Stopped while it waits to go again (Stop pressed, the message taken back): it never goes,
+    /// even once the link's back (#144).
+    @Test(.timeLimit(.minutes(1))) func aMessageStoppedWhileItWaitsToGoAgainNeverGoes() async throws {
+        let seen = Locked<[String]>([])
+        let (client, paired, clock, offline, _) = try await offlinePhone(seen: seen)
+        let sending = Task { try await collect(client.send(safeToRepeat("msg_stopped"), to: paired)) }
+        try #require(await waitsToGoAgain(sending, clock, within: Link.repeatWait(try: 2)), "it failed at once")
+        sending.cancel()
+        _ = try? await sending.value
+        offline.value = false
+        // The link back, and another sent after it: that one goes, and it alone.
+        let after = try await collect(client.send(safeToRepeat("msg_after"), to: paired))
+        #expect(after.body == Data("msg_after".utf8))
+        #expect(seen.value == ["msg_after"])
+    }
+
+    /// Several waiting to go again, and one sent once the link's back: the host has them in the
+    /// order they were sent, however each try went (#144).
+    @Test(.timeLimit(.minutes(1))) func messagesWaitingToGoAgainArriveInTheOrderTheyWereSent() async throws {
+        let seen = Locked<[String]>([])
+        let (client, paired, clock, offline, _) = try await offlinePhone(seen: seen)
+        let first = Task { try await collect(client.send(safeToRepeat("msg_a"), to: paired)) }
+        try #require(await waitsToGoAgain(first, clock, within: Link.repeatWait(try: 2)), "it failed at once")
+        let second = Task { try await collect(client.send(safeToRepeat("msg_b"), to: paired)) }
+        // (Behind the first, which was tried again as it joined, and waits again: its earlier
+        // wait, and this one.)
+        await clock.sleepers(2, dueWithin: Link.repeatWait(try: 4))
+        offline.value = false
+        let third = try await collect(client.send(safeToRepeat("msg_c"), to: paired))
+        #expect(third.status == 200)
+        #expect(try await first.value.body == Data("msg_a".utf8))
+        #expect(try await second.value.body == Data("msg_b".utf8))
+        #expect(seen.value == ["msg_a", "msg_b", "msg_c"])
     }
 
     /// Offline for longer than it's sent again for: it fails as it did at first, and goes back to
