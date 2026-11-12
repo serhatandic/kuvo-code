@@ -16,7 +16,7 @@ import { numberWaiting, primaryOf } from "./numbers";
 import { addItem, applyFileOps, changeItem, handItem, linkSession, linkSource, Refusal, refuseHanding, refuseMoving, removeItem, restoreItem, stageFiles, type Acting, type Fields, type FilePlaces } from "./ops";
 import { allItems, byUser, changeQueues, matching, MOST_BODY, whoWords, type Book, type Item, type Who } from "./store";
 import { canonicalOf, readIssue, seenOf, sourceOf, withSeen, type IssueRead } from "./github";
-import { issueAt, refText, sourceKey, sourceKeyOf, type IssueAt } from "./sources";
+import { issueAt, refText, sameSource, sourceKey, sourceKeyOf, type IssueAt } from "./sources";
 import { computerName, itemElsewhere, itemsElsewhere, takesQueues, type ItemElsewhere } from "./across";
 import { callOffHanding, elsewhereOf, handElsewhere, refuseLiveElsewhere } from "./hand";
 import { readPeerAgents } from "../peers/directory";
@@ -314,6 +314,9 @@ async function run(name: string, args: Record<string, unknown>, caller: QueueCal
         if (item.removed) throw new Refusal(deletedWords(item));
         refuseMoving([item.owner, to.owner]);
         refuseHanding(item);
+        // (One item for each issue: not to a computer where another item is that one already.)
+        const twin = to.peer && item.source ? itemsElsewhere("all").items.find(each => each.computer.key === to.peer!.key && each.id !== item.id && each.source && sameSource(each.source, item.source!)) : undefined;
+        if (twin) throw new Refusal(`${item.source!.ref} is in the Work Queue on ${twin.computer.name} already, in the queue of ${twin.owner}: one item for each issue. Ask that conversation (send_message), or the user.`);
         if (to.peer) handElsewhere(item, { owner: to.owner, peer: to.peer, name: to.name }, caller.who, now);
         else handItem(book, item, to.owner, caller.who, now);
         return item;
@@ -329,7 +332,7 @@ async function run(name: string, args: Record<string, unknown>, caller: QueueCal
           refuseHanding(item);
           if (!item.removed) throw new Refusal(`${nameOf(item)} isn't deleted.`);
           if (byUser(item.removed.by)) throw new Refusal(deletedWords(item));
-          refuseLiveElsewhere(item);
+          refuseLiveElsewhere(item, book.items());
           restoreItem(book, item, caller.who, now);
         } else {
           if (item.removed) throw new Refusal(`${nameOf(item)} is deleted already.`);
@@ -389,7 +392,7 @@ async function issueFor(given: unknown, caller: QueueCaller, overseen: Set<strin
 function refuseTaken(items: Item[], at: IssueAt, caller: QueueCaller, overseen: Set<string>, except?: string, id?: string): void {
   const key = sourceKey(at);
   const isIt = (source: Item["source"]) => Boolean(source) && (sourceKeyOf(source!) === key || (id !== undefined && source!.id === id));
-  const here = items.find(item => item.id !== except && isIt(item.source));
+  const here = items.find(item => item.id !== except && !item.removed && isIt(item.source)) ?? items.find(item => item.id !== except && isIt(item.source));
   if (here?.removed) throw new Refusal(deletedWords(here));
   if (here && inView(caller.owner, here, overseen)) throw new Refusal(`${nameOf(here)} is in your Work Queue already: refer to it as ${here.source!.ref}.`);
   if (here) throw new Refusal(`${nameOf(here)} is in the Work Queue already, in the queue of ${here.owner}: one item for each issue. Ask that conversation, or the user.`);
@@ -448,7 +451,7 @@ const peerName = (session: string): string | null => Object.values(readPeerAgent
 
 // Where an item stands as a list shows it: In progress, its category (Done while GitHub says its
 // issue or pull request is closed), and its title (GitHub's, as last read).
-interface ShownItem { title: string; category: string; inProgress: boolean; source?: Item["source"]; seen?: { state: string; at: number }; keptIn?: string; doneAt?: number }
+interface ShownItem { title: string; category: string; inProgress: boolean; source?: Item["source"]; seen?: { state: string; at: number; gone?: boolean }; keptIn?: string; doneAt?: number }
 const shownOf = (item: Item, working: Set<string>): ShownItem => withSeen<ShownItem>({ title: item.title, category: item.category, inProgress: inProgress(item, working), ...(item.source ? { source: item.source } : {}), ...(item.doneAt !== undefined ? { doneAt: item.doneAt } : {}) });
 
 // How an item reads in a list: its name, where it stands, and whose it is when it isn't yours.
@@ -457,7 +460,7 @@ function line(item: Item, facts: Facts, caller: QueueCaller, owners: Map<string,
   const shown = shownOf(item, facts.working);
   const state = shown.inProgress
     ? `in progress (${working.map(each => `"${owners.get(each.session)?.title ?? "a session"}" at work`).join(", ")})${item.progress?.note ? `: ${item.progress.note}` : ""}`
-    : shown.category === "done" ? (item.source && shown.seen ? `${seenWords(shown.seen.state)} on GitHub` : `done ${agoWords(shown.doneAt ?? item.updated.at, now)}`) : "";
+    : shown.category === "done" ? (item.source && shown.seen ? (shown.seen.gone ? "gone from GitHub" : `${seenWords(shown.seen.state)} on GitHub`) : `done ${agoWords(shown.doneAt ?? item.updated.at, now)}`) : "";
   const progress = item.progress?.value !== undefined ? ` ${Math.round(item.progress.value * 100)}%` : "";
   const whose = item.owner === caller.owner ? "" : item.owner.startsWith("grp_") ? " · in the group's queue" : ` · in "${owners.get(item.owner)?.title ?? "another session"}" (${item.owner})`;
   return `- ${nameOf({ ...item, title: shown.title })}${state ? ` · ${state}` : ""}${progress}${whose} · updated ${agoWords(item.updated.at, now)}`;
@@ -526,7 +529,7 @@ async function showWords(item: Item, facts: Facts, targets: Target[], caller: Qu
   const read = seenOf(item.source);
   const parts = [
     `${nameOf({ ...item, title: shown.title })} · ${shown.inProgress ? `In progress (kept in ${category})` : shown.category === "done" && item.category !== "done" ? `Done (kept in ${category})` : category}${item.removed ? " · DELETED" : ""}${item.owner === caller.owner ? "" : ` · in ${title(item.owner)}'s queue (${item.owner})`}`,
-    item.source ? `On GitHub: ${read?.value ? `${seenWords(read.value.state)}, as read ${agoWords(read.at, now)}${read.gone ? " (it couldn't be read since: gone, or no longer visible to gh here)" : ""}` : "not read yet"} · ${item.source.url ?? item.source.ref}${item.number !== undefined ? ` · was #${item.number}` : ""}` : "",
+    item.source ? `On GitHub: ${read?.value ? read.gone ? `gone, or no longer visible to gh here, since ${agoWords(read.at, now)} (${seenWords(read.value.state)} before)` : `${seenWords(read.value.state)}, as read ${agoWords(read.at, now)}` : "not read yet"} · ${item.source.url ?? item.source.ref}${item.number !== undefined ? ` · was #${item.number}` : ""}` : "",
     `Added ${agoWords(item.created.at, now)} by ${whoWords(item.created.by)}; updated ${agoWords(item.updated.at, now)}.`,
     item.progress ? `Progress: ${item.progress.value !== undefined ? `${Math.round(item.progress.value * 100)}%` : ""}${item.progress.value !== undefined && item.progress.note ? " · " : ""}${item.progress.note ?? ""}` : "",
     item.sessions.length ? `Sessions on it: ${item.sessions.map(each => `${title(each.session)} (${each.session}) ${facts.working.has(each.session) ? "at work" : "not at work"}`).join("; ")}` : "",

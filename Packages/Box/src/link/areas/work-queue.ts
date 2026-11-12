@@ -51,8 +51,8 @@ const GITHUB_WAIT = 3_000;
  * or handed on (summaries), those linked to it that are someone else's (what it's working on: seen
  * here, changed only by their owner's side), whose each is, and what's deleted among them. `all` is
  * every item on the box, whoever's it is. Its issues and pull requests are read from GitHub where
- * that's due, waiting `wait` ms at most. */
-export async function viewOf(owner: string, targets: Target[], facts?: Facts, signal?: AbortSignal, cache?: Map<string, unknown>, wait = GITHUB_WAIT) {
+ * that's due, waiting `wait` ms at most (null: not read, as last read). */
+export async function viewOf(owner: string, targets: Target[], facts?: Facts, signal?: AbortSignal, cache?: Map<string, unknown>, wait: number | null = GITHUB_WAIT) {
   const known = facts ?? await factsOf(targets, signal);
   const overseen = owner === ALL ? new Set<string>() : overseenBy(owner, known.all);
   const here = allItems();
@@ -60,7 +60,7 @@ export async function viewOf(owner: string, targets: Target[], facts?: Facts, si
   const all = here.filter(item => owner === ALL || inView(owner, item, overseen) || linkedTo(owner, item));
   // (What's shown, here or told by another computer: GitHub is read for it, only now.)
   // (Another computer's as it told them: when it last asked GitHub decides whether this box does.)
-  await readSeen([...all, ...itemsElsewhere(owner, readLink(), undefined, undefined, { asTold: true, linked: true }).items], wait);
+  if (wait !== null) await readSeen([...all, ...itemsElsewhere(owner, readLink(), undefined, undefined, { asTold: true, linked: true }).items], wait);
   const { owners, titles } = await ownersOf(owner, all, known, targets, cache);
   // Your other computers' items in this view, as each last told them (one deleted here that's live
   // there, a hand-off called off that had got there, is theirs).
@@ -198,9 +198,11 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
     if (method !== "GET") return yield* json(405, {});
     const owner = queryOf(request).get("owner") ?? "";
     if (!OWNER.test(owner) && owner !== ALL) return yield* json(400, { message: "Say whose queue (owner): a conversation's address, a group chat's id, or all." });
-    if (part === undefined) return yield* json(200, await viewOf(owner, targets, undefined, signal ?? undefined));
+    // (A glance at it, a count say, as the phone's ••• shows: GitHub isn't read for it.)
+    const glance = queryOf(request).get("glance") === "1";
+    if (part === undefined) return yield* json(200, await viewOf(owner, targets, undefined, signal ?? undefined, undefined, glance ? null : GITHUB_WAIT));
     yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
-    return yield* followView(owner, targets, signal ?? undefined);
+    return yield* followView(owner, targets, signal ?? undefined, glance);
   }
 
   // One item.
@@ -267,7 +269,7 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
   if (action === "restore" && method === "POST") {
     return yield* changed(inBook((item, book) => {
       if (!item.removed) throw new Refusal("It isn't deleted.");
-      refuseLiveElsewhere(item);
+      refuseLiveElsewhere(item, book.items());
       restoreItem(book, item, YOU, now);
     }), json);
   }
@@ -286,7 +288,7 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
 // An owner's view, a line now and one each time it changes: a change to the queues (here, or by
 // another process: its files), or a session linked to one of its items starting or stopping work
 // (looked at every few seconds).
-async function* followView(owner: string, targets: Target[], signal?: AbortSignal): AsyncGenerator<AnswerPiece> {
+async function* followView(owner: string, targets: Target[], signal?: AbortSignal, glance = false): AsyncGenerator<AnswerPiece> {
   let wake: (() => void) | null = null;
   let dirty = true;
   const told = () => {
@@ -321,7 +323,7 @@ async function* followView(owner: string, targets: Target[], signal?: AbortSigna
       }
       dirty = false;
       // (GitHub isn't waited for: what it says comes as a line of its own once it's read.)
-      const line = JSON.stringify(await viewOf(owner, targets, facts, signal, titles, 0));
+      const line = JSON.stringify(await viewOf(owner, targets, facts, signal, titles, glance ? null : 0));
       if (line !== last) {
         yield { body: Buffer.from(line + "\n") };
         last = line;

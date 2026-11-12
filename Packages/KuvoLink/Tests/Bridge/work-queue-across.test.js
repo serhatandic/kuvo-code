@@ -794,3 +794,90 @@ test("an issue another computer told of shows as it said, with no gh here; this 
   assert.deepEqual([item.category, item.seen.state, item.struck], ["later", "open", undefined]);
   assert.equal(ghAsks(), 1, "nor asked again while lab's word is fresh");
 });
+
+// GitHub's answer for one issue, as a repository's (`p0`), or as the node itself when it's asked by
+// its id.
+const ghIssue = (number, { state = "OPEN", byID = false } = {}) => {
+  const node = { __typename: "Issue", id: `I_kw${number}`, number, title: `Issue ${number}`, url: `https://github.com/kuvo-test/app/issues/${number}`, state, stateReason: state === "CLOSED" ? "COMPLETED" : null, closedAt: state === "CLOSED" ? "2026-11-10T09:00:00Z" : null, body: "" };
+  write(ghAnswer, { data: { p0: byID ? node : { issueOrPullRequest: node } } });
+};
+const issueSource = number => ({ kind: "github", ref: `gh:kuvo-test/app#${number}`, url: `https://github.com/kuvo-test/app/issues/${number}`, host: "github.com", id: `I_kw${number}` });
+
+test("one item for each issue, wherever it's handed: one handed here that another item here is already comes back with why; one isn't handed to a computer that told it has that issue", async () => {
+  ghIssue(12);
+  assert.equal((await tool("queue_add", { issue: "gh:kuvo-test/app#12" }, "ses_lead")).isError, false);
+  const mine = (await view("ses_lead")).items.find(item => item.source?.ref === "gh:kuvo-test/app#12");
+  // Lab hands its own item for the same issue (added there while this box's word hadn't reached it).
+  const item = { ...told(1, "ses_farlead", { id: "wqi_handedsameissue00001", title: "Issue 12", source: { ...issueSource(12), ref: "gh:Kuvo-Test/App#12" }, body: "", notes: [], files: [], links: [], handed: [] }), number: undefined };
+  await takeFrom(lab, { hand: { id: "wqh_sameissue00000001", to: "ses_child", from: "ses_farlead", by: { user: true }, at: Date.now(), item, files: [] } });
+  const [answer] = mailTo(lab).map(each => each.workQueue.handed);
+  assert.equal(answer.ok, false);
+  assert.equal(answer.why, "gh:kuvo-test/app#12 is in the Work Queue there already, in the queue of ses_lead: one item for each issue");
+  assert.deepEqual((await view("all")).items.filter(each => each.source?.ref.toLowerCase() === "gh:kuvo-test/app#12").map(each => each.id), [mine.id], "still one");
+
+  // Lab told it has gh:kuvo-test/app#13 in ses_far's queue: this box's item for it isn't handed there.
+  ghIssue(13);
+  receive(lab, { workQueue: telling([]) });
+  assert.equal((await tool("queue_add", { issue: "gh:kuvo-test/app#13" }, "ses_lead")).isError, false);
+  receive(lab, { workQueue: telling([{ ...told(2, "ses_wren", { id: "wqi_labssameissue0000013", title: "Issue 13", source: issueSource(13) }), number: undefined }]) });
+  const handed = await tool("queue_hand", { item: "gh:kuvo-test/app#13", to: "ses_far" }, "ses_lead");
+  assert.deepEqual(handed, { isError: true, text: "gh:kuvo-test/app#13 is in the Work Queue on lab already, in the queue of ses_wren: one item for each issue. Ask that conversation (send_message), or the user." });
+});
+
+test("one item for each issue, wherever it's restored: a deleted one stays deleted while another item is that issue, here or on another computer", async () => {
+  ghIssue(12);
+  await tool("queue_add", { issue: "gh:kuvo-test/app#12" }, "ses_lead");
+  const deleted = (await view("ses_lead")).items[0];
+  assert.equal((await tool("queue_remove", { item: "gh:kuvo-test/app#12" }, "ses_lead")).isError, false);
+  // Meanwhile lab added it (it never heard of a deleted one).
+  receive(lab, { workQueue: telling([{ ...told(3, "ses_far", { id: "wqi_labaddeditlater00012", title: "Issue 12", source: issueSource(12) }), number: undefined }]) });
+  const undone = await tool("queue_remove", { item: deleted.id, undo: true }, "ses_lead");
+  assert.deepEqual(undone, { isError: true, text: "Another item is gh:kuvo-test/app#12 now, on lab: one item for each issue, so this one stays deleted." });
+  const restored = await route("POST", `kuvo/work-queue/items/${deleted.id}/restore`);
+  assert.deepEqual([restored.status, restored.body.message], [400, "Another item is gh:kuvo-test/app#12 now, on lab: one item for each issue, so this one stays deleted."]);
+  // Here too: one handed here meanwhile (the deleted one doesn't hold it off).
+  receive(lab, { workQueue: telling([]) });
+  const item = { ...told(4, "ses_farlead", { id: "wqi_handedafterdelete012", title: "Issue 12", source: issueSource(12), body: "", notes: [], files: [], links: [], handed: [] }), number: undefined };
+  await takeFrom(lab, { hand: { id: "wqh_afterdelete000001", to: "ses_child", from: "ses_farlead", by: { user: true }, at: Date.now(), item, files: [] } });
+  assert.equal(mailTo(lab).map(each => each.workQueue.handed).find(Boolean).ok, true);
+  const again = await route("POST", `kuvo/work-queue/items/${deleted.id}/restore`);
+  assert.deepEqual([again.status, again.body.message], [400, "Another item is gh:kuvo-test/app#12 now, in the queue of ses_child: one item for each issue, so this one stays deleted."]);
+  assert.equal((await view("all")).items.filter(each => each.source?.ref === "gh:kuvo-test/app#12").length, 1);
+});
+
+test("what this box tells of an issue goes again only once it changes, never because GitHub was asked again and said the same", async () => {
+  ghIssue(12);
+  await tool("queue_add", { issue: "gh:kuvo-test/app#12" }, "ses_lead");
+  const now = Date.now();
+  await link.pushQueues(host, link.readLink(), targets, now);
+  const first = mailTo(lab)[0].workQueue.told;
+  receive(lab, { workQueue: { had: first.id } });
+  receive(mac, { workQueue: { had: first.id } });
+  sent.length = 0;
+  // Asked again each few minutes while a panel shows it, and the same each time: nothing goes.
+  const seenFile = path.join(queues, "seen.json");
+  for (const step of [1, 2, 3]) {
+    const kept = read(seenFile);
+    for (const each of Object.values(kept.reads)) each.checked = Date.now() - 600_000;
+    write(seenFile, kept);
+    const asks = ghAsks();
+    await view("ses_lead");
+    assert.equal(ghAsks(), asks + 1, "read again");
+    // (As though each read were minutes after the last: this test runs in less than one.)
+    const after = read(seenFile);
+    for (const each of Object.values(after.reads)) each.checked = Date.now() + step * 180_000;
+    write(seenFile, after);
+    await link.pushQueues(host, link.readLink(), targets, now + step * 180_000);
+    assert.equal(mailTo(lab).length, 0, `nothing told after read ${step}`);
+  }
+  // Closed there: that's a change, told once.
+  const kept = read(seenFile);
+  for (const each of Object.values(kept.reads)) each.checked = Date.now() - 600_000;
+  write(seenFile, kept);
+  ghIssue(12, { state: "CLOSED" });
+  await view("ses_lead");
+  await link.pushQueues(host, link.readLink(), targets, now + 800_000);
+  const closed = mailTo(lab);
+  assert.equal(closed.length, 1);
+  assert.deepEqual([closed[0].workQueue.told.items[0].seen.state, closed[0].workQueue.told.items[0].category], ["completed", "done"]);
+});

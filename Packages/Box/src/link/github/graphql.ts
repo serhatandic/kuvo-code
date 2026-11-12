@@ -97,7 +97,14 @@ export interface Reader<Ask, Value> {
 export function readKept<Value>(file: string): Kept<Value> {
   try {
     const kept = JSON.parse(fs.readFileSync(file, "utf8"));
-    return { reads: isObject(kept.reads) ? kept.reads as Kept<Value>["reads"] : {}, hosts: isObject(kept.hosts) ? kept.hosts as Kept<Value>["hosts"] : {} };
+    const reads: Kept<Value>["reads"] = {};
+    for (const [key, read] of Object.entries(isObject(kept.reads) ? kept.reads : {})) {
+      if (!isObject(read) || typeof read.at !== "number") continue;
+      // (As the glance kept a pull request before one reader read GitHub for all, `{at, pull}`:
+      // taken as what was read, and kept in this shape from the next write on.)
+      reads[key] = "value" in read ? read as unknown as Read<Value> : { at: read.at, value: (read.pull ?? null) as Value | null };
+    }
+    return { reads, hosts: isObject(kept.hosts) ? kept.hosts as Kept<Value>["hosts"] : {} };
   } catch {
     return { reads: {}, hosts: {} };
   }
@@ -169,7 +176,8 @@ function keep<Value>(reader: Reader<unknown, Value>, kept: Kept<Value>, now: num
 
 /** What a read found of one thing, kept after what was read of it before. */
 function readOf<Value>(before: Read<Value> | undefined, value: Value | null, keepsLast: boolean | undefined, now: number): Read<Value> {
-  if (value === null && keepsLast && before?.value) return { at: before.at, value: before.value, checked: now, gone: true };
+  // (Found gone is a word of its own: since when, the first read that found it so.)
+  if (value === null && keepsLast && before?.value) return { at: before.gone ? before.at : now, value: before.value, checked: now, gone: true };
   if (before && JSON.stringify(before.value) === JSON.stringify(value) && !before.gone) return { at: before.at, value, checked: now };
   return { at: now, value };
 }

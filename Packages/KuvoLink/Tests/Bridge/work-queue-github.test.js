@@ -172,7 +172,7 @@ test("GitHub's word on screen: read again only once it's due, closed is Done (it
   ageReads();
   let [item] = (await view()).items;
   assert.equal(queries().length, 2);
-  assert.deepEqual([item.category, item.keptIn, item.seen.state, item.title], ["done", "later", "completed", "Upload retries drop the name"]);
+  assert.deepEqual([item.category, item.keptIn, item.seen.state, item.title, item.doneAs], ["done", "later", "completed", "Upload retries drop the name", "Closed on GitHub"]);
   assert.equal(item.doneAt, Date.parse("2026-11-10T09:00:00Z"));
   assert.deepEqual(kept(), before, "the queue file is as it was: GitHub's word is kept beside it");
 
@@ -190,7 +190,7 @@ test("GitHub's word on screen: read again only once it's due, closed is Done (it
   github(issue(12, { title: "Upload retries drop the name" }));
   [item] = (await view()).items;
   assert.equal(queries().length, 3);
-  assert.deepEqual([item.category, item.keptIn, item.seen.state, item.doneAt], ["later", undefined, "open", undefined]);
+  assert.deepEqual([item.category, item.keptIn, item.seen.state, item.doneAt, item.doneAs], ["later", undefined, "open", undefined, undefined]);
   const intoDone = await route("POST", `kuvo/work-queue/items/${item.id}/move`, { category: "done" });
   assert.equal(intoDone.status, 400, "nor you, into Done");
   const done = await tool("queue_update", { item: "gh:kuvo-test/app#12", category: "done" });
@@ -237,11 +237,11 @@ test("a pull request is an item too: Done once it's merged, or closed unmerged",
   github(pull(57, { state: "MERGED", merged: true }));
   ageReads();
   [item] = (await view()).items;
-  assert.deepEqual([item.seen.state, item.category], ["merged", "done"]);
+  assert.deepEqual([item.seen.state, item.category, item.doneAs, item.struck], ["merged", "done", "Merged on GitHub", undefined]);
   github(pull(57, { state: "CLOSED" }));
   ageReads();
   [item] = (await view()).items;
-  assert.deepEqual([item.seen.state, item.category], ["closed", "done"]);
+  assert.deepEqual([item.seen.state, item.category, item.doneAs, item.struck], ["closed", "done", "Closed on GitHub", true]);
 });
 
 test("what gh can't read is said in words, and nothing is added; one gone later keeps what was last read", async () => {
@@ -257,17 +257,35 @@ test("what gh can't read is said in words, and nothing is added; one gone later 
   fs.rmSync(asked);
   github(issue(12));
   await tool("queue_add", { issue: "gh:kuvo-test/app#12" });
-  // No longer visible (a token's access taken away, or the issue deleted): shown as last read.
+  // No longer visible (a token's access taken away, or the issue deleted): shown as last read, gone:
+  // Done, struck through, said so; back in its place once GitHub shows it again.
   github(null);
   ageReads();
-  const [item] = (await view()).items;
-  assert.deepEqual([item.title, item.seen.state, item.seen.gone, item.category], ["Upload retries drop the file name", "open", true, "next"]);
+  let [item] = (await view()).items;
+  assert.deepEqual([item.title, item.seen.state, item.seen.gone, item.category, item.keptIn, item.struck, item.doneAs], ["Upload retries drop the file name", "open", true, "done", "next", true, "Gone from GitHub"]);
+  const goneAt = item.seen.at;
+  assert.ok(Date.now() - goneAt < 10_000, "since when it's been gone");
+  assert.equal(item.doneAt, goneAt);
+  const moved = await route("POST", `kuvo/work-queue/items/${item.id}/move`, { category: "later" });
+  assert.deepEqual([moved.status, moved.body.message], [400, 'gh:kuvo-test/app#12 "Upload retries drop the file name" is gone from GitHub (or gh here can no longer see it), so it\'s Done: it\'s back in its place once GitHub shows it again.']);
+  assert.match((await tool("queue_list", { done: true })).text, /- gh:kuvo-test\/app#12 "Upload retries drop the file name" · gone from GitHub/);
+  assert.match((await tool("queue_show", { item: "gh:kuvo-test/app#12" })).text, /\nOn GitHub: gone, or no longer visible to gh here, since .* \(open before\)/);
+  // Found gone again: still since then.
+  ageReads();
+  [item] = (await view()).items;
+  assert.equal(item.seen.at, goneAt - 3_600_000);
+  // (Read by GitHub's id now, wherever it went: GitHub answers the node itself.)
+  fs.writeFileSync(answer, JSON.stringify({ data: { p0: issue(12) } }));
+  ageReads();
+  [item] = (await view()).items;
+  assert.match(queries().at(-1), /p0: node\(id: "I_kw12"\)/);
+  assert.deepEqual([item.seen.gone, item.category, item.keptIn, item.struck, item.doneAs], [undefined, "next", undefined, undefined, undefined]);
   // Signed out since: not asked again for a while.
   fs.writeFileSync(fail, "gh auth login\n");
   ageReads();
   await view();
   await view();
-  assert.equal(queries().length, 3, "added, found gone, then signed out: held off since");
+  assert.equal(queries().length, 5, "added, found gone twice, back, then signed out: held off since");
 });
 
 test("an issue's own description is GitHub's: fenced off for agents as outside text, its bare #n that repository's", async () => {
@@ -323,3 +341,36 @@ test("a request answered once (a machine's, from the Mac) never waits on GitHub:
   assert.equal((await view()).items[0].category, "done");
 });
 
+
+test("a glance at a queue (a count, as the phone's ••• shows it) never reads GitHub: what was last read is what it says", async () => {
+  github(issue(12));
+  await tool("queue_add", { issue: "gh:kuvo-test/app#12" });
+  github(issue(12, { state: "CLOSED", stateReason: "COMPLETED" }));
+  ageReads();
+  const glanced = (await route("GET", "kuvo/work-queue?owner=ses_lead&glance=1")).body;
+  assert.equal(glanced.items[0].category, "next", "as last read");
+  assert.equal(queries().length, 1, "only as it was added");
+  // Followed for a glance: lines as the queue changes, GitHub never asked.
+  const controller = new AbortController();
+  const lines = [];
+  const following = (async () => {
+    for await (const piece of handle({ method: "GET", path: "kuvo/work-queue/events?owner=ses_lead&glance=1", headers: {}, fromApp: true }, undefined, controller.signal)) if (piece.body) lines.push(JSON.parse(piece.body.toString()));
+  })();
+  const deadline = Date.now() + 5_000;
+  while (!lines.length) {
+    assert.ok(Date.now() < deadline, "no line");
+    await new Promise(done => setTimeout(done, 20));
+  }
+  await tool("queue_update", { item: "gh:kuvo-test/app#12", progress_note: "Looking" });
+  while (lines.length < 2) {
+    assert.ok(Date.now() < deadline, "no line for the change");
+    await new Promise(done => setTimeout(done, 20));
+  }
+  controller.abort();
+  await following;
+  assert.equal(lines.at(-1).items[0].progress.note, "Looking");
+  assert.equal(queries().length, 1, "never read for a glance");
+  // A panel's view reads it.
+  assert.equal((await view()).items[0].category, "done");
+  assert.equal(queries().length, 2);
+});

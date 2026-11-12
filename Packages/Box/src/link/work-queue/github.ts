@@ -159,6 +159,13 @@ export function seenOf(source: Source | undefined): Read<IssueRead> | undefined 
 /** Whether GitHub said it's closed or merged, as last read (here, or as its computer told it). */
 export const doneOnGitHub = (state: string | undefined): boolean => state !== undefined && DONE_STATES.has(state);
 
+/** Whether what was read here makes it Done: closed or merged, or gone from GitHub since (deleted,
+ * or no longer visible to `gh` here: GitHub says the same of both). */
+export const doneByRead = (read: Read<IssueRead> | undefined): boolean => Boolean(read?.value && (read.gone || doneOnGitHub(read.value.state)));
+
+/** What a client shows in place of its category while GitHub makes it Done. */
+const doneWords = (seen: Seen): string => (seen.gone ? "Gone from GitHub" : seen.state === "merged" ? "Merged on GitHub" : "Closed on GitHub");
+
 /** The name a client shows: `kuvo-ai#12`, or `owner/kuvo-ai#12` where another owner's repository
  * read here has the same name. */
 export function shownName(at: IssueAt): string {
@@ -177,11 +184,13 @@ interface Shown {
   doneAt?: number;
   struck?: boolean;
   closesOn?: string;
+  doneAs?: string;
 }
 
 /** A summary with what GitHub says of its issue or pull request taken in: the newer of what was
- * read here and what its computer told (`seen`). Done while it's closed or merged (never in
- * progress then), its own category kept in `keptIn`; GitHub's title; the name a client shows. */
+ * read here and what its computer told (`seen`). Done while it's closed or merged, or gone (never
+ * in progress then), its own category kept in `keptIn`, and said in words (`doneAs`); GitHub's
+ * title; the name a client shows. */
 export function withSeen<S extends Shown>(summary: S): S {
   if (!summary.source) return summary;
   const at = issueAt(summary.source.ref);
@@ -204,8 +213,8 @@ export function withSeen<S extends Shown>(summary: S): S {
     source = { ...source, kind: read.value!.kind, url: read.value!.url, id: read.value!.id };
     closedAt = read.value!.closedAt;
   }
-  const done = doneOnGitHub(seen?.state);
-  const { keptIn: _, doneAt, struck: __, ...rest } = summary;
+  const done = Boolean(seen && (seen.gone || doneOnGitHub(seen.state)));
+  const { keptIn: _, doneAt, struck: __, doneAs: ___, ...rest } = summary;
   // (A Done one's time: when GitHub closed it; one Done only by what was told keeps the time told.)
   const doneSince = closedAt ?? (summary.keptIn !== undefined ? doneAt : undefined) ?? seen?.at;
   return {
@@ -215,10 +224,11 @@ export function withSeen<S extends Shown>(summary: S): S {
     ...(seen ? { seen } : {}),
     category: done ? "done" : keptIn,
     inProgress: done ? false : summary.inProgress,
-    // (What a client draws: its title struck through when it was closed without being done.)
-    ...(seen && STRUCK.has(seen.state) ? { struck: true } : {}),
+    // (What a client draws: its title struck through when it was closed without being done, or is
+    // gone.)
+    ...(seen && (seen.gone || STRUCK.has(seen.state)) ? { struck: true } : {}),
     closesOn: "github",
-    ...(done ? { keptIn, doneAt: doneSince } : doneAt !== undefined && summary.keptIn === undefined ? { doneAt } : {}),
+    ...(done ? { keptIn, doneAt: doneSince, doneAs: doneWords(seen!) } : doneAt !== undefined && summary.keptIn === undefined ? { doneAt } : {}),
   } as S;
 }
 

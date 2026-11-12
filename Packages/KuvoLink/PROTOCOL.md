@@ -3566,7 +3566,8 @@ before (a linked item is its owner's to change). A client shows them first, as "
   and on every other computer that told of its own (the panel's All). An item on another computer
   has `computer`. `kuvo/work-queue/events?owner=` is the same as NDJSON: a line now and one each
   time it changes (a change here or by another process, another computer telling of its queue, or a
-  linked session starting or stopping work).
+  linked session starting or stopping work). With `glance=1` (a client that shows only a count,
+  the phone's •••), either reads no issue or pull request from GitHub: each is as last read.
 - `GET kuvo/work-queue/items/<id or number>` → `{item}`, whole (an issue's `gh:` ref names it too,
   but its "/" can't go in a path through every client: a client asks by the `id` its chip has). `…/files/<name>` → its bytes. An
   item on another computer answers as that one told it, with `computer` and an empty `body`,
@@ -3672,7 +3673,9 @@ never written to: nothing here changes anything on GitHub.
   longest ago first; one process at a time; again after a minute while it's open, half an hour once
   it's closed, five minutes when it couldn't be found; a host `gh` couldn't read isn't asked for five
   minutes). One another computer told of is read here only once what it told is five minutes old
-  (`seen.checked`): that computer reads what it shows. A view's or refs' answer waits
+  (`seen.checked`): that computer reads what it shows. (It tells `checked` with what it tells, but
+  a newer `checked` alone isn't a change, so it doesn't go again for that: once five minutes old,
+  a box showing it reads it itself.) A view's or refs' answer waits
   3 s at most for it; the events stream doesn't wait, and its next line has it; a request answered
   once (`box route`) never waits: a read that's due goes on in a process of its own (`kuvo-link.js
   box github-read`), kept for the next ask. One found missing where it was is read again by GitHub's
@@ -3681,22 +3684,31 @@ never written to: nothing here changes anything on GitHub.
   value, checked?, gone?}}, hosts}`), never in them: a read changes no item and no `updated`. `at`
   is since when GitHub has said what it says (a read that finds the same moves only `checked`, so
   nothing shown or told changes with it). One found missing later (gone, or no longer visible to
-  that sign-in: GitHub says the same of both) keeps what was last read, `gone`. The same reader
-  (`link/github/graphql.ts`) reads sessions' pull requests for "A session at a glance".
+  that sign-in: GitHub says the same of both) keeps what was last read, `gone`, `at` since when
+  it's been found so. The same reader (`link/github/graphql.ts`) reads sessions' pull requests for
+  "A session at a glance"; what the glance kept before it did (`{at, pull}`, not `value`) is read
+  as `value`, and written in today's shape from the next read on.
 - Each summary takes it in: `title` GitHub's; `source.name`, what a client shows in place of `#n`
   (`repo#12`, `owner/repo#12` when another owner's repository read here has that name); `seen`
   (`{state, at, gone?}`: `open`, `draft`, `completed`, `not_planned` (a duplicate too), `merged` or
   `closed` (a pull request closed unmerged), and since when; a newer box may say more); and, while it's
-  `completed`, `not_planned`, `merged` or `closed`, `category` `done` (never in progress then), its
-  own category in `keptIn`, and `doneAt` when GitHub closed it. Reopened, it's back in its own
-  category; `struck` (closed without being done: its title drawn struck through) and `closesOn`
-  (`github`: Done is GitHub's, never a place to move it to), for clients to draw by. What another
+  `completed`, `not_planned`, `merged` or `closed`, or `gone`, `category` `done` (never in progress
+  then), its own category in `keptIn`, `doneAt` when GitHub closed it (or since when it's gone), and
+  `doneAs`, what a client shows in place of its category: "Merged on GitHub", "Closed on GitHub" or
+  "Gone from GitHub". Reopened, or found again, it's back in its own category; `struck` (closed
+  without being done, or gone: its title drawn struck through) and `closesOn` (`github`: Done is
+  GitHub's, never a place to move it to), for clients to draw by. A client draws a `gone` one's
+  GitHub mark dimmed. What another
   computer tells carries the same, so a client draws it there without `gh`; its times are taken as
   no later than when it told them. Where this box read it too, the word asked of GitHub later
   (`checked`, else `at`) is shown, this box's on a tie, and one found gone only when the other is
   too.
-- Done is GitHub's: moving one into Done, or out of it while it's closed (you or an agent), is
-  refused in words (400); its title and description aren't changed here either.
+- Done is GitHub's: moving one into Done, or out of it while it's closed or gone (you or an agent),
+  is refused in words (400); its title and description aren't changed here either.
+- One item for each issue wherever it goes: an item handed here that another item here is already
+  (by its name or GitHub's id) is refused back with why; `queue_hand` refuses to hand one to a
+  computer that told of another item that's that issue; and a deleted one isn't brought back (you
+  or an agent, 400) while another item is that issue, here or on another computer.
 
 **Numbers**: one `#n` per item, unique across your computers, handed out by the primary: your
 setup's main computer ("Your setup"), the box itself when it's that; one a box can't write to yet

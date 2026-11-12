@@ -15,7 +15,8 @@ const PROGRESS = object({ "value?": number, "note?": string });
 const SOURCE = object({ kind: string, ref: string, "url?": string, "host?": string, "id?": string, "name?": string });
 /** Where its issue or pull request stands on GitHub, as last read, and since when: open, draft,
  * completed, not_planned, merged or closed (a newer box may say more); `gone` when it couldn't be
- * read since; `checked`, when another computer last asked GitHub of it. */
+ * read since (Done then, its mark drawn dimmed); `checked`, when another computer last asked GitHub
+ * of it. */
 const SEEN = object({ state: string, at: number, "checked?": number, "gone?": bool });
 /** Another of your computers, the one an item is on. */
 const COMPUTER = object({ key: string, name: string, kind: words("mac", "machine"), "id?": string });
@@ -44,6 +45,8 @@ export const QUEUE_ITEM = object({
   "keptIn?": string,
   "struck?": bool,
   "closesOn?": string,
+  /** What a client shows in place of its category while GitHub makes it Done ("Merged on GitHub"). */
+  "doneAs?": string,
   "handing?": object({ to: string, name: string }),
   "computer?": COMPUTER,
   created: STAMP,
