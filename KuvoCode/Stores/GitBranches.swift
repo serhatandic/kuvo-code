@@ -160,19 +160,16 @@ nonisolated enum GitPreferences {
     static let branchPrefixKey = "git.branchPrefix"
     static let commitInstructionsKey = "git.commitInstructions"
     static let pullRequestInstructionsKey = "git.pullRequestInstructions"
-    /// The boxes that took them.
-    static let movedKey = "git.movedTo"
 
     // COMPAT(0.7 mac-git-settings): this Mac's Settings › Git from before, given to each box once (its box keeps each where it has none of its own); kept here for a computer added later. Goes 3 months after 0.8.0.
-    /// Gives `box` this Mac's, unless it took them already or there are none; tried again as it
-    /// next connects when it couldn't take them (its settings aren't its own yet, it can't be reached).
+    /// Gives `box` this Mac's, when there are any, as it starts or connects: the box takes them
+    /// the first time only (one made again later, under the same name too, takes them anew), and
+    /// one that couldn't (its settings not its own yet, not reached) is given them next time.
     static func move(to box: BoxClient, defaults: UserDefaults = .standard) async {
         let kept = [("branchPrefix", branchPrefixKey), ("commitInstructions", commitInstructionsKey), ("pullRequestInstructions", pullRequestInstructionsKey)]
             .compactMap { name, key in defaults.string(forKey: key).map { (name, $0) } }
-        let moved = defaults.stringArray(forKey: movedKey) ?? []
-        guard !kept.isEmpty, !moved.contains(box.box) else { return }
+        guard !kept.isEmpty else { return }
         struct Answer: Decodable { let moved: Bool }
-        guard (try? await box.value(Answer.self, "POST", "kuvo/git/settings/move", body: Dictionary(uniqueKeysWithValues: kept))) != nil else { return }
-        defaults.set((defaults.stringArray(forKey: movedKey) ?? []) + [box.box], forKey: movedKey)
+        _ = try? await box.value(Answer.self, "POST", "kuvo/git/settings/move", body: Dictionary(uniqueKeysWithValues: kept))
     }
 }

@@ -7,7 +7,8 @@
 
 import type { Target } from "../../shared/records";
 import { readMacKit, readWords } from "../bots/kit";
-import { holdsBack, permissionsHere } from "../bots/tell";
+import { holdsBack, isRule } from "../bots/tell";
+import { ownsSettings, readSettings } from "./config";
 import type { KitRule } from "../bots/kit";
 import { botPersonalities } from "../personalities/library";
 import { bridgeTarget } from "../engine/client";
@@ -21,12 +22,22 @@ export interface GroupSettings {
   denies: KitRule[];
 }
 
+/** Settings › Permissions here, or null while they can't be read: a hand edit that isn't plain
+ * JSON, a rule in them that isn't one, a machine's not its own yet. */
+function rulesHere(): KitRule[] | null {
+  if (!ownsSettings()) return null;
+  const { settings } = readSettings();
+  if (!settings) return null;
+  const rules = settings.permissions ?? [];
+  return Array.isArray(rules) && rules.every(isRule) ? rules : null;
+}
+
 /** This computer's, as it keeps them now; null until it has Kuvo Code's words for bots, and while
- * its Settings › Permissions can't be read (a hand edit that isn't plain JSON, a machine's not its
- * own yet): its chats keep what they have, never going on without what they hold back. */
+ * its Settings › Permissions can't be read: its chats keep what they have, never going on without
+ * what they hold back. */
 export function groupSettingsHere(): GroupSettings | null {
   const words = readWords();
-  const permissions = permissionsHere();
+  const permissions = rulesHere();
   if (!words || !permissions) return null;
   const told = (name: string, description: string) => words.personalityWords.replaceAll("⟦name⟧", () => name).replaceAll("⟦description⟧", () => description);
   const mac = readMacKit();

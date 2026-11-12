@@ -10,7 +10,8 @@ struct GitSettings: View {
         ScrollingSettingsForm {
             Section {
                 SettingsTextRow {
-                    // Emptied: no prefix at all.
+                    // Emptied: no prefix at all. None set: the box's own default (git-words.ts's
+                    // DEFAULT_BRANCH_PREFIX).
                     ConfigTextField(title: "Branch prefix", path: ["branch_prefix"], prompt: "None", unset: "kuvo/", bare: true)
                 } label: {
                     Text("Branch prefix")

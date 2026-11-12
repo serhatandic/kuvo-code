@@ -128,4 +128,9 @@ test("while this computer's Settings › Permissions can't be read, its group ch
   expect(store.settings()!.denies).toEqual([NEVER_PUSH])
   // Nothing given until it can be read.
   expect(store.settings()!.askFirst).toBe(true)
+  // Nor while a rule in them isn't one.
+  put(configFile, JSON.stringify({ permissions: [NEVER_PUSH, { action: "read" }] }))
+  await round()
+  expect(store.settings()!.denies).toEqual([NEVER_PUSH])
+  expect(store.settings()!.askFirst).toBe(true)
 })

@@ -3174,7 +3174,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   Accept Edits: a seat fetches no pages) and what its Settings › Permissions hold back. Its link
   gives them to the coding agents' bridge that runs the chats (`PUT api/kuvo/groups/box-settings`
   there), as it starts and within five seconds of any of them changing, never while its Settings ›
-  Permissions can't be read (its chats keep what they have); the bridge keeps them through its
+  Permissions can't be read or have a rule that isn't one (its chats keep what they have); the bridge keeps them through its
   restarts. Your clock (time zone, and how you write dates, for meetings and a chat's recap) is a
   client's to say, as a machine can't know it: `PUT api/kuvo/groups/clock {"timeZone", "locale"}`
   on the bridge (a Mac to each computer's it reaches, as it connects and as either changes);
@@ -6190,8 +6190,8 @@ can go three months after 0.8.0 ships.
   → `{"moved"}`, `409 {"message"}` while a machine's settings aren't its own yet, `500
   {"message"}` when they couldn't be written), which keeps
   each where it has none of its own yet, the first time only (`box/git.json`'s `moved`), so a
-  later one, or one after you cleared it there, changes nothing. The Mac notes each box that took
-  them, and keeps them in its preferences for a computer you add later.
+  later one, or one after you cleared it there, changes nothing. The Mac offers them as each box
+  starts or connects, and keeps them in its preferences for a computer you add later.
   <!-- compat: 0.7 mac-git-settings -->
 
 **Kuvo Code 0.8.0-beta.1.** It can go once 0.8.0 is out (a beta copy is offered the release).

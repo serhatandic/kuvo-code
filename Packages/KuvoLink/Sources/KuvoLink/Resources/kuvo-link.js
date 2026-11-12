@@ -38181,7 +38181,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "049c1a994f8e";
+var BRIDGE_VERSION = "b6e94e06822a";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -42608,9 +42608,18 @@ function serveBox(password, handle = engineHandler(readEngineFile, { name: os17.
 }
 
 // Packages/Box/src/link/areas/group-settings.ts
+function rulesHere() {
+  if (!ownsSettings())
+    return null;
+  const { settings } = readSettings();
+  if (!settings)
+    return null;
+  const rules = settings.permissions ?? [];
+  return Array.isArray(rules) && rules.every(isRule) ? rules : null;
+}
 function groupSettingsHere() {
   const words = readWords();
-  const permissions = permissionsHere();
+  const permissions = rulesHere();
   if (!words || !permissions)
     return null;
   const told = (name, description) => words.personalityWords.replaceAll("⟦name⟧", () => name).replaceAll("⟦description⟧", () => description);

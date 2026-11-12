@@ -2,9 +2,9 @@ import Foundation
 import Testing
 @testable import KuvoCode
 
-/// Settings › Git as this Mac kept it before each computer kept its own: given to a computer's box
-/// once, where that computer has none of its own, so nothing you set is lost; tried again until a
-/// box takes it, and never again once it has. The box is a real one (`MachineTestBox`).
+/// Settings › Git as this Mac kept it before each computer kept its own: given to a computer's box,
+/// which takes it once, where it has none of its own, so nothing you set is lost; given again to
+/// one that couldn't be reached. The box is a real one (`MachineTestBox`).
 @Suite(.serialized, .timeLimit(.minutes(1))) struct GitSettingsMoveTests {
     let defaults: UserDefaults
     let suite = "GitSettingsMoveTests-\(UUID().uuidString)"
@@ -28,7 +28,6 @@ import Testing
         #expect(moved["branch_prefix"] as? String == "", "no prefix stays no prefix")
         #expect(moved["commit_instructions"] as? String == "Start with the area changed.")
         #expect(moved["pull_request_instructions"] as? String == "Its own.", "the computer's own stays")
-        #expect(defaults.stringArray(forKey: GitPreferences.movedKey) == [box.name])
 
         // Changed there since: this Mac's don't come back.
         let (status, _) = try await box.client.send("PATCH", "kuvo/config", body: JSONSerialization.data(withJSONObject: ["changes": [["path": ["commit_instructions"], "value": "Changed there."]]]))
@@ -44,12 +43,10 @@ import Testing
         let client = away.client
         away.stop()
         await GitPreferences.move(to: client, defaults: defaults)
-        #expect(defaults.stringArray(forKey: GitPreferences.movedKey) == nil)
 
         let back = try await MachineTestBox(name: "away")
         defer { back.stop() }
         await GitPreferences.move(to: back.client, defaults: defaults)
         #expect(try back.onDisk()["commit_instructions"] as? String == "Start with the area changed.")
-        #expect(defaults.stringArray(forKey: GitPreferences.movedKey) == ["away"])
     }
 }
