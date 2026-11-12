@@ -556,7 +556,10 @@ final class AppModel {
                     attached = here
                     // One that won't start is said so, to try again, rather than waited on.
                     guard here.runs == .running else {
-                        throw MachineFailure(message: "The box already on this Mac didn’t start. Try again in a moment.")
+                        // Its login item there, which launchd wouldn't start: turned off, it stays off.
+                        throw MachineFailure(message: Here.startsByLaunchd(home: Self.hereHome)
+                            ? "The box already on this Mac didn’t start. If its login item (“sh”) is turned off in System Settings › General › Login Items, turn it on, then try again."
+                            : "The box already on this Mac didn’t start. Try again in a moment.")
                     }
                     // Running, it's told the app is here, for good.
                     await Here.sayAttached(home: Self.hereHome)
@@ -564,15 +567,13 @@ final class AppModel {
                     openOnAttached()
                     return
                 case .unknown(let why):
-                    attached = nil
+                    detachHere()
                     let couldnt = "Kuvo Code couldn’t check the box already on this Mac, so it didn’t start one of its own."
                     BackgroundWork.heldBack = couldnt
                     throw MachineFailure(message: why ?? couldnt)
                 case .own:
                     // None here now: the box that was is no longer this Mac's.
-                    attached = nil
-                    machines.detachHere()
-                    workspace.attachedChats = nil
+                    detachHere()
                 }
             }
             guard launch == self.launch else { return }
@@ -749,6 +750,14 @@ final class AppModel {
         startMachines()
         // Where its chats go, as it says, for a new chat with no project.
         Task { await readChatsHere() }
+    }
+
+    /// No longer attached to a box here (none now, or it can't be told): it's no longer listed or
+    /// followed, and what has no computer of its own is the app's own box's again.
+    private func detachHere() {
+        attached = nil
+        machines.detachHere()
+        workspace.attachedChats = nil
     }
 
     /// The chats folder of the box attached in place, as it names it (`kuvo/info`'s `chats`), as a

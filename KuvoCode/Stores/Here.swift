@@ -138,6 +138,11 @@ nonisolated struct Here: Decodable, Equatable, Sendable {
         return [("/bin/sh", [home.appending(path: root).appending(path: "bin/kuvo-start").path])]
     }
 
+    /// Whether the box here is started by launchd, through its login item (`startCommands`).
+    static func startsByLaunchd(home: URL) -> Bool {
+        root.map { startCommands(home: home, root: $0).first?.path == "/bin/launchctl" } ?? false
+    }
+
     /// The box in the machines' folder, stopped, started again in place (`startCommands`): what
     /// `here` says then, once it runs or after a few seconds.
     static func started(engine: URL, script: URL, appBox: URL, engineData: URL, home: URL) async -> Here? {

@@ -604,8 +604,7 @@ extension AppModel {
         guard await MachineConnection.inTurn([
             // Phones you've paired reach it directly, through its own bridge; then who else uses it.
             {
-                // (Not this Mac's own box, attached in place: it's used as it is, its link included.)
-                if !engine.machine.isThisMac { await self.phoneLink.sync(engine) }
+                await self.phoneLink.sync(engine)
                 await self.readAlsoUsedBy(engine)
             },
             // Its worktrees, as it keeps them (some this Mac made there before, handed over once).

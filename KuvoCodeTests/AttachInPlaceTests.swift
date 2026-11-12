@@ -217,6 +217,41 @@ import Testing
         #expect(Workspace.box(of: "/Users/me/project") == SSHConnection.thisMac)
     }
 
+    /// A new chat before the box here has said where its chats go: it's asked then, and the chat
+    /// opens there.
+    @Test func aNewChatAsksTheBoxHereWhereItsChatsGo() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        MachineEngine.standIn = { _ in nil }
+        app = try await started { try memberOfMacBooks() }
+        let model = try #require(app)
+        model.workspace.attachedChats = nil
+        model.tabs.newChat()
+        let chats = RemoteFolder.folder(home.path(percentEncoded: false) + "/\(RemoteEngineInstaller.root)/box-chats", on: SSHConnection.thisMac)
+        try await until { model.tabs.selection == .draft(chats) }
+        #expect(model.tabs.selection == .draft(chats))
+    }
+
+    /// The box here went (its Mac removed it) and the app starts again: it runs its own box, and
+    /// this Mac shows once, as its own; nothing of the box that was is left listed.
+    @Test func aBoxThatWentIsNoLongerListed() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        MachineEngine.standIn = { _ in nil }
+        engine.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 1])
+        engine.list([])
+        app = try await started { try memberOfMacBooks() }
+        let model = try #require(app)
+        #expect(model.boxes == [.attached])
+        // Its Mac removed it: its way to start and its engine went, its card stayed.
+        let box = home.appending(path: RemoteEngineInstaller.root)
+        for gone in ["bin", "engine", "run/box.pid"] { try FileManager.default.removeItem(at: box.appending(path: gone)) }
+        await model.restart()
+        #expect(model.attached == nil && model.engine == .ready)
+        #expect(model.boxes == [.mac] && model.machines.engine(SSHConnection.thisMac) == nil)
+        #expect(BoxClient.thisMac == BoxClient.mac && model.settingsTabs.box == .mac)
+    }
+
     /// Connected, this Mac's own box offers nothing in Settings › Machines (or to a phone): it's
     /// never disconnected from the window that's on it, nor started or removed from here.
     @Test func thisMacsBoxIsntDisconnectedFromHere() async throws {

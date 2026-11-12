@@ -101,7 +101,16 @@ import Testing
     /// account's crontab and launch agents, is its own Mac's), and nothing is run there for it.
     @Test func itsEngineIsNeverLaunchedFromHere() async throws {
         try await withHome { home in
-            await #expect(throws: RemoteEngineError.self) { try await RemoteServer.launch(on: connection, environment: [:]) }
+            // (In a folder of the test's own, should it ever run: never the account's start at login.)
+            try await RemoteEngineInstaller.$scopedRoot.withValue(".kuvo-code-test") {
+                do {
+                    _ = try await RemoteServer.launch(on: connection, environment: [:])
+                    Issue.record("it launched")
+                } catch RemoteEngineError.thisMac {
+                } catch {
+                    Issue.record("refused for another reason: \(error)")
+                }
+            }
             #expect((try? FileManager.default.contentsOfDirectory(atPath: home.path)) == [])
         }
     }

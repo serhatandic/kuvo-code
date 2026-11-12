@@ -566,7 +566,8 @@ final class PhoneLink {
     /// and the one after this Mac's box is told its settings, would run into each other there).
     /// `asked`: you asked (Set Up Again), so what keeps it from being set up now is said too.
     func sync(_ engine: MachineEngine, asked: Bool = false) async {
-        guard relayWanted, engine.isReady, hasIdentity else {
+        // (Never this Mac's own box, attached in place: it's used as it is, its link included.)
+        guard relayWanted, engine.isReady, hasIdentity, !engine.machine.isThisMac else {
             setupFailed[engine.machine.id] = nil
             return
         }
