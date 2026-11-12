@@ -5524,8 +5524,9 @@ Linux, nothing is made or removed right in a folder that holds what's kept (your
 `~/.local` and the like), only in the folders there: Landlock grants each thing that's there. Besides, each command
 writes and deletes freely in its conversation's folder, that folder's git repository (a real one: a `.git` that's
 a link, or names a folder that isn't a repository or a worktree the repository doesn't name back,
-counts for nothing; on macOS never its hooks or config, its submodules' or its worktrees', nor the
-engine's settings in the folder: `.opencode/`, `opencode.json`, nor the coding agents' settings
+counts for nothing; never its hooks or config, its submodules' or its worktrees' (on Linux, as
+below; on macOS by their names, so not where a `hooks` that's a link leads, nor a repository its
+`commondir` already names, #422), nor, on macOS, the engine's settings in the folder: `.opencode/`, `opencode.json`, nor the coding agents' settings
 files, whose hooks and servers they run as they start there, nor, on macOS, any other project's in
 your home: `.claude/settings.json` and
 `settings.local.json`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json` and `mcp.json`,
@@ -5575,8 +5576,92 @@ store and Bun's cache link theirs into a project's `node_modules` and pnpm's int
 as your own uv links its cache's into a project's `.venv`; bunx's packages in `/tmp`; and a new
 folder at the top of `~/.cache`, which it can't make (Landlock's right to make one would reach the
 folders it only reads); other projects' hooks, git settings and agents' settings in your home, which
-it writes as it writes the files beside them; and before Linux 6.2 (Landlock 3), truncating a file it only reads by its
-path (`truncate`), which Landlock checks only from then. It can't read
+it writes as it writes the files beside them; the engine's and the coding agents' settings in the
+conversation's folder; and, in the repositories it works in on Linux (below): a repository in the
+folder but its own, one there already (a vendored one, a submodule whose `.git` is a folder in it)
+or one a command makes (in a folder with no repository, `git init` and a hook in one command; in a
+repository, one it then adds to the index as a submodule, whose settings a plain `git status`
+outside runs); a worktree kept inside the project (`.claude/worktrees/x`) but the conversation's
+own, whose `.git` file a command can lead to such a repository; a submodule's folder in the project
+moved away and another put in its place whose `.git` leads to one (the `.git` file itself is
+read-only, the folder holding it isn't: a mount there would be a border, as below), and a
+submodule's `.git` a command leads there when its submodule has no repository in `.git/modules`; the
+repositories inside an Also Allowed folder, at any depth, but the one at its top (each would take
+its own keeping, on every command); the conversation's folder moved away from a folder above it
+that a command writes (an Also Allowed one, `/tmp`) and another, with a repository of its own, put
+in its place (a mount there would keep files from being moved or linked across it, tools' caches'
+links into the project among them); a `.git` in the folder that's a link; a rebase it left stopped,
+whose `exec` lines run as you go on with it (as on a Mac); and the race below (#617). Before Linux
+6.2 (Landlock 3), truncating a file it only reads by its path (`truncate`), which Landlock checks
+only from then.
+On Linux, where Landlock grants a folder whole, git's own files in the repositories a command writes
+are kept by its namespace instead (`fence/landlock.ts`, `KEEP_GIT`, #429). Before the command
+starts, in its conversation's repository, the `.git` folder up from its folder, each repository Also
+Allowed holds, and their submodules' repositories:
+- the repository's folder, `worktrees` and `modules` are mounted on themselves, so none is moved,
+  removed or replaced;
+- its `config`, `config.worktree`, `commondir`, `gitdir` and `hooks` are read-only (where one of
+  them but `gitdir` isn't there as it's kept, the repository's folder is, as below);
+- `worktrees`, and every folder in `modules` but each submodule's repository, are read-only, as are
+  each worktree's own `commondir`, `gitdir`, `config.worktree` and `modules` (the worktrees' folders
+  themselves are written as git works in them and tidies their reflogs);
+- each submodule's `.git` file in the project (not the folder it's in), and, once those are kept,
+  the `.git` file that leads the conversation's worktree to its repository, still leading there,
+  are read-only.
+
+A folder is mounted from within it, a file by its path (which a link swapped in at that moment
+could lead elsewhere), and each made read-only by its path; then all are checked in the namespace's
+mount table: each the top mount at its path, of what's there, not covered by a folder mounted since
+above it, and read-only where it should be; and every mount made since git's files began to be
+kept is one of those. A
+repository that changes as the command starts (git outside the sandbox writing it, or a command
+still running), or a mount that isn't so, runs nothing (126, to run again). This is done before
+what the namespace hides is hidden, so no mount there can uncover it.
+
+The command doesn't run (126, saying why and to ask the user) where one of those is a link (a
+command could trade it for its own, and where it leads isn't kept), where a `commondir` leads git
+anywhere but the repository itself (or, a worktree's, its repository), or where one can't be kept.
+So with a `.git/hooks` that's a link to a folder in the project, each command in that repository,
+or in a project that holds it (Also Allowed, or as a submodule), runs only once allowed outside the
+sandbox (`sandbox_ask`: you, or in Auto its reviewer). `core.hooksPath` is untouched: the hooks it
+names are files in the project, which commands write as any other, on a Mac too. Each is made read-only in two steps, a bind and then its remount, which
+libmount makes with the flags a mount from outside the namespace keeps locked (`nosuid`, `nodev`):
+in one step, util-linux before 2.39 drops them and Linux refuses it (checked with util-linux 2.36.1,
+2.38.1 and 2.41.5 on `/dev/shm`). Where a folder still can't be made read-only in a command's
+namespace, the box says so (`gaps`: `git`), and commands in a repository don't run; the namespace,
+and all else it hides, stays.
+
+Mounts keep only what's there, and a name git reads that isn't there yet can't be told from the
+files git makes beside it (`index.lock` beside `commondir`). So the launcher first leaves in each of
+those repositories what it lacks of them: `.git/commondir` holding `./` (git and libgit2 take the
+repository's own folder as its common one, as with none), empty `.git/hooks`, `.git/modules` and
+`.git/worktrees`, an empty `.git/config.worktree` (read only once `extensions.worktreeConfig` is on,
+as `git sparse-checkout` turns it on), and an empty `config.worktree` and `modules` in each
+worktree's own folder. These are the files Kuvo Code leaves in a repository's `.git` on Linux
+(docs/footprint.md). git reads them as before, but for what it prints: with a `commondir` there,
+`git rev-parse --git-common-dir` and `--git-path` (`hooks`, `info/…`) at the repository's top print
+absolute paths rather than ones under `.git` (`--git-dir` still prints `.git`), so a script that
+compares the two as strings to tell a linked worktree takes the repository for one. It never changes
+one that's there, and makes them as you, in the folder as it is (never through a link put there), so
+never in a folder you made read-only. A repository that lacks one of them (it can't give one, or one,
+`config` included, isn't there as it's kept) is checked as every other,
+then its folder is read-only to commands (they can't make it writable either), but for its
+worktrees' own folders and its submodules' repositories, each kept as above; the command runs, told
+so once in what it prints (again once it can and then can't).
+
+Still open on Linux: what a namespace keeps is what was there as the command started (#617). git
+outside the sandbox writes `.git/config` anew (`git config`, a push that sets its upstream, a branch
+that tracks one, `git submodule sync`) by putting a new file in its place, which Linux lets through
+and then no longer keeps in the namespaces of commands still running. So a sandboxed process still
+running then (a server left running, or a coding agent run whole in the sandbox, which keeps one
+namespace for its session) can win that race and write the new file. What the box runs by itself
+never runs what that file names (Git, below); git you run yourself, and what you ask the box for
+(Commit in Changes), would. A submodule's folder in the project can also be moved away and another
+put in its place whose `.git` leads to a repository of the command's own, and a new repository can
+be made in the project and added as a submodule (both in the list above). Without a namespace of its
+own (`gaps`: `services`), none of this holds.
+
+It can't read
 Kuvo Code's own folders (on a machine `~/.kuvo-code`; on this Mac the app's folders under `Library`,
 any `run.kuvo.code…` copy's, its temporary folder and `/tmp/kuvo-ssh-<uid>`) but its `bin`, nor your
 secrets (cloud, package and git tokens, browsers' and password managers' data, the coding agents'
@@ -5818,8 +5903,13 @@ it's empty.
   starts Codex's thread, Cursor's agent and an ACP agent again and is told to Claude Code; a key you
   changed reaches the relay alone, from the agent's next turn.
   While it's on, `gaps` lists what it can't keep commands from on this computer: `services`, the
-  services your login runs (a Linux machine whose commands can't have a namespace of their own;
-  `needs`: `"user namespaces"`, or `"util-linux"` without `unshare`). A client says so beside it.
+  services your login runs, and git's own files in the repositories they write (a Linux machine
+  whose commands can't have a namespace of their own;
+  `needs`: `"user namespaces"`, or `"util-linux"` without `unshare`); `git`, git's own files in the
+  repositories they write (a Linux machine where a folder can't be made read-only in a command's
+  namespace, tried in the box's own folder as it's checked: commands in a repository there don't
+  run, 126, rather than run with those open to them). A client says so beside it (`services`;
+  the apps don't show `git` yet).
   When it isn't on, also `reason`, a word for a client to map rather than reading `why`, with what
   you can do (`action`) and the box's route that does it (`route`, where there is one):
 
@@ -6005,8 +6095,9 @@ an add.
 
 A repository's own settings (its `.git/config` and what that includes) never start a program when
 the box runs git there (bridge 0.9.183), since whatever could write in the folder (a download, a command the sandbox
-let out) could have named one. The fence keeps a sandboxed command from writing them on macOS (above);
-this holds on every box, for a repository written by anything.
+let out) could have named one. The fence keeps a sandboxed command from writing them on macOS, and on
+Linux where commands have a namespace of their own (above); this holds on every box, for a
+repository written by anything.
 
 - Every git the box runs in a repository gets `-c core.fsmonitor=false -c core.pager=cat -c
   log.showSignature=false`, and its diffs (`diff`, `log`, `show`, `stash show`) `--no-ext-diff`.
@@ -6031,6 +6122,16 @@ this holds on every box, for a repository written by anything.
   switched, removed with what wasn't committed in it, or brought back, a project cloned) gets only
   the first set: the repository's hooks, filters and sign-ins run as in your terminal, so husky,
   LFS and git-crypt work, and what's kept of a removed worktree is stored as your `git add` would.
+- Neither runs (but what only reads names and objects, which starts nothing) where the repository's
+  `commondir` leads git anywhere but where it should (#429), or where git finds a bare repository
+  by sitting in a folder that has a `.git` of its own (what its own files make of it once that
+  `.git` is broken: `HEAD`, `objects`, `refs` and settings beside it; not by
+  `safe.bareRepository`, which would reach your hooks' own git too). Where it should is: none, or the repository's own folder
+  (`./`, as the sandbox leaves it on Linux), or, in a linked worktree's own folder
+  (`.git/worktrees/<name>`), the repository it's one of. One leading elsewhere would have git read
+  another repository's settings and run its hooks; Changes then says so, as for a program it won't
+  run. (git is asked where the repository is, `rev-parse --absolute-git-dir`, and the file read only
+  as a small regular one.)
 - The engine's own git (its `vcs` routes and the session's diff) has fsmonitor off and no external
   diff by itself, and keeps its snapshots outside the repository; a filter or converter the repository
   names still runs in its status and diffs. Submodules' own settings aren't read: the
