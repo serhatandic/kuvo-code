@@ -105,6 +105,9 @@ export function markChatOn(target: Target, type: string, data: unknown, signal?:
 const HEARD_FILE = path.join(RUN, "chats-heard.json");
 const HEARD_EVERY = 30_000;
 const keptHeard = new Map<string, number>();
+// The places being caught up with now: what's heard meanwhile isn't kept until that's done, so a
+// catch-up cut short is done again from where it began.
+const catchingUp = new Set<string>();
 
 function readHeard(): Record<string, number> {
   try {
@@ -117,7 +120,7 @@ function readHeard(): Record<string, number> {
 
 /** That the box heard `place` at `at`: kept at most every half a minute, unless `now`. */
 export function noteHeard(place: string, at = Date.now(), now = false): void {
-  if (!now && at - (keptHeard.get(place) ?? 0) < HEARD_EVERY) return;
+  if (!now && (catchingUp.has(place) || at - (keptHeard.get(place) ?? 0) < HEARD_EVERY)) return;
   keptHeard.set(place, at);
   try { writePrivate(HEARD_FILE, JSON.stringify({ ...readHeard(), [place]: at })); } catch {}
 }
@@ -135,24 +138,29 @@ export async function markChatsSince(target: Target, place: string, signal?: Abo
     noteHeard(place, now, true);
     return 0;
   }
-  const changed: EngineSession[] = [];
-  const real = new Map<string, string>();
-  let query: string | null = "limit=200&order=desc";
-  for (let pages = 0; query && pages < 500; pages++) {
-    if (signal?.aborted) return 0;
-    const page = await engineGet(target, `api/session?${query}`) as { data?: EngineSession[]; cursor?: { next?: string } | null } | null;
-    const data = Array.isArray(page?.data) ? page.data : [];
-    const recent = data.filter(session => (session?.time?.updated ?? 0) >= since);
-    for (const session of recent) if (session?.id && !markedRight(session, real)) changed.push(session);
-    const next = page?.cursor?.next;
-    // (The newest first: past the first from before, the rest are older still.)
-    query = recent.length === 200 && next ? `limit=200&cursor=${encodeURIComponent(next)}` : null;
+  catchingUp.add(place);
+  try {
+    const changed: EngineSession[] = [];
+    const real = new Map<string, string>();
+    let query: string | null = "limit=200&order=desc";
+    for (let pages = 0; query && pages < 500; pages++) {
+      if (signal?.aborted) return 0;
+      const page = await engineGet(target, `api/session?${query}`) as { data?: EngineSession[]; cursor?: { next?: string } | null } | null;
+      const data = Array.isArray(page?.data) ? page.data : [];
+      const recent = data.filter(session => (session?.time?.updated ?? 0) >= since);
+      for (const session of recent) if (session?.id && !markedRight(session, real)) changed.push(session);
+      const next = page?.cursor?.next;
+      // (The newest first: past the first from before, the rest are older still.)
+      query = recent.length === 200 && next ? `limit=200&cursor=${encodeURIComponent(next)}` : null;
+    }
+    let written = 0;
+    for (const session of changed.sort((a, b) => (a.time?.updated ?? 0) - (b.time?.updated ?? 0))) {
+      if (signal?.aborted) return written;
+      if (await markChat(target, session.id, signal).catch(() => false)) written += 1;
+    }
+    noteHeard(place, now, true);
+    return written;
+  } finally {
+    catchingUp.delete(place);
   }
-  let written = 0;
-  for (const session of changed.sort((a, b) => (a.time?.updated ?? 0) - (b.time?.updated ?? 0))) {
-    if (signal?.aborted) return written;
-    if (await markChat(target, session.id, signal).catch(() => false)) written += 1;
-  }
-  noteHeard(place, now, true);
-  return written;
 }

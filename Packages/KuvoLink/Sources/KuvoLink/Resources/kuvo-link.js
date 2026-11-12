@@ -13948,6 +13948,7 @@ function markChatOn(target, type, data, signal) {
 var HEARD_FILE = path58.join(RUN, "chats-heard.json");
 var HEARD_EVERY = 30000;
 var keptHeard = new Map;
+var catchingUp = new Set;
 function readHeard() {
   try {
     const kept = JSON.parse(fs55.readFileSync(HEARD_FILE, "utf8"));
@@ -13957,7 +13958,7 @@ function readHeard() {
   }
 }
 function noteHeard2(place, at = Date.now(), now = false) {
-  if (!now && at - (keptHeard.get(place) ?? 0) < HEARD_EVERY)
+  if (!now && (catchingUp.has(place) || at - (keptHeard.get(place) ?? 0) < HEARD_EVERY))
     return;
   keptHeard.set(place, at);
   try {
@@ -13971,30 +13972,35 @@ async function markChatsSince(target, place, signal) {
     noteHeard2(place, now, true);
     return 0;
   }
-  const changed = [];
-  const real = new Map;
-  let query = "limit=200&order=desc";
-  for (let pages = 0;query && pages < 500; pages++) {
-    if (signal?.aborted)
-      return 0;
-    const page = await engineGet(target, `api/session?${query}`);
-    const data = Array.isArray(page?.data) ? page.data : [];
-    const recent = data.filter((session) => (session?.time?.updated ?? 0) >= since);
-    for (const session of recent)
-      if (session?.id && !markedRight(session, real))
-        changed.push(session);
-    const next = page?.cursor?.next;
-    query = recent.length === 200 && next ? `limit=200&cursor=${encodeURIComponent(next)}` : null;
+  catchingUp.add(place);
+  try {
+    const changed = [];
+    const real = new Map;
+    let query = "limit=200&order=desc";
+    for (let pages = 0;query && pages < 500; pages++) {
+      if (signal?.aborted)
+        return 0;
+      const page = await engineGet(target, `api/session?${query}`);
+      const data = Array.isArray(page?.data) ? page.data : [];
+      const recent = data.filter((session) => (session?.time?.updated ?? 0) >= since);
+      for (const session of recent)
+        if (session?.id && !markedRight(session, real))
+          changed.push(session);
+      const next = page?.cursor?.next;
+      query = recent.length === 200 && next ? `limit=200&cursor=${encodeURIComponent(next)}` : null;
+    }
+    let written = 0;
+    for (const session of changed.sort((a, b) => (a.time?.updated ?? 0) - (b.time?.updated ?? 0))) {
+      if (signal?.aborted)
+        return written;
+      if (await markChat(target, session.id, signal).catch(() => false))
+        written += 1;
+    }
+    noteHeard2(place, now, true);
+    return written;
+  } finally {
+    catchingUp.delete(place);
   }
-  let written = 0;
-  for (const session of changed.sort((a, b) => (a.time?.updated ?? 0) - (b.time?.updated ?? 0))) {
-    if (signal?.aborted)
-      return written;
-    if (await markChat(target, session.id, signal).catch(() => false))
-      written += 1;
-  }
-  noteHeard2(place, now, true);
-  return written;
 }
 
 // Packages/Box/src/link/areas/worktree-records.ts
@@ -37250,7 +37256,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "97ddda8fd5d8";
+var BRIDGE_VERSION = "900e51fd956d";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
