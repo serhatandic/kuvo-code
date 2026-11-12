@@ -207,10 +207,10 @@ public extension WorkQueue {
         return parts
     }
 
-    /// What VoiceOver reads for a row: "Work item 551, Fix the sign-in, in progress, Writing the
-    /// tests, Kuvo Foreman, on lab, updated 12m ago".
+    /// What VoiceOver reads for a row, its title first, as a list's rows say theirs: "Fix the
+    /// sign-in, Work item 551, in progress, Writing the tests, Kuvo Foreman, on lab, updated 12m ago".
     static func spokenRow(_ item: WorkItem, in view: WorkQueueView, now: Date = .now, calendar: Calendar = .current, locale: Locale = .current) -> String {
-        var parts = [item.spokenName, item.title]
+        var parts = [item.title, item.spokenName]
         if item.isDone { parts.append("done") } else if isInProgress(item) { parts.append("in progress") }
         if isInProgress(item), let note = progressNote(item) { parts.append(note) }
         parts += eyebrow(of: item, in: view)
