@@ -41,9 +41,9 @@ const running = new Map<string, Program>()
 /** The relay's own stand-ins for servers that couldn't be reached, by the connection it gave each
  * agent: the server, how it was set up then (`setup`), and why it isn't there. */
 const standIns = new Map<string, { sessionID: string; name: string; setup: string; why: string }>()
-/** How each session's servers were set up when they last turned down their sign-in or key, by
- * session and name: the engine isn't asked again until that changes. */
-const refusals = new Map<string, string>()
+/** The engine asked to connect each session's server again, by session and name, for how it was
+ * set up when it turned down its sign-in: once for each setup, however many calls it turns down. */
+const refusals = new Map<string, { setup: string; asked: Promise<void> }>()
 /** How many times each session's server was set right after the relay stood in for it, by name. */
 const setRight = new Map<string, Map<string, number>>()
 
@@ -232,12 +232,15 @@ function replies(body: any, answers: unknown[], headers?: Record<string, string>
   return Response.json(Array.isArray(body) ? said : said[0], { headers })
 }
 
-/** Turned down: its sign-in or key refused. */
+/** Turned down: its sign-in or key refused (401), or what was asked not allowed (403). */
 const refused = (status: number) => status === 401 || status === 403
 
-/** Why a server's tools aren't there, as the agent is told it: one that turned down its sign-in or key. */
-const signInRefused = (name: string) =>
-  `The ${name} server turned down its sign-in, so its tools aren't available for now. If the user asks for something from it, tell them to sign in to it again in Kuvo Code (Settings › Integrations, or its key in Settings › MCP Servers), and carry on with the rest`
+/** Why a server's tools aren't there, or a call to it failed, as the agent is told it. */
+function whyNot(name: string, status: number): string {
+  if (status === 401) return `The ${name} server turned down its sign-in, so its tools aren't available for now. If the user asks for something from it, tell them to sign in to it again in Kuvo Code (Settings › Integrations, or its key in Settings › MCP Servers), and carry on with the rest`
+  if (status === 403) return `The ${name} server turned this down (HTTP 403): its sign-in or key may not be allowed to do it`
+  return `The ${name} server couldn't be reached (${status === 502 ? "no answer" : `HTTP ${status}`}), so its tools aren't available for now`
+}
 
 const jsonOf = (text: string): unknown => {
   try {
@@ -252,10 +255,15 @@ const jsonOf = (text: string): unknown => {
  * anyway, to a stand-in of its own with no tools, whose instructions say `why`, so an agent that
  * gives up its whole session when one server fails to start goes on with the rest.
  */
-function standInFor(sessionID: string, name: string, setup: string, why: string, messages: any[]): Response {
+function standInFor(sessionID: string, name: string, setup: string, why: string, messages: any[], many: boolean): Response {
   const connection = `unavailable-${randomBytes(12).toString("hex")}`
   standIns.set(connection, { sessionID, name, setup, why })
-  return standInAnswers(messages, why, messages.length > 1, { "mcp-session-id": connection })
+  return standInAnswers(messages, why, many, { "mcp-session-id": connection })
+}
+
+/** A session's server reached for real: the relay's stand-ins for it from before go. */
+function reached(sessionID: string, name: string) {
+  for (const [connection, standIn] of standIns) if (standIn.sessionID === sessionID && standIn.name === name) standIns.delete(connection)
 }
 
 /** A request to a stand-in, answered by the relay. */
@@ -328,27 +336,37 @@ async function answerServer(request: Request, sessionID: string, name: string): 
       current = again
       answer = await forward(request, again.url, again.headers, again.timeout, body, failed)
     }
-    if (refused(answer.status) && current.expires !== undefined) await retried()
-    if (refused(answer.status) && refusals.get(at) !== setupOf(current)) {
-      // (Once for how it's set up now: the engine renews your sign-in if it can, or finds it needs
-      // one, for Settings › Integrations to say.)
-      await reconnectServer(session.directory, name)
+    if (answer.status === 401 && current.expires !== undefined) await retried()
+    if (answer.status === 401) {
+      // (Once for how it's set up now, whatever else it turns down meanwhile: the engine renews
+      // your sign-in if it can, or finds it needs one, for Settings › Integrations to say.)
+      const setup = setupOf(current)
+      let asked = refusals.get(at)
+      if (asked?.setup !== setup) refusals.set(at, (asked = { setup, asked: reconnectServer(session.directory, name) }))
+      await asked.asked
       await retried()
+      // (Turned down as renewed too: not asked again for that either.)
+      if (answer.status === 401) refusals.set(at, { setup: setupOf(current), asked: asked.asked })
     }
-    if (refused(answer.status)) refusals.set(at, setupOf(current))
-    else if (answer.ok) refusals.delete(at)
     const sent = body === undefined ? undefined : jsonOf(body)
     const messages: any[] = sent === undefined ? [] : Array.isArray(sent) ? sent : [sent]
-    const why = refused(answer.status) ? signInRefused(name) : `The ${name} server couldn't be reached (${answer.status === 502 ? "no answer" : `HTTP ${answer.status}`})`
-    if (messages.some((message) => message?.method === "initialize") && !answer.ok) {
+    const starts = messages.some((message) => message?.method === "initialize")
+    if (starts && answer.ok) reached(sessionID, name)
+    const why = whyNot(name, answer.status)
+    if (starts && !answer.ok) {
       await answer.body?.cancel()
-      return standInFor(sessionID, name, setupOf(current), why, messages)
+      return standInFor(sessionID, name, setupOf(current), why, messages, Array.isArray(sent))
     }
     // A call it turns down partway (or can't take, for now): its answer says why, as a tool's
     // error, rather than an error of the connection's.
     if (messages.length && (refused(answer.status) || answer.status >= 500)) {
       await answer.body?.cancel()
       return standInAnswers(messages, why, Array.isArray(sent), undefined)
+    }
+    // (And its stream of what it sends, turned down: none, which MCP's HTTP allows.)
+    if (request.method === "GET" && refused(answer.status)) {
+      await answer.body?.cancel()
+      return new Response(null, { status: 405, headers: { Allow: "POST, DELETE" } })
     }
     return answer
   }
@@ -369,7 +387,7 @@ async function answerServer(request: Request, sessionID: string, name: string): 
   if (initialize) {
     // Each connection a server of its own, as an agent that starts it itself has it.
     const started = startServer(entry, sessionID, session.directory)
-    if (typeof started === "string") return standInFor(sessionID, name, setupOf(entry), started, messages)
+    if (typeof started === "string") return standInFor(sessionID, name, setupOf(entry), started, messages, Array.isArray(body))
     const fresh = randomBytes(12).toString("hex")
     const key = `${sessionID}\n${name}\n${fresh}`
     running.set(key, started)
@@ -379,8 +397,9 @@ async function answerServer(request: Request, sessionID: string, name: string): 
     const answered: any = answers[messages.indexOf(initialize)]
     if (!answered || answered.error) {
       started.stop()
-      return standInFor(sessionID, name, setupOf(entry), `The ${name} server couldn't start${answered?.error?.message ? `: ${answered.error.message}` : ""}`, messages)
+      return standInFor(sessionID, name, setupOf(entry), `The ${name} server couldn't start${answered?.error?.message ? `: ${answered.error.message}` : ""}`, messages, Array.isArray(body))
     }
+    reached(sessionID, name)
     return replies(body, answers, { "mcp-session-id": fresh })
   }
   const program = running.get(at)

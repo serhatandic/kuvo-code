@@ -7036,6 +7036,13 @@ async function readServers(directory) {
   await signIn(servers.filter((server) => signing.has(server.name)), at);
   return { servers, key: servers.map((server) => server.name).sort().join(" ") };
 }
+async function reconnectServer(directory, name) {
+  if (!link?.ready)
+    return;
+  const connect = `/api/experimental/mcp/${encodeURIComponent(name)}/connect`;
+  await link.request("POST", `${connect}?location%5Bdirectory%5D=${encodeURIComponent(directory)}`, {}, 30000).catch(() => {});
+  await link.request("POST", connect, {}, 30000).catch(() => {});
+}
 var strings = (value) => {
   const found = {};
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -7095,6 +7102,9 @@ var programs = new Map;
 var holders = new Map;
 var served = new Map;
 var running = new Map;
+var standIns = new Map;
+var refusals = new Map;
+var setRight = new Map;
 var IDLE = 60 * 60000;
 setInterval(() => {
   for (const program of running.values())
@@ -7123,13 +7133,34 @@ function relayedTools(sessionID, holder) {
   return { kind: "http", name: tools.name, key: tools.key, timeout: tools.timeout, url: `http://127.0.0.1:${relayPort()}/mcp`, headers: { Authorization: `Bearer ${key}` } };
 }
 function relayedServers(sessionID, holder, directory, found) {
+  serversKey(sessionID, found);
   if (!found.servers.length) {
     served.delete(sessionID);
     return [];
   }
   const key = hold(sessionID, holder);
   served.set(sessionID, { directory, servers: new Map(found.servers.map((each) => [each.name, each])) });
-  return found.servers.map((each) => ({ name: each.name, url: `http://127.0.0.1:${relayPort()}/mcp/${encodeURIComponent(each.name)}`, headers: { Authorization: `Bearer ${key}` }, timeout: each.timeout }));
+  return found.servers.map((each) => {
+    const times = setRight.get(sessionID)?.get(each.name);
+    return { name: each.name, url: `http://127.0.0.1:${relayPort()}/mcp/${encodeURIComponent(each.name)}${times ? `?again=${times}` : ""}`, headers: { Authorization: `Bearer ${key}` }, timeout: each.timeout };
+  });
+}
+var setupOf = (server) => JSON.stringify(server.kind === "remote" ? [server.url, server.headers] : [server.command, server.env, server.cwd]);
+function serversKey(sessionID, found) {
+  for (const [connection, standIn] of standIns) {
+    if (standIn.sessionID !== sessionID)
+      continue;
+    const now = found.servers.find((each) => each.name === standIn.name);
+    if (now && setupOf(now) === standIn.setup)
+      continue;
+    standIns.delete(connection);
+    let times = setRight.get(sessionID);
+    if (!times)
+      setRight.set(sessionID, times = new Map);
+    times.set(standIn.name, (times.get(standIn.name) ?? 0) + 1);
+  }
+  const times = [...setRight.get(sessionID) ?? []].sort(([a], [b]) => a.localeCompare(b));
+  return times.length ? `${found.key} ${JSON.stringify(times)}` : found.key;
 }
 var relayPort = () => (server2 ??= Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, fetch: answer2 })).port;
 function dropRelayed(sessionID, holder) {
@@ -7149,6 +7180,13 @@ function dropRelayed(sessionID, holder) {
     if (at.startsWith(sessionID + `
 `))
       program.stop();
+  for (const [connection, standIn] of standIns)
+    if (standIn.sessionID === sessionID)
+      standIns.delete(connection);
+  for (const at of refusals.keys())
+    if (at.startsWith(sessionID + `
+`))
+      refusals.delete(at);
 }
 async function answer2(request) {
   const key = /^Bearer (\S+)$/.exec(request.headers.get("authorization") ?? "")?.[1];
@@ -7215,11 +7253,82 @@ async function forward(request, url, headers, timeout, body, failed) {
 async function sendAll(program, body, timeout, connection, starts) {
   const messages = Array.isArray(body) ? body : [body];
   const answers = await Promise.all(messages.map((message) => program.send(message, timeout, connection)));
-  const replies = answers.filter((each) => each !== undefined);
-  const headers = starts ? { "mcp-session-id": connection } : undefined;
-  if (!replies.length)
+  return replies(body, answers, starts ? { "mcp-session-id": connection } : undefined);
+}
+function replies(body, answers, headers) {
+  const said = answers.filter((each) => each !== undefined);
+  if (!said.length)
     return new Response(null, { status: 202, headers });
-  return Response.json(Array.isArray(body) ? replies : replies[0], { headers });
+  return Response.json(Array.isArray(body) ? said : said[0], { headers });
+}
+var refused = (status) => status === 401 || status === 403;
+function whyNot(name, status) {
+  if (status === 401)
+    return `The ${name} server turned down its sign-in, so its tools aren't available for now. If the user asks for something from it, tell them to sign in to it again in Kuvo Code (Settings \u203A Integrations, or its key in Settings \u203A MCP Servers), and carry on with the rest`;
+  if (status === 403)
+    return `The ${name} server turned this down (HTTP 403): its sign-in or key may not be allowed to do it`;
+  return `The ${name} server couldn't be reached (${status === 502 ? "no answer" : `HTTP ${status}`}), so its tools aren't available for now`;
+}
+var jsonOf = (text) => {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return;
+  }
+};
+function standInFor(sessionID, name, setup, why, messages, many) {
+  const connection = `unavailable-${randomBytes4(12).toString("hex")}`;
+  standIns.set(connection, { sessionID, name, setup, why });
+  return standInAnswers(messages, why, many, { "mcp-session-id": connection });
+}
+function reached(sessionID, name) {
+  for (const [connection, standIn] of standIns)
+    if (standIn.sessionID === sessionID && standIn.name === name)
+      standIns.delete(connection);
+}
+async function answerStandIn(request, connection, why) {
+  if (request.method === "DELETE") {
+    standIns.delete(connection);
+    return new Response(null, { status: 200 });
+  }
+  if (request.method !== "POST")
+    return new Response(null, { status: 405, headers: { Allow: "POST, DELETE" } });
+  const body = jsonOf(await request.text());
+  if (body === undefined)
+    return Response.json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } }, { status: 400 });
+  return standInAnswers(Array.isArray(body) ? body : [body], why, Array.isArray(body), undefined);
+}
+function standInAnswers(messages, reason, many, headers) {
+  const why = reason.replace(/[.\s]+$/, "");
+  const answers = messages.map((message) => {
+    if (message?.id === undefined || message.id === null)
+      return;
+    const result = (value) => ({ jsonrpc: "2.0", id: message.id, result: value });
+    switch (message.method) {
+      case "initialize":
+        return result({
+          protocolVersion: typeof message.params?.protocolVersion === "string" ? message.params.protocolVersion : "2025-06-18",
+          capabilities: { tools: {} },
+          serverInfo: { name: "unavailable", version: "1" },
+          instructions: `${why}.`
+        });
+      case "ping":
+        return result({});
+      case "tools/list":
+        return result({ tools: [] });
+      case "resources/list":
+        return result({ resources: [] });
+      case "resources/templates/list":
+        return result({ resourceTemplates: [] });
+      case "prompts/list":
+        return result({ prompts: [] });
+      case "tools/call":
+        return result({ content: [{ type: "text", text: `${why}.` }], isError: true });
+      default:
+        return failure2(message.id, `${why}.`);
+    }
+  });
+  return replies(many ? messages : messages[0], answers, headers);
 }
 async function answerServer(request, sessionID, name) {
   const session = served.get(sessionID);
@@ -7227,16 +7336,56 @@ async function answerServer(request, sessionID, name) {
   if (!session || !entry)
     return new Response("No such server here.", { status: 404 });
   const failed = `The ${name} server didn't answer.`;
+  const connection = request.headers.get("mcp-session-id") ?? "";
+  const standIn = standIns.get(connection);
+  if (standIn?.sessionID === sessionID && standIn.name === name)
+    return answerStandIn(request, connection, standIn.why);
   if (entry.kind === "remote") {
     const body = request.method === "POST" ? await request.text() : undefined;
-    const current = entry.expires !== undefined && entry.expires < Date.now() + 60000 ? await renewed(sessionID, session, name) ?? entry : entry;
-    const answer = await forward(request, current.url, current.headers, current.timeout, body, failed);
-    if (answer.status !== 401 || current.expires === undefined)
-      return answer;
-    const again = await renewed(sessionID, session, name);
-    return again ? forward(request, again.url, again.headers, again.timeout, body, failed) : answer;
+    let current = entry.expires !== undefined && entry.expires < Date.now() + 60000 ? await renewed(sessionID, session, name) ?? entry : entry;
+    let answer = await forward(request, current.url, current.headers, current.timeout, body, failed);
+    const at = `${sessionID}
+${name}`;
+    const retried = async () => {
+      const again = await renewed(sessionID, session, name);
+      if (!again || setupOf(again) === setupOf(current))
+        return;
+      await answer.body?.cancel();
+      current = again;
+      answer = await forward(request, again.url, again.headers, again.timeout, body, failed);
+    };
+    if (answer.status === 401 && current.expires !== undefined)
+      await retried();
+    if (answer.status === 401) {
+      const setup = setupOf(current);
+      let asked = refusals.get(at);
+      if (asked?.setup !== setup)
+        refusals.set(at, asked = { setup, asked: reconnectServer(session.directory, name) });
+      await asked.asked;
+      await retried();
+      if (answer.status === 401)
+        refusals.set(at, { setup: setupOf(current), asked: asked.asked });
+    }
+    const sent = body === undefined ? undefined : jsonOf(body);
+    const messages = sent === undefined ? [] : Array.isArray(sent) ? sent : [sent];
+    const starts = messages.some((message) => message?.method === "initialize");
+    if (starts && answer.ok)
+      reached(sessionID, name);
+    const why = whyNot(name, answer.status);
+    if (starts && !answer.ok) {
+      await answer.body?.cancel();
+      return standInFor(sessionID, name, setupOf(current), why, messages, Array.isArray(sent));
+    }
+    if (messages.length && (refused(answer.status) || answer.status >= 500)) {
+      await answer.body?.cancel();
+      return standInAnswers(messages, why, Array.isArray(sent), undefined);
+    }
+    if (request.method === "GET" && refused(answer.status)) {
+      await answer.body?.cancel();
+      return new Response(null, { status: 405, headers: { Allow: "POST, DELETE" } });
+    }
+    return answer;
   }
-  const connection = request.headers.get("mcp-session-id") ?? "";
   const at = `${sessionID}
 ${name}
 ${connection}`;
@@ -7253,17 +7402,25 @@ ${connection}`;
     return Response.json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } }, { status: 400 });
   }
   const messages = Array.isArray(body) ? body : [body];
-  if (messages.some((message) => message?.method === "initialize")) {
+  const initialize = messages.find((message) => message?.method === "initialize");
+  if (initialize) {
     const started = startServer(entry, sessionID, session.directory);
     if (typeof started === "string")
-      return Response.json(failure2(messages.find((message) => message?.method === "initialize").id, started));
+      return standInFor(sessionID, name, setupOf(entry), started, messages, Array.isArray(body));
     const fresh = randomBytes4(12).toString("hex");
     const key = `${sessionID}
 ${name}
 ${fresh}`;
     running.set(key, started);
     started.whenStopped(() => running.get(key) === started && running.delete(key));
-    return sendAll(started, body, entry.timeout, fresh, true);
+    const answers = await Promise.all(messages.map((message) => started.send(message, entry.timeout, fresh)));
+    const answered = answers[messages.indexOf(initialize)];
+    if (!answered || answered.error) {
+      started.stop();
+      return standInFor(sessionID, name, setupOf(entry), `The ${name} server couldn't start${answered?.error?.message ? `: ${answered.error.message}` : ""}`, messages, Array.isArray(body));
+    }
+    reached(sessionID, name);
+    return replies(body, answers, { "mcp-session-id": fresh });
   }
   const program = running.get(at);
   if (!program || program.stopped)
@@ -7515,7 +7672,7 @@ class AcpThread {
     const mode = { approvesAll: hooks.approvesAll(), plan: input.plan, skills, ...subagents ? { subagents } : {}, ...this.flavor.whole && fenceRules() ? { whole: true } : {} };
     const fence = this.flavor.whole && fenceRules() ? fenceKey() + JSON.stringify(allowedFolders(this.session.location.directory)) + fullAccessMark(this.session.id) : "";
     const computer = await computerServers(this.session.location.directory);
-    const key = JSON.stringify({ ...mode, program: this.flavor.program?.() ?? 0, tools: kuvoTools(this.session.id)?.key, fence, servers: computer.key });
+    const key = JSON.stringify({ ...mode, program: this.flavor.program?.() ?? 0, tools: kuvoTools(this.session.id)?.key, fence, servers: serversKey(this.session.id, computer) });
     this.computer = computer;
     if (this.rpc && !this.rpc.isClosed)
       relayedServers(this.session.id, this, this.session.location.directory, computer);
@@ -12009,6 +12166,7 @@ class ClaudeThread {
     }
     const computer = await computerServers(this.session.location.directory);
     const servers = relayedServers(this.session.id, this, this.session.location.directory, computer);
+    const serversNow = serversKey(this.session.id, computer);
     const opening = !this.query;
     if (opening) {
       this.open(sdk, modelID, effort, input.plan, append, hooks, skills, subagents);
@@ -12021,14 +12179,14 @@ class ClaudeThread {
         await this.query.setPermissionMode(input.plan ? "plan" : "default").catch(() => {});
       this.opened = { model: modelID, effort, plan: input.plan, append, program: this.agent.program, tools: tools?.key, skills, fence, subagents: subagentsKey };
     }
-    if (this.query && (opening || this.servers !== computer.key)) {
+    if (this.query && (opening || this.servers !== serversNow)) {
       const entries = {};
       const tools = fenceOn() ? relayedTools(this.session.id, this) : kuvoTools(this.session.id);
       if (tools)
         entries[tools.name] = tools.kind === "http" ? { type: "http", url: tools.url, headers: tools.headers, timeout: tools.timeout } : { type: "stdio", command: tools.command, args: tools.args, env: tools.env, timeout: tools.timeout };
       for (const server of servers)
         entries[server.name] = { type: "http", url: server.url, headers: server.headers, timeout: server.timeout };
-      this.servers = computer.key;
+      this.servers = serversNow;
       await this.query.setMcpServers(entries).catch(() => {});
     }
     if (hooks.signal.aborted)
@@ -14342,11 +14500,12 @@ class CodexThread {
     const skillsKey = JSON.stringify([skills, turnedOffHere]);
     const computer = await computerServers(directory);
     const servers = relayedServers(this.session.id, this.agent, directory, computer);
+    const serversNow = serversKey(this.session.id, computer);
     const subagents = codexSubagents(await subagentsFor(directory));
-    if (this.nativeID && this.loaded && instructions === this.instructions && tools?.key === this.toolsKey && skillsKey === this.skillsKey && computer.key === this.serversKey && subagents.key === this.subagentsKey)
+    if (this.nativeID && this.loaded && instructions === this.instructions && tools?.key === this.toolsKey && skillsKey === this.skillsKey && serversNow === this.serversKey && subagents.key === this.subagentsKey)
       return rpc;
     this.toolsKey = tools?.key;
-    this.serversKey = computer.key;
+    this.serversKey = serversNow;
     this.skillsKey = skillsKey;
     this.subagentsKey = subagents.key;
     this.instructions = instructions;
@@ -16243,7 +16402,7 @@ class CursorThread {
   async ensureAgent(sdk, options, hooks) {
     const approvesAll = hooks.approvesAll(false);
     const skills = options.local?.dirs?.[0];
-    const tools = JSON.stringify([kuvoTools(this.session.id)?.key, Object.keys(options.mcpServers ?? {}).sort(), options.agents ?? {}]);
+    const tools = JSON.stringify([kuvoTools(this.session.id)?.key, Object.entries(options.mcpServers ?? {}).map(([name, server]) => [name, server?.url ?? ""]).sort(), options.agents ?? {}]);
     const fence = fenceRules() ? fenceKey() + JSON.stringify(allowedFolders(this.session.location.directory)) + fullAccessMark(this.session.id) : "";
     if (this.startedApproving !== approvesAll || this.startedSkills !== skills || this.startedTools !== tools || this.startedFence !== fence || this.worker?.isClosed)
       this.stop();
@@ -27446,4 +27605,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 0222034d5ab42d1e9d6803f781f9ddb0130575cad8603f9f0cec7c9c31bf6e03
+// Built from Packages/Box/src/agents 11df63c233af190dfadd6f21996bdbd786fd1da365d69068a8b3df6bc52c4b94

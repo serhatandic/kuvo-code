@@ -46,7 +46,8 @@ process.stdin.on("data", (chunk) => {
     buffer = buffer.slice(at + 1)
     if (message.id === "ask-1" && !message.method) { asked(message.error ? "error:" + message.error.code : "answered"); continue }
     if (message.id === undefined || message.method === undefined) continue
-    if (message.method === "initialize") send({ id: message.id, result: { protocolVersion: message.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "files", version: "1" } } })
+    if (message.method === "initialize" && process.env.REFUSES_TO_START) send({ id: message.id, error: { code: -32603, message: "Its settings are wrong." } })
+    else if (message.method === "initialize") send({ id: message.id, result: { protocolVersion: message.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "files", version: "1" } } })
     else if (message.method === "tools/call" && message.params.name === "asks") {
       // Its own requests to the agent, one numbered as the call it's in is (the relay numbers a
       // connection's 1, 2…), which isn't that call's answer.
@@ -92,6 +93,8 @@ process.stdin.on("data", (chunk) => {
     refusing: false as false | "start" | "calls",
     /** You signed in to the tracker again (Settings › Integrations): the engine has another sign-in. */
     signedInAgain: false,
+    /** The notes server is down: it answers every request with a server error. */
+    notesDown: false,
     /** The command server's command, as its settings name it. */
     filesCommand: SERVER_COMMAND,
     async serve() {
@@ -103,6 +106,7 @@ process.stdin.on("data", (chunk) => {
           const message: any = await request.json().catch(() => ({}))
           // Your sign-in, once it ran out, it turns down.
           if (fake.expiring && request.headers.get("authorization") === `Bearer ${KEYS.tracker}`) return new Response("Expired.", { status: 401 })
+          if (fake.notesDown && new URL(request.url).pathname === "/notes") return new Response("Down.", { status: 500 })
           // One taken back, every sign-in but the one you made again.
           const turnedDown = fake.refusing === "start" || (fake.refusing === "calls" && message.method === "tools/call")
           if (turnedDown && new URL(request.url).pathname === "/tracker" && request.headers.get("authorization") !== `Bearer ${KEYS.again}`) {

@@ -1201,6 +1201,23 @@ describe.skipIf(!canFence)("The computer's MCP servers, for an ACP agent in the 
     expect(servers.connects).toBeGreaterThan(0)
   })
 
+  test("however many calls a server turns down, the engine is asked to connect it again only once for each sign-in", async () => {
+    servers.refusing = "calls"
+    const id = await run(startingAll({ first: ["server", "tracker"], second: ["server", "tracker"], third: ["server", "tracker"] }))
+    expect(words(id)).toMatch(/^first=The tracker server turned down its sign-in.* second=The tracker server turned down its sign-in.* third=The tracker server/)
+    // (Once: for the conversation's folder and the engine's own.)
+    expect(servers.connects).toBe(2)
+  })
+
+  test("one that can't be reached as the agent starts, or a command's server that turns down starting, doesn't stop the turn: the agent goes on with the rest", async () => {
+    servers.notesDown = true
+    servers.filesEnvironment = { REFUSES_TO_START: "1" }
+    forgetServers()
+    const id = await run(startingAll({ notes: ["server", "notes"], files: ["server", "files"], tracker: ["server", "tracker"] }))
+    expect(ended(id)).toMatchObject({ type: "idle", outcome: "succeeded" })
+    expect(words(id)).toBe(`notes=The notes server couldn't be reached (HTTP 500), so its tools aren't available for now. files=The files server couldn't start: Its settings are wrong. tracker=auth:Bearer ${KEYS.tracker},key:none,at:/tracker`)
+  })
+
   test("a command's server that can't start (its program isn't installed) doesn't stop the turn: the agent goes on with the rest, told why", async () => {
     servers.filesCommand = "kuvo-test-not-installed"
     forgetServers()
