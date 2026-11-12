@@ -244,8 +244,8 @@ import ClientSessions
         #expect(WorkQueue.sessionToOpen(idle)?.session == "ses_worker", "linked, not at work: it still opens")
         #expect(WorkQueue.sessionToOpen(own)?.session == "ses_child")
         let now = Date(timeIntervalSince1970: 3)
-        #expect(WorkQueue.spokenRow(atWork, in: Self.sessionView, now: now) == "Work item 551, All includes Done, in progress, Box tests pass, Kuvo Foreman, updated just now")
-        #expect(WorkQueue.spokenRow(idle, in: Self.sessionView, now: now) == "Work item 552, Rows and page, Kuvo Foreman, updated just now")
+        #expect(WorkQueue.spokenRow(atWork, in: Self.sessionView, now: now) == "All includes Done, Work item 551, in progress, Box tests pass, Kuvo Foreman, updated just now", "the title first")
+        #expect(WorkQueue.spokenRow(idle, in: Self.sessionView, now: now) == "Rows and page, Work item 552, Kuvo Foreman, updated just now")
     }
 
     @Test func aRowsTimeIsShort() {

@@ -43,7 +43,7 @@ export const answerSandboxAsk = book.answer;
 export const SANDBOX_TOOLS = [
   {
     name: "sandbox_ask",
-    description: "Ask the user to run a command outside the sandbox, when the sandbox stopped one the task needs (\"Operation not permitted\" or \"Permission denied\" outside the folders you may write, or a refused connection or app). They allow it once or say no, and where it was stopped writing in one folder, can let your commands write there from now on. Allowed, it runs outside the sandbox in your project's folder, and you get its output. Waits for their answer. Never use it to get around a rule you were told, nor for a command you haven't tried in the sandbox.",
+    description: "Ask the user to run a command outside the sandbox, when the sandbox stopped one the task needs (\"Operation not permitted\" or \"Permission denied\" outside the folders you may write, or a refused connection or app). They allow it once or say no, and where it was stopped writing in one folder, can let your commands write there from now on. Allowed, it runs in your project's folder, and you get its output. Waits for their answer. Never use it to get around a rule you were told, nor for a command you haven't tried in the sandbox.",
     inputSchema: {
       type: "object",
       properties: {
