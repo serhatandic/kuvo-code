@@ -188,7 +188,7 @@ final class AppModel {
     }
     /// Settings › Accounts of `machine` (nil: this Mac): each computer signs in on its own.
     func openAccounts(on machine: String?) {
-        openSettings(.accounts, on: SidebarBox(machine: machine))
+        openSettings(.accounts, on: machine.map(SidebarBox.machine) ?? thisMacsBox)
     }
 
     /// A conversation carried on with the coding agents (`Workspace.moveToAgents`): its panel goes
@@ -200,15 +200,15 @@ final class AppModel {
 
     /// Settings › Custom Auto of `machine` (nil: this Mac): each has its own lists.
     func openAuto(on machine: String?) {
-        openSettings(.auto, on: SidebarBox(machine: machine))
+        openSettings(.auto, on: machine.map(SidebarBox.machine) ?? thisMacsBox)
     }
     /// Settings' tabs: the page, and the sites you're signing in to.
     let settingsTabs = SettingsTabs()
 
     /// Shows Settings in the main window, on `page` of `box` if one is given (otherwise the last
     /// one open).
-    func openSettings(_ page: SettingsPage? = nil, on box: SidebarBox = .mac) {
-        if let page { settingsTabs.show(page, on: box) }
+    func openSettings(_ page: SettingsPage? = nil, on box: SidebarBox? = nil) {
+        if let page { settingsTabs.show(page, on: box ?? thisMacsBox) }
         if page == .accounts { Analytics.shared.onboardingStep("accounts") }
         #if DEBUG
         let background = ProcessInfo.processInfo.environment["KUVO_DEMO_BACKGROUND"] != nil
@@ -352,7 +352,7 @@ final class AppModel {
         // Your personalities, one library on every computer, kept by this Mac's box. However one
         // changed there (here, from a phone, taken from a machine's copy), the machines take it,
         // and this Mac's bots with it are told what it is now, by its box.
-        Personalities.shared.box = { [weak self] in self?.box(BoxClient.mac) }
+        Personalities.shared.box = { [weak self] in self?.box(BoxClient.thisMac) }
         Personalities.shared.onChange = { [weak self] _ in self?.personalitiesChanged() }
         workspace.machineAPI = { [weak self] machine in self?.machines.engine(machine)?.api }
         workspace.machineAgents = { [weak self] machine in self?.machines.engine(machine)?.agents }
@@ -388,7 +388,7 @@ final class AppModel {
         if chatsWaitForStores {
             chatsWaitForStores = false
             Task { [moves, boxGroups] in
-                await moves.reload(BoxClient.mac)
+                await moves.reload(BoxClient.thisMac)
                 await boxGroups.connected(nil)
             }
         }
@@ -417,7 +417,7 @@ final class AppModel {
         // Agents writing to each other, and what an earlier Kuvo Code kept of their letters, to
         // this Mac's box before its link meets your other computers (it starts before the machines).
         AgentMail.shared.app = self
-        AgentMail.shared.box = { [weak self] in self?.box(BoxClient.mac) }
+        AgentMail.shared.box = { [weak self] in self?.box(BoxClient.thisMac) }
         // COMPAT(beta.1 mac-letters): letters an earlier Kuvo Code kept, handed to the box. Goes 3 months after 0.8.0.
         phoneLink.handOver = { await AgentMail.shared.handOver(to: $0) }
         // This Mac's link is its box's: the app tells it what's wanted, and answers what it asks.
@@ -710,7 +710,14 @@ final class AppModel {
 
     /// The box already on this Mac that the app attached to in place as it opened (`Here`), rather
     /// than starting one of its own: a Mac you set up as a machine, your Mac mini say.
-    private(set) var attached: Here?
+    private(set) var attached: Here? {
+        // What has no computer of its own is on this box from now on (`BoxClient.thisMac`), and
+        // Settings' pages on this Mac go with it.
+        didSet {
+            BoxClient.thisMac = thisMacsBox.id
+            settingsTabs.thisMac = thisMacsBox
+        }
+    }
     /// Whether the app attaches to a box already on this Mac (#183): on with the screen that says
     /// so, which the window shows instead of starting (with a state of its own, not `.starting`,
     /// which it stays in meanwhile); the tests' until then.

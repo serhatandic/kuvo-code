@@ -108,5 +108,5 @@ extension AppModel {
 
 extension EnvironmentValues {
     /// The computer a page of Settings is about: this Mac, or a machine, with its own settings.
-    @Entry var settingsBox: SidebarBox = .mac
+    @Entry var settingsBox: SidebarBox = .thisMac
 }
