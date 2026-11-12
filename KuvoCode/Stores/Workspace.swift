@@ -852,7 +852,7 @@ final class Workspace {
             throw BoxRefusal(status: 503, message: BoxClient.isThisMac(box) ? "Kuvo Code’s background service on this Mac isn’t answering. Try again in a moment." : "\(box) isn’t answering. Try again in a moment.")
         }
         // Its worktrees removed before its box kept them, whose sessions this Mac still shows under it.
-        let removed = removedWorktrees.filter { $0.value == directory && Self.box(of: $0.key) == box }.keys.map(Self.onBox).sorted()
+        let removed = removedWorktrees.filter { $0.value == directory && Self.isOn($0.key, box) }.keys.map(Self.onBox).sorted()
         let body = try JSONSerialization.data(withJSONObject: ["folders": removed])
         let (status, data) = try await client.send("DELETE", "kuvo/projects?directory=" + Self.queryValue(Self.onBox(directory)), body: body)
         switch status {
@@ -1205,15 +1205,21 @@ final class Workspace {
     /// gets its title. This Mac shows them
     /// from then on. Ones this Mac kept for it before the box kept them are handed over, and ones
     /// it no longer has (removed from a phone, say) go here too. Nil when it couldn't be asked:
-    /// what this Mac had stays. `handingOver` false: only read, with nothing handed over (a box read
-    /// again now and then, which had what this Mac kept handed to it as it connected).
-    @discardableResult func takeWorktrees(from box: String, details: Bool = false, handingOver: Bool = true) async -> [String: BoxWorktree]? {
+    /// what this Mac had stays.
+    @discardableResult func takeWorktrees(from box: String, details: Bool = false) async -> [String: BoxWorktree]? {
         struct Listed: Decodable { var worktrees: [BoxWorktree]; var restorable: [RestorableWorktree]? }
+        // The box attached in place answers once a read, and isn't told of what changes here: an
+        // answer read before a change here since (a worktree made, removed or restored) would undo
+        // it, so it's left for the next read. What this Mac kept there is handed over until it's
+        // taken once; after that, one it doesn't list was removed there.
+        let attachedHere = box == SSHConnection.thisMac
+        let handsOver = !(attachedHere && worktreesHandedOver.contains(box))
+        let before = attachedHere ? worktrees.filter { Self.isOn($0.value.root, box) } : [:]
+        let changedHere = { attachedHere && self.worktrees.filter { Self.isOn($0.value.root, box) } != before }
         guard let listed: Listed = try? await onBox(box, "GET", details ? "kuvo/worktrees" : "kuvo/worktrees?records=1", nil) else { return nil }
-        if box != BoxClient.mac || !followingWorktrees { takeRestorable(listed.restorable ?? [], from: box) }
+        if box != BoxClient.mac || !followingWorktrees, !changedHere() { takeRestorable(listed.restorable ?? [], from: box) }
         var records = listed.worktrees
-        let onIt = { (folder: String) in Self.box(of: folder) == box }
-        for (folder, tree) in worktrees where handingOver && onIt(tree.root) {
+        for (folder, tree) in worktrees where handsOver && Self.isOn(tree.root, box) {
             let project = Self.onBox(tree.project), root = Self.onBox(tree.root), path = Self.onBox(folder)
             guard !records.contains(where: { $0.root == root }) else { continue }
             var record: [String: Any] = ["project": project, "root": root, "folder": path, "branch": tree.branch]
@@ -1232,10 +1238,21 @@ final class Workspace {
                 return nil
             }
         }
+        if attachedHere, handsOver { worktreesHandedOver.insert(box) }
         // While this Mac follows its own, only what it's told changes them: an answer read before
         // a change since would undo it.
-        if box != BoxClient.mac || !followingWorktrees { take(records, from: box) }
+        if box != BoxClient.mac || !followingWorktrees, !changedHere() { take(records, from: box) }
         return Dictionary(records.map { (Self.here($0.root, on: box), $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// The boxes attached in place that took what this Mac kept for them (`takeWorktrees`).
+    @ObservationIgnored private var worktreesHandedOver: Set<String> = []
+
+    /// Whether `folder` is on `box`, as it's named here. Attached in place, the box here is this
+    /// Mac's, but what the app's own box kept (named as this Mac's own folders) isn't that box's: it's
+    /// never handed to it, nor taken for gone when it doesn't list it.
+    private static func isOn(_ folder: String, _ box: String) -> Bool {
+        box == BoxClient.mac ? Self.box(of: folder) == box : RemoteFolder.machine(of: folder) == box
     }
 
     /// `records` as `box`'s worktrees, here, in place of what was known of them. One that's gone
@@ -1243,10 +1260,10 @@ final class Workspace {
     /// back is still its project's.
     private func take(_ records: [BoxWorktree], from box: String) {
         let roots = Set(records.map { Self.here($0.root, on: box) })
-        let gone = worktrees.filter { Self.box(of: $0.value.root) == box && !roots.contains($0.value.root) }
+        let gone = worktrees.filter { Self.isOn($0.value.root, box) && !roots.contains($0.value.root) }
         for (folder, tree) in gone where sessions.contains(where: { $0.location.directory == folder }) { removedWorktrees[folder] = tree.project }
         if !gone.isEmpty { UserDefaults.standard.set(removedWorktrees, forKey: "removedWorktrees") }
-        var mine = worktrees.filter { Self.box(of: $0.value.root) != box }
+        var mine = worktrees.filter { !Self.isOn($0.value.root, box) }
         for record in records {
             let tree = Worktree(project: Self.here(record.project, on: box), root: Self.here(record.root, on: box), branch: record.branch, base: record.base)
             mine[Self.here(record.folder ?? record.root, on: box)] = tree
@@ -1261,7 +1278,7 @@ final class Workspace {
 
     /// `box`'s worktrees that can come back, here, in place of what was known of them.
     private func takeRestorable(_ entries: [RestorableWorktree], from box: String) {
-        var mine = restorableWorktrees.filter { Self.box(of: $0.value.root) != box }
+        var mine = restorableWorktrees.filter { !Self.isOn($0.value.root, box) }
         for entry in entries {
             var here = entry
             (here.project, here.root, here.folder) = (Self.here(entry.project, on: box), Self.here(entry.root, on: box), Self.here(entry.folder, on: box))
@@ -1317,11 +1334,12 @@ final class Workspace {
     /// read, is read again now and then instead, as slowly as a machine's things are.
     func followWorktrees(on box: String = BoxClient.mac) async {
         guard BoxClient.streams(box) else {
-            // (Read as it connected, with what this Mac kept handed over then: only read from now on.)
+            // (Read as it connected, with what this Mac kept handed over then, or now, if it couldn't
+            // be then: only read from then on.)
             while !Task.isCancelled {
                 try? await Task.sleep(for: BoxClient.readAgainAfter)
                 guard !Task.isCancelled else { return }
-                await takeWorktrees(from: box, handingOver: false)
+                await takeWorktrees(from: box)
             }
             return
         }

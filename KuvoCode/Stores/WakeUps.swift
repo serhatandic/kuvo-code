@@ -158,9 +158,14 @@ final class WakeUps {
     }
 
     /// Whether a conversation (by its key) that `box` lists is its to say: on the app's own, one
-    /// that lives here (`livesHere`); any other (the box attached in place) lists only its own.
+    /// that lives here (`livesHere`); on any other (the box attached in place), likewise, one whose
+    /// bot or session is still on that box. One moved to a machine is that machine's to say.
     private func lives(_ key: String, on box: String) -> Bool {
-        box != BoxClient.mac || livesHere(key)
+        guard box != BoxClient.mac else { return livesHere(key) }
+        guard let app else { return false }
+        if let bot = app.bots.bot(key) { return bot.machine == box }
+        guard let session = app.workspace.session(key) else { return true }
+        return RemoteFolder.machine(of: session.location.directory) == box
     }
 
     // MARK: Changing them

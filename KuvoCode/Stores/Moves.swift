@@ -366,7 +366,9 @@ final class Moves {
         await reload(box)
         await ended(answer.move, on: box)
         let events = ["bot": "bot_moved", "chat": "chat_moved_computer", "group": "group_moved"]
-        if let event = events[kind] { Analytics.shared.track(event, ["to": place.kind == "mac" ? "mac" : "machine"]) }
+        // (The box attached in place, which its box calls a machine, is this Mac.)
+        let toThisMac = place.kind == "mac" || place.key == app?.attached?.box?.key
+        if let event = events[kind] { Analytics.shared.track(event, ["to": toThisMac ? "mac" : "machine"]) }
     }
 
     private func placeName(_ machine: String?) -> String {
