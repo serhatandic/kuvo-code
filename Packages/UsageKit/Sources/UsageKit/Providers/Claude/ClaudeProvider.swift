@@ -327,11 +327,20 @@ final class ClaudeProvider: ProviderRuntime {
         // Local spend tiles, scanned natively from Claude Code's session logs and priced through the
         // shared pricing store, merged with Claude usage that happened inside pi (attributed back here).
         // Both scans run on their scanner actors, off the main actor, and do not require an OAuth login.
-        let pricing = await pricing()
-        let nativeScan = await logUsageScanner.scan(now: now(), pricing: pricing)
-        let piScan = allowsUnattributedPiUsage
-            ? await PiUsageScanner.shared.scan(cardID: provider.id, now: now(), pricing: pricing)
-            : nil
+        // The host's boxes state Claude's history themselves (`HostHistory`, fork addition): every
+        // account Kuvo Code runs, on every computer of yours; nothing is read here then.
+        let nativeScan: LogUsageScan?
+        let piScan: LogUsageScan?
+        if let hosted = HostHistory.shared.scan(for: provider.id) {
+            nativeScan = hosted
+            piScan = nil
+        } else {
+            let pricing = await pricing()
+            nativeScan = await logUsageScanner.scan(now: now(), pricing: pricing)
+            piScan = allowsUnattributedPiUsage
+                ? await PiUsageScanner.shared.scan(cardID: provider.id, now: now(), pricing: pricing)
+                : nil
+        }
         var usageHistory: ProviderUsageHistory?
         // Cancellation can land between the native and pi scans. Treat the pair as one unit so a
         // partial result cannot replace the last-good combined history in WidgetDataStore.
