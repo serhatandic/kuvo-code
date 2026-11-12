@@ -62,6 +62,7 @@ const WAYS: Record<string, Way> = {
   "its repository's HEAD taken away first": { tries: `rm -f "$G/HEAD"`, then: `printf '[core]\\n\\tfsmonitor = %s\\n' "$FSMONITOR" >> "$G/config"; echo 'ref: refs/heads/main' > "$G/HEAD"` },
   "a submodule's repository made where it has none": { tries: `mkdir -p "$G/modules" && git clone -q --bare "$LIB" "$G/modules/lib" && git config --file "$G/modules/lib/config" core.bare false && printf '%s\\n' "$HOOK" > "$G/modules/lib/hooks/post-checkout" && chmod +x "$G/modules/lib/hooks/post-checkout" && printf '[submodule "lib"]\\n\\tpath = lib\\n\\turl = %s\\n' "$LIB" > .gitmodules && git update-index --add --cacheinfo "160000,$(git -C "$LIB" rev-parse HEAD),lib" && git add .gitmodules && git commit -q -m lib`, after: "git -c protocol.file.allow=always submodule update --init" },
   "its own settings for worktrees, before they're on": { tries: `printf '[core]\\n\\tfsmonitor = %s\\n' "$FSMONITOR" > "$G/config.worktree"`, after: "git config extensions.worktreeConfig true" },
+  "a submodule's folder led to another repository": { submodule: true, tries: `cp -R "$G/modules/lib" evil && git config --file evil/config --unset core.worktree; git config --file evil/config core.fsmonitor "$FSMONITOR" && printf 'gitdir: %s\\n' "$PWD/evil" > lib/.git` },
   "a submodule's repository traded": { submodule: true, tries: `cp -R "$G/modules/lib" evil && git config --file evil/config core.fsmonitor "$FSMONITOR" && mv "$G/modules/lib" "$G/modules/lib-old" && mv evil "$G/modules/lib"` },
 }
 
@@ -144,9 +145,10 @@ test.skipIf(!canFence)("a command plants nothing git runs outside the sandbox in
 })
 
 // What keeps those leaves git working in the sandbox as ever: committing, branching, stashing and
-// tagging in its folder or its worktree, and committing and fetching in a submodule. On Linux the
-// repository gets what keeps names git would read from being made (a `commondir` naming itself, a
-// `hooks` folder where it has none), which git outside reads as before.
+// tagging in its folder or its worktree, committing and fetching in a submodule, and tidying every
+// worktree's reflogs from the main checkout. On Linux the repository gets what keeps names git would
+// read from being made (a `commondir` naming itself, empty `hooks`, `modules`, `worktrees` and
+// `config.worktree` where it has none), which git outside reads as before.
 test.skipIf(!canFence)("git works in the sandbox as ever in a repository kept so", () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sandbox-git-works-")))
   try {
@@ -167,9 +169,13 @@ test.skipIf(!canFence)("git works in the sandbox as ever in a repository kept so
     const tree = repository("tree", { worktree: true })
     const inTree = run(tree.work, tree.git, "set -e; echo wt >> README.md && git commit -q -am in-tree && git log --oneline -1 --format=%s")
     expect([inTree.code, inTree.out]).toEqual([0, "in-tree"])
+    // From the main checkout, with a worktree beside it, git tidies every worktree's reflogs.
+    const tidied = run(tree.app, tree.git, "set -e; git reflog expire --all --expire=now && git gc -q --prune=now && echo tidied")
+    expect([tidied.code, tidied.out, tidied.said]).toEqual([0, "tidied", "tidied"])
+    expect(existsSync(join(tree.git, "gc.log"))).toBe(false)
     if (process.platform === "linux") {
       for (const gitDir of [main.git, join(main.git, "modules", "lib"), tree.git]) {
-        expect(readFileSync(join(gitDir, "commondir"), "utf8")).toBe(".\n")
+        expect(readFileSync(join(gitDir, "commondir"), "utf8")).toBe("./\n")
         for (const folder of ["hooks", "modules", "worktrees"]) expect(statSync(join(gitDir, folder)).isDirectory()).toBe(true)
         expect(readFileSync(join(gitDir, "config.worktree"), "utf8")).toBe("")
       }
@@ -192,8 +198,9 @@ test.skipIf(!canFence || process.platform !== "linux")("on Linux, a repository w
   const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sandbox-git-unkept-")))
   try {
     const { repository, run } = fenced(root)
+    // A hooks folder linked to one kept in the project: where it leads, read-only.
     const linked = repository("linked", { before: "mv .git/hooks ../hooks && ln -s ../../hooks .git/hooks" })
-    expect(run(linked.work, linked.git, "echo ran")).toEqual({ code: 126, out: "", said: `This command can't run in the sandbox here: ${linked.git}/hooks is a link, which it can't keep as it is. Ask the user.` })
+    expect(run(linked.work, linked.git, "(echo hook > .git/hooks/pre-commit) 2>/dev/null && echo wrote || echo kept")).toEqual({ code: 0, out: "kept", said: "kept" })
     const led = repository("led", { before: "cp -R .git ../elsewhere && echo ../../elsewhere > .git/commondir" })
     expect(run(led.work, led.git, "echo ran")).toEqual({ code: 126, out: "", said: `This command can't run in the sandbox here: ${led.git}/commondir leads git to another repository. Ask the user.` })
     // (git reads up to a NUL, the shell past it, which leads it home: neither is taken.)
@@ -203,11 +210,12 @@ test.skipIf(!canFence || process.platform !== "linux")("on Linux, a repository w
     expect(run(tree.work, tree.git, "echo ran").code).toBe(126)
     const fixed = repository("fixed", { before: "rm -rf .git/hooks && chmod a-w .git" })
     try {
-      const note = `Note: git's own files in ${fixed.git} aren't kept from commands by Kuvo Code's sandbox (it can't add a hooks folder or commondir there).`
+      const note = `Note: git can't change its own files in ${fixed.git} from Kuvo Code's sandbox here (the sandbox couldn't add a hooks folder or commondir there, so commands only read it).`
       const first = run(fixed.work, fixed.git, "echo ran")
       expect(first.code).toBe(0)
       expect(first.said.split("\n").sort()).toEqual([note, "ran"])
-      expect(run(fixed.work, fixed.git, "echo ran")).toEqual({ code: 0, out: "ran", said: "ran" })
+      // (Read-only whole, though a command could give itself the right to write it.)
+      expect(run(fixed.work, fixed.git, "chmod u+w .git 2>/dev/null; mkdir .git/hooks 2>/dev/null && echo wrote || echo kept")).toEqual({ code: 0, out: "kept", said: "kept" })
     } finally {
       chmodSync(fixed.git, 0o755)
     }

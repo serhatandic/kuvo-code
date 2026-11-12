@@ -6,7 +6,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 // Where git takes a repository's settings and hooks from: its `commondir`, when it has one. A
-// repository's own names none, or itself (`.`, which the sandbox gives one on Linux, #429), and a
+// repository's own names none, or itself (`./`, which the sandbox gives one on Linux, #429), and a
 // linked worktree's names the repository it's one of. One that leads anywhere else was put there to
 // have git run another's settings' programs and hooks, so the box runs no git there that could
 // start one: neither what it reads by itself nor what you ask for (Changes' Commit).
@@ -89,7 +89,7 @@ test("a folder whose broken .git has a bare repository made around it: the box r
 })
 
 test("a repository's own commondir naming itself, or none, and a worktree's naming its repository, are as ever", async () => {
-  const own = repository(".\n")
+  const own = repository("./\n")
   const none = repository()
   const tree = join(box, "tree")
   git(none, "worktree", "add", "-q", "-b", "try", tree)

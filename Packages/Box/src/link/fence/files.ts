@@ -555,8 +555,9 @@ export default {
 /** What the engine tells its agents while their commands run in the sandbox here (`run/fence/agents.md`,
  * among the instructions each box starts its engine with): what they can't do, and how builds and
  * tools that would fail in it run. `tmuxFits`: whether tmux's socket fits in commands' temporary
- * folders here, which a home folder's long path can keep from it. */
-export function agentsNote(platform: "darwin" | "linux", tmuxFits = true): string {
+ * folders here, which a home folder's long path can keep from it. `gitKept`: on Linux, whether its
+ * commands' namespace keeps git's own files (fence/landlock.ts, KEEP_GIT). */
+export function agentsNote(platform: "darwin" | "linux", tmuxFits = true, gitKept = false): string {
   const mac = platform === "darwin";
   return [
     "# Commands run in a sandbox here",
@@ -572,7 +573,7 @@ export function agentsNote(platform: "darwin" | "linux", tmuxFits = true): strin
     "- A tool that moves a new copy over a file (`sed -i`, some installers) can't change one outside the folders it writes freely: make the copy in the project or `$TMPDIR`, then `cp` it over.",
     "- Docker's socket, SSH's shared connections and terminals' and editors' servers aren't reachable.",
     ...(mac ? ["- It can't change git's hooks or config, or the settings opencode and the coding agents start with (`.opencode/`, `opencode.json`, `.claude/settings.json`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json` and the like, and their hooks' scripts), in any project, nor make, move or remove the folders that hold them (`.git`, `.claude`, `.codex`, `.cursor` and the like); writing other files in them is fine. If a task needs one changed, ask the user."]
-      : ["- In this conversation's git repository it can't change git's hooks or settings (`git config` fails), where its common folder is (`.git/commondir`), its worktrees' links or its submodules' repositories; git commits, branches and fetches as ever. If a task needs one changed, ask the user."]),
+      : gitKept ? ["- In this conversation's git repository it can't change git's hooks or settings, where its common folder is, its worktrees' links or its submodules' repositories: `git config`, `git worktree add`, `git submodule update --init` and `git sparse-checkout` fail, and `git checkout -b x origin/x` makes the branch without its upstream; git commits, branches and fetches as ever. If a task needs one of those, ask the user."] : []),
     ...(mac
       ? [
           "",

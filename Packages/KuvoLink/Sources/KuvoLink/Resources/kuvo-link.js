@@ -4120,47 +4120,71 @@ function landlockPolicy(policy) {
 var KEEP_GIT = String.raw`keep() {
   [ ! -L "$1" ] || fail "$1 is a link, which it can't keep as it is. Ask the user."
   [ -e "$1" ] || return 0
-  mount -c --bind "$1" "$1" 2>/dev/null && [ ! -L "$1" ] && { [ "$2" != ro ] || mount -c -o remount,bind,ro "$1" 2>/dev/null; } || fail "$1 can't be kept from it."
+  if [ "$2" = ro ]; then mount -c --bind -o ro "$1" "$1" 2>/dev/null; else mount -c --bind "$1" "$1" 2>/dev/null; fi && [ ! -L "$1" ] || fail "$1 can't be kept from it."
 }
 ro() { mount -c -o remount,bind,ro "$1" 2>/dev/null || fail "$1 can't be kept from it."; }
+# (Settings and hooks that are links, to a hooks folder kept in the project say: where they lead,
+# read-only. One that leads nowhere could be made there.)
+keep_led() {
+  local to
+  [ -L "$1" ] || { keep "$1" ro; return 0; }
+  to=$(readlink -f "$1" 2>/dev/null) && [ -e "$to" ] || fail "$1 is a link to nothing, which it can't keep. Ask the user."
+  mount --bind -o ro "$to" "$to" 2>/dev/null || fail "$to can't be kept from it."
+}
 # Where a commondir leads, as git reads it: one line, with no NUL or carriage return (which the shell
-# and git would read differently), from its folder.
-leads() { [ -f "$1/$2" ] && [ "$(wc -c <"$1/$2")" -le 4096 ] && [ "$(tr -d '\000\r' <"$1/$2" | wc -c)" -eq "$(wc -c <"$1/$2")" ] && [ "$(wc -l <"$1/$2")" -le 1 ] && (cd "$1" 2>/dev/null && cd -P "$(head -c 4096 "$2")" 2>/dev/null && pwd -P); }
+# and git would read differently), from its folder. (A worktree's own as git writes it, first: one
+# compare.)
+leads() {
+  [ -f "$1/$2" ] || return 0
+  if [ "$1" != "$3" ] && cmp -s "$1/$2" "$k_plain"; then (cd "$1/../.." 2>/dev/null && pwd -P); return 0; fi
+  [ "$(wc -c <"$1/$2")" -le 4096 ] && [ "$(tr -d '\000\r' <"$1/$2" | wc -c)" -eq "$(wc -c <"$1/$2")" ] && [ "$(wc -l <"$1/$2")" -le 1 ] && (cd "$1" 2>/dev/null && cd -P "$(head -c 4096 "$2")" 2>/dev/null && pwd -P)
+}
 # (A real folder's path as it is, no link on the way: what's compared with git's.)
 as_is() { [ -d "$1" ] && [ ! -L "$1" ] && [ "$(cd -P "$1" 2>/dev/null && pwd -P)" = "$1" ]; }
+# (Whether a folder has nothing in it.)
+empty() { for k_x in "$1"/* "$1"/.[!.]* "$1"/..?*; do [ -e "$k_x" ] || [ -L "$k_x" ] && return 1; done; return 0; }
 repo() {
   local r e f
   r=$1
   keep "$r"
-  for f in config config.worktree commondir gitdir hooks; do keep "$r/$f" ro; done
-  [ ! -e "$r/commondir" ] || [ "$(leads "$r" commondir)" = "$r" ] || fail "$r/commondir leads git to another repository. Ask the user."
-  if [ -e "$r/worktrees" ] || [ -L "$r/worktrees" ]; then
-    keep "$r/worktrees"
-    for e in "$r/worktrees"/* "$r/worktrees"/.[!.]* "$r/worktrees"/..?*; do
-      [ ! -L "$e" ] || keep "$e"
-      case "$k_own
+  # (One that still lacks what the launcher gives it: read-only whole.)
+  for f in commondir hooks config.worktree modules worktrees; do [ -e "$r/$f" ] || [ -L "$r/$f" ] || { ro "$r"; return 0; }; done
+  keep_led "$r/config"
+  keep_led "$r/hooks"
+  for f in config.worktree commondir gitdir; do keep "$r/$f" ro; done
+  [ "$(leads "$r" commondir "$r")" = "$r" ] || fail "$r/commondir leads git to another repository. Ask the user."
+  keep "$r/worktrees"
+  for e in "$r/worktrees"/* "$r/worktrees"/.[!.]* "$r/worktrees"/..?*; do [ ! -L "$e" ] || keep "$e"; [ ! -d "$e" ] || keep "$e"; done
+  ro "$r/worktrees"
+  # (Another's, many at once: each its own few mounts, side by side.)
+  k_failed=$own/failed
+  for e in "$r/worktrees"/* "$r/worktrees"/.[!.]* "$r/worktrees"/..?*; do
+    [ -d "$e" ] || continue
+    case "$k_own
 " in *"
 $e
-"*) [ -d "$e" ] && keep "$e" ;; esac
-    done
-    ro "$r/worktrees"
-    for e in "$r/worktrees"/* "$r/worktrees"/.[!.]* "$r/worktrees"/..?*; do
-      case "$k_own
+"*) continue ;; esac
+    ( if [ ! -e "$e/config.worktree" ] || [ ! -e "$e/modules" ] || [ "$(leads "$e" commondir "$r")" != "$r" ]; then ro "$e"
+      else for f in commondir gitdir config.worktree modules; do keep "$e/$f" ro; done; fi ) </dev/null || : >"$k_failed" &
+  done
+  wait
+  [ ! -e "$k_failed" ] || exit 126
+  for e in "$r/worktrees"/* "$r/worktrees"/.[!.]* "$r/worktrees"/..?*; do
+    case "$k_own
 " in *"
 $e
-"*) ;; *) continue ;; esac
-      [ -d "$e" ] || continue
-      for f in commondir gitdir config.worktree; do keep "$e/$f" ro; done
-      [ "$(leads "$e" commondir)" = "$r" ] || fail "$e/commondir doesn't lead git back to its repository. Ask the user."
-      mods "$e/modules"
-    done
-  fi
+"*) [ -d "$e" ] || continue ;; *) continue ;; esac
+    [ -e "$e/config.worktree" ] && [ -e "$e/modules" ] && [ "$(leads "$e" commondir "$r")" = "$r" ] || fail "$e/commondir doesn't lead git back to its repository. Ask the user."
+    for f in commondir gitdir config.worktree; do keep "$e/$f" ro; done
+    mods "$e/modules"
+  done
   mods "$r/modules"
 }
 mods() {
-  local m k_found k_done h d k_in p
+  local m k_found k_done h d k_in p k_tree
   m=$1
   [ -e "$m" ] || [ -L "$m" ] || return 0
+  if [ ! -L "$m" ] && [ -d "$m" ] && empty "$m"; then keep "$m" ro; return 0; fi
   keep "$m"
   [ -z "$(find "$m" \( -name objects -o -name refs -o -name logs -o -name lfs -o -name rr-cache -o -name hooks -o -name info \) -prune -o -name '*
 *' -print 2>/dev/null | head -c 1)" ] || fail "$m holds a name it can't keep. Ask the user."
@@ -4172,17 +4196,24 @@ mods() {
     while IFS= read -r p; do [ -n "$p" ] && case "$d/" in "$p"/modules/*|"$p"/worktrees/*) k_in=1 ;; esac; done <<EOF_DONE
 $k_done
 EOF_DONE
-    [ -n "$k_in" ] || { repo "$d" </dev/null; k_done="$k_done
-$d"; }
+    [ -z "$k_in" ] || continue
+    repo "$d" </dev/null
+    k_done="$k_done
+$d"
+    # The .git file of its work tree (the submodule's folder in the project), which its settings,
+    # kept now, name: read-only.
+    k_tree=$(sed -n 's/^[[:space:]]*worktree[[:space:]]*=[[:space:]]*//p' "$d/config" 2>/dev/null | head -n 1)
+    [ -z "$k_tree" ] || { k_tree=$(cd "$d" 2>/dev/null && cd -P "$k_tree" 2>/dev/null && pwd -P) && [ -f "$k_tree/.git" ] && [ ! -L "$k_tree/.git" ] && keep "$k_tree/.git" ro; } || :
   done <<EOF_FOUND
 $k_found
 EOF_FOUND
   ro "$m"
 }
 # The .git file that leads a folder to its repository (a worktree's), up from it: kept read-only, and
-# the worktree's own folder it names is written as git works there (k_own, one a line); or the .git
-# folder found instead (k_dirs).
-k_own= k_dirs=
+# the worktree's own folder it names is the conversation's (k_own, one a line); or the .git folder
+# found instead (k_dirs).
+k_own= k_dirs= k_plain=$own/commondir
+printf '../..\n' >"$k_plain" || fail "it isn't set up."
 gitfile() {
   local at
   at=$1
@@ -4224,27 +4255,30 @@ $(case $git in /*.git) printf '%s\n' "$git" ;; esac)
 $k_dirs
 EOF_REPOS
 `;
-var MAKE_GIT = String.raw`git_unkept() {
-  k_note=$F/unkept/$(printf '%s' "$1" | cksum | cut -d ' ' -f 1)
-  [ ! -e "$k_note" ] || return 0
-  (umask 077; mkdir -p "$F/unkept" && : >"$k_note") 2>/dev/null
-  echo "Note: git's own files in $1 aren't kept from commands by Kuvo Code's sandbox (it can't add a hooks folder or commondir there)." >&2
-}
-git_made() {
+var MAKE_GIT = String.raw`git_made() {
   [ ! -e "$1" ] && [ ! -L "$1" ] || return 0
-  if [ "$3" = / ]; then mkdir "$1" 2>/dev/null || [ -d "$1" ] || git_unkept "$2"; return 0; fi
-  timeout 5 sh -c 'set -C; if [ -n "$0" ]; then printf "%s\n" "$0" >"$1"; else : >"$1"; fi' "$3" "$1" 2>/dev/null || [ -f "$1" ] || git_unkept "$2"
+  if [ "$2" = / ]; then mkdir "$1" 2>/dev/null || [ -d "$1" ]; return; fi
+  timeout 5 sh -c 'set -C; if [ -n "$0" ]; then printf "%s\n" "$0" >"$1"; else : >"$1"; fi' "$2" "$1" 2>/dev/null || [ -f "$1" ]
 }
 git_repo() {
   [ -d "$1" ] && [ ! -L "$1" ] || return 0
-  for k_n in hooks modules worktrees; do git_made "$1/$k_n" "$1" /; done
-  git_made "$1/commondir" "$1" .
-  git_made "$1/config.worktree" "$1" ""
-  for k_e in "$1/worktrees"/* "$1/worktrees"/.[!.]* "$1/worktrees"/..?*; do
-    [ -d "$k_e" ] && [ ! -L "$k_e" ] || continue
-    git_made "$k_e/config.worktree" "$1" ""
-    git_made "$k_e/modules" "$1" /
-  done
+  k_note=$F/unkept/$(printf '%s' "$1" | cksum | cut -d ' ' -f 1)
+  if ( cd -P "$1" 2>/dev/null && [ "$(pwd -P)" = "$1" ] || exit 0
+    k_ok=0
+    for k_n in hooks modules worktrees; do git_made "$k_n" / || k_ok=1; done
+    git_made commondir ./ || k_ok=1
+    git_made config.worktree "" || k_ok=1
+    for k_e in worktrees/* worktrees/.[!.]* worktrees/..?*; do
+      [ -d "$k_e" ] && [ ! -L "$k_e" ] || continue
+      git_made "$k_e/config.worktree" "" || k_ok=1
+      git_made "$k_e/modules" / || k_ok=1
+    done
+    exit $k_ok ); then
+    rm -f "$k_note"
+  elif [ ! -e "$k_note" ]; then
+    (umask 077; mkdir -p "$F/unkept" && : >"$k_note") 2>/dev/null
+    echo "Note: git can't change its own files in $1 from Kuvo Code's sandbox here (the sandbox couldn't add a hooks folder or commondir there, so commands only read it)." >&2
+  fi
 }
 git_all() {
   git_repo "$1"
@@ -4276,9 +4310,9 @@ fail() { echo "This command can't run in the sandbox here: $1" >&2; exit 126; }
 over() { ( cd -P "$1" 2>/dev/null || exit 1; [ -z "$3" ] || [ "$(pwd -P)" = "$1" ] || exit 1; [ "$3" != mine ] || [ -O . ] || exit 1; mount -c -t tmpfs -o "size=64k,mode=$2" kuvo-hidden . 2>/dev/null || exit 2 ) || { [ $? = 1 ] || fail "$1 can't be kept from it."; return 1; }; }
 off() { [ -S "$1" ] && { [ -z "$2" ] || [ ! -L "$1" ]; } || return 1; mount -c --bind /dev/null "$1" 2>/dev/null && [ -c "$1" ] && { [ -z "$2" ] || [ ! -L "$1" ]; } || fail "$1 can't be kept from it."; }
 [ -r "$sockets" ] || fail "it isn't set up."
-# (Whether a folder can be made read-only here, as git's own files are kept: where it can't, they
-# aren't, and each repository says so once.)
-k_can=; mount -c --bind "$own" "$own" 2>/dev/null && mount -c -o remount,bind,ro "$own" 2>/dev/null && k_can=1
+# (Where a folder can't be made read-only, as git's own files are kept, nothing runs: the box's check
+# runs this too, and finds commands can't have a namespace of their own here, for that: 125.)
+mount -c --bind -o ro "$own" "$own" 2>/dev/null || { echo "This command can't run in the sandbox here: a folder can't be made read-only in its namespace." >&2; exit 125; }
 over "$own" 0700 || fail "it isn't set up."
 while IFS= read -r s; do case $s in /*'*'*) for f in $s; do [ ! -S "$f" ] || off "$f"; done ;; /*) over "$s" 0700 || off "$s" ;; esac; done <"$sockets"
 over "/run/user/$u" 0700
@@ -4289,12 +4323,7 @@ fi
 for d in "/tmp/tmux-$u" /tmp/ssh-* "/run/screen/S-$n" "/tmp/nvim.$n" "/tmp/emacs$u"; do over "$d" 0700 mine; done
 over /tmp/.X11-unix 1777 here
 for s in /tmp/vscode-ipc-*.sock /tmp/vscode-ssh-auth-*.sock /tmp/vscode-git-*.sock; do [ -O "$s" ] && off "$s" here; done
-if [ -n "$k_can" ]; then
 ${KEEP_GIT}
-else
-  k_note=$(dirname "$own")/unkept/ro
-  [ -e "$k_note" ] || { mkdir -p "$(dirname "$k_note")" 2>/dev/null; : >"$k_note" 2>/dev/null; echo "Note: git's own files in the repositories commands write aren't kept from them by Kuvo Code's sandbox here (this computer can't make a folder read-only in their namespace)." >&2; }
-fi
 # (Its folder again, by its name, so what it reaches by a relative path goes through the mounts made
 # since it was there, not round them.)
 k_here=$(pwd -P 2>/dev/null) && cd "$k_here" 2>/dev/null
@@ -4309,8 +4338,12 @@ function ownNamespace(own) {
   if (!unshare)
     return null;
   const tried = spawnSync2(unshare, namespaceTry(unshare, own), { cwd: "/", stdio: "ignore", timeout: TRY_FOR });
+  readOnlyFailed = tried.status === READ_ONLY_FAILED;
   return tried.status === 0 ? unshare : null;
 }
+var READ_ONLY_FAILED = 125;
+var readOnlyFailed = false;
+var namespaceReadOnlyFailed = () => readOnlyFailed;
 function ownNamespaceLater(own, unshare = UNSHARE.find((each) => fs19.existsSync(each))) {
   if (!unshare)
     return Promise.resolve(null);
@@ -4324,6 +4357,7 @@ function ownNamespaceLater(own, unshare = UNSHARE.find((each) => fs19.existsSync
     });
     child.once("exit", (status) => {
       clearTimeout(late);
+      readOnlyFailed = status === READ_ONLY_FAILED;
       resolve(status === 0 ? unshare : null);
     });
   });
@@ -5018,7 +5052,7 @@ export default {
 }
 `;
 }
-function agentsNote(platform, tmuxFits = true) {
+function agentsNote(platform, tmuxFits = true, gitKept = false) {
   const mac = platform === "darwin";
   return [
     "# Commands run in a sandbox here",
@@ -5033,7 +5067,7 @@ function agentsNote(platform, tmuxFits = true) {
     "- A conversation the user started in one of those folders (a project in Documents, `~/.config/nvim`) writes its own folder freely. A session you start can't be in what runs later" + (mac ? ", `~/Library`" : "") + " or a personal folder itself: ask the user to start it there.",
     "- A tool that moves a new copy over a file (`sed -i`, some installers) can't change one outside the folders it writes freely: make the copy in the project or `$TMPDIR`, then `cp` it over.",
     "- Docker's socket, SSH's shared connections and terminals' and editors' servers aren't reachable.",
-    ...mac ? ["- It can't change git's hooks or config, or the settings opencode and the coding agents start with (`.opencode/`, `opencode.json`, `.claude/settings.json`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json` and the like, and their hooks' scripts), in any project, nor make, move or remove the folders that hold them (`.git`, `.claude`, `.codex`, `.cursor` and the like); writing other files in them is fine. If a task needs one changed, ask the user."] : ["- In this conversation's git repository it can't change git's hooks or settings (`git config` fails), where its common folder is (`.git/commondir`), its worktrees' links or its submodules' repositories; git commits, branches and fetches as ever. If a task needs one changed, ask the user."],
+    ...mac ? ["- It can't change git's hooks or config, or the settings opencode and the coding agents start with (`.opencode/`, `opencode.json`, `.claude/settings.json`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json` and the like, and their hooks' scripts), in any project, nor make, move or remove the folders that hold them (`.git`, `.claude`, `.codex`, `.cursor` and the like); writing other files in them is fine. If a task needs one changed, ask the user."] : gitKept ? ["- In this conversation's git repository it can't change git's hooks or settings, where its common folder is, its worktrees' links or its submodules' repositories: `git config`, `git worktree add`, `git submodule update --init` and `git sparse-checkout` fail, and `git checkout -b x origin/x` makes the branch without its upstream; git commits, branches and fetches as ever. If a task needs one of those, ask the user."] : [],
     ...mac ? [
       "",
       "On this Mac:",
@@ -5264,7 +5298,7 @@ function able(found) {
   }
   namespace = found === undefined ? namespaceHere() : found;
   namespaceKnown = true;
-  withoutNamespace = namespace ? null : UNSHARE.some((each) => fs20.existsSync(each)) ? "user namespaces" : "util-linux";
+  withoutNamespace = namespace ? null : namespaceReadOnlyFailed() ? "read-only mounts" : UNSHARE.some((each) => fs20.existsSync(each)) ? "user namespaces" : "util-linux";
   if (withoutNamespace && WITHOUT_NAMESPACE === "off") {
     const services = "which the sandbox needs to keep commands from the services your login runs: systemd, your keyring, your agents";
     return withoutNamespace === "user namespaces" ? { able: false, passed: false, why: `This machine doesn't let commands have a namespace of their own (it restricts unprivileged user namespaces, as Ubuntu 24.04 and later do), ${services}.`, reason: "namespaces", needs: withoutNamespace } : { able: false, passed: false, why: `This machine has no unshare (util-linux's), ${services}.`, reason: "namespaces", needs: withoutNamespace };
@@ -5325,7 +5359,7 @@ function probe() {
   }
 }
 function tellAgents(on = fenceState().on) {
-  const note = on ? agentsNote(platform, fitsTmux(appTemporary() ?? TEMPORARY)) : "";
+  const note = on ? agentsNote(platform, fitsTmux(appTemporary() ?? TEMPORARY), platform === "linux" && namespaceKnown && !withoutNamespace) : "";
   if (textOf(SANDBOX_NOTE) !== note)
     writePrivate(SANDBOX_NOTE, note);
 }
@@ -38388,7 +38422,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "d67c1f4ce449";
+var BRIDGE_VERSION = "710f459b5ca5";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

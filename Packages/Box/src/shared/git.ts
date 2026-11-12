@@ -165,7 +165,7 @@ function built(lead: string[], rest: string[], found: Found | undefined | "retry
 const NOTHING: Found = { settings: [], converters: false }
 
 // Where git takes a repository's common folder from (its settings, hooks, objects): its folder's
-// `commondir`, when there's one. A repository's own folder names none, or itself (`.`, which Kuvo
+// `commondir`, when there's one. A repository's own folder names none, or itself (`./`, which Kuvo
 // Code's sandbox gives one on Linux: fence/landlock.ts, MAKE_GIT), and a linked worktree's own
 // folder (`<repository>/worktrees/<name>`) names the repository it's one of. One that leads anywhere
 // else was put there to have git read another's settings and run its hooks, so the box runs no git
@@ -229,7 +229,9 @@ async function readNamedLater(file: string): Promise<string | null | undefined> 
 }
 
 // (Asked of git itself, which finds the repository from `cwd` and the options before its command as
-// it will for the command: a plain command, so nothing the repository names runs.)
+// it will for the command: a plain command, so nothing the repository names runs. Each time, never
+// kept: what git finds there is what a command can change between two calls, a broken `.git` with a
+// repository made around it. Only before a command that could start a program, not plain reads.)
 const gitDirArgs = (lead: string[]) => [...lead, ...EVERY, "rev-parse", "--absolute-git-dir"]
 // Commands that make a repository rather than work in one.
 const MAKING = new Set(["clone", "init"])
