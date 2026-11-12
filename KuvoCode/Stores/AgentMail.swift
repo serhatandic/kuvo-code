@@ -160,8 +160,13 @@ final class AgentMail {
         let said = try? JSONDecoder().decode(Said.self, from: answer.body)
         guard answer.status == 200, let text = said?.text else {
             // An older box, still running a session's work after an update (the keeper makes way
-            // once it's over), doesn't answer Kuvo Code's own tools yet: said plainly.
-            if answer.status == 400, Self.ownTools.contains(name), await !boxAnswersOwnTools(client) { return (Self.updating, true) }
+            // once it's over), doesn't answer Kuvo Code's own tools yet: this app's own box script
+            // answers them meanwhile (`OwnToolsOnce`), or, where it can't run, the agent's told why.
+            if answer.status == 400, Self.ownTools.contains(name), await !boxAnswersOwnTools(client) {
+                let said = await OwnToolsOnce.call(name, body: data, environment: app?.shellEnvironment ?? ProcessInfo.processInfo.environment) ?? (Self.updating, true)
+                if !said.isError { track(name, arguments, caller: caller) }
+                return said
+            }
             return (said?.message ?? "Kuvo Code’s background service on this Mac didn’t answer. Try again in a moment.", true)
         }
         let failed = said?.isError ?? false
@@ -171,10 +176,11 @@ final class AgentMail {
         return (text, failed)
     }
 
-    // COMPAT(agent-tools.own): an older box still running after an update. Goes once no supported update starts from a box without `agent-tools.own`.
+    // COMPAT(agent-tools.own): an older box still running after an update (`OwnToolsOnce`). Goes 3 months after 0.8.0.
     /// The tools every box answers since it says `agent-tools.own` (PROTOCOL.md, "Agents' tools").
     static let ownTools: Set<String> = ["schedule_wake_up", "watch_for_change", "list_wake_ups", "cancel_wake_up", "set_job", "show_in_panel", "show_file", "mark_final", "show_widget"]
-    /// What an agent hears from one of them while an older box runs on after an update.
+    /// What an agent hears from one of them while an older box runs on after an update and this
+    /// app's own box script can't answer it either (no engine to run it yet).
     static let updating = "Kuvo Code on this Mac is finishing an update, and its background service can't do this until the work that's running ends. Try again later; if you work on your own, say what's left in your reply."
 
     /// Whether this Mac's box says it answers them.

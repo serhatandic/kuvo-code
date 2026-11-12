@@ -506,10 +506,11 @@ enum DemoDirector {
                 await DemoWait.pause(.connectedAWhile)
                 guard let id = app.tabs.sessionID, let session = workspace.session(id), parts.count == 2 else { return }
                 let machine = RemoteFolder.machine(of: session.location.directory)
-                // (A copy of its box's words for one shown while the user looks at the conversation,
-                // `shownWords` in Packages/Box/src/link/letters/own-tools.ts: only what starts it,
-                // "Shown: the file", is read, by `BrowserTools.shownFolder`.)
-                let said = "Shown: the \(parts[1] == "folder" ? "folder" : "file") \(parts[0]) is open in Kuvo Code's side panel, beside this conversation."
+                // What its box answers the call, as the tool server passes it on, while you look at it.
+                struct Said: Decodable { var text: String; var isError: Bool }
+                guard let body = try? JSONSerialization.data(withJSONObject: ["name": BrowserTools.showInPanel, "arguments": ["path": parts[0]], "session": id, "inView": true] as [String: Any]),
+                      let answer = try? await app.box(machine ?? BoxClient.mac).send("POST", "kuvo/agent-tools", body: body), answer.status == 200,
+                      let said = (try? JSONDecoder().decode(Said.self, from: answer.body)).flatMap({ $0.isError ? nil : $0.text }) else { return }
                 for (type, data) in [
                     ("session.tool.input.started", #""name":"kuvo-browser_show_in_panel""#),
                     ("session.tool.called", #""input":{"path":\#(String(decoding: try! JSONEncoder().encode(parts[0]), as: UTF8.self))}"#),
