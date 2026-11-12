@@ -56,11 +56,23 @@ function engineFor(session, { running = false } = {}) {
     if (["POST", "DELETE", "PATCH"].includes(method)) return [200, {}];
   });
 }
-const agentsBridge = ({ signedIn = true, id = "ses_theirs" } = {}) => standIn((method, url, body) => {
-  if (method === "GET" && url === "/api/integration/claude-code") return [200, { data: { id: "claude-code", name: "Claude Code", metadata: { installed: true }, connections: signedIn ? [{ type: "agent" }] : [] } }];
-  if (method === "POST" && url === "/api/session/import") return [200, { data: { id, title: body.title } }];
-  if (["PUT", "PATCH"].includes(method)) return [200, {}];
-});
+// The coding agents' bridge: what it imports kept, read as it is now and its metadata written whole,
+// as the box reads it before it writes it again (#581).
+const agentsBridge = ({ signedIn = true, id = "ses_theirs" } = {}) => {
+  let imported = null;
+  return standIn((method, url, body) => {
+    if (method === "GET" && url === "/api/integration/claude-code") return [200, { data: { id: "claude-code", name: "Claude Code", metadata: { installed: true }, connections: signedIn ? [{ type: "agent" }] : [] } }];
+    if (method === "POST" && url === "/api/session/import") {
+      imported = { id, title: body.title, metadata: body.metadata };
+      return [200, { data: { id, title: body.title } }];
+    }
+    if (imported && url === `/api/session/${id}`) {
+      if (method === "GET") return [200, { data: imported }];
+      if (method === "PATCH" && body?.metadata) imported = { ...imported, metadata: body.metadata };
+    }
+    if (["PUT", "PATCH"].includes(method)) return [200, {}];
+  });
+};
 const sonnet = { id: "sonnet", providerID: "claude-code" };
 
 test("a conversation goes on with the coding agents whole, with what was waiting, and the engine's is archived", async () => {
