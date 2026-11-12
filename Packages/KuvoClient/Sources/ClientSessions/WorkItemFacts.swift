@@ -264,7 +264,7 @@ public extension WorkQueue {
     /// sign-in, Work item 551, in progress, Writing the tests, Kuvo Foreman, on lab, updated 12m ago".
     static func spokenRow(_ item: WorkItem, in view: WorkQueueView, now: Date = .now, calendar: Calendar = .current, locale: Locale = .current) -> String {
         var parts = [item.title, item.spokenName]
-        if item.isDone { parts.append("done") } else if isInProgress(item) { parts.append("in progress") }
+        if item.isDone { parts.append(item.isGone ? "done, gone" : "done") } else if isInProgress(item) { parts.append("in progress") }
         if isInProgress(item), let note = progressNote(item) { parts.append(note) }
         parts += eyebrow(of: item, in: view)
         parts.append(updated(item.updated.date, now: now, calendar: calendar, locale: locale).lowercased())

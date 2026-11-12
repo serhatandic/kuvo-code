@@ -24,9 +24,12 @@ const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-work-qu
 removeAtEnd(home);
 // GitHub's `gh`, standing in: it says each time it's asked (`gh-asked`), and answers what a test
 // says GitHub would (`gh-answer.json`), else that it's signed out. Never GitHub itself.
-const ghAsked = path.join(home, "gh-asked"), ghAnswer = path.join(home, "gh-answer.json");
+// It writes each query it was asked on a line, and answers one by GitHub's id with `gh-answer-id.json`
+// while that's there.
+const ghAsked = path.join(home, "gh-asked"), ghAnswer = path.join(home, "gh-answer.json"), ghAnswerID = path.join(home, "gh-answer-id.json");
 fs.mkdirSync(path.join(home, "bin"), { recursive: true });
-fs.writeFileSync(path.join(home, "bin", "gh"), `#!/bin/sh\necho asked >> '${ghAsked}'\nif [ -f '${ghAnswer}' ]; then cat '${ghAnswer}'; exit 0; fi\necho 'gh auth login' >&2\nexit 1\n`, { mode: 0o755 });
+fs.writeFileSync(path.join(home, "bin", "gh"), `#!/bin/sh\nfor last; do :; done\nprintf '%s\\n' "$last" | tr '\\n' ' ' >> '${ghAsked}'\necho >> '${ghAsked}'\ncase "$last" in *"node(id:"*) if [ -f '${ghAnswerID}' ]; then cat '${ghAnswerID}'; exit 0; fi ;; esac\nif [ -f '${ghAnswer}' ]; then cat '${ghAnswer}'; exit 0; fi\necho 'gh auth login' >&2\nexit 1\n`, { mode: 0o755 });
+const ghQueries = () => (fs.existsSync(ghAsked) ? fs.readFileSync(ghAsked, "utf8").split("\n").filter(Boolean) : []);
 const ghAsks = () => (fs.existsSync(ghAsked) ? fs.readFileSync(ghAsked, "utf8").split("\n").filter(Boolean).length : 0);
 process.env.PATH = `${path.join(home, "bin")}${path.delimiter}${process.env.PATH}`;
 process.env.KUVO_HOME = home;
@@ -140,6 +143,7 @@ const telling = (items, extra = {}) => ({ told: { id: `wqt_${crypto.randomBytes(
 beforeEach(() => {
   fs.rmSync(ghAsked, { force: true });
   fs.rmSync(ghAnswer, { force: true });
+  fs.rmSync(ghAnswerID, { force: true });
   fs.rmSync(run, { recursive: true, force: true });
   fs.mkdirSync(run, { recursive: true });
   write(path.join(run, "engine.json"), { ...target, version: "0.0.0" });
@@ -909,4 +913,53 @@ test("what this box tells of an issue goes again only once it changes, never bec
   const closed = mailTo(lab);
   assert.equal(closed.length, 1);
   assert.deepEqual([closed[0].workQueue.told.items[0].seen.state, closed[0].workQueue.told.items[0].category], ["completed", "done"]);
+});
+
+test("an issue another computer told of, never read here and moved since, is found by the id its item knows: at once where that computer found it gone or elsewhere, else once it's missing where it was", async () => {
+  write(path.join(run, "work", "elsewhere", `${lab.pub}.json`), { at: Date.now(), heard: Date.now(), leads: {} });
+  const old = Date.now() - 7_200_000;
+  const moved = { __typename: "Issue", id: "I_kw20", number: 3, title: "Moved here", url: "https://github.com/kuvo-test/moved/issues/3", state: "OPEN", stateReason: null, closedAt: null };
+  const told20 = seen => ({ ...told(520, "ses_far", { id: "wqi_toldmovedissue000020", title: "Issue 20", seen, source: issueSource(20) }), number: undefined });
+  const shown = async ref => (await view("all")).items.find(item => item.source?.ref === ref);
+
+  // Lab found it gone: read here by its id at once.
+  receive(lab, { workQueue: telling([told20({ state: "open", at: old, checked: old, gone: true })]) });
+  write(ghAnswerID, { data: { p0: moved } });
+  let item = await shown("gh:kuvo-test/app#20");
+  assert.equal(ghQueries().length, 1);
+  assert.match(ghQueries()[0], /p0: node\(id: "I_kw20"\)/);
+  assert.deepEqual([item.title, item.source.url, item.seen.gone, item.category], ["Moved here", "https://github.com/kuvo-test/moved/issues/3", undefined, "next"]);
+
+  // Lab told it as it was: missing where it was here, then found by the id its item knows.
+  fs.rmSync(path.join(queues, "seen.json"), { force: true });
+  fs.rmSync(ghAsked, { force: true });
+  receive(lab, { workQueue: telling([told20({ state: "open", at: old, checked: old })]) });
+  write(ghAnswer, { data: { p0: { issueOrPullRequest: null } } });
+  item = await shown("gh:kuvo-test/app#20");
+  assert.equal(ghQueries().length, 2);
+  assert.match(ghQueries()[0], /repository\(owner: "kuvo-test", name: "app"\) \{ issueOrPullRequest\(number: 20\)/);
+  assert.match(ghQueries()[1], /p0: node\(id: "I_kw20"\)/);
+  assert.deepEqual([item.source.url, item.seen.gone, item.category], ["https://github.com/kuvo-test/moved/issues/3", undefined, "next"]);
+});
+
+test("a deleted item never stands for its issue while another item is it: adding it, showing it and its chip name the live one on another computer, and an agent's ref the live one in another queue here", async () => {
+  ghIssue(12);
+  await tool("queue_add", { issue: "gh:kuvo-test/app#12" }, "ses_lead");
+  assert.equal((await tool("queue_remove", { item: "gh:kuvo-test/app#12" }, "ses_lead")).isError, false);
+  receive(lab, { workQueue: telling([{ ...told(3, "ses_far", { id: "wqi_labaddeditlater00012", title: "Issue 12", source: issueSource(12) }), number: undefined }]) });
+  // Adding it: it's on lab, not "undo the delete" (which the one-item rule refuses).
+  assert.deepEqual(await tool("queue_add", { issue: "gh:kuvo-test/app#12" }, "ses_lead"), { isError: true, text: 'gh:kuvo-test/app#12 "Issue 12" is in the Work Queue already, on lab: one item for each issue.' });
+  // Its ref names lab's: shown, and drawn as a chip.
+  const shownText = (await tool("queue_show", { item: "gh:kuvo-test/app#12" }, "ses_lead")).text;
+  assert.match(shownText, /is on lab/);
+  const ref = (await route("POST", "kuvo/work-queue/refs", { refs: ["gh:kuvo-test/app#12"] })).body.refs["gh:kuvo-test/app#12"];
+  assert.deepEqual([ref.id, ref.removed, ref.computer?.name], ["wqi_labaddeditlater00012", undefined, "lab"]);
+
+  // The live one in another conversation's queue here, one ses_lead doesn't oversee: an agent's ref
+  // is that one (not its to change), never the deleted one in its own queue.
+  receive(lab, { workQueue: telling([]) });
+  const whole = read(path.join(queues, "queues", "ses_lead.json"));
+  const { removed: _, ...live } = whole.items[0];
+  write(path.join(queues, "queues", "ses_someone.json"), { ...whole, owner: "ses_someone", items: [{ ...live, id: "wqi_someoneslive00000012", owner: "ses_someone", order: 9 }] });
+  assert.deepEqual(await tool("queue_update", { item: "gh:kuvo-test/app#12", note: "More" }, "ses_lead"), { isError: true, text: 'gh:kuvo-test/app#12 "Issue 12" isn\'t in your Work Queue, nor in a session\'s you oversee: ask the conversation it belongs to, or the user.' });
 });

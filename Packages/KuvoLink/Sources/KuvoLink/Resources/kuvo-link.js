@@ -19481,14 +19481,14 @@ async function readDue(reader, asks, now) {
           break;
         }
         const values = new Map;
+        const heldBack = (key) => {
+          const before = kept.reads[key];
+          read.set(key, before ? { ...before, checked: now() } : { at: now(), value: null });
+        };
         part.forEach((ask, index) => {
           const key = reader.keyOf(ask);
-          const before = kept.reads[key];
-          if (answer.held?.has(`p${index}`)) {
-            if (before)
-              read.set(key, { ...before, checked: now() });
-            return;
-          }
+          if (answer.held?.has(`p${index}`))
+            return heldBack(key);
           values.set(key, reader.valueOf(answer.data[`p${index}`], ask));
         });
         const again = part.flatMap((ask) => {
@@ -19496,20 +19496,31 @@ async function readDue(reader, asks, now) {
           const other = values.has(key) && values.get(key) === null ? reader.again?.(ask, kept.reads[key]) : null;
           return other ? [other] : [];
         });
+        let unread = false;
         if (again.length) {
           const second = await askGitHub(host, reader.query(again));
-          if (!("unread" in second)) {
+          if ("unread" in second) {
+            unread = true;
+            held.set(host, now() + BACK_OFF);
+            for (const ask of again)
+              values.delete(reader.keyOf(ask));
+          } else {
             again.forEach((ask, index) => {
-              if (second.held?.has(`p${index}`))
-                return void values.delete(reader.keyOf(ask));
+              const key = reader.keyOf(ask);
+              if (second.held?.has(`p${index}`)) {
+                values.delete(key);
+                return heldBack(key);
+              }
               const value = reader.valueOf(second.data[`p${index}`], ask);
               if (value !== null)
-                values.set(reader.keyOf(ask), value);
+                values.set(key, value);
             });
           }
         }
         for (const [key, value] of values)
           read.set(key, readOf(kept.reads[key], value, reader.keepsLast, now()));
+        if (unread)
+          break;
       }
     }
     const latest = readKept3(reader.file);
@@ -19662,7 +19673,10 @@ var ISSUES = register({
   freshFor: (value) => !value ? FRESH_MISSING : DONE_STATES.has(value.state) ? FRESH_DONE : FRESH_OPEN,
   keptFor: 30 * 86400000,
   keepsLast: true,
-  again: (ask, before) => !ask.id && before?.value?.id ? { ...ask, id: before.value.id } : null
+  again: (ask, before) => {
+    const id = before?.value?.id ?? ask.knownId;
+    return !ask.id && id ? { ...ask, id } : null;
+  }
 });
 var MOST_READ2 = 200;
 var TOLD_FRESH = 5 * 60000;
@@ -19678,11 +19692,12 @@ async function readSeen(items, wait, now = Date.now()) {
       continue;
     const key = sourceKey(at);
     const kept = reads[key];
-    const there = kept?.value ? issueAt(kept.value.url) : null;
+    const there = kept?.value ? issueAt(kept.value.url) : !kept && item.source.url ? issueAt(item.source.url) : null;
     const moved = Boolean(there && sourceKey(there) !== key);
-    const id = kept?.gone || moved ? kept?.value?.id ?? item.source.id : undefined;
+    const knownId = kept?.value?.id ?? item.source.id;
+    const id = kept?.gone || moved || !kept && item.seen?.gone ? knownId : undefined;
     if (!asks.has(key))
-      asks.set(key, { ...at, ...id ? { id } : {} });
+      asks.set(key, { ...at, ...id ? { id } : knownId ? { knownId } : {} });
   }
   const asked = (key) => reads[key]?.checked ?? reads[key]?.at ?? 0;
   const wanted = [...asks].sort(([a], [b]) => asked(a) - asked(b)).slice(0, MOST_READ2).map(([, at]) => at);
@@ -37317,7 +37332,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "9206f7674b98";
+var BRIDGE_VERSION = "5fc7e3ba62ad";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -39959,7 +39974,9 @@ function itemFor(items, given, caller, overseen) {
   if (!ref)
     throw new Refusal("Say which item (item), by its number, like #243 (or the id an item without one was given), or the GitHub issue or pull request it is, like gh:owner/repo#12.");
   const found = matching2(items, ref);
-  const item = found.find((each) => !each.removed && inView(caller.owner, each, overseen)) ?? found.find((each) => inView(caller.owner, each, overseen)) ?? found[0];
+  const live = found.filter((each) => !each.removed);
+  const deleted = live.length || itemElsewhere(ref) ? [] : found;
+  const item = live.find((each) => inView(caller.owner, each, overseen)) ?? live[0] ?? deleted.find((each) => inView(caller.owner, each, overseen)) ?? deleted[0];
   if (!item) {
     const far = itemElsewhere(ref);
     if (far && !itemsElsewhere(caller.owner).items.some((each) => each.id === far.id))
@@ -40010,7 +40027,7 @@ async function run3(name, args, caller, targets, signal) {
     case "queue_show": {
       const ref = refOf(args.item);
       const here = allItems();
-      const far = ref && !matching2(here, ref).length ? itemElsewhere(ref) : null;
+      const far = ref && !matching2(here, ref).some((item) => !item.removed) ? itemElsewhere(ref) : null;
       if (far) {
         if (!itemsElsewhere(caller.owner).items.some((item) => item.id === far.id))
           return refused5(`${nameOf3(far)} is on ${far.computer.name}, and isn't in your Work Queue, nor in a session's you oversee: ask the conversation it belongs to, or the user.`);
@@ -40171,9 +40188,7 @@ async function issueFor(given, caller, overseen, except) {
 function refuseTaken(items, at, caller, overseen, except, id) {
   const key = sourceKey(at);
   const isIt = (source) => Boolean(source) && (sourceKeyOf(source) === key || id !== undefined && source.id === id);
-  const here = items.find((item) => item.id !== except && !item.removed && isIt(item.source)) ?? items.find((item) => item.id !== except && isIt(item.source));
-  if (here?.removed)
-    throw new Refusal(deletedWords(here));
+  const here = items.find((item) => item.id !== except && !item.removed && isIt(item.source));
   if (here && inView(caller.owner, here, overseen))
     throw new Refusal(`${nameOf3(here)} is in your Work Queue already: refer to it as ${here.source.ref}.`);
   if (here)
@@ -40181,6 +40196,9 @@ function refuseTaken(items, at, caller, overseen, except, id) {
   const far = itemElsewhere({ source: key }) ?? (id !== undefined ? itemsElsewhere("all").items.find((item) => isIt(item.source)) ?? null : null);
   if (far && far.id !== except)
     throw new Refusal(`${nameOf3(far)} is in the Work Queue already, on ${far.computer.name}: one item for each issue.`);
+  const deleted = items.find((item) => item.id !== except && isIt(item.source));
+  if (deleted)
+    throw new Refusal(deletedWords(deleted));
 }
 function withFiles(args, caller, acting, work) {
   if (args.files === undefined)
@@ -40434,13 +40452,15 @@ async function* workQueueRoute(context, match) {
     const facts = await factsOf(targets, signal ?? undefined);
     const found = wanted.map((ref) => {
       const named = refOf(ref);
-      const item = named ? matching2(items, named)[0] : undefined;
-      return { ref, item, far: !item && named ? itemElsewhere(named, readLink(), { asTold: true }) : null };
+      const here = named ? matching2(items, named)[0] : undefined;
+      const far = (!here || here.removed) && named ? itemElsewhere(named, readLink(), { asTold: true }) : null;
+      return { ref, item: far ? undefined : here, far, here };
     });
     await readSeen(found.flatMap((each) => [each.item ?? each.far].filter(Boolean)), GITHUB_WAIT);
     const refs = {};
-    for (const { ref, item, far } of found) {
+    for (const { ref, far, here } of found) {
       const again = far ? itemElsewhere({ id: far.id }) : null;
+      const item = again ? undefined : here;
       refs[ref] = item ? refFacts(summaryOf(item, facts.working, new Map)) : again ? { ...refFacts(again), computer: again.computer } : null;
     }
     return yield* json(200, { refs });

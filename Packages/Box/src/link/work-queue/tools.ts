@@ -179,12 +179,15 @@ async function queueCaller(caller: Caller, readBridge: () => BridgeRecord): Prom
 }
 
 // The item a call names, in the caller's view (where two computers gave a number twice, the one
-// in its view), or why not.
+// in its view), or why not: a live one here, else one on another computer, and a deleted one only
+// where none is live (one issue's deleted item never stands for its live one).
 function itemFor(items: Item[], given: unknown, caller: QueueCaller, overseen: Set<string>): Item {
   const ref = refOf(given);
   if (!ref) throw new Refusal("Say which item (item), by its number, like #243 (or the id an item without one was given), or the GitHub issue or pull request it is, like gh:owner/repo#12.");
   const found = matching(items, ref);
-  const item = found.find(each => !each.removed && inView(caller.owner, each, overseen)) ?? found.find(each => inView(caller.owner, each, overseen)) ?? found[0];
+  const live = found.filter(each => !each.removed);
+  const deleted = live.length || itemElsewhere(ref) ? [] : found;
+  const item = live.find(each => inView(caller.owner, each, overseen)) ?? live[0] ?? deleted.find(each => inView(caller.owner, each, overseen)) ?? deleted[0];
   if (!item) {
     // One on another of your computers is changed there, by the conversation it belongs to.
     const far = itemElsewhere(ref);
@@ -238,7 +241,8 @@ async function run(name: string, args: Record<string, unknown>, caller: QueueCal
     case "queue_show": {
       const ref = refOf(args.item);
       const here = allItems();
-      const far = ref && !matching(here, ref).length ? itemElsewhere(ref) : null;
+      // (A live one elsewhere before a deleted one here.)
+      const far = ref && !matching(here, ref).some(item => !item.removed) ? itemElsewhere(ref) : null;
       if (far) {
         // (Only one in its view, as one here.)
         if (!itemsElsewhere(caller.owner).items.some(item => item.id === far.id)) return refused(`${nameOf(far)} is on ${far.computer.name}, and isn't in your Work Queue, nor in a session's you oversee: ask the conversation it belongs to, or the user.`);
@@ -391,12 +395,14 @@ async function issueFor(given: unknown, caller: QueueCaller, overseen: Set<strin
 function refuseTaken(items: Item[], at: IssueAt, caller: QueueCaller, overseen: Set<string>, except?: string, id?: string): void {
   const key = sourceKey(at);
   const isIt = (source: Item["source"]) => Boolean(source) && (sourceKeyOf(source!) === key || (id !== undefined && source!.id === id));
-  const here = items.find(item => item.id !== except && !item.removed && isIt(item.source)) ?? items.find(item => item.id !== except && isIt(item.source));
-  if (here?.removed) throw new Refusal(deletedWords(here));
+  // (A live one here, then one on another computer, and a deleted one here only after both.)
+  const here = items.find(item => item.id !== except && !item.removed && isIt(item.source));
   if (here && inView(caller.owner, here, overseen)) throw new Refusal(`${nameOf(here)} is in your Work Queue already: refer to it as ${here.source!.ref}.`);
   if (here) throw new Refusal(`${nameOf(here)} is in the Work Queue already, in the queue of ${here.owner}: one item for each issue. Ask that conversation, or the user.`);
   const far = itemElsewhere({ source: key }) ?? (id !== undefined ? itemsElsewhere("all").items.find(item => isIt(item.source)) ?? null : null);
   if (far && far.id !== except) throw new Refusal(`${nameOf(far)} is in the Work Queue already, on ${far.computer.name}: one item for each issue.`);
+  const deleted = items.find(item => item.id !== except && isIt(item.source));
+  if (deleted) throw new Refusal(deletedWords(deleted));
 }
 
 // `work`, with the files the call names read first (outside the queue's lock), and what's left of

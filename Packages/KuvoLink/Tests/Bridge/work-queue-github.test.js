@@ -33,6 +33,8 @@ const answer = path.join(home, "gh-answer.json");
 const fail = path.join(home, "gh-fail");
 // (What it answers a query by GitHub's id instead, while `gh-answer-id.json` is there.)
 const answerByID = path.join(home, "gh-answer-id.json");
+// (And while `gh-fail-id` is there, a query by GitHub's id fails: no network just then, say.)
+const failByID = path.join(home, "gh-fail-id");
 // (While `gh-hold` is there, it doesn't answer: GitHub slow to.)
 const hold = path.join(home, "gh-hold");
 fs.writeFileSync(path.join(bin, "gh"), `#!/bin/sh
@@ -41,7 +43,7 @@ printf '%s\\n' "$last" | tr '\\n' ' ' >> '${asked}'
 echo >> '${asked}'
 while [ -f '${hold}' ]; do sleep 0.05; done
 if [ -f '${fail}' ]; then cat '${fail}' >&2; exit 1; fi
-case "$last" in *"node(id:"*) if [ -f '${answerByID}' ]; then cat '${answerByID}'; exit 0; fi ;; esac
+case "$last" in *"node(id:"*) if [ -f '${failByID}' ]; then echo 'error connecting to api.github.com' >&2; exit 1; fi; if [ -f '${answerByID}' ]; then cat '${answerByID}'; exit 0; fi ;; esac
 cat '${answer}'
 `, { mode: 0o755 });
 process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`;
@@ -103,6 +105,7 @@ beforeEach(() => {
   fs.rmSync(asked, { force: true });
   fs.rmSync(fail, { force: true });
   fs.rmSync(answerByID, { force: true });
+  fs.rmSync(failByID, { force: true });
   calling.clear();
 });
 
@@ -412,4 +415,47 @@ test("a deleted item doesn't stand for its issue while another item is that issu
   const refs = (await route("POST", "kuvo/work-queue/refs", { refs: ["gh:kuvo-test/app#12"] })).body.refs;
   assert.equal(refs["gh:kuvo-test/app#12"].id, "wqi_livesameissue0000012");
   assert.equal(refs["gh:kuvo-test/app#12"].removed, undefined);
+});
+
+test("one missing where it was isn't gone until GitHub says so by its id too: asked by its id and not answered, it stays as it was, and the host is held off", async () => {
+  github(issue(14));
+  await tool("queue_add", { issue: "gh:kuvo-test/app#14" });
+  fs.rmSync(asked);
+  fs.writeFileSync(answer, JSON.stringify({ data: { p0: { issueOrPullRequest: null } }, errors: [{ type: "NOT_FOUND", path: ["p0", "issueOrPullRequest"], message: "Could not resolve." }] }));
+  fs.writeFileSync(failByID, "");
+  ageReads();
+  let [item] = (await view()).items;
+  assert.deepEqual([item.category, item.seen.gone, item.struck, item.doneAs], ["next", undefined, undefined, undefined], "no word from GitHub: not gone");
+  assert.equal(queries().length, 2, "where it was, then by its id");
+  [item] = (await view()).items;
+  assert.equal(queries().length, 2, "held off since, as for any read gh couldn't make");
+});
+
+test("one GitHub wouldn't answer for is asked again only once it's due, however often it's shown: never read here before, or asked by its id", async () => {
+  const forbidden = { type: "FORBIDDEN", path: ["p0"], message: "Resource protected by organization SAML enforcement." };
+  // Never read here (its read let go): GitHub won't answer for it.
+  github(issue(12));
+  await tool("queue_add", { issue: "gh:kuvo-test/app#12" });
+  fs.writeFileSync(seenFile, JSON.stringify({ reads: {}, hosts: {} }));
+  fs.rmSync(asked);
+  fs.writeFileSync(answer, JSON.stringify({ data: { p0: null }, errors: [forbidden] }));
+  await view();
+  await view();
+  await view();
+  assert.equal(queries().length, 1, "asked once: not again on each look");
+
+  // Missing where it was, and GitHub won't answer for it by its id either.
+  fs.rmSync(path.join(queues, "queues"), { recursive: true, force: true });
+  fs.rmSync(seenFile, { force: true });
+  github(issue(14));
+  await tool("queue_add", { issue: "gh:kuvo-test/app#14" });
+  fs.rmSync(asked);
+  fs.writeFileSync(answer, JSON.stringify({ data: { p0: { issueOrPullRequest: null } }, errors: [{ type: "NOT_FOUND", path: ["p0", "issueOrPullRequest"], message: "Could not resolve." }] }));
+  fs.writeFileSync(answerByID, JSON.stringify({ data: { p0: null }, errors: [forbidden] }));
+  ageReads();
+  const [item] = (await view()).items;
+  await view();
+  await view();
+  assert.equal(queries().length, 2, "where it was, then by its id: not again on each look");
+  assert.deepEqual([item.category, item.seen.gone], ["next", undefined]);
 });

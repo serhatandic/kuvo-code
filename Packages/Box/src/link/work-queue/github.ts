@@ -47,8 +47,9 @@ const ISSUE_FIELDS = "id number title url state stateReason closedAt";
 const PULL_FIELDS = "id number title url state isDraft merged closedAt";
 
 /** An issue or a pull request to read: where it is, and GitHub's id for one found missing there
- * since (moved to another repository, or turned into a discussion), read by that instead. */
-export type IssueAsk = IssueAt & { id?: string };
+ * since (moved to another repository, or turned into a discussion), read by that instead; or the id
+ * its item knows (`knownId`), to read it by if it isn't found where it was. */
+export type IssueAsk = IssueAt & { id?: string; knownId?: string };
 
 const fields = (body: boolean) => `__typename ... on Issue { ${ISSUE_FIELDS}${body ? " body" : ""} } ... on PullRequest { ${PULL_FIELDS}${body ? " body" : ""} }`;
 
@@ -92,7 +93,10 @@ export const ISSUES: Reader<IssueAsk, IssueRead> = register<IssueAsk, IssueRead>
   keptFor: 30 * 86_400_000,
   keepsLast: true,
   // (Missing where it was: by GitHub's id for it, moved to another repository say.)
-  again: (ask, before) => (!ask.id && before?.value?.id ? { ...ask, id: before.value.id } : null),
+  again: (ask, before) => {
+    const id = before?.value?.id ?? ask.knownId;
+    return !ask.id && id ? { ...ask, id } : null;
+  },
 });
 
 /** At most this many read at once, for one view or one ask of chips: those read longest ago first. */
@@ -119,11 +123,14 @@ export async function readSeen(items: { source?: Source; removed?: unknown; seen
     if (told !== undefined && now - told < (DONE_STATES.has(item.seen!.state) ? FRESH_DONE : TOLD_FRESH)) continue;
     const key = sourceKey(at);
     // (One found missing where it was, or found elsewhere since: by GitHub's id, wherever it went.)
+    // (Never read here, one handed or told from another computer: as its item says, its page there
+    // and whether that one found it gone.)
     const kept = reads[key];
-    const there = kept?.value ? issueAt(kept.value.url) : null;
+    const there = kept?.value ? issueAt(kept.value.url) : !kept && item.source!.url ? issueAt(item.source!.url) : null;
     const moved = Boolean(there && sourceKey(there) !== key);
-    const id = kept?.gone || moved ? kept?.value?.id ?? item.source!.id : undefined;
-    if (!asks.has(key)) asks.set(key, { ...at, ...(id ? { id } : {}) });
+    const knownId = kept?.value?.id ?? item.source!.id;
+    const id = kept?.gone || moved || (!kept && item.seen?.gone) ? knownId : undefined;
+    if (!asks.has(key)) asks.set(key, { ...at, ...(id ? { id } : knownId ? { knownId } : {}) });
   }
   const asked = (key: string) => reads[key]?.checked ?? reads[key]?.at ?? 0;
   const wanted = [...asks].sort(([a], [b]) => asked(a) - asked(b)).slice(0, MOST_READ).map(([, at]) => at);

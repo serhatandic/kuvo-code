@@ -141,15 +141,17 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
     const facts = await factsOf(targets, signal ?? undefined);
     const found = wanted.map(ref => {
       const named = refOf(ref);
-      const item = named ? matching(items, named)[0] : undefined;
-      // One on another of your computers, as it last told it.
-      return { ref, item, far: !item && named ? itemElsewhere(named, readLink(), { asTold: true }) : null };
+      const here = named ? matching(items, named)[0] : undefined;
+      // One on another of your computers, as it last told it: before one deleted here.
+      const far = (!here || here.removed) && named ? itemElsewhere(named, readLink(), { asTold: true }) : null;
+      return { ref, item: far ? undefined : here, far, here };
     });
     // (Their issues and pull requests read from GitHub where that's due: the chips are on screen.)
     await readSeen(found.flatMap(each => [each.item ?? each.far].filter(Boolean) as { source?: Item["source"] }[]), GITHUB_WAIT);
     const refs: Record<string, unknown> = {};
-    for (const { ref, item, far } of found) {
+    for (const { ref, far, here } of found) {
       const again = far ? itemElsewhere({ id: far.id }) : null;
+      const item = again ? undefined : here;
       refs[ref] = item ? refFacts(summaryOf(item, facts.working, new Map())) : again ? { ...refFacts(again), computer: again.computer } : null;
     }
     return yield* json(200, { refs });

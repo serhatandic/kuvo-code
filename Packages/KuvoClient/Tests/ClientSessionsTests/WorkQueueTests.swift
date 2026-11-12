@@ -416,5 +416,7 @@ import ClientSessions
         #expect(WorkQueue.properties(of: gone, in: view, now: now).first?.help == "If GitHub shows it again, it’s back in Later.")
         #expect(WorkQueue.properties(of: closed, in: view, now: now).first?.words == "Closed as planned", "the box's words, whatever the state")
         #expect(WorkQueue.properties(of: older, in: view, now: now).first?.words == "Merged on GitHub", "an older box's, from its state")
+        #expect(WorkQueue.spokenRow(gone, in: view, now: Date(timeIntervalSince1970: 0)).hasPrefix("Upload retries, GitHub issue app#12, done, gone, "), "VoiceOver hears it's gone, as the dimmed mark shows")
+        #expect(!WorkQueue.spokenRow(closed, in: view, now: Date(timeIntervalSince1970: 0)).contains("gone"))
     }
 }

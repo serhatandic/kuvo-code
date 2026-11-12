@@ -233,15 +233,16 @@ async function readDue<Ask, Value>(reader: Reader<Ask, Value>, asks: Ask[], now:
           held.set(host, now() + BACK_OFF);
           break;
         }
-        // (One GitHub wouldn't answer for, rather than didn't find, stays as it was, asked now.)
+        // (One GitHub wouldn't answer for, rather than didn't find, stays as it was, asked now, so
+        // it isn't asked again until it's due.)
         const values = new Map<string, Value | null>();
+        const heldBack = (key: string) => {
+          const before = kept.reads[key];
+          read.set(key, before ? { ...before, checked: now() } : { at: now(), value: null });
+        };
         part.forEach((ask, index) => {
           const key = reader.keyOf(ask);
-          const before = kept.reads[key];
-          if (answer.held?.has(`p${index}`)) {
-            if (before) read.set(key, { ...before, checked: now() });
-            return;
-          }
+          if (answer.held?.has(`p${index}`)) return heldBack(key);
           values.set(key, reader.valueOf(answer.data[`p${index}`], ask));
         });
         // (Missing where it was: asked again another way, a moved issue by its id, before it's gone.)
@@ -250,17 +251,28 @@ async function readDue<Ask, Value>(reader: Reader<Ask, Value>, asks: Ask[], now:
           const other = values.has(key) && values.get(key) === null ? reader.again?.(ask, kept.reads[key]) : null;
           return other ? [other] : [];
         });
+        let unread = false;
         if (again.length) {
           const second = await askGitHub(host, reader.query(again));
-          if (!("unread" in second)) {
+          if ("unread" in second) {
+            // (Not asked: what's kept of those stands, and the host is held off as for any.)
+            unread = true;
+            held.set(host, now() + BACK_OFF);
+            for (const ask of again) values.delete(reader.keyOf(ask));
+          } else {
             again.forEach((ask, index) => {
-              if (second.held?.has(`p${index}`)) return void values.delete(reader.keyOf(ask));
+              const key = reader.keyOf(ask);
+              if (second.held?.has(`p${index}`)) {
+                values.delete(key);
+                return heldBack(key);
+              }
               const value = reader.valueOf(second.data[`p${index}`], ask);
-              if (value !== null) values.set(reader.keyOf(ask), value);
+              if (value !== null) values.set(key, value);
             });
           }
         }
         for (const [key, value] of values) read.set(key, readOf(kept.reads[key], value, reader.keepsLast, now()));
+        if (unread) break;
       }
     }
     // (Into what's kept now: a read kept meanwhile apart from this one, `keepRead`, stays.)
