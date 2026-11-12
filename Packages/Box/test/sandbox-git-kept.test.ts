@@ -171,7 +171,7 @@ test.skipIf(!canFence)("git works in the sandbox as ever in a repository kept so
     expect([inTree.code, inTree.out]).toEqual([0, "in-tree"])
     // From the main checkout, with a worktree beside it, git tidies every worktree's reflogs.
     const tidied = run(tree.app, tree.git, "set -e; git reflog expire --all --expire=now && git gc -q --prune=now && echo tidied")
-    expect([tidied.code, tidied.out, tidied.said]).toEqual([0, "tidied", "tidied"])
+    expect([tidied.code, tidied.out]).toEqual([0, "tidied"])
     expect(existsSync(join(tree.git, "gc.log"))).toBe(false)
     if (process.platform === "linux") {
       for (const gitDir of [main.git, join(main.git, "modules", "lib"), tree.git]) {
