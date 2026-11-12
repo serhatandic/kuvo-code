@@ -145,7 +145,9 @@ import Testing
                 const given = read("statuses.json")[asked.path], answers = read("answers.json");
                 const status = (Array.isArray(given) ? given[nth - 1] : given) || 200;
                 // One the test holds (`hold.json`: by path, how many of its asks go through) waits,
-                // with what it read, until it's let go (or the test's folder goes).
+                // with what it read, until it's let go (or the test's folder goes); noted as it does
+                // ("held <nth> <line>").
+                if (read("hold.json")[asked.path] < nth) fs.appendFileSync(path.join(run, "asked.log"), "held " + nth + " " + line + "\\n");
                 while (fs.existsSync(run) && read("hold.json")[asked.path] < nth) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
                 // A worktree handed over is one it keeps from then on.
                 const records = "kuvo/worktrees?records=1";
@@ -347,6 +349,14 @@ import Testing
         askedOfTheBoxHere.filter { $0 == line }.count
     }
 
+    /// Which time it was asked `line` that the box here holds now, the first (`hold`).
+    private func held(_ line: String) -> Int? {
+        askedOfTheBoxHere.lazy.compactMap { entry -> Int? in
+            let parts = entry.split(separator: " ", maxSplits: 2).map(String.init)
+            return parts.count == 3 && parts[0] == "held" && parts[2] == line ? Int(parts[1]) : nil
+        }.first
+    }
+
     /// The box here's asks, followed: each one noted beats `TestPulse`, so a wait on them looks
     /// again. Ended by the test.
     private func followAsks() -> DispatchSourceFileSystemObject {
@@ -360,7 +370,7 @@ import Testing
     }
 
     /// The box here's status for each of `routes` (by its path), for each time it's asked in turn,
-    /// then 200; any other answers 200.
+    /// then 200; any other answers 200. (For asks made one at a time.)
     private func boxHereStatuses(_ routes: [String: [Int]]) throws {
         let file = home.appending(path: "\(RemoteEngineInstaller.root)/run/statuses.json")
         try JSONSerialization.data(withJSONObject: routes).write(to: file, options: .atomic)
@@ -368,7 +378,7 @@ import Testing
 
     /// The box here answers `path` the first `through` times it's asked (0: holds every ask from
     /// now on), and holds the asks after those, answered with what it read as it was asked, until
-    /// it's let go (`nil`).
+    /// it's let go (`nil`). (For asks made one at a time.)
     private func hold(_ path: String, through: Int?) throws {
         let file = home.appending(path: "\(RemoteEngineInstaller.root)/run/hold.json")
         var held = (try? JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Int]) ?? [:]
@@ -591,14 +601,15 @@ import Testing
         try await until { here.isReady && model.workspace.worktrees[root] != nil }
         // The next read waits, with what it read: the worktree.
         try hold(records, through: 0)
-        let reads = asked(read)
-        try await until { asked(read) > reads }
+        try await until { held(read) != nil }
+        let waiting = try #require(held(read))
         try await model.workspace.removeWorktree(root)
         #expect(model.workspace.worktrees[root] == nil)
-        // Gone there too. The read that waited goes on, and the one after waits.
+        // Gone there too. The read that waited goes on (taken in by the time it's read again), and
+        // the one after waits.
         try boxHereAnswers([records: ["worktrees": []]])
-        try hold(records, through: reads + 1)
-        try await until { asked(read) > reads + 1 }
+        try hold(records, through: waiting)
+        try await until { asked(read) > waiting }
         #expect(model.workspace.worktrees[root] == nil, "not brought back by what was read before")
         try hold(records, through: nil)
     }

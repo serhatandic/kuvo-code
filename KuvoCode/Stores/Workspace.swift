@@ -180,8 +180,14 @@ final class Workspace {
     }
     /// Sessions' own git worktrees, by the folder their sessions run in.
     private(set) var worktrees: [String: Worktree] = Workspace.loadWorktrees() {
-        didSet { projectsChanged() }
+        didSet {
+            worktreesChanged &+= 1
+            projectsChanged()
+        }
     }
+    /// How many times `worktrees` changed: a read of a box's worktrees from before a change since
+    /// isn't taken (`takeWorktrees`).
+    @ObservationIgnored private var worktreesChanged = 0
     /// The projects of worktrees removed since, by the folder their sessions ran in: an archived
     /// session there still belongs to its project, and comes back to it if you restore it.
     private var removedWorktrees: [String: String] = UserDefaults.standard.dictionary(forKey: "removedWorktrees") as? [String: String] ?? [:] {
@@ -1214,8 +1220,8 @@ final class Workspace {
         // taken once; after that, one it doesn't list was removed there.
         let attachedHere = box == SSHConnection.thisMac
         let handsOver = !(attachedHere && worktreesHandedOver.contains(box))
-        let before = attachedHere ? worktrees.filter { Self.isOn($0.value.root, box) } : [:]
-        let changedHere = { attachedHere && self.worktrees.filter { Self.isOn($0.value.root, box) } != before }
+        let before = worktreesChanged
+        let changedHere = { attachedHere && self.worktreesChanged != before }
         guard let listed: Listed = try? await onBox(box, "GET", details ? "kuvo/worktrees" : "kuvo/worktrees?records=1", nil) else { return nil }
         if box != BoxClient.mac || !followingWorktrees, !changedHere() { takeRestorable(listed.restorable ?? [], from: box) }
         var records = listed.worktrees
@@ -1231,7 +1237,8 @@ final class Workspace {
             } catch let refusal as BoxRefusal where refusal.status == 404 {
                 // Not there any more: it goes here too.
             } catch let refusal as BoxRefusal where refusal.status < 500 {
-                // Not one it takes (as kept here it doesn't make sense there): it stays here, as it was.
+                // Not one it takes (as kept here it doesn't make sense there): it goes here too, as
+                // one it doesn't have.
                 continue
             } catch {
                 // Not asked: kept as it was, for next time.
@@ -1245,8 +1252,14 @@ final class Workspace {
         return Dictionary(records.map { (Self.here($0.root, on: box), $0) }, uniquingKeysWith: { first, _ in first })
     }
 
-    /// The boxes attached in place that took what this Mac kept for them (`takeWorktrees`).
+    /// The boxes attached in place that took what this Mac kept for them (`takeWorktrees`), this
+    /// connection.
     @ObservationIgnored private var worktreesHandedOver: Set<String> = []
+
+    /// `box` connected (again): what this Mac kept there is handed over once more, as it's read.
+    func connecting(to box: String) {
+        worktreesHandedOver.remove(box)
+    }
 
     /// Whether `folder` is on `box`, as it's named here. Attached in place, the box here is this
     /// Mac's, but what the app's own box kept (named as this Mac's own folders) isn't that box's: it's

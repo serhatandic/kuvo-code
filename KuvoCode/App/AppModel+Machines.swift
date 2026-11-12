@@ -590,8 +590,12 @@ extension AppModel {
     /// long as its connection lasts.
     private func connected(_ engine: MachineEngine, _ connection: MachineConnection) async {
         let machine = engine.machine.id
-        // This Mac's own box, attached in place: its engine is this Mac's, at once.
-        if engine.machine.isThisMac { thisMacsBoxConnected(engine) }
+        // This Mac's own box, attached in place: its engine is this Mac's, at once; and what this
+        // Mac kept there is handed to it again (once taken, it's only read).
+        if engine.machine.isThisMac {
+            thisMacsBoxConnected(engine)
+            workspace.connecting(to: machine)
+        }
         // What waits for it (a bot deleted, an integration removed while it was away), now.
         guard await MachineConnection.inTurn([{ await self.machines.runWaiting(only: machine) }]) else { return }
         // Its sessions, once it's up: tried again a few times, as they're what makes them live.

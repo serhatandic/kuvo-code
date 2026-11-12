@@ -96,14 +96,6 @@ final class WakeUps {
         return app.box(owner.machine ?? BoxClient.mac)
     }
 
-    /// Whether a conversation (by its key) lives on this Mac: a bot here, or a session that isn't a
-    /// machine's. One moved to a machine is that machine's to say, whatever its old folder here says.
-    private func livesHere(_ key: String) -> Bool {
-        guard let app else { return false }
-        if let bot = app.bots.bot(key) { return bot.machine == nil }
-        guard let session = app.workspace.session(key) else { return true }
-        return RemoteFolder.machine(of: session.location.directory) == nil
-    }
 
     private static func route(_ owner: Owner, _ action: String? = nil) -> String {
         "kuvo/wakes/" + (owner.session.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? owner.session) + (action.map { "/" + $0 } ?? "")
@@ -157,15 +149,15 @@ final class WakeUps {
         }
     }
 
-    /// Whether a conversation (by its key) that `box` lists is its to say: on the app's own, one
-    /// that lives here (`livesHere`); on any other (the box attached in place), likewise, one whose
-    /// bot or session is still on that box. One moved to a machine is that machine's to say.
+    /// Whether a conversation (by its key) that `box` lists is its to say: one that lives on it (a
+    /// bot there, or a session in a folder there, or one not known here). One moved to another
+    /// computer is that one's to say, whatever its old folder says.
     private func lives(_ key: String, on box: String) -> Bool {
-        guard box != BoxClient.mac else { return livesHere(key) }
         guard let app else { return false }
-        if let bot = app.bots.bot(key) { return bot.machine == box }
+        let machine = box == BoxClient.mac ? nil : box
+        if let bot = app.bots.bot(key) { return bot.machine == machine }
         guard let session = app.workspace.session(key) else { return true }
-        return RemoteFolder.machine(of: session.location.directory) == box
+        return RemoteFolder.machine(of: session.location.directory) == machine
     }
 
     // MARK: Changing them
