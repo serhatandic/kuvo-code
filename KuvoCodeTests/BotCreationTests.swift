@@ -69,9 +69,12 @@ import Testing
         #expect(engine.requests("POST", "/api/session/ses_inbox/synthetic").count == 1)
 
         // You tell it; it keeps its job with set_job, and that's what shows under its name.
-        // (As its set_job tool on this Mac carries it out: `BrowserTools.job`.)
-        let kept = await app.bots.setJob(["summary": "Sorts my inbox every morning.", "details": "Archive newsletters; flag anything from my bank."], caller: "ses_inbox")
+        // (As this Mac's tool server passes the call on to its box, and the app hears of the bot again.)
+        let mail = AgentMail()
+        mail.box = { box.client(engine: engine.url) }
+        let kept = await mail.call("set_job", arguments: ["summary": "Sorts my inbox every morning.", "details": "Archive newsletters; flag anything from my bank."], caller: "ses_inbox")
         #expect(kept.isError == false, "\(kept.text)")
+        await app.bots.refresh(BoxClient.mac)
         #expect(app.bots.bot(bot.id)?.job == "Sorts my inbox every morning")
         #expect(app.bots.bot(bot.id)?.instructions == "Archive newsletters; flag anything from my bank.")
         #expect(told("ses_inbox").last?.contains("Archive newsletters; flag anything from my bank.") == true, "it hears its job as kept")
