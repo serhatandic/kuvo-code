@@ -5475,7 +5475,7 @@ outside it, with `sandbox_ask`) and the
 agents' `.claude`, `.codex`, `.cursor`, `.gemini` and `.grok`, can't be made, moved or removed, only written in, and
 neither can the conversation's folder itself and its repository's, so neither is traded for a link to
 another bot's), its conversation's own temporary
-folder (`TMPDIR`), its conversation's wake-ups' inbox (below), its bot's memory (`MEMORY.md` in the folder of the bot
+folder (`TMPDIR`; on Linux it can be emptied but not removed, as in the command's namespace it's mounted in place, `HIDE` in fence/landlock.ts), its conversation's wake-ups' inbox (below), its bot's memory (`MEMORY.md` in the folder of the bot
 whose conversation it is; for its seat in a group chat, the bot the agents bridge names
 (`KUVO_FENCE_BOT`, from the seat's `kuvo.seat.bot`), or, run by the engine, the bot whose own folder
 (not a link) it works in: that file alone, and only while it has no other name (a hard link), read

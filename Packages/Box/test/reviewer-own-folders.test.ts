@@ -148,10 +148,12 @@ test.skipIf(!canFence)("in Auto, a conversation reads and writes its own tempora
       said.keysSession = await ask("ses_keys", home.BOX_KEYS, "cat ./box.key");
       // Its commands can't trade their temporary folder for a link into Kuvo Code's folders...
       said.swapped = run('t=\${TMPDIR%/}; cd / && rm -rf "$t" 2>/dev/null; [ -e "$t" ] || ln -s ' + home.BOX_KEYS + ' "$t" && [ -L "$t" ] && echo swapped', ${JSON.stringify(project)}).stdout.trim();
-      said.movedIn = run('t=\${TMPDIR%/}; cd / && rm -rf "$t"; l=/tmp/kuvo-link-$$; ln -s ' + home.BOX_KEYS + ' "$l" && mv "$l" "$t" 2>/dev/null && echo moved; rm -f "$l"', ${JSON.stringify(project)}).stdout.trim();
+      said.movedIn = run('t=\${TMPDIR%/}; cd / && rm -rf "$t"; l=/tmp/kuvo-link-$$; ln -s ' + home.BOX_KEYS + ' "$l" && mv "$l" "$t" 2>/dev/null && [ -L "$t" ] && echo moved; rm -f "$l"', ${JSON.stringify(project)}).stdout.trim();
       said.stillFolder = !fs.lstatSync(tmp, { throwIfNoEntry: false })?.isSymbolicLink();
-      // (Though it may take it away, as \`rm -rf $TMPDIR\` does, and make it again as a folder.)
-      said.removed = run('rm -rf "$TMPDIR"; echo "rm $?"; mkdir "$TMPDIR" && echo again', ${JSON.stringify(project)}).stdout.trim();
+      // (Though it may take it away, as \`rm -rf $TMPDIR\` does, and make it again as a folder. On
+      // Linux it's only emptied: in the command's namespace it's mounted in place, in a folder it can't
+      // change (fence/landlock.ts's HIDE, since c923f4f6b), so it stays, as safe.)
+      said.removed = run('rm -rf "$TMPDIR"; echo "rm $?"; mkdir "$TMPDIR" 2>/dev/null && echo again; [ -d "$TMPDIR" ] && [ ! -L "\${TMPDIR%/}" ] && [ -O "$TMPDIR" ] && echo "its own, with $(ls -A "$TMPDIR" | wc -l | tr -d " ") in it"', ${JSON.stringify(project)}).stdout.trim();
       // ...and one put there before the sandbox kept them from it isn't theirs: the reviewer doesn't
       // follow it, and the next command gets a folder of its own again.
       fs.rmSync(tmp, { recursive: true, force: true });
@@ -164,7 +166,7 @@ test.skipIf(!canFence)("in Auto, a conversation reads and writes its own tempora
       different: true, othersRead: refused, othersAsk: expect.stringMatching(/^Auto's reviewer refused: It reaches Kuvo Code's own folders/),
       keys: refused, keysAsk: expect.stringMatching(/^Auto's reviewer refused: It reaches Kuvo Code's own folders/),
       keysSession: expect.stringMatching(/^Auto's reviewer refused: It reaches Kuvo Code's own folders/),
-      swapped: "", movedIn: "", stillFolder: true, removed: "rm 0\nagain", linkedRead: refused, next: "unreadable",
+      swapped: "", movedIn: "", stillFolder: true, removed: process.platform === "darwin" ? "rm 0\nagain\nits own, with 0 in it" : "rm 1\nits own, with 0 in it", linkedRead: refused, next: "unreadable",
     })
     // Only the command outside the sandbox went to the model.
     expect(prompts.length).toBe(1)
