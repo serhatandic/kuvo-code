@@ -54,5 +54,4 @@ for suite in box bridge; do
         fi
     fi
 done
-case "$root/" in "$HOME/.kuvo-code/"*) echo 'Sandbox tests need a checkout outside ~/.kuvo-code to exercise the sandbox correctly.' ;; esac
 [ "$box_status" != fail ] && [ "$bridge_status" != fail ]
