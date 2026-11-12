@@ -729,6 +729,7 @@ test("a link a command makes doesn't take the engine's own file tools out of the
   const project = path.join(root, "tools-project");
   fs.mkdirSync(project);
   fs.writeFileSync(path.join(project, "notes.md"), "the project's\n");
+  fs.writeFileSync(path.join(project, "the notes.md"), "the project's\n");
   // Somewhere commands can't read or write: your keys, and a start-up script that isn't there yet.
   const keys = path.join(root, "your-keys");
   fs.mkdirSync(keys);
@@ -752,9 +753,11 @@ test("a link a command makes doesn't take the engine's own file tools out of the
       ["patch the key", "patch", { patchText: "*** Begin Patch\n*** Update File: keys/id_test\n@@\n-a key\n+b key\n*** End Patch" }, input => patchedFile(input.patchText)],
       // (The engine takes a patch's lines without the spaces around them.)
       ["patch the key, the line indented", "patch", { patchText: "*** Begin Patch\n  *** Update File: keys/id_test \n@@\n-a key\n+b key\n*** End Patch" }, input => patchedFile(input.patchText)],
-      // (Read reads the one file beside a name that isn't there whose name is the same but for a
-      // no-break space; and the engine takes a name with the spaces it has.)
+      // (Read reads the one plain file beside a name that isn't there whose name is the same but
+      // for a no-break space, never a link: a link's is refused, as what's judged is the name given.
+      // And the engine takes a name with the spaces it has.)
       ["read the key by a look-alike name", "read", { path: "look\u00a0alike.txt" }, input => input.path],
+      ["read a file of its own by a look-alike name", "read", { path: "the\u00a0notes.md" }, input => input.path],
       ["read the key by a name ending in a space", "read", { path: "spaced.txt " }, input => input.path],
       ["write far into a link to a place that isn't there yet", "write", { path: `deep/${"d/".repeat(41)}x`, content: "x" }, input => input.path],
       // (A .. after a link goes up from where the link leads.)
@@ -782,7 +785,8 @@ test("a link a command makes doesn't take the engine's own file tools out of the
       "search its folder": "asks",
       "patch the key": "asks",
       "patch the key, the line indented": "asks",
-      "read the key by a look-alike name": "asks",
+      "read the key by a look-alike name": "refused",
+      "read a file of its own by a look-alike name": "goes",
       "read the key by a name ending in a space": "asks",
       "write far into a link to a place that isn't there yet": "asks",
       "write through a link that goes up from another": "asks",
@@ -1726,5 +1730,266 @@ test("Check Now runs a watch's check in the sandbox, and none whose folder is go
     assert.equal(fs.existsSync(path.join(own, "checked")), false);
   } finally {
     await running.stop().catch(() => {});
+  }
+});
+
+// While the sandbox is held, nothing can be let out of it: sandbox_ask isn't listed, and a call to it
+// is told the sandbox is being checked.
+const BEING_CHECKED = "The sandbox is being checked again, so nothing can be let out of it yet: commands still run in it. Try again in a minute, or tell the user what you need.";
+const CHECK_FAILED = "The sandbox's check failed here, so nothing can be let out of it: run the command with your shell tool, which asks the user first.";
+async function nothingLetOut(running, said = BEING_CHECKED) {
+  assert.deepEqual((await running.ask("GET", "kuvo/sandbox/tools")).value.tools, []);
+  const asked = (await running.ask("POST", "kuvo/sandbox/tools", { name: "sandbox_ask", session: "ses_x", arguments: { command: "ls", why: "to see" } })).value;
+  assert.deepEqual([asked.isError, asked.text], [true, said]);
+}
+
+// What a Mac asks a machine's box over SSH (`box route`): a process of its own, its answer's body.
+function routeOnce(box, env, method, route) {
+  const run = spawnSync(process.execPath, [script, "box", "route"], { env: { ...box.env, ...env }, input: JSON.stringify({ method, path: route }), encoding: "utf8" });
+  return JSON.parse(JSON.parse(run.stdout.trim().split("\n").at(-1)).body);
+}
+
+// A busy computer (a Mac mini running the box's whole suite) can keep the sandbox's check from
+// finishing in time: that says nothing of whether the sandbox works, so it's never taken for a
+// failed check, which would leave commands outside it.
+test("a check that doesn't finish in time leaves nothing outside the sandbox, and nothing counts on it until a check passes", async () => {
+  const box = boxAt("slow-check");
+  const project = path.join(root, "slow-check-project");
+  fs.mkdirSync(project);
+  // A file of yours, which a watch's check may never delete, and one of Kuvo Code's own, which a
+  // command may never read.
+  const outside = path.join(root, "slow-check-yours");
+  fs.writeFileSync(outside, "yours\n");
+  const own = path.join(box.home, "run", "engine.json");
+  // What holds the check up, as a busy computer would: a FIFO no one writes, there or not.
+  const hold = path.join(root, "slow-check-hold");
+  const holdUp = () => assert.equal(spawnSync("mkfifo", [hold]).status, 0);
+  const letGo = () => fs.rmSync(hold, { force: true });
+  const wake = path.join(box.home, "bin", "kuvo-wake");
+  const wakes = path.join(box.wakes, "ses_slow");
+  // Everything that runs commands, while the check hasn't finished: still in the sandbox.
+  const allInIt = async () => {
+    const state = (await running.ask("GET", "kuvo/sandbox")).value;
+    assert.deepEqual([state.on, state.reason, state.check], [false, "checking", undefined], `not a failed check: ${state.why}`);
+    const ran = await engineRuns(box, project, `cat ${JSON.stringify(own)}`, "ses_slow");
+    assert.notEqual(ran.status, 0, `a command ran outside the sandbox: ${ran.out}`);
+    const [letters] = fs.readdirSync(path.join(wakes, "watches"));
+    const tried = byHand(box, wakes, "try", letters);
+    assert.equal(fs.existsSync(outside), true, `a watch's check ran outside the sandbox: ${tried.stdout}${tried.stderr}`);
+    // And nothing counts on it: Auto asks first meanwhile, and nothing can be let out of it.
+    assert.equal((await running.ask("GET", "kuvo/approval")).value.auto.engine.held?.reason, "sandbox");
+    await nothingLetOut(running);
+  };
+  const checkedAgain = async () => {
+    letGo();
+    const state = (await running.ask("POST", "kuvo/sandbox/check")).value;
+    assert.equal(state.on, true, state.why);
+    assert.equal((await running.ask("GET", "kuvo/approval")).value.auto.engine.held, undefined);
+  };
+  holdUp();
+  const running = await start(box, { KUVO_TEST_SANDBOX_CHECK_HOLD: hold });
+  try {
+    // Its first check, as the box starts, doesn't finish (the box has decided once it's over).
+    assert.equal(decidedBy(box), running.pid);
+    // An agent's command adds a watch whose check deletes outside its conversation's folder.
+    const added = await engineRuns(box, project, `${wake} watch 1d 'rm -f ${outside}; echo seen' 'The build'`, "ses_slow");
+    assert.equal(added.status, 0, added.out);
+    await fire(box);
+    await changeIn(box.wakes, () => !fs.existsSync(path.join(box.wakes, ".watching")));
+    await allInIt();
+    await checkedAgain();
+    // On, then checked again as a busy computer's box is, and that check doesn't finish either.
+    holdUp();
+    await running.ask("POST", "kuvo/sandbox/check");
+    await allInIt();
+    // Its plugin for the engine taken away meanwhile: put back within the box's round.
+    fs.rmSync(box.plugin);
+    await changeIn(path.dirname(box.plugin), () => fs.existsSync(box.plugin));
+    // (On again once the engine has it again, as it opens the folder.)
+    await engineRuns(box, project, "true", "ses_slow");
+    await checkedAgain();
+    // Checked in another of the box's processes (`box route`, as a Mac asks a machine's box), where
+    // it doesn't finish: the box says so too, and checks again itself once it can.
+    holdUp();
+    const routed = routeOnce(box, { KUVO_TEST_SANDBOX_CHECK_HOLD: hold }, "POST", "kuvo/sandbox/check");
+    assert.equal(routed.reason, "checking", routed.why);
+    await allInIt();
+    letGo();
+    const fence = path.join(box.home, "run", "fence");
+    await changeIn(fence, () => !fs.existsSync(path.join(fence, "held")));
+    const state = (await running.ask("GET", "kuvo/sandbox")).value;
+    assert.equal(state.on, true, state.why);
+  } finally {
+    await running.stop();
+    fs.rmSync(hold, { force: true });
+  }
+});
+
+// The engine, as far as conversations' approvals go: `sessions` by id, which the box's PATCHes change
+// (each told to `patched`); its list held back while `listing` is false, as a busy engine's would be.
+async function approvalEngine(box, sessions, patched) {
+  const waiting = [];
+  let listing = true;
+  const server = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", chunk => { body += chunk; });
+    request.on("end", () => {
+      const reply = value => { response.writeHead(value ? 200 : 404, { "content-type": "application/json" }); response.end(JSON.stringify(value ?? { message: "Not here." })); };
+      const url = new URL(request.url, "http://x");
+      if (url.pathname === "/api/session" && request.method === "GET") {
+        const list = () => reply({ data: [...sessions.values()] });
+        return listing ? list() : waiting.push(list);
+      }
+      const one = url.pathname.match(/^\/api\/session\/([^/]+)$/);
+      const id = one && decodeURIComponent(one[1]);
+      if (one && request.method === "GET" && sessions.has(id)) return reply({ data: sessions.get(id) });
+      if (one && request.method === "PATCH" && sessions.has(id)) {
+        sessions.set(id, { ...sessions.get(id), ...JSON.parse(body) });
+        patched(sessions.get(id));
+        return reply({ data: sessions.get(id) });
+      }
+      reply(null);
+    });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  fs.writeFileSync(path.join(box.home, "run", "engine.json"), JSON.stringify({ pid: process.pid, port: server.address().port, password: "engine-pw", version: "test" }));
+  return {
+    hold: () => { listing = false; },
+    go: () => { listing = true; for (const list of waiting.splice(0)) list(); },
+    close: () => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); },
+  };
+}
+
+// A sandboxed agent can make the check fail (fill the disk, use up its processes): the sandbox is
+// taken away only once every conversation's rules ask first, so nothing in Auto runs outside it
+// unasked meanwhile. The same once its check hasn't finished time after time.
+test("a failed check takes the sandbox away only once Auto asks first, and one that never finishes counts as failed", async () => {
+  const box = boxAt("failed-check");
+  const project = path.join(root, "failed-check-project");
+  fs.mkdirSync(project);
+  const own = path.join(box.home, "run", "engine.json");
+  const hold = path.join(root, "failed-check-hold");
+  // A conversation in Auto, its rules made for the sandbox being on.
+  const NEVER_HELD = [{ action: "read", resource: "*.env", effect: "allow" }, { action: "read", resource: "*.env.*", effect: "allow" }, { action: "doom_loop", resource: "*", effect: "allow" }];
+  const sessions = new Map([["ses_auto", { id: "ses_auto", title: "Auto", location: { directory: project }, permissions: NEVER_HELD, metadata: { kuvo: { approval: "auto", applied: "auto" } }, time: { created: 1, updated: 1 } }]]);
+  // What the box's rules come to, as it writes them, and whether the sandbox's plugin was still there.
+  let told = () => {};
+  const changes = [];
+  const engine = await approvalEngine(box, sessions, now => { changes.push({ applied: now.metadata?.kuvo?.applied, asks: now.permissions.some(rule => rule.action === "shell" && rule.effect === "ask"), plugin: fs.existsSync(box.plugin) }); told(); });
+  const applied = want => new Promise(resolve => {
+    told = () => { if (sessions.get("ses_auto").metadata?.kuvo?.applied === want) resolve(); };
+    told();
+  });
+  const running = await start(box, { KUVO_TEST_SANDBOX_CHECK_HOLD: hold });
+  try {
+    // On, with the engine's plugin loaded, and the conversation in Auto as it was.
+    await engineRuns(box, project, "true", "ses_auto");
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.on, true);
+    await applied("auto");
+    // An agent's command adds a watch whose check deletes a file of yours outside its folder.
+    const outside = path.join(root, "failed-check-yours");
+    fs.writeFileSync(outside, "yours\n");
+    const wake = path.join(box.home, "bin", "kuvo-wake");
+    assert.equal((await engineRuns(box, project, `${wake} watch 1d 'rm -f ${outside}; echo seen' 'The build'`, "ses_auto")).status, 0);
+    await fire(box);
+    await changeIn(box.wakes, () => !fs.existsSync(path.join(box.wakes, ".watching")));
+    const wakes = path.join(box.wakes, "ses_auto");
+    const [letters] = fs.readdirSync(path.join(wakes, "watches"));
+
+    // The coding agents' bridge isn't running (killed, its record left behind): the sandbox isn't
+    // held for it, as a bridge started again asks in Auto while the sandbox is off.
+    const gone = spawnSync("true").pid;
+    fs.writeFileSync(path.join(box.home, "run", "bridge.json"), JSON.stringify({ pid: gone, port: 1, password: "bridge-pw" }));
+    // The check fails while the engine is slow to list its conversations.
+    engine.hold();
+    fs.writeFileSync(hold, "fail\n");
+    const state = (await running.ask("POST", "kuvo/sandbox/check")).value;
+    assert.deepEqual([state.on, state.reason, state.check], [false, "checkFailed", "readsOwn"], state.why);
+    // Before its rules are made again, a command it runs is still in the sandbox, and nothing counts on it.
+    assert.equal(sessions.get("ses_auto").metadata.kuvo.applied, "auto");
+    const ran = await engineRuns(box, project, `cat ${JSON.stringify(own)}`, "ses_auto");
+    assert.notEqual(ran.status, 0, `a command in Auto ran outside the sandbox without asking: ${ran.out}`);
+    assert.equal((await running.ask("GET", "kuvo/approval")).value.auto.engine.held?.reason, "sandbox");
+    await nothingLetOut(running, CHECK_FAILED);
+    // Then its rules ask first, and only then does the sandbox go.
+    engine.go();
+    await applied("askFirst");
+    await changeIn(path.dirname(box.plugin), () => !fs.existsSync(box.plugin));
+    const askFirst = changes.find(each => each.applied === "askFirst");
+    assert.deepEqual(askFirst && [askFirst.asks, askFirst.plugin], [true, true], JSON.stringify(changes));
+    // The watch's check, which can't ask, waits for the sandbox rather than run outside it.
+    const tried = byHand(box, wakes, "try", letters);
+    assert.match(tried.stdout, /isn't ready/, tried.stderr);
+    assert.equal(fs.existsSync(outside), true, "a watch's check ran outside the sandbox");
+
+    // Checked again: it passes, and Auto goes on its own again.
+    fs.rmSync(hold);
+    assert.equal((await running.ask("POST", "kuvo/sandbox/check")).value.reason, "waiting");
+    await engineRuns(box, project, "true", "ses_auto");
+    assert.equal((await running.ask("GET", "kuvo/sandbox")).value.on, true);
+    await applied("auto");
+
+    // A check that never finishes: "checking" a few times, then failed, and taken away the same way.
+    assert.equal(spawnSync("mkfifo", [hold]).status, 0);
+    let tries = 0;
+    let now;
+    do {
+      now = (await running.ask("POST", "kuvo/sandbox/check")).value;
+      tries += 1;
+    } while (now.reason === "checking" && tries < 10);
+    assert.deepEqual([now.reason, now.check], ["checkFailed", "didntRun"], now.why);
+    assert.ok(tries <= 5, `still checking after ${tries} checks`);
+    await applied("askFirst");
+    await changeIn(path.dirname(box.plugin), () => !fs.existsSync(box.plugin));
+    assert.equal(changes.filter(each => each.applied === "askFirst").at(-1).plugin, true, JSON.stringify(changes));
+  } finally {
+    await running.stop();
+    await engine.close();
+    fs.rmSync(hold, { force: true });
+  }
+});
+
+// A machine that stops letting commands have a namespace of their own (an upgrade that restricts user
+// namespaces): they keep theirs while that's checked and until Auto asks first, then the sandbox goes
+// on without one, as on a machine that never let them, never off for good.
+test("where commands lose their own namespace, the sandbox goes on without one once Auto asks first", { skip: !canBlock && "a Linux machine whose user namespaces this test can block" }, async () => {
+  const box = boxAt("namespace-gone");
+  const project = path.join(root, "namespace-gone-project");
+  fs.mkdirSync(project);
+  const engine = await approvalEngine(box, new Map(), () => {});
+  const namespaceFile = path.join(box.home, "run", "fence", "namespace");
+  try {
+    const before = await start(box);
+    await engineRuns(box, project, "true");
+    assert.equal((await before.ask("GET", "kuvo/sandbox")).value.on, true);
+    await before.stop();
+    assert.match(fs.readFileSync(namespaceFile, "utf8"), /^\//, "set up with a namespace of their own");
+    // A wake folder no one used for days, which the box's round clears: gone, its round has run.
+    const stale = path.join(box.wakes, "ses_stale");
+    fs.mkdirSync(path.join(stale, "wakes"), { recursive: true });
+    const days = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    for (const each of [path.join(stale, "wakes"), stale]) fs.utimesSync(each, days, days);
+    // Started again where namespaces can't be had.
+    engine.hold();
+    const running = await start(box, {}, blocked);
+    try {
+      let state = (await running.ask("GET", "kuvo/sandbox")).value;
+      assert.equal(state.on, false, state.why);
+      assert.match(fs.readFileSync(namespaceFile, "utf8"), /^\//, "kept until nothing counts on the sandbox");
+      // Its round checks again while it's held (and Auto doesn't ask yet): still kept.
+      await changeIn(box.wakes, () => !fs.existsSync(stale));
+      assert.match(fs.readFileSync(namespaceFile, "utf8"), /^\//, "kept through the box's round");
+      engine.go();
+      const fence = path.dirname(namespaceFile);
+      await changeIn(fence, () => !fs.existsSync(path.join(fence, "held")));
+      assert.equal(fs.readFileSync(namespaceFile, "utf8"), "-", "without one once Auto asks first");
+      await engineRuns(box, project, "true");
+      state = (await running.ask("GET", "kuvo/sandbox")).value;
+      assert.deepEqual([state.on, state.gaps], [true, ["services"]], state.why);
+    } finally {
+      await running.stop();
+    }
+  } finally {
+    await engine.close();
   }
 });

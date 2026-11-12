@@ -7132,6 +7132,10 @@ function fullAccessMark(session) {
   const where = folder();
   return where && session && /^ses_[A-Za-z0-9_]+$/.test(session) && existsSync7(join16(where, "full", session)) ? " full" : "";
 }
+function fenceOff() {
+  const where = folder();
+  return Boolean(where) && existsSync7(where) && !fenceOn();
+}
 function fenceOn() {
   const where = folder();
   return Boolean(where) && process.env.KUVO_SANDBOX !== "off" && existsSync7(join16(where, "on"));
@@ -19435,6 +19439,7 @@ function partsOf2(ask) {
 function isShell(action) {
   return action === "shell" || action === "bash";
 }
+var madeForAuto = (session) => session.metadata?.kuvo?.applied === "auto";
 function alwaysSaves(ask) {
   if (ask.save)
     return ask.save;
@@ -21159,6 +21164,8 @@ ${live.agentPrompt}` : ""
       approvesAll: (canAsk = true) => {
         if (plan)
           return false;
+        if (this.autoWithoutSandbox(live, record.session))
+          return false;
         if ((record.session.permissions ?? []).some((rule) => rule.effect !== "allow"))
           return false;
         const isDefault = (rule) => engineDefaults.some((other) => other.action === rule.action && other.resource === rule.resource && other.effect === rule.effect);
@@ -21283,6 +21290,13 @@ ${live.agentPrompt}` : ""
     }
     return going.length > 0;
   }
+  autoWithoutSandbox(live, session) {
+    if (!madeForAuto(session))
+      return false;
+    if (fenceOff())
+      return true;
+    return [...live.threads].some(([providerID, thread]) => thread.outside || this.agent(providerID)?.outside?.() === true);
+  }
   checkPermission(live, session, ask, plan, owns) {
     const parts = partsOf2(ask);
     if (live.blocks && strictest(live.blocks, ask.action, parts) === "deny")
@@ -21310,6 +21324,8 @@ ${live.agentPrompt}` : ""
     if (live.blocks === undefined && !looks2.has(ask.action))
       return "ask";
     if (hidesFromBlocks(live.blocks, ask))
+      return "ask";
+    if (isShell(ask.action) && this.autoWithoutSandbox(live, session) && !this.allowedBefore(live, ask))
       return "ask";
     return effect === "ask" && !this.allowedBefore(live, ask) ? "ask" : undefined;
   }
@@ -21376,7 +21392,8 @@ ${live.agentPrompt}` : ""
     if (effect === "deny")
       return "reject";
     const unclassified = ask.unclassified && matched === undefined && asksFirst(session.permissions) && !this.allowedBefore(live, ask);
-    if (!unknown && !unclassified && !hidesFromBlocks(live.blocks, ask) && (effect === "allow" || this.allowedBefore(live, ask)))
+    const unfenced = isShell(ask.action) && this.autoWithoutSandbox(live, session) && !this.allowedBefore(live, ask);
+    if (!unknown && !unclassified && !unfenced && !hidesFromBlocks(live.blocks, ask) && (effect === "allow" || this.allowedBefore(live, ask)))
       return "once";
     if (turn.isEnded || refusesAsks(live.doing))
       return "reject";
@@ -23234,7 +23251,8 @@ class GroupStore {
     };
   }
   writeSettings(settings) {
-    write(join31(this.root, "settings.json"), { kuvo: version2, ...settings });
+    const kept = read2(join31(this.root, "settings.json"));
+    write(join31(this.root, "settings.json"), { ...kept && typeof kept === "object" ? kept : {}, kuvo: version2, ...settings });
   }
   allBots() {
     let names = [];
@@ -23570,17 +23588,22 @@ async function groupRoutes(runner, store, method, parts, body) {
       return json9({ version: version2, data: runner.list() });
     return error(405, "Not allowed");
   }
-  if (id === "settings" && method === "PUT") {
+  if ((id === "box-settings" || id === "clock" || id === "settings") && method === "PUT" && action === undefined) {
     const value = await body();
     const before = store.settings();
-    store.writeSettings({
-      personalities: value?.personalities && typeof value.personalities === "object" ? value.personalities : {},
-      identityNote: typeof value?.identityNote === "string" ? value.identityNote : "",
-      askFirst: value?.askFirst === true,
-      denies: Array.isArray(value?.denies) ? value.denies : [],
-      timeZone: typeof value?.timeZone === "string" ? value.timeZone : undefined,
-      locale: typeof value?.locale === "string" ? value.locale : undefined
-    });
+    if (id === "box-settings") {
+      store.writeSettings({
+        personalities: value?.personalities && typeof value.personalities === "object" ? value.personalities : {},
+        identityNote: typeof value?.identityNote === "string" ? value.identityNote : "",
+        askFirst: value?.askFirst === true,
+        denies: Array.isArray(value?.denies) ? value.denies : []
+      });
+    } else {
+      store.writeSettings({
+        timeZone: typeof value?.timeZone === "string" ? value.timeZone : undefined,
+        locale: typeof value?.locale === "string" ? value.locale : undefined
+      });
+    }
     const after = store.settings();
     if (JSON.stringify([before?.askFirst, before?.denies]) !== JSON.stringify([after?.askFirst, after?.denies]))
       runner.rulesChanged();
@@ -28380,4 +28403,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 782a05911f1b0fe339be778037586abdc1ca162cb46d5ee64ed58bf300b8b252
+// Built from Packages/Box/src/agents a106d7e2c78b8e9fcee403e79fe380d60af8177363118d6aa87572ebc87919f9

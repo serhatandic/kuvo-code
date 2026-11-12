@@ -142,7 +142,7 @@ final class Sandboxes {
                 do {
                     // Whether its word on the reviewer's asks is whole: read once a connection.
                     // (Counted once read: one that fails is read again on the next try.)
-                    if box != BoxClient.mac, !featuresRead.contains(box) {
+                    if !BoxClient.hasEveryFeature(box), !featuresRead.contains(box) {
                         struct Info: Decodable { var features: [String]? }
                         if let info = try? await client.value(Info.self, "GET", "kuvo/info") {
                             featuresRead.insert(box)
@@ -159,14 +159,14 @@ final class Sandboxes {
                     }
                     // This Mac's box tells each change as it comes: its stream over, it's not
                     // telling now. A machine's answers once, and is read again.
-                    if box == BoxClient.mac { setLive(false, box) }
+                    if BoxClient.streams(box) { setLive(false, box) }
                 } catch let refusal as BoxRefusal where [404, 405].contains(refusal.status) {
                     return
                 } catch {
                     setLive(false, box)
                 }
             }
-            try? await Task.sleep(for: .seconds(box == BoxClient.mac ? 2 : 10))
+            try? await Task.sleep(for: .seconds(BoxClient.streams(box) ? 2 : 10))
         }
         // Gone with its connection: nothing it asks can be answered from here now. What it still
         // asks keeps its notification, and isn't told again when it's back.
@@ -424,7 +424,7 @@ final class Sandboxes {
             await readState(box)
             if without.contains(box) { return }
             // A machine's goes over SSH: less often.
-            try? await Task.sleep(for: .seconds(Self.passes(states[box]) ? (box == BoxClient.mac ? 4 : 10) : 30))
+            try? await Task.sleep(for: .seconds(Self.passes(states[box]) ? (BoxClient.streams(box) ? 4 : 10) : 30))
         }
     }
 

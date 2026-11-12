@@ -19,9 +19,75 @@ public struct SSHConnection: Sendable, Hashable, Codable {
     private static let routesLock = NSLock()
     nonisolated(unsafe) private static var routes: [String: String] = [:]
 
-    /// Sends connections to `destination` to `address` from now on (nil: to itself again).
+    /// Sends connections to `destination` to `address` from now on (nil: to itself again). This
+    /// Mac's own box (`thisMac`) is only ever here.
     public static func route(_ destination: String, to address: String?) {
+        guard destination != thisMac else { return }
         routesLock.withLock { routes[destination] = address == destination ? nil : address }
+    }
+
+    /// This Mac's own box, already in its home folder: one set up as a machine (your Mac mini),
+    /// which the app attaches to in place (#183). The app reaches it as it reaches any machine, by
+    /// this name, with no SSH: what would go to it over SSH runs here, from its home folder, the
+    /// way sshd runs it there (`invocation`), and its engine's ports are this Mac's own. (`.localhost`
+    /// never names another computer, RFC 6761.)
+    public static let thisMac = "this-mac.localhost"
+
+    /// The home folder this Mac's own box is in: this account's, or a test's own, which it sets
+    /// before anything goes there. Within `$scopedHome.withValue(…)`, that one, for those tasks alone.
+    public static var thisMacHome: String {
+        get { scopedHome ?? routesLock.withLock { ownHome } ?? NSHomeDirectory() }
+        set { routesLock.withLock { ownHome = newValue } }
+    }
+    nonisolated(unsafe) private static var ownHome: String?
+    @TaskLocal public static var scopedHome: String?
+
+    /// It's this Mac's own box, reached with no SSH.
+    public var isLocal: Bool { destination == Self.thisMac }
+
+    /// How a script starts: a program, its arguments, and (for this Mac's own box) the
+    /// environment and folder it starts with.
+    public struct Invocation: Sendable, Equatable {
+        public var executable: String
+        public var arguments: [String]
+        /// Nil: this process's (ssh's own, which sends the machine nothing of it but `LANG` and
+        /// `LC_*`).
+        public var environment: [String: String]?
+        public var directory: URL?
+    }
+
+    /// What runs `script` there: `ssh` (`arguments(running:)`), or for this Mac's own box, the
+    /// account's login shell here running the same command line sshd would hand it, so the
+    /// quoting, the shell's own start files and what the script sees are a machine's: from the
+    /// home folder, with only what sshd gives (`localEnvironment`). `extra` and `shared` are
+    /// ssh's: a forward isn't needed to reach this Mac's own ports, and the panel's terminal
+    /// gives it a terminal of its own.
+    public func invocation(running script: String, extra: [String] = [], shared: Bool = true) -> Invocation {
+        guard isLocal else {
+            return Invocation(executable: "/usr/bin/ssh", arguments: arguments(running: script, extra: extra, shared: shared), environment: nil, directory: nil)
+        }
+        let home = Self.thisMacHome
+        return Invocation(executable: Self.loginShell, arguments: ["-c", Self.command(running: script)],
+                          environment: Self.localEnvironment(home: home), directory: URL(filePath: home, directoryHint: .isDirectory))
+    }
+
+    /// This account's login shell, as sshd runs a command with it; `sh` without a usable one.
+    static var loginShell: String {
+        guard let entry = getpwuid(getuid()), let shell = entry.pointee.pw_shell.map({ String(cString: $0) }),
+              shell.hasPrefix("/"), FileManager.default.isExecutableFile(atPath: shell) else { return "/bin/sh" }
+        return shell
+    }
+
+    /// What a command run over SSH starts with on a Mac, and nothing of this app's own (its
+    /// `KUVO_*`, its engine's settings, the shell it loaded for its terminals): the account, its
+    /// home and shell, the system's PATH, its temporary folder, and the language ssh sends along.
+    static func localEnvironment(home: String, from mine: [String: String] = ProcessInfo.processInfo.environment) -> [String: String] {
+        let account = getpwuid(getuid()).flatMap { $0.pointee.pw_name.map { String(cString: $0) } } ?? NSUserName()
+        var environment = ["HOME": home, "USER": account, "LOGNAME": account, "SHELL": loginShell, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
+        var folder = [CChar](repeating: 0, count: Int(PATH_MAX))
+        if confstr(_CS_DARWIN_USER_TEMP_DIR, &folder, folder.count) > 0 { environment["TMPDIR"] = String(cString: folder) }
+        for (key, value) in mine where key == "LANG" || key.hasPrefix("LC_") { environment[key] = value }
+        return environment
     }
 
     /// Goes to the address itself, whatever machine it's an address of (to ask one that may not
@@ -83,7 +149,7 @@ public struct SSHConnection: Sendable, Hashable, Codable {
 
     /// A machine under `.invalid`, a name that never resolves (RFC 6761): a stand-in a demo copy
     /// shows (`KUVO_DEMO_MACHINE`), which nothing ever goes to.
-    public var isStandIn: Bool { Self.isStandIn(address) || Self.isStandIn(destination) }
+    public var isStandIn: Bool { !isLocal && (Self.isStandIn(address) || Self.isStandIn(destination)) }
 
     /// Nothing goes to it, so nothing is tried there: a stand-in, unless a test's `standIn`
     /// answers for it (the app's tests name their machines under `.invalid` too).
@@ -142,11 +208,12 @@ public struct SSHConnection: Sendable, Hashable, Codable {
     public func run(_ script: String, input: URL? = nil, cancellable: Bool = false, sent: (@Sendable (Int64) -> Void)? = nil) async throws -> String {
         try await mustBeWanted()
         #if DEBUG
-        if let fedStandIn = Self.fedStandIn {
+        // (This Mac's own box is real in a test too, in the test's home folder.)
+        if !isLocal, let fedStandIn = Self.fedStandIn {
             guard let output = fedStandIn(address, script, input) else { throw RemoteEngineError.ssh(status: 255, message: "That failed on \(address)") }
             return output
         }
-        if let standIn = Self.standIn {
+        if !isLocal, let standIn = Self.standIn {
             guard let output = standIn(address, script) else { throw RemoteEngineError.ssh(status: 255, message: "Couldn't reach \(address)") }
             // All of it, at once.
             if let input, let sent, let size = (try? input.resourceValues(forKeys: [.fileSizeKey]))?.fileSize { sent(Int64(size)) }
@@ -156,7 +223,9 @@ public struct SSHConnection: Sendable, Hashable, Codable {
         // (A test's stand-in answers first: its machines are under `.invalid` too.)
         guard !isStandIn else { throw RemoteEngineError.ssh(status: 255, message: "Couldn’t reach \(destination).") }
         let stdin: ChildProcess.Input = input.map { url in sent.map { .reported(url, read: $0) } ?? .file(url) } ?? .nothing
-        let result = try await ChildProcess.run("/usr/bin/ssh", arguments(running: script), input: stdin, cancellable: cancellable)
+        let started = invocation(running: script)
+        let result = try await ChildProcess.run(started.executable, started.arguments, environment: started.environment, directory: started.directory,
+                                                input: stdin, cancellable: cancellable)
         guard result.succeeded else { throw RemoteEngineError.ssh(status: result.status, message: result.errorText) }
         return result.outputText
     }
@@ -167,8 +236,9 @@ public struct SSHConnection: Sendable, Hashable, Codable {
         try await mustBeWanted()
         guard !isStandIn else { throw RemoteEngineError.ssh(status: 255, message: "Couldn’t reach \(destination).") }
         guard FileManager.default.createFile(atPath: output.path, contents: nil, attributes: [.posixPermissions: 0o600]) else { throw CocoaError(.fileWriteUnknown) }
-        let result = try await ChildProcess.run("/usr/bin/ssh", arguments(running: script), input: input.map { .file($0) } ?? .nothing,
-                                                output: .file(output), cancellable: false)
+        let started = invocation(running: script)
+        let result = try await ChildProcess.run(started.executable, started.arguments, environment: started.environment, directory: started.directory,
+                                                input: input.map { .file($0) } ?? .nothing, output: .file(output), cancellable: false)
         guard result.succeeded else { throw RemoteEngineError.ssh(status: result.status, message: result.errorText) }
     }
 
@@ -386,7 +456,8 @@ public struct RemoteEngineInstaller: Sendable {
         }
         guard let release else { throw RemoteEngineError.unsupportedPlatform(platform + (second == "musl" ? " (musl)" : "")) }
         let rest = lines.dropFirst(2)
-        if let computer = rest.first(where: { $0.hasPrefix("computer ") }), Self.isThisAccount(computer) { throw RemoteEngineError.thisMac }
+        // (This Mac's own box is this account's on purpose.)
+        if !connection.isLocal, let computer = rest.first(where: { $0.hasPrefix("computer ") }), Self.isThisAccount(computer) { throw RemoteEngineError.thisMac }
         let found = Self.found(in: answer)
         let said = rest.filter { line in !["computer ", "macos ", "box ", "card ", "link ", "app "].contains { line.hasPrefix($0) } }
         return (release, said.contains { $0.hasSuffix(OpenCodeEngine.version) }, found)
@@ -665,10 +736,11 @@ public final class RemoteServer: @unchecked Sendable {
     /// The agents bridge beside it, through the same tunnel.
     public let agentsEndpoint: ServerEndpoint?
     public let connection: SSHConnection
-    private let tunnel: Process
+    /// Nil for this Mac's own box, whose ports are this Mac's.
+    private let tunnel: Process?
     private let log: LogTail
 
-    private init(engine: Engine, endpoint: ServerEndpoint, agentsEndpoint: ServerEndpoint?, connection: SSHConnection, tunnel: Process, log: LogTail) {
+    private init(engine: Engine, endpoint: ServerEndpoint, agentsEndpoint: ServerEndpoint?, connection: SSHConnection, tunnel: Process?, log: LogTail) {
         self.engine = engine
         self.endpoint = endpoint
         self.agentsEndpoint = agentsEndpoint
@@ -677,7 +749,7 @@ public final class RemoteServer: @unchecked Sendable {
         self.log = log
     }
 
-    public var isConnected: Bool { tunnel.isRunning }
+    public var isConnected: Bool { tunnel?.isRunning ?? true }
 
     /// The last lines ssh wrote, for error reports.
     public var recentOutput: String { log.text }
@@ -699,13 +771,18 @@ public final class RemoteServer: @unchecked Sendable {
 
     /// The engine running on the machine, if there is one, or whether it's stopped on purpose;
     /// and the box's keeper made sure of (a machine set up by an older version gets it here).
+    /// This Mac's own box (`SSHConnection.thisMac`) is only read: its keeper is its own (launchd's),
+    /// never one the app starts, which would run as Kuvo Code's, and its Mac says whether it's off.
     public static func find(on connection: SSHConnection) async throws -> Found {
-        let text = try await connection.run("""
-            K="$HOME/\(RemoteEngineInstaller.root)"; R="\(run)"
-            \(RemoteProcess.check)
+        let keep = connection.isLocal ? "" : """
             # A Mac that has it among its machines: no longer off (a removal before, cut short), if it was.
             rm -f "$R/off"
             [ -f "$K/bin/kuvo-start" ] && sh "$K/bin/kuvo-start" box >/dev/null 2>&1
+            """
+        let text = try await connection.run("""
+            K="$HOME/\(RemoteEngineInstaller.root)"; R="\(run)"
+            \(RemoteProcess.check)
+            \(keep)
             pid=$(sed -n 's/^{"pid":\\([0-9]*\\),.*/\\1/p' "$R/engine.json" 2>/dev/null)
             if kuvo_runs "$pid" opencode; then
               cat "$R/engine.json"
@@ -735,6 +812,9 @@ public final class RemoteServer: @unchecked Sendable {
     /// (Start); otherwise it stays stopped, and this throws `stopped`.
     public static func launch(on connection: SSHConnection, environment base: [String: String], notes: [String: String] = [:], withAgents: Bool = false,
                               replace: Int? = nil, start: Bool = false) async throws -> Engine {
+        // Never on this Mac's own box, attached in place: it starts on its own (launchd's), and what
+        // a launch writes (its start at login, the account's crontab) is its own Mac's to write.
+        if connection.isLocal { throw RemoteEngineError.thisMac }
         // What starts it again after a restart, as this launch does.
         try await installBoot(on: connection)
         var lastError: Error = RemoteEngineError.timedOut
@@ -1392,6 +1472,8 @@ public final class RemoteServer: @unchecked Sendable {
         timeout: Duration = .seconds(90),
         onExit: @escaping @Sendable (Int32) -> Void = { _ in }
     ) async throws -> RemoteServer {
+        // This Mac's own box: its engine listens here already.
+        if connection.isLocal { return try await attachHere(to: engine, on: connection, timeout: timeout) }
         let localPort = try freeLocalPort()
         var forwards = ["-o", "ExitOnForwardFailure=yes", "-L", "\(localPort):127.0.0.1:\(engine.port)"]
         // The agents bridge beside it, through the same connection.
@@ -1448,8 +1530,24 @@ public final class RemoteServer: @unchecked Sendable {
         return RemoteServer(engine: engine, endpoint: endpoint, agentsEndpoint: agentsEndpoint, connection: connection, tunnel: process, log: log)
     }
 
+    /// This Mac's own box's engine, at its own ports, once it answers: there's nothing in
+    /// between to close.
+    private static func attachHere(to engine: Engine, on connection: SSHConnection, timeout: Duration) async throws -> RemoteServer {
+        let endpoint = ServerEndpoint(url: URL(string: "http://127.0.0.1:\(engine.port)")!, password: engine.password)
+        let agentsEndpoint = engine.agents.map { ServerEndpoint(url: URL(string: "http://127.0.0.1:\($0.port)")!, password: $0.password) }
+        let client = HTTPClient(endpoint: endpoint)
+        struct Info: Decodable { var version: String }
+        let deadline = ContinuousClock.now + timeout
+        while (try? await client.send(client.request("GET", "api/info"), as: Info.self)) == nil {
+            if ContinuousClock.now > deadline { throw RemoteEngineError.timedOut }
+            try await Task.sleep(for: .milliseconds(150))
+        }
+        return RemoteServer(engine: engine, endpoint: endpoint, agentsEndpoint: agentsEndpoint, connection: connection, tunnel: nil, log: LogTail())
+    }
+
     /// Closes the tunnel. The engine keeps running on the machine.
     public func disconnect() {
+        guard let tunnel else { return }
         tunnel.terminationHandler = nil
         if tunnel.isRunning { tunnel.terminate() }
     }
@@ -1548,9 +1646,12 @@ public final class RemoteServer: @unchecked Sendable {
 
     /// Runs `script` on the machine without waiting more than `timeout`, for when the app quits.
     public static func runNow(_ script: String, on connection: SSHConnection, timeout: TimeInterval = 3) {
+        let started = connection.invocation(running: script)
         let process = Process()
-        process.executableURL = URL(filePath: "/usr/bin/ssh")
-        process.arguments = connection.arguments(running: script)
+        process.executableURL = URL(filePath: started.executable)
+        process.arguments = started.arguments
+        if let environment = started.environment { process.environment = environment }
+        if let directory = started.directory { process.currentDirectoryURL = directory }
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice

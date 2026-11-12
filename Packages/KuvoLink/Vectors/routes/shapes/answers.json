@@ -3014,6 +3014,9 @@
             "literal": "agent-tools"
            },
            {
+            "literal": "agent-tools.own"
+           },
+           {
             "literal": "agents"
            },
            {
@@ -3123,6 +3126,9 @@
            },
            {
             "literal": "git.push"
+           },
+           {
+            "literal": "git.words"
            },
            {
             "literal": "goals"
@@ -3385,6 +3391,9 @@
             "literal": "agent-tools"
            },
            {
+            "literal": "agent-tools.own"
+           },
+           {
             "literal": "agents"
            },
            {
@@ -3494,6 +3503,9 @@
            },
            {
             "literal": "git.push"
+           },
+           {
+            "literal": "git.words"
            },
            {
             "literal": "goals"
@@ -5014,6 +5026,7 @@
       "title": "string",
       "body": "string",
       "summary?": "string",
+      "prompt?": "string",
       "host": {
        "oneOf": [
         {
@@ -5048,7 +5061,33 @@
     "200": {
      "object": {
       "diff": "string",
-      "staged": "bool"
+      "staged": "bool",
+      "prompt?": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/git/settings/move",
+   "answers": {
+    "200": {
+     "object": {
+      "moved": "bool"
+     }
+    },
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "409": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "500": {
+     "object": {
+      "message": "string"
      }
     }
    }

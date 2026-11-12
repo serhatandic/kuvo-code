@@ -190,7 +190,7 @@ export async function freshenBots(target: Target): Promise<void> {
 // What "Ask First" asks about (the Mac's ToolApproval.askFirst): a conversation that asks before
 // running commands asks first.
 const ASK_FIRST: string[] = ["edit", "write", "patch", "shell", "webfetch", "external_directory", "kuvo-browser_browser_save_pdf", "kuvo-browser_browser_upload", "kuvo-browser_watch_for_change"];
-const isRule = (rule: unknown): rule is KitRule => isObject(rule) && typeof rule.action === "string" && typeof rule.resource === "string" && typeof rule.effect === "string" && rule.effect !== "";
+export const isRule = (rule: unknown): rule is KitRule => isObject(rule) && typeof rule.action === "string" && typeof rule.resource === "string" && typeof rule.effect === "string" && rule.effect !== "";
 // What a rule holds back: Don't Allow, or one a newer engine set that this box doesn't know (the
 // Mac's `holdsBack`), which goes on as it is.
 export const holdsBack = (rule: KitRule): boolean => rule.effect !== "allow" && rule.effect !== "ask";
