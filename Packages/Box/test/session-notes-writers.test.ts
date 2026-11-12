@@ -1,6 +1,6 @@
 import "./safety"
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test"
-import { mkdirSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 
 // The box's writers of a session's notes (#581), each as it really runs, against a stand-in engine
 // that keeps a session as the real one (2.2.5) does: a PATCH replaces its metadata (and its rules)
@@ -20,9 +20,16 @@ let nextRead: Promise<void> | null = null
 
 const target = () => ({ port: engine.port!, password: "pw" })
 
+// This computer's approval as it was (setting one's approval makes it the next one's default), put
+// back once these are done, for the tests after them.
+let approvalFile = ""
+let approvalBefore: string | null = null
+
 beforeAll(async () => {
   // (Loaded as the box loads them: the Work tools' modules only once the rest are.)
   await import("../src/link/areas/approval")
+  approvalFile = (await import("../src/link/work/approval")).APPROVAL_FILE
+  approvalBefore = existsSync(approvalFile) ? readFileSync(approvalFile, "utf8") : null
   chats = (await import("../src/link/home")).CHATS
   mkdirSync(chats, { recursive: true })
   engine = Bun.serve({
@@ -52,7 +59,11 @@ beforeAll(async () => {
   })
 })
 
-afterAll(() => engine.stop(true))
+afterAll(() => {
+  engine.stop(true)
+  if (approvalBefore === null) rmSync(approvalFile, { force: true })
+  else writeFileSync(approvalFile, approvalBefore)
+})
 
 beforeEach(() => {
   patches = []
