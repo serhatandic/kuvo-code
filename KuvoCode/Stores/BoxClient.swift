@@ -49,6 +49,10 @@ struct BoxClient: Sendable {
     /// as a machine is.
     nonisolated static func hasEveryFeature(_ id: String) -> Bool { id == mac }
 
+    /// Whether `machine` (nil: this Mac) is one of your machines, as analytics counts where
+    /// something happened: this Mac's box attached in place is this Mac.
+    nonisolated static func isMachine(_ machine: String?) -> Bool { machine.map { !isThisMac($0) } ?? false }
+
 
     /// A machine's box, by the machine's id, through `kuvo-link.js box route` over its SSH connection.
     nonisolated static func machine(_ id: String) -> BoxClient {

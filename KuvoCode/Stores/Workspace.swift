@@ -2656,7 +2656,9 @@ final class Workspace {
            let started = try? event.payload(as: EventPayload.ToolInputStarted.self), started.name.hasPrefix("kuvo-browser_browser_") {
             if let machine {
                 onMachineBrowsing?(machine, id)
-                Analytics.shared.trackOnce("browser_used", key: "agent.machine", ["by": "agent", "place": "machine"])
+                // (The box attached in place's browser runs on this Mac: counted as this Mac's.)
+                let place = BoxClient.isMachine(machine) ? "machine" : "mac"
+                Analytics.shared.trackOnce("browser_used", key: "agent." + place, ["by": "agent", "place": place])
             }
             if ["kuvo-browser_browser_sign_in", "kuvo-browser_browser_ask_code", "kuvo-browser_browser_ask_user"].contains(started.name) {
                 onBrowserAsk?(id, machine)

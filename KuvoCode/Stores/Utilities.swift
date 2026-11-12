@@ -467,7 +467,9 @@ final class Utilities {
     /// `address` at once, if given).
     func newMachinePage(_ machine: String, address: String? = nil, owner: String? = nil) {
         Analytics.shared.track("panel_opened", ["tool": "machine_browser"])
-        Analytics.shared.trackOnce("browser_used", key: "you.machine", ["by": "you", "place": "machine"])
+        // (The browser of the box attached in place runs on this Mac: counted as this Mac's.)
+        let place = BoxClient.isMachine(machine) ? "machine" : "mac"
+        Analytics.shared.trackOnce("browser_used", key: "you." + place, ["by": "you", "place": place])
         let tab = Tab(kind: .machinePage(machine, nil), owner: owner ?? panelKey)
         add(tab)
         if let address { open(address, inTab: tab.id) }
