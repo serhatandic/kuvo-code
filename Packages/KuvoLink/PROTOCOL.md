@@ -2398,10 +2398,25 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     command; `POST kuvo/agents/api/integration/<provider>/install` runs it (a few minutes at most)
     → `{data: {installed, version?, message?}}` (`message`: why not, in the installer's words).
     `metadata.outdated` with `version` and `latestVersion`, and `metadata.updates` true when the
-    installer that owns it can update it (`updateCommand`, as typed): `POST …/<provider>/update` →
-    `{data: {updated, version?, message?}}`. Either one done, `integration.updated` and
-    `model.updated` follow. One program serves every account with it, so update one per
-    computer; Update All updates each outdated one on every computer.
+    installer that owns it can update it (`updateCommand`, as typed). The box keeps each program's
+    update, the same on every account with it (one program serves them all), for every client:
+    `metadata.programUpdate` is `{state: "updating", at}`, `{state: "updated" | "current",
+    version, at}` (updated to it, or already the newest when asked) or `{state: "failed",
+    message, version?, at}` (why, in the installer's words), none otherwise; `at` (ms) tells one
+    outcome from the next. What an update brought is kept an hour, why one failed until it's
+    seen; either goes with the next update, once the version moves past it (updated in a
+    terminal), or once a client says it was seen: `DELETE …/kuvo/updates/<provider>?at=<at>`
+    (that outcome only; for every client). `metadata.updateAll` true, on the agent's own
+    sign-in only (once a program): Update All updates it (behind, its installer can update it,
+    not updating). `POST kuvo/agents/api/kuvo/updates` is Update All, each program the box
+    picks, once; `POST …/kuvo/updates/<provider>` updates that account's program; both answer as
+    they start, `{data: {updating: [<agent>]}}` (`metadata.agent`), with `integration.updated`
+    for each account with the program as it starts and as it ends (and `model.updated` once it
+    updated). A client draws them, says an outcome once and then that it was seen. Update All on
+    the phone asks each computer. (An older client's `POST …/integration/<provider>/update` runs
+    the same update and answers once it's done, `{data: {updated, version?, message?}}`; a box
+    from before these has no `updateAll`, and a client asks it that way.) Installing done,
+    `integration.updated` and `model.updated` follow, and how an update went before is gone.
   - Signing in to an agent: `POST kuvo/agents/api/integration/<provider>/connect/oauth {methodID,
     remote}` → `{data: {attemptID, url, instructions, mode, acceptsCode?, userCode?, time}}`; `GET
     …/connect/oauth/<attempt>` → its status (`pending`, with `url`, `instructions`, `userCode` and
@@ -6281,6 +6296,14 @@ before connects (the box notes one: `run/attached`).
   "Notices"), which stays until a box tells its news without its bridge: removing it before then
   loses those notices.
   <!-- compat: 0.7 box-notices -->
+- **Updating an agent's program**: such a Mac asks `POST kuvo/agents/api/integration/<provider>/update`
+  and waits for its answer, `{data: {updated, version?, message?}}`, so the agents bridge still
+  answers that once the update is done (the same update every client sees, "Installing and
+  updating an agent's program"). The other way round, a Mac or phone of this version meeting a box
+  from before `kuvo/updates` (a 404, the bridges of 0.7.x and 0.8.0-beta.1 Macs) asks it each
+  program that way, picking what's behind from `metadata.outdated` and `metadata.updates` on the
+  own sign-in.
+  <!-- compat: 0.7 update-answer -->
 
 **This Mac's own group chats, from 0.5 to 0.8.0-beta.1.** Those Macs ran their group chats in the
 app (`groups.json`, each chat's messages in `groups/<id>.json`). A Mac with this version moves
