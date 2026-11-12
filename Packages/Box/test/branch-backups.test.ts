@@ -1,5 +1,5 @@
 import "./safety"
-import { afterAll, beforeAll, expect, test } from "bun:test"
+import { afterAll, beforeAll, expect, setDefaultTimeout, test } from "bun:test"
 import { spawnSync } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -7,6 +7,12 @@ import { join } from "node:path"
 
 // What an agent's turn can take from a repository, taken back from the box's backups: a hard reset,
 // a deleted branch, dropped stashes, and `rm -rf .git`. Real repositories in folders of their own.
+
+// Each test runs a dozen git programs of its own, waiting on each: about 0.2–0.7 s on a quiet Mac,
+// and over Bun's 5 s when it is busy (24 copies at once on this 12-core Mac: 1 of 24 runs timed out
+// at 5.0 s, "a hard reset is taken back…", its file's tests reaching 18.8 s). So a busy machine gets
+// as long as the work takes, not 5 s.
+setDefaultTimeout(30_000)
 
 let box: string
 let backups: typeof import("../src/link/work/backups")

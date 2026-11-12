@@ -1,7 +1,7 @@
 // Codex's thread against a fake `codex app-server`: what Codex 0.16x sends, shown, not lost.
 
 import "../safety"
-import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { afterAll, afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test"
 import { chmodSync, linkSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
@@ -20,6 +20,12 @@ import type { Roster } from "../../src/agents/roster"
 import { Sessions, timing } from "../../src/agents/sessions"
 import { Store } from "../../src/agents/store"
 import type { Message, PermissionRule } from "../../src/agents/wire"
+
+// Each test starts a fake Codex in a Bun process of its own and waits on it: about 0.2–0.8 s on a
+// quiet Mac, and 4.6 s in 32 copies at once on this 12-core Mac; a full box suite at load 23 saw the
+// Approve All test take 12.9 s, past both Bun's 5 s and the wait's 10 s. So a busy machine gets as
+// long as the work takes, not 5 s.
+setDefaultTimeout(30_000)
 
 // By its real place (`/var` is `/private/var` on a Mac): the fake Codex knows the session's own by its folder.
 const base = realpathSync(mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-codex-test-")))
@@ -344,7 +350,10 @@ afterEach(() => {
   codex?.shutdown()
 })
 
-async function until(condition: () => boolean, ms = 10_000) {
+/** What `condition` says, looked at every 10 ms: a busy Mac's fake Codex can take over 10 s to start
+ * and answer (the Approve All test took 12.9 s in a full box suite at load 23), so a wait gets as
+ * long as the test itself. */
+async function until(condition: () => boolean, ms = 30_000) {
   const start = Date.now()
   while (!condition()) {
     if (Date.now() - start > ms) throw new Error("timed out")

@@ -1565,6 +1565,12 @@ test("a watch's check runs in the sandbox when its time comes, as its conversati
   const running = await start(box);
   try {
     assert.equal((await running.ask("GET", "kuvo/sandbox")).value.able, true);
+    // A busy Mac can make the check the box runs as it starts take longer than its 20 s, and the box
+    // then leaves the sandbox off until its next round: checked again, it's on. (What a watch's check
+    // goes by is run/fence/on.)
+    const on = path.join(box.home, "run", "fence", "on");
+    if (!fs.existsSync(on)) await running.ask("POST", "kuvo/sandbox/check");
+    assert.equal(fs.existsSync(on), true, "the box's sandbox is on");
     // An agent's command adds a watch whose check deletes outside its conversation's folder.
     const wake = path.join(box.home, "bin", "kuvo-wake");
     const added = await engineRuns(box, project, `${wake} watch 5m 'rm -f ${outside}; echo ok > checked' 'The build'`, "ses_watch");
