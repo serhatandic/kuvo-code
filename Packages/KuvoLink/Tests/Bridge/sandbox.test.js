@@ -1944,6 +1944,11 @@ test("where commands lose their own namespace, the sandbox goes on without one o
     assert.equal((await before.ask("GET", "kuvo/sandbox")).value.on, true);
     await before.stop();
     assert.match(fs.readFileSync(namespaceFile, "utf8"), /^\//, "set up with a namespace of their own");
+    // A wake folder no one used for days, which the box's round clears: gone, its round has run.
+    const stale = path.join(box.wakes, "ses_stale");
+    fs.mkdirSync(path.join(stale, "wakes"), { recursive: true });
+    const days = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    for (const each of [path.join(stale, "wakes"), stale]) fs.utimesSync(each, days, days);
     // Started again where namespaces can't be had.
     engine.hold();
     const running = await start(box, {}, blocked);
@@ -1951,8 +1956,13 @@ test("where commands lose their own namespace, the sandbox goes on without one o
       let state = (await running.ask("GET", "kuvo/sandbox")).value;
       assert.equal(state.on, false, state.why);
       assert.match(fs.readFileSync(namespaceFile, "utf8"), /^\//, "kept until nothing counts on the sandbox");
+      // Its round checks again while it's held (and Auto doesn't ask yet): still kept.
+      await changeIn(box.wakes, () => !fs.existsSync(stale));
+      assert.match(fs.readFileSync(namespaceFile, "utf8"), /^\//, "kept through the box's round");
       engine.go();
-      await changeIn(path.dirname(namespaceFile), () => fs.readFileSync(namespaceFile, "utf8") === "-");
+      const fence = path.dirname(namespaceFile);
+      await changeIn(fence, () => !fs.existsSync(path.join(fence, "held")));
+      assert.equal(fs.readFileSync(namespaceFile, "utf8"), "-", "without one once Auto asks first");
       await engineRuns(box, project, "true");
       state = (await running.ask("GET", "kuvo/sandbox")).value;
       assert.deepEqual([state.on, state.gaps], [true, ["services"]], state.why);

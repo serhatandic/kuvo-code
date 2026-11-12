@@ -5206,7 +5206,7 @@ function withdraw(ready = "remove") {
   loosening = null;
 }
 function hold2() {
-  if (!fs20.existsSync(HELD))
+  if (!textOf(HELD))
     writePrivate(HELD, crypto9.randomUUID());
 }
 var heldMark = () => textOf(HELD) || null;
@@ -5282,7 +5282,7 @@ function setUpFence(found) {
     return loosen("withdraw", can, "remove");
   const inEffect = platform === "linux" ? textOf(path19.join(FOLDER2, "namespace")) ?? "" : "";
   const dropping = !namespace && !namespaceUnfinished && inEffect.startsWith("/") && !mayLoosen;
-  kept = dropping ? inEffect : null;
+  kept = dropping ? inEffect : namespaceUnfinished && !mayLoosen ? kept : null;
   try {
     fs20.mkdirSync(path19.join(FOLDER2, "tmp"), { recursive: true, mode: 448 });
     writeTemporary();
@@ -38125,7 +38125,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "01f62f1e2a60";
+var BRIDGE_VERSION = "65fab1c61d7c";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

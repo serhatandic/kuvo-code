@@ -443,7 +443,8 @@ function withdraw(ready: "keep" | "remove" = "remove"): void {
 
 /** Holds it: nothing counts on it from now, a new hold each time (`heldMark`). */
 function hold(): void {
-  if (!fs.existsSync(HELD)) writePrivate(HELD, crypto.randomUUID());
+  // (One a box before left empty is given one too.)
+  if (!textOf(HELD)) writePrivate(HELD, crypto.randomUUID());
 }
 
 /** Which hold is on now, if any: the approvals' round lets go of one only if it was on throughout
@@ -576,7 +577,8 @@ export function setUpFence(found?: string | null): FenceState {
   // once nothing counts on the sandbox.
   const inEffect = platform === "linux" ? textOf(path.join(FOLDER, "namespace")) ?? "" : "";
   const dropping = !namespace && !namespaceUnfinished && inEffect.startsWith("/") && !mayLoosen;
-  kept = dropping ? inEffect : null;
+  // (A try that didn't finish meanwhile keeps the one kept: it says nothing new.)
+  kept = dropping ? inEffect : namespaceUnfinished && !mayLoosen ? kept : null;
   try {
     fs.mkdirSync(path.join(FOLDER, "tmp"), { recursive: true, mode: 0o700 });
     writeTemporary();
