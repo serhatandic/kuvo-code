@@ -22,6 +22,10 @@ The rules for what a message says, the same in both apps. Foundation only: no vi
   them, and the snippet with them in bold.
 - `PermissionAnswer`: a permission's answers, numbered as both apps list them (1 Allow Once,
   2 Always Allow…, 3 Don't Allow, 4 Tell It What to Do Instead…), with `AlwaysWords` for 2.
+- `Quote` and `Quoting`: replying to parts of a message, each `Quote` with your answer under it,
+  written into the message as Markdown and read back (an undo, a send that didn't go) as the same
+  quotes and answers, so a reply written on one app shows its quotes on the other. A box reads them
+  the same way (`box-vectors.json`, ClientSessionsTests' BoxVectorsTests).
 
 ## ClientAccounts
 
@@ -64,6 +68,12 @@ What a client shows of a computer's sessions, the same in both apps. Rules only,
   has ended (its engine let go of it) or just can't be read now.
 - `AskPlace`: which of the asks waiting takes the composer's place, and "2 of 3" over it: the one
   in view stays while others come, and once it's answered the next after it shows.
+- `SlashCommands`: "/" starting a message: the command name being typed, the commands it matches
+  (names starting with it first), and a message that runs one ("/review main"), else as written.
+- `CommandMessages`: which messages a command made, with the command as you wrote it, shown in
+  place of the long prompt it sent; the latest 500, kept where each app says (its settings).
+- `GoalChart.labeledDays`, `.labeledHours`: which days and hours along a goal's timeline get a
+  label, clear of each other, counted from Today; each app gives the room its own labels take.
 - `MachinePieces`: which version a machine's link, coding agents and engine each run, as its box
   says (`kuvo/info`'s `pieces`), and the line under the machine while one runs an older version
   than its files (a new bridge waits for a quiet moment, or holds new messages for the turns under
@@ -111,8 +121,9 @@ the Mac's own git). Foundation only.
 
 ## ClientDesign
 
-The look both apps draw with, the same on each: SwiftUI, no app state. It's taking the place of the
-phone's copies of the Mac's design files, a piece at a time.
+The look both apps draw with, the same on each: SwiftUI, no app state (except the site-icon cache,
+`SiteIcons`, in a folder each app hands it). It's taking the place of the phone's copies of the
+Mac's design files, a piece at a time.
 
 - `MachineWords`: a machine's words in both apps: the step its first connection is on ("Copying
   the engine"), and what Remove's dialog says Uninstall would stop it for (your other Macs, your
@@ -145,6 +156,12 @@ phone's copies of the Mac's design files, a piece at a time.
   at the size of the text they're in (handed in, as each app sets its own).
 - `CodeLanguage` and `CodeLine`: a code block's language name, and how wide a line of it is set.
 - `FolderIcon`: a project's folder, open or closed.
+- `SiteIcons`: the icons of the sites replies link to, from the sites themselves (their declared
+  icon, else /favicon.ico; no cookies, public addresses only), kept in the folder the app hands it
+  within a cap, with the globe for a site with none worth showing. Each app reads the pictures
+  itself (`usable`, `picture`: the Mac draws SVG and keeps them at twice their size, the phone at
+  three times), as `PlatformImage` (NSImage or UIImage); `isColorlessGlyph` is the shared rule for
+  an icon that would vanish on a dark or a light card.
 - `Flow`: views in rows that wrap when the room runs out, against the leading or trailing edge
   (a sent message's pictures, chips in a row).
 - `TitleWithTail`: a row's title with a short note at its end ("from Mini"); the title always
@@ -174,8 +191,9 @@ Only what both apps call, with a small public surface: rules and formatting both
 tested here. Not:
 
 - text views (each app's composer field, reply renderers), where AppKit and UIKit differ;
-- anything bound to an app's state, stores or settings (drafts, the site-icon cache and its
-  network session);
+- anything bound to an app's state, stores or settings (drafts), unless each app hands it in:
+  where it keeps what it keeps (`CommandMessages`' settings, `SiteIcons`' folder, each app's own
+  `shared`), so a package run never reaches an app's real data;
 - what only one app uses.
 
 A change here is a change to both apps: run this package's tests (`swift test`), the Mac app's

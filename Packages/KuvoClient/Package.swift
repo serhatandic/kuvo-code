@@ -29,6 +29,7 @@ let package = Package(
         .target(name: "ClientAccounts"),
         .testTarget(name: "ClientAccountsTests", dependencies: ["ClientAccounts"]),
         .target(name: "ClientDesign", dependencies: [
+            "ClientText",
             .product(name: "Textual", package: "textual"),
             .product(name: "SwiftUIMath", package: "swiftui-math"),
         ], resources: [.process("Resources/Marks.xcassets")]),
@@ -36,7 +37,7 @@ let package = Package(
         .target(name: "ClientNews"),
         .testTarget(name: "ClientNewsTests", dependencies: ["ClientNews"]),
         .target(name: "ClientSessions", dependencies: ["ClientAccounts", "ClientText", .product(name: "OpenCodeKit", package: "OpenCodeKit")]),
-        .testTarget(name: "ClientSessionsTests", dependencies: ["ClientSessions", .product(name: "OpenCodeKit", package: "OpenCodeKit")]),
+        .testTarget(name: "ClientSessionsTests", dependencies: ["ClientSessions", "ClientText", .product(name: "OpenCodeKit", package: "OpenCodeKit")]),
         .target(name: "ClientChanges"),
         .testTarget(name: "ClientChangesTests", dependencies: ["ClientChanges"]),
         .target(name: "ClientVault"),
