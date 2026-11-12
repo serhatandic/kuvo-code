@@ -42,7 +42,7 @@ export class Unreached extends Error {}
 
 /** A session here, and where it runs (the engine, or the coding agents' bridge); null for one no
  * place has. Throws `Unreached` when one that might have it didn't answer. */
-async function sessionHere(targets: Target[], id: string, signal?: AbortSignal): Promise<{ target: Target; data: EngineSession } | null> {
+export async function sessionHere(targets: Target[], id: string, signal?: AbortSignal): Promise<{ target: Target; data: EngineSession } | null> {
   let unreached = false;
   for (const target of targets) {
     const wait = AbortSignal.timeout(5_000);
