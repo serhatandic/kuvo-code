@@ -1013,6 +1013,8 @@ test("in Auto, a read by a look-alike name beside a link a command made to your 
     // What a command in the sandbox can make in its folder: a link to your key, and a plain file.
     symlinkSync(join(fake, ".ssh", "id_test"), join(folder, "look alike.txt"))
     symlinkSync(join(fake, ".ssh", "id_test"), join(folder, "it's.txt"))
+    // (And one to a name that isn't there, which looks like your other key's.)
+    symlinkSync(join(fake, ".ssh", "work\u00a0key"), join(folder, "notes.txt"))
     writeFileSync(join(folder, "plain notes.txt"), "the project's\n")
     // And one in a folder outside it, which reads ask about.
     const elsewhere = join(box, "alike-elsewhere")
@@ -1056,6 +1058,7 @@ test("in Auto, a read by a look-alike name beside a link a command made to your 
       "a name nothing looks like": await read("per_a5", join(folder, "missing.txt")),
       "outside the folder, by a look-alike name": await read("per_a6", join(elsewhere, "our\u00a0notes.md")),
       "a key itself, by a look-alike name": await read("per_a7", join(fake, ".ssh", "work\u00a0key")),
+      "through a link to a look-alike of a key": await read("per_a8", join(folder, "notes.txt")),
     }
     const refused = expect.stringMatching(/^refused: This names a file that isn't there, beside a link whose name looks the same/)
     expect(tried).toEqual({
@@ -1067,11 +1070,57 @@ test("in Auto, a read by a look-alike name beside a link a command made to your 
       "outside the folder, by a look-alike name": refused,
       // (Judged as the file read reads in its place, which is your key.)
       "a key itself, by a look-alike name": "refused at the engine",
+      "through a link to a look-alike of a key": expect.stringMatching(/^refused: This names a link out of the conversation's folder to a file that isn't there/),
     })
     // (The reviewer was asked about the key itself, not only the name given.)
-    expect(prompts.at(-1)).toContain(join(fake, ".ssh", "work key"))
+    expect(prompts.at(-1)).toContain(join(fake, "dotfiles", "ssh", "work key"))
+    // Asked about that link all the same (by an engine without the plugin's refusal), the reviewer
+    // judges where it leads, and the key beside that.
+    const before = prompts.length
+    calling.ses_alike = [{ type: "tool", id: "call_per_a9", name: "read", state: { input: { path: join(folder, "notes.txt") } } }]
+    asking.ses_alike = [{ id: "per_a9", action: "external_directory", resources: [join(fake, ".ssh", "*")], source: { id: "call_per_a9", messageID: "msg_1" } }]
+    expect((await reviewing.reviewPermission({ port: engine.port, password: "pw" } as never, { type: "permission.asked", data: { id: "per_a9", sessionID: "ses_alike", action: "external_directory" } }))?.decision).toBe("refuse")
+    expect(prompts.length).toBe(before + 1)
+    expect(prompts.at(-1)).toContain(join(fake, "dotfiles", "ssh", "work key"))
   } finally {
     process.env.HOME = runsHome
     rmSync(fake, { recursive: true, force: true })
   }
+})
+
+// A command can make a link in its folder to a file that isn't there yet; the engine's write makes
+// that file where the link leads.
+test("in Auto, a write through a link to a file that isn't there yet is judged where it lands: what runs later, Kuvo Code's own, and no place allowed earlier stands in for it (#434)", async () => {
+  const folder = join(box, "dangling-project")
+  const notes = join(box, "dangling-notes")
+  for (const each of [folder, notes]) mkdirSync(each)
+  // (Never made: only judged.)
+  const later = "/etc/sudoers.d/kuvo-test-434"
+  const kuvo = (await import("../src/link/fence/policy")).fencePolicy().kuvo[0]
+  symlinkSync(join(notes, "a.md"), join(folder, "a.md"))
+  symlinkSync(later, join(folder, "b"))
+  symlinkSync(join(kuvo, "kuvo-test-434", "x.txt"), join(folder, "k"))
+  conversation("ses_dangling", "auto", "Update the notes")
+  sessions.ses_dangling.location = { directory: folder }
+  // As the engine asks, after the sandbox's plugin gave it where the link leads: the folder there,
+  // the call as the agent made it.
+  const write = (id: string, file: string, leads: string) => {
+    calling.ses_dangling = [{ type: "tool", id: `call_${id}`, name: "write", state: { input: { filePath: file, content: "x" } } }]
+    asking.ses_dangling = [{ id, action: "external_directory", resources: [join(dirname(leads), "*")], source: { id: `call_${id}`, messageID: "msg_1" } }]
+    return reviewing.reviewPermission({ port: engine.port, password: "pw" } as never, { type: "permission.asked", data: { id, sessionID: "ses_dangling", action: "external_directory" } })
+  }
+  // One the model allows, to the notes beside the project: shown where it lands.
+  reply = () => '{"decision": "allow", "reason": "The notes the user asked for."}'
+  expect((await write("per_d1", join(folder, "a.md"), join(notes, "a.md")))?.decision).toBe("allow")
+  expect(prompts.at(-1)).toContain(join(realpathSync(notes), "a.md"))
+  // Then one where what runs later is kept: the model's, told so, never allowed by the place before.
+  reply = () => '{"decision": "refuse", "reason": "Nobody asked for that."}'
+  const before = prompts.length
+  expect((await write("per_d2", join(folder, "b"), later))?.decision).toBe("refuse")
+  expect(prompts.length).toBe(before + 1)
+  expect(prompts.at(-1)).toContain("It sets up something that runs at login or on a schedule")
+  // And into Kuvo Code's own folders: refused by code.
+  expect((await write("per_d3", join(folder, "k"), join(kuvo, "kuvo-test-434", "x.txt")))?.decision).toBe("refuse")
+  expect(replies.at(-1)).toMatchObject({ path: "/permission/per_d3/reply", body: { decision: "reject", message: expect.stringContaining("Kuvo Code's own folders") } })
+  expect(prompts.length).toBe(before + 1)
 })

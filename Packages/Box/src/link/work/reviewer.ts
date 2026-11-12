@@ -30,7 +30,7 @@ import { isObject } from "../../shared/json";
 import { cut, oneLine } from "../../shared/text";
 import { locked, textOf, writePrivate } from "../files";
 import { attachmentRoots, BOX, homeFolder, IN_TEST_FOLDER, opencodeAuthFile, RUN } from "../home";
-import { askedAbout, escapeRegex, fencePolicy, realish, type FencePolicy } from "../fence/policy";
+import { askedAbout, escapeRegex, fencePolicy, landsAt, realish, type FencePolicy } from "../fence/policy";
 import { GUARDED } from "../fence/seatbelt";
 import { commandTemporary, conversationPlaces } from "../fence/state";
 import { readLine } from "./policy";
@@ -307,7 +307,7 @@ function takenAway(program: string, args: readonly string[], words: readonly str
 export function hardLine(action: ReviewedAction, policy: FencePolicy = fencePolicy(), own: readonly string[] = []): string | null {
   // (Room to write a folder that holds them, as a coding agent asks for, reaches them too.)
   if (action.kind === "file") {
-    const where = realish(action.path);
+    const where = landsAt(action.path);
     return inKuvo(where, policy, own) || (action.access === "write" && policy.kuvo.some(wall => holds(where, wall))) ? KUVO : null;
   }
   if (action.kind === "tool") return null;
@@ -415,7 +415,7 @@ const PERSISTS = "It sets up something that runs at login or on a schedule, outs
  * items through `defaults` or osascript). A sentence saying so, for the model,
  * which allows it only where you plainly asked for that kind of thing; null for none. */
 export function persistenceOf(action: ReviewedAction, policy: FencePolicy = fencePolicy()): string | null {
-  if (action.kind === "file") return action.access === "write" && atLogin(realish(action.path), policy.home) ? PERSISTS : null;
+  if (action.kind === "file") return action.access === "write" && atLogin(landsAt(action.path), policy.home) ? PERSISTS : null;
   if (action.kind === "tool") return null;
   return commandPersists(action.command, action.folder, policy, 0) || stoppedWrites(action).some(where => atLogin(realish(where), policy.home)) ? PERSISTS : null;
 }
@@ -512,7 +512,7 @@ function ownAt(given: string, home: string): OwnKind | null {
 /** Which of yours `action` changes for every project (`OWN`), if it does: a write there, or a
  * program that writes there (`git config --global`, `ssh-keygen` making a key in ~/.ssh). */
 export function ownOf(action: ReviewedAction, policy: FencePolicy = fencePolicy()): OwnKind | null {
-  if (action.kind === "file") return action.access === "write" ? ownAt(realish(action.path), policy.home) : null;
+  if (action.kind === "file") return action.access === "write" ? ownAt(landsAt(action.path), policy.home) : null;
   if (action.kind === "tool") return null;
   return commandOwn(action.command, action.folder, policy, 0);
 }
@@ -854,7 +854,7 @@ export function reviewPrompt(action: ReviewedAction, context: ReviewContext, scr
       ? `Run this command again outside the sandbox, in ${action.folder}. It already ran in the sandbox, up to where the sandbox stopped it, and it would run again from the start:\n${tag("command", action.command)}\nWhat it printed in the sandbox (the end):\n${tag("printed", cut(action.stopped.printed, 4000))}${stops.length ? `\nWhat the sandbox refused it, which running it outside would do too:\n${tag("refused", stops.map(stop => `- ${stop.kind}${stop.path ? ` ${stop.path}` : ""}`).join("\n"))}` : ""}\nIf what it printed shows something else refused it, not the sandbox (a database, a server, a file's own permissions), refuse it: running it outside won't help.`
       : `Run this command outside the sandbox, in ${action.folder}:\n${tag("command", action.command)}`
     : action.kind === "file"
-      ? `${action.access === "write" ? "Change" : "Read"} this file or folder outside the conversation's folder (${action.folder})${action.tool ? `, with the agent's ${action.tool} tool` : ""}:\n${tag("file", action.path)}${action.input ? `\nThe tool's arguments:\n${tag("arguments", cut(JSON.stringify(action.input, null, 2), MOST_SCRIPT))}` : ""}`
+      ? `${action.access === "write" ? "Change" : "Read"} this file or folder outside the conversation's folder (${action.folder})${action.tool ? `, with the agent's ${action.tool} tool` : ""}:\n${tag("file", action.path)}${landsAt(action.path) !== path.resolve(action.path) ? `\nThrough a link, it really is:\n${tag("file", landsAt(action.path))}` : ""}${action.input ? `\nThe tool's arguments:\n${tag("arguments", cut(JSON.stringify(action.input, null, 2), MOST_SCRIPT))}` : ""}`
       : `Call the tool ${action.tool} with these arguments:\n${tag("arguments", cut(JSON.stringify(action.args, null, 2), MOST_SCRIPT))}`;
   const read = scripts.map(each => tag("script", `${each.name}:\n${each.text}`)).join("\n");
   return [
@@ -1197,7 +1197,7 @@ async function reviewed(action: ReviewedAction, context: ReviewContext, given: R
  * settings, ~/Library): each change there is judged on its own. */
 async function keptPlace(action: ReviewedAction, policy: FencePolicy, own: readonly string[]): Promise<string | undefined> {
   if (action.kind !== "file" || action.access !== "write" || !action.tool || !action.input) return undefined;
-  const file = realish(action.path);
+  const file = landsAt(action.path);
   const repository = await inTime(repositoryOf(path.dirname(file)), null);
   const place = repository?.top ?? path.dirname(file);
   const home = own[0] ? realish(own[0]) : null;
@@ -1227,7 +1227,7 @@ function holdsRepository(folder: string): boolean {
  * repository's record of its worktrees. Each of
  * those is judged as anywhere. */
 export function walledForOwn(where: string, policy: FencePolicy = fencePolicy(), own: readonly string[] = []): boolean {
-  const at = realish(where);
+  const at = landsAt(where);
   // (What's the conversation's own in Kuvo Code's folders, in ~/Library on a Mac, is its own there:
   // only those, never another of its folders, wherever that leads.)
   const ours = ownInside(own, policy).filter(folder => inKuvo(folder, policy)).some(folder => exactly(at, folder));
@@ -1268,7 +1268,7 @@ async function judge(action: ReviewedAction, context: ReviewContext, given: Revi
   const line = hardLine(action, policy, ours);
   if (line) return { verdict: { decision: "refuse", reason: line, by: "code", held: false }, key: actionKey(action) };
   // The agent's own tools read anywhere but your secrets, as Codex's sandbox does: no review.
-  if (action.kind === "file" && action.access === "read" && !isSecret(realish(action.path), policy)) return { verdict: { decision: "allow", reason: "Reading outside its folder goes ahead.", by: "code" }, key: actionKey(action) };
+  if (action.kind === "file" && action.access === "read" && !isSecret(landsAt(action.path), policy)) return { verdict: { decision: "allow", reason: "Reading outside its folder goes ahead.", by: "code" }, key: actionKey(action) };
   // What it runs, read first, whole: a script it can't read, it can't judge (`problem`, held back).
   const scripts: { name: string; text: string }[] = [];
   // (And what an approval is tied to: those, and one too long to read, or what can be told of one
@@ -1337,7 +1337,7 @@ async function judge(action: ReviewedAction, context: ReviewContext, given: Revi
   // settings, your secrets, what runs at login or later, nor git's hooks and settings and the
   // agents' there, each judged on its own).
   if (action.kind === "file" && action.access === "write" && action.tool && action.input && log.places?.length && !own && !persists
-    && !isSecret(realish(action.path), policy) && !runsLater(realish(action.path), policy)
+    && !isSecret(landsAt(action.path), policy) && !runsLater(landsAt(action.path), policy)
     && await stillPlaced(context.session, folder, await keptPlace(action, policy, context.folders ?? given.own ?? []))) {
     return done({ decision: "allow", reason: "Auto's reviewer allowed changing files there earlier in this conversation.", by: "code" });
   }

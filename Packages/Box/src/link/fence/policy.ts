@@ -636,6 +636,13 @@ function deepestThere(where: string, resolve: (at: string) => string): string {
   }
 }
 
+/** Where a file tool reading or writing `where` lands: through its links, a link to a name that
+ * isn't there included (writing it makes that name; read takes a look-alike beside it), the rest as
+ * the system has it (`realish`). Where `realish` stops at such a link, this goes on. */
+export function landsAt(where: string): string {
+  return realish(leadsTo(where));
+}
+
 /** Where a path leads through its links, opening nothing: as `followLinks`, but past a name that
  * isn't there (a link to it, say), the rest as it's named. */
 function leadsTo(where: string): string {

@@ -25,7 +25,7 @@ import { botOfConversation, startedByOf, worksFor } from "./tree";
 import { botHere } from "../bots/here";
 import { readProjects } from "../areas/projects";
 import { commandTemporary } from "../fence/state";
-import { askedAbout, fencePolicy } from "../fence/policy";
+import { askedAbout, fencePolicy, landsAt } from "../fence/policy";
 import { lookalikesOf } from "../fence/lookalike";
 import { inTime, projectWorktrees } from "./project-trees";
 import { foundAt } from "./found-folders";
@@ -587,21 +587,6 @@ function within(file: string, folder: string): boolean {
   return inside === "" || (!inside.startsWith("..") && !path.isAbsolute(inside));
 }
 
-
-function realPath(file: string): string {
-  const rest: string[] = [];
-  for (let at = path.resolve(file); ; ) {
-    try {
-      return path.join(fs.realpathSync(at), ...rest.reverse());
-    } catch {
-      const up = path.dirname(at);
-      if (up === at) return path.resolve(file);
-      rest.push(path.basename(at));
-      at = up;
-    }
-  }
-}
-
 async function answerPermission(source: Target, id: string, sessionID: string, signal?: AbortSignal, found?: Conversation | null): Promise<Verdict | null> {
   let { permissions } = await asksIn(source, sessionID, signal);
   let permission = permissions.find(each => each.id === id && each.asker === sessionID);
@@ -643,12 +628,13 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
   const file = seen && [seen.input.filePath, seen.input.file_path, seen.input.notebook_path, seen.input.path, seen.input.file].find((each): each is string => typeof each === "string" && each.startsWith("/"));
   // (Each as a command's path reads: \`~\` as your home, one not from \`/\` from its folder.)
   const named = permission.resources.filter(each => each !== "*").map(each => path.resolve(folder, each.replace(/^~(?=\/|$)/, homeFolder()).replace(/\/\*$/, "") || "/"));
-  // (And a read of a file that isn't there, by each beside it whose name looks the same, one of
-  // which the engine reads in its place without asking again: fence/lookalike.ts. Its folder asked
-  // about off the box's thread first, as below.)
+  // (And a read of a file that isn't there, where it leads (through a link to a name that isn't
+  // there too, which the sandbox's plugin gives the engine), by each beside it whose name looks the
+  // same, one of which the engine reads in its place without asking again: fence/lookalike.ts. Its
+  // folder asked about off the box's thread first, as below.)
   const reads = Boolean(seen && file && seen.tool.toLowerCase() === "read");
   if (reads) await askedAbout([folder, path.resolve(file!)]);
-  const alikes = reads ? lookalikesOf(path.resolve(file!)) : [];
+  const alikes = reads ? lookalikesOf(landsAt(file!)) : [];
   const actions: ReviewedAction[] = seen && file ? [file, ...alikes].map(each => ({ kind: "file" as const, path: each, access: READING.has(seen.tool.toLowerCase()) ? "read" as const : "write" as const, folder, tool: seen.tool, input: seen.input }))
     : named.length ? named.map(each => ({ kind: "file" as const, path: each, access: "write" as const, folder }))
     : [{ kind: "tool", tool: seen?.tool || "work outside its folder", args: seen?.input ?? { asked: permission.resources }, folder }];
@@ -686,7 +672,7 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
   };
   // (Each path macOS may ask about, asked off the box's thread first: a project on your Desktop.)
   await askedAbout([folder, ...actions.flatMap(action => action.kind === "file" ? [action.path] : [])]);
-  if (ownByName && ownReads((file, place) => within(realPath(file), foundAt(place)))) {
+  if (ownByName && ownReads((file, place) => within(landsAt(file), foundAt(place)))) {
     await reply({ decision: "once" }, "allowed");
     return { decision: "allow", reason: "Its own files.", by: "code" };
   }
