@@ -74,11 +74,13 @@ function bridge(agents: Agent[]) {
   }
 }
 
-/** The bridge's next word that `provider` changed: an update has ended once every account with it is told. */
-function told(provider: string): Promise<void> {
+/** The bridge's `times`th word from now that `provider` changed: an update has ended once every
+ * account with it is told (as it starts, and as it ends). */
+function told(provider: string, times = 1): Promise<void> {
   return new Promise((resolve) => {
     const stop = subscribe((event) => {
       if (event.type !== "integration.updated" || event.data.integrationID !== provider) return
+      if (--times > 0) return
       stop()
       resolve()
     })
@@ -95,7 +97,8 @@ describe("updating the agents' programs", () => {
     const box = bridge([claude.account(), claude.account("work"), grok.account(), codex.account()])
 
     const before = await box.accounts()
-    expect([before["claude-all-cli"].updateAll, before["claude-all-cli@work"].updateAll]).toEqual([true, true])
+    // Said of the agent's own sign-in: once for its program.
+    expect([before["claude-all-cli"].updateAll, before["claude-all-cli@work"].updateAll]).toEqual([true, false])
     expect(before["grok-all-cli"].updateAll).toBe(false)
     expect(before["codex-all-cli"].updateAll).toBe(false)
     expect(before["claude-all-cli"].programUpdate).toBeUndefined()
@@ -119,6 +122,10 @@ describe("updating the agents' programs", () => {
     expect(after["claude-all-cli@work"].programUpdate).toMatchObject({ state: "updated", version: "2.0.0" })
     expect([after["claude-all-cli"].version, after["claude-all-cli"].outdated, after["claude-all-cli"].updateAll]).toEqual(["2.0.0", false, false])
     expect(claude.told).toBe(2)
+
+    // A read that began before it ended still says the version before: the news stays.
+    claude.installed = "1.0.0"
+    expect((await box.accounts())["claude-all-cli"].programUpdate).toMatchObject({ state: "updated", version: "2.0.0" })
   })
 
   test("one that fails says why to every client, and is offered again until the version moves on", async () => {
@@ -139,6 +146,40 @@ describe("updating the agents' programs", () => {
     // Updated in a terminal since: no longer news.
     grok.installed = "1.1.0"
     expect((await box.accounts())["grok-stuck-cli"].programUpdate).toBeUndefined()
+  })
+
+  test("why one failed, seen on one client, is gone for every client; one seen before a newer outcome leaves that one", async () => {
+    const grok = new Program("grok-seen", "1.0.0", "1.1.0")
+    const box = bridge([grok.account()])
+    await box.accounts()
+    await box.ask("kuvo/updates/grok-seen-cli", "POST")
+    const ended = told("grok-seen-cli")
+    grok.end({ updated: false, version: "1.0.0", message: "npm: permission denied" })
+    await ended
+    const failed = (await box.accounts())["grok-seen-cli"].programUpdate
+
+    // Seen on an older outcome: this one stays.
+    await box.ask(`kuvo/updates/grok-seen-cli?at=${failed.at - 1}`, "DELETE")
+    expect((await box.accounts())["grok-seen-cli"].programUpdate).toMatchObject({ state: "failed" })
+    const forgotten = told("grok-seen-cli")
+    expect((await box.ask(`kuvo/updates/grok-seen-cli?at=${failed.at}`, "DELETE")).status).toBe(200)
+    await forgotten
+    const now = (await box.accounts())["grok-seen-cli"]
+    expect(now.programUpdate).toBeUndefined()
+    expect(now.updateAll).toBe(true)
+  })
+
+  test("an update whose program can't even start ends failed with why, not updating for good", async () => {
+    const broken = { ...new Program("codex-broken", "0.9.0", "1.0.0").account(), update: async () => { throw new Error("spawn npm ENOENT") } } as unknown as Agent
+    const box = bridge([broken])
+    await box.accounts()
+    // Told as it starts, then as it ends.
+    const ended = told("codex-broken-cli", 2)
+    await box.ask("kuvo/updates/codex-broken-cli", "POST")
+    await ended
+    const after = (await box.accounts())["codex-broken-cli"]
+    expect(after.programUpdate).toMatchObject({ state: "failed", message: "spawn npm ENOENT" })
+    expect(after.updateAll).toBe(true)
   })
 
   test("an update a client asked for goes on after it stops waiting (the app quit), and the client opened again sees it, then that it was already the newest", async () => {

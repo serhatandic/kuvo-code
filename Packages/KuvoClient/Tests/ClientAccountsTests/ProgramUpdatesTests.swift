@@ -13,7 +13,8 @@ import Testing
 
     @Test func eachOutcomeIsToldFromTheNextByItsProgramAndWhen() throws {
         let failed = try account(["agent": "codex", "programUpdate": ["state": "failed", "message": "npm: permission denied", "version": "0.163.0", "at": 1_700_000_000_123]])
-        #expect(failed.programUpdate == ProgramUpdate(state: .failed("npm: permission denied"), id: "codex@1700000000123"))
+        #expect(failed.programUpdate == ProgramUpdate(state: .failed("npm: permission denied"), at: 1_700_000_000_123, program: "codex"))
+        #expect(failed.programUpdate?.id == "codex@1700000000123")
         let again = try account(["agent": "codex", "programUpdate": ["state": "failed", "message": "npm: permission denied", "at": 1_700_000_000_456]])
         #expect(again.programUpdate?.id != failed.programUpdate?.id, "a second failure is said too")
 
@@ -26,6 +27,9 @@ import Testing
         #expect(try account(["agent": "codex"]).programUpdate == nil)
         #expect(try account(["agent": "codex", "programUpdate": ["state": "verifying", "at": 8]]).programUpdate == nil, "one a newer box adds")
         #expect(try account(["agent": "codex", "updateAll": true]).isInUpdateAll)
-        #expect(try !account(["agent": "codex", "outdated": true, "updates": true]).isInUpdateAll, "the box picks what Update All updates")
+        #expect(try !account(["agent": "codex", "updateAll": false, "outdated": true, "updates": true]).isInUpdateAll, "the box picks what Update All updates")
+        // A box from before it picked them: its own sign-in, by what it says of its version.
+        #expect(try account(["agent": "codex", "accountID": "default", "outdated": true, "updates": true]).isInUpdateAll)
+        #expect(try !account(["agent": "codex", "accountID": "9a8b", "outdated": true, "updates": true]).isInUpdateAll)
     }
 }

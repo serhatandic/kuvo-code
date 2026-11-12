@@ -16,7 +16,7 @@ import { reviewRoutes, type Reviews } from "./reviews"
 import { voiceRoutes, type VoiceWords } from "./voice"
 import { limitsRoutes, type Limits } from "./limits"
 import { isOutdated, type Maintenance } from "./maintenance"
-import { inUpdateAll, programUpdate, updateAll, updateProgram } from "./updates"
+import { forgetUpdate, inUpdateAll, programUpdate, updateAll, updateProgram } from "./updates"
 import { refreshLoginPath } from "./proc"
 import { setToolServer } from "./kuvotools"
 import { noteToolServer } from "./fence"
@@ -169,9 +169,10 @@ export async function integration(agent: Agent, fresh = false, auto?: Auto): Pro
       updateCommand: maintained?.shown,
       updates: Boolean(agent.update && maintained?.command),
       // How its update stands, the same for every account with its program, and whether Update
-      // All updates it: the box's to say, so every client shows the same (updates.ts).
+      // All updates it (said of the agent's own sign-in, once for its program): the box's to say,
+      // so every client shows the same (updates.ts).
       programUpdate: programUpdate(agent.id, maintained?.installed),
-      updateAll: inUpdateAll(agent, maintained),
+      updateAll: agent.instance.id === "default" && inUpdateAll(agent, maintained),
       // Whether its sign-in can finish on another device (`remote: true`).
       remoteSignIn: Boolean(agent.signIn && agent.signsInRemotely),
       // Its list (`api/model?hidden=1`) is every model it runs: one missing from it is gone.
@@ -297,6 +298,8 @@ export function handler(context: Context) {
           if (!agent.installProgram) return error(400, `Install ${agent.name} the way its maker says.`)
           const result = await agent.installProgram()
           if (result.installed) {
+            // How an update went before is no longer news.
+            forgetUpdate(agent.id)
             for (const each of roster.all()) if (each.id === agent.id) each.programUpdated?.()
             emit("integration.updated", { integrationID: agent.providerID })
             emit("model.updated", {})
@@ -509,11 +512,23 @@ export function handler(context: Context) {
 
       // Updating the agents' programs, answered as it starts: every account with the program says
       // how it goes (`metadata.programUpdate`). `POST kuvo/updates`: Update All, each program it
-      // picks (`metadata.updateAll`); `POST kuvo/updates/<provider>`: that account's program.
-      if (area === "kuvo" && a === "updates" && method === "POST" && !c) {
-        if (!b) return json({ data: { updating: await updateAll(roster.all(), () => roster.all(), maintainedNow) } })
+      // picks (`metadata.updateAll`); `POST kuvo/updates/<provider>`: that account's program;
+      // `DELETE kuvo/updates/<provider>?at=…`: how that one went, seen, for every client.
+      if (area === "kuvo" && a === "updates" && !c) {
+        if (!b) {
+          if (method !== "POST") return error(405, "Not allowed.")
+          return json({ data: { updating: await updateAll(roster.all(), () => roster.all(), maintainedNow, (agent) => lastMaintained.get(agent.id)) } })
+        }
         const agent = agentFor(b)
         if (!agent) return error(404, `No agent ${b}.`)
+        if (method === "DELETE") {
+          const at = url.searchParams.get("at")
+          if (forgetUpdate(agent.id, at === null ? undefined : Number(at))) {
+            for (const each of roster.all()) if (each.id === agent.id) emit("integration.updated", { integrationID: each.providerID })
+          }
+          return json({})
+        }
+        if (method !== "POST") return error(405, "Not allowed.")
         if (!agent.update || !agent.maintenance) return error(400, `Update ${agent.name} the way you installed it.`)
         void updateProgram(agent, () => roster.all(), maintainedNow)
         return json({ data: { updating: [agent.id] } })

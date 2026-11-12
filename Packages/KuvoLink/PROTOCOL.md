@@ -2367,17 +2367,20 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     `metadata.programUpdate` is `{state: "updating", at}`, `{state: "updated" | "current",
     version, at}` (updated to it, or already the newest when asked) or `{state: "failed",
     message, version?, at}` (why, in the installer's words), none otherwise; `at` (ms) tells one
-    outcome from the next. What an update brought is kept an hour; why one failed until the
-    next, and either goes once the version moves on (updated in a terminal). `metadata.updateAll`
-    true: Update All updates it (behind, its installer can update it, not updating). `POST
-    kuvo/agents/api/kuvo/updates` is Update All, each program the box picks, once; `POST
-    …/kuvo/updates/<provider>` updates that account's program; both answer as they start, `{data:
-    {updating: [<agent>]}}` (`metadata.agent`), with `integration.updated` for each account with
-    the program as it starts and as it ends (and `model.updated` once it updated). A client draws
-    them, and says an outcome once (by `at`). Update All on the phone asks each computer. (An
-    older client's `POST …/integration/<provider>/update` runs the same update and answers once
-    it's done, `{data: {updated, version?, message?}}`.) Installing done, `integration.updated`
-    and `model.updated` follow.
+    outcome from the next. What an update brought is kept an hour, why one failed until it's
+    seen; either goes with the next update, once the version moves past it (updated in a
+    terminal), or once a client says it was seen: `DELETE …/kuvo/updates/<provider>?at=<at>`
+    (that outcome only; for every client). `metadata.updateAll` true, on the agent's own
+    sign-in only (once a program): Update All updates it (behind, its installer can update it,
+    not updating). `POST kuvo/agents/api/kuvo/updates` is Update All, each program the box
+    picks, once; `POST …/kuvo/updates/<provider>` updates that account's program; both answer as
+    they start, `{data: {updating: [<agent>]}}` (`metadata.agent`), with `integration.updated`
+    for each account with the program as it starts and as it ends (and `model.updated` once it
+    updated). A client draws them, says an outcome once and then that it was seen. Update All on
+    the phone asks each computer. (An older client's `POST …/integration/<provider>/update` runs
+    the same update and answers once it's done, `{data: {updated, version?, message?}}`; a box
+    from before these has no `updateAll`, and a client asks it that way.) Installing done,
+    `integration.updated` and `model.updated` follow, and how an update went before is gone.
   - Signing in to an agent: `POST kuvo/agents/api/integration/<provider>/connect/oauth {methodID,
     remote}` → `{data: {attemptID, url, instructions, mode, acceptsCode?, userCode?, time}}`; `GET
     …/connect/oauth/<attempt>` → its status (`pending`, with `url`, `instructions`, `userCode` and

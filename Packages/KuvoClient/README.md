@@ -46,8 +46,8 @@ was made before; held, with `PlanSignIns`, to the box's cases (`Vectors/plan-sig
 `ProgramUpdate` is how a coding agent's program's update stands as its box keeps it
 (`Integration.programUpdate`: under way, updated, already the newest, or why it failed, by an id
 that tells one outcome from the next), and `isInUpdateAll` whether its box's Update All updates it;
-`OpenCodeAPI.updateAllPrograms()` and `updateProgram(_:)` ask for them. Both apps draw these; the
-box decides.
+`OpenCodeAPI.updateAllPrograms(_:)`, `updateProgram(_:)` and `sawProgramUpdate(_:at:)` ask for
+them (with the old-box path for a box from before). Both apps draw these; the box decides.
 
 ## ClientSessions
 

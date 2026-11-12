@@ -70,14 +70,12 @@ extension AppModel {
         return boxes.contains(picked) ? picked : .mac
     }
 
-    /// What Update All updates on `box` (while its agents are up), as its box picks it, one account
-    /// for each program (an account you added runs its agent's): each shows how it goes on its row
-    /// or tile in Settings › Accounts.
+    /// What Update All updates on `box` (while its agents are up), as its box picks it, once for
+    /// each program: each shows how it goes on its row or tile in Settings › Accounts.
     func outdatedAgents(on box: SidebarBox) -> [Integration] {
         if let machine = box.machine, machines.engine(machine) == nil { return [] }
         guard agents(for: box).api != nil, !agents(for: box).isDown else { return [] }
-        var programs = Set<String>()
-        return catalog(for: box).codingAgents.filter { $0.isInUpdateAll && programs.insert(OutsideAgents.base($0.id)).inserted }
+        return catalog(for: box).codingAgents.filter(\.isInUpdateAll)
     }
 
     /// Update All on `box`: its box updates each it picks, through the installer that owns it, and
@@ -85,7 +83,7 @@ extension AppModel {
     func updateAllAgents(on box: SidebarBox) async throws {
         let agents = agents(for: box)
         guard let api = agents.api else { throw OutsideAgents.Failure.notRunning(agents.failure) }
-        try await api.updateAllPrograms()
+        try await api.updateAllPrograms(catalog(for: box).codingAgents)
         await catalog(for: box).refreshAgents()
     }
 

@@ -409,8 +409,9 @@ renewal =
         build,
         work: () => {
           const here = sessions.work()
-          const turns = here.turns || answering > 0 || (groups?.runner.busy() ?? false)
-          const other = here.other || goals.busy() || sideQuestions.busy() || reviews.busy() || handoffs.busy() || signInsWaiting() || updatesUnderWay()
+          // (An agent's program updating is cut by nothing: an installer stopped halfway can leave it broken.)
+          const turns = here.turns || answering > 0 || (groups?.runner.busy() ?? false) || updatesUnderWay()
+          const other = here.other || goals.busy() || sideQuestions.busy() || reviews.busy() || handoffs.busy() || signInsWaiting()
           return { turns, other }
         },
         hold: (on) => sessions.hold(on),

@@ -18246,12 +18246,19 @@ function programUpdate(program, installed, now = Date.now()) {
   const update = kept2.get(program);
   if (!update || update.state === "updating")
     return update;
-  const movedOn = installed !== undefined && update.version !== undefined && installed !== update.version;
+  const movedOn = installed !== undefined && update.version !== undefined && compareVersions(installed, update.version) > 0;
   const old = update.state !== "failed" && now - update.at > NEWS_KEPT;
   if (!movedOn && !old)
     return update;
   kept2.delete(program);
   return;
+}
+function forgetUpdate(program, at) {
+  const update = kept2.get(program);
+  if (!update || update.state === "updating" || at !== undefined && update.at !== at)
+    return false;
+  kept2.delete(program);
+  return true;
 }
 function inUpdateAll(agent, maintained) {
   return Boolean(agent.update && maintained?.command && isOutdated(maintained) && !isUpdating(agent.id));
@@ -18276,34 +18283,36 @@ function updateProgram(agent, accounts, noted) {
     return running;
   kept2.set(program, { state: "updating", at: Date.now() });
   const done = (async () => {
-    let result;
+    let result = { updated: false, message: "The update stopped without saying how it went." };
     try {
       result = agent.update ? await agent.update() : { updated: false, message: `Update ${agent.name} the way you installed it.` };
+      const maintained = await agent.maintenance?.().catch(() => {
+        return;
+      });
+      if (maintained)
+        noted(agent, maintained);
+      if (result.updated) {
+        for (const each of accounts())
+          if (each.id === program)
+            each.programUpdated?.();
+      }
     } catch (error) {
-      result = { updated: false, message: String(error?.message ?? error) };
+      if (!result.updated)
+        result = { updated: false, message: String(error?.message ?? error) };
+    } finally {
+      kept2.set(program, outcome(result));
+      underWay2.delete(program);
+      told3(agent, accounts());
+      if (result.updated)
+        emit("model.updated", {});
     }
-    const maintained = await agent.maintenance?.().catch(() => {
-      return;
-    });
-    if (maintained)
-      noted(agent, maintained);
-    if (result.updated) {
-      for (const each of accounts())
-        if (each.id === program)
-          each.programUpdated?.();
-    }
-    kept2.set(program, outcome(result));
-    underWay2.delete(program);
-    told3(agent, accounts());
-    if (result.updated)
-      emit("model.updated", {});
     return result;
   })();
   underWay2.set(program, done);
   told3(agent, accounts());
   return done;
 }
-async function updateAll(agents, accounts, noted) {
+async function updateAll(agents, accounts, noted, known) {
   const byProgram = new Map;
   const ordered = [...agents.filter((agent) => agent.instance.id === "default"), ...agents.filter((agent) => agent.instance.id !== "default")];
   for (const agent of ordered) {
@@ -18315,9 +18324,11 @@ async function updateAll(agents, accounts, noted) {
     if (isUpdating(candidates[0].id))
       return;
     for (const agent of candidates) {
-      const maintained = await agent.maintenance().catch(() => {
-        return;
-      });
+      let maintained = known(agent);
+      if (!maintained)
+        maintained = await agent.maintenance().catch(() => {
+          return;
+        });
       if (maintained && noted(agent, maintained))
         emit("integration.updated", { integrationID: agent.providerID });
       if (inUpdateAll(agent, maintained))
@@ -27017,7 +27028,7 @@ async function integration(agent, fresh = false, auto) {
       updateCommand: maintained?.shown,
       updates: Boolean(agent.update && maintained?.command),
       programUpdate: programUpdate(agent.id, maintained?.installed),
-      updateAll: inUpdateAll(agent, maintained),
+      updateAll: agent.instance.id === "default" && inUpdateAll(agent, maintained),
       remoteSignIn: Boolean(agent.signIn && agent.signsInRemotely),
       modelsComplete: agent.listsEveryModel ? agent.listsEveryModel() : true
     },
@@ -27138,6 +27149,7 @@ function handler(context) {
             return error2(400, `Install ${agent.name} the way its maker says.`);
           const result = await agent.installProgram();
           if (result.installed) {
+            forgetUpdate(agent.id);
             for (const each of roster.all())
               if (each.id === agent.id)
                 each.programUpdated?.();
@@ -27352,12 +27364,26 @@ function handler(context) {
           return json12({});
         }
       }
-      if (area === "kuvo" && a === "updates" && method === "POST" && !c) {
-        if (!b)
-          return json12({ data: { updating: await updateAll(roster.all(), () => roster.all(), maintainedNow) } });
+      if (area === "kuvo" && a === "updates" && !c) {
+        if (!b) {
+          if (method !== "POST")
+            return error2(405, "Not allowed.");
+          return json12({ data: { updating: await updateAll(roster.all(), () => roster.all(), maintainedNow, (agent) => lastMaintained.get(agent.id)) } });
+        }
         const agent = agentFor(b);
         if (!agent)
           return error2(404, `No agent ${b}.`);
+        if (method === "DELETE") {
+          const at = url.searchParams.get("at");
+          if (forgetUpdate(agent.id, at === null ? undefined : Number(at))) {
+            for (const each of roster.all())
+              if (each.id === agent.id)
+                emit("integration.updated", { integrationID: each.providerID });
+          }
+          return json12({});
+        }
+        if (method !== "POST")
+          return error2(405, "Not allowed.");
         if (!agent.update || !agent.maintenance)
           return error2(400, `Update ${agent.name} the way you installed it.`);
         updateProgram(agent, () => roster.all(), maintainedNow);
@@ -28263,8 +28289,8 @@ renewal = onMachine && build ? new Renewal({
   build,
   work: () => {
     const here = sessions.work();
-    const turns = here.turns || answering > 0 || (groups?.runner.busy() ?? false);
-    const other = here.other || goals.busy() || sideQuestions.busy() || reviews.busy() || handoffs.busy() || signInsWaiting() || updatesUnderWay();
+    const turns = here.turns || answering > 0 || (groups?.runner.busy() ?? false) || updatesUnderWay();
+    const other = here.other || goals.busy() || sideQuestions.busy() || reviews.busy() || handoffs.busy() || signInsWaiting();
     return { turns, other };
   },
   hold: (on) => sessions.hold(on),
@@ -28354,4 +28380,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents f1f27e4618ee5e16acd68a53097f2900b77f22f1c8519c51e0d8ec4b6f2a1195
+// Built from Packages/Box/src/agents 782a05911f1b0fe339be778037586abdc1ca162cb46d5ee64ed58bf300b8b252

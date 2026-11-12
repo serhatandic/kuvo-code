@@ -689,9 +689,9 @@ final class OutsideAgents {
         try await api.removeAgentAccount(providerID)
     }
 
-    /// The program updates whose outcome you've seen (`ProgramUpdate.id`): what an update brought
-    /// is said while you're on the page that said it, and why one failed until you've seen it. How
-    /// each stands is its box's (`Integration.programUpdate`), the same for each of your devices.
+    /// The program updates whose outcome you've seen here (`ProgramUpdate.id`), gone from view at
+    /// once while their box forgets them for every device (`seen`). How each stands is its box's
+    /// (`Integration.programUpdate`).
     private var seenUpdates: Set<String> = []
 
     /// How an agent's program stands, as its row or tile in Settings › Accounts says it.
@@ -731,7 +731,13 @@ final class OutsideAgents {
     }
 
     func dismissUpdateFailure(_ integration: Integration) {
-        if let id = integration.programUpdate?.id { seenUpdates.insert(id) }
+        seen(integration)
+    }
+
+    /// How its update went, seen: its box forgets it, for your other devices too.
+    private func seen(_ integration: Integration) {
+        guard let update = integration.programUpdate, seenUpdates.insert(update.id).inserted, let api else { return }
+        Task { try? await api.sawProgramUpdate(integration.id, at: update.at) }
     }
 
     /// Updates an agent's program (Claude Code, Codex, Grok's CLI) through the installer that owns
@@ -739,17 +745,22 @@ final class OutsideAgents {
     /// the app shows of it. Throws only when it couldn't be asked.
     func update(_ providerID: String, then refresh: () async -> Void) async throws {
         guard let api else { throw Failure.notRunning(failure) }
-        try await api.updateProgram(providerID)
+        do {
+            try await api.updateProgram(providerID)
+        } catch {
+            await refresh()
+            throw error
+        }
         await refresh()
     }
 
     /// What updates brought, said once: gone when you leave the page that said it (why one failed
-    /// stays until you've seen it).
+    /// stays until you've seen it). Once for each program, by its agent's own sign-in.
     func forgetUpdates(_ integrations: [Integration]) {
-        for update in integrations.compactMap(\.programUpdate) {
-            switch update.state {
-            case .updated, .current: seenUpdates.insert(update.id)
-            case .updating, .failed: break
+        for integration in integrations where Self.account(integration.id) == nil {
+            switch integration.programUpdate?.state {
+            case .updated, .current: seen(integration)
+            default: break
             }
         }
     }

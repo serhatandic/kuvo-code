@@ -1,6 +1,7 @@
 import Foundation
 import OpenCodeKit
 import Testing
+import ClientAccounts
 @testable import KuvoCode
 
 /// Update All, in Settings › Accounts, and each agent's Update, as its computer's box keeps them:
@@ -33,9 +34,17 @@ import Testing
             accounts = added + versions.keys.sorted()
             StubWeb.handle(url + "/api/model") { _, _ in StubWeb.json(["data": []]) }
             StubWeb.handle(url + "/api/kuvo/updates") { [weak self] request, _ in
-                guard let self, request.httpMethod == "POST" else { return StubWeb.Answer(status: 404) }
+                guard let self else { return StubWeb.Answer(status: 503) }
                 return self.lock.withLock {
                     let parts = request.url!.path().split(separator: "/").map(String.init)
+                    if request.httpMethod == "DELETE", parts.count == 4 {
+                        let program = String(parts[3].split(separator: "@")[0])
+                        let at = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "at" }?.value
+                        self.asked.append("seen \(parts[3])")
+                        if let update = self.updates[program], "\(update["at"] ?? "")" == at { self.updates[program] = nil }
+                        return StubWeb.json([String: Any]())
+                    }
+                    guard request.httpMethod == "POST" else { return StubWeb.Answer(status: 405) }
                     let programs = parts.count == 4 ? [String(parts[3].split(separator: "@")[0])] : self.picked.sorted()
                     self.asked.append(parts.count == 4 ? parts[3] : "all")
                     for program in programs { self.start(program) }
@@ -78,7 +87,7 @@ import Testing
             var metadata: [String: Any] = [
                 "source": "agent", "agent": program, "accountID": parts.count == 2 ? parts[1] : "default", "installed": true,
                 "version": versions[program] ?? "", "latestVersion": Self.newest[program] ?? "", "outdated": versions[program] != Self.newest[program],
-                "updates": true, "updateAll": picked.contains(program),
+                "updates": true, "updateAll": parts.count == 1 && picked.contains(program),
             ]
             metadata["programUpdate"] = updates[program]
             return ["id": id, "name": program, "methods": [], "connections": [], "metadata": metadata]
@@ -109,7 +118,7 @@ import Testing
         await app.catalog.refreshAgents()
         await box.catalog.refreshAgents()
 
-        #expect(app.outdatedAgents(on: .mac).map { OutsideAgents.name($0.id) } == ["Claude Code"], "once for Claude Code, though both its accounts say so; never Grok")
+        #expect(app.outdatedAgents(on: .mac).map(\.id) == ["claude-code"], "once for Claude Code, by its own sign-in; never Grok")
         #expect(app.outdatedAgents(on: .machine(box.machine.id)).map(\.id) == ["codex-cli"])
 
         // This Mac's page: its own box only, the machine's on the machine's page.
@@ -150,11 +159,15 @@ import Testing
         #expect(status("grok-cli") == .failed("Grok is still 1.0.60 after “grok update”."))
         #expect(app.outdatedAgents(on: .mac).map(\.id) == ["grok-cli"], "still out of date, so Update All stays")
 
-        // Seen: the failure once you've dismissed it, what an update brought once you've left the page.
+        // Seen: the failure once you've dismissed it, what an update brought once you've left the
+        // page; its box forgets them, for your other devices too.
         app.agents.dismissUpdateFailure(try agent("grok-cli"))
         #expect(status("grok-cli") == .available("1.0.67"), "offered again")
         app.agents.forgetUpdates(app.catalog.codingAgents)
         #expect(status("claude-code") == .available("2.1.309"), "the stub's version stands still; news no more")
+        try await until { Set(bridge.asks.filter { $0.hasPrefix("seen") }) == ["seen grok-cli", "seen claude-code"] }
+        await app.catalog.refreshAgents()
+        #expect(try agent("grok-cli").programUpdate == nil && agent("claude-code").programUpdate == nil)
     }
 
     @Test func anUpdateAnotherClientStartedShowsUnderWayThenHowItWent() async throws {
