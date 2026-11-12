@@ -1003,14 +1003,21 @@ test("in Auto, a read by a look-alike name beside a link a command made to your 
   const fake = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-fake-home-")))
   process.env.HOME = fake
   try {
-    mkdirSync(join(fake, ".ssh"))
+    // (Your SSH folder kept with your dotfiles, as stow links it.)
+    mkdirSync(join(fake, "dotfiles", "ssh"), { recursive: true })
+    symlinkSync(join(fake, "dotfiles", "ssh"), join(fake, ".ssh"))
     writeFileSync(join(fake, ".ssh", "id_test"), "a key\n")
+    writeFileSync(join(fake, ".ssh", "work key"), "another key\n")
     const folder = join(box, "alike-project")
     mkdirSync(folder)
     // What a command in the sandbox can make in its folder: a link to your key, and a plain file.
     symlinkSync(join(fake, ".ssh", "id_test"), join(folder, "look alike.txt"))
     symlinkSync(join(fake, ".ssh", "id_test"), join(folder, "it's.txt"))
     writeFileSync(join(folder, "plain notes.txt"), "the project's\n")
+    // And one in a folder outside it, which reads ask about.
+    const elsewhere = join(box, "alike-elsewhere")
+    mkdirSync(elsewhere)
+    symlinkSync(join(fake, ".ssh", "id_test"), join(elsewhere, "our notes.md"))
     conversation("ses_alike", "auto", "Read the notes")
     sessions.ses_alike.location = { directory: folder }
     reply = () => '{"decision": "refuse", "reason": "Not what the user asked."}'
@@ -1037,16 +1044,18 @@ test("in Auto, a read by a look-alike name beside a link a command made to your 
         if (verdict?.decision !== "allow") return "refused at the engine"
       }
       if (existsSync(opens)) return readFileSync(opens, "utf8")
-      const same = (name: string) => name.normalize("NFC").replace(/[  ]/g, " ").replace(/[‘’]/g, "'")
+      const same = (name: string) => name.normalize("NFC").replace(/[\u00a0\u202f]/g, " ").replace(/[\u2018\u2019]/g, "'")
       const beside = readdirSync(dirname(opens), { withFileTypes: true }).filter(each => each.isFile() && same(each.name) === same(opens.split("/").at(-1)!))
       return beside.length === 1 ? readFileSync(join(dirname(opens), beside[0].name), "utf8") : "not found"
     }
     const tried = {
-      "by the look-alike name": await read("per_a1", join(folder, "look alike.txt")),
-      "by a curly quote": await read("per_a2", join(folder, "it’s.txt")),
+      "by the look-alike name": await read("per_a1", join(folder, "look\u00a0alike.txt")),
+      "by a curly quote": await read("per_a2", join(folder, "it\u2019s.txt")),
       "by the link's own name": await read("per_a3", join(folder, "look alike.txt")),
-      "a plain file by its look-alike name": await read("per_a4", join(folder, "plain notes.txt")),
+      "a plain file by its look-alike name": await read("per_a4", join(folder, "plain\u00a0notes.txt")),
       "a name nothing looks like": await read("per_a5", join(folder, "missing.txt")),
+      "outside the folder, by a look-alike name": await read("per_a6", join(elsewhere, "our\u00a0notes.md")),
+      "a key itself, by a look-alike name": await read("per_a7", join(fake, ".ssh", "work\u00a0key")),
     }
     const refused = expect.stringMatching(/^refused: This names a file that isn't there, beside a link whose name looks the same/)
     expect(tried).toEqual({
@@ -1055,6 +1064,9 @@ test("in Auto, a read by a look-alike name beside a link a command made to your 
       "by the link's own name": "refused at the engine",
       "a plain file by its look-alike name": "the project's\n",
       "a name nothing looks like": "not found",
+      "outside the folder, by a look-alike name": refused,
+      // (Judged as the file read reads in its place, which is your key.)
+      "a key itself, by a look-alike name": "refused at the engine",
     })
   } finally {
     process.env.HOME = runsHome

@@ -9,6 +9,7 @@
 
 import { MOST_FOLDERS } from "./allowed";
 import { HIDE } from "./landlock";
+import { alikeName } from "./lookalike";
 import { AGENT_FOLDERS } from "./seatbelt";
 
 /** Where the box keeps the sandbox's own files (profiles, the plugin's note, commands' temporary
@@ -359,13 +360,12 @@ function topOf(folder) {
   }
   return ""
 }
-// What the read tool reads instead of a file that isn't there: the one plain file beside it whose
-// name is the same but for how it's written (composed accents, no-break spaces, curly quotes), never
-// a link (engine 2.2.5), so one in the same folder as the name it was given. Whether a link beside
-// \`where\` (which isn't there) has such a name: one an engine that followed it would read in its
-// place, while what's asked about, and judged, is the name given.
+// What the read tool reads instead of a file that isn't there: one beside it whose name looks the
+// same (fence/lookalike.ts), a plain file (engine 2.2.5) in the same folder as the name it was given.
+// Whether a link beside \`where\` (which isn't there) has such a name: one an engine that followed it
+// would read in its place, while what's asked about, and judged, is the name given.
+const same = ${alikeName.toString()}
 function lookalikeLink(where) {
-  const same = (name) => name.normalize("NFC").replace(/[\u00a0\u202f]/g, " ").replace(/[\u2018\u2019]/g, "'")
   const name = same(path.basename(where))
   try {
     return fs.readdirSync(path.dirname(where), { withFileTypes: true }).some(each => each.isSymbolicLink() && same(each.name) === name)

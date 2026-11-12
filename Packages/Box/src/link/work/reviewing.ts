@@ -26,6 +26,7 @@ import { botHere } from "../bots/here";
 import { readProjects } from "../areas/projects";
 import { commandTemporary } from "../fence/state";
 import { askedAbout, fencePolicy } from "../fence/policy";
+import { lookalikesOf } from "../fence/lookalike";
 import { inTime, projectWorktrees } from "./project-trees";
 import { foundAt } from "./found-folders";
 export { noteFolderFound } from "./found-folders";
@@ -642,7 +643,10 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
   const file = seen && [seen.input.filePath, seen.input.file_path, seen.input.notebook_path, seen.input.path, seen.input.file].find((each): each is string => typeof each === "string" && each.startsWith("/"));
   // (Each as a command's path reads: \`~\` as your home, one not from \`/\` from its folder.)
   const named = permission.resources.filter(each => each !== "*").map(each => path.resolve(folder, each.replace(/^~(?=\/|$)/, homeFolder()).replace(/\/\*$/, "") || "/"));
-  const actions: ReviewedAction[] = seen && file ? [{ kind: "file", path: file, access: READING.has(seen.tool.toLowerCase()) ? "read" : "write", folder, tool: seen.tool, input: seen.input }]
+  // (And a read of a file that isn't there, by each beside it whose name looks the same, one of
+  // which the engine reads in its place without asking again: fence/lookalike.ts.)
+  const alikes = seen && file && seen.tool.toLowerCase() === "read" ? lookalikesOf(path.resolve(file)) : [];
+  const actions: ReviewedAction[] = seen && file ? [file, ...alikes].map(each => ({ kind: "file" as const, path: each, access: READING.has(seen.tool.toLowerCase()) ? "read" as const : "write" as const, folder, tool: seen.tool, input: seen.input }))
     : named.length ? named.map(each => ({ kind: "file" as const, path: each, access: "write" as const, folder }))
     : [{ kind: "tool", tool: seen?.tool || "work outside its folder", args: seen?.input ?? { asked: permission.resources }, folder }];
   // What its own tools read, one file at a time, of its commands' temporary files (a screenshot a
@@ -706,7 +710,7 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
   const resolve = (raw: string) => path.resolve(folder, raw.replace(/^~(?=\/|$)/, homeFolder()));
   const resources = permission.resources.map(raw => ({ raw, path: resolve(raw.replace(/\/\*$/, "") || "/"), folder: raw.endsWith("/*") ? true : null }));
   const changes = [...resources, ...(permission.filepath ? [{ raw: permission.filepath, path: resolve(permission.filepath), folder: false as boolean | null }] : []),
-    ...(seen ? changedBy(seen, folder) ?? [] : [])];
+    ...(seen ? changedBy(seen, folder) ?? [] : []), ...alikes.map(each => ({ raw: each, path: each, folder: false as boolean | null }))];
   // (A call the ask names that couldn't be read, or the image tool, which writes by another name
   // than the one it's given: never its own by code.)
   const unread = Boolean(permission.call) && !seen;

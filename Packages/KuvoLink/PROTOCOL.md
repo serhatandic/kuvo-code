@@ -5667,10 +5667,11 @@ is, taking the path as the engine does (`~`, the spaces a patch's lines are trim
 engine's rules for a folder outside the project apply to it (a link a command made to your keys
 asks, as your keys' own path would). `read` given a file that isn't there reads the one plain file
 beside it whose name is the same but for how it's written (composed accents, no-break spaces, curly
-quotes), never a link (engine 2.2.5): one in the same folder, which needs nothing more. Where a link
-beside it has such a name, in the folder or out of it, the plugin refuses the read rather than send
-it where the link leads: Auto's reviewer judges a read by the name its call gives, which isn't where
-the link leads (nor would an engine that took the link ask about where it leads). And it refuses
+quotes; never a link, engine 2.2.5), without asking about it again. So where a link beside it has a
+name that looks the same (by a wider rule, `fence/lookalike.ts`: compatibility-composed, any space,
+any apostrophe-like mark, any case), in the folder or out of it, the plugin refuses the read rather
+than send it where the link leads; and Auto's reviewer judges such a read by each file beside it
+whose name looks the same too, as by the name its call gives. And it refuses
 `session_move` (the engine's, or code mode's `opencode_session_move`) of another conversation, or to
 a folder outside the conversation's own and its repository's worktrees: commands would write
 wherever it moved. A command's folder is where it really was as the engine opened it (for a
