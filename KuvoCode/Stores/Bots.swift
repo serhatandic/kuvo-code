@@ -654,10 +654,6 @@ final class Bots {
         path.hasSuffix("/MEMORY.md") && path.contains("/bots/bot_")
     }
 
-    /// Who sets what about a bot, so it doesn't claim to have changed them (a group chat's seat is
-    /// told it too), as its box words it.
-    static var identityNote: String { BotWords.shipped.identityNote }
-
     // MARK: From earlier versions
 
     /// For an update from a version before bots had descriptions, and as this Mac's box starts keeping
@@ -751,8 +747,8 @@ final class Bots {
 extension Bots {
     /// What's a computer's own for its bots, kept in its bots' folder (`kit.json`): the name this
     /// Mac calls a machine (⟦machine⟧ in what its bots are told), the personalities you made, the
-    /// projects there and the model a bot starts on, the rules a new conversation gets, and your
-    /// time zone.
+    /// projects there and the model a bot starts on, and your time zone. (A new bot's rules its box
+    /// makes from its own default and Settings › Permissions.)
     struct MachineKit: Encodable {
         struct Personality: Encodable { var id: String, name: String, description: String, custom = true, instruction: String }
         struct Project: Encodable { var directory: String, name: String }
@@ -761,8 +757,6 @@ extension Bots {
         var personalities: [Personality]
         var startingModel: ModelRef?
         var projects: [Project]
-        /// A new conversation's rules, before a bot's own (its folder).
-        var rules: [PermissionRule]
         var timeZone: String
         /// Its time zone's rules, for a machine without zone files of its own.
         var zoneinfo: String?
@@ -777,7 +771,6 @@ extension Bots {
             startingModel: catalog?.startingModel(LastModel.current, scope: .on(machine: machine)),
             projects: (app?.workspace.projects ?? []).filter { RemoteFolder.machine(of: $0.directory) == machine }
                 .map { .init(directory: RemoteFolder.parse($0.directory)?.path ?? $0.directory, name: $0.name) },
-            rules: ToolApproval.lastPicked.provisionalRules(settings: EngineConfig.rules(on: machine)),
             timeZone: TimeZone.current.identifier,
             // (This Mac's bots go by its own clock.)
             zoneinfo: machine == nil ? nil : WakeUps.zoneRules(TimeZone.current.identifier)?.base64EncodedString())

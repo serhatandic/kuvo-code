@@ -144,6 +144,25 @@ test("in Auto, a command the reviewer allows runs outside the sandbox without as
   expect(reviewer.reviewLog("ses_allow").decisions.map(each => [each.decision, each.by])).toEqual([["allowed", "model"]])
 })
 
+// The sandbox can go while the reviewer decides (its check failed, or didn't finish): what it
+// allowed then never runs outside, as Auto counts on the sandbox.
+test("in Auto, a command the reviewer allows doesn't run once the sandbox has gone while it decided: the agent hears why", async () => {
+  conversation("ses_gone", "auto", "Make the build pass")
+  const marker = join(project, "ran-outside")
+  reply = () => {
+    delete process.env.KUVO_TEST_SANDBOX_ON
+    return '{"decision": "allow", "reason": "Builds the project, as asked."}'
+  }
+  try {
+    const ran = await sandboxAsk("ses_gone", `echo ran > ${JSON.stringify(marker)}`)
+    expect(ran.text).toBe("The sandbox isn't on here now, so Auto lets nothing out of it: run the command with your shell tool, which asks the user first.")
+    expect(existsSync(marker)).toBe(false)
+  } finally {
+    process.env.KUVO_TEST_SANDBOX_ON = "1"
+    reply = () => '{"decision": "allow", "reason": "Builds the project, as asked."}'
+  }
+})
+
 test("in Auto, a command the reviewer refuses never runs and nobody's asked; the agent hears why, and that you can approve it", async () => {
   conversation("ses_refuse", "auto", "Fix the typo")
   reply = () => '{"decision": "refuse", "reason": "Not part of fixing a typo."}'

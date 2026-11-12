@@ -995,7 +995,7 @@ struct DraftSessionView: View {
                 onSelectAgent: { pickedAgent = $0 },
                 onSelectApproval: { picked in
                     // Full Access the first time on its computer: asked first.
-                    if picked == .fullAccess, here?.fullAccess != true { confirmsFullAccess = true } else { pickedApproval = picked; ToolApproval.lastPicked = picked }
+                    if picked == .fullAccess, here?.fullAccess != true { confirmsFullAccess = true } else { pickedApproval = picked }
                 },
                 approvalShown: here?.shown(approval, agents: OutsideAgents.runsInBridge(startingModel?.providerID)),
                 autopilot: autopilotChoice,
@@ -1006,7 +1006,6 @@ struct DraftSessionView: View {
                         do {
                             try await workspace.allowFullAccess(for: directory)
                             pickedApproval = .fullAccess
-                            ToolApproval.lastPicked = .fullAccess
                         } catch {
                             failure = error.localizedDescription
                         }

@@ -9,7 +9,7 @@ import { isObject, parsed } from "../../shared/json";
 import type { SandboxState } from "../../shared/routes/sandbox";
 import { addableOwners, addRule, allowedFor, folderOfOwner, forgetGoneBots, listed, removeRule, RuleRefusal } from "../fence/allowed";
 import { answerSandboxAsk, callSandboxTool, listSandboxAsks, onSandboxAsksChanged, SANDBOX_TOOLS, stoppedInAuto } from "../fence/outside";
-import { answeredRestart, asksToRestart, fenceState, restartSettled, setUpFence, tellAgents } from "../fence/state";
+import { answeredRestart, asksToRestart, fencePending, fenceState, notOnWords, restartSettled, setUpFence, tellAgents } from "../fence/state";
 import { bridgeTarget, call } from "../engine/client";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import { readLink } from "../state";
@@ -24,7 +24,7 @@ const NOT_ON = "Commands aren't in the sandbox on this computer now, so there's 
 // (What agents are told goes with it at once, rather than at the box's next look.)
 const shown = (): SandboxState => {
   const { on, able, agents, ...not } = fenceState();
-  try { tellAgents(on); } catch {}
+  try { tellAgents(); } catch {}
   return { on, able, agents, ...Object.fromEntries(Object.entries(not).filter(([, value]) => value !== undefined)) };
 };
 
@@ -44,7 +44,8 @@ export async function* sandboxRoute(context: RouteContext): AsyncGenerator<Answe
   const method = request.method.toUpperCase();
   if (route === "kuvo/sandbox/check") {
     if (method !== "POST") return yield* json(405, {});
-    setUpFence();
+    // (One that can't be set up now, a full disk, say, is as it was: tried again in the box's round.)
+    try { setUpFence(); } catch {}
     return yield* json(200, shown());
   }
   if (route === "kuvo/sandbox") {
@@ -108,7 +109,7 @@ export async function* sandboxRoute(context: RouteContext): AsyncGenerator<Answe
     // What a tool server lists (`tools/list`): only while commands here are in the sandbox.
     if (method === "GET") return yield* json(200, { tools: on ? SANDBOX_TOOLS : [] });
     if (method !== "POST") return yield* json(405, {});
-    if (!on) return yield* json(200, { text: NOT_ON, isError: true });
+    if (!on) return yield* json(200, { text: fencePending() ? notOnWords() : NOT_ON, isError: true });
     // Only a call the conversation it names is making now, with these arguments (vault/who.ts).
     const args = isObject(given.arguments) ? given.arguments : {};
     const session = typeof given.session === "string" ? given.session : undefined;

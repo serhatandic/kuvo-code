@@ -53,6 +53,7 @@ export const FEATURES = [
   "git.pull-request",
   "git.pull-request.draft",
   "git.push",
+  "git.words",
   "goals",
   "groups",
   "groups.delete",

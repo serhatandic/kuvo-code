@@ -757,17 +757,11 @@ final class BoxGroups {
 
     // MARK: Settings
 
-    /// What every chat on a computer goes by, from this Mac: what each personality tells a bot,
-    /// who sets what about a bot, Ask First, what its Settings › Permissions deny, your time zone
-    /// and how you write dates.
+    /// Your clock, for every chat on a computer: your time zone and how you write dates, which a
+    /// machine can't know. (The rest they go by, each computer's box works out itself.)
     func giveSettings(to machine: String?) async {
         guard let api = api(machine) else { return }
-        let denies = EngineConfig.rules(on: machine).filter { $0.effect.holdsBack }
         let settings: [String: JSONValue] = [
-            "personalities": .object(Dictionary(Personalities.shared.all.map { ($0.id, JSONValue.string($0.instruction)) }) { first, _ in first }),
-            "identityNote": .string(Bots.identityNote),
-            "askFirst": .bool([.askFirst, .acceptEdits].contains(ToolApproval.lastPicked)),
-            "denies": Self.json(denies) ?? .array([]),
             "timeZone": .string(TimeZone.current.identifier),
             "locale": .string(Locale.current.identifier(.bcp47)),
         ]
@@ -783,8 +777,8 @@ final class BoxGroups {
         }
     }
 
-    /// Settings changed here (or your time zone, or how you write dates): each computer that can be
-    /// reached now gets them, this Mac's bridge too.
+    /// Your time zone, or how you write dates, changed: each computer that can be reached now gets
+    /// them, this Mac's bridge too.
     func settingsChanged() {
         let machines = Set(app?.machines.engines.values.filter(\.isReady).map(\.machine.id) ?? []).union(running)
         for machine in [nil] + machines.map(Optional.some) where reachable(machine) {
@@ -872,12 +866,6 @@ final class BoxGroups {
         try? data.write(to: file, options: .atomic)
     }
 
-    private static func json(_ value: some Encodable) -> JSONValue? {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        return (try? encoder.encode(value)).flatMap { try? JSONDecoder().decode(JSONValue.self, from: $0) }
-    }
-
     private static func decode<Value: Decodable>(_ type: Value.Type, from value: JSONValue) throws -> Value {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -940,6 +928,6 @@ extension OpenCodeAPI {
     }
 
     func giveBoxGroupSettings(_ settings: JSONValue) async throws {
-        _ = try await client.send(try client.request("PUT", "api/kuvo/groups/settings", body: settings), as: JSONValue.self)
+        _ = try await client.send(try client.request("PUT", "api/kuvo/groups/clock", body: settings), as: JSONValue.self)
     }
 }

@@ -52,7 +52,7 @@ function isTurning(value: any): value is Turning {
   )
 }
 
-/** What the Mac says for every chat on this machine. */
+/** What every chat on this computer goes by: its box's own, and your clock, which a client says. */
 export interface Settings {
   /** What each personality tells a bot, by its ID. */
   personalities: Record<string, string>
@@ -279,8 +279,10 @@ export class GroupStore {
     }
   }
 
-  writeSettings(settings: Settings) {
-    write(join(this.root, "settings.json"), { kuvo: version, ...settings })
+  /** Some of them changed, the rest kept as they were: the box's own, or your clock. */
+  writeSettings(settings: Partial<Settings>) {
+    const kept = read(join(this.root, "settings.json"))
+    write(join(this.root, "settings.json"), { ...(kept && typeof kept === "object" ? kept : {}), kuvo: version, ...settings })
   }
 
   /** Every bot on this machine, as their folders have them now. */
