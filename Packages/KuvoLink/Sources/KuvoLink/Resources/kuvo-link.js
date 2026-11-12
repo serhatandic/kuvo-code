@@ -37123,7 +37123,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "b3a1718d0b29";
+var BRIDGE_VERSION = "9e2da296d834";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -39732,7 +39732,7 @@ var QUEUE_TOOLS = [
   }
 ];
 var QUEUE_TOOL_NAMES = QUEUE_TOOLS.map((tool) => tool.name);
-var QUEUE_INSTRUCTIONS = " Keep work items in your Work Queue (queue_*), not a file: what the user asks for, what's left to do, and GitHub issues or PRs you work on (queue_add issue:, Done once closed). Refer to them as #243 or gh:owner/repo#12, never a bare #243 in commits, branches or PRs. On one: working: true, progress_note, then category: done.";
+var QUEUE_INSTRUCTIONS = " Keep work items in your Work Queue (queue_*), not a file: what the user asks for, what's left to do, and GitHub issues or PRs you work on (queue_add issue:, Done once closed). Refer to them as #243 (GitHub ones as gh:owner/repo#12), never a bare #243 in commits, branches or PRs. On one: working: true, progress_note, then category: done.";
 var why3 = (error) => String(error?.message ?? error);
 var placesOf2 = (folder) => ({ own: folder ?? null, others: folder ? readProjects().find((each) => each.directory === folder)?.folders ?? [] : [] });
 async function groupLivesHere(group, readBridge) {

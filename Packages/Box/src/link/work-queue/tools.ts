@@ -135,7 +135,7 @@ export const QUEUE_TOOLS = [
 export const QUEUE_TOOL_NAMES: readonly string[] = QUEUE_TOOLS.map(tool => tool.name);
 
 /** What the tool servers add to what they tell agents, with the tools. */
-export const QUEUE_INSTRUCTIONS = " Keep work items in your Work Queue (queue_*), not a file: what the user asks for, what's left to do, and GitHub issues or PRs you work on (queue_add issue:, Done once closed). Refer to them as #243 or gh:owner/repo#12, never a bare #243 in commits, branches or PRs. On one: working: true, progress_note, then category: done.";
+export const QUEUE_INSTRUCTIONS = " Keep work items in your Work Queue (queue_*), not a file: what the user asks for, what's left to do, and GitHub issues or PRs you work on (queue_add issue:, Done once closed). Refer to them as #243 (GitHub ones as gh:owner/repo#12), never a bare #243 in commits, branches or PRs. On one: working: true, progress_note, then category: done.";
 
 /** Who calls, as the queue knows them: the owner of the queue they write to, the session that
  * works when they say working, their name, and where their files may come from. */
