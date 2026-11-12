@@ -667,7 +667,19 @@ export class AntigravityAgent implements Agent {
     if (!flat.length) {
       for (const info of setup?.models?.availableModels ?? []) flat.push({ value: info.modelId, name: info.name ?? info.modelId })
     }
-    if (flat.length) writeFileSync(this.modelsFile, JSON.stringify({ current: option?.currentValue, models: flat }))
+    if (flat.length) {
+      writeFileSync(this.modelsFile, JSON.stringify({ current: option?.currentValue, models: flat }))
+      this.listedHere = true
+    }
+  }
+
+  /** Its models were said by Antigravity since this bridge started: the file kept from before may
+   * be an older list. */
+  private listedHere = false
+
+  /** Only once Antigravity said its models in this bridge's time (its file may be an older list). */
+  listsEveryModel(): boolean {
+    return this.listedHere
   }
 
   /** A session made only to check the sign-in leaves nothing behind. */

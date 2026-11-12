@@ -58,31 +58,30 @@ export function signInNeed(providerID: string, methods: string[][]): { missing: 
 }
 
 /** `target`'s answer to `route`; undefined when it didn't answer (not there, too slow, an error). */
-const asked = (target: Target, route: string, signal?: AbortSignal, folder?: string): Promise<unknown> => {
-  const wait = AbortSignal.timeout(ASK_WAIT);
-  return call(target, "GET", route, undefined, signal ? AbortSignal.any([signal, wait]) : wait, folder).catch(() => undefined);
-};
+const asked = (target: Target, route: string, folder?: string): Promise<unknown> =>
+  call(target, "GET", route, undefined, AbortSignal.timeout(ASK_WAIT), folder).catch(() => undefined);
 
 /** How long what a place listed is used again: until it says something changed, or this long. */
 const KEPT_FOR = 10_000;
 const kept = new Map<string, { at: number; lists: Promise<unknown> }>();
 
 /** What a place lists, read again only once it's older than `KEPT_FOR` or a change was heard;
- * what it couldn't say isn't kept. */
-function keptOr<T>(key: string, read: () => Promise<T | null>): Promise<T | null> {
+ * what it couldn't wholly say (`whole`) isn't kept. Read with its own time limit, never one
+ * caller's: an ask that's let go doesn't cut short another's read. */
+function keptOr<T>(key: string, read: () => Promise<T | null>, whole: (value: T) => boolean): Promise<T | null> {
   const now = Date.now();
   const before = kept.get(key);
   if (before && now - before.at < KEPT_FOR) return before.lists as Promise<T | null>;
   const lists = read();
   kept.set(key, { at: now, lists });
-  void lists.then(value => { if (value === null && kept.get(key)?.lists === lists) kept.delete(key); });
+  void lists.then(value => { if ((value === null || !whole(value)) && kept.get(key)?.lists === lists) kept.delete(key); });
   if (kept.size > 200) kept.delete(kept.keys().next().value!);
   return lists;
 }
 
 /** The events after which what's kept is read again: accounts, models, settings or Custom Auto's
  * lists changed on the engine or the bridge. */
-const CHANGES = new Set(["integration.updated", "model.updated", "provider.updated", "config.updated", "kuvo.auto.updated", "server.instance.disposed"]);
+const CHANGES = new Set(["integration.updated", "model.updated", "provider.updated", "config.updated", "global.disposed", "kuvo.auto.updated"]);
 
 /** Told each event of the engine's and the bridge's (engine/watch.ts). */
 export function noteModelsEvent(event: { type?: string }): void {
@@ -135,8 +134,8 @@ interface BridgeLists { models: Listed[]; accounts: Map<string, Account>; auto: 
 
 /** What the engine lists in `folder` (a project's own settings may add providers, models or its
  * default model there). */
-async function engineLists(engine: Target, folder: string | undefined, signal?: AbortSignal): Promise<EngineLists | null> {
-  const [providers, listed, integrations, fallback] = await Promise.all(["/api/provider", "/api/model", "/api/integration", "/api/model/default"].map(route => asked(engine, route, signal, folder)));
+async function engineLists(engine: Target, folder: string | undefined): Promise<EngineLists | null> {
+  const [providers, listed, integrations, fallback] = await Promise.all(["/api/provider", "/api/model", "/api/integration", "/api/model/default"].map(route => asked(engine, route, folder)));
   const models = modelsIn(listed), accounts = accountsIn(integrations);
   if (!Array.isArray(providers) || !models || !accounts) return null;
   const ready = new Set(providers.flatMap(each => (isObject(each) && typeof each.id === "string" ? [each.id] : [])));
@@ -149,12 +148,12 @@ async function engineLists(engine: Target, folder: string | undefined, signal?: 
   return { ready, models, accounts, fallback: given };
 }
 
-async function bridgeLists(bridge: Target, signal?: AbortSignal): Promise<BridgeLists | null> {
+async function bridgeLists(bridge: Target): Promise<BridgeLists | null> {
   // (Those an agent keeps out of its picker but still runs, Codex's hidden ones, too: only one
   // absent from its list is gone.)
   // (The models first: an account's word that its list is whole is of the list it has then.)
-  const listed = await asked(bridge, "/api/model?hidden=1", signal);
-  const [integrations, auto] = await Promise.all(["/api/integration", "/api/kuvo/auto"].map(route => asked(bridge, route, signal)));
+  const listed = await asked(bridge, "/api/model?hidden=1");
+  const [integrations, auto] = await Promise.all(["/api/integration", "/api/kuvo/auto"].map(route => asked(bridge, route)));
   const models = modelsIn(listed), accounts = accountsIn(integrations);
   if (!models || !accounts) return null;
   const lists = isObject(auto) && Array.isArray(auto.lists)
@@ -170,8 +169,9 @@ function onEngine(ref: Ref, engine: EngineLists | null): Omit<SessionModel, "mod
   if (!engine) return undefined;
   const listed = named(ref, engine.models);
   const name = listed ? { name: listed.name } : {};
-  // OpenCode Zen's free models need no account.
-  if (listed && ref.providerID === "opencode" && listed.free) return { ...name, runs: true };
+  // OpenCode Zen's free models need no account; its others the engine lists only with its account
+  // or a key of its own (in your settings, say), listed, they run.
+  if (listed && ref.providerID === "opencode") return { ...name, runs: true };
   const account = engine.accounts.get(ref.providerID);
   // Signed in, or with nothing to sign in to (one of your own, or a local one). OpenCode Zen is
   // ready for its free models alone: its others need its account.
@@ -179,9 +179,9 @@ function onEngine(ref: Ref, engine: EngineLists | null): Omit<SessionModel, "mod
     : engine.ready.has(ref.providerID) || !account || account.signedIn || account.methods.length === 0;
   if (ready) {
     if (listed) return { ...name, runs: true };
-    // A provider the engine doesn't know at all here: one only a project's own settings add, which
-    // the engine lists in that project alone.
-    if (!account && !engine.models.some(model => model.providerID === ref.providerID)) return undefined;
+    // None of its provider's listed: one only a project's own settings add (the engine lists it in
+    // that project alone), or one whose models aren't in yet (a plugin's, as the engine settles).
+    if (!engine.models.some(model => model.providerID === ref.providerID)) return undefined;
     return { runs: false, missing: "gone", ...(account ? { account: accountOf(account) } : {}) };
   }
   // Signed out: its key, or a sign-in (`signInNeed`).
@@ -225,10 +225,12 @@ export async function sessionModels(ids: string[], engine: Target | null, bridge
   let bridgeRead: Promise<BridgeLists | null> | undefined;
   const fromEngine = (folder: string | undefined) => {
     const key = folder ?? "";
-    if (!engineRead.has(key)) engineRead.set(key, engine ? keptOr(`engine:${engine.port}:${key}`, () => engineLists(engine, folder, signal)) : Promise.resolve(null));
+    // (Whole: its default said too, none or one.)
+    if (!engineRead.has(key)) engineRead.set(key, engine ? keptOr(`engine:${engine.port}:${key}`, () => engineLists(engine, folder), lists => lists.fallback !== undefined) : Promise.resolve(null));
     return engineRead.get(key)!;
   };
-  const fromBridge = () => (bridgeRead ??= bridge ? keptOr(`bridge:${bridge.port}`, () => bridgeLists(bridge, signal)) : Promise.resolve(null));
+  // (Whole: Custom Auto's lists said too.)
+  const fromBridge = () => (bridgeRead ??= bridge ? keptOr(`bridge:${bridge.port}`, () => bridgeLists(bridge), lists => lists.auto !== null) : Promise.resolve(null));
   const answer: Record<string, SessionModel> = {};
   await Promise.all(found.map(async ({ target, data }) => {
     const folder = data.location?.directory ?? data.directory;

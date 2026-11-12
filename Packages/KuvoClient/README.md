@@ -40,7 +40,9 @@ integrations Accounts lists as providers: no web search services, and not the en
 `PlanSignIns` is what a conversation on the engine's own OpenAI or xAI model says when the engine
 can't run it: a ChatGPT or SuperGrok plan signs in through Codex or Grok, so it needs a key, or a
 model under that agent. Only for a box without `sessions.models` (the old-box path): a box that has
-it says so itself (`SessionModelState`).
+it says so itself (`SessionModelState`). `Integration.offeredSignInMethods` is the ways to sign in both apps'
+Accounts offer: not a ChatGPT or SuperGrok plan's own (they go through Codex and Grok), unless one
+was made before; held, with `PlanSignIns`, to the box's cases (`Vectors/plan-sign-ins.json`).
 
 ## ClientSessions
 

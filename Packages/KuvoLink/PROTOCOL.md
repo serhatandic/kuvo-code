@@ -1199,7 +1199,9 @@ box decides it from what its engine and coding agents list, so every client show
   folder, where a project's own settings may add to them.
 - An engine provider counts as signed in when the engine says it's ready (`api/provider`), it has
   a connection, or nothing to sign in to (a local one's); OpenCode Zen's free models need no
-  account, and its others need its account (the engine lists it ready for its free ones). A coding
+  account, and its others need its account or a key (the engine lists it ready for its free ones,
+  and lists its others only then). A model missing from a provider signed in is `gone` only while
+  the engine lists others of that provider. A coding
   agent's model runs while its account is installed, signed in, and its agent lists it (by its own
   id or one it's known by), one it keeps out of its picker too (Codex's hidden ones, from the
   bridge's `api/model?hidden=1`): only one absent from its list is `gone`, and only where its
@@ -1217,9 +1219,12 @@ box decides it from what its engine and coding agents list, so every client show
   it would from a box without `sessions.models`.
 - What the engine and the bridge list is read once for every session asked about, and used again
   for ten seconds, or until the box hears either say accounts, models, settings or Custom Auto's
-  lists changed.
+  lists changed (`integration.updated`, `model.updated`, `provider.updated`, `config.updated`,
+  `global.disposed`, `kuvo.auto.updated`), or hears them again after it couldn't; what one of them
+  couldn't wholly say (its default, Custom Auto's lists) isn't kept.
 - A client asks again as what it's drawn from changes: the session opens, its model changes, or its
-  box's accounts, models or Custom Auto lists do (`integration.updated`, `model.updated`,
+  box's accounts, models, default model or Custom Auto lists do (as it reads them again on
+  `integration.updated`, `model.updated`, `provider.updated`, `config.updated`,
   `kuvo.auto.updated`), and once a model it picked is set. What the box said is of the model it
   names: a client draws it only while that's still the session's (another just picked is drawn as
   without the box's word until the box is asked again).
@@ -1229,8 +1234,8 @@ box decides it from what its engine and coding agents list, so every client show
   a message is refused with what to do (a sign-in, a key, an install, where), kept in the field;
   a failed turn's card, for the model the conversation is on, names its button by what it does
   (Add Key, Install, Sign In, or Sign In Again for a sign-in that ended). How a signed-out engine
-  provider is signed in to is held to `Vectors/plan-sign-ins.json` in the box, the Mac's Accounts
-  and KuvoClient's `PlanSignIns`. A
+  provider is signed in to is held to `Vectors/plan-sign-ins.json` in the box and KuvoClient's
+  `PlanSignIns` and `Integration.offeredSignInMethods`, which both apps' Accounts offer from. A
   box without `sessions.models` leaves the clients deciding from its accounts and models as they
   did before.
 

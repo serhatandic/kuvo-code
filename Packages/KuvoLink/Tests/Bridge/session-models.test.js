@@ -58,6 +58,7 @@ const engineSessions = {
   ses_local: session("ses_local", { providerID: "lmstudio", id: "qwen-3" }),
   ses_ollama: session("ses_ollama", { providerID: "ollama", id: "llama-4" }),
   ses_zenPaid: session("ses_zenPaid", { providerID: "opencode", id: "claude-opus-zen" }),
+  ses_mistral: session("ses_mistral", { providerID: "mistral", id: "mistral-large" }),
 };
 const engineLists = {
     "/api/provider": [{ id: "anthropic" }, { id: "opencode" }],
@@ -69,7 +70,6 @@ const engineLists = {
       model("openai", "gpt-5.5", "GPT-5.5"),
       model("deepseek", "deepseek-chat", "DeepSeek Chat"),
       model("opencode", "big-pickle", "Big Pickle", { cost: [{ input: 0, output: 0 }] }),
-      model("opencode", "claude-opus-zen", "Claude Opus (Zen)"),
       model("lmstudio", "qwen-3", "Qwen 3"),
       model("ollama", "llama-4", "Llama 4"),
     ],
@@ -81,6 +81,8 @@ const engineLists = {
       { id: "deepseek", name: "DeepSeek", methods: [{ type: "key" }, { type: "env", names: ["DEEPSEEK_API_KEY"] }], connections: [] },
       { id: "opencode", name: "OpenCode Zen", methods: [{ type: "key", label: "API key (service account)" }, { type: "env", names: ["OPENCODE_API_KEY"] }, { type: "oauth", id: "device", label: "OpenCode Console account" }], connections: [] },
       { id: "ollama", name: "Ollama", methods: [], connections: [] },
+      // Signed in, its models not in yet (a plugin's, as the engine settles).
+      { id: "mistral", name: "Mistral", methods: [{ type: "key" }], connections: [{ type: "credential", method: "key" }] },
     ],
     "/api/model/default": { providerID: "anthropic", id: "claude-opus-5-5" },
 };
@@ -240,7 +242,8 @@ test("Custom Auto runs while its list has models, and is gone once it's emptied"
 
 test("what the box can't say yet is left out: a coding agent's models still being listed, a provider only a project knows, a session it doesn't have", async () => {
   // Claude Code listing only its usual ones as it starts: one not among them isn't gone yet.
-  const shown = await states("ses_codex", "ses_projects", "ses_nowhere", "ses_starting", "ses_fine");
+  // A provider signed in whose models aren't in yet isn't gone either.
+  const shown = await states("ses_codex", "ses_projects", "ses_nowhere", "ses_starting", "ses_mistral", "ses_fine");
   assert.deepEqual(Object.keys(shown), ["ses_fine"]);
 });
 
@@ -268,11 +271,15 @@ test("an engine that hasn't loaded the session's folder yet (no provider ready, 
   assert.deepEqual(await statesOn(noModels, "ses_fine", "ses_none"), {});
 });
 
-test("OpenCode Zen is ready for its free models only: a paid one needs its account", async () => {
+test("OpenCode Zen is ready for its free models only: a paid one needs its account, and runs once the engine lists it", async () => {
+  // (Without its account the engine lists none of its paid ones, as 2.2.5 does.)
   assert.deepEqual((await states("ses_zenPaid")).ses_zenPaid, {
-    model: { providerID: "opencode", id: "claude-opus-zen" }, name: "Claude Opus (Zen)", runs: false,
+    model: { providerID: "opencode", id: "claude-opus-zen" }, runs: false,
     missing: "signIn", account: { id: "opencode", name: "OpenCode Zen" },
   });
+  // A key of its own in the settings: listed, so it runs.
+  const keyed = handlerOn(await engineWith({ "/api/model": [...engineLists["/api/model"], model("opencode", "claude-opus-zen", "Claude Opus (Zen)")] }));
+  assert.deepEqual((await statesOn(keyed, "ses_zenPaid")).ses_zenPaid, { model: { providerID: "opencode", id: "claude-opus-zen" }, name: "Claude Opus (Zen)", runs: true });
 });
 
 test("a session with no model of its own: none when the engine says it has no default; not known when it didn't answer", async () => {
@@ -280,6 +287,11 @@ test("a session with no model of its own: none when the engine says it has no de
   assert.deepEqual((await statesOn(none, "ses_none")).ses_none, { model: null, runs: false, missing: "model" });
   const failing = handlerOn(await engineWith({ "/api/model/default": FAILS }));
   assert.deepEqual(await statesOn(failing, "ses_none", "ses_fine"), { ses_fine: (await states("ses_fine")).ses_fine });
+  // What it couldn't wholly say isn't kept: asked again at once.
+  const defaults = () => asked.filter(url => url === "/api/model/default").length;
+  const before = defaults();
+  await statesOn(failing, "ses_none");
+  assert.equal(defaults(), before + 1);
 });
 
 test("from a bridge that can't say its list is every model it runs (an older one, or a Codex that lists none it hides), a missing one isn't gone", async () => {

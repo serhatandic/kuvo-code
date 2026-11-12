@@ -24,7 +24,7 @@ import { markConversation, noteFullAccess, noteFullAccessAtWork } from "../work/
 import { queueWatcher, scanQueues, writtenByYou, type ScanFound } from "./queue";
 import { adoptConversation } from "../areas/approval";
 import { followAsks, forgetAsksOn, noteAskEvent } from "../glance/asked";
-import { noteModelsEvent } from "../areas/session-models";
+import { forgetModelLists, noteModelsEvent } from "../areas/session-models";
 import { pullCatcher } from "../glance/pulls";
 import type { Target } from "../../shared/records";
 import type { SignInEvent } from "../areas/accounts";
@@ -373,7 +373,12 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       // Agents' work that ended while it wasn't listening (or before boxes read it so): read, unless
       // what came since you read it is news to you, or it asks you (READ_RULE).
       if (work) settleWorkRead(source, connection.signal).catch(() => {});
+      // (Heard again: what changed meanwhile went by unheard, so what a session's model needs is read again.)
+      forgetModelLists();
       for await (const event of serverEvents(response.body)) {
+        // Accounts or models changed: what a session's model needs is read again
+        // (`kuvo/sessions/models`), first, before anything this event waits on.
+        noteModelsEvent(event);
         // The box's own work, Mac connected or not: a session made in one of its worktrees told
         // so; a worktree's branch named after its session (as it's made with a title, or given
         // one); a bot's job read from its memory as its run ends.
@@ -400,8 +405,6 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         }
         learn(source, LEARN_NOW.has(event.type));
         noteAskEvent(event, work || String(source.port));
-        // Accounts or models changed: what a session's model needs is read again (`kuvo/sessions/models`).
-        noteModelsEvent(event);
         catchPull(event);
         // Your settings changed by hand meanwhile: the model your subagents use follows them.
         if (learns && (event.type === "session.execution.started" || event.type === "config.updated")) followSettingsFile();

@@ -305,24 +305,4 @@ import Testing
         // A box from before it: the one picked last, as before.
         #expect(catalog.composerModel(nil, said: nil, lastModel: luna) == luna)
     }
-
-    /// The ways Accounts offers to sign in to a signed-out provider of the engine's, as the box says
-    /// them for a session's model (`Packages/KuvoLink/Vectors/plan-sign-ins.json`): a ChatGPT or
-    /// SuperGrok plan's sign-in isn't, as those plans go through Codex and Grok.
-    @Test func accountsOffersTheWaysTheBoxSays() throws {
-        let file = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../Packages/KuvoLink/Vectors/plan-sign-ins.json").standardized
-        let vectors = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
-        let cases = try #require(vectors["cases"] as? [[String: Any]])
-        for each in cases {
-            let json = try JSONSerialization.data(withJSONObject: ["id": each["provider"] as Any, "name": each["name"] as Any, "methods": each["methods"] as Any, "connections": [Any]()])
-            let integration = try JSONDecoder().decode(Integration.self, from: json)
-            let offered = integration.offeredSignInMethods.filter { method in
-                switch method {
-                case .oauth, .key, .external: true
-                default: false
-                }
-            }.map(\.id)
-            #expect(offered == each["offered"] as? [String], "\(each["provider"] ?? "")")
-        }
-    }
 }

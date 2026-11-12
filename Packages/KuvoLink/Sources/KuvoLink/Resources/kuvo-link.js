@@ -32882,15 +32882,12 @@ function signInNeed(providerID, methods) {
     ...key && plan ? { plan: { name: plan.name, agent: plan.agent, provider: plan.provider } } : {}
   };
 }
-var asked6 = (target, route, signal, folder) => {
-  const wait = AbortSignal.timeout(ASK_WAIT2);
-  return call(target, "GET", route, undefined, signal ? AbortSignal.any([signal, wait]) : wait, folder).catch(() => {
-    return;
-  });
-};
+var asked6 = (target, route, folder) => call(target, "GET", route, undefined, AbortSignal.timeout(ASK_WAIT2), folder).catch(() => {
+  return;
+});
 var KEPT_FOR2 = 1e4;
 var kept2 = new Map;
-function keptOr(key, read) {
+function keptOr(key, read, whole) {
   const now = Date.now();
   const before = kept2.get(key);
   if (before && now - before.at < KEPT_FOR2)
@@ -32898,14 +32895,14 @@ function keptOr(key, read) {
   const lists = read();
   kept2.set(key, { at: now, lists });
   lists.then((value) => {
-    if (value === null && kept2.get(key)?.lists === lists)
+    if ((value === null || !whole(value)) && kept2.get(key)?.lists === lists)
       kept2.delete(key);
   });
   if (kept2.size > 200)
     kept2.delete(kept2.keys().next().value);
   return lists;
 }
-var CHANGES = new Set(["integration.updated", "model.updated", "provider.updated", "config.updated", "kuvo.auto.updated", "server.instance.disposed"]);
+var CHANGES = new Set(["integration.updated", "model.updated", "provider.updated", "config.updated", "global.disposed", "kuvo.auto.updated"]);
 function noteModelsEvent(event) {
   if (event.type && CHANGES.has(event.type))
     kept2.clear();
@@ -32946,8 +32943,8 @@ function accountsIn(listed) {
   return accounts;
 }
 var named2 = (ref, models) => models.find((model) => model.providerID === ref.providerID && model.id === ref.id) ?? models.find((model) => model.providerID === ref.providerID && model.aliases.includes(ref.id));
-async function engineLists(engine, folder, signal) {
-  const [providers, listed, integrations, fallback] = await Promise.all(["/api/provider", "/api/model", "/api/integration", "/api/model/default"].map((route) => asked6(engine, route, signal, folder)));
+async function engineLists(engine, folder) {
+  const [providers, listed, integrations, fallback] = await Promise.all(["/api/provider", "/api/model", "/api/integration", "/api/model/default"].map((route) => asked6(engine, route, folder)));
   const models = modelsIn2(listed), accounts = accountsIn(integrations);
   if (!Array.isArray(providers) || !models || !accounts)
     return null;
@@ -32957,9 +32954,9 @@ async function engineLists(engine, folder, signal) {
   const given = fallback === undefined ? undefined : isObject(fallback) && typeof fallback.providerID === "string" && typeof fallback.id === "string" ? { providerID: fallback.providerID, id: fallback.id } : null;
   return { ready, models, accounts, fallback: given };
 }
-async function bridgeLists(bridge, signal) {
-  const listed = await asked6(bridge, "/api/model?hidden=1", signal);
-  const [integrations, auto] = await Promise.all(["/api/integration", "/api/kuvo/auto"].map((route) => asked6(bridge, route, signal)));
+async function bridgeLists(bridge) {
+  const listed = await asked6(bridge, "/api/model?hidden=1");
+  const [integrations, auto] = await Promise.all(["/api/integration", "/api/kuvo/auto"].map((route) => asked6(bridge, route)));
   const models = modelsIn2(listed), accounts = accountsIn(integrations);
   if (!models || !accounts)
     return null;
@@ -32972,14 +32969,14 @@ function onEngine(ref, engine) {
     return;
   const listed = named2(ref, engine.models);
   const name = listed ? { name: listed.name } : {};
-  if (listed && ref.providerID === "opencode" && listed.free)
+  if (listed && ref.providerID === "opencode")
     return { ...name, runs: true };
   const account = engine.accounts.get(ref.providerID);
   const ready = ref.providerID === "opencode" && account ? account.signedIn : engine.ready.has(ref.providerID) || !account || account.signedIn || account.methods.length === 0;
   if (ready) {
     if (listed)
       return { ...name, runs: true };
-    if (!account && !engine.models.some((model) => model.providerID === ref.providerID))
+    if (!engine.models.some((model) => model.providerID === ref.providerID))
       return;
     return { runs: false, missing: "gone", ...account ? { account: accountOf(account) } : {} };
   }
@@ -33020,10 +33017,10 @@ async function sessionModels(ids, engine, bridge, signal) {
   const fromEngine = (folder) => {
     const key = folder ?? "";
     if (!engineRead.has(key))
-      engineRead.set(key, engine ? keptOr(`engine:${engine.port}:${key}`, () => engineLists(engine, folder, signal)) : Promise.resolve(null));
+      engineRead.set(key, engine ? keptOr(`engine:${engine.port}:${key}`, () => engineLists(engine, folder), (lists) => lists.fallback !== undefined) : Promise.resolve(null));
     return engineRead.get(key);
   };
-  const fromBridge = () => bridgeRead ??= bridge ? keptOr(`bridge:${bridge.port}`, () => bridgeLists(bridge, signal)) : Promise.resolve(null);
+  const fromBridge = () => bridgeRead ??= bridge ? keptOr(`bridge:${bridge.port}`, () => bridgeLists(bridge), (lists) => lists.auto !== null) : Promise.resolve(null);
   const answer = {};
   await Promise.all(found.map(async ({ target, data }) => {
     const folder = data.location?.directory ?? data.directory;
@@ -33291,7 +33288,9 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
         atWork3(source).then((sessions) => takeUpWaitingAsks(source, sessions, connection.signal, work || undefined)).catch(() => {});
       if (work)
         settleWorkRead(source, connection.signal).catch(() => {});
+      forgetModelLists();
       for await (const event of serverEvents(response.body)) {
+        noteModelsEvent(event);
         if (event.type === "session.execution.started")
           freshenBot(source, event.data?.sessionID).catch(() => {});
         if (work && (event.type === "session.execution.started" || RUN_ENDS.has(event.type)) && typeof event.data?.sessionID === "string")
@@ -33310,7 +33309,6 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
         }
         learn(source, LEARN_NOW.has(event.type));
         noteAskEvent(event, work || String(source.port));
-        noteModelsEvent(event);
         catchPull(event);
         if (learns && (event.type === "session.execution.started" || event.type === "config.updated"))
           followSettingsFile();
@@ -37752,7 +37750,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "ab38dac0b5d9";
+var BRIDGE_VERSION = "3d8d175dee1a";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

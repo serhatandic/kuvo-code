@@ -10156,8 +10156,14 @@ ${rpc.stderr.trim()}`);
       for (const info of setup?.models?.availableModels ?? [])
         flat.push({ value: info.modelId, name: info.name ?? info.modelId });
     }
-    if (flat.length)
+    if (flat.length) {
       writeFileSync15(this.modelsFile, JSON.stringify({ current: option?.currentValue, models: flat }));
+      this.listedHere = true;
+    }
+  }
+  listedHere = false;
+  listsEveryModel() {
+    return this.listedHere;
   }
   removeSessionFiles(sessionID) {
     const folder = join20(this.profile, "antigravity-acp");
@@ -27455,4 +27461,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 2d01008505b5a7602a7da9fab07e6bfad15f7026438a2ccbdfc90bff0e67ce64
+// Built from Packages/Box/src/agents f498876df1104ec759d1f259003291de488683bfcf6bee9e8ba59fbd9788c176
