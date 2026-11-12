@@ -179,11 +179,12 @@ for (const mac of [false, true]) {
     // folders it has open, and says its agents changed: once with the plugin's rules in them (the
     // box may change its settings too, each read again on its own).
     const plugged = agent => agent.permissions?.some(rule => rule.action === "external_directory" && rule.resource === "*" && rule.effect === "ask");
-    for (;;) {
+    for (let round = 1; ; round++) {
       await reloaded;
       reloaded = engine.changed("agent.updated");
       reloaded.catch(() => {});
       if ((await engine.api("GET", "api/agent")).data.filter(each => AGENTS.includes(each.id)).every(plugged)) break;
+      assert.ok(round < 10, "the engine said its agents changed ten times without the plugin's rules in them");
     }
     for (const agent of AGENTS) {
       assert.equal(await engine.effect(agent, path.join(box.home, ".ssh")), "ask", `${agent} asks before reading your SSH keys`);
