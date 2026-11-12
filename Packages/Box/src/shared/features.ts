@@ -91,6 +91,7 @@ export const FEATURES = [
   "sandbox.reviews.whole",
   "search",
   "sessions.agents",
+  "sessions.chat",
   "sessions.glance",
   "sessions.start",
   "setup",

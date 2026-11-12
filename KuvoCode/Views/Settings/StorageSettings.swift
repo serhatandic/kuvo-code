@@ -514,7 +514,7 @@ private struct OldSessions: View {
                             .foregroundStyle(.secondary)
                     } label: {
                         Text(session.title ?? "New Session")
-                        Text(workspace.projectName(session.location.directory))
+                        Text(workspace.projectName(of: session))
                     }
                 }
             } header: {

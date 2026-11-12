@@ -404,7 +404,10 @@ test("a Claude Code chat moves, and what the other computer's chats remember sta
   assert.equal(moved.status, 200, JSON.stringify(moved.json));
   const placed = path.join(lab.claude, "projects", slug(lab.chats));
   assert.equal(hash(path.join(placed, `${chatClaude}.jsonl`)), before);
-  assert.equal((await asks(lab, "GET", "/api/session/ses_chat")).json.data.location.directory, lab.chats);
+  const there = (await asks(lab, "GET", "/api/session/ses_chat")).json.data;
+  assert.equal(there.location.directory, lab.chats);
+  assert.equal(there.metadata?.kuvo?.chat, lab.chats, "a chat there from the first, marked by the box it came to");
+  assert.equal(there.time.updated, 1, "as old as it was: marked as it's placed, not written to again");
   assert.equal(fs.readFileSync(path.join(placed, "memory", "MEMORY.md"), "utf8"), "From the machine.\n", "never over what's there");
   assert.equal(fs.readFileSync(path.join(placed, "memory", "only-mac.md"), "utf8"), "Mine.\n");
   const beside = fs.readdirSync(path.join(placed, "memory")).find(name => /^moved-.*-MEMORY\.md$/.test(name));

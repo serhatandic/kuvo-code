@@ -12,8 +12,9 @@ import type { Target } from "../../shared/records";
 import type { MoveKind } from "../../shared/routes/moves";
 import { answerBotKeys } from "../areas/bot-keys";
 import { askGroups } from "../areas/groups";
+import { chatNotes } from "../engine/chats";
 import { asked, call } from "../engine/client";
-import { BOTS, IS_MAC, K, SESSION_WAKES } from "../home";
+import { BOTS, CHATS, IS_MAC, K, SESSION_WAKES } from "../home";
 import { hostTrash } from "../host-interface";
 import { bundleOf } from "./records";
 import { filesSize, stageFiles, type CarriedQueues } from "../work-queue/moves";
@@ -58,7 +59,7 @@ export interface Contents {
 }
 
 // A chat's folder here: conversations of no project (this Mac's app's own, a machine's in its box).
-export const CHATS = IS_MAC ? path.join(path.dirname(K), "Chats") : path.join(K, "chats");
+export { CHATS };
 
 /** Where a thing's folder is kept on this box: a bot's, or a chat's wake-ups'. */
 export const folderOf = (kind: MoveKind, thing: string): string | null => kind === "bot" ? path.join(BOTS, thing) : kind === "chat" ? path.join(SESSION_WAKES, thing) : null;
@@ -317,8 +318,11 @@ export async function toTrash(folder: string): Promise<string | undefined> {
 export async function importAll(engine: Target, exports: unknown[], directory: string, signal?: AbortSignal): Promise<void> {
   for (const exported of exports) {
     if (!isObject(exported)) continue;
-    // (One there already isn't replaced: what a move brought before goes first, `clearCopy`.)
-    await call(engine, "POST", "/api/experimental/session/import", { info: exported.info, messages: exported.messages, location: { directory } }, signal);
+    // (One there already isn't replaced: what a move brought before goes first, `clearCopy`.) A
+    // chat's mark as it is here, from the first: kept where it lands among this box's chats, taken
+    // off anywhere else.
+    const info = isObject(exported.info) ? { ...exported.info, metadata: chatNotes(exported.info.metadata, directory) } : exported.info;
+    await call(engine, "POST", "/api/experimental/session/import", { info, messages: exported.messages, location: { directory } }, signal);
   }
 }
 

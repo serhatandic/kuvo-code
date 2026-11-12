@@ -216,7 +216,7 @@ struct SidebarView: View {
             guard ProcessInfo.processInfo.environment["KUVO_DEMO_RENAME"] == "sidebar" else { return }
             try? await Task.sleep(for: .seconds(2))
             if let selection, let session = workspace.session(selection) {
-                renaming = RenameTarget(id: selection, place: Workspace.isChat(session.location.directory) ? .chats : .project)
+                renaming = RenameTarget(id: selection, place: Workspace.isChat(session) ? .chats : .project)
             }
         }
         #endif
@@ -920,7 +920,7 @@ struct SidebarView: View {
     private func isHighlighted(_ session: Session, in place: Place) -> Bool {
         guard let selection, topConversation(selection) == session.id else { return false }
         if let picked = pickedIn[session.id] { return picked == place }
-        return place == (Workspace.isChat(session.location.directory) ? .chats : .project)
+        return place == (Workspace.isChat(session) ? .chats : .project)
     }
 
     /// A session's row, and under it, unfolded, the conversations branched or handed off from it
@@ -1057,7 +1057,7 @@ struct SidebarView: View {
                     .foregroundStyle(.tertiary)
             } else {
                 HStack(spacing: 6) {
-                    if look.isSearching, Workspace.isChat(session.location.directory), let machine = RemoteFolder.machine(of: session.location.directory) {
+                    if look.isSearching, Workspace.isChat(session), let machine = RemoteFolder.machine(of: session.location.directory) {
                         Image(systemName: "server.rack")
                             .sidebarFont(10)
                             .foregroundStyle(.tertiary)
@@ -1184,7 +1184,7 @@ struct SidebarView: View {
                 renaming = RenameTarget(id: session.id, place: place)
             }
         }
-        if Workspace.isChat(session.location.directory) {
+        if Workspace.isChat(session) {
             moveToProject(session, disabled: moving)
             MoveToComputerItems(thing: .chat(session), app: app).submenu
         } else if !RemoteFolder.isRemote(session.location.directory) {
