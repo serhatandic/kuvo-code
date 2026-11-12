@@ -5610,8 +5610,8 @@ Allowed holds, and their submodules' repositories:
 A folder is mounted from within it, a file by its path (which a link swapped in at that moment
 could lead elsewhere), and each made read-only by its path; then all are checked in the namespace's
 mount table: each the top mount at its path, of what's there, not covered by a folder mounted since
-above it, and read-only where it should be; and every mount made since the command started is one of
-those. A
+above it, and read-only where it should be; and every mount made since git's files began to be
+kept is one of those. A
 repository that changes as the command starts (git outside the sandbox writing it, or a command
 still running), or a mount that isn't so, runs nothing (126, to run again). This is done before
 what the namespace hides is hidden, so no mount there can uncover it.

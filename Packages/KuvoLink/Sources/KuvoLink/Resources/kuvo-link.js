@@ -4132,6 +4132,26 @@ function landlockPolicy(policy) {
   }) + `
 `;
 }
+var KEPT_CHECK = String.raw`function plain(p) { gsub(/\\040/, " ", p); gsub(/\\011/, "\t", p); gsub(/\\012/, "\n", p); gsub(/\\134/, "\\", p); return p }
+function bad(p) { print (p == "" ? "a mount" : p); exit 1 }
+function from(m, p,   q, way) {
+  q = under[m]
+  if (!(q in seen) || dev[q] != dev[m]) return 0
+  if (p == at[q]) way = ""; else if (at[q] == "/") way = p; else if (substr(p, 1, length(at[q]) + 1) == at[q] "/") way = substr(p, length(at[q]) + 1); else return 0
+  return root[m] == (root[q] == "/" ? (way == "" ? "/" : way) : root[q] way)
+}
+FILENAME == ARGV[1] { old[$1] = 1; next }
+FILENAME == ARGV[2] { want[++n] = $0; noted[substr($0, 4)] = 1; next }
+{ seen[$1] = 1; at[$1] = plain($5); root[$1] = plain($4); dev[$1] = $3; under[$1] = $2; how[$1] = $6; top[plain($5)] = $1; on[$2, plain($5)] = 1; ids[++k] = $1 }
+END {
+  if (!k) bad("")
+  for (i = 1; i <= k; i++) { m = ids[i]; if (!(m in old) && (!(at[m] in noted) || !from(m, at[m]))) bad(at[m]) }
+  for (i = 1; i <= n; i++) {
+    p = substr(want[i], 4); m = top[p]
+    if (m == "" || !from(m, p) || (substr(want[i], 1, 2) == "ro" && how[m] !~ /(^|,)ro(,|$)/)) bad(p)
+    for (a = p; (j = match(a, /\/[^\/]*$/)) > 1; ) { a = substr(a, 1, j - 1); if ((under[m], a) in on) bad(p) }
+  }
+}`;
 var KEEP_GIT = String.raw`# (Read-only in two steps, a bind and then its remount, which libmount makes with the flags a mount
 # from outside the namespace keeps locked, nosuid and nodev: in one, util-linux before 2.39 drops
 # them, and Linux refuses it. Where even that fails, the command doesn't run: its namespace stays.)
@@ -4185,7 +4205,7 @@ repo() {
   keep "$r/gitdir" ro || :
   for f in modules worktrees; do [ -e "$r/$f" ] || [ -L "$r/$f" ] || k_lacks=1; done
   [ ! -e "$r/commondir" ] || [ "$(leads "$r" commondir "$r")" = "$r" ] || fail "$r/commondir leads git to another repository. Ask the user."
-  if { [ -e "$r/worktrees" ] || [ -L "$r/worktrees" ]; } && { keep "$r/worktrees" || { k_lacks=1; false; }; }; then
+  if { [ -e "$r/worktrees" ] || [ -L "$r/worktrees" ]; } && keep "$r/worktrees"; then
     # (One gone as it's kept is read-only within worktrees.)
     for e in "$r/worktrees"/* "$r/worktrees"/.[!.]* "$r/worktrees"/..?*; do [ ! -L "$e" ] || keep "$e"; [ ! -d "$e" ] || keep "$e" || :; done
     ro "$r/worktrees"
@@ -4210,16 +4230,17 @@ $e
       [ -e "$e/config.worktree" ] && [ -e "$e/modules" ] || fail "$e lacks config.worktree or modules, which it can't keep from being made. Ask the user."
       [ "$(leads "$e" commondir "$r")" = "$r" ] || fail "$e/commondir doesn't lead git back to its repository. Ask the user."
       for f in commondir gitdir config.worktree; do must "$e/$f" ro; done
-      mods "$e/modules"
+      mods "$e/modules" || fail "$e/modules changed as it started. Run it again, or ask the user."
     done
+  else k_lacks=1
   fi
-  mods "$r/modules"
+  mods "$r/modules" || k_lacks=1
   [ -z "$k_lacks" ] || ro "$r"
 }
 mods() {
   local m k_found k_done h d k_in p
   m=$1
-  [ -e "$m" ] || [ -L "$m" ] || return 0
+  [ -e "$m" ] || [ -L "$m" ] || return 1
   if [ ! -L "$m" ] && [ -d "$m" ] && empty "$m"; then must "$m" ro; return 0; fi
   must "$m"
   [ -z "$(find "$m" \( -name objects -o -name refs -o -name logs -o -name lfs -o -name rr-cache -o -name hooks -o -name info \) -prune -o -name '*
@@ -4308,26 +4329,7 @@ EOF_FILES
 # not covered by a folder mounted since above it, and read-only where it should be; and each mount made
 # since it started one of those, so a link swapped in can't have led one elsewhere.
 [ ! -s "$k_kept" ] || k_bad=$(awk '
-function plain(p) { gsub(/\\040/, " ", p); gsub(/\\011/, "\t", p); gsub(/\\012/, "\n", p); gsub(/\\134/, "\\", p); return p }
-function bad(p) { print (p == "" ? "a mount" : p); exit 1 }
-function from(m, p,   q, way) {
-  q = under[m]
-  if (!(q in seen) || dev[q] != dev[m]) return 0
-  if (p == at[q]) way = ""; else if (at[q] == "/") way = p; else if (substr(p, 1, length(at[q]) + 1) == at[q] "/") way = substr(p, length(at[q]) + 1); else return 0
-  return root[m] == (root[q] == "/" ? (way == "" ? "/" : way) : root[q] way)
-}
-FILENAME == ARGV[1] { old[$1] = 1; next }
-FILENAME == ARGV[2] { want[++n] = $0; noted[substr($0, 4)] = 1; next }
-{ seen[$1] = 1; at[$1] = plain($5); root[$1] = plain($4); dev[$1] = $3; under[$1] = $2; how[$1] = $6; top[plain($5)] = $1; on[$2, plain($5)] = 1; ids[++k] = $1 }
-END {
-  if (!k) bad("")
-  for (i = 1; i <= k; i++) { m = ids[i]; if (!(m in old) && (!(at[m] in noted) || !from(m, at[m]))) bad(at[m]) }
-  for (i = 1; i <= n; i++) {
-    p = substr(want[i], 4); m = top[p]
-    if (m == "" || !from(m, p) || (substr(want[i], 1, 2) == "ro" && how[m] !~ /(^|,)ro(,|$)/)) bad(p)
-    for (a = p; (j = match(a, /\/[^\/]*$/)) > 1; ) { a = substr(a, 1, j - 1); if ((under[m], a) in on) bad(p) }
-  }
-}' "$own/k/before" "$k_kept" /proc/self/mountinfo) || { [ -n "$k_bad" ] || k_bad="git's own files"; fail "$k_bad changed as it started (git outside the sandbox may have been writing it). Run it again, or ask the user."; }
+${KEPT_CHECK}' "$own/k/before" "$k_kept" /proc/self/mountinfo) || { [ -n "$k_bad" ] || k_bad="git's own files"; fail "$k_bad changed as it started. Run it again, or ask the user."; }
 `;
 var MAKE_GIT = String.raw`git_made() {
   [ ! -e "$1" ] && [ ! -L "$1" ] || return 0
@@ -38942,7 +38944,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "4a02efe090b2";
+var BRIDGE_VERSION = "665a32e716c9";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

@@ -1,9 +1,9 @@
 import "./safety"
 import { expect, setDefaultTimeout, test } from "bun:test"
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { HIDE, readOnlyHere, triedNamespace, UNSHARE } from "../src/link/fence/landlock"
+import { HIDE, KEPT_CHECK, readOnlyHere, triedNamespace, UNSHARE } from "../src/link/fence/landlock"
 import { canFence, realFence } from "./agents/support/fence"
 
 // What git runs, or is led by, in the repository a conversation's commands write (its settings, its
@@ -283,12 +283,51 @@ test.skipIf(!canFence || process.platform !== "linux")("on Linux, a repository w
   }
 })
 
+// Whatever a race did to those mounts, the namespace's check of its mount table refuses all but each
+// kept as it should be: one led elsewhere, at a path not kept (a link swapped in as it was made) or of
+// something else, one a folder mounted since covers, one read-write that should be read-only. (Each
+// mount table as Linux writes it, \\040 for a space.)
+test("what's kept is checked against the mount table, and anything a race could have led elsewhere refuses", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sandbox-git-check-")))
+  try {
+    const before = ["20 1 8:1 / / rw,relatime - ext4 /dev/sda1 rw", "30 20 8:2 / /home rw,nosuid,relatime - ext4 /dev/sda2 rw", "40 20 0:5 / /run/user/1000 rw,nosuid - tmpfs t rw"]
+    const kept = ["50 30 8:2 /u/my\\040app/.git /home/u/my\\040app/.git rw,nosuid - ext4 /dev/sda2 rw", "51 50 8:2 /u/my\\040app/.git/config /home/u/my\\040app/.git/config ro,nosuid - ext4 /dev/sda2 rw"]
+    const noted = ["rw /home/u/my app/.git", "rw /home/u/my app/.git/config", "ro /home/u/my app/.git/config"]
+    const check = (table: string[], notes = noted) => {
+      writeFileSync(join(root, "before"), before.map(line => line.split(" ")[0]).join("\n") + "\n")
+      writeFileSync(join(root, "kept"), notes.join("\n") + "\n")
+      writeFileSync(join(root, "mountinfo"), [...before, ...table].join("\n") + "\n")
+      const ran = Bun.spawnSync(["awk", KEPT_CHECK, join(root, "before"), join(root, "kept"), join(root, "mountinfo")])
+      return ran.exitCode === 0 ? "kept" : `refused: ${ran.stdout.toString().trim()}`
+    }
+    expect({
+      kept: check(kept),
+      "kept again over what it holds, which is kept again": check([...kept, "52 30 8:2 /u/my\\040app/.git /home/u/my\\040app/.git rw,nosuid - ext4 /dev/sda2 rw", "53 52 8:2 /u/my\\040app/.git/config /home/u/my\\040app/.git/config ro,nosuid - ext4 /dev/sda2 rw"]),
+      "a socket mounted where nothing's kept": check([...kept, "54 30 0:5 /bus /home/u/my\\040app/bus rw - tmpfs t rw"]),
+      "something else where settings are kept": check([kept[0], "51 50 0:5 /bus /home/u/my\\040app/.git/config ro - tmpfs t rw"]),
+      "the folder mounted again over them": check([...kept, "55 50 8:2 /u/my\\040app/.git /home/u/my\\040app/.git rw,nosuid - ext4 /dev/sda2 rw"]),
+      "a folder above, kept too, mounted over them": check([...kept, "56 30 8:2 /u/my\\040app /home/u/my\\040app rw,nosuid - ext4 /dev/sda2 rw"], [...noted, "rw /home/u/my app"]),
+      "settings left read-write": check([kept[0], kept[1].replace("ro,nosuid", "rw,nosuid")]),
+    }).toEqual({
+      kept: "kept",
+      "kept again over what it holds, which is kept again": "kept",
+      "a socket mounted where nothing's kept": "refused: /home/u/my app/bus",
+      "something else where settings are kept": "refused: /home/u/my app/.git/config",
+      "the folder mounted again over them": "refused: /home/u/my app/.git/config",
+      "a folder above, kept too, mounted over them": "refused: /home/u/my app/.git",
+      "settings left read-write": "refused: /home/u/my app/.git/config",
+    })
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 // Nor can a command still running steer those mounts: one that keeps swapping its repository's
 // `.git` for a link (to the folder holding sockets each namespace hides) as later commands start
 // never has where the link leads mounted anew (on `.git`, or where the swap takes that), nor gets
-// them seen, nor writes the repository's settings; and one that swaps now and then leaves commands
-// running between. (A race: each start is one try, many at once, of the namespace each command
-// starts in, as the launcher starts it.)
+// them seen, nor writes the repository's settings; and between its swaps (held while .git is the
+// repository), commands run. (A race: each start is one try, many at once, of the namespace each
+// command starts in, as the launcher starts it.)
 test.skipIf(!canFence || process.platform !== "linux")("on Linux, a .git swapped for a link as commands start never has where it leads mounted, nor what's hidden seen", async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sandbox-git-raced-")))
   let swapper: { kill(signal: NodeJS.Signals): void; exited: Promise<number> } | undefined
@@ -304,37 +343,35 @@ test.skipIf(!canFence || process.platform !== "linux")("on Linux, a .git swapped
     const fence = join(kuvo, "run", "fence")
     const id = (flag: string) => Bun.spawnSync(["id", flag]).stdout.toString().trim()
     symlinkSync(apps, join(raced.work, ".git-swap"))
-    // (What swaps them, renameat2's RENAME_EXCHANGE through Bun's own FFI: as fast as it can, or
-    // with a pause between, in milliseconds.)
+    // (What swaps them, as fast as it can: renameat2's RENAME_EXCHANGE, through Bun's own FFI.)
     const swap = join(root, "swap.js")
     writeFileSync(swap, `import { dlopen, FFIType, ptr } from "bun:ffi"
 const { symbols } = dlopen("libc.so.6", { renameat2: { args: [FFIType.i32, FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.u32], returns: FFIType.i32 }, getppid: { args: [], returns: FFIType.i32 } })
 const [a, b] = process.argv.slice(2, 4).map(name => Buffer.from(name + "\\0"))
-const pause = Number(process.argv[4])
 const parent = symbols.getppid()
 console.log(symbols.renameat2(-100, ptr(a), -100, ptr(b), 2) === 0 ? "swapping" : "can't")
 // (Until the test that started it is gone, if it isn't stopped first.)
-for (let round = 1; (pause ? 1 : round % 65536) || symbols.getppid() === parent; round++) {
-  symbols.renameat2(-100, ptr(a), -100, ptr(b), 2)
-  if (pause) { if (symbols.getppid() !== parent) break; Bun.sleepSync(pause) }
-}
+for (let round = 1; round % 65536 || symbols.getppid() === parent; round++) symbols.renameat2(-100, ptr(a), -100, ptr(b), 2)
 `)
-    const startSwapping = async (pause: number) => {
-      const swapping = Bun.spawn([process.execPath, swap, join(raced.work, ".git"), join(raced.work, ".git-swap"), String(pause)], { stdout: "pipe", stderr: "ignore", env: { ...ENV, BUN_BE_BUN: "1" } })
-      swapper = swapping
-      expect(new TextDecoder().decode((await swapping.stdout.getReader().read()).value).trim()).toBe("swapping")
-      return swapping
-    }
-    const stopSwapping = async () => {
-      swapper?.kill("SIGKILL")
-      await swapper?.exited
-      swapper = undefined
+    // (Held, as Linux has it stopped, with .git the repository; or let go.)
+    const stopped = (pid: number) => readFileSync(`/proc/${pid}/stat`, "utf8").replace(/^.*\) /s, "").startsWith("T")
+    const hold = (swapping: { pid: number; kill(signal: NodeJS.Signals): void }) => {
+      for (;;) {
+        swapping.kill("SIGSTOP")
+        while (!stopped(swapping.pid));
+        if (!lstatSync(join(raced.work, ".git")).isSymbolicLink()) return
+        swapping.kill("SIGCONT")
+        while (stopped(swapping.pid));
+      }
     }
     const once = async () => {
-      const ran = Bun.spawn([unshare, "-Urm", "/bin/sh", "-c", HIDE, unshare, id("-u"), id("-g"), id("-un"), join(fence, "ns"), join(fence, "sockets"), "", "", raced.work, raced.git, "", "/bin/sh", "-c", `ls -A ${sh(join(apps, "agent"))} .git/agent .git-swap/agent 2>/dev/null; for each in .git .git-swap; do printf '#planted\\n' >> "$each/config"; done 2>/dev/null; exit 0`], { cwd: raced.work, stdout: "pipe", stderr: "ignore", env: ENV })
-      const out = await new Response(ran.stdout).text()
-      return out.includes("socket") ? "seen" : `${await ran.exited}`
+      const ran = Bun.spawn([unshare, "-Urm", "/bin/sh", "-c", HIDE, unshare, id("-u"), id("-g"), id("-un"), join(fence, "ns"), join(fence, "sockets"), "", "", raced.work, raced.git, "", "/bin/sh", "-c", `ls -A ${sh(join(apps, "agent"))} .git/agent .git-swap/agent 2>/dev/null; for each in .git .git-swap; do printf '#planted\\n' >> "$each/config"; done 2>/dev/null; exit 0`], { cwd: raced.work, stdout: "pipe", stderr: "pipe", env: ENV })
+      const [out, said] = await Promise.all([new Response(ran.stdout).text(), new Response(ran.stderr).text()])
+      const end = out.includes("socket") ? "seen" : `${await ran.exited}`
+      if (end !== "0") refusals.push(said.trim())
+      return end
     }
+    const refusals: string[] = []
     const tries = async (rounds: number) => {
       const ended: Record<string, number> = {}
       for (let round = 0; round < rounds; round++) for (const end of await Promise.all(Array.from({ length: 16 }, once))) ended[end] = (ended[end] ?? 0) + 1
@@ -342,15 +379,23 @@ for (let round = 1; (pause ? 1 : round % 65536) || symbols.getppid() === parent;
     }
     // (One runs before any swap: the try itself does.)
     expect(await once()).toBe("0")
-    await startSwapping(0)
-    const fast = await tries(250)
-    await stopSwapping()
-    await startSwapping(250)
-    const slow = await tries(25)
-    await stopSwapping()
-    console.log("How the tries ended, swapped as fast as can be and now and then:", fast, slow)
-    expect([fast.seen ?? 0, slow.seen ?? 0]).toEqual([0, 0])
-    expect(slow["0"] ?? 0).toBeGreaterThan(0)
+    const swapping = Bun.spawn([process.execPath, swap, join(raced.work, ".git"), join(raced.work, ".git-swap")], { stdout: "pipe", stderr: "ignore", env: { ...ENV, BUN_BE_BUN: "1" } })
+    swapper = swapping
+    expect(new TextDecoder().decode((await swapping.stdout.getReader().read()).value).trim()).toBe("swapping")
+    const racing: Record<string, number> = {}
+    const held: Record<string, number> = {}
+    for (let turn = 0; turn < 10; turn++) {
+      for (const [end, count] of Object.entries(await tries(25))) racing[end] = (racing[end] ?? 0) + count
+      hold(swapping)
+      refusals.length = 0
+      for (const [end, count] of Object.entries(await tries(1))) held[end] = (held[end] ?? 0) + count
+      if (refusals.length) console.log("Held, and yet:", refusals)
+      swapping.kill("SIGCONT")
+    }
+    swapping.kill("SIGKILL")
+    await swapping.exited
+    console.log("How the tries ended, swapped as fast as can be and held between:", racing, held)
+    expect([racing.seen ?? 0, held]).toEqual([0, { "0": 160 }])
     // Nor did any that ran write the repository's settings, which stayed kept.
     const real = [".git", ".git-swap"].map(name => join(raced.app, name)).find(each => statSync(each, { throwIfNoEntry: false })?.isDirectory() && !existsSync(join(each, "agent")))!
     expect(readFileSync(join(real, "config"), "utf8")).not.toContain("#planted")
