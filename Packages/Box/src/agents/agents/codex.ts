@@ -662,6 +662,12 @@ export class CodexAgent implements Agent {
     }
   }
 
+  /** Only once it listed those it hides from its picker (asked for: a Codex too old to take
+   * `includeHidden` lists none), so one missing from its list isn't one it hides. */
+  listsEveryModel(): boolean {
+    return this.modelList?.models.some((model) => model.hidden) === true
+  }
+
   private async listModels(): Promise<Model[]> {
     const rpc = await this.rpc()
     const models: Model[] = []

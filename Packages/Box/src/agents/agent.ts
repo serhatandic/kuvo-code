@@ -428,6 +428,10 @@ export interface Agent {
   /** What it lists for the picker; with `hidden`, also those it still runs but keeps out of its
    * own picker (Codex's), each marked `hidden`. */
   models(options?: { hidden?: boolean }): Promise<Model[]>
+  /** Whether what it lists (`models({ hidden: true })`) is every model it runs now, so one missing
+   * from it is gone: not while it lists its usual ones in its place (Claude Code as it starts), nor
+   * where it can't say it listed those it hides (an older Codex). Without it, it lists all it runs. */
+  listsEveryModel?(): boolean
   /**
    * The model an alias of its own (Claude Code's `default`) stands for on this computer and
    * account, as the agent itself listed it: undefined when `id` isn't an alias, or the agent hasn't

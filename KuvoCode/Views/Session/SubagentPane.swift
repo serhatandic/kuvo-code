@@ -371,7 +371,7 @@ private struct SubagentConversation: View {
             quoteFocus: model.quoteFocus,
             agent: model.agent,
             approval: model.approval,
-            model: model.session.model ?? model.modelState?.model ?? catalog.startingModel(lastModel),
+            model: catalog.composerModel(model.session.model, said: model.modelState, lastModel: lastModel),
             modelState: model.modelState,
             isRunning: isWorking,
             hasQueue: !model.waiting.isEmpty,
@@ -401,9 +401,10 @@ private struct SubagentConversation: View {
     private func send() {
         guard !isOffline else { return }
         Analytics.shared.track("subagent_messaged", ["working": isWorking])
-        // A model whose account needs something, as its box says: said instead, as for any conversation.
+        // A model that can't run: why, said instead of sending, as for any conversation (SessionView's `send`).
         let machine = RemoteFolder.machine(of: model.session.location.directory).map { id in app.machines.list.first { $0.id == id }?.name ?? id }
-        let unavailable = isAgentsOwn ? nil : model.session.model.flatMap { ref in model.modelState.flatMap { $0.isAbout(ref) ? catalog.refusal(ref, on: machine, said: $0) : nil } }
+        // (One with no model of its own runs on the one its box names.)
+        let unavailable = isAgentsOwn ? nil : (model.session.model ?? model.modelState?.model).flatMap { catalog.refusal($0, on: machine, said: model.modelState) }
         model.submitDraft(for: catalog.model(model.session.model), queue: false, commands: catalog.commands(in: model.session.location.directory), unavailable: unavailable)
     }
 }

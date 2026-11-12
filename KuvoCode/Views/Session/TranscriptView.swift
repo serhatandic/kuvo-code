@@ -1609,9 +1609,9 @@ private struct TurnEndView: View {
                             // Labelled by what it does, as its box says: a sheet that takes a key adds
                             // one, an agent not installed installs; else it signs in (again).
                             let ended = kind == .signIn(ended: true)
-                            let title = signIn.said?.cardButton(for: account.providerID, ended: ended) ?? (ended ? "Sign In Again" : "Sign In")
+                            let title = signIn.said?.cardButton(for: account, ended: ended) ?? (ended ? "Sign In Again" : "Sign In")
                             Button(machine.map { "\(title) on \($0)" } ?? title) { signIn.open(account.providerID) }
-                                .help(catalog.signInHelp(account.providerID, on: machine, said: signIn.said))
+                                .help(catalog.signInHelp(account.providerID, on: machine, said: signIn.said.flatMap { $0.isAbout(account) ? $0 : nil }))
                             if actions?.switchModel == true, let switchModel {
                                 Button("Switch Model", action: switchModel)
                                     .help("Choose another model for this conversation")

@@ -606,7 +606,7 @@ struct BottomStack: View {
                         agent: model.agent,
                         approval: model.approval,
                         // None of its own: the one its box says it runs on (the engine's default).
-                        model: model.session.model ?? model.modelState?.model ?? catalog.startingModel(lastModel),
+                        model: catalog.composerModel(model.session.model, said: model.modelState, lastModel: lastModel),
                         modelState: model.modelState,
                         modelInUse: model.modelInUse,
                         isRunning: model.isRunning,

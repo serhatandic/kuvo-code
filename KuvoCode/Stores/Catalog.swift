@@ -363,6 +363,15 @@ final class Catalog {
         return placeholder
     }
 
+    /// The model a conversation's composer is given: its own; else the one its box says it runs on
+    /// (`said`); none where its box says it has none, so the chip asks for one, as the phone's does;
+    /// else (a box from before `sessions.models`, or not read yet) the one a new one would start on.
+    func composerModel(_ own: ModelRef?, said: SessionModelState?, lastModel: ModelRef?) -> ModelRef? {
+        if let own { return own }
+        if said?.missing == .model { return nil }
+        return said?.model ?? startingModel(lastModel)
+    }
+
     /// Why a message on `ref` can't be sent (on the machine named `on`), from what its box says
     /// (`said`); nil when it can go. Where the box hasn't said it of `ref`, the old-box path
     /// (`refusal`).

@@ -19,15 +19,20 @@ process.env.KUVO_HOME = home;
 removeAtEnd(home);
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
-// A stand-in on a free port, answering `routes[url]` (or 404), its `data` as their APIs give it;
-// the folders it was asked about, as the engine reads them (`x-opencode-directory`), kept.
+// A stand-in on a free port, answering `routes[url]` (or 404; `FAILS`, 500), its `data` as their
+// APIs give it; the folders it was asked about, as the engine reads them (`x-opencode-directory`),
+// and every path asked, kept.
 const folders = [];
+const asked = [];
+const FAILS = Symbol("fails");
 async function standIn(routes) {
   const server = http.createServer((request, response) => {
     if (request.headers["x-opencode-directory"]) folders.push(decodeURIComponent(request.headers["x-opencode-directory"]));
+    asked.push(request.url);
     const value = typeof routes === "function" ? routes(request.url) : routes[request.url];
-    response.writeHead(value === undefined ? 404 : 200, { "content-type": "application/json" });
-    response.end(JSON.stringify(value === undefined ? { message: "No such thing." } : { data: value }));
+    const status = value === undefined ? 404 : value === FAILS ? 500 : 200;
+    response.writeHead(status, { "content-type": "application/json" });
+    response.end(JSON.stringify(status !== 200 ? { message: "No such thing." } : { data: value }));
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   atEnd(() => { server.closeAllConnections(); server.close(); });
@@ -39,7 +44,7 @@ const model = (providerID, id, name, extra = {}) => ({ id, providerID, name, ena
 
 // The engine: Anthropic signed in, GitHub Copilot signed out (it signs in on a page), xAI and OpenAI
 // offering only a key (their plans go through Grok and Codex), DeepSeek a key, OpenCode Zen's free
-// models with no account.
+// models with no account (ready for them, as the engine lists it, and its paid ones not signed in).
 const engineSessions = {
   ses_fine: session("ses_fine", { providerID: "anthropic", id: "claude-opus-5-5", variant: "high" }),
   ses_signedOut: session("ses_signedOut", { providerID: "github-copilot", id: "gpt-5.5" }),
@@ -52,12 +57,10 @@ const engineSessions = {
   ses_chatgpt: session("ses_chatgpt", { providerID: "openai", id: "gpt-5.5" }),
   ses_local: session("ses_local", { providerID: "lmstudio", id: "qwen-3" }),
   ses_ollama: session("ses_ollama", { providerID: "ollama", id: "llama-4" }),
+  ses_zenPaid: session("ses_zenPaid", { providerID: "opencode", id: "claude-opus-zen" }),
 };
-const engine = await standIn(url => {
-  const one = url.match(/^\/api\/session\/([^/?]+)$/);
-  if (one) return engineSessions[decodeURIComponent(one[1])];
-  return {
-    "/api/provider": [{ id: "anthropic" }],
+const engineLists = {
+    "/api/provider": [{ id: "anthropic" }, { id: "opencode" }],
     "/api/model": [
       model("anthropic", "claude-opus-5-5", "Claude Opus 5.5"),
       model("anthropic", "claude-sonnet-5", "Claude Sonnet 5", { status: "deprecated" }),
@@ -66,6 +69,7 @@ const engine = await standIn(url => {
       model("openai", "gpt-5.5", "GPT-5.5"),
       model("deepseek", "deepseek-chat", "DeepSeek Chat"),
       model("opencode", "big-pickle", "Big Pickle", { cost: [{ input: 0, output: 0 }] }),
+      model("opencode", "claude-opus-zen", "Claude Opus (Zen)"),
       model("lmstudio", "qwen-3", "Qwen 3"),
       model("ollama", "llama-4", "Llama 4"),
     ],
@@ -75,12 +79,18 @@ const engine = await standIn(url => {
       { id: "xai", name: "xAI", methods: [{ type: "oauth", id: "device", label: "SuperGrok" }, { type: "key" }], connections: [] },
       { id: "openai", name: "OpenAI", methods: [{ type: "oauth", id: "chatgpt-browser", label: "ChatGPT Pro/Plus" }, { type: "key" }, { type: "env", names: ["OPENAI_API_KEY"] }], connections: [] },
       { id: "deepseek", name: "DeepSeek", methods: [{ type: "key" }, { type: "env", names: ["DEEPSEEK_API_KEY"] }], connections: [] },
-      { id: "opencode", name: "OpenCode Zen", methods: [{ type: "key" }], connections: [] },
+      { id: "opencode", name: "OpenCode Zen", methods: [{ type: "key", label: "API key (service account)" }, { type: "env", names: ["OPENCODE_API_KEY"] }, { type: "oauth", id: "device", label: "OpenCode Console account" }], connections: [] },
       { id: "ollama", name: "Ollama", methods: [], connections: [] },
     ],
     "/api/model/default": { providerID: "anthropic", id: "claude-opus-5-5" },
-  }[url];
+};
+// An engine answering `lists` (with `changes` over them), its sessions those above.
+const engineWith = (changes = {}) => standIn(url => {
+  const one = url.match(/^\/api\/session\/([^/?]+)$/);
+  if (one) return engineSessions[decodeURIComponent(one[1])];
+  return url in changes ? changes[url] : engineLists[url];
 });
+const engine = await engineWith();
 
 // The coding agents' bridge: Claude Code signed in (its `default` stands for Opus), an account of
 // Claude Code's you added and signed out of, Codex signed in with its models still to be listed,
@@ -99,9 +109,11 @@ const bridgeSessions = {
   ses_starting: session("ses_starting", { providerID: "claude-code@new", id: "opusplan" }),
   ses_codexHidden: session("ses_codexHidden", { providerID: "codex-cli@work", id: "gpt-5.1-codex-mini" }),
   ses_codexAbsent: session("ses_codexAbsent", { providerID: "codex-cli@work", id: "gpt-4.1" }),
+  ses_codexOld: session("ses_codexOld", { providerID: "codex-cli@old", id: "gpt-5.1-codex-mini" }),
 };
-const agent = (id, name, { installed = true, signedIn = true, label } = {}) => ({
-  id, name, metadata: { source: "agent", installed, ...(label ? { accountLabel: label } : {}) }, methods: [{ type: "oauth", id: "browser", label: "Sign in" }],
+// (`complete`: its list is every model it runs, as a bridge from #572 on says; an older one doesn't.)
+const agent = (id, name, { installed = true, signedIn = true, label, complete = true } = {}) => ({
+  id, name, metadata: { source: "agent", installed, ...(label ? { accountLabel: label } : {}), ...(complete ? { modelsComplete: true } : {}) }, methods: [{ type: "oauth", id: "browser", label: "Sign in" }],
   connections: signedIn ? [{ type: "agent", method: "oauth", status: { status: "connected" } }] : [],
 });
 const bridge = await standIn(url => {
@@ -115,11 +127,14 @@ const bridge = await standIn(url => {
       agent("cursor", "Cursor", { installed: false, signedIn: false }),
       agent("claude-code@new", "Claude Code · New", { label: "New" }),
       agent("codex-cli@work", "Codex · Work", { label: "Work" }),
+      // A bridge, or a Codex, that can't say its list has the models it hides.
+      agent("codex-cli@old", "Codex · Old", { label: "Old", complete: false }),
     ],
     // (As the bridge lists them for the box: those an agent keeps out of its picker too.)
     "/api/model?hidden=1": [
       model("codex-cli@work", "gpt-5.5", "GPT-5.5"),
       model("codex-cli@work", "gpt-5.1-codex-mini", "GPT-5.1 Codex Mini", { hidden: true }),
+      model("codex-cli@old", "gpt-5.5", "GPT-5.5"),
       model("claude-code", "claude-opus-5-5", "Opus 5.5", { aliases: ["default"] }),
       model("claude-code", "claude-sonnet-5", "Sonnet 5"),
       // Claude Code's usual ones, until it says which this account has.
@@ -133,19 +148,21 @@ const bridge = await standIn(url => {
   }[url];
 });
 const agents = await runningAs("kuvo-agents", { after: atEnd });
-const handle = link.engineHandler(() => ({ pid: process.pid, ...engine, version: "2.0.32" }), { name: "Studio" }, () => ({ pid: agents, ...bridge }));
+const handlerOn = target => link.engineHandler(() => ({ pid: process.pid, ...target, version: "2.0.32" }), { name: "Studio" }, () => ({ pid: agents, ...bridge }));
+const handle = handlerOn(engine);
 
-async function answer(method, route) {
+async function answer(method, route, on = handle) {
   const parts = [];
-  for await (const part of handle({ method, path: route, headers: {}, body: Buffer.from("") }, {}, undefined)) parts.push(part);
+  for await (const part of on({ method, path: route, headers: {}, body: Buffer.from("") }, {}, undefined)) parts.push(part);
   const text = Buffer.concat(parts.filter(part => part.body).map(part => part.body)).toString();
   return { status: parts[0].head.status, json: text ? JSON.parse(text) : undefined };
 }
-const states = async (...ids) => {
-  const { status, json } = await answer("GET", `kuvo/sessions/models?sessions=${ids.join(",")}`);
+const statesOn = async (on, ...ids) => {
+  const { status, json } = await answer("GET", `kuvo/sessions/models?sessions=${ids.join(",")}`, on);
   assert.equal(status, 200);
   return json.sessions;
 };
+const states = (...ids) => statesOn(handle, ...ids);
 
 test("a model that runs: the model and its name, and nothing missing", async () => {
   const shown = await states("ses_fine", "ses_free");
@@ -228,6 +245,7 @@ test("what the box can't say yet is left out: a coding agent's models still bein
 });
 
 test("the engine's lists are read in the session's folder, where a project's own settings may add to them", async () => {
+  link.forgetModelLists();
   folders.length = 0;
   await states("ses_none");
   assert.ok(folders.length > 0 && folders.every(folder => folder === home), `asked about ${folders}`);
@@ -240,6 +258,44 @@ test("with the engine down, the coding agents' sessions are still said; the engi
   assert.equal(parts[0].head.status, 200);
   const shown = JSON.parse(Buffer.concat(parts.filter(part => part.body).map(part => part.body)).toString()).sessions;
   assert.deepEqual(Object.keys(shown), ["ses_agentFine"]);
+});
+
+test("an engine that hasn't loaded the session's folder yet (no provider ready, no models) can't say: left out, never gone or blocked", async () => {
+  const unloaded = handlerOn(await engineWith({ "/api/provider": [], "/api/model": [] }));
+  assert.deepEqual(await statesOn(unloaded, "ses_fine", "ses_deepseek", "ses_none"), {});
+  // Nor with providers but no models yet.
+  const noModels = handlerOn(await engineWith({ "/api/model": [] }));
+  assert.deepEqual(await statesOn(noModels, "ses_fine", "ses_none"), {});
+});
+
+test("OpenCode Zen is ready for its free models only: a paid one needs its account", async () => {
+  assert.deepEqual((await states("ses_zenPaid")).ses_zenPaid, {
+    model: { providerID: "opencode", id: "claude-opus-zen" }, name: "Claude Opus (Zen)", runs: false,
+    missing: "signIn", account: { id: "opencode", name: "OpenCode Zen" },
+  });
+});
+
+test("a session with no model of its own: none when the engine says it has no default; not known when it didn't answer", async () => {
+  const none = handlerOn(await engineWith({ "/api/model/default": null }));
+  assert.deepEqual((await statesOn(none, "ses_none")).ses_none, { model: null, runs: false, missing: "model" });
+  const failing = handlerOn(await engineWith({ "/api/model/default": FAILS }));
+  assert.deepEqual(await statesOn(failing, "ses_none", "ses_fine"), { ses_fine: (await states("ses_fine")).ses_fine });
+});
+
+test("from a bridge that can't say its list is every model it runs (an older one, or a Codex that lists none it hides), a missing one isn't gone", async () => {
+  assert.deepEqual(await states("ses_codexOld"), {});
+});
+
+test("what the engine and the bridge list is read again once they say something changed, and not for every ask before", async () => {
+  link.forgetModelLists();
+  await states("ses_fine");
+  const reads = () => asked.filter(url => url === "/api/provider").length;
+  const before = reads();
+  await states("ses_fine", "ses_deepseek");
+  assert.equal(reads(), before, "kept, a moment later");
+  link.noteModelsEvent({ type: "integration.updated" });
+  await states("ses_fine");
+  assert.equal(reads(), before + 1, "read again once an account changed");
 });
 
 test("a session with no model of its own runs on the engine's default", async () => {

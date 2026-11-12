@@ -11713,6 +11713,9 @@ class ClaudeAgent {
     this.loadingModels ??= this.loadModels().finally(() => this.loadingModels = undefined);
     return this.modelList?.models ?? fallbackModels(this.providerID);
   }
+  listsEveryModel() {
+    return Boolean(this.modelList);
+  }
   async concreteModel(id) {
     if (id !== "default")
       return;
@@ -14067,6 +14070,9 @@ class CodexAgent {
         return shown(this.modelList.models);
       throw error;
     }
+  }
+  listsEveryModel() {
+    return this.modelList?.models.some((model) => model.hidden) === true;
   }
   async listModels() {
     const rpc = await this.rpc();
@@ -26117,7 +26123,8 @@ async function integration(agent, fresh = false, auto) {
       outdated: maintained ? isOutdated(maintained) : false,
       updateCommand: maintained?.shown,
       updates: Boolean(agent.update && maintained?.command),
-      remoteSignIn: Boolean(agent.signIn && agent.signsInRemotely)
+      remoteSignIn: Boolean(agent.signIn && agent.signsInRemotely),
+      modelsComplete: agent.listsEveryModel ? agent.listsEveryModel() : true
     },
     methods: agent.methods(),
     connections: account.signedIn ? [{ type: "agent", label: account.label, method: "oauth", status: { status: "connected", message: account.label ? `Signed in as ${account.label}` : account.unchecked ? "Couldn't check the sign-in just now" : "Signed in" } }] : []
@@ -27448,4 +27455,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents cec5e53dcadac3090dfb96b8b43207b2ff1ad0f3cac61054875aee018bdc9595
+// Built from Packages/Box/src/agents b16edce178797c7e8f2064eece637b3c3d6ebb35426a5165b19cbde32beb4688

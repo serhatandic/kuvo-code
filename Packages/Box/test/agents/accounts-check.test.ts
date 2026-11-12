@@ -751,3 +751,16 @@ test("the picker's models leave out those an agent keeps from its own; the box a
   expect((await ask("model")).map((model: any) => model.id)).toEqual(["gpt-5.5"])
   expect(await ask("model?hidden=1")).toEqual(listed(true))
 })
+
+test("an account says whether its list is every model it runs: not while its agent can't say so (Claude Code's usual ones, a Codex that lists none it hides)", async () => {
+  const of = (listsEveryModel?: () => boolean) =>
+    ({ providerID: "codex-cli", id: "codex", name: "Codex", instance: { id: "default" }, methods: () => [], account: async () => ({ installed: true, signedIn: true }), models: async () => [], ...(listsEveryModel ? { listsEveryModel } : {}) }) as unknown as Agent
+  const metadata = async (agent: Agent) => {
+    const answer = handler({ roster: { all: () => [agent], find: () => agent }, password: "pw" } as any)
+    const response = await answer(new Request("http://box/api/integration/codex-cli", { headers: { authorization: "Basic " + Buffer.from("opencode:pw").toString("base64") } }))
+    return ((await response.json()) as any).data.metadata
+  }
+  expect((await metadata(of(() => false))).modelsComplete).toBe(false)
+  expect((await metadata(of(() => true))).modelsComplete).toBe(true)
+  expect((await metadata(of())).modelsComplete).toBe(true)
+})

@@ -676,6 +676,11 @@ export class ClaudeAgent implements Agent {
     return this.modelList?.models ?? fallbackModels(this.providerID)
   }
 
+  /** Only once Claude Code said which models your account has: its usual ones meanwhile are a guess. */
+  listsEveryModel(): boolean {
+    return Boolean(this.modelList)
+  }
+
   async concreteModel(id: string): Promise<string | undefined> {
     // Its only alias of its own: a model's own id (`opus`, `claude-opus-5-5`) stands for itself.
     if (id !== "default") return undefined

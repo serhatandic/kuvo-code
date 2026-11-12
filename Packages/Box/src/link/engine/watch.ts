@@ -24,6 +24,7 @@ import { markConversation, noteFullAccess, noteFullAccessAtWork } from "../work/
 import { queueWatcher, scanQueues, writtenByYou, type ScanFound } from "./queue";
 import { adoptConversation } from "../areas/approval";
 import { followAsks, forgetAsksOn, noteAskEvent } from "../glance/asked";
+import { noteModelsEvent } from "../areas/session-models";
 import { pullCatcher } from "../glance/pulls";
 import type { Target } from "../../shared/records";
 import type { SignInEvent } from "../areas/accounts";
@@ -398,6 +399,8 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         }
         learn(source, LEARN_NOW.has(event.type));
         noteAskEvent(event, work || String(source.port));
+        // Accounts or models changed: what a session's model needs is read again (`kuvo/sessions/models`).
+        noteModelsEvent(event);
         catchPull(event);
         // Your settings changed by hand meanwhile: the model your subagents use follows them.
         if (learns && (event.type === "session.execution.started" || event.type === "config.updated")) followSettingsFile();

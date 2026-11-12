@@ -1960,9 +1960,12 @@ describe("Codex's context", () => {
 
   test("a model Codex keeps out of its picker isn't offered, and is still listed, marked, for what asks whether one runs", async () => {
     codex = new TestCodex(fakeCodex(root, []), root)
+    // Not before it's listed those it hides: one missing then may be one of them.
+    expect(codex.listsEveryModel()).toBe(false)
     expect((await codex!.models()).map((model) => model.id)).toEqual(["gpt-test"])
     const all = await codex!.models({ hidden: true })
     expect(all.map((model) => [model.id, model.hidden ?? false])).toEqual([["gpt-test", false], ["gpt-mini", true]])
+    expect(codex!.listsEveryModel()).toBe(true)
   })
 
   test("what a turn used: each of its model calls counted once, those that only ran commands too", async () => {

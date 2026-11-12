@@ -148,12 +148,12 @@ public struct SessionModelState: Decodable, Equatable, Sendable {
         account?.id == provider ? accountStep : nil
     }
 
-    /// What a failed turn's card button says for `provider`'s account (the one the turn failed
-    /// on), labelled by what it does: Add Key, Install, Sign In, or Sign In Again for a sign-in
-    /// that `ended`. Nil where the box says nothing that account needs (another's, or none): the
-    /// app's own words then.
-    public func cardButton(for provider: String, ended: Bool) -> String? {
-        guard let step = accountStep(for: provider) else { return nil }
+    /// What a failed turn's card button says for the model the turn `failed` on, labelled by what
+    /// it does: Add Key, Install, Sign In, or Sign In Again for a sign-in that `ended`. Only where
+    /// this is said of that model (the conversation's now): nil for another model, or one that
+    /// needs none of those, which the app's own words say then.
+    public func cardButton(for failed: ModelRef, ended: Bool) -> String? {
+        guard isAbout(failed), let step = accountStep(for: failed.providerID) else { return nil }
         return ended && step == .signIn ? "Sign In Again" : step.title
     }
 

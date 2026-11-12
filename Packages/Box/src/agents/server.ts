@@ -162,6 +162,8 @@ export async function integration(agent: Agent, fresh = false, auto?: Auto): Pro
       updates: Boolean(agent.update && maintained?.command),
       // Whether its sign-in can finish on another device (`remote: true`).
       remoteSignIn: Boolean(agent.signIn && agent.signsInRemotely),
+      // Its list (`api/model?hidden=1`) is every model it runs: one missing from it is gone.
+      modelsComplete: agent.listsEveryModel ? agent.listsEveryModel() : true,
     },
     methods: agent.methods(),
     connections: account.signedIn

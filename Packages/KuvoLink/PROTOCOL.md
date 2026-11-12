@@ -1178,7 +1178,8 @@ box decides it from what its engine and coding agents list, so every client show
   {"message"}` for none named, `405` for anything but `GET`, `503` with neither the engine nor the
   coding agents' bridge running, or while one that might have a session isn't answering.
 - `model`: the model it runs on, `{providerID, id, variant?}` as the session names it: its own,
-  else (a session of the engine's with none) the engine's default; `null` with neither. `name`:
+  else (a session of the engine's with none) the engine's default; `null` when the engine says it
+  has none (`api/model/default` answers `data: null`). `name`:
   as its provider lists it, or its coding agent (Claude Code's `default` by the model it stands
   for now), or a Custom Auto list's name; left out for one gone from the list.
 - `runs`: it can run here now. Else `missing` says what it needs:
@@ -1198,15 +1199,25 @@ box decides it from what its engine and coding agents list, so every client show
   folder, where a project's own settings may add to them.
 - An engine provider counts as signed in when the engine says it's ready (`api/provider`), it has
   a connection, or nothing to sign in to (a local one's); OpenCode Zen's free models need no
-  account. A coding agent's model runs while its account is installed, signed in, and its agent
-  lists it (by its own id or one it's known by), one it keeps out of its picker too (Codex's
-  hidden ones): only one absent from its list is `gone`. Custom Auto runs while its list has models: it
+  account, and its others need its account (the engine lists it ready for its free ones). A coding
+  agent's model runs while its account is installed, signed in, and its agent lists it (by its own
+  id or one it's known by), one it keeps out of its picker too (Codex's hidden ones, from the
+  bridge's `api/model?hidden=1`): only one absent from its list is `gone`, and only where its
+  account says its list is every model it runs (`metadata.modelsComplete` in the bridge's
+  `api/integration`: not while Claude Code lists its usual ones, nor for a Codex that listed none
+  it hides, nor from a bridge before it). Custom Auto runs while its list has models: it
   picks among them each turn, so whether one entry's account is signed in isn't said.
 - Left out, as not known yet: a session the box doesn't have; one whose place didn't answer just
-  now; a coding agent's model while that account, signed in, lists no models, or only its usual
-  ones (`provisional: true` on the bridge's `api/model`, Claude Code's until it says which your
-  account has); and a model of a provider the engine doesn't know at all. A client decides such a
-  one as it would from a box without `sessions.models`.
+  now; an engine's session while the engine lists no provider ready or no models for its folder
+  (one it hasn't loaded yet answers so at first), or, for one with no model of its own, while it
+  didn't answer for its default; a coding agent's model while that account, signed in, lists no
+  models, or only its usual ones (`provisional: true` on the bridge's `api/model`, Claude Code's
+  until it says which your account has), or one missing from a list its account doesn't say is
+  whole; and a model of a provider the engine doesn't know at all. A client decides such a one as
+  it would from a box without `sessions.models`.
+- What the engine and the bridge list is read once for every session asked about, and used again
+  for ten seconds, or until the box hears either say accounts, models, settings or Custom Auto's
+  lists changed.
 - A client asks again as what it's drawn from changes: the session opens, its model changes, or its
   box's accounts, models or Custom Auto lists do (`integration.updated`, `model.updated`,
   `kuvo.auto.updated`), and once a model it picked is set. What the box said is of the model it
@@ -1216,7 +1227,10 @@ box decides it from what its engine and coding agents list, so every client show
   while it runs or its account needs something, and says "Choose a Model" for `gone` and `model`;
   Send follows `ComposerSend` with that, so it waits for a model for those two, and for the others
   a message is refused with what to do (a sign-in, a key, an install, where), kept in the field;
-  a sign-in card's Sign In says what it does for that account (adds a key, signs in, installs). A
+  a failed turn's card, for the model the conversation is on, names its button by what it does
+  (Add Key, Install, Sign In, or Sign In Again for a sign-in that ended). How a signed-out engine
+  provider is signed in to is held to `Vectors/plan-sign-ins.json` in the box, the Mac's Accounts
+  and KuvoClient's `PlanSignIns`. A
   box without `sessions.models` leaves the clients deciding from its accounts and models as they
   did before.
 
