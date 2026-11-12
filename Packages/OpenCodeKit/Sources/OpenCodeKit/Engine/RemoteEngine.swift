@@ -121,6 +121,17 @@ public struct SSHConnection: Sendable, Hashable, Codable {
     nonisolated(unsafe) public static var fedStandIn: (@Sendable (_ address: String, _ script: String, _ input: URL?) -> String?)?
     #endif
 
+    /// Within `$sendsWhile.withValue(…)` (a machine's connect under way), each script that would go
+    /// to that machine (by the name it was added under) asks it first, and none starts once it says
+    /// no (the machine removed or disconnected meanwhile): `CancellationError`. One already running
+    /// there finishes, as `run` says. Another machine's scripts, from a task begun meanwhile, go on.
+    @TaskLocal public static var sendsWhile: (machine: String, wanted: @Sendable () async -> Bool)?
+
+    /// Throws `CancellationError` when `sendsWhile` no longer wants scripts sent to this machine.
+    public func mustBeWanted() async throws {
+        if let gate = Self.sendsWhile, gate.machine == destination, await !gate.wanted() { throw CancellationError() }
+    }
+
     /// Runs `script` on the machine and returns what it printed. `input` is sent to it. It runs as
     /// long as it takes (an install, a copy), with no limit of its own: SSH notices a machine that
     /// has gone away (`options`). It isn't stopped when the task is cancelled, so a change there
@@ -129,6 +140,7 @@ public struct SSHConnection: Sendable, Hashable, Codable {
     /// `sent`, given an `input`, hears how much of it has gone, as it goes.
     @discardableResult
     public func run(_ script: String, input: URL? = nil, cancellable: Bool = false, sent: (@Sendable (Int64) -> Void)? = nil) async throws -> String {
+        try await mustBeWanted()
         #if DEBUG
         if let fedStandIn = Self.fedStandIn {
             guard let output = fedStandIn(address, script, input) else { throw RemoteEngineError.ssh(status: 255, message: "That failed on \(address)") }
@@ -152,6 +164,7 @@ public struct SSHConnection: Sendable, Hashable, Codable {
     /// Runs `script` on the machine with what it prints going to `output` as it is (an archive of
     /// a folder there, say), not read as text. `input` is sent to it. As long as it takes, as `run`.
     public func run(_ script: String, input: URL? = nil, output: URL) async throws {
+        try await mustBeWanted()
         guard !isStandIn else { throw RemoteEngineError.ssh(status: 255, message: "Couldn’t reach \(destination).") }
         guard FileManager.default.createFile(atPath: output.path, contents: nil, attributes: [.posixPermissions: 0o600]) else { throw CocoaError(.fileWriteUnknown) }
         let result = try await ChildProcess.run("/usr/bin/ssh", arguments(running: script), input: input.map { .file($0) } ?? .nothing,
@@ -1519,7 +1532,7 @@ public final class RemoteServer: @unchecked Sendable {
 
     /// Starts the machine's engine over, as it was last started there (Restart). False when it
     /// didn't come up. `wanted`, asked before each step after the first: no longer (the machine
-    /// removed meanwhile), and nothing more goes there.
+    /// removed or disconnected meanwhile), and nothing more goes there.
     @discardableResult
     public static func restartEngine(on connection: SSHConnection, while wanted: @Sendable () async -> Bool) async throws -> Bool {
         try await installBoot(on: connection, while: wanted)

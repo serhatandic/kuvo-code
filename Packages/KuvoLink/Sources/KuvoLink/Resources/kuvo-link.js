@@ -7498,8 +7498,18 @@ function noteOlderMacs() {
   noteOlderMac(at);
   return true;
 }
+var MAC_INSTALLING = 3600000;
 function checkDrift(now = Date.now()) {
   const record = path33.join(UPDATES, "installed.json"), pending = path33.join(RUN, "update-drift");
+  const note = path33.join(RUN, "mac-installing");
+  let installing = 0;
+  try {
+    installing = fs31.statSync(note).mtimeMs;
+  } catch {}
+  if (installing && now - installing >= MAC_INSTALLING) {
+    fs31.rmSync(note, { force: true });
+    installing = 0;
+  }
   if (isUpdating() || fs31.existsSync(UPDATE_TRIAL))
     return false;
   let installed = null;
@@ -7520,11 +7530,7 @@ function checkDrift(now = Date.now()) {
       return true;
     }
   });
-  let installing = 0;
-  try {
-    installing = fs31.statSync(path33.join(RUN, "mac-installing")).mtimeMs;
-  } catch {}
-  if (!changed || isUpdating() || now - installing < 3600000) {
+  if (!changed || isUpdating() || now - installing < MAC_INSTALLING) {
     fs31.rmSync(pending, { force: true });
     return false;
   }
@@ -37506,7 +37512,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "85e31e3ecb73";
+var BRIDGE_VERSION = "83a47eae14c7";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
