@@ -21585,7 +21585,7 @@ async function wakeTool(name, args, calling, bridge) {
     return refused2(MOVING);
   const directory = root?.place.data.location?.directory ?? root?.place.data.directory;
   const cwd = directory && fs80.existsSync(directory) ? directory : os9.homedir();
-  const env = { ...process.env, KUVO_BOTS: BOTS, KUVO_WAKES: SESSION_WAKES, KUVO_WAKE_TOOL: "1" };
+  const env = { ...process.env, PWD: cwd, KUVO_BOTS: BOTS, KUVO_WAKES: SESSION_WAKES, KUVO_WAKE_TOOL: "1" };
   if (viaBridge)
     env.KUVO_WAKE_VIA = "bridge";
   else
@@ -38310,7 +38310,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "04d3d31c6e3d";
+var BRIDGE_VERSION = "610632593e8d";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

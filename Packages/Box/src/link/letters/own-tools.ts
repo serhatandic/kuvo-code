@@ -123,7 +123,9 @@ export async function wakeTool(name: WakeToolName, args: Record<string, unknown>
   if (exists && isMoving(folder)) return refused(MOVING);
   const directory = root?.place.data.location?.directory ?? root?.place.data.directory;
   const cwd = directory && fs.existsSync(directory) ? directory : os.homedir();
-  const env: NodeJS.ProcessEnv = { ...process.env, KUVO_BOTS: BOTS, KUVO_WAKES: SESSION_WAKES, KUVO_WAKE_TOOL: "1" };
+  // (`PWD` as the folder's named, so a first folder records it as the engine names it, not
+  // through links: /tmp, not /private/tmp.)
+  const env: NodeJS.ProcessEnv = { ...process.env, PWD: cwd, KUVO_BOTS: BOTS, KUVO_WAKES: SESSION_WAKES, KUVO_WAKE_TOOL: "1" };
   if (viaBridge) env.KUVO_WAKE_VIA = "bridge";
   else delete env.KUVO_WAKE_VIA;
   // (Never as the box's own conversation, nor in a sandbox's folder: it's named.)
