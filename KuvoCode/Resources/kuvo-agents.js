@@ -14783,7 +14783,7 @@ ${said.map((each) => each.text).join(`
       }
     } else if (item?.type === "userMessage") {
       const text = (item.content ?? []).find((part) => part?.type === "text")?.text;
-      const heard = typeof text === "string" ? [...this.answered, ...this.retelling].find((each) => !each.heard && text.startsWith(each.text)) : undefined;
+      const heard = typeof text === "string" ? [...this.retelling, ...this.answered].find((each) => !each.heard && text.startsWith(each.text)) : undefined;
       if (heard)
         heard.heard = true;
     } else if (WORK_ITEMS.has(item?.type)) {
@@ -27452,4 +27452,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 9aa47d4e9dba22f8a341089598b7742c0f9dfaf795f8f9eb29a69fc8cbcca303
+// Built from Packages/Box/src/agents 611ded0c27045e661f52d344da3092ff0e75d70882b603d5313041493ef2fdec

@@ -1568,7 +1568,7 @@ class CodexThread implements Thread {
       // (Its words first: what it attached, Codex may be told of after them. One being told again
       // as a sleep started counts too: Codex may take it as it was first sent meanwhile.)
       const text: unknown = (item.content ?? []).find((part: any) => part?.type === "text")?.text
-      const heard = typeof text === "string" ? [...this.answered, ...this.retelling].find((each) => !each.heard && text.startsWith(each.text)) : undefined
+      const heard = typeof text === "string" ? [...this.retelling, ...this.answered].find((each) => !each.heard && text.startsWith(each.text)) : undefined
       if (heard) heard.heard = true
     } else if (WORK_ITEMS.has(item?.type)) {
       this.turnedDown = 0
