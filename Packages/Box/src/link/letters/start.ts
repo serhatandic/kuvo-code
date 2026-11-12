@@ -8,6 +8,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
+import { isChatsFolder } from "../engine/chats";
 import { asked, call, engineGet } from "../engine/client";
 import { writtenByYou } from "../engine/queue";
 import { messageID } from "../engine/sessions";
@@ -548,12 +549,14 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     ...(remote ? { call: remote.call, lead: { box: remote.computer, key: remote.key, name: by!.name }, ...(brought.length ? { held: brought } : {}) } : {}) };
   // (Kept with it as it's made, so the box never takes it for one a client made without saying.)
   const starter = Boolean(by?.place || remote);
-  const marks = { ...(starter ? { startedBy: by!.session } : {}), ...(asBefore ? {} : { approval: kept, applied }), ...(autopilot ? { autopilot: true } : {}), ...(filed ? { filed } : {}), ...marksOfLine };
+  // (A chat carries its mark from the first, and keeps it as its marks are put on: "Chats".)
+  const chat = isChatsFolder(folder) ? { chat: folder } : {};
+  const marks = { ...(starter ? { startedBy: by!.session } : {}), ...(asBefore ? {} : { approval: kept, applied }), ...(autopilot ? { autopilot: true } : {}), ...(filed ? { filed } : {}), ...chat, ...marksOfLine };
   const waits = given.wait === true && !remote;
   const wakes = wakesFrom(given.wait === true && remote ? given.wake ?? "both" : given.wake, remote ? remote.own : Boolean(ownBot), waits);
   // What its starter hears of it, only once it's marked so: none for an agent outside any
   // conversation here, or for a mark the engine didn't take (it's told to write to it instead).
-  const kuvo = { ...(starter ? { startedBy: by!.session, ...(bot ? { by: bot, depth } : {}), ...(wakes.length ? { wake: wakes } : {}) } : {}), ...(asBefore ? {} : { approval: kept, applied }), ...(autopilot ? { autopilot: true } : {}), ...(filed ? { filed } : {}), ...marksOfLine };
+  const kuvo = { ...(starter ? { startedBy: by!.session, ...(bot ? { by: bot, depth } : {}), ...(wakes.length ? { wake: wakes } : {}) } : {}), ...(asBefore ? {} : { approval: kept, applied }), ...(autopilot ? { autopilot: true } : {}), ...(filed ? { filed } : {}), ...chat, ...marksOfLine };
   const from_ = remote ? `${by!.name} on ${remote.computer}` : by?.name ?? "";
   // (Its finish heard by its starter with its last reply: its report isn't sent again as a message.)
   const textFor = (heard: boolean) => by ? composeLetter(from_, by.session, task, waits, heard) + (bot ? `\n\n${sessionNote(bot.name, heard, given.review !== false)}${goal ? `\n\n${goalNote}` : ""}` : "") : task;

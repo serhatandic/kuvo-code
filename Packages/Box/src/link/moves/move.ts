@@ -35,6 +35,7 @@ import { workAsks } from "../work/asks";
 import { ofBot, under, workSessions } from "../work/tree";
 import { readBackground } from "../work/background";
 import { decidedOf, forgetDecided, isAutopilot, keepDecided, tellAutopilot } from "../work/autopilot";
+import { isChatsFolder } from "../engine/chats";
 import type { EngineSession } from "../engine/sessions";
 import { CHATS, engineWait, MOST_BUNDLE, NotTaken, TooBig, deleteSession, directoryOf, exportAll, folderOf, groupAction, conversationHash, hashOf, idsOf, importAll, keysOf, notPlainIn, ownTree, pack, toTrash, unpack } from "./bundle";
 import type { Contents } from "./bundle";
@@ -293,7 +294,7 @@ async function movable(kind: MoveKind, thing: string, signal?: AbortSignal): Pro
     if (!isObject(session)) return null;
     const title = typeof session.title === "string" && session.title.trim() ? `“${session.title.trim()}”` : "This chat";
     const directory = isObject(session.location) ? session.location.directory : session.directory;
-    if (directory !== CHATS) return null;
+    if (!isChatsFolder(directory)) return null;
     if (await chatGoalRuns(thing, signal)) return { name: title, why: say.onGoal(title), note: note.onGoal };
     const running = runningOf([thing]);
     if (running) return { name: title, why: say.background(title, running), note: note.background };
@@ -1045,7 +1046,7 @@ async function bringIn(record: MoveRecord, signal: AbortSignal): Promise<string[
   changeMove(record.id, each => { each.sessions = sessions; each.was = was; });
   let infos: (Partial<EngineSession> & { id: string })[];
   if (contents.lane) {
-    const placed = await carry<{ digest: string; sessions: string[]; model?: { providerID?: string; id?: string }; came?: { providerID?: string; id?: string }; infos: { id: string; metadata?: Record<string, unknown> }[] }>(engine, "place", { from: carried, keep: placedOf(record.id), directory, root }, signal).catch(error => {
+    const placed = await carry<{ digest: string; sessions: string[]; model?: { providerID?: string; id?: string }; came?: { providerID?: string; id?: string }; infos: { id: string; metadata?: Record<string, unknown> }[] }>(engine, "place", { from: carried, keep: placedOf(record.id), directory, root, chat: isChatsFolder(directory) ? directory : null }, signal).catch(error => {
       if ((error as { status?: number } | null)?.status === 409) throw new NotTaken(String((error as Error).message));
       throw error;
     });

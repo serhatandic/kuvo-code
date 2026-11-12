@@ -21271,8 +21271,8 @@ class Carrying {
         return account;
     return own ?? accounts[0] ?? this.agentOf(baseProvider[named.kind]);
   }
-  async place(from, keep, directory, root) {
-    return await this.inTurn(keep, () => this.placeNow(from, keep, directory, root));
+  async place(from, keep, directory, root, chat) {
+    return await this.inTurn(keep, () => this.placeNow(from, keep, directory, root, chat));
   }
   turns = new Map;
   takenBack = new Set;
@@ -21295,7 +21295,7 @@ class Carrying {
       return Object.entries(this.sessions.slotsOf(session.id)).flatMap(([provider, slot]) => this.laneFiles(record, provider, slot.state ?? {}, true).files?.items.map((item) => item.path) ?? []);
     });
   }
-  async placeNow(from, keep, directory, root) {
+  async placeNow(from, keep, directory, root, chat) {
     const manifest = await this.readManifest(from);
     if (manifest.root !== root)
       throw new CantCarry("its conversations aren't its own");
@@ -21336,6 +21336,10 @@ class Carrying {
         if (session?.id !== id || !Array.isArray(messages))
           throw new CantCarry("its conversation didn't come whole");
         session.location = { ...session.location, directory };
+        if (chat !== undefined) {
+          const { chat: _, ...kuvo } = session.metadata?.kuvo ?? {};
+          session.metadata = { ...session.metadata ?? {}, kuvo: chat ? { ...kuvo, chat } : kuvo };
+        }
         session.projectID = "prj_" + createHash11("sha1").update(directory).digest("hex").slice(0, 16);
         delete agent.snapshots;
         const lanesHere = manifest.lanes.filter((lane) => lane.session === id);
@@ -21556,7 +21560,7 @@ async function carryRoutes(carrying, method, parts, body) {
         await carrying.keep(text("root"), text("into"));
         return json({ data: true });
       case "place":
-        return json({ data: await carrying.place(text("from"), text("keep"), text("directory"), text("root")) });
+        return json({ data: await carrying.place(text("from"), text("keep"), text("directory"), text("root"), typeof given?.chat === "string" || given?.chat === null ? given.chat : undefined) });
       case "undo":
         await carrying.undo(text("keep"));
         return json({ data: true });
@@ -27442,4 +27446,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents cb3c0bc0b133c3ea315e33e4cf746ae566b275113abd86784c29ef00c55ccd70
+// Built from Packages/Box/src/agents 2018364d9713c63593cbc77563fa4be0fa66f127df0f75688b325b58df4660b0

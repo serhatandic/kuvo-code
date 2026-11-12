@@ -1001,9 +1001,9 @@ final class SessionModel {
 
     /// Where a conversation is, for anonymous usage: a bot's own folder (here or on a machine), a
     /// chat, or a project.
-    private static func place(of directory: String) -> String {
-        if Workspace.isBotFolder(directory) { return "bot" }
-        return Workspace.isChat(directory) ? "chat" : "project"
+    private static func place(of session: Session) -> String {
+        if Workspace.isBotFolder(session.location.directory) { return "bot" }
+        return Workspace.isChat(session) ? "chat" : "project"
     }
 
     /// `withComments`: your review comments go with it; a message the app writes for you leaves
@@ -1027,7 +1027,7 @@ final class SessionModel {
         props["comments"] = !comments.isEmpty
         Analytics.shared.track("message_sent", props)
         Analytics.shared.noteMessage(in: session.id, chars: text.count)
-        Analytics.shared.messageSent(path: Self.place(of: session.location.directory))
+        Analytics.shared.messageSent(path: Self.place(of: session))
     }
 
     /// Undo for a removed message: back in the queue as it went (its words, what it names and its

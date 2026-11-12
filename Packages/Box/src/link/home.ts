@@ -178,9 +178,10 @@ export const CONFIG_LOCK = path.join(RUN, ".config.lock");
 // A Mac's box finds them where its app keeps them, as the engine does (KUVO_BOTS, KUVO_WAKES, and the
 // app's own kuvo-wake); a machine's, in its folder.
 export const BOTS = process.env.KUVO_BOTS || path.join(K, "bots");
-// Its chats (conversations of no project): where a Mac's app keeps them (KUVO_CHATS), a machine's in
-// its folder.
-export const CHATS = process.env.KUVO_CHATS || path.join(K, "chats");
+// Its chats (conversations of no project): where a Mac's app keeps them (KUVO_CHATS, beside its box),
+// a machine's in its folder. The one place a box names it (`kuvo/info`'s `chats`, the chat mark,
+// moves, the sandbox).
+export const CHATS = process.env.KUVO_CHATS || (process.env.KUVO_BOX === "mac" ? path.join(path.dirname(K), "Chats") : path.join(K, "chats"));
 
 // This Mac's box: the Mac app's own Attachments folder (BoxProcess gives it, KUVO_MAC_ATTACHMENTS),
 // where it keeps the files its sessions sent a folder for each session, as the box keeps its own:
