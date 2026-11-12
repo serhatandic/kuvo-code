@@ -537,7 +537,9 @@ export default {
       if (typeof answer?.text !== "string") return
       // Not let out: why not, after what it printed, and it ended as it did.
       if (typeof answer.exit !== "number") return void (call.result.content = [...parts, { type: "text", text: answer.text }])
-      const ended = parts.some(part => part?.type === "text" && typeof part.text === "string" && part.text.startsWith("Exit code: ")) ? "Exit code: " : "Exited with code "
+      // (Said in its last text, after what it printed, a timeout's note before it on a line.)
+      const last = parts.filter(part => part?.type === "text").at(-1)?.text
+      const ended = typeof last === "string" && /(^|\\n)Exit code: \\S+$/.test(last) ? "Exit code: " : "Exited with code "
       call.result.content = [...parts.filter(part => part?.type !== "text"), { type: "text", text: answer.text }, ...(answer.exit ? [{ type: "text", text: ended + answer.exit }] : [])]
       if (output && typeof output === "object") call.result.output = { ...output, output: answer.text, exit: answer.exit, truncated: false }
       call.result.metadata = { ...call.result.metadata, exit: answer.exit, truncated: false }

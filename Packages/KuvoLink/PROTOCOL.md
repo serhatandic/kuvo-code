@@ -4944,7 +4944,14 @@ and the folders of the skills the engine finds (learned again when they change, 
 never `/` or a folder holding your home folder).
 
 The agents bridge takes the same ask as one of the engine's defaults, for when the engine can't
-say its agent's rules. It doesn't take a coding agent off running on its own (`approvesAll`), so
+say its agent's rules. From engine 2.2.7, a folder the engine has just opened or is reading again
+lists its agents, integrations and skills at once with what it has so far, before its plugins are
+set up (then says `agent.updated`, `integration.updated`), while `api/provider` still waits for
+them. So the box asks for the providers first and reads those lists after, with the folder's
+`x-opencode-directory` where it has one; an integration list with nothing in it is not read yet,
+never "nothing signed in". An agent list in which no agent has the plugin's rules (its ask, then
+`<data>/tool-output/*` allowed) has the bridge add the ask to each agent that would otherwise work
+outside the project, so a coding agent never does that without asking where the engine would ask. It doesn't take a coding agent off running on its own (`approvesAll`), so
 Codex, Cursor, Grok and Antigravity keep their modes. Where the bridge sees a tool call (Claude
 Code's every one, and what the others ask about), one whose files are outside the project asks
 first (a command's line isn't read for them), weighed by their folders as the engine weighs its own

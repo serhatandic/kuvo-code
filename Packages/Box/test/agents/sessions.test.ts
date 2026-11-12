@@ -846,33 +846,59 @@ describe("asks and conversations", () => {
     }
   })
 
+  /** A stand-in engine listing `agents` (the box's plugin's rules given to them once `plugins` is
+   * true), whose plugins are set up once it's asked for its providers (they wait for them) when
+   * `setsUp`; with how often each was asked for. */
+  function engineListing(agents: (plugins: boolean) => unknown[], setsUp = true) {
+    let plugins = false
+    const asked = { providers: 0, agents: 0 }
+    const engine = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const path = new URL(request.url).pathname
+        if (path === "/api/provider") {
+          asked.providers++
+          plugins = setsUp
+          return Response.json({ data: [] })
+        }
+        if (path === "/api/agent") {
+          asked.agents++
+          return Response.json({ data: agents(plugins) })
+        }
+        return new Response("not here", { status: 404 })
+      },
+    })
+    const link = new EngineLink()
+    link.configure(`http://127.0.0.1:${engine.port}`, "pw")
+    const agentsHere = new Map([a, b].map((agent) => [agent.providerID, agent]))
+    sessions.closeAll()
+    sessions = new Sessions(store, { find: (provider: string | undefined) => (provider ? agentsHere.get(provider) : undefined) } as unknown as Roster, auto, undefined, async () => [], (name, directory) => link.agent(name, directory))
+    return {
+      link,
+      asked,
+      stop() {
+        link.configure(undefined, undefined)
+        engine.stop(true)
+      },
+    }
+  }
+
+  // The rules the box's plugin gives an agent (engine/defaults.ts): its ask outside the project,
+  // then what's kept for it open.
+  const pluginRules = [
+    { action: "external_directory", resource: "*", effect: "ask" },
+    { action: "external_directory", resource: "/box/attachments/*", effect: "allow" },
+    { action: "external_directory", resource: "/box/data/opencode/tool-output/*", effect: "allow" },
+  ]
+
   test("an engine that lists its agents before its plugins are set up (2.2.7, in a folder it just opened) doesn't let a coding agent work outside the project without asking", async () => {
-    const outside = { action: "external_directory", resource: "*", effect: "ask" } as const
     // Build as the engine lists it before the box's plugin is set up (your rules only: one that
-    // refuses reading a secrets file), and after (the plugin's rules at the end).
+    // refuses reading a secrets file), and after.
     const early = [{ action: "*", resource: "*", effect: "allow" }, { action: "read", resource: "/tmp/project/secrets/*", effect: "deny" }]
-    const whole = [...early, outside, { action: "external_directory", resource: "/box/attachments/*", effect: "allow" }]
-    const agents = new Map([a, b].map((agent) => [agent.providerID, agent]))
-    // The engine's plugins set up once it's asked for its providers (which wait for them), or never.
+    // Its plugins set up once it's asked for its providers, or never.
     for (const setsUp of [true, false]) {
-      let plugins = false
-      const engine = Bun.serve({
-        port: 0,
-        fetch(request) {
-          const path = new URL(request.url).pathname
-          if (path === "/api/provider") {
-            plugins = setsUp
-            return Response.json({ data: [] })
-          }
-          if (path === "/api/agent") return Response.json({ data: [{ id: "build", mode: "primary", permissions: plugins ? whole : early }] })
-          return new Response("not here", { status: 404 })
-        },
-      })
-      const link = new EngineLink()
-      link.configure(`http://127.0.0.1:${engine.port}`, "pw")
+      const engine = engineListing((plugins) => [{ id: "build", mode: "primary", permissions: plugins ? [...early, ...pluginRules] : early }], setsUp)
       try {
-        sessions.closeAll()
-        sessions = new Sessions(store, { find: (provider: string | undefined) => (provider ? agents.get(provider) : undefined) } as unknown as Roster, auto, undefined, async () => [], (name, directory) => link.agent(name, directory))
         const seen: unknown[] = []
         a.script = async (_input, turn, hooks) => {
           seen.push(await hooks.permission({ action: "read", resources: ["/home/me/.ssh/id_ed25519"] }))
@@ -896,9 +922,35 @@ describe("asks and conversations", () => {
         await settled(id, 1)
         expect(seen).toEqual(["reject", "reject", "once"])
       } finally {
-        link.configure(undefined, undefined)
-        engine.stop(true)
+        engine.stop()
       }
+    }
+  })
+
+  test("once the engine's plugins are set up, your own Allow outside the project and an agent of yours from Settings › Agents work as on the engine, with its agents read once", async () => {
+    const yours = { action: "external_directory", resource: "*", effect: "allow" }
+    const engine = engineListing((plugins) => [
+      // (Your settings' rules come after the plugin's; an agent of yours doesn't get them.)
+      { id: "build", mode: "primary", permissions: [{ action: "*", resource: "*", effect: "allow" }, ...(plugins ? pluginRules : []), yours] },
+      { id: "notes", mode: "primary", permissions: [{ action: "*", resource: "*", effect: "allow" }] },
+    ])
+    try {
+      const seen: unknown[] = []
+      a.script = async (_input, turn, hooks) => {
+        seen.push(await hooks.permission({ action: "read", resources: ["/home/me/notes/today.md"] }))
+        turn.startStep()
+        turn.endStep()
+        return { outcome: "succeeded" }
+      }
+      const id = create()
+      send(id, "read my notes")
+      await settled(id, 1)
+      expect(seen).toEqual(["once"])
+      expect(sessions.permissions(id)).toEqual([])
+      expect((await engine.link.agent("notes", "/tmp/project"))?.permissions).toEqual([{ action: "*", resource: "*", effect: "allow" }])
+      expect(engine.asked).toEqual({ providers: 1, agents: 1 })
+    } finally {
+      engine.stop()
     }
   })
 

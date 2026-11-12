@@ -113,9 +113,10 @@ export class EngineLink {
    * One of the engine's lists for a folder, kept a while (one read at a time, a failure kept a
    * moment too, so a stalled engine doesn't hold up each message); as last known when it doesn't
    * answer, and undefined when it never has. `usable` says whether an answer is (a folder the
-   * engine hasn't loaded yet answers with nothing at first).
+   * engine hasn't loaded yet answers with nothing at first). `settled`: asked for once the engine's
+   * plugins are set up (`pluginsSetUp`), and taken as that says.
    */
-  private async read(path: string, directory: string, usable: (value: any) => boolean = () => true, fresh = false): Promise<any> {
+  private async read(path: string, directory: string, usable: (value: any) => boolean = () => true, fresh = false, settled?: (value: any) => any): Promise<any> {
     const key = `${path}\n${directory}`
     const kept = this.reads.get(key)
     if (!this.url) return kept?.value
@@ -126,7 +127,10 @@ export class EngineLink {
     const keep = (entry: { at: number; value: any; failed?: boolean }) => {
       if (generation === this.generation) this.reads.set(key, entry)
     }
-    const pending = this.request("GET", path, undefined, 4_000, directory).then(
+    const asked = settled
+      ? this.pluginsSetUp(directory).then(async () => settled(await this.request("GET", path, undefined, 4_000, directory)))
+      : this.request("GET", path, undefined, 4_000, directory)
+    const pending = asked.then(
       (value) => {
         if (usable(value)) keep({ at: Date.now(), value })
         else keep({ at: 0, value: kept?.value })
@@ -164,26 +168,31 @@ export class EngineLink {
   }
 
   /**
-   * The engine's agents for a folder, each with Kuvo Code's rules (`withKuvoRules`); undefined
-   * when it never answered. An engine that opened the folder a moment ago, or is reading it again,
-   * may list them before its plugins are set up (2.2.7 does), without the rules the box's plugin
-   * gives them: such a list isn't taken. It's asked again once they're set up (its providers wait
-   * for them); one that still doesn't have them is taken with each agent asking first outside the
-   * project, never letting it work there without.
+   * The engine's agents for a folder, with Kuvo Code's rules (`withKuvoRules`); undefined when it
+   * never answered. An engine that opened the folder a moment ago, or is reading it again, may
+   * list them before its plugins are set up (2.2.7 does), without the rules the box's plugin gives
+   * them: so they're asked for once its plugins are, and a list still without them has each agent
+   * ask first outside the project.
    */
   private async agentList(directory: string, name?: string): Promise<any[] | undefined> {
-    const path = "/api/agent"
-    let answer = await this.read(path, directory, wholeAgents)
+    const usable = (value: any) => Array.isArray(value?.data) && value.data.length > 0
+    let answer = await this.read("/api/agent", directory, usable, false, withKuvoRules)
     // One you've just added isn't in what was read a moment ago.
-    if (answer !== undefined && name && !answer.data.some(named(name))) answer = await this.read(path, directory, wholeAgents, true)
-    if (answer !== undefined) return answer.data
-    // (An engine that isn't answering isn't asked again and again.)
-    if (!this.url || this.reads.get(`${path}\n${directory}`)?.failed) return undefined
-    await this.request("GET", "/api/provider", undefined, 10_000, directory).catch(() => undefined)
-    answer = await this.read(path, directory, wholeAgents, true)
-    if (answer !== undefined) return answer.data
-    const early = await this.request("GET", path, undefined, 4_000, directory).catch(() => undefined)
-    return Array.isArray(early?.data) && early.data.length ? early.data.map(withKuvoRules) : undefined
+    if (answer !== undefined && name && !answer.data.some(named(name))) answer = await this.read("/api/agent", directory, usable, true, withKuvoRules)
+    return answer?.data
+  }
+
+  /**
+   * Once the engine has set up its plugins for a folder: its providers wait for them (its agents,
+   * integrations and skills don't from 2.2.7 on, listing what it has so far, and then say
+   * `agent.updated`). Not longer than a few seconds: a plugin that hangs doesn't hold up every
+   * message (what's read then is taken as it is, with Kuvo Code's rules if it hasn't them).
+   */
+  private pluginsSetUp(directory: string): Promise<void> {
+    return this.request("GET", "/api/provider", undefined, 5_000, directory).then(
+      () => undefined,
+      () => undefined,
+    )
   }
 
   /**
@@ -350,21 +359,31 @@ const named = (name: string) => (agent: any) => agent?.id === name || agent?.nam
  * an agent ask first, as it checks too. */
 const OUTSIDE = "/kuvo-code/an/outside/folder/*"
 
-/** Whether an agent has Kuvo Code's rules: working outside the project asks first, or your rules
- * refuse it. The box's engine plugin gives each agent that, last, once the engine has set it up. */
-function keepsOutside(agent: any): boolean {
-  const effect = ruled(Array.isArray(agent?.permissions) ? agent.permissions : [], "external_directory", [OUTSIDE])
-  return effect === "ask" || effect === "deny"
+/**
+ * Whether the box's engine plugin (link/engine/defaults.ts) has given an agent its rules: its ask
+ * outside the project, and then the engine's long outputs saved whole (`<data>/tool-output`)
+ * open, which it gives every agent it gives the ask. (Your settings' rules come after them, and
+ * agents of yours in Settings › Agents don't get them, as on the engine.)
+ */
+function fromPlugin(agent: any): boolean {
+  const rules: any[] = Array.isArray(agent?.permissions) ? agent.permissions : []
+  const at = rules.findIndex((rule) => rule?.action === "external_directory" && rule.resource === "*" && rule.effect === "ask")
+  return at >= 0 && rules.slice(at + 1).some((rule) => rule?.action === "external_directory" && rule.effect === "allow" && typeof rule.resource === "string" && rule.resource.endsWith("/tool-output/*"))
 }
 
-/** A list of the engine's agents with Kuvo Code's rules in each (not one from before its plugins were set up). */
-const wholeAgents = (value: any) => Array.isArray(value?.data) && value.data.length > 0 && value.data.every(keepsOutside)
-
-/** An agent with Kuvo Code's rules: as listed when it has them, otherwise asking first outside the project. */
-function withKuvoRules(agent: any): any {
-  if (keepsOutside(agent)) return agent
-  const permissions: PermissionRule[] = Array.isArray(agent?.permissions) ? agent.permissions : []
-  return { ...agent, permissions: [...permissions, { action: "external_directory", resource: "*", effect: "ask" }] }
+/**
+ * The engine's agents (its answer for `api/agent`) with Kuvo Code's rules: as listed once the
+ * box's plugin has given them; before (an engine still setting up its plugins, or one without
+ * it), each that would work outside the project without asking asks first.
+ */
+function withKuvoRules(answer: any): any {
+  if (!Array.isArray(answer?.data) || answer.data.some(fromPlugin)) return answer
+  const asking = (agent: any) => {
+    const permissions: PermissionRule[] = Array.isArray(agent?.permissions) ? agent.permissions : []
+    const effect = ruled(permissions, "external_directory", [OUTSIDE])
+    return effect === "ask" || effect === "deny" ? agent : { ...agent, permissions: [...permissions, { action: "external_directory", resource: "*", effect: "ask" }] }
+  }
+  return { ...answer, data: answer.data.map(asking) }
 }
 
 class EngineError extends Error {

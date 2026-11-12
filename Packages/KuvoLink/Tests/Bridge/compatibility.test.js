@@ -33,8 +33,8 @@ const layerFile = (folder = home) => path.join(folder, "config", "opencode", "op
 
 // An engine whose models are `models`, with a Copilot account there or not (`copilot`; `null`: its
 // accounts can't be read, as one just started for a moment), and whose events can be followed.
-async function engineWith(models, { copilot = true } = {}) {
-  const engine = { models, copilot, followers: [], awaiting: [], held: null, modelsAsked: [] };
+async function engineWith(models, { copilot = true, settingUp = false } = {}) {
+  const engine = { models, copilot, settingUp, followers: [], awaiting: [], held: null, modelsAsked: [] };
   // Its answer for its models held back until `release()`, and a wait for the next one asked.
   engine.holdModels = () => {
     let release;
@@ -63,10 +63,14 @@ async function engineWith(models, { copilot = true } = {}) {
       return void engine.held.then(answer);
     }
     // Its providers, which it answers once its plugins are set up.
-    if (request.url === "/api/provider") return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ data: [] }));
+    if (request.url === "/api/provider") {
+      engine.settingUp = false;
+      return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ data: [] }));
+    }
     // Its accounts with Copilot: none, or one signed in to (`null`: it can't say).
     if (request.url === "/api/integration/github-copilot" && engine.copilot !== null) {
-      const connections = engine.copilot ? [{ id: "cred_copilot", label: "GitHub Copilot", method: "device" }] : [];
+      // (Before its plugins are set up, 2.2.7 on, its account isn't said yet.)
+      const connections = engine.copilot && !engine.settingUp ? [{ id: "cred_copilot", label: "GitHub Copilot", method: "device" }] : [];
       return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ data: { id: "github-copilot", name: "GitHub Copilot", connections } }));
     }
     response.writeHead(404).end();
@@ -232,6 +236,16 @@ test("an engine that can't say whether there's a Copilot account leaves what the
   fresh(t);
   learnedBefore(["claude-opus-5.6"]);
   const engine = await engineWith([{ providerID: "github-copilot", id: "claude-opus-5.6", family: "claude-opus" }], { copilot: null });
+  const box = watch(t, engine);
+  await box.first;
+  box.stop();
+  assert.deepEqual(copilotModels(engineReads()), ["claude-opus-5.6"]);
+});
+
+test("an engine that just started, its plugins not set up yet, isn't taken for one without a Copilot account", async t => {
+  fresh(t);
+  learnedBefore(["claude-opus-5.6"]);
+  const engine = await engineWith([{ providerID: "github-copilot", id: "claude-opus-5.6", family: "claude-opus" }], { settingUp: true });
   const box = watch(t, engine);
   await box.first;
   box.stop();

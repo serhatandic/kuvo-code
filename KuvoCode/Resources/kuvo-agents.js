@@ -3124,7 +3124,7 @@ class EngineLink {
     return this.names.get(providerID);
   }
   reads = new Map;
-  async read(path, directory, usable = () => true, fresh = false) {
+  async read(path, directory, usable = () => true, fresh = false, settled) {
     const key = `${path}
 ${directory}`;
     const kept = this.reads.get(key);
@@ -3139,7 +3139,8 @@ ${directory}`;
       if (generation === this.generation)
         this.reads.set(key, entry);
     };
-    const pending = this.request("GET", path, undefined, 4000, directory).then((value) => {
+    const asked = settled ? this.pluginsSetUp(directory).then(async () => settled(await this.request("GET", path, undefined, 4000, directory))) : this.request("GET", path, undefined, 4000, directory);
+    const pending = asked.then((value) => {
       if (usable(value))
         keep({ at: Date.now(), value });
       else
@@ -3171,25 +3172,18 @@ ${directory}`;
     return this.agentList(directory);
   }
   async agentList(directory, name) {
-    const path = "/api/agent";
-    let answer = await this.read(path, directory, wholeAgents);
+    const usable = (value) => Array.isArray(value?.data) && value.data.length > 0;
+    let answer = await this.read("/api/agent", directory, usable, false, withKuvoRules);
     if (answer !== undefined && name && !answer.data.some(named(name)))
-      answer = await this.read(path, directory, wholeAgents, true);
-    if (answer !== undefined)
-      return answer.data;
-    if (!this.url || this.reads.get(`${path}
-${directory}`)?.failed)
+      answer = await this.read("/api/agent", directory, usable, true, withKuvoRules);
+    return answer?.data;
+  }
+  pluginsSetUp(directory) {
+    return this.request("GET", "/api/provider", undefined, 5000, directory).then(() => {
       return;
-    await this.request("GET", "/api/provider", undefined, 1e4, directory).catch(() => {
-      return;
-    });
-    answer = await this.read(path, directory, wholeAgents, true);
-    if (answer !== undefined)
-      return answer.data;
-    const early = await this.request("GET", path, undefined, 4000, directory).catch(() => {
+    }, () => {
       return;
     });
-    return Array.isArray(early?.data) && early.data.length ? early.data.map(withKuvoRules) : undefined;
   }
   async policies(directory) {
     const files = await this.settingsFiles(directory);
@@ -3348,16 +3342,20 @@ ${directory}`)?.failed)
 }
 var named = (name) => (agent) => agent?.id === name || agent?.name === name;
 var OUTSIDE = "/kuvo-code/an/outside/folder/*";
-function keepsOutside(agent) {
-  const effect = ruled(Array.isArray(agent?.permissions) ? agent.permissions : [], "external_directory", [OUTSIDE]);
-  return effect === "ask" || effect === "deny";
+function fromPlugin(agent) {
+  const rules = Array.isArray(agent?.permissions) ? agent.permissions : [];
+  const at = rules.findIndex((rule) => rule?.action === "external_directory" && rule.resource === "*" && rule.effect === "ask");
+  return at >= 0 && rules.slice(at + 1).some((rule) => rule?.action === "external_directory" && rule.effect === "allow" && typeof rule.resource === "string" && rule.resource.endsWith("/tool-output/*"));
 }
-var wholeAgents = (value) => Array.isArray(value?.data) && value.data.length > 0 && value.data.every(keepsOutside);
-function withKuvoRules(agent) {
-  if (keepsOutside(agent))
-    return agent;
-  const permissions = Array.isArray(agent?.permissions) ? agent.permissions : [];
-  return { ...agent, permissions: [...permissions, { action: "external_directory", resource: "*", effect: "ask" }] };
+function withKuvoRules(answer) {
+  if (!Array.isArray(answer?.data) || answer.data.some(fromPlugin))
+    return answer;
+  const asking = (agent) => {
+    const permissions = Array.isArray(agent?.permissions) ? agent.permissions : [];
+    const effect = ruled(permissions, "external_directory", [OUTSIDE]);
+    return effect === "ask" || effect === "deny" ? agent : { ...agent, permissions: [...permissions, { action: "external_directory", resource: "*", effect: "ask" }] };
+  };
+  return { ...answer, data: answer.data.map(asking) };
 }
 
 class EngineError extends Error {
@@ -27477,4 +27475,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents f7ecc616f9bc3d4bf75ec55c269e2b62b976040bdfb40dd8cf2d1b71615f4d90
+// Built from Packages/Box/src/agents e158b8ba08b69d399d42758ac244018328e8525af31f03aaf112e042ea9b9d91
