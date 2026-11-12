@@ -4984,7 +4984,8 @@ function loaded() {
 function engineCommandsInSandbox() {
   return fenceWanted() && fs20.existsSync(ON) && !fs20.existsSync(HELD) && loaded().on;
 }
-var fencePending = () => fenceWanted() && (checked.unfinished === true || checked.passed && fs20.existsSync(HELD));
+var fencePending = () => fenceWanted() && (checked.unfinished === true || fs20.existsSync(HELD));
+var BEING_CHECKED = "The sandbox is being checked again, so nothing can be let out of it yet: commands still run in it. Try again in a minute, or tell the user what you need.";
 var agentsCommandsInSandbox = () => fenceWanted() && fs20.existsSync(ON) && !fs20.existsSync(HELD);
 function bridgeSays() {
   if (!agentsCommandsInSandbox())
@@ -5217,13 +5218,18 @@ function withdraw(ready = "remove") {
   loosening = null;
 }
 function hold2() {
-  if (!textOf(HELD))
-    writePrivate(HELD, crypto9.randomUUID());
+  try {
+    if (!textOf(HELD))
+      writePrivate(HELD, crypto9.randomUUID());
+  } catch {
+    fs20.rmSync(ON, { force: true });
+  }
 }
 var heldMark = () => textOf(HELD) || null;
 var MOST_UNFINISHED = 5;
 var unfinishedInARow = 0;
 var loosening = null;
+var looseningMark = null;
 var keepReady = false;
 var mayLoosen = false;
 function loosen(what, why, ready) {
@@ -5233,13 +5239,15 @@ function loosen(what, why, ready) {
     return fenceState();
   }
   hold2();
-  loosening = what === "withdraw" || loosening === "withdraw" ? "withdraw" : "namespace";
+  const mark = heldMark();
+  loosening = what === "withdraw" || loosening === "withdraw" && looseningMark === mark ? "withdraw" : "namespace";
+  looseningMark = mark;
   keepReady = ready === "keep";
   return fenceState();
 }
 function nothingCountsOnIt(mark) {
   const what = loosening;
-  if (!what || !fenceWanted() || !mark || heldMark() !== mark)
+  if (!what || !fenceWanted() || !mark || heldMark() !== mark || looseningMark !== mark)
     return;
   loosening = null;
   if (what === "withdraw")
@@ -5424,7 +5432,7 @@ function keepFence(every = (round) => {
       if (checked.passed || checked.unfinished)
         writeProfiles();
       const changed = textOf(PLUGIN) !== pluginScript(places, VERSION);
-      const elsewhere = checked.passed ? fs20.existsSync(HELD) : checked.unfinished === true && !fs20.existsSync(HELD);
+      const elsewhere = checked.passed ? fs20.existsSync(HELD) : (checked.unfinished === true || loosening !== null) && !fs20.existsSync(HELD);
       if (checked.passed ? changed || elsewhere : round % 6 === 0 || elsewhere)
         setUpFence(namespaceKnown ? namespace : undefined);
       else if (checked.unfinished && changed)
@@ -17653,8 +17661,8 @@ async function reapplyApprovals(engine, bridge, settings = false) {
   for (const [target, agents] of [[engine, false], [bridge, true]]) {
     if (!target)
       continue;
-    let query = "limit=200&order=desc&parentID=null";
-    for (let pages = 0;pages < 15 && query; pages++) {
+    let query = "limit=200&order=desc";
+    while (query) {
       const page = await engineGet(target, `api/session?${query}`).catch(() => null);
       if (!page)
         return false;
@@ -17665,8 +17673,9 @@ async function reapplyApprovals(engine, bridge, settings = false) {
         const kept = data.metadata?.kuvo?.approval;
         const bot = found2(target, data, agents).bot;
         const now = approvalOf(data, { agents, bot }, since, byDefault);
-        markConversation(data.id, now.effective === "fullAccess");
-        if (now.effective !== "auto")
+        if (!data.parentID)
+          markConversation(data.id, now.effective === "fullAccess");
+        if (!data.parentID && now.effective !== "auto")
           try {
             clearPlaces(data.id);
           } catch {}
@@ -17684,7 +17693,7 @@ async function reapplyApprovals(engine, bridge, settings = false) {
           done = false;
       }
       const next = page.cursor?.next;
-      query = listed.length === 200 && next ? `limit=200&parentID=null&cursor=${encodeURIComponent(next)}` : null;
+      query = listed.length === 200 && next ? `limit=200&cursor=${encodeURIComponent(next)}` : null;
     }
   }
   return done;
@@ -17746,7 +17755,7 @@ function keepApprovals(engine = ownEngine2, bridge = bridgeTarget, every = (roun
       const settings = JSON.stringify(permissionsHere());
       if ((now !== last || settings !== settingsMade) && await reapplyApprovals(here, agents, settings !== settingsMade))
         [last, settingsMade] = [now, settings];
-      if (off && last === now && here && (agents || !fs66.existsSync(BRIDGE_FILE)))
+      if (off && last === now && here)
         nothingCountsOnIt(mark);
       await adoptPending(here, agents);
       await adoptBots(here, agents, adopted);
@@ -32125,6 +32134,10 @@ async function askToRun(caller, args, signal) {
       how = "always";
     } catch {}
   }
+  if (verdict?.decision === "allow" && !fenceState().on) {
+    forgetFetched(fetched);
+    return { text: BEING_CHECKED, isError: false };
+  }
   const left = Math.floor((CALL_BUDGET - (Date.now() - started)) / 1000);
   const seconds = Math.max(1, Math.min(600, left, Number(args.timeout) || 300));
   const { shown, code, timedOut } = await runOutside(fetched?.command ?? command, project, seconds, signal).finally(() => forgetFetched(fetched));
@@ -32180,6 +32193,10 @@ async function stoppedInAuto(caller, input, printed, calling, signal) {
     return null;
   if (verdict.decision === "refuse")
     return { text: refusalWords(verdict) };
+  if (!fenceState().on) {
+    forgetFetched(verdict.fetched);
+    return { text: BEING_CHECKED };
+  }
   const asked = Number(input.timeout);
   const left = Math.floor((CALL_BUDGET - (Date.now() - started)) / 1000);
   const seconds = Math.max(1, Math.min(600, left, asked > 0 ? Math.ceil(asked / 1000) : asked === 0 ? 600 : 300));
@@ -38211,7 +38228,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "87a59cbe97b7";
+var BRIDGE_VERSION = "f5de0b33571e";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -41529,7 +41546,6 @@ async function* autopilotRoute(context) {
 var NOT_OPEN2 = "This computer's box isn't running its own process: try again in a moment.";
 var NOT_CALLING2 = "Only a conversation's own tool call can ask, and this one isn't running in it.";
 var NOT_ON = "Commands aren't in the sandbox on this computer now, so there's nothing to ask: run the command with your shell tool.";
-var PENDING = "The sandbox is being checked again (its last check didn't finish in time), so nothing can be let out of it yet: commands still run in it. Try again in a minute, or tell the user what you need.";
 var shown4 = () => {
   const { on, able, agents, ...not } = fenceState();
   try {
@@ -41556,7 +41572,9 @@ async function* sandboxRoute(context) {
   if (route === "kuvo/sandbox/check") {
     if (method !== "POST")
       return yield* json(405, {});
-    setUpFence();
+    try {
+      setUpFence();
+    } catch {}
     return yield* json(200, shown4());
   }
   if (route === "kuvo/sandbox") {
@@ -41622,7 +41640,7 @@ async function* sandboxRoute(context) {
     if (method !== "POST")
       return yield* json(405, {});
     if (!on)
-      return yield* json(200, { text: fencePending() ? PENDING : NOT_ON, isError: true });
+      return yield* json(200, { text: fencePending() ? BEING_CHECKED : NOT_ON, isError: true });
     const args = isObject(given.arguments) ? given.arguments : {};
     const session = typeof given.session === "string" ? given.session : undefined;
     if (typeof given.name !== "string" || !await isCalling(session, [given.name], args, readEngine, readBridge)) {

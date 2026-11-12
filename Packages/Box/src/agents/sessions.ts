@@ -19,6 +19,7 @@ import { parseProvider } from "./accounts"
 import { citedIn, plainCitations } from "./agents/codex-citations"
 import { Auto, autoProvider, foldEntries, resetTime, type AutoEntry, type AutoList } from "./auto"
 import { emit } from "./events"
+import { fenceOff } from "./fence"
 import { handover, withHandover } from "./handover"
 import { onMachine, ownEnvironment } from "./machine"
 import { messageID, newID } from "./ids"
@@ -802,6 +803,11 @@ function partsOf(ask: PermissionAsk): string[] {
 function isShell(action: string): boolean {
   return action === "shell" || action === "bash"
 }
+
+/** A conversation whose rules the box made for Auto, which counts on the sandbox, while the sandbox
+ * isn't on here (`fenceOff`: taken away after a failed check, before the box makes its rules again):
+ * its commands ask. */
+const autoWithoutSandbox = (session: Session) => (session.metadata?.kuvo as Record<string, unknown> | undefined)?.applied === "auto" && fenceOff()
 
 /** What Always saves for an ask whose agent doesn't say (Claude Code's, Codex's), as the engine's
  * does: every edit, for an edit; for a command, each command in its line by its kind ("git push *",
@@ -2696,6 +2702,7 @@ export class Sessions {
       // don't hold it back.
       approvesAll: (canAsk = true) => {
         if (plan) return false
+        if (autoWithoutSandbox(record.session)) return false
         if ((record.session.permissions ?? []).some((rule) => rule.effect !== "allow")) return false
         const isDefault = (rule: PermissionRule) => engineDefaults.some((other) => other.action === rule.action && other.resource === rule.resource && other.effect === rule.effect)
         if ((live.agentRules ?? []).some((rule) => rule.effect !== "allow" && agentActions.has(rule.action) && !isDefault(rule))) return false
@@ -2927,7 +2934,9 @@ export class Sessions {
     // What the agent asked about, not known by its kind and no rule of yours about it, under Ask
     // First: you answer it, unless you allowed it in this session before.
     const unclassified = ask.unclassified && matched === undefined && asksFirst(session.permissions) && !this.allowedBefore(live, ask)
-    if (!unknown && !unclassified && !hidesFromBlocks(live.blocks, ask) && (effect === "allow" || this.allowedBefore(live, ask))) return "once"
+    // (A command in Auto without the sandbox: you answer it.)
+    const unfenced = isShell(ask.action) && autoWithoutSandbox(session)
+    if (!unknown && !unclassified && !unfenced && !hidesFromBlocks(live.blocks, ask) && (effect === "allow" || this.allowedBefore(live, ask))) return "once"
     if (turn.isEnded || refusesAsks(live.doing)) return "reject"
     const request: PermissionRequest = {
       id: newID("per"),

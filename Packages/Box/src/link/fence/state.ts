@@ -171,7 +171,10 @@ export function engineCommandsInSandbox(): boolean {
 
 /** Whether its check didn't finish in time (here, or in another of the box's processes), so
  * commands go through it but nothing counts on it. */
-export const fencePending = (): boolean => fenceWanted() && (checked.unfinished === true || (checked.passed && fs.existsSync(HELD)));
+export const fencePending = (): boolean => fenceWanted() && (checked.unfinished === true || fs.existsSync(HELD));
+
+/** What a command that would leave the sandbox is told while it's held (`fencePending`). */
+export const BEING_CHECKED = "The sandbox is being checked again, so nothing can be let out of it yet: commands still run in it. Try again in a minute, or tell the user what you need.";
 
 /** Whether the coding agents' own programs (Claude Code, Codex, Cursor, Grok, Antigravity, whose
  * commands don't go through the engine) run in it: each runs whole in it, as the bridge starts
@@ -441,10 +444,17 @@ function withdraw(ready: "keep" | "remove" = "remove"): void {
   loosening = null;
 }
 
-/** Holds it: nothing counts on it from now, a new hold each time (`heldMark`). */
+/** Holds it: nothing counts on it from now, a new hold each time (`heldMark`). Where that can't be
+ * written (a full disk, no files left to open), `on` goes instead, which nothing counts on it
+ * without either (the coding agents' bridge asks in Auto then, kuvo-wake waits on `ready`), and it's
+ * held again on the next try. */
 function hold(): void {
   // (One a box before left empty is given one too.)
-  if (!textOf(HELD)) writePrivate(HELD, crypto.randomUUID());
+  try {
+    if (!textOf(HELD)) writePrivate(HELD, crypto.randomUUID());
+  } catch {
+    fs.rmSync(ON, { force: true });
+  }
 }
 
 /** Which hold is on now, if any: the approvals' round lets go of one only if it was on throughout
@@ -459,6 +469,9 @@ let unfinishedInARow = 0;
 /** What waits for nothing to count on the sandbox before it's done (`nothingCountsOnIt`): taking
  * it away, or on Linux dropping the namespace of each command's own that's in effect. */
 let loosening: "withdraw" | "namespace" | null = null;
+// The hold it waits on (`heldMark`): never another's, as one made since by another of the box's
+// processes, or after a check passed there.
+let looseningMark: string | null = null;
 // Whether taking it away keeps `ready` (after a failed check: `withdraw`).
 let keepReady = false;
 // Set while that's being done: the namespace may go.
@@ -477,7 +490,9 @@ function loosen(what: "withdraw" | "namespace", why: Checked, ready: "keep" | "r
     return fenceState();
   }
   hold();
-  loosening = what === "withdraw" || loosening === "withdraw" ? "withdraw" : "namespace";
+  const mark = heldMark();
+  loosening = what === "withdraw" || (loosening === "withdraw" && looseningMark === mark) ? "withdraw" : "namespace";
+  looseningMark = mark;
   keepReady = ready === "keep";
   return fenceState();
 }
@@ -487,7 +502,7 @@ function loosen(what: "withdraw" | "namespace", why: Checked, ready: "keep" | "r
  * now. */
 export function nothingCountsOnIt(mark: string | null): void {
   const what = loosening;
-  if (!what || !fenceWanted() || !mark || heldMark() !== mark) return;
+  if (!what || !fenceWanted() || !mark || heldMark() !== mark || looseningMark !== mark) return;
   loosening = null;
   if (what === "withdraw") return withdraw(keepReady ? "keep" : "remove");
   // (Without its namespace, as the last try found: checked again, and held while it is.)
@@ -709,7 +724,7 @@ export function keepFence(every: (round: () => Promise<void>) => void = round =>
       const changed = textOf(PLUGIN) !== pluginScript(places, VERSION);
       // Checked again too where another of the box's processes (`box route`) found its check
       // didn't finish, or since passed it (or found it failed, and took it away).
-      const elsewhere = checked.passed ? fs.existsSync(HELD) : checked.unfinished === true && !fs.existsSync(HELD);
+      const elsewhere = checked.passed ? fs.existsSync(HELD) : (checked.unfinished === true || loosening !== null) && !fs.existsSync(HELD);
       if (checked.passed ? changed || elsewhere : round % 6 === 0 || elsewhere) setUpFence(namespaceKnown ? namespace : undefined);
       // While it hasn't finished, its plugin put back at once, as while it's on.
       else if (checked.unfinished && changed) givePlugin();

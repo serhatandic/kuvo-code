@@ -424,6 +424,42 @@ describe("permissions", () => {
     expect(seen).toEqual([false, "reject", "once"])
   })
 
+  // The box takes its sandbox away after a failed check only once it has made every conversation's
+  // rules for it being off; a bridge not running then, or started again before its round, still
+  // has a conversation in Auto ask before its commands while the sandbox isn't on.
+  test("a conversation in Auto asks before its commands while the box's sandbox is off, and goes on its own once it's on again", async () => {
+    const fence = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-fence-off-")))
+    const was = process.env.KUVO_FENCE
+    process.env.KUVO_FENCE = fence
+    try {
+      const seen: (boolean | string)[] = []
+      a.script = async (_input, _turn, hooks) => {
+        seen.push(hooks.approvesAll())
+        seen.push(await hooks.permission({ action: "shell", resources: ["ls"] }))
+        seen.push(await hooks.permission({ action: "edit", resources: ["notes.md"] }))
+        return { outcome: "succeeded" }
+      }
+      const id = create()
+      sessions.update(id, { metadata: { kuvo: { approval: "auto", applied: "auto" } } })
+      send(id, "go")
+      await until(() => sessions.permissions(id).length === 1)
+      expect(sessions.permissions(id)[0].action).toBe("shell")
+      sessions.replyPermission(id, sessions.permissions(id)[0].id, "once")
+      await settled(id, 1)
+      expect(seen).toEqual([false, "once", "once"])
+      // On again: it goes on its own.
+      writeFileSync(join(fence, "on"), "on")
+      seen.length = 0
+      send(id, "again")
+      await settled(id, 2)
+      expect(seen).toEqual([true, "once", "once"])
+    } finally {
+      if (was === undefined) delete process.env.KUVO_FENCE
+      else process.env.KUVO_FENCE = was
+      rmSync(fence, { recursive: true, force: true })
+    }
+  })
+
   test("Approve All with a rule of a kind a newer engine set (one this app doesn't know) holds back what it matches, as Don't Allow does", async () => {
     const seen: (boolean | string)[] = []
     a.script = async (_input, _turn, hooks) => {

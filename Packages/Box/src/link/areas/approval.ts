@@ -8,7 +8,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isObject, parsed } from "../../shared/json";
-import { BOX, BRIDGE_FILE } from "../home";
+import { BOX } from "../home";
 import { bridgeTarget, engineGet, readEngineFile } from "../engine/client";
 import { rewriteOn } from "../engine/notes";
 import { allowFullAccess, allowOtherComputers, APPROVALS, approvalOf, approvalRules, approvalsSince, defaultApproval, effectiveApproval, fullAccessAllowed, heldOf, isApproval, madeBefore, otherComputersAllowed, rememberApproval, unavailable } from "../work/approval";
@@ -227,8 +227,11 @@ export async function reapplyApprovals(engine: Target | null, bridge: Target | n
   const byDefault = defaultApproval();
   for (const [target, agents] of [[engine, false], [bridge, true]] as const) {
     if (!target) continue;
-    let query: string | null = "limit=200&order=desc&parentID=null";
-    for (let pages = 0; pages < 15 && query; pages++) {
+    // Every one, to the end of the list, subagents' too (whose rules the engine may have copied
+    // from their conversation's): once the sandbox is held, it's taken away only once all are made
+    // for it being off.
+    let query: string | null = "limit=200&order=desc";
+    while (query) {
       const page = await engineGet(target, `api/session?${query}`).catch(() => null) as { data?: unknown; cursor?: { next?: string } | null } | null;
       if (!page) return false;
       const listed = Array.isArray(page.data) ? page.data as EngineSession[] : [];
@@ -237,10 +240,11 @@ export async function reapplyApprovals(engine: Target | null, bridge: Target | n
         const kept = data.metadata?.kuvo?.approval;
         const bot = found(target, data, agents).bot;
         const now = approvalOf(data, { agents, bot }, since, byDefault);
-        // (Full Access's list for the sandbox's launcher, as each is now: one from before too.)
-        markConversation(data.id, now.effective === "fullAccess");
+        // (Full Access's list for the sandbox's launcher, as each is now: one from before too. A
+        // subagent's goes as its conversation's, as the box marks it as it works.)
+        if (!data.parentID) markConversation(data.id, now.effective === "fullAccess");
         // Out of Auto (the sandbox stopped, its rules changed by a client): the folders it allowed go.
-        if (now.effective !== "auto") try { clearPlaces(data.id); } catch {}
+        if (!data.parentID && now.effective !== "auto") try { clearPlaces(data.id); } catch {}
         // (Settings › Permissions changed: any kept with an approval, whose rules don't follow them yet.)
         const remade = settings && now.stored && changeFor(found(target, data, agents), now.approval) !== null;
         // (Ask First and Accept Edits come to themselves anywhere; a bot's from before, to its own.)
@@ -252,7 +256,7 @@ export async function reapplyApprovals(engine: Target | null, bridge: Target | n
         if (!await (remade ? remake(found(target, fresh, agents)) : settle(found(target, fresh, agents)))) done = false;
       }
       const next = page.cursor?.next;
-      query = listed.length === 200 && next ? `limit=200&parentID=null&cursor=${encodeURIComponent(next)}` : null;
+      query = listed.length === 200 && next ? `limit=200&cursor=${encodeURIComponent(next)}` : null;
     }
   }
   return done;
@@ -327,11 +331,12 @@ export function keepApprovals(engine: () => Target | null = ownEngine, bridge: (
       // yet as the box runs: they reach every conversation within a round.)
       const settings = JSON.stringify(permissionsHere());
       if ((now !== last || settings !== settingsMade) && await reapplyApprovals(here, agents, settings !== settingsMade)) [last, settingsMade] = [now, settings];
-      // Every conversation's rules made for the sandbox being off (Auto asks first), the engine's and
-      // the coding agents' bridge's (where there's one here) both answering: what the sandbox held
-      // for that, taking itself away after a failed check, goes ahead (fence/state.ts). Until then
-      // it stays held, which is safe: commands still go through it.
-      if (off && last === now && here && (agents || !fs.existsSync(BRIDGE_FILE))) nothingCountsOnIt(mark);
+      // Every conversation's rules made for the sandbox being off (Auto asks first), with the engine
+      // answering: what the sandbox held for that, taking itself away after a failed check, goes
+      // ahead (fence/state.ts). Until then it stays held, which is safe: commands still go through
+      // it. (The coding agents' bridge needn't answer: one not running, or started again, has a
+      // conversation in Auto ask before its commands while the sandbox is off, agents/sessions.ts.)
+      if (off && last === now && here) nothingCountsOnIt(mark);
       await adoptPending(here, agents);
       await adoptBots(here, agents, adopted);
     } catch {} finally {
