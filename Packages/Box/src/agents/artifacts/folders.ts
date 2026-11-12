@@ -41,7 +41,10 @@ export function watchTree(folder: string, changed: (path: string) => void, faile
     const watcher = watchFolder(folder, (_, name) => {
       if (name) changed(join(folder, name))
     }, { recursive: true, missed })
-    watcher.on("error", (error: any) => failed(String(error?.message ?? error)))
+    watcher.on("error", (error: any) => {
+      watcher.close()
+      failed(String(error?.message ?? error))
+    })
     return { close: () => watcher.close() }
   }
   const watchers = new Map<string, FSWatcher>()

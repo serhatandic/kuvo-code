@@ -1,5 +1,8 @@
 import "../safety"
-import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
+import fs from "node:fs"
+import { EventEmitter } from "node:events"
+import { watchTree } from "../../src/agents/artifacts/folders"
 import { spawnSync } from "node:child_process"
 import { chmodSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -204,6 +207,101 @@ describe("a bot's memory", () => {
     await store.change(memory, { by: { kind: "outside" }, via: "outside", where: { bot: "bot_ada" } })
     const { value } = await route("GET", `kuvo/artifacts/${ArtifactStore.idOf(memory)}`)
     expect(value.versions.at(-1)).toMatchObject({ n: 2, by: { kind: "outside" }, lines: { added: 1, removed: 0 } })
+  })
+})
+
+describe("queued artifact reads", () => {
+  const made = { by: { kind: "outside" as const }, via: "outside" }
+
+  test("a captured change cannot hide a newer write while waiting for git", async () => {
+    const file = join(project, "queued.md")
+    writeFileSync(file, "v1")
+    const first = store.change(file, made)
+    expect(store.asSeen(file)).toBe(true)
+    writeFileSync(file, "v2")
+    expect(store.asSeen(file)).toBe(false)
+    await store.changeAll([file], made)
+    await first
+    expect(store.at(file)!.versions.at(-1)!.hash).toBe("sha256:" + new Bun.CryptoHasher("sha256").update("v2").digest("hex"))
+    expect(store.asSeen(file)).toBe(true)
+  })
+
+  test("only the last queued read can say what the file will be recorded as", async () => {
+    const file = join(project, "overlap.md")
+    writeFileSync(file, "v1")
+    const all = store.changeAll([file], made)
+    const captured = store.change(file, made)
+    writeFileSync(file, "v2")
+    expect(store.asSeen(file)).toBe(false)
+    await store.changeAll([file], made)
+    await Promise.all([all, captured])
+    expect(store.asSeen(file)).toBe(true)
+  })
+
+  test("a queued pin cannot hide a newer write", async () => {
+    const file = join(project, "pinned.md")
+    writeFileSync(file, "v0")
+    await store.change(file, made)
+    writeFileSync(file, "v1")
+    const captured = store.change(file, made)
+    const pinned = store.pin(store.at(file)!.id, { by: "you" })
+    writeFileSync(file, "v2")
+    expect(store.asSeen(file)).toBe(false)
+    await store.changeAll([file], made)
+    await Promise.all([captured, pinned])
+    expect(store.asSeen(file)).toBe(true)
+  })
+
+  test("a before that will be skipped cannot hide a newer write", async () => {
+    const file = join(project, "skipped-before.md")
+    writeFileSync(file, "v1")
+    const captured = store.change(file, made)
+    const before = store.before(file, Buffer.from("v2"))
+    writeFileSync(file, "v2")
+    expect(store.asSeen(file)).toBe(false)
+    await store.changeAll([file], made)
+    await Promise.all([captured, before])
+    expect(store.asSeen(file)).toBe(true)
+  })
+
+  test("a queued before cannot hide the current file", async () => {
+    const file = join(project, "before.md")
+    writeFileSync(file, "after")
+    const before = store.before(file, Buffer.from("before"))
+    expect(store.asSeen(file)).toBe(false)
+    await store.changeAll([file], made)
+    await before
+    expect(store.at(file)!.versions.at(-1)!.size).toBe(5)
+  })
+
+  test("a changed size or mtime needs no content read before changeAll", async () => {
+    const file = join(project, "stat.md")
+    writeFileSync(file, "one")
+    await store.change(file, made)
+    const read = spyOn(store as any, "look")
+    try {
+      writeFileSync(file, "longer")
+      expect(store.asSeen(file)).toBe(false)
+      expect(read).not.toHaveBeenCalled()
+      await store.changeAll([file], made)
+      read.mockClear()
+      writeFileSync(file, "others")
+      utimesSync(file, new Date(), new Date(Date.now() + 2000))
+      expect(store.asSeen(file)).toBe(false)
+      expect(read).not.toHaveBeenCalled()
+    } finally { read.mockRestore() }
+  })
+
+  test("a failed recursive watch closes and unregisters its looks", () => {
+    const watcher = Object.assign(new EventEmitter(), { close() {} })
+    const close = spyOn(watcher, "close")
+    const watch = spyOn(fs, "watch").mockReturnValue(watcher as any)
+    try {
+      const tree = watchTree(project, () => {}, () => {}, { linux: false })
+      watcher.emit("error", new Error("watch failed"))
+      expect(close).toHaveBeenCalledTimes(1)
+      tree.close()
+    } finally { watch.mockRestore(); close.mockRestore() }
   })
 })
 

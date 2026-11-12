@@ -236,21 +236,36 @@ export class ArtifactStore {
   /** Whether `path` is as the record last saw it: its newest version, or gone (or never there) as it
    * says; or about to be, a change of it waiting its turn. */
   asSeen(path: string): boolean {
-    if (this.waiting.has(path)) return true
+    const waiting = this.waiting.get(path)
+    if (waiting?.length && waiting.at(-1) === undefined) return true
+    const expected = waiting ? waiting.at(-1) : this.at(path)?.versions.at(-1)?.hash
+    const observed = this.observed.get(path)
+    if (observed && observed.hash === expected) {
+      try {
+        const stat = statSync(path)
+        if (!stat.isFile() || stat.size !== observed.size || stat.mtimeMs !== observed.mtime) return false
+      } catch {}
+    }
     const artifact = this.at(path)
+    try {
+      const stat = statSync(path)
+      if (stat.isFile() && (!expected || (!waiting && artifact?.versions.at(-1)?.size !== stat.size))) return false
+    } catch {}
     const read = this.read(path)
     if (read === null) return true
     if (!read) return !artifact || artifact.gone !== null
-    return !!artifact && !artifact.gone && artifact.versions.at(-1)?.hash === read.hash
+    return waiting ? waiting.at(-1) === read.hash : !!artifact && !artifact.gone && artifact.versions.at(-1)?.hash === read.hash
   }
 
   /** What's being recorded: one at a time, in the order asked, each once git has said what it ignores. */
   private queue: Promise<unknown> = Promise.resolve()
-  /** Paths with something waiting its turn there, and how much. */
-  private waiting = new Map<string, number>()
+  /** Captured hashes waiting their turn; undefined means it will read when its turn comes. */
+  private waiting = new Map<string, (string | null | undefined)[]>()
+  private observed = new Map<string, { hash: string; size: number; mtime: number }>()
 
-  private inTurn<T>(paths: string[], work: () => T): Promise<T | undefined> {
-    for (const path of paths) this.waiting.set(path, (this.waiting.get(path) ?? 0) + 1)
+  private inTurn<T>(paths: string[], work: () => T, hash?: string | null, records = true): Promise<T | undefined> {
+    const recording = records ? paths : []
+    for (const path of recording) this.waiting.set(path, [...(this.waiting.get(path) ?? []), hash])
     const next = this.queue.then(async () => {
       await this.policy.learn(paths)
       return work()
@@ -258,10 +273,10 @@ export class ArtifactStore {
       console.error("artifacts:", error?.message ?? error)
       return undefined
     }).finally(() => {
-      for (const path of paths) {
-        const left = (this.waiting.get(path) ?? 1) - 1
-        if (left > 0) this.waiting.set(path, left)
-        else this.waiting.delete(path)
+      for (const path of recording) {
+        const left = this.waiting.get(path)!
+        left.shift()
+        if (!left.length) this.waiting.delete(path)
       }
     })
     this.queue = next
@@ -277,7 +292,7 @@ export class ArtifactStore {
   change(path: string, made: Made): Promise<Artifact | undefined> {
     // As it is now, not once git has answered (another change may come meanwhile).
     const seen = this.look(path)
-    return this.inTurn([path], () => this.changeNow(path, made, seen))
+    return this.inTurn([path], () => this.changeNow(path, made, seen), this.read(path, seen)?.hash ?? null)
   }
 
   /** Each of `paths` as it is now, recorded as `made` it, git asked about them all at once. */
@@ -296,13 +311,13 @@ export class ArtifactStore {
 
   /** What a file was before the record first saw it change (`beforeNow`). */
   before(path: string, bytes: Buffer, where: { bot?: string } = {}, at = this.now()): Promise<void> {
-    return this.inTurn([path], () => this.beforeNow(path, bytes, where, at))
+    return this.inTurn([path], () => this.beforeNow(path, bytes, where, at), "sha256:" + createHash("sha256").update(bytes).digest("hex"), !this.at(path) && !this.waiting.has(path))
   }
 
   /** Pinned (marked final) or not (`pinNow`). */
   pin(id: string, pinned: { by: "bot" | "you"; note?: string } | null): Promise<Artifact | undefined> {
     const path = this.artifacts.get(id)?.path
-    return this.inTurn(path ? [path] : [], () => this.pinNow(id, pinned))
+    return this.inTurn(path ? [path] : [], () => this.pinNow(id, pinned), undefined, false)
   }
 
   /** Version `n` put back on disk (`restoreNow`): the artifact, or why not. */
@@ -717,6 +732,12 @@ export class ArtifactStore {
    */
   private read(path: string, seen = this.look(path)): { hash: string; size: number; bytes?: Buffer; private?: NoCopy } | undefined | null {
     if (!seen) return seen
+    const read = this.hash(path, seen)
+    this.observed.set(path, { hash: read.hash, size: seen.size, mtime: seen.mtime })
+    return read
+  }
+
+  private hash(path: string, seen: { size: number; mtime: number; bytes?: Buffer }): { hash: string; size: number; bytes?: Buffer; private?: NoCopy } {
     const privacy = this.policy.privacy(path)
     if (!seen.bytes) return { hash: `stat:${seen.size}:${seen.mtime}`, size: seen.size, ...(privacy ? { private: privacy } : {}) }
     // What's private: keyed, so the record says when it changed and nothing of what it holds.

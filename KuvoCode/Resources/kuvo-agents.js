@@ -1431,21 +1431,38 @@ class ArtifactStore {
     return this.artifacts.get(ArtifactStore.idOf(path));
   }
   asSeen(path) {
-    if (this.waiting.has(path))
+    const waiting = this.waiting.get(path);
+    if (waiting?.length && waiting.at(-1) === undefined)
       return true;
+    const expected = waiting ? waiting.at(-1) : this.at(path)?.versions.at(-1)?.hash;
+    const observed = this.observed.get(path);
+    if (observed && observed.hash === expected) {
+      try {
+        const stat = statSync3(path);
+        if (!stat.isFile() || stat.size !== observed.size || stat.mtimeMs !== observed.mtime)
+          return false;
+      } catch {}
+    }
     const artifact = this.at(path);
+    try {
+      const stat = statSync3(path);
+      if (stat.isFile() && (!expected || !waiting && artifact?.versions.at(-1)?.size !== stat.size))
+        return false;
+    } catch {}
     const read = this.read(path);
     if (read === null)
       return true;
     if (!read)
       return !artifact || artifact.gone !== null;
-    return !!artifact && !artifact.gone && artifact.versions.at(-1)?.hash === read.hash;
+    return waiting ? waiting.at(-1) === read.hash : !!artifact && !artifact.gone && artifact.versions.at(-1)?.hash === read.hash;
   }
   queue = Promise.resolve();
   waiting = new Map;
-  inTurn(paths, work) {
-    for (const path of paths)
-      this.waiting.set(path, (this.waiting.get(path) ?? 0) + 1);
+  observed = new Map;
+  inTurn(paths, work, hash, records = true) {
+    const recording = records ? paths : [];
+    for (const path of recording)
+      this.waiting.set(path, [...this.waiting.get(path) ?? [], hash]);
     const next = this.queue.then(async () => {
       await this.policy.learn(paths);
       return work();
@@ -1453,11 +1470,10 @@ class ArtifactStore {
       console.error("artifacts:", error?.message ?? error);
       return;
     }).finally(() => {
-      for (const path of paths) {
-        const left = (this.waiting.get(path) ?? 1) - 1;
-        if (left > 0)
-          this.waiting.set(path, left);
-        else
+      for (const path of recording) {
+        const left = this.waiting.get(path);
+        left.shift();
+        if (!left.length)
           this.waiting.delete(path);
       }
     });
@@ -1469,7 +1485,7 @@ class ArtifactStore {
   }
   change(path, made) {
     const seen = this.look(path);
-    return this.inTurn([path], () => this.changeNow(path, made, seen));
+    return this.inTurn([path], () => this.changeNow(path, made, seen), this.read(path, seen)?.hash ?? null);
   }
   changeAll(paths, made) {
     return this.inTurn(paths, () => {
@@ -1483,11 +1499,11 @@ class ArtifactStore {
     });
   }
   before(path, bytes, where = {}, at = this.now()) {
-    return this.inTurn([path], () => this.beforeNow(path, bytes, where, at));
+    return this.inTurn([path], () => this.beforeNow(path, bytes, where, at), "sha256:" + createHash("sha256").update(bytes).digest("hex"), !this.at(path) && !this.waiting.has(path));
   }
   pin(id, pinned) {
     const path = this.artifacts.get(id)?.path;
-    return this.inTurn(path ? [path] : [], () => this.pinNow(id, pinned));
+    return this.inTurn(path ? [path] : [], () => this.pinNow(id, pinned), undefined, false);
   }
   async restore(id, n, at = this.now()) {
     const path = this.artifacts.get(id)?.path;
@@ -1866,6 +1882,11 @@ class ArtifactStore {
   read(path, seen = this.look(path)) {
     if (!seen)
       return seen;
+    const read = this.hash(path, seen);
+    this.observed.set(path, { hash: read.hash, size: seen.size, mtime: seen.mtime });
+    return read;
+  }
+  hash(path, seen) {
     const privacy = this.policy.privacy(path);
     if (!seen.bytes)
       return { hash: `stat:${seen.size}:${seen.mtime}`, size: seen.size, ...privacy ? { private: privacy } : {} };
@@ -2082,7 +2103,10 @@ function watchTree(folder, changed, failed, { limit = 4000, linux = process.plat
       if (name)
         changed(join7(folder, name));
     }, { recursive: true, missed });
-    watcher.on("error", (error) => failed(String(error?.message ?? error)));
+    watcher.on("error", (error) => {
+      watcher.close();
+      failed(String(error?.message ?? error));
+    });
     return { close: () => watcher.close() };
   }
   const watchers = new Map;
@@ -28207,4 +28231,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 619e79972309c00145ecdb2ce5a320041c58aacada41facb021f8c96b524ba23
+// Built from Packages/Box/src/agents 91a221330388b524ea4bfb288ff7f44ca30cfb545df4202d4b506e3dc8840a5e

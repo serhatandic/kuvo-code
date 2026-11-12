@@ -141,7 +141,7 @@ function sourceFor(caller: () => Promise<Caller | null>) {
  * offers none, and a key added later is there at once), in the process that holds the vault.
  * Returns what stops them.
  */
-export function keepSshAgents(): () => void {
+export function keepSshAgents(watch = watchFolder): () => void {
   const agents = new Map<string, { folder: string; server: net.Server; used: number }>();
   const close = (note: string) => {
     const agent = agents.get(note);
@@ -201,7 +201,7 @@ export function keepSshAgents(): () => void {
     }
   } catch {}
   let watcher: fs.FSWatcher | null = null;
-  try { watcher = watchFolder(SSH_FOR, () => look()); watcher.unref?.(); } catch {}
+  try { watcher = watch(SSH_FOR, () => look()); watcher.unref?.(); } catch {}
   look();
   // On a busy Mac the watch tells late or not at all, and the launcher waits for the agent only a
   // moment before the command runs without it (git over SSH then finds no key): the notes' folder

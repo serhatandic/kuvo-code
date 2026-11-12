@@ -38001,7 +38001,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "8d31916dede6";
+var BRIDGE_VERSION = "a97e77b67929";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -39145,7 +39145,7 @@ function sourceFor(caller) {
     }
   };
 }
-function keepSshAgents() {
+function keepSshAgents(watch = watchFolder) {
   const agents = new Map;
   const close = (note) => {
     const agent = agents.get(note);
@@ -39224,7 +39224,7 @@ function keepSshAgents() {
   } catch {}
   let watcher = null;
   try {
-    watcher = watchFolder(SSH_FOR, () => look());
+    watcher = watch(SSH_FOR, () => look());
     watcher.unref?.();
   } catch {}
   look();
