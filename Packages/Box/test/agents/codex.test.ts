@@ -262,7 +262,7 @@ process.stdin.on("data", (chunk) => {
     } else if (message.method === "thread/backgroundTerminals/clean") {
       terminals = []
       send({ id: message.id, result: {} })
-    } else if (message.method === "model/list") send({ id: message.id, result: { data: [{ id: "gpt-test", model: "gpt-test", displayName: "GPT Test", isDefault: true }] } })
+    } else if (message.method === "model/list") send({ id: message.id, result: { data: [{ id: "gpt-test", model: "gpt-test", displayName: "GPT Test", isDefault: true }, { id: "gpt-mini", model: "gpt-mini", displayName: "GPT Mini", hidden: true }] } })
     else if (message.id !== undefined) send({ id: message.id, result: {} })
   }
 })
@@ -1952,6 +1952,13 @@ describe("Codex's context", () => {
     expect(last.tokens).toMatchObject({ input: 4_000, output: 600, reasoning: 300, cache: { read: 48_000 } })
     const models = await codex!.models()
     expect(models.find((model) => model.id === "gpt-test")?.limit.context).toBe(258_400)
+  })
+
+  test("a model Codex keeps out of its picker isn't offered, and is still listed, marked, for what asks whether one runs", async () => {
+    codex = new TestCodex(fakeCodex(root, []), root)
+    expect((await codex!.models()).map((model) => model.id)).toEqual(["gpt-test"])
+    const all = await codex!.models({ hidden: true })
+    expect(all.map((model) => [model.id, model.hidden ?? false])).toEqual([["gpt-test", false], ["gpt-mini", true]])
   })
 
   test("what a turn used: each of its model calls counted once, those that only ran commands too", async () => {

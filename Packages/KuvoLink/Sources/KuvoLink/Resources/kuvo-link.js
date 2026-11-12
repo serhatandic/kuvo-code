@@ -37124,7 +37124,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "f7fb4b432782";
+var BRIDGE_VERSION = "f186dc9dec36";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -37841,7 +37841,7 @@ async function engineLists(engine, folder, signal) {
   return { ready, models, accounts, fallback: given };
 }
 async function bridgeLists(bridge, signal) {
-  const [listed, integrations, auto] = await Promise.all(["/api/model", "/api/integration", "/api/kuvo/auto"].map((route) => asked6(bridge, route, signal)));
+  const [listed, integrations, auto] = await Promise.all(["/api/model?hidden=1", "/api/integration", "/api/kuvo/auto"].map((route) => asked6(bridge, route, signal)));
   const models = modelsIn2(listed), accounts = accountsIn(integrations);
   if (!models || !accounts)
     return null;

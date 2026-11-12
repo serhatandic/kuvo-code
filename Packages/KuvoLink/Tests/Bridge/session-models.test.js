@@ -97,6 +97,8 @@ const bridgeSessions = {
   ses_autoGone: session("ses_autoGone", { providerID: "auto", id: "list_deleted" }),
   ses_agentOnEngine: session("ses_agentOnEngine", { providerID: "xai", id: "grok-4.7" }),
   ses_starting: session("ses_starting", { providerID: "claude-code@new", id: "opusplan" }),
+  ses_codexHidden: session("ses_codexHidden", { providerID: "codex-cli@work", id: "gpt-5.1-codex-mini" }),
+  ses_codexAbsent: session("ses_codexAbsent", { providerID: "codex-cli@work", id: "gpt-4.1" }),
 };
 const agent = (id, name, { installed = true, signedIn = true, label } = {}) => ({
   id, name, metadata: { source: "agent", installed, ...(label ? { accountLabel: label } : {}) }, methods: [{ type: "oauth", id: "browser", label: "Sign in" }],
@@ -112,8 +114,12 @@ const bridge = await standIn(url => {
       agent("codex-cli", "Codex"),
       agent("cursor", "Cursor", { installed: false, signedIn: false }),
       agent("claude-code@new", "Claude Code · New", { label: "New" }),
+      agent("codex-cli@work", "Codex · Work", { label: "Work" }),
     ],
-    "/api/model": [
+    // (As the bridge lists them for the box: those an agent keeps out of its picker too.)
+    "/api/model?hidden=1": [
+      model("codex-cli@work", "gpt-5.5", "GPT-5.5"),
+      model("codex-cli@work", "gpt-5.1-codex-mini", "GPT-5.1 Codex Mini", { hidden: true }),
       model("claude-code", "claude-opus-5-5", "Opus 5.5", { aliases: ["default"] }),
       model("claude-code", "claude-sonnet-5", "Sonnet 5"),
       // Claude Code's usual ones, until it says which this account has.
@@ -197,6 +203,14 @@ test("a coding agent's model: by the name its agent lists, gone once its agent n
   assert.deepEqual(shown.ses_cursor, { model: { providerID: "cursor", id: "composer-2" }, runs: false, missing: "install", account: { id: "cursor", name: "Cursor" } });
   // A conversation with the coding agents on the engine's model: the engine's account says.
   assert.equal(shown.ses_agentOnEngine.missing, "key");
+});
+
+test("a model Codex keeps out of its picker still runs; one absent from its list is gone", async () => {
+  const shown = await states("ses_codexHidden", "ses_codexAbsent");
+  assert.deepEqual(shown.ses_codexHidden, { model: { providerID: "codex-cli@work", id: "gpt-5.1-codex-mini" }, name: "GPT-5.1 Codex Mini", runs: true });
+  assert.deepEqual(shown.ses_codexAbsent, {
+    model: { providerID: "codex-cli@work", id: "gpt-4.1" }, runs: false, missing: "gone", account: { id: "codex-cli@work", name: "Codex · Work", label: "Work" },
+  });
 });
 
 test("Custom Auto runs while its list has models, and is gone once it's emptied", async () => {

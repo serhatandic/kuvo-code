@@ -93,7 +93,9 @@ async function engineLists(engine: Target, folder: string | undefined, signal?: 
 }
 
 async function bridgeLists(bridge: Target, signal?: AbortSignal): Promise<BridgeLists | null> {
-  const [listed, integrations, auto] = await Promise.all(["/api/model", "/api/integration", "/api/kuvo/auto"].map(route => asked(bridge, route, signal)));
+  // (Those an agent keeps out of its picker but still runs, Codex's hidden ones, too: only one
+  // absent from its list is gone.)
+  const [listed, integrations, auto] = await Promise.all(["/api/model?hidden=1", "/api/integration", "/api/kuvo/auto"].map(route => asked(bridge, route, signal)));
   const models = modelsIn(listed), accounts = accountsIn(integrations);
   if (!models || !accounts) return null;
   const lists = isObject(auto) && Array.isArray(auto.lists)

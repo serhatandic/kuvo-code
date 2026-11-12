@@ -3002,6 +3002,7 @@ function model(providerID, id, name, options = {}) {
     family: options.family,
     ...options.aliases?.length ? { aliases: options.aliases } : {},
     ...options.provisional ? { provisional: true } : {},
+    ...options.hidden ? { hidden: true } : {},
     capabilities: { tools: true, input: options.images ? ["text", "image"] : ["text"], output: ["text"] },
     variants: (options.variants ?? []).map((id) => ({ id })),
     time: { released: options.released ?? 0 },
@@ -14055,14 +14056,15 @@ class CodexAgent {
     await rpc.request("account/login/start", { type: "apiKey", apiKey: key }, 30000);
     this.known.reset();
   }
-  async models() {
+  async models(options = {}) {
+    const shown = (models) => options.hidden ? models : models.filter((each) => !each.hidden);
     if (this.modelList && Date.now() - this.modelList.at < 30 * 60000)
-      return this.modelList.models;
+      return shown(this.modelList.models);
     try {
-      return await this.listModels();
+      return shown(await this.listModels());
     } catch (error) {
       if (this.modelList)
-        return this.modelList.models;
+        return shown(this.modelList.models);
       throw error;
     }
   }
@@ -14074,13 +14076,12 @@ class CodexAgent {
     do {
       const page = await rpc.request("model/list", cursor ? { cursor } : {}, 30000);
       for (const info of page?.data ?? []) {
-        if (info.hidden)
-          continue;
         models.push(model(this.providerID, info.model ?? info.id, info.displayName ?? info.model, {
           variants: (info.supportedReasoningEfforts ?? []).map((effort) => effort.reasoningEffort),
           images: (info.inputModalities ?? []).includes("image"),
           context: this.windows.get(info.model ?? info.id) ?? 400000,
-          released: info.isDefault ? 2000 : order--
+          released: info.isDefault ? 2000 : order--,
+          hidden: Boolean(info.hidden)
         }));
       }
       cursor = page?.nextCursor ?? undefined;
@@ -21374,7 +21375,7 @@ class Carrying {
         const concrete = manifest.sessions.find((each) => each.id === id)?.model;
         if (concrete && session.model && concrete.providerID === session.model.providerID && typeof concrete.id === "string" && concrete.id && concrete.id.length <= 200) {
           const host = hosts.get(session.model.providerID) ?? this.agentOf(session.model.providerID);
-          const there = await host?.models().catch(() => []) ?? [];
+          const there = await host?.models({ hidden: true }).catch(() => []) ?? [];
           if (there.some((model) => model.id === concrete.id || model.aliases?.includes(concrete.id)))
             session.model = { ...session.model, id: concrete.id };
         }
@@ -26118,11 +26119,11 @@ async function integration(agent, fresh = false, auto) {
     connections: account.signedIn ? [{ type: "agent", label: account.label, method: "oauth", status: { status: "connected", message: account.label ? `Signed in as ${account.label}` : account.unchecked ? "Couldn't check the sign-in just now" : "Signed in" } }] : []
   };
 }
-async function models(agents) {
+async function models(agents, hidden = false) {
   const lists = await Promise.all(agents.map(async (agent) => {
     try {
       const account = await agent.account();
-      return account.signedIn ? await agent.models() : [];
+      return account.signedIn ? await agent.models(hidden ? { hidden } : undefined) : [];
     } catch {
       return [];
     }
@@ -26257,7 +26258,7 @@ function handler(context) {
       if (area === "model") {
         if (a === "default")
           return located(null);
-        return located(await models(roster.all()));
+        return located(await models(roster.all(), url.searchParams.get("hidden") === "1"));
       }
       if (area === "agent" || area === "command" || area === "skill" || area === "mcp")
         return located([]);
@@ -27443,4 +27444,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 0b9e8fa9fa05f6db7403155bc4bcb55fce78bfdb159becc4fea0f22018126532
+// Built from Packages/Box/src/agents 67b0be35096d5b40655fed11149c88c08c90b163c5e0889fd79122328c7f4832

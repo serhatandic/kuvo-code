@@ -34,6 +34,8 @@ struct SessionModelStateTests {
         let install = try state(#"{"model":{"providerID":"cursor","id":"composer-2"},"runs":false,"missing":"install","account":{"id":"cursor","name":"Cursor"}}"#)
         #expect(install.namesModel)
         #expect(install.refusal(accounts: "Accounts", shownName: "Composer 2") == "Composer 2 needs Cursor installed: install it in Accounts, or choose another model.")
+        #expect(install.accountStep(for: "cursor")?.title == "Install")
+        #expect(out.accountStep(for: "github-copilot")?.title == "Sign In")
     }
 
     /// The engine's xAI model with no key, while a SuperGrok plan is signed in to through Grok: a
@@ -43,6 +45,9 @@ struct SessionModelStateTests {
         let xai = try state(#"{"model":{"providerID":"xai","id":"grok-4.7"},"name":"Grok 4.7","runs":false,"missing":"key","account":{"id":"xai","name":"xAI"},"plan":{"name":"SuperGrok","agent":"Grok","provider":"grok-cli"}}"#)
         #expect(xai.refusal(there: " on devbox", accounts: "Accounts") == "Grok 4.7 needs an xAI key on devbox: add one in Accounts, or choose another model (with a SuperGrok plan, one under Grok).")
         #expect(xai.signInHelp("xai", there: " on devbox") == "Add an xAI key on devbox (with a SuperGrok plan, choose a model under Grok instead)")
+        // Its card's button says what it does: it opens the key sheet.
+        #expect(xai.accountStep(for: "xai")?.title == "Add Key")
+        #expect(xai.accountStep(for: "grok-cli") == nil, "another account's card is its own")
     }
 
     /// A model gone from its provider's list (a coding agent's dropped while it's signed in, #338's
@@ -53,6 +58,7 @@ struct SessionModelStateTests {
         #expect(ComposerSend(ready: true, text: "Fix the build", hasModel: gone.namesModel) == .chooseModel)
         #expect(gone.refusal(accounts: "Accounts", shownName: "Opus 4.1") == "Opus 4.1 is no longer among Claude Code’s models: choose another model.")
         #expect(gone.signInHelp("claude-code") == nil, "nothing to sign in to")
+        #expect(gone.accountStep == nil)
         let none = try state(#"{"model":null,"runs":false,"missing":"model"}"#)
         #expect(!none.namesModel)
     }

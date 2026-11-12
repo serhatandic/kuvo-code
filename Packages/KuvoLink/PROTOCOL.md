@@ -1198,7 +1198,8 @@ box decides it from what its engine and coding agents list, so every client show
 - An engine provider counts as signed in when the engine says it's ready (`api/provider`), it has
   a connection, or nothing to sign in to (a local one's); OpenCode Zen's free models need no
   account. A coding agent's model runs while its account is installed, signed in, and its agent
-  lists it (by its own id or one it's known by). Custom Auto runs while its list has models: it
+  lists it (by its own id or one it's known by), one it keeps out of its picker too (Codex's
+  hidden ones): only one absent from its list is `gone`. Custom Auto runs while its list has models: it
   picks among them each turn, so whether one entry's account is signed in isn't said.
 - Left out, as not known yet: a session the box doesn't have; one whose place didn't answer just
   now; a coding agent's model while that account, signed in, lists no models, or only its usual
@@ -2310,7 +2311,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
 - `kuvo/agents/api/…`: the coding agents you already have (Claude Code, Codex, Cursor, Grok,
   Antigravity), through the agents bridge beside the host's engine, which answers the same paths
   as the engine for them: sessions, messages, prompts, permissions, questions, events
-  (`kuvo/agents/api/event`) and models (`kuvo/agents/api/model`, only signed-in agents'). Its
+  (`kuvo/agents/api/event`) and models (`kuvo/agents/api/model`, only signed-in agents'; with
+  `?hidden=1`, also those an agent still runs but keeps out of its own picker, Codex's hidden ones,
+  each `hidden: true`, which pickers don't offer). Its
   sessions carry `metadata.kuvoAgent` and run where that bridge does; a new session with one of
   their models (providers `claude-code`, `codex-cli`, `cursor`, `grok-cli`, `antigravity`) is
   made there, never on the engine. A Mac answers for its own; a machine's bridge for the

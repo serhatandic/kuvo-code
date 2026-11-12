@@ -170,12 +170,12 @@ export async function integration(agent: Agent, fresh = false, auto?: Auto): Pro
   }
 }
 
-async function models(agents: Agent[]): Promise<Model[]> {
+async function models(agents: Agent[], hidden = false): Promise<Model[]> {
   const lists = await Promise.all(
     agents.map(async (agent) => {
       try {
         const account = await agent.account()
-        return account.signedIn ? await agent.models() : []
+        return account.signedIn ? await agent.models(hidden ? { hidden } : undefined) : []
       } catch {
         return []
       }
@@ -305,7 +305,9 @@ export function handler(context: Context) {
       // Catalog
       if (area === "model") {
         if (a === "default") return located(null)
-        return located(await models(roster.all()))
+        // `hidden=1`: also those an agent still runs but keeps out of its picker (the box's
+        // `kuvo/sessions/models` reads them; pickers don't).
+        return located(await models(roster.all(), url.searchParams.get("hidden") === "1"))
       }
       if (area === "agent" || area === "command" || area === "skill" || area === "mcp") return located([])
       if (area === "provider") return located([])

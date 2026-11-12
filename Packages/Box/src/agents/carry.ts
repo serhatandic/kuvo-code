@@ -426,7 +426,7 @@ export class Carrying {
         const concrete = manifest.sessions.find((each) => each.id === id)?.model
         if (concrete && session.model && concrete.providerID === session.model.providerID && typeof concrete.id === "string" && concrete.id && concrete.id.length <= 200) {
           const host = hosts.get(session.model.providerID) ?? this.agentOf(session.model.providerID)
-          const there = (await host?.models().catch(() => [])) ?? []
+          const there = (await host?.models({ hidden: true }).catch(() => [])) ?? []
           if (there.some((model) => model.id === concrete.id || model.aliases?.includes(concrete.id))) session.model = { ...session.model, id: concrete.id }
         }
         if (session.model?.providerID && hosts.get(session.model.providerID)) session.model = { ...session.model, providerID: hosts.get(session.model.providerID)!.providerID }

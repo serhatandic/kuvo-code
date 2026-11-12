@@ -425,7 +425,9 @@ export interface Agent {
   outside?(): boolean
   /** Stops those (`outside`) that nothing is at work in now, to start again in the sandbox (you said to restart them); whether one is still at work. */
   restartOutside?(): boolean
-  models(): Promise<Model[]>
+  /** What it lists for the picker; with `hidden`, also those it still runs but keeps out of its
+   * own picker (Codex's), each marked `hidden`. */
+  models(options?: { hidden?: boolean }): Promise<Model[]>
   /**
    * The model an alias of its own (Claude Code's `default`) stands for on this computer and
    * account, as the agent itself listed it: undefined when `id` isn't an alias, or the agent hasn't
@@ -504,7 +506,7 @@ export class ContextWindows {
 }
 
 /** A model as the app lists it, from the little an agent says about one. */
-export function model(providerID: string, id: string, name: string, options: { variants?: string[]; images?: boolean; context?: number; released?: number; family?: string; aliases?: string[]; provisional?: boolean } = {}): Model {
+export function model(providerID: string, id: string, name: string, options: { variants?: string[]; images?: boolean; context?: number; released?: number; family?: string; aliases?: string[]; provisional?: boolean; hidden?: boolean } = {}): Model {
   return {
     id,
     providerID,
@@ -512,6 +514,7 @@ export function model(providerID: string, id: string, name: string, options: { v
     family: options.family,
     ...(options.aliases?.length ? { aliases: options.aliases } : {}),
     ...(options.provisional ? { provisional: true as const } : {}),
+    ...(options.hidden ? { hidden: true as const } : {}),
     capabilities: { tools: true, input: options.images ? ["text", "image"] : ["text"], output: ["text"] },
     variants: (options.variants ?? []).map((id) => ({ id })),
     time: { released: options.released ?? 0 },

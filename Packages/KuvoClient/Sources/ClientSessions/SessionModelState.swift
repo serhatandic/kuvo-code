@@ -118,6 +118,36 @@ public struct SessionModelState: Decodable, Equatable, Sendable {
         }
     }
 
+    /// What a sign-in card's button does for its account, which it's labelled by.
+    public enum AccountStep: Equatable, Sendable {
+        case signIn, addKey, install
+
+        /// The button's words: what it does, not "Sign In" for a sheet that takes a key.
+        public var title: String {
+            switch self {
+            case .signIn: "Sign In"
+            case .addKey: "Add Key"
+            case .install: "Install"
+            }
+        }
+    }
+
+    /// What its account needs done: signing in, adding a key, or installing its agent; nil for one
+    /// that needs none of those.
+    public var accountStep: AccountStep? {
+        switch missing {
+        case .signIn: .signIn
+        case .key: .addKey
+        case .install: .install
+        default: nil
+        }
+    }
+
+    /// The same, for a card about `provider`'s account: nil for another's.
+    public func accountStep(for provider: String) -> AccountStep? {
+        account?.id == provider ? accountStep : nil
+    }
+
     /// Its account needs something before it runs: a sign-in, a key, or its agent installed.
     public var needsAccount: Bool {
         switch missing {

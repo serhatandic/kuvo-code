@@ -1606,8 +1606,11 @@ private struct TurnEndView: View {
                     case .signIn:
                         let machine = RemoteFolder.machine(of: directory)
                         if let signIn, let account = actions?.signIn {
-                            let again = kind == .signIn(ended: true) ? "Sign In Again" : "Sign In"
-                            Button(machine.map { "\(again) on \($0)" } ?? again) { signIn.open(account.providerID) }
+                            // Labelled by what it does, as its box says: a sheet that takes a key adds
+                            // one, an agent not installed installs; else it signs in (again).
+                            let step = signIn.said?.accountStep(for: account.providerID)
+                            let title = kind == .signIn(ended: true) && (step ?? .signIn) == .signIn ? "Sign In Again" : (step ?? .signIn).title
+                            Button(machine.map { "\(title) on \($0)" } ?? title) { signIn.open(account.providerID) }
                                 .help(catalog.signInHelp(account.providerID, on: machine, said: signIn.said))
                             if actions?.switchModel == true, let switchModel {
                                 Button("Switch Model", action: switchModel)

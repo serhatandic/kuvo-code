@@ -227,6 +227,8 @@ export interface Model {
   aliases?: string[]
   /** Its agent's usual models, listed until it says which your account has (Claude Code's, as it starts): not its word that one is gone. */
   provisional?: true
+  /** One its agent still runs but keeps out of its own picker (Codex's): listed only when asked for (`api/model?hidden=1`). */
+  hidden?: true
   capabilities: { tools: boolean; input: string[]; output: string[] }
   variants: { id: string }[]
   time: { released: Millis }
