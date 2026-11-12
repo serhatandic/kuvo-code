@@ -121,6 +121,17 @@ public struct SSHConnection: Sendable, Hashable, Codable {
     nonisolated(unsafe) public static var fedStandIn: (@Sendable (_ address: String, _ script: String, _ input: URL?) -> String?)?
     #endif
 
+    /// Within `$sendsWhile.withValue(…)` (a machine's connect under way), each script that would go
+    /// to a machine asks it first, and none starts once it says no (the machine removed or
+    /// disconnected meanwhile): `CancellationError`. One already running there finishes, as `run`
+    /// says.
+    @TaskLocal public static var sendsWhile: (@Sendable () async -> Bool)?
+
+    /// Throws `CancellationError` when `sendsWhile` no longer wants scripts sent.
+    private static func mustBeWanted() async throws {
+        if let wanted = sendsWhile, await !wanted() { throw CancellationError() }
+    }
+
     /// Runs `script` on the machine and returns what it printed. `input` is sent to it. It runs as
     /// long as it takes (an install, a copy), with no limit of its own: SSH notices a machine that
     /// has gone away (`options`). It isn't stopped when the task is cancelled, so a change there
@@ -129,6 +140,7 @@ public struct SSHConnection: Sendable, Hashable, Codable {
     /// `sent`, given an `input`, hears how much of it has gone, as it goes.
     @discardableResult
     public func run(_ script: String, input: URL? = nil, cancellable: Bool = false, sent: (@Sendable (Int64) -> Void)? = nil) async throws -> String {
+        try await Self.mustBeWanted()
         #if DEBUG
         if let fedStandIn = Self.fedStandIn {
             guard let output = fedStandIn(address, script, input) else { throw RemoteEngineError.ssh(status: 255, message: "That failed on \(address)") }
@@ -152,6 +164,7 @@ public struct SSHConnection: Sendable, Hashable, Codable {
     /// Runs `script` on the machine with what it prints going to `output` as it is (an archive of
     /// a folder there, say), not read as text. `input` is sent to it. As long as it takes, as `run`.
     public func run(_ script: String, input: URL? = nil, output: URL) async throws {
+        try await Self.mustBeWanted()
         guard !isStandIn else { throw RemoteEngineError.ssh(status: 255, message: "Couldn’t reach \(destination).") }
         guard FileManager.default.createFile(atPath: output.path, contents: nil, attributes: [.posixPermissions: 0o600]) else { throw CocoaError(.fileWriteUnknown) }
         let result = try await ChildProcess.run("/usr/bin/ssh", arguments(running: script), input: input.map { .file($0) } ?? .nothing,
@@ -395,13 +408,10 @@ public struct RemoteEngineInstaller: Sendable {
 
     /// Makes sure the engine is on the machine. `progress` hears how far it's come: the download,
     /// when there is one (this Mac keeps the package for the next machine), then the copy.
-    /// `wanted`, asked once it's downloaded: no longer (the machine removed or disconnected
-    /// meanwhile), and nothing is copied there (`CancellationError`).
-    public func install(progress: @escaping @Sendable (Progress) -> Void = { _ in }, while wanted: @Sendable () async -> Bool = { true }) async throws {
+    public func install(progress: @escaping @Sendable (Progress) -> Void = { _ in }) async throws {
         let (release, isInstalled, _) = try await check()
         if isInstalled { return }
         let package = try await checkedPackage(release) { progress(.downloading(fraction: $0)) }
-        guard await wanted() else { throw CancellationError() }
         let total = Int64((try? package.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
         progress(.copying(sent: 0, total: total))
         let folder = "$HOME/\(Self.root)/engine"

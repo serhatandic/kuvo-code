@@ -338,13 +338,22 @@ extension AppModel {
         connect(engine)
     }
 
-    /// Starts a machine's engine over (its Settings › Engine), and connects to it again. Disconnect,
-    /// Remove or Connect Now meanwhile ends it: nothing more goes there, and it isn't connected again.
+    /// Starts a machine's engine over (its Settings › Engine), and connects to it again. Connect
+    /// pressed meanwhile (it shows as not connected while it starts over), Disconnect or Remove
+    /// ends it: nothing more of it goes there, and it doesn't connect again itself.
     @discardableResult
     func restartEngine(_ engine: MachineEngine) -> Task<Void, Never> {
         engine.disconnect()
         connectionClosed(engine.machine.id)
-        let wanted = engine.stillWanted()
+        // Restart asks for it to be connected, as Connect does.
+        engine.isDisconnected = false
+        engine.restarts += 1
+        let round = engine.restarts
+        let current = engine.stillWanted()
+        let wanted: @Sendable () async -> Bool = { @MainActor in
+            guard engine.restarts == round else { return false }
+            return await current()
+        }
         return Task {
             _ = try? await RemoteServer.restartEngine(on: engine.machine.connection, while: wanted)
             guard await wanted() else { return }
@@ -393,6 +402,8 @@ extension AppModel {
     func connect(_ engine: MachineEngine) -> Task<Void, Never> {
         let machine = engine.machine.id
         engine.isDisconnected = false
+        // A start over under way ends: this connection goes on in its place.
+        engine.restarts += 1
         // Its pages are the panel's browser tabs while a session there is in view.
         engine.browser.onPages = { [weak self] pages in self?.utilities.syncMachinePages(machine, pages) }
         engine.browser.onActive = { [weak self] page, byAgent, session in self?.utilities.machinePageActive(machine, page: page, byAgent: byAgent, session: session) }
