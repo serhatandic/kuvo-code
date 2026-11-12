@@ -4614,10 +4614,10 @@ function agentsNote(platform, tmuxFits = true) {
     "",
     "`npm`, `pnpm`, `uv` and corepack use caches of Kuvo Code's own here (`$npm_config_cache`, `$pnpm_config_cache_dir`, `$UV_CACHE_DIR`, `$COREPACK_HOME`): leave them as they are. `npx -y <package>`, `pnpm dlx` and `uvx` fetch what they need (`uvx` with a Python that's installed).",
     "",
-    ...tmuxFits ? [] : ["This computer's home folder's path is too long for tmux in the sandbox: its socket in `$TMPDIR` would pass the system's limit, so tmux fails with \"File name too long\", as can other programs that make a socket there. Don't start tmux with sandbox_ask instead: outside the sandbox it would be the user's own. For another program that needs a socket, ask with sandbox_ask, or tell the user why it can't run in the sandbox here.", ""],
+    ...tmuxFits ? [] : ["This computer's home folder's path is too long for tmux in the sandbox: its socket in `$TMPDIR` would pass the system's limit, so tmux fails with \"File name too long\" (as can other programs' sockets there). Don't start tmux with sandbox_ask instead (outside the sandbox it would be the user's own); for another program that needs a socket, use sandbox_ask or tell the user why it can't run here.", ""],
     "`ssh` and git over SSH use only the keys the user lets this conversation use from Kuvo Code's vault, through `$SSH_AUTH_SOCK`. With none, use HTTPS or ask the user.",
     "",
-    `When the sandbox refuses something a task needs ("Operation not permitted" or "Permission denied"), don't work around it: ask the user with sandbox_ask.`,
+    "When the sandbox refuses something a task needs, don't work around it: ask the user with sandbox_ask.",
     ""
   ].join(`
 `);
@@ -31304,7 +31304,7 @@ var answerSandboxAsk = book.answer;
 var SANDBOX_TOOLS = [
   {
     name: "sandbox_ask",
-    description: `Ask the user to run a command outside the sandbox, when the sandbox stopped one the task needs ("Operation not permitted" or "Permission denied" outside the folders you may write, or a refused connection or app). They allow it once or say no, and where it was stopped writing in one folder, can let your commands write there from now on. Allowed, it runs outside the sandbox in your project's folder, and you get its output. Waits for their answer. Never use it to get around a rule you were told, nor for a command you haven't tried in the sandbox.`,
+    description: `Ask the user to run a command outside the sandbox, when the sandbox stopped one the task needs ("Operation not permitted" or "Permission denied" outside the folders you may write, or a refused connection or app). They allow it once or say no, and where it was stopped writing in one folder, can let your commands write there from now on. Allowed, it runs in your project's folder, and you get its output. Waits for their answer. Never use it to get around a rule you were told, nor for a command you haven't tried in the sandbox.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -37160,7 +37160,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0403a71616d1";
+var BRIDGE_VERSION = "ab886dddfee0";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -38920,7 +38920,7 @@ var VAULT_TOOLS = [
   },
   {
     name: "vault_run",
-    description: 'Run a shell command in your project\'s folder with values from the vault in its environment, never on its command line: each variable gets an item\'s value (`"GITHUB_TOKEN": "GitHub token"`, or `"Item.field"` for one field), and a file item\'s variable gets the path of a temporary copy, removed when the command ends. Vault values are hidden in its output. Use the variables in the command (`curl -H "Authorization: Bearer $GITHUB_TOKEN" …`); never print them.',
+    description: 'Run a shell command in your project\'s folder with values from the vault in its environment, never on its command line: each variable gets an item\'s value (`"GITHUB_TOKEN": "GitHub token"`), and a file item\'s variable gets the path of a temporary copy, removed when the command ends. Vault values are hidden in its output. Use the variables in the command (`curl -H "Authorization: Bearer $GITHUB_TOKEN" …`); never print them.',
     inputSchema: {
       type: "object",
       properties: {
@@ -39672,20 +39672,20 @@ function importWords(outcome, skipped, names) {
 // Packages/Box/src/link/work-queue/tools.ts
 var said3 = (text) => ({ text, isError: false });
 var refused5 = (text) => ({ text, isError: true });
-var ITEM = { type: ["string", "integer"], description: "Its number, like #243; or the GitHub issue or pull request it is, like gh:owner/repo#12." };
-var ISSUE = { type: "string", description: "A GitHub issue or pull request, as gh:owner/repo#12 or its address: its title, and Done once it's closed or merged, come from GitHub." };
+var ITEM = { type: ["string", "integer"], description: "Like #243 or gh:owner/repo#12." };
+var ISSUE = { type: "string", description: "gh:owner/repo#12 or its URL." };
 var TOP = { type: "boolean", description: "At the top of its category." };
 var CATEGORY2 = { type: "string", description: "Next, Later, Parked, Done or a custom one." };
 var LINKS = { type: "array", items: { type: "string" }, description: "Web links (a PR, a doc)." };
 var FILES4 = { type: "array", items: { type: "string" }, description: "Full paths of files to keep with it (in the body: ![](name))." };
 var PROGRESS = { type: ["number", "null"], description: "0 to 1, where it can be counted." };
-var PROGRESS_NOTE = { type: ["string", "null"], description: "What's being done now, in a few words." };
+var PROGRESS_NOTE = { type: ["string", "null"], description: "What's being done now, briefly." };
 var WORKING = { type: "boolean", description: "You're on it now (false: you stopped)." };
 var NAMES2 = { type: "array", items: { type: "string" } };
 var QUEUE_TOOLS = [
   {
     name: "queue_list",
-    description: "List your Work Queue (and that of sessions you oversee) by category, In progress first.",
+    description: "List your Work Queue (and those of sessions you oversee) by category, In progress first.",
     inputSchema: { type: "object", properties: {
       category: { type: "string", description: "Only this one (or In progress)." },
       query: { type: "string", description: "Words in the title or description." },
@@ -39694,12 +39694,12 @@ var QUEUE_TOOLS = [
   },
   {
     name: "queue_show",
-    description: "Read one item whole: description, progress, notes, files, links, sessions.",
+    description: "Read one item whole, with its notes, files, links and sessions.",
     inputSchema: { type: "object", properties: { item: ITEM }, required: ["item"], additionalProperties: false }
   },
   {
     name: "queue_add",
-    description: "Add an item to your Work Queue (Next, at the bottom, by default). You get its number. With issue, the item is that GitHub issue or pull request (no title then).",
+    description: "Add an item to your Work Queue (at the bottom of Next by default); you get its number. With issue, it's that GitHub issue or PR (no title).",
     inputSchema: { type: "object", properties: {
       title: { type: "string", description: "One short line." },
       issue: ISSUE,
@@ -39715,10 +39715,10 @@ var QUEUE_TOOLS = [
   },
   {
     name: "queue_update",
-    description: "Change an item of yours (or of a session you oversee). category: done marks it done; note adds a note; issue makes it that GitHub issue or pull request.",
+    description: "Change an item of yours (or of a session you oversee): note adds a note; issue makes it that GitHub issue or PR.",
     inputSchema: { type: "object", properties: {
       item: ITEM,
-      issue: ISSUE,
+      issue: { type: "string" },
       title: { type: "string" },
       body: { type: "string", description: "Replaces the description." },
       category: CATEGORY2,
@@ -39738,7 +39738,7 @@ var QUEUE_TOOLS = [
   },
   {
     name: "queue_hand",
-    description: "Hand an item to a session or bot (here or on another of the user's computers): it moves to its queue, linked to it, and stays in your view.",
+    description: "Hand an item to a session or bot, here or on another computer: it moves to their queue, linked to them, and stays in your view.",
     inputSchema: { type: "object", properties: {
       item: ITEM,
       to: { type: "string", description: "Its address, or a bot's name." }
@@ -39746,7 +39746,7 @@ var QUEUE_TOOLS = [
   },
   {
     name: "queue_remove",
-    description: "Delete an item (the user can bring it back for 30 days); undo brings back one an agent deleted.",
+    description: "Delete an item (the user can restore it for 30 days); undo restores one an agent deleted.",
     inputSchema: { type: "object", properties: { item: ITEM, undo: { type: "boolean" } }, required: ["item"], additionalProperties: false }
   },
   {
@@ -39769,7 +39769,7 @@ var QUEUE_TOOLS = [
   }
 ];
 var QUEUE_TOOL_NAMES = QUEUE_TOOLS.map((tool) => tool.name);
-var QUEUE_INSTRUCTIONS = " Keep work items in your Work Queue (queue_*), not a file: add what the user asks for or what's left to do. Refer to them as #243 (outside ones with their source, like gh:owner/repo#12). On one: working: true, progress_note, then category: done. A GitHub issue or pull request you work on is an item itself (queue_add issue:), Done when it's closed on GitHub; never write a bare #243 in commits, branches or pull requests.";
+var QUEUE_INSTRUCTIONS = " Keep work items in your Work Queue (queue_*), not a file: what the user asks for, what's left to do, and GitHub issues or PRs you work on (queue_add issue:, Done once closed). Refer to them as #243 (GitHub ones as gh:owner/repo#12), never a bare #243 in commits, branches or PRs. On one: working: true, progress_note, then category: done.";
 var why3 = (error) => String(error?.message ?? error);
 var placesOf2 = (folder) => ({ own: folder ?? null, others: folder ? readProjects().find((each) => each.directory === folder)?.folders ?? [] : [] });
 async function groupLivesHere(group, readBridge) {

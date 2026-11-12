@@ -54,29 +54,36 @@ const seatBot = (id: string, name: string): SeatBot => ({ id, name, job: "Keeps 
 const [mira, ada, ben] = [seatBot("bot_mira", "Mira"), seatBot("bot_ada", "Ada"), seatBot("bot_ben", "Ben")]
 const seat = seatInstructions(mira, { name: "Launch", purpose: "Planning the launch." } as Group, [ada, ben], mira, personality, words.identityNote)
 
-test("what each agent kind carries of the box's own words, on every call, stays within its budget", () => {
-  const carried = {
-    "an engine session": tokens(schemas) + tokens(queueWords) + tokens(sandboxNote),
-    "an engine session on Autopilot": tokens(schemas) + tokens(queueWords) + tokens(sandboxNote) + tokens(AUTOPILOT_WORDS),
-    "an engine bot": tokens(schemas) + tokens(queueWords) + tokens(sandboxNote) + tokens(bot),
-    "a Claude Code bot": tokens(names) + tokens(queueWords) + tokens(bot),
-    "a Codex bot": tokens(schemas) + tokens(queueWords) + tokens(bot) + tokens(ASKING_WORDS),
-    "a Cursor, Grok or Antigravity bot": tokens(schemas) + tokens(queueWords) + tokens(bot),
-    "a bot's seat in a group chat": tokens(seat),
-  }
-  // (The Work Queue's eight tools and their line, #243, came to about 1,250 tokens once trimmed from
-  // 2,130: what every agent kind carries now to keep work items in the queue, not a file.)
-  const budget = {
-    "an engine session": 2_950,
-    "an engine session on Autopilot": 3_200,
-    "an engine bot": 5_400,
-    "a Claude Code bot": 2_650,
-    "a Codex bot": 4_600,
-    "a Cursor, Grok or Antigravity bot": 4_550,
-    "a bot's seat in a group chat": 650,
-  }
-  for (const kind of Object.keys(budget) as (keyof typeof budget)[]) expect({ kind, tokens: carried[kind] }).toEqual({ kind, tokens: Math.min(carried[kind], budget[kind]) })
-})
+// What each agent kind carries, on every call.
+const carried = {
+  "an engine session": tokens(schemas) + tokens(queueWords) + tokens(sandboxNote),
+  "an engine session on Autopilot": tokens(schemas) + tokens(queueWords) + tokens(sandboxNote) + tokens(AUTOPILOT_WORDS),
+  "an engine bot": tokens(schemas) + tokens(queueWords) + tokens(sandboxNote) + tokens(bot),
+  "a Claude Code bot": tokens(names) + tokens(queueWords) + tokens(bot),
+  "a Codex bot": tokens(schemas) + tokens(queueWords) + tokens(bot) + tokens(ASKING_WORDS),
+  "a Cursor, Grok or Antigravity bot": tokens(schemas) + tokens(queueWords) + tokens(bot),
+  "a bot's seat in a group chat": tokens(seat),
+}
+// (The Work Queue's eight tools and their line, #243, came to about 1,250 tokens once trimmed from
+// 2,130: what every agent kind carries now to keep work items in the queue, not a file. #393's
+// GitHub items added ~220 to them, and #553 ~50 to what a bot is told, past six budgets; #579
+// trimmed both back.)
+const budget: Record<keyof typeof carried, number> = {
+  "an engine session": 2_950,
+  "an engine session on Autopilot": 3_200,
+  "an engine bot": 5_400,
+  "a Claude Code bot": 2_650,
+  "a Codex bot": 4_600,
+  "a Cursor, Grok or Antigravity bot": 4_550,
+  "a bot's seat in a group chat": 650,
+}
+
+// Each kind on its own, so one past its budget doesn't hide another (#579: one hid five).
+for (const kind of Object.keys(budget) as (keyof typeof budget)[]) {
+  test(`what ${kind} carries of the box's own words, on every call, stays within its budget of ${budget[kind]} tokens`, () => {
+    expect({ kind, tokens: carried[kind] }).toEqual({ kind, tokens: Math.min(carried[kind], budget[kind]) })
+  })
+}
 
 test("a bot in a project is told how to leave it, its identity note and all", () => {
   // The project note goes ahead of the identity note, which is found as the words' last paragraph:

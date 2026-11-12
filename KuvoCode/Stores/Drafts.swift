@@ -1,4 +1,5 @@
 import AppKit
+import ClientText
 import Foundation
 
 /// What's typed in a composer but not sent yet, by session (or by a project's new session),
@@ -37,12 +38,9 @@ final class Drafts {
         }
     }
 
-    /// A part of a message you're replying to, and what you say to it.
-    struct Quote: Codable, Hashable, Identifiable {
-        var id = UUID()
-        var text: String
-        var response = ""
-    }
+    /// A part of a message you're replying to, and what you say to it (KuvoClient's, as the phone
+    /// keeps it too).
+    typealias Quote = ClientText.Quote
 
     /// A quote whose answer is to take the keyboard: each one asked is another, the same quote's
     /// again too (quoted twice, its answer takes the keyboard again).
