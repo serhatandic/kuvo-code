@@ -1,11 +1,18 @@
 import "./safety"
 import { REAL_PATH } from "../../KuvoLink/Tests/Bridge/test-safety.js"
-import { expect, test } from "bun:test"
+import { expect, setDefaultTimeout, test } from "bun:test"
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fenceAgent } from "../src/agents/fence"
 import { canFence, realFence } from "./agents/support/fence"
+
+// Each test sets a whole sandbox up and runs programs in it (Bun, the sandbox, a shell) in processes
+// of its own, waiting on them: about 1 s on a quiet machine, and over Bun's 5 s when it is busy,
+// where Bun then stops the process being waited on and the test sees nothing (72 copies at once on
+// this 12-core Mac: 29 of 72 timed out at 5.0 s, `spawnSync` giving `exitCode: null` and no output).
+// So a busy machine gets as long as the work takes, not 5 s.
+setDefaultTimeout(30_000)
 
 // A bot keeps its memory (`MEMORY.md` in its folder) whatever its agent, run whole in the sandbox.
 // Claude Code saves a file whole in a new one beside it first (`MEMORY.md.tmp.<pid>.<random>`) and
