@@ -10,3 +10,7 @@ import { join } from "node:path"
 
 process.env.KUVO_HOME ??= join(process.env.HOME!, ".kuvo-code")
 mkdirSync(process.env.KUVO_HOME, { recursive: true })
+// The link's home, worked out here, before any test file loads: the files share one process, in an
+// order of the system's (on Linux, not by name), and one that names a KUVO_HOME of its own for a
+// while would otherwise give the whole run its folder, which it removes.
+await import("../src/link/home")
