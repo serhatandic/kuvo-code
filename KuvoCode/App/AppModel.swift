@@ -1109,7 +1109,7 @@ final class AppModel {
             agentsActivation = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
                     // (This Mac's: the box attached in place's, if that's where it is.)
-                    if let self { catalog(for: thisMacsBox).refreshAgentsIfStale() }
+                    if let self { self.catalog(for: self.thisMacsBox).refreshAgentsIfStale() }
                     self?.workspace.reloadMachinesProjects()
                 }
             }
