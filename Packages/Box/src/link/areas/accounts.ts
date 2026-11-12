@@ -9,7 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
 import type { EngineRecord, Target } from "../../shared/records";
-import { engineGet } from "../engine/client";
+import { engineGet, engineList } from "../engine/client";
 import { REFRESHABLE, refreshModels } from "../engine/models";
 import type { EngineAnswer, UncheckedAnswer } from "../engine/client";
 import type { EngineSession } from "../engine/sessions";
@@ -89,8 +89,9 @@ export async function noteSignIn(event: SignInEvent, source: Target): Promise<vo
 
 // Each plan's sign-in in use, as its engine lists them; it throws when the engine can't say.
 async function signInsInUse(engine: Target): Promise<(provider: string) => EngineConnection | null> {
-  const integrations = (await engineGet(engine, "api/integration") as UncheckedAnswer)?.data;
-  if (!Array.isArray(integrations)) throw new Error("The engine didn't list its plans.");
+  // (One that lists none, or hasn't set up its plugins, hasn't said yet.)
+  const integrations = await engineList(engine, "api/integration");
+  if (!integrations) throw new Error("The engine didn't list its plans.");
   return provider => (integrations as EngineIntegration[]).find(each => each?.id === provider)?.connections?.find(each => each?.type === "credential") ?? null;
 }
 
@@ -113,9 +114,10 @@ export async function endedProviders(engine: Target): Promise<string[]> {
 // won't remove one, why, with what it didn't remove still there (and its plan still said to have
 // ended, if it had).
 export async function forgetPlan(engine: Target, id: string): Promise<{ status: 200 | 404 } | { status: 502 | 503; message: string }> {
-  const integrations = (await engineGet(engine, "api/integration") as UncheckedAnswer)?.data;
+  // (Not one it hasn't listed yet taken for one that isn't there.)
+  const integrations = await engineList(engine, "api/integration");
   const entries = (await engineGet(engine, "api/credential") as UncheckedAnswer)?.data;
-  if (!Array.isArray(integrations) || !Array.isArray(entries)) return { status: 503, message: "The engine isn't answering. Try again in a moment." };
+  if (!integrations || !Array.isArray(entries)) return { status: 503, message: "The engine isn't answering. Try again in a moment." };
   const plan = (integrations as EngineIntegration[]).find(each => each?.id === id);
   if (!plan || plan.metadata?.source === "mcp") return { status: 404 };
   let refused = 0;

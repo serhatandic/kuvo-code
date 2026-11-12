@@ -23,8 +23,11 @@ afterEach(async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
-/** A local server answering `GET api/integration` with `list`, and keeping what's posted. */
-async function serve(list: unknown[], posted: unknown[] = []): Promise<Target> {
+/** A local server answering `GET api/integration` with `list`, and keeping what's posted. As the
+ * engine does, it lists `early` (what it has before its plugins are set up, 2.2.7 on) until its
+ * providers are asked for, which wait for them. */
+async function serve(list: unknown[], posted: unknown[] = [], early?: unknown[]): Promise<Target> {
+  let setUp = !early
   const server = http.createServer((request, response) => {
     if (request.headers.authorization !== `Basic ${Buffer.from("opencode:secret").toString("base64")}`) {
       response.writeHead(401).end();
@@ -33,8 +36,11 @@ async function serve(list: unknown[], posted: unknown[] = []): Promise<Target> {
     let body = "";
     request.on("data", (chunk) => (body += chunk));
     request.on("end", () => {
-      if (request.method === "GET" && request.url?.startsWith("/api/integration")) {
-        response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ location: "global", data: list }));
+      if (request.method === "GET" && request.url === "/api/provider") {
+        setUp = true;
+        response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ location: "global", data: [] }));
+      } else if (request.method === "GET" && request.url?.startsWith("/api/integration")) {
+        response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ location: "global", data: setUp ? list : early }));
       } else if (request.method === "POST" && request.url === "/api/credential") {
         posted.push(JSON.parse(body));
         response.writeHead(200, { "content-type": "application/json" }).end("{}");
@@ -147,8 +153,23 @@ test("opencode's own sign-ins and keys are connected only when the engine's is w
 });
 
 test("a fresh computer: nothing to bring over, and nothing fails", async () => {
-  const what = await found({ engine: await serve([]), bridge: await serve([]), authFile: join(root, "none.json") });
+  // (The engine lists the providers it knows, none signed in.)
+  const engine = await serve([{ id: "anthropic", name: "Anthropic", methods: [], connections: [] }]);
+  const what = await found({ engine, bridge: await serve([]), authFile: join(root, "none.json") });
   expect(what).toEqual({ agents: [], opencode: [], shell: [], connected: [], unread: [] });
+});
+
+test("an engine that just started, listing what it has before its plugins are set up, is read once they are, and one that lists nothing yet is unread", async () => {
+  const authFile = opencode({ "github-copilot": { type: "oauth", refresh: "gho_1", access: "x", expires: 1 } });
+  const bridge = await serve([]);
+  // (Copilot signed in, which a plugin of the engine's says.)
+  const copilot = { id: "github-copilot", name: "GitHub Copilot", methods: [], connections: [{ type: "credential", id: "c1", label: "GitHub", method: "oauth" }] };
+  const engine = await serve([copilot], [], [{ ...copilot, connections: [] }]);
+  const what = await found({ engine, bridge, authFile });
+  expect(what.unread).toEqual([]);
+  expect(what.connected).toEqual(["github-copilot"]);
+  // Nothing listed yet: not taken for nothing signed in.
+  expect((await found({ engine: await serve([]), bridge, authFile })).unread).toEqual(["engine"]);
 });
 
 test("an engine or agents bridge that isn't running or doesn't answer is said to be unread, not taken for nothing signed in", async () => {

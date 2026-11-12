@@ -62,6 +62,8 @@ async function engineWith(models, { copilot = true } = {}) {
       for (const resolve of engine.modelsAsked.splice(0)) resolve();
       return void engine.held.then(answer);
     }
+    // Its providers, which it answers once its plugins are set up.
+    if (request.url === "/api/provider") return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ data: [] }));
     // Its accounts with Copilot: none, or one signed in to (`null`: it can't say).
     if (request.url === "/api/integration/github-copilot" && engine.copilot !== null) {
       const connections = engine.copilot ? [{ id: "cred_copilot", label: "GitHub Copilot", method: "device" }] : [];

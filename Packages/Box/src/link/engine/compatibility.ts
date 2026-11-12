@@ -21,7 +21,7 @@ import { subagentLayer } from "../../shared/subagents";
 import { CONFIG_FILE, deepMerged, readSettings } from "../areas/config";
 import { writePrivate } from "../files";
 import { ENGINE_CONFIG, K, RUN, SANDBOX_NOTE } from "../home";
-import { engineGet } from "./client";
+import { engineGet, pluginsSetUp } from "./client";
 import type { Target } from "../../shared/records";
 
 /** The layer as this box last learned it, ready to go on top of its engine's settings. */
@@ -130,6 +130,8 @@ export function readCompatibility(file = COMPATIBILITY_FILE): Record<string, unk
  * say what accounts it has (one just started answers 404 for a moment), and changes nothing. True
  * when the layer changed. */
 export async function learnCompatibility(engine: Target, file = COMPATIBILITY_FILE, layerFile = ENGINE_LAYER_FILE): Promise<boolean> {
+  // (Its accounts as they are once its plugins are set up, not what it has so far.)
+  await pluginsSetUp(engine);
   const account = await engineGet(engine, "api/integration/github-copilot");
   const connections = isObject(account) && isObject(account.data) ? account.data.connections : undefined;
   if (!Array.isArray(connections)) throw new Error("The engine didn't say what Copilot accounts it has.");

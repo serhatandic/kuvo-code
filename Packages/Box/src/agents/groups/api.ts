@@ -81,10 +81,14 @@ export class SeatAPI {
    * starting).
    */
   async account(model: ModelRef): Promise<{ name: string; signedOut: boolean } | undefined> {
-    const [providers, integrations] = await Promise.all([this.requester.request("GET", "/api/provider"), this.requester.request("GET", "/api/integration")])
+    // Its providers first: they wait for its plugins, and its integrations don't (an engine that
+    // opened a folder a moment ago lists what it has so far, 2.2.7 on).
+    const providers = await this.requester.request("GET", "/api/provider")
     const ready: unknown[] = Array.isArray(providers?.data) ? providers.data.map((each: any) => each?.id) : []
     if (!ready.length) return undefined
+    const integrations = await this.requester.request("GET", "/api/integration")
     const listed: any[] = Array.isArray(integrations?.data) ? integrations.data : []
+    if (!listed.length) return undefined
     const provider = listed.find((each) => each?.id === model.providerID)
     return { name: String(provider?.name ?? model.providerID), signedOut: provider !== undefined && !ready.includes(model.providerID) }
   }
