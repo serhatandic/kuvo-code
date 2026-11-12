@@ -354,7 +354,10 @@ import Textual
         #expect(!FileManager.default.fileExists(atPath: asked.path), "GitHub isn't asked while its host is held off")
     }
 
-    @Test func anItemOnAnotherComputerSaysWhereItIsAndItsPageAndWhatYouDoToItGoThere() async throws {
+    /// #341: what you do to an item on another computer goes to the box the panel shows, which
+    /// works out where it's kept and does it there; this Mac never sends it anywhere else itself, and
+    /// shows what that box said.
+    @Test func anItemOnAnotherComputerSaysWhereItIsAndWhatYouDoToItGoesToThePanelsBoxWhichSaysHowItWent() async throws {
         let studio = try await MachineTestBox(name: "studio")
         defer { studio.stop() }
         let lab = try await MachineTestBox(name: "lab")
@@ -384,10 +387,18 @@ import Textual
         onLaptop["title"] = "On the laptop"
         try JSONSerialization.data(withJSONObject: ["id": "wqt_told0000002", "at": Date.now.timeIntervalSince1970 * 1000, "heard": 1, "kind": "mac", "items": [onLaptop], "owners": [], "categories": []])
             .write(to: run.appending(path: "work-queue/peers/\(otherMac).json"))
+        // Lab takes what you do from another box; the laptop is a box from before that. And the relay
+        // found nothing at lab a minute ago.
+        try JSONSerialization.data(withJSONObject: [
+            labKey: ["at": 1, "heard": 1, "kind": "machine", "id": "lab-elsewhere", "list": [], "features": ["work-queue", "work-queue.elsewhere", "work-queue.forward"]],
+            otherMac: ["at": 1, "heard": 1, "kind": "mac", "list": [], "features": ["work-queue", "work-queue.elsewhere"]],
+        ]).write(to: run.appending(path: "peer-agents.json"))
+        try JSONSerialization.data(withJSONObject: [labKey: Date.now.timeIntervalSince1970 * 1000 - 60_000]).write(to: run.appending(path: "peer-reach.json"))
 
         let store = app.workQueues
+        var asked: [String] = []
         let studioClient = Self.appClient(studio, box: BoxClient.mac), labClient = Self.appClient(lab, box: "lab")
-        store.boxes = { $0 == "lab" ? labClient : studioClient }
+        store.boxes = { asked.append($0); return $0 == "lab" ? labClient : studioClient }
         store.proof = { _, _, _, _ in "cHJvb2Y" }
         store.computers = { (mac: mac, machines: ["lab": labKey]) }
         let all = WorkQueues.Key(box: BoxClient.mac, owner: WorkQueueView.all)
@@ -395,28 +406,27 @@ import Textual
         let item = try #require(store.views[all]?.items.first { $0.number == 500 })
         #expect(item.computer?.name == "lab-elsewhere")
         #expect(store.views[all]?.computers.map(\.name).sorted() == ["Laptop", "lab-elsewhere"])
-        #expect(store.box(of: item, in: BoxClient.mac) == "lab", "by its key, as this Mac names it")
+        #expect(store.box(of: item, in: BoxClient.mac) == "lab", "its files are read from lab, by its key, as this Mac names it")
 
-        // One on another Mac: said plainly, never sent to this Mac's box.
-        let laptops = try #require(store.views[all]?.items.first { $0.number == 501 })
-        #expect(store.box(of: laptops, in: BoxClient.mac) == nil)
-        await store.delete(laptops, on: BoxClient.mac)
-        #expect(store.refusal?.text == "That item is on Laptop, another Mac: change it there.")
-
-        // Its page: whole, as lab keeps it.
-        #expect(await store.load(box: BoxClient.mac, item: "500")?.body == "About On the lab.")
-
-        // Deleted from this Mac's panel: on lab, where Undo brings it back too.
+        // Deleted from this Mac's panel: sent to this Mac's box, which says lab isn't answering.
+        asked.removeAll()
         await store.delete(item, on: BoxClient.mac)
-        #expect(store.refusal == nil)
+        #expect(store.refusal?.box == BoxClient.mac)
+        #expect(store.refusal?.text == "lab-elsewhere isn't answering now (it may be asleep, off or offline), so nothing was changed there. Try again once it's back.")
+        #expect(store.undoable == nil)
+        // One on a Mac from before: that box's word, changed there.
+        let laptops = try #require(store.views[all]?.items.first { $0.number == 501 })
+        await store.move(laptops, to: .category("later"), on: BoxClient.mac)
+        #expect(store.refusal?.text == "#501 \"On the laptop\" is on Laptop: change it there.")
+        #expect(!asked.contains("lab"), "never sent to lab by this Mac itself")
         let labView = WorkQueues.Key(box: "lab", owner: "ses_far")
         await store.read(labView)
-        #expect(store.views[labView]?.removed.map(\.title) == ["On the lab"])
-        #expect(store.undoable?.box == BoxClient.mac, "Undo shows in the panel it was deleted from")
-        await store.undo()
-        await store.read(labView)
-        #expect(store.views[labView]?.items.map(\.title) == ["On the lab"])
-        #expect(store.refusal == nil)
+        #expect(store.views[labView]?.items.map(\.title) == ["On the lab"], "nothing changed there")
+
+        // Its page: as lab last told this Mac's box, said so.
+        let page = await store.load(box: BoxClient.mac, item: "500")
+        #expect(page?.item.title == "On the lab")
+        #expect(page?.told == true)
     }
 
     // MARK: Counts, order and dragging (#551)
@@ -549,8 +559,6 @@ import Textual
         try await until { store.fellBack.contains(all) }
         let mine = try #require(store.views[all]?.items.first { $0.title == "On this Mac" })
         #expect(mine.computer != nil, "never taken for lab's")
-        #expect(store.box(of: mine, in: "lab") == BoxClient.mac)
-        #expect(store.box(of: item, in: "lab") == "lab")
         await store.move(mine, to: .category("later"), on: "lab")
         #expect(store.refusal == nil)
         let here = WorkQueues.Key(box: BoxClient.mac, owner: "ses_here")

@@ -263,8 +263,11 @@ public struct WorkItemDetail: Hashable, Sendable, Decodable {
     public var files: [File]
     public var links: [Link]
     public var handed: [Handed]
+    /// One on another of your computers that the box asked couldn't read whole there now: as that
+    /// computer last told it, without what only it keeps (its description, notes, activity, files).
+    public var told: Bool
 
-    private enum Keys: String, CodingKey { case body, notes, events, files, links, handed }
+    private enum Keys: String, CodingKey { case body, notes, events, files, links, handed, told }
 
     // (An event this client can't read leaves out only itself, never the item.)
     private struct Lossy<Value: Decodable>: Decodable {
@@ -281,6 +284,7 @@ public struct WorkItemDetail: Hashable, Sendable, Decodable {
         files = try container.decodeIfPresent([File].self, forKey: .files) ?? []
         links = try container.decodeIfPresent([Link].self, forKey: .links) ?? []
         handed = try container.decodeIfPresent([Handed].self, forKey: .handed) ?? []
+        told = try container.decodeIfPresent(Bool.self, forKey: .told) ?? false
     }
 }
 
