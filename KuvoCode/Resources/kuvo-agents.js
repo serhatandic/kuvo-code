@@ -189,6 +189,42 @@ import { sep as sep7 } from "path";
 import { readdirSync as readdirSync4, readFileSync as readFileSync4, statSync as statSync4, watch } from "fs";
 import { join as join7, relative as relative2, sep as sep5 } from "path";
 
+// Packages/Box/src/shared/watch.ts
+import fs from "fs";
+var WATCH_LOOKS_AGAIN = [250, 1000];
+var watching = new Set;
+var looks = new Map;
+function startedOrStopped() {
+  for (const after of WATCH_LOOKS_AGAIN) {
+    const at = Math.ceil((Date.now() + after) / 100) * 100;
+    if (looks.has(at))
+      continue;
+    const timer = setTimeout(() => {
+      looks.delete(at);
+      for (const look of [...watching]) {
+        try {
+          look();
+        } catch {}
+      }
+    }, at - Date.now());
+    timer.unref?.();
+    looks.set(at, timer);
+  }
+}
+function watchFolder(folder, changed, { recursive = false, missed = () => changed() } = {}) {
+  const watcher = fs.watch(folder, { recursive }, (event, name) => changed(event, name === null ? null : String(name)));
+  const look = () => missed();
+  watching.add(look);
+  startedOrStopped();
+  const close = watcher.close.bind(watcher);
+  watcher.close = () => {
+    if (watching.delete(look))
+      startedOrStopped();
+    close();
+  };
+  return watcher;
+}
+
 // Packages/Box/src/agents/artifacts/store.ts
 import { createHash, createHmac, randomBytes as randomBytes2 } from "crypto";
 import { appendFileSync, closeSync, existsSync as existsSync3, fchmodSync, mkdirSync as mkdirSync3, openSync, readdirSync as readdirSync3, readFileSync as readFileSync3, renameSync as renameSync2, rmSync as rmSync3, statSync as statSync3, writeFileSync as writeFileSync3 } from "fs";
@@ -614,7 +650,7 @@ async function ownArgsLater(args, cwd) {
 
 // Packages/Box/src/shared/platform.ts
 import { execFile as execFile2, execFileSync, spawn } from "child_process";
-import fs from "fs";
+import fs2 from "fs";
 import path from "path";
 function alive(pid) {
   try {
@@ -628,9 +664,9 @@ function processRuns(pid, name, proc = "/proc") {
   if (!Number.isInteger(pid) || pid <= 1 || !alive(pid))
     return false;
   try {
-    return fs.readFileSync(`${proc}/${pid}/cmdline`, "utf8").includes(name);
+    return fs2.readFileSync(`${proc}/${pid}/cmdline`, "utf8").includes(name);
   } catch {
-    if (fs.existsSync(proc))
+    if (fs2.existsSync(proc))
       return false;
     if (process.env.KUVO_BOX === "mac" || process.env.KUVO_AGENTS_HOME && !process.env.KUVO_AGENTS_REMOTE)
       return true;
@@ -655,9 +691,9 @@ function commandLine(pid) {
 }
 function commandLineOf(pid, proc = "/proc") {
   try {
-    return fs.readFileSync(`${proc}/${pid}/cmdline`, "utf8").split("\x00").join(" ").trim();
+    return fs2.readFileSync(`${proc}/${pid}/cmdline`, "utf8").split("\x00").join(" ").trim();
   } catch {
-    if (fs.existsSync(proc))
+    if (fs2.existsSync(proc))
       return;
     return commandLine(pid)?.trim() || undefined;
   }
@@ -677,7 +713,7 @@ function accountShell() {
 `).map((line) => line.split(":")).find((fields) => fields[2] === uid)?.[6]?.trim();
   let shell;
   try {
-    shell = shellOf(fs.readFileSync("/etc/passwd", "utf8"));
+    shell = shellOf(fs2.readFileSync("/etc/passwd", "utf8"));
   } catch {}
   if (!shell) {
     try {
@@ -748,7 +784,7 @@ async function loginPath(env = process.env, wait = { interactive: 6000, login: 2
 var savedPathFile = (home) => path.join(home, "run", "login-path");
 function savedLoginPath(home) {
   try {
-    const saved = fs.readFileSync(savedPathFile(home), "utf8").trim();
+    const saved = fs2.readFileSync(savedPathFile(home), "utf8").trim();
     return saved.startsWith("/") ? saved : undefined;
   } catch {
     return;
@@ -756,15 +792,15 @@ function savedLoginPath(home) {
 }
 function saveLoginPath(home, value) {
   try {
-    fs.mkdirSync(path.dirname(savedPathFile(home)), { recursive: true, mode: 448 });
-    fs.writeFileSync(savedPathFile(home) + ".new", value + `
+    fs2.mkdirSync(path.dirname(savedPathFile(home)), { recursive: true, mode: 448 });
+    fs2.writeFileSync(savedPathFile(home) + ".new", value + `
 `, { mode: 384 });
-    fs.renameSync(savedPathFile(home) + ".new", savedPathFile(home));
+    fs2.renameSync(savedPathFile(home) + ".new", savedPathFile(home));
   } catch {}
 }
 function sandboxGeneration(on) {
   try {
-    return fs.readFileSync(on, "utf8").trim();
+    return fs2.readFileSync(on, "utf8").trim();
   } catch {
     return "";
   }
@@ -793,11 +829,11 @@ function useOf(rows, pid, command, asleep) {
 }
 function linuxUse(pid, proc) {
   const rows = [];
-  for (const name of fs.readdirSync(proc)) {
+  for (const name of fs2.readdirSync(proc)) {
     if (!/^\d+$/.test(name))
       continue;
     try {
-      const stat = fs.readFileSync(`${proc}/${name}/stat`, "utf8");
+      const stat = fs2.readFileSync(`${proc}/${name}/stat`, "utf8");
       const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
       const [utime, stime, cutime, cstime] = fields.slice(11, 15).map(Number);
       rows.push({ pid: Number(name), ppid: Number(fields[1]), state: fields[0], seconds: (utime + stime + (Number(name) === pid ? 0 : cutime + cstime)) / 100 });
@@ -805,7 +841,7 @@ function linuxUse(pid, proc) {
   }
   let command = "";
   try {
-    command = fs.readFileSync(`${proc}/${pid}/cmdline`, "utf8").replaceAll("\x00", " ").trim();
+    command = fs2.readFileSync(`${proc}/${pid}/cmdline`, "utf8").replaceAll("\x00", " ").trim();
   } catch {
     return null;
   }
@@ -814,8 +850,8 @@ function linuxUse(pid, proc) {
 }
 function threadsAsleep(pid, proc) {
   try {
-    return fs.readdirSync(`${proc}/${pid}/task`).every((thread) => {
-      const stat = fs.readFileSync(`${proc}/${pid}/task/${thread}/stat`, "utf8");
+    return fs2.readdirSync(`${proc}/${pid}/task`).every((thread) => {
+      const stat = fs2.readFileSync(`${proc}/${pid}/task/${thread}/stat`, "utf8");
       return stat.slice(stat.lastIndexOf(")") + 2).startsWith("S");
     });
   } catch {
@@ -845,7 +881,7 @@ function macUse(table, pid) {
   return useOf(rows, pid, command, "SI");
 }
 async function processUse(pid, proc = "/proc") {
-  if (fs.existsSync(proc)) {
+  if (fs2.existsSync(proc)) {
     try {
       return linuxUse(pid, proc);
     } catch {
@@ -1279,6 +1315,15 @@ class ArtifactStore {
   }
   at(path) {
     return this.artifacts.get(ArtifactStore.idOf(path));
+  }
+  asSeen(path) {
+    const artifact = this.at(path);
+    const read = this.read(path);
+    if (read === null)
+      return true;
+    if (!read)
+      return !artifact || artifact.gone !== null;
+    return !!artifact && !artifact.gone && artifact.versions.at(-1)?.hash === read.hash;
   }
   queue = Promise.resolve();
   inTurn(paths, work) {
@@ -1904,12 +1949,12 @@ function recordable(path) {
     return rest[1] === "skills" && rest.length > 3 && !rest.some((part) => skipped.has(part));
   return !rest.some((part) => skipped.has(part) || part.startsWith("."));
 }
-function watchTree(folder, changed, failed, { limit = 4000, linux = process.platform === "linux" } = {}) {
+function watchTree(folder, changed, failed, { limit = 4000, linux = process.platform === "linux", missed = () => {} } = {}) {
   if (!linux) {
-    const watcher = watch(folder, { recursive: true }, (_, name) => {
+    const watcher = watchFolder(folder, (_, name) => {
       if (name)
-        changed(join7(folder, name.toString()));
-    });
+        changed(join7(folder, name));
+    }, { recursive: true, missed });
     watcher.on("error", (error) => failed(String(error?.message ?? error)));
     return { close: () => watcher.close() };
   }
@@ -1981,6 +2026,7 @@ class BotFolders {
   watcher;
   watching = false;
   pending = new Map;
+  lookedAt = 0;
   constructor(store, recorder, bots, settle = 1000) {
     this.store = store;
     this.recorder = recorder;
@@ -1988,6 +2034,7 @@ class BotFolders {
     this.settle = settle;
   }
   start({ watch: watches = true } = {}) {
+    this.lookedAt = Date.now();
     for (const bot of this.list())
       this.baseline(bot);
     if (!watches)
@@ -1997,7 +2044,7 @@ class BotFolders {
       this.watcher = watchTree(this.bots, (path) => this.changed(path), (why) => {
         console.error("artifacts: bots' folders aren't all watched:", why);
         this.watching = false;
-      });
+      }, { missed: () => this.missed() });
     } catch (error) {
       console.error("artifacts: bots' folders can't be watched:", error?.message ?? error);
       this.watching = false;
@@ -2008,6 +2055,14 @@ class BotFolders {
     for (const timer of this.pending.values())
       clearTimeout(timer);
     this.pending.clear();
+  }
+  missed() {
+    const since = this.lookedAt;
+    this.lookedAt = Date.now();
+    for (const path of changedSince(this.bots, since, (inside) => recordable(inside))) {
+      if (!this.pending.has(path) && !this.store.asSeen(path))
+        this.changed(path);
+    }
   }
   changed(path) {
     const inside = relative2(this.bots, path);
@@ -18537,7 +18592,7 @@ function coveredBy(patterns, action, resources) {
   });
 }
 var agentActions = new Set(["*", "edit", "write", "patch", "shell", "bash", "read", "webfetch", "websearch", "external_directory"]);
-var looks = new Set(["read", "glob", "grep", "list", "websearch", "todowrite", "todoread", "question"]);
+var looks2 = new Set(["read", "glob", "grep", "list", "websearch", "todowrite", "todoread", "question"]);
 function strictest(rules, action, parts) {
   let result;
   for (const part of parts.length ? parts : ["*"]) {
@@ -20358,7 +20413,7 @@ ${live.agentPrompt}` : ""
       if (outside === "ask" && !this.allowedOutside(live, folders))
         return "ask";
     }
-    if (live.blocks === undefined && !looks.has(ask.action))
+    if (live.blocks === undefined && !looks2.has(ask.action))
       return "ask";
     if (hidesFromBlocks(live.blocks, ask))
       return "ask";
@@ -20402,7 +20457,7 @@ ${live.agentPrompt}` : ""
       if (blocks !== undefined)
         live.blocks = blocks;
     }
-    const unknown = live.blocks === undefined && !looks.has(ask.action);
+    const unknown = live.blocks === undefined && !looks2.has(ask.action);
     if (live.blocks && strictest(live.blocks, ask.action, parts) === "deny")
       return "reject";
     if (plan && changes2.has(ask.action))
@@ -22758,14 +22813,14 @@ function member(bot) {
   return { id: bot.id, name: bot.name, look: bot.look, session: bot.sessionID, directory: bot.directory, agents: bot.agents };
 }
 var plainLook = { color: "graphite", shape: "round", face: "calm" };
-var looks2 = {
+var looks3 = {
   color: ["mint", "sky", "indigo", "violet", "pink", "coral", "orange", "amber", "lime", "graphite"],
   shape: ["round", "squircle", "pebble", "gem", "bloom"],
   face: ["calm", "happy", "sleepy", "wink", "curious", "bright"]
 };
 function knownLook(look) {
   const given = look && typeof look === "object" && !Array.isArray(look) ? look : {};
-  const pick = (key) => typeof given[key] === "string" && looks2[key].includes(given[key]) ? given[key] : plainLook[key];
+  const pick = (key) => typeof given[key] === "string" && looks3[key].includes(given[key]) ? given[key] : plainLook[key];
   return { color: pick("color"), shape: pick("shape"), face: pick("face") };
 }
 function memberThere(bot, runner) {
@@ -23153,32 +23208,32 @@ class SeatAPI {
 }
 
 // Packages/Box/src/shared/queues.ts
-import fs3 from "fs";
+import fs4 from "fs";
 import path3 from "path";
 
 // Packages/Box/src/shared/files.ts
-import fs2 from "fs";
+import fs3 from "fs";
 import path2 from "path";
 function writePrivate(file, text) {
-  fs2.mkdirSync(path2.dirname(file), { recursive: true, mode: 448 });
+  fs3.mkdirSync(path2.dirname(file), { recursive: true, mode: 448 });
   const temporary = `${file}.${process.pid}.tmp`;
-  fs2.writeFileSync(temporary, text, { mode: 384 });
-  fs2.renameSync(temporary, file);
+  fs3.writeFileSync(temporary, text, { mode: 384 });
+  fs3.renameSync(temporary, file);
 }
 function take(lock, stale) {
   try {
-    fs2.mkdirSync(lock);
+    fs3.mkdirSync(lock);
     return true;
   } catch {
     try {
-      if (Date.now() - fs2.statSync(lock).mtimeMs > stale)
-        fs2.rmdirSync(lock);
+      if (Date.now() - fs3.statSync(lock).mtimeMs > stale)
+        fs3.rmdirSync(lock);
     } catch {}
     return false;
   }
 }
 function hold2(lock, stale, wait) {
-  fs2.mkdirSync(path2.dirname(lock), { recursive: true, mode: 448 });
+  fs3.mkdirSync(path2.dirname(lock), { recursive: true, mode: 448 });
   const nap = new Int32Array(new SharedArrayBuffer(4));
   for (let i = 0;i < wait / 10; i++) {
     if (take(lock, stale))
@@ -23194,7 +23249,7 @@ function locked(lock, work, { stale = 1e4, wait = 3000 } = {}) {
   } finally {
     if (held)
       try {
-        fs2.rmdirSync(lock);
+        fs3.rmdirSync(lock);
       } catch {}
   }
 }
@@ -23228,7 +23283,7 @@ var RESUMED_FOR = 60000;
 function readQueues(files) {
   let all = {};
   try {
-    all = JSON.parse(fs3.readFileSync(files.file, "utf8"));
+    all = JSON.parse(fs4.readFileSync(files.file, "utf8"));
   } catch {}
   return isObject(all) ? Object.fromEntries(Object.entries(all).map(([session, state]) => [session, keptState(state)])) : {};
 }
@@ -26564,11 +26619,11 @@ ${all}`;
 }
 
 // Packages/Box/src/agents/renewal.ts
-import { statSync as statSync12, watch as watch2 } from "fs";
+import { statSync as statSync12 } from "fs";
 import { dirname as dirname17 } from "path";
 
 // Packages/Box/src/shared/bundle.ts
-import fs4 from "fs";
+import fs5 from "fs";
 var BUILT = /\/\/ Built from Packages\/Box\/src\/agents ([0-9a-f]{16,64})\s*(?:\n|$)/g;
 function buildOf(text) {
   let found = null;
@@ -26579,18 +26634,18 @@ function buildOf(text) {
 function bundleBuild(file) {
   let handle;
   try {
-    handle = fs4.openSync(file, "r");
-    const size = fs4.fstatSync(handle).size;
+    handle = fs5.openSync(file, "r");
+    const size = fs5.fstatSync(handle).size;
     const length = Math.min(size, 1024);
     const tail = Buffer.alloc(length);
-    fs4.readSync(handle, tail, 0, length, size - length);
+    fs5.readSync(handle, tail, 0, length, size - length);
     return buildOf(tail.toString("utf8"));
   } catch {
     return null;
   } finally {
     if (handle !== undefined)
       try {
-        fs4.closeSync(handle);
+        fs5.closeSync(handle);
       } catch {}
   }
 }
@@ -26639,7 +26694,7 @@ class Renewal {
     this.looking = setInterval(() => this.look(), renewalTiming.look);
     this.looking.unref?.();
     try {
-      this.watching = watch2(dirname17(this.options.script), () => this.look());
+      this.watching = watchFolder(dirname17(this.options.script), () => this.look());
     } catch {}
     this.look();
   }
@@ -26774,7 +26829,7 @@ class Renewal {
 }
 
 // Packages/Box/src/shared/engines.ts
-import fs5 from "fs";
+import fs6 from "fs";
 import path4 from "path";
 function byNumbers(a, b) {
   const [x, y] = [a, b].map((version) => version.split(".").map((part) => parseInt(part, 10) || 0));
@@ -26786,11 +26841,11 @@ function byNumbers(a, b) {
 function enginesThere(root) {
   let names = [];
   try {
-    names = fs5.readdirSync(path4.join(root, "engine"));
+    names = fs6.readdirSync(path4.join(root, "engine"));
   } catch {}
   const runs = (name) => {
     try {
-      fs5.accessSync(path4.join(root, "engine", name, "opencode"), fs5.constants.X_OK);
+      fs6.accessSync(path4.join(root, "engine", name, "opencode"), fs6.constants.X_OK);
       return true;
     } catch {
       return false;
@@ -26801,27 +26856,27 @@ function enginesThere(root) {
 function keeperEngine(root) {
   let named;
   try {
-    named = /^V=([0-9][0-9A-Za-z.+-]*)$/m.exec(fs5.readFileSync(path4.join(root, "bin", "kuvo-start"), "utf8"))?.[1];
+    named = /^V=([0-9][0-9A-Za-z.+-]*)$/m.exec(fs6.readFileSync(path4.join(root, "bin", "kuvo-start"), "utf8"))?.[1];
   } catch {}
   const there = enginesThere(root);
   return named && there.includes(named) ? named : there.at(-1) ?? null;
 }
 
 // Packages/Box/src/shared/updating.ts
-import fs6 from "fs";
+import fs7 from "fs";
 import path5 from "path";
 function updateUnderWay(run) {
   const lock = path5.join(run, ".updating");
-  if (!fs6.existsSync(lock))
+  if (!fs7.existsSync(lock))
     return false;
   let pid = null;
   try {
-    pid = Number(fs6.readFileSync(path5.join(lock, "pid"), "utf8"));
+    pid = Number(fs7.readFileSync(path5.join(lock, "pid"), "utf8"));
   } catch {}
   if (pid)
     return processRuns(pid, "kuvo-link");
   try {
-    return Date.now() - fs6.statSync(lock).mtimeMs < 60000;
+    return Date.now() - fs7.statSync(lock).mtimeMs < 60000;
   } catch {
     return false;
   }
@@ -26931,7 +26986,7 @@ class Store {
 }
 
 // Packages/Box/src/shared/hang.ts
-import fs7 from "fs";
+import fs8 from "fs";
 import net from "net";
 import path6 from "path";
 var LOOK_EVERY = 30000;
@@ -27039,21 +27094,21 @@ class HangWatch {
   }
   server() {
     try {
-      const { pid, port } = JSON.parse(fs7.readFileSync(this.options.record, "utf8"));
+      const { pid, port } = JSON.parse(fs8.readFileSync(this.options.record, "utf8"));
       return Number.isInteger(pid) && pid > 1 && Number.isInteger(port) && port > 0 ? { pid, port } : null;
     } catch {
       return null;
     }
   }
   stoppedOnPurpose() {
-    return ["stopped", ".launching", ".updating", ".system-asking"].some((name) => fs7.existsSync(path6.join(this.options.run, name)));
+    return ["stopped", ".launching", ".updating", ".system-asking"].some((name) => fs8.existsSync(path6.join(this.options.run, name)));
   }
   endedLately() {
     const file = path6.join(this.options.run, `hung-${this.options.name}.json`);
-    if (!fs7.existsSync(file))
+    if (!fs8.existsSync(file))
       return [];
     try {
-      const times = JSON.parse(fs7.readFileSync(file, "utf8"));
+      const times = JSON.parse(fs8.readFileSync(file, "utf8"));
       return Array.isArray(times) ? times.filter((time) => typeof time === "number" && this.now() - time < ENDED_WHILE && time <= this.now()) : null;
     } catch {
       return null;
@@ -27069,8 +27124,8 @@ class HangWatch {
     }
     const file = path6.join(this.options.run, `hung-${this.options.name}.json`);
     try {
-      fs7.writeFileSync(`${file}.new`, JSON.stringify([...lately, this.now()]), { mode: 384 });
-      fs7.renameSync(`${file}.new`, file);
+      fs8.writeFileSync(`${file}.new`, JSON.stringify([...lately, this.now()]), { mode: 384 });
+      fs8.renameSync(`${file}.new`, file);
     } catch {
       console.error(`The ${this.options.name} has said nothing for ${minutes} minutes, but that can't be noted in ${file}: it's left as it is, for you to restart.`);
       return;
@@ -27446,4 +27501,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 2018364d9713c63593cbc77563fa4be0fa66f127df0f75688b325b58df4660b0
+// Built from Packages/Box/src/agents 680728f4e6f3b7f927cf9aa3228e7c2084a2db85e4fa8ee3ca49f23e0946bb6c

@@ -233,6 +233,15 @@ export class ArtifactStore {
     return this.artifacts.get(ArtifactStore.idOf(path))
   }
 
+  /** Whether `path` is as the record last saw it: its newest version, or gone (or never there) as it says. */
+  asSeen(path: string): boolean {
+    const artifact = this.at(path)
+    const read = this.read(path)
+    if (read === null) return true
+    if (!read) return !artifact || artifact.gone !== null
+    return !!artifact && !artifact.gone && artifact.versions.at(-1)?.hash === read.hash
+  }
+
   /** What's being recorded: one at a time, in the order asked, each once git has said what it ignores. */
   private queue: Promise<unknown> = Promise.resolve()
 

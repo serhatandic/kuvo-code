@@ -299,8 +299,9 @@ async function* followView(owner: string, targets: Target[], signal?: AbortSigna
   // locks and the numbers there.)
   try { fs.mkdirSync(TOLD, { recursive: true, mode: 0o700 }); } catch {}
   const queuesWatch = watchFolders([path.join(WORK_QUEUE, "queues"), TOLD], told, { recursive: false });
-  // (And what GitHub said of its issues and pull requests, read as it's shown.)
-  const categoriesWatch = watchFolders([WORK_QUEUE], ((_: unknown, name: unknown) => { if (["categories.json", path.basename(SEEN_FILE)].includes(String(name ?? ""))) told(); }) as () => void, { recursive: false });
+  // (And what GitHub said of its issues and pull requests, read as it's shown; told nothing, a look
+  // for what the watch missed.)
+  const categoriesWatch = watchFolders([WORK_QUEUE], ((event: unknown, name: unknown) => { if (event === undefined || ["categories.json", path.basename(SEEN_FILE)].includes(String(name ?? ""))) told(); }) as () => void, { recursive: false });
   const watching = { close: () => { queuesWatch.close(); categoriesWatch.close(); } };
   signal?.addEventListener("abort", () => wake?.(), { once: true });
   let last = "";

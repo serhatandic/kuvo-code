@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { script, served, standInHost } from "./bot-keys-scenarios.js";
 import { removeAtEnd } from "./at-end.js";
+import { appears } from "./vault-waits.js";
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-upgrade-host-")));
 const home = path.join(root, "box");
@@ -115,8 +116,6 @@ test("this Mac's box starting, as its app or keeper starts it: up to date before
   let letGo = () => {};
   const held = new Promise(resolve => { letGo = resolve; });
   host.onDelete = () => { host.onDelete = null; return held; };
-  let poke = () => {};
-  const watcher = fs.watch(path.dirname(settingsFile), () => poke());
   // (Its password, which the box took out of this process's environment as it loaded here.)
   const box = await served({ ...process.env, KUVO_HOST_PASSWORD: PASSWORD, KUVO_TEST_NO_PEERS: "1" });
   try {
@@ -127,12 +126,11 @@ test("this Mac's box starting, as its app or keeper starts it: up to date before
     assert.deepEqual(atItsAddress.figma, older().figma, "not while its key is its app's to take away");
 
     letGo();
-    while (servers().figma.url === undefined) await new Promise(resolve => { poke = resolve; });
+    await appears(path.dirname(settingsFile), () => servers().figma.url !== undefined);
     assert.deepEqual(servers().figma, figmaNow);
     assert.equal(host.keys.has(FIGMA), false);
   } finally {
     letGo();
-    watcher.close();
     await box.stop();
     fs.rmSync(catalog, { force: true });
   }

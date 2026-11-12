@@ -299,6 +299,25 @@ describe("a bot's folder", () => {
       folders.stop()
     }
   })
+
+  test("a file a command made that the watch never told (as it, or another watch, started) is that turn's all the same, once it looks again; what it has as it is stays untouched", async () => {
+    const folder = bot("bot_ada", "m\n")
+    const folders = watched()
+    // Quiet from here: as the system's stream is in the moment it's made anew.
+    folders.stop()
+    await hear([{ type: "session.execution.started", data: { sessionID: "ses_bot_ada" } }, { type: "session.inbox.delivered", data: { sessionID: "ses_bot_ada", inboxID: "msg_1" } }])
+    const report = join(folder, "workspace", "weekly.csv")
+    writeFileSync(report, "week,sales\n1,10\n")
+    folders.missed()
+    await hear([{ type: "session.execution.succeeded", data: { sessionID: "ses_bot_ada" } }])
+    const { value } = await route("GET", "kuvo/artifacts?bot=bot_ada")
+    expect(value.artifacts.map((artifact: any) => artifact.name)).toEqual(["weekly.csv"])
+    expect(value.artifacts[0].latest).toMatchObject({ via: ["shell"], turn: { session: "ses_bot_ada", message: "msg_1" }, by: { kind: "agent", bot: "bot_ada" } })
+    // Its memory, made just before the watch and as the record has it: no version, nor the turn's.
+    const { value: memory } = await route("GET", `kuvo/artifacts/${ArtifactStore.idOf(join(folder, "MEMORY.md"))}`)
+    expect(memory.versions.map((version: any) => version.n)).toEqual([0])
+    expect(memory.where.sessions).toEqual([])
+  })
 })
 
 describe("files a command made", () => {

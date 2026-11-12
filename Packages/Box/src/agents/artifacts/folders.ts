@@ -6,6 +6,7 @@
 
 import { readdirSync, readFileSync, statSync, watch, type FSWatcher } from "node:fs"
 import { join, relative, sep } from "node:path"
+import { watchFolder } from "../../shared/watch"
 import type { Recorder } from "./recorder"
 import { copyLimit, type ArtifactStore, type Made } from "./store"
 import { changedSince, skipped } from "./turnfiles"
@@ -28,16 +29,18 @@ export function recordable(path: string): boolean {
 
 /**
  * `folder` and what's in it watched, `changed` told each path that changes, the same on macOS and
- * Linux: on macOS, one recursive watch (FSEvents, a single stream however many folders); on Linux,
- * where each folder takes one of the user's inotify watches, a watch of each folder but tools' and
- * caches' (`skipped`, dot folders but a bot's skills), added as folders come, at most `limit`.
- * `failed`: it can't keep watching (out of watches); what's still watched stays.
+ * Linux: on macOS, one recursive watch (FSEvents, a single stream however many folders), and
+ * `missed` told a moment after it or any other watch in the process starts or stops, for what the
+ * stream didn't tell then (`watchFolder`); on Linux, where each folder takes one of the user's
+ * inotify watches, a watch of each folder but tools' and caches' (`skipped`, dot folders but a
+ * bot's skills), added as folders come, at most `limit`. `failed`: it can't keep watching (out of
+ * watches); what's still watched stays.
  */
-export function watchTree(folder: string, changed: (path: string) => void, failed: (why: string) => void, { limit = 4000, linux = process.platform === "linux" } = {}) {
+export function watchTree(folder: string, changed: (path: string) => void, failed: (why: string) => void, { limit = 4000, linux = process.platform === "linux", missed = () => {} } = {}) {
   if (!linux) {
-    const watcher = watch(folder, { recursive: true }, (_, name) => {
-      if (name) changed(join(folder, name.toString()))
-    })
+    const watcher = watchFolder(folder, (_, name) => {
+      if (name) changed(join(folder, name))
+    }, { recursive: true, missed })
     watcher.on("error", (error: any) => failed(String(error?.message ?? error)))
     return { close: () => watcher.close() }
   }
@@ -102,6 +105,8 @@ export class BotFolders {
   /** The watch is up: every change is told (on Linux, it ends when the system's watches run out). */
   private watching = false
   private pending = new Map<string, ReturnType<typeof setTimeout>>()
+  /** Since when what the watch may not have told was last looked for. */
+  private lookedAt = 0
 
   constructor(
     private readonly store: ArtifactStore,
@@ -112,6 +117,7 @@ export class BotFolders {
 
   /** Its bots' memory noted as it is, and (`watch`) the folder watched from now on. */
   start({ watch: watches = true }: { watch?: boolean } = {}) {
+    this.lookedAt = Date.now()
     for (const bot of this.list()) this.baseline(bot)
     if (!watches) return
     // Without a whole watch, each turn's end looks instead (`turnEnded`).
@@ -120,7 +126,7 @@ export class BotFolders {
       this.watcher = watchTree(this.bots, (path) => this.changed(path), (why) => {
         console.error("artifacts: bots' folders aren't all watched:", why)
         this.watching = false
-      })
+      }, { missed: () => this.missed() })
     } catch (error: any) {
       console.error("artifacts: bots' folders can't be watched:", error?.message ?? error)
       this.watching = false
@@ -131,6 +137,17 @@ export class BotFolders {
     this.watcher?.close()
     for (const timer of this.pending.values()) clearTimeout(timer)
     this.pending.clear()
+  }
+
+  /** What changed since it last looked, for what the watch may not have told (as it started, or
+   * as another started or stopped): each the record hasn't seen as it is, as the watch would have
+   * told it. */
+  missed() {
+    const since = this.lookedAt
+    this.lookedAt = Date.now()
+    for (const path of changedSince(this.bots, since, (inside) => recordable(inside))) {
+      if (!this.pending.has(path) && !this.store.asSeen(path)) this.changed(path)
+    }
   }
 
   /** A file in a bot's folder changed: recorded once it settles (or its turn ends). */

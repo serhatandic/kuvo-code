@@ -23,6 +23,7 @@ import { pathToFileURL } from "node:url";
 import { script, sshAgentsOf } from "./bot-keys-scenarios.js";
 import { NO_BUN, testBun } from "./bun-for-tests.js";
 import { removeAtEnd } from "./at-end.js";
+import { appears } from "./vault-waits.js";
 
 // In the folder tests keep in your home (not the temporary folders, which commands may write), so
 // what a command mustn't write is somewhere it otherwise couldn't.
@@ -219,13 +220,9 @@ function byHand(box, folder, ...args) {
   return spawnSync(path.join(box.home, "bin", "kuvo-wake"), [folder, ...args], { env: { PATH: process.env.PATH, HOME: root, KUVO_BOTS: box.bots, KUVO_WAKES: box.wakes }, encoding: "utf8" });
 }
 
-// Until `done` holds, a change in `folder` at a time (no clock).
-function changeIn(folder, done) {
-  return new Promise(resolve => {
-    if (done()) return resolve();
-    const watcher = fs.watch(folder, () => { if (done()) { watcher.close(); resolve(); } });
-  });
-}
+// Until `done` holds, looked at as `folder` changes (no clock; and now and then, for what a watch
+// misses as it starts).
+const changeIn = (folder, done) => appears(folder, done);
 
 test("set up wherever it can run as the box starts, waiting only for the engine, with no switch to turn it off", async () => {
   const box = boxAt("always");
