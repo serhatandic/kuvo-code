@@ -8,7 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { APP_KEY_FILES, INTEGRATION_DATA, K, homeFolder } from "../home";
 import { engineList } from "../engine/client";
-import { askedAbout } from "../fence/policy";
+import { askedAbout, homeSecrets } from "../fence/policy";
 import { readSettings, valueAt } from "./config";
 import type { EngineRecord } from "../../shared/records";
 import type { ClaudeCode, ClaudeCodeImport } from "../../shared/routes/settings";
@@ -68,22 +68,30 @@ const CLAUDE_DEPTH_LIMIT = 4;
 type Walk = { bytes: number; entries: number; places: Places; listed: Set<string> };
 
 /** Where ~/.claude's links may lead: anywhere in your home folder (your dotfiles, as GNU stow links
- * them), and the Nix store (as home-manager does), but never into `refused`, where your keys and
- * sign-ins are. */
-type Places = { roots: string[]; refused: string[] };
+ * them), the Nix store (as home-manager does) and wherever ~/.claude itself leads, but never into
+ * `refused`, where your keys and sign-ins are. `store`: the Nix store, where it really is. */
+type Places = { roots: string[]; refused: string[]; store: string[] };
 
 /** Your home's folders that hold keys and sign-ins: never read, nor listed, through a link, whatever
- * the file's called. (Your Keychains are in ~/Library; Linux's keyrings in ~/.local/share/keyrings.) */
+ * the file's called; and those the sandbox keeps commands from (`homeSecrets`). (Your Keychains are
+ * in ~/Library; Linux's keyrings in ~/.local/share/keyrings.) */
 const REFUSED_FOLDERS = [".ssh", ".gnupg", ".aws", path.join(".config", "gh"), ".kuvo-code", "Library", path.join(".local", "share", "keyrings")];
 
-async function claudePlaces(): Promise<Places> {
+async function claudePlaces(claude: string): Promise<Places> {
   const home = homeFolder();
-  // Each by its name and by where it is, should it be a link itself (~/.ssh in your dotfiles).
+  // Each by its name and by where it is, should it be a link itself (~/.ssh in your dotfiles, a
+  // /nix moved to another disk).
   const both = async (folder: string) => [folder, await fs.promises.realpath(folder).catch(() => folder)];
-  const refused = [...REFUSED_FOLDERS.map(each => path.join(home, each)), K, INTEGRATION_DATA, ...(APP_KEY_FILES ? [APP_KEY_FILES] : [])];
+  const refused = [...[...REFUSED_FOLDERS, ...homeSecrets()].map(each => path.join(home, each)), K, INTEGRATION_DATA, ...(APP_KEY_FILES ? [APP_KEY_FILES] : [])];
+  const store = await both("/nix/store");
+  // (~/.claude itself, linked to your dotfiles on another disk, say: never a folder your home is in,
+  // which would be others' too.)
+  const homes = await both(home);
+  const own = await fs.promises.realpath(claude).catch(() => null);
   return {
-    roots: [...await both(home), "/nix/store"],
+    roots: [...homes, ...store, ...(own && !homes.some(each => within(each, own)) ? [own] : [])],
     refused: (await Promise.all(refused.map(both))).flat(),
+    store,
   };
 }
 
@@ -116,10 +124,12 @@ const O_NOFOLLOW_ANY = 0x20000000;
  * to a file it can't read itself, so where the file really is, and its own name there, are what
  * count. Never a pipe or a device, which would hold the read, nor a file so big it would, nor one
  * with other names (a hard link: nothing says what its other names are, so one to your key, named
- * `x.md` in ~/.claude, can't be told from yours). Opened where its links lead, without waiting on a
- * pipe, and so a folder swapped for a link meanwhile isn't read through: on a Mac, opened with no
- * link anywhere in the path (`O_NOFOLLOW_ANY`); on Linux, which has no such open, checked again
- * where the system says the open file is. */
+ * `x.md` in ~/.claude, can't be told from yours), but the system's own in the Nix store (one that
+ * keeps a file once, `auto-optimise-store`, links every file to its copy; a link to your key would
+ * still be yours). Opened where its links lead, without waiting on a pipe, and so a folder swapped
+ * for a link meanwhile isn't read through: on a Mac, opened with no link anywhere in the path
+ * (`O_NOFOLLOW_ANY`); on Linux, which has no such open, checked again where the system says the
+ * open file is, and not read where it can't say. */
 async function readClaudeFile(file: string, walk: Walk): Promise<string | null> {
   let real: string;
   try { real = await fs.promises.realpath(file); } catch { return null; }
@@ -129,9 +139,10 @@ async function readClaudeFile(file: string, walk: Walk): Promise<string | null> 
   try { handle = await fs.promises.open(real, fs.constants.O_RDONLY | noLinks | fs.constants.O_NONBLOCK); } catch { return null; }
   try {
     const stat = await handle.stat();
-    if (!stat.isFile() || stat.nlink > 1 || stat.size > CLAUDE_FILE_LIMIT || stat.size > walk.bytes) return null;
+    if (!stat.isFile() || stat.size > CLAUDE_FILE_LIMIT || stat.size > walk.bytes) return null;
+    if (stat.nlink > 1 && !(stat.uid === 0 && walk.places.store.some(store => within(real, store)))) return null;
     const at = await openedAt(handle);
-    if (at !== null && !mayRead(at, walk.places)) return null;
+    if (process.platform === "linux" && (at === null || !mayRead(at, walk.places))) return null;
     // (And still the same file, opened: where macOS's open can't say no to a link, an older one's.)
     const again = await fs.promises.stat(real).catch(() => null);
     if (!again || again.dev !== stat.dev || again.ino !== stat.ino) return null;
@@ -197,7 +208,7 @@ export async function claudeCodeList(folder: string, settings: unknown, others: 
   const entry = (name: string, description: string, at: string[], value: Record<string, string>): ClaudeCodeImport =>
     ({ name, description, path: at, settings: value, imported: valueAt(settings, at) !== undefined });
   // (Where its links lead: a ~/.claude, or its agents or commands, linked to your dotfiles is read there.)
-  const walk: Walk = { bytes: CLAUDE_TOTAL_LIMIT, entries: CLAUDE_ENTRY_LIMIT, places: await claudePlaces(), listed: new Set() };
+  const walk: Walk = { bytes: CLAUDE_TOTAL_LIMIT, entries: CLAUDE_ENTRY_LIMIT, places: await claudePlaces(folder), listed: new Set() };
   const agents = (await markdownFiles(path.join(folder, "agents"), walk)).flatMap(file => {
     const { fields, body } = parseClaudeFile(file.text);
     const name = fields.name || file.name;

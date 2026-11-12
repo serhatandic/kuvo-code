@@ -292,6 +292,11 @@ const MAC_SECRETS = ["Library/Application Support/Google/Chrome", "Library/Appli
 // (`Library/Keychains/<UUID>`), which only its daemons read: `keychainDaemons`.
 const LINUX_SECRETS = [".config/google-chrome", ".config/chromium", ".config/BraveSoftware", ".mozilla", ".local/share/keyrings"];
 
+/** Your secrets by name in your home folder, as commands are kept from them here (not your SSH keys
+ * by name, nor gh's sign-in, which the policy reads ~/.ssh and gh's settings for): what else reads
+ * your home for an agent keeps out of them too (`claude-code.ts`). */
+export const homeSecrets = (): string[] => [...SECRETS, ...(process.platform === "darwin" ? MAC_SECRETS : LINUX_SECRETS)];
+
 /** The system's own keychain folders in your Keychain's (`Library/Keychains/<UUID>`), which only
  * its daemons read, never gh or git themselves. */
 function keychainDaemons(home: string): string[] {

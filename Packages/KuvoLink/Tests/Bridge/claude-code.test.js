@@ -134,6 +134,9 @@ test("only Markdown files are offered: not a link to a key or another file, a ha
     fs.symlinkSync(path.join(other, ".ssh", "keys.md"), path.join(folder, "commands", "keys.md"));
     fs.symlinkSync(path.join(other, ".aws", "notes.md"), path.join(folder, "commands", "account.md"));
     fs.symlinkSync(path.join(elsewhere, "theirs.md"), path.join(folder, "commands", "theirs.md"));
+    // (As the sandbox keeps commands from them: your passwords too.)
+    write(path.join(other, ".password-store", "notes.md"), "My passwords.\n");
+    fs.symlinkSync(path.join(other, ".password-store", "notes.md"), path.join(folder, "commands", "passwords.md"));
     // Nor a folder of them, through a link.
     fs.symlinkSync(path.join(other, ".ssh"), path.join(folder, "commands", "ssh"));
     // Nor a file with another name too (a hard link): its other names can't be told, so one to
@@ -202,7 +205,28 @@ test("a ~/.claude that's a link (to your dotfiles, say) is read where it leads",
   }
 });
 
-test("agents and commands linked into your dotfiles, folders or files (GNU stow, home-manager), are read where they lead", async () => {
+test("a ~/.claude linked out of your home folder (dotfiles on another disk) is read there, but no further", async () => {
+  const saved = process.env.HOME;
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-claude-code-home-"));
+  const disk = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-claude-code-disk-"));
+  removeAtEnd(other);
+  removeAtEnd(disk);
+  process.env.HOME = other;
+  try {
+    write(path.join(disk, "claude", "commands", "ship.md"), "Ship it.\n");
+    write(path.join(disk, "other.md"), "Not Claude Code's.\n");
+    fs.symlinkSync("../other.md", path.join(disk, "claude", "commands", "other.md"));
+    fs.symlinkSync(path.join(disk, "claude"), path.join(other, ".claude"));
+    const handle = link.engineHandler(() => { throw new Error("not running"); });
+    const { json } = await answer(handle, "GET", "kuvo/claude-code");
+    assert.deepEqual(json.commands.map(command => command.name), ["ship"]);
+  } finally {
+    process.env.HOME = saved;
+  }
+});
+
+// (The Nix store, where home-manager links lead, is read as your home is; it isn't stood in for here.)
+test("agents and commands linked into your dotfiles, folders or files (GNU stow), are read where they lead", async () => {
   const saved = process.env.HOME;
   const other = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-claude-code-stow-"));
   removeAtEnd(other);
@@ -222,6 +246,10 @@ test("agents and commands linked into your dotfiles, folders or files (GNU stow,
     fs.symlinkSync("../../../more", path.join(dotfiles, "commands", "more"));
     // A file linked to a Markdown file of another name is read by the link's.
     fs.symlinkSync("../../../more/lint.md", path.join(dotfiles, "commands", "check.md"));
+    // Your keys in your dotfiles too, ~/.ssh linking there: still yours, where they really are.
+    write(path.join(other, "dotfiles", "ssh", "keys.md"), "My keys.\n");
+    fs.symlinkSync(path.join(other, "dotfiles", "ssh"), path.join(other, ".ssh"));
+    fs.symlinkSync("../../../ssh/keys.md", path.join(dotfiles, "commands", "keys.md"));
     const handle = link.engineHandler(() => { throw new Error("not running"); });
     const { json } = await answer(handle, "GET", "kuvo/claude-code");
     assert.deepEqual(json.agents.map(agent => agent.name), ["tester"]);

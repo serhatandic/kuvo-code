@@ -3529,6 +3529,7 @@ var MAC_SECRETS = [
   "Library/Application Support/Bitwarden"
 ];
 var LINUX_SECRETS = [".config/google-chrome", ".config/chromium", ".config/BraveSoftware", ".mozilla", ".local/share/keyrings"];
+var homeSecrets = () => [...SECRETS, ...process.platform === "darwin" ? MAC_SECRETS : LINUX_SECRETS];
 function keychainDaemons(home) {
   const folder = path16.join(home, "Library", "Keychains");
   try {
@@ -38919,13 +38920,17 @@ var CLAUDE_TOTAL_LIMIT = 4 * 1024 * 1024;
 var CLAUDE_ENTRY_LIMIT = 2000;
 var CLAUDE_DEPTH_LIMIT = 4;
 var REFUSED_FOLDERS = [".ssh", ".gnupg", ".aws", path125.join(".config", "gh"), ".kuvo-code", "Library", path125.join(".local", "share", "keyrings")];
-async function claudePlaces() {
+async function claudePlaces(claude) {
   const home = homeFolder();
   const both = async (folder) => [folder, await fs123.promises.realpath(folder).catch(() => folder)];
-  const refused = [...REFUSED_FOLDERS.map((each) => path125.join(home, each)), K, INTEGRATION_DATA, ...APP_KEY_FILES ? [APP_KEY_FILES] : []];
+  const refused = [...[...REFUSED_FOLDERS, ...homeSecrets()].map((each) => path125.join(home, each)), K, INTEGRATION_DATA, ...APP_KEY_FILES ? [APP_KEY_FILES] : []];
+  const store = await both("/nix/store");
+  const homes = await both(home);
+  const own = await fs123.promises.realpath(claude).catch(() => null);
   return {
-    roots: [...await both(home), "/nix/store"],
-    refused: (await Promise.all(refused.map(both))).flat()
+    roots: [...homes, ...store, ...own && !homes.some((each) => within5(each, own)) ? [own] : []],
+    refused: (await Promise.all(refused.map(both))).flat(),
+    store
   };
 }
 function within5(where, folder) {
@@ -38962,10 +38967,12 @@ async function readClaudeFile(file, walk) {
   }
   try {
     const stat = await handle.stat();
-    if (!stat.isFile() || stat.nlink > 1 || stat.size > CLAUDE_FILE_LIMIT || stat.size > walk.bytes)
+    if (!stat.isFile() || stat.size > CLAUDE_FILE_LIMIT || stat.size > walk.bytes)
+      return null;
+    if (stat.nlink > 1 && !(stat.uid === 0 && walk.places.store.some((store) => within5(real, store))))
       return null;
     const at = await openedAt(handle);
-    if (at !== null && !mayRead(at, walk.places))
+    if (process.platform === "linux" && (at === null || !mayRead(at, walk.places)))
       return null;
     const again = await fs123.promises.stat(real).catch(() => null);
     if (!again || again.dev !== stat.dev || again.ino !== stat.ino)
@@ -39032,7 +39039,7 @@ async function markdownFiles(folder, walk, depth = 0) {
 }
 async function claudeCodeList(folder, settings, others) {
   const entry = (name, description, at, value) => ({ name, description, path: at, settings: value, imported: valueAt(settings, at) !== undefined });
-  const walk = { bytes: CLAUDE_TOTAL_LIMIT, entries: CLAUDE_ENTRY_LIMIT, places: await claudePlaces(), listed: new Set };
+  const walk = { bytes: CLAUDE_TOTAL_LIMIT, entries: CLAUDE_ENTRY_LIMIT, places: await claudePlaces(folder), listed: new Set };
   const agents = (await markdownFiles(path125.join(folder, "agents"), walk)).flatMap((file) => {
     const { fields, body } = parseClaudeFile(file.text);
     const name = fields.name || file.name;
@@ -39258,7 +39265,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "5cba5e8b802e";
+var BRIDGE_VERSION = "e31705c05cdd";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

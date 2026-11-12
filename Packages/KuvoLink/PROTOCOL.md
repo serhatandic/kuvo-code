@@ -3119,12 +3119,14 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   its engine lists them). Import is writing `settings` at `path` (`["agents", "<id>"]` or
   `["commands", "<name>"]`) through this computer's `kuvo/config`; `imported` says whether its
   settings have it there. A computer with no `~/.claude` lists none. Links, to folders and files
-  alike, are followed where they lead in the user's home folder or `/nix/store` (dotfiles kept with
-  GNU stow or home-manager), each folder listed once, but never into `~/.ssh`, `~/.gnupg`,
-  `~/.aws`, `~/.config/gh`, `~/Library`, `~/.local/share/keyrings` or the box's own folders. A file
-  is read only where it's an ordinary file of 256 KB at most whose own name, where its links lead,
-  ends in `.md`: a link `x.md` to a key or to Claude Code's sign-in isn't, nor a hard link (its
-  other names can't be told), a pipe or a device. Commands' folders are read four deep, and no
+  alike, are followed where they lead in the user's home folder, `/nix/store` (dotfiles kept with
+  GNU stow or home-manager) or where `~/.claude` itself leads, each folder listed once, but never
+  into `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config/gh`, `~/Library`, `~/.local/share/keyrings`, the
+  box's own folders or the secrets its sandbox hides by name (`homeSecrets`). A file is read only
+  where it's an ordinary file of 256 KB at most whose own name, where its links lead, ends in `.md`:
+  a link `x.md` to a key or to Claude Code's sign-in isn't, nor a hard link (its other names can't
+  be told; but root's in the Nix store, which an optimised store makes of every file), a pipe or a
+  device. Commands' folders are read four deep, and no
   more than 2,000 entries and 4 MB in all. Each computer offers its own:
   a client asks a machine's box for the machine's, never a Mac for it (`?machine=`, which a Mac's
   app once answered with the Mac's `~/.claude`, is `404`).
