@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run the box and machine bridge suites with their shared heavy-job slot.
+# Run the box and machine bridge suites in a slot of heavy.sh's box lane (two runs may go at once).
 set -u
 root=$(cd "$(dirname "$0")/.." && pwd -P)
 mode=${1:-all}
@@ -54,5 +54,4 @@ for suite in box bridge; do
         fi
     fi
 done
-case "$root/" in "$HOME/.kuvo-code/"*) echo 'Sandbox tests need a checkout outside ~/.kuvo-code to exercise the sandbox correctly.' ;; esac
 [ "$box_status" != fail ] && [ "$bridge_status" != fail ]

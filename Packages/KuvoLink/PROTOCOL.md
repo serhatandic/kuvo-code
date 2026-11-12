@@ -816,7 +816,8 @@ beside it, and its memory) as well as the bridge's record. The agents bridge doe
 manifest of every file and its SHA-256, and says its `digest`; `place` puts it in place on the box
 it goes to (paths and the conversation's folder made right for this box, the memory beside one
 already there kept, a file with the same name but other words kept beside it as
-`moved-<sha8>-<name>`), noting each step so `undo` takes it all back; `digest {root}` says the same
+`moved-<sha8>-<name>`; with `chat`, each session's chat mark set to it, or taken off for null, as it's
+placed: "Chats"; a bridge from before ignores it, and the chat goes by its folder), noting each step so `undo` takes it all back; `digest {root}` says the same
 hash again. A bot's memory goes in its own folder (`<bot>/memory`, Claude Code's
 `autoMemoryDirectory`) from there on. An agent that keeps nothing to carry, or one whose files
 can't be found, goes with the bridge's record, and its next turn starts from what that holds.
@@ -2242,7 +2243,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `started`, when the engine running now came up, in seconds since 1970 (null while none runs): a
   restart changes it, so a phone tells the new engine from the old. Both name the folder of chats
   (`chats`: conversations of no project, made if it isn't there yet, so a phone can start the first
-  one there through the engine, as for a project). A machine's bridge also says whether its engine
+  one there through the engine, as for a project; new chats' sessions are marked chats, "Chats"). A machine's bridge also says whether its engine
   is `running`, and whether it's `stopped` on purpose (it stays down until it's started, from a Mac
   or a phone), and `home`, the Mac that started its engine (`{"mac", "name"?}`, its name where
   its start noted one). It also says who uses it, for an uninstall to name whom it would stop it
@@ -3531,9 +3532,47 @@ kind: mac|machine, id?}`: the computer it's on, when that isn't the box asked, a
 it; `id`, a machine's name on this Mac, for a client to reach it), `created` and `updated` (`{at,
 by}`: `by` is `{user: true}`, `{session, name}`, or another shape kept as it came, such as an outside
 tracker's `{source, name?}`: a client shows its `name`, never takes it for you), `doneAt`, `removed`
-(`{at, by}`, deleted). Whole, it has `body` (Markdown), `notes` (`[{at, by, text}]`), `files`
-(`[{name, size, type, at}]`), `links` (`[{url, title?, kind?, ref?}]`) and `handed` (`[{from, to,
-at}]`, the last 20).
+(`{at, by}`, deleted). Whole, it has `body` (Markdown), `notes` (`[{at, by, text}]`), `events`
+(below), `files` (`[{name, size, type, at}]`), `links` (`[{url, title?, kind?, ref?}]`) and
+`handed` (`[{from, to, at}]`, the last 20).
+
+**What happened to it** (`events`, for its feed): `[{at, by, kind, from?, to?, top?}]`, oldest
+first, the last 50, kept with the item and going with it wherever it goes (a hand-off to another
+computer, a move), as its notes do. `by` is who did it, as for `created` (`{source: "kuvo", name:
+"Kuvo Code"}` for what the box did itself). A box keeps an event by its `at`, its `kind` (up to 40
+characters) and its `by`, each of a size an event has; what else it says is
+kept as it came, for a client to read (a newer box's `top: false` or `from: null` too).
+
+- `started`: a session's agent said it's working on it (`working: true`), unless it's at it already:
+  linked, with its own last word `started` since the item was last `done`. A session linked some other way (`sessions`, a
+  hand-off) says `started` the first time it says it's working; one linked before this box kept
+  events, or whose `started` went past the last 50, says it once more then. (A delete keeps no
+  event: a session linked again to an item brought back, that had said `started` before its
+  delete, says no new `started`.)
+- `stopped`: its link went while its own last word was `started`: it said it stopped (`working:
+  false`), or it was unlinked (`unlink`, or its oldest link dropped as it linked a fourth item), by
+  the same `by` as that `started` but where it said so itself. One that never said it started says
+  no `stopped`. Done and a delete unlink everyone and say no `stopped`: they say it. A session that
+  starts again within 2 minutes of its `stopped`, with nothing between (no other event, note or
+  hand-off), never stopped: the `stopped` goes.
+- `moved`: you or an agent moved it to another category, or to another place in its own (`from` and
+  `to`, category ids, the same for a reorder; `top` when it went to the top). Its place is among
+  every owner's items in that category on the box, as the All view lists them, so a move past
+  another queue's item is one; a move that leaves it where it was isn't. One's reorders in one
+  category within 10 minutes of each other, with nothing between (no other event, note or
+  hand-off), are one `moved`. (Neither fold reaches back in time: an event from a computer whose
+  clock was ahead is never folded into.) An item whose category the box doesn't keep (brought back after its
+  category was removed, or come by a hand-off or a move) goes to Next, a `moved` by the box. An
+  item added isn't moved, wherever it's put (`top`, `before`, `after`).
+- `done`: moved to Done (a move out of Done is `moved`).
+
+A hand-off is in `handed`, not here. A newer box may keep other kinds: a box keeps them as they
+came, a client leaves them out. An item from before this has none (`[]`), and keeps what happens
+from then on. A client puts `notes` and `events` (with `created`, `handed`, `doneAt` where no `done`
+was kept at it or since, and `removed`) in one feed, oldest first. At one moment: `created`; the
+box's events up to its last `started` at that moment, in its order (a move and the work it
+started); notes; hand-offs; its other events, in its order; `doneAt`; `removed`. A category an
+event names that the view doesn't (a custom one removed since) is "another category".
 
 **In progress** isn't a category: an item is in progress while a session linked to it is at work
 (its turn running, or what it left running), unless it's Done or deleted. A session is linked to
@@ -3569,7 +3608,7 @@ before (a linked item is its owner's to change). A client shows them first, as "
 - `GET kuvo/work-queue/items/<id or number>` → `{item}`, whole (an issue's `gh:` ref names it too,
   but its "/" can't go in a path through every client: a client asks by the `id` its chip has). `…/files/<name>` → its bytes. An
   item on another computer answers as that one told it, with `computer` and an empty `body`,
-  `notes`, `files`, `links` and `handed`: a client reads it whole, and its files, from that computer
+  `notes`, `events`, `files`, `links` and `handed`: a client reads it whole, and its files, from that computer
   (a machine by `computer.id`; a Mac, its own box).
 - `GET kuvo/work-queue/refs?refs=243,12`, or `POST kuvo/work-queue/refs {refs: [...],
   conversation?}` (a list, so a ref with a comma in it, an outside one later, goes whole;
@@ -4062,9 +4101,11 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `sandbox` | `kuvo/sandbox` ("Sandbox", bridge 0.9.118) |
 | `sandbox.asks` | `kuvo/sandbox/asks…`, `kuvo/sandbox/allowed…` and `kuvo/sandbox/tools` ("Sandbox", "Asks", bridge 0.9.118) |
 | `sandbox.check` | `reason`, `action` and the rest in `kuvo/sandbox`, and `POST kuvo/sandbox/check` |
+| `sandbox.reviews.settled` | `settled` on `kuvo/sandbox/asks`: each ask Auto's reviewer was checking or left for you that was answered or went since, so no client takes it for one that waits, heard or not ("Sandbox") |
 | `sandbox.reviews.whole` | `reviews` on `kuvo/sandbox/asks` lists every ask to work outside a conversation's folder, so a client shows one only once it's listed `yours` ("Sandbox") |
 | `search` | `kuvo/search` |
 | `sessions.agents` | `POST kuvo/sessions/<id>/agents` |
+| `sessions.chat` | A chat made, moved or with its metadata written since carries `kuvo.chat` in its metadata, naming the chats folder it's in; older ones go by their folder ("Chats") |
 | `sessions.glance` | `kuvo/sessions/glance`, `…/events`, and `session` in `POST kuvo/git/pull-request` ("A session at a glance") |
 | `sessions.start` | `POST kuvo/sessions`: a session started with a task (bridge 0.9.100) |
 | `setup` | `kuvo/setup`, `…/events`: your setup and its main computer ("Your setup") |
@@ -4447,6 +4488,40 @@ while a box is away goes there when it's back.
   or not (nothing is archived).
 - `GET kuvo/projects/events`: `application/x-ndjson`, the list now, then again each time it
   changes.
+
+#### Chats
+
+A chat is a conversation of no project: one in the box's chats folder (`kuvo/info`'s `chats`). A
+chat's session can carry a mark in its metadata, `kuvo.chat`, naming the folder it's a chat in (as
+the session names it: `sessions.chat`, #571), so a client draws it as a chat from the session
+itself, wherever it reads it (the engine's or the coding agents' bridge's list, a session read
+again as its event comes, `kuvo/search`'s `info`, a session a move brought), not from its folder. A
+mark naming another folder than the session's own is no mark: one moved out of the chats while no
+box could take its mark off is never kept a chat by it.
+
+The engine (2.2.5) and the coding agents' bridge make a session the newest for any write, its
+metadata alone too, so a mark is written only as a session is made, moved or has its metadata
+written (each of which made it the newest already), never on a session from before:
+
+- a client gives a chat it makes its mark from the first (`SessionChat.mark`), as a box's
+  `kuvo/sessions` does for one it starts;
+- the box marks one made without it (by a client from before, or the engine: a chat's subagent), one
+  moved (`session.moved`: a chat moved into a project loses it) and one whose metadata a client
+  wrote whole without it (`session.metadata.updated`), as their events come;
+- a move sets it as it is here as conversations come in ("kuvo/moves"): before they're imported,
+  or, with a coding agent, as its bridge places them (`carry/place`'s `chat`) (kept among the chats,
+  naming this box's folder; taken off in a bot's folder).
+
+Nothing else writes it: a chat from before the mark that's only written to (a message, a new
+title), or one changed while the box wasn't hearing its engine, stays without it. The box decides it
+from its own chats folder (the same folder through a link counts too). Their APIs write metadata
+whole, with nothing to say "only if it's unchanged": the box reads a session just before it writes
+the mark, and writes only when it's wrong (a client's write between the two is lost, as with the
+box's other writers of a session's metadata, #581). A client keeps the mark as it keeps the rest of
+the metadata when it writes it back. A session without the mark (a chat from before, or on a box
+from before `sessions.chat`, which marks nothing) goes by its folder, as before (the folder its
+box's `kuvo/info` names, kept for when that isn't answered). What both apps read is `SessionChat`
+(`Packages/KuvoClient`, ClientSessions).
 
 ### Artifacts
 
@@ -5605,7 +5680,7 @@ while the sandbox is `on`) and pass a call to `POST kuvo/sandbox/tools` `{sessio
 making that call. The asks, the tool and the answers live in the box's long-running process, as the
 vault does (`run/vault.sock`); another passes them on.
 
-- `GET kuvo/sandbox/asks` → `{asks: [ask], restart?, reviews?}`, oldest first, with `restart: true` while
+- `GET kuvo/sandbox/asks` → `{asks: [ask], restart?, reviews?, settled?}`, oldest first, with `restart: true` while
   the box asks you to restart its agents (the state's `restart`); `kuvo/sandbox/asks/events`, NDJSON,
   the same at once and on every change. `reviews` (bridge 0.9.192): what Auto's reviewer did with
   the engine's asks to work outside a conversation's folder (`permission.asked`, action
@@ -5622,7 +5697,26 @@ vault does (`run/vault.sock`); another passes them on.
   decided it, whose entry stays for its step's mark. While a client doesn't hear the box's asks
   (its link down or starting again, the stream cut), what it last listed of an ask stands, and one
   it never listed is yours, as nothing would list it. From a box without that word, a client takes
-  one not listed as yours at once. An ask: `{id, at, session?, sessionName?, bot?, botName?,
+  one not listed as yours at once.
+  `settled` (`sandbox.reviews.settled`): each ask the reviewer was checking or had left for you
+  that's over without its word, the latest 200, each `{id, session, call?, state, at}`, `state`
+  `answered` (by you, on any client, or by its engine: `permission.replied`) or `gone` (its run
+  ended, its session was deleted, or its engine let it go while the box wasn't listening: an
+  engine started again, a run that ended unheard). The box keeps them per ask and session, from
+  `checking` to `yours` to `answered` or `gone`: as it hears an engine or the bridge again it reads
+  each session whose ask it still lists as checked or yours there, and one no longer asked is
+  `gone`; one it was about to check and finds no longer asked is `gone` too, never `yours`. A
+  client never takes an ask listed in `settled` for one that waits, heard or not, so none is left
+  with an ask that's over (a session's row saying it asks). Such a client holds nothing of its own
+  for an ask the box takes up but one it heard asked that the box hasn't listed yet (it lists each
+  as it hears it), which is yours, and told, should the box go quiet first, as above. It tells you
+  of one (a notification) once it's listed `yours`,
+  reading it from its engine then (one its engine no longer asks isn't told; where its engine
+  can't be read, it's told without its words), and lets go of one listed in `settled`. The
+  reviewer's own answer isn't listed `answered`: the ask goes from `checking` to what it decided. The box's
+  process started again lists what still waits as it takes it up again (`checking` at once) and
+  none from before. From a box without `settled`, a client keeps what it heard asked until the box
+  lists it, as before. An ask: `{id, at, session?, sessionName?, bot?, botName?,
   project, command, why, stopped?, error?, always?, machine?, owner?, review?}`. `session` is the conversation's root
   (a bot's sub-agent asks as its bot's conversation). `stopped`, on macOS: what the sandbox refused
   that command, from the system's log, each `{kind, path?}` (`kind`: `write`, `read`, `connect`,

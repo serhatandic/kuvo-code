@@ -100,6 +100,51 @@ struct WorkQueueShots {
         return try! JSONDecoder().decode(WorkItemDetail.self, from: JSONSerialization.data(withJSONObject: whole))
     }
 
+    /// An item's feed with what the box kept of what happened to it (#563): at work (added, work
+    /// started, a note, moved to the top of Next, as the draft has it), and done (moved, started,
+    /// stopped, a note, done).
+    static func feedDetail(done: Bool) -> WorkItemDetail {
+        var whole = done ? items.first { $0["number"] as? Int == 600 }! : items[0]
+        let foreman: [String: Any] = ["session": "ses_lead", "name": "Kuvo Foreman"]
+        let worker: [String: Any] = ["session": "ses_worker", "name": "Work Queue panel"]
+        let ago = { (minutes: Double) in now - minutes * 60_000 }
+        whole["created"] = ["at": ago(120), "by": foreman]
+        whole["body"] = done ? "Ship the list's new rows." : "Activity shows what happened to an item: work started, moves, done."
+        whole["files"] = []
+        whole["links"] = []
+        whole["handed"] = []
+        if done {
+            whole["doneAt"] = ago(5)
+            whole["updated"] = ["at": ago(5), "by": worker]
+            whole["notes"] = [["at": ago(6), "by": worker, "text": "Rows draw the eyebrow; tests pass."]]
+            whole["events"] = [["at": ago(100), "by": ["user": true], "kind": "moved", "from": "later", "to": "next"],
+                               ["at": ago(90), "by": worker, "kind": "started"],
+                               ["at": ago(30), "by": worker, "kind": "stopped"],
+                               ["at": ago(20), "by": worker, "kind": "started"],
+                               ["at": ago(5), "by": worker, "kind": "done"]]
+        } else {
+            whole["notes"] = [["at": ago(60), "by": foreman, "text": "In progress must work across computers: added to the session."]]
+            whole["events"] = [["at": ago(61), "by": worker, "kind": "started"],
+                               ["at": ago(40), "by": ["user": true], "kind": "moved", "from": "next", "to": "next", "top": true]]
+        }
+        whole["noteCount"] = 1
+        return try! JSONDecoder().decode(WorkItemDetail.self, from: JSONSerialization.data(withJSONObject: whole))
+    }
+
+    /// #563: the item page's feed with the box's events, at work and done; light and dark. In
+    /// KUVO_SHOTS_OUT too.
+    @Test func feedShots() async throws {
+        let out = try #require(ProcessInfo.processInfo.environment["KUVO_SHOTS_OUT"])
+        try FileManager.default.createDirectory(atPath: out, withIntermediateDirectories: true)
+        for dark in [false, true] {
+            let look = dark ? "dark" : "light"
+            for done in [false, true] {
+                try await panel(width: 760, height: 760, dark: dark, open: true, detail: Self.feedDetail(done: done))
+                    .write(to: URL(fileURLWithPath: out).appending(path: "mac-feed-\(done ? "done" : "at-work")-\(look).png"))
+            }
+        }
+    }
+
     @Test func shots() async throws {
         let out = try #require(ProcessInfo.processInfo.environment["KUVO_SHOTS_OUT"])
         try FileManager.default.createDirectory(atPath: out, withIntermediateDirectories: true)
@@ -159,17 +204,17 @@ struct WorkQueueShots {
         return try await picture(content, width: width, height: height, dark: dark) { true }
     }
 
-    private func panel(width: CGFloat, height: CGFloat, dark: Bool, open: Bool, empty: Bool = false) async throws -> Data {
+    private func panel(width: CGFloat, height: CGFloat, dark: Bool, open: Bool, empty: Bool = false, detail: WorkItemDetail = Self.detail) async throws -> Data {
         let app = AppModel()
         app.workQueues.app = app
         app.utilities.inView.session = "ses_lead"
         let key = WorkQueues.Key(box: BoxClient.mac, owner: "ses_lead")
-        app.workQueues.standIn(empty ? Self.emptyView : Self.view, for: key, details: [Self.detail])
+        app.workQueues.standIn(empty ? Self.emptyView : Self.view, for: key, details: [detail])
         app.utilities.showWorkQueue()
-        if open { app.workQueues.opened[app.utilities.panelKey] = WorkQueues.Opened(box: BoxClient.mac, id: Self.detail.item.id, number: 243) }
+        if open { app.workQueues.opened[app.utilities.panelKey] = WorkQueues.Opened(box: BoxClient.mac, id: detail.item.id, number: detail.item.number) }
         let pane = UtilitiesPane(utilities: app.utilities, directory: nil, model: nil, environment: [:], isExpanded: PaneSwitch(isOn: { open }, set: { _ in }))
         return try await picture(pane.environment(app), width: width, height: height, dark: dark) {
-            !open || app.workQueues.detail(box: BoxClient.mac, id: Self.detail.item.id, number: nil) != nil
+            !open || app.workQueues.detail(box: BoxClient.mac, id: detail.item.id, number: nil) != nil
         }
     }
 

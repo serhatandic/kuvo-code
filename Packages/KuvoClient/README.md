@@ -48,6 +48,8 @@ What a client shows of a computer's sessions, the same in both apps. Rules only,
 
 - `HiddenSessions`: what's kept out of sight (a group chat's seat, the engine's run for a coding
   agents' session).
+- `SessionChat`: whether a session is a chat, as its box marks it (`kuvo.chat`, naming the chats
+  folder it's in; PROTOCOL.md, "Chats"); one without the mark by its folder, the old-box path.
 - `ReadState`: which sub-sessions are new (finished since you were last in them, or in the session
   at the top of their chain), what reading a session reads with it (its finished sub-sessions, all
   the way down), and a read elsewhere taken when it's later.

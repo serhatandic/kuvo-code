@@ -77,6 +77,21 @@ import Testing
         #expect(workspace.chats.map(\.id) == ["s_chat"])
     }
 
+    /// A chat is drawn as its box marks it (#571, `kuvo.chat`): in the chats, named Chats, whatever
+    /// its folder is called there, and never a project of its own. One from a box from before the
+    /// mark (`s_chat`) is still a chat by its folder.
+    @Test func aChatItsBoxMarkedIsAChatWhateverItsFolder() async throws {
+        defer { StubWeb.stop() }
+        var marked = Self.session("s_marked", in: "/tmp/kuvo-tests/box/chats", updated: 70)
+        marked["metadata"] = ["kuvo": ["chat": "/tmp/kuvo-tests/box/chats"]]
+        sessions.add(marked)
+        await workspace.refresh()
+        #expect(workspace.chats.map(\.id) == ["s_marked", "s_chat"])
+        #expect(!workspace.projects.contains { $0.directory == "/tmp/kuvo-tests/box/chats" })
+        #expect(workspace.projectName(of: try #require(workspace.session("s_marked"))) == "Chats")
+        #expect(workspace.projects.filter { $0.directory.hasPrefix("/tmp/kuvo-tests/") }.map(\.directory) == ["/tmp/kuvo-tests/web", "/tmp/kuvo-tests/api"])
+    }
+
     /// A rename the engine doesn't take (a machine's connection dropped, an engine that's busy)
     /// goes back to the title it had, as a pin does, rather than looking saved until the next read.
     @Test func aRenameTheEngineDoesntTakeGoesBack() async {

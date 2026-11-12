@@ -1,6 +1,6 @@
 """scripts/heavy.sh: jobs of different kinds run together, two of one kind queue (two phone jobs that
-handle slots run at once, each with a simulator of its own, and two mac-build jobs, each with a build
-folder of its own, beside the app suite's mac; the phone's builds, phone-build, take mac-build's slots), a job started the
+handle slots run at once, each with a simulator of its own, two mac-build jobs, each with a build
+folder of its own, beside the app suite's mac, and two box jobs; the phone's builds, phone-build, take mac-build's slots), a job started the
 old way (under the one lock for every kind) holds up every kind, a busy Mac holds a job back, and jobs
 waiting for a lane go in line, high-priority ones first, however many come at once.
 Each test has locks of its own (KUVO_HEAVY_DIR), and asks with KUVO_HEAVY_WAIT=0, which says what a
@@ -138,11 +138,13 @@ class HeavyTests(unittest.TestCase):
             mac.let_go()
         self.assertEqual(self.run_heavy("mac", "true")[0], 0)
 
+    # How a lane's line goes, below, on mac: the one lane with a single slot for every caller
+    # (box and mac-build have two, and phone two for a caller that handles them).
     def test_a_second_job_of_a_kind_waits_for_the_first_and_runs_after_it(self):
-        first = Held([HEAVY, "box"], self.env)
-        second = subprocess.Popen([HEAVY, "box", "/bin/sh", "-c", "echo ran; exit 7"], env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        first = Held([HEAVY, "mac"], self.env)
+        second = subprocess.Popen([HEAVY, "mac", "/bin/sh", "-c", "echo ran; exit 7"], env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         try:
-            self.assertIn("Waiting for another box job", second.stderr.readline())
+            self.assertIn("Waiting for another mac job", second.stderr.readline())
             self.assertIsNone(second.poll(), "it ran beside the first")
         finally:
             first.let_go()
@@ -167,18 +169,18 @@ class HeavyTests(unittest.TestCase):
         self.assertTrue(select.select([job.stderr], [], [], 30)[0], "it said nothing")
         self.assertIn(f"Waiting for another {kind} job", job.stderr.readline())
 
-    def queue(self, kind="box"):
+    def queue(self, kind="mac"):
         folder = os.path.join(self.locks, f"kuvo-code-heavy-{kind}-{os.getuid()}.queue")
         os.makedirs(folder, exist_ok=True)
         return folder
 
     def test_a_high_priority_job_goes_before_the_normal_ones_waiting_and_each_priority_keeps_its_order(self):
-        first = Held([HEAVY, "box"], self.env)
+        first = Held([HEAVY, "mac"], self.env)
         output = os.path.join(self.locks, "order")
         jobs = []
         try:
             for name, priority in (("normal1", "normal"), ("high1", "high"), ("normal2", "normal"), ("high2", "high")):
-                jobs.append(self.queued("box", ["/bin/sh", "-c", f"echo {name} >> '{output}'"], KUVO_HEAVY_PRIORITY=priority))
+                jobs.append(self.queued("mac", ["/bin/sh", "-c", f"echo {name} >> '{output}'"], KUVO_HEAVY_PRIORITY=priority))
         finally:
             first.let_go()
         for job in jobs:
@@ -187,9 +189,9 @@ class HeavyTests(unittest.TestCase):
             self.assertEqual(f.read().splitlines(), ["high1", "high2", "normal1", "normal2"])
 
     def test_a_high_priority_job_never_stops_one_running(self):
-        first = Held([HEAVY, "box"], self.env)
+        first = Held([HEAVY, "mac"], self.env)
         try:
-            high = self.queued("box", ["true"], KUVO_HEAVY_PRIORITY="high")
+            high = self.queued("mac", ["true"], KUVO_HEAVY_PRIORITY="high")
             self.assertIsNone(first.process.poll(), "the running job was stopped")
             self.assertIsNone(high.poll(), "it ran beside the running job")
         finally:
@@ -205,18 +207,18 @@ class HeavyTests(unittest.TestCase):
     def test_jobs_that_come_at_once_while_the_lane_is_held_go_in_turn_high_ones_first(self):
         """Many jobs arriving together: each waits in line, none slips in beside another, and the
         high ones go first, whatever order they came in."""
-        first = Held([HEAVY, "box"], self.env)
+        first = Held([HEAVY, "mac"], self.env)
         output = os.path.join(self.locks, "order")
         script = f'echo "start $1" >> "{output}"; sleep 0.2; echo "end $1" >> "{output}"'
         names = [("normal", f"n{i}") for i in range(6)] + [("high", f"h{i}") for i in range(2)]
         jobs = []
         try:
             for priority, name in names:  # all started before any says it waits
-                job = subprocess.Popen([HEAVY, "box", "/bin/sh", "-c", script, "sh", name], env=dict(self.env, KUVO_HEAVY_PRIORITY=priority), stdin=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, start_new_session=True)
+                job = subprocess.Popen([HEAVY, "mac", "/bin/sh", "-c", script, "sh", name], env=dict(self.env, KUVO_HEAVY_PRIORITY=priority), stdin=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, start_new_session=True)
                 self.addCleanup(lambda job=job: (job.poll() is None and os.killpg(job.pid, signal.SIGKILL), job.wait(timeout=30), job.stderr.close()))
                 jobs.append(job)
             for job in jobs:
-                self.said_waiting(job, "box")
+                self.said_waiting(job, "mac")
         finally:
             first.let_go()
         for job in jobs:
@@ -239,11 +241,11 @@ class HeavyTests(unittest.TestCase):
         """The race between looking at a slot and taking it: of many jobs that find a slot free at
         the same moment, one gets it, and the others say so at once (none waits for it, nor runs
         after it). The winners hold their slots until every other has answered."""
-        for kind, slots, env in (("box", 1, {}), ("phone", 2, {"KUVO_HEAVY_SLOTS": "2"}), ("mac-build", 2, {})):
+        for kind, slots, env in (("mac", 1, {}), ("phone", 2, {"KUVO_HEAVY_SLOTS": "2"}), ("mac-build", 2, {}), ("box", 2, {})):
             for attempt in range(3):
                 with self.subTest(kind=kind, attempt=attempt):
                     done = os.path.join(self.locks, f"done-{kind}-{attempt}")
-                    # (box has one slot, and no KUVO_HEAVY_SLOT.)
+                    # (mac has one slot, and no KUVO_HEAVY_SLOT.)
                     hold = f'echo "${{KUVO_HEAVY_SLOT:-1}}"; while [ ! -f "{done}" ]; do sleep 0.05; done'
                     jobs = self.at_once(kind, 10, ["/bin/sh", "-c", hold], **env)
                     winners, answers = [], []
@@ -266,21 +268,21 @@ class HeavyTests(unittest.TestCase):
                         self.assertEqual(job.wait(timeout=30), 0)
 
     def test_told_not_to_wait_it_never_waits_while_others_wait_in_line(self):
-        first = Held([HEAVY, "box"], self.env)
+        first = Held([HEAVY, "mac"], self.env)
         try:
-            self.queued("box", ["true"])
-            self.queued("box", ["true"], KUVO_HEAVY_PRIORITY="high")
+            self.queued("mac", ["true"])
+            self.queued("mac", ["true"], KUVO_HEAVY_PRIORITY="high")
             for priority in ("normal", "high"):
                 with self.subTest(priority):
                     started = time.monotonic()
-                    code, said = self.run_heavy("box", "true", KUVO_HEAVY_PRIORITY=priority)
+                    code, said = self.run_heavy("mac", "true", KUVO_HEAVY_PRIORITY=priority)
                     self.assertEqual(code, WAITS)
-                    self.assertIn("Another box job is running", said)
+                    self.assertIn("Another mac job is running", said)
                     self.assertLess(time.monotonic() - started, 5)
         finally:
             first.let_go()
 
-    def in_line(self, name, seen=None, kind="box"):
+    def in_line(self, name, seen=None, kind="mac"):
         """An entry in the lane's queue, as a job waiting in line has (seen: when it last looked)."""
         path = os.path.join(self.queue(kind), name)
         with open(path, "w") as f:
@@ -292,28 +294,28 @@ class HeavyTests(unittest.TestCase):
         never looks) is before a normal job told not to wait, which says so, and after a high one,
         which goes. One whose process is gone holds no one up."""
         waiting = self.in_line(f"1-000000000000-{os.getpid()}-1")
-        code, said = self.run_heavy("box", "true")
+        code, said = self.run_heavy("mac", "true")
         self.assertEqual(code, WAITS)
-        self.assertIn("Another box job is waiting for its turn ahead of this one", said)
-        self.assertEqual(self.run_heavy("box", "true", KUVO_HEAVY_PRIORITY="high")[0], 0)
+        self.assertIn("Another mac job is waiting for its turn ahead of this one", said)
+        self.assertEqual(self.run_heavy("mac", "true", KUVO_HEAVY_PRIORITY="high")[0], 0)
         gone = subprocess.Popen(["true"])
         gone.wait()
         os.rename(waiting, os.path.join(self.queue(), f"0-000000000000-{gone.pid}-1"))
-        self.assertEqual(self.run_heavy("box", "true"), (0, ""))
+        self.assertEqual(self.run_heavy("mac", "true"), (0, ""))
         self.assertEqual(sorted(name for name in os.listdir(self.queue()) if name[0] in "01"), [], "it left an entry in line")
 
     def test_a_job_that_hasnt_looked_for_a_while_holds_no_one_up(self):
         """Stopped, or its pid now another process's (here, this test's): it leaves the line."""
         self.in_line(f"0-000000000000-{os.getpid()}-1", seen=int(time.time()) - 120)
-        self.assertEqual(self.run_heavy("box", "true"), (0, ""))
+        self.assertEqual(self.run_heavy("mac", "true"), (0, ""))
         # One that never said when (cut short as it did) neither.
         open(os.path.join(self.queue(), f"0-000000000001-{os.getpid()}-1"), "w").close()
-        self.assertEqual(self.run_heavy("box", "true"), (0, ""))
+        self.assertEqual(self.run_heavy("mac", "true"), (0, ""))
 
     def test_a_new_job_goes_after_those_in_line_whatever_became_of_the_last_number(self):
         self.in_line(f"1-000000000005-{os.getpid()}-1")
         open(os.path.join(self.queue(), "sequence"), "w").close()  # cut short as it was written
-        code, said = self.run_heavy("box", "true")
+        code, said = self.run_heavy("mac", "true")
         self.assertEqual(code, WAITS)
         self.assertIn("waiting for its turn ahead of this one", said)
 
@@ -326,7 +328,7 @@ class HeavyTests(unittest.TestCase):
         self.addCleanup(lambda: (other.kill(), other.wait()))
         self.in_line(f"1-000000000000-{other.pid}-1")
         profile = "(version 1)(allow default)(deny signal)(allow signal (target same-sandbox))"
-        result = subprocess.run(["sandbox-exec", "-p", profile, HEAVY, "box", "true"], env=dict(self.env, KUVO_HEAVY_WAIT="0"), capture_output=True, text=True, timeout=30)
+        result = subprocess.run(["sandbox-exec", "-p", profile, HEAVY, "mac", "true"], env=dict(self.env, KUVO_HEAVY_WAIT="0"), capture_output=True, text=True, timeout=30)
         if "Operation not permitted" in result.stderr and "sandbox" in result.stderr:
             self.skipTest("sandbox-exec isn't allowed here")
         self.assertEqual(result.returncode, WAITS, result.stderr)
@@ -335,9 +337,9 @@ class HeavyTests(unittest.TestCase):
     def test_the_time_limit_counts_from_when_the_job_gets_its_slot(self):
         """It waits in line longer than its limit and isn't stopped for it: its limit starts when it
         starts, and then it is stopped on time."""
-        first = Held([HEAVY, "box"], self.env)
+        first = Held([HEAVY, "mac"], self.env)
         try:
-            job = self.queued("box", ["sleep", "30"], KUVO_HEAVY_LIMIT="3s")
+            job = self.queued("mac", ["sleep", "30"], KUVO_HEAVY_LIMIT="3s")
             time.sleep(4)
             self.assertIsNone(job.poll(), "it was stopped while it waited")
         finally:
@@ -703,6 +705,73 @@ class HeavyTests(unittest.TestCase):
         finally:
             first.let_go()
 
+    def test_two_box_jobs_run_at_once_each_knowing_its_slot_and_a_third_waits(self):
+        # Any caller: nothing to opt into. No simulator and no build folder: only its slot's number.
+        first = Held([HEAVY, "box"], self.env)
+        try:
+            second = Held([HEAVY, "box"], self.env)
+            try:
+                self.assertEqual((first.seen, second.seen), ("|1|", "|2|"))
+                code, said = self.run_heavy("box", "true")
+                self.assertEqual(code, WAITS)
+                self.assertIn("Another box job is running in each of its two slots", said)
+                self.assertEqual(self.run_heavy("mac-build", "true")[0], 0)
+            finally:
+                second.let_go()
+        finally:
+            first.let_go()
+        self.assertEqual(self.run_heavy("box", "true")[0], 0)
+
+    def test_a_third_box_job_takes_whichever_slot_frees_first(self):
+        first, second = Held([HEAVY, "box"], self.env), Held([HEAVY, "box"], self.env)
+        third = None
+        try:
+            third = subprocess.Popen([HEAVY, "box", "/bin/sh", "-c", 'echo "$KUVO_HEAVY_SLOT"'], env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            self.assertIn("Waiting for another box job", third.stderr.readline())
+            self.assertIsNone(third.poll(), "it ran with both slots taken")
+            second.let_go()
+            out, _ = third.communicate(timeout=30)
+            self.assertEqual((third.returncode, out), (0, "2\n"))
+        finally:
+            first.let_go()
+            if third is not None and third.poll() is None:
+                third.kill()
+                third.wait()
+
+    def test_an_older_copys_box_job_holds_slot_one_alone_and_a_new_one_runs_beside_it(self):
+        """An older copy's job holds the one box lock it always had: a new job takes slot 2 beside
+        it, and a third waits for either."""
+        old = Held(["lockf", "-k", self.lock("box")], self.env)
+        try:
+            new = Held([HEAVY, "box"], self.env)
+            try:
+                self.assertEqual(new.seen, "|2|")
+                self.assertEqual(self.run_heavy("box", "true")[0], WAITS)
+            finally:
+                new.let_go()
+        finally:
+            old.let_go()
+
+    def test_a_job_inside_a_box_job_runs_at_once_in_the_same_slot(self):
+        env = self.env
+        holds = lambda *command: subprocess.run(command, env=env, timeout=30).returncode
+        slot = lambda *command, **more: subprocess.run(command, env=dict(env, KUVO_HEAVY_WAIT="0", **more), capture_output=True, text=True, timeout=30).stdout.strip()
+        self.assertEqual(holds(HEAVY, "--holds", "box"), 1)
+        self.assertEqual(holds(HEAVY, "box", HEAVY, "--holds", "box"), 0)
+        say = 'echo "$KUVO_HEAVY_SLOT|${KUVO_TEST_SIMULATOR-}|${KUVO_HEAVY_BUILD_SUFFIX-}"'
+        inner = ["/bin/sh", "-c", f'"{HEAVY}" box /bin/sh -c {shlex.quote(say)}']
+        self.assertEqual(slot(HEAVY, "box", *inner), "1||")
+        first = Held([HEAVY, "box"], env)  # slot 1 taken: the next job and its nested one are on slot 2
+        try:
+            self.assertEqual(slot(HEAVY, "box", *inner), "2||")
+            self.assertEqual(holds(HEAVY, "box", HEAVY, "--holds", "box"), 0)
+        finally:
+            first.let_go()
+        # What a shell in a slot 2 job, or in a phone or build job around it, left in the
+        # environment, under slot 1's lock: slot 1's, and nothing of theirs.
+        stale = dict(KUVO_HEAVY_SLOT="2", KUVO_TEST_SIMULATOR="Kuvo Code Tests 2", KUVO_HEAVY_BUILD_SUFFIX="-2")
+        self.assertEqual(slot("lockf", "-k", self.lock("box"), HEAVY, "box", "/bin/sh", "-c", say, **stale), "1||")
+
     def test_a_script_can_ask_whether_its_kinds_turn_is_held(self):
         holds = lambda *command: subprocess.run(command, env=self.env, timeout=30).returncode
         self.assertEqual(holds(HEAVY, "--holds", "mac"), 1)
@@ -1034,10 +1103,10 @@ class HeavyTests(unittest.TestCase):
         said = 'echo "$0 ${KUVO_HEAVY_HANDED-none}"'
         result = subprocess.run([HEAVY, "box", "/bin/sh", "-c", said], env=env, capture_output=True, text=True, timeout=30)
         self.assertEqual((result.returncode, result.stdout), (0, "/bin/sh none\n"))
-        # It holds the box lane, taken by the canonical copy: the lock this copy knows too.
-        job = Held([HEAVY, "box"], env)
+        # It holds the mac lane, taken by the canonical copy: the lock this copy knows too.
+        job = Held([HEAVY, "mac"], env)
         try:
-            self.assertEqual(self.run_heavy("box", "true")[0], WAITS)
+            self.assertEqual(self.run_heavy("mac", "true")[0], WAITS)
         finally:
             job.let_go()
 
@@ -1062,7 +1131,7 @@ class HeavyTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return {line.split(":", 1)[0]: line for line in result.stdout.splitlines()}
 
-    def older_holder(self, kind="box"):
+    def older_holder(self, kind="mac"):
         """A slot held as an older copy held it while it waited for room: its lock, and only a
         `sleep` under it."""
         holder = subprocess.Popen(["lockf", "-k", self.lock(kind), "/bin/sh", "-c", "sleep 600; :"], env=self.env, start_new_session=True)
@@ -1081,22 +1150,27 @@ class HeavyTests(unittest.TestCase):
         self.assertEqual(sorted(lanes), ["box", "mac", "mac-build", "phone"])
         job = Held([HEAVY, "box"], self.env)
         try:
-            self.assertRegex(self.status()["box"], r"^box: slot 1 pid \d+ \(.+\), held \d+s, running \d+s; none waiting$")
-            waiting = self.queued("box", ["true"])
-            self.assertRegex(self.status()["box"], r"; 1 waiting, the longest for \d+s$")
+            self.assertRegex(self.status()["box"], r"^box: slot 1 pid \d+ \(.+\), held \d+s, running \d+s; slot 2 free; none waiting$")
+            other = Held([HEAVY, "box"], self.env)
+            try:
+                self.assertRegex(self.status()["box"], r"^box: slot 1 pid \d+ \(.+\), held \d+s, running \d+s; slot 2 pid \d+ \(.+\), held \d+s, running \d+s; none waiting$")
+                waiting = self.queued("box", ["true"])
+                self.assertRegex(self.status()["box"], r"; 1 waiting, the longest for \d+s$")
+            finally:
+                other.let_go()
         finally:
             job.let_go()
         self.assertEqual(waiting.wait(timeout=30), 0)
-        self.assertEqual(self.status()["box"], "box: slot 1 free; none waiting")
-        holder = self.older_holder()
-        self.assertRegex(self.status()["box"], rf"^box: slot 1 pid {holder.pid} \(an older heavy.sh\)(, held for [\d:]+)?, not running its command: it waits for room under the lock; none waiting$")
+        self.assertEqual(self.status()["box"], "box: slot 1 free; slot 2 free; none waiting")
+        holder = self.older_holder("box")
+        self.assertRegex(self.status()["box"], rf"^box: slot 1 pid {holder.pid} \(an older heavy.sh\)(, held for [\d:]+)?, not running its command: it waits for room under the lock; slot 2 free; none waiting$")
 
     def test_those_in_line_say_when_a_slots_holder_hasnt_run_its_command_for_a_while(self):
         holder = self.older_holder()
-        waiting = self.queued("box", ["true"], KUVO_HEAVY_STUCK_AFTER="0")
+        waiting = self.queued("mac", ["true"], KUVO_HEAVY_STUCK_AFTER="0")
         self.assertTrue(select.select([waiting.stderr], [], [], 30)[0], "it said nothing")
         said = waiting.stderr.readline()
-        self.assertIn("slot 1 of the box lane has been held for", said)
+        self.assertIn("slot 1 of the mac lane has been held for", said)
         self.assertIn(f"without its command running: pid {holder.pid} (an older heavy.sh)", said)
 
     def test_a_job_given_its_slot_runs_its_command_at_once_whatever_the_mac_says(self):
