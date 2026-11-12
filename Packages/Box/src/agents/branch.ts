@@ -5,6 +5,8 @@
 // "Branches").
 
 import type { GoalPlaces } from "./goals"
+import { sameJSON } from "../shared/json"
+import { rewriteVia } from "./notes"
 import { at, sessionInfo } from "./oneoff"
 
 /** What says where a conversation came from (an agent's start_session marks `startedBy`; older
@@ -39,12 +41,23 @@ export async function branch(places: GoalPlaces, session: string, before: string
   const copy = made?.data
   if (typeof copy?.id !== "string") throw new BranchError(503, "The new conversation couldn't be started.")
   // A copy carries its source's metadata on some places: where that one came from isn't this one's.
-  const metadata = Object.fromEntries(Object.entries(copy.metadata ?? {}).filter(([key]) => !listed.includes(key))) as Record<string, any>
-  const kuvo = Object.fromEntries(Object.entries(metadata.kuvo ?? {}).filter(([key]) => !origins.includes(key)))
-  metadata.kuvo = { ...kuvo, branchedFrom: session }
+  // Marked in its turn (`notes.ts`), on its notes as they are then: what was written to it since it
+  // was made stays, and only what it carried of those goes (as its place answered the copy, or as
+  // its source has them, for a place whose answer leaves its metadata out).
+  const carried = [copy.metadata ?? {}, info.metadata ?? {}] as Record<string, any>[]
+  const from = (key: string, value: unknown, inKuvo: boolean) => carried.some((notes) => {
+    const where = inKuvo ? notes.kuvo ?? {} : notes
+    return key in where && sameJSON(value, where[key])
+  })
+  const marked = await rewriteVia(place.api, copy.id, (now) => {
+    const metadata: Record<string, any> = { ...(now.metadata ?? {}) }
+    for (const key of listed) if (key in metadata && from(key, metadata[key], false)) delete metadata[key]
+    const kuvo: Record<string, any> = { ...(metadata.kuvo ?? {}) }
+    for (const key of origins) if (key in kuvo && from(key, kuvo[key], true)) delete kuvo[key]
+    return { metadata: { ...metadata, kuvo: { ...kuvo, branchedFrom: session } } }
+  }).catch(() => null)
   // Unmarked, it's answered as it is: shown loose, as its list will show it.
-  const marked = await place.api.request("PATCH", at(copy.id), { metadata }).then(() => true, () => false)
-  return marked ? { ...copy, metadata } : copy
+  return marked ? { ...copy, metadata: marked.session.metadata } : copy
 }
 
 // MARK: Routes (`/api/kuvo/branch`, which a client reaches as `kuvo/agents/api/kuvo/branch`)

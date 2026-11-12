@@ -4101,6 +4101,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `sandbox` | `kuvo/sandbox` ("Sandbox", bridge 0.9.118) |
 | `sandbox.asks` | `kuvo/sandbox/asks…`, `kuvo/sandbox/allowed…` and `kuvo/sandbox/tools` ("Sandbox", "Asks", bridge 0.9.118) |
 | `sandbox.check` | `reason`, `action` and the rest in `kuvo/sandbox`, and `POST kuvo/sandbox/check` |
+| `sandbox.reviews.settled` | `settled` on `kuvo/sandbox/asks`: each ask Auto's reviewer was checking or left for you that was answered or went since, so no client takes it for one that waits, heard or not ("Sandbox") |
 | `sandbox.reviews.whole` | `reviews` on `kuvo/sandbox/asks` lists every ask to work outside a conversation's folder, so a client shows one only once it's listed `yours` ("Sandbox") |
 | `search` | `kuvo/search` |
 | `sessions.agents` | `POST kuvo/sessions/<id>/agents` |
@@ -4515,12 +4516,57 @@ Nothing else writes it: a chat from before the mark that's only written to (a me
 title), or one changed while the box wasn't hearing its engine, stays without it. The box decides it
 from its own chats folder (the same folder through a link counts too). Their APIs write metadata
 whole, with nothing to say "only if it's unchanged": the box reads a session just before it writes
-the mark, and writes only when it's wrong (a client's write between the two is lost, as with the
-box's other writers of a session's metadata, #581). A client keeps the mark as it keeps the rest of
+the mark, in its turn, and writes only when it's wrong (see "Session notes" for what can still be
+lost). A client keeps the mark as it keeps the rest of
 the metadata when it writes it back. A session without the mark (a chat from before, or on a box
 from before `sessions.chat`, which marks nothing) goes by its folder, as before (the folder its
 box's `kuvo/info` names, kept for when that isn't answered). What both apps read is `SessionChat`
 (`Packages/KuvoClient`, ClientSessions).
+
+#### Session notes
+
+A session's metadata (its notes: `kuvo.*` and the rest) is written whole: the engine (2.2.5) and
+the coding agents' bridge keep what a `PATCH api/session/<id>` sends as its `metadata` in place of
+what was there (`{}` empties it; a key left out goes; a PATCH without `metadata`, a title or its
+rules alone, leaves it as it is), with nothing to say "only if it's unchanged". So every writer
+reads it, changes what it owns and sends it all back (the bridge keeps its own `kuvoAgent` and
+`kuvo.messages` whatever is sent).
+
+The box's own writers (#581: the chat mark, a new conversation's approval and any change to it,
+Autopilot, an agent's answers, archiving by a tool or a project's removal, a carry to the coding
+agents, the marks of a session it starts and of a bot it makes, a bot's rules repaired) each take
+their turn on the session: in their process, and across the box's processes on that computer and
+its coding agents' bridge by a lock folder per session in the box's `run/notes` (named for the
+session's ID, so the engine's and the bridge's sessions alike). Each reads the session as it is
+then, changes only its own keys on it, and writes it straight away. The bridge's writers through
+the API (a branch's mark, a handoff's, a group chat seat's) take the same turn. A client's
+`PATCH api/session/<id>` that comes through the box (a phone's, another computer's) waits for it
+too, so the box doesn't write over it with what it read before (but see below).
+
+A turn's read and its write are each cut short at half a minute, so none lasts more than a minute;
+a lock folder older than that (65 seconds) was left by a process cut off: another process takes it
+over then, and the box clears those as it starts. Another process waits for a turn's folder that
+long at most, then goes ahead without it. While a box from before #581 runs beside a newer one (an
+update taking over), the newer one waits for that box's one lock (`run/work/.notes.lock`, held for
+its answers and archiving) as it would have, without taking it.
+
+What can still be lost, as long as the engine has no "only if unchanged", is a write that lands
+between a writer's read and its write (a few milliseconds), when it's
+
+- a client's that doesn't come through the box: the Mac's app writes a session's metadata whole
+  straight to its own engine (archiving or pinning it, say), taking no turn (an iPhone's, and the
+  Mac's to another computer, come through that computer's box and wait for the turn, but are whole
+  too: below);
+- one that doesn't wait as long as a turn can last: a client's PATCH through the box gives up its
+  turn after half a minute, its write still on its way, and a process that waited 65 seconds for a
+  turn's folder goes ahead without it;
+- a session's rules (`permissions`) written alone, outside a turn (a group chat seat's, the
+  bridge's for an engine run of its own), against the box's approval writes, which send them whole;
+- or a client's whole write made from what it read before the box wrote: the box's change is lost
+  (the chat mark is put back as that write's `session.metadata.updated` comes; the box's other
+  notes aren't).
+
+A client writes back what it read with only its own change, as late as it can.
 
 ### Artifacts
 
@@ -5679,7 +5725,7 @@ while the sandbox is `on`) and pass a call to `POST kuvo/sandbox/tools` `{sessio
 making that call. The asks, the tool and the answers live in the box's long-running process, as the
 vault does (`run/vault.sock`); another passes them on.
 
-- `GET kuvo/sandbox/asks` → `{asks: [ask], restart?, reviews?}`, oldest first, with `restart: true` while
+- `GET kuvo/sandbox/asks` → `{asks: [ask], restart?, reviews?, settled?}`, oldest first, with `restart: true` while
   the box asks you to restart its agents (the state's `restart`); `kuvo/sandbox/asks/events`, NDJSON,
   the same at once and on every change. `reviews` (bridge 0.9.192): what Auto's reviewer did with
   the engine's asks to work outside a conversation's folder (`permission.asked`, action
@@ -5696,7 +5742,26 @@ vault does (`run/vault.sock`); another passes them on.
   decided it, whose entry stays for its step's mark. While a client doesn't hear the box's asks
   (its link down or starting again, the stream cut), what it last listed of an ask stands, and one
   it never listed is yours, as nothing would list it. From a box without that word, a client takes
-  one not listed as yours at once. An ask: `{id, at, session?, sessionName?, bot?, botName?,
+  one not listed as yours at once.
+  `settled` (`sandbox.reviews.settled`): each ask the reviewer was checking or had left for you
+  that's over without its word, the latest 200, each `{id, session, call?, state, at}`, `state`
+  `answered` (by you, on any client, or by its engine: `permission.replied`) or `gone` (its run
+  ended, its session was deleted, or its engine let it go while the box wasn't listening: an
+  engine started again, a run that ended unheard). The box keeps them per ask and session, from
+  `checking` to `yours` to `answered` or `gone`: as it hears an engine or the bridge again it reads
+  each session whose ask it still lists as checked or yours there, and one no longer asked is
+  `gone`; one it was about to check and finds no longer asked is `gone` too, never `yours`. A
+  client never takes an ask listed in `settled` for one that waits, heard or not, so none is left
+  with an ask that's over (a session's row saying it asks). Such a client holds nothing of its own
+  for an ask the box takes up but one it heard asked that the box hasn't listed yet (it lists each
+  as it hears it), which is yours, and told, should the box go quiet first, as above. It tells you
+  of one (a notification) once it's listed `yours`,
+  reading it from its engine then (one its engine no longer asks isn't told; where its engine
+  can't be read, it's told without its words), and lets go of one listed in `settled`. The
+  reviewer's own answer isn't listed `answered`: the ask goes from `checking` to what it decided. The box's
+  process started again lists what still waits as it takes it up again (`checking` at once) and
+  none from before. From a box without `settled`, a client keeps what it heard asked until the box
+  lists it, as before. An ask: `{id, at, session?, sessionName?, bot?, botName?,
   project, command, why, stopped?, error?, always?, machine?, owner?, review?}`. `session` is the conversation's root
   (a bot's sub-agent asks as its bot's conversation). `stopped`, on macOS: what the sandbox refused
   that command, from the system's log, each `{kind, path?}` (`kind`: `write`, `read`, `connect`,

@@ -30,8 +30,9 @@ fs.copyFileSync(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.
 // The engine: a conversation, a subagent it started, an engine run it works through, and what
 // each new session was marked with.
 const marked = new Map();
-// What each new session was made with.
+// What each new session was made with, and each as the engine keeps it.
 const created = [];
+const sessionsMade = new Map();
 let made = 0;
 // Worktrees made so far, each a folder of its own.
 let trees = 0;
@@ -49,6 +50,9 @@ const engine = http.createServer((request, response) => {
       if (id === "ses_web") return reply({ data: { id, location: { directory: web } } });
       if (id === "ses_helper") return reply({ data: { id, parentID: "ses_lead", location: { directory: work } } });
       if (id === "ses_run") return reply({ data: { id, location: { directory: work }, metadata: { kuvo: { engineFor: "ses_lead" } } } });
+      // One it made, as it is now: the box reads it before it marks it (#581).
+      const made = sessionsMade.get(id);
+      if (made) return reply({ data: { ...made, ...(marked.has(id) ? { metadata: marked.get(id) } : {}) } });
       return reply({ message: "No such session." }, 404);
     }
     // A git project, and its worktrees made with git, as the real engine makes them.
@@ -59,8 +63,11 @@ const engine = http.createServer((request, response) => {
       return reply({ directory: folder });
     }
     if (request.method === "POST" && request.url === "/api/session") {
-      created.push(JSON.parse(body));
-      return reply({ data: { id: `ses_new${++made}` } });
+      const given = JSON.parse(body);
+      created.push(given);
+      const id = `ses_new${++made}`;
+      sessionsMade.set(id, { id, location: given.location, ...(given.metadata ? { metadata: given.metadata } : {}) });
+      return reply({ data: { id } });
     }
     if (one && request.method === "PATCH") {
       if (!marking) return reply({ message: "Busy." }, 503);

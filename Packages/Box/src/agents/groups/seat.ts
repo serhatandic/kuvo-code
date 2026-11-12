@@ -261,7 +261,7 @@ export class Seats implements SeatHome {
     const metadata = { kuvo: { seat: { group: chat.id, bot: bot.id, ...(scratch ? { scratch: true } : {}) } } }
     const session = await api.create(bot.directory, title, agent, model, this.rules(bot), metadata)
     try {
-      await api.setMetadata(session.id, metadata)
+      await api.markSeat(session.id, metadata.kuvo.seat)
       await api.setInstruction(session.id, seatKey, text)
     } catch (error) {
       await api.delete(session.id).catch(() => {})
