@@ -1,11 +1,10 @@
 // Chats, marked by the box (PROTOCOL.md, "Chats"): a session in its chats folder carries
 // `kuvo.chat` in its metadata, naming that folder, so a client draws a chat from the session
-// itself, never from its folder. The engine makes a session the newest for any write, so the box
-// never marks one from before it first heard the engine (an upgrade leaves every chat where it was
-// in every list, for clients to go by its folder); it marks those made, moved or written to while
-// it wasn't heard as it's heard again, the oldest first so they keep their order, and keeps the mark
-// right as sessions are made, moved and written to, leaving the rest of their metadata as it was.
-// The real link's watch, in this process; only the engine is a stand-in.
+// itself, never from its folder. The engine (2.2.5) makes a session the newest for any write, so
+// the box writes the mark only as a session is made, moved or has its metadata written, never on a
+// session from before: an upgrade, an old chat written to since, and the box hearing its engine
+// again after a while leave every session where it was in every list, for clients to go by its
+// folder. The real link's watch, in this process; only the engine is a stand-in.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/chats.test.js`.
 import "./test-safety.js";
@@ -31,37 +30,47 @@ fs.mkdirSync(chats, { recursive: true });
 fs.mkdirSync(project, { recursive: true });
 fs.symlinkSync(chats, linked);
 
-// The engine: its sessions, newest first a page at a time, each read and written as the real one
-// (2.2.5) does: PATCH replaces its metadata whole and makes it the newest. Every write that changed
-// a chat mark kept; and its events, followed.
+// The engine: its sessions, a page at a time in the order asked (the newest first for `desc`),
+// each read and written as the real one (2.2.5) does: PATCH replaces its metadata whole and makes
+// it the newest. Every write that changed a chat mark kept, every read of all its sessions (not
+// one's subagents) counted; and its events, followed.
 const sessions = new Map();
 const writes = [];
 const followers = [];
+let listedAll = 0;
 let onWrite = () => {};
+let onFollowed = () => {};
 // The engine's clock, as each write makes a session the newest.
 let clock = 0;
-let onFollowed = () => {};
-// Told as the box reads the whole list (every session, not only the newest), as it catches up.
-let onListed = () => {};
+const tick = () => (clock = Math.max(Date.now(), clock + 1));
+// Requests it's answering now, and who waits for none to be left.
+let answering = 0;
+let onIdle = () => {};
 const engine = keepsIdle(http.createServer((request, response) => {
   let body = "";
   request.on("data", chunk => { body += chunk; });
   request.on("end", () => {
     const url = new URL(request.url, "http://x");
-    const send = (value, status = 200) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
     if (url.pathname === "/api/event") {
       response.writeHead(200, { "content-type": "text/event-stream" });
       response.write(": hello\n\n");
       followers.push(response);
       return onFollowed();
     }
+    answering += 1;
+    const send = (value, status = 200) => {
+      response.writeHead(status, { "content-type": "application/json" });
+      response.end(JSON.stringify(value));
+      answering -= 1;
+      if (!answering) onIdle();
+    };
     if (url.pathname === "/api/session" && request.method === "GET") {
-      const newest = [...sessions.values()].sort((a, b) => b.time.updated - a.time.updated);
-      const limit = Number(url.searchParams.get("limit")) || newest.length;
-      const start = Number(url.searchParams.get("cursor") ?? 0);
-      send({ data: newest.slice(start, start + limit), cursor: { next: start + limit < newest.length ? String(start + limit) : null } });
-      if (!url.searchParams.has("parentID")) onListed();
-      return;
+      if (!url.searchParams.has("parentID")) listedAll += 1;
+      const page = url.searchParams.get("cursor") ? JSON.parse(Buffer.from(url.searchParams.get("cursor"), "base64url").toString()) : { order: url.searchParams.get("order") ?? "desc", start: 0 };
+      const all = [...sessions.values()].sort((a, b) => (page.order === "asc" ? a.time.updated - b.time.updated : b.time.updated - a.time.updated));
+      const limit = Number(url.searchParams.get("limit")) || all.length;
+      const next = page.start + limit < all.length ? Buffer.from(JSON.stringify({ ...page, start: page.start + limit })).toString("base64url") : null;
+      return send({ data: all.slice(page.start, page.start + limit), cursor: { next } });
     }
     const one = url.pathname.match(/^\/api\/session\/([^/]+)$/);
     const session = one && sessions.get(decodeURIComponent(one[1]));
@@ -70,7 +79,7 @@ const engine = keepsIdle(http.createServer((request, response) => {
       const given = JSON.parse(body);
       const was = session.metadata?.kuvo?.chat;
       Object.assign(session, given);
-      session.time.updated = clock = Math.max(Date.now(), clock + 1);
+      session.time.updated = tick();
       if (session.metadata?.kuvo?.chat !== was) writes.push({ id: session.id, chat: session.metadata?.kuvo?.chat ?? null });
       onWrite();
       return send({ data: session });
@@ -95,72 +104,68 @@ const writtenTo = (id, times = 1) => new Promise(resolve => {
   onWrite = look;
   look();
 });
+// Until nothing the box asked is still being answered.
+const idle = () => new Promise(resolve => {
+  onIdle = resolve;
+  if (!answering) resolve();
+});
+// Every session, the newest first, as a client's list has them.
+const list = () => [...sessions.values()].sort((a, b) => b.time.updated - a.time.updated).map(each => each.id);
 
-// The sessions by when each changed last, the newest first, with their metadata.
-const listed = ids => [...sessions.values()].filter(each => ids.includes(each.id)).sort((a, b) => b.time.updated - a.time.updated).map(each => ({ id: each.id, updated: each.time.updated, metadata: each.metadata }));
-const heard = path.join(home, ".kuvo-code", "run", "chats-heard.json");
-const before = ["ses_oldchat", "ses_oldlinked", "ses_oldsub", "ses_oldmovedout", "ses_shop"];
-
-test("an upgrade: the first time the box hears its engine, no session from before is written, so every chat keeps its place and time in every list; one made then is marked as it's made", { timeout: 60_000 }, async t => {
-  // From before boxes marked chats: a chat kept archived, one through a link to the chats folder,
-  // a chat's subagent, a project's session marked by a box that marked it once, a project's.
-  made("ses_oldchat", chats, { "kuvo.archived": true, kuvo: { approval: "auto" } });
-  made("ses_oldlinked", linked);
-  made("ses_oldsub", chats, undefined, { parentID: "ses_oldchat" });
-  made("ses_oldmovedout", project, { kuvo: { chat: chats } });
-  made("ses_shop", project);
-  const was = listed(before);
-  // As it hears its engine for the first time, and again as it follows it once more.
-  assert.equal(await link.markChatsSince(atEngine, "engine"), 0);
-  assert.ok(fs.existsSync(heard), "when it heard its engine, kept");
-  assert.equal(await link.markChatsSince(atEngine, "engine"), 0);
-  assert.deepEqual(writes, [], "nothing from before written");
-  assert.deepEqual(listed(before), was, "each in its place, as old as it was, its metadata as it was");
-
+// The box follows its engine (again): once it's heard a chat a client made just now (without its
+// mark, as one from before would) and marked it, and nothing it asked is still being answered.
+async function follows(t, marker) {
   const stop = new AbortController();
   t.signal.addEventListener("abort", () => stop.abort());
   const followed = new Promise(resolve => { onFollowed = resolve; });
   link.watchEvents(() => atEngine, () => true, stop.signal, () => {}, { notices: false, work: "engine" });
   await followed;
-  // A chat made now (by a client that doesn't mark it): marked.
-  sessions.set("ses_first", { id: "ses_first", location: { directory: chats }, time: { created: Date.now(), updated: Date.now() } });
-  tell("session.created", { sessionID: "ses_first", location: { directory: chats } });
-  await writtenTo("ses_first");
-  assert.deepEqual(writes, [{ id: "ses_first", chat: chats }]);
+  sessions.set(marker, { id: marker, location: { directory: chats }, time: { created: tick(), updated: clock } });
+  tell("session.created", { sessionID: marker, location: { directory: chats } });
+  await writtenTo(marker);
+  await idle();
+  return stop;
+}
+
+const old = ["ses_oldchat", "ses_oldlinked", "ses_oldsub", "ses_oldmovedout", "ses_shop", "ses_shop2"];
+
+test("an upgrade: as the box first hears its engine, no session from before is written, so every chat keeps its place and time in every list; one made then is marked", { timeout: 60_000 }, async t => {
+  // From before boxes marked chats: a chat kept archived, one through a link to the chats folder,
+  // a chat's subagent, a project's session left marked by a box that marked it once, projects'.
+  made("ses_oldchat", chats, { "kuvo.archived": true, kuvo: { approval: "auto" } });
+  made("ses_shop", project);
+  made("ses_oldlinked", linked);
+  made("ses_oldsub", chats, undefined, { parentID: "ses_oldchat" });
+  made("ses_oldmovedout", project, { kuvo: { chat: chats } });
+  made("ses_shop2", project);
+  // (More than a page of them, so one that reads them all reads page after page.)
+  for (let i = 0; i < 220; i++) made(`ses_older${i}`, project);
+  const was = list();
+  const metadata = Object.fromEntries(old.map(id => [id, structuredClone(sessions.get(id).metadata)]));
+
+  const stop = await follows(t, "ses_first");
+  assert.deepEqual(writes, [{ id: "ses_first", chat: chats }], "nothing from before written");
+  assert.deepEqual(list(), ["ses_first", ...was], "every session where it was, the new chat on top");
+  for (const id of old) assert.deepEqual(sessions.get(id).metadata, metadata[id], `${id}: its metadata as it was`);
+  assert.equal(listedAll, 0, "it never reads every session to look for one to mark");
   stop.abort();
 });
 
-test("back after a while it wasn't heard: what changed meanwhile is marked as its folder says, the oldest first so they keep their order; nothing from before", { timeout: 60_000 }, async t => {
+test("an old chat written to after the box first heard its engine (a message), then a project's session after it (renamed), then the box hears its engine again: the old chat is never written, and the list stays in that order", { timeout: 60_000 }, async t => {
   writes.length = 0;
-  const was = listed(before);
-  // Changed while the box wasn't listening (it was restarting): a chat made, one through a link, a
-  // chat's subagent, a chat moved into a project, and a chat a box from before brought here from a
-  // box that marked it there.
-  const at = Math.max(Date.now(), clock + 1);
-  const now = (id, directory, metadata, more = {}, step = 0) => sessions.set(id, { id, location: { directory }, time: { created: at + step, updated: at + step }, ...(metadata ? { metadata } : {}), ...more });
-  now("ses_gapmoved", project, { kuvo: { chat: chats, filed: { folder: project, project } } }, {}, 0);
-  now("ses_gapchat", chats, { "kuvo.pinned": true }, {}, 1);
-  now("ses_gaplinked", linked, undefined, {}, 2);
-  now("ses_gapsub", chats, undefined, { parentID: "ses_gapchat" }, 3);
-  now("ses_gapbrought", chats, { kuvo: { chat: "/Users/me/Library/Application Support/run.kuvo.code/Chats" } }, {}, 4);
-  now("ses_gapshop", project, undefined, {}, 5);
-  const wrong = ["ses_gapmoved", "ses_gapchat", "ses_gaplinked", "ses_gapsub", "ses_gapbrought"];
-  const order = listed(wrong).map(each => each.id);
-  const stop = new AbortController();
-  t.signal.addEventListener("abort", () => stop.abort());
-  link.watchEvents(() => atEngine, () => true, stop.signal, () => {}, { notices: false, work: "engine" });
-  // (The newest wrong one is written last.)
-  await writtenTo("ses_gapbrought");
+  // A message to the old chat, then a rename of a project's session: each the newest in turn.
+  sessions.get("ses_oldchat").time.updated = tick();
+  sessions.get("ses_shop").time.updated = tick();
+  sessions.get("ses_shop").title = "Checkout";
+  const was = list();
+  assert.deepEqual(was.slice(0, 3), ["ses_shop", "ses_oldchat", "ses_first"]);
 
-  assert.deepEqual(writes.map(each => each.id), wrong, "only those whose mark was wrong, the oldest first");
-  assert.deepEqual(listed(wrong).map(each => each.id), order, "still in the order they were in among themselves");
-  assert.deepEqual(sessions.get("ses_gapmoved").metadata, { kuvo: { filed: { folder: project, project } } }, "a project's session carries no mark");
-  assert.deepEqual(sessions.get("ses_gapchat").metadata, { "kuvo.pinned": true, kuvo: { chat: chats } }, "marked, the rest of its metadata as it was");
-  assert.equal(sessions.get("ses_gaplinked").metadata.kuvo.chat, linked, "the chats folder through a link is the chats folder, named as the session names it");
-  assert.equal(sessions.get("ses_gapsub").metadata.kuvo.chat, chats, "a chat's subagent works in the chats too");
-  assert.equal(sessions.get("ses_gapbrought").metadata.kuvo.chat, chats, "marked for where it is now");
-  assert.equal(sessions.get("ses_gapshop").metadata, undefined);
-  assert.deepEqual(listed(before), was, "nothing from before");
+  // The box stopped hearing its engine (the app quit, the engine restarted) and hears it again.
+  const stop = await follows(t, "ses_second");
+  assert.deepEqual(writes, [{ id: "ses_second", chat: chats }], "the old chat never written");
+  assert.deepEqual(list(), ["ses_second", ...was], "every session where it was, the new chat on top");
+  assert.equal(sessions.get("ses_oldchat").metadata.kuvo.chat, undefined, "no mark: clients go by its folder");
+  assert.equal(listedAll, 0, "it never reads every session to look for one to mark");
   stop.abort();
 });
 
@@ -170,11 +175,8 @@ test("a chat made, moved into a project, and written whole by a client keeps the
   const stop = new AbortController();
   t.signal.addEventListener("abort", () => stop.abort());
   const followed = new Promise(resolve => { onFollowed = resolve; });
-  // (Caught up first: it has nothing from before to mark.)
-  const caughtUp = new Promise(resolve => { onListed = resolve; });
   link.watchEvents(() => atEngine, () => true, stop.signal, () => {}, { notices: false, work: "engine" });
   await followed;
-  await caughtUp;
 
   // Made by a client that doesn't mark it (an older one, or the engine itself): marked, as the
   // engine's event shows it, once its approval's written (which writes its metadata too), with

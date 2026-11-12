@@ -35,7 +35,7 @@ import { workAsks } from "../work/asks";
 import { ofBot, under, workSessions } from "../work/tree";
 import { readBackground } from "../work/background";
 import { decidedOf, forgetDecided, isAutopilot, keepDecided, tellAutopilot } from "../work/autopilot";
-import { isChatsFolder, markChat } from "../engine/chats";
+import { isChatsFolder } from "../engine/chats";
 import type { EngineSession } from "../engine/sessions";
 import { CHATS, engineWait, MOST_BUNDLE, NotTaken, TooBig, deleteSession, directoryOf, exportAll, folderOf, groupAction, conversationHash, hashOf, idsOf, importAll, keysOf, notPlainIn, ownTree, pack, toTrash, unpack } from "./bundle";
 import type { Contents } from "./bundle";
@@ -1046,15 +1046,12 @@ async function bringIn(record: MoveRecord, signal: AbortSignal): Promise<string[
   changeMove(record.id, each => { each.sessions = sessions; each.was = was; });
   let infos: (Partial<EngineSession> & { id: string })[];
   if (contents.lane) {
-    const placed = await carry<{ digest: string; sessions: string[]; model?: { providerID?: string; id?: string }; came?: { providerID?: string; id?: string }; infos: { id: string; metadata?: Record<string, unknown> }[] }>(engine, "place", { from: carried, keep: placedOf(record.id), directory, root }, signal).catch(error => {
+    const placed = await carry<{ digest: string; sessions: string[]; model?: { providerID?: string; id?: string }; came?: { providerID?: string; id?: string }; infos: { id: string; metadata?: Record<string, unknown> }[] }>(engine, "place", { from: carried, keep: placedOf(record.id), directory, root, chat: isChatsFolder(directory) ? directory : null }, signal).catch(error => {
       if ((error as { status?: number } | null)?.status === 409) throw new NotTaken(String((error as Error).message));
       throw error;
     });
     sessions = [...new Set([...sessions, ...placed.sessions])];
     changeMove(record.id, each => { each.digest = placed.digest; each.sessions = sessions; });
-    // A chat's conversations marked as chats here (their bridge places them with the marks they
-    // had there, and says nothing a mark is looked at for), a bot's unmarked.
-    for (const placedID of placed.sessions) await markChat(engine, placedID, signal).catch(() => {});
     infos = placed.infos as typeof infos;
     // Its account isn't on this computer: the bot goes on with the one its conversation went to. And
     // on the model it ran on, where it named it by an alias that stands for another one here.

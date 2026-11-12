@@ -10,7 +10,7 @@ import { finishDeletes } from "../bots/edit";
 import { freshenBot, freshenBots } from "../bots/tell";
 import { ANSWERED, GROUP_NEWS, NEWS, RUN_ENDS, groupNotice, noticeFor, settleHeld } from "../notices/news";
 import { keepReadThroughSummary, keepWorkRead, settleWorkRead } from "../work/tree";
-import { markChatOn, markChatsSince, noteHeard } from "./chats";
+import { markChatOn } from "./chats";
 import { bridgeTarget, engineGet, peerTargets, readBridgeFile, readEngineFile } from "./client";
 import { applyCompatibility, followSettingsFile, learnCompatibility } from "./compatibility";
 import { modelsDue, settleDueModels, WORK_ENDS } from "./models";
@@ -365,9 +365,6 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       if (goalHeld) settleGoalHolds(source, goalHeld).catch(() => {});
       // Full Access's list for the sandbox's launcher, for those at work now (one changed meanwhile).
       if (work) noteFullAccessAtWork(source, atWork).catch(() => {});
-      // Chats made, moved or written to while it wasn't heard marked, and only them (never one from
-      // before, which would come up as the newest).
-      if (work) markChatsSince(source, work, connection.signal).catch(() => {});
       // Asks to work outside a folder waiting already (it started again as they came, or their
       // event went by unheard): taken up now, so every client's list of them is whole.
       if (work) atWork(source).then(sessions => takeUpWaitingAsks(source, sessions, connection.signal)).catch(() => {});
@@ -390,10 +387,10 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         // One a client made without a kept approval: the one it was made with, else this computer's
         // default (a client from before never gets Full Access unasked).
         const adopted = work && event.type === "session.created" ? adoptConversation(source, event.data?.sessionID ?? event.data?.info?.id, work === "bridge").catch(() => {}) : null;
-        // A chat marked so, and nothing else (engine/chats.ts), as one's made, moved or written to:
-        // once its approval's written, which reads and writes its metadata too.
+        // A chat marked so, and nothing else (engine/chats.ts), as one's made, moved or has its
+        // metadata written (never one from before: a write makes it the newest): once its
+        // approval's written, which reads and writes its metadata too.
         if (work) Promise.resolve(adopted).then(() => markChatOn(source, event.type, event.data, connection.signal)).catch(() => {});
-        if (work) noteHeard(work);
         if (event.type === "session.deleted" && typeof event.data?.sessionID === "string") {
           letSessionFilesGo(attachmentsLooked, event.data.sessionID);
           forgetReviews(event.data.sessionID);
