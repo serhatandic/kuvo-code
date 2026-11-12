@@ -891,7 +891,8 @@ struct BottomStack: View {
             return
         }
         let machine = RemoteFolder.machine(of: model.session.location.directory).map { id in app.machines.list.first { $0.id == id }?.name ?? id }
-        let unavailable = model.session.model.flatMap { catalog.refusal($0, on: machine, said: model.modelState) }
+        // (One with no model of its own runs on the one its box names.)
+        let unavailable = (model.session.model ?? model.modelState?.model).flatMap { catalog.refusal($0, on: machine, said: model.modelState) }
         model.submitDraft(for: catalog.model(model.session.model), queue: queue, commands: catalog.commands(in: model.session.location.directory), unavailable: unavailable)
     }
 }

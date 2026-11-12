@@ -23,8 +23,9 @@ const ASK_WAIT = 5_000;
 
 type Ref = { providerID: string; id: string; variant?: string };
 
-/** A model as a place lists it. */
-interface Listed { providerID: string; id: string; name: string; aliases: string[]; free: boolean }
+/** A model as a place lists it; `provisional`, one of its agent's usual ones, listed until it says
+ * which your account has (Claude Code's, as it starts). */
+interface Listed { providerID: string; id: string; name: string; aliases: string[]; free: boolean; provisional: boolean }
 
 /** An account as a place lists it (`api/integration`): its ways to sign in, whether it's signed
  * in, and for a coding agent's, whether its program is installed. */
@@ -38,9 +39,9 @@ const PLANS: Record<string, { name: string; agent: string; provider: string; hid
   xai: { name: "SuperGrok", agent: "Grok", provider: "grok-cli", hidden: method => method === "device" },
 };
 
-const asked = (target: Target, route: string, signal?: AbortSignal): Promise<unknown> => {
+const asked = (target: Target, route: string, signal?: AbortSignal, folder?: string): Promise<unknown> => {
   const wait = AbortSignal.timeout(ASK_WAIT);
-  return call(target, "GET", route, undefined, signal ? AbortSignal.any([signal, wait]) : wait).catch(() => null);
+  return call(target, "GET", route, undefined, signal ? AbortSignal.any([signal, wait]) : wait, folder).catch(() => null);
 };
 
 function modelsIn(listed: unknown): Listed[] | null {
@@ -49,7 +50,7 @@ function modelsIn(listed: unknown): Listed[] | null {
     // (One turned off is as good as gone.)
     if (!isObject(each) || typeof each.id !== "string" || typeof each.providerID !== "string" || each.enabled === false) return [];
     const aliases = Array.isArray(each.aliases) ? each.aliases.filter((alias): alias is string => typeof alias === "string") : [];
-    return [{ providerID: each.providerID, id: each.id, name: typeof each.name === "string" && each.name ? each.name : each.id, aliases, free: isFree(each) }];
+    return [{ providerID: each.providerID, id: each.id, name: typeof each.name === "string" && each.name ? each.name : each.id, aliases, free: isFree(each), provisional: each.provisional === true }];
   });
 }
 
@@ -80,8 +81,10 @@ interface EngineLists { ready: Set<string>; models: Listed[]; accounts: Map<stri
  * Auto lists (null where it can't say). */
 interface BridgeLists { models: Listed[]; accounts: Map<string, Account>; auto: { id: string; name: string; entries: number }[] | null }
 
-async function engineLists(engine: Target, signal?: AbortSignal): Promise<EngineLists | null> {
-  const [providers, listed, integrations, fallback] = await Promise.all(["/api/provider", "/api/model", "/api/integration", "/api/model/default"].map(route => asked(engine, route, signal)));
+/** What the engine lists in `folder` (a project's own settings may add providers, models or its
+ * default model there). */
+async function engineLists(engine: Target, folder: string | undefined, signal?: AbortSignal): Promise<EngineLists | null> {
+  const [providers, listed, integrations, fallback] = await Promise.all(["/api/provider", "/api/model", "/api/integration", "/api/model/default"].map(route => asked(engine, route, signal, folder)));
   const models = modelsIn(listed), accounts = accountsIn(integrations);
   if (!Array.isArray(providers) || !models || !accounts) return null;
   const ready = new Set(providers.flatMap(each => (isObject(each) && typeof each.id === "string" ? [each.id] : [])));
@@ -132,7 +135,8 @@ function withAgents(ref: Ref, bridge: BridgeLists | null): Omit<SessionModel, "m
   if (!bridge) return undefined;
   if (ref.providerID === "auto") {
     if (!bridge.auto) return undefined;
-    const list = bridge.auto.find(each => each.id === ref.id);
+    // A list deleted runs on the first, as the bridge runs it (`Auto.list`).
+    const list = bridge.auto.find(each => each.id === ref.id) ?? bridge.auto[0];
     if (!list) return { runs: false, missing: "gone" };
     return list.entries ? { name: list.name, runs: true } : { name: list.name, runs: false, missing: "gone" };
   }
@@ -142,10 +146,11 @@ function withAgents(ref: Ref, bridge: BridgeLists | null): Omit<SessionModel, "m
   if (!account.installed) return { runs: false, missing: "install", account: accountOf(account) };
   if (!account.signedIn) return { runs: false, missing: "signIn", account: accountOf(account) };
   const ofIt = bridge.models.filter(model => model.providerID === ref.providerID);
-  // Signed in with none listed: its models are still being read.
-  if (!ofIt.length) return undefined;
   const listed = named(ref, ofIt);
-  return listed ? { name: listed.name, runs: true } : { runs: false, missing: "gone", account: accountOf(account) };
+  if (listed) return { name: listed.name, runs: true };
+  // Signed in with none listed, or only its agent's usual ones: its models are still being read.
+  if (!ofIt.length || ofIt.every(model => model.provisional)) return undefined;
+  return { runs: false, missing: "gone", account: accountOf(account) };
 }
 
 /** What each of `ids` runs on, and whether it can, by session; one this box doesn't have, or can't
@@ -153,23 +158,29 @@ function withAgents(ref: Ref, bridge: BridgeLists | null): Omit<SessionModel, "m
 export async function sessionModels(ids: string[], engine: Target | null, bridge: Target | null, signal?: AbortSignal): Promise<Record<string, SessionModel>> {
   const targets = [engine, bridge].filter((each): each is Target => each !== null);
   const found = (await Promise.all(ids.map(id => sessionHere(targets, id, signal)))).filter(each => each !== null);
-  // Each place's lists read once, and only where one's needed.
-  let engineRead: Promise<EngineLists | null> | undefined, bridgeRead: Promise<BridgeLists | null> | undefined;
-  const fromEngine = () => (engineRead ??= engine ? engineLists(engine, signal) : Promise.resolve(null));
+  // Each place's lists read once (the engine's once a folder), and only where one's needed.
+  const engineRead = new Map<string, Promise<EngineLists | null>>();
+  let bridgeRead: Promise<BridgeLists | null> | undefined;
+  const fromEngine = (folder: string | undefined) => {
+    const key = folder ?? "";
+    if (!engineRead.has(key)) engineRead.set(key, engine ? engineLists(engine, folder, signal) : Promise.resolve(null));
+    return engineRead.get(key)!;
+  };
   const fromBridge = () => (bridgeRead ??= bridge ? bridgeLists(bridge, signal) : Promise.resolve(null));
   const answer: Record<string, SessionModel> = {};
   await Promise.all(found.map(async ({ target, data }) => {
+    const folder = data.location?.directory ?? data.directory;
     const own = isObject(data.model) && typeof data.model.providerID === "string" && typeof data.model.id === "string" ? data.model : null;
     const onBridge = bridge !== null && target.port === bridge.port;
     // None of its own: the engine's default (a coding agents' session always has one).
-    const ref: Ref | null = own ? { providerID: own.providerID, id: own.id, ...(typeof own.variant === "string" ? { variant: own.variant } : {}) } : onBridge ? null : (await fromEngine())?.fallback ?? null;
+    const ref: Ref | null = own ? { providerID: own.providerID, id: own.id, ...(typeof own.variant === "string" ? { variant: own.variant } : {}) } : onBridge ? null : (await fromEngine(folder))?.fallback ?? null;
     if (!ref) {
       // (An engine that can't say has no default to tell.)
-      if (!onBridge && !(await fromEngine())) return;
+      if (!onBridge && !(await fromEngine(folder))) return;
       answer[data.id] = { model: null, runs: false, missing: "model" };
       return;
     }
-    const state = isEngineModel(ref) && ref.providerID !== "auto" ? onEngine(ref, await fromEngine()) : withAgents(ref, await fromBridge());
+    const state = isEngineModel(ref) && ref.providerID !== "auto" ? onEngine(ref, await fromEngine(folder)) : withAgents(ref, await fromBridge());
     if (state) answer[data.id] = { model: ref, ...state };
   }));
   return answer;

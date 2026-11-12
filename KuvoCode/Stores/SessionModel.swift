@@ -2045,14 +2045,15 @@ final class SessionModel {
 
     /// Reads what its box says of its model again (`modelState`): as it opens, as its model
     /// changes, and as its box's accounts, models or Custom Auto lists do. One the box can't say
-    /// about yet is as it is, and a message on it goes; what can't be read keeps what was.
+    /// about yet (it leaves it out) is as this Mac works it out, as from an older box; what can't
+    /// be read keeps what was.
     func readModelState() async {
         guard let box = box(), await boxHas("sessions.models") else {
             modelState = nil
             return
         }
         guard let read = try? await box.value(SessionModelStates.self, "GET", SessionModelState.path([id])), !Task.isCancelled else { return }
-        let state = read.sessions[id] ?? .unknown(session.model)
+        let state = read.sessions[id]
         if modelState != state { modelState = state }
     }
     /// Whether its box answers `feature` (`kuvo/info`'s `features`); this Mac's answers them all.
@@ -2560,6 +2561,8 @@ final class SessionModel {
                     if session.model == model { session.model = previous }
                     throw error
                 }
+                // What its box says of the new one, now it's set there.
+                await readModelState()
                 // The note starts a turn of its own: only when there was a run to stop, as there
                 // may not be by now (it ended while the model was being set); and not if it has
                 // asked you something meanwhile.

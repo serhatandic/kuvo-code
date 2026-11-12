@@ -75,5 +75,7 @@ struct SessionModelStateTests {
         let answer = try JSONDecoder().decode(SessionModelStates.self, from: Data(#"{"sessions":{"ses_a":{"model":null,"runs":false,"missing":"model"}}}"#.utf8))
         #expect(answer.sessions["ses_a"]?.missing == .model)
         #expect(SessionModelState.path(["ses_a", "ses_b"]) == "kuvo/sessions/models?sessions=ses_a,ses_b")
+        let xiaomi = SessionModelState(model: ModelRef(id: "mimo", providerID: "xiaomi"), runs: false, missing: .key, account: .init(id: "xiaomi", name: "Xiaomi"))
+        #expect(xiaomi.signInHelp("xiaomi") == "Add a Xiaomi key")
     }
 }

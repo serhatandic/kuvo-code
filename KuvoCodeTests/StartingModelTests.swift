@@ -272,8 +272,8 @@ import Testing
         // where to sign in, on the machine it's on.
         let out = try said(#"{"model":{"providerID":"anthropic","id":"sonnet"},"name":"Sonnet","runs":false,"missing":"signIn","account":{"id":"anthropic","name":"Anthropic"}}"#)
         #expect(catalog.chipModel(sonnet, in: .all, said: out)?.id == "sonnet")
-        #expect(catalog.refusal(sonnet, on: "devbox", said: out) == "sonnet needs a sign-in on devbox: sign in to Anthropic in Settings › Accounts, or choose another model.")
-        #expect(catalog.chipHelp(sonnet, in: .all, on: "devbox", said: out) == "sonnet needs a sign-in on devbox: sign in to Anthropic in Settings › Accounts, or choose another model.")
+        #expect(catalog.refusal(sonnet, on: "devbox", said: out) == "Sonnet needs a sign-in on devbox: sign in to Anthropic in Settings › Accounts, or choose another model.")
+        #expect(catalog.chipHelp(sonnet, in: .all, on: "devbox", said: out) == "Sonnet needs a sign-in on devbox: sign in to Anthropic in Settings › Accounts, or choose another model.")
         #expect(catalog.needsAccount(sonnet, said: out))
         // The engine's xAI, its SuperGrok plan Grok's: its card's Sign In opens the key sheet, and
         // says so, here and on a machine whose accounts this Mac doesn't list (#338's leftover).

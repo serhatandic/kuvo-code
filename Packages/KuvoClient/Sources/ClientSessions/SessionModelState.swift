@@ -91,15 +91,12 @@ public struct SessionModelState: Decodable, Equatable, Sendable {
         plan = try container.decodeIfPresent(Plan.self, forKey: .plan)
     }
 
-    /// What the box can't say yet (a place not answering, an agent's models still being listed),
-    /// which it leaves out: the model as it is, and a message on it goes.
-    public static func unknown(_ ref: ModelRef?) -> SessionModelState {
-        SessionModelState(model: ref, runs: true)
-    }
+    /// The route a box answers it on, `sessions=<id>,<id>…` its query.
+    public static let route = "kuvo/sessions/models"
 
-    /// The route that asks it for `sessions`.
+    /// The route that asks it for `sessions`, as a link request's path (query and all).
     public static func path(_ sessions: [String]) -> String {
-        "kuvo/sessions/models?sessions=" + sessions.joined(separator: ",")
+        route + "?sessions=" + sessions.joined(separator: ",")
     }
 
     /// Whether this is said of `ref`, the model a composer shows (nil: a session with none of its
@@ -175,10 +172,11 @@ public struct SessionModelState: Decodable, Equatable, Sendable {
         }
     }
 
-    /// "an" before a name said starting with a vowel ("an xAI key", "an OpenAI key"), else "a".
+    /// "an" before a name said starting with a vowel ("an OpenAI key", "an xAI key", said "ex-A-I"),
+    /// else "a" ("a Xiaomi key").
     static func article(_ word: String) -> String {
         guard let first = word.lowercased().first else { return "a" }
-        return "aeiox".contains(first) ? "an" : "a"
+        return "aeiou".contains(first) || word.hasPrefix("xA") ? "an" : "a"
     }
 }
 

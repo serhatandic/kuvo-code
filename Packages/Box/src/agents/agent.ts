@@ -504,13 +504,14 @@ export class ContextWindows {
 }
 
 /** A model as the app lists it, from the little an agent says about one. */
-export function model(providerID: string, id: string, name: string, options: { variants?: string[]; images?: boolean; context?: number; released?: number; family?: string; aliases?: string[] } = {}): Model {
+export function model(providerID: string, id: string, name: string, options: { variants?: string[]; images?: boolean; context?: number; released?: number; family?: string; aliases?: string[]; provisional?: boolean } = {}): Model {
   return {
     id,
     providerID,
     name,
     family: options.family,
     ...(options.aliases?.length ? { aliases: options.aliases } : {}),
+    ...(options.provisional ? { provisional: true as const } : {}),
     capabilities: { tools: true, input: options.images ? ["text", "image"] : ["text"], output: ["text"] },
     variants: (options.variants ?? []).map((id) => ({ id })),
     time: { released: options.released ?? 0 },

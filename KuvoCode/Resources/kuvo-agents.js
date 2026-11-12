@@ -3001,6 +3001,7 @@ function model(providerID, id, name, options = {}) {
     name,
     family: options.family,
     ...options.aliases?.length ? { aliases: options.aliases } : {},
+    ...options.provisional ? { provisional: true } : {},
     capabilities: { tools: true, input: options.images ? ["text", "image"] : ["text"], output: ["text"] },
     variants: (options.variants ?? []).map((id) => ({ id })),
     time: { released: options.released ?? 0 },
@@ -11898,9 +11899,9 @@ function updateChannel() {
 }
 function fallbackModels(providerID) {
   return [
-    model(providerID, "opus", "Opus", { family: "claude-opus", images: true, variants: ["low", "medium", "high", "xhigh", "max"], released: 3, aliases: ["default"] }),
-    model(providerID, "sonnet", "Sonnet", { family: "claude-sonnet", images: true, variants: ["low", "medium", "high", "max"], released: 2 }),
-    model(providerID, "haiku", "Haiku", { family: "claude-haiku", images: true, released: 1 })
+    model(providerID, "opus", "Opus", { family: "claude-opus", images: true, variants: ["low", "medium", "high", "xhigh", "max"], released: 3, aliases: ["default"], provisional: true }),
+    model(providerID, "sonnet", "Sonnet", { family: "claude-sonnet", images: true, variants: ["low", "medium", "high", "max"], released: 2, provisional: true }),
+    model(providerID, "haiku", "Haiku", { family: "claude-haiku", images: true, released: 1, provisional: true })
   ];
 }
 var goingOnLimit = 60000;
@@ -27434,4 +27435,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 049a76b815862f30092620a85ab119c3445a8013e3f788c5210158daaff34f31
+// Built from Packages/Box/src/agents 5edf5e91f30c7375663bd78bfa9f9b5ac507a82a2e023acc99e7a83ed24794e7

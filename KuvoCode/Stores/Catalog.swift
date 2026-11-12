@@ -244,7 +244,9 @@ final class Catalog {
     /// Only then: a model missing from a list for a moment (a coding agent's, as it starts) goes
     /// to its agent, which says for itself if it can't run it.
     /// The old-box path, with `refusal`, `unavailable`, `chipModel` and `signInHelp`: a box with
-    /// `sessions.models` says this itself (`SessionModelState`, the `said:` versions below).
+    /// `sessions.models` says this itself (`SessionModelState`, the `said:` versions below). These
+    /// go once every box a client may reach has `sessions.models` (bridge 0.9 boxes before #572
+    /// don't), with the phone's `HostModel.hasChipModel` and `needsSignIn`.
     func needsSignIn(_ ref: ModelRef?) -> Bool {
         guard let ref, isUnavailable(ref) else { return false }
         return integrations.contains { $0.id == ref.providerID && !$0.isConnected && !$0.methods.isEmpty }
@@ -405,6 +407,7 @@ final class Catalog {
         var hasher = Hasher()
         hasher.combine(listsRead)
         hasher.combine(auto)
+        hasher.combine(defaultModel?.key)
         return hasher.finalize()
     }
     /// How many times the accounts and models were read.

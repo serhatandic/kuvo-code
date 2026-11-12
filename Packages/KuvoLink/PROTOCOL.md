@@ -1191,21 +1191,25 @@ box decides it from what its engine and coding agents list, so every client show
   - `install`: `account`'s coding agent installed on this box.
   - `gone`: the model is no longer in its provider's list (`account`, while its account is still
     there), its account signed in: retired, or a coding agent's it no longer lists. It can't run:
-    choose another. Also a coding agent's account you removed, and a Custom Auto list deleted or
-    emptied.
+    choose another. Also a coding agent's account you removed, and a Custom Auto list emptied (one
+    deleted runs on your first list, as the bridge runs it).
+- The engine's lists (its providers, models, accounts and default) are read in the session's
+  folder, where a project's own settings may add to them.
 - An engine provider counts as signed in when the engine says it's ready (`api/provider`), it has
   a connection, or nothing to sign in to (a local one's); OpenCode Zen's free models need no
   account. A coding agent's model runs while its account is installed, signed in, and its agent
   lists it (by its own id or one it's known by). Custom Auto runs while its list has models: it
   picks among them each turn, so whether one entry's account is signed in isn't said.
 - Left out, as not known yet: a session the box doesn't have; one whose place didn't answer just
-  now; a coding agent's model while that account, signed in, lists no models (still being read);
-  and a model of a provider the engine doesn't know at all (one a project's own settings add).
-  A client shows such a model as it is, and lets a message on it go.
+  now; a coding agent's model while that account, signed in, lists no models, or only its usual
+  ones (`provisional: true` on the bridge's `api/model`, Claude Code's until it says which your
+  account has); and a model of a provider the engine doesn't know at all. A client decides such a
+  one as it would from a box without `sessions.models`.
 - A client asks again as what it's drawn from changes: the session opens, its model changes, or its
   box's accounts, models or Custom Auto lists do (`integration.updated`, `model.updated`,
-  `kuvo.auto.updated`). What the box said is of the model it names: a client draws it only while
-  that's still the session's (another just picked is drawn as it is until the box is asked again).
+  `kuvo.auto.updated`), and once a model it picked is set. What the box said is of the model it
+  names: a client draws it only while that's still the session's (another just picked is drawn as
+  without the box's word until the box is asked again).
 - Clients draw it alike from ClientSessions' `SessionModelState`: the model button names the model
   while it runs or its account needs something, and says "Choose a Model" for `gone` and `model`;
   Send follows `ComposerSend` with that, so it waits for a model for those two, and for the others

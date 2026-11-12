@@ -891,11 +891,12 @@ function updateChannel(): string {
 }
 
 function fallbackModels(providerID: string): Model[] {
+  // (Its usual ones, not its word: one missing from them isn't gone.)
   return [
     // (Until Claude Code says which its default is, a session on it shows as this and goes on.)
-    model(providerID, "opus", "Opus", { family: "claude-opus", images: true, variants: ["low", "medium", "high", "xhigh", "max"], released: 3, aliases: ["default"] }),
-    model(providerID, "sonnet", "Sonnet", { family: "claude-sonnet", images: true, variants: ["low", "medium", "high", "max"], released: 2 }),
-    model(providerID, "haiku", "Haiku", { family: "claude-haiku", images: true, released: 1 }),
+    model(providerID, "opus", "Opus", { family: "claude-opus", images: true, variants: ["low", "medium", "high", "xhigh", "max"], released: 3, aliases: ["default"], provisional: true }),
+    model(providerID, "sonnet", "Sonnet", { family: "claude-sonnet", images: true, variants: ["low", "medium", "high", "max"], released: 2, provisional: true }),
+    model(providerID, "haiku", "Haiku", { family: "claude-haiku", images: true, released: 1, provisional: true }),
   ]
 }
 
