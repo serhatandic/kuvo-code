@@ -10,11 +10,13 @@ import path from "node:path";
 import { isObject } from "../../shared/json";
 import { isChatsFolder } from "../engine/chats";
 import { asked, call, engineGet } from "../engine/client";
+import { rewriteOn } from "../engine/notes";
 import { writtenByYou } from "../engine/queue";
 import { messageID } from "../engine/sessions";
 import { BOTS, CHATS, HERE, homeFolder, IS_MAC } from "../home";
 import { macLink, readLink } from "../state";
 import { plainName } from "../../shared/text";
+import { withNotes } from "../../shared/session-notes";
 import { askedAbout, realish } from "../fence/policy";
 import { changeProjects, filedUnder, PROJECT_FOLDERS_ENTRY, PROJECTS_FILE, projectFoldersNote, readProjects } from "../areas/projects";
 import { projectOf as projectOfFolder, readWorktrees } from "../areas/worktree-records";
@@ -664,7 +666,8 @@ export async function markMade(making: Making, target: Target, session: string, 
   }
   if (making.autopilot) await tellAutopilot(target, session, true).catch(() => {});
   await settleNewSession(target, session).catch(() => {});
-  const marked = await call(target, "PATCH", `/api/session/${address}`, { metadata: { kuvo: making.kuvo } }).then(() => true, () => false);
+  // (In its turn, onto its notes as they are then: what was written since it was made stays.)
+  const marked = await rewriteOn(target, session, now => ({ metadata: withNotes(now.metadata, making.kuvo) })).then(done => Boolean(done), () => false);
   // (Not marked, its finish isn't heard: told so, also where it's finished after a restart, as its
   // journal keeps this.)
   if (!marked && making.prompt.unheard) making.prompt.text = making.prompt.unheard;
