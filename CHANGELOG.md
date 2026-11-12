@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- Keys, tokens and sign-ins Kuvo Code saves on your computers (integrations' keys, a machine's own keys, Claude Code's sign-in for Kuvo Code, the page a coding agent's sign-in opens while you sign in) are now always in files only you can read, in a folder only you can open, even one that was made open to others before, and nothing half-written is left behind when saving one fails.
 - Each computer now marks the chats you make from now on, so they show under Chats on your Mac and iPhone even when your iPhone can't ask that computer where it keeps chats (Kuvo Code on that Mac isn't answering, say), where before they showed as a project called "Chats". Chats from before still go by their folder.
 - Starting or stopping a computer's engine no longer waits minutes when an earlier start or stop there was cut short (by removing the computer, a crash, or the computer going to sleep): the next one goes ahead at once. One still under way is waited for, as before.
 - In a group chat, a bot that has nothing to report on its part of the work now says nothing in the chat: its part shows as done, as before, but "PASS" no longer appears there as its report, nor in a notification that it finished its part. This holds for a bot on another of your computers too.
