@@ -348,7 +348,7 @@ final class Workspace {
 
     /// Whether `session` is a chat: as its box marks it (`kuvo.chat`, PROTOCOL.md "Chats"). One
     /// without the mark goes by its folder (`isChat(_ directory:)`): the old-box path, for a machine
-    /// whose box is from before the mark, and for a chat its box hasn't marked yet.
+    /// whose box is from before the mark, a chat from before the mark, and one not marked yet.
     static func isChat(_ session: Session) -> Bool {
         // (The mark names its folder as its box does.)
         SessionChat.isChat(session, folder: onBox(session.location.directory)) { isChat($0) }
@@ -1002,6 +1002,9 @@ final class Workspace {
         var kuvo: [String: JSONValue] = [:]
         if let approval { kuvo["approval"] = .string(approval.rawValue) }
         if worktree { kuvo["filed"] = SessionProject.mark(folder: Self.onBox(folder), project: Self.onBox(directory)) }
+        // A chat carries its mark from the first, as its box would put it (PROTOCOL.md, "Chats"):
+        // no second write, which the engine would make it newer for.
+        if !worktree, Self.isChat(folder) { kuvo["chat"] = SessionChat.mark(folder: Self.onBox(folder)) }
         let metadata: JSONValue? = kuvo.isEmpty ? nil : .object(["kuvo": .object(kuvo)])
         let session: Session
         do {

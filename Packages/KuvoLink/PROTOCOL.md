@@ -2242,7 +2242,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `started`, when the engine running now came up, in seconds since 1970 (null while none runs): a
   restart changes it, so a phone tells the new engine from the old. Both name the folder of chats
   (`chats`: conversations of no project, made if it isn't there yet, so a phone can start the first
-  one there through the engine, as for a project; each of their sessions is marked a chat, "Chats"). A machine's bridge also says whether its engine
+  one there through the engine, as for a project; their sessions are marked chats, "Chats"). A machine's bridge also says whether its engine
   is `running`, and whether it's `stopped` on purpose (it stays down until it's started, from a Mac
   or a phone), and `home`, the Mac that started its engine (`{"mac", "name"?}`, its name where
   its start noted one). It also says who uses it, for an uninstall to name whom it would stop it
@@ -4065,7 +4065,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `sandbox.reviews.whole` | `reviews` on `kuvo/sandbox/asks` lists every ask to work outside a conversation's folder, so a client shows one only once it's listed `yours` ("Sandbox") |
 | `search` | `kuvo/search` |
 | `sessions.agents` | `POST kuvo/sessions/<id>/agents` |
-| `sessions.chat` | Every chat's session carries `kuvo.chat` in its metadata, naming the chats folder it's in ("Chats") |
+| `sessions.chat` | A chat's session made, moved or written to carries `kuvo.chat` in its metadata, naming the chats folder it's in ("Chats") |
 | `sessions.glance` | `kuvo/sessions/glance`, `…/events`, and `session` in `POST kuvo/git/pull-request` ("A session at a glance") |
 | `sessions.start` | `POST kuvo/sessions`: a session started with a task (bridge 0.9.100) |
 | `setup` | `kuvo/setup`, `…/events`: your setup and its main computer ("Your setup") |
@@ -4451,33 +4451,39 @@ while a box is away goes there when it's back.
 
 #### Chats
 
-A chat is a conversation of no project: one in the box's chats folder (`kuvo/info`'s `chats`). The
-box marks each one in its session's metadata, `kuvo.chat`, naming the folder it's a chat in (as the
-session names it: `sessions.chat`, #571), so a client draws a session as a chat from the session
-itself, wherever it reads it (the engine's or the coding agents' bridge's list, a session read
-again as its event comes, `kuvo/search`'s `info`, a session a move brought), and never works it out
-from its folder. A mark naming another folder than the session's own is no mark: one moved out of
-the chats while no box could take its mark off (its box was down, or from before the mark) is
-never kept a chat by it. The box decides it from its own chats folder (the same folder through a
-link counts too), for every session there, subagents' included, and takes it off any other:
+A chat is a conversation of no project: one in the box's chats folder (`kuvo/info`'s `chats`). Its
+session carries a mark in its metadata, `kuvo.chat`, naming the folder it's a chat in (as the
+session names it: `sessions.chat`, #571), so a client draws it as a chat from the session itself,
+wherever it reads it (the engine's or the coding agents' bridge's list, a session read again as its
+event comes, `kuvo/search`'s `info`, a session a move brought), not from its folder. A mark naming
+another folder than the session's own is no mark: one moved out of the chats while no box could
+take its mark off is never kept a chat by it.
 
-- as a session is made (one a box's `kuvo/sessions` starts carries it from the first), as it moves
-  (`session.moved`: a chat moved into a project loses it), and as its metadata is written whole
-  (`session.metadata.updated`: a client that wrote it without the mark costs a second write);
-- as the box follows its engine and its coding agents' bridge again (it started, or the box did):
-  every session, for those made, moved or written to while it wasn't heard, and those from before
-  boxes marked chats;
-- as a move brings conversations in ("kuvo/moves"): the box sets it as it is here before they're
-  imported (kept among its chats, naming its own folder; taken off in a bot's folder).
+The engine (2.2.5) and the coding agents' bridge make a session the newest for any write, its
+metadata alone too, so a mark is written only where the session has just changed anyway, and never
+on a session from before:
 
-The engine and the coding agents' bridge write metadata whole, with nothing to say "only if it's
-unchanged": the box reads a session just before it writes the mark, and writes only when it's
-wrong. A client keeps the mark as it keeps the rest of the metadata when it writes it back. The
-bridge's sessions, like the engine's, are no newer for their metadata alone (a pin, an archive, the
-mark). A box from before `sessions.chat` marks nothing: a client goes by the session's folder
-there, as it did before (the folder its `kuvo/info` names, kept for when that isn't answered), and
-does the same for a session with no mark (a chat its box hasn't marked in the moment since it was
-made). What both apps read is `SessionChat` (`Packages/KuvoClient`, ClientSessions).
+- a client gives a chat it makes its mark from the first (`SessionChat.mark`), as a box's
+  `kuvo/sessions` does for one it starts, so there's no second write;
+- the box marks one made without it (by a client from before, or the engine: a chat's subagent), one
+  moved (`session.moved`: a chat moved into a project loses it) and one whose metadata a client
+  wrote whole without it (`session.metadata.updated`), as their events come;
+- as the box hears its engine and its coding agents' bridge again (it started, or the box did), it
+  marks those changed since it last heard them (`run/chats-heard.json`, kept every half a minute
+  or so), the oldest first, so they stay in their order; the first time it hears one (a new box, or
+  one from before the mark), none: the chats you have keep their places, and clients go by their
+  folder;
+- as a move brings conversations in ("kuvo/moves"): set as it is here before they're imported, or,
+  with a coding agent, as soon as its bridge has placed them (kept among the chats, naming this
+  box's folder; taken off in a bot's folder).
+
+The box decides it from its own chats folder (the same folder through a link counts too). Their
+APIs write metadata whole, with nothing to say "only if it's unchanged": the box reads a session
+just before it writes the mark, and writes only when it's wrong. A client keeps the mark as it keeps
+the rest of the metadata when it writes it back. A session without the mark (a chat from before, or
+on a box from before `sessions.chat`, which marks nothing) goes by its folder, as before (the folder
+its box's `kuvo/info` names, kept for when that isn't answered). What both apps read is
+`SessionChat` (`Packages/KuvoClient`, ClientSessions).
 
 ### Artifacts
 

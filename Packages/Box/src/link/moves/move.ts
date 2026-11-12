@@ -35,7 +35,7 @@ import { workAsks } from "../work/asks";
 import { ofBot, under, workSessions } from "../work/tree";
 import { readBackground } from "../work/background";
 import { decidedOf, forgetDecided, isAutopilot, keepDecided, tellAutopilot } from "../work/autopilot";
-import { isChatsFolder } from "../engine/chats";
+import { isChatsFolder, markChat } from "../engine/chats";
 import type { EngineSession } from "../engine/sessions";
 import { CHATS, engineWait, MOST_BUNDLE, NotTaken, TooBig, deleteSession, directoryOf, exportAll, folderOf, groupAction, conversationHash, hashOf, idsOf, importAll, keysOf, notPlainIn, ownTree, pack, toTrash, unpack } from "./bundle";
 import type { Contents } from "./bundle";
@@ -1052,6 +1052,9 @@ async function bringIn(record: MoveRecord, signal: AbortSignal): Promise<string[
     });
     sessions = [...new Set([...sessions, ...placed.sessions])];
     changeMove(record.id, each => { each.digest = placed.digest; each.sessions = sessions; });
+    // A chat's conversations marked as chats here (their bridge places them with the marks they
+    // had there, and says nothing a mark is looked at for), a bot's unmarked.
+    for (const placedID of placed.sessions) await markChat(engine, placedID, signal).catch(() => {});
     infos = placed.infos as typeof infos;
     // Its account isn't on this computer: the bot goes on with the one its conversation went to. And
     // on the model it ran on, where it named it by an alias that stands for another one here.

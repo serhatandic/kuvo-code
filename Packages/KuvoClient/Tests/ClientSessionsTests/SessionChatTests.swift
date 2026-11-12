@@ -33,6 +33,11 @@ struct SessionChatTests {
         #expect(!SessionChat.isChat(moved, folder: project) { $0 == chats })
     }
 
+    @Test func aChatAClientMakesIsMarkedAsItsBoxWouldMarkIt() throws {
+        let made = try session(in: chats, metadata: #"{"kuvo": {"chat": "\#(SessionChat.mark(folder: chats).string ?? "")"}}"#)
+        #expect(SessionChat.isMarked(made, folder: chats))
+    }
+
     @Test func anOldBoxsChatGoesByItsFolder() throws {
         // A box from before the mark marks nothing: its chats folder, as its `kuvo/info` named it.
         let chat = try session(in: chats)

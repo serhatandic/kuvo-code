@@ -118,6 +118,7 @@ export { BRIDGE_VERSION } from "./version";
 export { FEATURES } from "../shared/features";
 export { macFeatures } from "../shared/routes/mac";
 export { messageID } from "./engine/sessions";
+export { markChatsSince } from "./engine/chats";
 export { forgetMovesInMemory, keepMoving, sendMovesWith, takeMoveMail, watchMoves } from "./moves/move";
 export { movesElsewhere } from "./moves/elsewhere";
 export { applyCompatibility, COMPATIBILITY_FILE, ENGINE_LAYER_FILE, engineConfigContent, learnCompatibility, readCompatibility } from "./engine/compatibility";

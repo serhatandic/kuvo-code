@@ -1263,9 +1263,7 @@ export class Sessions {
       if (messages !== undefined) session.metadata.kuvo = { ...((body.metadata.kuvo as Record<string, unknown> | undefined) ?? {}), messages }
       emit("session.metadata.updated", { sessionID: id }, directory)
     }
-    // (Clients' notes alone don't make it newer, as the engine's don't: an archive, a pin or a
-    // box's chat mark leaves it where it is in every list.)
-    if (body.title !== undefined || body.permissions !== undefined) session.time.updated = Date.now()
+    session.time.updated = Date.now()
     this.store.save(id, true)
   }
 

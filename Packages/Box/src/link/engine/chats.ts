@@ -1,13 +1,17 @@
-// Chats, as this box marks them (PROTOCOL.md, "Chats"): every session in its chats folder carries
+// Chats, as this box marks them (PROTOCOL.md, "Chats"): a session in its chats folder carries
 // `kuvo.chat` in its metadata, naming that folder (as the session names it), so every client draws
 // a chat from the session itself, wherever it reads it (the engine's list, an event's reload, a
-// search, a move), and never works it out from the session's folder. A mark naming another folder
-// than the session's own is no mark (one moved out while no box could take it off, or brought by a
-// box from before), so it can't keep one a chat for good. Kept right as sessions are made, moved
-// and written to, and as the box follows its engine and its coding agents' bridge again.
+// search, a move), not from the session's folder. A mark naming another folder than the session's
+// own is no mark (one moved out while no box could take it off), so it can't keep one a chat for
+// good. The engine makes a session the newest for any write, so the mark is written only where a
+// session just changed anyway (made, moved, written to, brought by a move), never on one from
+// before: those go by their folder in every client.
 
+import fs from "node:fs";
+import path from "node:path";
 import { isObject } from "../../shared/json";
-import { CHATS, located } from "../home";
+import { writePrivate } from "../files";
+import { CHATS, located, RUN } from "../home";
 import { call, engineGet, type EngineAnswer } from "./client";
 import type { EngineSession } from "./sessions";
 import type { Target } from "../../shared/records";
@@ -95,26 +99,60 @@ export function markChatOn(target: Target, type: string, data: unknown, signal?:
   return markChat(target, id, signal);
 }
 
-/** Every session on `target` marked as its folder says (subagents' too), page by page: as the box
- * follows it again (it started, or the box did), for those made, moved or written to while it
- * wasn't heard, and those from before boxes marked chats. Each is read again just before it's
- * written (`markChat`). How many were written. */
-export async function markAllChats(target: Target, signal?: AbortSignal): Promise<number> {
-  const wrong: string[] = [];
+// When the box last heard each of its places' events (`run/chats-heard.json`, by place: "engine",
+// "bridge"), kept now and then as they come: what changed after it, while it wasn't heard, is looked
+// at as it's heard again. (Kept a little behind, which only looks at a little more.)
+const HEARD_FILE = path.join(RUN, "chats-heard.json");
+const HEARD_EVERY = 30_000;
+const keptHeard = new Map<string, number>();
+
+function readHeard(): Record<string, number> {
+  try {
+    const kept = JSON.parse(fs.readFileSync(HEARD_FILE, "utf8")) as unknown;
+    return isObject(kept) ? Object.fromEntries(Object.entries(kept).filter((each): each is [string, number] => typeof each[1] === "number")) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** That the box heard `place` at `at`: kept at most every half a minute, unless `now`. */
+export function noteHeard(place: string, at = Date.now(), now = false): void {
+  if (!now && at - (keptHeard.get(place) ?? 0) < HEARD_EVERY) return;
+  keptHeard.set(place, at);
+  try { writePrivate(HEARD_FILE, JSON.stringify({ ...readHeard(), [place]: at })); } catch {}
+}
+
+/** The sessions on `target` (the box's `place`) made, moved or written to while the box wasn't
+ * hearing it, marked as their folders say, as it's heard again: those changed since it was last
+ * heard, the oldest first, so they stay in the order they were in (the engine makes each one it
+ * writes to the newest). Never one from before: the first time a box hears a place (it's new, or
+ * it's from before boxes marked chats), none, so the chats you have keep their places in every
+ * list, and clients go by their folder (`SessionChat`'s old-box path). How many were written. */
+export async function markChatsSince(target: Target, place: string, signal?: AbortSignal): Promise<number> {
+  const now = Date.now();
+  const since = readHeard()[place];
+  if (since === undefined) {
+    noteHeard(place, now, true);
+    return 0;
+  }
+  const changed: EngineSession[] = [];
   const real = new Map<string, string>();
   let query: string | null = "limit=200&order=desc";
   for (let pages = 0; query && pages < 500; pages++) {
     if (signal?.aborted) return 0;
     const page = await engineGet(target, `api/session?${query}`) as { data?: EngineSession[]; cursor?: { next?: string } | null } | null;
     const data = Array.isArray(page?.data) ? page.data : [];
-    for (const session of data) if (session?.id && !markedRight(session, real)) wrong.push(session.id);
+    const recent = data.filter(session => (session?.time?.updated ?? 0) >= since);
+    for (const session of recent) if (session?.id && !markedRight(session, real)) changed.push(session);
     const next = page?.cursor?.next;
-    query = data.length === 200 && next ? `limit=200&cursor=${encodeURIComponent(next)}` : null;
+    // (The newest first: past the first from before, the rest are older still.)
+    query = recent.length === 200 && next ? `limit=200&cursor=${encodeURIComponent(next)}` : null;
   }
   let written = 0;
-  for (const id of wrong) {
-    if (signal?.aborted) break;
-    if (await markChat(target, id, signal).catch(() => false)) written += 1;
+  for (const session of changed.sort((a, b) => (a.time?.updated ?? 0) - (b.time?.updated ?? 0))) {
+    if (signal?.aborted) return written;
+    if (await markChat(target, session.id, signal).catch(() => false)) written += 1;
   }
+  noteHeard(place, now, true);
   return written;
 }
