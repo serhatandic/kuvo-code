@@ -192,9 +192,10 @@ import Testing
         defer { arguments.forEach { free($0) } }
         #expect(posix_spawn(&pid, "/bin/sleep", nil, &attributes, arguments, nil) == 0)
         // The engine has it only in the session's folder, which it reads from the request's header.
+        let started = Int(pid)
         StubWeb.route(Self.engine + "/api/shell/sh_left", sent: { request, _ in
             guard request.value(forHTTPHeaderField: "x-opencode-directory")?.removingPercentEncoding == folder else { return StubWeb.json([:], status: 404) }
-            return StubWeb.json(["data": ["id": "sh_left", "status": "running", "command": "sleep 600", "pid": Int(pid)]])
+            return StubWeb.json(["data": ["id": "sh_left", "status": "running", "command": "sleep 600", "pid": started]])
         })
         let stopped = await workspace.stopShellJob(ShellJob(id: "sh_left", status: "running", command: "sleep 600"), in: session.id)
         #expect(stopped == "signal")
