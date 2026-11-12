@@ -4,8 +4,9 @@
 // (start_session), and run the sessions it started as you would (list_sessions, stop_session, compact_session,
 // answer_ask, list_models, make_project, list_projects: `work/tools.ts`, PROTOCOL.md "Work"; and a bot's
 // goal: propose_goal, goal_progress, may_spend, finish_goal, "Work › Goals"; and telling you something on
-// purpose, notify_user, `notices/notify.ts`). Every box answers them alike (`POST kuvo/agent-tools`): this Mac's app and a
-// machine's kuvo-browser.js only pass the call on. A message reaches its conversation as input that
+// purpose, notify_user, `notices/notify.ts`; and the rest of Kuvo Code's own: wake-ups, a bot's job and
+// the show tools' checks, `own-tools.ts`). Every box answers them alike (`POST kuvo/agent-tools`): this
+// Mac's app and keeper, and a machine's kuvo-browser.js, only pass the call on. A message reaches its conversation as input that
 // says who sent it, and the agent there takes it up; with `wait`, the sender gets its answer back.
 // One on another computer goes there by mail (PROTOCOL.md, "Peers"). You name one with "&".
 
@@ -35,6 +36,7 @@ import { rowsBox } from "../work/elsewhere";
 import { awaySince } from "../peers/reach";
 import { awaitAnswer, boxName, boxOf, callPeer, elsewhereTool, rowsEverywhere } from "./calls";
 import { computerOf, readElsewhere, startElsewhere } from "./start-call";
+import { setJobTool, SHOW_TOOLS, showTool, WAKE_TOOLS, wakeTool } from "./own-tools";
 import type { ListedAgent, Target } from "../../shared/records";
 import type { SessionPlace } from "./letter";
 
@@ -51,10 +53,13 @@ export interface ToolPlace {
   bridge: () => Target | null;
   signal?: AbortSignal;
   step?: number;
+  /** Whether the user is looking at the calling conversation now, where the client passing the
+   * call on can tell (show_in_panel's words). */
+  inView?: boolean;
 }
 
 /** The tools, by name. */
-export const AGENT_TOOLS = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "compact_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal", "notify_user", "plan_limits"] as const;
+export const AGENT_TOOLS = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "compact_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal", "notify_user", "plan_limits", ...WAKE_TOOLS, "set_job", ...SHOW_TOOLS] as const;
 export type AgentToolName = (typeof AGENT_TOOLS)[number];
 export const isAgentTool = (name: unknown): name is AgentToolName => AGENT_TOOLS.includes(name as AgentToolName);
 
@@ -283,6 +288,24 @@ export async function agentTool(name: AgentToolName, args: Record<string, unknow
   // A bot's seat in a group chat only talks and looks things up, whatever agent it runs on: the work
   // happens in each bot's own conversation, handed out after the wrap-up.
   if (root?.place.data.metadata?.kuvo?.seat && (name === "send_message" || name === "start_session")) return refused(seatRefusal().message);
+  // Kuvo Code's own, which don't need everyone: for the conversation the call works for.
+  switch (name) {
+    case "schedule_wake_up":
+    case "watch_for_change":
+    case "list_wake_ups":
+    case "cancel_wake_up":
+    case "set_job":
+    case "show_in_panel":
+    case "show_file":
+    case "mark_final":
+    case "show_widget": {
+      const own = session === root?.session ? root.place : session ? await placeOfSession(session, targets).catch(() => null) : null;
+      const calling = { session, own, root };
+      if (name === "set_job") return setJobTool(args, calling, place.readEngine, place.bridge);
+      if (name === "show_in_panel" || name === "show_file" || name === "mark_final" || name === "show_widget") return showTool(name, args, calling, place.inView);
+      return wakeTool(name, args, calling, place.readEngine, place.bridge);
+    }
+  }
   const all = await everyone(place);
   switch (name) {
     case "list_agents":

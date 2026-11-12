@@ -951,16 +951,19 @@ short) is lifted.
 
 ### Agents' tools
 
-Every box answers its agents' tools for writing to each other and starting sessions itself, the
-same on every computer (bridge 0.9.100). The tool servers (this Mac's app, a machine's
-`kuvo-browser.js`) only pass a call on; a machine's through `kuvo-link.js box route`, a process of
-its own, which a `SIGTERM` stops waiting.
+Every box answers Kuvo Code's own agent tools itself, the same on every computer (bridge 0.9.100;
+wake-ups, `set_job` and the show tools later, which an older box answers 400 for): writing to
+each other and starting sessions, and the rest listed under the route. The tool servers (this Mac's app and its keeper, a machine's
+`kuvo-browser.js`) only pass a call on, and draw nothing from it but what it shows; a machine's
+through `kuvo-link.js box route`, a process of its own, which a `SIGTERM` stops waiting. Only the
+browser's tools (`browser_…`), which work in a client's own browser, aren't the box's.
 
-- **`POST kuvo/agent-tools`** `{name, arguments, session}` → `{text, isError}`: `name` is
-  `list_agents`, `send_message`, `read_conversation` or `start_session`, `arguments` the tool's,
-  `session` the conversation calling (as the engine names it; null outside one). The answer is the
-  tool's own words. One that waits for an answer holds the request up to eleven minutes; the
-  request going stops the wait, and an answer that comes later reaches the conversation as a
+- **`POST kuvo/agent-tools`** `{name, arguments, session, inView?}` → `{text, isError}`: `name` is
+  `list_agents`, `send_message`, `read_conversation`, `start_session`, the Work tools ("Work"),
+  `plan_limits`, or one of those below; `arguments` the tool's, `session` the
+  conversation calling (as the engine names it; null outside one). The answer is the tool's own
+  words. One that waits for an answer holds the request up to eleven minutes; the request going
+  stops the wait, and an answer that comes later reaches the conversation as a
   message (one moving to or from another computer once it's there; one that lives on another now,
   there, as a letter with `note`, "Peers"). 400 for another `name`.
   - A subagent, and a coding agent's engine run (`kuvo.engineFor`), act as their conversation: its
@@ -975,6 +978,28 @@ its own, which a `SIGTERM` stops waiting.
     past three in an hour or twelve in a day, past ten in an hour from all the box's agents
     together, and for the same sentence again within a day; looked at and kept under one lock, so
     calls at once can't both pass.
+  - A conversation's wake-ups and watches (`schedule_wake_up` `{when, note, every?, summary?}`,
+    `watch_for_change` `{every, check, note, summary?}`, `list_wake_ups`, `cancel_wake_up` `{id}`):
+    through the box's own `kuvo-wake` (`KUVO_WAKE_COMMAND`), with what it says as the answer, for
+    the conversation the caller is part of: a bot's in its folder, a session's in its wake-ups
+    folder (`kuvo/wakes/<session>`), made with its first one as `POST kuvo/wakes/<session>` makes
+    it (its folder, `via` for a coding agent's, held while it's archived). Run in the folder the conversation works in. Refused
+    from a group chat's seat (a chat meets on a schedule), for a conversation the box doesn't have,
+    while it's moving (`kuvo/moves`), and a watch in a conversation that asks before every command
+    unless the engine asked you about the watch's tool first (its rules name
+    `kuvo-browser_watch_for_change`; never through the coding agents' bridge, which doesn't): then
+    the agent's told to start it with `kuvo-wake watch`, a command, which asks you.
+  - `set_job` `{summary | job, details}` or `{clear: true}`: the bot whose conversation this is
+    keeps it, as `PATCH kuvo/bots/<id>` with `job` changes it. Refused for a conversation that
+    isn't a bot's.
+  - The show tools say whether what they name is there to show; clients show it from the call once
+    it goes ahead. `show_file` `{path, caption?}` and `mark_final` `{path, note?}`: a file at a
+    full path, as given (no `~`, `.` or `..`). `show_widget` `{html, title?}`: some HTML.
+    `show_in_panel` `{path}`: a file or folder by its full path (a relative one is refused, naming
+    it in full from the conversation's folder); its answer starts `Shown: `, `Kept for later: ` or
+    `Sent: `, then `the folder ` or `the file `, by `inView`: whether the user is looking at the
+    conversation now, which only the client passing the call on can say (true, false, or left out
+    where it can't tell).
   - Who there is: the box's own agents and its peers' (as `run/agents.json` has them), and any
     conversation here named by its address. An agent is named by its address or its name (any case
     or accents, with or without `&`).
