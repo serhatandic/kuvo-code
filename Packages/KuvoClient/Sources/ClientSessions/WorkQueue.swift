@@ -673,7 +673,7 @@ public extension WorkRef {
 }
 
 public extension WorkQueue {
-    /// Bare references are local to the box's conversation view (own, bot and linked items).
+    /// Bare references use the conversation's own items, those of sessions it started, and linked items.
     /// The all-items panel and the global ref cache never grant conversation visibility.
     static func chipRefs(in text: String, known: [String: WorkRef], view: WorkQueueView?) -> [String: WorkRef] {
         WorkItemRefs.chipRefs(in: text, known: known, visible: visibleRefs(in: view))
