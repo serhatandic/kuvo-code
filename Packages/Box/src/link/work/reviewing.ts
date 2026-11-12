@@ -269,8 +269,9 @@ const reviewFollowers = new Set<() => void>();
 export const listAskReviews = (): AskReview[] => [...askReviews.values()];
 export const listSettledReviews = (): SettledReview[] => [...settledReviews.values()];
 
-// The asks the reviewer is answering now, whose answer's event isn't someone else's.
-const replying = new Set<string>();
+// The asks the reviewer is answering now, whose answer's event is its own; true once one came, which
+// is someone else's should its own answer not go.
+const replying = new Map<string, boolean>();
 
 const waitsOnReview = (review: AskReview | undefined) => review?.state === "yours" || review?.state === "checking";
 
@@ -291,7 +292,10 @@ function settle(reviews: AskReview[], state: SettledReview["state"]): void {
  * decided stays, for the mark on its step. */
 export function settleAskReview(id: string): void {
   // (The reviewer's own answer: what it decided is listed as it notes it.)
-  if (replying.has(id)) return;
+  if (replying.has(id)) {
+    replying.set(id, true);
+    return;
+  }
   const review = askReviews.get(id);
   if (waitsOnReview(review)) settle([review!], "answered");
 }
@@ -641,10 +645,17 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
   }
   // Its answer, and how it decided, listed as it answers (its answer's event isn't taken for yours).
   const reply = async (body: Record<string, unknown>, decided: AskReview["state"]) => {
-    replying.add(id);
+    replying.set(id, false);
     try {
       await engineCall(source, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, body, signal);
       noteReview(id, sessionID, decided, call);
+    } catch (error) {
+      // (Answered elsewhere meanwhile: so it's listed.)
+      if (replying.get(id)) {
+        replying.delete(id);
+        settleAskReview(id);
+      }
+      throw error;
     } finally {
       replying.delete(id);
     }

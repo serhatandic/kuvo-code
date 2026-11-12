@@ -406,6 +406,30 @@ test("the box keeps each ask Auto's reviewer takes up as every client reads it: 
     expect(stateOf(now, "per_k8")).toBe("gone")
     expect(prompts.length).toBe(reviewed)
 
+    // In Auto, answered on your phone just as the reviewer answers it, whose own answer then
+    // can't go: listed answered, never left for you.
+    conversation("ses_both", "auto", "Update the shared notes")
+    reply = () => '{"decision": "allow", "reason": "The notes the user asked for."}'
+    asks("ses_both", "per_k9")
+    // (Its engine, but for that answer: your answer's event comes first, and the reviewer's is too late.)
+    const late = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url)
+        if (request.method === "POST" && url.pathname.endsWith("/permission/per_k9/reply")) {
+          reviewing.settleAskReview("per_k9")
+          return Response.json({ message: "That request was answered already." }, { status: 404 })
+        }
+        return fetch(`http://127.0.0.1:${engine.port}${url.pathname}${url.search}`, { method: request.method, headers: request.headers, body: request.method === "GET" ? undefined : await request.text() })
+      },
+    })
+    try {
+      await reviewing.reviewPermission({ port: late.port, password: "pw" } as never, { type: "permission.asked", data: { id: "per_k9", sessionID: "ses_both", action: "external_directory" } }, undefined, undefined, "engine").catch(() => null)
+    } finally {
+      late.stop(true)
+    }
+    expect(stateOf(await listed(), "per_k9")).toBe("answered")
+
     // Two left for you, and the box starts again: one its engine still asks is listed again from
     // the start (checked, then yours), the one gone meanwhile isn't listed as waiting.
     conversation("ses_kept2", "askFirst", "Update the shared notes")

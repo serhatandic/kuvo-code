@@ -113,10 +113,11 @@ final class BotWork {
         if let asks = app?.botAsks, report.asks.contains(where: { ask in !asks.asks(for: ask.session).contains { $0.ask.id == ask.id } }) {
             await asks.read(bot.box)
         }
-        // A project it made on a machine since its projects were read there: read again.
+        // A project it made on a machine since its projects were read there: read again (on its
+        // own, so the next read of its work never waits on it).
         if let machine = bot.machine, let workspace = app?.workspace,
            report.projects.contains(where: { !workspace.folders.contains(RemoteFolder.folder($0.directory, on: machine)) }) {
-            await workspace.loadProjects(on: machine)
+            Task { await workspace.loadProjects(on: machine) }
         }
     }
 
