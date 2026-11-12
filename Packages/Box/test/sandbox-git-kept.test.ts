@@ -1,9 +1,9 @@
 import "./safety"
 import { expect, setDefaultTimeout, test } from "bun:test"
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { readOnlyHere, triedNamespace, UNSHARE } from "../src/link/fence/landlock"
+import { HIDE, readOnlyHere, triedNamespace, UNSHARE } from "../src/link/fence/landlock"
 import { canFence, realFence } from "./agents/support/fence"
 
 // What git runs, or is led by, in the repository a conversation's commands write (its settings, its
@@ -267,3 +267,50 @@ test.skipIf(process.platform !== "linux")("on Linux, the box finds whether a fol
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+// Nor can a command still running steer those mounts: one that keeps swapping its repository's
+// \`.git\` for a link (to the folder holding sockets each namespace hides) as later commands start
+// never has where the link leads mounted anew (on \`.git\`, or where the swap takes that), nor gets
+// them seen. (A race: each start is one try, many at once, of the namespace each command starts in,
+// as the launcher starts it.)
+test.skipIf(!canFence || process.platform !== "linux")("on Linux, a .git swapped for a link as commands start never has where it leads mounted, nor what's hidden seen", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sandbox-git-raced-")))
+  let swapper: { kill(signal: NodeJS.Signals): void; exited: Promise<number> } | undefined
+  try {
+    const apps = join(root, "apps")
+    mkdirSync(join(apps, "agent"), { recursive: true })
+    writeFileSync(join(apps, "agent", "socket"), "")
+    const { kuvo, repository, run } = fenced(root, [join(apps, "agent")])
+    const raced = repository("raced", {})
+    // (Given what the launcher gives a repository, as a command there first.)
+    expect(run(raced.work, raced.git, "true").code).toBe(0)
+    const unshare = UNSHARE.find(each => existsSync(each))!
+    const fence = join(kuvo, "run", "fence")
+    const id = (flag: string) => Bun.spawnSync(["id", flag]).stdout.toString().trim()
+    symlinkSync(apps, join(raced.work, ".git-swap"))
+    // (What swaps them, as fast as it can: renameat2's RENAME_EXCHANGE, through Bun's own FFI.)
+    const swap = join(root, "swap.js")
+    writeFileSync(swap, `import { dlopen, FFIType, ptr } from "bun:ffi"
+const { symbols } = dlopen("libc.so.6", { renameat2: { args: [FFIType.i32, FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.u32], returns: FFIType.i32 } })
+const [a, b] = process.argv.slice(2).map(name => Buffer.from(name + "\\0"))
+console.log(symbols.renameat2(-100, ptr(a), -100, ptr(b), 2) === 0 ? "swapping" : "can't")
+for (;;) symbols.renameat2(-100, ptr(a), -100, ptr(b), 2)
+`)
+    const swapping = Bun.spawn([process.execPath, swap, join(raced.work, ".git"), join(raced.work, ".git-swap")], { stdout: "pipe", stderr: "ignore", env: { ...ENV, BUN_BE_BUN: "1" } })
+    swapper = swapping
+    expect(new TextDecoder().decode((await swapping.stdout.getReader().read()).value).trim()).toBe("swapping")
+    const once = async () => {
+      const ran = Bun.spawn([unshare, "-Urm", "/bin/sh", "-c", HIDE, unshare, id("-u"), id("-g"), id("-un"), join(fence, "ns"), join(fence, "sockets"), "", "", raced.work, raced.git, "", "/bin/sh", "-c", `ls -A ${sh(join(apps, "agent"))} .git/agent .git-swap/agent 2>/dev/null`], { cwd: raced.work, stdout: "pipe", stderr: "ignore", env: ENV })
+      const out = await new Response(ran.stdout).text()
+      return out.includes("socket") ? "seen" : `${await ran.exited}`
+    }
+    const ended: Record<string, number> = {}
+    for (let round = 0; round < 250; round++) for (const end of await Promise.all(Array.from({ length: 16 }, once))) ended[end] = (ended[end] ?? 0) + 1
+    console.log("How the tries ended:", ended)
+    expect(ended.seen ?? 0).toBe(0)
+  } finally {
+    swapper?.kill("SIGKILL")
+    await swapper?.exited
+    rmSync(root, { recursive: true, force: true })
+  }
+}, 600_000)

@@ -4134,12 +4134,20 @@ function landlockPolicy(policy) {
 var KEEP_GIT = String.raw`# (Read-only in two steps, a bind and then its remount, which libmount makes with the flags a mount
 # from outside the namespace keeps locked, nosuid and nodev: in one, util-linux before 2.39 drops
 # them, and Linux refuses it. Where even that fails, the command doesn't run: its namespace stays.)
+# (Each mounted on itself never by a path a link swapped in meanwhile could lead elsewhere, which
+# mount would follow, mounting what it leads to anew: a folder from within it, as it is; a file by its
+# path. Each noted, and all checked once kept, below.)
 keep() {
   [ ! -L "$1" ] || fail "$1 is a link, which it can't keep as it is. Ask the user."
   [ -e "$1" ] || return 0
-  mount -c --bind "$1" "$1" 2>/dev/null && [ ! -L "$1" ] && { [ "$2" != ro ] || mount -c -o remount,bind,ro "$1" 2>/dev/null; } || fail "$1 can't be kept from it."
+  if [ -d "$1" ]; then ( cd -P "$1" 2>/dev/null && [ "$(pwd -P)" = "$1" ] && mount -c --bind . . 2>/dev/null )
+  else mount -c --bind "$1" "$1" 2>/dev/null; fi && printf 'rw %s\n' "$1" >>"$k_kept" || fail "$1 can't be kept from it."
+  [ "$2" != ro ] || ro "$1"
 }
-ro() { mount -c -o remount,bind,ro "$1" 2>/dev/null || fail "$1 can't be kept from it."; }
+ro() {
+  if [ -d "$1" ]; then ( cd -P "$1" 2>/dev/null && [ "$(pwd -P)" = "$1" ] && mount -c -o remount,bind,ro . 2>/dev/null )
+  else mount -c -o remount,bind,ro "$1" 2>/dev/null; fi && printf 'ro %s\n' "$1" >>"$k_kept" || fail "$1 can't be kept from it."
+}
 # (Each submodule's work tree's .git file, which its kept settings name: read-only.)
 tree_file() {
   local t
@@ -4232,7 +4240,8 @@ EOF_FOUND
 # The .git file that leads a folder to its repository (a worktree's), up from it: kept read-only, and
 # the worktree's own folder it names is the conversation's (k_own, one a line); or the .git folder
 # found instead (k_dirs).
-k_own= k_dirs= k_plain=$own/commondir
+k_own= k_dirs= k_plain=$own/commondir k_kept=$own/kept
+: >"$k_kept" || fail "it isn't set up."
 printf '../..\n' >"$k_plain" || fail "it isn't set up."
 gitfile() {
   local at
@@ -4266,7 +4275,8 @@ while IFS= read -r k_at; do
 " in *"
 $k_at
 "*) continue ;; esac
-  as_is "$k_at" || continue
+  # (Each was found as it is: one that's changed since, by a command still running, runs nothing.)
+  as_is "$k_at" || fail "$k_at changed as it started. Ask the user."
   repo "$k_at" </dev/null
   k_done="$k_done
 $k_at"
@@ -4274,6 +4284,21 @@ done <<EOF_REPOS
 $(case $git in /*.git) printf '%s\n' "$git" ;; esac)
 $k_dirs
 EOF_REPOS
+# Each kept as noted, as the mount table has it now: the top mount at its path, of what's there in
+# what it's mounted on (its root there is that mount's own and the way to it, on the same device), and
+# read-only where it should be. One a link swapped in led elsewhere, or that's been moved since, isn't.
+[ ! -s "$k_kept" ] || { k_bad=$(awk '
+function plain(p) { gsub(/\\040/, " ", p); gsub(/\\011/, "\t", p); gsub(/\\012/, "\n", p); gsub(/\\134/, "\\", p); return p }
+FILENAME == ARGV[1] { want[++n] = $0; next }
+{ seen[$1] = 1; at[$1] = plain($5); root[$1] = plain($4); dev[$1] = $3; under[$1] = $2; how[$1] = $6; top[plain($5)] = $1 }
+END {
+  for (i = 1; i <= n; i++) {
+    p = substr(want[i], 4); m = top[p]; q = under[m]
+    if (m == "" || !(q in seen) || dev[q] != dev[m]) { print p; exit }
+    if (p == at[q]) way = ""; else if (at[q] == "/") way = p; else if (substr(p, 1, length(at[q]) + 1) == at[q] "/") way = substr(p, length(at[q]) + 1); else { print p; exit }
+    if (root[m] != (root[q] == "/" ? (way == "" ? "/" : way) : root[q] way) || (substr(want[i], 1, 2) == "ro" && how[m] !~ /(^|,)ro(,|$)/)) { print p; exit }
+  }
+}' "$k_kept" /proc/self/mountinfo) && [ -z "$k_bad" ]; } || { [ -n "$k_bad" ] || k_bad="git's own files"; fail "$k_bad can't be kept from it."; }
 `;
 var MAKE_GIT = String.raw`git_made() {
   [ ! -e "$1" ] && [ ! -L "$1" ] || return 0
@@ -4331,6 +4356,8 @@ over() { ( cd -P "$1" 2>/dev/null || exit 1; [ -z "$3" ] || [ "$(pwd -P)" = "$1"
 off() { [ -S "$1" ] && { [ -z "$2" ] || [ ! -L "$1" ]; } || return 1; mount -c --bind /dev/null "$1" 2>/dev/null && [ -c "$1" ] && { [ -z "$2" ] || [ ! -L "$1" ]; } || fail "$1 can't be kept from it."; }
 [ -r "$sockets" ] || fail "it isn't set up."
 over "$own" 0700 || fail "it isn't set up."
+# (git's own files kept first, while nothing's hidden yet: no mount there can uncover what is.)
+${KEEP_GIT}
 while IFS= read -r s; do case $s in /*'*'*) for f in $s; do [ ! -S "$f" ] || off "$f"; done ;; /*) over "$s" 0700 || off "$s" ;; esac; done <"$sockets"
 over "/run/user/$u" 0700
 if [ -n "$t_own" ]; then
@@ -4340,7 +4367,6 @@ fi
 for d in "/tmp/tmux-$u" /tmp/ssh-* "/run/screen/S-$n" "/tmp/nvim.$n" "/tmp/emacs$u"; do over "$d" 0700 mine; done
 over /tmp/.X11-unix 1777 here
 for s in /tmp/vscode-ipc-*.sock /tmp/vscode-ssh-auth-*.sock /tmp/vscode-git-*.sock; do [ -O "$s" ] && off "$s" here; done
-${KEEP_GIT}
 # (Its folder again, by its name, so what it reaches by a relative path goes through the mounts made
 # since it was there, not round them.)
 k_here=$(pwd -P 2>/dev/null) && cd "$k_here" 2>/dev/null
@@ -38664,7 +38690,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "c8c9968d90b5";
+var BRIDGE_VERSION = "2121bf303b08";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

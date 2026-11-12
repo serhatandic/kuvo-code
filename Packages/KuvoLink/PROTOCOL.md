@@ -5549,18 +5549,20 @@ folder at the top of `~/.cache`, which it can't make (Landlock's right to make o
 folders it only reads); other projects' hooks, git settings and agents' settings in your home, which
 it writes as it writes the files beside them; the engine's and the coding agents' settings in the
 conversation's folder; and, in the repositories it works in on Linux (below): a repository in the
-folder but its own, one there already or one a command makes (in a folder with no repository,
-`git init` and a hook in one command; in a repository, one it then adds to the index as a
-submodule, whose settings a plain `git status` outside runs); a submodule's folder in the project
-moved away and another put in its place whose `.git` leads to such a repository (the `.git` file
-itself is read-only, the folder holding it isn't: a mount there would be a border, as below), and a
+folder but its own, one there already (a vendored one, a submodule whose `.git` is a folder in it)
+or one a command makes (in a folder with no repository, `git init` and a hook in one command; in a
+repository, one it then adds to the index as a submodule, whose settings a plain `git status`
+outside runs); a worktree kept inside the project (`.claude/worktrees/x`) but the conversation's
+own, whose `.git` file a command can lead to such a repository; a submodule's folder in the project
+moved away and another put in its place whose `.git` leads to one (the `.git` file itself is
+read-only, the folder holding it isn't: a mount there would be a border, as below), and a
 submodule's `.git` a command leads there when its submodule has no repository in `.git/modules`; the
-repositories one level down in an Also Allowed folder (each would take its own keeping, on every
-command); the conversation's folder moved away from a folder above it that a command writes (an
-Also Allowed one, `/tmp`) and another, with a repository of its own, put in its place (a mount
-there would keep files from being moved or linked across it, tools' caches' links into the project
-among them); a `.git` in the folder that's a link; a rebase it left
-stopped, whose `exec` lines run as you go on with it (as on a Mac); and the race below. Before Linux
+repositories inside an Also Allowed folder, at any depth, but the one at its top (each would take
+its own keeping, on every command); the conversation's folder moved away from a folder above it
+that a command writes (an Also Allowed one, `/tmp`) and another, with a repository of its own, put
+in its place (a mount there would keep files from being moved or linked across it, tools' caches'
+links into the project among them); a `.git` in the folder that's a link; a rebase it left stopped,
+whose `exec` lines run as you go on with it (as on a Mac); and the race below (#617). Before Linux
 6.2 (Landlock 3), truncating a file it only reads by its path (`truncate`), which Landlock checks
 only from then.
 On Linux, where Landlock grants a folder whole, git's own files in the repositories a command writes
@@ -5575,6 +5577,12 @@ Allowed holds, and their submodules' repositories:
   themselves are written as git works in them and tidies their reflogs);
 - each submodule's `.git` file in the project (not the folder it's in), and the `.git` file that
   leads the conversation's worktree to its repository, are read-only.
+
+Each is mounted from within it (a folder) or by its path (a file), never through a link one of
+those becomes as the command starts, and then all are checked in the namespace's mount table: each
+the top mount at its path, of what's there, read-only where it should be. A repository that changes
+as the command starts, or a mount that isn't so, runs nothing (126). This is done before what the
+namespace hides is hidden, so no mount there can uncover it.
 
 The command doesn't run (126, saying why and to ask the user) where one of those is a link (a
 command could trade it for its own, and where it leads isn't kept), where a `commondir` leads git
