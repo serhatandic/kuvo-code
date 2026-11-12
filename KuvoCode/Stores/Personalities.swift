@@ -121,16 +121,24 @@ final class Personalities {
     }
 
     /// The library as this Mac's box keeps it, from now on (`kuvo/personalities/events`): a change
-    /// from Edit Bot, a phone or another computer shows, and is told, as it happens.
+    /// from Edit Bot, a phone or another computer shows, and is told, as it happens. The box attached
+    /// in place, which answers once a read, is read again now and then instead, as slowly as a
+    /// machine's things are.
     func follow() async {
         while !Task.isCancelled {
+            var streams = true
             if let client = box() {
-                do {
-                    for try await _ in client.follow("kuvo/personalities/events") { await refresh() }
-                } catch {}
+                streams = BoxClient.streams(client.box)
+                if streams {
+                    do {
+                        for try await _ in client.follow("kuvo/personalities/events") { await refresh() }
+                    } catch {}
+                } else {
+                    await refresh()
+                }
             }
             // Its box started again, or isn't up yet: followed again in a moment.
-            try? await Task.sleep(for: .seconds(2))
+            try? await Task.sleep(for: streams ? .seconds(2) : BoxClient.readAgainAfter)
         }
     }
 

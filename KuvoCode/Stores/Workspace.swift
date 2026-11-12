@@ -1083,12 +1083,15 @@ final class Workspace {
     }
 
     /// The worktree this Mac's box keeps at `folder`, read from it and added here: just that one,
-    /// so a read that crossed a change the box is telling this Mac about doesn't undo it.
+    /// so a read that crossed a change the box is telling this Mac about doesn't undo it. (This
+    /// Mac's box, the one attached in place too; a machine's are read as it connects.)
     private func learnWorktree(at folder: String) async {
+        let box = Self.box(of: folder)
+        guard BoxClient.isThisMac(box) else { return }
         struct Listed: Decodable { var worktrees: [BoxWorktree] }
-        guard let listed: Listed = try? await onBox(BoxClient.mac, "GET", "kuvo/worktrees?records=1", nil),
-              let record = listed.worktrees.first(where: { $0.folder ?? $0.root == folder }), worktrees[folder] == nil else { return }
-        worktrees[folder] = Worktree(project: record.project, root: record.root, branch: record.branch, base: record.base)
+        guard let listed: Listed = try? await onBox(box, "GET", "kuvo/worktrees?records=1", nil),
+              let record = listed.worktrees.first(where: { Self.here($0.folder ?? $0.root, on: box) == folder }), worktrees[folder] == nil else { return }
+        worktrees[folder] = Worktree(project: Self.here(record.project, on: box), root: Self.here(record.root, on: box), branch: record.branch, base: record.base)
         saveWorktrees()
     }
 
@@ -1312,8 +1315,16 @@ final class Workspace {
     }
 
     /// This Mac's worktrees as its box keeps them, from now on: one made, renamed or removed for a
-    /// phone shows here as it happens.
-    func followWorktrees() async {
+    /// phone shows here as it happens. The box attached in place (`box`), which answers once a
+    /// read, is read again now and then instead, as slowly as a machine's things are.
+    func followWorktrees(on box: String = BoxClient.mac) async {
+        guard BoxClient.streams(box) else {
+            while !Task.isCancelled {
+                await takeWorktrees(from: box)
+                try? await Task.sleep(for: BoxClient.readAgainAfter)
+            }
+            return
+        }
         struct Listed: Decodable { var worktrees: [BoxWorktree]; var restorable: [RestorableWorktree]? }
         while !Task.isCancelled {
             if let client = boxes?(BoxClient.mac), await takeWorktrees(from: BoxClient.mac) != nil {

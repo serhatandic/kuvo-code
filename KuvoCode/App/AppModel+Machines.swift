@@ -221,8 +221,10 @@ extension AppModel {
     /// computer's own settings change only it). Each as soon as nothing's at work in it, now or
     /// when that's done, so no one's work is cut off and nothing waits for you to remember.
     func renewEngines(mac: Bool, machines named: [String] = []) {
-        if mac { renewals.insert("") }
-        for id in named where machines.engine(id)?.isReady == true { renewals.insert(id) }
+        // (Attached in place, this Mac's engine is that box's, which is renewed as a machine's is:
+        // the app has none of its own to wait for.)
+        if mac, attached == nil { renewals.insert("") }
+        for id in named + (mac && attached != nil ? [SSHConnection.thisMac] : []) where machines.engine(id)?.isReady == true { renewals.insert(id) }
         guard renewing == nil else { return }
         renewing = Task { [weak self] in
             while let self, !self.renewals.isEmpty, !Task.isCancelled {
@@ -652,6 +654,15 @@ extension AppModel {
         connection.run("background") { [weak self] in await self?.workspace.followBackground(machine) }
         // Its projects as its box has them, changed from a phone too.
         connection.run("projects") { [weak self] in await self?.workspace.followProjects(on: machine) }
+        // This Mac's own box, attached in place: what the app's own box is followed for as it runs
+        // is followed there too (its wake-ups and worktrees, and your personalities, which it keeps
+        // for this Mac), read now and then as it answers once a read; and it's this Mac's engine.
+        if engine.machine.isThisMac {
+            connection.run("follow-wakes") { [weak self] in await self?.wakeUps.follow(on: machine) }
+            connection.run("follow-worktrees") { [weak self] in await self?.workspace.followWorktrees(on: machine) }
+            connection.run("follow-personalities") { await Personalities.shared.follow() }
+            thisMacsBoxConnected(engine)
+        }
     }
 
     /// Closes this Mac's connection to a machine. It runs on, as a box of its own: its sessions,
@@ -824,6 +835,12 @@ extension AppModel {
     /// (see `Personalities`). One that changed here goes to the other machines too, and bots with
     /// it hear its new words.
     func syncPersonalities(with engine: MachineEngine) async {
+        // This Mac's own box, attached in place, keeps the library this Mac shows (`Personalities.box`):
+        // read, not met with itself.
+        if engine.machine.isThisMac {
+            await Personalities.shared.refresh()
+            return
+        }
         guard let met = try? await MachineBox.personalities(Personalities.shared.library, on: engine.machine.connection) else { return }
         // Where this Mac keeps them: what changed there is told (`Personalities.onChange`).
         await Personalities.shared.take(met)

@@ -32,6 +32,11 @@ struct BoxClient: Sendable {
     /// a timer, as slowly as a machine.
     nonisolated static func streams(_ id: String) -> Bool { id == mac }
 
+    /// How long what follows a box that doesn't stream waits before it reads the box again: as long
+    /// as a machine's bots wait (`Bots.machineFollowPause`), so the one attached in place, whose
+    /// every read runs a process, isn't read more often than a machine over SSH. (A test's shorter.)
+    nonisolated(unsafe) static var readAgainAfter: Duration = .seconds(30)
+
     /// Whether a request to its vault carries this Mac's proof (PROTOCOL.md, "Vault"): every box but
     /// the app's own, which answers in this process. The one attached in place takes a request
     /// through its CLI as a Mac's, so it asks for one too; but it takes only its own Macs' proofs
@@ -43,6 +48,7 @@ struct BoxClient: Sendable {
     /// app's own box, of this version. One attached in place is whatever version it is, and is asked,
     /// as a machine is.
     nonisolated static func hasEveryFeature(_ id: String) -> Bool { id == mac }
+
 
     /// A machine's box, by the machine's id, through `kuvo-link.js box route` over its SSH connection.
     nonisolated static func machine(_ id: String) -> BoxClient {

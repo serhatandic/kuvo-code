@@ -123,12 +123,14 @@ final class WakeUps {
         notePaused(key, listed.paused == true)
     }
 
-    /// This Mac's conversations its box listed last, by key.
-    @ObservationIgnored private var followed: Set<String> = []
+    /// The conversations each followed box listed last, by key.
+    @ObservationIgnored private var followed: [String: Set<String>] = [:]
 
     /// This Mac's wake-ups and watches as its box keeps them, from now on (`kuvo/wakes/events`): one
     /// added, sent at its time, canceled or paused, by an agent, a phone or here, shows as it happens.
-    func follow() async {
+    /// The box attached in place (`box`), which answers once a read, is read again now and then
+    /// instead, as slowly as a machine's things are: its bots' too, which a machine's aren't.
+    func follow(on box: String = BoxClient.mac) async {
         struct Line: Decodable {
             struct Entry: Decodable { var session: String; var wakes: [Listed.Wake]; var watches: [Listed.Watch]; var paused: Bool }
             var sessions: [Entry]
@@ -136,23 +138,33 @@ final class WakeUps {
         while !Task.isCancelled {
             if let app {
                 do {
-                    for try await data in app.box(BoxClient.mac).follow("kuvo/wakes/events") {
+                    for try await data in app.box(box).follow("kuvo/wakes/events") {
                         guard let line = try? JSONDecoder().decode(Line.self, from: data) else { continue }
                         var keys: Set<String> = []
                         for entry in line.sessions {
                             let key = app.bots.bot(forSession: entry.session).map(\.id) ?? entry.session
-                            guard livesHere(key) else { continue }
+                            guard lives(key, on: box) else { continue }
                             keys.insert(key)
                             take(Listed(wakes: entry.wakes, watches: entry.watches, paused: entry.paused), for: key)
                         }
-                        for key in followed.subtracting(keys) where livesHere(key) { forget(key: key) }
-                        followed = keys
+                        for key in followed[box, default: []].subtracting(keys) where lives(key, on: box) { forget(key: key) }
+                        followed[box] = keys
                     }
                 } catch {}
             }
             // The box started again, or isn't up yet: followed again in a moment.
-            try? await Task.sleep(for: .seconds(2))
+            try? await Task.sleep(for: BoxClient.streams(box) ? .seconds(2) : BoxClient.readAgainAfter)
         }
+    }
+
+    /// Whether a conversation (by its key) lives on `box`: the app's own (`livesHere`), or a
+    /// machine's, by its id (the box attached in place). One not listed here yet is taken as its.
+    private func lives(_ key: String, on box: String) -> Bool {
+        guard box != BoxClient.mac else { return livesHere(key) }
+        guard let app else { return false }
+        if let bot = app.bots.bot(key) { return bot.machine == box }
+        guard let session = app.workspace.session(key) else { return true }
+        return RemoteFolder.machine(of: session.location.directory) == box
     }
 
     // MARK: Changing them
