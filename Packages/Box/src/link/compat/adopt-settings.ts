@@ -80,5 +80,5 @@ export function adoptBox(seed: { settings?: unknown; keys?: unknown } | null | u
       writePrivate(launchEnv, lines.join("\n"));
     } catch {}
     return { status: "adopted", seeded, settings: readSettings().settings ?? settings };
-  }), { stale: 300_000, wait: 120_000 });
+  }));
 }

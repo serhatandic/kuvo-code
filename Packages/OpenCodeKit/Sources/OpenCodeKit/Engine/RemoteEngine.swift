@@ -108,6 +108,7 @@ public struct SSHConnection: Sendable, Hashable, Codable {
 
     /// The command line for the machine's login shell that runs `script` with `sh`. Without a
     /// working `base64` there, it fails (127) rather than running nothing and saying it's done.
+    /// (`kuvo_script` in it is how the box's launch lock knows a Mac's launch runs: `launchLock`.)
     public static func command(running script: String) -> String {
         "exec sh -c 'kuvo_script=$(printf %s " + Data(script.utf8).base64EncodedString() + " | base64 -d) || exit 127; eval \"$kuvo_script\"'"
     }
@@ -856,23 +857,28 @@ public final class RemoteServer: @unchecked Sendable {
     /// it is. One whose holder runs is waited for, up to five minutes, as one that doesn't say is
     /// (an older Kuvo Code's, or one taken a moment ago). Taking one away is one at a time
     /// (`run/.launching.breaking`, with who's doing it in it; one whose taker is gone, or that
-    /// never said, a minute on, is moved aside and removed by one alone), looked at again
-    /// first: two waiting for one whose holder is gone don't both take it. Each lets go of its
-    /// lock only while it's still said to be its own, or, where it couldn't say so, as it took it.
-    /// Taking it and saying so, and letting go of it (each two steps), are done whole, apart from
-    /// what ends the one doing it (TERM to it or its group, a connection gone): what's left then is
-    /// a lock that says whose it is, taken away at once, or none; only one killed outright in
-    /// between leaves it to the five minutes. (A folder lock can't close every gap: one held over
-    /// five minutes that's let go and taken again in the very moment it's taken away, or one an
-    /// older script took after taking away a newer one's, can still be had twice, as between
-    /// older scripts before.) `$R` is the box's `run`.
+    /// never said, a minute on, is moved aside and removed), looked at again first, and only from
+    /// the holder judged gone: what it said is moved aside (one step), removed with the lock if
+    /// it's still that one's, and put back if not, so even two at it at once (a taking away moved
+    /// aside under one still at it) don't both take it, nor take it from one that just took it.
+    /// Each lets go of its lock only while it's still said to be its own, or, where it couldn't
+    /// say so, as it took it.
+    /// Taking it and saying so, letting go of it, and taking it away (each more than one step),
+    /// are done whole, apart from what ends the one doing it (TERM to it or its group, a
+    /// connection gone): what's left then is a lock that says whose it is, taken away at once, or
+    /// none; only one killed outright in between leaves it to the five minutes. (A folder lock
+    /// can't close every gap: one held over five minutes that's let go and taken again in the
+    /// very moment it's taken away, or one an older script took after taking away a newer one's,
+    /// can still be had twice, as between older scripts before.) `$R` is the box's `run`.
     ///
     /// `take_lock <tenths>` takes it, waiting that many tenths of a second at most: false if it
-    /// isn't had. `unlock` lets go of it, if it's still its own.
+    /// isn't had. `unlock` lets go of it, if it's still its own. `holding <pid> [<pattern>]`: it
+    /// runs, as one of Kuvo Code's (its command line has `kuvo`, or the extended regular
+    /// expression), and isn't this one.
     static let launchLock = #"""
         holding() {
           [ -n "$1" ] && [ "$1" != "$$" ] || return 1
-          if [ -d /proc/self ]; then grep -q kuvo "/proc/$1/cmdline" 2>/dev/null; else ps -ww -o command= -p "$1" 2>/dev/null | grep -q kuvo; fi
+          if [ -d /proc/self ]; then grep -qE -- "${2:-kuvo}" "/proc/$1/cmdline" 2>/dev/null; else ps -ww -o command= -p "$1" 2>/dev/null | grep -qE -- "${2:-kuvo}"; fi
         }
         locked() { unsaid=; { echo $$ >"$R/.launching.pid"; } 2>/dev/null || unsaid=1; }
         unlock() {
@@ -881,29 +887,33 @@ public final class RemoteServer: @unchecked Sendable {
             rm -f "$R/.launching.pid"; rmdir "$R/.launching" ) 2>/dev/null
           unsaid=
         }
+        believed() { newer=$(find "$R/.launching" -maxdepth 0 -newer "$R/.launching.pid" 2>/dev/null) && [ -z "$newer" ]; }
         held_by_gone() {
           holder=$(cat "$R/.launching.pid" 2>/dev/null)
-          [ -n "$holder" ] && newer=$(find "$R/.launching" -maxdepth 0 -newer "$R/.launching.pid" 2>/dev/null) && [ -z "$newer" ] && ! holding "$holder"
+          [ -n "$holder" ] && believed && ! holding "$holder"
         }
         held_long() { [ -n "$(find "$R/.launching" -maxdepth 0 -mmin +5 2>/dev/null)" ]; }
         unheld() {
           held_by_gone || held_long || return 1
-          taker=$(cat "$R/.launching.breaking/pid" 2>/dev/null)
-          if { [ -n "$taker" ] && ! holding "$taker"; } || { [ -z "$taker" ] && [ -n "$(find "$R/.launching.breaking" -maxdepth 0 -mmin +1 2>/dev/null)" ]; }; then
-            if mv "$R/.launching.breaking" "$R/.launching.breaking.$$" 2>/dev/null; then
-              if [ "$(cat "$R/.launching.breaking.$$/pid" 2>/dev/null)" != "$taker" ]; then
-                [ -e "$R/.launching.breaking" ] || mv "$R/.launching.breaking.$$" "$R/.launching.breaking" 2>/dev/null
-                rm -rf "$R/.launching.breaking.$$"
-                return 1
-              fi
-              rm -rf "$R/.launching.breaking.$$"
-            fi
-          fi
           ( trap '' HUP INT TERM
+            taker=$(cat "$R/.launching.breaking/pid" 2>/dev/null)
+            if { [ -n "$taker" ] && ! holding "$taker"; } || { [ -z "$taker" ] && [ -n "$(find "$R/.launching.breaking" -maxdepth 0 -mmin +1 2>/dev/null)" ]; }; then
+              if mv "$R/.launching.breaking" "$R/.launching.breaking.$$" 2>/dev/null; then
+                [ "$(cat "$R/.launching.breaking.$$/pid" 2>/dev/null)" = "$taker" ] || { rm -rf "$R/.launching.breaking.$$"; exit 1; }
+                rm -rf "$R/.launching.breaking.$$"
+              fi
+            fi
             mkdir "$R/.launching.breaking" 2>/dev/null || exit 1
-            echo $$ >"$R/.launching.breaking/pid"
-            if held_by_gone || held_long; then rm -f "$R/.launching.pid"; rmdir "$R/.launching" 2>/dev/null; fi
-            [ "$(cat "$R/.launching.breaking/pid" 2>/dev/null)" != "$$" ] || rm -rf "$R/.launching.breaking" )
+            echo $$ >"$R/.launching.breaking/pid" || exit 1
+            if held_by_gone; then
+              if mv "$R/.launching.pid" "$R/.launching.pid.$$"; then
+                if [ "$(cat "$R/.launching.pid.$$")" = "$holder" ]; then rmdir "$R/.launching"; else ln "$R/.launching.pid.$$" "$R/.launching.pid"; fi
+                rm -f "$R/.launching.pid.$$"
+              fi
+            elif held_long; then
+              rm -f "$R/.launching.pid"; rmdir "$R/.launching"
+            fi
+            [ "$(cat "$R/.launching.breaking/pid")" != "$$" ] || rm -rf "$R/.launching.breaking" ) 2>/dev/null
         }
         take_lock() {
           waited=0
@@ -1138,7 +1148,8 @@ public final class RemoteServer: @unchecked Sendable {
         stop)
           # Under the lock, so a start under way finishes first, and then stays stopped.
           lock || { echo "A start of the engine is under way there." >&2; exit 4; }
-          trap unlock EXIT
+          # (Its EXIT trap whole: a second TERM doesn't cut it short.)
+          trap 'trap "" HUP INT TERM; unlock' EXIT
           trap 'exit 1' HUP INT TERM
           touch "$R/stopped"
           halt
@@ -1165,9 +1176,11 @@ public final class RemoteServer: @unchecked Sendable {
           # The keeper with the start it's at (its engine's tries and their launch, in its session),
           # which would go on after it.
           b=$(cat "$R/box.pid" 2>/dev/null); if is "$b" kuvo-start; then kill -- "-$b" 2>/dev/null || kill "$b" 2>/dev/null; fi; rm -f "$R/box.pid"
-          # A start that holds the lock (a Mac's, or the keeper's where it has no session of its
-          # own), ended rather than waited for: it stops the engine it hasn't noted, and lets go.
-          h=$(cat "$R/.launching.pid" 2>/dev/null); holding "$h" && kill "$h" 2>/dev/null
+          # A start or stop that holds the lock (a Mac's, or the keeper's where it has no session of
+          # its own), ended rather than waited for: it stops the engine it hasn't noted, and lets
+          # go. Only one the lock says holds it now, and that runs as one of these.
+          h=$(cat "$R/.launching.pid" 2>/dev/null)
+          believed && holding "$h" 'kuvo-start|kuvo-launch|kuvo_script|kuvo-link' && kill "$h" 2>/dev/null
           if lock 600; then halt; unlock; else halt; fi
           rm -f "$R/stopped"
           ;;
@@ -1225,9 +1238,12 @@ public final class RemoteServer: @unchecked Sendable {
         take_lock 2400 || \(boot ? "exit 0" : "{ echo \"Another start of the engine is under way there.\" >&2; exit 4; }")
         # The lock goes as it ends, after an engine it started but didn't get to note with it:
         # nothing else would know to stop that one.
-        trap '[ -z "${pid-}" ] || [ -n "${noted-}" ] || kill "$pid" 2>/dev/null; unlock' EXIT
+        # (Whole: a second TERM, `off` ending its keeper and it, doesn't cut it short.)
+        trap 'trap "" HUP INT TERM PIPE; [ -z "${pid-}" ] || [ -n "${noted-}" ] || kill "$pid" 2>/dev/null; unlock' EXIT
         trap 'exit 1' HUP INT TERM PIPE
-        \(boot ? "# Off (the machine removed): it starts nothing until a Mac starts it there.\n[ -f \"$R/off\" ] && exit 0" : "")
+        # Off (the machine removed): it starts nothing until a Mac starts it there. From a Mac, which
+        # took that away as it began, it was removed since.
+        \(boot ? "[ -f \"$R/off\" ] && exit 0" : "[ -f \"$R/off\" ] && { echo \"It was removed from Kuvo Code meanwhile.\" >&2; exit 6; }")
         # COMPAT(0.7 engine-stop): an engine an older Mac stopped stays down until Start. Goes 3 months after 0.8.0.
         # Stopped on purpose (Stop, from the Mac or a phone): it stays stopped, unless this is Start.
         if [ -f "$R/stopped" ]; then

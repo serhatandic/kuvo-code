@@ -41,49 +41,59 @@ function holding(pid: string): boolean {
   }
 }
 
-function heldByGone(): boolean {
+// The holder the lock says it has, believed, when it's gone; else "".
+function goneHolder(): string {
   const holder = said(SAID);
   const lock = changed(LOCK);
   const saying = changed(SAID);
-  return !!holder && lock !== null && saying !== null && lock <= saying && !holding(holder);
+  return holder && lock !== null && saying !== null && lock <= saying && !holding(holder) ? holder : "";
 }
 
-// Takes away a lock whose holder is gone, or that's `stale`, as the scripts do.
+// Takes away a lock whose holder is gone, or that's `stale`, as the scripts do: only from the holder
+// judged gone (what it said moved aside, one step, and put back if it isn't that one's).
 function unheld(stale: number) {
-  const held = () => heldByGone() || olderThan(LOCK, stale);
-  if (!held()) return;
-  const taker = said(TAKER);
-  if ((taker && !holding(taker)) || (!taker && olderThan(BREAKING, 60_000))) {
-    const aside = `${BREAKING}.${process.pid}`;
-    try {
-      fs.renameSync(BREAKING, aside);
-      if (said(path.join(aside, "pid")) !== taker) {
-        // Another's, just made: back, if nothing took its place.
-        if (!fs.existsSync(BREAKING)) try { fs.renameSync(aside, BREAKING); } catch {}
+  if (!goneHolder() && !olderThan(LOCK, stale)) return;
+  try {
+    const taker = said(TAKER);
+    if ((taker && !holding(taker)) || (!taker && olderThan(BREAKING, 60_000))) {
+      const aside = `${BREAKING}.${process.pid}`;
+      try {
+        fs.renameSync(BREAKING, aside);
+        const was = said(path.join(aside, "pid"));
         fs.rmSync(aside, { recursive: true, force: true });
-        return;
-      }
-      fs.rmSync(aside, { recursive: true, force: true });
-    } catch {}
-  }
-  try {
-    fs.mkdirSync(BREAKING);
-  } catch {
-    return;
-  }
-  try {
-    fs.writeFileSync(TAKER, `${process.pid}\n`);
-    if (held()) {
-      fs.rmSync(SAID, { force: true });
-      try { fs.rmdirSync(LOCK); } catch {}
+        if (was !== taker) return;
+      } catch {}
     }
-  } finally {
-    if (said(TAKER) === String(process.pid)) fs.rmSync(BREAKING, { recursive: true, force: true });
-  }
+    try {
+      fs.mkdirSync(BREAKING);
+    } catch {
+      return;
+    }
+    try {
+      fs.writeFileSync(TAKER, `${process.pid}\n`);
+      const holder = goneHolder();
+      if (holder) {
+        const aside = `${SAID}.${process.pid}`;
+        fs.renameSync(SAID, aside);
+        if (said(aside) === holder) {
+          try { fs.rmdirSync(LOCK); } catch {}
+        } else {
+          try { fs.linkSync(aside, SAID); } catch {}
+        }
+        fs.rmSync(aside, { force: true });
+      } else if (olderThan(LOCK, stale)) {
+        fs.rmSync(SAID, { force: true });
+        try { fs.rmdirSync(LOCK); } catch {}
+      }
+    } finally {
+      if (said(TAKER) === String(process.pid)) fs.rmSync(BREAKING, { recursive: true, force: true });
+    }
+  } catch {}
 }
 
-// `work` done holding the launch's lock, saying so. One not had in `wait` ms goes ahead all the same.
-export function launchLocked<T>(work: () => T, { stale = 300_000, wait = 120_000 } = {}): T {
+// `work` done holding the launch's lock, saying so. One not had in `wait` ms goes ahead all the same:
+// by then one that was held all along is `stale`, and taken away.
+export function launchLocked<T>(work: () => T, { stale = 300_000, wait = 330_000 } = {}): T {
   fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
   const nap = new Int32Array(new SharedArrayBuffer(4));
   let held = false;

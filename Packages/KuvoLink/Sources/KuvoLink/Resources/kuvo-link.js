@@ -29719,52 +29719,62 @@ function holding(pid) {
     return false;
   }
 }
-function heldByGone() {
+function goneHolder() {
   const holder = said3(SAID);
   const lock = changed2(LOCK14);
   const saying = changed2(SAID);
-  return !!holder && lock !== null && saying !== null && lock <= saying && !holding(holder);
+  return holder && lock !== null && saying !== null && lock <= saying && !holding(holder) ? holder : "";
 }
 function unheld(stale) {
-  const held = () => heldByGone() || olderThan(LOCK14, stale);
-  if (!held())
+  if (!goneHolder() && !olderThan(LOCK14, stale))
     return;
-  const taker = said3(TAKER);
-  if (taker && !holding(taker) || !taker && olderThan(BREAKING, 60000)) {
-    const aside = `${BREAKING}.${process.pid}`;
-    try {
-      fs97.renameSync(BREAKING, aside);
-      if (said3(path103.join(aside, "pid")) !== taker) {
-        if (!fs97.existsSync(BREAKING))
-          try {
-            fs97.renameSync(aside, BREAKING);
-          } catch {}
-        fs97.rmSync(aside, { recursive: true, force: true });
-        return;
-      }
-      fs97.rmSync(aside, { recursive: true, force: true });
-    } catch {}
-  }
   try {
-    fs97.mkdirSync(BREAKING);
-  } catch {
-    return;
-  }
-  try {
-    fs97.writeFileSync(TAKER, `${process.pid}
-`);
-    if (held()) {
-      fs97.rmSync(SAID, { force: true });
+    const taker = said3(TAKER);
+    if (taker && !holding(taker) || !taker && olderThan(BREAKING, 60000)) {
+      const aside = `${BREAKING}.${process.pid}`;
       try {
-        fs97.rmdirSync(LOCK14);
+        fs97.renameSync(BREAKING, aside);
+        const was = said3(path103.join(aside, "pid"));
+        fs97.rmSync(aside, { recursive: true, force: true });
+        if (was !== taker)
+          return;
       } catch {}
     }
-  } finally {
-    if (said3(TAKER) === String(process.pid))
-      fs97.rmSync(BREAKING, { recursive: true, force: true });
-  }
+    try {
+      fs97.mkdirSync(BREAKING);
+    } catch {
+      return;
+    }
+    try {
+      fs97.writeFileSync(TAKER, `${process.pid}
+`);
+      const holder = goneHolder();
+      if (holder) {
+        const aside = `${SAID}.${process.pid}`;
+        fs97.renameSync(SAID, aside);
+        if (said3(aside) === holder) {
+          try {
+            fs97.rmdirSync(LOCK14);
+          } catch {}
+        } else {
+          try {
+            fs97.linkSync(aside, SAID);
+          } catch {}
+        }
+        fs97.rmSync(aside, { force: true });
+      } else if (olderThan(LOCK14, stale)) {
+        fs97.rmSync(SAID, { force: true });
+        try {
+          fs97.rmdirSync(LOCK14);
+        } catch {}
+      }
+    } finally {
+      if (said3(TAKER) === String(process.pid))
+        fs97.rmSync(BREAKING, { recursive: true, force: true });
+    }
+  } catch {}
 }
-function launchLocked(work, { stale = 300000, wait = 120000 } = {}) {
+function launchLocked(work, { stale = 300000, wait = 330000 } = {}) {
   fs97.mkdirSync(RUN, { recursive: true, mode: 448 });
   const nap = new Int32Array(new SharedArrayBuffer(4));
   let held = false;
@@ -29863,7 +29873,7 @@ function adoptBox(seed) {
 `));
     } catch {}
     return { status: "adopted", seeded, settings: readSettings().settings ?? settings };
-  }), { stale: 300000, wait: 120000 });
+  }));
 }
 
 // Packages/Box/src/link/personalities/take.ts
@@ -37234,7 +37244,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "b5fd2554be9e";
+var BRIDGE_VERSION = "81b8cfd13d74";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

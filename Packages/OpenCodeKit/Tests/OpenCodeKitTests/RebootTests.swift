@@ -183,7 +183,7 @@ import Testing
     private func withLock(_ shell: String, _ lines: String) throws -> Process {
         let process = Process()
         process.executableURL = URL(filePath: shell)
-        process.arguments = ["-c", "R=\(SSHConnection.quoted(run.path))\n" + RemoteServer.launchLock + "\n" + lines]
+        process.arguments = ["-c", "R=\(SSHConnection.quoted(run.path))\n" + RemoteServer.launchLock + "\n" + lines, "kuvo-test"]
         process.environment = ["HOME": home.path, "PATH": "\(tools.path):/usr/bin:/bin"]
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
@@ -809,6 +809,34 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: overlaps.path), "never two at once")
     }
 
+    /// The same as the scripts take it (`take_lock`), with a taking away left behind by one that's
+    /// gone each time (killed as it took it away): moved aside under one still at it, it still
+    /// doesn't let two take it.
+    @Test(arguments: Self.shells) func manyWaitingWithATakingAwayLeftBehindTakeItInTurn(_ shell: String) throws {
+        defer { cleanUp() }
+        let overlaps = run.appending(path: "overlaps")
+        let inside = """
+            take_lock 3000 || exit 3
+            mkdir "$R/inside" 2>/dev/null || echo $$ >>"$R/overlaps"
+            /bin/sleep 0.02
+            rmdir "$R/inside" 2>/dev/null
+            mkdir "$R/.launching.breaking" 2>/dev/null && echo \(try ended()) >"$R/.launching.breaking/pid"
+            exit 0
+            """
+        for round in 1...12 {
+            try? FileManager.default.removeItem(at: run.appending(path: ".launching"))
+            try? FileManager.default.removeItem(at: run.appending(path: ".launching.breaking"))
+            try leftHeld(by: try ended())
+            let breaking = run.appending(path: ".launching.breaking")
+            try FileManager.default.createDirectory(at: breaking, withIntermediateDirectories: false)
+            try write(breaking.appending(path: "pid"), "\(try ended())\n")
+            let waiting = try (1...12).map { _ in try withLock(shell, inside) }
+            waiting.forEach { $0.waitUntilExit() }
+            #expect(waiting.allSatisfy { $0.terminationStatus == 0 }, "round \(round): each had it in turn")
+        }
+        #expect(!FileManager.default.fileExists(atPath: overlaps.path), "never two at once")
+    }
+
     /// A lock nobody said was theirs (an older Kuvo Code's, or one cut off as it took it) is taken
     /// away once it's five minutes old.
     @Test(arguments: Self.shells) func aLockNobodySaidIsTakenAfterFiveMinutes(_ shell: String) throws {
@@ -952,6 +980,41 @@ import Testing
         let pids = try String(contentsOf: engines, encoding: .utf8).split(separator: "\n").compactMap { Int($0) }
         #expect(pids.count == 1, "nothing started again")
         #expect(pids.allSatisfy { !alive($0) }, "nothing runs after off")
+        #expect(running() == nil && keeper == nil)
+        #expect(!FileManager.default.fileExists(atPath: run.appending(path: ".launching").path))
+    }
+
+    /// `off` ends only a holder the lock says holds it now and that runs as one of the box's
+    /// scripts: a number left beside it that's another process's since (one that only names Kuvo
+    /// Code, or one whose lock has gone) is left alone.
+    @Test func offEndsNothingElse() throws {
+        defer { cleanUp() }
+        let other = Process()
+        other.executableURL = URL(filePath: "/bin/sh")
+        other.arguments = ["-c", "while :; do /bin/sleep 1; done", "vim-kuvo-notes", home.path]
+        try other.run()
+        defer { other.terminate() }
+        // (Over five minutes old, so `off` doesn't wait for it.)
+        try leftHeld(by: other.processIdentifier, ago: 400)
+        #expect(try start("off") == 0)
+        usleep(300_000)
+        #expect(other.isRunning, "not one of the scripts")
+        try? FileManager.default.removeItem(at: run.appending(path: ".launching"))
+        let holder = try atWork()
+        defer { holder.terminate() }
+        try write(run.appending(path: ".launching.pid"), "\(holder.processIdentifier)\n")
+        #expect(try start("off") == 0)
+        usleep(300_000)
+        #expect(holder.isRunning, "its lock gone")
+    }
+
+    /// A Mac's start that an `off` came after (the machine removed while it waited for the lock)
+    /// starts nothing: it took `off` away as it began, so one there now is newer.
+    @Test func aMacsStartAfterWhichItWasRemovedStartsNothing() throws {
+        defer { cleanUp() }
+        // `off` just as it takes the lock.
+        try tool("mkdir", "/bin/mkdir \"$@\" || exit\ncase \"$*\" in *\"/run/.launching\") touch \"${1%/.launching}/off\" ;; esac")
+        #expect(try macLaunch() == 6)
         #expect(running() == nil && keeper == nil)
         #expect(!FileManager.default.fileExists(atPath: run.appending(path: ".launching").path))
     }
