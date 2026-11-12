@@ -129,6 +129,7 @@ export { forgetEverythingSent, SENDING_PATIENCE } from "./server/sent-once";
 export { keepReadThroughSummary, keepWorkRead, settleWorkRead, under } from "./work/tree";
 export { readAllOn, readGroups } from "./areas/read-all";
 export { glances, Unreached } from "./areas/glance";
+export { forgetModelLists, noteModelsEvent } from "./areas/session-models";
 export { askedSince, forgetAsks, forgetAsksOn, noteAskEvent } from "./glance/asked";
 export { checksOf, pullOf, queryFor, readPulls } from "./glance/github";
 export { linkPull, pullCatcher, readPullLinks } from "./glance/pulls";

@@ -674,6 +674,11 @@ export class ClaudeAgent implements Agent {
     return this.modelList?.models ?? fallbackModels(this.providerID)
   }
 
+  /** Only once Claude Code said which models your account has: its usual ones meanwhile are a guess. */
+  listsEveryModel(): boolean {
+    return Boolean(this.modelList)
+  }
+
   async concreteModel(id: string): Promise<string | undefined> {
     // Its only alias of its own: a model's own id (`opus`, `claude-opus-5-5`) stands for itself.
     if (id !== "default") return undefined
@@ -889,11 +894,12 @@ function updateChannel(): string {
 }
 
 function fallbackModels(providerID: string): Model[] {
+  // (Its usual ones, not its word: one missing from them isn't gone.)
   return [
     // (Until Claude Code says which its default is, a session on it shows as this and goes on.)
-    model(providerID, "opus", "Opus", { family: "claude-opus", images: true, variants: ["low", "medium", "high", "xhigh", "max"], released: 3, aliases: ["default"] }),
-    model(providerID, "sonnet", "Sonnet", { family: "claude-sonnet", images: true, variants: ["low", "medium", "high", "max"], released: 2 }),
-    model(providerID, "haiku", "Haiku", { family: "claude-haiku", images: true, released: 1 }),
+    model(providerID, "opus", "Opus", { family: "claude-opus", images: true, variants: ["low", "medium", "high", "xhigh", "max"], released: 3, aliases: ["default"], provisional: true }),
+    model(providerID, "sonnet", "Sonnet", { family: "claude-sonnet", images: true, variants: ["low", "medium", "high", "max"], released: 2, provisional: true }),
+    model(providerID, "haiku", "Haiku", { family: "claude-haiku", images: true, released: 1, provisional: true }),
   ]
 }
 

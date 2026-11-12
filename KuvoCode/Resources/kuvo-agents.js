@@ -3182,6 +3182,8 @@ function model(providerID, id, name, options = {}) {
     name,
     family: options.family,
     ...options.aliases?.length ? { aliases: options.aliases } : {},
+    ...options.provisional ? { provisional: true } : {},
+    ...options.hidden ? { hidden: true } : {},
     capabilities: { tools: true, input: options.images ? ["text", "image"] : ["text"], output: ["text"] },
     variants: (options.variants ?? []).map((id) => ({ id })),
     time: { released: options.released ?? 0 },
@@ -10525,8 +10527,14 @@ ${rpc.stderr.trim()}`);
       for (const info of setup?.models?.availableModels ?? [])
         flat.push({ value: info.modelId, name: info.name ?? info.modelId });
     }
-    if (flat.length)
+    if (flat.length) {
       writeFileSync14(this.modelsFile, JSON.stringify({ current: option?.currentValue, models: flat }));
+      this.listedHere = true;
+    }
+  }
+  listedHere = false;
+  listsEveryModel() {
+    return this.listedHere;
   }
   removeSessionFiles(sessionID) {
     const folder = join21(this.profile, "antigravity-acp");
@@ -12079,6 +12087,9 @@ class ClaudeAgent {
     this.loadingModels ??= this.loadModels().finally(() => this.loadingModels = undefined);
     return this.modelList?.models ?? fallbackModels(this.providerID);
   }
+  listsEveryModel() {
+    return Boolean(this.modelList);
+  }
   async concreteModel(id) {
     if (id !== "default")
       return;
@@ -12266,9 +12277,9 @@ function updateChannel() {
 }
 function fallbackModels(providerID) {
   return [
-    model(providerID, "opus", "Opus", { family: "claude-opus", images: true, variants: ["low", "medium", "high", "xhigh", "max"], released: 3, aliases: ["default"] }),
-    model(providerID, "sonnet", "Sonnet", { family: "claude-sonnet", images: true, variants: ["low", "medium", "high", "max"], released: 2 }),
-    model(providerID, "haiku", "Haiku", { family: "claude-haiku", images: true, released: 1 })
+    model(providerID, "opus", "Opus", { family: "claude-opus", images: true, variants: ["low", "medium", "high", "xhigh", "max"], released: 3, aliases: ["default"], provisional: true }),
+    model(providerID, "sonnet", "Sonnet", { family: "claude-sonnet", images: true, variants: ["low", "medium", "high", "max"], released: 2, provisional: true }),
+    model(providerID, "haiku", "Haiku", { family: "claude-haiku", images: true, released: 1, provisional: true })
   ];
 }
 var goingOnLimit = 60000;
@@ -14422,16 +14433,20 @@ class CodexAgent {
     await rpc.request("account/login/start", { type: "apiKey", apiKey: key }, 30000);
     this.known.reset();
   }
-  async models() {
+  async models(options = {}) {
+    const shown = (models) => options.hidden ? models : models.filter((each) => !each.hidden);
     if (this.modelList && Date.now() - this.modelList.at < 30 * 60000)
-      return this.modelList.models;
+      return shown(this.modelList.models);
     try {
-      return await this.listModels();
+      return shown(await this.listModels());
     } catch (error) {
       if (this.modelList)
-        return this.modelList.models;
+        return shown(this.modelList.models);
       throw error;
     }
+  }
+  listsEveryModel() {
+    return this.modelList?.models.some((model) => model.hidden) === true;
   }
   async listModels() {
     const rpc = await this.rpc();
@@ -14439,15 +14454,14 @@ class CodexAgent {
     let cursor;
     let order = 1000;
     do {
-      const page = await rpc.request("model/list", cursor ? { cursor } : {}, 30000);
+      const page = await rpc.request("model/list", { includeHidden: true, ...cursor ? { cursor } : {} }, 30000);
       for (const info of page?.data ?? []) {
-        if (info.hidden)
-          continue;
         models.push(model(this.providerID, info.model ?? info.id, info.displayName ?? info.model, {
           variants: (info.supportedReasoningEfforts ?? []).map((effort) => effort.reasoningEffort),
           images: (info.inputModalities ?? []).includes("image"),
           context: this.windows.get(info.model ?? info.id) ?? 400000,
-          released: info.isDefault ? 2000 : order--
+          released: info.isDefault ? 2000 : order--,
+          hidden: Boolean(info.hidden)
         }));
       }
       cursor = page?.nextCursor ?? undefined;
@@ -20480,7 +20494,7 @@ ${text.slice(0, 4000)}
     const agent = this.agent(providerID);
     if (!agent)
       return [];
-    return await Promise.race([agent.models().catch(() => []), Bun.sleep(3000).then(() => [])]);
+    return await Promise.race([agent.models({ hidden: true }).catch(() => []), Bun.sleep(3000).then(() => [])]);
   }
   static modelIn(models, id) {
     return models.find((model) => model.id === id) ?? models.find((model) => model.aliases?.includes(id));
@@ -21763,7 +21777,7 @@ class Carrying {
         const concrete = manifest.sessions.find((each) => each.id === id)?.model;
         if (concrete && session.model && concrete.providerID === session.model.providerID && typeof concrete.id === "string" && concrete.id && concrete.id.length <= 200) {
           const host = hosts.get(session.model.providerID) ?? this.agentOf(session.model.providerID);
-          const there = await host?.models().catch(() => []) ?? [];
+          const there = await host?.models({ hidden: true }).catch(() => []) ?? [];
           if (there.some((model) => model.id === concrete.id || model.aliases?.includes(concrete.id)))
             session.model = { ...session.model, id: concrete.id };
         }
@@ -26457,17 +26471,18 @@ async function integration(agent, fresh = false, auto) {
       outdated: maintained ? isOutdated(maintained) : false,
       updateCommand: maintained?.shown,
       updates: Boolean(agent.update && maintained?.command),
-      remoteSignIn: Boolean(agent.signIn && agent.signsInRemotely)
+      remoteSignIn: Boolean(agent.signIn && agent.signsInRemotely),
+      modelsComplete: agent.listsEveryModel ? agent.listsEveryModel() : true
     },
     methods: agent.methods(),
     connections: account.signedIn ? [{ type: "agent", label: account.label, method: "oauth", status: { status: "connected", message: account.label ? `Signed in as ${account.label}` : account.unchecked ? "Couldn't check the sign-in just now" : "Signed in" } }] : []
   };
 }
-async function models(agents) {
+async function models(agents, hidden = false) {
   const lists = await Promise.all(agents.map(async (agent) => {
     try {
       const account = await agent.account();
-      return account.signedIn ? await agent.models() : [];
+      return account.signedIn ? await agent.models(hidden ? { hidden } : undefined) : [];
     } catch {
       return [];
     }
@@ -26602,7 +26617,7 @@ function handler(context) {
       if (area === "model") {
         if (a === "default")
           return located(null);
-        return located(await models(roster.all()));
+        return located(await models(roster.all(), url.searchParams.get("hidden") === "1"));
       }
       if (area === "agent" || area === "command" || area === "skill" || area === "mcp")
         return located([]);
@@ -27789,4 +27804,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 93c0bd0b38f6b324f4d15b7a09afa2615aa28652901778ba0097e73f56becf2b
+// Built from Packages/Box/src/agents 6c2131e5b148b20185129ba70818ac7a8ccae1c6e718854b05230c43d053b907

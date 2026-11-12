@@ -385,6 +385,10 @@ struct ModelChip<Label: View>: View {
     /// Whose models it offers: the engine's (a bot's, a machine's session), or every one with the
     /// coding agents' and Auto (a session with the agents, a new one on this Mac).
     var scope: ModelScope = .engine
+    /// What the conversation's box says of its model (`kuvo/sessions/models`), which the chip
+    /// names and its help says; nil where there's none (a bot's model, a new conversation, a box
+    /// from before it).
+    var said: SessionModelState? = nil
     /// Auto among them (not in your Auto list's own picker).
     var offersAuto = true
     /// Opens it when it changes.
@@ -401,10 +405,9 @@ struct ModelChip<Label: View>: View {
     @State private var placement = ModelPicker.Placement()
     @State private var anchor = ScreenRoom()
 
-    /// The model picked can't be used now: the chip asks for another rather than show the
-    /// default as if it were in use.
-    private var isUnavailable: Bool { catalog.isUnavailable(selection) || selection.map { !scope.allows($0.providerID) } == true }
-    private var current: Model? { catalog.chipModel(selection, in: scope) }
+    /// The model picked, unless it can't be used now: the chip asks for another rather than show
+    /// the default as if it were in use.
+    private var current: Model? { catalog.chipModel(selection, in: scope, said: said) }
     private var variant: String? { current.flatMap { model in selection.map({ catalog.isSameModel(model.ref, $0) }) == true ? selection?.variant : nil } }
 
     var body: some View {
@@ -416,7 +419,7 @@ struct ModelChip<Label: View>: View {
         }
         .modelChipStyle(popUp: popUp)
         .clickablePointer()
-        .help(catalog.needsSignIn(selection) ? catalog.unavailable(selection!, on: catalog.machine.map { app.name(of: .machine($0)) }) : isUnavailable && current == nil ? "\(catalog.model(selection)?.name ?? selection?.id ?? "") isn't available now: choose another model" : "Model and effort")
+        .help(catalog.chipHelp(selection, in: scope, on: catalog.machine.map { app.name(of: .machine($0)) }, said: said))
         .background(ScreenRoomReader(room: anchor))
         .closesWhenKept($isOpen)
         .popover(isPresented: $isOpen, arrowEdge: placement.below ? .bottom : .top) {
@@ -465,8 +468,8 @@ private extension View {
 
 extension ModelChip where Label == ModelChipLabel {
     /// `inUse`: on Auto, the model of your list at work now, shown beside it.
-    init(selection: ModelRef?, onSelect: @escaping (ModelRef) -> Void, scope: ModelScope = .engine, offersAuto: Bool = true, inUse: ModelRef? = nil, openRequest: Int = 0) {
-        self.init(selection: selection, onSelect: onSelect, scope: scope, offersAuto: offersAuto, openRequest: openRequest) { model, variant in
+    init(selection: ModelRef?, onSelect: @escaping (ModelRef) -> Void, scope: ModelScope = .engine, said: SessionModelState? = nil, offersAuto: Bool = true, inUse: ModelRef? = nil, openRequest: Int = 0) {
+        self.init(selection: selection, onSelect: onSelect, scope: scope, said: said, offersAuto: offersAuto, openRequest: openRequest) { model, variant in
             ModelChipLabel(model: model, variant: variant, inUse: model?.providerID == OutsideAgents.autoProvider ? inUse : nil)
         }
     }
