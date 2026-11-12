@@ -129,6 +129,12 @@ final class PhoneLink {
     private var secret: RelaySecret { identity.secret }
     /// This Mac's box, which holds the relay connection (`BoxProcess`); set by AppModel.
     @ObservationIgnored var box: () -> BoxClient? = { nil }
+    /// Why there's no box of the app's own for its link, when that's for good rather than for a
+    /// moment (the app attached to the box already on this Mac, which keeps a link of its own); set
+    /// by AppModel.
+    @ObservationIgnored var noBox: () -> String? = { nil }
+    /// What `noBox` says while the app uses the box already on this Mac.
+    static let keptByTheBoxHere = "The box already on this Mac keeps its own link to your phones and other computers. For now, pair a phone or set up a machine for them from the Mac that set this one up."
     /// Following the link's state and its phones, as the box keeps them.
     @ObservationIgnored private var running: Task<Void, Never>?
     @ObservationIgnored private var endpoint: ServerEndpoint?
@@ -440,7 +446,7 @@ final class PhoneLink {
         let round = pairingRound
         struct Made: Decodable { var link: String }
         guard let client = box() else {
-            pairingProblem = "Kuvo Code’s background service on this Mac isn’t running. Try again in a moment."
+            pairingProblem = noBox() ?? "Kuvo Code’s background service on this Mac isn’t running. Try again in a moment."
             return
         }
         // The last one shown ended first, so its end never ends this one.
@@ -567,7 +573,17 @@ final class PhoneLink {
     /// `asked`: you asked (Set Up Again), so what keeps it from being set up now is said too.
     func sync(_ engine: MachineEngine, asked: Bool = false) async {
         // (Never this Mac's own box, attached in place: it's used as it is, its link included.)
-        guard !engine.machine.isThisMac, relayWanted, engine.isReady, hasIdentity else {
+        guard !engine.machine.isThisMac, relayWanted, engine.isReady else {
+            setupFailed[engine.machine.id] = nil
+            return
+        }
+        // No box of the app's own to set it up with (attached in place): said, when you asked,
+        // before anything goes to the machine or this Mac's keys are read.
+        if let why = noBox() {
+            setupFailed[engine.machine.id] = asked ? why : nil
+            return
+        }
+        guard hasIdentity else {
             setupFailed[engine.machine.id] = nil
             return
         }

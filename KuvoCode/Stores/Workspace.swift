@@ -1205,14 +1205,15 @@ final class Workspace {
     /// gets its title. This Mac shows them
     /// from then on. Ones this Mac kept for it before the box kept them are handed over, and ones
     /// it no longer has (removed from a phone, say) go here too. Nil when it couldn't be asked:
-    /// what this Mac had stays.
-    @discardableResult func takeWorktrees(from box: String, details: Bool = false) async -> [String: BoxWorktree]? {
+    /// what this Mac had stays. `handingOver` false: only read, with nothing handed over (a box read
+    /// again now and then, which had what this Mac kept handed to it as it connected).
+    @discardableResult func takeWorktrees(from box: String, details: Bool = false, handingOver: Bool = true) async -> [String: BoxWorktree]? {
         struct Listed: Decodable { var worktrees: [BoxWorktree]; var restorable: [RestorableWorktree]? }
         guard let listed: Listed = try? await onBox(box, "GET", details ? "kuvo/worktrees" : "kuvo/worktrees?records=1", nil) else { return nil }
         if box != BoxClient.mac || !followingWorktrees { takeRestorable(listed.restorable ?? [], from: box) }
         var records = listed.worktrees
         let onIt = { (folder: String) in Self.box(of: folder) == box }
-        for (folder, tree) in worktrees where onIt(tree.root) {
+        for (folder, tree) in worktrees where handingOver && onIt(tree.root) {
             let project = Self.onBox(tree.project), root = Self.onBox(tree.root), path = Self.onBox(folder)
             guard !records.contains(where: { $0.root == root }) else { continue }
             var record: [String: Any] = ["project": project, "root": root, "folder": path, "branch": tree.branch]
@@ -1312,8 +1313,18 @@ final class Workspace {
     }
 
     /// This Mac's worktrees as its box keeps them, from now on: one made, renamed or removed for a
-    /// phone shows here as it happens.
-    func followWorktrees() async {
+    /// phone shows here as it happens. The box attached in place (`box`), which answers once a
+    /// read, is read again now and then instead, as slowly as a machine's things are.
+    func followWorktrees(on box: String = BoxClient.mac) async {
+        guard BoxClient.streams(box) else {
+            // (Read as it connected, with what this Mac kept handed over then: only read from now on.)
+            while !Task.isCancelled {
+                try? await Task.sleep(for: BoxClient.readAgainAfter)
+                guard !Task.isCancelled else { return }
+                await takeWorktrees(from: box, handingOver: false)
+            }
+            return
+        }
         struct Listed: Decodable { var worktrees: [BoxWorktree]; var restorable: [RestorableWorktree]? }
         while !Task.isCancelled {
             if let client = boxes?(BoxClient.mac), await takeWorktrees(from: BoxClient.mac) != nil {
@@ -2645,7 +2656,9 @@ final class Workspace {
            let started = try? event.payload(as: EventPayload.ToolInputStarted.self), started.name.hasPrefix("kuvo-browser_browser_") {
             if let machine {
                 onMachineBrowsing?(machine, id)
-                Analytics.shared.trackOnce("browser_used", key: "agent.machine", ["by": "agent", "place": "machine"])
+                // (The box attached in place's browser runs on this Mac: counted as this Mac's.)
+                let place = BoxClient.isMachine(machine) ? "machine" : "mac"
+                Analytics.shared.trackOnce("browser_used", key: "agent." + place, ["by": "agent", "place": place])
             }
             if ["kuvo-browser_browser_sign_in", "kuvo-browser_browser_ask_code", "kuvo-browser_browser_ask_user"].contains(started.name) {
                 onBrowserAsk?(id, machine)

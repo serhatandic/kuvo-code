@@ -625,7 +625,7 @@ final class BoxGroups {
         guard let chat = chat(id) else { throw Failure.gone }
         guard let api = api(chat.machine) else { throw failure(for: chat.machine) }
         let message = try await api.boxGroupAction(id, "send", ["text": .string(text)])
-        Analytics.shared.track("group_message", ["discussing": discussing.contains(id), "place": chat.machine == nil ? "mac" : "machine"])
+        Analytics.shared.track("group_message", ["discussing": discussing.contains(id), "place": BoxClient.isMachine(chat.machine) ? "machine" : "mac"])
         if let message = message.flatMap({ try? Self.message(from: $0) }), !(logs[id] ?? []).contains(where: { $0.id == message.id }) {
             setLog(id, (logs[id] ?? []) + [message])
             saveLog(id)
