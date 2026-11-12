@@ -5,6 +5,7 @@
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/claude-code.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -92,4 +93,60 @@ test("a computer with no ~/.claude has nothing to bring over; another's list, or
   }
   assert.equal((await answer(handle, "GET", "kuvo/claude-code?machine=lab")).status, 404);
   assert.equal((await answer(handle, "POST", "kuvo/claude-code")).status, 405);
+});
+
+// What's read of ~/.claude: an agent may write files there (the sandbox lets it, outside the
+// settings Claude Code starts with), so the box reads only what's Claude Code's own, and nothing
+// that would hold it.
+test("only ordinary files in ~/.claude are offered: not a link out of it, a pipe, or a file too big", async () => {
+  const saved = process.env.HOME;
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-claude-code-limits-"));
+  removeAtEnd(other);
+  process.env.HOME = other;
+  try {
+    const folder = path.join(other, ".claude");
+    write(path.join(folder, "agents", "kept.md"), "---\nname: kept\n---\nKept.\n");
+    fs.mkdirSync(path.join(folder, "commands"));
+    // A link to another of its own files is read where it leads.
+    write(path.join(folder, "notes", "shared.md"), "Shared.\n");
+    fs.symlinkSync(path.join(folder, "notes", "shared.md"), path.join(folder, "commands", "shared.md"));
+    // A link to a file outside it (one the agent couldn't read itself, say) isn't.
+    write(path.join(other, "secret.md"), "The secret.\n");
+    fs.symlinkSync(path.join(other, "secret.md"), path.join(folder, "agents", "secret.md"));
+    fs.symlinkSync("../../secret.md", path.join(folder, "commands", "secret.md"));
+    // A pipe would hold the read until something wrote to it.
+    execFileSync("mkfifo", [path.join(folder, "commands", "pipe.md")]);
+    fs.symlinkSync(path.join(folder, "commands", "pipe.md"), path.join(folder, "agents", "pipe.md"));
+    // Over 256 KB isn't an agent's instructions; up to it is.
+    write(path.join(folder, "commands", "huge.md"), "x".repeat(256 * 1024 + 1));
+    write(path.join(folder, "commands", "long.md"), "y".repeat(256 * 1024));
+    // A folder named like a file isn't one.
+    fs.mkdirSync(path.join(folder, "agents", "folder.md"));
+
+    const handle = link.engineHandler(() => { throw new Error("not running"); });
+    const { status, json } = await answer(handle, "GET", "kuvo/claude-code");
+    assert.equal(status, 200);
+    assert.deepEqual(json.agents.map(agent => agent.name), ["kept"]);
+    assert.deepEqual(json.commands.map(command => command.name), ["long", "shared"]);
+    assert.equal(json.commands[0].settings.template.length, 256 * 1024);
+    assert.equal(json.commands[1].settings.template, "Shared.");
+  } finally {
+    process.env.HOME = saved;
+  }
+});
+
+test("a ~/.claude that's a link (to your dotfiles, say) is read where it leads", async () => {
+  const saved = process.env.HOME;
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-claude-code-dotfiles-"));
+  removeAtEnd(other);
+  process.env.HOME = other;
+  try {
+    write(path.join(other, "dotfiles", "claude", "commands", "ship.md"), "Ship it.\n");
+    fs.symlinkSync(path.join(other, "dotfiles", "claude"), path.join(other, ".claude"));
+    const handle = link.engineHandler(() => { throw new Error("not running"); });
+    const { json } = await answer(handle, "GET", "kuvo/claude-code");
+    assert.deepEqual(json.commands.map(command => command.name), ["ship"]);
+  } finally {
+    process.env.HOME = saved;
+  }
 });

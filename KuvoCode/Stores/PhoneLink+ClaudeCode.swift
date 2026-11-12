@@ -2,16 +2,16 @@ import Foundation
 import KuvoLink
 import OpenCodeKit
 
-/// Settings › Agents' and Settings › Commands' From Claude Code for a phone (PROTOCOL.md,
-/// `kuvo/claude-code`): the subagents and commands in this Mac's ~/.claude, each with what Import
-/// writes in a computer's settings, through `kuvo/config` (this Mac's, or a machine's): named,
-/// and said to be there, as that computer's page has them.
+/// Settings › Agents' and Settings › Commands' From Claude Code for a phone, through an older box of
+/// this Mac's (PROTOCOL.md, "For released Macs"): the subagents and commands in this Mac's ~/.claude,
+/// each with what Import writes in its settings through `kuvo/config`, named, and said to be there,
+/// as this Mac's page has them. (Every box lists its own computer's now: `kuvo/claude-code`.)
 extension PhoneLink {
-    /// `machine`: the computer it's for (nil, this Mac). `folder`: Claude Code's (a test's own).
-    func claudeCodeJSON(for machine: String? = nil, folder: URL = ClaudeCode.folder) async -> (Int, Data) {
+    /// COMPAT(0.7 claude-code): this Mac's ~/.claude, read here for an older box. Goes 3 months after 0.8.0.
+    /// `folder`: Claude Code's (a test's own).
+    func claudeCodeJSON(folder: URL = ClaudeCode.folder) async -> (Int, Data) {
         guard let app = bots?.app else { return (503, Self.message("Kuvo Code isn't ready yet. Try again in a moment.")) }
-        let box = SidebarBox(machine: machine)
-        if let machine, app.machines.engine(machine) == nil { return (404, Data("{}".utf8)) }
+        let box = SidebarBox.mac
         let (agents, commands) = await Task.detached {
             (ClaudeAgents.load(from: folder.appending(path: "agents")), ClaudeCommands.load(from: folder.appending(path: "commands")))
         }.value

@@ -38914,7 +38914,42 @@ function unquote(text) {
   return first === '"' ? inner.replaceAll("\\\"", '"') : inner.replaceAll("''", "'");
 }
 var claudeID = (name) => [...name.toLowerCase()].map((each) => /[\p{L}\p{N}_-]/u.test(each) ? each : "-").join("");
-async function markdownFiles(folder, nested = false) {
+var CLAUDE_FILE_LIMIT = 256 * 1024;
+async function readClaudeFile(file, root) {
+  let real;
+  try {
+    real = await fs123.promises.realpath(file);
+  } catch {
+    return null;
+  }
+  if (!real.startsWith(root + path125.sep))
+    return null;
+  let handle;
+  try {
+    handle = await fs123.promises.open(real, fs123.constants.O_RDONLY | fs123.constants.O_NOFOLLOW | fs123.constants.O_NONBLOCK);
+  } catch {
+    return null;
+  }
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size > CLAUDE_FILE_LIMIT)
+      return null;
+    const buffer = Buffer.alloc(stat.size);
+    let read = 0;
+    while (read < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, read, buffer.length - read, read);
+      if (bytesRead === 0)
+        break;
+      read += bytesRead;
+    }
+    return buffer.subarray(0, read).toString("utf8");
+  } catch {
+    return null;
+  } finally {
+    await handle.close().catch(() => {});
+  }
+}
+async function markdownFiles(folder, root, nested = false) {
   let entries = [];
   try {
     entries = await fs123.promises.readdir(folder, { withFileTypes: true });
@@ -38924,20 +38959,23 @@ async function markdownFiles(folder, nested = false) {
   const found = await Promise.all(entries.map(async (entry) => {
     const file = path125.join(folder, entry.name);
     if (entry.isDirectory())
-      return nested && !entry.name.startsWith(".") ? (await markdownFiles(file, true)).map((each) => ({ name: `${entry.name}/${each.name}`, text: each.text })) : [];
+      return nested && !entry.name.startsWith(".") ? (await markdownFiles(file, root, true)).map((each) => ({ name: `${entry.name}/${each.name}`, text: each.text })) : [];
     if (path125.extname(entry.name) !== ".md")
       return [];
-    try {
-      return [{ name: entry.name.slice(0, -3), text: await fs123.promises.readFile(file, "utf8") }];
-    } catch {
-      return [];
-    }
+    const text = await readClaudeFile(file, root);
+    return text === null ? [] : [{ name: entry.name.slice(0, -3), text }];
   }));
   return found.flat();
 }
 async function claudeCodeList(folder, settings, others) {
   const entry = (name, description, at, value) => ({ name, description, path: at, settings: value, imported: valueAt(settings, at) !== undefined });
-  const agents = (await markdownFiles(path125.join(folder, "agents"))).flatMap((file) => {
+  let root;
+  try {
+    root = await fs123.promises.realpath(folder);
+  } catch {
+    return { agents: [], commands: [] };
+  }
+  const agents = (await markdownFiles(path125.join(folder, "agents"), root)).flatMap((file) => {
     const { fields, body } = parseClaudeFile(file.text);
     const name = fields.name || file.name;
     let id = claudeID(name);
@@ -38949,7 +38987,7 @@ async function claudeCodeList(folder, settings, others) {
 `);
     return [{ id, name, description, body }];
   }).sort((one, other) => one.name.localeCompare(other.name, undefined, { sensitivity: "base" }));
-  const commands = (await markdownFiles(path125.join(folder, "commands"), true)).flatMap((file) => {
+  const commands = (await markdownFiles(path125.join(folder, "commands"), root, true)).flatMap((file) => {
     const { fields, body } = parseClaudeFile(file.text);
     const id = claudeID(file.name);
     return id && body ? [{ id, description: fields.description ?? "", body }] : [];
@@ -39163,7 +39201,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "6f058360fd08";
+var BRIDGE_VERSION = "0c23f9826b81";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -43434,10 +43472,10 @@ function engineHandler(readEngine = readEngineFile, info = {}, readBridge = read
 
 // Packages/Box/src/link/mac/relay.ts
 var MAC_APP_ROUTES = ["kuvo/machines", "kuvo/hosts", "kuvo/usage", "kuvo/asks", "kuvo/mac", "kuvo/claude-code", "kuvo/engine"];
-var macAppAnswers = (route, request) => MAC_APP_ROUTES.some((area) => route === area || route.startsWith(`${area}/`)) && !(request && boxAnswers(route, request));
-function boxAnswers(route, request) {
+var macAppAnswers = (route, request) => MAC_APP_ROUTES.some((area) => route === area || route.startsWith(`${area}/`)) && !(request && boxAnswers(route));
+function boxAnswers(route) {
   if (route === "kuvo/claude-code")
-    return !new URLSearchParams(String(request.path ?? "").split("?")[1] ?? "").has("machine");
+    return true;
   if (route === "kuvo/engine/restart")
     return keeperRuns();
   return false;

@@ -56,18 +56,53 @@ function unquote(text: string): string {
 /** A name the engine takes: lowercase, with hyphens for anything else. */
 export const claudeID = (name: string): string => [...name.toLowerCase()].map(each => /[\p{L}\p{N}_-]/u.test(each) ? each : "-").join("");
 
-/** The Markdown files in a folder, read; `nested`, in its folders too, each named with them
- * ("frontend/component" for frontend/component.md), as Claude Code names its commands. A link to a
- * folder isn't followed (one to itself would list it again and again); a link to a file is read.
- * Read off the box's thread, so one that macOS asks about holds this request only. */
-async function markdownFiles(folder: string, nested = false): Promise<{ name: string; text: string }[]> {
+/** The most of one file read: an agent's instructions or a command's prompt is a few kilobytes. */
+export const CLAUDE_FILE_LIMIT = 256 * 1024;
+
+/** A file's text, if it's an ordinary file of `CLAUDE_FILE_LIMIT` at most inside `root` (Claude
+ * Code's folder, as its links lead): never a link out of it (an agent may write in ~/.claude, and
+ * could leave one to a file it can't read itself), nor a pipe or a device, which would hold the
+ * read, nor a file so big it would. Opened where its links lead, without waiting on a pipe, and
+ * checked as opened, so one swapped in meanwhile isn't read either. */
+async function readClaudeFile(file: string, root: string): Promise<string | null> {
+  let real: string;
+  try { real = await fs.promises.realpath(file); } catch { return null; }
+  if (!real.startsWith(root + path.sep)) return null;
+  let handle: fs.promises.FileHandle;
+  try { handle = await fs.promises.open(real, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK); } catch { return null; }
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size > CLAUDE_FILE_LIMIT) return null;
+    // (No more than it said, though it grows as it's read.)
+    const buffer = Buffer.alloc(stat.size);
+    let read = 0;
+    while (read < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, read, buffer.length - read, read);
+      if (bytesRead === 0) break;
+      read += bytesRead;
+    }
+    return buffer.subarray(0, read).toString("utf8");
+  } catch {
+    return null;
+  } finally {
+    await handle.close().catch(() => {});
+  }
+}
+
+/** The Markdown files in a folder of `root`, read; `nested`, in its folders too, each named with
+ * them ("frontend/component" for frontend/component.md), as Claude Code names its commands. A link
+ * to a folder isn't followed (one to itself would list it again and again); a link to a file is
+ * read where it stays in `root` (`readClaudeFile`). Read off the box's thread, so one that macOS
+ * asks about holds this request only. */
+async function markdownFiles(folder: string, root: string, nested = false): Promise<{ name: string; text: string }[]> {
   let entries: fs.Dirent[] = [];
   try { entries = await fs.promises.readdir(folder, { withFileTypes: true }); } catch { return []; }
   const found = await Promise.all(entries.map(async entry => {
     const file = path.join(folder, entry.name);
-    if (entry.isDirectory()) return nested && !entry.name.startsWith(".") ? (await markdownFiles(file, true)).map(each => ({ name: `${entry.name}/${each.name}`, text: each.text })) : [];
+    if (entry.isDirectory()) return nested && !entry.name.startsWith(".") ? (await markdownFiles(file, root, true)).map(each => ({ name: `${entry.name}/${each.name}`, text: each.text })) : [];
     if (path.extname(entry.name) !== ".md") return [];
-    try { return [{ name: entry.name.slice(0, -3), text: await fs.promises.readFile(file, "utf8") }]; } catch { return []; }
+    const text = await readClaudeFile(file, root);
+    return text === null ? [] : [{ name: entry.name.slice(0, -3), text }];
   }));
   return found.flat();
 }
@@ -79,7 +114,10 @@ async function markdownFiles(folder: string, nested = false): Promise<{ name: st
 export async function claudeCodeList(folder: string, settings: unknown, others: ReadonlySet<string>): Promise<ClaudeCode> {
   const entry = (name: string, description: string, at: string[], value: Record<string, string>): ClaudeCodeImport =>
     ({ name, description, path: at, settings: value, imported: valueAt(settings, at) !== undefined });
-  const agents = (await markdownFiles(path.join(folder, "agents"))).flatMap(file => {
+  // (Where its links lead: a ~/.claude that's a link to your dotfiles is read there.)
+  let root: string;
+  try { root = await fs.promises.realpath(folder); } catch { return { agents: [], commands: [] }; }
+  const agents = (await markdownFiles(path.join(folder, "agents"), root)).flatMap(file => {
     const { fields, body } = parseClaudeFile(file.text);
     const name = fields.name || file.name;
     let id = claudeID(name);
@@ -89,7 +127,7 @@ export async function claudeCodeList(folder: string, settings: unknown, others: 
     const description = (fields.description ?? "").replaceAll("\\n", "\n");
     return [{ id, name, description, body }];
   }).sort((one, other) => one.name.localeCompare(other.name, undefined, { sensitivity: "base" }));
-  const commands = (await markdownFiles(path.join(folder, "commands"), true)).flatMap(file => {
+  const commands = (await markdownFiles(path.join(folder, "commands"), root, true)).flatMap(file => {
     const { fields, body } = parseClaudeFile(file.text);
     const id = claudeID(file.name);
     return id && body ? [{ id, description: fields.description ?? "", body }] : [];
@@ -113,8 +151,9 @@ async function otherCommands(engine: EngineRecord | null, settings: unknown): Pr
     .filter((name): name is string => typeof name === "string" && !(yours && typeof yours === "object" && name in yours)));
 }
 
-// `GET kuvo/claude-code`: this computer's own. (A Mac's app answered `?machine=` for one of its
-// machines, with the Mac's ~/.claude; this Mac's box hands that to it still: link/mac/relay.ts.)
+// `GET kuvo/claude-code`: this computer's own, on every box. (`?machine=`, which a Mac's app once
+// answered with the Mac's ~/.claude for one of its machines, isn't another's here: each machine's
+// box lists its own.)
 export async function* claudeCodeRoute({ request, readEngine, json }: RouteContext): AsyncGenerator<AnswerPiece> {
   if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
   if (new URLSearchParams(request.path.split("?")[1] ?? "").has("machine")) return yield* json(404, { message: "This computer lists its own Claude Code only." });

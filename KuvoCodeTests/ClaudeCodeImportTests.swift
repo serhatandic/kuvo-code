@@ -66,8 +66,9 @@ import Testing
         #expect(review.template == "Review pull request #$ARGUMENTS: what it changes, and what could break.")
     }
 
-    /// A phone's From Claude Code: each with what Import writes where in a computer's settings,
-    /// and whether this Mac has it; a command named as one of the engine's comes over beside it.
+    /// A phone's From Claude Code through an older box of this Mac's (which doesn't list them): each
+    /// with what Import writes where in its settings, and whether this Mac has it; a command named
+    /// as one of the engine's comes over beside it.
     @MainActor @Test func aPhoneSeesWhatImportWrites() async throws {
         defer { try? FileManager.default.removeItem(at: claude) }
         try write("agents/code-reviewer.md", "---\nname: code-reviewer\ndescription: Reviews code\n---\nList what's wrong, worst first.\n")
@@ -97,7 +98,5 @@ import Testing
         config.set(try #require(ClaudeAgents.load(from: claude.appending(path: "agents")).first).settings, at: ["agents", "code-reviewer"])
         let again = try #require(try JSONSerialization.jsonObject(with: await link.claudeCodeJSON(folder: claude).1) as? [String: Any])
         #expect((again["agents"] as? [[String: Any]])?.first?["imported"] as? Bool == true)
-        // For a computer that isn't one of yours: nothing.
-        #expect(await link.claudeCodeJSON(for: "nowhere", folder: claude).0 == 404)
     }
 }

@@ -9,7 +9,7 @@ struct CommandsSettings: View {
     @State private var editing: CommandEdit?
     /// What to remove once its sheet has closed (and its fields are done saving).
     @State private var removal: [String]?
-    /// Claude Code's commands, to bring over: this Mac's, as its box lists them.
+    /// Claude Code's commands, to bring over: this page's computer's own, as its box lists them.
     @State private var claudeCommands: [ClaudeCodeImports.Item] = []
 
     private var config: EngineConfig { app.config(for: box) }

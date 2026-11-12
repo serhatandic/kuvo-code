@@ -457,7 +457,7 @@ test("a phone restarts this Mac's engine through its keeper with the app closed;
   }
 });
 
-test("this Mac's own Claude Code agents and commands come from its box with the app closed; one of its machines' are still the app's", async () => {
+test("this Mac's own Claude Code agents and commands come from its box with the app closed; a machine's are that machine's box's, never the app's", async () => {
   app.state = "closed";
   const saved = process.env.HOME;
   process.env.HOME = path.join(support, "home");
@@ -468,9 +468,11 @@ test("this Mac's own Claude Code agents and commands come from its box with the 
     const own = await asked(front, "GET", "kuvo/claude-code");
     assert.equal(own.status, 200);
     assert.deepEqual(own.json.agents.map(agent => agent.path), [["agents", "reviewer"]]);
-    // (Its machines' are the Mac's ~/.claude brought to them, which only the app answers.)
-    assert.equal((await asked(front, "GET", "kuvo/claude-code?machine=lab")).status, 503);
-    assert.equal(app.asked.at(-1).path, "kuvo/claude-code?machine=lab");
+    // (A machine's are in its own ~/.claude, which its own box lists: not this Mac's, and not
+    // asked of the app.)
+    const asking = app.asked.length;
+    assert.equal((await asked(front, "GET", "kuvo/claude-code?machine=lab")).status, 404);
+    assert.equal(app.asked.length, asking);
   } finally {
     process.env.HOME = saved;
   }

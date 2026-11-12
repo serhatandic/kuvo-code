@@ -2,8 +2,8 @@ import Foundation
 import OpenCodeKit
 
 /// Settings › Agents' and Settings › Commands' From Claude Code on one box's page (PROTOCOL.md,
-/// `kuvo/claude-code`): the subagents and commands in this Mac's ~/.claude, as its box lists them,
-/// named as they'd come over. Import writes an item's `settings` at its `path` in that box's
+/// `kuvo/claude-code`): the subagents and commands in that computer's own ~/.claude, as its box lists
+/// them, named as they'd come over. Import writes an item's `settings` at its `path` in that box's
 /// settings.
 struct ClaudeCodeImports: Decodable {
     var agents: [Item] = []
@@ -18,20 +18,16 @@ struct ClaudeCodeImports: Decodable {
         var id: String { path.joined(separator: ".") }
     }
 
-    /// The list for `box`'s page, or none while it can't be read. This Mac's, as its box lists it.
-    /// `others`: the commands that box's engine has that aren't yours, for what the app reads itself.
+    /// The list for `box`'s page, as that box lists its computer's own, or none while it can't be
+    /// read. `others`: the commands that box's engine has that aren't yours, for an older box.
     static func read(for box: BoxClient, others: Set<String>) async -> ClaudeCodeImports {
-        if box.box == BoxClient.mac {
-            guard let (status, data) = try? await box.send("GET", "kuvo/claude-code") else { return ClaudeCodeImports() }
-            if status == 200 { return (try? JSONDecoder().decode(ClaudeCodeImports.self, from: data)) ?? ClaudeCodeImports() }
-            // Old-box path: a box from before it listed them (a route it doesn't have) gets them as
-            // the app read them itself. Goes once no box is older.
-            guard status == 404 else { return ClaudeCodeImports() }
-        }
-        // A machine's page offers this Mac's commands, as it always has, though its box lists its
-        // own: which computer's ~/.claude a machine's page offers is the user's to decide (#341).
-        let isMac = box.box == BoxClient.mac
-        let (agents, commands) = await Task.detached { (isMac ? ClaudeAgents.load() : [], ClaudeCommands.load()) }.value
+        guard let (status, data) = try? await box.send("GET", "kuvo/claude-code") else { return ClaudeCodeImports() }
+        if status == 200 { return (try? JSONDecoder().decode(ClaudeCodeImports.self, from: data)) ?? ClaudeCodeImports() }
+        // A machine's box from before it listed them has none to offer: never this Mac's in their
+        // place (it updates as this Mac connects).
+        guard status == 404, box.box == BoxClient.mac else { return ClaudeCodeImports() }
+        // COMPAT(0.7 claude-code): this Mac's own box from before it listed them (a keeper's, still running), so this Mac's ~/.claude read here. Goes 3 months after 0.8.0.
+        let (agents, commands) = await Task.detached { (ClaudeAgents.load(), ClaudeCommands.load()) }.value
         return ClaudeCodeImports(agents: agents, commands: commands, others: others)
     }
 

@@ -63,4 +63,40 @@ import Testing
         #expect(listed.agents.first?.name == "Reviewer")
         #expect(listed.agents.first?.settings == .object(["mode": .string("subagent"), "description": .string("Reviews code"), "system": .string("Review it.")]))
     }
+
+    /// A machine's page offers what's in that machine's own ~/.claude, agents and commands, as its
+    /// own box lists them: never this Mac's, with this Mac's app closed or not. (Its box here, at
+    /// home in a folder of the test's own, reached as a machine's.)
+    @Test func aMachinesPageOffersItsOwnClaudeCode() async throws {
+        let home = FileManager.default.temporaryDirectory.appending(path: "box-first-machine-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        try FileManager.default.createDirectory(at: home.appending(path: ".claude/agents"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: home.appending(path: ".claude/commands"), withIntermediateDirectories: true)
+        try Data("---\nname: Tester\ndescription: Tests it\n---\nTest it.\n".utf8).write(to: home.appending(path: ".claude/agents/tester.md"))
+        try Data("Ship $ARGUMENTS.\n".utf8).write(to: home.appending(path: ".claude/commands/ship.md"))
+        let box = try await TestBox(engine: engine.url, environment: ["HOME": home.path])
+        defer {
+            box.stop()
+            engine.stop()
+        }
+        let local = box.client(engine: engine.url)
+        let machine = BoxClient(box: "m_lab", transport: local.transport)
+        let listed = await ClaudeCodeImports.read(for: machine, others: [])
+        #expect(listed.agents.map(\.path) == [["agents", "tester"]])
+        #expect(listed.commands.map(\.path) == [["commands", "ship"]])
+        #expect(listed.commands.first?.settings == .object(["template": .string("Ship $ARGUMENTS."), "description": .string("")]))
+
+        // A machine's box from before it listed them offers none: not this Mac's in their place.
+        struct Missing: BoxTransport {
+            func send(_ request: LinkRequest) -> AsyncThrowingStream<LinkResponsePart, Error> {
+                AsyncThrowingStream { continuation in
+                    continuation.yield(.head(status: 404, headers: [:]))
+                    continuation.yield(.body(Data("{}".utf8)))
+                    continuation.finish()
+                }
+            }
+        }
+        let older = await ClaudeCodeImports.read(for: BoxClient(box: "m_old", transport: Missing()), others: [])
+        #expect(older.agents.isEmpty && older.commands.isEmpty)
+    }
 }

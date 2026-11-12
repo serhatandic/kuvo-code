@@ -11,7 +11,7 @@ struct AgentsSettings: View {
     @State private var editing: AgentEdit?
     /// What to remove once its sheet has closed (and its fields are done saving).
     @State private var removal: [String]?
-    /// Claude Code's agents, to bring over: this Mac's, as its box lists them.
+    /// Claude Code's agents, to bring over: this page's computer's own, as its box lists them.
     @State private var claudeAgents: [ClaudeCodeImports.Item] = []
 
     private var config: EngineConfig { app.config(for: box) }
@@ -119,9 +119,8 @@ struct AgentsSettings: View {
                 }
             }
         }
-        // Claude Code's agents are this Mac's: offered on this Mac's page only, not brought onto a
-        // machine as if they were its own.
-        // (Again as the engine's list comes, or changes: this Mac's box was starting, say.)
+        // Claude Code's agents in this page's computer's own ~/.claude: a machine's on its page.
+        // (Again as the engine's list comes, or changes: its box was starting, say.)
         .task(id: [box.id] + catalog.agents.map(\.id)) { claudeAgents = await ClaudeCodeImports.read(for: app.box(box.id), others: []).agents }
         .settingsDetail(item: $editing, title: { $0.agentID ?? "New Agent" }, onDismiss: removePending) { edit in
             AgentEditor(id: edit.agentID, isBuiltIn: edit.isBuiltIn) { editing = nil } remove: { path in
