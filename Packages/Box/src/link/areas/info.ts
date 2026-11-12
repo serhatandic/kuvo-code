@@ -30,7 +30,7 @@ export async function* infoRoute(context: RouteContext): AsyncGenerator<AnswerPi
   if (engine.pid) try { started = fs.statSync(ENGINE_FILE).mtimeMs / 1000; } catch {}
   // Its folder of chats (conversations of no project), as a Mac names its own: made if it isn't
   // there yet, so a phone can start the first one.
-  const chats = IS_MAC ? CHATS : path.join(K, "chats");
+  const chats = CHATS;
   try { fs.mkdirSync(chats, { recursive: true }); } catch {}
   yield { head: { status: 200, headers: { "content-type": "application/json" } } };
   yield { body: Buffer.from(JSON.stringify(IS_MAC ? macInfo(engine, started, chats, Boolean(bridge())) : machineInfo(engine, started, chats, Boolean(bridge()), info))) };

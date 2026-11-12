@@ -323,8 +323,8 @@ export class Carrying {
    * and the list of what it put where (`undo`), which stays until the move's over.
    * It throws `CantCarry` for what's wrong with what came; anything of it placed goes back then.
    */
-  async place(from: string, keep: string, directory: string, root: string) {
-    return await this.inTurn(keep, () => this.placeNow(from, keep, directory, root))
+  async place(from: string, keep: string, directory: string, root: string, chat?: string | null) {
+    return await this.inTurn(keep, () => this.placeNow(from, keep, directory, root, chat))
   }
 
   /** What's placed or undone with a folder of a move's, one after the other: an undo that comes while
@@ -352,7 +352,7 @@ export class Carrying {
     })
   }
 
-  private async placeNow(from: string, keep: string, directory: string, root: string) {
+  private async placeNow(from: string, keep: string, directory: string, root: string, chat?: string | null) {
     const manifest = await this.readManifest(from)
     if (manifest.root !== root) throw new CantCarry("its conversations aren't its own")
     for (const { id } of manifest.sessions) if (this.store.get(id)) throw new CantCarry("its conversations are here already")
@@ -386,6 +386,13 @@ export class Carrying {
         const agent = (await read("agent.json", {})) as Record<string, any>
         if (session?.id !== id || !Array.isArray(messages)) throw new CantCarry("its conversation didn't come whole")
         session.location = { ...session.location, directory }
+        // Its chat mark as the box it comes to says (PROTOCOL.md, "Chats"): the chats folder it's in
+        // here, or none; as it came from a box that doesn't say. Put on as it's placed, so it's no
+        // newer for it.
+        if (chat !== undefined) {
+          const { chat: _, ...kuvo } = (session.metadata?.kuvo ?? {}) as Record<string, unknown>
+          session.metadata = { ...(session.metadata ?? {}), kuvo: chat ? { ...kuvo, chat } : kuvo }
+        }
         session.projectID = "prj_" + createHash("sha1").update(directory).digest("hex").slice(0, 16)
         // Its undo's copies stay where they were made.
         delete agent.snapshots
@@ -627,7 +634,7 @@ export async function carryRoutes(carrying: Carrying | undefined, method: string
         await carrying.keep(text("root"), text("into"))
         return json({ data: true })
       case "place":
-        return json({ data: await carrying.place(text("from"), text("keep"), text("directory"), text("root")) })
+        return json({ data: await carrying.place(text("from"), text("keep"), text("directory"), text("root"), typeof given?.chat === "string" || given?.chat === null ? given.chat : undefined) })
       case "undo":
         await carrying.undo(text("keep"))
         return json({ data: true })

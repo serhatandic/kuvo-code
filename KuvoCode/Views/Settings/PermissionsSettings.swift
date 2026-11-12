@@ -202,7 +202,7 @@ struct PermissionsSettings: View {
     }
 
     private func projectName(_ id: String) -> String {
-        workspace.sessions.first { $0.projectID == id }.map { workspace.projectName($0.location.directory) } ?? "A project"
+        workspace.sessions.first { $0.projectID == id }.map { workspace.projectName(of: $0) } ?? "A project"
     }
 
     static func title(of action: String) -> String {

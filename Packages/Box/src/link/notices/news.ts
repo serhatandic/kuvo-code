@@ -11,7 +11,7 @@ import { summaryAtEnd } from "../../shared/summaries";
 import { isHiddenRun } from "../engine/sessions";
 import { sessionsWaitingOnServer } from "../work/answers";
 import { isAutopilot } from "../work/autopilot";
-import { IS_MAC, K } from "../home";
+import { isChatsFolder } from "../engine/chats";
 import { masked, showsAll } from "./mask";
 import { oneSentence, plain, reasonLine } from "./sentence";
 import { writtenByYou } from "../engine/queue";
@@ -238,15 +238,12 @@ export function answersYou(began: TurnBegan, session: EngineSession): boolean {
   return !isBot(session) && !session.metadata?.kuvo?.startedBy;
 }
 
-// This box's chats, conversations of no project: a machine's in its folder, a Mac's beside its box.
-const chatsFolder = (): string => (IS_MAC ? path.join(path.dirname(K), "Chats") : path.join(K, "chats"));
-
 // A project's name, as every client shows it: its own, or its folder's; a worktree's or another
 // folder's is its project's, and so is that of a session filed under it from there (`kuvo.filed`,
 // `session`'s, while it's in that folder).
 export function projectNameOf(directory: string | undefined, session?: Partial<EngineSession> | null): string | undefined {
   if (!directory) return undefined;
-  if (directory === chatsFolder()) return "Chats";
+  if (isChatsFolder(directory)) return "Chats";
   const under = filedUnder(directory);
   const mark = session?.metadata?.kuvo?.filed;
   const project = under === directory && isObject(mark) && mark.folder === directory && typeof mark.project === "string" ? mark.project : under;
