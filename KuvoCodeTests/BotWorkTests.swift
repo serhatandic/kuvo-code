@@ -213,7 +213,7 @@ import Testing
 
 /// A box answering a bot's work as it is when each read reaches it, the first read held until
 /// released (one over SSH, slow).
-private final class SlowWorkBox: @unchecked Sendable {
+nonisolated private final class SlowWorkBox: @unchecked Sendable {
     private let lock = NSLock()
     private var asking = true
     private var reads = 0
