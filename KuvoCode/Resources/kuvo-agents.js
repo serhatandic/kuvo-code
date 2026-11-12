@@ -7079,7 +7079,7 @@ async function signIn(servers, at) {
       continue;
     let value = accessFor(list, integration);
     if (value && Number(value.expires) > 0 && Number(value.expires) < Date.now() + 60000) {
-      await link.request("POST", at(`/api/experimental/mcp/${encodeURIComponent(server.name)}/connect`), {}, 30000).catch(() => {});
+      await link.request("POST", at(`/api/experimental/mcp/${encodeURIComponent(server.name)}/connect`), {}, 1e4).catch(() => {});
       list = await credentials();
       value = accessFor(list, integration);
     }
@@ -7105,6 +7105,7 @@ var running = new Map;
 var standIns = new Map;
 var refusals = new Map;
 var setRight = new Map;
+var relayTiming = { starts: 15000, commandStarts: 30000, check: 5000 };
 var IDLE = 60 * 60000;
 setInterval(() => {
   for (const program of running.values())
@@ -7133,7 +7134,7 @@ function relayedTools(sessionID, holder) {
   return { kind: "http", name: tools.name, key: tools.key, timeout: tools.timeout, url: `http://127.0.0.1:${relayPort()}/mcp`, headers: { Authorization: `Bearer ${key}` } };
 }
 function relayedServers(sessionID, holder, directory, found) {
-  serversKey(sessionID, found);
+  retireChanged(sessionID, found);
   if (!found.servers.length) {
     served.delete(sessionID);
     return [];
@@ -7146,21 +7147,65 @@ function relayedServers(sessionID, holder, directory, found) {
   });
 }
 var setupOf = (server) => JSON.stringify(server.kind === "remote" ? [server.url, server.headers] : [server.command, server.env, server.cwd]);
-function serversKey(sessionID, found) {
-  for (const [connection, standIn] of standIns) {
+async function serversKey(sessionID, found) {
+  retireChanged(sessionID, found);
+  const checking = new Map;
+  for (const standIn of standIns.values()) {
+    const now = found.servers.find((each) => each.name === standIn.name);
+    if (standIn.sessionID !== sessionID || standIn.signIn || !now || checking.has(standIn.name))
+      continue;
+    checking.set(standIn.name, answers(now, sessionID, served.get(sessionID)?.directory));
+  }
+  for (const [name, check] of checking)
+    if (await check)
+      retire(sessionID, name);
+  const times = [...setRight.get(sessionID) ?? []].sort(([a], [b]) => a.localeCompare(b));
+  return times.length ? `${found.key} ${JSON.stringify(times)}` : found.key;
+}
+function retireChanged(sessionID, found) {
+  for (const standIn of [...standIns.values()]) {
     if (standIn.sessionID !== sessionID)
       continue;
     const now = found.servers.find((each) => each.name === standIn.name);
-    if (now && setupOf(now) === standIn.setup)
-      continue;
-    standIns.delete(connection);
-    let times = setRight.get(sessionID);
-    if (!times)
-      setRight.set(sessionID, times = new Map);
-    times.set(standIn.name, (times.get(standIn.name) ?? 0) + 1);
+    if (!now || setupOf(now) !== standIn.setup)
+      retire(sessionID, standIn.name);
   }
-  const times = [...setRight.get(sessionID) ?? []].sort(([a], [b]) => a.localeCompare(b));
-  return times.length ? `${found.key} ${JSON.stringify(times)}` : found.key;
+}
+function retire(sessionID, name) {
+  let any = false;
+  for (const [connection, standIn] of standIns)
+    if (standIn.sessionID === sessionID && standIn.name === name)
+      any = standIns.delete(connection);
+  if (!any)
+    return;
+  let times = setRight.get(sessionID);
+  if (!times)
+    setRight.set(sessionID, times = new Map);
+  times.set(name, (times.get(name) ?? 0) + 1);
+}
+async function answers(entry, sessionID, directory) {
+  const initialize = { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "kuvo-code", version: "1" } } };
+  if (entry.kind === "local") {
+    if (!directory)
+      return false;
+    const started = startServer(entry, sessionID, directory);
+    if (typeof started === "string")
+      return false;
+    const answer = await started.send(initialize, relayTiming.check, "check");
+    started.stop();
+    return Boolean(answer?.result) && !answer.error;
+  }
+  try {
+    const signal = AbortSignal.timeout(relayTiming.check);
+    const response = await fetch(entry.url, { method: "POST", headers: { ...entry.headers, "Content-Type": "application/json", Accept: "application/json, text/event-stream" }, body: JSON.stringify(initialize), redirect: "manual", signal });
+    const started = response.ok ? await startedBy(response, 1) : `HTTP ${response.status}`;
+    const session = response.headers.get("mcp-session-id");
+    if (session)
+      fetch(entry.url, { method: "DELETE", headers: { ...entry.headers, "mcp-session-id": session }, redirect: "manual", signal: AbortSignal.timeout(relayTiming.check) }).catch(() => {});
+    return started === undefined;
+  } catch {
+    return false;
+  }
 }
 var relayPort = () => (server2 ??= Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, fetch: answer2 })).port;
 function dropRelayed(sessionID, holder) {
@@ -7238,7 +7283,7 @@ async function forward(request, url, headers, timeout, body, failed) {
   }
   try {
     const signal = request.method === "POST" ? AbortSignal.any([request.signal, AbortSignal.timeout(timeout)]) : request.signal;
-    const response = await fetch(url, { method: request.method, headers: sent, body, signal });
+    const response = await fetch(url, { method: request.method, headers: sent, body, signal, redirect: "manual" });
     const back = new Headers;
     for (const name of ["content-type", "mcp-session-id"]) {
       const value = response.headers.get(name);
@@ -7262,12 +7307,45 @@ function replies(body, answers, headers) {
   return Response.json(Array.isArray(body) ? said : said[0], { headers });
 }
 var refused = (status) => status === 401 || status === 403;
-function whyNot(name, status) {
+var failing = (status) => refused(status) || status >= 300 && status < 400 || status >= 500;
+function whyNot(name, status, started) {
   if (status === 401)
     return `The ${name} server turned down its sign-in, so its tools aren't available for now. If the user asks for something from it, tell them to sign in to it again in Kuvo Code (Settings \u203A Integrations, or its key in Settings \u203A MCP Servers), and carry on with the rest`;
   if (status === 403)
     return `The ${name} server turned this down (HTTP 403): its sign-in or key may not be allowed to do it`;
-  return `The ${name} server couldn't be reached (${status === 502 ? "no answer" : `HTTP ${status}`}), so its tools aren't available for now`;
+  if (started)
+    return `The ${name} server couldn't start (${started}), so its tools aren't available for now`;
+  const what = status === 502 ? "no answer" : status >= 300 && status < 400 ? `HTTP ${status}: it sent elsewhere, perhaps to sign in` : `HTTP ${status}`;
+  return `The ${name} server couldn't be reached (${what}), so its tools aren't available for now`;
+}
+function notStarted(text, type, id) {
+  const messages = [];
+  const add = (data) => {
+    const parsed = jsonOf(data);
+    if (parsed !== undefined)
+      messages.push(...Array.isArray(parsed) ? parsed : [parsed]);
+  };
+  if (type?.includes("text/event-stream")) {
+    for (const event of text.split(/\r?\n\r?\n/)) {
+      const data = event.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join(`
+`);
+      if (data)
+        add(data);
+    }
+  } else
+    add(text);
+  const answer = messages.find((message) => message && typeof message === "object" && message.id === id && (("result" in message) || ("error" in message)));
+  if (!answer)
+    return "its answer isn't an MCP server's";
+  if (answer.error || !answer.result || typeof answer.result !== "object")
+    return typeof answer.error?.message === "string" ? answer.error.message : "it said no";
+  return;
+}
+async function startedBy(response, id) {
+  const text = await response.text().catch(() => {
+    return;
+  });
+  return text === undefined ? "no answer" : notStarted(text, response.headers.get("content-type"), id);
 }
 var jsonOf = (text) => {
   try {
@@ -7276,9 +7354,9 @@ var jsonOf = (text) => {
     return;
   }
 };
-function standInFor(sessionID, name, setup, why, messages, many) {
+function standInFor(sessionID, name, setup, why, messages, many, signIn = false) {
   const connection = `unavailable-${randomBytes4(12).toString("hex")}`;
-  standIns.set(connection, { sessionID, name, setup, why });
+  standIns.set(connection, { sessionID, name, setup, why, signIn });
   return standInAnswers(messages, why, many, { "mcp-session-id": connection });
 }
 function reached(sessionID, name) {
@@ -7298,12 +7376,14 @@ async function answerStandIn(request, connection, why) {
     return Response.json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } }, { status: 400 });
   return standInAnswers(Array.isArray(body) ? body : [body], why, Array.isArray(body), undefined);
 }
-function standInAnswers(messages, reason, many, headers) {
+function standInAnswers(messages, reason, many, headers, failing = false) {
   const why = reason.replace(/[.\s]+$/, "");
   const answers = messages.map((message) => {
     if (message?.id === undefined || message.id === null)
       return;
     const result = (value) => ({ jsonrpc: "2.0", id: message.id, result: value });
+    if (failing && message.method !== "tools/call")
+      return failure2(message.id, `${why}.`);
     switch (message.method) {
       case "initialize":
         return result({
@@ -7342,8 +7422,12 @@ async function answerServer(request, sessionID, name) {
     return answerStandIn(request, connection, standIn.why);
   if (entry.kind === "remote") {
     const body = request.method === "POST" ? await request.text() : undefined;
+    const sent = body === undefined ? undefined : jsonOf(body);
+    const messages = sent === undefined ? [] : Array.isArray(sent) ? sent : [sent];
+    const initialize = messages.find((message) => message?.method === "initialize");
+    const limit = (server) => initialize ? Math.min(server.timeout, relayTiming.starts) : server.timeout;
     let current = entry.expires !== undefined && entry.expires < Date.now() + 60000 ? await renewed(sessionID, session, name) ?? entry : entry;
-    let answer = await forward(request, current.url, current.headers, current.timeout, body, failed);
+    let answer = await forward(request, current.url, current.headers, limit(current), body, failed);
     const at = `${sessionID}
 ${name}`;
     const retried = async () => {
@@ -7352,7 +7436,7 @@ ${name}`;
         return;
       await answer.body?.cancel();
       current = again;
-      answer = await forward(request, again.url, again.headers, again.timeout, body, failed);
+      answer = await forward(request, again.url, again.headers, limit(again), body, failed);
     };
     if (answer.status === 401 && current.expires !== undefined)
       await retried();
@@ -7361,26 +7445,37 @@ ${name}`;
       let asked = refusals.get(at);
       if (asked?.setup !== setup)
         refusals.set(at, asked = { setup, asked: reconnectServer(session.directory, name) });
-      await asked.asked;
-      await retried();
-      if (answer.status === 401)
-        refusals.set(at, { setup: setupOf(current), asked: asked.asked });
+      if (!initialize) {
+        await asked.asked;
+        await retried();
+        if (answer.status === 401)
+          refusals.set(at, { setup: setupOf(current), asked: asked.asked });
+      }
     }
-    const sent = body === undefined ? undefined : jsonOf(body);
-    const messages = sent === undefined ? [] : Array.isArray(sent) ? sent : [sent];
-    const starts = messages.some((message) => message?.method === "initialize");
-    if (starts && answer.ok)
+    if (initialize) {
+      let text;
+      let why;
+      if (answer.ok) {
+        text = await answer.text().catch(() => {
+          return;
+        });
+        const failure = text === undefined ? "no answer" : notStarted(text, answer.headers.get("content-type"), initialize.id);
+        if (failure)
+          why = whyNot(name, answer.status, failure);
+      } else {
+        await answer.body?.cancel();
+        why = whyNot(name, answer.status);
+      }
+      if (why)
+        return standInFor(sessionID, name, setupOf(current), why, messages, Array.isArray(sent), answer.status === 401);
       reached(sessionID, name);
-    const why = whyNot(name, answer.status);
-    if (starts && !answer.ok) {
-      await answer.body?.cancel();
-      return standInFor(sessionID, name, setupOf(current), why, messages, Array.isArray(sent));
+      return new Response(text, { status: answer.status, headers: answer.headers });
     }
-    if (messages.length && (refused(answer.status) || answer.status >= 500)) {
+    if (messages.length && failing(answer.status)) {
       await answer.body?.cancel();
-      return standInAnswers(messages, why, Array.isArray(sent), undefined);
+      return standInAnswers(messages, whyNot(name, answer.status), Array.isArray(sent), undefined, true);
     }
-    if (request.method === "GET" && refused(answer.status)) {
+    if (request.method === "GET" && failing(answer.status)) {
       await answer.body?.cancel();
       return new Response(null, { status: 405, headers: { Allow: "POST, DELETE" } });
     }
@@ -7413,7 +7508,7 @@ ${name}
 ${fresh}`;
     running.set(key, started);
     started.whenStopped(() => running.get(key) === started && running.delete(key));
-    const answers = await Promise.all(messages.map((message) => started.send(message, entry.timeout, fresh)));
+    const answers = await Promise.all(messages.map((message) => started.send(message, message === initialize ? Math.min(entry.timeout, relayTiming.commandStarts) : entry.timeout, fresh)));
     const answered = answers[messages.indexOf(initialize)];
     if (!answered || answered.error) {
       started.stop();
@@ -7672,7 +7767,8 @@ class AcpThread {
     const mode = { approvesAll: hooks.approvesAll(), plan: input.plan, skills, ...subagents ? { subagents } : {}, ...this.flavor.whole && fenceRules() ? { whole: true } : {} };
     const fence = this.flavor.whole && fenceRules() ? fenceKey() + JSON.stringify(allowedFolders(this.session.location.directory)) + fullAccessMark(this.session.id) : "";
     const computer = await computerServers(this.session.location.directory);
-    const key = JSON.stringify({ ...mode, program: this.flavor.program?.() ?? 0, tools: kuvoTools(this.session.id)?.key, fence, servers: serversKey(this.session.id, computer) });
+    const servers = await serversKey(this.session.id, computer);
+    const key = JSON.stringify({ ...mode, program: this.flavor.program?.() ?? 0, tools: kuvoTools(this.session.id)?.key, fence, servers });
     this.computer = computer;
     if (this.rpc && !this.rpc.isClosed)
       relayedServers(this.session.id, this, this.session.location.directory, computer);
@@ -12165,8 +12261,8 @@ class ClaudeThread {
       this.close();
     }
     const computer = await computerServers(this.session.location.directory);
+    const serversNow = await serversKey(this.session.id, computer);
     const servers = relayedServers(this.session.id, this, this.session.location.directory, computer);
-    const serversNow = serversKey(this.session.id, computer);
     const opening = !this.query;
     if (opening) {
       this.open(sdk, modelID, effort, input.plan, append, hooks, skills, subagents);
@@ -14499,8 +14595,8 @@ class CodexThread {
     const turnedOffHere = (await engineSkills(directory)).filter((skill) => within(skill.folder, own) && off(skill.name)).map((skill) => ({ path: join24(skill.folder, "SKILL.md"), enabled: false }));
     const skillsKey = JSON.stringify([skills, turnedOffHere]);
     const computer = await computerServers(directory);
+    const serversNow = await serversKey(this.session.id, computer);
     const servers = relayedServers(this.session.id, this.agent, directory, computer);
-    const serversNow = serversKey(this.session.id, computer);
     const subagents = codexSubagents(await subagentsFor(directory));
     if (this.nativeID && this.loaded && instructions === this.instructions && tools?.key === this.toolsKey && skillsKey === this.skillsKey && serversNow === this.serversKey && subagents.key === this.subagentsKey)
       return rpc;
@@ -16376,7 +16472,9 @@ class CursorThread {
     const skills = skillsFolder(await skillsFor(cwd, this.owner.ownSkillFolders(cwd), turnedOff(hooks)));
     const fenced = Boolean(fenceRules());
     const tools = fenced ? relayedTools(this.session.id, this) : kuvoTools(this.session.id);
-    const servers = relayedServers(this.session.id, this, cwd, await computerServers(cwd));
+    const computer = await computerServers(cwd);
+    await serversKey(this.session.id, computer);
+    const servers = relayedServers(this.session.id, this, cwd, computer);
     const mcpServers = Object.fromEntries(servers.map((each) => [each.name, { type: "http", url: each.url, headers: each.headers }]));
     if (tools)
       mcpServers[tools.name] = tools.kind === "http" ? { type: "http", url: tools.url, headers: tools.headers } : { type: "stdio", command: tools.command, args: tools.args, env: tools.env };
@@ -27605,4 +27703,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 11df63c233af190dfadd6f21996bdbd786fd1da365d69068a8b3df6bc52c4b94
+// Built from Packages/Box/src/agents fdd731486fa08133e46a0e4776629db848a958936219015b46fe66b25153e046

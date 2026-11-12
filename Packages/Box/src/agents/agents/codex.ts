@@ -1085,8 +1085,9 @@ class CodexThread implements Thread {
     // The computer's MCP servers (yours, the integrations', a bot's with its own keys), through the
     // relay, which keeps their keys.
     const computer = await computerServers(directory)
+    // (Those set right since the relay stood in for them first, so their addresses are new.)
+    const serversNow = await serversKey(this.session.id, computer)
     const servers = relayedServers(this.session.id, this.agent, directory, computer)
-    const serversNow = serversKey(this.session.id, computer)
     // Your subagents (Settings › Agents), as its roles, and the model its subagents use.
     const subagents = codexSubagents(await subagentsFor(directory))
     // Loaded again when Kuvo Code's tools moved (the app started again), to reach them, or the

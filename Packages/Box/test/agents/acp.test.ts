@@ -22,6 +22,7 @@ import { canFence, realFence } from "./support/fence"
 import { computerServers, KEYS, SERVER_COMMAND } from "./support/servers"
 import { subagentEngine } from "./support/subagents"
 import { forgetServers } from "../../src/agents/servers"
+import { relayTiming } from "../../src/agents/toolrelay"
 import { noteAgentsInside } from "../../src/agents/fence"
 import type { PermissionRule } from "../../src/agents/wire"
 
@@ -1190,6 +1191,7 @@ describe.skipIf(!canFence)("The computer's MCP servers, for an ACP agent in the 
     expect(words(id).slice(said.length)).toContain(`tracker=auth:Bearer ${KEYS.again},key:none,at:/tracker`)
     const [first, ...later] = given()
     const tracker = (list: any[]) => list.find((server) => server.name === "tracker").url
+    expect(later).not.toHaveLength(0)
     expect(later.map(tracker)).not.toContain(tracker(first!))
   })
 
@@ -1210,12 +1212,83 @@ describe.skipIf(!canFence)("The computer's MCP servers, for an ACP agent in the 
   })
 
   test("one that can't be reached as the agent starts, or a command's server that turns down starting, doesn't stop the turn: the agent goes on with the rest", async () => {
-    servers.notesDown = true
+    servers.notesDown = "start"
     servers.filesEnvironment = { REFUSES_TO_START: "1" }
     forgetServers()
     const id = await run(startingAll({ notes: ["server", "notes"], files: ["server", "files"], tracker: ["server", "tracker"] }))
     expect(ended(id)).toMatchObject({ type: "idle", outcome: "succeeded" })
     expect(words(id)).toBe(`notes=The notes server couldn't be reached (HTTP 500), so its tools aren't available for now. files=The files server couldn't start: Its settings are wrong. tracker=auth:Bearer ${KEYS.tracker},key:none,at:/tracker`)
+  })
+
+  test("one that turns down what's asked (403) doesn't stop the turn either, says so without asking you to sign in again, and the engine isn't asked to connect it again", async () => {
+    servers.refusing = "start"
+    servers.refusingWith = 403
+    const id = await run(startingAll({ tracker: ["server", "tracker"], notes: ["server", "notes"] }))
+    expect(ended(id)).toMatchObject({ type: "idle", outcome: "succeeded" })
+    expect(words(id)).toBe(`tracker=The tracker server turned this down (HTTP 403): its sign-in or key may not be allowed to do it. notes=auth:none,key:${KEYS.notes},at:/notes`)
+    expect(servers.connects).toBe(0)
+  })
+
+  test("one that goes down partway: its tool's call says so, as the tool's error", async () => {
+    servers.notesDown = "calls"
+    const id = await run(startingAll({ notes: ["server", "notes"], tracker: ["server", "tracker"] }))
+    expect(words(id)).toBe(`notes=The notes server couldn't be reached (HTTP 500), so its tools aren't available for now. tracker=auth:Bearer ${KEYS.tracker},key:none,at:/tracker`)
+  })
+
+  for (const [how, said] of [
+    ["error", "The notes server couldn't start (Its workspace is gone.)"],
+    ["redirect", "The notes server couldn't be reached (HTTP 302: it sent elsewhere, perhaps to sign in)"],
+    ["hangs", "The notes server couldn't be reached (no answer)"],
+  ] as const) {
+    test(`one that doesn't start though it answers (${how === "error" ? "an error for its start" : how === "redirect" ? "it sends you to a sign-in page" : "nothing, in time"}) doesn't stop the turn`, async () => {
+      servers.notesStart = how
+      const timing = { ...relayTiming }
+      relayTiming.starts = relayTiming.check = 300
+      try {
+        const id = await run(startingAll({ notes: ["server", "notes"], files: ["server", "files"] }))
+        expect(ended(id)).toMatchObject({ type: "idle", outcome: "succeeded" })
+        expect(words(id)).toBe(`notes=${said}, so its tools aren't available for now. files=key:${KEYS.shared}`)
+      } finally {
+        Object.assign(relayTiming, timing)
+      }
+    })
+  }
+
+  test("one that couldn't be reached as the agent started is given to it afresh at the next message once it answers again", async () => {
+    servers.notesDown = "start"
+    const id = await run(startingAll({ notes: ["server", "notes"] }))
+    expect(words(id)).toStartWith("notes=The notes server couldn't be reached (HTTP 500)")
+    // Still down: the agent goes on as it is (not started again for it).
+    send(id, "again")
+    await settled(id, 2)
+    expect(given()).toHaveLength(1)
+    servers.notesDown = false
+    send(id, "and again")
+    await settled(id, 3)
+    expect(words(id)).toEndWith(`notes=auth:none,key:${KEYS.notes},at:/notes`)
+    const [first, ...later] = given()
+    const notes = (list: any[]) => list.find((server) => server.name === "notes").url
+    expect(later).not.toHaveLength(0)
+    expect(later.map(notes)).not.toContain(notes(first!))
+  })
+
+  test("one connected for real that then turns down its sign-in: its lists say why as an error, not as if it had no tools, and its stream is none; calls at once ask the engine only once", async () => {
+    servers.noExpiry = true
+    await run(startingAll({}))
+    const tracker = given()[0]!.find((server) => server.name === "tracker")
+    const headers = { ...Object.fromEntries(tracker.headers.map((each: any) => [each.name, each.value])), "Content-Type": "application/json", Accept: "application/json, text/event-stream" }
+    const started = await fetch(tracker.url, { method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "agent", version: "1" } } }) })
+    expect(started.status).toBe(200)
+    const session = { ...headers, "mcp-session-id": started.headers.get("mcp-session-id")! }
+    servers.refusing = "start"
+    const asked = (id: number, method: string) => fetch(tracker.url, { method: "POST", headers: session, body: JSON.stringify({ jsonrpc: "2.0", id, method, params: method === "tools/call" ? { name: "reveal", arguments: {} } : {} }) }).then((response) => response.json() as any)
+    const [list, ...calls] = await Promise.all([asked(2, "tools/list"), asked(3, "tools/call"), asked(4, "tools/call"), asked(5, "tools/call")])
+    expect(list.error.message).toStartWith("The tracker server turned down its sign-in")
+    for (const call of calls) expect(call.result).toMatchObject({ isError: true, content: [{ type: "text", text: expect.stringContaining("sign in to it again") }] })
+    // (Once: for the conversation's folder and the engine's own.)
+    expect(servers.connects).toBe(2)
+    const stream = await fetch(tracker.url, { method: "GET", headers: { ...session, Accept: "text/event-stream" } })
+    expect(stream.status).toBe(405)
   })
 
   test("a command's server that can't start (its program isn't installed) doesn't stop the turn: the agent goes on with the rest, told why", async () => {

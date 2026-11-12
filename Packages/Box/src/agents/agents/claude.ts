@@ -1095,8 +1095,9 @@ class ClaudeThread implements Thread {
     // The computer's MCP servers (yours, the integrations', a bot's with its own keys), through the
     // relay, which keeps their keys: another set of them is told to the same Claude Code.
     const computer = await computerServers(this.session.location.directory)
+    // (Those set right since the relay stood in for them first, so their addresses are new.)
+    const serversNow = await serversKey(this.session.id, computer)
     const servers = relayedServers(this.session.id, this, this.session.location.directory, computer)
-    const serversNow = serversKey(this.session.id, computer)
     const opening = !this.query
     if (opening) {
       this.open(sdk, modelID, effort, input.plan, append, hooks, skills, subagents)

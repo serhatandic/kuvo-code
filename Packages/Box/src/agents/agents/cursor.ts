@@ -16,7 +16,7 @@ import { kuvoTools } from "../kuvotools"
 import { pictureData, pictureFile, withPictures } from "../pictures"
 import { skillsFolder, skillsFor, turnedOff, upward } from "../skills"
 import { cursorSubagents, subagentsFor } from "../subagents"
-import { dropRelayed, relayedServers, relayedTools, relayPort } from "../toolrelay"
+import { dropRelayed, relayedServers, relayedTools, relayPort, serversKey } from "../toolrelay"
 import { computerServers } from "../servers"
 import type { Turn } from "../turn"
 import type { Model, OAuthStatus, Session } from "../wire"
@@ -336,7 +336,10 @@ class CursorThread implements Thread {
     const tools = fenced ? relayedTools(this.session.id, this) : kuvoTools(this.session.id)
     // And the computer's MCP servers (yours, the integrations', a bot's with its own keys), through
     // the relay, which keeps their keys.
-    const servers = relayedServers(this.session.id, this, cwd, await computerServers(cwd))
+    // (Those set right since the relay stood in for them, at new addresses, which start it again.)
+    const computer = await computerServers(cwd)
+    await serversKey(this.session.id, computer)
+    const servers = relayedServers(this.session.id, this, cwd, computer)
     const mcpServers: Record<string, unknown> = Object.fromEntries(servers.map((each) => [each.name, { type: "http", url: each.url, headers: each.headers }]))
     if (tools) mcpServers[tools.name] = tools.kind === "http" ? { type: "http", url: tools.url, headers: tools.headers } : { type: "stdio", command: tools.command, args: tools.args, env: tools.env }
     // Your subagents (Settings › Agents), on a model of Cursor's when theirs is one.

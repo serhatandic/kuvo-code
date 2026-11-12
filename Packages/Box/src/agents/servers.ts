@@ -127,7 +127,8 @@ async function signIn(servers: ComputerServer[], at: (path: string) => string) {
     if (!integration) continue
     let value = accessFor(list, integration)
     if (value && Number(value.expires) > 0 && Number(value.expires) < Date.now() + 60_000) {
-      await link.request("POST", at(`/api/experimental/mcp/${encodeURIComponent(server.name)}/connect`), {}, 30_000).catch(() => {})
+      // (Briefly: an agent may be waiting for it to start.)
+      await link.request("POST", at(`/api/experimental/mcp/${encodeURIComponent(server.name)}/connect`), {}, 10_000).catch(() => {})
       list = await credentials()
       value = accessFor(list, integration)
     }

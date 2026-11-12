@@ -1277,6 +1277,29 @@ describe("Claude Code and the computer's MCP servers", () => {
       servers.stop()
     }
   })
+
+  test("one it reached for real once you signed in again (it connected again by itself) isn't told it afresh as well", async () => {
+    const servers = computerServers(root)
+    servers.refusing = "start"
+    await servers.serve()
+    try {
+      const { id, first } = await begin()
+      const before = (fake.mcpServers as Record<string, any>).tracker
+      expect(await callServer(before)).toStartWith("The tracker server turned down its sign-in")
+      fake.result([first])
+      await until(() => sessions.messages(id).some((message) => message.type === "idle"))
+      servers.signedInAgain = true
+      forgetServers()
+      // It connects again by itself: the relay renews the sign-in it turned down, and reaches it.
+      expect(await callServer(before)).toBe(`auth:Bearer ${KEYS.again},key:none,at:/tracker`)
+      const sent = fake.sent.length
+      sessions.prompt(id, { id: "msg_claude_turn_0142", text: "again", files: [], delivery: "steer" })
+      await until(() => fake.sent.length === sent + 1)
+      expect((fake.mcpServers as Record<string, any>).tracker.url).toBe(before.url)
+    } finally {
+      servers.stop()
+    }
+  })
 })
 
 describe("Claude Code in the box's sandbox", () => {

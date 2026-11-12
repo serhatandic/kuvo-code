@@ -39,13 +39,19 @@ const served = new Map<string, { directory: string; servers: Map<string, Compute
 /** The command servers running, each for one of an agent's connections: by session, name and connection. */
 const running = new Map<string, Program>()
 /** The relay's own stand-ins for servers that couldn't be reached, by the connection it gave each
- * agent: the server, how it was set up then (`setup`), and why it isn't there. */
-const standIns = new Map<string, { sessionID: string; name: string; setup: string; why: string }>()
+ * agent: the server, how it was set up then (`setup`), why it isn't there, and whether that's its
+ * sign-in turned down (`signIn`: only another sign-in sets it right). */
+const standIns = new Map<string, { sessionID: string; name: string; setup: string; why: string; signIn: boolean }>()
 /** The engine asked to connect each session's server again, by session and name, for how it was
  * set up when it turned down its sign-in: once for each setup, however many calls it turns down. */
 const refusals = new Map<string, { setup: string; asked: Promise<void> }>()
 /** How many times each session's server was set right after the relay stood in for it, by name. */
 const setRight = new Map<string, Map<string, number>>()
+
+/** How long a server has to start as an agent connects, before the agent goes on without it (some
+ * give up their whole session well before a server's own time); a command's longer, as it may fetch
+ * its package the first time. And how long one that wasn't there has to answer at the next turn. */
+export const relayTiming = { starts: 15_000, commandStarts: 30_000, check: 5_000 }
 
 /** A command's server no connection has used for an hour is stopped (an agent that started again
  * has a new one), as the engine stops its own; one it comes back to it starts again. */
@@ -96,7 +102,7 @@ export function relayedTools(sessionID: string, holder: object): Extract<KuvoToo
  */
 export function relayedServers(sessionID: string, holder: object, directory: string, found: ComputerServers): RelayedServer[] {
   // (Those set right since the relay stood in for them, noted.)
-  serversKey(sessionID, found)
+  retireChanged(sessionID, found)
   if (!found.servers.length) {
     served.delete(sessionID)
     return []
@@ -115,22 +121,65 @@ const setupOf = (server: ComputerServer) => JSON.stringify(server.kind === "remo
 
 /**
  * What tells the computer's servers a session's agent is given now from those it was given, with
- * their names (`found.key`): a server the relay stood in for that's set up otherwise since (you
- * signed in again, changed its key, or took it away) counts as another, so the agent is started
- * again or told, and connects to it afresh. Each agent's thread asks as it decides that.
+ * their names (`found.key`): a server the relay stood in for that's set right since counts as
+ * another, so the agent is started again or told, and connects to it afresh. One whose sign-in was
+ * turned down is set right by another (you signed in again, changed its key, or took it away); one
+ * that couldn't be reached, or start, once it answers, which is checked now (briefly). Each agent's
+ * thread asks as it decides that, at each turn.
  */
-export function serversKey(sessionID: string, found: ComputerServers): string {
-  for (const [connection, standIn] of standIns) {
-    if (standIn.sessionID !== sessionID) continue
+export async function serversKey(sessionID: string, found: ComputerServers): Promise<string> {
+  retireChanged(sessionID, found)
+  const checking = new Map<string, Promise<boolean>>()
+  for (const standIn of standIns.values()) {
     const now = found.servers.find((each) => each.name === standIn.name)
-    if (now && setupOf(now) === standIn.setup) continue
-    standIns.delete(connection)
-    let times = setRight.get(sessionID)
-    if (!times) setRight.set(sessionID, (times = new Map()))
-    times.set(standIn.name, (times.get(standIn.name) ?? 0) + 1)
+    if (standIn.sessionID !== sessionID || standIn.signIn || !now || checking.has(standIn.name)) continue
+    checking.set(standIn.name, answers(now, sessionID, served.get(sessionID)?.directory))
   }
+  for (const [name, check] of checking) if (await check) retire(sessionID, name)
   const times = [...(setRight.get(sessionID) ?? [])].sort(([a], [b]) => a.localeCompare(b))
   return times.length ? `${found.key} ${JSON.stringify(times)}` : found.key
+}
+
+/** A session's servers the relay stood in for that are set up otherwise now (or gone), retired. */
+function retireChanged(sessionID: string, found: ComputerServers) {
+  for (const standIn of [...standIns.values()]) {
+    if (standIn.sessionID !== sessionID) continue
+    const now = found.servers.find((each) => each.name === standIn.name)
+    if (!now || setupOf(now) !== standIn.setup) retire(sessionID, standIn.name)
+  }
+}
+
+/** A session's server set right: the relay's stand-ins for it go, and its agent is given it at another address. */
+function retire(sessionID: string, name: string) {
+  let any = false
+  for (const [connection, standIn] of standIns) if (standIn.sessionID === sessionID && standIn.name === name) any = standIns.delete(connection)
+  if (!any) return
+  let times = setRight.get(sessionID)
+  if (!times) setRight.set(sessionID, (times = new Map()))
+  times.set(name, (times.get(name) ?? 0) + 1)
+}
+
+/** Whether a server that wasn't there starts now (in a moment): connected to, and let go. */
+async function answers(entry: ComputerServer, sessionID: string, directory: string | undefined): Promise<boolean> {
+  const initialize = { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "kuvo-code", version: "1" } } }
+  if (entry.kind === "local") {
+    if (!directory) return false
+    const started = startServer(entry, sessionID, directory)
+    if (typeof started === "string") return false
+    const answer: any = await started.send(initialize, relayTiming.check, "check")
+    started.stop()
+    return Boolean(answer?.result) && !answer.error
+  }
+  try {
+    const signal = AbortSignal.timeout(relayTiming.check)
+    const response = await fetch(entry.url, { method: "POST", headers: { ...entry.headers, "Content-Type": "application/json", Accept: "application/json, text/event-stream" }, body: JSON.stringify(initialize), redirect: "manual", signal })
+    const started = response.ok ? await startedBy(response, 1) : `HTTP ${response.status}`
+    const session = response.headers.get("mcp-session-id")
+    if (session) void fetch(entry.url, { method: "DELETE", headers: { ...entry.headers, "mcp-session-id": session }, redirect: "manual", signal: AbortSignal.timeout(relayTiming.check) }).catch(() => {})
+    return started === undefined
+  } catch {
+    return false
+  }
 }
 
 /** The relay's port (listening from then on). */
@@ -206,7 +255,8 @@ async function forward(request: Request, url: string, headers: Record<string, st
   try {
     // Given up with the agent's own request; a call, not a stream of what comes, after the server's time.
     const signal = request.method === "POST" ? AbortSignal.any([request.signal, AbortSignal.timeout(timeout)]) : request.signal
-    const response = await fetch(url, { method: request.method, headers: sent, body, signal })
+    // (Never followed elsewhere: a sign-in page somewhere else isn't the server's answer.)
+    const response = await fetch(url, { method: request.method, headers: sent, body, signal, redirect: "manual" })
     const back = new Headers()
     for (const name of ["content-type", "mcp-session-id"]) {
       const value = response.headers.get(name)
@@ -235,11 +285,43 @@ function replies(body: any, answers: unknown[], headers?: Record<string, string>
 /** Turned down: its sign-in or key refused (401), or what was asked not allowed (403). */
 const refused = (status: number) => status === 401 || status === 403
 
-/** Why a server's tools aren't there, or a call to it failed, as the agent is told it. */
-function whyNot(name: string, status: number): string {
+/** Not the server's answer: turned down, sent elsewhere (to a sign-in page, say), or failing. */
+const failing = (status: number) => refused(status) || (status >= 300 && status < 400) || status >= 500
+
+/** Why a server's tools aren't there, or a call to it failed, as the agent is told it (`started`:
+ * why its answer to starting wasn't a start). */
+function whyNot(name: string, status: number, started?: string): string {
   if (status === 401) return `The ${name} server turned down its sign-in, so its tools aren't available for now. If the user asks for something from it, tell them to sign in to it again in Kuvo Code (Settings › Integrations, or its key in Settings › MCP Servers), and carry on with the rest`
   if (status === 403) return `The ${name} server turned this down (HTTP 403): its sign-in or key may not be allowed to do it`
-  return `The ${name} server couldn't be reached (${status === 502 ? "no answer" : `HTTP ${status}`}), so its tools aren't available for now`
+  if (started) return `The ${name} server couldn't start (${started}), so its tools aren't available for now`
+  const what = status === 502 ? "no answer" : status >= 300 && status < 400 ? `HTTP ${status}: it sent elsewhere, perhaps to sign in` : `HTTP ${status}`
+  return `The ${name} server couldn't be reached (${what}), so its tools aren't available for now`
+}
+
+/** Why a server's answer to `initialize` (numbered `id`), read whole, isn't a start: none if it is.
+ * JSON, or the events of a stream (`type`, its content type). */
+function notStarted(text: string, type: string | null, id: unknown): string | undefined {
+  const messages: any[] = []
+  const add = (data: string) => {
+    const parsed = jsonOf(data)
+    if (parsed !== undefined) messages.push(...(Array.isArray(parsed) ? parsed : [parsed]))
+  }
+  if (type?.includes("text/event-stream")) {
+    for (const event of text.split(/\r?\n\r?\n/)) {
+      const data = event.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join("\n")
+      if (data) add(data)
+    }
+  } else add(text)
+  const answer = messages.find((message) => message && typeof message === "object" && message.id === id && ("result" in message || "error" in message))
+  if (!answer) return "its answer isn't an MCP server's"
+  if (answer.error || !answer.result || typeof answer.result !== "object") return typeof answer.error?.message === "string" ? answer.error.message : "it said no"
+  return undefined
+}
+
+/** `notStarted` for a whole answer, or why it couldn't be read. */
+async function startedBy(response: Response, id: unknown): Promise<string | undefined> {
+  const text = await response.text().catch(() => undefined)
+  return text === undefined ? "no answer" : notStarted(text, response.headers.get("content-type"), id)
 }
 
 const jsonOf = (text: string): unknown => {
@@ -255,9 +337,9 @@ const jsonOf = (text: string): unknown => {
  * anyway, to a stand-in of its own with no tools, whose instructions say `why`, so an agent that
  * gives up its whole session when one server fails to start goes on with the rest.
  */
-function standInFor(sessionID: string, name: string, setup: string, why: string, messages: any[], many: boolean): Response {
+function standInFor(sessionID: string, name: string, setup: string, why: string, messages: any[], many: boolean, signIn = false): Response {
   const connection = `unavailable-${randomBytes(12).toString("hex")}`
-  standIns.set(connection, { sessionID, name, setup, why })
+  standIns.set(connection, { sessionID, name, setup, why, signIn })
   return standInAnswers(messages, why, many, { "mcp-session-id": connection })
 }
 
@@ -279,12 +361,17 @@ async function answerStandIn(request: Request, connection: string, why: string):
   return standInAnswers(Array.isArray(body) ? body : [body], why, Array.isArray(body), undefined)
 }
 
-/** What a server that isn't there answers: it starts, it has no tools, and anything asked of it says `why`. */
-function standInAnswers(messages: any[], reason: string, many: boolean, headers: Record<string, string> | undefined): Response {
+/**
+ * What a server that isn't there answers: it starts, it has no tools, and anything asked of it says
+ * `why`. Or (`failing`) what one connected for real that fails partway answers: a tool's call, its
+ * error saying why; anything else, an error saying why (not an empty list, as if it had none).
+ */
+function standInAnswers(messages: any[], reason: string, many: boolean, headers: Record<string, string> | undefined, failing = false): Response {
   const why = reason.replace(/[.\s]+$/, "")
   const answers = messages.map((message) => {
     if (message?.id === undefined || message.id === null) return undefined
     const result = (value: unknown) => ({ jsonrpc: "2.0", id: message.id, result: value })
+    if (failing && message.method !== "tools/call") return failure(message.id, `${why}.`)
     switch (message.method) {
       case "initialize":
         return result({
@@ -323,10 +410,15 @@ async function answerServer(request: Request, sessionID: string, name: string): 
   if (standIn?.sessionID === sessionID && standIn.name === name) return answerStandIn(request, connection, standIn.why)
   if (entry.kind === "remote") {
     const body = request.method === "POST" ? await request.text() : undefined
+    const sent = body === undefined ? undefined : jsonOf(body)
+    const messages: any[] = sent === undefined ? [] : Array.isArray(sent) ? sent : [sent]
+    const initialize = messages.find((message) => message?.method === "initialize")
+    // (Its start, briefly: an agent may give up its whole session while it waits.)
+    const limit = (server: ComputerServer) => (initialize ? Math.min(server.timeout, relayTiming.starts) : server.timeout)
     // Your sign-in to it running out (in a long turn): renewed by the engine first; one it turned
     // down, renewed and tried once more.
     let current = entry.expires !== undefined && entry.expires < Date.now() + 60_000 ? ((await renewed(sessionID, session, name)) ?? entry) : entry
-    let answer = await forward(request, current.url, current.headers, current.timeout, body, failed)
+    let answer = await forward(request, current.url, current.headers, limit(current), body, failed)
     const at = `${sessionID}\n${name}`
     /** Tried again with how it's set up now, if that's changed. */
     const retried = async () => {
@@ -334,37 +426,47 @@ async function answerServer(request: Request, sessionID: string, name: string): 
       if (!again || setupOf(again) === setupOf(current)) return
       await answer.body?.cancel()
       current = again
-      answer = await forward(request, again.url, again.headers, again.timeout, body, failed)
+      answer = await forward(request, again.url, again.headers, limit(again), body, failed)
     }
     if (answer.status === 401 && current.expires !== undefined) await retried()
     if (answer.status === 401) {
-      // (Once for how it's set up now, whatever else it turns down meanwhile: the engine renews
-      // your sign-in if it can, or finds it needs one, for Settings › Integrations to say.)
+      // The engine connects it again, once for how it's set up now, whatever else it turns down
+      // meanwhile: it renews your sign-in if it can, or finds it needs one, for Settings ›
+      // Integrations to say. (A start doesn't wait for that: the agent's next turn finds it.)
       const setup = setupOf(current)
       let asked = refusals.get(at)
       if (asked?.setup !== setup) refusals.set(at, (asked = { setup, asked: reconnectServer(session.directory, name) }))
-      await asked.asked
-      await retried()
-      // (Turned down as renewed too: not asked again for that either.)
-      if (answer.status === 401) refusals.set(at, { setup: setupOf(current), asked: asked.asked })
+      if (!initialize) {
+        await asked.asked
+        await retried()
+        // (Turned down as renewed too: not asked again for that either.)
+        if (answer.status === 401) refusals.set(at, { setup: setupOf(current), asked: asked.asked })
+      }
     }
-    const sent = body === undefined ? undefined : jsonOf(body)
-    const messages: any[] = sent === undefined ? [] : Array.isArray(sent) ? sent : [sent]
-    const starts = messages.some((message) => message?.method === "initialize")
-    if (starts && answer.ok) reached(sessionID, name)
-    const why = whyNot(name, answer.status)
-    if (starts && !answer.ok) {
-      await answer.body?.cancel()
-      return standInFor(sessionID, name, setupOf(current), why, messages, Array.isArray(sent))
+    if (initialize) {
+      // Read whole before the agent has it: what isn't a start (an error, a page) is a stand-in's.
+      let text: string | undefined
+      let why: string | undefined
+      if (answer.ok) {
+        text = await answer.text().catch(() => undefined)
+        const failure = text === undefined ? "no answer" : notStarted(text, answer.headers.get("content-type"), initialize.id)
+        if (failure) why = whyNot(name, answer.status, failure)
+      } else {
+        await answer.body?.cancel()
+        why = whyNot(name, answer.status)
+      }
+      if (why) return standInFor(sessionID, name, setupOf(current), why, messages, Array.isArray(sent), answer.status === 401)
+      reached(sessionID, name)
+      return new Response(text, { status: answer.status, headers: answer.headers })
     }
     // A call it turns down partway (or can't take, for now): its answer says why, as a tool's
     // error, rather than an error of the connection's.
-    if (messages.length && (refused(answer.status) || answer.status >= 500)) {
+    if (messages.length && failing(answer.status)) {
       await answer.body?.cancel()
-      return standInAnswers(messages, why, Array.isArray(sent), undefined)
+      return standInAnswers(messages, whyNot(name, answer.status), Array.isArray(sent), undefined, true)
     }
-    // (And its stream of what it sends, turned down: none, which MCP's HTTP allows.)
-    if (request.method === "GET" && refused(answer.status)) {
+    // (And its stream of what it sends, failing: none, which MCP's HTTP allows.)
+    if (request.method === "GET" && failing(answer.status)) {
       await answer.body?.cancel()
       return new Response(null, { status: 405, headers: { Allow: "POST, DELETE" } })
     }
@@ -392,7 +494,8 @@ async function answerServer(request: Request, sessionID: string, name: string): 
     const key = `${sessionID}\n${name}\n${fresh}`
     running.set(key, started)
     started.whenStopped(() => running.get(key) === started && running.delete(key))
-    const answers = await Promise.all(messages.map((message) => started.send(message, entry.timeout, fresh)))
+    // (Its start, briefly: an agent may give up its whole session while it waits.)
+    const answers = await Promise.all(messages.map((message) => started.send(message, message === initialize ? Math.min(entry.timeout, relayTiming.commandStarts) : entry.timeout, fresh)))
     // (One that ends, or says no, before it's started: the agent goes on without it.)
     const answered: any = answers[messages.indexOf(initialize)]
     if (!answered || answered.error) {

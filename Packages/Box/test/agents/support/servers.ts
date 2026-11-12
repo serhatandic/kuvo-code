@@ -93,8 +93,16 @@ process.stdin.on("data", (chunk) => {
     refusing: false as false | "start" | "calls",
     /** You signed in to the tracker again (Settings › Integrations): the engine has another sign-in. */
     signedInAgain: false,
-    /** The notes server is down: it answers every request with a server error. */
-    notesDown: false,
+    /** How the tracker turns your sign-in down: 401 (it's no good), or 403 (it isn't allowed). */
+    refusingWith: 401,
+    /** The notes server is down: it answers every request with a server error (`start`), or only
+     * its tools' calls (`calls`: it went down partway). */
+    notesDown: false as false | "start" | "calls",
+    /** The notes server doesn't start, though it answers: an error for its start (`error`), its
+     * company's sign-in page (`redirect`: it sends you there), or nothing at all (`hangs`). */
+    notesStart: undefined as undefined | "error" | "redirect" | "hangs",
+    /** Your sign-in to the tracker never runs out (the engine keeps none for when). */
+    noExpiry: false,
     /** The command server's command, as its settings name it. */
     filesCommand: SERVER_COMMAND,
     async serve() {
@@ -106,11 +114,19 @@ process.stdin.on("data", (chunk) => {
           const message: any = await request.json().catch(() => ({}))
           // Your sign-in, once it ran out, it turns down.
           if (fake.expiring && request.headers.get("authorization") === `Bearer ${KEYS.tracker}`) return new Response("Expired.", { status: 401 })
-          if (fake.notesDown && new URL(request.url).pathname === "/notes") return new Response("Down.", { status: 500 })
+          const path = new URL(request.url).pathname
+          if (path === "/login") return new Response("<html>Sign in to your company</html>", { headers: { "Content-Type": "text/html" } })
+          if (path === "/notes" && (fake.notesDown === "start" || (fake.notesDown === "calls" && message.method === "tools/call"))) return new Response("Down.", { status: 500 })
+          if (path === "/notes" && message.method === "initialize" && fake.notesStart) {
+            if (fake.notesStart === "error") return Response.json({ jsonrpc: "2.0", id: message.id, error: { code: -32603, message: "Its workspace is gone." } })
+            if (fake.notesStart === "redirect") return new Response(null, { status: 302, headers: { Location: `http://127.0.0.1:${remote!.port}/login` } })
+            // (Until the server stops.)
+            return new Promise<Response>(() => {})
+          }
           // One taken back, every sign-in but the one you made again.
           const turnedDown = fake.refusing === "start" || (fake.refusing === "calls" && message.method === "tools/call")
           if (turnedDown && new URL(request.url).pathname === "/tracker" && request.headers.get("authorization") !== `Bearer ${KEYS.again}`) {
-            return new Response("Unauthorized.", { status: 401, headers: { "WWW-Authenticate": 'Bearer error="invalid_token"' } })
+            return new Response("Unauthorized.", { status: fake.refusingWith, headers: { "WWW-Authenticate": 'Bearer error="invalid_token"' } })
           }
           if (message.method === "initialize") return Response.json({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "remote", version: "1" } } }, { headers: { "mcp-session-id": "remote-1" } })
           const said = `auth:${request.headers.get("authorization") ?? "none"},key:${request.headers.get("x-api-key") ?? "none"},at:${new URL(request.url).pathname}`
@@ -132,7 +148,7 @@ process.stdin.on("data", (chunk) => {
           }
           if (at === "/api/credential") {
             // (About to run out: within the minute it's renewed before.)
-            const value = fake.expiring ? { access: KEYS.tracker, expires: Date.now() + 1_000 } : { access: fake.signedInAgain ? KEYS.again : fake.connects ? KEYS.renewed : KEYS.tracker, expires: Date.now() + 3_600_000 }
+            const value = fake.expiring ? { access: KEYS.tracker, expires: Date.now() + 1_000 } : { access: fake.signedInAgain ? KEYS.again : fake.connects ? KEYS.renewed : KEYS.tracker, ...(fake.noExpiry ? {} : { expires: Date.now() + 3_600_000 }) }
             return Response.json({ data: [{ integrationID: "int_tracker", active: true, value: { type: "oauth", refresh: "r", ...value } }] })
           }
           return new Response("Not found.", { status: 404 })
