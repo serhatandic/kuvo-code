@@ -280,10 +280,12 @@ struct ChangesPanel: View {
                         let isAgents = model.map { OutsideAgents.isAgentSession($0.session) } ?? false
                         // (Its bridge: this Mac's, or its machine's.)
                         let bridge = model.flatMap { workspace.agents(forFolder: $0.session.location.directory)?.api }
+                        // (This Mac's engine: the box attached in place's, if that's where it is.)
+                        let thisMacs = app.api(for: app.thisMacsBox)
                         CommitForm(changes: changes, environment: app.shellEnvironment,
-                                   api: isAgents ? bridge ?? app.api : model.flatMap { workspace.api(forSession: $0.id) } ?? app.api,
+                                   api: isAgents ? bridge ?? thisMacs : model.flatMap { workspace.api(forSession: $0.id) } ?? thisMacs,
                                    session: isAgents && bridge == nil ? nil : model?.id, model: isAgents ? nil : model?.session.model,
-                                   fallback: isAgents ? app.api : nil) { isCommitting = false }
+                                   fallback: isAgents ? thisMacs : nil) { isCommitting = false }
                         .popoverContent()
                     }
             }
@@ -834,7 +836,7 @@ private struct PullRequestForm: View {
             // A coding agent's session asks its own model; one whose agent can't answer outside
             // the conversation, the engine's default model.
             var written = try? await api.generate(prompt, session: session)
-            if written == nil, isAgents { written = try? await app.api?.generate(prompt) }
+            if written == nil, isAgents { written = try? await app.api(for: app.thisMacsBox)?.generate(prompt) }
             guard let text = written, let pull = PullRequestDraft.parse(text) else {
                 failure = "The model didn’t write one. Try again, or write it yourself."
                 return
