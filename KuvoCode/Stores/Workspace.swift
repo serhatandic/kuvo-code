@@ -2509,6 +2509,11 @@ final class Workspace {
             guard let api = api(forSession: permission.sessionID), let asked = await Self.stillAsked(in: permission.sessionID, api: api), !asked.contains(request) else { continue }
             awaitingReview[request] = nil
         }
+        // And one heard asked here that its box hasn't listed, gone meanwhile: never told later.
+        for (request, permission) in heardUnlisted where sessionMachines[permission.sessionID] == nil && !isBridgeSession(permission.sessionID) {
+            guard let api = api(forSession: permission.sessionID), let asked = await Self.stillAsked(in: permission.sessionID, api: api), !asked.contains(request) else { continue }
+            heardUnlisted[request] = nil
+        }
     }
 
     /// An agent on a machine started using its browser.
@@ -3118,8 +3123,9 @@ final class Workspace {
         guard asking[id] == nil, let box = Sandboxes.shared.review(of: id)?.box,
               let engine = known ? self.api(forSession: session) : box == BoxClient.mac ? self.api : machineAPI(box) else { return }
         let read: [PermissionRequest]?
-        do { read = try await engine.permissions(session: session) } catch let error as ServerError where error.status == 404 {
-            // (Its session gone there: it asks nothing.)
+        do { read = try await engine.permissions(session: session) } catch let error as ServerError where error.status == 404 && known {
+            // (Its session gone from where it is: it asks nothing. One not known here may be its
+            // coding agents', which its engine doesn't have: told without its words, below.)
             read = []
         } catch {
             read = nil

@@ -261,6 +261,9 @@ export interface SettledReview {
 const askReviews = new Map<string, AskReview>();
 // Those still checked or left for you that were answered or went since, the latest two hundred.
 const settledReviews = new Map<string, SettledReview>();
+// Asks still checked or left for you that fell off the list, past two hundred: listed again as they
+// change, where no other unknown ask is.
+const droppedWaiting = new Map<string, string>();
 // The place each ask still checked or left for you was asked on ("engine", "bridge"), which looks
 // for it again as the box hears that place again.
 const askedOn = new Map<string, string>();
@@ -294,6 +297,7 @@ function settle(reviews: AskReview[], state: SettledReview["state"]): void {
  * listed `answered` from now on, so what's listed as waiting is what waits; what the reviewer
  * decided stays, for the mark on its step. */
 export function settleAskReview(id: string): void {
+  droppedWaiting.delete(id);
   // (The reviewer's own answer: what it decided is listed as it notes it.)
   if (replying.has(id)) {
     replying.set(id, true);
@@ -306,6 +310,7 @@ export function settleAskReview(id: string): void {
 /** A run's end (or its session deleted), which takes what it asked with it, without a word of each:
  * its asks left for you or still checked are listed `gone`. */
 export function settleRunReviews(session: string): void {
+  for (const [id, of] of droppedWaiting) if (of === session) droppedWaiting.delete(id);
   settle([...askReviews.values()].filter(each => each.session === session && waitsOnReview(each)), "gone");
 }
 
@@ -340,7 +345,8 @@ export function onAskReviewsChanged(changed: () => void): () => void {
  * just fell off the list, past two hundred, is listed again.) */
 function noteReview(id: string, session: string, state: AskReview["state"], call?: string, place?: string, fresh = false): void {
   const waiting = state === "checking" || state === "yours";
-  if (waiting && !fresh && settledReviews.has(id)) return;
+  if (waiting && !fresh && !askReviews.has(id) && !droppedWaiting.has(id)) return;
+  droppedWaiting.delete(id);
   askReviews.delete(id);
   settledReviews.delete(id);
   askReviews.set(id, { id, session, ...(call ? { call } : {}), state, at: Date.now() });
@@ -349,6 +355,11 @@ function noteReview(id: string, session: string, state: AskReview["state"], call
   if (askReviews.size > 200) {
     const decided = [...askReviews.values()].find(each => each.state !== "checking" && each.state !== "yours");
     const dropped = decided?.id ?? askReviews.keys().next().value!;
+    const waited = askReviews.get(dropped);
+    if (waitsOnReview(waited)) {
+      droppedWaiting.set(dropped, waited!.session);
+      if (droppedWaiting.size > 200) droppedWaiting.delete(droppedWaiting.values().next().value!);
+    }
     askReviews.delete(dropped);
     askedOn.delete(dropped);
   }

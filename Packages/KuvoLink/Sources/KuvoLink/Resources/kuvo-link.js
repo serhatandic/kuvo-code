@@ -16705,6 +16705,7 @@ var OWN_READING = new Set(["read", "view", "notebookread"]);
 var reviewing = new Map;
 var askReviews = new Map;
 var settledReviews = new Map;
+var droppedWaiting = new Map;
 var askedOn = new Map;
 var reviewFollowers = new Set;
 var listAskReviews = () => [...askReviews.values()];
@@ -16727,6 +16728,7 @@ function settle(reviews, state) {
     changed();
 }
 function settleAskReview(id) {
+  droppedWaiting.delete(id);
   if (replying.has(id)) {
     replying.set(id, true);
     return;
@@ -16736,6 +16738,9 @@ function settleAskReview(id) {
     settle([review], "answered");
 }
 function settleRunReviews(session) {
+  for (const [id, of] of droppedWaiting)
+    if (of === session)
+      droppedWaiting.delete(id);
   settle([...askReviews.values()].filter((each) => each.session === session && waitsOnReview(each)), "gone");
 }
 async function settleGoneReviews(source, place, since, signal) {
@@ -16760,8 +16765,9 @@ function onAskReviewsChanged(changed) {
 }
 function noteReview(id, session, state, call, place, fresh = false) {
   const waiting = state === "checking" || state === "yours";
-  if (waiting && !fresh && settledReviews.has(id))
+  if (waiting && !fresh && !askReviews.has(id) && !droppedWaiting.has(id))
     return;
+  droppedWaiting.delete(id);
   askReviews.delete(id);
   settledReviews.delete(id);
   askReviews.set(id, { id, session, ...call ? { call } : {}, state, at: Date.now() });
@@ -16772,6 +16778,12 @@ function noteReview(id, session, state, call, place, fresh = false) {
   if (askReviews.size > 200) {
     const decided = [...askReviews.values()].find((each) => each.state !== "checking" && each.state !== "yours");
     const dropped = decided?.id ?? askReviews.keys().next().value;
+    const waited = askReviews.get(dropped);
+    if (waitsOnReview(waited)) {
+      droppedWaiting.set(dropped, waited.session);
+      if (droppedWaiting.size > 200)
+        droppedWaiting.delete(droppedWaiting.values().next().value);
+    }
     askReviews.delete(dropped);
     askedOn.delete(dropped);
   }
@@ -37256,7 +37268,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "669d02254cfe";
+var BRIDGE_VERSION = "1a7fa5ddfae5";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
