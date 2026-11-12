@@ -8,6 +8,7 @@
 // `node --test Packages/KuvoLink/Tests/Bridge/work-read.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
+import { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -82,7 +83,19 @@ const engine = http.createServer((request, response) => {
   });
 });
 await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
-atEnd(() => { engine.closeAllConnections(); engine.close(); });
+// The box backs a session up as its run ends, in a git process of its own (work/backups.ts), which
+// the watcher's abort doesn't wait for: here its folder isn't a repository, so it says so and exits.
+// Stop any still running by its own pid and wait for it, so the file's clean-up finds no process the
+// test left (a loaded machine made it outlive the tests).
+const ended = child => child.exitCode !== null || child.signalCode !== null;
+const settleChildren = () => Promise.all(process._getActiveHandles()
+  .filter(handle => handle instanceof ChildProcess && !ended(handle))
+  .map(child => new Promise(resolve => {
+    if (ended(child)) return resolve();
+    child.once("exit", resolve);
+    child.kill("SIGKILL");
+  })));
+atEnd(async () => { engine.closeAllConnections(); engine.close(); await settleChildren(); });
 const target = { port: engine.address().port, password: "pw" };
 const following = [];
 const send = event => { for (const follower of followers) follower.write(`data: ${JSON.stringify(event)}\n\n`); };
