@@ -93,12 +93,14 @@ import Testing
         try await StubWeb.listen(port: 47_966)
         BoxProcess.engineChanged(ServerEndpoint(url: try #require(URL(string: engine.url)), password: "test"), version: OpenCodeEngine.version, pid: getpid())
         let runtime = OwnToolsOnce.runtime
-        OwnToolsOnce.runtime = { (node, false, false) }
+        OwnToolsOnce.runtime = { (node, false) }
         let wakes = WakeUps.root.appending(path: "ses_lead")
         defer {
             OwnToolsOnce.runtime = runtime
             BoxProcess.engineChanged(nil, version: nil, pid: nil)
             try? FileManager.default.removeItem(at: wakes)
+            try? FileManager.default.removeItem(at: BoxProcess.home)
+            StubWeb.stopListening(port: 47_966)
             engine.stop()
         }
         let mail = AgentMail()

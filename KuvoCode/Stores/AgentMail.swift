@@ -162,7 +162,8 @@ final class AgentMail {
             // An older box, still running a session's work after an update (the keeper makes way
             // once it's over), doesn't answer Kuvo Code's own tools yet: this app's own box script
             // answers them meanwhile (`OwnToolsOnce`), or, where it can't run, the agent's told why.
-            if answer.status == 400, Self.ownTools.contains(name), await !boxAnswersOwnTools(client) {
+            // (Not while this app is attached to a box in another folder, whose folders it isn't.)
+            if [400, 404].contains(answer.status), Self.ownTools.contains(name), app?.attached == nil, await !boxAnswersOwnTools(client) {
                 let said = await OwnToolsOnce.call(name, body: data, environment: app?.shellEnvironment ?? ProcessInfo.processInfo.environment) ?? (Self.updating, true)
                 if !said.isError { track(name, arguments, caller: caller) }
                 return said
@@ -176,7 +177,7 @@ final class AgentMail {
         return (text, failed)
     }
 
-    // COMPAT(agent-tools.own): an older box still running after an update (`OwnToolsOnce`). Goes 3 months after 0.8.0.
+    // COMPAT(agent-tools.own): an older box still running after an update (`OwnToolsOnce`). Goes once 0.8.0 ships (every released box has `agent-tools.own` from then on).
     /// The tools every box answers since it says `agent-tools.own` (PROTOCOL.md, "Agents' tools").
     static let ownTools: Set<String> = ["schedule_wake_up", "watch_for_change", "list_wake_ups", "cancel_wake_up", "set_job", "show_in_panel", "show_file", "mark_final", "show_widget"]
     /// What an agent hears from one of them while an older box runs on after an update and this
