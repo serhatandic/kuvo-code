@@ -392,7 +392,6 @@ final class Workspace {
         // why where it can't (a coding agent's, one moving to another computer).
         let boxID = Self.box(of: directory)
         if let box = boxes?(boxID), await boxHas(SessionMove.feature, on: boxID) {
-            await projectsWritten()
             _ = try await box.value(SessionMove.Moved.self, "POST", SessionMove.route(id), body: SessionMove.Asked(directory: Self.onBox(directory)))
             await reload(id)
             Analytics.shared.track("chat_moved")
@@ -947,10 +946,14 @@ final class Workspace {
         settings[directory] = project == ProjectSettings() ? nil : project
         saveSettings()
         keepOnBox(directory)
-        // Sessions not open yet catch up when they open (from a box with `projects.folders`, as each
-        // next runs: its box gives them).
+        // Sessions not open yet catch up when they open (from a box with `projects.folders`, also
+        // as each next runs: its box gives them).
         for model in models.values where projectDirectory(of: model.session) == directory {
-            Task { await model.syncFolders() }
+            // (Once its box has them.)
+            Task {
+                await projectsWritten()
+                await model.syncFolders()
+            }
         }
         return directory
     }
@@ -1024,8 +1027,6 @@ final class Workspace {
         // approval and Autopilot, all there.
         let boxID = Self.box(of: directory)
         if let box = boxes?(boxID), await boxHas(SessionStart.feature, on: boxID) {
-            // (With the project as it was last saved here: its folders are its box's to give.)
-            await projectsWritten()
             let asked = SessionStart.Asked(folder: Self.onBox(directory), chat: !worktree && Self.isChat(directory), worktree: worktree, agent: agent, model: model, approval: approval?.rawValue, autopilot: autopilot)
             let started = try await box.value(SessionStart.Started.self, "POST", SessionStart.route, body: asked)
             let session: Session

@@ -96,6 +96,7 @@ export type GlanceChecks = Infer<typeof GLANCE_CHECKS>;
 
 export const SESSION_ROUTES: RouteShape[] = [
   { route: "POST kuvo/sessions/:id/agents", answers: { 200: CARRIED } },
+  { route: "POST kuvo/sessions/:id/folders", answers: { 200: object({ session: string }), 404: REFUSED, 405: REFUSED, 502: REFUSED, 503: REFUSED } },
   { route: "POST kuvo/sessions/:id/move", answers: { 200: SESSION_MOVED, 400: REFUSED, 404: REFUSED, 405: REFUSED, 409: REFUSED, 502: REFUSED, 503: REFUSED } },
   { route: "POST kuvo/sessions", answers: { 200: STARTED, 400: REFUSED, 403: REFUSED, 404: REFUSED, 409: object({ message: string, reason: words("fullAccessOff") }), 429: REFUSED, 502: object({ message: string, "session?": string }), 503: REFUSED } },
   { route: "POST kuvo/agent-tools", answers: { 200: TOOL_ANSWER, 400: REFUSED } },

@@ -2595,9 +2595,14 @@ final class SessionModel {
     /// Gives the agent the project's folders as they're set now, if it doesn't have them yet:
     /// allowed in its permissions, and named in its instructions.
     func syncFolders() async {
+        // Its box gives them (where they've changed), now it's opened, before you write to it.
+        if await foldersOnBox() {
+            struct Given: Decodable { var session: String }
+            _ = try? await box()?.value(Given.self, "POST", ProjectFoldersOnBox.route(id))
+            return
+        }
         // A box from before `projects.folders` doesn't give its sessions their project's folders:
         // the app gives an open one them.
-        guard await !foldersOnBox() else { return }
         // As the engine knows them: a machine's folders are plain paths there.
         let folders = projectFolders().map(api.enginePath)
         let machine = RemoteFolder.machine(of: session.location.directory)

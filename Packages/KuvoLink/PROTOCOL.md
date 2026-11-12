@@ -4335,7 +4335,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `pieces` | a machine only: `kuvo/info`'s `pieces`, which version its link, coding agents' bridge and engine run ("Updates", "A new version while it works") |
 | `plugins.search` | `kuvo/plugins/search` |
 | `programs` | `kuvo/programs` |
-| `projects.folders` | A project's `folders` reach each of its sessions as it's started or moved there and as each run starts where they changed ("Projects", #341) |
+| `projects.folders` | A project's `folders` reach each of its sessions as it's started or moved there, opened (`POST kuvo/sessions/<id>/folders`) and as each run starts where they changed ("Projects", #341) |
 | `providers.models` | `POST kuvo/providers/models` |
 | `queue` | `kuvo/sessions/<id>/queue…`, `…/stop` and `kuvo/sessions/queues/events`: the box carries the queue (bridge 0.9.100) |
 | `queue.waits` | A Stop holds the conversation: what arrives waits on the box (`waiting`), `…/queue/add` and `DELETE …/queue/<item>` (bridge 0.9.128) |
@@ -4731,9 +4731,14 @@ while a box is away goes there when it's back.
   session gets a rule allowing each folder (`external_directory` `<folder>/*`, and where a link
   leads, after its approval's rules; a bot's own folder's rule stays) and the instruction
   `kuvo.project-folders` naming them, or neither once there are none: as it's started or moved
-  there, and as each of its runs starts where they changed since (never one at rest, which a write
-  would make the newest). Not a subagent's, nor a hidden run's (a group chat's seat, an engine run,
-  a review's part). A box from before doesn't: a client gives each session it opens its folders then.
+  there, as a client opens it (`POST kuvo/sessions/<id>/folders` → `200 {session}`, 404 for none
+  here, 502 where the engine didn't take it: so it has them before you write to it), and as each of
+  its runs starts where they changed since (for one nobody opens: a wake-up's, a letter's). Each is
+  written only where they changed (a write makes a session the newest). One filed under a project
+  that's the same place by another name (`kuvo.filed`, a link) has that project's. A folder rule
+  Settings › Permissions names stays. Not a subagent's, nor a hidden run's (a group chat's seat, an
+  engine run, a review's part). A box from before doesn't: a client gives each session it opens its
+  folders then.
 - `POST kuvo/sessions/<id>/move` `{directory}` (`sessions.move`, #341) moves a conversation into the
   project at `directory` here, as a chat that turns into work is: the engine moves it (one at work at
   its next step), and it gets that project's other folders as above. `200 {session, directory,

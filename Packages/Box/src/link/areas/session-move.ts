@@ -1,6 +1,8 @@
 // `POST kuvo/sessions/<id>/move {directory}`: a conversation moved into a project here (PROTOCOL.md,
 // "Projects"), as a chat that turns into work is: its conversation goes along, and from then on it
-// works in that project's folders, given them as a session started there is (`giveFolders`).
+// works in that project's folders, given them as a session started there is (`giveFolders`). And
+// `POST kuvo/sessions/<id>/folders`: one given its project's folders as they're set now, as a client
+// opens it, before you write to it (its runs get them too, but only once they've started).
 
 import fs from "node:fs";
 import path from "node:path";
@@ -15,6 +17,7 @@ import type { SessionMoved } from "../../shared/routes/sessions";
 import type { AnswerPiece, RouteContext } from "../server/context";
 
 export const SESSION_MOVE_ROUTE = /^kuvo\/sessions\/([^/]+)\/move$/;
+export const SESSION_FOLDERS_ROUTE = /^kuvo\/sessions\/([^/]+)\/folders$/;
 
 // A session on `target` as it is now, or null for none there.
 async function read(target: Target | null, id: string, signal: AbortSignal | undefined): Promise<Record<string, unknown> | null> {
@@ -58,4 +61,21 @@ export async function* sessionMoveRoute(context: RouteContext): AsyncGenerator<A
   await giveFolders(engine!, id, { signal, folder: directory });
   const info = await read(engine, id, signal);
   return yield* json(200, { session: id, directory, ...(info ? { info } : {}) } satisfies SessionMoved);
+}
+
+export async function* sessionFoldersRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
+  const { request, route, readEngine, bridge, signal, json } = context;
+  if (request.method.toUpperCase() !== "POST") return yield* json(405, { message: "Ask with POST." });
+  let id = "";
+  try { id = decodeURIComponent(route.match(SESSION_FOLDERS_ROUTE)?.[1] ?? ""); } catch {}
+  let engine: Target | null = null;
+  try { engine = readEngine(); } catch {}
+  if (!engine?.port) engine = null;
+  const agents = bridge();
+  if (!engine && !agents) return yield* json(503, { message: "The engine isn't running." });
+  const target = await read(engine, id, signal) ? engine : await read(agents, id, signal) ? agents : null;
+  if (!target) return yield* json(404, { message: "That conversation isn't here." });
+  // (Written only where its folders aren't as set: a write makes it the newest.)
+  if (!await giveFolders(target, id, { signal, whenChanged: true })) return yield* json(502, { message: "Its folders couldn't be given to it now." });
+  return yield* json(200, { session: id });
 }

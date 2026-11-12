@@ -10,7 +10,8 @@ import type { Project, Projects } from "../../shared/routes/projects";
 import { call, readBridgeFile, readEngineFile } from "../engine/client";
 import { rewriteOn } from "../engine/notes";
 import { isHiddenRun, type EngineSession } from "../engine/sessions";
-import { askedAbout } from "../fence/policy";
+import { askedAbout, realish } from "../fence/policy";
+import { permissionsHere } from "../bots/tell";
 import { locked, writePrivate } from "../files";
 import { followed } from "../follow";
 import { K } from "../home";
@@ -81,9 +82,22 @@ export function folderRules(folders: readonly string[]): KitRule[] {
 export const isFolderRule = (rule: KitRule): boolean => rule.action === "external_directory" && rule.effect === "allow" && rule.resource.endsWith("/*");
 
 /** `rules` with the folders they allow made `folders`: a bot's own folder stays allowed, as it isn't
- * one of the project's. */
-export const withFolders = (rules: readonly KitRule[], folders: readonly string[]): KitRule[] =>
-  [...rules.filter(rule => !isFolderRule(rule) || rule.resource.includes("/bots/bot_")), ...folderRules(folders)];
+ * one of the project's, and so does one Settings › Permissions names (Auto and Full Access allow
+ * what it asks about outside). */
+export function withFolders(rules: readonly KitRule[], folders: readonly string[]): KitRule[] {
+  const named = new Set((permissionsHere() ?? []).map(rule => rule.resource));
+  return [...rules.filter(rule => !isFolderRule(rule) || rule.resource.includes("/bots/bot_") || named.has(rule.resource)), ...folderRules(folders)];
+}
+
+/** The other folders a session in `at` gets: as `foldersFor`, or, filed under a project that's the
+ * same place by another name (`kuvo.filed`: a link, as its start found it), that project's. */
+function foldersOf(session: EngineSession, at: string): readonly string[] {
+  const filed = session.metadata?.kuvo?.filed;
+  const project = isObject(filed) && filed.folder === at && typeof filed.project === "string" ? filed.project : null;
+  if (!project || project === at || realish(project) !== realish(at)) return foldersFor(at);
+  const folders = readProjects().find(each => each.directory === project)?.folders ?? [];
+  return folders.includes(at) ? [] : folders;
+}
 
 /** A session on `target` given its project's other folders as they're set where it is now (or in
  * `folder`, where it's moving: the engine moves one at work at its next step), `foldersFor`: its
@@ -101,16 +115,18 @@ export async function giveFolders(target: Target, session: string, { signal, fol
   if (before.parentID || isHiddenRun(before)) return true;
   const where = (now: EngineSession) => folder ?? now.location?.directory ?? now.directory ?? null;
   const first = where(before);
-  await askedAbout(first ? foldersFor(first) : []);
+  await askedAbout(first ? foldersOf(before, first) : []);
   // (Folders changed again while they were given: given again, so its rules and its note agree.)
   for (let tries = 0; tries < 3; tries++) {
     let at: string | null = null;
     let folders: readonly string[] = [];
     let changed = false;
+    let seen: EngineSession = before;
     try {
       const done = await rewriteOn(target, session, now => {
+        seen = now;
         at = where(now);
-        folders = at ? foldersFor(at) : [];
+        folders = at ? foldersOf(now, at) : [];
         const current = (now.permissions ?? []) as KitRule[];
         const permissions = withFolders(current, folders);
         changed = JSON.stringify(permissions) !== JSON.stringify(current);
@@ -120,7 +136,7 @@ export async function giveFolders(target: Target, session: string, { signal, fol
     } catch {
       return false;
     }
-    if (JSON.stringify(foldersFor(at)) !== JSON.stringify(folders)) continue;
+    if (JSON.stringify(foldersOf(seen, at)) !== JSON.stringify(folders)) continue;
     if (whenChanged && !changed) return true;
     const entry = `/api/experimental/session/${address}/instructions/entries/${PROJECT_FOLDERS_ENTRY}`;
     try {

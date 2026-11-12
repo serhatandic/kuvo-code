@@ -7614,6 +7614,36 @@
    }
   },
   {
+   "route": "POST kuvo/sessions/:id/folders",
+   "answers": {
+    "200": {
+     "object": {
+      "session": "string"
+     }
+    },
+    "404": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "405": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "502": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "503": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
    "route": "POST kuvo/sessions/:id/move",
    "answers": {
     "200": {

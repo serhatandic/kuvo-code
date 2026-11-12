@@ -1,6 +1,6 @@
 import "./safety"
 import { afterAll, expect, test } from "bun:test"
-import { mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 
 // A project's other folders reach each of its sessions as it next runs (PROTOCOL.md, "Projects",
@@ -11,10 +11,16 @@ import { join } from "node:path"
 const home = process.env.KUVO_HOME!
 const shop = join(home, "work", "shop")
 const docs = join(home, "work", "docs")
-for (const folder of [shop, docs]) mkdirSync(folder, { recursive: true })
+const tree = join(home, "trees", "brave-otter")
+// The shop by another name: a link, as `/home` is on some Linux machines.
+const linked = join(home, "linked-shop")
+for (const folder of [shop, docs, tree]) mkdirSync(folder, { recursive: true })
+symlinkSync(shop, linked)
 mkdirSync(join(home, "box"), { recursive: true })
-writeFileSync(join(home, "box", "projects.json"), JSON.stringify({ version: 1, projects: [{ directory: shop, folders: [docs] }] }))
-afterAll(() => rmSync(join(home, "box", "projects.json"), { force: true }))
+const keep = (folders: string[]) => writeFileSync(join(home, "box", "projects.json"), JSON.stringify({ version: 1, projects: [{ directory: shop, folders }] }))
+keep([docs])
+writeFileSync(join(home, "box", "worktrees.json"), JSON.stringify({ worktrees: [{ project: shop, root: tree, folder: tree, branch: "kuvo/brave-otter" }] }))
+afterAll(() => { for (const name of ["projects.json", "worktrees.json"]) rmSync(join(home, "box", name), { force: true }); rmSync(linked, { force: true }) })
 
 const asks = { action: "shell", resource: "*", effect: "ask" }
 const docsRule = { action: "external_directory", resource: join(docs, "*"), effect: "allow" }
@@ -24,6 +30,8 @@ const sessions: Record<string, Session> = {
   ses_given: { id: "ses_given", location: { directory: shop }, permissions: [asks, docsRule], metadata: {} },
   ses_seat: { id: "ses_seat", location: { directory: shop }, permissions: [asks], metadata: { kuvo: { seat: "grp_1" } } },
   ses_helper: { id: "ses_helper", parentID: "ses_given", location: { directory: shop }, permissions: [asks], metadata: {} },
+  ses_tree: { id: "ses_tree", location: { directory: tree }, permissions: [asks], metadata: {} },
+  ses_linked: { id: "ses_linked", location: { directory: linked }, permissions: [asks, docsRule], metadata: { kuvo: { filed: { folder: linked, project: shop } } } },
 }
 const written: string[] = []
 const notes: Record<string, string | null> = {}
@@ -85,4 +93,26 @@ test("one whose folders are as set, a subagent's and a group chat's seat aren't 
   expect(written).toEqual([])
   expect(notes.ses_given).toBeUndefined()
   expect(sessions.ses_seat!.permissions).toEqual([asks])
+})
+
+test("a worktree's session gets its project's folders; one in the project by another name keeps them; once they go, rule and note go", async () => {
+  const { giveFolders } = await import("../src/link/areas/projects")
+  expect(await giveFolders(target, "ses_tree", { whenChanged: true })).toBe(true)
+  expect(sessions.ses_tree!.permissions).toEqual([asks, docsRule])
+  expect(notes.ses_tree).toContain(`- docs: ${docs}`)
+
+  written.length = 0
+  expect(await giveFolders(target, "ses_linked", { whenChanged: true })).toBe(true)
+  expect(written).toEqual([])
+
+  keep([])
+  try {
+    for (const id of ["ses_tree", "ses_stale"]) {
+      expect(await giveFolders(target, id, { whenChanged: true })).toBe(true)
+      expect(sessions[id]!.permissions).toEqual([asks])
+      expect(notes[id]).toBeNull()
+    }
+  } finally {
+    keep([docs])
+  }
 })

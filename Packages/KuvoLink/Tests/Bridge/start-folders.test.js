@@ -199,3 +199,17 @@ test("a project's folders changed by any client are given to no session at rest,
   assert.equal(told.size, 0);
   // (As each runs: box test project-folders.test.ts.)
 });
+
+test("a session a client opens is given its project's folders where it hasn't them, before anything is written to it; one that has them isn't written", async () => {
+  const opened = await route("POST", "kuvo/sessions/ses_shop/folders");
+  assert.deepEqual(opened, { status: 200, body: { session: "ses_shop" } });
+  assert.ok(allows("ses_shop", docsRule));
+  assert.match(told.get("ses_shop kuvo.project-folders") ?? "", /This project spans several folders/);
+
+  told = new Map();
+  const before = JSON.stringify([...sessions.values()]);
+  for (const id of ["ses_shop", "ses_seat", "ses_blog"]) assert.equal((await route("POST", `kuvo/sessions/${id}/folders`)).status, 200, id);
+  assert.equal(JSON.stringify([...sessions.values()]), before);
+  assert.equal(told.size, 0);
+  assert.equal((await route("POST", "kuvo/sessions/ses_gone/folders")).status, 404);
+});

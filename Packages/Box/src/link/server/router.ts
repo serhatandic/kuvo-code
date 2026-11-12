@@ -6,7 +6,7 @@
 import { processRuns as runs } from "../../shared/platform";
 import { accountsRoute, credentialsRoute } from "../areas/accounts";
 import { agentToolsRoute, startRoute } from "../areas/agent-tools";
-import { SESSION_MOVE_ROUTE, sessionMoveRoute } from "../areas/session-move";
+import { SESSION_FOLDERS_ROUTE, SESSION_MOVE_ROUTE, sessionFoldersRoute, sessionMoveRoute } from "../areas/session-move";
 import { foundRoute } from "../areas/found";
 import { searchRoute } from "../areas/search";
 import { setupRoute } from "../areas/setup";
@@ -97,6 +97,7 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route === "kuvo/agent-tools", answer: agentToolsRoute },
   { when: route => route === "kuvo/sessions", answer: startRoute },
   { when: route => SESSION_MOVE_ROUTE.test(route), answer: sessionMoveRoute },
+  { when: route => SESSION_FOLDERS_ROUTE.test(route), answer: sessionFoldersRoute },
   { when: route => route === "kuvo/approval" || SESSION_APPROVAL_ROUTE.test(route) || SESSION_DECISIONS_ROUTE.test(route), answer: approvalRoute },
   { when: route => SESSION_AUTOPILOT_ROUTE.test(route), answer: autopilotRoute },
   { when: route => route.match(QUEUE_ROUTE), answer: queueRoute },

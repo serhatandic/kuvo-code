@@ -80,9 +80,15 @@ public enum SessionMove {
     }
 }
 
-/// Whether a box gives every session of a project its folders as they change (`PUT kuvo/projects`),
-/// and each one it starts or moves: then a client gives none itself. (A box from before: its client
-/// gives each open session its folders.)
+/// Whether a box gives a project's sessions its other folders (`projects.folders`): each it starts or
+/// moves, each as its runs start where they changed, and one a client opens, asked with `route` (so
+/// it has them before you write to it). Then a client gives none itself. (A box from before: its
+/// client gives each session it opens its folders.)
 public enum ProjectFoldersOnBox {
     public static let feature = "projects.folders"
+
+    /// `POST`: the session given its project's folders as they're set now, where it hasn't them.
+    public static func route(_ id: String) -> String {
+        "kuvo/sessions/\(id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))) ?? id)/folders"
+    }
 }
