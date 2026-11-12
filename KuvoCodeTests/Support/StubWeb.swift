@@ -3,6 +3,8 @@ import Foundation
 /// Answers for web services the app calls (GitHub's API, its raw files), so tests never reach the
 /// network: each test registers what an address answers, and addresses it didn't register answer
 /// 404. Only the hosts given are stubbed; the app's other requests go out as they would.
+/// `registerClass` reaches only the shared session: one the app makes of its own has this in its
+/// `protocolClasses` in the tests, as `MachineEngine.patient` has (`TestEnvironment`).
 nonisolated final class StubWeb: URLProtocol, @unchecked Sendable {
     struct Answer: Sendable {
         var status = 200

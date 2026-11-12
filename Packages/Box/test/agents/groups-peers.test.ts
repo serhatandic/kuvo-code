@@ -575,6 +575,17 @@ describe("a group chat with a bot on another of your computers", () => {
     expect(host.runner.get(id)!.messages.find((message) => message.kind === "wrapUp")!.tasks!.map((task) => task.state)).toEqual(["done", "done"])
   }, 20_000)
 
+  test("its part done on its own computer with nothing to report, a pass: the part's done in the chat, and nothing's said there", async () => {
+    host.engine.lines = { Ada: ["We'll split it.", "&Ben: fix the build\nGO"] }
+    home.engine.reports = { Ben: " Pass \n" }
+    host.runner.put(team(), [], "active", false)
+    host.runner.send(id, "Split it and go ahead.")
+    await until(() => host.runner.get(id)!.messages.find((message) => message.tasks)?.tasks?.[0].state === "done")
+    expect(reports()).toMatchObject([{ ok: true }])
+    expect(said(host).filter((message) => message.report !== undefined)).toEqual([])
+    expect(said(host).some((message) => /^\W*pass\W*$/i.test(message.text))).toBe(false)
+  }, 20_000)
+
   test("its part waiting on its conversation there, stopped by you: the chat's computer says so, until it goes on and reports", async () => {
     mkdirSync(join(home.root, "run"), { recursive: true })
     writeFileSync(home.queues.file, JSON.stringify({ ses_own_Ben: { paused: true, held: [] } }))
