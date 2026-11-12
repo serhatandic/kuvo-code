@@ -342,7 +342,10 @@ test("a chat moves from this Mac to the machine, with its wake-ups; here it's go
   assert.deepEqual(underWay((await askMachine("GET", "kuvo/moves")).json), { moves: [], away: [] });
 });
 
-test("the chat that moved takes messages where it lives now", { timeout: 60_000 }, async t => {
+// The machine tells this Mac its agents every 60 s, and a chat that just moved is in that list only
+// at its next round: 59.8 s measured on an idle Mac (this wait), leaving under a fifth of a second of
+// the 60 s a test had, so any load at all failed it. Two minutes leaves the round room.
+test("the chat that moved takes messages where it lives now", { timeout: 120_000 }, async t => {
   signal = t.signal;
   // Once the machine has said the chat is one of its agents now.
   await eventually(() => {
