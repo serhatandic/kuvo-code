@@ -59,6 +59,7 @@ struct SessionView: View {
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
         // Its machine out of reach: the conversation to read, without what needs the engine.
+        .workChipContext(WorkQueues.Key(box: Workspace.box(of: model.session.location.directory), owner: app.workspace.root(of: model.id)))
         .environment(\.isOffline, Self.offlineMachine(of: model, in: app) != nil)
         // A conversation as last seen is read once its machine is back.
         // A copy shown while the engine reads (this Mac's) is read too; one waiting for its
@@ -333,7 +334,7 @@ struct BottomStack: View {
         case .plan(let plan, let box):
             GoalCard(plan: plan, box: box)
                 .environment(\.goalBox, box)
-                .disabled(offlineMachine != nil && box != BoxClient.mac)
+                .disabled(offlineMachine != nil && !BoxClient.isThisMac(box))
         }
     }
 
@@ -605,7 +606,9 @@ struct BottomStack: View {
                         quoteFocus: model.quoteFocus,
                         agent: model.agent,
                         approval: model.approval,
-                        model: model.session.model ?? catalog.startingModel(lastModel),
+                        // None of its own: the one its box says it runs on (the engine's default).
+                        model: catalog.composerModel(model.session.model, said: model.modelState, lastModel: lastModel),
+                        modelState: model.modelState,
                         modelInUse: model.modelInUse,
                         isRunning: model.isRunning,
                         hasQueue: !model.waiting.isEmpty,
@@ -685,6 +688,9 @@ struct BottomStack: View {
             }
             // A machine's box removes and restores worktrees without telling this Mac: read as it shows.
             .task(id: model.session.location.directory) { await workspace.refreshWorktrees(for: model.session) }
+            // What its box says of its model, read again as its model changes, and as its
+            // computer's accounts, models or Custom Auto lists do.
+            .task(id: ModelStateAsk(session: model.id, model: model.session.model, lists: catalog.listsKey)) { await model.readModelState() }
             // A bot's work read from its box as it changes (a session of it started, at work,
             // asking, done), wherever the bot lives.
             .task(id: workChanges) {
@@ -886,7 +892,8 @@ struct BottomStack: View {
             return
         }
         let machine = RemoteFolder.machine(of: model.session.location.directory).map { id in app.machines.list.first { $0.id == id }?.name ?? id }
-        let unavailable = model.session.model.flatMap { catalog.refusal($0, on: machine) }
+        // (One with no model of its own runs on the one its box names.)
+        let unavailable = (model.session.model ?? model.modelState?.model).flatMap { catalog.refusal($0, on: machine, said: model.modelState) }
         model.submitDraft(for: catalog.model(model.session.model), queue: queue, commands: catalog.commands(in: model.session.location.directory), unavailable: unavailable)
     }
 }
@@ -988,7 +995,7 @@ struct DraftSessionView: View {
                 onSelectAgent: { pickedAgent = $0 },
                 onSelectApproval: { picked in
                     // Full Access the first time on its computer: asked first.
-                    if picked == .fullAccess, here?.fullAccess != true { confirmsFullAccess = true } else { pickedApproval = picked; ToolApproval.lastPicked = picked }
+                    if picked == .fullAccess, here?.fullAccess != true { confirmsFullAccess = true } else { pickedApproval = picked }
                 },
                 approvalShown: here?.shown(approval, agents: OutsideAgents.runsInBridge(startingModel?.providerID)),
                 autopilot: autopilotChoice,
@@ -999,7 +1006,6 @@ struct DraftSessionView: View {
                         do {
                             try await workspace.allowFullAccess(for: directory)
                             pickedApproval = .fullAccess
-                            ToolApproval.lastPicked = .fullAccess
                         } catch {
                             failure = error.localizedDescription
                         }
@@ -1015,6 +1021,7 @@ struct DraftSessionView: View {
                 listRoom: listRoom,
                 listHeight: $listShown
             )
+            .workChipContext(.init(box: Workspace.box(of: directory), owner: ""))
             .padding(.horizontal, Metrics.gutter)
             .readableColumn()
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
@@ -1128,4 +1135,12 @@ struct LastModel: DynamicProperty {
     var projectedValue: Binding<ModelRef?> {
         Binding(get: { wrappedValue }, set: { wrappedValue = $0 })
     }
+}
+
+/// What a conversation's box is asked of its model for: the conversation, its model, and its
+/// computer's accounts and models as last read.
+private struct ModelStateAsk: Hashable {
+    let session: String
+    let model: ModelRef?
+    let lists: Int
 }

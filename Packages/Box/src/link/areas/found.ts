@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { type Body, isObject, parsed } from "../../shared/json";
 import type { Target } from "../../shared/records";
 import type { Found } from "../../shared/routes/box";
-import { call } from "../engine/client";
+import { call, pluginsSetUp } from "../engine/client";
 import { opencodeAuthFile } from "../home";
 import type { AnswerPiece, RouteContext } from "../server/context";
 
@@ -57,11 +57,15 @@ interface Integration {
   connections: { type?: unknown; name?: unknown; status?: unknown }[];
 }
 
-/** `target`'s integrations, or `null` when it isn't running or doesn't answer. */
-async function integrations(target: Target | null, signal?: AbortSignal, fresh = false): Promise<Integration[] | null> {
+/** `target`'s integrations, or `null` when it isn't running or doesn't answer. The engine's once
+ * its plugins are set up, and none from it is none read yet (it always lists the providers it
+ * knows): one that opened a folder a moment ago lists what it has so far. */
+async function integrations(target: Target | null, signal?: AbortSignal, fresh = false, engine = false): Promise<Integration[] | null> {
   if (!target?.port) return null;
-  const data = await call(target, "GET", `/api/integration${fresh ? "?fresh=1" : ""}`, undefined, signal ?? AbortSignal.timeout(20_000)).catch(() => null);
-  if (!Array.isArray(data)) return null;
+  const wait = signal ?? AbortSignal.timeout(20_000);
+  if (engine && !(await pluginsSetUp(target, undefined, wait).then(() => true, () => false))) return null;
+  const data = await call(target, "GET", `/api/integration${fresh ? "?fresh=1" : ""}`, undefined, wait).catch(() => null);
+  if (!Array.isArray(data) || (engine && !data.length)) return null;
   return data.filter(isObject).filter(each => typeof each.id === "string").map(each => ({
     id: each.id as string,
     name: typeof each.name === "string" ? each.name : each.id as string,
@@ -77,7 +81,7 @@ async function integrations(target: Target | null, signal?: AbortSignal, fresh =
  */
 export async function found({ engine, bridge, authFile = readFrom() }: { engine: Target | null; bridge: Target | null; authFile?: string }, signal?: AbortSignal): Promise<Found> {
   // The agents' programs looked for again (an install a moment ago, a PATH changed since).
-  const [engineRead, agentsRead] = await Promise.all([integrations(engine, signal), integrations(bridge, signal, true)]);
+  const [engineRead, agentsRead] = await Promise.all([integrations(engine, signal, false, true), integrations(bridge, signal, true)]);
   const unread = [...(engineRead ? [] : ["engine" as const]), ...(agentsRead ? [] : ["agents" as const])];
   const engineList = engineRead ?? [];
   const agentList = agentsRead ?? [];

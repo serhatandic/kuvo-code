@@ -52,7 +52,7 @@ final class BotOversight {
                 } catch {}
             }
             if following[box] == me { live.remove(box) }
-            try? await Task.sleep(for: .seconds(older ? 300 : box == BoxClient.mac ? 2 : 30))
+            try? await Task.sleep(for: .seconds(older ? 300 : BoxClient.streams(box) ? 2 : 30))
         }
         if following[box] == me {
             following[box] = nil

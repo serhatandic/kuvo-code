@@ -17,18 +17,27 @@ export async function groupRoutes(runner: GroupRunner | undefined, store: GroupS
     if (method === "GET") return json({ version, data: runner.list() })
     return error(405, "Not allowed")
   }
-  // What the Mac says for every chat here: personalities, Ask First, what's denied, the time zone.
-  if (id === "settings" && method === "PUT") {
+  // What every chat here goes by. The box's link works out its own (`box-settings`: what each
+  // personality tells a bot, who sets what about one, Ask First, what's denied); a client says only
+  // your clock (`clock`: time zone, how you write dates), which a machine can't know. Each on a path
+  // of its own, which a bridge from before turns away (404) rather than taking it for all of them,
+  // the rest emptied. (An older Mac sends all of them to `settings`: only its clock is taken.)
+  if ((id === "box-settings" || id === "clock" || id === "settings") && method === "PUT" && action === undefined) {
     const value = await body()
     const before = store.settings()
-    store.writeSettings({
-      personalities: value?.personalities && typeof value.personalities === "object" ? value.personalities : {},
-      identityNote: typeof value?.identityNote === "string" ? value.identityNote : "",
-      askFirst: value?.askFirst === true,
-      denies: Array.isArray(value?.denies) ? value.denies : [],
-      timeZone: typeof value?.timeZone === "string" ? value.timeZone : undefined,
-      locale: typeof value?.locale === "string" ? value.locale : undefined,
-    })
+    if (id === "box-settings") {
+      store.writeSettings({
+        personalities: value?.personalities && typeof value.personalities === "object" ? value.personalities : {},
+        identityNote: typeof value?.identityNote === "string" ? value.identityNote : "",
+        askFirst: value?.askFirst === true,
+        denies: Array.isArray(value?.denies) ? value.denies : [],
+      })
+    } else {
+      store.writeSettings({
+        timeZone: typeof value?.timeZone === "string" ? value.timeZone : undefined,
+        locale: typeof value?.locale === "string" ? value.locale : undefined,
+      })
+    }
     const after = store.settings()
     if (JSON.stringify([before?.askFirst, before?.denies]) !== JSON.stringify([after?.askFirst, after?.denies])) runner.rulesChanged()
     return json({})

@@ -34,7 +34,7 @@ struct TranscriptView: View {
     /// A failed turn's Sign In, to its model's account, here.
     private var signIn: ConversationSignIn? {
         guard !isOffline else { return nil }
-        return ConversationSignIn(current: model.session.model) { providerID in signingIn = SigningIn(id: providerID) }
+        return ConversationSignIn(current: model.session.model, said: model.modelState) { providerID in signingIn = SigningIn(id: providerID) }
     }
     @AppStorage(StepsDetail.key) private var stepsDetail = StepsDetail.summary
     @State private var scroller = ConversationScroller()
@@ -137,6 +137,7 @@ struct TranscriptView: View {
         .environment(\.answerAgent) { text in model.send(text, for: nil, withComments: false) }
         // What the bot that runs it answered for it, on the steps that asked; a subagent's are kept
         // on the session it works for.
+        .workChipContext(WorkQueues.Key(box: Workspace.box(of: model.session.location.directory), owner: workspace.root(of: model.id)))
         .environment(\.workAnswers, workAnswers)
         // The calls it made on Autopilot, where its questions would have waited.
         .environment(\.autopilotCalls, autopilotCalls)
@@ -1024,6 +1025,7 @@ struct UserBubble: View {
     var status: String?
     @Environment(\.findHighlight) private var highlight
     @Environment(AppModel.self) private var app
+    @Environment(\.workChipQueue) private var workChipQueue
     /// The conversation this is in, where what it opens comes back to.
     @Environment(\.conversationTab) private var here
 
@@ -1034,7 +1036,7 @@ struct UserBubble: View {
         let names = part.contains(AgentReferences.trigger) || (!folders.isEmpty && part.contains("@"))
         let marks = part.contains("http") || part.contains("www.") || part.contains("[Image ")
         // The Work Queue items it names, as chips once the box says what they are.
-        let refs = part.contains("#") ? app.workQueues.refs(in: part, box: app.utilities.queueBox) : [:]
+        let refs = part.contains("#") ? app.workQueues.refs(in: part, box: workChipQueue?.box ?? BoxClient.thisMac, owner: workChipQueue?.owner) : [:]
         guard names || marks || !refs.isEmpty else { return own }
         var text = own ?? AttributedString(part)
         if names { MessageMentions.apply(to: &text, agents: agents, folders: folders) }
@@ -1124,7 +1126,7 @@ struct UserBubble: View {
         // item, in the Work Queue.
         .environment(\.openURL, OpenURLAction { url in
             if let ref = WorkItemRefs.ref(in: url) {
-                app.openWorkItem(ref)
+                app.openWorkItem(ref, box: workChipQueue?.box)
                 return .handled
             }
             if let session = MessageMentions.session(in: url) {
@@ -1386,6 +1388,7 @@ private struct MarkdownPiece: View, Equatable {
     let agents: [MessageMentions.Agent]
     let highlight: FindHighlight?
     @Environment(AppModel.self) private var app
+    @Environment(\.workChipQueue) private var workChipQueue
     /// The conversation this is in, where what it opens comes back to.
     @Environment(\.conversationTab) private var here
 
@@ -1405,12 +1408,12 @@ private struct MarkdownPiece: View, Equatable {
     private var textKit: some View {
         // Its ```mermaid blocks drawn as diagrams, as in a Markdown file's preview.
         // The Work Queue items it names, drawn as their chips once the box says what they are.
-        let refs = text.contains("#") ? app.workQueues.refs(in: text, box: app.utilities.queueBox) : [:]
+        let refs = text.contains("#") ? app.workQueues.refs(in: text, box: workChipQueue?.box ?? BoxClient.thisMac, owner: workChipQueue?.owner) : [:]
         return ReplyView(markdown: text, parser: FileLinkingParser(folders: folders, mentions: mentions, agents: agents, highlight: highlight, refs: refs), diagrams: true) { url in
             // A file opens in the side panel, a named agent its conversation, a Work Queue item
             // the Work Queue; web links in the browser.
             if let ref = WorkItemRefs.ref(in: url) {
-                app.openWorkItem(ref)
+                app.openWorkItem(ref, box: workChipQueue?.box)
                 return true
             }
             if let session = MessageMentions.session(in: url) {
@@ -1576,7 +1579,7 @@ private struct TurnEndView: View {
 
     /// What its card offers for a sign-in, from here (none while offline).
     private var actions: SignInCard.Actions? {
-        signIn.map { SignInCard.actions(failed: stats.model, current: $0.current, catalog: catalog) }
+        signIn.map { SignInCard.actions(failed: stats.model, current: $0.current, said: $0.said, catalog: catalog) }
     }
 
     /// The engine's words under the headline; for a sign-in that ended, which the engine says only
@@ -1606,9 +1609,12 @@ private struct TurnEndView: View {
                     case .signIn:
                         let machine = RemoteFolder.machine(of: directory)
                         if let signIn, let account = actions?.signIn {
-                            let again = kind == .signIn(ended: true) ? "Sign In Again" : "Sign In"
-                            Button(machine.map { "\(again) on \($0)" } ?? again) { signIn.open(account.providerID) }
-                                .help(catalog.signInHelp(account.providerID, on: machine))
+                            // Labelled by what it does, as its box says: a sheet that takes a key adds
+                            // one, an agent not installed installs; else it signs in (again).
+                            let ended = kind == .signIn(ended: true)
+                            let title = signIn.said?.cardButton(for: account, ended: ended) ?? (ended ? "Sign In Again" : "Sign In")
+                            Button(machine.map { "\(title) on \($0)" } ?? title) { signIn.open(account.providerID) }
+                                .help(catalog.signInHelp(account.providerID, on: machine, said: signIn.said.flatMap { $0.isAbout(account) ? $0 : nil }))
                             if actions?.switchModel == true, let switchModel {
                                 Button("Switch Model", action: switchModel)
                                     .help("Choose another model for this conversation")
@@ -2599,6 +2605,8 @@ extension TranscriptView {
 struct ConversationSignIn {
     /// The model the conversation is on now, which Try Again sends with.
     let current: ModelRef?
+    /// What its box says of that model (`kuvo/sessions/models`); nil from a box before it.
+    var said: SessionModelState?
     let open: (String) -> Void
 }
 
@@ -2617,10 +2625,11 @@ enum SignInCard {
         var tryAgain = true
     }
 
-    static func actions(failed: ModelRef?, current: ModelRef?, catalog: Catalog) -> Actions {
+    /// `said`: what the conversation's box says of its model now, where it has it.
+    static func actions(failed: ModelRef?, current: ModelRef?, said: SessionModelState? = nil, catalog: Catalog) -> Actions {
         func signedOut(_ ref: ModelRef?) -> Bool {
             guard let ref, ref.providerID != OutsideAgents.autoProvider else { return false }
-            return catalog.needsSignIn(ref) || catalog.hasEndedSignIn(ref.providerID)
+            return catalog.needsAccount(ref, said: said) || catalog.hasEndedSignIn(ref.providerID)
         }
         guard let failed, failed.providerID != OutsideAgents.autoProvider, catalog.offersSignIn(failed.providerID) else {
             return Actions(tryAgain: !signedOut(current))

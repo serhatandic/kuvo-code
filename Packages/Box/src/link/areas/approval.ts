@@ -9,9 +9,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { isObject, parsed } from "../../shared/json";
 import { BOX } from "../home";
-import { bridgeTarget, call, engineGet, readEngineFile } from "../engine/client";
+import { bridgeTarget, engineGet, readEngineFile } from "../engine/client";
+import { rewriteOn } from "../engine/notes";
 import { allowFullAccess, allowOtherComputers, APPROVALS, approvalOf, approvalRules, approvalsSince, defaultApproval, effectiveApproval, fullAccessAllowed, heldOf, isApproval, madeBefore, otherComputersAllowed, rememberApproval, unavailable } from "../work/approval";
 import { resumeReviewedSession } from "../work/goals";
+import { heldMark, nothingCountsOnIt } from "../fence/state";
 import { sandboxOn } from "../work/sandbox";
 import { approveHeld, clearFetched, clearPlaces, resumeReviews, reviewLog, revokePlace, seeHeld, shownReviews } from "../work/reviewer";
 import { noteFolderFound, tellApproved } from "../work/reviewing";
@@ -23,6 +25,7 @@ import type { Approval } from "../work/approval";
 import type { KitRule } from "../bots/kit";
 import type { EngineAnswer } from "../engine/client";
 import type { EngineSession } from "../engine/sessions";
+import type { Rewritten } from "../../shared/session-notes";
 import type { Target } from "../../shared/records";
 import type { ApprovalHere, SessionApproval } from "../../shared/routes/approval";
 import type { AnswerPiece, RouteContext } from "../server/context";
@@ -30,9 +33,6 @@ import type { AnswerPiece, RouteContext } from "../server/context";
 export const SESSION_APPROVAL_ROUTE = /^kuvo\/sessions\/([^/]+)\/approval$/;
 /** A conversation's decisions by Auto's reviewer. */
 export const SESSION_DECISIONS_ROUTE = /^kuvo\/sessions\/([^/]+)\/decisions$/;
-
-/** How long the box waits on the engine for one conversation. */
-const WAIT = 30_000;
 
 /** A conversation where it is: on the engine, or the coding agents' (`agents`); a bot's own or its
  * work's (`bot`). */
@@ -86,37 +86,52 @@ function changeFor(at: Found, wanted: Approval): { permissions: KitRule[]; metad
   return { permissions, metadata: { ...metadata, kuvo: { ...kuvo, approval: wanted, applied: approval } } };
 }
 
-/** Writes `change` to the conversation, and takes what the engine kept: true once it's there. */
-async function write(at: Found, change: NonNullable<ReturnType<typeof changeFor>>, signal?: AbortSignal): Promise<boolean> {
-  const wait = AbortSignal.timeout(WAIT);
+/** The conversation changed in its turn (`../engine/notes.ts`): read as it is then, and given the
+ * rules and notes of the approval `wanted` says for it as it is (null: none to change), changing
+ * only those and the approval's own notes. `at` takes it as it is then. True once it's so; false
+ * where the engine didn't answer or take it, or it's gone. */
+async function write(at: Found, wanted: (now: Found) => Approval | null, signal?: AbortSignal): Promise<boolean> {
+  let done: Rewritten<EngineSession> | null;
   try {
-    await call(at.target, "PATCH", `/api/session/${encodeURIComponent(at.data.id)}`, change, signal ? AbortSignal.any([signal, wait]) : wait);
+    done = await rewriteOn(at.target, at.data.id, data => {
+      const now = found(at.target, data, at.agents);
+      const approval = wanted(now);
+      return approval ? changeFor(now, approval) : null;
+    }, signal);
   } catch {
     return false;
   }
-  at.data = { ...at.data, permissions: change.permissions as EngineSession["permissions"], metadata: change.metadata };
+  if (!done) return false;
+  Object.assign(at, found(at.target, done.session, at.agents));
   return true;
 }
 
-/** A conversation kept with an approval whose rules are made for something else than it comes to
- * now (the sandbox started or stopped, the switch changed, and the box hasn't come round to it):
- * its rules made for what it comes to. A bot's from before there were approvals is kept with the
- * one its rules say (Ask First, or this computer's default), so it comes to what that does here, and stays so. True
- * where nothing's left to do. */
-async function settle(at: Found, signal?: AbortSignal): Promise<boolean> {
+/** The approval a conversation is to be kept with now, where its rules are made for something else
+ * than it comes to (the sandbox started or stopped, the switch changed, and the box hasn't come
+ * round to it), or it's a bot's from before there were approvals (kept with the one its rules
+ * say: Ask First, or this computer's default), or a new one waiting for its own; null where
+ * nothing's left to do. */
+function toSettle(at: Found): Approval | null {
   const now = approvalOf(at.data, { agents: at.agents, bot: at.bot });
-  if (now.stored ? now.applied === now.effective && !madeBefore(at.data.permissions ?? [], now.effective) : !(at.bot || now.pending)) return true;
-  const change = changeFor(at, now.approval);
-  return !change || await write(at, change, signal);
+  if (now.stored ? now.applied === now.effective && !madeBefore(at.data.permissions ?? [], now.effective) : !(at.bot || now.pending)) return null;
+  return now.approval;
+}
+
+/** A conversation kept with an approval whose rules are made for something else than it comes to
+ * now, its rules made for what it comes to (`toSettle`), as it is in its turn. True where
+ * nothing's left to do. */
+async function settle(at: Found, signal?: AbortSignal): Promise<boolean> {
+  return !toSettle(at) || await write(at, toSettle, signal);
 }
 
 /** A conversation kept with an approval, its rules made again for it with Settings › Permissions
- * as they are now. True where nothing's left to do. */
+ * as they are now, as it is in its turn. True where nothing's left to do. */
 async function remake(at: Found, signal?: AbortSignal): Promise<boolean> {
-  const now = approvalOf(at.data, { agents: at.agents, bot: at.bot });
-  if (!now.stored) return true;
-  const change = changeFor(at, now.approval);
-  return !change || await write(at, change, signal);
+  const kept = (now: Found) => {
+    const is = approvalOf(now.data, { agents: now.agents, bot: now.bot });
+    return is.stored ? is.approval : null;
+  };
+  return !kept(at) || await write(at, kept, signal);
 }
 
 /** A conversation a client just made, without a kept approval: the one it was made with
@@ -176,8 +191,7 @@ export async function setApproval(id: string, wanted: Approval, engine: Target |
   if (!at) return { status: 404, value: { message: "That conversation isn't here." } };
   const not = unavailable(wanted, { agents: at.agents });
   if (not && not.reason !== "sandbox") return { status: 409, value: { message: not.why, reason: not.reason } };
-  const change = changeFor(at, wanted);
-  if (change && !await write(at, change, signal)) return { status: 502, value: { message: "It couldn't be changed: the engine didn't take it. Try again." } };
+  if (!await write(at, () => wanted, signal)) return { status: 502, value: { message: "It couldn't be changed: the engine didn't take it. Try again." } };
   // (The next new conversation here starts with it, a bot's pick too: never a subagent's.)
   if (!at.data.parentID) rememberApproval(wanted);
   // (What it comes to may have changed while it was written.)
@@ -206,6 +220,9 @@ export function approvalHere(): ApprovalHere {
  * written. With `settings` (Settings › Permissions changed), every one kept with an approval whose
  * rules aren't made from them as they are now, too. True once every one is so; false where the
  * engine didn't answer or take one (tried again on the next round). */
+/** The most pages of 200 conversations the round reads: half a million, far past any computer's. */
+const MOST_PAGES = 2500;
+
 export async function reapplyApprovals(engine: Target | null, bridge: Target | null, settings = false): Promise<boolean> {
   let done = true;
   // (This computer's, read once for the round: thousands of conversations may be looked at.)
@@ -213,20 +230,28 @@ export async function reapplyApprovals(engine: Target | null, bridge: Target | n
   const byDefault = defaultApproval();
   for (const [target, agents] of [[engine, false], [bridge, true]] as const) {
     if (!target) continue;
-    let query: string | null = "limit=200&order=desc&parentID=null";
-    for (let pages = 0; pages < 15 && query; pages++) {
+    // Every one, to the end of the list, subagents' too (whose rules the engine may have copied
+    // from their conversation's): once the sandbox is held, it's taken away only once all are made
+    // for it being off.
+    let query: string | null = "limit=200&order=desc";
+    for (let pages = 0; query; pages++) {
+      // (Past this many, not done: a sandbox held for it stays held, the safe side.)
+      if (pages >= MOST_PAGES) return false;
       const page = await engineGet(target, `api/session?${query}`).catch(() => null) as { data?: unknown; cursor?: { next?: string } | null } | null;
       if (!page) return false;
       const listed = Array.isArray(page.data) ? page.data as EngineSession[] : [];
       for (const data of listed) {
         if (!data?.id) continue;
         const kept = data.metadata?.kuvo?.approval;
+        // (A subagent's with no approval of its own has nothing to make.)
+        if (data.parentID && kept === undefined) continue;
         const bot = found(target, data, agents).bot;
         const now = approvalOf(data, { agents, bot }, since, byDefault);
-        // (Full Access's list for the sandbox's launcher, as each is now: one from before too.)
-        markConversation(data.id, now.effective === "fullAccess");
+        // (Full Access's list for the sandbox's launcher, as each is now: one from before too. A
+        // subagent's goes as its conversation's, as the box marks it as it works.)
+        if (!data.parentID) markConversation(data.id, now.effective === "fullAccess");
         // Out of Auto (the sandbox stopped, its rules changed by a client): the folders it allowed go.
-        if (now.effective !== "auto") try { clearPlaces(data.id); } catch {}
+        if (!data.parentID && now.effective !== "auto") try { clearPlaces(data.id); } catch {}
         // (Settings › Permissions changed: any kept with an approval, whose rules don't follow them yet.)
         const remade = settings && now.stored && changeFor(found(target, data, agents), now.approval) !== null;
         // (Ask First and Accept Edits come to themselves anywhere; a bot's from before, to its own.)
@@ -238,7 +263,7 @@ export async function reapplyApprovals(engine: Target | null, bridge: Target | n
         if (!await (remade ? remake(found(target, fresh, agents)) : settle(found(target, fresh, agents)))) done = false;
       }
       const next = page.cursor?.next;
-      query = listed.length === 200 && next ? `limit=200&parentID=null&cursor=${encodeURIComponent(next)}` : null;
+      query = listed.length === 200 && next ? `limit=200&cursor=${encodeURIComponent(next)}` : null;
     }
   }
   return done;
@@ -299,16 +324,37 @@ export function keepApprovals(engine: () => Target | null = ownEngine, bridge: (
   let last: string | null = null;
   let going = false;
   const adopted = new Set<string>();
+  // A pass that didn't get through (an engine or bridge that doesn't answer, or won't take one):
+  // tried again as things stay so less and less often, up to once a minute, and at once when
+  // something changes.
+  let failed: string | null = null;
+  let failures = 0;
+  let waiting = 0;
   every(async () => {
     const [here, agents] = [engine(), bridge()];
-    const now = `${sandboxOn(false)} ${sandboxOn(true)} ${fullAccessAllowed()} ${here?.port ?? 0} ${agents?.port ?? 0}`;
+    // (And which hold of the sandbox is on, if any: one let go of and taken again meanwhile is a new
+    // one, whose rules are made again.)
+    const mark = heldMark();
+    const off = !sandboxOn(false);
+    const now = `${!off} ${sandboxOn(true)} ${fullAccessAllowed()} ${here?.port ?? 0} ${agents?.port ?? 0} ${mark ?? ""}`;
     if (going || following) return;
     going = true;
     try {
       // (Settings › Permissions changed, from any client or by hand in the file, or not made with
       // yet as the box runs: they reach every conversation within a round.)
       const settings = JSON.stringify(permissionsHere());
-      if ((now !== last || settings !== settingsMade) && await reapplyApprovals(here, agents, settings !== settingsMade)) [last, settingsMade] = [now, settings];
+      const state = `${now}\n${settings}`;
+      if ((now !== last || settings !== settingsMade) && (state !== failed || --waiting <= 0)) {
+        if (await reapplyApprovals(here, agents, settings !== settingsMade)) [last, settingsMade, failed, failures] = [now, settings, null, 0];
+        else [failed, failures, waiting] = [state, failures + 1, Math.min(2 ** (failures + 1), 30)];
+      }
+      // Every conversation's rules made for the sandbox being off (Auto asks first), with the engine
+      // answering, and the coding agents' bridge where it runs: what the sandbox held for that,
+      // taking itself away after a failed check, goes ahead (fence/state.ts). Until then it stays
+      // held, which is safe: commands still go through it. (A bridge that isn't running isn't
+      // waited for, nor its record left behind: one started again asks in Auto before its commands
+      // while the sandbox is off, agents/sessions.ts. One running that doesn't answer keeps it held.)
+      if (off && last === now && here) nothingCountsOnIt(mark);
       await adoptPending(here, agents);
       await adoptBots(here, agents, adopted);
     } catch {} finally {

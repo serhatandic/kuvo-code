@@ -80,36 +80,35 @@ import Testing
         #expect(asked.requests("/kuvo/agent-tools").last?.body["session"] as? String == "ses_claude")
     }
 
-    /// An archived session's agent schedules a wake-up with Kuvo Code closed (it was still
-    /// working): it waits with the session, held as archiving holds it, as it does with the app
-    /// open (WakeUpsTests), until you bring the session back. The engine is a stand-in on a port of
-    /// its own, recorded where this Mac's box records its engine; kuvo-wake is real.
-    @Test func aWakeUpMadeWhileArchivedWaitsWithTheAppClosed() async throws {
-        let session = "ses_keeperarchived"
-        let engine = try await StubListener { request, _ in
-            guard request.url?.path() == "/api/session/\(session)" else { return StubWeb.Answer(status: 404) }
-            return StubWeb.json(["data": ["id": session, "title": "Nightly checks", "metadata": ["kuvo.archived": true]]])
+    /// With Kuvo Code closed, a bot's wake-ups, its job and the files it shows go to this Mac's box
+    /// too, which answers them as every box does (the box's own tests hold what it does with them:
+    /// Packages/KuvoLink/Tests/Bridge/own-tools.test.js); only show_in_panel needs the window.
+    @Test func wakeUpsAJobAndShownFilesGoThroughThisMacsBoxWithTheAppClosed() async throws {
+        let asked = Asked()
+        let box = try await StubListener { request, body in
+            asked.note(request, body)
+            guard request.url?.path() == "/kuvo/agent-tools" else { return StubWeb.Answer(status: 404) }
+            return StubWeb.json(["text": "Done.", "isError": false])
         }
-        let endpoint = engine.endpoint
-        BoxProcess.engineChanged(endpoint, version: OpenCodeEngine.version, pid: getpid())
-        let tools = KeeperTools(record: { $0 == "engine.json" ? endpoint : nil })
-        let folder = WakeUps.root.appending(path: session)
+        let endpoint = box.endpoint
+        let tools = KeeperTools(record: { $0 == "serve.json" ? endpoint : nil })
         defer {
             tools.stop()
-            engine.stop()
-            BoxProcess.engineChanged(nil, version: nil, pid: nil)
-            try? FileManager.default.removeItem(at: folder)
+            box.stop()
         }
         let server = try await tools.start().agents
+        for name in ["schedule_wake_up", "list_wake_ups", "set_job", "show_file", "mark_final", "show_widget"] {
+            let result = try await call(server, ["method": "tools/call", "params": [
+                "name": name, "arguments": ["path": "/tmp/report.pdf"], "_meta": ["ai.opencode/sessionID": "ses_bot"],
+            ]])
+            #expect(text(result) == "Done.", "\(name)")
+        }
+        #expect(asked.requests("/kuvo/agent-tools").map { $0.body["name"] as? String } == ["schedule_wake_up", "list_wake_ups", "set_job", "show_file", "mark_final", "show_widget"])
+        #expect(asked.requests("/kuvo/agent-tools").allSatisfy { $0.body["session"] as? String == "ses_bot" })
 
-        let result = try await call(server, ["method": "tools/call", "params": [
-            "name": "schedule_wake_up", "arguments": ["when": "+2h", "note": "Look again"],
-            "_meta": ["ai.opencode/sessionID": session],
-        ]])
-        #expect(result["isError"] as? Bool == false, "\(text(result))")
-        let waiting = (try? FileManager.default.contentsOfDirectory(atPath: folder.appending(path: "wakes").path(percentEncoded: false))) ?? []
-        #expect(waiting.count == 1, "kept for when it's back")
-        #expect((try? String(contentsOf: folder.appending(path: "paused"), encoding: .utf8)) == "archived", "held while it's archived")
+        let panel = try await call(server, ["method": "tools/call", "params": ["name": "show_in_panel", "arguments": ["path": "/tmp"]]])
+        #expect(panel["isError"] as? Bool == true)
+        #expect(asked.requests("/kuvo/agent-tools").count == 6, "the side panel needs the app")
     }
 
     /// The browser can't work without the app: a call says Kuvo Code needs to be open, and the

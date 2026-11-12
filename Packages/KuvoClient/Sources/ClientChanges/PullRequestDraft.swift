@@ -11,6 +11,9 @@ public struct PullRequestDraft: Decodable, Equatable, Sendable {
     /// What the branch brings, for a model to write the title and description from; only when
     /// asked for (`"summary": true`).
     public var summary: String?
+    /// What a model is asked to write them from, in the box's words with your instructions on that
+    /// computer (Settings › Git); only when asked for (`"prompt": true`), and from a box that has them.
+    public var prompt: String?
     /// "github", "gitlab" or "other".
     public var host: String
     /// Made on the box with `gh`; else the host's page opens.
@@ -18,8 +21,8 @@ public struct PullRequestDraft: Decodable, Equatable, Sendable {
     /// Why not on GitHub: "signed-out", or "missing" (not installed).
     public var gh: String?
 
-    public init(branch: String, base: String?, title: String, body: String, summary: String? = nil, host: String, creates: Bool, gh: String?) {
-        (self.branch, self.base, self.title, self.body, self.summary, self.host, self.creates, self.gh) = (branch, base, title, body, summary, host, creates, gh)
+    public init(branch: String, base: String?, title: String, body: String, summary: String? = nil, prompt: String? = nil, host: String, creates: Bool, gh: String?) {
+        (self.branch, self.base, self.title, self.body, self.summary, self.prompt, self.host, self.creates, self.gh) = (branch, base, title, body, summary, prompt, host, creates, gh)
     }
 
     /// "dark-mode into main".

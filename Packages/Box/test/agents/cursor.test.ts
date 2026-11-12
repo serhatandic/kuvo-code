@@ -223,6 +223,36 @@ describe("Cursor and the computer's MCP servers", () => {
     }
   })
 
+  test("one whose sign-in is turned down (taken back) still connects, its call saying to sign in again; signed in again, its agent is started afresh with it at the next message, and reaches it", async () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-cursor-")))
+    folders.push(home)
+    const servers = computerServers(home)
+    servers.refusing = "start"
+    await servers.serve()
+    try {
+      const sdk = fakeSDK()
+      process.env.CURSOR_API_KEY = "key_test"
+      const agent = new CursorAgent({ home, temporary: home, deps: { ensure: async () => home, load: async () => sdk } as any })
+      const session: Session = { id: "ses_servers_refused", projectID: "p", cost: 0, tokens: noTokens(), time: { created: 1, updated: 1 }, title: "Primary", location: { directory: home } }
+      const state: Record<string, unknown> = {}
+      const thread = agent.thread(session, state)
+      const input = { text: "hi", files: [], model: { id: "grok-4.7", providerID: "cursor" }, plan: false }
+      await thread.prepare?.(input, hooks(state))
+      const before = (sdk.made.at(-1)?.mcpServers as Record<string, any>).tracker
+      expect(await callServer(before)).toMatch(/^The tracker server turned down its sign-in.*sign in to it again in Kuvo Code \(Settings › Integrations/)
+      servers.signedInAgain = true
+      forgetServers()
+      await thread.prepare?.(input, hooks(state))
+      expect(sdk.made.length).toBe(2)
+      const after = (sdk.made.at(-1)?.mcpServers as Record<string, any>).tracker
+      expect(after.url).not.toBe(before.url)
+      expect(await callServer(after)).toBe(`auth:Bearer ${KEYS.again},key:none,at:/tracker`)
+      thread.close?.()
+    } finally {
+      servers.stop()
+    }
+  })
+
   /** Cursor's agent, prepared for a turn in `home`: the servers it was given. */
   async function preparedIn(home: string) {
     const sdk = fakeSDK()

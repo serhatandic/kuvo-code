@@ -5,10 +5,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
 import type { Fields } from "../../shared/json";
+import { withNotes } from "../../shared/session-notes";
 import { newID, plainName, stamp } from "../../shared/text";
 import { settleAgain } from "../areas/approval";
 import { boxProjects } from "../areas/projects";
 import { call } from "../engine/client";
+import { rewriteOn } from "../engine/notes";
 import { BOTS, HERE, IS_MAC } from "../home";
 import { botPersonalities } from "../personalities/library";
 import { BOT_STEP, botLook, botModel, DESCRIPTION, isModel, noteBotsChanged } from "./here";
@@ -164,7 +166,9 @@ async function makeOnce(given: GivenBot | null | undefined, readEngine: () => Ta
     // bot that works in a project: there it's the project's.
     if (!project) fs.mkdirSync(path.join(folder, "memory"), { recursive: true });
     fs.writeFileSync(path.join(folder, "MEMORY.md"), kit.memory.replaceAll("⟦name⟧", name));
-    const rules = [...(kit.rules ?? []), { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" }];
+    // Its own folder; the rest are made just below for this computer's default approval and its
+    // Settings › Permissions.
+    const rules = [{ action: "external_directory", resource: path.join(folder, "*"), effect: "allow" }];
     // The session it made, as far as its id.
     const made = await call(target, "POST", "/api/session", { title: name, location: { directory }, model, permissions: rules, metadata: { kuvo: { bot: id } } }, AbortSignal.timeout(BOT_STEP)) as Fields<"id"> | null;
     if (typeof made?.id !== "string" || !made.id) throw new Error("No conversation was made.");
@@ -174,10 +178,12 @@ async function makeOnce(given: GivenBot | null | undefined, readEngine: () => Ta
     // computer's default, as any new conversation's), its rules made for what that comes to here
     // (Auto asks first where the sandbox doesn't run).
     const kept = approvalOf({ permissions: rules }, { agents, bot: true });
-    await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, {
-      metadata: { kuvo: { bot: id, approval: kept.approval, applied: kept.effective } },
+    // (In its turn, onto its notes as they are then.)
+    const marked = await rewriteOn(target, session.id, now => ({
+      metadata: withNotes(now.metadata, { bot: id, approval: kept.approval, applied: kept.effective }),
       permissions: approvalRules(kept.effective, rules),
-    }, AbortSignal.timeout(BOT_STEP));
+    }));
+    if (!marked) throw new Error("The conversation it made went.");
     const told = botInstructions(kit, name, folder, personality?.instruction, project as string | undefined);
     await call(target, "PUT", `/api/experimental/session/${encodeURIComponent(session.id)}/instructions/entries/kuvo.bot`, { value: told }, AbortSignal.timeout(BOT_STEP));
     fs.writeFileSync(path.join(folder, "session"), session.id);

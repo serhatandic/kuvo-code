@@ -5,9 +5,9 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
-import type { Fields } from "../../shared/json";
 import { ownsSettings, readSettings } from "../areas/config";
 import { call } from "../engine/client";
+import { rewriteOn } from "../engine/notes";
 import { listOf, textOf } from "../files";
 import { BOTS, HERE, IS_MAC, WAKE_COMMAND } from "../home";
 import { botPersonalities } from "../personalities/library";
@@ -190,7 +190,7 @@ export async function freshenBots(target: Target): Promise<void> {
 // What "Ask First" asks about (the Mac's ToolApproval.askFirst): a conversation that asks before
 // running commands asks first.
 const ASK_FIRST: string[] = ["edit", "write", "patch", "shell", "webfetch", "external_directory", "kuvo-browser_browser_save_pdf", "kuvo-browser_browser_upload", "kuvo-browser_watch_for_change"];
-const isRule = (rule: unknown): rule is KitRule => isObject(rule) && typeof rule.action === "string" && typeof rule.resource === "string" && typeof rule.effect === "string" && rule.effect !== "";
+export const isRule = (rule: unknown): rule is KitRule => isObject(rule) && typeof rule.action === "string" && typeof rule.resource === "string" && typeof rule.effect === "string" && rule.effect !== "";
 // What a rule holds back: Don't Allow, or one a newer engine set that this box doesn't know (the
 // Mac's `holdsBack`), which goes on as it is.
 export const holdsBack = (rule: KitRule): boolean => rule.effect !== "allow" && rule.effect !== "ask";
@@ -238,28 +238,28 @@ export function refreshedRules(current: KitRule[], settings: KitRule[]): KitRule
 // it came from had Settings of its own. Whether they're right now.
 async function repairRules(target: Target, here: BotHere, sessionID: string): Promise<boolean> {
   const id = here.described.id;
-  let rules: unknown;
-  let metadata: unknown;
-  try {
-    const data = await call(target, "GET", `/api/session/${encodeURIComponent(sessionID)}`) as Fields<"permissions" | "metadata"> | null;
-    rules = data?.permissions;
-    metadata = data?.metadata;
-  } catch {
-    return false;
-  }
-  if (!Array.isArray(rules)) return false;
   const own = { action: "external_directory", resource: path.join(here.folder, "*"), effect: "allow" };
   const commands = [`kuvo-wake ${id} `, `"${WAKE_COMMAND}" ${id} `, `"$HOME/.kuvo-code/bin/kuvo-wake" ${id} `];
   const old = (rule: { action?: unknown; resource?: unknown } | null | undefined) => (rule?.action === "shell" && commands.some(command => String(rule.resource ?? "").startsWith(command)))
     || (rule?.action === "external_directory" && String(rule.resource ?? "").endsWith(`/bots/${id}/*`));
-  const kept: unknown[] = rules.filter(rule => !old(rule));
-  const settings = kept.every(isRule) ? permissionsHere() : null;
-  // Where `settings` is there, every one kept is a rule (checked just above). Made for the approval
-  // kept with it, where there is one (Accept Edits isn't in its rules alone).
-  const approval = settings ? approvalOf({ permissions: kept as KitRule[], metadata: isObject(metadata) ? metadata : null }, { bot: true }) : null;
-  const made = settings ? (approval?.stored ? approvalRules(approval.effective, kept as KitRule[]) : refreshedRules(kept as KitRule[], settings)) : kept as KitRule[];
-  // (Without the asks a box before put in a bot's: only what you set in Edit Bot holds it back.)
-  const repaired = [...withoutFormerAsks(made, settings ?? []), own];
-  if (JSON.stringify(repaired) === JSON.stringify(rules)) return true;
-  return call(target, "PATCH", `/api/session/${encodeURIComponent(sessionID)}`, { permissions: repaired }).then(() => true, () => false);
+  let readable = true;
+  // (In its turn, as its rules and notes are then: `../engine/notes.ts`.)
+  const done = await rewriteOn(target, sessionID, data => {
+    const rules: unknown = data.permissions;
+    const metadata: unknown = data.metadata;
+    if (!Array.isArray(rules)) {
+      readable = false;
+      return null;
+    }
+    const kept: unknown[] = rules.filter(rule => !old(rule));
+    const settings = kept.every(isRule) ? permissionsHere() : null;
+    // Where `settings` is there, every one kept is a rule (checked just above). Made for the approval
+    // kept with it, where there is one (Accept Edits isn't in its rules alone).
+    const approval = settings ? approvalOf({ permissions: kept as KitRule[], metadata: isObject(metadata) ? metadata : null }, { bot: true }) : null;
+    const made = settings ? (approval?.stored ? approvalRules(approval.effective, kept as KitRule[]) : refreshedRules(kept as KitRule[], settings)) : kept as KitRule[];
+    // (Without the asks a box before put in a bot's: only what you set in Edit Bot holds it back.)
+    const repaired = [...withoutFormerAsks(made, settings ?? []), own];
+    return JSON.stringify(repaired) === JSON.stringify(rules) ? null : { permissions: repaired };
+  }).catch(() => null);
+  return Boolean(done) && readable;
 }

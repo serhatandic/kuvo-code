@@ -386,7 +386,7 @@ final class Utilities {
 
     /// The box the panel's Work Queue is on: the machine the session you work in runs on, else
     /// this Mac's.
-    var queueBox: String { place ?? BoxClient.mac }
+    var queueBox: String { place ?? BoxClient.thisMac }
 
     func newTerminal(in directory: String?, environment: [String: String]) {
         Analytics.shared.track("panel_opened", ["tool": "terminal"])

@@ -42,7 +42,7 @@ export function firstCommit(folder: string): boolean {
 /** git in `folder` doing what you asked for (a worktree, merging one back): the repository's
  * hooks and filters run, as in your terminal. */
 export function gitAsked(folder: string, args: string[], env: Record<string, string> = {}): string | null {
-  return ranIn(folder, askedArgs(args), env);
+  return ranIn(folder, askedArgs(args, folder), env);
 }
 
 /** [gitIn] without holding up the bridge, for what takes a while in a big worktree. */

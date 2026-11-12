@@ -1,4 +1,5 @@
 import AppKit
+import ClientSessions
 import ClientText
 import OpenCodeKit
 import SwiftUI
@@ -25,6 +26,8 @@ import Testing
     @Observable final class Look {
         var size = MessageFont().size
         var model: ModelRef?
+        /// What the conversation's box says of its model (`kuvo/sessions/models`).
+        var said: SessionModelState?
         var sent = 0
     }
 
@@ -41,7 +44,7 @@ import Testing
                     }
                 }
                 Composer(session: model.id, text: $model.draftText, files: $model.draftFiles, quotes: $model.draftQuotes, quoteFocus: model.quoteFocus,
-                         agent: "build", approval: .auto, model: look.model, isRunning: false, keywords: [.review],
+                         agent: "build", approval: .auto, model: look.model, modelState: look.said, isRunning: false, keywords: [.review],
                          onSelectAgent: { _ in }, onSelectApproval: { _ in }, onSelectModel: { look.model = $0 }, onSend: { look.sent += 1 }, onStop: {})
             }
             .environment(\.messageFont, MessageFont(size: look.size))
@@ -507,6 +510,53 @@ extension ComposerFieldTests {
         popover?.orderOut(nil)
         look.model = ModelRef(id: "v4.1-flash", providerID: "deepseek")
         try await until { send?.object.isAccessibilityEnabled?() == true }
+        field.keyDown(with: returnKey)
+        #expect(look.sent == 1)
+    }
+
+    /// A conversation whose box says its model is gone from its provider's list (#572: a coding
+    /// agent's it dropped, which this Mac's lists still named and sent, to fail): the chip asks for a
+    /// model and Send waits for one, as the phone's do. Once the box says it runs, it goes.
+    @Test func aModelItsBoxSaysIsGoneWaitsForAnother() async throws {
+        AXElement.reading(true)
+        defer {
+            popover?.orderOut(nil)
+            AXElement.reading(false)
+            done()
+        }
+        let location = ["directory": "/"]
+        let own: [String: Any] = ["id": "v4.1-flash", "modelID": "v4.1-flash", "providerID": "deepseek", "name": "DeepSeek V4.1 Flash",
+                                  "capabilities": ["tools": true, "input": ["text"], "output": ["text"]], "variants": [], "time": ["released": 1],
+                                  "cost": [["input": 1, "output": 1]], "status": "active", "enabled": true, "limit": ["context": 100_000, "output": 8_000]]
+        engine.on("GET", "/api/integration", json: ["location": location, "data": [["id": "deepseek", "name": "DeepSeek", "methods": [["type": "key"]],
+                                                                                  "connections": [["type": "credential", "credentialID": "cred_deepseek", "method": "key"]]]]])
+        engine.on("GET", "/api/model", json: ["location": location, "data": [own]])
+        engine.on("GET", "/api/model/default", json: ["location": location, "data": own])
+        engine.on("GET", "/api/agent", json: ["location": location, "data": []])
+        engine.on("GET", "/api/command", json: ["location": location, "data": []])
+        catalog.api = engine.api
+        await catalog.refresh()
+        // This Mac's lists have it; its box says it's gone.
+        look.model = ModelRef(id: "v4.1-flash", providerID: "deepseek")
+        look.said = try JSONDecoder().decode(SessionModelState.self, from: Data(#"{"model":{"providerID":"deepseek","id":"v4.1-flash"},"runs":false,"missing":"gone","account":{"id":"deepseek","name":"DeepSeek"}}"#.utf8))
+        try await until { editing == "composer" }
+        let field = try #require(field)
+        type("Fix the build", in: field)
+
+        var send: AXElement? {
+            window.contentView?.layoutSubtreeIfNeeded()
+            TestPulse.beat()
+            return AXElement.all(in: window.contentView).first { $0.label == "Send" }
+        }
+        try await until { send?.help == "Choose a model to send it (Return opens the list)" }
+        #expect(send?.object.isAccessibilityEnabled?() == false, "Send is off")
+        #expect(AXElement.all(in: window.contentView).contains { ($0.label ?? "").contains("Choose a Model") }, "the chip asks for a model")
+
+        // Its box says it runs: Return sends it.
+        look.said = SessionModelState(model: look.model, name: "DeepSeek V4.1 Flash", runs: true)
+        try await until { send?.object.isAccessibilityEnabled?() == true }
+        let returnKey = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                                                       context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
         field.keyDown(with: returnKey)
         #expect(look.sent == 1)
     }

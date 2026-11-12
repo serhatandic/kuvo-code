@@ -47,6 +47,9 @@ export function engineSkills(directory: string): Promise<Skill[]> {
   const skills = (async () => {
     if (!link?.ready) return []
     try {
+      // Once its plugins are set up (its providers wait for them): an engine that opened the
+      // folder a moment ago lists what it has so far (2.2.7 on).
+      await link.request("GET", "/api/provider", undefined, 10_000, directory)
       const answer: any = await link.request("GET", "/api/skill", undefined, 10_000, directory)
       const list: any[] = Array.isArray(answer?.data) ? answer.data : Array.isArray(answer) ? answer : []
       const found: Skill[] = []

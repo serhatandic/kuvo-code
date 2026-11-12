@@ -39,7 +39,15 @@ integrations Accounts lists as providers: no web search services, and not the en
 "Claude Agent" (Claude comes through Claude Code, with the coding agents) unless it was added.
 `PlanSignIns` is what a conversation on the engine's own OpenAI or xAI model says when the engine
 can't run it: a ChatGPT or SuperGrok plan signs in through Codex or Grok, so it needs a key, or a
-model under that agent.
+model under that agent. Only for a box without `sessions.models` (the old-box path): a box that has
+it says so itself (`SessionModelState`). `Integration.offeredSignInMethods` is the ways to sign in both apps'
+Accounts offer: not a ChatGPT or SuperGrok plan's own (they go through Codex and Grok), unless one
+was made before; held, with `PlanSignIns`, to the box's cases (`Vectors/plan-sign-ins.json`).
+`ProgramUpdate` is how a coding agent's program's update stands as its box keeps it
+(`Integration.programUpdate`: under way, updated, already the newest, or why it failed, by an id
+that tells one outcome from the next), and `isInUpdateAll` whether its box's Update All updates it;
+`OpenCodeAPI.updateAllPrograms(_:)`, `updateProgram(_:)` and `sawProgramUpdate(_:at:)` ask for
+them (with the old-box path for a box from before). Both apps draw these; the box decides.
 
 ## ClientSessions
 
@@ -91,6 +99,10 @@ What a client shows of a computer's sessions, the same in both apps. Rules only,
 - `ComposerSend`: what a composer's Send and Return do with what's written: it goes; or, with no
   model chosen (the chip says "Choose a Model"), Send is off and Return opens the model picker,
   the message kept; a "!" command, and showing, pausing or taking away a goal, go without one.
+- `SessionModelState`: what a session's box says of its model (`kuvo/sessions/models`): the model
+  it runs on, whether it can, and what's missing (a model, a sign-in, a key, its agent installed,
+  or the model gone). What the model button names (`namesModel`, else "Choose a Model"), what a
+  message refused on it says (`refusal`), and what a sign-in card's Sign In does (`signInHelp`).
 
 ## ClientVault
 

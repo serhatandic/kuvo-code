@@ -161,45 +161,26 @@ final class BoxProcess {
     }
     #endif
 
-    private func launch(_ runtime: URL, environment: [String: String], arguments: @escaping (URL) -> [String]) async {
-        guard server == nil, startInFlight == nil else { return }
-        let start = UUID()
-        startInFlight = start
-        defer { if startInFlight == start { startInFlight = nil } }
-        let began = ContinuousClock.now
-        upSince = nil
-        self.runtime = (runtime, environment, arguments)
-        guard let script = Self.script else {
-            failure = "Kuvo Code’s background service is missing from the app. Install Kuvo Code again."
-            return
-        }
+    /// Its temporary files' folder, in the app's own temporary folder.
+    static var temporary: URL {
+        FileManager.default.temporaryDirectory.appending(path: Bundle.main.bundleIdentifier ?? "run.kuvo.code").appending(path: "box")
+    }
+
+    /// What this Mac's box runs with, from `environment` (your shell's, and what the keeper adds):
+    /// as it starts (`launch`), and as the app runs its script once (`OwnToolsOnce`). `runsEngine`:
+    /// with the engine's Bun.
+    static func boxEnvironment(_ environment: [String: String], runsEngine: Bool) -> [String: String] {
         var env = environment
         // Nothing from your shell's environment that changes what runs before the box's own code:
         // libraries loaded into it, Bun's or Node's options (an agent's command can write your
-        // shell's profile). The engine's Bun gets its two from `start` again.
+        // shell's profile). The engine's Bun gets its two again.
         for name in env.keys where name.hasPrefix("DYLD_") || name.hasPrefix("BUN_") || name == "NODE_OPTIONS" { env[name] = nil }
         if runsEngine {
             env["BUN_BE_BUN"] = "1"
+            // Bun would otherwise keep a copy of the script, compiled, in ~/Library/Caches/bun.
             env["BUN_RUNTIME_TRANSPILER_CACHE_PATH"] = "0"
         }
-        if checksRuntime {
-            // And what it runs is what it was: the engine's Bun the pinned build (opencode's
-            // signature and the binary's own hash), and the box's script the app's own, sealed with it.
-            // Checked again each time, as a file replaced in the app's folder or its bundle (both
-            // yours to write, so an agent's command's too) would run as the box. (Off the main
-            // thread: reading them takes a second or so.)
-            let engine = runtime
-            let trouble = await Task.detached(operation: { BoxIntegrity.trouble(engine: engine) }).value
-            guard startInFlight == start else { return }
-            if let trouble {
-                failure = trouble
-                refused = true
-                return
-            }
-            refused = false
-            checkedAt = Date()
-        }
-        env["KUVO_HOME"] = Self.home.path
+        env["KUVO_HOME"] = home.path
         // A Mac's box: its bots are this Mac's own, made with the kit the app gives it.
         env["KUVO_BOX"] = "mac"
         // What it says of this Mac with the app closed too (`kuvo/info`): the app's version, and
@@ -217,7 +198,42 @@ final class BoxProcess {
         env["KUVO_ENGINE_DATA"] = AppModel.engineFolders.dataDirectory.path
         env["KUVO_KEYS"] = IntegrationKeys.folder.path
         // What integrations' servers keep (a sign-in), where the engine runs them with it.
-        env["KUVO_INTEGRATIONS"] = Self.integrations.path
+        env["KUVO_INTEGRATIONS"] = integrations.path
+        // Its temporary files, in the app's own temporary folder.
+        env["TMPDIR"] = temporary.path + "/"
+        return env
+    }
+
+    private func launch(_ runtime: URL, environment: [String: String], arguments: @escaping (URL) -> [String]) async {
+        guard server == nil, startInFlight == nil else { return }
+        let start = UUID()
+        startInFlight = start
+        defer { if startInFlight == start { startInFlight = nil } }
+        let began = ContinuousClock.now
+        upSince = nil
+        self.runtime = (runtime, environment, arguments)
+        guard let script = Self.script else {
+            failure = "Kuvo Code’s background service is missing from the app. Install Kuvo Code again."
+            return
+        }
+        var env = Self.boxEnvironment(environment, runsEngine: runsEngine)
+        if checksRuntime {
+            // And what it runs is what it was: the engine's Bun the pinned build (opencode's
+            // signature and the binary's own hash), and the box's script the app's own, sealed with it.
+            // Checked again each time, as a file replaced in the app's folder or its bundle (both
+            // yours to write, so an agent's command's too) would run as the box. (Off the main
+            // thread: reading them takes a second or so.)
+            let engine = runtime
+            let trouble = await Task.detached(operation: { BoxIntegrity.trouble(engine: engine) }).value
+            guard startInFlight == start else { return }
+            if let trouble {
+                failure = trouble
+                refused = true
+                return
+            }
+            refused = false
+            checkedAt = Date()
+        }
         // The defaults it adds to them once, as it starts: those an earlier version added here
         // noted as done, so one you took out stays out.
         Self.noteDefaultsAdded(EngineConfig.defaultsAdded())
@@ -229,9 +245,7 @@ final class BoxProcess {
         if let words = try? BotWords.data, (try? Data(contentsOf: bin.appending(path: BotWords.fileName))) != words {
             try? words.write(to: bin.appending(path: BotWords.fileName), options: .atomic)
         }
-        // Its temporary files, in the app's own temporary folder.
-        let temporary = FileManager.default.temporaryDirectory.appending(path: Bundle.main.bundleIdentifier ?? "run.kuvo.code").appending(path: "box")
-        env["TMPDIR"] = temporary.path + "/"
+        let temporary = Self.temporary
         do {
             try FileManager.default.createDirectory(at: Self.run, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)

@@ -82,7 +82,7 @@ import Testing
             let size = host.fittingSize
             window.setContentSize(NSSize(width: width, height: size.height))
             host.frame = NSRect(origin: .zero, size: NSSize(width: width, height: size.height))
-            // Awaited, not a run loop turn: a row reading its answer needs the main actor free.
+            // Awaited, not a run loop turn: a step's app icon loading needs the main actor free.
             try await Task.sleep(for: .milliseconds(80))
         }
         host.layoutSubtreeIfNeeded()
@@ -95,45 +95,8 @@ import Testing
         window.close()
     }
 
-    /// The engine's models, as it answers: the ones the box's roles name.
-    private func models() async throws {
-        let engine = "http://127.0.0.1:47998"
-        StubWeb.start(hosts: ["127.0.0.1", "models.opencode.ai"])
-        catalog.api = OpenCodeAPI(endpoint: ServerEndpoint(url: URL(string: engine)!, password: "test"))
-        let opus: [String: Any] = ["id": "claude-opus-5-5", "modelID": "claude-opus-5-5", "providerID": "anthropic", "name": "Opus 5.5",
-                                   "capabilities": ["tools": true, "input": ["text"], "output": ["text"]], "variants": ["low", "medium", "high", "max"].map { ["id": $0] },
-                                   "time": ["released": 1], "cost": [["input": 1, "output": 1]], "status": "active", "enabled": true,
-                                   "limit": ["context": 1_000_000, "output": 64_000]]
-        let account: [String: Any] = ["id": "anthropic", "name": "Anthropic", "methods": [["type": "key"]],
-                                      "connections": [["type": "credential", "credentialID": "cred_anthropic", "method": "key"]]]
-        let location = ["directory": "/"]
-        try StubWeb.answer(engine + "/api/integration", json: ["location": location, "data": [account]])
-        try StubWeb.answer(engine + "/api/model", json: ["location": location, "data": [opus]])
-        try StubWeb.answer(engine + "/api/model/default", json: ["location": location, "data": opus])
-        try StubWeb.answer(engine + "/api/agent", json: ["location": location, "data": []])
-        try StubWeb.answer(engine + "/api/command", json: ["location": location, "data": []])
-        await catalog.refresh()
-    }
-
-    /// This Mac's box as it answers the roles: Power its own pick, not asked about yet.
-    private var box: BoxClient {
-        let roles = #"{"roles":[{"id":"power","entries":[{"providerID":"anthropic","modelID":"claude-opus-5-5","name":"Opus 5.5","variant":"high","held":false}],"setBy":"box","why":"The ablest model on your plan here","then":[]}]}"#
-        return BoxClient(box: BoxClient.mac, transport: LocalBox { request in
-            AsyncThrowingStream { continuation in
-                let found = request.path == "kuvo/models/roles"
-                continuation.yield(.head(status: found ? 200 : 404, headers: [:]))
-                continuation.yield(.body(Data((found ? roles : #"{"message":"Not here."}"#).utf8)))
-                continuation.finish()
-            }
-        })
-    }
-
     @Test func startCard() async throws {
         guard out != nil else { return }
-        defer { StubWeb.stop() }
-        try await models()
-        let box = box
-        app.goalPlans.boxes = { _ in box }
         app.bots.take([ListedBot(id: "bot_mobile", session: "ses_bot", name: "Mobile App Expert", look: BotLook(color: .orange, shape: .round, face: .calm), folder: "/bots/bot_mobile")], from: BoxClient.mac)
         for (width, w) in [(CGFloat(780), "wide"), (440, "narrow")] {
             for (scheme, s) in [(ColorScheme.dark, "dark"), (.light, "light")] {

@@ -14,7 +14,7 @@ import { fileDiff, fromPatch } from "../diff"
 import { emit } from "../events"
 import { allowedFolders, fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceRules, seatBot, fullAccessMark } from "../fence"
 import { kuvoTools, toolServerName } from "../kuvotools"
-import { dropRelayed, relayedServers, relayedTools, relayPort } from "../toolrelay"
+import { dropRelayed, relayedServers, relayedTools, relayPort, serversKey } from "../toolrelay"
 import { computerServers } from "../servers"
 import { pictureData, pictureFile, withPictures } from "../pictures"
 import { elicitationField } from "../forms"
@@ -649,15 +649,23 @@ export class CodexAgent implements Agent {
     this.known.reset()
   }
 
-  async models(): Promise<Model[]> {
-    if (this.modelList && Date.now() - this.modelList.at < 30 * 60_000) return this.modelList.models
+  async models(options: { hidden?: boolean } = {}): Promise<Model[]> {
+    // (Those Codex hides from its picker it still runs: listed only when asked for.)
+    const shown = (models: Model[]) => (options.hidden ? models : models.filter((each) => !each.hidden))
+    if (this.modelList && Date.now() - this.modelList.at < 30 * 60_000) return shown(this.modelList.models)
     try {
-      return await this.listModels()
+      return shown(await this.listModels())
     } catch (error) {
       // Codex couldn't list them just now (busy, or starting): the ones it listed last.
-      if (this.modelList) return this.modelList.models
+      if (this.modelList) return shown(this.modelList.models)
       throw error
     }
+  }
+
+  /** Only once it listed those it hides from its picker (asked for: a Codex too old to take
+   * `includeHidden` lists none), so one missing from its list isn't one it hides. */
+  listsEveryModel(): boolean {
+    return this.modelList?.models.some((model) => model.hidden) === true
   }
 
   private async listModels(): Promise<Model[]> {
@@ -666,9 +674,9 @@ export class CodexAgent implements Agent {
     let cursor: string | undefined
     let order = 1000
     do {
-      const page: any = await rpc.request("model/list", cursor ? { cursor } : {}, 30_000)
+      // (With those it hides from its picker, which it lists only when asked: they still run.)
+      const page: any = await rpc.request("model/list", { includeHidden: true, ...(cursor ? { cursor } : {}) }, 30_000)
       for (const info of page?.data ?? []) {
-        if (info.hidden) continue
         models.push(
           model(this.providerID, info.model ?? info.id, info.displayName ?? info.model, {
             variants: (info.supportedReasoningEfforts ?? []).map((effort: any) => effort.reasoningEffort),
@@ -676,6 +684,7 @@ export class CodexAgent implements Agent {
             context: this.windows.get(info.model ?? info.id) ?? 400_000,
             // Listed in Codex's order: its default first.
             released: info.isDefault ? 2000 : order--,
+            hidden: Boolean(info.hidden),
           }),
         )
       }
@@ -958,6 +967,8 @@ class CodexThread implements Thread {
   private answers: Answer[] = []
   /** Answers gone into the turn under way, for the first sleep that starts after them. */
   private answered: Answered[] = []
+  /** Answers a sleep took from `answered` as it started, while it's told them again: one Codex takes meanwhile, as it was first sent, is heard. */
+  private retelling = new Set<Answered>()
   /** The sleep it's in, which what goes in now ends. */
   private sleep?: AbortController
   /** How many of its questions its box turned down with words, this message. */
@@ -1085,14 +1096,16 @@ class CodexThread implements Thread {
     // The computer's MCP servers (yours, the integrations', a bot's with its own keys), through the
     // relay, which keeps their keys.
     const computer = await computerServers(directory)
+    // (Those set right since the relay stood in for them first, so their addresses are new.)
+    const serversNow = await serversKey(this.session.id, computer)
     const servers = relayedServers(this.session.id, this.agent, directory, computer)
     // Your subagents (Settings › Agents), as its roles, and the model its subagents use.
     const subagents = codexSubagents(await subagentsFor(directory))
     // Loaded again when Kuvo Code's tools moved (the app started again), to reach them, or the
     // skills, the servers or the subagents changed.
-    if (this.nativeID && this.loaded && instructions === this.instructions && tools?.key === this.toolsKey && skillsKey === this.skillsKey && computer.key === this.serversKey && subagents.key === this.subagentsKey) return rpc
+    if (this.nativeID && this.loaded && instructions === this.instructions && tools?.key === this.toolsKey && skillsKey === this.skillsKey && serversNow === this.serversKey && subagents.key === this.subagentsKey) return rpc
     this.toolsKey = tools?.key
-    this.serversKey = computer.key
+    this.serversKey = serversNow
     this.skillsKey = skillsKey
     this.subagentsKey = subagents.key
     this.instructions = instructions
@@ -1545,6 +1558,7 @@ class CodexThread implements Thread {
       this.answered = []
       if (said.length && !stopped) {
         const words = { text: `Your question has its answer, so there's nothing to wait for on it:\n\n${said.map((each) => each.text).join("\n\n")}`, files: [] }
+        for (const each of said) this.retelling.add(each)
         this.keep(this.steerIn(active, words).then(async (took) => {
           if (took) return
           // Into this sleep, and then into one that started while that was tried (as in steerAnswer).
@@ -1557,12 +1571,15 @@ class CodexThread implements Thread {
           // next turn, rather than wait on a sleep that may never come.
           this.answered.push(...said.filter((each) => each.heard))
           this.answers.push(...said.filter((each) => !each.heard).map((each) => ({ text: each.text, files: each.files ?? [] })))
+        }).finally(() => {
+          for (const each of said) this.retelling.delete(each)
         }))
       }
     } else if (item?.type === "userMessage") {
-      // (Its words first: what it attached, Codex may be told of after them.)
+      // (Its words first: what it attached, Codex may be told of after them. One being told again
+      // as a sleep started counts too: Codex may take it as it was first sent meanwhile.)
       const text: unknown = (item.content ?? []).find((part: any) => part?.type === "text")?.text
-      const heard = typeof text === "string" ? this.answered.find((each) => !each.heard && text.startsWith(each.text)) : undefined
+      const heard = typeof text === "string" ? [...this.retelling, ...this.answered].find((each) => !each.heard && text.startsWith(each.text)) : undefined
       if (heard) heard.heard = true
     } else if (WORK_ITEMS.has(item?.type)) {
       this.turnedDown = 0

@@ -8,6 +8,7 @@
 
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { isObject } from "../../shared/json";
 import { plainName } from "../../shared/text";
@@ -17,9 +18,10 @@ import { assemble } from "../documents/parts";
 import { readBridgeFile } from "../engine/client";
 import { listOf, writePrivate } from "../files";
 import { LETTER_ID, LETTER_MEMORY, SENDING, letterTries } from "../letters/letter";
-import { readLink } from "../state";
-import { readPeerAgents } from "./directory";
-import { mailFor, peersOf } from "./known";
+import { IS_MAC } from "../home";
+import { macLink, readLink } from "../state";
+import { readPeerAgents, vouchedOf } from "./directory";
+import { mailFor, ownKey, peersOf } from "./known";
 import type { ToldAgents } from "../../shared/records";
 import type { SeatLine as SharedLine, SeatMailKind, SeatPeers } from "../../shared/seats";
 import type { DocPart, PendingParts } from "../documents/parts";
@@ -31,9 +33,10 @@ import type { MailSender, Peer } from "./known";
 // the two say to each other is src/shared/seats.ts.
 
 /** A mail between two computers' bridges: its kind, and for what a bot remembers of a chat
- * (`memory`), whose and which chat's. The rest goes as it is. */
+ * (`memory`), whose and which chat's. The rest goes as it is. `limits`: the bridge's plan limits
+ * (PROTOCOL.md, "Plan limits"), which go as `{"limits": …}`, not as a seat's. */
 export interface SeatMail {
-  kind: SeatMailKind;
+  kind: SeatMailKind | "limits";
   memory?: { bot: string; chat: string; [field: string]: unknown };
   [field: string]: unknown;
 }
@@ -129,8 +132,17 @@ export function seatPayloads(mail: SeatMail, id?: string): SeatPayload[] | null 
 // The bridge's mail for `to`, sent now, each part as a mail of its own: whether it all went, or
 // "too big" for one that can't go at all (said in the log).
 function sendSeat(host: SeatHost | null | undefined, to: string, mail: SeatMail, id: string | undefined, link: LinkState | null = readLink()): boolean | "too big" {
-  const peer = peersOf(link).find(each => each.key === to);
+  // (Plan limits go to a box a peer vouches for too.)
+  const peer = peersOf(link).find(each => each.key === to) ?? (mail.kind === "limits" ? vouchedOf(link).find(each => each.key === to) : undefined);
   if (!peer || !host) return false;
+  // Its plan limits: a mail of their own, whole (the bridge sends no more than fits).
+  if (mail.kind === "limits") {
+    const { kind: _, ...limits } = mail;
+    const bytes = mailFor(peer, { limits, at: Date.now() }, link!);
+    if (!bytes) return false;
+    try { host.send(bytes); } catch { return false; }
+    return true;
+  }
   const payloads = seatPayloads(mail, id);
   if (!payloads) {
     console.error(`kuvo-link: a group chat's ${String(mail?.kind ?? "mail")} for ${plainName(peer.name) || "another computer"} is too big to send, so it wasn't.`);
@@ -143,6 +155,12 @@ function sendSeat(host: SeatHost | null | undefined, to: string, mail: SeatMail,
     try { host.send(bytes); } catch { return false; }
   }
   return true;
+}
+
+// A peer's plan limits, to the bridge here (PROTOCOL.md, "Plan limits"): told again in ten
+// minutes, so one the bridge couldn't take now is let go.
+export async function takeLimits(sender: MailSender, limits: Record<string, unknown>, ask: BridgeAsk = bridgeAsk): Promise<void> {
+  await ask("POST", "/mail", { from: sender.key, mail: { ...limits, kind: "limits" } }).catch(() => {});
 }
 
 // A seat mail that came (whole, or once its parts are all here), to the bridge; one that mustn't be
@@ -173,7 +191,12 @@ export async function takeSeat(sender: MailSender, payload: Record<string, unkno
 // when its `features` say `groups.seats`), and the bots it told of, by their id.
 export function seatPeers(link: LinkState | null = readLink(), told: Record<string, ToldAgents> = readPeerAgents()): SeatPeers {
   const peers = peersOf(link);
+  const key = link ? ownKey(link) : null;
+  const name = plainName(IS_MAC ? macLink.config?.name : link?.name) || os.hostname();
   return {
+    ...(key ? { self: { key, name } } : {}),
+    // Boxes only a peer knows, for plan limits alone.
+    also: vouchedOf(link, told).map(box => ({ key: box.key, name: plainName(box.name) || "another computer" })),
     boxes: peers.map(peer => ({ key: peer.key, name: plainName(peer.name) || "another computer", seats: (told[peer.key]?.features ?? []).includes("groups.seats") })),
     bots: peers.flatMap(peer => (told[peer.key]?.list ?? []).filter(agent => agent.kind === "bot" && agent.id)
       .map(agent => ({ id: agent.id!, name: agent.name, job: agent.about ?? "", box: peer.key, session: agent.session, ...(agent.look ? { look: agent.look } : {}) }))),

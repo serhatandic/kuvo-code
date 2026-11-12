@@ -2125,11 +2125,16 @@ const noAnswer = (answer, what) =>
 
 const text = (value, isError = false) => ({ content: [{ type: "text", text: value }], isError });
 
-// The tools answered by this machine's box: agents writing to each other and running their sessions.
-const MAIL_TOOLS = new Set(["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "compact_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal", "notify_user", "plan_limits"]);
-// Agents writing to each other (list_agents, send_message, read_conversation, start_session):
-// this machine's box answers them, as every box does (`POST kuvo/agent-tools`), so they're the same
-// on all your computers. A call that waits for an answer holds up to eleven minutes; stopped, the
+// The tools answered by this machine's box: agents writing to each other and running their
+// sessions, a conversation's wake-ups, a bot's job, and the checks before showing a file or a widget
+// (which Kuvo Code then shows from the call).
+const MAIL_TOOLS = new Set(["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "compact_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal", "notify_user", "plan_limits",
+  "schedule_wake_up", "watch_for_change", "list_wake_ups", "cancel_wake_up", "set_job", "show_in_panel", "show_file", "mark_final", "show_widget"]);
+// Those that change what's kept, which the call stopping doesn't cut off.
+const KEPT_WHOLE = new Set(["schedule_wake_up", "watch_for_change", "cancel_wake_up", "set_job"]);
+// Kuvo Code's own tools (agents writing to each other, wake-ups, a bot's job, showing things): this
+// machine's box answers them, as every box does (`POST kuvo/agent-tools`), so they're the same on all
+// your computers. A call that waits for an answer holds up to eleven minutes; stopped, the
 // box stops waiting, and an answer that comes later reaches the conversation as a message.
 async function mail(name, args, from, cancelled = () => false) {
   const answer = await boxRoute({ method: "POST", path: "kuvo/agent-tools", body: { name, arguments: args, session: from } }, { timeout: 720_000, cancelled });
@@ -2185,117 +2190,6 @@ async function onAutopilot(id) {
   const above = (data) => data?.parentID ?? data?.metadata?.kuvo?.engineFor;
   for (let step = 0; above(found?.data) && step < 5; step++) found = await findSession(above(found.data));
   return found?.data?.metadata?.kuvo?.autopilot === true;
-}
-
-// A conversation's wake-ups (WakeUps.call on the Mac): through this machine's kuvo-wake, for the
-// conversation the caller is part of (a subagent's, the one that started it; a bot's, the bot's
-// folder), from the folder it works in, so a session's folder knows where that is.
-const WAKE_TOOLS = new Set(["schedule_wake_up", "watch_for_change", "list_wake_ups", "cancel_wake_up"]);
-
-async function wake(name, args, from) {
-  if (!from) return text("This needs a conversation of its own.", true);
-  let session = from;
-  let info = null;
-  // Up to the conversation it works for (a subagent's), on the engine or the agents' bridge here.
-  let place = null;
-  for (let step = 0; step < 5; step++) {
-    const found = await findSession(session);
-    if (!found) break;
-    info = found.data;
-    place = found.place;
-    if (!found.data.parentID) break;
-    session = found.data.parentID;
-  }
-  // A coding agent's session: its wake-ups go to the agents' bridge here.
-  const viaBridge = place === "bridge" || (!info && fs.existsSync(path.join(K, "run", "bridge.json")));
-  const bots = process.env.KUVO_BOTS || path.join(K, "bots");
-  let target = session;
-  for (const id of fs.existsSync(bots) ? fs.readdirSync(bots) : []) {
-    let owned = null;
-    try {
-      owned = fs.readFileSync(path.join(bots, id, "session"), "utf8").trim();
-    } catch {}
-    if (owned === session) target = path.join(bots, id);
-  }
-  const given = (key) => (typeof args[key] === "string" && args[key].trim() ? args[key].trim() : null);
-  let verb;
-  if (name === "schedule_wake_up") {
-    if (!given("when")) return text("Say when (when): +20m, +2h, +1d, or a time like 2026-10-21T09:00.", true);
-    if (!given("note")) return text("Add a note for yourself (note): what to do when you wake up.", true);
-    verb = ["add", given("when"), ...(given("every") ? ["--every", given("every")] : []), ...(given("summary") ? ["--summary", given("summary")] : []), given("note")];
-  } else if (name === "watch_for_change") {
-    if (!given("every") || !given("check") || !given("note")) return text("Give how often (every), the check (a shell command) and a note for when it changes.", true);
-    // A watch runs a command whenever it's due: in Ask First, only once the user was asked, as on
-    // the Mac (ToolApproval.watchWentUnasked). The engine asks for the tool in a conversation made
-    // since it does; not in one from before, nor through the coding agents' bridge.
-    const calling = (await findSession(from))?.data ?? info;
-    const rules = Array.isArray(calling?.permissions) ? calling.permissions : [];
-    const asksFirst = rules.some((rule) => rule.action === "shell" && rule.effect === "ask");
-    const asked = rules.some((rule) => rule.action === "kuvo-browser_watch_for_change" && rule.effect === "ask");
-    if (asksFirst && (viaBridge || !asked)) return text("This conversation asks before running commands, and a watch runs its check by itself, so the user approves it first: start it with the shell command kuvo-wake watch <every> \"<check>\" \"<what to do when it changes>\" instead, which asks them.", true);
-    verb = ["watch", given("every"), given("check"), ...(given("summary") ? ["--summary", given("summary")] : []), given("note")];
-  } else if (name === "list_wake_ups") {
-    verb = ["list"];
-  } else {
-    if (!given("id")) return text("Say which one (id), from list_wake_ups.", true);
-    verb = ["cancel", given("id")];
-  }
-  const directory = info?.location?.directory;
-  const cwd = directory && fs.existsSync(directory) ? directory : path.join(K, "workspace");
-  const env = { ...process.env, KUVO_BOTS: bots, KUVO_WAKES: process.env.KUVO_WAKES || path.join(K, "wakes"), KUVO_WAKE_TOOL: "1", ...(viaBridge ? { KUVO_WAKE_VIA: "bridge" } : {}) };
-  delete env.OPENCODE_SESSION_ID;
-  return await new Promise((resolve) => {
-    const child = spawn(path.join(K, "bin", "kuvo-wake"), [target, ...verb], { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
-    let output = "";
-    child.stdout.on("data", (chunk) => (output += chunk));
-    child.stderr.on("data", (chunk) => (output += chunk));
-    const stop = setTimeout(() => child.kill("SIGTERM"), 30_000);
-    child.on("error", (error) => {
-      clearTimeout(stop);
-      resolve(text(`Couldn't run kuvo-wake here: ${error.message}`, true));
-    });
-    child.on("close", (status) => {
-      clearTimeout(stop);
-      resolve(text(output.trim() || (status === 0 ? "Done." : "That didn't work."), status !== 0));
-    });
-  });
-}
-
-// A bot keeping its job (set_job): the box keeps it, in the bot's record (KuvoLink's PROTOCOL.md,
-// `PATCH kuvo/bots/<id>` with `job`), asked through its script (`kuvo-link.js box route`), so what a
-// job is and what a bot is told of it is the box's alone. For the bot whose conversation this is (a
-// subagent's, the one that started it).
-async function setJob(args, from) {
-  if (!from) return text("This needs a conversation of its own.", true);
-  let session = from;
-  for (let step = 0; step < 5; step++) {
-    const found = await findSession(session);
-    if (!found?.data?.parentID) break;
-    session = found.data.parentID;
-  }
-  const bots = process.env.KUVO_BOTS || path.join(K, "bots");
-  const id = (fs.existsSync(bots) ? fs.readdirSync(bots) : []).find((name) => {
-    try {
-      return /^bot_[A-Za-z0-9]+$/.test(name) && fs.readFileSync(path.join(bots, name, "session"), "utf8").trim() === session;
-    } catch {
-      return false;
-    }
-  });
-  if (!id) return text("Only a bot keeps a job, and this conversation isn't one.", true);
-  const line = args.summary ?? args.job;
-  if (args.clear !== true && (typeof line !== "string" || !line.trim() || typeof args.details !== "string"))
-    return text("Provide a non-empty summary and details, or clear: true to clear your job.", true);
-  const job = args.clear === true ? { line: "", details: "" } : { line, details: args.details };
-  const answer = await boxRoute({ method: "PATCH", path: `kuvo/bots/${id}`, body: { job } });
-  if (!answer) return text("Couldn't keep it: Kuvo Code on this machine didn't answer. Try again in a moment.", true);
-  let said = null;
-  try {
-    said = JSON.parse(answer.body || "{}");
-  } catch {}
-  if (answer.status !== 200) return text(said?.message || `Couldn't keep it (${answer.status}).`, true);
-  if (typeof said?.bot?.job !== "string") return text("The box returned an unreadable job response. Check the job before trying again.", true);
-  const keptLine = said.bot.job;
-  return text(keptLine ? `Kept. Kuvo Code shows "${keptLine}" under your name.` : "Kept: you have no job now.");
 }
 
 /// A route of this machine's box, answered once: `{status, body}`, or null when its script didn't
@@ -2522,64 +2416,6 @@ async function tool(name, args) {
   const integer = (key) => (Number.isFinite(Number(args[key])) && args[key] !== "" && args[key] !== null ? Math.trunc(Number(args[key])) : null);
   const string = (key) => (typeof args[key] === "string" ? args[key] : null);
   const scripts = CONFIG.scripts;
-
-  // Not the browser's: Kuvo Code shows it in its panel when this says it goes ahead (it sees
-  // the call), so it's only checked here. It can't tell whether the user is looking at the
-  // conversation; the Mac shows it then, or when they come back to it.
-  // Drawn by Kuvo Code from the call, in the conversation.
-  if (name === "show_widget") {
-    const html = string("html");
-    if (!html || !html.trim()) throw new ToolError("Missing html.");
-    return text("Shown in the conversation, live. The user sees it now; what they click in it that calls kuvo.send comes to you as their message.");
-  }
-
-  if (name === "show_in_panel") {
-    const raw = string("path");
-    if (!raw) throw new ToolError("Missing path.");
-    const full = path.resolve(raw.replace(/^~(?=$|\/)/, os.homedir()));
-    // A folder's path may end in "/", which resolving drops.
-    if (full !== (raw.replace(/\/+$/, "") || "/")) return text(`Give the full path: ${full}`, true);
-    let isFolder;
-    try {
-      isFolder = fs.statSync(full).isDirectory();
-    } catch {
-      return text(`There's nothing at ${full}.`, true);
-    }
-    return text(`Sent: the ${isFolder ? "folder" : "file"} ${full} opens in Kuvo Code's side panel beside this conversation, at once if the user is looking at it, or else when they come back to it.`);
-  }
-
-  // Shown by Kuvo Code from the call, in the conversation (and on a phone, which fetches it).
-  if (name === "show_file") {
-    const raw = string("path");
-    if (!raw) throw new ToolError("Missing path.");
-    // As given, which is what the conversation shows it from: a full path, nothing to expand.
-    const full = raw;
-    if (!path.isAbsolute(full) || full.split("/").some((part) => part === "." || part === "..")) {
-      return text(raw.startsWith("~") ? `Give the file's full path: ${raw.replace(/^~(?=$|\/)/, os.homedir())}` : "Give the file's full path.", true);
-    }
-    let stat;
-    try {
-      stat = fs.statSync(full);
-    } catch {
-      return text(`There's nothing at ${full}.`, true);
-    }
-    if (stat.isDirectory()) return text(`${full} is a folder: show a file in it, or the folder with show_in_panel.`, true);
-    return text(`Shown in the conversation: the file ${full}. The user sees it there, on their Mac and their phone.`);
-  }
-
-  // Pinned by the box's record of what was made, from the call: only checked here.
-  if (name === "mark_final") {
-    const full = string("path");
-    if (!full || !path.isAbsolute(full) || full.split("/").some((part) => part === "." || part === "..")) return text("Give the file's full path.", true);
-    let stat;
-    try {
-      stat = fs.statSync(full);
-    } catch {
-      return text(`There's no file at ${full}.`, true);
-    }
-    if (!stat.isFile()) return text(`There's no file at ${full}.`, true);
-    return text(`Marked final: ${full}. It's kept at the top of what you made, for the user.`);
-  }
 
   if (name === "browser_upload") {
     const index = integer("index");
@@ -2983,10 +2819,6 @@ async function mcp() {
         calls.set(call.id, call);
         // Showing something in Kuvo Code's panel needs no browser, nor a turn in the line.
         // Nor does writing to another agent.
-        if (WAKE_TOOLS.has(params.name)) {
-          wake(params.name, params.arguments || {}, call.session).then(reply, (error) => reply(text(error instanceof ToolError ? error.message : String(error), true)));
-          return;
-        }
         // The vault's, the sandbox's and the Work Queue's, which this machine's box carries out (and
         // may ask you).
         const boxTool = typeof params.name === "string" && (params.name.startsWith("vault_") ? ["kuvo/vault/tools", "This machine's vault can't be reached now. Try again in a moment."]
@@ -2998,22 +2830,16 @@ async function mcp() {
             .then((answer) => reply(answer?.status === 200 && typeof answer.value?.text === "string" ? text(answer.value.text, answer.value.isError === true) : text(answer?.value?.message || boxTool[1], true)));
           return;
         }
-        if (params.name === "set_job") {
-          setJob(params.arguments || {}, call.session).then(reply, (error) => reply(text(error instanceof ToolError ? error.message : String(error), true)));
-          return;
-        }
         if (MAIL_TOOLS.has(params.name)) {
-          mail(params.name, params.arguments || {}, call.session, () => call.cancelled).then(reply, (error) => reply(text(error instanceof ToolError ? error.message : String(error), true)));
+          // (A wake-up or a job is never stopped half way: what's kept would be half of it.)
+          const stops = !KEPT_WHOLE.has(params.name);
+          mail(params.name, params.arguments || {}, call.session, () => stops && call.cancelled).then(reply, (error) => reply(text(error instanceof ToolError ? error.message : String(error), true)));
           return;
         }
         // An added integration's site: to its tools instead, with no browser needed.
         if (params.name === "browser_navigate" || params.name === "browser_new_tab") {
           const note = integrationNote(params.arguments?.url, call.session);
           if (note) return reply(text(note));
-        }
-        if (params.name === "show_in_panel" || params.name === "show_widget" || params.name === "show_file" || params.name === "mark_final") {
-          tool(params.name, params.arguments || {}).then(reply, (error) => reply(text(error instanceof ToolError ? error.message : String(error), true)));
-          return;
         }
         perform(call, reply);
         return;

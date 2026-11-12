@@ -7,7 +7,9 @@
 // box does it, here beside the engine, for the engine's sessions and the coding agents' alike
 // (PROTOCOL.md, "Handoffs").
 
+import { withNotes } from "../shared/session-notes"
 import { emit } from "./events"
+import { rewriteVia } from "./notes"
 import type { GoalPlace, GoalPlaces } from "./goals"
 import { transcript } from "./goals"
 import { answerWithContext, at, line, messages, opening, sessionInfo, type SessionInfo } from "./oneoff"
@@ -150,10 +152,9 @@ export class Handoffs {
     return Boolean(answer?.data && session in answer.data)
   }
 
-  /** `kuvo.<…>` in a conversation's metadata, the rest kept as it is now. */
+  /** `kuvo.<…>` in a conversation's metadata, in its turn (`notes.ts`), the rest kept as it is then. */
   private async link(place: GoalPlace, session: string, kuvo: Record<string, string>) {
-    const metadata = (await sessionInfo(place.api, session).catch(() => undefined))?.metadata ?? {}
-    await place.api.request("PATCH", at(session), { metadata: { ...metadata, kuvo: { ...(metadata.kuvo ?? {}), ...kuvo } } }).catch(() => {})
+    await rewriteVia(place.api, session, (now) => ({ metadata: withNotes(now.metadata, kuvo) })).catch(() => {})
   }
 }
 

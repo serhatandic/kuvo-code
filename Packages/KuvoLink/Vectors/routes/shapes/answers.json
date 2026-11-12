@@ -3014,6 +3014,9 @@
             "literal": "agent-tools"
            },
            {
+            "literal": "agent-tools.own"
+           },
+           {
             "literal": "agents"
            },
            {
@@ -3126,6 +3129,9 @@
            },
            {
             "literal": "git.push"
+           },
+           {
+            "literal": "git.words"
            },
            {
             "literal": "goals"
@@ -3246,6 +3252,9 @@
            },
            {
             "literal": "sessions.glance"
+           },
+           {
+            "literal": "sessions.models"
            },
            {
             "literal": "sessions.start"
@@ -3382,6 +3391,9 @@
             "literal": "agent-tools"
            },
            {
+            "literal": "agent-tools.own"
+           },
+           {
             "literal": "agents"
            },
            {
@@ -3494,6 +3506,9 @@
            },
            {
             "literal": "git.push"
+           },
+           {
+            "literal": "git.words"
            },
            {
             "literal": "goals"
@@ -3614,6 +3629,9 @@
            },
            {
             "literal": "sessions.glance"
+           },
+           {
+            "literal": "sessions.models"
            },
            {
             "literal": "sessions.start"
@@ -5011,6 +5029,7 @@
       "title": "string",
       "body": "string",
       "summary?": "string",
+      "prompt?": "string",
       "host": {
        "oneOf": [
         {
@@ -5045,7 +5064,33 @@
     "200": {
      "object": {
       "diff": "string",
-      "staged": "bool"
+      "staged": "bool",
+      "prompt?": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/git/settings/move",
+   "answers": {
+    "200": {
+     "object": {
+      "moved": "bool"
+     }
+    },
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "409": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "500": {
+     "object": {
+      "message": "string"
      }
     }
    }
@@ -6880,6 +6925,9 @@
         "oneOf": [
          {
           "literal": "services"
+         },
+         {
+          "literal": "git"
          }
         ]
        }
@@ -6982,6 +7030,9 @@
         "oneOf": [
          {
           "literal": "services"
+         },
+         {
+          "literal": "git"
          }
         ]
        }
@@ -7084,6 +7135,9 @@
         "oneOf": [
          {
           "literal": "services"
+         },
+         {
+          "literal": "git"
          }
         ]
        }
@@ -7807,6 +7861,78 @@
           }
          },
          "asked?": "number"
+        }
+       }
+      }
+     }
+    },
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "503": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/sessions/models",
+   "answers": {
+    "200": {
+     "object": {
+      "sessions": {
+       "map": {
+        "object": {
+         "model": {
+          "oneOf": [
+           {
+            "object": {
+             "providerID": "string",
+             "id": "string",
+             "variant?": "string"
+            }
+           },
+           "null"
+          ]
+         },
+         "name?": "string",
+         "runs": "bool",
+         "missing?": {
+          "oneOf": [
+           {
+            "literal": "model"
+           },
+           {
+            "literal": "signIn"
+           },
+           {
+            "literal": "key"
+           },
+           {
+            "literal": "install"
+           },
+           {
+            "literal": "gone"
+           }
+          ]
+         },
+         "account?": {
+          "object": {
+           "id": "string",
+           "name": "string",
+           "label?": "string"
+          }
+         },
+         "plan?": {
+          "object": {
+           "name": "string",
+           "agent": "string",
+           "provider": "string"
+          }
+         }
         }
        }
       }

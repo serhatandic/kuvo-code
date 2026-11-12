@@ -9,7 +9,7 @@ import { EngineLink } from "../../../src/agents/engine"
 import { forgetServers, setServerSource } from "../../../src/agents/servers"
 
 /** The keys in the settings: none of them may reach an agent. */
-export const KEYS = { shared: "shared-key-1111", bot: "bot-key-2222", notes: "notes-key-3333", tracker: "tracker-access-4444", renewed: "tracker-renewed-5555" }
+export const KEYS = { shared: "shared-key-1111", bot: "bot-key-2222", notes: "notes-key-3333", tracker: "tracker-access-4444", renewed: "tracker-renewed-5555", again: "tracker-again-6666" }
 
 /** The command server's name on the PATH. */
 export const SERVER_COMMAND = "kuvo-test-files"
@@ -32,6 +32,9 @@ export function computerServers(folder: string) {
 const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n")
 const fs = require("node:fs")
 let asked
+// Each start written down, and what it starts of its own (a helper), where its settings say.
+if (process.env.START_LOG) fs.appendFileSync(process.env.START_LOG, "start\\n")
+if (process.env.CHILD_PID_FILE) fs.writeFileSync(process.env.CHILD_PID_FILE, String(require("node:child_process").spawn("/bin/sleep", ["600"], { stdio: "ignore" }).pid))
 const tools = {
   reveal: () => "key:" + (process.env.SERVICE_KEY ?? "none"),
   read: ({ path }) => { try { fs.readFileSync(path); return "yes" } catch { return "no" } },
@@ -46,7 +49,9 @@ process.stdin.on("data", (chunk) => {
     buffer = buffer.slice(at + 1)
     if (message.id === "ask-1" && !message.method) { asked(message.error ? "error:" + message.error.code : "answered"); continue }
     if (message.id === undefined || message.method === undefined) continue
-    if (message.method === "initialize") send({ id: message.id, result: { protocolVersion: message.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "files", version: "1" } } })
+    if (message.method === "initialize" && process.env.HANGS_AT_START) continue
+    if (message.method === "initialize" && process.env.REFUSES_TO_START) send({ id: message.id, error: { code: -32603, message: "Its settings are wrong." } })
+    else if (message.method === "initialize") send({ id: message.id, result: { protocolVersion: message.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "files", version: "1" } } })
     else if (message.method === "tools/call" && message.params.name === "asks") {
       // Its own requests to the agent, one numbered as the call it's in is (the relay numbers a
       // connection's 1, 2…), which isn't that call's answer.
@@ -70,7 +75,7 @@ process.stdin.on("data", (chunk) => {
 
   /** This computer's settings: Settings › MCP Servers' and the integrations'. */
   const computer = () => ({
-    files: { type: "local", command: [SERVER_COMMAND], environment: { SERVICE_KEY: KEYS.shared, ...fake.filesEnvironment } },
+    files: { type: "local", command: [fake.filesCommand], environment: { SERVICE_KEY: KEYS.shared, ...fake.filesEnvironment } },
     notes: { type: "remote", url: `${remoteURL()}/notes`, headers: { "X-Api-Key": KEYS.notes }, oauth: false },
     // One you signed in to (its maker's sign-in, which the engine keeps).
     tracker: { type: "remote", url: `${remoteURL()}/tracker` },
@@ -86,6 +91,30 @@ process.stdin.on("data", (chunk) => {
     expiring: false,
     /** How many times the engine was asked to connect the tracker again. */
     connects: 0,
+    /** The tracker turns down your sign-in, whatever it is (it was taken back): from the start
+     * (`start`), or only its tools' calls (`calls`: it ended partway). The engine, connecting it
+     * again, finds it needs signing in. */
+    refusing: false as false | "start" | "calls",
+    /** You signed in to the tracker again (Settings › Integrations): the engine has another sign-in. */
+    signedInAgain: false,
+    /** How the tracker turns your sign-in down: 401 (it's no good), or 403 (it isn't allowed). */
+    refusingWith: 401,
+    /** The notes server is down: it answers every request with a server error (`start`), or only
+     * its tools' calls (`calls`: it went down partway). */
+    notesDown: false as false | "start" | "calls",
+    /** The notes server doesn't start, though it answers: an error for its start (`error`), its
+     * company's sign-in page (`redirect`: it sends you there), its address on another host
+     * (`elsewhere`), or nothing at all (`hangs`). Or it does, in its own way: at its address with a
+     * slash (`moved`, a 307 there), or as a stream it keeps open after (`stream`). */
+    notesStart: undefined as undefined | "error" | "redirect" | "elsewhere" | "hangs" | "moved" | "stream",
+    /** Your sign-in to the tracker never runs out (the engine keeps none for when). */
+    noExpiry: false,
+    /** The tracker is down: it answers every request with a server error. */
+    trackerDown: false,
+    /** The connections the URL's servers were asked about, as named (`mcp-session-id`). */
+    seen: [] as string[],
+    /** The command server's command, as its settings name it. */
+    filesCommand: SERVER_COMMAND,
     async serve() {
       // A URL's server: its tool says the sign-in and key it was sent.
       remote = Bun.serve({
@@ -95,6 +124,29 @@ process.stdin.on("data", (chunk) => {
           const message: any = await request.json().catch(() => ({}))
           // Your sign-in, once it ran out, it turns down.
           if (fake.expiring && request.headers.get("authorization") === `Bearer ${KEYS.tracker}`) return new Response("Expired.", { status: 401 })
+          const path = new URL(request.url).pathname.replace(/^\/notes\/$/, "/notes")
+          const connection = request.headers.get("mcp-session-id")
+          if (connection) fake.seen.push(connection)
+          if (path === "/tracker" && fake.trackerDown) return new Response("Down.", { status: 500 })
+          if (path === "/login") return new Response("<html>Sign in to your company</html>", { headers: { "Content-Type": "text/html" } })
+          if (path === "/notes" && (fake.notesDown === "start" || (fake.notesDown === "calls" && message.method === "tools/call"))) return new Response("Down.", { status: 500 })
+          if (path === "/notes" && message.method === "initialize" && fake.notesStart) {
+            if (fake.notesStart === "error") return Response.json({ jsonrpc: "2.0", id: message.id, error: { code: -32603, message: "Its workspace is gone." } })
+            if (fake.notesStart === "redirect") return new Response(null, { status: 302, headers: { Location: `http://127.0.0.1:${remote!.port}/login` } })
+            if (fake.notesStart === "elsewhere") return new Response(null, { status: 307, headers: { Location: `http://localhost:${remote!.port}/notes` } })
+            if (fake.notesStart === "moved" && new URL(request.url).pathname === "/notes") return new Response(null, { status: 307, headers: { Location: "/notes/" } })
+            if (fake.notesStart === "stream") {
+              const started = `event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "remote", version: "1" } } })}\n\n`
+              return new Response(new ReadableStream({ start: (controller) => controller.enqueue(new TextEncoder().encode(started)) }), { headers: { "Content-Type": "text/event-stream", "mcp-session-id": "remote-1" } })
+            }
+            // (Until the server stops.)
+            if (fake.notesStart === "hangs") return new Promise<Response>(() => {})
+          }
+          // One taken back, every sign-in but the one you made again.
+          const turnedDown = fake.refusing === "start" || (fake.refusing === "calls" && message.method === "tools/call")
+          if (turnedDown && new URL(request.url).pathname === "/tracker" && request.headers.get("authorization") !== `Bearer ${KEYS.again}`) {
+            return new Response("Unauthorized.", { status: fake.refusingWith, headers: { "WWW-Authenticate": 'Bearer error="invalid_token"' } })
+          }
           if (message.method === "initialize") return Response.json({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "remote", version: "1" } } }, { headers: { "mcp-session-id": "remote-1" } })
           const said = `auth:${request.headers.get("authorization") ?? "none"},key:${request.headers.get("x-api-key") ?? "none"},at:${new URL(request.url).pathname}`
           return Response.json({ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: said }] } })
@@ -107,7 +159,7 @@ process.stdin.on("data", (chunk) => {
           const at = new URL(request.url).pathname
           if (at === "/api/event") return new Response(new ReadableStream({ start() {} }), { headers: { "Content-Type": "text/event-stream" } })
           if (at === "/api/config") return Response.json([{ type: "document", path: "opencode.json", info: { mcp: { servers: computer() } } }, ...(fake.botLayer ? [{ type: "document", path: ".opencode/opencode.json", info: { mcp: { servers: fake.botLayer } } }] : [])])
-          if (at === "/api/mcp") return Response.json([{ name: "tracker", status: "connected", integrationID: "int_tracker" }])
+          if (at === "/api/mcp") return Response.json([{ name: "tracker", status: fake.refusing && fake.connects && !fake.signedInAgain ? "needs_auth" : "connected", integrationID: "int_tracker" }])
           if (at === "/api/experimental/mcp/tracker/connect" && request.method === "POST") {
             fake.connects += 1
             fake.expiring = false
@@ -115,7 +167,7 @@ process.stdin.on("data", (chunk) => {
           }
           if (at === "/api/credential") {
             // (About to run out: within the minute it's renewed before.)
-            const value = fake.expiring ? { access: KEYS.tracker, expires: Date.now() + 1_000 } : { access: fake.connects ? KEYS.renewed : KEYS.tracker, expires: Date.now() + 3_600_000 }
+            const value = fake.expiring ? { access: KEYS.tracker, expires: Date.now() + 1_000 } : { access: fake.signedInAgain ? KEYS.again : fake.connects ? KEYS.renewed : KEYS.tracker, ...(fake.noExpiry ? {} : { expires: Date.now() + 3_600_000 }) }
             return Response.json({ data: [{ integrationID: "int_tracker", active: true, value: { type: "oauth", refresh: "r", ...value } }] })
           }
           return new Response("Not found.", { status: 404 })

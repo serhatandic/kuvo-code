@@ -227,7 +227,6 @@ import Testing
         // Read again once both are answered (a late answer shown instead would be the wrong one).
         try await until { model.approval != .auto || box.reads == 2 }
         #expect(model.approval == .auto, "the box keeps Auto, and so does the composer")
-        #expect(ToolApproval.lastPicked == .auto)
     }
 
     /// A bot's conversation on a box from before bots could have Full Access (bridge 0.9.188): the

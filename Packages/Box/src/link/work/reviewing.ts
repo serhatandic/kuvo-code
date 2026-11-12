@@ -25,7 +25,8 @@ import { botOfConversation, startedByOf, worksFor } from "./tree";
 import { botHere } from "../bots/here";
 import { readProjects } from "../areas/projects";
 import { commandTemporary } from "../fence/state";
-import { askedAbout, fencePolicy } from "../fence/policy";
+import { askedAbout, fencePolicy, landsAt } from "../fence/policy";
+import { lookalikesOf } from "../fence/lookalike";
 import { inTime, projectWorktrees } from "./project-trees";
 import { foundAt } from "./found-folders";
 export { noteFolderFound } from "./found-folders";
@@ -586,21 +587,6 @@ function within(file: string, folder: string): boolean {
   return inside === "" || (!inside.startsWith("..") && !path.isAbsolute(inside));
 }
 
-
-function realPath(file: string): string {
-  const rest: string[] = [];
-  for (let at = path.resolve(file); ; ) {
-    try {
-      return path.join(fs.realpathSync(at), ...rest.reverse());
-    } catch {
-      const up = path.dirname(at);
-      if (up === at) return path.resolve(file);
-      rest.push(path.basename(at));
-      at = up;
-    }
-  }
-}
-
 async function answerPermission(source: Target, id: string, sessionID: string, signal?: AbortSignal, found?: Conversation | null): Promise<Verdict | null> {
   let { permissions } = await asksIn(source, sessionID, signal);
   let permission = permissions.find(each => each.id === id && each.asker === sessionID);
@@ -639,7 +625,9 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
   // By the file its tool call names; where none does (Codex asks for room of its own, with no
   // tool call), by the paths the ask names, each judged as a write; where it names none, by
   // what it asked, as the model reads it.
-  const file = seen && [seen.input.filePath, seen.input.file_path, seen.input.notebook_path, seen.input.path, seen.input.file].find((each): each is string => typeof each === "string" && each.startsWith("/"));
+  // (As the engine takes it: `~` your home, one not from `/` from the conversation's folder.)
+  const given = seen && [seen.input.filePath, seen.input.file_path, seen.input.notebook_path, seen.input.path, seen.input.file].find((each): each is string => typeof each === "string" && each !== "");
+  const file = given ? path.resolve(folder, given === "~" ? homeFolder() : given.startsWith("~/") ? path.join(homeFolder(), given.slice(2)) : given) : undefined;
   // (Each as a command's path reads: \`~\` as your home, one not from \`/\` from its folder.)
   const named = permission.resources.filter(each => each !== "*").map(each => path.resolve(folder, each.replace(/^~(?=\/|$)/, homeFolder()).replace(/\/\*$/, "") || "/"));
   const actions: ReviewedAction[] = seen && file ? [{ kind: "file", path: file, access: READING.has(seen.tool.toLowerCase()) ? "read" : "write", folder, tool: seen.tool, input: seen.input }]
@@ -660,6 +648,18 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
     noteReview(id, sessionID, "yours", call);
     return null;
   }
+  // A read of a file that isn't there is judged by each file beside it, and beside where it lands,
+  // whose name looks the same too (through a link to a name that isn't there, which the sandbox's
+  // plugin gives the engine), one of which the engine reads in its place without asking again (fence/lookalike.ts: a
+  // screenshot's name, its spaces narrow, typed with plain ones). Its folder asked about off the
+  // box's thread first, as below.
+  const reads = Boolean(seen && file && seen.tool.toLowerCase() === "read");
+  if (reads) await askedAbout([folder, path.resolve(file!)]);
+  // (Beside the name as given, where the engine looks, and beside where a link there leads, where
+  // the sandbox's plugin sends it.)
+  // (Each once, by where it lands.)
+  const alikes = reads ? [...new Map([...lookalikesOf(file!), ...lookalikesOf(landsAt(file!))].map(each => [landsAt(each), each])).values()] : [];
+  actions.push(...alikes.map(each => ({ ...actions[0], path: each }) as ReviewedAction));
   // Its answer, and how it decided, listed as it answers (its answer's event isn't taken for yours).
   const reply = async (body: Record<string, unknown>, decided: AskReview["state"]) => {
     replying.set(id, false);
@@ -679,7 +679,7 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
   };
   // (Each path macOS may ask about, asked off the box's thread first: a project on your Desktop.)
   await askedAbout([folder, ...actions.flatMap(action => action.kind === "file" ? [action.path] : [])]);
-  if (ownByName && ownReads((file, place) => within(realPath(file), foundAt(place)))) {
+  if (ownByName && ownReads((file, place) => within(landsAt(file), foundAt(place)))) {
     await reply({ decision: "once" }, "allowed");
     return { decision: "allow", reason: "Its own files.", by: "code" };
   }
@@ -706,7 +706,7 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
   const resolve = (raw: string) => path.resolve(folder, raw.replace(/^~(?=\/|$)/, homeFolder()));
   const resources = permission.resources.map(raw => ({ raw, path: resolve(raw.replace(/\/\*$/, "") || "/"), folder: raw.endsWith("/*") ? true : null }));
   const changes = [...resources, ...(permission.filepath ? [{ raw: permission.filepath, path: resolve(permission.filepath), folder: false as boolean | null }] : []),
-    ...(seen ? changedBy(seen, folder) ?? [] : [])];
+    ...(seen ? changedBy(seen, folder) ?? [] : []), ...alikes.map(each => ({ raw: each, path: each, folder: false as boolean | null }))];
   // (A call the ask names that couldn't be read, or the image tool, which writes by another name
   // than the one it's given: never its own by code.)
   const unread = Boolean(permission.call) && !seen;

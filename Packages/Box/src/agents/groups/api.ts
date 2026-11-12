@@ -1,6 +1,8 @@
 // What a group chat on a machine asks of where its bots' seats run: the machine's engine, or this
 // bridge itself for a seat on a coding agent's model. Both answer the engine's API.
 
+import { withNotes } from "../../shared/session-notes"
+import { rewriteVia } from "../notes"
 import type { ModelRef } from "../wire"
 import type { Rule } from "./rules"
 
@@ -81,10 +83,14 @@ export class SeatAPI {
    * starting).
    */
   async account(model: ModelRef): Promise<{ name: string; signedOut: boolean } | undefined> {
-    const [providers, integrations] = await Promise.all([this.requester.request("GET", "/api/provider"), this.requester.request("GET", "/api/integration")])
+    // Its providers first: they wait for its plugins, and its integrations don't (an engine that
+    // opened a folder a moment ago lists what it has so far, 2.2.7 on).
+    const providers = await this.requester.request("GET", "/api/provider")
     const ready: unknown[] = Array.isArray(providers?.data) ? providers.data.map((each: any) => each?.id) : []
     if (!ready.length) return undefined
+    const integrations = await this.requester.request("GET", "/api/integration")
     const listed: any[] = Array.isArray(integrations?.data) ? integrations.data : []
+    if (!listed.length) return undefined
     const provider = listed.find((each) => each?.id === model.providerID)
     return { name: String(provider?.name ?? model.providerID), signedOut: provider !== undefined && !ready.includes(model.providerID) }
   }
@@ -102,8 +108,11 @@ export class SeatAPI {
     await this.requester.request("PATCH", at(id), { permissions: rules })
   }
 
-  async setMetadata(id: string, metadata: Record<string, unknown>) {
-    await this.requester.request("PATCH", at(id), { metadata })
+  /** Marked as a group chat's seat (`kuvo.seat`), in its turn (`../notes.ts`), the rest of its
+   * notes as they are then. */
+  async markSeat(id: string, seat: Record<string, unknown>) {
+    const done = await rewriteVia(this.requester, id, (now) => ({ metadata: withNotes(now.metadata, { seat }) }))
+    if (!done) throw new Error("There's no such conversation.")
   }
 
   async setInstruction(id: string, key: string, text: string) {

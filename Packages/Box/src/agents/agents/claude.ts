@@ -19,10 +19,11 @@ import { CLAUDE_LIMITS_EVERY, claudeIdentity, credentialsIn, heardWindows, limit
 import { emit } from "../events"
 import { run, which } from "../proc"
 import { Queue } from "../queue"
+import { writeSecret } from "../../shared/files"
 import { commandSignIn } from "../signin"
 import { newID } from "../ids"
 import { kuvoTools } from "../kuvotools"
-import { dropRelayed, relayedServers, relayedTools, relayPort } from "../toolrelay"
+import { dropRelayed, relayedServers, relayedTools, relayPort, serversKey } from "../toolrelay"
 import { computerServers } from "../servers"
 import { skillsFolder, skillsFor, turnedOff, upward } from "../skills"
 import { claudeSubagents, subagentRules, subagentsFor, type Subagents } from "../subagents"
@@ -477,11 +478,8 @@ export class ClaudeAgent implements Agent {
       const started = Date.now()
       let handedOver = false
       const keep = (token: string) => {
-        mkdirSync(dirname(this.tokenFile), { recursive: true, mode: 0o700 })
-        // Whole or not at all, for a session starting meanwhile.
-        const writing = `${this.tokenFile}.${process.pid}.tmp`
-        writeFileSync(writing, JSON.stringify({ token, made: started }), { mode: 0o600 })
-        renameSync(writing, this.tokenFile)
+        // Whole or not at all, for a session starting meanwhile; only you can read it, and nothing's left if it fails.
+        writeSecret(this.tokenFile, JSON.stringify({ token, made: started }))
         handedOver = true
       }
       return commandSignIn({
@@ -674,6 +672,11 @@ export class ClaudeAgent implements Agent {
     // first time with Claude Code's usual ones meanwhile.
     this.loadingModels ??= this.loadModels().finally(() => (this.loadingModels = undefined))
     return this.modelList?.models ?? fallbackModels(this.providerID)
+  }
+
+  /** Only once Claude Code said which models your account has: its usual ones meanwhile are a guess. */
+  listsEveryModel(): boolean {
+    return Boolean(this.modelList)
   }
 
   async concreteModel(id: string): Promise<string | undefined> {
@@ -891,11 +894,12 @@ function updateChannel(): string {
 }
 
 function fallbackModels(providerID: string): Model[] {
+  // (Its usual ones, not its word: one missing from them isn't gone.)
   return [
     // (Until Claude Code says which its default is, a session on it shows as this and goes on.)
-    model(providerID, "opus", "Opus", { family: "claude-opus", images: true, variants: ["low", "medium", "high", "xhigh", "max"], released: 3, aliases: ["default"] }),
-    model(providerID, "sonnet", "Sonnet", { family: "claude-sonnet", images: true, variants: ["low", "medium", "high", "max"], released: 2 }),
-    model(providerID, "haiku", "Haiku", { family: "claude-haiku", images: true, released: 1 }),
+    model(providerID, "opus", "Opus", { family: "claude-opus", images: true, variants: ["low", "medium", "high", "xhigh", "max"], released: 3, aliases: ["default"], provisional: true }),
+    model(providerID, "sonnet", "Sonnet", { family: "claude-sonnet", images: true, variants: ["low", "medium", "high", "max"], released: 2, provisional: true }),
+    model(providerID, "haiku", "Haiku", { family: "claude-haiku", images: true, released: 1, provisional: true }),
   ]
 }
 
@@ -1095,6 +1099,8 @@ class ClaudeThread implements Thread {
     // The computer's MCP servers (yours, the integrations', a bot's with its own keys), through the
     // relay, which keeps their keys: another set of them is told to the same Claude Code.
     const computer = await computerServers(this.session.location.directory)
+    // (Those set right since the relay stood in for them first, so their addresses are new.)
+    const serversNow = await serversKey(this.session.id, computer)
     const servers = relayedServers(this.session.id, this, this.session.location.directory, computer)
     const opening = !this.query
     if (opening) {
@@ -1108,13 +1114,13 @@ class ClaudeThread implements Thread {
     }
     // Kuvo Code's own tools, as the engine's models have them, and those servers: told over its
     // pipe, not on its command line (where any process could read their key).
-    if (this.query && (opening || this.servers !== computer.key)) {
+    if (this.query && (opening || this.servers !== serversNow)) {
       const entries: Record<string, unknown> = {}
       // (Its key to them made again, if it started again: the old one went with it.)
       const tools = fenceOn() ? relayedTools(this.session.id, this) : kuvoTools(this.session.id)
       if (tools) entries[tools.name] = tools.kind === "http" ? { type: "http", url: tools.url, headers: tools.headers, timeout: tools.timeout } : { type: "stdio", command: tools.command, args: tools.args, env: tools.env, timeout: tools.timeout }
       for (const server of servers) entries[server.name] = { type: "http", url: server.url, headers: server.headers, timeout: server.timeout }
-      this.servers = computer.key
+      this.servers = serversNow
       await this.query.setMcpServers(entries as any).catch(() => {})
     }
     if (hooks.signal.aborted) return { outcome: "interrupted" }

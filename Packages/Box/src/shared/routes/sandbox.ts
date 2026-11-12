@@ -9,7 +9,9 @@ import { any, bool, type Infer, list, NOTHING, number, object, type RouteShape, 
  * can do (`action`) and the box's route that does it (`route`); what the computer needs first
  * (`needs`), which part of the check failed (`check`), and how many checks failed in a row. While
  * it's on, what it can't keep commands from here (`gaps`: `services`, the services your login runs,
- * where commands can't have a namespace of their own; `needs` says what for). */
+ * where commands can't have a namespace of their own; `needs` says what for; `git`, git's own files in
+ * the repositories commands write, where a folder can't be made read-only in their namespace, so
+ * commands in a repository don't run there). */
 export const SANDBOX = object({
   on: bool, "why?": string, able: bool, agents: bool, "outside?": bool, "restart?": bool,
   "reason?": words("kernel", "namespaces", "macos", "engineMissing", "checking", "checkFailed", "plugin", "engineDown", "waiting"),
@@ -17,7 +19,7 @@ export const SANDBOX = object({
   "route?": string, "needs?": string,
   "check?": words("folder", "tempFiles", "readsOwn", "writesOwn", "services", "didntRun", "setup"),
   "failures?": number,
-  "gaps?": list(words("services")),
+  "gaps?": list(words("services", "git")),
 });
 
 export type SandboxState = Infer<typeof SANDBOX>;

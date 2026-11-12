@@ -22,7 +22,9 @@ const github = http.createServer((request, response) => {
       { path: ".claude/skills/pdf/SKILL.md", type: "blob" },
       { path: "skills/c++/SKILL.md", type: "blob" }, { path: "skills/c++/a.cpp", type: "blob" }, { path: "skills/c++/b.cpp", type: "blob" },
     ], truncated: false },
-    // The engine beside it: the skills it lists, from other tools' folders too.
+    // The engine beside it: its providers, which it answers once its plugins are set up, and the
+    // skills it lists, from other tools' folders too.
+    "/api/provider": { data: [] },
     "/api/skill": { data: [
       { id: "pdf-forms", name: "pdf-forms" },
       { id: "claude-one", name: "claude-one", path: path.join(os.homedir(), ".claude", "skills", "claude-one", "SKILL.md") },
