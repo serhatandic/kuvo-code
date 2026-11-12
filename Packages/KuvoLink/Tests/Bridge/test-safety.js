@@ -222,7 +222,10 @@ for (const holder of new Set([fs.promises, fsPromises])) {
 // starts with your real home as its HOME: each throws (as a missing file does, for code that carries
 // on) and fails the run, however it's caught. Only what a path is, its links and whether it's there,
 // is asked, as the sandbox's rules need. A live test you asked for (compact-live.test.js) says so with
-// `allowRealAgents`, for its own process alone.
+// `allowRealAgents`, for its own process alone. What a test starts runs without this guard: it
+// finds none of their programs on the PATH it's handed (below), and the bridge, told so by
+// KUVO_TEST_PATH_ONLY, looks for them nowhere else; a command a test runs that names their files
+// itself (`cat ~/.grok/auth.json`) isn't seen here.
 export const AGENT_FOLDERS = [".grok", ".codex", ".claude", ".claude.json", ".cursor", ".gemini", ".opencode",
   path.join(".config", "opencode"), path.join(".local", "share", "opencode"), path.join(".local", "state", "opencode"),
   path.join(".local", "share", "claude"), path.join(".local", "share", "cursor-agent")];
@@ -238,6 +241,22 @@ if (process.env.PATH) process.env.PATH = process.env.PATH.split(path.delimiter).
 /** For a live test you asked for (it's skipped otherwise): the real agents, as you're signed in to them. */
 export function allowRealAgents() {
   realAgentsAllowed = true;
+}
+
+/**
+ * For a test that checks the installed program itself (its schema), never signed in: `act` may start
+ * `program` (only that one, only while it runs, and with a home of the test's own). Its folders stay
+ * refused.
+ */
+const realPrograms = new Set();
+export function withRealProgram(program, act) {
+  const real = fs.realpathSync(program);
+  realPrograms.add(real);
+  try {
+    return act();
+  } finally {
+    realPrograms.delete(real);
+  }
 }
 
 /** What this run reached of your real agents (refused, each), for the run to fail on. */
@@ -264,6 +283,12 @@ function agentFolderOf(given) {
 }
 
 function refuseAgentPath(given, verb) {
+  // (A folder they're in, copied whole, copies them too.)
+  if (verb === "copy whole" && !realAgentsAllowed && (typeof given === "string" || given instanceof URL)) {
+    const where = fold(resolved(given instanceof URL ? fileURLToPath(given) : given));
+    const inside = agentFolders.find(each => isIn(each, where));
+    if (inside) refuseAgents(`Refusing to copy ${String(given)}: ${inside} is in it, a coding agent's own in your real home (test-safety.js). A test uses folders of its own.`);
+  }
   const folder = agentFolderOf(given);
   if (folder) refuseAgents(`Refusing to ${verb} ${String(given)}: it's in ${folder}, a coding agent's own in your real home (test-safety.js). A test uses folders of its own.`);
 }
@@ -288,7 +313,10 @@ const guardedRead = (holder, name, verb, places = 1) => {
 for (const holder of new Set([fs, fs.promises, fsPromises])) {
   for (const name of ["readFileSync", "readFile", "openSync", "open", "createReadStream"]) guardedRead(holder, name, "read");
   for (const name of ["writeFileSync", "writeFile", "appendFileSync", "appendFile", "createWriteStream", "mkdirSync", "mkdir", "truncateSync", "truncate", "chmodSync", "chmod", "utimesSync", "utimes"]) guardedRead(holder, name, "write");
-  for (const name of ["copyFileSync", "copyFile", "cpSync", "cp", "symlinkSync", "symlink", "linkSync", "link", "renameSync", "rename"]) guardedRead(holder, name, "copy", 2);
+  for (const name of ["copyFileSync", "copyFile", "symlinkSync", "symlink", "linkSync", "link", "renameSync", "rename"]) guardedRead(holder, name, "copy", 2);
+  for (const name of ["cpSync", "cp"]) guardedRead(holder, name, "copy whole", 1);
+  for (const name of ["cpSync", "cp"]) guardedRead(holder, name, "copy", 2);
+  guardedRead(holder, "openAsBlob", "read");
   for (const name of ["rmSync", "rm", "rmdirSync", "rmdir", "unlinkSync", "unlink"]) guardedRead(holder, name, "delete");
 }
 
@@ -312,16 +340,48 @@ function refuseStart(program, env) {
   const at = programAt(program, env);
   if (at) {
     const real = (() => { try { return fs.realpathSync(at); } catch { return at; } })();
-    const folder = agentFolderOf(at) ?? agentFolderOf(real);
+    const folder = realPrograms.has(real) ? undefined : agentFolderOf(at) ?? agentFolderOf(real);
     if (folder) refuseAgents(`Refusing to start ${at}: it's a coding agent's real program, in ${folder} (test-safety.js). A test uses a stand-in of its own on the PATH.`);
     const ownCopy = [...own].some(each => isIn(resolved(at), each));
-    if (AGENT_PROGRAMS.has(path.basename(at)) && !ownCopy) refuseAgents(`Refusing to start ${at}: it's a coding agent's real program (test-safety.js). A test uses a stand-in of its own on the PATH.`);
+    if (AGENT_PROGRAMS.has(path.basename(at)) && !ownCopy && !realPrograms.has(real)) refuseAgents(`Refusing to start ${at}: it's a coding agent's real program (test-safety.js). A test uses a stand-in of its own on the PATH.`);
   }
   // (The bridge or a box, run by Bun or node, reads the agents' sign-ins in the home it's given.)
   const home = (env ?? process.env).HOME;
-  const runtime = /^(bun|node)(-[a-z]+)?$/.test(path.basename(String(at ?? program))) || String(at ?? program) === process.execPath;
+  const runtime = /^(bun|node)(-[a-z]+)?$/.test(path.basename(String(at ?? program))) || String(at ?? program) === process.execPath || Boolean((env ?? process.env).BUN_BE_BUN);
   if (runtime && home && realHomes.some(each => fold(path.resolve(String(home))) === fold(each) || fold(resolved(String(home))) === fold(each)))
     refuseAgents(`Refusing to start ${String(program)} with your real home as its HOME (test-safety.js): a test's own reaches its agents' sign-ins.`);
+}
+
+// What a test starts (the bridge, a box) finds programs on the PATH it's handed, outside this guard:
+// a folder there with an agent's real program (`~/.local/bin/grok`) is swapped for a copy in the run's
+// home with everything else in it but those, so nothing the run starts finds them, as on a computer
+// without them. (The PATH as it was stays in REAL_PATH, for a live test you asked for.)
+export const REAL_PATH = process.env.PATH ?? "";
+process.env.KUVO_TEST_PATH_ONLY = "1";
+// (By its name, or a link into an agent's folder.)
+const agentProgram = (folder, name) => {
+  if (AGENT_PROGRAMS.has(name)) return true;
+  try {
+    const at = path.join(folder, name);
+    return fs.lstatSync(at).isSymbolicLink() && Boolean(agentFolderOf(fs.realpathSync(at)));
+  } catch {
+    return false;
+  }
+};
+if (process.env.PATH) {
+  let made = 0;
+  process.env.PATH = process.env.PATH.split(path.delimiter).map(folder => {
+    let names;
+    try { names = fs.readdirSync(folder); } catch { return folder; }
+    if (!path.isAbsolute(folder) || [...own].some(each => isIn(resolved(folder), each)) || !names.some(name => agentProgram(folder, name))) return folder;
+    const copy = path.join(ownRoot, ".path", String(made++));
+    fs.mkdirSync(copy, { recursive: true });
+    for (const name of names) {
+      if (agentProgram(folder, name)) continue;
+      try { fs.symlinkSync(path.join(folder, name), path.join(copy, name)); } catch {}
+    }
+    return copy;
+  }).join(path.delimiter);
 }
 
 // Node's ways of starting a program: (file, args?, options?), each with its environment.
@@ -377,6 +437,18 @@ if (process.versions.bun) {
   for (const name of ["os", "node:os"]) mock.module(name, () => ({ ...named(os), default: os }));
   // And what Bun itself starts gets the environment this process started with, whatever's changed
   // since (the names dropped above, your real home), unless it's told otherwise.
+  // And Bun's own files, as node's are.
+  const file = Bun.file;
+  Bun.file = (given, ...rest) => {
+    if (typeof given === "string" || given instanceof URL) refuseAgentPath(given, "read");
+    return file.call(Bun, given, ...rest);
+  };
+  const write = Bun.write;
+  Bun.write = (destination, input, ...rest) => {
+    for (const each of [destination, input]) if (typeof each === "string" || each instanceof URL) refuseAgentPath(each, "write");
+    for (const each of [destination, input]) if (each && typeof each === "object" && typeof each.name === "string") refuseAgentPath(each.name, "write");
+    return write.call(Bun, destination, input, ...rest);
+  };
   // (Held to what node's ways of starting a program are, above.)
   for (const name of ["spawn", "spawnSync"]) {
     const start = Bun[name];

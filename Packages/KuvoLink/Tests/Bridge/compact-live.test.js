@@ -15,7 +15,7 @@
 // in: each says what it left there, in kuvo-compact-* folders, for you to remove. Only the lane you
 // asked for reaches the real home (test-safety.js's `allowRealAgents`): its bridge has the other
 // agents' homes in the test's own folders, so it never reads their sign-ins.
-import { allowRealAgents } from "./test-safety.js";
+import { allowRealAgents, REAL_PATH } from "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -29,8 +29,8 @@ import { NO_BUN, testBun } from "./bun-for-tests.js";
 const bun = testBun();
 const agentsJS = fileURLToPath(new URL("../../../../KuvoCode/Resources/kuvo-agents.js", import.meta.url));
 const agentsSources = fileURLToPath(new URL("../../../Box/src/agents", import.meta.url));
-// (Grok's own folder of programs isn't on a test's PATH: the bridge finds it there by the real home.)
-const program = name => spawnSync("sh", ["-c", `command -v ${name}`], { encoding: "utf8", env: { ...process.env, PATH: `${process.env.PATH}:${path.join(process.env.KUVO_TEST_REAL_HOME ?? "", ".grok", "bin")}` } }).stdout.trim();
+// (The agents' programs aren't on a test's PATH: REAL_PATH has them, and Grok's own folder of them.)
+const program = name => spawnSync("sh", ["-c", `command -v ${name}`], { encoding: "utf8", env: { ...process.env, PATH: `${REAL_PATH}:${path.join(process.env.KUVO_TEST_REAL_HOME ?? "", ".grok", "bin")}` } }).stdout.trim();
 const WORDS = "TANGERINE-42 and HARBOUR";
 // The run has a home of its own: Claude Code's and Grok's sign-ins are in the real one.
 const realHome = process.env.KUVO_TEST_REAL_HOME;
@@ -51,7 +51,7 @@ async function bridge(prefix, env = {}, useRealHome = false, ownClaudeSignIn = f
   const child = spawn(bun, ownClaudeSignIn ? ["--preload", preload, path.join(agentsSources, "main.ts")] : [agentsJS], {
     cwd: workspace,
     stdio: ["pipe", "pipe", "pipe"],
-    env: { PATH: process.env.PATH, HOME: useRealHome ? realHome : home, USER: process.env.USER, TMPDIR: `${home}/tmp`, KUVO_HOME: home, KUVO_AGENTS_HOME: path.join(home, "agents"), OPENCODE_PASSWORD: "pw", BUN_BE_BUN: "1", ...others, ...env },
+    env: { PATH: REAL_PATH, HOME: useRealHome ? realHome : home, USER: process.env.USER, TMPDIR: `${home}/tmp`, KUVO_HOME: home, KUVO_AGENTS_HOME: path.join(home, "agents"), OPENCODE_PASSWORD: "pw", BUN_BE_BUN: "1", ...others, ...env },
   });
   atEnd(() => new Promise(resolve => { if (child.exitCode !== null) return resolve(); child.on("exit", resolve); child.stdin.end(); child.kill(); }));
   const port = await new Promise((resolve, reject) => {
@@ -178,6 +178,8 @@ test("Grok", { skip: !process.env.KUVO_TEST_COMPACT_GROK ? "KUVO_TEST_COMPACT_GR
 });
 
 test("Codex", { skip: !process.env.KUVO_TEST_CODEX_AUTH || !process.env.KUVO_TEST_CODEX_MODEL ? "KUVO_TEST_CODEX_AUTH and KUVO_TEST_CODEX_MODEL aren't set" : !bun ? NO_BUN : !program("codex") ? "Codex isn't installed" : false, timeout: 900_000 }, async t => {
+  // (The sign-in you named, which may be your own Codex's: read only to copy it.)
+  allowRealAgents();
   // A copy must never refresh, which would rotate the token and sign the original out.
   const auth = JSON.parse(fs.readFileSync(process.env.KUVO_TEST_CODEX_AUTH, "utf8"));
   const { exp } = JSON.parse(Buffer.from(auth.tokens.access_token.split(".")[1], "base64url").toString());

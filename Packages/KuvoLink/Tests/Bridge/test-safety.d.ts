@@ -9,3 +9,7 @@ export declare const AGENT_FOLDERS: string[];
 export declare function allowRealAgents(): void;
 /** What this run reached of your real agents (each refused), for the run to fail on. */
 export declare function reachedRealAgents(): string[];
+/** For a test of the installed program itself: `act` may start `program`, and only that, while it runs. */
+export declare function withRealProgram<T>(program: string, act: () => T): T;
+/** The PATH as the run was given it, with the coding agents' real programs: for a live test you asked for. */
+export declare const REAL_PATH: string;
