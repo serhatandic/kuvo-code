@@ -10,7 +10,7 @@ import type { Agent } from "../../src/agents/agent"
 import { subscribe } from "../../src/agents/events"
 import type { Maintenance, UpdateResult } from "../../src/agents/maintenance"
 import { handler } from "../../src/agents/server"
-import { updatesUnderWay } from "../../src/agents/updates"
+import { isUpdating } from "../../src/agents/updates"
 
 /** A stand-in agent's program: its version, the newest, whether its installer can update it, and its update, finished when the test says. */
 class Program {
@@ -200,8 +200,8 @@ describe("updating the agents' programs", () => {
     const after = (await box.accounts())["codex-throws-cli"]
     expect(after.programUpdate).toMatchObject({ state: "failed", message: "spawnSync npm ENOENT" })
     expect(after.updateAll).toBe(true)
-    // Nothing under way: renewal (a newer bridge) isn't waiting on it.
-    expect(updatesUnderWay()).toBe(false)
+    // Not under way: renewal (a newer bridge) isn't waiting on it.
+    expect(isUpdating("codex-throws")).toBe(false)
     // Asked again, it's tried again, not answered with the one before.
     const again = told("codex-throws-cli", 2)
     expect((await box.ask("kuvo/updates/codex-throws-cli", "POST")).value.data).toEqual({ updating: ["codex-throws"] })

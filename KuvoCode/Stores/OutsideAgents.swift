@@ -759,6 +759,8 @@ final class OutsideAgents {
     /// the app shows of it. Throws only when it couldn't be asked.
     func update(_ integration: Integration, then refresh: () async -> Void) async throws {
         guard let api else { throw Failure.notRunning(failure) }
+        // Asked already (a second click): once is enough.
+        guard !isAskedToUpdate(integration) else { return }
         try await asking([integration], then: refresh) { try await api.updateProgram(integration.id) }
     }
 
@@ -767,7 +769,7 @@ final class OutsideAgents {
     /// from before `kuvo/updates`) why those that didn't update didn't.
     func updateAll(_ accounts: [Integration], then refresh: () async -> Void) async throws {
         guard let api else { throw Failure.notRunning(failure) }
-        // Not one being asked already (a box from before `kuvo/updates` would run it twice).
+        // COMPAT(0.7 update-answer): not one being asked already, which a box from before `kuvo/updates` would run twice. Goes 3 months after 0.8.0.
         let accounts = accounts.filter { !isAskedToUpdate($0) }
         try await asking(accounts.filter(\.isInUpdateAll), then: refresh) { try await api.updateAllPrograms(accounts) }
     }
