@@ -323,8 +323,8 @@ struct GoalCard: View {
         }
     }
 
-    /// How it runs: its deadline, how often you hear, the model the box does the work on (asked once),
-    /// what it may spend, its projects and Wake me, each a row with its control on the right.
+    /// How it runs: its deadline, how often you hear, what it may spend, its projects and Wake me,
+    /// each a row with its control on the right.
     private var settingsSection: some View {
         GoalCardSection(symbol: "slider.horizontal.3", title: "Execution settings", caption: "How the goal runs") {
             VStack(spacing: 0) {
