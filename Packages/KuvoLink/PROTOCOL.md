@@ -3531,8 +3531,10 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
 `kuvo/info` has `agents: true` (503 otherwise), where `features` has `limits`.
 
 - `GET kuvo/agents/api/kuvo/limits` → `{data: {accounts: [account], services, rows: [row]}}`.
-  `accounts`: this box's own; `rows`: every account across your computers (below, "Across your
-  computers"), what a client lists. `services`: what
+  `accounts`: this box's own (one a peer's reading stood for a read of here, with that reading's
+  windows, plan and credits where they're newer than its own, for clients from before `rows`);
+  `rows`: every account across your computers (below, "Across your computers"), what a client
+  lists. `services`: what
   this box reads the limits of (`claude`, `codex`, `grok`, `cursor`, `antigravity`, `copilot`,
   `openrouter`, `zai`, `ollama`, `opencode`), whether or not one is signed in now: a client shows
   those from here, and anything else from where it had them before. An account is listed once it's
@@ -3576,7 +3578,9 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     `failed`. Show `message` as it is.
 - `POST kuvo/agents/api/kuvo/limits/refresh` reads now each account read over a minute ago, as
   often as its maker allows and never inside a hold (nor one a peer read within its time between
-  reads), then asks the computer each account only elsewhere is on to do the same for it, and
+  reads), then asks a computer that reads it for each account this box doesn't read itself (one
+  only on another computer, or one only its turns tell of here, a Mac's Claude) to do the same for
+  it, and
   answers as `GET` with what's read within a couple of seconds; what comes later comes as
   `kuvo.limits.updated`.
 - The bridge's events (`kuvo/agents/api/event`) carry `kuvo.limits.updated` `{accounts, rows}`
@@ -3586,7 +3590,7 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   - Each box's bridge tells each peer ("Peers") what it read of its own accounts, through its
     link: `{"limits": {at, accounts, ask?, refresh?}}`, `accounts` as its `GET` lists them (each
     account's hashed `identity`, its windows with when each was read, `checked`, `next`, its plan,
-    credits and problem; never a sign-in, a token or an ID), as many as fit in 40 KB; `at`, the
+    credits and problem; never a sign-in, a token or an ID), as many as fit in 28 KB; `at`, the
     sender's clock. It's sent at once after a read, at most once a minute for what turns hear, again
     every ten minutes though nothing changed (the relay keeps nothing), and to each as its link says
     who your computers are (`ask: true`: tell me yours, answered with the receiver's own). A box
@@ -3602,9 +3606,13 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     taken over then. Computers that read at the same moment settle on one by the next round (the
     one that read last is fresh to the other). Holds and the one-a-minute spacing stay each box's
     own (Anthropic's limit is per computer): a 429 on one holds that one alone, and a reading with a
-    problem never stands for a read. An account a box can't say who it is is always read there.
-  - `refresh: [row id]`: a refresh asked of the sender (above) for accounts it hasn't; the
-    receiver refreshes those of its own as it would its own refresh.
+    problem never stands for a read. An account a box can't say who it is is always read there;
+    one whose sign-in doesn't say who it is (GitHub Copilot's: its maker's answer does) counts as
+    who it was last read as only while the lasting part of its sign-in (a refresh token or a key,
+    not a renewed token) is as it was then: signed in again, what was kept of it goes (`problem`,
+    `failed`, as above) and it's read soon.
+  - `refresh: [row id]`: a refresh asked of the sender (above) for accounts it doesn't read
+    itself; the receiver refreshes those of its own as it would its own refresh.
   - **`rows`**: one row per account across this box and its peers, this box's first, then each
     peer's by name. Rows of one `service` with one `identity` are one row, from any box; a row
     without one is its box's own. Two windows are one limit when they have the same `model`
@@ -3626,7 +3634,7 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   as they are, merging nothing (the Mac: its own box's; the phone: the box of the first Mac whose
   usage panel answers, else the first that answers, that panel placing the rows), refreshed
   through that box alone, while they have every row each other box the client reaches says is
-  signed in there (`here`). A row whose computers are all away shows "As of" its reading's time.
+  signed in there (`here`), with that box among the row's `boxes` and not `away`. A row whose computers are all away shows "As of" its reading's time.
   Naming, a view: a row's name is its account's ("Claude", "Codex", "ChatGPT", "Claude · Work");
   where two rows would have one name: a row whose sign-in on the answering box is the engine's
   takes the service's name ("ChatGPT"); rows not on the answering box add the names of the boxes
@@ -3634,9 +3642,10 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   own of that name (a provider's card that reads your own login's limits, when this Mac's box has
   no row of it: Codex's, say; Claude's card has none, so the accounts take its place, `covers`);
   rows still alike add their other boxes' names. Otherwise (a computer the client reaches answers
-  without `rows`, a box from before them, or one the first box hasn't heard from yet), the client
-  merges each box's `accounts` itself, by the rules for `rows` above, and refreshes each; that goes
-  once every box has had #210 three months.
+  without `rows`, a box from before them, or one whose own rows the first box doesn't have from it
+  as it hears it now, not `away`: just added, or the relay down), the client merges each box's
+  `accounts` itself, by the rules for `rows` above, and refreshes each; that goes three months after
+  the release that carries #210.
 - What's read: Claude Code's accounts, on Linux from Anthropic with Claude Code's own sign-in in
   Kuvo Code's folder; on a Mac only from what its turns hear (Claude Code's rate-limit events, every
   window from each response's headers), as the token Kuvo Code signs in with there can only run

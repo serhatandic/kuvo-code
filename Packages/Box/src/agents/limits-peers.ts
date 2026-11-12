@@ -87,11 +87,16 @@ export class LimitsPeers {
 
   /** The newest time a peer read this account from its maker (on this box's clock), if any did. */
   fresh(service: LimitsService, identity: string): number | undefined {
-    let newest: number | undefined
+    return this.freshest(service, identity)?.checked
+  }
+
+  /** The newest reading a peer had of this account from its maker, without a problem, if any did. */
+  freshest(service: LimitsService, identity: string): AccountLimits | undefined {
+    let newest: AccountLimits | undefined
     for (const kept of this.peers.values()) {
       for (const account of kept.accounts) {
         if (account.service !== service || account.identity !== identity || account.problem || !account.checked) continue
-        if (newest === undefined || account.checked > newest) newest = account.checked
+        if (!newest || account.checked > newest.checked!) newest = account
       }
     }
     return newest
@@ -186,7 +191,7 @@ export class LimitsPeers {
 
   /** This box's own accounts, as many as fit in one mail (with up to 200 rows' ids asked of it besides). */
   private shared(): AccountLimits[] {
-    const accounts = this.limits.list()
+    const accounts = this.limits.list(false)
     while (accounts.length && Buffer.byteLength(JSON.stringify(accounts)) > MOST_BYTES - 200 * 60) accounts.pop()
     return accounts
   }

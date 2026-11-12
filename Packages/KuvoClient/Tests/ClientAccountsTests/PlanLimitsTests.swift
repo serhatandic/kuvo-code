@@ -282,7 +282,8 @@ struct PlanLimitsTests {
     /// their own accounts: one from before rows, or one it hasn't heard from yet (just added, or
     /// cut off from the relay), has each box's own merged here, so none goes missing.
     @Test func theFirstBoxsListIsShownOnlyWhenItHasEveryComputerTheClientReached() throws {
-        let mac = try BoxLimits.decode(Data(rowsAnswer.utf8))
+        // The Mac's box hears from hetzner now.
+        let mac = try BoxLimits.decode(Data(rowsAnswer.replacingOccurrences(of: #", "away": true"#, with: "").utf8))
         // hetzner, as it says itself: its Athas, which the Mac's list has.
         let hetzner = try BoxLimits.decode(Data(#"""
         {"data": {"services": ["claude"], "accounts": [], "rows": [
@@ -302,5 +303,9 @@ struct PlanLimitsTests {
         // One from before rows: the same.
         let old = try BoxLimits.decode(Data(answer.utf8))
         #expect(UsageListing.listing([.init(key: "", name: nil, limits: mac), .init(key: "old", name: "old", limits: old)]).lister == nil)
+        // hetzner away from the Mac's box (the relay down), though this Mac reaches it: what
+        // hetzner says now, merged, not the Mac's box's last word of it.
+        let cutOff = try BoxLimits.decode(Data(rowsAnswer.utf8))
+        #expect(UsageListing.listing([.init(key: "", name: nil, limits: cutOff), .init(key: "hetzner", name: "hetzner", limits: hetzner)]).lister == nil)
     }
 }

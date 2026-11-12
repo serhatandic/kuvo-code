@@ -11,7 +11,7 @@ private let log = Logger(subsystem: "run.kuvo.code", category: "usage")
 /// the menu bar's usage panel in place of its own rows for the services this Mac's box reads
 /// (`HostLimits`). The boxes read and share them; this only follows what this Mac's box says and
 /// names the rows (KuvoClient's `UsageListing.listing`, which merges each box's own, as before, only
-/// while one is from before every box listed all of them, #210).
+/// while one is from before every box listed all of them, #210, or isn't heard from by this Mac's).
 @MainActor
 final class BoxPlanLimits {
     /// What each box said last, by machine ("" for this Mac's).

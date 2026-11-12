@@ -107,6 +107,13 @@ export interface LimitsSource {
    * Claude Code has run with it).
    */
   identity?(): string | undefined
+  /**
+   * The lasting part of its sign-in, as a fingerprint (never the secret): the same through its
+   * token's renewals, another once it's signed in again. For one whose sign-in doesn't say who it
+   * is (no `identity`): who its maker last said it is holds while this stays as it was then
+   * (`signIn` where there's none).
+   */
+  account?(): string | undefined
 }
 
 /** An account whose limits are read: a coding agent's, or a sign-in of the engine's. */
@@ -166,8 +173,8 @@ interface Entry {
   elsewhere?: number
   /**
    * For one whose sign-in doesn't say who it is (GitHub Copilot's: its maker's answer does), the
-   * sign-in (`LimitsSource.signIn`) `identity` was last read with: signed in again since, who it
-   * is isn't known until it's read, so no peer's reading stands for it.
+   * sign-in (`LimitsSource.account`) `identity` was last read with: signed in again since, who it
+   * is isn't known until it's read again.
    */
   identityAs?: string
 }
@@ -226,7 +233,7 @@ export class Limits {
 
   /** Every account across your computers, one row each (`limits-rows.ts`): this box's first. */
   rows(): LimitRow[] {
-    const own = this.list()
+    const own = this.list(false)
     return this.peers ? this.peers.rows(own) : limitRows([{ key: "", name: "", here: true, away: false, accounts: own }])
   }
 
@@ -251,8 +258,13 @@ export class Limits {
     this.timer = undefined
   }
 
-  /** The accounts with plan limits: each agent's own sign-in first, then the ones you added, then the engine's. */
-  list(): AccountLimits[] {
+  /**
+   * The accounts with plan limits: each agent's own sign-in first, then the ones you added, then
+   * the engine's. `borrowed`: one a peer's reading stood for a read of here is listed with that
+   * reading's numbers where they're newer than its own (as clients from before `rows` read this
+   * list alone); without, each as read here, as peers and `rows` take them.
+   */
+  list(borrowed = true): AccountLimits[] {
     const listed: AccountLimits[] = []
     for (const account of this.accounts()) {
       const entry = this.entries.get(account.provider)
@@ -261,6 +273,22 @@ export class Limits {
       // another account since says so), or read on another of your computers in its place.
       if (!entry.checked && !entry.windows.length && !entry.problem && !entry.elsewhere) continue
       const problem = entry.problem ? { kind: entry.problem.kind, message: entry.problem.message, ...(entry.problem.until ? { until: entry.problem.until } : {}) } : undefined
+      const peer = borrowed && entry.elsewhere && entry.identity ? this.peers?.freshest(account.service, entry.identity) : undefined
+      if (peer?.checked && peer.checked > (entry.checked ?? 0)) {
+        listed.push({
+          provider: account.provider,
+          service: account.service,
+          ...(account.agent ? { agent: account.agent.kind, account: account.agent.account } : {}),
+          ...(account.label ? { label: account.label } : {}),
+          identity: entry.identity!,
+          ...((peer.plan ?? entry.plan) ? { plan: peer.plan ?? entry.plan } : {}),
+          windows: peer.windows,
+          ...((peer.balance ?? entry.balance) ? { balance: peer.balance ?? entry.balance } : {}),
+          ...(entry.checked ? { checked: entry.checked } : {}),
+          ...(account.limits.read ? { next: entry.next } : {}),
+        })
+        continue
+      }
       listed.push({
         provider: account.provider,
         service: account.service,
@@ -334,6 +362,15 @@ export class Limits {
       this.switched(entry, source)
       const says = source.identity?.()
       this.identify(entry, says)
+      // Signed in again since its maker last said who it is (its sign-in doesn't say): who it is
+      // isn't known now, so what was kept of it goes, no peer's reading stands for it, and it's
+      // read soon.
+      const as = source.account?.() ?? source.signIn?.()
+      if (!says && entry.identityAs !== undefined && as !== undefined && as !== entry.identityAs) {
+        this.forget(entry)
+        entry.identity = undefined
+        entry.identityAs = undefined
+      }
       if (!source.read) continue
       const at = this.now()
       if (at < entry.next) continue
@@ -345,7 +382,7 @@ export class Limits {
       }
       // Read on another of your computers lately: not asked again here, but a little after that
       // computer's next read, should it not have read it by then (PROTOCOL.md, "Plan limits").
-      const known = says || (entry.identityAs !== undefined && entry.identityAs === source.signIn?.()) ? entry.identity : undefined
+      const known = says || (entry.identityAs !== undefined && entry.identityAs === as) ? entry.identity : undefined
       const elsewhere = known ? this.peers?.fresh(account.service, known) : undefined
       if (elsewhere !== undefined && at - elsewhere < source.every) {
         entry.elsewhere = elsewhere
@@ -391,7 +428,7 @@ export class Limits {
       const at = this.now()
       // (Another account's since: what was kept goes, before this one's is kept.)
       if (reading) this.identify(entry, reading.identity)
-      if (reading?.identity) entry.identityAs = source.signIn?.()
+      if (reading?.identity) entry.identityAs = source.account?.() ?? source.signIn?.()
       entry.next = at + source.every
       // Nothing to read now: as it was.
       if (!reading) return false
@@ -457,20 +494,23 @@ export class Limits {
     if (!raw) return
     const identity = identityOf(raw)
     if (entry.identity === identity) return
-    if (entry.identity) {
-      entry.windows = []
-      entry.plan = undefined
-      entry.balance = undefined
-      entry.checked = undefined
-      // Listed meanwhile, saying why it has no numbers (a maker's hold can keep it unread for hours).
-      entry.problem = { kind: "failed", message: "Signed in to another account here: its limits show once they're read." }
-      entry.signIn = undefined
-      entry.elsewhere = undefined
-      entry.refusals = 0
-      entry.failures = 0
-      entry.next = 0
-    }
+    if (entry.identity) this.forget(entry)
     entry.identity = identity
+  }
+
+  /** Signed in to another account: what was kept of the one before goes, and this one is read soon. */
+  private forget(entry: Entry) {
+    entry.windows = []
+    entry.plan = undefined
+    entry.balance = undefined
+    entry.checked = undefined
+    // Listed meanwhile, saying why it has no numbers (a maker's hold can keep it unread for hours).
+    entry.problem = { kind: "failed", message: "Signed in to another account here: its limits show once they're read." }
+    entry.signIn = undefined
+    entry.elsewhere = undefined
+    entry.refusals = 0
+    entry.failures = 0
+    entry.next = 0
   }
 
   /**

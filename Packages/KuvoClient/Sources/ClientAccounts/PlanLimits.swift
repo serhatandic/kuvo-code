@@ -351,7 +351,7 @@ public enum UsageListing {
     /// Every box's accounts, one row per account across them (`accounts(_:)`), placed where the
     /// panel (the client's own computer's, or the first Mac's) says each service goes, as the Mac's
     /// menu bar lists this Mac's and its machines'. For boxes from before they listed every
-    /// computer's rows themselves (#210; goes once every box has had that three months).
+    /// computer's rows themselves (#210; goes three months after the release that carries it).
     public static func items<Panel>(panel: [Panel], covers: (Panel) -> String?, boxes: [Box]) -> [Item<Panel>] {
         place(Self.accounts(boxes), panel: panel, covers: covers)
     }
@@ -447,14 +447,18 @@ extension UsageListing {
     /// What a client lists of every computer it reached (`answers`, in its order, its own computer
     /// first): the first box's rows, as they are (it works them out with your other computers'
     /// boxes, PROTOCOL.md "Plan limits"), when they have every account each other box it reached
-    /// says is signed in there; else (a box from before rows, #210, or one the first hasn't heard
-    /// from yet) each box's own, merged here (goes once every box has had #210 three months).
+    /// says is signed in there, from that computer as it hears it now (not away); else (a box from
+    /// before rows, #210, or one the first hasn't heard from lately) each box's own, merged here.
+    /// That fallback goes three months after the release that carries #210.
     public static func listing(_ answers: [Answer]) -> Listing {
         if let first = answers.first, let rows = first.limits.rows {
-            let ids = Set(rows.compactMap(\.rowID))
+            let byID = Dictionary(rows.compactMap { row in row.rowID.map { ($0, row) } }, uniquingKeysWith: { first, _ in first })
             let covered = answers.dropFirst().allSatisfy { other in
                 guard let theirs = other.limits.rows else { return false }
-                return theirs.filter { $0.boxes.contains(where: \.here) }.allSatisfy { $0.rowID.map(ids.contains) ?? false }
+                return theirs.allSatisfy { row in
+                    guard let here = row.boxes.first(where: \.here) else { return true }
+                    return row.rowID.flatMap { byID[$0] }?.boxes.contains { $0.key == here.key && !$0.away } ?? false
+                }
             }
             if covered { return Listing(accounts: accounts(rows: rows, here: first.key), lister: first.key) }
         }

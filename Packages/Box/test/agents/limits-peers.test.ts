@@ -251,6 +251,11 @@ describe("plan limits across your computers", () => {
     const said = await hetzner.route()
     expect(said.rows).toEqual(JSON.parse(JSON.stringify(hetzner.rows())))
     expect(said.accounts.map((account) => account.provider)).toEqual(["claude-code"])
+    // hetzner never read it: what it lists as its own (for a client from before rows) has the Mac's numbers.
+    expect(said.accounts[0].windows[0].used).toBe(0.42)
+    expect(said.accounts[0].checked).toBeUndefined()
+    // Which computer read it, in its row: the Mac, not hetzner.
+    expect(said.rows[0]!.boxes.find((each) => each.here)?.checked).toBeUndefined()
     expect(said.rows).toHaveLength(2)
   })
 
@@ -357,14 +362,17 @@ describe("plan limits across your computers", () => {
   })
 
   test("a computer signed in to another account since, whose sign-in doesn't say who it is (Copilot's), reads it rather than taking a peer's reading of the one before", async () => {
-    // Copilot's sign-in doesn't say whose it is: GitHub's answer does.
+    // Copilot's sign-in doesn't say whose it is: GitHub's answer does. Its short token is renewed
+    // often; its refresh token lasts until it's signed in again.
     const logins = new Map<string, string>([["mac", "octocat"], ["hetzner", "octocat"]])
+    let renewals = 0
     const copilot = (box: string): LimitedAccount => ({
       provider: "github-copilot",
       service: "copilot",
       limits: {
         every: 10 * MINUTE,
-        signIn: () => `token-of-${logins.get(box)}`,
+        signIn: () => `token-of-${logins.get(box)}-${renewals}`,
+        account: () => `refresh-of-${logins.get(box)}`,
         read: async () => {
           const login = logins.get(box)!
           maker.reads.push({ box, who: login })
@@ -387,16 +395,20 @@ describe("plan limits across your computers", () => {
     pass(MINUTE)
     await hetzner.limits.tick()
     expect(maker.reads.map((read) => read.box)).toEqual(["mac", "hetzner", "mac"])
-
-    // hetzner signs in as someone else: past its next read, it reads its own, though the Mac read octocat's just now.
-    logins.set("hetzner", "hubot")
+    // Its token renewed, the same login: still the Mac's reading.
+    renewals++
     pass(10 * MINUTE)
     await mac.limits.tick()
     await relay.settled()
     pass(3 * MINUTE)
     await hetzner.limits.tick()
+    expect(maker.reads.map((read) => read.box)).toEqual(["mac", "hetzner", "mac", "mac"])
+
+    // hetzner signs in as someone else: read at once, though the Mac read octocat's just now.
+    logins.set("hetzner", "hubot")
+    await hetzner.limits.tick()
     await relay.settled()
-    expect(maker.reads.slice(3)).toEqual([{ box: "mac", who: "octocat" }, { box: "hetzner", who: "hubot" }])
+    expect(maker.reads.slice(4)).toEqual([{ box: "hetzner", who: "hubot" }])
     // Two rows on each: octocat's on the Mac, hubot's on hetzner.
     for (const box of [mac, hetzner]) expect(box.rows().map((row) => `${row.windows[0]?.used} on ${row.boxes.map((each) => each.name).join(",")}`).sort()).toEqual(["0.1 on hetzner", "0.4 on MacBook Pro"])
   })
@@ -443,6 +455,14 @@ describe("plan limits across your computers", () => {
     } finally {
       bridge.stop(true)
     }
+  })
+
+  test("a box whose group chats didn't start takes plan limits, and says not now to group chat mail, so what mustn't be lost comes again", async () => {
+    const box = new Box("key-mac", "MacBook Pro", relay, [])
+    const post = async (route: string, body: unknown) => (await peerRoutes(box.parts, "POST", [route], async () => body)).status
+    expect(await post("mail", { from: "key-other", mail: { kind: "limits", at: time, accounts: [] } })).toBe(200)
+    expect(await post("mail", { from: "key-other", mail: { kind: "work", work: { task: "gt_1" } } })).toBe(404)
+    expect(await post("gaveup", { to: "key-other", mail: { kind: "work", work: { task: "gt_1" } } })).toBe(404)
   })
 
   test("a computer you removed goes from the list, with its accounts", async () => {

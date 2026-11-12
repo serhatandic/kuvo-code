@@ -11407,7 +11407,7 @@ class Limits {
   }
   peers;
   rows() {
-    const own = this.list();
+    const own = this.list(false);
     return this.peers ? this.peers.rows(own) : limitRows([{ key: "", name: "", here: true, away: false, accounts: own }]);
   }
   peersChanged() {
@@ -11426,7 +11426,7 @@ class Limits {
       clearInterval(this.timer);
     this.timer = undefined;
   }
-  list() {
+  list(borrowed = true) {
     const listed = [];
     for (const account of this.accounts()) {
       const entry = this.entries.get(account.provider);
@@ -11435,6 +11435,22 @@ class Limits {
       if (!entry.checked && !entry.windows.length && !entry.problem && !entry.elsewhere)
         continue;
       const problem = entry.problem ? { kind: entry.problem.kind, message: entry.problem.message, ...entry.problem.until ? { until: entry.problem.until } : {} } : undefined;
+      const peer = borrowed && entry.elsewhere && entry.identity ? this.peers?.freshest(account.service, entry.identity) : undefined;
+      if (peer?.checked && peer.checked > (entry.checked ?? 0)) {
+        listed.push({
+          provider: account.provider,
+          service: account.service,
+          ...account.agent ? { agent: account.agent.kind, account: account.agent.account } : {},
+          ...account.label ? { label: account.label } : {},
+          identity: entry.identity,
+          ...peer.plan ?? entry.plan ? { plan: peer.plan ?? entry.plan } : {},
+          windows: peer.windows,
+          ...peer.balance ?? entry.balance ? { balance: peer.balance ?? entry.balance } : {},
+          ...entry.checked ? { checked: entry.checked } : {},
+          ...account.limits.read ? { next: entry.next } : {}
+        });
+        continue;
+      }
       listed.push({
         provider: account.provider,
         service: account.service,
@@ -11494,6 +11510,12 @@ class Limits {
       this.switched(entry, source);
       const says = source.identity?.();
       this.identify(entry, says);
+      const as = source.account?.() ?? source.signIn?.();
+      if (!says && entry.identityAs !== undefined && as !== undefined && as !== entry.identityAs) {
+        this.forget(entry);
+        entry.identity = undefined;
+        entry.identityAs = undefined;
+      }
       if (!source.read)
         continue;
       const at = this.now();
@@ -11504,7 +11526,7 @@ class Limits {
         entry.next = hold;
         continue;
       }
-      const known = says || entry.identityAs !== undefined && entry.identityAs === source.signIn?.() ? entry.identity : undefined;
+      const known = says || entry.identityAs !== undefined && entry.identityAs === as ? entry.identity : undefined;
       const elsewhere = known ? this.peers?.fresh(account.service, known) : undefined;
       if (elsewhere !== undefined && at - elsewhere < source.every) {
         entry.elsewhere = elsewhere;
@@ -11545,7 +11567,7 @@ class Limits {
       if (reading)
         this.identify(entry, reading.identity);
       if (reading?.identity)
-        entry.identityAs = source.signIn?.();
+        entry.identityAs = source.account?.() ?? source.signIn?.();
       entry.next = at + source.every;
       if (!reading)
         return false;
@@ -11603,19 +11625,21 @@ class Limits {
     const identity = identityOf(raw);
     if (entry.identity === identity)
       return;
-    if (entry.identity) {
-      entry.windows = [];
-      entry.plan = undefined;
-      entry.balance = undefined;
-      entry.checked = undefined;
-      entry.problem = { kind: "failed", message: "Signed in to another account here: its limits show once they're read." };
-      entry.signIn = undefined;
-      entry.elsewhere = undefined;
-      entry.refusals = 0;
-      entry.failures = 0;
-      entry.next = 0;
-    }
+    if (entry.identity)
+      this.forget(entry);
     entry.identity = identity;
+  }
+  forget(entry) {
+    entry.windows = [];
+    entry.plan = undefined;
+    entry.balance = undefined;
+    entry.checked = undefined;
+    entry.problem = { kind: "failed", message: "Signed in to another account here: its limits show once they're read." };
+    entry.signIn = undefined;
+    entry.elsewhere = undefined;
+    entry.refusals = 0;
+    entry.failures = 0;
+    entry.next = 0;
   }
   switched(entry, source) {
     if (source.read || !source.signIn)
@@ -17740,6 +17764,10 @@ class EngineAccounts {
             identity: () => {
               const value = this.credentials.find((each) => each.integrationID === integration)?.value;
               return value ? READERS[integration]?.identity?.(value) : undefined;
+            },
+            account: () => {
+              const value = this.credentials.find((each) => each.integrationID === integration)?.value;
+              return fingerprint(value?.refresh || value?.key || value?.access);
             }
           }
         };
@@ -28092,13 +28120,16 @@ class LimitsPeers {
     directory.listen(() => this.directorySaid());
   }
   fresh(service, identity) {
+    return this.freshest(service, identity)?.checked;
+  }
+  freshest(service, identity) {
     let newest;
     for (const kept of this.peers.values()) {
       for (const account of kept.accounts) {
         if (account.service !== service || account.identity !== identity || account.problem || !account.checked)
           continue;
-        if (newest === undefined || account.checked > newest)
-          newest = account.checked;
+        if (!newest || account.checked > newest.checked)
+          newest = account;
       }
     }
     return newest;
@@ -28184,7 +28215,7 @@ class LimitsPeers {
     this.told.set(key, { json: JSON.stringify(accounts), at: now });
   }
   shared() {
-    const accounts = this.limits.list();
+    const accounts = this.limits.list(false);
     while (accounts.length && Buffer.byteLength(JSON.stringify(accounts)) > MOST_BYTES - 200 * 60)
       accounts.pop();
     return accounts;
@@ -28635,4 +28666,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 934e4adfd6d55bb7cfe5cb3fd0d91865156d9854096180b3bf85bdbcf5776fb3
+// Built from Packages/Box/src/agents a65262e752e3dedcd16e4deeb305f2b57a8fa004774cceab672ae8e4e514a141
