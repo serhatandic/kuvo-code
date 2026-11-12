@@ -528,7 +528,7 @@ export default {
       const exit = call.result.metadata?.exit
       if (typeof exit !== "number" || exit === 0) return
       // (What it printed is its result's output, which the agent reads as its content's first text,
-      // and then "Exited with code N".)
+      // and then how it ended: "Exit code: N" from engine 2.2.7 on, "Exited with code N" before.)
       const output = call.result.output
       const parts = Array.isArray(call.result.content) ? call.result.content : []
       const printed = typeof output?.output === "string" ? output.output : parts.filter(part => part?.type === "text").map(part => part.text).join("\\n")
@@ -537,7 +537,8 @@ export default {
       if (typeof answer?.text !== "string") return
       // Not let out: why not, after what it printed, and it ended as it did.
       if (typeof answer.exit !== "number") return void (call.result.content = [...parts, { type: "text", text: answer.text }])
-      call.result.content = [...parts.filter(part => part?.type !== "text"), { type: "text", text: answer.text }, ...(answer.exit ? [{ type: "text", text: "Exited with code " + answer.exit }] : [])]
+      const ended = parts.some(part => part?.type === "text" && typeof part.text === "string" && part.text.startsWith("Exit code: ")) ? "Exit code: " : "Exited with code "
+      call.result.content = [...parts.filter(part => part?.type !== "text"), { type: "text", text: answer.text }, ...(answer.exit ? [{ type: "text", text: ended + answer.exit }] : [])]
       if (output && typeof output === "object") call.result.output = { ...output, output: answer.text, exit: answer.exit, truncated: false }
       call.result.metadata = { ...call.result.metadata, exit: answer.exit, truncated: false }
     })
