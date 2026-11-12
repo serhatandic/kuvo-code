@@ -838,13 +838,27 @@ final class WindowTabs {
     func newSession(in directory: String?, conversation: Bool = false) {
         let inView = activeDirectory.map(workspace.projectDirectory).flatMap { Workspace.isBotFolder($0) ? nil : $0 }
         // (On this Mac: its box's, the app's own or the one attached in place.)
-        let directory = Workspace.onThisMac(directory ?? inView ?? workspace.projects.first?.directory ?? Workspace.thisMacsChats)
+        guard let directory = (directory ?? inView ?? workspace.projects.first?.directory ?? workspace.thisMacsChats).map(Workspace.onThisMac) else { return newChat() }
         // A project that has a terminal command for its sessions opens that, not a conversation.
         if !conversation, let command = workspace.settings[workspace.projectDirectory(directory)]?.terminal {
             openTerminalTab(command: command, in: directory)
             return
         }
         open(.draft(directory))
+    }
+
+    /// A new chat on this Mac: in its chats folder, its box's once it's said where that is (the box
+    /// attached in place is asked again, should it not have yet).
+    func newChat() {
+        if let chats = workspace.thisMacsChats { return newSession(in: chats) }
+        Task { [weak self] in
+            guard let self else { return }
+            await app.readChatsHere()
+            guard let chats = workspace.thisMacsChats else {
+                return Modal.show(BoxRefusal(status: 503, message: "This Mac’s box hasn’t said where its chats go yet. Try again in a moment."))
+            }
+            newSession(in: chats)
+        }
     }
 
     /// A terminal as a tab, in the folder of the tab in view (or the one given), typing `command`

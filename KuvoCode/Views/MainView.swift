@@ -810,7 +810,7 @@ struct MainView: View {
                     // The welcome only once the sessions are read and none opened: until then
                     // the latest may still open here, and the welcome would flash first.
                     if workspace.isLoaded {
-                        WelcomeView(openFolder: openFolder, newChat: { tabs.newSession(in: Workspace.thisMacsChats) }, showProviders: { app.openSettings(.accounts) })
+                        WelcomeView(openFolder: openFolder, newChat: { tabs.newChat() }, showProviders: { app.openSettings(.accounts) })
                     } else {
                         Color.clear
                             .accessibilityHidden(true)
@@ -986,7 +986,7 @@ struct MainView: View {
             newBot: { tabs.openBotEditor(bot: nil) },
             importBot: { if let recipe = BotRecipe.pick() { tabs.openBotEditor(bot: nil, recipe: recipe) } },
             newGroup: { tabs.openGroupEditor(group: nil) },
-            newChat: { tabs.newSession(in: Workspace.thisMacsChats) },
+            newChat: { tabs.newChat() },
             stop: { model?.stop() },
             isPlanning: model?.session.agent == "plan",
             togglePlan: { model?.togglePlan() },

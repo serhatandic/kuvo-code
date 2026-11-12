@@ -534,7 +534,8 @@ final class AppModel {
             // place, and starts, claims and registers nothing of its own, so there's never a second.
             // (One that couldn't tell, with a box here, starts nothing: its own would be a second, for good.)
             if Self.attachesInPlace, keeperBox == nil, !ownBoxStarted {
-                attached = nil
+                // (Attached already, it stays so while it's looked at again: this Mac doesn't show
+                // up twice, nor do Settings' tabs move, as it starts again.)
                 BackgroundWork.heldBack = nil
                 let outcome = await Here.gate(engine: binary, script: BoxProcess.script, appBox: BoxProcess.home, engineData: engineFolders.dataDirectory,
                                               home: Self.hereHome, checked: Self.engineOverride == nil)
@@ -563,11 +564,15 @@ final class AppModel {
                     openOnAttached()
                     return
                 case .unknown(let why):
+                    attached = nil
                     let couldnt = "Kuvo Code couldn’t check the box already on this Mac, so it didn’t start one of its own."
                     BackgroundWork.heldBack = couldnt
                     throw MachineFailure(message: why ?? couldnt)
                 case .own:
-                    break
+                    // None here now: the box that was is no longer this Mac's.
+                    attached = nil
+                    machines.detachHere()
+                    workspace.attachedChats = nil
                 }
             }
             guard launch == self.launch else { return }
@@ -742,6 +747,17 @@ final class AppModel {
         wireStores()
         engine = .ready
         startMachines()
+        // Where its chats go, as it says, for a new chat with no project.
+        Task { await readChatsHere() }
+    }
+
+    /// The chats folder of the box attached in place, as it names it (`kuvo/info`'s `chats`), as a
+    /// machine's is read for a new chat there.
+    func readChatsHere() async {
+        guard attached != nil, workspace.attachedChats == nil else { return }
+        struct Info: Decodable { var chats: String? }
+        guard let chats = try? await box(SSHConnection.thisMac).value(Info.self, "GET", "kuvo/info").chats else { return }
+        workspace.attachedChats = RemoteFolder.folder(chats, on: SSHConnection.thisMac)
     }
 
     /// This Mac's engine once it's up: the keeper's (started, or made way for after an update, as

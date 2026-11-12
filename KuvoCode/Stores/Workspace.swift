@@ -1501,14 +1501,13 @@ final class Workspace {
         return RemoteFolder.folder(path, on: BoxClient.thisMac)
     }
 
-    /// Where this Mac's chats run: the app's own folder for them, or, attached in place, the box's
-    /// there (`chats` in its folder: the box's `CHATS`, Packages/Box/src/link/home.ts, for a box
-    /// with no `KUVO_CHATS`, which only the app's own box is given). (A new chat on a machine asks
-    /// its box, `kuvo/info`'s `chats`; this one is needed at once, for ⌘N's draft.)
-    static var thisMacsChats: String {
-        guard BoxClient.thisMac != BoxClient.mac else { return chatsFolder }
-        return RemoteFolder.folder(SSHConnection.thisMacHome + "/\(RemoteEngineInstaller.root)/chats", on: BoxClient.thisMac)
-    }
+    /// Where this Mac's chats run: the app's own folder for them, or, attached in place, the box's,
+    /// as it names it (`attachedChats`); nil until it has.
+    var thisMacsChats: String? { BoxClient.thisMac == BoxClient.mac ? Self.chatsFolder : attachedChats }
+
+    /// The chats folder of the box attached in place, as its box names it (`kuvo/info`'s `chats`, a
+    /// folder there), read as the app attaches (`AppModel.readChatsHere`).
+    var attachedChats: String?
     /// A folder as its box names it, and as it's named here.
     private static func onBox(_ directory: String) -> String { RemoteFolder.parse(directory)?.path ?? directory }
     private static func here(_ path: String, on box: String) -> String { box == BoxClient.mac ? path : RemoteFolder.folder(path, on: box) }

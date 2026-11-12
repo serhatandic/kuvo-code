@@ -34,7 +34,9 @@ struct BoxClient: Sendable {
 
     /// Whether a request to its vault carries this Mac's proof (PROTOCOL.md, "Vault"): every box but
     /// the app's own, which answers in this process. The one attached in place takes a request
-    /// through its CLI as a Mac's, so it asks for one too.
+    /// through its CLI as a Mac's, so it asks for one too; but it takes only its own Macs' proofs
+    /// (`link.macs`), and this Mac isn't one of those for a box another Mac set up, so its vault
+    /// (and the saved passwords in it) can't be reached from here yet (#333).
     nonisolated static func needsVaultProof(_ id: String) -> Bool { id != mac }
 
     /// Whether it has everything this app knows of, without asking it (`kuvo/info`'s features): the

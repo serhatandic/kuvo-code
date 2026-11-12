@@ -123,7 +123,8 @@ import Testing
                 const fs = require("fs"), path = require("path"), run = path.join(process.env.KUVO_HOME, "run");
                 fs.writeFileSync(path.join(run, "app-attached.json"), "{}");
                 fs.writeFileSync(path.join(run, "setup-card.json"), JSON.stringify({ app: true, by: "its own" }));
-                console.log(JSON.stringify({ status: 200, body: "{}" }));
+                // (Where its chats go, as its `kuvo/info` says; every route answers the same.)
+                console.log(JSON.stringify({ status: 200, body: JSON.stringify({ chats: path.join(process.env.KUVO_HOME, "box-chats") }) }));
 
                 """.write(to: box.appending(path: "bin/kuvo-link.js"), atomically: true, encoding: .utf8)
             if runs == .running {
@@ -207,9 +208,11 @@ import Testing
         #expect(model.settingsTabs.page == .general && model.settingsTabs.box == .attached)
         model.settingsTabs.show(.accounts)
         #expect(model.settingsTabs.page == .accounts && model.settingsTabs.box == .attached)
+        // Its chats where its box says they go.
+        await model.readChatsHere()
         model.tabs.newSession(in: nil, conversation: true)
-        let chats = RemoteFolder.folder(home.path(percentEncoded: false) + "/\(RemoteEngineInstaller.root)/chats", on: SSHConnection.thisMac)
-        #expect(model.tabs.selection == .draft(chats) && Workspace.isChat(chats))
+        let chats = RemoteFolder.folder(home.path(percentEncoded: false) + "/\(RemoteEngineInstaller.root)/box-chats", on: SSHConnection.thisMac)
+        #expect(model.tabs.selection == .draft(chats))
         #expect(Workspace.onThisMac("/Users/me/project") == RemoteFolder.folder("/Users/me/project", on: SSHConnection.thisMac))
         #expect(Workspace.box(of: "/Users/me/project") == SSHConnection.thisMac)
     }
@@ -256,18 +259,20 @@ import Testing
     }
 
     /// Started again by launchd, through the launch agent its Mac put in place, as at login (never
-    /// under Kuvo Code's own permissions); by its own script where there's none.
+    /// under Kuvo Code's own permissions): started, or loaded where launchd hasn't it loaded yet,
+    /// and never by the app then; by its own script only where there's no agent.
     @Test func aStoppedBoxIsStartedByLaunchdWhereItCanBe() throws {
         defer { try? FileManager.default.removeItem(at: folder) }
-        let own = Here.startCommand(home: home, root: ".kuvo-code", user: 501, real: true)
-        #expect(own.path == "/bin/sh" && own.arguments == [home.appending(path: ".kuvo-code/bin/kuvo-start").path])
+        let own = Here.startCommands(home: home, root: ".kuvo-code", user: 501, real: true)
+        #expect(own.map(\.path) == ["/bin/sh"] && own.first?.arguments == [home.appending(path: ".kuvo-code/bin/kuvo-start").path])
         let agent = home.appending(path: "Library/LaunchAgents/\(RemoteServer.launchAgent).plist")
         try FileManager.default.createDirectory(at: agent.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data().write(to: agent)
-        let launchd = Here.startCommand(home: home, root: ".kuvo-code", user: 501, real: true)
-        #expect(launchd.path == "/bin/launchctl" && launchd.arguments == ["kickstart", "gui/501/run.kuvo.code.machine"])
+        let launchd = Here.startCommands(home: home, root: ".kuvo-code", user: 501, real: true)
+        #expect(launchd.map(\.path) == ["/bin/launchctl", "/bin/launchctl"])
+        #expect(launchd.map(\.arguments) == [["kickstart", "gui/501/run.kuvo.code.machine"], ["bootstrap", "gui/501", agent.path]])
         // A test's home is never the account's, whose agent launchd would start.
-        #expect(Here.startCommand(home: home, root: ".kuvo-code", user: 501).path == "/bin/sh")
+        #expect(Here.startCommands(home: home, root: ".kuvo-code", user: 501).map(\.path) == ["/bin/sh"])
     }
 
     /// MacBook removed this Mac as a machine (its way to start and keys went, its card stayed): no box

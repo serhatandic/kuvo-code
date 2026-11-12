@@ -442,7 +442,8 @@ final class MachineEngine {
     /// This Mac started the engine running there with other settings than `launch`'s, or an older
     /// Mac did, with its own.
     func isBehind(_ launch: Launch) -> Bool {
-        guard let engine = server?.engine else { return false }
+        // (This Mac's own box, attached in place, runs as it is: never started again from here.)
+        guard !machine.isThisMac, let engine = server?.engine else { return false }
         // COMPAT(0.7 engine-stop): an engine an older Mac started, with its settings. Goes 3 months after 0.8.0.
         if isOlderMacs(engine) { return !boxIsNewer }
         guard !isAnotherMacs(engine) else { return false }
@@ -1373,6 +1374,15 @@ final class Machines {
         let engine = makeEngine(machine)
         engines[machine.id] = engine
         return engine
+    }
+
+    /// This Mac's own box isn't here any more (the app runs its own now): it's no longer listed,
+    /// and its connection ends. Nothing is run there or removed from it.
+    func detachHere() {
+        guard let engine = engines.removeValue(forKey: SSHConnection.thisMac) else { return }
+        engine.retire()
+        engine.disconnect()
+        list.removeAll { $0.id == SSHConnection.thisMac }
     }
 
     @discardableResult
