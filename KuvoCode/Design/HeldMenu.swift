@@ -288,9 +288,11 @@ private struct HeldContextMenu: ViewModifier {
     func body(content: Content) -> some View {
         content
             // Over what it marks, taking clicks only while a right-click asks what's in front
-            // (`HeldMenus.frontmost`).
+            // (`HeldMenus.frontmost`). Enabled itself in a disabled view: SwiftUI finds nothing
+            // in one, and a disabled view's menu opens, its rows disabled, as SwiftUI's did.
             .overlay(HeldMenuMarker(rows: rows, isEnabled: isEnabled, place: place)
                 .allowsHitTesting(HeldMenus.shared.probe.isOn)
+                .environment(\.isEnabled, true)
                 .accessibilityHidden(true))
             // As SwiftUI gave a view with a `.contextMenu`: each element in it offers Show Menu
             // (applied to a stack, it reaches every element in it, as a probe of macOS 27 found).
