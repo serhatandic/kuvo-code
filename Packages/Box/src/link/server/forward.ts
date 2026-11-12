@@ -12,6 +12,8 @@ import { stopIfWaiting } from "../work/answers";
 import { attachedIn } from "./attached";
 import type { ModelInput } from "./attached";
 import { namedIn, namingHere } from "./naming";
+import { sentKey, sentOnce } from "./sent-once";
+import type { SentAnswer } from "./sent-once";
 import { agentsAllowed, allowed, canonicalPath, REQUEST_HEADERS, RESPONSE_HEADERS } from "./paths";
 import type { EngineRecord, Target } from "../../shared/records";
 import type { EngineSession } from "../engine/sessions";
@@ -53,6 +55,16 @@ export function modelInput(base: URL, headers: Record<string, string>, signal: A
     const input = model?.capabilities?.input;
     return Array.isArray(input) ? input.filter((kind): kind is string => typeof kind === "string") : null;
   };
+}
+
+// The headers of an answer that go back to whoever asked.
+function answerHeaders(response: Response): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const name of RESPONSE_HEADERS) {
+    const value = response.headers.get(name);
+    if (value) out[name] = value;
+  }
+  return out;
 }
 
 // Passes `path` to the engine or the agents' bridge on this machine, with its password, and
@@ -97,7 +109,7 @@ export async function* forward(target: Target, path: string, request: LinkReques
   // A message that's here whole goes on to its conversation even if whoever sent it goes
   // meanwhile (a phone that gave up waiting while a big file was still on its way, #358): its
   // files are kept here by then, and it isn't lost without a word. Sent again under the same id
-  // (as the share sheet does), the conversation takes it once. A command still stops with its
+  // (as the share sheet and a phone's dropped link do), it goes once (below). A command still stops with its
   // sender: it has no id, and sent again it would run twice.
   const delivering = sending && sending[2] === "prompt" ? undefined : signal;
   // What goes to the engine: a message as above, anything else as it came.
@@ -107,6 +119,24 @@ export async function* forward(target: Target, path: string, request: LinkReques
     const body = await attachedIn(request.body, session, modelInput(url, headers, delivering), request.fromMac === true, toAgents);
     return prompt ? fromPhone(await namedIn(body, session, naming)) : body;
   };
+  // Not answering (starting again, say).
+  const notAnswering = (): SentAnswer => ({ status: 503, headers: { "content-type": "application/json" }, body: Buffer.from(JSON.stringify({ message: down() })) });
+  // A message under an id it was sent with already (its phone's link dropped before the answer
+  // came, #144): taken once, every send answered as the one that went (`sentOnce`).
+  const once = sending && sending[2] === "prompt" ? sentKey(toAgents ? "agents" : "engine", decodeURIComponent(sending[1]!), request.body) : null;
+  if (once) {
+    const answer = await sentOnce(once, async () => {
+      try {
+        const response = await fetch(url, { method, headers, body: await outgoing() });
+        return { status: response.status, headers: answerHeaders(response), body: Buffer.from(await response.arrayBuffer()) };
+      } catch {
+        return notAnswering();
+      }
+    });
+    yield { head: { status: answer.status, headers: answer.headers } };
+    if (answer.body.length) yield { body: answer.body };
+    return;
+  }
   let response: Response;
   try {
     response = await fetch(url, {
@@ -116,17 +146,14 @@ export async function* forward(target: Target, path: string, request: LinkReques
       signal: delivering,
     });
   } catch (error) {
-    // Not answering (starting again, say): said so, unless the asker went.
+    // Said so, unless the asker went.
     if (signal?.aborted) throw error;
-    yield { head: { status: 503, headers: { "content-type": "application/json" } } };
-    yield { body: Buffer.from(JSON.stringify({ message: down() })) };
+    const answer = notAnswering();
+    yield { head: { status: answer.status, headers: answer.headers } };
+    yield { body: answer.body };
     return;
   }
-  const out: Record<string, string> = {};
-  for (const name of RESPONSE_HEADERS) {
-    const value = response.headers.get(name);
-    if (value) out[name] = value;
-  }
+  const out = answerHeaders(response);
   // Archived or brought back (`kuvo.archived` in its metadata), here with the Mac closed too: its
   // wake-ups wait, or come back, as a Mac's Archive has it. Only when that changed.
   if (changed && response.ok) {

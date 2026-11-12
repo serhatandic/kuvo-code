@@ -37333,7 +37333,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "277e4c5d4e59";
+var BRIDGE_VERSION = "87cfe3cd1a51";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -37524,6 +37524,63 @@ async function* pairingRoute(context) {
   return yield* json(200, { link: pairingLink({ ...link, pairing: link[slot] }), ends: Math.floor(link[slot].expires / 1000) });
 }
 
+// Packages/Box/src/link/server/sent-once.ts
+var KEPT_MS = 60 * 60 * 1000;
+var AT_MOST = 1000;
+var sent3 = new Map;
+var wentOK = (answer) => answer !== null && answer.status >= 200 && answer.status < 300;
+function sentKey(place, session, body) {
+  let id;
+  try {
+    id = JSON.parse(Buffer.from(body ?? "").toString("utf8"))?.id;
+  } catch {
+    return null;
+  }
+  return typeof id === "string" && id.length > 0 && id.length <= 200 ? `${place}
+${session}
+${id}` : null;
+}
+async function sentOnce(key, send, now = Date.now) {
+  for (;; ) {
+    forgetOld2(now());
+    const earlier = sent3.get(key);
+    if (!earlier)
+      break;
+    const answer = await earlier.answer.catch(() => null);
+    if (wentOK(answer))
+      return answer;
+    if (sent3.get(key) === earlier)
+      sent3.delete(key);
+  }
+  const entry = { answer: send() };
+  sent3.set(key, entry);
+  try {
+    const answer = await entry.answer;
+    if (wentOK(answer))
+      entry.went = now();
+    else if (sent3.get(key) === entry)
+      sent3.delete(key);
+    return answer;
+  } catch (error) {
+    if (sent3.get(key) === entry)
+      sent3.delete(key);
+    throw error;
+  }
+}
+function forgetOld2(at) {
+  for (const [key, entry] of sent3)
+    if (entry.went !== undefined && at - entry.went > KEPT_MS)
+      sent3.delete(key);
+  if (sent3.size < AT_MOST)
+    return;
+  for (const [key, entry] of sent3) {
+    if (sent3.size < AT_MOST)
+      break;
+    if (entry.went !== undefined)
+      sent3.delete(key);
+  }
+}
+
 // Packages/Box/src/link/server/forward.ts
 var AGENTS = "kuvo/agents/";
 var FROM_PHONE = ["<from-phone>", "The user sent this from Kuvo Code on their iPhone.", "They read your reply on a small screen, and can't open file paths, links to files on the computer or Kuvo Code's side panel there. Keep your reply short and easy to read on a phone. To show them a file (a picture, a chart, a PDF, a document you made or found), use show_file: it puts the file in this conversation, where they see it. A widget (show_widget) shows there too: keep it narrow, and make it work with taps rather than hovering.", "</from-phone>"].join(`
@@ -37555,6 +37612,15 @@ function modelInput(base, headers, signal) {
     const input = model?.capabilities?.input;
     return Array.isArray(input) ? input.filter((kind) => typeof kind === "string") : null;
   };
+}
+function answerHeaders(response) {
+  const out = {};
+  for (const name of RESPONSE_HEADERS) {
+    const value = response.headers.get(name);
+    if (value)
+      out[name] = value;
+  }
+  return out;
 }
 async function* forward(target, path, request, signal, allows, naming = null, down = engineDown, toAgents = false) {
   const method = request.method.toUpperCase();
@@ -37598,6 +37664,22 @@ async function* forward(target, path, request, signal, allows, naming = null, do
     const body = await attachedIn(request.body, session, modelInput(url, headers, delivering), request.fromMac === true, toAgents);
     return prompt ? fromPhone(await namedIn(body, session, naming)) : body;
   };
+  const notAnswering = () => ({ status: 503, headers: { "content-type": "application/json" }, body: Buffer.from(JSON.stringify({ message: down() })) });
+  const once = sending && sending[2] === "prompt" ? sentKey(toAgents ? "agents" : "engine", decodeURIComponent(sending[1]), request.body) : null;
+  if (once) {
+    const answer = await sentOnce(once, async () => {
+      try {
+        const response = await fetch(url, { method, headers, body: await outgoing() });
+        return { status: response.status, headers: answerHeaders(response), body: Buffer.from(await response.arrayBuffer()) };
+      } catch {
+        return notAnswering();
+      }
+    });
+    yield { head: { status: answer.status, headers: answer.headers } };
+    if (answer.body.length)
+      yield { body: answer.body };
+    return;
+  }
   let response;
   try {
     response = await fetch(url, {
@@ -37609,16 +37691,12 @@ async function* forward(target, path, request, signal, allows, naming = null, do
   } catch (error) {
     if (signal?.aborted)
       throw error;
-    yield { head: { status: 503, headers: { "content-type": "application/json" } } };
-    yield { body: Buffer.from(JSON.stringify({ message: down() })) };
+    const answer = notAnswering();
+    yield { head: { status: answer.status, headers: answer.headers } };
+    yield { body: answer.body };
     return;
   }
-  const out = {};
-  for (const name of RESPONSE_HEADERS) {
-    const value = response.headers.get(name);
-    if (value)
-      out[name] = value;
-  }
+  const out = answerHeaders(response);
   if (changed && response.ok) {
     let archived;
     try {

@@ -420,6 +420,99 @@ test("a message that arrived whole reaches its conversation though the phone tha
   assert.deepEqual(fs.readFileSync(videoPath), video);
 });
 
+test("a message sent again under the same id after the phone's link dropped goes to its conversation once, and each send hears it went (#144)", { timeout: 30_000 }, async t => {
+  // An engine slow to take the first (a busy computer), counting every message it's sent.
+  const prompts = [];
+  let takeIt;
+  const taken = new Promise(resolve => { takeIt = resolve; });
+  let firstArrived;
+  const arrived = new Promise(resolve => { firstArrived = resolve; });
+  const server = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", chunk => { body += chunk; });
+    request.on("end", async () => {
+      const sent = /^\/api\/session\/([^/]+)\/prompt$/.exec(request.url);
+      if (!sent) { response.writeHead(404); return response.end("{}"); }
+      const prompt = JSON.parse(body);
+      prompts.push(prompt);
+      firstArrived();
+      await taken;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ data: { id: prompt.id, sessionID: sent[1], type: "user" } }));
+    });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const target = () => ({ pid: process.pid, port: server.address().port, password: "s3cret", version: "2.0.32" });
+  const handle = link.engineHandler(target, {}, () => null);
+  const hostKey = link.newKey();
+  const host = new link.LinkHost({ key: hostKey, hello: { v: 1, kind: "machine", name: "m", app: "0" }, authorize: () => true, handle });
+  const phone = phoneFor(host, hostKey);
+  const picture = Buffer.alloc(300_000, 7);
+  const message = Buffer.from(JSON.stringify({ id: "msg_once", text: "what's on this screen?", delivery: "steer", files: [{ name: "screen.png", uri: `data:image/png;base64,${picture.toString("base64")}` }] }));
+  const prompt = id => ({ t: "req", id, m: "POST", p: "api/session/ses_once/prompt", h: { "content-type": "application/json", "idempotency-key": "msg_once" } });
+  const kept = () => {
+    const folder = path.join(home, "attachments", "ses_once");
+    return fs.existsSync(folder) ? fs.readdirSync(folder, { recursive: true }).filter(name => fs.statSync(path.join(folder, name)).isFile()).length : 0;
+  };
+
+  // Here whole, then the link drops before the answer comes back.
+  await phone.open({});
+  phone.send(prompt(1), message);
+  await arrived;
+  await phone.close();
+  // Sent again on a new session, while the first is still on its way to the conversation.
+  await phone.open({});
+  phone.send(prompt(1), message);
+  const again = phone.response();
+  takeIt();
+  const answered = await again;
+  assert.equal(answered.head.s, 200);
+  assert.equal(JSON.parse(answered.body).data.id, "msg_once");
+  // And again once it went: the same answer, with the conversation not asked a second time.
+  phone.send(prompt(2), message);
+  const late = await phone.response();
+  assert.equal(late.head.s, 200);
+  assert.equal(JSON.parse(late.body).data.id, "msg_once");
+  assert.equal(prompts.length, 1);
+  assert.equal(prompts[0].id, "msg_once");
+  assert.equal(kept(), 1);
+
+  // Another message (its own id) still goes.
+  phone.send(prompt(3), Buffer.from(JSON.stringify({ id: "msg_other", text: "and this one?", delivery: "steer" })));
+  assert.equal((await phone.response()).head.s, 200);
+  assert.deepEqual(prompts.map(sent => sent.id), ["msg_once", "msg_other"]);
+});
+
+test("a message sent again after the conversation refused it is tried again (#144)", { timeout: 30_000 }, async t => {
+  // An engine that can't take it the first time (starting again), then can.
+  const prompts = [];
+  const server = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", chunk => { body += chunk; });
+    request.on("end", () => {
+      if (!/\/prompt$/.test(request.url)) { response.writeHead(404); return response.end("{}"); }
+      prompts.push(JSON.parse(body).id);
+      response.writeHead(prompts.length === 1 ? 503 : 200, { "content-type": "application/json" });
+      response.end(prompts.length === 1 ? JSON.stringify({ message: "starting" }) : "{}");
+    });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const target = () => ({ pid: process.pid, port: server.address().port, password: "s3cret", version: "2.0.32" });
+  const handle = link.engineHandler(target, {}, () => null);
+  const hostKey = link.newKey();
+  const host = new link.LinkHost({ key: hostKey, hello: { v: 1, kind: "machine", name: "m", app: "0" }, authorize: () => true, handle });
+  const phone = phoneFor(host, hostKey);
+  await phone.open({});
+  const message = Buffer.from(JSON.stringify({ id: "msg_retried", text: "hello", delivery: "steer" }));
+  phone.send({ t: "req", id: 1, m: "POST", p: "api/session/ses_retried/prompt", h: { "content-type": "application/json" } }, message);
+  assert.equal((await phone.response()).head.s, 503);
+  phone.send({ t: "req", id: 2, m: "POST", p: "api/session/ses_retried/prompt", h: { "content-type": "application/json" } }, message);
+  assert.equal((await phone.response()).head.s, 200);
+  assert.deepEqual(prompts, ["msg_retried", "msg_retried"]);
+});
+
 test("a Mac's files for a machine take the phone's path: kept on the machine's box, and only what the model reads goes as a file, with no word of a phone", async t => {
   const prompted = {};
   const server = http.createServer((request, response) => {
