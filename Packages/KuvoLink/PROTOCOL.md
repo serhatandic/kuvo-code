@@ -6189,10 +6189,15 @@ can go three months after 0.8.0 ships.
   once (`POST kuvo/git/settings/move {branchPrefix?, commitInstructions?, pullRequestInstructions?}`
   → `{"moved"}`, `409 {"message"}` while a machine's settings aren't its own yet, `500
   {"message"}` when they couldn't be written), which keeps
-  each where it has none of its own yet, the first time only (`box/git.json`'s `moved`), so a
-  later one, or one after you cleared it there, changes nothing. The Mac offers them as each box
-  starts or connects, and keeps them in its preferences for a computer you add later.
+  each where it has none of its own yet, the first time a Mac offers any (a branch prefix, or
+  instructions that aren't empty: `box/git.json`'s `moved`), so a later one, or one after you
+  cleared it there, changes nothing; `moved` says whether it took any now. The Mac offers them as
+  each box starts or connects, and keeps them in its preferences for a computer you add later.
   <!-- compat: 0.7 mac-git-settings -->
+- The branch prefix a box kept before in `box/git.json` (`branchPrefix`, the one a client last
+  made a worktree with): taken into its settings' `branch_prefix` once, where they have none, as a
+  machine's box starts or its settings become its own (`box adopt`), or after a Mac's Settings › Git
+  is moved there (the Mac's own prefix first), then removed from `box/git.json`. <!-- compat: 0.7 box-branch-prefix -->
 
 **Kuvo Code 0.8.0-beta.1.** It can go once 0.8.0 is out (a beta copy is offered the release).
 - It signs no documents: its setup and mail give its peers as a list (`peers`, with `peersAt` or
