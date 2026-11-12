@@ -55,11 +55,12 @@ function boxAnswers(route: string, request: LinkRequest): boolean {
   return false;
 }
 
-/** Whether this Mac's keeper runs now (its record in `run/keeper.json`, with its process alive). */
+/** Whether this Mac's keeper runs this box now: its record in `run/keeper.json` names the process
+ * that started it, alive. (A record a keeper left as it crashed, its ID another's since, isn't.) */
 export function keeperRuns(): boolean {
   let pid = 0;
   try { pid = Number(JSON.parse(fs.readFileSync(path.join(RUN, "keeper.json"), "utf8"))?.pid); } catch { return false; }
-  if (!Number.isInteger(pid) || pid <= 0) return false;
+  if (!Number.isInteger(pid) || pid <= 0 || pid !== process.ppid) return false;
   // (Another user's process with its ID, after a restart, isn't it: the keeper is always yours.)
   try {
     process.kill(pid, 0);

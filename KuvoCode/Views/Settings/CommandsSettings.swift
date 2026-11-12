@@ -103,7 +103,8 @@ struct CommandsSettings: View {
             }
         }
         // Named apart from this page's computer's other commands.
-        .task(id: box.id) { claudeCommands = await ClaudeCodeImports.read(for: app.box(box.id), others: Set(others.map(\.name))).commands }
+        // (Again as the engine's list comes, or changes: the names it takes.)
+        .task(id: [box.id] + others.map(\.name)) { claudeCommands = await ClaudeCodeImports.read(for: app.box(box.id), others: Set(others.map(\.name))).commands }
         .settingsDetail(item: $editing, title: { $0.name.map { "/" + $0 } ?? "New Command" }, onDismiss: removePending) { edit in
             CommandEditor(name: edit.name) { editing = nil } remove: { path in
                 removal = path

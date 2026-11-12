@@ -49,6 +49,8 @@ write(path.join(claude, "commands", "deploy.md"), "Ship it.\n");
 write(path.join(claude, "commands", "init.md"), "Set up.\n");
 write(path.join(claude, "commands", "mine.md"), "Mine.\n");
 write(path.join(claude, "commands", "empty.md"), "---\ndescription: nothing after\n---\n");
+// A link to a folder isn't followed (this one would list them all again and again).
+fs.symlinkSync(".", path.join(claude, "commands", "again"));
 // Imported already: this box's settings have it.
 write(path.join(home, "box", "opencode.json"), JSON.stringify({ agents: { "code-reviewer": { mode: "subagent" } }, commands: { mine: { template: "Mine." } } }));
 

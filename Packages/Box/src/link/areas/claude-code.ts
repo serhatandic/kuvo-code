@@ -57,28 +57,29 @@ function unquote(text: string): string {
 export const claudeID = (name: string): string => [...name.toLowerCase()].map(each => /[\p{L}\p{N}_-]/u.test(each) ? each : "-").join("");
 
 /** The Markdown files in a folder, read; `nested`, in its folders too, each named with them
- * ("frontend/component" for frontend/component.md), as Claude Code names its commands. */
-function markdownFiles(folder: string, nested = false): { name: string; text: string }[] {
-  let names: string[] = [];
-  try { names = fs.readdirSync(folder); } catch { return []; }
-  return names.flatMap(name => {
-    const file = path.join(folder, name);
-    let isFolder = false;
-    try { isFolder = fs.statSync(file).isDirectory(); } catch { return []; }
-    if (isFolder) return nested && !name.startsWith(".") ? markdownFiles(file, true).map(each => ({ name: `${name}/${each.name}`, text: each.text })) : [];
-    if (path.extname(name) !== ".md") return [];
-    try { return [{ name: name.slice(0, -3), text: fs.readFileSync(file, "utf8") }]; } catch { return []; }
-  });
+ * ("frontend/component" for frontend/component.md), as Claude Code names its commands. A link to a
+ * folder isn't followed (one to itself would list it again and again); a link to a file is read.
+ * Read off the box's thread, so one that macOS asks about holds this request only. */
+async function markdownFiles(folder: string, nested = false): Promise<{ name: string; text: string }[]> {
+  let entries: fs.Dirent[] = [];
+  try { entries = await fs.promises.readdir(folder, { withFileTypes: true }); } catch { return []; }
+  const found = await Promise.all(entries.map(async entry => {
+    const file = path.join(folder, entry.name);
+    if (entry.isDirectory()) return nested && !entry.name.startsWith(".") ? (await markdownFiles(file, true)).map(each => ({ name: `${entry.name}/${each.name}`, text: each.text })) : [];
+    if (path.extname(entry.name) !== ".md") return [];
+    try { return [{ name: entry.name.slice(0, -3), text: await fs.promises.readFile(file, "utf8") }]; } catch { return []; }
+  }));
+  return found.flat();
 }
 
 /** Claude Code's subagents (`agents`) and commands (`commands`) in `folder`, as they'd come over to
  * this box: named so they take none of its own (the engine's agents and commands, and `others`,
  * the commands its engine has that aren't in its settings: a plugin's, an MCP server's), and marked
  * `imported` where `settings` have them already. */
-export function claudeCodeList(folder: string, settings: unknown, others: ReadonlySet<string>): ClaudeCode {
+export async function claudeCodeList(folder: string, settings: unknown, others: ReadonlySet<string>): Promise<ClaudeCode> {
   const entry = (name: string, description: string, at: string[], value: Record<string, string>): ClaudeCodeImport =>
     ({ name, description, path: at, settings: value, imported: valueAt(settings, at) !== undefined });
-  const agents = markdownFiles(path.join(folder, "agents")).flatMap(file => {
+  const agents = (await markdownFiles(path.join(folder, "agents"))).flatMap(file => {
     const { fields, body } = parseClaudeFile(file.text);
     const name = fields.name || file.name;
     let id = claudeID(name);
@@ -88,7 +89,7 @@ export function claudeCodeList(folder: string, settings: unknown, others: Readon
     const description = (fields.description ?? "").replaceAll("\\n", "\n");
     return [{ id, name, description, body }];
   }).sort((one, other) => one.name.localeCompare(other.name, undefined, { sensitivity: "base" }));
-  const commands = markdownFiles(path.join(folder, "commands"), true).flatMap(file => {
+  const commands = (await markdownFiles(path.join(folder, "commands"), true)).flatMap(file => {
     const { fields, body } = parseClaudeFile(file.text);
     const id = claudeID(file.name);
     return id && body ? [{ id, description: fields.description ?? "", body }] : [];
@@ -124,5 +125,5 @@ export async function* claudeCodeRoute({ request, readEngine, json }: RouteConte
   const { settings } = readSettings();
   let engine: EngineRecord | null = null;
   try { engine = readEngine(); } catch {}
-  return yield* json(200, claudeCodeList(folder, settings ?? {}, await otherCommands(engine, settings ?? {})));
+  return yield* json(200, await claudeCodeList(folder, settings ?? {}, await otherCommands(engine, settings ?? {})));
 }

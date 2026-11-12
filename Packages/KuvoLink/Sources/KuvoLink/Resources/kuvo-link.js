@@ -37202,35 +37202,30 @@ function unquote(text) {
   return first === '"' ? inner.replaceAll("\\\"", '"') : inner.replaceAll("''", "'");
 }
 var claudeID = (name) => [...name.toLowerCase()].map((each) => /[\p{L}\p{N}_-]/u.test(each) ? each : "-").join("");
-function markdownFiles(folder, nested = false) {
-  let names = [];
+async function markdownFiles(folder, nested = false) {
+  let entries = [];
   try {
-    names = fs117.readdirSync(folder);
+    entries = await fs117.promises.readdir(folder, { withFileTypes: true });
   } catch {
     return [];
   }
-  return names.flatMap((name) => {
-    const file = path122.join(folder, name);
-    let isFolder = false;
+  const found = await Promise.all(entries.map(async (entry) => {
+    const file = path122.join(folder, entry.name);
+    if (entry.isDirectory())
+      return nested && !entry.name.startsWith(".") ? (await markdownFiles(file, true)).map((each) => ({ name: `${entry.name}/${each.name}`, text: each.text })) : [];
+    if (path122.extname(entry.name) !== ".md")
+      return [];
     try {
-      isFolder = fs117.statSync(file).isDirectory();
+      return [{ name: entry.name.slice(0, -3), text: await fs117.promises.readFile(file, "utf8") }];
     } catch {
       return [];
     }
-    if (isFolder)
-      return nested && !name.startsWith(".") ? markdownFiles(file, true).map((each) => ({ name: `${name}/${each.name}`, text: each.text })) : [];
-    if (path122.extname(name) !== ".md")
-      return [];
-    try {
-      return [{ name: name.slice(0, -3), text: fs117.readFileSync(file, "utf8") }];
-    } catch {
-      return [];
-    }
-  });
+  }));
+  return found.flat();
 }
-function claudeCodeList(folder, settings, others) {
+async function claudeCodeList(folder, settings, others) {
   const entry = (name, description, at, value) => ({ name, description, path: at, settings: value, imported: valueAt(settings, at) !== undefined });
-  const agents = markdownFiles(path122.join(folder, "agents")).flatMap((file) => {
+  const agents = (await markdownFiles(path122.join(folder, "agents"))).flatMap((file) => {
     const { fields, body } = parseClaudeFile(file.text);
     const name = fields.name || file.name;
     let id = claudeID(name);
@@ -37242,7 +37237,7 @@ function claudeCodeList(folder, settings, others) {
 `);
     return [{ id, name, description, body }];
   }).sort((one, other) => one.name.localeCompare(other.name, undefined, { sensitivity: "base" }));
-  const commands = markdownFiles(path122.join(folder, "commands"), true).flatMap((file) => {
+  const commands = (await markdownFiles(path122.join(folder, "commands"), true)).flatMap((file) => {
     const { fields, body } = parseClaudeFile(file.text);
     const id = claudeID(file.name);
     return id && body ? [{ id, description: fields.description ?? "", body }] : [];
@@ -37274,7 +37269,7 @@ async function* claudeCodeRoute({ request, readEngine, json }) {
   try {
     engine = readEngine();
   } catch {}
-  return yield* json(200, claudeCodeList(folder, settings ?? {}, await otherCommands(engine, settings ?? {})));
+  return yield* json(200, await claudeCodeList(folder, settings ?? {}, await otherCommands(engine, settings ?? {})));
 }
 
 // Packages/Box/src/link/areas/folders.ts
@@ -37456,7 +37451,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "78772631067d";
+var BRIDGE_VERSION = "7c073e0b79b1";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -41941,7 +41936,7 @@ function keeperRuns() {
   } catch {
     return false;
   }
-  if (!Number.isInteger(pid) || pid <= 0)
+  if (!Number.isInteger(pid) || pid <= 0 || pid !== process.ppid)
     return false;
   try {
     process.kill(pid, 0);

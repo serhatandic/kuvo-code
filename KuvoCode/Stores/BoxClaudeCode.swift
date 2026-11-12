@@ -5,11 +5,11 @@ import OpenCodeKit
 /// `kuvo/claude-code`): the subagents and commands in this Mac's ~/.claude, as its box lists them,
 /// named as they'd come over. Import writes an item's `settings` at its `path` in that box's
 /// settings.
-nonisolated struct ClaudeCodeImports: Decodable, Sendable {
+struct ClaudeCodeImports: Decodable {
     var agents: [Item] = []
     var commands: [Item] = []
 
-    struct Item: Decodable, Identifiable, Hashable, Sendable {
+    struct Item: Decodable, Identifiable, Hashable {
         /// An agent's, as it's shown; a command's, the one it comes over as.
         var name: String
         var description: String
@@ -30,13 +30,15 @@ nonisolated struct ClaudeCodeImports: Decodable, Sendable {
         }
         // A machine's page offers this Mac's commands, as it always has, though its box lists its
         // own: which computer's ~/.claude a machine's page offers is the user's to decide (#341).
-        return await Task.detached { ClaudeCodeImports(here: box.box == BoxClient.mac, others: others) }.value
+        let isMac = box.box == BoxClient.mac
+        let (agents, commands) = await Task.detached { (isMac ? ClaudeAgents.load() : [], ClaudeCommands.load()) }.value
+        return ClaudeCodeImports(agents: agents, commands: commands, others: others)
     }
 
-    /// This Mac's ~/.claude, read here: its agents on this Mac's page only.
-    private init(here isMac: Bool, others: Set<String>) {
-        agents = isMac ? ClaudeAgents.load().map { Item(name: $0.name, description: $0.description, path: ["agents", $0.id], settings: $0.settings) } : []
-        commands = ClaudeCommands.load().map { command in
+    /// This Mac's ~/.claude, as read here, named as the app names them.
+    private init(agents: [ClaudeAgents.Agent], commands: [ClaudeCommands.Command], others: Set<String>) {
+        self.agents = agents.map { Item(name: $0.name, description: $0.description, path: ["agents", $0.id], settings: $0.settings) }
+        self.commands = commands.map { command in
             let name = ClaudeCommands.importedName(command, others: others)
             return Item(name: name, description: command.description, path: ["commands", name], settings: command.settings)
         }

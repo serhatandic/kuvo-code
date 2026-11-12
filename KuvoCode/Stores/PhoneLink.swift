@@ -874,7 +874,7 @@ final class PhoneLink {
         }
         // Settings › Agents' and Commands' From Claude Code: this Mac's ~/.claude, read here, for
         // one of its machines (`?machine=`), and for a phone through an older box (old-box path:
-        // every box lists its own now, `kuvo/claude-code`).
+        // every box lists its own now, `kuvo/claude-code`; that part goes once no box is older).
         if route == "kuvo/claude-code" {
             // `?machine=<id>`: named and said to be there as that machine's pages have them.
             let machine = URLComponents(string: request.path)?.queryItems?.first { $0.name == "machine" }?.value

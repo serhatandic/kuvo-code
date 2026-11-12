@@ -430,18 +430,23 @@ test("a phone restarts this Mac's engine through its keeper with the app closed;
   const front = link.macFront(link.engineHandler(() => ({ pid: process.pid, port: 1, password: "p" })));
   const keeper = path.join(run, "keeper.json");
   try {
-    // The keeper runs (this process stands for it): the box asks it, and the app isn't needed.
-    fs.writeFileSync(keeper, JSON.stringify({ pid: process.pid, version: "1.0.0", build: "1", url: "http://127.0.0.1:9", password: "k", started: 0 }));
+    // The keeper runs this box (what started this process stands for it): the box asks it, and the
+    // app isn't needed.
+    fs.writeFileSync(keeper, JSON.stringify({ pid: process.ppid, version: "1.0.0", build: "1", url: "http://127.0.0.1:9", password: "k", started: 0 }));
     const asking = app.asked.length;
     assert.equal((await asked(front, "POST", "kuvo/engine/restart")).status, 202);
     await link.toolRun();
     assert.equal(fs.readFileSync(told, "utf8").trim(), "restart");
     assert.equal(app.asked.length, asking, "the app wasn't asked");
 
-    // No keeper running (its record left by one that's gone, or none): the app runs the box and
-    // restarts its engine, and says it isn't there when it's closed.
+    // No keeper running this box (its record left by one that's gone, one whose ID another process
+    // has since, or none): the app runs the box and restarts its engine, and says it isn't there
+    // when it's closed.
     fs.rmSync(told);
-    for (const record of [JSON.stringify({ pid: 999999, version: "1.0.0", build: "1", url: "", password: "", started: 0 }), null]) {
+    const gone = spawn(process.execPath, ["-e", ""]);
+    await new Promise(resolve => gone.on("exit", resolve));
+    const left = pid => JSON.stringify({ pid, version: "1.0.0", build: "1", url: "", password: "", started: 0 });
+    for (const record of [left(gone.pid), left(process.pid), null]) {
       if (record) fs.writeFileSync(keeper, record); else fs.rmSync(keeper);
       assert.equal((await asked(front, "POST", "kuvo/engine/restart")).status, 503);
       assert.equal(app.asked.at(-1).path, "kuvo/engine/restart");

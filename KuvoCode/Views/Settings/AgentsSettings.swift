@@ -121,7 +121,8 @@ struct AgentsSettings: View {
         }
         // Claude Code's agents are this Mac's: offered on this Mac's page only, not brought onto a
         // machine as if they were its own.
-        .task(id: box.id) { claudeAgents = await ClaudeCodeImports.read(for: app.box(box.id), others: []).agents }
+        // (Again as the engine's list comes, or changes: this Mac's box was starting, say.)
+        .task(id: [box.id] + catalog.agents.map(\.id)) { claudeAgents = await ClaudeCodeImports.read(for: app.box(box.id), others: []).agents }
         .settingsDetail(item: $editing, title: { $0.agentID ?? "New Agent" }, onDismiss: removePending) { edit in
             AgentEditor(id: edit.agentID, isBuiltIn: edit.isBuiltIn) { editing = nil } remove: { path in
                 removal = path
