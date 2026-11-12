@@ -3,21 +3,26 @@
 // agent's program or package is there, and is skipped otherwise.
 
 import "../safety"
+import { REAL_PATH, withRealProgram } from "../../../KuvoLink/Tests/Bridge/test-safety.js"
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { claudeMessages, claudeSystem } from "../../src/agents/agents/claude"
 import { codexApprovals, codexItems, codexNotifications, codexRequests } from "../../src/agents/agents/codex"
 
-const codex = Bun.which("codex")
+const codex = Bun.which("codex", { PATH: REAL_PATH })
 
 /** The installed Codex's own schema files, read by name, in a folder removed after `check`. */
 function codexSchema(check: (read: (file: string) => any) => void) {
   const folder = mkdtempSync(join(tmpdir(), "kuvo-codex-schema-"))
   try {
-    expect(Bun.spawnSync([codex!, "app-server", "generate-json-schema", "--out", folder]).exitCode).toBe(0)
-    check((file) => JSON.parse(readFileSync(join(folder, file), "utf8")))
+    // (Only its schema, never signed in: in a home of its own, never yours.)
+    const home = join(folder, "codex-home")
+    mkdirSync(home)
+    const made = withRealProgram(codex!, () => Bun.spawnSync([codex!, "app-server", "generate-json-schema", "--out", join(folder, "schema")], { env: { ...process.env, CODEX_HOME: home } }))
+    expect(made.exitCode).toBe(0)
+    check((file) => JSON.parse(readFileSync(join(folder, "schema", file), "utf8")))
   } finally {
     rmSync(folder, { recursive: true, force: true })
   }

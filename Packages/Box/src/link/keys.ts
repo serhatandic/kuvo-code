@@ -5,7 +5,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { textOf, listOf, locked, writePrivate } from "./files";
+import { textOf, listOf, locked, writeSecret } from "./files";
 import { BOT_KEYS, BOX_KEYS, CONFIG_LOCK, KEYS_ON_HOST } from "./home";
 import { KeysUnavailable, NOT_ANSWERING, appHost, askHost } from "./host-interface";
 
@@ -71,8 +71,8 @@ export async function writeKey(name: string, value: unknown): Promise<void> {
   const host = keyHost();
   if (host) return void await askHost(host, "keys/set", { name, value });
   // A shared one under the settings' lock, as a Mac making the machine's settings its own copies them.
-  if (name.includes("__")) writePrivate(keyFile(name), value);
-  else locked(CONFIG_LOCK, () => writePrivate(keyFile(name), value));
+  if (name.includes("__")) writeSecret(keyFile(name), value);
+  else locked(CONFIG_LOCK, () => writeSecret(keyFile(name), value));
 }
 
 /** One key gone (nothing for one there wasn't). */

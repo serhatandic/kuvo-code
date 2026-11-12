@@ -32,6 +32,8 @@ import { Roster } from "./roster"
 import { cancelSignIns, handler, signInsWaiting } from "./server"
 import { launchLets, Renewal } from "./renewal"
 import { keeperEngine } from "../shared/engines"
+import { writeSecret } from "../shared/files"
+import { leftSignIns } from "./signin"
 import { commandLineOf } from "../shared/platform"
 import { updateUnderWay } from "../shared/updating"
 import { spawn } from "node:child_process"
@@ -106,6 +108,8 @@ mkdirSync(temporary, { recursive: true })
 // What an agent left unpacked when the bridge last stopped without cleaning up (Antigravity's
 // agent unpacks itself, about 1 GB, for each run), and half-finished downloads.
 rmSync(join(temporary, "antigravity"), { recursive: true, force: true })
+// And the page of a sign-in one was in the middle of.
+leftSignIns(temporary)
 try {
   for (const name of readdirSync(join(home, "antigravity"))) if (name.startsWith(".install-")) rmSync(join(home, "antigravity", name), { recursive: true, force: true })
 } catch {}
@@ -384,8 +388,7 @@ const record = onMachine ? join(machineHome!, "run", "bridge.json") : undefined
 const writeRecord = (renewal: RenewalRecord | null, first = false) => {
   if (!record) return
   try {
-    writeFileSync(record + ".new", JSON.stringify({ pid: process.pid, port: server.port, password, build, renewal }), { mode: 0o600 })
-    renameSync(record + ".new", record)
+    writeSecret(record, JSON.stringify({ pid: process.pid, port: server.port, password, build, renewal }))
   } catch (error) {
     if (first) throw error
   }

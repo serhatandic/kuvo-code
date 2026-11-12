@@ -19,6 +19,7 @@ import { CLAUDE_LIMITS_EVERY, claudeIdentity, credentialsIn, heardWindows, limit
 import { emit } from "../events"
 import { run, which } from "../proc"
 import { Queue } from "../queue"
+import { writeSecret } from "../../shared/files"
 import { commandSignIn } from "../signin"
 import { newID } from "../ids"
 import { kuvoTools } from "../kuvotools"
@@ -477,11 +478,8 @@ export class ClaudeAgent implements Agent {
       const started = Date.now()
       let handedOver = false
       const keep = (token: string) => {
-        mkdirSync(dirname(this.tokenFile), { recursive: true, mode: 0o700 })
-        // Whole or not at all, for a session starting meanwhile.
-        const writing = `${this.tokenFile}.${process.pid}.tmp`
-        writeFileSync(writing, JSON.stringify({ token, made: started }), { mode: 0o600 })
-        renameSync(writing, this.tokenFile)
+        // Whole or not at all, for a session starting meanwhile; only you can read it, and nothing's left if it fails.
+        writeSecret(this.tokenFile, JSON.stringify({ token, made: started }))
         handedOver = true
       }
       return commandSignIn({
