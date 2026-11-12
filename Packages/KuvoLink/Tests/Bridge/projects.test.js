@@ -70,6 +70,8 @@ async function engineWith(sessions, refusing = new Set(), waiting = new Set(), a
       }
       const id = decodeURIComponent(url.pathname.split("/").pop());
       const session = sessions.find(each => each.id === id);
+      // One read as it is now, before its metadata is written (#581).
+      if (request.method === "GET" && session) return send(200, { data: session });
       if (request.method === "PATCH" && session && !refusing.has(id)) {
         session.metadata = JSON.parse(body).metadata;
         // Answered once the others asked meanwhile have come in.

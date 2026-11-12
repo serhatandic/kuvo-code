@@ -7,7 +7,9 @@ import Foundation
 /// - a `#` at the start, or after a space or one of `([{"'/,–-`, then 1 to 6 digits, then no
 ///   letter, digit or underscore;
 /// - not inside a code span or block, a Markdown link or a web address;
-/// - not after "PR", "MR", "pull request", "issue" or "step": those are someone else's numbers.
+/// - not after "PR", "MR", "pull request", "issue" or "step": those are someone else's numbers;
+/// - numbers 1–10 next to rank words or before "on Google", "in search" or "Google result"
+///   describe ranks, not queue items.
 ///
 /// An outside source's reference has a prefix (`gh:owner/repo#12`), so a bare `#n` is always ours.
 /// One names the item that is that GitHub issue or pull request, by the same rule: at the start or
@@ -33,7 +35,7 @@ public enum WorkItemRefs {
             if end < text.endIndex, text[end].isLetter || text[end].isNumber || text[end] == "_" { continue }
             guard let number = Int(text[index..<end]), number > 0 else { continue }
             let range = hash..<end
-            guard !skipped.contains(where: { $0.overlaps(range) }), !afterOthersWord(text, hash) else { continue }
+            guard !skipped.contains(where: { $0.overlaps(range) }), !afterOthersWord(text, hash), !(number <= 10 && isOrdinal(text, hash, end)) else { continue }
             found.append((range, number))
             index = end
         }
@@ -110,13 +112,32 @@ public enum WorkItemRefs {
     /// "PR #12", "issue #5", "Step #3": another's number, not ours.
     private static func afterOthersWord(_ text: String, _ hash: String.Index) -> Bool {
         var start = hash
-        while start > text.startIndex, text[text.index(before: start)] == " " { start = text.index(before: start) }
+        while start > text.startIndex, text[text.index(before: start)].isWhitespace { start = text.index(before: start) }
         let before = text[text.startIndex..<start].suffix(14).lowercased()
         return othersWords.contains { word in
             guard before.hasSuffix(word) else { return false }
             let rest = before.dropLast(word.count)
             return rest.last.map { !$0.isLetter && !$0.isNumber } ?? true
         }
+    }
+
+    private static func isOrdinal(_ text: String, _ hash: String.Index, _ end: String.Index) -> Bool {
+        let words: Set<String> = ["ranked", "rank", "number", "result", "results", "spot", "place", "position", "priority", "seller"]
+        let before = text[..<hash].reversed().drop(while: { $0.isWhitespace }).prefix(while: { $0.isLetter }).reversed()
+        let after = text[end...].drop(while: { $0.isWhitespace })
+        if words.contains(String(before).lowercased()) || words.contains(after.prefix(while: { $0.isLetter }).lowercased()) { return true }
+        let following = after.split(maxSplits: 2, whereSeparator: { $0.isWhitespace }).prefix(2).map { $0.lowercased().trimmingCharacters(in: .punctuationCharacters) }
+        return (following.count == 2 && ["on", "in"].contains(following[0]) && following[1].contains(where: { $0.isLetter })) || (following.count == 2 && following[0] == "google" && ["result", "results"].contains(following[1]))
+    }
+
+    /// Resolves references for a conversation. Bare numbers must be in its visible queue;
+    /// explicitly qualified sources keep their computer-wide lookup. Missing visibility fails closed.
+    public static func chipRefs<Value>(in text: String, known: [String: Value], visible: [String: Value]) -> [String: Value] {
+        var result: [String: Value] = [:]
+        for key in refs(in: text) {
+            if let value = Int(key) == nil ? known[key] : visible[key] { result[key] = value }
+        }
+        return result
     }
 
     /// Where a reference isn't one: code spans and blocks, Markdown links (their words and their

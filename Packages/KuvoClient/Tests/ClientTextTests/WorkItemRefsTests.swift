@@ -24,6 +24,36 @@ import ClientText
         #expect(WorkItemRefs.find(in: text).map(\.number) == numbers)
     }
 
+    @Test(arguments: ["the #1 Google result", "to #1 on Google", "ranked #1", "#1 spot", "#1 on Google", "We’re #1 on Google", "it hit #1 in search", "#1 Google result", "rank #1", "number #1", "#1 result", "#1 place", "#1 position", "#1 priority", "#1 seller", "#1 results", "#1 on Amazon", "#1 in Europe", "priority #10", "seller #2"])
+    func ordinalsStayPlain(text: String) {
+        #expect(WorkItemRefs.refs(in: text).isEmpty)
+    }
+
+    @Test func chipsRequireConversationVisibility() {
+        let global = ["1": "Unrelated bot's item", "243": "Our item"]
+        let ours = ["243": "Our item"]
+        #expect(WorkItemRefs.chipRefs(in: "see #243", known: global, visible: ours) == ours)
+        #expect(WorkItemRefs.chipRefs(in: "#243", known: global, visible: [:]).isEmpty)
+        #expect(WorkItemRefs.chipRefs(in: "#1", known: global, visible: ours).isEmpty)
+        #expect(WorkItemRefs.chipRefs(in: "the #1 Google result", known: global, visible: global).isEmpty)
+        #expect(WorkItemRefs.chipRefs(in: "#243 then the #243 result", known: global, visible: ours) == ours)
+    }
+
+    @Test(arguments: ["Linked to #243", "Added a note to #243", "Look at #243", "Fix the #243 bug", "Moved it to\n#243", "to #243", "at #243", "the #243", "ranked #243", "#243 result"])
+    func realReferencesSurvive(text: String) {
+        #expect(WorkItemRefs.chipRefs(in: text, known: [:], visible: ["243": "ours"])["243"] == "ours")
+    }
+
+    @Test func qualifiedReferencesNeedNoConversation() {
+        let known = ["gh:owner/repo#12": "issue", "12": "queue item"]
+        #expect(WorkItemRefs.chipRefs(in: "gh:owner/repo#12 and #12", known: known, visible: [:]) == ["gh:owner/repo#12": "issue"])
+    }
+
+    @Test func aReasonRequiresVisibility() {
+        #expect(WorkItemRefs.chipRefs(in: "the #1 reason", known: ["1": "other"], visible: [:]).isEmpty)
+        #expect(WorkItemRefs.chipRefs(in: "the #1 reason", known: [:], visible: ["1": "ours"])["1"] == "ours")
+    }
+
     @Test func eachRangeIsTheWrittenReference() {
         let text = "Fix #243 now"
         let found = WorkItemRefs.find(in: text)

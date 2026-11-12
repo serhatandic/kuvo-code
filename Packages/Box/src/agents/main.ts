@@ -32,6 +32,8 @@ import { Roster } from "./roster"
 import { cancelSignIns, handler, signInsWaiting } from "./server"
 import { launchLets, Renewal } from "./renewal"
 import { keeperEngine } from "../shared/engines"
+import { writeSecret } from "../shared/files"
+import { leftSignIns } from "./signin"
 import { commandLineOf } from "../shared/platform"
 import { updateUnderWay } from "../shared/updating"
 import { spawn } from "node:child_process"
@@ -52,6 +54,7 @@ import { GroupRunner } from "./groups/runner"
 import { GroupStore } from "./groups/store"
 import { queueFiles } from "../shared/queues"
 import { HangWatch, isEngine } from "../shared/hang"
+import { notesBeside } from "./notes"
 import { agentAccounts, Limits } from "./limits"
 import { ENGINE_SERVICES, EngineAccounts } from "./engine-limits"
 
@@ -105,6 +108,8 @@ mkdirSync(temporary, { recursive: true })
 // What an agent left unpacked when the bridge last stopped without cleaning up (Antigravity's
 // agent unpacks itself, about 1 GB, for each run), and half-finished downloads.
 rmSync(join(temporary, "antigravity"), { recursive: true, force: true })
+// And the page of a sign-in one was in the middle of.
+leftSignIns(temporary)
 try {
   for (const name of readdirSync(join(home, "antigravity"))) if (name.startsWith(".install-")) rmSync(join(home, "antigravity", name), { recursive: true, force: true })
 } catch {}
@@ -201,6 +206,8 @@ const botsFolder = groupFolders?.bots ?? (onMachine ? join(machineHome!, "bots")
 const agentsFile = onMachine ? join(machineHome!, "run", "agents.json") : process.env.KUVO_AGENTS_FILE || undefined
 // The box's queues, where a chat's part for a conversation you stopped waits (on the Mac, the box's run folder the app says).
 const runFolder = onMachine ? join(machineHome!, "run") : process.env.KUVO_RUN || undefined
+// Sessions' turns held with the box's link, in its run folder.
+notesBeside(runFolder)
 // Nor do the agents get these.
 for (const name of ["KUVO_GROUPS", "KUVO_TRASH", "KUVO_GROUPS_MEMORY_KEY", "KUVO_AGENTS_FILE", "KUVO_ARTIFACTS", "KUVO_RUN", ...(onMachine ? [] : ["KUVO_BOTS"])]) delete process.env[name]
 if (groupFolders) {
@@ -381,8 +388,7 @@ const record = onMachine ? join(machineHome!, "run", "bridge.json") : undefined
 const writeRecord = (renewal: RenewalRecord | null, first = false) => {
   if (!record) return
   try {
-    writeFileSync(record + ".new", JSON.stringify({ pid: process.pid, port: server.port, password, build, renewal }), { mode: 0o600 })
-    renameSync(record + ".new", record)
+    writeSecret(record, JSON.stringify({ pid: process.pid, port: server.port, password, build, renewal }))
   } catch (error) {
     if (first) throw error
   }

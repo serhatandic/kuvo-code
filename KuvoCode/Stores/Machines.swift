@@ -146,6 +146,8 @@ final class MachineEngine {
     @ObservationIgnored private(set) var activeConnection: MachineConnection?
     /// It left this Mac (removed, or found to be another machine here): it never connects again.
     @ObservationIgnored private(set) var isRetired = false
+    /// Starts over begun (`AppModel.restartEngine`), so a Connect meanwhile ends the one under way.
+    @ObservationIgnored var restarts = 0
     /// Copying its sign-ins, now or last: the next waits for it.
     @ObservationIgnored var signInTurn: Task<Void, Never>?
     /// Events for the stores that span every machine (sessions); the catalog takes its own.
@@ -490,12 +492,15 @@ final class MachineEngine {
         case .preparing, .failed: break
         case .downloading, .starting, .ready: return nil
         }
-        // One that left this Mac, from a retry or a start over that came after: nothing goes there.
-        guard !isRetired else { return nil }
+        // One that left this Mac, from a retry or a start over that came after, or one
+        // disconnected: nothing goes there.
+        guard !isRetired, !isDisconnected else { return nil }
         isStopping = false
-        // Disconnecting (Connect Now) or a newer attempt ends this one at its next step.
+        // Disconnect, Remove, Connect Now or a newer attempt ends this one before its next step:
+        // asked before each script that goes there, so nothing more does once it's cut off.
         let attempt = connections
-        let check = { if self.connections != attempt { throw Superseded() } }
+        let check = { if !self.isCurrent(attempt) { throw Superseded() } }
+        let wanted = stillWanted()
         #if DEBUG
         if let standIn = Self.standIn {
             state = .starting
@@ -503,11 +508,11 @@ final class MachineEngine {
             do {
                 api = try await standIn(machine)
             } catch {
-                guard connections == attempt else { return nil }
+                guard isCurrent(attempt) else { return nil }
                 failed(error)
                 return nil
             }
-            guard connections == attempt else { return nil }
+            guard isCurrent(attempt) else { return nil }
             guard let api else {
                 failureKind = .away
                 lastTryAway = true
@@ -528,124 +533,145 @@ final class MachineEngine {
         }
         var attached: RemoteServer?
         do {
-            state = .starting
-            step = .checking
-            // At whichever of its addresses answers.
-            await reach()
+            // What goes there to set it up, every script asking first that it's still wanted
+            // (`SSHConnection.sendsWhile`), so nothing more does once it's cut off: none of the
+            // steps' own probes, a seed with your keys, a launch. (Only these steps: what runs for
+            // the connection after has its own end.) Nil: its engine was stopped on purpose.
+            let ready = try await SSHConnection.$sendsWhile.withValue((machine.id, wanted)) { () async throws -> RemoteServer? in
+                state = .starting
+                step = .checking
+                // At whichever of its addresses answers.
+                await reach()
+                try check()
+                let connection = machine.connection
+                // A box a newer Kuvo Code set up (it updated itself, or another Mac's newer app did):
+                // what's there runs as it is, and nothing of this app's goes over it.
+                boxIsNewer = BoxVersion.isNewer(try await BoxVersion.read(on: connection))
+                try check()
+                // COMPAT(0.7 files): `run/mac-installing` while this app puts its files there. Goes 3 months after 0.8.0.
+                // What follows puts this app's files there: the box doesn't take them for an older Mac's.
+                if !boxIsNewer { try? await BoxVersion.installing(on: connection) }
+                try check()
+                // The box's own tool and keeper first, which what follows counts on.
+                try await RemoteServer.installBoot(on: connection)
+                try check()
+                var found = try await RemoteServer.find(on: connection)
+                try check()
+                let starting = startWanted
+                // COMPAT(0.7 engine-stop): an engine an older Mac stopped stays down until Start. Goes 3 months after 0.8.0.
+                if found == .stopped, !starting {
+                    if !boxIsNewer { try? await BoxVersion.notInstalling(on: connection) }
+                    return nil
+                }
+                isStopped = false
+                // A newer box's engine isn't running: its own keeper starts the one it has.
+                if boxIsNewer, found.engine == nil {
+                    // COMPAT(0.7 engine-stop): a newer box found stopped is started. Goes 3 months after 0.8.0.
+                    if found == .stopped { try await RemoteServer.startEngine(on: connection) }
+                    for _ in 0..<15 where found.engine == nil {
+                        try await Task.sleep(for: .seconds(2))
+                        try check()
+                        found = try await RemoteServer.find(on: connection)
+                    }
+                    guard found.engine != nil else { throw NewerBox() }
+                }
+                var engine = found.engine
+                let isNewer = engine.map { $0.version.compare(OpenCodeEngine.version, options: .numeric) == .orderedDescending } ?? false
+                var updates = !boxIsNewer && engine?.version != OpenCodeEngine.version && !(isNewer && engine.map(isAnotherMacs) == true)
+                // An engine of another version still at work (a session left running when the app
+                // quit or updated): kept, with its work, until a connection finds it with none.
+                var busy: RemoteServer?
+                // (One that can't be reached to ask is updated, as before.)
+                try check()
+                if updates, let old = engine, let probe = try? await attach(old, launch) {
+                    attached = probe
+                    try check()
+                    let api = OpenCodeAPI(endpoint: probe.endpoint, folderPrefix: RemoteFolder.prefix(for: machine.id))
+                    if (try? await api.activeSessions())?.isEmpty == false {
+                        busy = probe
+                        updates = false
+                    } else {
+                        probe.disconnect()
+                        attached = nil
+                    }
+                }
+                try check()
+                if updates {
+                    state = .downloading(progress: 0)
+                    try await RemoteEngineInstaller(connection: connection, cache: cache).install(progress: { progress in
+                        Task { @MainActor in
+                            guard case .downloading = self.state else { return }
+                            switch progress {
+                            case .downloading(let fraction):
+                                self.state = .downloading(progress: fraction)
+                                self.step = .downloading(fraction: fraction)
+                            case .copying(let sent, let total):
+                                self.step = .copying(sent: sent, total: total)
+                            }
+                        }
+                    })
+                    try check()
+                    state = .starting
+                }
+                step = .starting
+                // Its own settings, a box of its own: made so once (from what it runs with, or this
+                // Mac's on one with none), then read, for what its engine starts with.
+                try await MachineBox.install(on: connection)
+                try check()
+                var launch = launch
+                // COMPAT(0.7 settings): the settings an older Mac's start left, made the box's own. Goes 3 months after 0.8.0.
+                let box = try await MachineBox.adopt(on: connection, seed: launch.seed)
+                config.took(box.settings)
+                launch.boxEnvironment = launch.fromBox(config.settings)
+                if box.seeded { seededNow = true }
+                try check()
+                // The browser tools' helper, and the agents bridge, which an engine starts with.
+                try await MachineBrowserInstaller.installHelper(launch.helper, on: connection)
+                try check()
+                if let agents = launch.agents { try await Self.installAgents(agents, on: connection) }
+                try check()
+                let running: RemoteServer.Engine
+                // One of another version is replaced in the same start, so its keeper starts no other.
+                if let engine, !updates { running = engine } else { running = try await launchEngine(launch, replace: engine?.pid, starting: starting) }
+                try check()
+                var server: RemoteServer
+                if let busy { server = busy } else { server = try await attach(running, launch) }
+                attached = server
+                try check()
+                let api = OpenCodeAPI(endpoint: server.endpoint, folderPrefix: RemoteFolder.prefix(for: machine.id))
+                // COMPAT(0.7 engine-stop): an older Mac's engine started over once nothing runs. Goes 3 months after 0.8.0.
+                // Taken from another Mac (Make This Mac Its Home): this Mac's from now on.
+                let takes = takingHome && isAnotherMacs(server.engine)
+                if !boxIsNewer, takes || isOlderMacs(server.engine) || server.engine.notes["settings"] != launch.fingerprint && !isAnotherMacs(server.engine), (try? await api.activeSessions())?.isEmpty == true {
+                    takingHome = false
+                    // Started with older settings (or an older Mac's), and nothing to interrupt: start it over.
+                    try check()
+                    server.disconnect()
+                    attached = nil
+                    let replaced = try await launchEngine(launch, replace: server.engine.pid)
+                    try check()
+                    server = try await attach(replaced, launch)
+                    attached = server
+                    try check()
+                }
+                try check()
+                // COMPAT(0.7 files): the marks of this app's tools, for `bin/.own`. Goes 3 months after 0.8.0.
+                // What this app put there runs: the box is this version's.
+                if !boxIsNewer {
+                    var marks = ["kuvo-browser.js": "// kuvo-browser \(launch.helper.hash)"]
+                    if let agents = launch.agents { marks["kuvo-agents.js"] = "// kuvo-agents \(agents.hash)" }
+                    try? await BoxVersion.mark(on: connection, marks: marks)
+                }
+                return server
+            }
+            // Cut off as its last step ran (marking the box): it isn't connected.
             try check()
-            let connection = machine.connection
-            // A box a newer Kuvo Code set up (it updated itself, or another Mac's newer app did):
-            // what's there runs as it is, and nothing of this app's goes over it.
-            boxIsNewer = BoxVersion.isNewer(try await BoxVersion.read(on: connection))
-            try check()
-            // COMPAT(0.7 files): `run/mac-installing` while this app puts its files there. Goes 3 months after 0.8.0.
-            // What follows puts this app's files there: the box doesn't take them for an older Mac's.
-            if !boxIsNewer { try? await BoxVersion.installing(on: connection) }
-            // The box's own tool and keeper first, which what follows counts on.
-            try await RemoteServer.installBoot(on: connection)
-            var found = try await RemoteServer.find(on: connection)
-            try check()
-            let starting = startWanted
             // COMPAT(0.7 engine-stop): an engine an older Mac stopped stays down until Start. Goes 3 months after 0.8.0.
-            if found == .stopped, !starting {
-                if !boxIsNewer { try? await BoxVersion.notInstalling(on: connection) }
+            guard let server = ready else {
                 isStopped = true
                 state = .preparing
                 watchWhileStopped()
                 return nil
-            }
-            isStopped = false
-            // A newer box's engine isn't running: its own keeper starts the one it has.
-            if boxIsNewer, found.engine == nil {
-                // COMPAT(0.7 engine-stop): a newer box found stopped is started. Goes 3 months after 0.8.0.
-                if found == .stopped { try await RemoteServer.startEngine(on: connection) }
-                for _ in 0..<15 where found.engine == nil {
-                    try await Task.sleep(for: .seconds(2))
-                    try check()
-                    found = try await RemoteServer.find(on: connection)
-                }
-                guard found.engine != nil else { throw NewerBox() }
-            }
-            var engine = found.engine
-            let isNewer = engine.map { $0.version.compare(OpenCodeEngine.version, options: .numeric) == .orderedDescending } ?? false
-            var updates = !boxIsNewer && engine?.version != OpenCodeEngine.version && !(isNewer && engine.map(isAnotherMacs) == true)
-            // An engine of another version still at work (a session left running when the app
-            // quit or updated): kept, with its work, until a connection finds it with none.
-            var busy: RemoteServer?
-            // (One that can't be reached to ask is updated, as before.)
-            if updates, let old = engine, let probe = try? await attach(old, launch) {
-                attached = probe
-                try check()
-                let api = OpenCodeAPI(endpoint: probe.endpoint, folderPrefix: RemoteFolder.prefix(for: machine.id))
-                if (try? await api.activeSessions())?.isEmpty == false {
-                    busy = probe
-                    updates = false
-                } else {
-                    probe.disconnect()
-                    attached = nil
-                }
-            }
-            if updates {
-                state = .downloading(progress: 0)
-                try await RemoteEngineInstaller(connection: connection, cache: cache).install { progress in
-                    Task { @MainActor in
-                        guard case .downloading = self.state else { return }
-                        switch progress {
-                        case .downloading(let fraction):
-                            self.state = .downloading(progress: fraction)
-                            self.step = .downloading(fraction: fraction)
-                        case .copying(let sent, let total):
-                            self.step = .copying(sent: sent, total: total)
-                        }
-                    }
-                }
-                try check()
-                state = .starting
-            }
-            step = .starting
-            // Its own settings, a box of its own: made so once (from what it runs with, or this
-            // Mac's on one with none), then read, for what its engine starts with.
-            try await MachineBox.install(on: connection)
-            var launch = launch
-            // COMPAT(0.7 settings): the settings an older Mac's start left, made the box's own. Goes 3 months after 0.8.0.
-            let box = try await MachineBox.adopt(on: connection, seed: launch.seed)
-            config.took(box.settings)
-            launch.boxEnvironment = launch.fromBox(config.settings)
-            if box.seeded { seededNow = true }
-            try check()
-            // The browser tools' helper, and the agents bridge, which an engine starts with.
-            try await MachineBrowserInstaller.installHelper(launch.helper, on: connection)
-            if let agents = launch.agents { try await Self.installAgents(agents, on: connection) }
-            try check()
-            let running: RemoteServer.Engine
-            // One of another version is replaced in the same start, so its keeper starts no other.
-            if let engine, !updates { running = engine } else { running = try await launchEngine(launch, replace: engine?.pid, starting: starting) }
-            try check()
-            var server: RemoteServer
-            if let busy { server = busy } else { server = try await attach(running, launch) }
-            attached = server
-            try check()
-            let api = OpenCodeAPI(endpoint: server.endpoint, folderPrefix: RemoteFolder.prefix(for: machine.id))
-            // COMPAT(0.7 engine-stop): an older Mac's engine started over once nothing runs. Goes 3 months after 0.8.0.
-            // Taken from another Mac (Make This Mac Its Home): this Mac's from now on.
-            let takes = takingHome && isAnotherMacs(server.engine)
-            if !boxIsNewer, takes || isOlderMacs(server.engine) || server.engine.notes["settings"] != launch.fingerprint && !isAnotherMacs(server.engine), (try? await api.activeSessions())?.isEmpty == true {
-                takingHome = false
-                // Started with older settings (or an older Mac's), and nothing to interrupt: start it over.
-                try check()
-                server.disconnect()
-                attached = nil
-                server = try await attach(launchEngine(launch, replace: server.engine.pid), launch)
-                attached = server
-                try check()
-            }
-            try check()
-            // COMPAT(0.7 files): the marks of this app's tools, for `bin/.own`. Goes 3 months after 0.8.0.
-            // What this app put there runs: the box is this version's.
-            if !boxIsNewer {
-                var marks = ["kuvo-browser.js": "// kuvo-browser \(launch.helper.hash)"]
-                if let agents = launch.agents { marks["kuvo-agents.js"] = "// kuvo-agents \(agents.hash)" }
-                try? await BoxVersion.mark(on: connection, marks: marks)
             }
             self.server = server
             let current = OpenCodeAPI(endpoint: server.endpoint, session: Self.patient, folderPrefix: RemoteFolder.prefix(for: machine.id))
@@ -669,7 +695,7 @@ final class MachineEngine {
         } catch is Superseded {
             // What it connected is its own to close; the newer attempt has the rest.
             if let attached, attached !== server { attached.disconnect() }
-        } catch where connections != attempt {
+        } catch where !isCurrent(attempt) {
             // Failed after a newer attempt began: that one's state isn't this one's to change.
             if let attached, attached !== server { attached.disconnect() }
         // COMPAT(0.7 engine-stop): an engine an older Mac stopped. Goes 3 months after 0.8.0.
@@ -739,6 +765,20 @@ final class MachineEngine {
     }
 
     private struct Superseded: Error {}
+
+    /// The start that began at `attempt` is still wanted: nothing disconnected or removed it since,
+    /// nor began another.
+    private func isCurrent(_ attempt: Int) -> Bool {
+        connections == attempt && !isRetired && !isDisconnected
+    }
+
+    /// Whether what begins for it now (a start, a start over) is still wanted, each time it's
+    /// asked: not once it's disconnected or removed, or connected again from the start (Connect
+    /// Now), so nothing more of it goes there.
+    func stillWanted() -> @Sendable () async -> Bool {
+        let attempt = connections
+        return { @MainActor [weak self] in self?.isCurrent(attempt) ?? false }
+    }
 
     #if DEBUG
     /// For the app's tests: the engine a machine's connection reaches (nil: it can't be reached),

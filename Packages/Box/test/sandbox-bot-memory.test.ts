@@ -1,4 +1,5 @@
 import "./safety"
+import { REAL_PATH } from "../../KuvoLink/Tests/Bridge/test-safety.js"
 import { expect, setDefaultTimeout, test } from "bun:test"
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -110,7 +111,8 @@ test.skipIf(!canFence)("a bot's agent saves its memory as Claude Code saves a fi
 
 // The same with Claude Code itself, where it's installed: its Read, Edit and Write tools on the
 // bot's memory, as a model would call them (a stand-in for Anthropic's API on 127.0.0.1 asks).
-const claude = Bun.which("claude")
+// (The agents' programs aren't on a test's PATH: REAL_PATH has them.)
+const claude = Bun.which("claude", { PATH: REAL_PATH })
 test.skipIf(!canFence || !claude)("a bot on Claude Code edits and rewrites its memory in the sandbox", async () => {
   const box = botBox()
   const calls = [

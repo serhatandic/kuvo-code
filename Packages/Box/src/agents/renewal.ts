@@ -16,11 +16,12 @@
 // after five runs in a row under ten minutes, so it goes only after eleven minutes, and on an older
 // launch only while it has started fewer than four times (`lets`).
 
-import { statSync, watch } from "node:fs"
+import { statSync } from "node:fs"
 import { dirname } from "node:path"
 import { bundleBuild } from "../shared/bundle"
 import { nightOf } from "../shared/night"
 import type { RenewalRecord, RenewalWait } from "../shared/records"
+import { watchFolder } from "../shared/watch"
 
 /** What's under way here: `turns`, which it never cuts (a session's turn, a subagent's, your `!`
  * command, a message being handed to an agent, a session being deleted, a group chat's discussion,
@@ -102,7 +103,7 @@ export class Renewal {
     this.looking = setInterval(() => this.look(), renewalTiming.look)
     this.looking.unref?.()
     try {
-      this.watching = watch(dirname(this.options.script), () => this.look())
+      this.watching = watchFolder(dirname(this.options.script), () => this.look())
     } catch {}
     this.look()
   }
