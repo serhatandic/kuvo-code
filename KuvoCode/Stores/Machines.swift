@@ -376,6 +376,14 @@ final class MachineEngine {
     }
 
     var offer: Offer? {
+        // This Mac's own box, attached in place (#333): never disconnected (it's the window's) and
+        // never started from the app (it starts on its own), so only Connect, when it's lost.
+        if machine.isThisMac {
+            return switch state {
+            case .failed, .preparing: isRetrying ? .connectNow : .connect
+            default: nil
+            }
+        }
         switch state {
         case .ready: .disconnect
         // COMPAT(0.7 engine-stop): Start. Goes 3 months after 0.8.0.
