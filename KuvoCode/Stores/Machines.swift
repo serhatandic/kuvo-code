@@ -1627,6 +1627,8 @@ final class Machines {
     func start(for url: URL, on machine: String) {
         guard let port = Self.callbackPort(in: url) else { return }
         stop()
+        // This Mac's own box: the page comes back to this Mac's localhost, where its agent is.
+        guard !Machine(destination: machine).connection.isLocal else { return }
         problem = nil
         let process = Process()
         process.executableURL = URL(filePath: "/usr/bin/ssh")
@@ -1726,9 +1728,10 @@ nonisolated enum RemoteShell {
     /// stopped, rather than holding up what asked for ever.
     static func run(_ script: String, on machine: String) -> Data? {
         #if DEBUG
-        if let standIn = SSHConnection.standIn { return standIn(SSHConnection(destination: machine).address, script).map { Data($0.utf8) } }
+        if !SSHConnection(destination: machine).isLocal, let standIn = SSHConnection.standIn { return standIn(SSHConnection(destination: machine).address, script).map { Data($0.utf8) } }
         #endif
-        guard let result = try? ChildProcess.runBlocking("/usr/bin/ssh", SSHConnection(destination: machine).arguments(running: script),
+        let started = SSHConnection(destination: machine).invocation(running: script)
+        guard let result = try? ChildProcess.runBlocking(started.executable, started.arguments, environment: started.environment, directory: started.directory,
                                                          errors: .discard, limit: .seconds(300)),
               result.succeeded else { return nil }
         return result.output
