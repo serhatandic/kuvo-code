@@ -12,8 +12,10 @@
 //                                     Codex with a COPY of that sign-in, in a CODEX_HOME of its own,
 //                                     deleted afterwards; refused if the copy could refresh it
 // Claude Code and Grok keep their conversations in the real home's folders, which no test may delete
-// in: each says what it left there, in kuvo-compact-* folders, for you to remove.
-import "./test-safety.js";
+// in: each says what it left there, in kuvo-compact-* folders, for you to remove. Only the lane you
+// asked for reaches the real home (test-safety.js's `allowRealAgents`): its bridge has the other
+// agents' homes in the test's own folders, so it never reads their sign-ins.
+import { allowRealAgents } from "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -27,16 +29,20 @@ import { NO_BUN, testBun } from "./bun-for-tests.js";
 const bun = testBun();
 const agentsJS = fileURLToPath(new URL("../../../../KuvoCode/Resources/kuvo-agents.js", import.meta.url));
 const agentsSources = fileURLToPath(new URL("../../../Box/src/agents", import.meta.url));
-const program = name => spawnSync("sh", ["-c", `command -v ${name}`], { encoding: "utf8" }).stdout.trim();
+// (Grok's own folder of programs isn't on a test's PATH: the bridge finds it there by the real home.)
+const program = name => spawnSync("sh", ["-c", `command -v ${name}`], { encoding: "utf8", env: { ...process.env, PATH: `${process.env.PATH}:${path.join(process.env.KUVO_TEST_REAL_HOME ?? "", ".grok", "bin")}` } }).stdout.trim();
 const WORDS = "TANGERINE-42 and HARBOUR";
 // The run has a home of its own: Claude Code's and Grok's sign-ins are in the real one.
 const realHome = process.env.KUVO_TEST_REAL_HOME;
 
 /** The bridge, in folders of the test's own, and a client's calls to it. */
-async function bridge(prefix, env = {}, useRealHome = true, ownClaudeSignIn = false) {
+async function bridge(prefix, env = {}, useRealHome = false, ownClaudeSignIn = false) {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
   removeAtEnd(home);
-  for (const folder of ["tmp", "work", "agents", "run"]) fs.mkdirSync(path.join(home, folder), { recursive: true });
+  for (const folder of ["tmp", "work", "agents", "run", "grok", "codex", "claude"]) fs.mkdirSync(path.join(home, folder), { recursive: true });
+  // The agents not under test, in folders of the test's own: never your sign-ins with them (the
+  // bridge reads each agent's as it starts, for its plan's limits).
+  const others = { GROK_HOME: path.join(home, "grok"), CODEX_HOME: path.join(home, "codex"), CLAUDE_CONFIG_DIR: path.join(home, "claude") };
   const workspace = path.join(home, "work");
   // On a Mac the bridge's Claude lane signs in with Kuvo Code's own token, which a test's folders don't
   // have and never get a copy of. So from its sources, as on a machine: with your own sign-in, as is.
@@ -45,7 +51,7 @@ async function bridge(prefix, env = {}, useRealHome = true, ownClaudeSignIn = fa
   const child = spawn(bun, ownClaudeSignIn ? ["--preload", preload, path.join(agentsSources, "main.ts")] : [agentsJS], {
     cwd: workspace,
     stdio: ["pipe", "pipe", "pipe"],
-    env: { PATH: process.env.PATH, HOME: useRealHome ? realHome : home, USER: process.env.USER, TMPDIR: `${home}/tmp`, KUVO_HOME: home, KUVO_AGENTS_HOME: path.join(home, "agents"), OPENCODE_PASSWORD: "pw", BUN_BE_BUN: "1", ...env },
+    env: { PATH: process.env.PATH, HOME: useRealHome ? realHome : home, USER: process.env.USER, TMPDIR: `${home}/tmp`, KUVO_HOME: home, KUVO_AGENTS_HOME: path.join(home, "agents"), OPENCODE_PASSWORD: "pw", BUN_BE_BUN: "1", ...others, ...env },
   });
   atEnd(() => new Promise(resolve => { if (child.exitCode !== null) return resolve(); child.on("exit", resolve); child.stdin.end(); child.kill(); }));
   const port = await new Promise((resolve, reject) => {
@@ -148,7 +154,8 @@ async function scenario({ api, workspace }, provider, model) {
 }
 
 test("Claude Code", { skip: !process.env.KUVO_TEST_COMPACT_CLAUDE ? "KUVO_TEST_COMPACT_CLAUDE isn't set" : !bun ? NO_BUN : !program("claude") ? "Claude Code isn't installed" : false, timeout: 900_000 }, async t => {
-  const running = await bridge("kuvo-compact-claude-", {}, true, true);
+  allowRealAgents();
+  const running = await bridge("kuvo-compact-claude-", { CLAUDE_CONFIG_DIR: undefined }, true, true);
   t.diagnostic(`Left to remove: ~/.claude/projects/${running.workspace.replace(/[^a-zA-Z0-9]/g, "-")}`);
   // A project's hook for what follows a summary: it starts, and its row isn't a failure.
   const ran = path.join(running.home, "hook-ran.txt");
@@ -163,7 +170,8 @@ test("Claude Code", { skip: !process.env.KUVO_TEST_COMPACT_CLAUDE ? "KUVO_TEST_C
 });
 
 test("Grok", { skip: !process.env.KUVO_TEST_COMPACT_GROK ? "KUVO_TEST_COMPACT_GROK isn't set" : !bun ? NO_BUN : !program("grok") ? "Grok isn't installed" : false, timeout: 900_000 }, async t => {
-  const running = await bridge("kuvo-compact-grok-");
+  allowRealAgents();
+  const running = await bridge("kuvo-compact-grok-", { GROK_HOME: undefined }, true);
   t.diagnostic(`Left to remove: the folder in ~/.grok/sessions named after ${running.workspace}`);
   const { stopped } = await scenario(running, "grok-cli", process.env.KUVO_TEST_COMPACT_GROK);
   t.diagnostic(`A summary stopped under way: ${stopped}`);
