@@ -860,7 +860,8 @@ async function processUse(pid, proc = "/proc") {
 
 // Packages/Box/src/agents/proc.ts
 function which(name, extra = []) {
-  const folders = [...(process.env.PATH ?? "").split(delimiter), ...extra].filter(Boolean);
+  const skipped = process.env.KUVO_TEST_PATH_ONLY === "1" ? new Set(["/opt/homebrew/bin", "/usr/local/bin"]) : new Set;
+  const folders = [...(process.env.PATH ?? "").split(delimiter), ...extra.filter((folder) => !skipped.has(folder))].filter(Boolean);
   for (const folder of folders) {
     const path = join4(folder, name);
     try {
@@ -1208,21 +1209,26 @@ function writePrivate(file, text) {
   fs2.mkdirSync(path2.dirname(file), { recursive: true, mode: 448 });
   placeWhole(file, text);
 }
-function writeSecret(file, text) {
+function writeSecret(file, text, mode = 384) {
   privateFolder(path2.dirname(file));
-  placeWhole(file, text);
+  placeWhole(file, text, mode);
 }
 function privateFolder(folder) {
   fs2.mkdirSync(folder, { recursive: true, mode: 448 });
-  const made = fs2.statSync(folder);
-  if (made.mode & 63 && made.uid === process.getuid?.())
+  const made = fs2.lstatSync(folder);
+  if (!made.isDirectory())
+    throw new Error(`${folder} isn't a folder of its own: nothing secret is written in it.`);
+  if (process.getuid && made.uid !== process.getuid())
+    throw new Error(`${folder} isn't yours: nothing secret is written in it.`);
+  if (made.mode & 63)
     fs2.chmodSync(folder, 448);
   return folder;
 }
-function placeWhole(file, text) {
+function placeWhole(file, text, mode = 384) {
   const temporary = `${file}.${process.pid}.${crypto2.randomBytes(4).toString("hex")}.tmp`;
   try {
-    fs2.writeFileSync(temporary, text, { mode: 384, flag: "wx" });
+    fs2.writeFileSync(temporary, text, { mode, flag: "wx" });
+    fs2.chmodSync(temporary, mode);
     fs2.renameSync(temporary, file);
   } catch (error) {
     try {
@@ -6644,7 +6650,7 @@ function ancestors(path) {
 
 // Packages/Box/src/agents/agents/antigravity.ts
 import { createHash as createHash6 } from "crypto";
-import { chmodSync as chmodSync2, existsSync as existsSync12, mkdirSync as mkdirSync12, readdirSync as readdirSync12, readFileSync as readFileSync18, renameSync as renameSync10, rmSync as rmSync10, statSync as statSync8, writeFileSync as writeFileSync14 } from "fs";
+import { chmodSync, existsSync as existsSync12, mkdirSync as mkdirSync12, readdirSync as readdirSync12, readFileSync as readFileSync18, renameSync as renameSync10, rmSync as rmSync10, statSync as statSync8, writeFileSync as writeFileSync14 } from "fs";
 import { dirname as dirname10, join as join20 } from "path";
 import { pathToFileURL as pathToFileURL2 } from "url";
 
@@ -8629,7 +8635,7 @@ function questionFields(questions) {
 }
 
 // Packages/Box/src/agents/signin.ts
-import { chmodSync, existsSync as existsSync9, lstatSync as lstatSync4, mkdtempSync, readFileSync as readFileSync15, rmSync as rmSync7 } from "fs";
+import { existsSync as existsSync9, lstatSync as lstatSync4, mkdtempSync, readFileSync as readFileSync15, rmSync as rmSync7 } from "fs";
 import { join as join17 } from "path";
 
 // Packages/Box/src/agents/screen.ts
@@ -8963,10 +8969,8 @@ function catcher(temporary) {
 umask 077
 printf '%s\\n' "$1" >> "$KUVO_URL_FILE"
 `;
-  if (!ownScript(path, script)) {
-    writeSecret(path, script);
-    chmodSync(path, 448);
-  }
+  if (!ownScript(path, script))
+    writeSecret(path, script, 448);
   return path;
 }
 function ownScript(path, script) {
@@ -8977,9 +8981,10 @@ function ownScript(path, script) {
     return false;
   }
 }
+var SIGN_IN_FOLDER = "kuvo-signin-";
 async function commandSignIn(options) {
   const browser = catcher(options.temporary);
-  const own = mkdtempSync(join17(options.temporary, "kuvo-signin-"));
+  const own = mkdtempSync(join17(options.temporary, SIGN_IN_FOLDER));
   const urlFile = join17(own, "url");
   const env = { ...process.env, ...options.env, BROWSER: browser, KUVO_URL_FILE: urlFile };
   for (const name of Object.keys(env))
@@ -9069,6 +9074,7 @@ async function commandSignIn(options) {
   };
   child.exited.then(async (code) => {
     rmSync7(own, { recursive: true, force: true });
+    options.onEnd?.();
     if (status.status !== "pending")
       return;
     const signedIn = await options.signedIn().catch(() => false);
@@ -10065,7 +10071,7 @@ class AntigravityAgent {
         throw new Error(`Couldn't unpack Antigravity's agent: ${unzipped.stderr.trim()}`);
       rmSync10(archive, { force: true });
       for (const name of [executableName, harnessName])
-        chmodSync2(join20(staging, name), 493);
+        chmodSync(join20(staging, name), 493);
       writeFileSync14(join20(staging, ".complete"), JSON.stringify({ version, sha256: release.sha256 }));
       rmSync10(this.folder, { recursive: true, force: true });
       renameSync10(staging, this.folder);
@@ -27165,6 +27171,11 @@ var temporary = process.env.TMPDIR?.replace(/\/$/, "") || join32(home3, "tmp");
 mkdirSync20(temporary, { recursive: true });
 rmSync16(join32(temporary, "antigravity"), { recursive: true, force: true });
 try {
+  for (const name of readdirSync17(temporary))
+    if (name.startsWith(SIGN_IN_FOLDER))
+      rmSync16(join32(temporary, name), { recursive: true, force: true });
+} catch {}
+try {
   for (const name of readdirSync17(join32(home3, "antigravity")))
     if (name.startsWith(".install-"))
       rmSync16(join32(home3, "antigravity", name), { recursive: true, force: true });
@@ -27477,4 +27488,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 4294d00ae4df1662e4a1436af15bb23d3f648f6984c7e9c4ba00b08ba7f781cf
+// Built from Packages/Box/src/agents bb05d8a351ef9d92a5cd789e3d32b2ca860c93b6e9d851ef59a63eeb30f5feb0

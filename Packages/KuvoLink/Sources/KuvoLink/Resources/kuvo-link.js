@@ -570,8 +570,13 @@ function socketKey() {
       return key;
   } catch {}
   fs3.mkdirSync(RUN, { recursive: true, mode: 448 });
-  const made = `${SOCKET_KEY_FILE}.${process.pid}`;
-  fs3.writeFileSync(made, madeKey(), { mode: 384 });
+  const made = `${SOCKET_KEY_FILE}.${process.pid}.${crypto2.randomBytes(4).toString("hex")}`;
+  try {
+    fs3.writeFileSync(made, madeKey(), { mode: 384, flag: "wx" });
+  } catch (error) {
+    fs3.rmSync(made, { force: true });
+    throw error;
+  }
   try {
     fs3.linkSync(made, SOCKET_KEY_FILE);
   } catch {
@@ -932,21 +937,26 @@ function writePrivate(file, text) {
   fs6.mkdirSync(path5.dirname(file), { recursive: true, mode: 448 });
   placeWhole(file, text);
 }
-function writeSecret(file, text) {
+function writeSecret(file, text, mode = 384) {
   privateFolder(path5.dirname(file));
-  placeWhole(file, text);
+  placeWhole(file, text, mode);
 }
 function privateFolder(folder) {
   fs6.mkdirSync(folder, { recursive: true, mode: 448 });
-  const made = fs6.statSync(folder);
-  if (made.mode & 63 && made.uid === process.getuid?.())
+  const made = fs6.lstatSync(folder);
+  if (!made.isDirectory())
+    throw new Error(`${folder} isn't a folder of its own: nothing secret is written in it.`);
+  if (process.getuid && made.uid !== process.getuid())
+    throw new Error(`${folder} isn't yours: nothing secret is written in it.`);
+  if (made.mode & 63)
     fs6.chmodSync(folder, 448);
   return folder;
 }
-function placeWhole(file, text) {
+function placeWhole(file, text, mode = 384) {
   const temporary = `${file}.${process.pid}.${crypto3.randomBytes(4).toString("hex")}.tmp`;
   try {
-    fs6.writeFileSync(temporary, text, { mode: 384, flag: "wx" });
+    fs6.writeFileSync(temporary, text, { mode, flag: "wx" });
+    fs6.chmodSync(temporary, mode);
     fs6.renameSync(temporary, file);
   } catch (error) {
     try {
@@ -37352,7 +37362,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "17eb599b34fb";
+var BRIDGE_VERSION = "44705dceac19";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
