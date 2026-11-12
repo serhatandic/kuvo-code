@@ -9,6 +9,7 @@
 
 import { MOST_FOLDERS } from "./allowed";
 import { HIDE, MAKE_GIT } from "./landlock";
+import { alikeName } from "./lookalike";
 import { AGENT_FOLDERS } from "./seatbelt";
 
 /** Where the box keeps the sandbox's own files (profiles, the plugin's note, commands' temporary
@@ -362,15 +363,17 @@ function topOf(folder) {
   }
   return ""
 }
-// What the read tool reads instead of a file that isn't there: the one file beside it whose name is
-// the same but for how it's written (composed accents, no-break spaces, curly quotes).
-function lookalike(where) {
-  const same = (name) => name.normalize("NFC").replace(/[\u00a0\u202f]/g, " ").replace(/[\u2018\u2019]/g, "'")
+// What the read tool reads instead of a file that isn't there: one beside it whose name looks the
+// same (fence/lookalike.ts), a plain file (engine 2.2.5) in the same folder as the name it was given.
+// Whether something beside \`where\` (which isn't there) has such a name (\`links\`: a link): one
+// the engine (or one that followed links) would read in its place, while what's asked about, and
+// judged, is the name given.
+const same = ${alikeName.toString()}
+function lookalikeBeside(where, links) {
   const name = same(path.basename(where))
   try {
-    const found = fs.readdirSync(path.dirname(where)).filter(each => same(each) === name && fs.statSync(path.join(path.dirname(where), each)).isFile())
-    return found.length === 1 ? path.join(path.dirname(where), found[0]) : ""
-  } catch { return "" }
+    return fs.readdirSync(path.dirname(where), { withFileTypes: true }).some(each => (!links || each.isSymbolicLink()) && same(each.name) === name)
+  } catch { return false }
 }
 
 // The engine's own file tools run outside the sandbox, and tell a place outside the conversation's
@@ -464,17 +467,19 @@ export default {
     })
     const top = moved ? moved.top || "" : work ? topOf(work) : ""
     const ours = [work, folder, top].filter(Boolean)
-    const really = (given, tool) => {
+    const really = (given) => {
       if (typeof given !== "string" || !given || !work) return given
       const written = resolved(work, given)
       if (!ours.some(each => within(written, each))) return given
-      let where = located(written)
-      // A file that isn't there, which read takes a look-alike's place for.
-      if (tool === "read" && ours.some(each => within(where, each))) {
-        try { fs.statSync(written) } catch { where = located(lookalike(written) || written) }
-      }
+      const where = located(written)
       return ours.some(each => within(where, each)) ? given : where
     }
+    // A read of a file that isn't there, beside a link whose name looks the same: refused, in the
+    // folder or out of it (where the link leads is never what the box judged, nor asked about).
+    const LOOKALIKE = "This names a file that isn't there, where a link has that name or one that looks the same, which Kuvo Code's sandbox doesn't let the engine's read tool open in its place. Name a file that's there exactly as it's written, or ask the user."
+    // And one through a link out of the folder to a file that isn't there, beside one whose name looks
+    // the same, which read would take in its place.
+    const NOWHERE = "This leads, through a link out of the conversation's folder, to a file that isn't there, beside one whose name looks the same, which Kuvo Code's sandbox doesn't let the engine's read tool open in its place. Name the file exactly as it's written, or ask the user."
     // The engine reads a \\ in a path as a / where it weighs your rules for folders outside the
     // project, and the system doesn't: \`notes\\x\` would pass for a file in \`notes\` (one
     // you allowed) while it's a folder beside it. So no file tool's path has one.
@@ -485,7 +490,14 @@ export default {
       const field = PATHS[call.tool]
       if (field && typeof input[field] === "string" && input[field].includes("\\\\")) throw new Error(SLASHED)
       if (field) {
-        const given = really(input[field], call.tool)
+        const given = really(input[field])
+        if (call.tool === "read" && typeof given === "string" && given && work) {
+          const opens = resolved(work, given)
+          let there = true
+          try { fs.statSync(opens) } catch { there = false }
+          if (!there && given !== input[field] && lookalikeBeside(opens, false)) throw new Error(NOWHERE)
+          if (!there && lookalikeBeside(opens, true)) throw new Error(LOOKALIKE)
+        }
         if (given !== input[field]) call.input = { ...input, [field]: given }
       } else if ((call.tool === "patch" || call.tool === "apply_patch") && typeof input.patchText === "string") {
         const patchText = input.patchText.split("\\n").map((line) => {

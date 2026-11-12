@@ -729,6 +729,7 @@ test("a link a command makes doesn't take the engine's own file tools out of the
   const project = path.join(root, "tools-project");
   fs.mkdirSync(project);
   fs.writeFileSync(path.join(project, "notes.md"), "the project's\n");
+  fs.writeFileSync(path.join(project, "the notes.md"), "the project's\n");
   // Somewhere commands can't read or write: your keys, and a start-up script that isn't there yet.
   const keys = path.join(root, "your-keys");
   fs.mkdirSync(keys);
@@ -752,9 +753,11 @@ test("a link a command makes doesn't take the engine's own file tools out of the
       ["patch the key", "patch", { patchText: "*** Begin Patch\n*** Update File: keys/id_test\n@@\n-a key\n+b key\n*** End Patch" }, input => patchedFile(input.patchText)],
       // (The engine takes a patch's lines without the spaces around them.)
       ["patch the key, the line indented", "patch", { patchText: "*** Begin Patch\n  *** Update File: keys/id_test \n@@\n-a key\n+b key\n*** End Patch" }, input => patchedFile(input.patchText)],
-      // (Read reads the one file beside a name that isn't there whose name is the same but for a
-      // no-break space; and the engine takes a name with the spaces it has.)
+      // (Read reads the one plain file beside a name that isn't there whose name is the same but
+      // for a no-break space, never a link: a link's is refused, as what's judged is the name given.
+      // And the engine takes a name with the spaces it has.)
       ["read the key by a look-alike name", "read", { path: "look\u00a0alike.txt" }, input => input.path],
+      ["read a file of its own by a look-alike name", "read", { path: "the\u00a0notes.md" }, input => input.path],
       ["read the key by a name ending in a space", "read", { path: "spaced.txt " }, input => input.path],
       ["write far into a link to a place that isn't there yet", "write", { path: `deep/${"d/".repeat(41)}x`, content: "x" }, input => input.path],
       // (A .. after a link goes up from where the link leads.)
@@ -782,7 +785,8 @@ test("a link a command makes doesn't take the engine's own file tools out of the
       "search its folder": "asks",
       "patch the key": "asks",
       "patch the key, the line indented": "asks",
-      "read the key by a look-alike name": "asks",
+      "read the key by a look-alike name": "refused",
+      "read a file of its own by a look-alike name": "goes",
       "read the key by a name ending in a space": "asks",
       "write far into a link to a place that isn't there yet": "asks",
       "write through a link that goes up from another": "asks",
