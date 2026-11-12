@@ -368,7 +368,9 @@ struct GoalChartView: View {
         let marks = hours ? chart.ticks().filter(chart.shown.contains) : Self.days(in: chart.shown)
         let dayWidth = x.width * 86400 / max(1, chart.shown.duration)
         let hourWidth = marks.count > 1 ? x(marks[1]) - x(marks[0]) : x.width
-        let labeled = hours ? Self.labeledHours(marks, hourWidth: hourWidth) : Self.labeledDays(marks, dayWidth: dayWidth, week: chart.shown.duration <= 8 * 86400, now: now)
+        // A date's label takes 56 points on this axis; a day 52 wide has room for one of its own.
+        let labeled = hours ? GoalChart.labeledHours(marks, hourWidth: hourWidth)
+            : GoalChart.labeledDays(marks, dayWidth: dayWidth, week: chart.shown.duration <= 8 * 86400, now: now, room: 56, everyDay: 52)
         let rightRoom: CGFloat = edgeDue ? Self.edgeRoom + 12 : 18
         return ZStack(alignment: .topLeading) {
             ForEach(marks, id: \.self) { mark in
@@ -465,25 +467,6 @@ struct GoalChartView: View {
             day = calendar.date(byAdding: .day, value: 1, to: day) ?? shown.end
         }
         return days
-    }
-
-    /// The hours that get a label: each where it has room for its time, else every second, third…
-    /// counted from the first, so no two run into each other on a narrow axis.
-    static func labeledHours(_ hours: [Date], hourWidth: CGFloat, room: CGFloat = 44) -> Set<Date> {
-        let step = hourWidth > 0 ? max(1, Int((room / hourWidth).rounded(.up))) : max(hours.count, 1)
-        return Set(hours.enumerated().compactMap { $0.offset % step == 0 ? $0.element : nil })
-    }
-
-    /// The days that get a label of their own: every day across a week or where each has room for
-    /// its date; else one every few days, counted out from Today (or the first day) so the labels
-    /// keep clear of it and of each other, and a week apart once that's most of a week.
-    static func labeledDays(_ days: [Date], dayWidth: CGFloat, week: Bool, now: Date, calendar: Calendar = .current) -> Set<Date> {
-        let fit = dayWidth > 0 ? Int((56 / dayWidth).rounded(.up)) : 7
-        let step = week || dayWidth >= 52 ? 1 : fit >= 5 ? 7 * Int((Double(fit) / 7).rounded(.up)) : max(fit, 1)
-        let origin = calendar.startOfDay(for: days.contains { calendar.isDate($0, inSameDayAs: now) } ? now : days.first ?? now)
-        return Set(days.filter { day in
-            (calendar.dateComponents([.day], from: origin, to: calendar.startOfDay(for: day)).day ?? 1) % step == 0
-        })
     }
 }
 
