@@ -11,7 +11,7 @@ import type { Agent, PermissionAsk, RunInput, RunResult, Thread, TurnHooks } fro
 import { failure } from "./agent"
 import type { Limit } from "./auto"
 import { newID } from "./ids"
-import { holdsBack, ruled } from "./rules"
+import { holdsBack, matches, ruled } from "./rules"
 import type { Turn } from "./turn"
 import type { Decision, FormField, Model, ModelRef, Session, StructuredError, TokenUsage, ToolOutput, PermissionRule } from "./wire"
 
@@ -114,7 +114,8 @@ export class EngineLink {
    * moment too, so a stalled engine doesn't hold up each message); as last known when it doesn't
    * answer, and undefined when it never has. `usable` says whether an answer is (a folder the
    * engine hasn't loaded yet answers with nothing at first). `settled`: asked for once the engine's
-   * plugins are set up (`pluginsSetUp`), and taken as that says.
+   * plugins are set up (`pluginsSetUp`), and taken as that says; one read without waiting for them
+   * long enough isn't kept, so the next message reads it again.
    */
   private async read(path: string, directory: string, usable: (value: any) => boolean = () => true, fresh = false, settled?: (value: any) => any): Promise<any> {
     const key = `${path}\n${directory}`
@@ -127,12 +128,16 @@ export class EngineLink {
     const keep = (entry: { at: number; value: any; failed?: boolean }) => {
       if (generation === this.generation) this.reads.set(key, entry)
     }
+    let setUp = true
     const asked = settled
-      ? this.pluginsSetUp(directory).then(async () => settled(await this.request("GET", path, undefined, 4_000, directory)))
+      ? this.pluginsSetUp(directory).then(async (done) => {
+          setUp = done
+          return settled(await this.request("GET", path, undefined, 4_000, directory))
+        })
       : this.request("GET", path, undefined, 4_000, directory)
     const pending = asked.then(
       (value) => {
-        if (usable(value)) keep({ at: Date.now(), value })
+        if (usable(value)) keep({ at: setUp ? Date.now() : 0, value })
         else keep({ at: 0, value: kept?.value })
         return usable(value) ? value : kept?.value
       },
@@ -188,10 +193,10 @@ export class EngineLink {
    * `agent.updated`). Not longer than a few seconds: a plugin that hangs doesn't hold up every
    * message (what's read then is taken as it is, with Kuvo Code's rules if it hasn't them).
    */
-  private pluginsSetUp(directory: string): Promise<void> {
+  private pluginsSetUp(directory: string): Promise<boolean> {
     return this.request("GET", "/api/provider", undefined, 5_000, directory).then(
-      () => undefined,
-      () => undefined,
+      () => true,
+      () => false,
     )
   }
 
@@ -374,14 +379,21 @@ function fromPlugin(agent: any): boolean {
 /**
  * The engine's agents (its answer for `api/agent`) with Kuvo Code's rules: as listed once the
  * box's plugin has given them; before (an engine still setting up its plugins, or one without
- * it), each that would work outside the project without asking asks first.
+ * it), the ask where the plugin puts it: after the rule that lets work outside the project through
+ * (the engine's own `* allow`), before your rules about folders outside, which still win. An
+ * agent that asks or refuses already, or whose own rule allows it outside, is left as it is.
  */
 function withKuvoRules(answer: any): any {
   if (!Array.isArray(answer?.data) || answer.data.some(fromPlugin)) return answer
   const asking = (agent: any) => {
     const permissions: PermissionRule[] = Array.isArray(agent?.permissions) ? agent.permissions : []
     const effect = ruled(permissions, "external_directory", [OUTSIDE])
-    return effect === "ask" || effect === "deny" ? agent : { ...agent, permissions: [...permissions, { action: "external_directory", resource: "*", effect: "ask" }] }
+    if (effect === "ask" || effect === "deny") return agent
+    // (The last rule that lets it out; none: the engine's own default does.)
+    const at = permissions.findLastIndex((rule) => matches(rule.action, "external_directory") && matches(rule.resource, OUTSIDE))
+    if (at >= 0 && permissions[at].action === "external_directory") return agent
+    const ask: PermissionRule = { action: "external_directory", resource: "*", effect: "ask" }
+    return { ...agent, permissions: [...permissions.slice(0, at + 1), ask, ...permissions.slice(at + 1)] }
   }
   return { ...answer, data: answer.data.map(asking) }
 }

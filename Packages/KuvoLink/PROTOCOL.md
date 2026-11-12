@@ -5006,7 +5006,10 @@ them. So the box asks for the providers first and reads those lists after, with 
 `x-opencode-directory` where it has one; an integration list with nothing in it is not read yet,
 never "nothing signed in". An agent list in which no agent has the plugin's rules (its ask, then
 `<data>/tool-output/*` allowed) has the bridge add the ask to each agent that would otherwise work
-outside the project, so a coding agent never does that without asking where the engine would ask. It doesn't take a coding agent off running on its own (`approvesAll`), so
+outside the project, where the plugin puts it: after the rule that lets it out (the engine's own
+`* allow`), before your rules about folders outside, which still win; an agent your own rule lets
+outside (`external_directory` allowed) is left as it is. A list read while the engine was too slow
+to say its plugins are set up is used for that message only, and read again for the next. It doesn't take a coding agent off running on its own (`approvesAll`), so
 Codex, Cursor, Grok and Antigravity keep their modes. Where the bridge sees a tool call (Claude
 Code's every one, and what the others ask about), one whose files are outside the project asks
 first (a command's line isn't read for them), weighed by their folders as the engine weighs its own

@@ -927,6 +927,43 @@ describe("asks and conversations", () => {
     }
   })
 
+  test("an engine without the plugin's rules (its plugin failed, or slow to set up) still has your own rules about folders outside win: the ask goes before them", async () => {
+    const shared = { action: "external_directory", resource: "/home/me/shared/*", effect: "allow" }
+    const keptOut = { action: "external_directory", resource: "/home/me/kept-out/*", effect: "deny" }
+    const allowAll = { action: "*", resource: "*", effect: "allow" }
+    // Your Settings › Permissions folders, then your "Work outside the project: Allow".
+    for (const yours of [[shared, keptOut], [{ action: "external_directory", resource: "*", effect: "allow" }]]) {
+      const engine = engineListing(() => [{ id: "build", mode: "primary", permissions: [allowAll, ...yours] }], false)
+      try {
+        const seen: unknown[] = []
+        a.script = async (_input, turn, hooks) => {
+          seen.push(await hooks.permission({ action: "read", resources: ["/home/me/shared/notes.md"] }))
+          seen.push(await hooks.permission({ action: "read", resources: ["/home/me/kept-out/key"] }))
+          seen.push(await hooks.permission({ action: "read", resources: ["/home/me/.ssh/id_ed25519"] }))
+          turn.startStep()
+          turn.endStep()
+          return { outcome: "succeeded" }
+        }
+        const id = create()
+        send(id, "read them")
+        if (yours.length === 2) {
+          // Only what no rule of yours says asks.
+          await until(() => sessions.permissions(id).length === 1)
+          expect(sessions.permissions(id)[0]).toMatchObject({ action: "external_directory", resources: ["/home/me/.ssh/id_ed25519"] })
+          sessions.replyPermission(id, sessions.permissions(id)[0].id, "reject")
+          await settled(id, 1)
+          expect(seen).toEqual(["once", "reject", "reject"])
+        } else {
+          await settled(id, 1)
+          expect(seen).toEqual(["once", "once", "once"])
+          expect(sessions.permissions(id)).toEqual([])
+        }
+      } finally {
+        engine.stop()
+      }
+    }
+  })
+
   test("once the engine's plugins are set up, your own Allow outside the project and an agent of yours from Settings › Agents work as on the engine, with its agents read once", async () => {
     const yours = { action: "external_directory", resource: "*", effect: "allow" }
     const engine = engineListing((plugins) => [
