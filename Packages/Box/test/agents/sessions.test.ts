@@ -10,6 +10,7 @@ import { AcpThread } from "../../src/agents/acp"
 import { AntigravityFollower } from "../../src/agents/agents/antigravity"
 import { model, type Agent, type RunInput, type RunResult, type Thread, type TurnHooks } from "../../src/agents/agent"
 import { Auto } from "../../src/agents/auto"
+import { EngineLink } from "../../src/agents/engine"
 import { subscribe } from "../../src/agents/events"
 import type { Roster } from "../../src/agents/roster"
 import { Sessions, shellProcesses, timing } from "../../src/agents/sessions"
@@ -842,6 +843,62 @@ describe("asks and conversations", () => {
       sessions.replyPermission(id, sessions.permissions(id)[0].id, "reject")
       await settled(id, 1)
       expect(seen).toEqual([true, "once", "reject"])
+    }
+  })
+
+  test("an engine that lists its agents before its plugins are set up (2.2.7, in a folder it just opened) doesn't let a coding agent work outside the project without asking", async () => {
+    const outside = { action: "external_directory", resource: "*", effect: "ask" } as const
+    // Build as the engine lists it before the box's plugin is set up (your rules only: one that
+    // refuses reading a secrets file), and after (the plugin's rules at the end).
+    const early = [{ action: "*", resource: "*", effect: "allow" }, { action: "read", resource: "/tmp/project/secrets/*", effect: "deny" }]
+    const whole = [...early, outside, { action: "external_directory", resource: "/box/attachments/*", effect: "allow" }]
+    const agents = new Map([a, b].map((agent) => [agent.providerID, agent]))
+    // The engine's plugins set up once it's asked for its providers (which wait for them), or never.
+    for (const setsUp of [true, false]) {
+      let plugins = false
+      const engine = Bun.serve({
+        port: 0,
+        fetch(request) {
+          const path = new URL(request.url).pathname
+          if (path === "/api/provider") {
+            plugins = setsUp
+            return Response.json({ data: [] })
+          }
+          if (path === "/api/agent") return Response.json({ data: [{ id: "build", mode: "primary", permissions: plugins ? whole : early }] })
+          return new Response("not here", { status: 404 })
+        },
+      })
+      const link = new EngineLink()
+      link.configure(`http://127.0.0.1:${engine.port}`, "pw")
+      try {
+        sessions.closeAll()
+        sessions = new Sessions(store, { find: (provider: string | undefined) => (provider ? agents.get(provider) : undefined) } as unknown as Roster, auto, undefined, async () => [], (name, directory) => link.agent(name, directory))
+        const seen: unknown[] = []
+        a.script = async (_input, turn, hooks) => {
+          seen.push(await hooks.permission({ action: "read", resources: ["/home/me/.ssh/id_ed25519"] }))
+          seen.push(await hooks.permission({ action: "read", resources: ["/tmp/project/secrets/key"] }))
+          seen.push(await hooks.permission({ action: "read", resources: ["/box/attachments/ses_one/photo.png"] }))
+          turn.startStep()
+          turn.endStep()
+          return { outcome: "succeeded" }
+        }
+        const id = create()
+        send(id, "read the keys")
+        await until(() => sessions.permissions(id).length === 1)
+        expect(sessions.permissions(id)[0]).toMatchObject({ action: "external_directory", resources: ["/home/me/.ssh/id_ed25519"] })
+        sessions.replyPermission(id, sessions.permissions(id)[0].id, "reject")
+        // Your rule holds either way; what's kept for it is open once the plugin's rules are in, and
+        // asked about until then.
+        if (!setsUp) {
+          await until(() => sessions.permissions(id).length === 1 && sessions.permissions(id)[0].resources[0] === "/box/attachments/ses_one/photo.png")
+          sessions.replyPermission(id, sessions.permissions(id)[0].id, "once")
+        }
+        await settled(id, 1)
+        expect(seen).toEqual(["reject", "reject", "once"])
+      } finally {
+        link.configure(undefined, undefined)
+        engine.stop(true)
+      }
     }
   })
 

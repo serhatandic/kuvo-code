@@ -11,7 +11,7 @@ import type { Agent, PermissionAsk, RunInput, RunResult, Thread, TurnHooks } fro
 import { failure } from "./agent"
 import type { Limit } from "./auto"
 import { newID } from "./ids"
-import { holdsBack } from "./rules"
+import { holdsBack, ruled } from "./rules"
 import type { Turn } from "./turn"
 import type { Decision, FormField, Model, ModelRef, Session, StructuredError, TokenUsage, ToolOutput, PermissionRule } from "./wire"
 
@@ -150,23 +150,40 @@ export class EngineLink {
 
   /** The session's agent as the engine has it (yours, from Settings or a file): what it's told, and its permissions. */
   async agent(name: string, directory: string): Promise<{ system?: string; permissions?: PermissionRule[] } | undefined> {
-    const usable = (value: any) => Array.isArray(value?.data) && value.data.length > 0
-    const named = (value: any) => (value?.data ?? []).find((agent: any) => agent?.id === name || agent?.name === name)
-    let answer = await this.read("/api/agent", directory, usable)
-    // One you've just added isn't in what was read a moment ago.
-    if (answer !== undefined && !named(answer)) answer = await this.read("/api/agent", directory, usable, true)
+    const listed = await this.agentList(directory, name)
     // Not known: what its settings say it's told, for one of yours.
-    if (answer === undefined) return name === "build" || name === "plan" ? undefined : { system: await this.agentPrompt(name, directory) }
-    const found = named(answer)
+    if (listed === undefined) return name === "build" || name === "plan" ? undefined : { system: await this.agentPrompt(name, directory) }
+    const found = listed.find(named(name))
     if (!found) return undefined
     return { system: typeof found.system === "string" && found.system.trim() ? found.system.trim() : undefined, permissions: Array.isArray(found.permissions) ? found.permissions : undefined }
   }
 
   /** The engine's agents for a folder, as it lists them (yours and its own); undefined when it never answered. */
   async agents(directory: string): Promise<any[] | undefined> {
-    const answer = await this.read("/api/agent", directory, (value) => Array.isArray(value?.data) && value.data.length > 0)
-    if (answer === undefined) return undefined
-    return Array.isArray(answer?.data) ? answer.data : []
+    return this.agentList(directory)
+  }
+
+  /**
+   * The engine's agents for a folder, each with Kuvo Code's rules (`withKuvoRules`); undefined
+   * when it never answered. An engine that opened the folder a moment ago, or is reading it again,
+   * may list them before its plugins are set up (2.2.7 does), without the rules the box's plugin
+   * gives them: such a list isn't taken. It's asked again once they're set up (its providers wait
+   * for them); one that still doesn't have them is taken with each agent asking first outside the
+   * project, never letting it work there without.
+   */
+  private async agentList(directory: string, name?: string): Promise<any[] | undefined> {
+    const path = "/api/agent"
+    let answer = await this.read(path, directory, wholeAgents)
+    // One you've just added isn't in what was read a moment ago.
+    if (answer !== undefined && name && !answer.data.some(named(name))) answer = await this.read(path, directory, wholeAgents, true)
+    if (answer !== undefined) return answer.data
+    // (An engine that isn't answering isn't asked again and again.)
+    if (!this.url || this.reads.get(`${path}\n${directory}`)?.failed) return undefined
+    await this.request("GET", "/api/provider", undefined, 10_000, directory).catch(() => undefined)
+    answer = await this.read(path, directory, wholeAgents, true)
+    if (answer !== undefined) return answer.data
+    const early = await this.request("GET", path, undefined, 4_000, directory).catch(() => undefined)
+    return Array.isArray(early?.data) && early.data.length ? early.data.map(withKuvoRules) : undefined
   }
 
   /**
@@ -324,6 +341,30 @@ export class EngineLink {
       await Bun.sleep(1000)
     }
   }
+}
+
+/** An agent the engine lists by that name. */
+const named = (name: string) => (agent: any) => agent?.id === name || agent?.name === name
+
+/** A folder no rule of yours names: where the box's engine plugin (link/engine/defaults.ts) makes
+ * an agent ask first, as it checks too. */
+const OUTSIDE = "/kuvo-code/an/outside/folder/*"
+
+/** Whether an agent has Kuvo Code's rules: working outside the project asks first, or your rules
+ * refuse it. The box's engine plugin gives each agent that, last, once the engine has set it up. */
+function keepsOutside(agent: any): boolean {
+  const effect = ruled(Array.isArray(agent?.permissions) ? agent.permissions : [], "external_directory", [OUTSIDE])
+  return effect === "ask" || effect === "deny"
+}
+
+/** A list of the engine's agents with Kuvo Code's rules in each (not one from before its plugins were set up). */
+const wholeAgents = (value: any) => Array.isArray(value?.data) && value.data.length > 0 && value.data.every(keepsOutside)
+
+/** An agent with Kuvo Code's rules: as listed when it has them, otherwise asking first outside the project. */
+function withKuvoRules(agent: any): any {
+  if (keepsOutside(agent)) return agent
+  const permissions: PermissionRule[] = Array.isArray(agent?.permissions) ? agent.permissions : []
+  return { ...agent, permissions: [...permissions, { action: "external_directory", resource: "*", effect: "ask" }] }
 }
 
 class EngineError extends Error {
