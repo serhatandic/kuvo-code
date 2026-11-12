@@ -4,7 +4,8 @@
 // once, and can open it again. Some also print a page to use when no browser opens, which ends on
 // a code to paste back (Claude Code's): that's taken too, typed into the command.
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, lstatSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { privateFolder, writeSecret } from "../shared/files"
 import { join } from "node:path"
 import type { SignInAttempt } from "./agent"
 import { newID } from "./ids"
@@ -49,20 +50,38 @@ export interface CommandSignInOptions {
   refusedEnds?: string
 }
 
-/** The catcher, in the temporary folder: a path without spaces (Python splits BROWSER on them). */
+/**
+ * The catcher, in the temporary folder: a path without spaces (Python splits BROWSER on them). In a
+ * folder only you can open, written by the bridge itself (never one found there), and what it writes
+ * down (a sign-in's page) only you can read.
+ */
 export function catcher(temporary: string): string {
-  const path = join(temporary, "bin", "kuvo-catch-url")
-  if (!existsSync(path)) {
-    mkdirSync(join(temporary, "bin"), { recursive: true })
-    writeFileSync(path, '#!/bin/sh\nprintf \'%s\\n\' "$1" >> "$KUVO_URL_FILE"\n')
-    chmodSync(path, 0o755)
+  const path = join(privateFolder(join(temporary, "bin")), "kuvo-catch-url")
+  const script = '#!/bin/sh\numask 077\nprintf \'%s\\n\' "$1" >> "$KUVO_URL_FILE"\n'
+  if (!ownScript(path, script)) {
+    writeSecret(path, script)
+    chmodSync(path, 0o700)
   }
   return path
 }
 
+/** Whether `path` is that script, as the bridge wrote it: yours, and no one else's to change or read. */
+function ownScript(path: string, script: string): boolean {
+  try {
+    const there = lstatSync(path)
+    return there.isFile() && there.uid === process.getuid?.() && (there.mode & 0o777) === 0o700 && readFileSync(path, "utf8") === script
+  } catch {
+    return false
+  }
+}
+
 export async function commandSignIn(options: CommandSignInOptions): Promise<SignInAttempt> {
-  const urlFile = join(options.temporary, `${newID("att")}.url`)
-  const env: Record<string, string | undefined> = { ...process.env, ...options.env, BROWSER: catcher(options.temporary), KUVO_URL_FILE: urlFile }
+  // The page it hands its browser, written down in a folder of this attempt's own that only you can
+  // open, and gone with it.
+  const browser = catcher(options.temporary)
+  const own = mkdtempSync(join(options.temporary, "kuvo-signin-"))
+  const urlFile = join(own, "url")
+  const env: Record<string, string | undefined> = { ...process.env, ...options.env, BROWSER: browser, KUVO_URL_FILE: urlFile }
   // A value left `undefined` is unset, as in `run`.
   for (const name of Object.keys(env)) if (env[name] === undefined) delete env[name]
   // What it printed, its terminal codes taken out as a whole (one can come split over two reads).
@@ -118,28 +137,34 @@ export async function commandSignIn(options: CommandSignInOptions): Promise<Sign
   }
   let type: (text: string) => Promise<void>
   let child: ReturnType<typeof Bun.spawn>
-  if (options.terminal) {
-    const decoder = new TextDecoder()
-    const spawned = Bun.spawn([options.command, ...options.args], {
-      env,
-      terminal: { ...TERMINAL, data: (_terminal: unknown, data: Uint8Array) => take(decoder.decode(data, { stream: true })) },
-    } as any) as any
-    child = spawned
-    // A terminal's Return.
-    type = async (text) => void spawned.terminal.write(text.replace(/\n$/, "\r"))
-  } else {
-    const spawned = Bun.spawn([options.command, ...options.args], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" })
-    child = spawned
-    const read = async (stream: ReadableStream<Uint8Array>) => {
+  // (A command that can't start leaves nothing behind either.)
+  try {
+    if (options.terminal) {
       const decoder = new TextDecoder()
-      for await (const chunk of stream) take(decoder.decode(chunk, { stream: true }))
+      const spawned = Bun.spawn([options.command, ...options.args], {
+        env,
+        terminal: { ...TERMINAL, data: (_terminal: unknown, data: Uint8Array) => take(decoder.decode(data, { stream: true })) },
+      } as any) as any
+      child = spawned
+      // A terminal's Return.
+      type = async (text) => void spawned.terminal.write(text.replace(/\n$/, "\r"))
+    } else {
+      const spawned = Bun.spawn([options.command, ...options.args], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" })
+      child = spawned
+      const read = async (stream: ReadableStream<Uint8Array>) => {
+        const decoder = new TextDecoder()
+        for await (const chunk of stream) take(decoder.decode(chunk, { stream: true }))
+      }
+      void read(spawned.stdout)
+      void read(spawned.stderr)
+      type = async (text) => {
+        spawned.stdin.write(text)
+        await spawned.stdin.flush()
+      }
     }
-    void read(spawned.stdout)
-    void read(spawned.stderr)
-    type = async (text) => {
-      spawned.stdin.write(text)
-      await spawned.stdin.flush()
-    }
+  } catch (error) {
+    rmSync(own, { recursive: true, force: true })
+    throw error
   }
   let status: OAuthStatus = { status: "pending" }
   let pasted = false
@@ -150,7 +175,7 @@ export async function commandSignIn(options: CommandSignInOptions): Promise<Sign
     options.onComplete?.()
   }
   void child.exited.then(async (code) => {
-    rmSync(urlFile, { force: true })
+    rmSync(own, { recursive: true, force: true })
     if (status.status !== "pending") return
     const signedIn = await options.signedIn().catch(() => false)
     if (status.status !== "pending") return

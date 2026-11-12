@@ -18,6 +18,7 @@ import { fromPatch, unified } from "../diff"
 import { isBinary, isText, kindOf, typeOf, type Kind } from "./kinds"
 import { CopyPolicy, freeSpace, privateReasons, type NoCopy } from "./policy"
 import { inScratch } from "./turnfiles"
+import { writeSecret } from "../../shared/files"
 
 /** The biggest file a copy is kept of (as `kuvo/file` sends at most). */
 export const copyLimit = 25 * 1024 * 1024
@@ -193,8 +194,7 @@ export class ArtifactStore {
       if (key.length === 32) return key
     } catch {}
     const key = randomBytes(32)
-    writeFileSync(file + ".new", key, { mode: 0o600 })
-    renameSync(file + ".new", file)
+    writeSecret(file, key)
     return key
   }
 

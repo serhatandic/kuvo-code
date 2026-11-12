@@ -32,6 +32,7 @@ import { Roster } from "./roster"
 import { cancelSignIns, handler, signInsWaiting } from "./server"
 import { launchLets, Renewal } from "./renewal"
 import { keeperEngine } from "../shared/engines"
+import { writeSecret } from "../shared/files"
 import { commandLineOf } from "../shared/platform"
 import { updateUnderWay } from "../shared/updating"
 import { spawn } from "node:child_process"
@@ -381,8 +382,7 @@ const record = onMachine ? join(machineHome!, "run", "bridge.json") : undefined
 const writeRecord = (renewal: RenewalRecord | null, first = false) => {
   if (!record) return
   try {
-    writeFileSync(record + ".new", JSON.stringify({ pid: process.pid, port: server.port, password, build, renewal }), { mode: 0o600 })
-    renameSync(record + ".new", record)
+    writeSecret(record, JSON.stringify({ pid: process.pid, port: server.port, password, build, renewal }))
   } catch (error) {
     if (first) throw error
   }

@@ -512,7 +512,7 @@ export class AntigravityAgent implements Agent {
     const settings = join(this.profile, "antigravity-acp", "settings.json")
     if (!existsSync(settings)) writeFileSync(settings, JSON.stringify({ auth: { type: "oauth-personal" } }))
     const temporary = join(this.context.temporary, "antigravity", newID("att"))
-    mkdirSync(temporary, { recursive: true })
+    mkdirSync(temporary, { recursive: true, mode: 0o700 })
     let env: Record<string, string | undefined> = {}
     for (const [key, value] of Object.entries(process.env)) if (!scrubbed.includes(key.toUpperCase())) env[key] = value
     // On a machine, its commands find the machine's own settings (`gh`, git's).

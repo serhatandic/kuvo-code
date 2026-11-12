@@ -1,6 +1,7 @@
 // Reading and writing the box's files: what's there or nothing, written so only you can read them
 // and never seen half-written, one process at a time where two would clash.
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { sleep } from "./wait";
@@ -25,9 +26,37 @@ export const listOf = (folder: string): string[] => {
 /** `text` in `file`, readable by you only (its folder made so too), moved into place whole. */
 export function writePrivate(file: string, text: string | Uint8Array) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const temporary = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(temporary, text, { mode: 0o600 });
-  fs.renameSync(temporary, file);
+  placeWhole(file, text);
+}
+
+/**
+ * A key, token or sign-in in `file`: as `writePrivate`, and in a folder only you can open however
+ * it was made (one others could read is closed to them first).
+ */
+export function writeSecret(file: string, text: string | Uint8Array) {
+  privateFolder(path.dirname(file));
+  placeWhole(file, text);
+}
+
+/** `folder`, made if it isn't there, and closed to everyone but you when it's yours. */
+export function privateFolder(folder: string): string {
+  fs.mkdirSync(folder, { recursive: true, mode: 0o700 });
+  const made = fs.statSync(folder);
+  if ((made.mode & 0o077) && made.uid === process.getuid?.()) fs.chmodSync(folder, 0o700);
+  return folder;
+}
+
+// Through a new file only you can read (one of that name already there, or a link, isn't written
+// through), renamed into place: never seen half-written, and nothing left beside it if it fails.
+function placeWhole(file: string, text: string | Uint8Array) {
+  const temporary = `${file}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
+  try {
+    fs.writeFileSync(temporary, text, { mode: 0o600, flag: "wx" });
+    fs.renameSync(temporary, file);
+  } catch (error) {
+    try { fs.rmSync(temporary, { force: true }); } catch {}
+    throw error;
+  }
 }
 
 // Takes `lock` (a folder, made while it's held) when it's free: whether it was. A lock left by one
