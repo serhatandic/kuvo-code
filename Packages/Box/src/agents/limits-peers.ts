@@ -32,6 +32,8 @@ export interface LimitsTransport {
   send(to: string, mail: LimitsMail, durable: boolean): void
   /** Whether the link takes what's sent now. */
   readonly followed: boolean
+  /** Told each time the link starts taking what's sent (again). */
+  onFollowed?(listener: () => void): void
 }
 
 /** Who your other computers are, as the link says (`LinkDirectory`). */
@@ -72,6 +74,8 @@ export class LimitsPeers {
   private peers = new Map<string, Kept>()
   /** What was last told each peer, and when. */
   private told = new Map<string, { json: string; at: number }>()
+  /** When each peer's ask (or its coming back) was last answered. */
+  private answered = new Map<string, number>()
 
   constructor(
     private readonly limits: Limits,
@@ -84,6 +88,9 @@ export class LimitsPeers {
     this.load()
     limits.peers = this
     directory.listen(() => this.directorySaid())
+    // The link carries what goes again (it started, or followed anew): what went meanwhile was
+    // lost, so each peer is told again, and asked for its own, once the link says who they are.
+    transport.onFollowed?.(() => this.told.clear())
   }
 
   /** The newest time a peer read this account from its maker (on this box's clock), if any did. */
@@ -115,8 +122,9 @@ export class LimitsPeers {
 
   /**
    * This box's accounts told to its peers: at once after a read, at most once a minute for what
-   * turns hear, and again each ten minutes; to a peer not told since this started at once, asking
-   * for its own (it may have told while this was away).
+   * turns hear, and again each ten minutes; to a peer not told since this started (or since the
+   * link carries what goes again) at once, asking for its own (it may have told while this was
+   * away).
    */
   tell(urgent = false) {
     if (!this.transport.followed || !this.directory.told) return
@@ -150,8 +158,9 @@ export class LimitsPeers {
     this.peers.set(from, { name, heard: now, accounts })
     this.save()
     this.limits.peersChanged()
-    // Asked, or back after being away (it may have missed what was told meanwhile): told this box's.
-    if (given.ask === true || (before && now - before.heard > PEER_AWAY)) this.tellOne(from)
+    // Asked, or back after being away (it may have missed what was told meanwhile): told this box's,
+    // whatever was told it lately (that may be what it missed), once a minute at most.
+    if (given.ask === true || (before && now - before.heard > PEER_AWAY)) this.answer(from)
     if (Array.isArray(given.refresh)) {
       const ids = new Set(given.refresh.filter((id): id is string => typeof id === "string").slice(0, 200))
       if (ids.size) void this.limits.refresh((account, identity) => ids.has(this.idOf(account, identity)))
@@ -184,13 +193,13 @@ export class LimitsPeers {
     return identity ? `${account.service}#${identity}` : `${this.directory.own()?.key ?? ""}/${account.provider}`
   }
 
-  /** This box's accounts told to one peer now, unless they were within the minute as they are. */
-  private tellOne(key: string) {
+  /** This box's accounts told to one peer that asked, unless it was answered within the minute. An answer doesn't ask back. */
+  private answer(key: string) {
     if (!this.transport.followed) return
     const now = this.now()
+    if (now - (this.answered.get(key) ?? -Infinity) < HEARD_EVERY) return
+    this.answered.set(key, now)
     const accounts = this.shared()
-    const last = this.told.get(key)
-    if (last && now - last.at < HEARD_EVERY && last.json === JSON.stringify(accounts)) return
     this.transport.send(key, { kind: "limits", at: now, accounts }, false)
     this.told.set(key, { json: JSON.stringify(accounts), at: now })
   }
@@ -212,6 +221,7 @@ export class LimitsPeers {
       gone = true
     }
     for (const key of [...this.told.keys()]) if (!here.has(key)) this.told.delete(key)
+    for (const key of [...this.answered.keys()]) if (!here.has(key)) this.answered.delete(key)
     if (gone) {
       this.save()
       this.limits.peersChanged()

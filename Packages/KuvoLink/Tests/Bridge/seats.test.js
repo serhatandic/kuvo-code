@@ -426,3 +426,22 @@ test("plan limits with a box only a peer knows (another Mac's, beside a machine 
     server.close();
   }
 });
+
+test("a box only a peer knew is forgotten once no peer names it: nothing goes to it, and its mail isn't opened", () => {
+  fresh();
+  const air = box("mac", "air");
+  const at = Date.now();
+  link.takeAgents(second.peer, { at, list: [], boxes: [air.peer] });
+  assert.deepEqual(link.seatPeers(link.readLink()).also, [{ key: air.pub, name: "air" }]);
+  // The second machine no longer names it (the Air's Mac let it go).
+  link.takeAgents(second.peer, { at: at + 1, list: [], boxes: [] });
+  assert.deepEqual(link.seatPeers(link.readLink()).also, []);
+  const sent = [];
+  link.carrySeat({ send: bytes => sent.push(bytes) }, { id: "sm_limits003", to: air.pub, durable: false, mail: { kind: "limits", at: 9, accounts: [] } }, link.readLink());
+  assert.equal(sent.length, 0);
+  const mail = link.mailFor(here.peer, { limits: { at: 9, accounts: [] }, at: Date.now() }, { key: k(air.key) });
+  assert.equal(link.openMail(link.readFrame(mail.subarray(17)).body, link.readLink(), () => link.vouchedOf(link.readLink())), null);
+  // (While it was named, it was opened.)
+  link.takeAgents(second.peer, { at: at + 2, list: [], boxes: [air.peer] });
+  assert.equal(link.openMail(link.readFrame(mail.subarray(17)).body, link.readLink(), () => link.vouchedOf(link.readLink()))?.vouched, true);
+});

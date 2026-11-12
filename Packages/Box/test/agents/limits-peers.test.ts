@@ -164,6 +164,14 @@ class Box {
     }
   }
 
+  /** Its link starts again (its bridge doesn't): it follows what the bridge sends anew, and says who your computers are. */
+  async relink(others: Box[]) {
+    this.following.abort()
+    this.following = new AbortController()
+    void this.link()
+    await this.meet(others)
+  }
+
   /** Its link says who your other computers are (`PUT /api/kuvo/peers`): its peers, and `also`, the boxes they know that it doesn't. */
   async meet(others: Box[], also: Box[] = []) {
     await peerRoutes(this.parts, "PUT", [], async () => ({ self: { key: this.key, name: this.name }, boxes: others.map((box) => ({ key: box.key, name: box.name, seats: true })), also: also.map((box) => ({ key: box.key, name: box.name })), bots: [] }))
@@ -500,6 +508,27 @@ describe("plan limits across your computers", () => {
     await relay.settled()
     expect(relay.sent.slice(before).map((each) => `${each.from} ${each.to}`)).toEqual(["key-mac key-lokum"])
     void hetzner
+  })
+
+  test("a tell lost while a computer's link was off is made up once that link carries mail again", async () => {
+    const mac = new Box("key-mac", "MacBook Pro", relay, [claude(maker, "mac", "anthropic:work|org")])
+    const lokum = new Box("key-lokum", "lokum", relay, [])
+    await mac.meet([lokum])
+    await lokum.meet([mac])
+    await relay.settled()
+    pass(2 * MINUTE)
+    // lokum's link is off as the Mac reads and tells it: lost.
+    relay.off.add("key-lokum")
+    maker.used.set("anthropic:work|org", 0.61)
+    await mac.limits.tick()
+    await relay.settled()
+    expect(lokum.rows()).toEqual([])
+    // Half a minute on, its link starts again (its bridge didn't): it asks, and the Mac answers.
+    pass(30_000)
+    relay.off.delete("key-lokum")
+    await lokum.relink([mac])
+    await relay.settled()
+    expect(lokum.rows().map((row) => row.windows[0]?.used)).toEqual([0.61])
   })
 
   test("an account of a service a newer box knows and this one doesn't is listed by its name", async () => {

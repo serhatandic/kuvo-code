@@ -191,7 +191,7 @@ export { followedSetup, newSetupID, startsFromOthers } from "./setup/record";
 export { setupView } from "./setup/view";
 export { foundOf, hereNow, judgeComputer, judgeHere, oursNow, OWN_BOX_RAN } from "./setup/judge";
 export { cardNow, SETUP_CARD, writeCard } from "./setup/card";
-export { keptFeatures, peerOf, readPeerAgents, takeAgents } from "./peers/directory";
+export { keptFeatures, peerOf, readPeerAgents, takeAgents, vouchedOf } from "./peers/directory";
 export { composeLetter } from "./letters/letter";
 export { composeAgents } from "./peers/directory";
 export { nameAgents, namedAgents, namesIn } from "./peers/naming";

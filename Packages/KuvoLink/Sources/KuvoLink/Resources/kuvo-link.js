@@ -10754,22 +10754,38 @@ function takeAgents(sender, given, file = PEER_AGENTS_FILE, lock = PEER_LOCK) {
   });
 }
 var keptBoxes = (boxes) => boxes.filter(fitsPeer).slice(0, MOST_PEERS).map(cleanPeer).map(({ key, address, kind, name }) => ({ key, address, kind, name }));
-function vouchedOf(link, told = readPeerAgents()) {
+function vouchedOf(link, told) {
   if (!link)
     return [];
   const own = ownKey(link);
   const peers = peersOf(link);
+  let stamp = `${own}|${peers.map((peer) => peer.key).join(",")}|`;
+  if (!told) {
+    try {
+      const file = fs42.statSync(PEER_AGENTS_FILE);
+      stamp += `${file.mtimeMs}:${file.size}`;
+    } catch {
+      stamp += "none";
+    }
+    if (vouchedKept?.stamp === stamp)
+      return vouchedKept.vouched;
+  }
   const known = new Set(peers.map((peer) => peer.key));
   const vouched = new Map;
   for (const peer of peers) {
-    for (const box of told[peer.key]?.boxes ?? []) {
+    for (const box of (told ?? (told = readPeerAgents()))[peer.key]?.boxes?.slice(0, VOUCHED_EACH) ?? []) {
       if (!fitsPeer(box) || box.key === own || known.has(box.key) || vouched.has(box.key))
         continue;
       vouched.set(box.key, cleanPeer(box));
     }
   }
-  return [...vouched.values()].slice(0, MOST_PEERS);
+  const list = [...vouched.values()].slice(0, MOST_PEERS);
+  if (!stamp.endsWith("|"))
+    vouchedKept = { stamp, vouched: list };
+  return list;
 }
+var VOUCHED_EACH = 16;
+var vouchedKept = null;
 function readPeerAgents(file = PEER_AGENTS_FILE) {
   let all = {};
   try {
@@ -39029,7 +39045,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "c678f484b3cf";
+var BRIDGE_VERSION = "b2d67f9bdecf";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -44612,6 +44628,7 @@ export {
   upgradeIntegrations,
   verifyBoxes,
   versionOrder,
+  vouchedOf,
   wakeFolder,
   wakeOf,
   watchAsks,

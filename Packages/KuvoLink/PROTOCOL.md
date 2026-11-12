@@ -3632,8 +3632,9 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
 - **Across your computers** (#210): every box is equal, none is a hub, and each works with any
   other off.
   - **Who**: a box's limits peers are its peers ("Peers") and the boxes they say they know
-    (`agents.boxes`) that it doesn't: so two Macs that share a machine, which aren't each other's
-    peers, and each Mac's other machines, share their limits through no one. It takes only `limits`
+    (`agents.boxes`, 16 from each peer at most) that it doesn't: so two Macs that share a machine,
+    which aren't each other's peers, and each Mac's other machines, share their limits through no
+    one. It takes only `limits`
     from those (any other mail from them is dropped, as from anyone else), and they go when no peer
     names them any more. A box two hops away (known only to a box only a peer knows) isn't one.
   - Each box's bridge tells each limits peer what it read of its own accounts, through its link:
@@ -3642,8 +3643,10 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     `next`, its plan, credits and problem; never a sign-in, a token or an ID), as many as fit in 28
     KB; `at`, the sender's clock. It's sent at once after a read, at most once a minute for what
     turns hear, again every ten minutes though nothing changed (the relay keeps nothing), and at once
-    to a peer it hasn't told since its bridge started, with `ask: true` (tell me yours). A box
-    answers `ask`, and a peer back after being away, with its own, at most once a minute as it is.
+    to a peer it hasn't told since its bridge started, or since its link started carrying its mail
+    again (what went meanwhile was lost), with `ask: true` (tell me yours). A box answers `ask`,
+    and a peer back after being away, with its own (no `ask`), at most once a minute for each peer,
+    whatever it told that peer lately.
     A box from before this ignores it, and sends none. A sealed mail that doesn't fit isn't sent.
   - The receiver keeps the last from each peer (`limits-peers.json` in the bridge's folder, through
     a restart), its times moved onto its own clock where the sender's `at` is a minute or more off

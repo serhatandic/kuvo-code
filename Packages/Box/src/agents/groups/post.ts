@@ -106,12 +106,21 @@ export class PeerPost implements PeerTransport {
         }
         signal?.addEventListener("abort", stop, { once: true })
         for (const line of this.kept) write(line)
+        const first = this.followers.size === 0
         this.followers.add(write)
+        if (first) for (const listener of this.carried) listener()
         beating()
       },
       cancel: () => stop(),
     })
     return new Response(stream, { headers: { "Content-Type": "application/x-ndjson", "Cache-Control": "no-cache" } })
+  }
+
+  private carried: (() => void)[] = []
+
+  /** Told each time the link starts following what goes (again: what went while it didn't was lost). */
+  onFollowed(listener: () => void) {
+    this.carried.push(listener)
   }
 
   /** Whether the link follows what goes now. */

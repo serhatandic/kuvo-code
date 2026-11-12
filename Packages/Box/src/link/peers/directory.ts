@@ -92,20 +92,35 @@ const keptBoxes = (boxes: unknown[]): NonNullable<ToldAgents["boxes"]> => boxes.
 // Mac's machines, beside a machine two Macs share): it takes plan limits from them, and tells its
 // own to them, and nothing else (PROTOCOL.md, "Plan limits", "Across your computers"). A peer's word
 // on them is as good as the peer, which a Mac set up; it goes with that peer.
-export function vouchedOf(link: LinkState | null | undefined, told: Record<string, ToldAgents> = readPeerAgents()): Peer[] {
+export function vouchedOf(link: LinkState | null | undefined, told?: Record<string, ToldAgents>): Peer[] {
   if (!link) return [];
   const own = ownKey(link);
   const peers = peersOf(link);
+  // Worked out again only when its peers or what they told changed (mail no peer can open asks
+  // it each time).
+  let stamp = `${own}|${peers.map(peer => peer.key).join(",")}|`;
+  if (!told) {
+    try {
+      const file = fs.statSync(PEER_AGENTS_FILE);
+      stamp += `${file.mtimeMs}:${file.size}`;
+    } catch { stamp += "none"; }
+    if (vouchedKept?.stamp === stamp) return vouchedKept.vouched;
+  }
   const known = new Set(peers.map(peer => peer.key));
   const vouched = new Map<string, Peer>();
   for (const peer of peers) {
-    for (const box of told[peer.key]?.boxes ?? []) {
+    // (As many as one peer names, 16 at most.)
+    for (const box of (told ?? (told = readPeerAgents()))[peer.key]?.boxes?.slice(0, VOUCHED_EACH) ?? []) {
       if (!fitsPeer(box) || box.key === own || known.has(box.key) || vouched.has(box.key)) continue;
       vouched.set(box.key, cleanPeer(box));
     }
   }
-  return [...vouched.values()].slice(0, MOST_PEERS);
+  const list = [...vouched.values()].slice(0, MOST_PEERS);
+  if (!stamp.endsWith("|")) vouchedKept = { stamp, vouched: list };
+  return list;
 }
+const VOUCHED_EACH = 16;
+let vouchedKept: { stamp: string; vouched: Peer[] } | null = null;
 
 // What each peer told, by its key, as it last said it by mail.
 export function readPeerAgents(file = PEER_AGENTS_FILE): Record<string, ToldAgents> {

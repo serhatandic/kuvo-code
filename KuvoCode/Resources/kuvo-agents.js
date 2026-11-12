@@ -27085,12 +27085,20 @@ class PeerPost {
         signal?.addEventListener("abort", stop, { once: true });
         for (const line of this.kept)
           write(line);
+        const first = this.followers.size === 0;
         this.followers.add(write);
+        if (first)
+          for (const listener of this.carried)
+            listener();
         beating();
       },
       cancel: () => stop()
     });
     return new Response(stream, { headers: { "Content-Type": "application/x-ndjson", "Cache-Control": "no-cache" } });
+  }
+  carried = [];
+  onFollowed(listener) {
+    this.carried.push(listener);
   }
   get followed() {
     return this.followers.size > 0;
@@ -28353,6 +28361,7 @@ class LimitsPeers {
   now;
   peers = new Map;
   told = new Map;
+  answered = new Map;
   constructor(limits, transport, directory, file, now = Date.now) {
     this.limits = limits;
     this.transport = transport;
@@ -28362,6 +28371,7 @@ class LimitsPeers {
     this.load();
     limits.peers = this;
     directory.listen(() => this.directorySaid());
+    transport.onFollowed?.(() => this.told.clear());
   }
   fresh(service, identity) {
     return this.freshest(service, identity)?.checked;
@@ -28422,7 +28432,7 @@ class LimitsPeers {
     this.save();
     this.limits.peersChanged();
     if (given.ask === true || before && now - before.heard > PEER_AWAY)
-      this.tellOne(from);
+      this.answer(from);
     if (Array.isArray(given.refresh)) {
       const ids = new Set(given.refresh.filter((id) => typeof id === "string").slice(0, 200));
       if (ids.size)
@@ -28451,14 +28461,14 @@ class LimitsPeers {
   idOf(account, identity) {
     return identity ? `${account.service}#${identity}` : `${this.directory.own()?.key ?? ""}/${account.provider}`;
   }
-  tellOne(key) {
+  answer(key) {
     if (!this.transport.followed)
       return;
     const now = this.now();
-    const accounts = this.shared();
-    const last = this.told.get(key);
-    if (last && now - last.at < HEARD_EVERY && last.json === JSON.stringify(accounts))
+    if (now - (this.answered.get(key) ?? -Infinity) < HEARD_EVERY)
       return;
+    this.answered.set(key, now);
+    const accounts = this.shared();
     this.transport.send(key, { kind: "limits", at: now, accounts }, false);
     this.told.set(key, { json: JSON.stringify(accounts), at: now });
   }
@@ -28480,6 +28490,9 @@ class LimitsPeers {
     for (const key of [...this.told.keys()])
       if (!here.has(key))
         this.told.delete(key);
+    for (const key of [...this.answered.keys()])
+      if (!here.has(key))
+        this.answered.delete(key);
     if (gone) {
       this.save();
       this.limits.peersChanged();
@@ -28914,4 +28927,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 0c41c4398285a1ef3cf1214f524f798dfd7afaaa6f53469fae9312ed078c2759
+// Built from Packages/Box/src/agents 04f2e852d7238843bdf4a562b05f9684171838b9ca911c4066a4f427d93510a8
