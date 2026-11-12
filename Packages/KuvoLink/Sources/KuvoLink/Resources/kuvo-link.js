@@ -13342,6 +13342,37 @@ import crypto26 from "node:crypto";
 
 // Packages/Box/src/link/phones.ts
 import crypto24 from "node:crypto";
+
+// Packages/Box/src/link/setup/main-only.ts
+function mainElsewhere(link) {
+  const setup = link?.setup;
+  if (!setup || setup.role !== "member" || typeof setup.primary !== "string")
+    return null;
+  const doc = macDoc(link, setup.primary, "peers") ?? setupDoc(link);
+  const named = (Array.isArray(doc?.body.boxes) ? doc.body.boxes : []).find((box) => isObject(box) && box.key === setup.primary);
+  const name = String(isObject(named) && typeof named.name === "string" && named.name || link?.macNames?.[setup.primary] || "").slice(0, 100);
+  return { key: setup.primary, name };
+}
+var named = (main) => main.name || "your main computer";
+var pairElsewhere = (main) => ({ message: `Pair new phones from ${named(main)}.`, primary: main.key });
+var addElsewhere = (main) => ({ message: `Add and remove computers from ${named(main)}.`, primary: main.key });
+function memberHosts(link) {
+  if (IS_MAC || !mainElsewhere(link) || !link?.relay)
+    return null;
+  const doc = setupDoc(link) ?? macDoc(link, link.setup.primary, "peers");
+  if (!doc)
+    return null;
+  const hosts = [];
+  for (const box of Array.isArray(doc.body.boxes) ? doc.body.boxes.slice(0, 64) : []) {
+    if (!isObject(box) || box.kind !== "machine" || typeof box.key !== "string" || typeof box.address !== "string" || hosts.some((each) => each.key === box.key))
+      continue;
+    const name = String(box.name ?? "").slice(0, 100);
+    hosts.push({ kind: "machine", name, address: box.address, key: box.key, relay: link.relay, machine: typeof box.id === "string" && box.id ? box.id : name, anotherMac: false, removed: false });
+  }
+  return { hosts: hosts.sort((one, other) => one.name < other.name ? -1 : one.name > other.name ? 1 : 0) };
+}
+
+// Packages/Box/src/link/phones.ts
 function authorizePhone(key, hello, address) {
   const encoded = key.toString("base64url");
   if (!hello?.pair)
@@ -13358,6 +13389,10 @@ function authorizePhone(key, hello, address) {
     });
     if (!slot)
       return null;
+    if (mainElsewhere(link)) {
+      delete link[slot];
+      return link;
+    }
     pairPhone(link, { key: encoded, name: String(hello.name ?? "").slice(0, 100), added: Math.floor(Date.now() / 1000), from: "pair", address: address?.toString("base64url"), pairing: newPairing() });
     delete link[slot];
     paired = true;
@@ -18023,19 +18058,19 @@ async function answerPermission(source, id, sessionID, signal, found) {
 import fs67 from "node:fs";
 import path67 from "node:path";
 var FULL_ACCESS_FOLDER = path67.join(RUN, "fence", "full");
-var named = (session) => /^ses_[A-Za-z0-9_]+$/.test(session);
+var named2 = (session) => /^ses_[A-Za-z0-9_]+$/.test(session);
 function markFullAccess(session, on, root = session, folder = FULL_ACCESS_FOLDER) {
-  if (!named(session))
+  if (!named2(session))
     return;
   const file = path67.join(folder, session);
   try {
     if (!on)
       return fs67.rmSync(file, { force: true });
     fs67.mkdirSync(folder, { recursive: true, mode: 448 });
-    fs67.writeFileSync(file, named(root) ? root : session, { mode: 384 });
+    fs67.writeFileSync(file, named2(root) ? root : session, { mode: 384 });
   } catch {}
 }
-var markedFullAccess = (session, folder = FULL_ACCESS_FOLDER) => named(session) && fs67.existsSync(path67.join(folder, session));
+var markedFullAccess = (session, folder = FULL_ACCESS_FOLDER) => named2(session) && fs67.existsSync(path67.join(folder, session));
 function markConversation(root, on, folder = FULL_ACCESS_FOLDER) {
   markFullAccess(root, on, root, folder);
   if (on)
@@ -18045,7 +18080,7 @@ function markConversation(root, on, folder = FULL_ACCESS_FOLDER) {
     names = fs67.readdirSync(folder);
   } catch {}
   for (const name of names) {
-    if (!named(name) || name === root)
+    if (!named2(name) || name === root)
       continue;
     try {
       if (fs67.readFileSync(path67.join(folder, name), "utf8") === root)
@@ -18054,7 +18089,7 @@ function markConversation(root, on, folder = FULL_ACCESS_FOLDER) {
   }
 }
 async function noteFullAccess(session, found) {
-  if (typeof session !== "string" || !named(session))
+  if (typeof session !== "string" || !named2(session))
     return;
   const at = found === undefined ? await conversationOf2(session) : found;
   if (at)
@@ -34227,7 +34262,7 @@ function accountsIn(listed) {
   }
   return accounts;
 }
-var named2 = (ref, models) => models.find((model) => model.providerID === ref.providerID && model.id === ref.id) ?? models.find((model) => model.providerID === ref.providerID && model.aliases.includes(ref.id));
+var named3 = (ref, models) => models.find((model) => model.providerID === ref.providerID && model.id === ref.id) ?? models.find((model) => model.providerID === ref.providerID && model.aliases.includes(ref.id));
 async function engineLists(engine, folder) {
   const [providers, listed, integrations, fallback] = await Promise.all(["/api/provider", "/api/model", "/api/integration", "/api/model/default"].map((route) => asked6(engine, route, folder)));
   const models = modelsIn2(listed), accounts = accountsIn(integrations);
@@ -34252,7 +34287,7 @@ var accountOf = (account) => ({ id: account.id, name: account.name, ...account.l
 function onEngine(ref, engine) {
   if (!engine)
     return;
-  const listed = named2(ref, engine.models);
+  const listed = named3(ref, engine.models);
   const name = listed ? { name: listed.name } : {};
   if (listed && ref.providerID === "opencode")
     return { ...name, runs: true };
@@ -34287,7 +34322,7 @@ function withAgents(ref, bridge) {
   if (!account.signedIn)
     return { runs: false, missing: "signIn", account: accountOf(account) };
   const ofIt = bridge.models.filter((model) => model.providerID === ref.providerID);
-  const listed = named2(ref, ofIt);
+  const listed = named3(ref, ofIt);
   if (listed)
     return { name: listed.name, runs: true };
   if (!ofIt.length || ofIt.every((model) => model.provisional) || !account.complete)
@@ -37467,35 +37502,6 @@ async function* browserRoute(context) {
   return yield* json(405, {});
 }
 
-// Packages/Box/src/link/setup/main-only.ts
-function mainElsewhere(link) {
-  const setup = link?.setup;
-  if (!setup || setup.role !== "member" || typeof setup.primary !== "string")
-    return null;
-  const doc = macDoc(link, setup.primary, "peers") ?? setupDoc(link);
-  const named = (Array.isArray(doc?.body.boxes) ? doc.body.boxes : []).find((box) => isObject(box) && box.key === setup.primary);
-  const name = String(isObject(named) && typeof named.name === "string" && named.name || link?.macNames?.[setup.primary] || "").slice(0, 100);
-  return { key: setup.primary, name };
-}
-var named3 = (main) => main.name || "your main computer";
-var pairElsewhere = (main) => ({ message: `Pair new phones from ${named3(main)}.`, primary: main.key });
-var addElsewhere = (main) => ({ message: `Add and remove computers from ${named3(main)}.`, primary: main.key });
-function memberHosts(link) {
-  if (IS_MAC || !mainElsewhere(link) || !link?.relay)
-    return null;
-  const doc = setupDoc(link) ?? macDoc(link, link.setup.primary, "peers");
-  if (!doc)
-    return null;
-  const hosts = [];
-  for (const box of Array.isArray(doc.body.boxes) ? doc.body.boxes.slice(0, 64) : []) {
-    if (!isObject(box) || box.kind !== "machine" || typeof box.key !== "string" || typeof box.address !== "string" || hosts.some((each) => each.key === box.key))
-      continue;
-    const name = String(box.name ?? "").slice(0, 100);
-    hosts.push({ kind: "machine", name, address: box.address, key: box.key, relay: link.relay, machine: typeof box.id === "string" && box.id ? box.id : name, anotherMac: false, removed: false });
-  }
-  return { hosts: hosts.sort((one, other) => one.name < other.name ? -1 : one.name > other.name ? 1 : 0) };
-}
-
 // Packages/Box/src/link/mac/link.ts
 import fs119 from "node:fs";
 import path121 from "node:path";
@@ -38983,7 +38989,7 @@ async function* memberComputersRoute(context) {
   if (route !== "kuvo/hosts")
     return yield* engineRoute(context);
   const hosts = memberHosts(link);
-  return yield* json(hosts ? 200 : 503, hosts ?? { message: "This computer doesn't have its setup's list of computers yet. Try again in a moment." });
+  return yield* json(hosts ? 200 : 503, hosts ?? { message: "This computer can't list your computers yet. Try again in a moment." });
 }
 
 // Packages/Box/src/link/areas/attention.ts
@@ -39272,7 +39278,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "3add70a3a05e";
+var BRIDGE_VERSION = "1dad8202399d";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -44192,6 +44198,7 @@ function pair(relay) {
   const main = mainElsewhere(readLink());
   if (main) {
     console.error(pairElsewhere(main).message);
+    console.error(`If ${main.name || "it"} is gone for good, let it go here first: kuvo-link.js leave ${main.key}`);
     process.exit(3);
   }
   const link = updateLink((current) => {

@@ -1473,6 +1473,7 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "sessions.start": ["POST", "kuvo/sessions"],
     // (Your setup, and who's its main computer.)
     setup: ["GET", "kuvo/setup"],
+    "setup.mainOnly": ["GET", "kuvo/setup"],
     "shell.stop": ["POST", "kuvo/shell/sh_none/stop"],
     "sign-in.return": ["GET", "kuvo/sign-in/return"],
     skills: ["GET", "kuvo/skills"],
@@ -1669,6 +1670,13 @@ test("a machine pairs phones by itself while it leads its own setup, and not as 
   link.writeLink({ ...base, macs: [main], macNames: { [main]: "Studio" }, setup: { ...setup, primary: main, role: "member", aside: true } });
   assert.deepEqual(await as("POST", "kuvo/phones/pair"), { status: 409, json: { message: "Pair new phones from Studio.", primary: main } });
   assert.equal(link.readLink().pairing, undefined);
+  // A link it made before it was a member pairs no one now, and is done with.
+  const token = crypto.randomBytes(16).toString("base64url");
+  link.updateLink(current => ({ ...current, pairing: { token, expires: Date.now() + 60_000 } }));
+  const late = crypto.randomBytes(32);
+  assert.equal(link.authorizePhone(late, { pair: token, name: "Late" }, undefined), false);
+  assert.equal(link.readLink().pairing, undefined);
+  assert.ok(!link.readLink().phones.some(phone => phone.key === late.toString("base64url")));
   fs.rmSync(path.join(home, "run", "link.json"), { force: true });
 });
 

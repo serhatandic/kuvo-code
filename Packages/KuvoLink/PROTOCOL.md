@@ -287,17 +287,20 @@ computer. Changing the main computer and joining two setups come later: #183.)
   now) answers, with `primary` the main computer's static key and words naming it for a client to
   show as they are:
   - `POST kuvo/phones/pair`: `409 {"message": "Pair new phones from <main>.", primary}`, and
-    `kuvo-link.js pair` prints those words and stops (exit 3), with no pairing made;
+    `kuvo-link.js pair` prints those words and stops (exit 3), with no pairing made, saying too
+    how to let a main computer that's gone for good go there (`kuvo-link.js leave <its key>`, as
+    removing the computer from it would; then it pairs by itself), until a takeover can be made; a
+    pairing link made before the box became a member pairs no one;
   - adding, changing or removing computers, `kuvo/machines…` and `kuvo/hosts/…` but `GET`, and
-    `PUT kuvo/link/peers` from an app or `box route` there: `409 {"message": "Add and remove
+    `kuvo/link/peers` from an app or `box route` there: `409 {"message": "Add and remove
     computers from <main>.", primary}`, so only the main computer's app says who's in the setup;
   - `GET kuvo/hosts`, as a Mac answers it: the machines the setup's document names (itself too),
     each `{kind: "machine", name, address, key, relay, machine, anotherMac: false, removed:
     false}` (`machine`, the id the main computer's app knows it by), by name; `503 {"message"}`
-    before it holds that document. Not the main computer's Mac: a phone pairs with it.
+    before it holds that document (or while it has no relay). Not the main computer's Mac: a phone pairs with it.
 
-  The main computer and a box in no setup (one you run alone, one whose Mac is older) pair and add
-  as before; with the main computer's app closed, adding says to open it (`kuvo/machines`, above).
+  The main computer (a box you run alone is its own setup's) and a box in no setup (one whose Mac
+  is older, a shared machine whose Macs never led one) pair and add as before; with the main computer's app closed, adding says to open it (`kuvo/machines`, above).
   Existing pairings stay. Pairing removes no one.
 - **The card**: `run/setup-card.json`, beside link.json, nothing secret in it, for what looks at a
   computer from outside its box (the app as it opens, a Mac adding it over SSH): `{setup, epoch,

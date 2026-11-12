@@ -895,6 +895,9 @@ function pair(relay: string | undefined): void {
   const main = mainElsewhere(readLink());
   if (main) {
     console.error(pairElsewhere(main).message);
+    // (Until a takeover can be made: a main computer that's gone for good is let go here, as
+    // removing this computer from it would, and then this box pairs by itself.)
+    console.error(`If ${main.name || "it"} is gone for good, let it go here first: kuvo-link.js leave ${main.key}`);
     process.exit(3);
   }
   const link = updateLink(current => {

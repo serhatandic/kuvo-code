@@ -259,6 +259,7 @@ test("a member pairs no phone and adds no computer, naming the main computer, an
   assert.equal(cli.status, 3, cli.stderr);
   assert.equal(cli.stdout, "");
   assert.match(cli.stderr, /^Pair new phones from Studio Mac\.$/m);
+  assert.match(cli.stderr, new RegExp(`^If Studio Mac is gone for good, let it go here first: kuvo-link\\.js leave ${macPub}$`, "m"));
   assert.equal(read(linkFile).pairing, undefined);
 
   // Adding, changing or removing computers there, and an app there saying who's in the setup.

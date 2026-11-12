@@ -1,7 +1,7 @@
 // What only your setup's main computer does (PROTOCOL.md, "Your setup", Only the main computer):
 // it adds computers and pairs phones. A member says so, naming it (a 409 with its words, for any
-// client to show as it is), and a box in no setup (one you run alone, or one beside an older Mac)
-// does them as before. A member says which computers a phone reaches from the setup's document.
+// client to show as it is), and the main computer and a box in no setup (one beside an older Mac)
+// do them as before: a box you run alone is its own setup's main computer. A member says which computers a phone reaches from the setup's document.
 
 import { isObject } from "../../shared/json";
 import type { Hosts } from "../../shared/routes/mac";
@@ -33,7 +33,8 @@ export const addElsewhere = (main: { key: string; name: string }) => ({ message:
 
 /** `kuvo/hosts` as a member says it, from its setup's document: every machine in the setup a phone
  * reaches directly (itself too), as a Mac lists its machines; the main computer's Mac isn't one (a
- * phone pairs with it). Null where this box is no member, or holds no document of its setup yet. */
+ * phone pairs with it). Null where this box is no member, has no relay to name, or holds no document
+ * of its setup yet. */
 export function memberHosts(link: LinkState | null | undefined): Hosts | null {
   if (IS_MAC || !mainElsewhere(link) || !link?.relay) return null;
   const doc = setupDoc(link) ?? macDoc(link, link.setup!.primary, "peers");

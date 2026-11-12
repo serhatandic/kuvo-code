@@ -65,5 +65,5 @@ export async function* memberComputersRoute(context: RouteContext): AsyncGenerat
   if (request.method.toUpperCase() !== "GET") return yield* json(409, addElsewhere(main));
   if (route !== "kuvo/hosts") return yield* engineRoute(context);
   const hosts = memberHosts(link);
-  return yield* json(hosts ? 200 : 503, hosts ?? { message: "This computer doesn't have its setup's list of computers yet. Try again in a moment." });
+  return yield* json(hosts ? 200 : 503, hosts ?? { message: "This computer can't list your computers yet. Try again in a moment." });
 }
