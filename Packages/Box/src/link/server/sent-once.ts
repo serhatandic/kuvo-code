@@ -6,7 +6,35 @@
 // wasn't there) is tried again. Kept in memory, an hour: after this box starts again the engine,
 // which takes a message once by its id, is what's left to catch a repeat.
 
+import type { AnswerPiece } from "./context";
+
 export type SentAnswer = { status: number; headers: Record<string, string>; body: Buffer };
+
+// What a message says when the engine here runs but is too busy to take it in time (504, `busy`):
+// it isn't down, and it can be sent again in a moment (#443).
+export const BUSY = "This computer is busy: its engine didn't answer in time. Try again in a moment.";
+
+// How long a message may take to reach its conversation, as the engine takes it: a busy engine has
+// it late, and has it then (#443); one that never answers is given up on, so a repeat tries again.
+// (An object, for tests to make it shorter.)
+export const SENDING_PATIENCE = { ms: 120_000 };
+
+// A route's answer, whole (a message's is small).
+export async function collected(pieces: AsyncIterable<AnswerPiece>): Promise<SentAnswer> {
+  const answer: SentAnswer = { status: 200, headers: {}, body: Buffer.alloc(0) };
+  const body: Buffer[] = [];
+  for await (const piece of pieces) {
+    if ("head" in piece) Object.assign(answer, { status: piece.head.status, headers: piece.head.headers });
+    else body.push(piece.body);
+  }
+  return { ...answer, body: Buffer.concat(body) };
+}
+
+// `answer` as a route answers it.
+export function* answering(answer: SentAnswer): Generator<AnswerPiece> {
+  yield { head: { status: answer.status, headers: answer.headers } };
+  if (answer.body.length) yield { body: answer.body };
+}
 
 const KEPT_MS = 60 * 60 * 1000;
 const AT_MOST = 1000;
@@ -44,6 +72,17 @@ export async function sentOnce(key: string, send: () => Promise<SentAnswer>, now
     if (sent.get(key) === entry) sent.delete(key);
     throw error;
   }
+}
+
+// A message taken away (from what waits on the box, or the engine's inbox): sent again under its
+// id (Undo), it goes again.
+export function forgetSent(session: string, id: string) {
+  for (const place of ["engine", "agents", "queue"]) sent.delete(`${place}\n${session}\n${id}`);
+}
+
+// Nothing remembered, as when the box starts (for tests that start one again in the same process).
+export function forgetEverythingSent() {
+  sent.clear();
 }
 
 // Ones that went more than an hour ago, and the oldest past the most kept.

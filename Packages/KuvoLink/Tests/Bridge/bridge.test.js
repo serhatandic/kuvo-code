@@ -484,6 +484,41 @@ test("a message sent again under the same id after the phone's link dropped goes
   assert.deepEqual(prompts.map(sent => sent.id), ["msg_once", "msg_other"]);
 });
 
+test("a message the engine never answers is given up on in time, and sent again it's tried again (#144)", { timeout: 30_000 }, async t => {
+  // An engine that takes the first and never answers it (stuck), then answers.
+  const prompts = [];
+  const server = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", chunk => { body += chunk; });
+    request.on("end", () => {
+      if (!/\/prompt$/.test(request.url)) { response.writeHead(404); return response.end("{}"); }
+      prompts.push(JSON.parse(body).id);
+      if (prompts.length === 1) return;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{}");
+    });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const patience = link.SENDING_PATIENCE.ms;
+  link.SENDING_PATIENCE.ms = 200;
+  t.after(() => { link.SENDING_PATIENCE.ms = patience; });
+  const target = () => ({ pid: process.pid, port: server.address().port, password: "s3cret", version: "2.0.32" });
+  const handle = link.engineHandler(target, {}, () => null);
+  const hostKey = link.newKey();
+  const host = new link.LinkHost({ key: hostKey, hello: { v: 1, kind: "machine", name: "m", app: "0" }, authorize: () => true, handle });
+  const phone = phoneFor(host, hostKey);
+  await phone.open({});
+  const message = Buffer.from(JSON.stringify({ id: "msg_stuck", text: "hello", delivery: "steer" }));
+  phone.send({ t: "req", id: 1, m: "POST", p: "api/session/ses_stuck/prompt", h: { "content-type": "application/json" } }, message);
+  const busy = await phone.response();
+  assert.equal(busy.head.s, 504);
+  assert.equal(JSON.parse(busy.body).busy, true);
+  phone.send({ t: "req", id: 2, m: "POST", p: "api/session/ses_stuck/prompt", h: { "content-type": "application/json" } }, message);
+  assert.equal((await phone.response()).head.s, 200);
+  assert.deepEqual(prompts, ["msg_stuck", "msg_stuck"]);
+});
+
 test("a message sent again after the conversation refused it is tried again (#144)", { timeout: 30_000 }, async t => {
   // An engine that can't take it the first time (starting again), then can.
   const prompts = [];

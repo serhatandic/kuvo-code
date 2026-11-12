@@ -12,7 +12,7 @@ import { stopIfWaiting } from "../work/answers";
 import { attachedIn } from "./attached";
 import type { ModelInput } from "./attached";
 import { namedIn, namingHere } from "./naming";
-import { sentKey, sentOnce } from "./sent-once";
+import { BUSY, forgetSent, SENDING_PATIENCE, sentKey, sentOnce } from "./sent-once";
 import type { SentAnswer } from "./sent-once";
 import { agentsAllowed, allowed, canonicalPath, REQUEST_HEADERS, RESPONSE_HEADERS } from "./paths";
 import type { EngineRecord, Target } from "../../shared/records";
@@ -96,6 +96,9 @@ export async function* forward(target: Target, path: string, request: LinkReques
     yield { body: Buffer.from(JSON.stringify({ message: MOVING })) };
     return;
   }
+  // A message taken out of the engine's inbox: sent again under its id (Undo), it goes again.
+  const cancelled = method === "DELETE" && /^\/api\/session\/([^/]+)\/inbox\/([^/]+)$/.exec(url.pathname);
+  if (cancelled) forgetSent(decodeURIComponent(cancelled[1]!), decodeURIComponent(cancelled[2]!));
   // A session's metadata changed: whether it was archived before, as the engine has it (null when
   // it can't say). A phone sends all of it with any change (a pin, say), the flag as it was too.
   const changed = method === "PATCH" && /^\/api\/session\/([^/]+)$/.exec(url.pathname);
@@ -127,9 +130,11 @@ export async function* forward(target: Target, path: string, request: LinkReques
   if (once) {
     const answer = await sentOnce(once, async () => {
       try {
-        const response = await fetch(url, { method, headers, body: await outgoing() });
+        const response = await fetch(url, { method, headers, body: await outgoing(), signal: AbortSignal.timeout(SENDING_PATIENCE.ms) });
         return { status: response.status, headers: answerHeaders(response), body: Buffer.from(await response.arrayBuffer()) };
-      } catch {
+      } catch (error) {
+        // Running but never answering: said busy, and not kept, so a repeat tries again.
+        if ((error as Error | null)?.name === "TimeoutError") return { status: 504, headers: { "content-type": "application/json" }, body: Buffer.from(JSON.stringify({ message: BUSY, busy: true })) };
         return notAnswering();
       }
     });

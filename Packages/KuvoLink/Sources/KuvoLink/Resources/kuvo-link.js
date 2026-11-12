@@ -37333,7 +37333,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "87cfe3cd1a51";
+var BRIDGE_VERSION = "738f99114b82";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -37525,6 +37525,24 @@ async function* pairingRoute(context) {
 }
 
 // Packages/Box/src/link/server/sent-once.ts
+var BUSY = "This computer is busy: its engine didn't answer in time. Try again in a moment.";
+var SENDING_PATIENCE = { ms: 120000 };
+async function collected(pieces) {
+  const answer = { status: 200, headers: {}, body: Buffer.alloc(0) };
+  const body = [];
+  for await (const piece of pieces) {
+    if ("head" in piece)
+      Object.assign(answer, { status: piece.head.status, headers: piece.head.headers });
+    else
+      body.push(piece.body);
+  }
+  return { ...answer, body: Buffer.concat(body) };
+}
+function* answering(answer) {
+  yield { head: { status: answer.status, headers: answer.headers } };
+  if (answer.body.length)
+    yield { body: answer.body };
+}
 var KEPT_MS = 60 * 60 * 1000;
 var AT_MOST = 1000;
 var sent3 = new Map;
@@ -37566,6 +37584,15 @@ async function sentOnce(key, send, now = Date.now) {
       sent3.delete(key);
     throw error;
   }
+}
+function forgetSent(session, id) {
+  for (const place of ["engine", "agents", "queue"])
+    sent3.delete(`${place}
+${session}
+${id}`);
+}
+function forgetEverythingSent() {
+  sent3.clear();
 }
 function forgetOld2(at) {
   for (const [key, entry] of sent3)
@@ -37647,6 +37674,9 @@ async function* forward(target, path, request, signal, allows, naming = null, do
     yield { body: Buffer.from(JSON.stringify({ message: MOVING })) };
     return;
   }
+  const cancelled = method === "DELETE" && /^\/api\/session\/([^/]+)\/inbox\/([^/]+)$/.exec(url.pathname);
+  if (cancelled)
+    forgetSent(decodeURIComponent(cancelled[1]), decodeURIComponent(cancelled[2]));
   const changed = method === "PATCH" && /^\/api\/session\/([^/]+)$/.exec(url.pathname);
   let wasArchived = null;
   if (changed) {
@@ -37669,9 +37699,11 @@ async function* forward(target, path, request, signal, allows, naming = null, do
   if (once) {
     const answer = await sentOnce(once, async () => {
       try {
-        const response = await fetch(url, { method, headers, body: await outgoing() });
+        const response = await fetch(url, { method, headers, body: await outgoing(), signal: AbortSignal.timeout(SENDING_PATIENCE.ms) });
         return { status: response.status, headers: answerHeaders(response), body: Buffer.from(await response.arrayBuffer()) };
-      } catch {
+      } catch (error) {
+        if (error?.name === "TimeoutError")
+          return { status: 504, headers: { "content-type": "application/json" }, body: Buffer.from(JSON.stringify({ message: BUSY, busy: true })) };
         return notAnswering();
       }
     });
@@ -37768,7 +37800,6 @@ async function* engineRoute(context) {
 
 // Packages/Box/src/link/areas/queue.ts
 var QUEUE_ROUTE = /^kuvo\/sessions\/(?:queues\/events|([^/]+)\/(stop|queue(?:\/(hold|resume|add))?|queue\/([^/]+)(?:\/(now))?))$/;
-var BUSY = "This computer is busy: its engine didn't answer in time. Try again in a moment.";
 async function* queueRoute(context, match) {
   const { request, readEngine, bridge, signal, json } = context;
   const method = request.method.toUpperCase();
@@ -37796,6 +37827,7 @@ async function* queueRoute(context, match) {
     const dropped = dropWaiting(session, decodeURIComponent(item), place ? await inboxFor(place.target, session) : []);
     if (!dropped)
       return yield* json(404, { message: "That message isn't waiting any more." });
+    forgetSent(session, decodeURIComponent(item));
     const { from, text: words } = dropped.shown;
     const removed = dropped.message ? { ...dropped.message, ...from ? { from } : {}, words, ...dropped.before ? { before: dropped.before } : {} } : undefined;
     return yield* json(200, { ...shownQueue(queueOf(session)), ...removed ? { removed } : {} });
@@ -37823,8 +37855,13 @@ async function* queueRoute(context, match) {
       const items = isObject(given) && Array.isArray(given.items) ? given.items.filter((id) => typeof id === "string") : [];
       return yield* json(200, shownQueue(await holdQueue(place.target, session, undefined, items)));
     }
-    if (step === "add")
-      return yield* add2(context, place.target, session);
+    if (step === "add") {
+      const once = sentKey("queue", session, request.body);
+      const target = place.target;
+      if (!once)
+        return yield* add2(context, target, session);
+      return yield* answering(await sentOnce(once, () => collected(add2(context, target, session))));
+    }
     forgetStopped(session);
     if (step === "resume")
       return yield* json(200, shownQueue(await resumeQueue(place.target, session)));
@@ -37855,7 +37892,7 @@ async function* add2({ request, bridge, readEngine, json, signal }, target, sess
   const before = typeof given.before === "string" && /^[A-Za-z0-9_]{1,100}$/.test(given.before) ? given.before : undefined;
   if (await keepWaitingBefore(target, session, message, { from, words }, before))
     return yield* json(200, { ...shownQueue(queueOf(session)), waits: true });
-  await asked(target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, message, 120000);
+  await asked(target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, message, SENDING_PATIENCE.ms);
   return yield* json(200, { ...shownQueue(queueOf(session)), waits: false });
 }
 
@@ -42761,6 +42798,7 @@ export {
   RESTORED_WAIT,
   REVIEW_PAUSE,
   SEEN_FILE,
+  SENDING_PATIENCE,
   SETUP_CARD,
   SHOWN_WITHIN,
   SKILL_REPOSITORIES,
@@ -42854,6 +42892,7 @@ export {
   followedSetup,
   forgetAsks,
   forgetAsksOn,
+  forgetEverythingSent,
   forgetLeftKeys,
   forgetMovesInMemory,
   forgetOldHomes,
