@@ -32,6 +32,7 @@ TEST_APP = str(SCRIPTS / "test-app.sh")
 # waits until that fifo is written.
 XCODEBUILD = r"""#!/bin/sh
 echo "$*" >> "$FAKE_XCODE_LOG"
+echo "source root: ${TEST_RUNNER_KUVO_SOURCE_ROOT:-none}" >> "$FAKE_XCODE_LOG"
 if [ "$1" = test-without-building ]; then
     if [ -n "${FAKE_XCODE_TEST_HOLD:-}" ]; then
         : > "$FAKE_XCODE_TEST_HOLD.running"
@@ -171,6 +172,7 @@ class Building(Batches):
         folder = os.path.join(self.batches, "mac", name)
         self.assertEqual(stamp["kuvo_ai"], commit)
         self.assertEqual(stamp["kuvo_ai_subject"], "First")
+        self.assertEqual(stamp["kuvo_ai_src"], os.path.join(folder, "src", "kuvo-ai"))
         self.assertEqual(stamp["xctestrun"], os.path.join(folder, "build", "Build", "Products", "KuvoCode_macosx-arm64.xctestrun"))
         self.assertTrue(os.path.isfile(stamp["xctestrun"]))
         self.assertIn("built", stamp)
@@ -202,6 +204,8 @@ class Building(Batches):
         self.assertEqual(stamp["kuvo_code_ios"], git(self.phone, "rev-parse", "main"))
         self.assertEqual(stamp["kuvo_ai"], git(self.mac, "rev-parse", "main"))
         src = os.path.join(self.batches, "phone", name, "src")
+        self.assertEqual(stamp["kuvo_code_ios_src"], os.path.join(src, "kuvo-code-ios"))
+        self.assertEqual(stamp["kuvo_ai_src"], os.path.join(src, "kuvo-ai"))
         # The phone's project finds kuvo-ai's packages at ../kuvo-ai.
         self.assertTrue(os.path.isdir(os.path.join(src, "kuvo-code-ios", "KuvoCodeMobileTests")))
         self.assertTrue(os.path.isdir(os.path.join(src, "kuvo-ai", "KuvoCode")))
@@ -358,10 +362,41 @@ class FromBatch(Batches):
         self.assertEqual(said.count("build-for-testing"), 2, "only the batches were built")
         self.assertIn("test-without-building -xctestrun " + stamp["xctestrun"] + " -destination platform=macOS", said)
         self.assertIn("-only-testing:KuvoCodeTests/WindowTabsTests -only-testing:KuvoCodeTests/WorkQueueTests", said)
+        # The tests that read the sources read the batch's, as its stamp says.
+        self.assertEqual(stamp["kuvo_ai_src"], os.path.join(self.batches, "mac", name, "src", "kuvo-ai"))
+        self.assertIn("source root: " + stamp["kuvo_ai_src"] + "\n", said)
         self.assertIn("Tested the batch " + name + ":", done.stdout)
         self.assertIn("kuvo_ai=" + stamp["kuvo_ai"], done.stdout)
         self.assertIn("xctestrun=" + stamp["xctestrun"], done.stdout)
         self.assertEqual(self.runs(name), [], "it closed the batch")
+
+    def test_the_tests_read_the_sources_the_stamp_names(self):
+        self.assertEqual(self.build("mac").returncode, 0)
+        name = self.built("mac")[0]
+        elsewhere = os.path.join(self.root, "sources-elsewhere")
+        shutil.copytree(os.path.join(self.batches, "mac", name, "src", "kuvo-ai"), elsewhere)
+        stamp = os.path.join(self.batches, "mac", name, "stamp")
+        write(stamp, "".join(("kuvo_ai_src=" + elsewhere if line.startswith("kuvo_ai_src=") else line) + "\n"
+                             for line in read(stamp).splitlines()))
+        done = self.run_tests("KuvoCodeTests/WindowTabsTests", "--from-batch")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("source root: " + elsewhere + "\n", self.xcode_said())
+
+    def test_a_run_that_builds_gives_the_tests_its_own_checkout(self):
+        done = self.run_tests("KuvoCodeTests/HeldMenuGuardTests")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        said = self.xcode_said()
+        self.assertIn("test -project KuvoCode.xcodeproj", said)
+        self.assertIn("source root: " + str(SCRIPTS.parent) + "\n", said)
+
+    def test_a_batch_whose_stamp_names_no_sources_gives_the_tests_its_exported_ones(self):
+        self.assertEqual(self.build("mac").returncode, 0)
+        name = self.built("mac")[0]
+        stamp = os.path.join(self.batches, "mac", name, "stamp")
+        write(stamp, "".join(line + "\n" for line in read(stamp).splitlines() if not line.startswith("kuvo_ai_src=")))
+        done = self.run_tests("KuvoCodeTests/WindowTabsTests", "--from-batch")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("source root: " + os.path.join(self.batches, "mac", name, "src", "kuvo-ai") + "\n", self.xcode_said())
 
     def test_a_batch_a_run_has_open_is_kept_while_it_waits_or_runs(self):
         self.assertEqual(self.build("mac").returncode, 0)

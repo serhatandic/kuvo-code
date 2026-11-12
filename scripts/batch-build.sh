@@ -193,6 +193,9 @@ one() {
             echo "kuvo_code_ios=$phone_commit"
             echo "kuvo_code_ios_subject=$(git --no-optional-locks -C "$PHONE_REPO" log -1 --format=%s "$phone_commit")"
         fi
+        # (The sources it was built from: test-app.sh gives them to the tests that read them.)
+        echo "kuvo_ai_src=$src/kuvo-ai"
+        [ "$platform" = mac ] || echo "kuvo_code_ios_src=$src/kuvo-code-ios"
         echo "built=$(date +%Y-%m-%dT%H:%M:%S%z)"
         echo "build_seconds=$((ended - from))"
         echo "xctestrun=$xctestrun"
