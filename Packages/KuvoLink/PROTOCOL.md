@@ -817,7 +817,7 @@ manifest of every file and its SHA-256, and says its `digest`; `place` puts it i
 it goes to (paths and the conversation's folder made right for this box, the memory beside one
 already there kept, a file with the same name but other words kept beside it as
 `moved-<sha8>-<name>`; with `chat`, each session's chat mark set to it, or taken off for null, as it's
-placed: "Chats"), noting each step so `undo` takes it all back; `digest {root}` says the same
+placed: "Chats"; a bridge from before ignores it, and the chat goes by its folder), noting each step so `undo` takes it all back; `digest {root}` says the same
 hash again. A bot's memory goes in its own folder (`<bot>/memory`, Claude Code's
 `autoMemoryDirectory`) from there on. An agent that keeps nothing to carry, or one whose files
 can't be found, goes with the bridge's record, and its next turn starts from what that holds.
