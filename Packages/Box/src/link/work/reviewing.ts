@@ -628,14 +628,7 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
   const file = seen && [seen.input.filePath, seen.input.file_path, seen.input.notebook_path, seen.input.path, seen.input.file].find((each): each is string => typeof each === "string" && each.startsWith("/"));
   // (Each as a command's path reads: \`~\` as your home, one not from \`/\` from its folder.)
   const named = permission.resources.filter(each => each !== "*").map(each => path.resolve(folder, each.replace(/^~(?=\/|$)/, homeFolder()).replace(/\/\*$/, "") || "/"));
-  // (And a read of a file that isn't there, where it leads (through a link to a name that isn't
-  // there too, which the sandbox's plugin gives the engine), by each beside it whose name looks the
-  // same, one of which the engine reads in its place without asking again: fence/lookalike.ts. Its
-  // folder asked about off the box's thread first, as below.)
-  const reads = Boolean(seen && file && seen.tool.toLowerCase() === "read");
-  if (reads) await askedAbout([folder, path.resolve(file!)]);
-  const alikes = reads ? lookalikesOf(landsAt(file!)) : [];
-  const actions: ReviewedAction[] = seen && file ? [file, ...alikes].map(each => ({ kind: "file" as const, path: each, access: READING.has(seen.tool.toLowerCase()) ? "read" as const : "write" as const, folder, tool: seen.tool, input: seen.input }))
+  const actions: ReviewedAction[] = seen && file ? [{ kind: "file", path: file, access: READING.has(seen.tool.toLowerCase()) ? "read" : "write", folder, tool: seen.tool, input: seen.input }]
     : named.length ? named.map(each => ({ kind: "file" as const, path: each, access: "write" as const, folder }))
     : [{ kind: "tool", tool: seen?.tool || "work outside its folder", args: seen?.input ?? { asked: permission.resources }, folder }];
   // What its own tools read, one file at a time, of its commands' temporary files (a screenshot a
@@ -653,6 +646,15 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
     noteReview(id, sessionID, "yours", call);
     return null;
   }
+  // A read of a file that isn't there is judged by each file beside where it lands whose name looks
+  // the same too (through a link to a name that isn't there, which the sandbox's plugin gives the
+  // engine), one of which the engine reads in its place without asking again (fence/lookalike.ts: a
+  // screenshot's name, its spaces narrow, typed with plain ones). Its folder asked about off the
+  // box's thread first, as below.
+  const reads = Boolean(seen && file && seen.tool.toLowerCase() === "read");
+  if (reads) await askedAbout([folder, path.resolve(file!)]);
+  const alikes = reads ? lookalikesOf(landsAt(file!)) : [];
+  actions.push(...alikes.map(each => ({ ...actions[0], path: each }) as ReviewedAction));
   // Its answer, and how it decided, listed as it answers (its answer's event isn't taken for yours).
   const reply = async (body: Record<string, unknown>, decided: AskReview["state"]) => {
     replying.set(id, false);

@@ -5700,7 +5700,7 @@ quotes; never a link, engine 2.2.5), without asking about it again. So where a l
 name that looks the same (by a wider rule, `fence/lookalike.ts`: compatibility-composed, any space,
 any apostrophe-like mark, any case), in the folder or out of it, the plugin refuses the read rather
 than send it where the link leads, and a read it would send through a link out of the folder to a
-file that isn't there; and Auto's reviewer judges a read naming its file from `/` by each file
+file that isn't there beside one whose name looks the same; and Auto's reviewer judges a read naming its file from `/` by each file
 beside where it lands whose name looks the same too, as by that name (one named otherwise is judged
 by the folder the engine asks about, as a write). And it refuses
 `session_move` (the engine's, or code mode's `opencode_session_move`) of another conversation, or to

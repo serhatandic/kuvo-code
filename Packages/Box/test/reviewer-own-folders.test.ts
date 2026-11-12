@@ -242,6 +242,10 @@ test.skipIf(!canFence)("in Ask First and Accept Edits, a conversation's own tool
       const tmp = run('mkdir -p "$TMPDIR/shots" && echo png > "$TMPDIR/shots/frame-01.png" && printf %s "$TMPDIR"', project).stdout.replace(/\\/$/, "");
       said.first = await read("ses_first", path.join(tmp, "shots", "frame-01.png"));
       said.edits = await read("ses_edits", path.join(tmp, "shots", "frame-01.png"));
+      // A screenshot, its name's space a narrow one, read by a name typed with a plain one (the
+      // engine reads it in that name's place, #434).
+      fs.writeFileSync(path.join(tmp, "shots", "Screenshot at 10.00.00\\u202fAM.png"), "png");
+      said.screenshot = await read("ses_first", path.join(tmp, "shots", "Screenshot at 10.00.00 AM.png"));
       // A file you attached to it, kept in Kuvo Code's folders.
       const attached = path.join(home.K, "attachments", "ses_first", "a1b2c3d4", "plan.pdf");
       fs.mkdirSync(path.dirname(attached), { recursive: true });
@@ -257,7 +261,7 @@ test.skipIf(!canFence)("in Ask First and Accept Edits, a conversation's own tool
       said.theirs = await read("ses_first", theirs);
       fs.symlinkSync(home.BOX_KEYS, path.join(tmp, "keys"));
       said.linked = await read("ses_first", path.join(tmp, "keys", "box.key"));`)
-    expect(said).toEqual({ first: "allow", edits: "allow", attached: "allow", writes: null, elsewhere: null, theirs: null, linked: null })
+    expect(said).toEqual({ first: "allow", edits: "allow", screenshot: "allow", attached: "allow", writes: null, elsewhere: null, theirs: null, linked: null })
     expect(prompts.length).toBe(0)
   } finally {
     rmSync(project, { recursive: true, force: true })

@@ -645,7 +645,7 @@ export function landsAt(where: string): string {
 
 /** Where a path leads through its links, opening nothing: as `followLinks`, but past a name that
  * isn't there (a link to it, say), the rest as it's named. */
-function leadsTo(where: string): string {
+export function leadsTo(where: string): string {
   try { return followLinks(path.resolve(where), true); } catch { return path.resolve(where); }
 }
 

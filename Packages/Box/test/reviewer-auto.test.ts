@@ -1015,6 +1015,7 @@ test("in Auto, a read by a look-alike name beside a link a command made to your 
     symlinkSync(join(fake, ".ssh", "id_test"), join(folder, "it's.txt"))
     // (And one to a name that isn't there, which looks like your other key's.)
     symlinkSync(join(fake, ".ssh", "work\u00a0key"), join(folder, "notes.txt"))
+    symlinkSync(join(fake, ".ssh", "id_tset"), join(folder, "typo.txt"))
     writeFileSync(join(folder, "plain notes.txt"), "the project's\n")
     // And one in a folder outside it, which reads ask about.
     const elsewhere = join(box, "alike-elsewhere")
@@ -1059,6 +1060,7 @@ test("in Auto, a read by a look-alike name beside a link a command made to your 
       "outside the folder, by a look-alike name": await read("per_a6", join(elsewhere, "our\u00a0notes.md")),
       "a key itself, by a look-alike name": await read("per_a7", join(fake, ".ssh", "work\u00a0key")),
       "through a link to a look-alike of a key": await read("per_a8", join(folder, "notes.txt")),
+      "through a link to a name nothing looks like": await read("per_a10", join(folder, "typo.txt")),
     }
     const refused = expect.stringMatching(/^refused: This names a file that isn't there, beside a link whose name looks the same/)
     expect(tried).toEqual({
@@ -1070,7 +1072,9 @@ test("in Auto, a read by a look-alike name beside a link a command made to your 
       "outside the folder, by a look-alike name": refused,
       // (Judged as the file read reads in its place, which is your key.)
       "a key itself, by a look-alike name": "refused at the engine",
-      "through a link to a look-alike of a key": expect.stringMatching(/^refused: This names a link out of the conversation's folder to a file that isn't there/),
+      "through a link to a look-alike of a key": expect.stringMatching(/^refused: This leads, through a link out of the conversation's folder, to a file that isn't there, beside one whose name looks the same/),
+      // (A typo through a link: the engine says it isn't there.)
+      "through a link to a name nothing looks like": "not found",
     })
     // (The reviewer was asked about the key itself, not only the name given.)
     expect(prompts.at(-1)).toContain(join(fake, "dotfiles", "ssh", "work key"))
