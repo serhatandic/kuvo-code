@@ -13,7 +13,7 @@ import { callerOf, isCalling } from "../vault/who";
 import { addCategory, categories, categoryNamed } from "./categories";
 import { importItems, importWords, givenItems } from "./import";
 import { numberWaiting, primaryOf } from "./numbers";
-import { addItem, applyFileOps, changeItem, handItem, linkSession, linkSource, Refusal, refuseHanding, refuseMoving, removeItem, restoreItem, stageFiles, startWork, stopWork, type Acting, type Fields, type FilePlaces } from "./ops";
+import { addItem, applyFileOps, changeItem, handItem, linkSession, linkSource, Refusal, refuseHanding, refuseMoving, removeItem, restoreItem, stageFiles, startWork, stopWork, unlinkSessions, type Acting, type Fields, type FilePlaces } from "./ops";
 import { allItems, byUser, changeQueues, matching, MOST_BODY, whoWords, type Book, type Item, type Who } from "./store";
 import { canonicalOf, readIssue, seenOf, sourceOf, withSeen, type IssueRead } from "./github";
 import { issueAt, refText, sourceKey, sourceKeyOf, type IssueAt } from "./sources";
@@ -297,8 +297,7 @@ async function run(name: string, args: Record<string, unknown>, caller: QueueCal
           for (const session of named(args.sessions)) linkSession(book, item, session, now);
         }
         if (args.working === false) stopWork(item, caller.session, acting);
-        const unlinked = new Set(named(args.unlink));
-        item.sessions = item.sessions.filter(each => !unlinked.has(each.session));
+        unlinkSessions(item, named(args.unlink), now);
         applyFileOps(acting);
         return item;
       }));

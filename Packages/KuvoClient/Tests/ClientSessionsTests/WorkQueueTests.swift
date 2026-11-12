@@ -240,10 +240,11 @@ import ClientSessions
 
     @Test func activityMergesNotesAndWhatHappenedToItOldestFirst() throws {
         // (Out of order on the wire; three things at 4000: a start and a move as the box kept them,
-        // and a note; at 7000, a move and the work it started, in the box's order.)
+        // and a note; at 7000, as `queue_update {category, working: true, note}` keeps them, a move
+        // and the work it started, in the box's order, then the note.)
         let json = """
         {"id":"wqi_1","number":551,"owner":"ses_lead","title":"T","category":"done","doneAt":9000,"order":1,"inProgress":false,"sessions":[],"noteCount":2,"fileCount":0,"linkCount":0,"created":{"at":1000,"by":{"session":"ses_lead","name":"Kuvo Foreman"}},"updated":{"at":9000,"by":{"session":"ses_b","name":"Sign-in"}},
-         "body":"","notes":[{"at":4000,"by":{"session":"ses_b","name":"Sign-in"},"text":"Starting with the tests."},{"at":8500,"by":{"session":"ses_b","name":"Sign-in"},"text":"All pass."}],
+         "body":"","notes":[{"at":4000,"by":{"session":"ses_b","name":"Sign-in"},"text":"Starting with the tests."},{"at":8500,"by":{"session":"ses_b","name":"Sign-in"},"text":"All pass."},{"at":7000,"by":{"session":"ses_b","name":"Sign-in"},"text":"On it."}],
          "events":[{"at":4000,"by":{"session":"ses_b","name":"Sign-in"},"kind":"started"},
                    {"at":4000,"by":{"user":true},"kind":"moved","from":"next","to":"next","top":true},
                    {"at":2000,"by":{"user":true},"kind":"moved","from":"next","to":"cat_design"},
@@ -274,11 +275,12 @@ import ClientSessions
             "You moved it to Later",
             "Sign-in moved it to another category",
             "Sign-in started work",
+            "Sign-in left a note",
             "Sign-in stopped work",
             "Sign-in left a note",
             "Sign-in marked it done",
         ], "a kind from a newer box left out; Done once, as the box kept it")
-        #expect(lines.map(\.kind) == [.added, .moved, .moved, .started, .note, .moved, .moved, .moved, .moved, .started, .stopped, .note, .done])
+        #expect(lines.map(\.kind) == [.added, .moved, .moved, .started, .note, .moved, .moved, .moved, .moved, .started, .note, .stopped, .note, .done])
         #expect(lines[3].who == .session("ses_b", name: "Sign-in"))
         #expect(Set(lines.map(\.id)).count == lines.count)
     }

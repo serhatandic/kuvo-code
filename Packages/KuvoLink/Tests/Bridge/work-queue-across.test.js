@@ -655,6 +655,12 @@ test("what happened to an item goes with it to another computer, as its notes do
   // One handed here from an older box has none.
   await takeFrom(lab, { hand: { id: "wqh_fromlab00000004", to: "ses_child", from: "ses_farlead", by: { session: "ses_farlead", name: "Far lead" }, at: Date.now(), item: told(702, "ses_farlead", { id: "wqi_handedfromlab0000004", body: "", notes: [], files: [], links: [], handed: [] }), files: [] } });
   assert.deepEqual((await route("GET", "kuvo/work-queue/items/702")).body.item.events, []);
+  // One in a category this box doesn't keep (none came with it) lands in Next, its feed saying so.
+  await takeFrom(lab, { hand: { id: "wqh_fromlab00000005", to: "ses_child", from: "ses_farlead", by: { session: "ses_farlead", name: "Far lead" }, at: Date.now(), item: told(703, "ses_farlead", { id: "wqi_handedfromlab0000005", category: "cat_farcat", body: "", notes: [], files: [], links: [], handed: [], events: far }), files: [] } });
+  const landed = (await route("GET", "kuvo/work-queue/items/703")).body.item;
+  assert.equal(landed.category, "next");
+  assert.deepEqual(landed.events.slice(0, 2), far);
+  assert.deepEqual(landed.events.slice(2).map(({ at: _, ...event }) => event), [{ by: { source: "kuvo", name: "Kuvo Code" }, kind: "moved", from: "cat_farcat", to: "next" }]);
 });
 
 test("an item handed here without a number takes one as it arrives", async () => {

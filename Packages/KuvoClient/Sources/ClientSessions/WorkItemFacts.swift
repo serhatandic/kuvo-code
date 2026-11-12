@@ -158,20 +158,6 @@ public extension WorkQueue {
             case moved
             case done
             case deleted
-
-            // Which goes first of lines at one moment: work started, then what was said, then the
-            // rest (a change that starts work and leaves a note, or leaves one and marks it done,
-            // reads in that order).
-            var rank: Int {
-                switch self {
-                case .added: 0
-                case .started: 1
-                case .note: 2
-                case .handed: 3
-                case .stopped, .moved, .done: 4
-                case .deleted: 5
-                }
-            }
         }
 
         public var id: String
@@ -190,7 +176,8 @@ public extension WorkQueue {
 
     /// An item's activity, oldest first: who added it, its notes and what the box kept of what
     /// happened to it (work started and stopped, moves, done), its hand-offs, and when it was
-    /// deleted. Of lines at one moment, work started goes first, then notes, then the rest.
+    /// deleted. Of lines at one moment, the box's events up to its last start then go first (in
+    /// its order), then notes and hand-offs, then its other events.
     static func activity(of detail: WorkItemDetail, in view: WorkQueueView) -> [Activity] {
         let item = detail.item
         var lines: [Activity] = []
@@ -211,31 +198,30 @@ public extension WorkQueue {
         if let removed = item.removed {
             lines.append(Activity(id: "deleted", kind: .deleted, who: removed.by, whoWords: capitalized(removed.by.words), what: "deleted it", at: removed.at))
         }
-        // (Oldest first; at one moment, by kind, then in the order above.)
-        let others = lines.enumerated().sorted { a, b in
-            if a.element.at != b.element.at { return a.element.at < b.element.at }
-            if a.element.kind.rank != b.element.kind.rank { return a.element.kind.rank < b.element.kind.rank }
-            return a.offset < b.offset
-        }.map(\.element)
-        // The box's events, oldest first, in the order it kept them at one moment (a move then the
-        // work it started); merged in, each before the others' lines at its moment that rank after it.
+        // The box's events in the order it kept them (a move then the work it started).
         let events = detail.events.enumerated().compactMap { index, event -> Activity? in
             guard let (kind, what) = eventWords(event, in: view) else { return nil }
             return Activity(id: "event-\(index)", kind: kind, who: event.by, whoWords: capitalized(event.by.words), what: what, at: event.at)
-        }.enumerated().sorted { $0.element.at != $1.element.at ? $0.element.at < $1.element.at : $0.offset < $1.offset }.map(\.element)
-        var merged: [Activity] = []
-        var (next, nextEvent) = (0, 0)
-        while next < others.count || nextEvent < events.count {
-            if nextEvent < events.count, next == others.count || events[nextEvent].at < others[next].at
-                || (events[nextEvent].at == others[next].at && events[nextEvent].kind.rank < others[next].kind.rank) {
-                merged.append(events[nextEvent])
-                nextEvent += 1
-            } else {
-                merged.append(others[next])
-                next += 1
+        }
+        // At one moment: the item added; the box's events up to its last start then (the work and
+        // what came with it); notes; hand-offs; its other events; Done; deleted.
+        let lastStart = Dictionary(events.enumerated().filter { $0.element.kind == .started }.map { ($0.element.at, $0.offset) }) { max($0, $1) }
+        func place(_ line: Activity) -> Int {
+            switch line.kind {
+            case .added: 0
+            case .note: 2
+            case .handed: 3
+            case .deleted: 6
+            case .started, .stopped, .moved, .done: 5
             }
         }
-        return merged
+        let keyed = lines.enumerated().map { (line: $0.element, place: place($0.element), order: $0.offset) }
+            + events.enumerated().map { index, line in (line: line, place: index <= (lastStart[line.at] ?? -1) ? 1 : 4, order: index) }
+        return keyed.sorted { a, b in
+            if a.line.at != b.line.at { return a.line.at < b.line.at }
+            if a.place != b.place { return a.place < b.place }
+            return a.order < b.order
+        }.map(\.line)
     }
 
     /// What an event says it did ("started work", "moved it to the top of Next"), and its kind; nil

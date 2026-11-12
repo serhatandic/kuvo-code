@@ -151,6 +151,13 @@ const handingOf = (given: unknown): Handing | null => {
   return { id: given.id, to: given.to, key: given.key, name: typeof given.name === "string" ? given.name : "", at: given.at, by: whoOf(given.by) ?? { user: true }, ...(typeof given.sent === "number" ? { sent: given.sent } : {}), ...(typeof given.missing === "number" ? { missing: given.missing } : {}) };
 };
 
+/** An event as it was read (or came with an item from another box): when, its kind and who, of a
+ * size an event has; what else it says (a newer box's) kept as it came, for a client to read. */
+const MOST_EVENT = 2_000;
+const eventKept = (each: Record<string, unknown>): boolean =>
+  typeof each.at === "number" && Number.isFinite(each.at) && typeof each.kind === "string" && each.kind.length > 0 && each.kind.length <= 40 && whoOf(each.by) !== null
+  && JSON.stringify(each.by).length <= 500 && JSON.stringify(each).length <= MOST_EVENT;
+
 /** An item as it was read (or as a move brought it), checked: null for one that isn't. Fields this
  * box doesn't know (a newer box's) are kept as they are, so writing it here doesn't drop them. */
 export function itemOf(given: unknown, owner: string): Item | null {
@@ -170,8 +177,7 @@ export function itemOf(given: unknown, owner: string): Item | null {
     order: typeof given.order === "number" && Number.isFinite(given.order) ? given.order : 0,
     ...(isObject(given.progress) ? { progress: { ...(typeof given.progress.value === "number" ? { value: given.progress.value } : {}), ...(typeof given.progress.note === "string" ? { note: given.progress.note } : {}) } } : {}),
     notes: list<Note>(given.notes, each => typeof each.at === "number" && typeof each.text === "string" && whoOf(each.by) !== null),
-    ...(Array.isArray(given.events) ? { events: list<ItemEvent>(given.events, each => typeof each.at === "number" && typeof each.kind === "string" && whoOf(each.by) !== null
-      && (each.from === undefined || typeof each.from === "string") && (each.to === undefined || typeof each.to === "string") && (each.top === undefined || each.top === true)).slice(-MOST_EVENTS) } : {}),
+    ...(Array.isArray(given.events) ? { events: list<ItemEvent>(given.events, eventKept).slice(-MOST_EVENTS) } : {}),
     files: list<KeptFile>(given.files, each => typeof each.name === "string" && FILE_NAME.test(each.name) && typeof each.size === "number"),
     links: list<Link>(given.links, each => typeof each.url === "string"),
     sessions: list<Linked>(given.sessions, each => typeof each.session === "string" && SESSION.test(each.session)),

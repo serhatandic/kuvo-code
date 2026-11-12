@@ -11535,6 +11535,8 @@ var handingOf = (given) => {
     return null;
   return { id: given.id, to: given.to, key: given.key, name: typeof given.name === "string" ? given.name : "", at: given.at, by: whoOf(given.by) ?? { user: true }, ...typeof given.sent === "number" ? { sent: given.sent } : {}, ...typeof given.missing === "number" ? { missing: given.missing } : {} };
 };
+var MOST_EVENT = 2000;
+var eventKept = (each) => typeof each.at === "number" && Number.isFinite(each.at) && typeof each.kind === "string" && each.kind.length > 0 && each.kind.length <= 40 && whoOf(each.by) !== null && JSON.stringify(each.by).length <= 500 && JSON.stringify(each).length <= MOST_EVENT;
 function itemOf(given, owner) {
   if (!isObject(given) || typeof given.id !== "string" || !ITEM_ID.test(given.id) || typeof given.title !== "string" || typeof given.category !== "string")
     return null;
@@ -11553,7 +11555,7 @@ function itemOf(given, owner) {
     order: typeof given.order === "number" && Number.isFinite(given.order) ? given.order : 0,
     ...isObject(given.progress) ? { progress: { ...typeof given.progress.value === "number" ? { value: given.progress.value } : {}, ...typeof given.progress.note === "string" ? { note: given.progress.note } : {} } } : {},
     notes: list(given.notes, (each) => typeof each.at === "number" && typeof each.text === "string" && whoOf(each.by) !== null),
-    ...Array.isArray(given.events) ? { events: list(given.events, (each) => typeof each.at === "number" && typeof each.kind === "string" && whoOf(each.by) !== null && (each.from === undefined || typeof each.from === "string") && (each.to === undefined || typeof each.to === "string") && (each.top === undefined || each.top === true)).slice(-MOST_EVENTS) } : {},
+    ...Array.isArray(given.events) ? { events: list(given.events, eventKept).slice(-MOST_EVENTS) } : {},
     files: list(given.files, (each) => typeof each.name === "string" && FILE_NAME.test(each.name) && typeof each.size === "number"),
     links: list(given.links, (each) => typeof each.url === "string"),
     sessions: list(given.sessions, (each) => typeof each.session === "string" && SESSION2.test(each.session)),
@@ -19916,28 +19918,43 @@ function linkSession2(book, item, session, now) {
   const others = book.items().filter((each) => each.id !== item.id && each.sessions.some((link) => link.session === session));
   if (others.length >= LINKS_EACH) {
     const oldest = others.sort((a, b) => a.sessions.find((link) => link.session === session).since - b.sessions.find((link) => link.session === session).since)[0];
-    oldest.sessions = oldest.sessions.filter((link) => link.session !== session);
+    unlinkSessions(oldest, [session], now);
   }
   item.sessions.push({ session, since: now });
 }
 var FOLD_REORDERS = 10 * 60000;
+var FOLD_RESTART = 2 * 60000;
+var sameWho2 = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 function noteEvent(item, event) {
   const events = [...item.events ?? []];
   const last = events.at(-1);
   const reorder = (each) => each.kind === "moved" && each.from === each.to;
-  if (last && reorder(last) && reorder(event) && last.to === event.to && JSON.stringify(last.by) === JSON.stringify(event.by) && event.at - last.at < FOLD_REORDERS) {
+  const quiet = (since) => !item.notes.some((note) => note.at >= since) && !(item.handed ?? []).some((each) => each.at >= since);
+  if (last && reorder(last) && reorder(event) && last.to === event.to && sameWho2(last.by, event.by) && event.at - last.at < FOLD_REORDERS && quiet(last.at)) {
     const { top: _, ...folded } = last;
     events[events.length - 1] = { ...folded, at: event.at, ...event.top ? { top: true } : {} };
+  } else if (last && last.kind === "stopped" && event.kind === "started" && sameWho2(last.by, event.by) && event.at - last.at < FOLD_RESTART) {
+    events.pop();
   } else {
     events.push(event);
   }
   item.events = events.slice(-MOST_EVENTS);
 }
-var startedLast = (item, session) => [...item.events ?? []].reverse().find((each) => (each.kind === "started" || each.kind === "stopped") && each.by.session === session)?.kind === "started";
+var lastWord = (item, session) => [...item.events ?? []].reverse().find((each) => (each.kind === "started" || each.kind === "stopped") && each.by.session === session);
+function unlinkSessions(item, sessions, now, who) {
+  for (const session of sessions) {
+    if (!item.sessions.some((each) => each.session === session))
+      continue;
+    item.sessions = item.sessions.filter((each) => each.session !== session);
+    const word = lastWord(item, session);
+    if (word?.kind === "started")
+      noteEvent(item, { at: now, by: who ?? word.by, kind: "stopped" });
+  }
+}
 function startWork(book, item, session, { who, now }) {
   const linked = item.sessions.some((each) => each.session === session);
   linkSession2(book, item, session, now);
-  if (!linked || !startedLast(item, session))
+  if (!linked || lastWord(item, session)?.kind !== "started")
     noteEvent(item, { at: now, by: who, kind: "started" });
 }
 function stopWork2(item, session, { who, now }) {
@@ -19945,6 +19962,11 @@ function stopWork2(item, session, { who, now }) {
     return;
   item.sessions = item.sessions.filter((each) => each.session !== session);
   noteEvent(item, { at: now, by: who, kind: "stopped" });
+}
+var THE_BOX = { source: "kuvo", name: "Kuvo Code" };
+function intoNext(item, from, now) {
+  item.category = "next";
+  noteEvent(item, { at: now, by: THE_BOX, kind: "moved", from, to: "next" });
 }
 function applyFileOps(acting) {
   for (const op of acting.fileOps.splice(0))
@@ -19978,7 +20000,7 @@ function addItem2(book, owner, fields, acting, primary, source) {
     ...source ? { source } : {}
   };
   book.queue(owner).items.push(item);
-  changeItem2(book, item, { ...fields, title: undefined, category: undefined, top: undefined }, acting);
+  changeItem2(book, item, { ...fields, title: undefined, category: undefined, top: undefined, before: undefined, after: undefined }, acting);
   if (item.source)
     return item;
   const number = takeNumber(primary);
@@ -20125,7 +20147,7 @@ function removeItem2(item, who, now) {
 function restoreItem(book, item, who, now) {
   delete item.removed;
   if (!categoryNamed(item.category))
-    item.category = "next";
+    intoNext(item, item.category, now);
   item.order = placeIn(book.items(), item.category);
   item.updated = { at: now, by: who };
 }
@@ -20421,7 +20443,7 @@ async function handArrived(sender, given, reply, places, now = Date.now()) {
       return;
     }
     if (!categoryNamed(item.category))
-      item.category = "next";
+      intoNext(item, item.category, now);
     item.owner = owner;
     item.order = placeIn(book.items(), item.category);
     delete item.removed;
@@ -22348,7 +22370,7 @@ function placeWorkQueues(carried, owners, opened) {
       keepCategory(each.id, each.name);
   for (const item of items)
     if (!categoryNamed(item.category))
-      item.category = "next";
+      intoNext(item, item.category, Date.now());
   changeQueues((book) => {
     for (const item of items) {
       const before = book.find({ id: item.id });
@@ -37160,7 +37182,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "ab886dddfee0";
+var BRIDGE_VERSION = "35d0fc22e5e9";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -39917,8 +39939,7 @@ async function run3(name, args, caller, targets, signal) {
         }
         if (args.working === false)
           stopWork2(item, caller.session, acting);
-        const unlinked = new Set(named(args.unlink));
-        item.sessions = item.sessions.filter((each) => !unlinked.has(each.session));
+        unlinkSessions(item, named(args.unlink), now);
         applyFileOps(acting);
         return item;
       }));
