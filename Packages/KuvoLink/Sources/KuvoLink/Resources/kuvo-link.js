@@ -3733,7 +3733,7 @@ function fencePolicy(ports = []) {
       ...sshPaths,
       ...sshGlobs
     ],
-    secrets: [...inHomes([...SECRETS, ...LINUX_SECRETS]), ...opencodes, ...homes.flatMap((each) => [...sshKeys(each), ...ghHosts(each)])]
+    secrets: [...inHomes([...SECRETS, ...LINUX_SECRETS]), ...opencodes, ...homes.flatMap((each) => [...sshKeys(each), ...ghHosts(each)]).map(throughLinks)]
   };
 }
 function userTemporary() {
@@ -17490,7 +17490,10 @@ async function answerPermission(source, id, sessionID, signal, found) {
   }
   const file = seen && [seen.input.filePath, seen.input.file_path, seen.input.notebook_path, seen.input.path, seen.input.file].find((each) => typeof each === "string" && each.startsWith("/"));
   const named = permission.resources.filter((each) => each !== "*").map((each) => path66.resolve(folder, each.replace(/^~(?=\/|$)/, homeFolder()).replace(/\/\*$/, "") || "/"));
-  const alikes = seen && file && seen.tool.toLowerCase() === "read" ? lookalikesOf(path66.resolve(file)) : [];
+  const reads = Boolean(seen && file && seen.tool.toLowerCase() === "read");
+  if (reads)
+    await askedAbout([folder, path66.resolve(file)]);
+  const alikes = reads ? lookalikesOf(path66.resolve(file)) : [];
   const actions = seen && file ? [file, ...alikes].map((each) => ({ kind: "file", path: each, access: READING.has(seen.tool.toLowerCase()) ? "read" : "write", folder, tool: seen.tool, input: seen.input })) : named.length ? named.map((each) => ({ kind: "file", path: each, access: "write", folder })) : [{ kind: "tool", tool: seen?.tool || "work outside its folder", args: seen?.input ?? { asked: permission.resources }, folder }];
   const readsOwn = [commandTemporary(folder), ...[at.data.id, at.data.parentID].filter((each) => typeof each === "string").flatMap(attachedOf)].filter((each) => Boolean(each));
   const ownReads = (within) => actions.every((action) => action.kind === "file" && action.access === "read" && OWN_READING.has(String(action.tool).toLowerCase()) && readsOwn.some((place) => within(action.path, place)));
@@ -38365,7 +38368,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "f53f2ca4b956";
+var BRIDGE_VERSION = "a56358d92fc9";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
