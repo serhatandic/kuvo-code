@@ -38918,6 +38918,22 @@ var CLAUDE_FILE_LIMIT = 256 * 1024;
 var CLAUDE_TOTAL_LIMIT = 4 * 1024 * 1024;
 var CLAUDE_ENTRY_LIMIT = 2000;
 var CLAUDE_DEPTH_LIMIT = 4;
+var REFUSED_FOLDERS = [".ssh", ".gnupg", ".aws", path125.join(".config", "gh"), ".kuvo-code", "Library", path125.join(".local", "share", "keyrings")];
+async function claudePlaces() {
+  const home = homeFolder();
+  const both = async (folder) => [folder, await fs123.promises.realpath(folder).catch(() => folder)];
+  const refused = [...REFUSED_FOLDERS.map((each) => path125.join(home, each)), K, INTEGRATION_DATA, ...APP_KEY_FILES ? [APP_KEY_FILES] : []];
+  return {
+    roots: [...await both(home), "/nix/store"],
+    refused: (await Promise.all(refused.map(both))).flat()
+  };
+}
+function within5(where, folder) {
+  const [at, of] = process.platform === "darwin" ? [where.toLowerCase(), folder.toLowerCase()] : [where, folder];
+  return at === of || at.startsWith(of.endsWith(path125.sep) ? of : of + path125.sep);
+}
+var mayLeadTo = (where, places) => places.roots.some((root) => within5(where, root)) && !places.refused.some((folder) => within5(where, folder));
+var mayRead = (where, places) => path125.basename(where).endsWith(".md") && mayLeadTo(where, places);
 async function openedAt(handle) {
   if (process.platform !== "linux")
     return null;
@@ -38927,28 +38943,29 @@ async function openedAt(handle) {
     return null;
   }
 }
-async function readClaudeFile(file, root, budget) {
-  const inside = (where) => where.startsWith(root + path125.sep);
+var O_NOFOLLOW_ANY = 536870912;
+async function readClaudeFile(file, walk) {
   let real;
   try {
     real = await fs123.promises.realpath(file);
   } catch {
     return null;
   }
-  if (!inside(real))
+  if (!mayRead(real, walk.places))
     return null;
+  const noLinks = process.platform === "darwin" ? O_NOFOLLOW_ANY : fs123.constants.O_NOFOLLOW;
   let handle;
   try {
-    handle = await fs123.promises.open(real, fs123.constants.O_RDONLY | fs123.constants.O_NOFOLLOW | fs123.constants.O_NONBLOCK);
+    handle = await fs123.promises.open(real, fs123.constants.O_RDONLY | noLinks | fs123.constants.O_NONBLOCK);
   } catch {
     return null;
   }
   try {
     const stat = await handle.stat();
-    if (!stat.isFile() || stat.nlink > 1 || stat.size > CLAUDE_FILE_LIMIT || stat.size > budget.bytes)
+    if (!stat.isFile() || stat.nlink > 1 || stat.size > CLAUDE_FILE_LIMIT || stat.size > walk.bytes)
       return null;
     const at = await openedAt(handle);
-    if (at !== null && !inside(at))
+    if (at !== null && !mayRead(at, walk.places))
       return null;
     const again = await fs123.promises.stat(real).catch(() => null);
     if (!again || again.dev !== stat.dev || again.ino !== stat.ino)
@@ -38963,7 +38980,7 @@ async function readClaudeFile(file, root, budget) {
     }
     if (await fs123.promises.realpath(file).catch(() => null) !== real)
       return null;
-    budget.bytes -= read;
+    walk.bytes -= read;
     return buffer.subarray(0, read).toString("utf8");
   } catch {
     return null;
@@ -38971,28 +38988,43 @@ async function readClaudeFile(file, root, budget) {
     await handle.close().catch(() => {});
   }
 }
-async function markdownFiles(folder, root, budget, depth = 0) {
+async function markdownFiles(folder, walk, depth = 0) {
+  await askedAbout([folder]);
+  let real;
+  try {
+    real = await fs123.promises.realpath(folder);
+  } catch {
+    return [];
+  }
+  if (!mayLeadTo(real, walk.places) || walk.listed.has(real))
+    return [];
+  walk.listed.add(real);
   let entries = [];
   try {
-    entries = await fs123.promises.readdir(folder, { withFileTypes: true });
+    entries = await fs123.promises.readdir(real, { withFileTypes: true });
   } catch {
     return [];
   }
   const found = [];
   for (const entry of entries.sort((one, other) => one.name < other.name ? -1 : one.name > other.name ? 1 : 0)) {
-    if (budget.entries-- <= 0 || budget.bytes <= 0)
+    if (walk.entries-- <= 0 || walk.bytes <= 0)
       break;
-    const file = path125.join(folder, entry.name);
-    if (entry.isDirectory()) {
+    const file = path125.join(real, entry.name);
+    let isFolder = entry.isDirectory();
+    if (entry.isSymbolicLink()) {
+      await askedAbout([file]);
+      isFolder = (await fs123.promises.stat(file).catch(() => null))?.isDirectory() ?? false;
+    }
+    if (isFolder) {
       if (depth > 0 && !entry.name.startsWith(".")) {
-        for (const each of await markdownFiles(file, root, budget, depth - 1))
+        for (const each of await markdownFiles(file, walk, depth - 1))
           found.push({ name: `${entry.name}/${each.name}`, text: each.text });
       }
       continue;
     }
     if (path125.extname(entry.name) !== ".md")
       continue;
-    const text = await readClaudeFile(file, root, budget);
+    const text = await readClaudeFile(file, walk);
     if (text !== null)
       found.push({ name: entry.name.slice(0, -3), text });
   }
@@ -39000,14 +39032,8 @@ async function markdownFiles(folder, root, budget, depth = 0) {
 }
 async function claudeCodeList(folder, settings, others) {
   const entry = (name, description, at, value) => ({ name, description, path: at, settings: value, imported: valueAt(settings, at) !== undefined });
-  let root;
-  try {
-    root = await fs123.promises.realpath(folder);
-  } catch {
-    return { agents: [], commands: [] };
-  }
-  const budget = { bytes: CLAUDE_TOTAL_LIMIT, entries: CLAUDE_ENTRY_LIMIT };
-  const agents = (await markdownFiles(path125.join(folder, "agents"), root, budget)).flatMap((file) => {
+  const walk = { bytes: CLAUDE_TOTAL_LIMIT, entries: CLAUDE_ENTRY_LIMIT, places: await claudePlaces(), listed: new Set };
+  const agents = (await markdownFiles(path125.join(folder, "agents"), walk)).flatMap((file) => {
     const { fields, body } = parseClaudeFile(file.text);
     const name = fields.name || file.name;
     let id = claudeID(name);
@@ -39019,7 +39045,7 @@ async function claudeCodeList(folder, settings, others) {
 `);
     return [{ id, name, description, body }];
   }).sort((one, other) => one.name.localeCompare(other.name, undefined, { sensitivity: "base" }));
-  const commands = (await markdownFiles(path125.join(folder, "commands"), root, budget, CLAUDE_DEPTH_LIMIT)).flatMap((file) => {
+  const commands = (await markdownFiles(path125.join(folder, "commands"), walk, CLAUDE_DEPTH_LIMIT)).flatMap((file) => {
     const { fields, body } = parseClaudeFile(file.text);
     const id = claudeID(file.name);
     return id && body ? [{ id, description: fields.description ?? "", body }] : [];
@@ -39045,7 +39071,6 @@ async function* claudeCodeRoute({ request, readEngine, json }) {
   if (new URLSearchParams(request.path.split("?")[1] ?? "").has("machine"))
     return yield* json(404, { message: "This computer lists its own Claude Code only." });
   const folder = path125.join(homeFolder(), ".claude");
-  await askedAbout([path125.join(folder, "agents"), path125.join(folder, "commands")]);
   const { settings } = readSettings();
   let engine = null;
   try {
@@ -39233,7 +39258,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "c6ae47c798ee";
+var BRIDGE_VERSION = "5cba5e8b802e";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

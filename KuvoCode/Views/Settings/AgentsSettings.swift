@@ -114,7 +114,7 @@ struct AgentsSettings: View {
                 } header: {
                     Text("From Claude Code")
                 } footer: {
-                    Text("Agents in ~/.claude/agents, brought over as subagents with their description and instructions. They use the session's model and the permissions here, not the tools and model Claude Code gives them.")
+                    Text("Agents in ~/.claude/agents\(box.machine == nil ? "" : " on \(app.name(of: box))"), brought over as subagents with their description and instructions. They use the session's model and the permissions here, not the tools and model Claude Code gives them.")
                         .foregroundStyle(.secondary)
                 }
             }

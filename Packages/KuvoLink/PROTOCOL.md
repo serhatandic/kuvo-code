@@ -3118,10 +3118,14 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   this computer has one by its name already (the engine's own, a plugin's or an MCP server's, as
   its engine lists them). Import is writing `settings` at `path` (`["agents", "<id>"]` or
   `["commands", "<name>"]`) through this computer's `kuvo/config`; `imported` says whether its
-  settings have it there. A computer with no `~/.claude` lists none. Only ordinary files of 256 KB
-  at most are read, where their links lead inside `~/.claude` (itself a link, to dotfiles say, is
-  read where it leads): a link out of it, a hard link, a pipe or a device isn't. Commands' folders
-  are read four deep, and no more than 2,000 entries and 4 MB in all. Each computer offers its own:
+  settings have it there. A computer with no `~/.claude` lists none. Links, to folders and files
+  alike, are followed where they lead in the user's home folder or `/nix/store` (dotfiles kept with
+  GNU stow or home-manager), each folder listed once, but never into `~/.ssh`, `~/.gnupg`,
+  `~/.aws`, `~/.config/gh`, `~/Library`, `~/.local/share/keyrings` or the box's own folders. A file
+  is read only where it's an ordinary file of 256 KB at most whose own name, where its links lead,
+  ends in `.md`: a link `x.md` to a key or to Claude Code's sign-in isn't, nor a hard link (its
+  other names can't be told), a pipe or a device. Commands' folders are read four deep, and no
+  more than 2,000 entries and 4 MB in all. Each computer offers its own:
   a client asks a machine's box for the machine's, never a Mac for it (`?machine=`, which a Mac's
   app once answered with the Mac's `~/.claude`, is `404`).
 - `POST kuvo/engine/restart`: the computer's engine starts over, as Settings › Engine's Restart

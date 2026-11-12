@@ -6,7 +6,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { homeFolder } from "../home";
+import { APP_KEY_FILES, INTEGRATION_DATA, K, homeFolder } from "../home";
 import { engineList } from "../engine/client";
 import { askedAbout } from "../fence/policy";
 import { readSettings, valueAt } from "./config";
@@ -63,8 +63,43 @@ const CLAUDE_TOTAL_LIMIT = 4 * 1024 * 1024;
 const CLAUDE_ENTRY_LIMIT = 2000;
 const CLAUDE_DEPTH_LIMIT = 4;
 
-/** What's left of one listing's limits. */
-type Budget = { bytes: number; entries: number };
+/** What's left of one listing's limits, where its links may lead, and the folders it has listed
+ * (by where they are: a link to one of them, or to itself, isn't listed again). */
+type Walk = { bytes: number; entries: number; places: Places; listed: Set<string> };
+
+/** Where ~/.claude's links may lead: anywhere in your home folder (your dotfiles, as GNU stow links
+ * them), and the Nix store (as home-manager does), but never into `refused`, where your keys and
+ * sign-ins are. */
+type Places = { roots: string[]; refused: string[] };
+
+/** Your home's folders that hold keys and sign-ins: never read, nor listed, through a link, whatever
+ * the file's called. (Your Keychains are in ~/Library; Linux's keyrings in ~/.local/share/keyrings.) */
+const REFUSED_FOLDERS = [".ssh", ".gnupg", ".aws", path.join(".config", "gh"), ".kuvo-code", "Library", path.join(".local", "share", "keyrings")];
+
+async function claudePlaces(): Promise<Places> {
+  const home = homeFolder();
+  // Each by its name and by where it is, should it be a link itself (~/.ssh in your dotfiles).
+  const both = async (folder: string) => [folder, await fs.promises.realpath(folder).catch(() => folder)];
+  const refused = [...REFUSED_FOLDERS.map(each => path.join(home, each)), K, INTEGRATION_DATA, ...(APP_KEY_FILES ? [APP_KEY_FILES] : [])];
+  return {
+    roots: [...await both(home), "/nix/store"],
+    refused: (await Promise.all(refused.map(both))).flat(),
+  };
+}
+
+/** Whether `where` is `folder` or in it (whatever the case of its letters on a Mac, whose disks
+ * usually don't tell them apart). */
+function within(where: string, folder: string): boolean {
+  const [at, of] = process.platform === "darwin" ? [where.toLowerCase(), folder.toLowerCase()] : [where, folder];
+  return at === of || at.startsWith(of.endsWith(path.sep) ? of : of + path.sep);
+}
+
+const mayLeadTo = (where: string, places: Places) =>
+  places.roots.some(root => within(where, root)) && !places.refused.some(folder => within(where, folder));
+
+/** Whether a file that's really at `where` may be read: a Markdown file by its own name (so a link
+ * named `x.md` to a key, or to Claude Code's sign-in, isn't), where links may lead. */
+const mayRead = (where: string, places: Places) => path.basename(where).endsWith(".md") && mayLeadTo(where, places);
 
 /** Where an open file is, as the system says it (Linux): null where it can't say (macOS). */
 async function openedAt(handle: fs.promises.FileHandle): Promise<string | null> {
@@ -72,25 +107,32 @@ async function openedAt(handle: fs.promises.FileHandle): Promise<string | null> 
   try { return await fs.promises.readlink(`/proc/self/fd/${handle.fd}`); } catch { return null; }
 }
 
-/** A file's text, if it's an ordinary file of `CLAUDE_FILE_LIMIT` at most inside `root` (Claude
- * Code's folder, as its links lead): never a link out of it (an agent may write in ~/.claude, and
- * could leave one to a file it can't read itself), nor a pipe or a device, which would hold the
- * read, nor a file so big it would, nor one with other names (a hard link). Opened where its links
- * lead, without waiting on a pipe, and checked again as opened: where the system says the open
- * file is (Linux), or that the path still leads to that same file (macOS), so a folder swapped for
- * a link meanwhile isn't read through. */
-async function readClaudeFile(file: string, root: string, budget: Budget): Promise<string | null> {
-  const inside = (where: string) => where.startsWith(root + path.sep);
+/** macOS's `O_NOFOLLOW_ANY` (macOS 11 on): no link anywhere in the path, not only at its end. Node
+ * and Bun don't name it, and pass it on as it is. */
+const O_NOFOLLOW_ANY = 0x20000000;
+
+/** A file's text, if it's an ordinary Markdown file of `CLAUDE_FILE_LIMIT` at most, where links may
+ * lead (`mayRead`), as its links lead: an agent may write in ~/.claude, and could leave a link there
+ * to a file it can't read itself, so where the file really is, and its own name there, are what
+ * count. Never a pipe or a device, which would hold the read, nor a file so big it would, nor one
+ * with other names (a hard link: nothing says what its other names are, so one to your key, named
+ * `x.md` in ~/.claude, can't be told from yours). Opened where its links lead, without waiting on a
+ * pipe, and so a folder swapped for a link meanwhile isn't read through: on a Mac, opened with no
+ * link anywhere in the path (`O_NOFOLLOW_ANY`); on Linux, which has no such open, checked again
+ * where the system says the open file is. */
+async function readClaudeFile(file: string, walk: Walk): Promise<string | null> {
   let real: string;
   try { real = await fs.promises.realpath(file); } catch { return null; }
-  if (!inside(real)) return null;
+  if (!mayRead(real, walk.places)) return null;
+  const noLinks = process.platform === "darwin" ? O_NOFOLLOW_ANY : fs.constants.O_NOFOLLOW;
   let handle: fs.promises.FileHandle;
-  try { handle = await fs.promises.open(real, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK); } catch { return null; }
+  try { handle = await fs.promises.open(real, fs.constants.O_RDONLY | noLinks | fs.constants.O_NONBLOCK); } catch { return null; }
   try {
     const stat = await handle.stat();
-    if (!stat.isFile() || stat.nlink > 1 || stat.size > CLAUDE_FILE_LIMIT || stat.size > budget.bytes) return null;
+    if (!stat.isFile() || stat.nlink > 1 || stat.size > CLAUDE_FILE_LIMIT || stat.size > walk.bytes) return null;
     const at = await openedAt(handle);
-    if (at !== null && !inside(at)) return null;
+    if (at !== null && !mayRead(at, walk.places)) return null;
+    // (And still the same file, opened: where macOS's open can't say no to a link, an older one's.)
     const again = await fs.promises.stat(real).catch(() => null);
     if (!again || again.dev !== stat.dev || again.ino !== stat.ino) return null;
     // (No more than it said, though it grows as it's read.)
@@ -102,7 +144,7 @@ async function readClaudeFile(file: string, root: string, budget: Budget): Promi
       read += bytesRead;
     }
     if (await fs.promises.realpath(file).catch(() => null) !== real) return null;
-    budget.bytes -= read;
+    walk.bytes -= read;
     return buffer.subarray(0, read).toString("utf8");
   } catch {
     return null;
@@ -111,27 +153,37 @@ async function readClaudeFile(file: string, root: string, budget: Budget): Promi
   }
 }
 
-/** The Markdown files in a folder of `root`, read one at a time, within `budget`; `depth`, how
- * many folders deep it may go into (commands: in their folders too, each named with them,
- * "frontend/component" for frontend/component.md, as Claude Code names them). A link to a folder
- * isn't followed (one to itself would list it again and again); a link to a file is read where it
- * stays in `root` (`readClaudeFile`). Read off the box's thread, so one that macOS asks about holds
- * this request only. */
-async function markdownFiles(folder: string, root: string, budget: Budget, depth = 0): Promise<{ name: string; text: string }[]> {
+/** The Markdown files in `folder`, read one at a time, within `walk`'s limits; `depth`, how many
+ * folders deep it may go into (commands: in their folders too, each named with them,
+ * "frontend/component" for frontend/component.md, as Claude Code names them). Links are followed,
+ * to folders and files alike, where they may lead (`mayLeadTo`, `readClaudeFile`): a folder once,
+ * so one linked to itself isn't listed again and again. Read off the box's thread, and asked of
+ * macOS first where it would ask (a link into your Documents), so that holds this request only. */
+async function markdownFiles(folder: string, walk: Walk, depth = 0): Promise<{ name: string; text: string }[]> {
+  await askedAbout([folder]);
+  let real: string;
+  try { real = await fs.promises.realpath(folder); } catch { return []; }
+  if (!mayLeadTo(real, walk.places) || walk.listed.has(real)) return [];
+  walk.listed.add(real);
   let entries: fs.Dirent[] = [];
-  try { entries = await fs.promises.readdir(folder, { withFileTypes: true }); } catch { return []; }
+  try { entries = await fs.promises.readdir(real, { withFileTypes: true }); } catch { return []; }
   const found: { name: string; text: string }[] = [];
   for (const entry of entries.sort((one, other) => one.name < other.name ? -1 : one.name > other.name ? 1 : 0)) {
-    if (budget.entries-- <= 0 || budget.bytes <= 0) break;
-    const file = path.join(folder, entry.name);
-    if (entry.isDirectory()) {
+    if (walk.entries-- <= 0 || walk.bytes <= 0) break;
+    const file = path.join(real, entry.name);
+    let isFolder = entry.isDirectory();
+    if (entry.isSymbolicLink()) {
+      await askedAbout([file]);
+      isFolder = (await fs.promises.stat(file).catch(() => null))?.isDirectory() ?? false;
+    }
+    if (isFolder) {
       if (depth > 0 && !entry.name.startsWith(".")) {
-        for (const each of await markdownFiles(file, root, budget, depth - 1)) found.push({ name: `${entry.name}/${each.name}`, text: each.text });
+        for (const each of await markdownFiles(file, walk, depth - 1)) found.push({ name: `${entry.name}/${each.name}`, text: each.text });
       }
       continue;
     }
     if (path.extname(entry.name) !== ".md") continue;
-    const text = await readClaudeFile(file, root, budget);
+    const text = await readClaudeFile(file, walk);
     if (text !== null) found.push({ name: entry.name.slice(0, -3), text });
   }
   return found;
@@ -144,11 +196,9 @@ async function markdownFiles(folder: string, root: string, budget: Budget, depth
 export async function claudeCodeList(folder: string, settings: unknown, others: ReadonlySet<string>): Promise<ClaudeCode> {
   const entry = (name: string, description: string, at: string[], value: Record<string, string>): ClaudeCodeImport =>
     ({ name, description, path: at, settings: value, imported: valueAt(settings, at) !== undefined });
-  // (Where its links lead: a ~/.claude that's a link to your dotfiles is read there.)
-  let root: string;
-  try { root = await fs.promises.realpath(folder); } catch { return { agents: [], commands: [] }; }
-  const budget: Budget = { bytes: CLAUDE_TOTAL_LIMIT, entries: CLAUDE_ENTRY_LIMIT };
-  const agents = (await markdownFiles(path.join(folder, "agents"), root, budget)).flatMap(file => {
+  // (Where its links lead: a ~/.claude, or its agents or commands, linked to your dotfiles is read there.)
+  const walk: Walk = { bytes: CLAUDE_TOTAL_LIMIT, entries: CLAUDE_ENTRY_LIMIT, places: await claudePlaces(), listed: new Set() };
+  const agents = (await markdownFiles(path.join(folder, "agents"), walk)).flatMap(file => {
     const { fields, body } = parseClaudeFile(file.text);
     const name = fields.name || file.name;
     let id = claudeID(name);
@@ -158,7 +208,7 @@ export async function claudeCodeList(folder: string, settings: unknown, others: 
     const description = (fields.description ?? "").replaceAll("\\n", "\n");
     return [{ id, name, description, body }];
   }).sort((one, other) => one.name.localeCompare(other.name, undefined, { sensitivity: "base" }));
-  const commands = (await markdownFiles(path.join(folder, "commands"), root, budget, CLAUDE_DEPTH_LIMIT)).flatMap(file => {
+  const commands = (await markdownFiles(path.join(folder, "commands"), walk, CLAUDE_DEPTH_LIMIT)).flatMap(file => {
     const { fields, body } = parseClaudeFile(file.text);
     const id = claudeID(file.name);
     return id && body ? [{ id, description: fields.description ?? "", body }] : [];
@@ -189,10 +239,9 @@ async function otherCommands(engine: EngineRecord | null, settings: unknown): Pr
 export async function* claudeCodeRoute({ request, readEngine, json }: RouteContext): AsyncGenerator<AnswerPiece> {
   if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
   if (new URLSearchParams(request.path.split("?")[1] ?? "").has("machine")) return yield* json(404, { message: "This computer lists its own Claude Code only." });
+  // (~/.claude may lead into a folder macOS asks about, your Desktop say: `markdownFiles` asks it
+  // off the box's thread first, so only this request waits for the answer.)
   const folder = path.join(homeFolder(), ".claude");
-  // (~/.claude may lead into a folder macOS asks about, your Desktop say: asked off the box's
-  // thread first, so only this request waits for the answer.)
-  await askedAbout([path.join(folder, "agents"), path.join(folder, "commands")]);
   const { settings } = readSettings();
   let engine: EngineRecord | null = null;
   try { engine = readEngine(); } catch {}

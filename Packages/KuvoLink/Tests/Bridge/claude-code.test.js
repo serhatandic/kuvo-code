@@ -54,7 +54,7 @@ write(path.join(claude, "commands", "deploy.md"), "Ship it.\n");
 write(path.join(claude, "commands", "init.md"), "Set up.\n");
 write(path.join(claude, "commands", "mine.md"), "Mine.\n");
 write(path.join(claude, "commands", "empty.md"), "---\ndescription: nothing after\n---\n");
-// A link to a folder isn't followed (this one would list them all again and again).
+// A link to a folder listed already isn't listed again (this one would list them all again and again).
 fs.symlinkSync(".", path.join(claude, "commands", "again"));
 // Imported already: this box's settings have it.
 write(path.join(home, "box", "opencode.json"), JSON.stringify({ agents: { "code-reviewer": { mode: "subagent" } }, commands: { mine: { template: "Mine." } } }));
@@ -102,12 +102,15 @@ test("a computer with no ~/.claude has nothing to bring over; another's list, or
 });
 
 // What's read of ~/.claude: an agent may write files there (the sandbox lets it, outside the
-// settings Claude Code starts with), so the box reads only what's Claude Code's own, and nothing
-// that would hold it.
-test("only ordinary files in ~/.claude are offered: not a link out of it, a pipe, or a file too big", async () => {
+// settings Claude Code starts with), and could leave a link to a file it can't read itself; so the
+// box reads only Markdown files, by their own names, in your home folder but not where your keys
+// and sign-ins are, and nothing that would hold it.
+test("only Markdown files are offered: not a link to a key or another file, a hard link, a pipe, or a file too big", async () => {
   const saved = process.env.HOME;
   const other = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-claude-code-limits-"));
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-claude-code-elsewhere-"));
   removeAtEnd(other);
+  removeAtEnd(elsewhere);
   process.env.HOME = other;
   try {
     const folder = path.join(other, ".claude");
@@ -116,10 +119,28 @@ test("only ordinary files in ~/.claude are offered: not a link out of it, a pipe
     // A link to another of its own files is read where it leads.
     write(path.join(folder, "notes", "shared.md"), "Shared.\n");
     fs.symlinkSync(path.join(folder, "notes", "shared.md"), path.join(folder, "commands", "shared.md"));
-    // A link to a file outside it (one the agent couldn't read itself, say) isn't.
-    write(path.join(other, "secret.md"), "The secret.\n");
-    fs.symlinkSync(path.join(other, "secret.md"), path.join(folder, "agents", "secret.md"));
-    fs.symlinkSync("../../secret.md", path.join(folder, "commands", "secret.md"));
+    // A link named like a command to your key, or to Claude Code's own sign-in, isn't: neither is
+    // a Markdown file where it is.
+    write(path.join(other, ".ssh", "id_rsa"), "-----BEGIN OPENSSH PRIVATE KEY-----\n");
+    write(path.join(folder, ".credentials.json"), "{\"token\":\"t\"}\n");
+    write(path.join(other, "notes.txt"), "Notes.\n");
+    fs.symlinkSync(path.join(other, ".ssh", "id_rsa"), path.join(folder, "agents", "key.md"));
+    fs.symlinkSync("../.credentials.json", path.join(folder, "commands", "signin.md"));
+    fs.symlinkSync("../../notes.txt", path.join(folder, "commands", "notes.md"));
+    // Nor one to a Markdown file among your keys and sign-ins, or outside your home folder.
+    write(path.join(other, ".ssh", "keys.md"), "My keys.\n");
+    write(path.join(other, ".aws", "notes.md"), "My account.\n");
+    write(path.join(elsewhere, "theirs.md"), "Someone else's.\n");
+    fs.symlinkSync(path.join(other, ".ssh", "keys.md"), path.join(folder, "commands", "keys.md"));
+    fs.symlinkSync(path.join(other, ".aws", "notes.md"), path.join(folder, "commands", "account.md"));
+    fs.symlinkSync(path.join(elsewhere, "theirs.md"), path.join(folder, "commands", "theirs.md"));
+    // Nor a folder of them, through a link.
+    fs.symlinkSync(path.join(other, ".ssh"), path.join(folder, "commands", "ssh"));
+    // Nor a file with another name too (a hard link): its other names can't be told, so one to
+    // your key looks like any other.
+    write(path.join(other, "secret.txt"), "The secret.\n");
+    fs.linkSync(path.join(other, "secret.txt"), path.join(folder, "commands", "hard.md"));
+    fs.linkSync(path.join(other, ".ssh", "id_rsa"), path.join(folder, "agents", "hard-key.md"));
     // A pipe would hold the read until something wrote to it.
     execFileSync("mkfifo", [path.join(folder, "commands", "pipe.md")]);
     fs.symlinkSync(path.join(folder, "commands", "pipe.md"), path.join(folder, "agents", "pipe.md"));
@@ -176,6 +197,37 @@ test("a ~/.claude that's a link (to your dotfiles, say) is read where it leads",
     const handle = link.engineHandler(() => { throw new Error("not running"); });
     const { json } = await answer(handle, "GET", "kuvo/claude-code");
     assert.deepEqual(json.commands.map(command => command.name), ["ship"]);
+  } finally {
+    process.env.HOME = saved;
+  }
+});
+
+test("agents and commands linked into your dotfiles, folders or files (GNU stow, home-manager), are read where they lead", async () => {
+  const saved = process.env.HOME;
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-claude-code-stow-"));
+  removeAtEnd(other);
+  process.env.HOME = other;
+  try {
+    const dotfiles = path.join(other, "dotfiles", "claude", ".claude");
+    write(path.join(dotfiles, "commands", "ship.md"), "Ship it.\n");
+    write(path.join(dotfiles, "commands", "git", "commit.md"), "Commit.\n");
+    write(path.join(dotfiles, "agents", "tester.md"), "---\nname: tester\n---\nTest it.\n");
+    write(path.join(other, "dotfiles", "more", "review.md"), "Review.\n");
+    write(path.join(other, "dotfiles", "more", "lint.md"), "Lint.\n");
+    const claude = path.join(other, ".claude");
+    // Folders linked as stow links them (relative), a folder inside commands, and a file.
+    fs.mkdirSync(claude);
+    fs.symlinkSync("../dotfiles/claude/.claude/commands", path.join(claude, "commands"));
+    fs.symlinkSync(path.join(dotfiles, "agents"), path.join(claude, "agents"));
+    fs.symlinkSync("../../../more", path.join(dotfiles, "commands", "more"));
+    // A file linked to a Markdown file of another name is read by the link's.
+    fs.symlinkSync("../../../more/lint.md", path.join(dotfiles, "commands", "check.md"));
+    const handle = link.engineHandler(() => { throw new Error("not running"); });
+    const { json } = await answer(handle, "GET", "kuvo/claude-code");
+    assert.deepEqual(json.agents.map(agent => agent.name), ["tester"]);
+    assert.deepEqual(json.commands.map(command => [command.name, command.settings.template]), [
+      ["check", "Lint."], ["git-commit", "Commit."], ["more-lint", "Lint."], ["more-review", "Review."], ["ship", "Ship it."],
+    ]);
   } finally {
     process.env.HOME = saved;
   }

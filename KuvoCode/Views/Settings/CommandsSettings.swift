@@ -81,7 +81,7 @@ struct CommandsSettings: View {
                 } header: {
                     Text("From Claude Code")
                 } footer: {
-                    Text("Commands in ~/.claude/commands. Their prompts come over as they are.")
+                    Text("Commands in ~/.claude/commands\(box.machine == nil ? "" : " on \(app.name(of: box))"). Their prompts come over as they are.")
                         .foregroundStyle(.secondary)
                 }
             }

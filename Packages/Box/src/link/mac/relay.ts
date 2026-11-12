@@ -47,7 +47,8 @@ export const macAppAnswers = (route: string): boolean => MAC_APP_ROUTES.some(are
 export const boxAnswers = (route: string): boolean => route === "kuvo/engine/restart" && keeperRuns();
 
 /** Whether this Mac's keeper runs this box now: its record in `run/keeper.json` names the process
- * that started it, alive. (A record a keeper left as it crashed, its ID another's since, isn't.) */
+ * that started it, alive. (A record a keeper left as it crashed, its ID another's since, isn't.)
+ * So the keeper starts the box itself, nothing between them: `MacBoxTests.theBoxIsItsKeepersOwnChild`. */
 export function keeperRuns(): boolean {
   let pid = 0;
   try { pid = Number(JSON.parse(fs.readFileSync(path.join(RUN, "keeper.json"), "utf8"))?.pid); } catch { return false; }
