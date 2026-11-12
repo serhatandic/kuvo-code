@@ -86,11 +86,18 @@ let ownList: ListedAgent[] | null = null;
 let ownMachine: string | null = null;
 // Each working out's turn, and the latest one kept: one begun earlier, answered later, is older.
 let refreshes = 0, keptRefresh = 0;
-// Them, as just worked out elsewhere (`kuvo/named`), on box `machine`.
-export function keepOwn(list: ListedAgent[], machine: string | null): void {
-  ownList = list;
-  keptRefresh = refreshes;
-  ownMachine = machine;
+// Them, worked out again for one asking here (`list_agents`, `kuvo/named`) on box `machine`, and
+// kept unless a working out begun since was kept first. Null when its engine can't say.
+export async function ownAgentsNow(readEngine: () => Target, machine: string | null): Promise<ListedAgent[] | null> {
+  const turn = ++refreshes;
+  const list = await ownAgents(readEngine, machine ?? undefined);
+  if (list && turn > keptRefresh) {
+    ownList = list;
+    keptRefresh = turn;
+    ownMachine = machine;
+  }
+  // (One kept since is newer than this.)
+  return list && ownList;
 }
 
 // This box's own agents as last worked out: since it started, else as `run/agents.json` last had

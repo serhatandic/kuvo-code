@@ -907,3 +907,30 @@ test("a conversation read by mail whose tool stopped waiting as it came is dropp
   assert.equal(fs.existsSync(path.join(replies, "ltr_read01.json")), false, "gone, not kept to deliver");
   assert.equal(fs.existsSync(path.join(replies, "ltr_read01.gaveup")), false);
 });
+
+test("a message sent without waiting that the box it went to refuses: its sender hears why, once, as the box's own word", async t => {
+  fresh({ legacy: { [mac.pub]: { at: 1, peers: [mac.peer, second.peer] } } });
+  const { target, prompts } = await engine(t);
+  fs.writeFileSync(path.join(run, "engine.json"), JSON.stringify(target));
+  fs.writeFileSync(path.join(run, "peer-agents.json"), JSON.stringify({ [second.pub]: { at: 1, list: [{ session: "ses_target", name: "API", kind: "session" }] } }));
+  const sending = path.join(run, "outbox", "sending");
+  fs.mkdirSync(sending, { recursive: true });
+  const file = path.join(sending, "ltr_refused.json");
+  const now = Date.now();
+  fs.writeFileSync(file, JSON.stringify({ from: "ses_mine", to: "ses_target", text: "Hello", wait: false, at: now, sentTo: second.pub }));
+  link.letterWent(stranger.peer, { id: "ltr_refused", ok: false, why: "No." }, now);
+  assert.ok(fs.existsSync(file), "only the box it went to can refuse it");
+  link.letterWent(second.peer, { id: "ltr_refused", ok: false, why: "That conversation doesn't take messages." }, now);
+  assert.equal(fs.existsSync(file), false, "the message itself never goes again");
+  const left = fs.readdirSync(sending);
+  assert.equal(left.length, 1);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(sending, left[0]), "utf8")).to, "ses_mine", "its notice, for its sender");
+  await link.sendOutbox({ send: () => assert.fail("the notice belongs here") }, link.readLink(), now);
+  assert.equal(prompts.length, 1);
+  assert.equal(prompts[0].session, "ses_mine");
+  assert.equal(prompts[0].text, `[Not delivered] Your message to API on second wasn't delivered: second said "That conversation doesn't take messages."`);
+  assert.equal(prompts[0].delivery, "queue");
+  assert.deepEqual(prompts[0].metadata.kuvo.note, { from: "Your other computers", line: "Your message to API on second wasn't delivered" });
+  assert.ok(!prompts[0].text.includes("ses_target"));
+  assert.equal(fs.readdirSync(sending).length, 0);
+});
