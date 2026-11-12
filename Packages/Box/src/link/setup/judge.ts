@@ -288,7 +288,7 @@ export function judgeHere(own: FoundBox | null, there: FoundBox | null, runs: "r
  * link.json), or what the app writes only as it starts one (`serve.json`) or its keeper does
  * (`keeper.json`). Never the folder alone: the app writes in it with no box (its machines' list,
  * the integrations' catalog), so it's there on a Mac whose app attached to the box in place too. */
-const OWN_BOX_RAN = ["setup-card.json", "link.json", "serve.json", "keeper.json"];
+export const OWN_BOX_RAN = ["setup-card.json", "link.json", "serve.json", "keeper.json"];
 
 /** Whether the app's own engine kept your sessions in its data folder (`KUVO_ENGINE_DATA`, as the
  * app gives its box: its database, `opencode*.db`). A version from before its box had a folder, or

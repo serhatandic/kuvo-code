@@ -325,3 +325,8 @@ test("a box its Mac removed is no box, whatever's left of it: its keeper still e
   }, { startable: false }).said;
   assert.deepEqual([beside.verdict, beside.use, beside.box], ["free", "own", null]);
 });
+
+test("what in the app's own box folder says a box ran there is the vector's, which the app's tests hold the app's list to", () => {
+  const vector = JSON.parse(fs.readFileSync(fileURLToPath(new URL("../../Vectors/routes/setup/own-box-ran.json", import.meta.url)), "utf8"));
+  assert.deepEqual(link.OWN_BOX_RAN, vector.files);
+});

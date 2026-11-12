@@ -284,13 +284,11 @@ import Testing
     }
 
     /// The files the app counts as its own box having run, when the box can't be asked, are the box's
-    /// own: one the box stopped counting would make the app keep a box the box would attach.
+    /// own (`Vectors/routes/setup/own-box-ran.json`, which the bridge's tests hold the box's list to):
+    /// one the box stopped counting would make the app keep a box the box would attach.
     @Test func whatCountsAsItsOwnBoxIsTheBoxs() throws {
-        let judge = URL(filePath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .appending(path: "Packages/Box/src/link/setup/judge.ts")
-        let source = try String(contentsOf: judge, encoding: .utf8)
-        let line = try #require(source.split(separator: "\n").first { $0.hasPrefix("const OWN_BOX_RAN = [") })
-        let files = line.matches(of: /"([^"]+)"/).map { String($0.1) }
-        #expect(files == Here.ownBoxFiles)
+        let folder = try #require(RouteScenarios.folder, "The routes folder isn't in the test bundle.")
+        let vector = try JSONSerialization.jsonObject(with: Data(contentsOf: folder.appending(path: "setup/own-box-ran.json"))) as? [String: Any]
+        #expect(vector?["files"] as? [String] == Here.ownBoxFiles)
     }
 }
