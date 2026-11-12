@@ -366,9 +366,6 @@ struct ModelChip<Label: View>: View {
     var offersAuto = true
     /// Opens it when it changes.
     var openRequest = 0
-    /// Drawn as a filled pop-up button, like the pop-up menus in a row beside it, rather than the
-    /// composer's quiet chip.
-    var popUp = false
     /// Drawn with the model in use and its effort.
     @ViewBuilder let label: (Model?, String?) -> Label
     @State private var isOpen = false
@@ -390,7 +387,7 @@ struct ModelChip<Label: View>: View {
         } label: {
             label(current, variant)
         }
-        .modelChipStyle(popUp: popUp)
+        .buttonStyle(.plain)
         .clickablePointer()
         .help(catalog.chipHelp(selection, in: scope, on: catalog.machine.map { app.name(of: .machine($0)) }, said: said))
         .background(ScreenRoomReader(room: anchor))
@@ -430,12 +427,6 @@ struct ModelChip<Label: View>: View {
             }
         }
         #endif
-    }
-}
-
-private extension View {
-    @ViewBuilder func modelChipStyle(popUp: Bool) -> some View {
-        if popUp { buttonStyle(.bordered) } else { buttonStyle(.plain) }
     }
 }
 
