@@ -71,10 +71,11 @@ nonisolated enum PullRequests {
         case pushed
     }
 
-    /// `withSummary`: with what the branch brings, for a model to write them from.
-    static func draft(on box: BoxClient, directory: String, withSummary: Bool = false) async throws -> PullRequestDraft {
-        struct Asked: Encodable { let directory: String; let summary: Bool }
-        return try await box.value(PullRequestDraft.self, "POST", "kuvo/git/pull-request/draft", body: Asked(directory: directory, summary: withSummary))
+    /// `withPrompt`: with what a model is asked to write them from, in the box's words with your
+    /// instructions on that computer.
+    static func draft(on box: BoxClient, directory: String, withPrompt: Bool = false) async throws -> PullRequestDraft {
+        struct Asked: Encodable { let directory: String; let prompt: Bool }
+        return try await box.value(PullRequestDraft.self, "POST", "kuvo/git/pull-request/draft", body: Asked(directory: directory, prompt: withPrompt))
     }
 
     /// `session`: the one it's made from (the one in view), whose pull request it is from now on, on
@@ -127,32 +128,51 @@ struct GitFailure: LocalizedError {
     var errorDescription: String? { message }
 }
 
-/// Settings › Git: how branches are named, and what you'd like commit messages and pull requests
-/// written like.
+/// What a model is asked to write a commit message from, as the box the project is on words it
+/// (`kuvo/git/commit-diff`): what the commit takes, with your instructions on that computer
+/// (Settings › Git).
+nonisolated enum CommitMessages {
+    enum Failure: LocalizedError {
+        case nothing
+        case olderBox(String)
+        var errorDescription: String? {
+            switch self {
+            case .nothing: "There’s nothing to commit to write a message from."
+            case .olderBox(let place): "\(place) needs a newer Kuvo Code to suggest a message. It updates by itself overnight, or connect to it from this Mac."
+            }
+        }
+    }
+
+    /// `place`: the computer, as a refusal names it.
+    static func prompt(on box: BoxClient, directory: String, place: String) async throws -> String {
+        struct Asked: Encodable { let directory: String; let prompt = true }
+        struct Answer: Decodable { let diff: String; let prompt: String? }
+        let answer = try await box.value(Answer.self, "POST", "kuvo/git/commit-diff", body: Asked(directory: directory))
+        guard !answer.diff.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw Failure.nothing }
+        guard let prompt = answer.prompt else { throw Failure.olderBox(place) }
+        return prompt
+    }
+}
+
+/// Settings › Git as this Mac kept it before each computer kept its own (`kuvo/config`'s
+/// `branch_prefix`, `commit_instructions`, `pull_request_instructions`): given to each box once.
 nonisolated enum GitPreferences {
     static let branchPrefixKey = "git.branchPrefix"
     static let commitInstructionsKey = "git.commitInstructions"
     static let pullRequestInstructionsKey = "git.pullRequestInstructions"
-    static let defaultBranchPrefix = "kuvo/"
+    /// The boxes that took them.
+    static let movedKey = "git.movedTo"
 
-    /// What a session's own branch starts with ("kuvo/").
-    /// As git takes it in a branch's name: without spaces around it (one typed at the end of
-    /// the field doesn't show), the characters a branch can't have (~ ^ : ? * [ \), "..", or a
-    /// start in - / or .; else every worktree's branch would fail to be made.
-    static var branchPrefix: String {
-        let typed = UserDefaults.standard.string(forKey: branchPrefixKey) ?? defaultBranchPrefix
-        var prefix = typed.trimmingCharacters(in: .whitespacesAndNewlines).filter { character in
-            !" ~^:?*[\\".contains(character) && !character.isWhitespace && !(character.asciiValue.map { $0 < 32 || $0 == 127 } ?? false)
-        }
-        while prefix.contains("..") { prefix = prefix.replacingOccurrences(of: "..", with: ".") }
-        while let first = prefix.first, "-/.".contains(first) { prefix.removeFirst() }
-        return prefix
-    }
-
-    /// A prompt for a commit message or pull request, with your instructions for it added.
-    static func prompt(_ prompt: String, instructionsKey: String) -> String {
-        let instructions = (UserDefaults.standard.string(forKey: instructionsKey) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !instructions.isEmpty else { return prompt }
-        return prompt + "\n\nAlso follow these instructions from the user:\n" + instructions
+    // COMPAT(0.7 mac-git-settings): this Mac's Settings › Git from before, given to each box once (its box keeps each where it has none of its own); kept here for a computer added later. Goes 3 months after 0.8.0.
+    /// Gives `box` this Mac's, unless it took them already or there are none; tried again as it
+    /// next connects when it couldn't take them (its settings aren't its own yet, it can't be reached).
+    static func move(to box: BoxClient, defaults: UserDefaults = .standard) async {
+        let kept = [("branchPrefix", branchPrefixKey), ("commitInstructions", commitInstructionsKey), ("pullRequestInstructions", pullRequestInstructionsKey)]
+            .compactMap { name, key in defaults.string(forKey: key).map { (name, $0) } }
+        let moved = defaults.stringArray(forKey: movedKey) ?? []
+        guard !kept.isEmpty, !moved.contains(box.box) else { return }
+        struct Answer: Decodable { let moved: Bool }
+        guard (try? await box.value(Answer.self, "POST", "kuvo/git/settings/move", body: Dictionary(uniqueKeysWithValues: kept))) != nil else { return }
+        defaults.set((defaults.stringArray(forKey: movedKey) ?? []) + [box.box], forKey: movedKey)
     }
 }

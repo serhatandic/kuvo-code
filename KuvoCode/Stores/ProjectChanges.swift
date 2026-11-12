@@ -197,12 +197,6 @@ final class ProjectChanges {
         return failure
     }
 
-    /// The diff a commit would take (what's staged, or everything with new files' names),
-    /// cut to a size a model reads quickly.
-    func commitDiff() async -> String {
-        await Git.commitDiffing(in: directory).diff
-    }
-
     /// Whether anything is staged, which is what a commit takes then.
     func hasStaged() async -> Bool {
         let directory = directory

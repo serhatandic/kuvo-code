@@ -3,17 +3,14 @@ import ClientDesign
 import OpenCodeKit
 import SwiftUI
 
-/// Git: how sessions' branches are named, and how commit messages and pull requests are written.
+/// Git: how sessions' branches are named, and how commit messages and pull requests are written,
+/// on one computer: each keeps its own (`kuvo/config`), for any client that asks it.
 struct GitSettings: View {
-    @AppStorage(GitPreferences.branchPrefixKey) private var branchPrefix = GitPreferences.defaultBranchPrefix
-    @AppStorage(GitPreferences.commitInstructionsKey) private var commitInstructions = ""
-    @AppStorage(GitPreferences.pullRequestInstructionsKey) private var pullRequestInstructions = ""
-
     var body: some View {
         ScrollingSettingsForm {
             Section {
                 SettingsTextRow {
-                    TextField("Branch prefix", text: $branchPrefix, prompt: Text(verbatim: GitPreferences.defaultBranchPrefix))
+                    GitField(title: "Branch prefix", path: ["branch_prefix"], prompt: "kuvo/", unset: "kuvo/")
                 } label: {
                     Text("Branch prefix")
                     Text("How a session’s own branch in a worktree starts.")
@@ -23,7 +20,7 @@ struct GitSettings: View {
             }
 
             Section {
-                InstructionsEditor(text: $commitInstructions, prompt: "For example: Start with the area changed, like “ui: …”, and never mention tickets.")
+                GitField(title: "Instructions", path: ["commit_instructions"], prompt: "For example: Start with the area changed, like “ui: …”, and never mention tickets.", multiline: true)
             } header: {
                 Text("Commit Messages")
             } footer: {
@@ -32,7 +29,7 @@ struct GitSettings: View {
             }
 
             Section {
-                InstructionsEditor(text: $pullRequestInstructions, prompt: "For example: Add a Testing section, and link the issue if the branch names one.")
+                GitField(title: "Instructions", path: ["pull_request_instructions"], prompt: "For example: Add a Testing section, and link the issue if the branch names one.", multiline: true)
             } header: {
                 Text("Pull Requests")
             } footer: {
@@ -43,15 +40,39 @@ struct GitSettings: View {
     }
 }
 
-/// A few lines of instructions for the model.
-private struct InstructionsEditor: View {
-    @Binding var text: String
+/// One of a computer's Git settings, saved when you press Return or leave the field. `unset`: what
+/// it shows when the computer has none (the branch prefix's `kuvo/`); emptied, it's kept empty (no
+/// prefix). Without one, an emptied field removes the setting (no instructions).
+private struct GitField: View {
+    let title: String
+    let path: [String]
     let prompt: String
+    var unset: String?
+    /// A few lines of instructions for the model.
+    var multiline = false
+    @Environment(AppModel.self) private var app
+    @Environment(\.settingsBox) private var box
+    @State private var field = SettingField()
+    @FocusState private var isFocused: Bool
+
+    private var config: EngineConfig { app.config(for: box) }
 
     var body: some View {
-        TextField("Instructions", text: $text, prompt: Text(prompt), axis: .vertical)
+        let stored = config.value(at: path)?.string ?? unset ?? ""
+        TextField(title, text: $field.text, prompt: Text(prompt), axis: multiline ? .vertical : .horizontal)
             .labelsHidden()
-            .lineLimit(3...8)
+            .lineLimit(multiline ? 3...8 : 1...1)
+            .focused($isFocused)
+            .onSubmit(commit)
+            .onChange(of: isFocused) { if !isFocused { commit() } }
+            .onAppear { field.load(stored) }
+            .onChange(of: stored) { if !isFocused { field.load(stored) } }
+            .onDisappear(perform: commit)
+    }
+
+    private func commit() {
+        guard let value = field.edit(trimming: true) else { return }
+        config.set(value.isEmpty && unset == nil ? nil : .string(value), at: path)
     }
 }
 
