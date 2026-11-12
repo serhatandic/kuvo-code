@@ -23,6 +23,14 @@ public enum Link {
     /// it sent has only left for the system's buffers, the network and the relay's (a few MB
     /// between them), and on a slow connection reaches the host many seconds later (#358).
     static let slowUpload = 64 * 1024
+    /// How long a request that's safe to send again (`LinkRequest.isRepeatable`) is sent again for,
+    /// from when its session first dropped under it: the link back within this, it goes; not, it
+    /// fails as it would have at first.
+    static let repeatFor: Duration = .seconds(120)
+    /// How long it waits before each try after the first, which goes at once.
+    static func repeatWait(try number: Int) -> Duration {
+        number <= 1 ? .zero : .seconds(min(1 << (number - 2), 8))
+    }
 }
 
 public enum LinkError: Error, Equatable, LocalizedError {
@@ -90,6 +98,16 @@ extension LinkRequest {
     }
 
     public var isSocket: Bool { headers["upgrade"]?.lowercased() == "websocket" }
+
+    /// The header that makes a request safe to send again, naming what it makes (a message's id):
+    /// the host takes it once however often it comes (PROTOCOL.md, "Sending again").
+    public static let repeatableHeader = "idempotency-key"
+
+    /// Whether the link may send it again when its session drops before the answer comes, until
+    /// the link's back (`Link.repeatFor`).
+    public var isRepeatable: Bool {
+        headers.contains { $0.key.lowercased() == Self.repeatableHeader && !$0.value.isEmpty }
+    }
 }
 
 /// What comes over a socket: that it's open, then its messages.
@@ -161,6 +179,17 @@ public actor LinkClient {
     /// what holds a body up is this phone's own connection, which they share.
     private var sent = 0
     private var arrived = 0
+    /// How many times `disconnect` was asked: a request waiting to go again from before it doesn't.
+    private var disconnects = 0
+    /// Requests waiting out the time before they go again, by their wait: each goes when it's over,
+    /// or as soon as a relay connection is made, whichever is first.
+    private var waitingToGo: [Int: (attempt: Repeat, error: LinkError)] = [:]
+    private var waits = 0
+    private var orders = 0
+    private func nextOrder() -> Int {
+        orders += 1
+        return orders
+    }
 
     private final class Session {
         /// A new one if its handshake starts over (see `startOver`).
@@ -187,6 +216,8 @@ public actor LinkClient {
         var nextID = 1
         var streams: [Int: AsyncThrowingStream<LinkResponsePart, Error>.Continuation] = [:]
         var sockets: [Int: AsyncThrowingStream<LinkSocketEvent, Error>.Continuation] = [:]
+        /// Requests safe to send again with no answer yet: sent again if the session drops.
+        var repeatable: [Int: Repeat] = [:]
 
         init(host: PairedHost, pairing: Data?, now: ContinuousClock.Instant) {
             self.host = host
@@ -206,7 +237,7 @@ public actor LinkClient {
     /// Pairs with the host a pairing link names. Returns it, to keep.
     public func pair(_ link: PairingLink) async throws -> PairedHost {
         let address = link.host
-        if let old = sessions[address] { end(old, with: .closed) }
+        if let old = sessions[address] { end(old, with: .closed, repeating: false) }
         var host = PairedHost(address: address, key: link.key, name: link.name, kind: .mac)
         let hostHello = try await open(host, pairing: link.token)
         host.name = hostHello.name
@@ -311,9 +342,13 @@ public actor LinkClient {
         return true
     }
 
-    /// Ends every session and the relay connection.
+    /// Ends every session and the relay connection, and what waited to go again.
     public func disconnect() {
-        for session in sessions.values { end(session, with: .closed) }
+        disconnects += 1
+        let waiting = waitingToGo
+        waitingToGo = [:]
+        for (_, entry) in waiting { entry.attempt.continuation.finish(throwing: LinkError.closed) }
+        for session in sessions.values { end(session, with: .closed, repeating: false) }
         relay?.close()
         relay = nil
     }
@@ -375,7 +410,8 @@ public actor LinkClient {
     }
 
     /// Ends `session`, telling the host unless it no longer has it (the relay said it's gone).
-    private func end(_ session: Session, with error: LinkError, tellingHost: Bool = true) {
+    /// What's safe to send again goes again, unless `repeating` is false (ended on purpose).
+    private func end(_ session: Session, with error: LinkError, tellingHost: Bool = true, repeating: Bool = true) {
         let address = session.host.linkAddress
         if sessions[address] === session { sessions[address] = nil }
         for waiter in session.waiting { waiter.resume(throwing: error) }
@@ -383,6 +419,12 @@ public actor LinkClient {
         session.checking = false
         session.unanswered = [:]
         session.pings = []
+        let repeats = session.repeatable
+        session.repeatable = [:]
+        for (id, attempt) in repeats where repeating && Repeat.goesAgain(after: error) {
+            session.streams[id] = nil
+            again(attempt, after: error)
+        }
         for stream in session.streams.values { stream.finish(throwing: error) }
         session.streams = [:]
         for socket in session.sockets.values { socket.finish(throwing: error) }
@@ -392,7 +434,81 @@ public actor LinkClient {
     }
 
     private func start(_ request: LinkRequest, to host: PairedHost, ticket: Ticket, continuation: AsyncThrowingStream<LinkResponsePart, Error>.Continuation) async {
-        await start(request, to: host, ticket: ticket, for: .response(continuation))
+        guard request.isRepeatable else { return await start(request, to: host, ticket: ticket, for: .response(continuation)) }
+        await start(request, to: host, ticket: ticket, for: .response(continuation), repeating: Repeat(request: request, host: host, ticket: ticket, continuation: continuation, disconnects: disconnects, order: nextOrder()))
+    }
+
+    /// A request that's safe to send again (`LinkRequest.isRepeatable`), as it goes: who hears its
+    /// answer, how many times it's gone, and since when its sessions have been dropping under it.
+    private struct Repeat {
+        let request: LinkRequest
+        let host: PairedHost
+        let ticket: Ticket
+        let continuation: AsyncThrowingStream<LinkResponsePart, Error>.Continuation
+        var tries = 1
+        var since: ContinuousClock.Instant?
+        /// `disconnects` as it first went.
+        var disconnects: Int
+        /// Which went first, of those waiting to go again.
+        var order: Int
+
+        /// A link that dropped or isn't there yet, which may come back; not a host that turned
+        /// this phone away, or can't talk with it.
+        static func goesAgain(after error: LinkError) -> Bool {
+            switch error {
+            case .closed, .timedOut, .relayUnavailable: true
+            // Nothing at its address (asleep, offline): said at once, as ever, rather than shown
+            // going for minutes.
+            case .hostOffline, .refused, .unsupportedVersion, .notAvailable: false
+            }
+        }
+    }
+
+    /// Sends `attempt` again once its wait is over, or fails it with `error` once it's been
+    /// dropping for `Link.repeatFor` (or no one waits for it any more).
+    private func again(_ attempt: Repeat, after error: LinkError) {
+        guard !attempt.ticket.isStopped, attempt.disconnects == disconnects else { return attempt.continuation.finish(throwing: error) }
+        let now = clock.now()
+        let since = attempt.since ?? now
+        guard now - since < Link.repeatFor else { return attempt.continuation.finish(throwing: error) }
+        var next = attempt
+        next.since = since
+        next.tries += 1
+        let wait = Link.repeatWait(try: next.tries - 1)
+        guard wait > .zero else {
+            Task { await self.resend(next, after: error) }
+            return
+        }
+        waits += 1
+        let (key, clock) = (waits, clock)
+        waitingToGo[key] = (next, error)
+        Task {
+            await clock.sleep(wait)
+            await self.waitOver(key)
+        }
+    }
+
+    /// A wait's over: its request goes, unless a relay connection made meanwhile sent it already.
+    private func waitOver(_ key: Int) async {
+        guard let (attempt, error) = waitingToGo.removeValue(forKey: key) else { return }
+        await resend(attempt, after: error)
+    }
+
+    /// A relay connection's made: what waits to go again goes now, in the order it first went.
+    private func linkIsBack() {
+        let waiting = waitingToGo.values.sorted { $0.attempt.order < $1.attempt.order }
+        waitingToGo = [:]
+        guard !waiting.isEmpty else { return }
+        // One after another, so each is on its way before the next.
+        Task {
+            for (attempt, error) in waiting { await self.resend(attempt, after: error) }
+        }
+    }
+
+    private func resend(_ attempt: Repeat, after error: LinkError) async {
+        // Let go of meanwhile: it doesn't connect again.
+        guard attempt.disconnects == disconnects else { return attempt.continuation.finish(throwing: error) }
+        await start(attempt.request, to: attempt.host, ticket: attempt.ticket, for: .response(attempt.continuation), repeating: attempt)
     }
 
     /// Who hears a request's answer.
@@ -409,12 +525,17 @@ public actor LinkClient {
     }
 
     /// Sends `request`, once there's a session the host still has, with who hears its answer set
-    /// up first.
-    private func start(_ request: LinkRequest, to host: PairedHost, ticket: Ticket, for listener: Listener) async {
+    /// up first. `repeating`: one safe to send again, sent again if it doesn't get there.
+    private func start(_ request: LinkRequest, to host: PairedHost, ticket: Ticket, for listener: Listener, repeating: Repeat? = nil) async {
+        // Where it was put to go, for a try that fails before it's gone.
+        var placed: (session: Session, id: Int)?
         do {
+            // (Stopped while it waited to go again: no new connection for it.)
+            guard !ticket.isStopped else { throw CancellationError() }
             try await open(host, pairing: nil)
             guard let session = sessions[host.linkAddress], session.transport != nil else { throw LinkError.closed }
             try Task.checkCancellation()
+            guard !ticket.isStopped else { throw CancellationError() }
             let id = session.nextID
             session.nextID += 1
             ticket.set(id: id, session: session.id)
@@ -422,6 +543,8 @@ public actor LinkClient {
             case .response(let continuation): session.streams[id] = continuation
             case .socket(let continuation): session.sockets[id] = continuation
             }
+            placed = (session, id)
+            if let repeating { session.repeatable[id] = repeating }
             let head = LinkMessage.Head(t: .req, id: id, m: request.method, p: request.path, h: request.headers)
             for piece in LinkMessage.pieces(head, body: request.body, end: true) {
                 try seal(piece, in: session)
@@ -429,6 +552,14 @@ public actor LinkClient {
             session.unanswered[id] = sent
             watchAnswer(id, in: session)
         } catch {
+            if let repeating, let error = error as? LinkError, Repeat.goesAgain(after: error) {
+                // Sent again from here, not again when its session ends.
+                if let placed {
+                    placed.session.streams[placed.id] = nil
+                    placed.session.repeatable[placed.id] = nil
+                }
+                return again(repeating, after: error)
+            }
             listener.failed(error)
         }
     }
@@ -495,8 +626,10 @@ public actor LinkClient {
     }
 
     private func cancel(_ ticket: Ticket, on host: PairedHost) {
+        ticket.stop()
         guard let (id, sessionID) = ticket.value, let session = sessions[host.linkAddress], session.id == sessionID else { return }
         session.unanswered[id] = nil
+        session.repeatable[id] = nil
         let socket = session.sockets.removeValue(forKey: id)
         guard session.streams.removeValue(forKey: id) != nil || socket != nil else { return }
         socket?.finish()
@@ -537,6 +670,7 @@ public actor LinkClient {
             self.relay = relay
             // Nothing sent before is on its way on this one.
             arrived = sent
+            linkIsBack()
             if let registration { relay.send(.register(registration)) }
             Task { [weak self] in
                 for await message in relay.messages { await self?.receive(message) }
@@ -612,6 +746,8 @@ public actor LinkClient {
         case .res, .data:
             // Answered, with a head or (a host that sends none) its body: it had the request whole.
             if let id = head.id, let went = session.unanswered.removeValue(forKey: id) { arrived = max(arrived, went) }
+            // It got there: it isn't sent again.
+            if let id = head.id { session.repeatable[id] = nil }
             if let id = head.id, let socket = session.sockets[id] {
                 if head.t == .res, head.s != 101 {
                     session.sockets[id] = nil
@@ -635,6 +771,7 @@ public actor LinkClient {
         case .cancel:
             guard let id = head.id else { return }
             session.unanswered[id] = nil
+            session.repeatable[id] = nil
             session.streams.removeValue(forKey: id)?.finish(throwing: LinkError.closed)
             session.sockets.removeValue(forKey: id)?.finish(throwing: LinkError.closed)
         case .ping:
@@ -677,13 +814,16 @@ public struct LinkResponse: AsyncSequence, Sendable {
     }
 }
 
-/// Which request a stream became, for cancelling it.
+/// Which request a stream became, for cancelling it, and whether it was (so it isn't sent again).
 private final class Ticket: @unchecked Sendable {
     private let lock = NSLock()
     private var stored: (Int, UInt32)?
+    private var stopped = false
 
     func set(id: Int, session: UInt32) { lock.withLock { stored = (id, session) } }
     var value: (Int, UInt32)? { lock.withLock { stored } }
+    func stop() { lock.withLock { stopped = true } }
+    var isStopped: Bool { lock.withLock { stopped } }
 }
 
 /// The machines' side of the link (`Resources/kuvo-link.js`): the script the Mac app puts in a

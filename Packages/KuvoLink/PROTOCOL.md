@@ -85,6 +85,11 @@ Older phones keep checking quiet sessions, and skip `gone`.
 IP address (4005). A device a little too fast, or sending faster than the one it sends to
 takes in, is held back: the relay stops reading from it for a moment.
 
+The phone pings the relay over its WebSocket every 25 s, and counts the connection as gone (closes
+it, and connects again) when the pong doesn't come back in 10 s and a second more for each 64 KB it
+has handed its WebSocket since the last ping that was answered: the ping goes out behind those, and
+a picture on a slow connection holds its pong up as long as it takes to send (#144).
+
 An APNs push carries `{"aps": {"alert": {"title": "Kuvo Code", "body": "New activity"},
 "mutable-content": 1}, "f": "<sender's address>", "k": "<payload, base64>"}`. The phone's
 notification extension decrypts `k` with the key of the host at `f`, and replaces the text,
@@ -2149,6 +2154,21 @@ like HTTP:
 | `{"t": "data", "id": 7, "end": false}` | More body. Event streams (`api/event`) go on until cancelled. |
 | `{"t": "cancel", "id": 7}` | Either side stops request 7. |
 | `{"t": "ping"}`, `{"t": "pong"}` | Is the other end still there? The relay's own pings only reach the relay. The phone pings while a request waits with nothing from the host, once its own frames have gone out: a host whose connection died without closing takes frames until the relay notices, and never answers. No answer ends the session, after 15 s (a host under a heavy load can take that long to read its connection, and is still there) and a second more for each 64 KB the phone sent that no host has answered yet (by answering a request sent after it, or a ping): frames the phone's connection says it sent may still be in the system's buffers, on a slow network or at the relay, ahead of the ping. So a host whose connection died is found out that much later after a big body (a 10 MB one: about 2.5 minutes). A host that started again or left is told by the relay (`gone`), so a quiet session isn't checked. Answer at once. |
+
+**Sending again** (#144). A request with `idempotency-key` in `h` (a message's own id, as
+`POST api/session/<id>/prompt` and `kuvo/agents/api/…/prompt` carry it) is safe to send twice: when
+its session ends before the answer's head comes (closed, timed out, or the relay connection lost:
+on LTE, or as the app comes back from the background), the phone sends it again, whole, on a new
+session: at once, then after 1, 2, 4 and 8 s (8 s from then on), or as soon as a relay connection
+is made again, whichever comes first (in the order they were first sent), for up to two minutes
+from when it first failed; past that it fails as it did at first. Meanwhile a client shows it
+waiting, not failed. A host that isn't connected to the relay (asleep, offline), turns the phone
+away, or can't talk with it isn't tried again: that's said at once, as before. A box takes a message sent again under the
+same id once (`Packages/Box/src/link/server/sent-once.ts`): one still on its way to the conversation
+waits for it and answers as it did; one that went answers as it did then, for an hour, without the
+conversation (or the files it brought) asked again; one the engine refused or that didn't reach it is
+tried again. After a box starts again, the engine and the coding agents' bridge, which each take a
+message once by its id, catch a repeat. The header is never passed to the engine.
 
 `h` holds `x-opencode-directory` and `content-type`; the host adds the engine's password
 itself. Which route answers is told by its path before any `?`: a query string never changes it,
