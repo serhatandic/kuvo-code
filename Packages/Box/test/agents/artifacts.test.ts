@@ -309,7 +309,9 @@ describe("a bot's folder", () => {
     const report = join(folder, "workspace", "weekly.csv")
     writeFileSync(report, "week,sales\n1,10\n")
     folders.missed()
-    await hear([{ type: "session.execution.succeeded", data: { sessionID: "ses_bot_ada" } }])
+    // (Before its turn ends, which looks too.)
+    folders.flush()
+    await store.settled()
     const { value } = await route("GET", "kuvo/artifacts?bot=bot_ada")
     expect(value.artifacts.map((artifact: any) => artifact.name)).toEqual(["weekly.csv"])
     expect(value.artifacts[0].latest).toMatchObject({ via: ["shell"], turn: { session: "ses_bot_ada", message: "msg_1" }, by: { kind: "agent", bot: "bot_ada" } })
@@ -317,6 +319,30 @@ describe("a bot's folder", () => {
     const { value: memory } = await route("GET", `kuvo/artifacts/${ArtifactStore.idOf(join(folder, "MEMORY.md"))}`)
     expect(memory.versions.map((version: any) => version.n)).toEqual([0])
     expect(memory.where.sessions).toEqual([])
+  })
+
+  test("what a command made that the watch never told, nor its looks again, is found as its turn ends", async () => {
+    const folder = bot("bot_ada", "m\n")
+    const folders = watched()
+    folders.stop()
+    await hear([{ type: "session.execution.started", data: { sessionID: "ses_bot_ada" } }, { type: "session.inbox.delivered", data: { sessionID: "ses_bot_ada", inboxID: "msg_1" } }])
+    writeFileSync(join(folder, "workspace", "weekly.csv"), "week,sales\n1,10\n")
+    await hear([{ type: "session.execution.succeeded", data: { sessionID: "ses_bot_ada" } }])
+    await store.settled()
+    const { value } = await route("GET", "kuvo/artifacts?bot=bot_ada")
+    expect(value.artifacts.map((artifact: any) => artifact.name)).toEqual(["weekly.csv"])
+    expect(value.artifacts[0].latest).toMatchObject({ via: ["shell"], turn: { session: "ses_bot_ada", message: "msg_1" } })
+  })
+
+  // (On Linux each folder's watch is the system's own, and misses nothing as it starts.)
+  test.skipIf(process.platform === "linux")("its watch looks again for what it may have missed, a moment after it starts", async () => {
+    bot("bot_ada", "m\n")
+    const folders = watched()
+    try {
+      await new Promise<void>(resolve => { folders.missed = resolve })
+    } finally {
+      folders.stop()
+    }
   })
 })
 

@@ -2228,17 +2228,19 @@ var watching = new Set;
 var looks = new Map;
 function startedOrStopped() {
   for (const after of WATCH_LOOKS_AGAIN) {
-    const at = Math.ceil((Date.now() + after) / 100) * 100;
+    const at = Math.ceil((performance.now() + after) / 100) * 100;
     if (looks.has(at))
       continue;
     const timer = setTimeout(() => {
       looks.delete(at);
       for (const look of [...watching]) {
+        if (!watching.has(look))
+          continue;
         try {
           look();
         } catch {}
       }
-    }, at - Date.now());
+    }, at - performance.now());
     timer.unref?.();
     looks.set(at, timer);
   }
@@ -2258,13 +2260,13 @@ function watchFolder(folder, changed, { recursive = false, missed = () => change
 }
 
 // Packages/Box/src/link/follow.ts
-function watchFolders(folders, changed, { recursive = true } = {}) {
+function watchFolders(folders, changed, { recursive = true, missed = changed } = {}) {
   let whole = folders.length > 0;
   const watchers = [];
   for (const folder of folders) {
     try {
       fs13.mkdirSync(folder, { recursive: true });
-      const watcher = watchFolder(folder, changed, { recursive });
+      const watcher = watchFolder(folder, changed, { recursive, missed });
       watcher.on("error", () => {
         whole = false;
         watcher.close();
@@ -37292,7 +37294,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "cdae6b22950d";
+var BRIDGE_VERSION = "34e43c104c75";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -40562,11 +40564,12 @@ async function* followView(owner, targets, signal) {
   try {
     fs129.mkdirSync(TOLD, { recursive: true, mode: 448 });
   } catch {}
-  const queuesWatch = watchFolders([path131.join(WORK_QUEUE, "queues"), TOLD], told, { recursive: false });
-  const categoriesWatch = watchFolders([WORK_QUEUE], (event, name) => {
-    if (event === undefined || ["categories.json", path131.basename(SEEN_FILE2)].includes(String(name ?? "")))
+  const looked = () => wake?.();
+  const queuesWatch = watchFolders([path131.join(WORK_QUEUE, "queues"), TOLD], told, { recursive: false, missed: looked });
+  const categoriesWatch = watchFolders([WORK_QUEUE], (_, name) => {
+    if (["categories.json", path131.basename(SEEN_FILE2)].includes(String(name ?? "")))
       told();
-  }, { recursive: false });
+  }, { recursive: false, missed: looked });
   const watching = { close: () => {
     queuesWatch.close();
     categoriesWatch.close();

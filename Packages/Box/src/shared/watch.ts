@@ -4,30 +4,32 @@
 // anew on a thread of its own each time a watch starts or stops, which tells only what changes once
 // it runs: so a change as a watch starts is never told to it, nor one in that moment, or just
 // before it, to any other watch in the process. Each watch made here is told to look again
-// (`missed`) a moment after any of them starts or stops, by then on the new stream. (On Linux each
-// watch is the system's own and starts as it's made: looking again costs a look, and misses
-// nothing.)
+// (`missed`) a moment after any of them starts or stops, by then usually on the new stream. (On
+// Linux each watch is the system's own and starts as it's made: looking again costs a look.)
 
 import fs from "node:fs";
 
-/** When each watch looks again after one starts or stops (in ms): once the stream is surely made
+/** When each watch looks again after one starts or stops (in ms): once the stream is usually made
  * anew, and later still on a busy computer. */
 export const WATCH_LOOKS_AGAIN = [250, 1000];
 
 const watching = new Set<() => void>();
-// Looks to come, by when (to the tenth of a second: many watches started at once look once).
+// Looks to come, by when (on the process's own clock, which the time of day changing doesn't move;
+// to the tenth of a second: many watches started at once look once).
 const looks = new Map<number, ReturnType<typeof setTimeout>>();
 
 function startedOrStopped() {
   for (const after of WATCH_LOOKS_AGAIN) {
-    const at = Math.ceil((Date.now() + after) / 100) * 100;
+    const at = Math.ceil((performance.now() + after) / 100) * 100;
     if (looks.has(at)) continue;
     const timer = setTimeout(() => {
       looks.delete(at);
+      // (Not one a look before it closed.)
       for (const look of [...watching]) {
+        if (!watching.has(look)) continue;
         try { look(); } catch {}
       }
-    }, at - Date.now());
+    }, at - performance.now());
     timer.unref?.();
     looks.set(at, timer);
   }

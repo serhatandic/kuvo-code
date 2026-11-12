@@ -196,17 +196,19 @@ var watching = new Set;
 var looks = new Map;
 function startedOrStopped() {
   for (const after of WATCH_LOOKS_AGAIN) {
-    const at = Math.ceil((Date.now() + after) / 100) * 100;
+    const at = Math.ceil((performance.now() + after) / 100) * 100;
     if (looks.has(at))
       continue;
     const timer = setTimeout(() => {
       looks.delete(at);
       for (const look of [...watching]) {
+        if (!watching.has(look))
+          continue;
         try {
           look();
         } catch {}
       }
-    }, at - Date.now());
+    }, at - performance.now());
     timer.unref?.();
     looks.set(at, timer);
   }
@@ -1317,6 +1319,8 @@ class ArtifactStore {
     return this.artifacts.get(ArtifactStore.idOf(path));
   }
   asSeen(path) {
+    if (this.waiting.has(path))
+      return true;
     const artifact = this.at(path);
     const read = this.read(path);
     if (read === null)
@@ -1326,13 +1330,24 @@ class ArtifactStore {
     return !!artifact && !artifact.gone && artifact.versions.at(-1)?.hash === read.hash;
   }
   queue = Promise.resolve();
+  waiting = new Map;
   inTurn(paths, work) {
+    for (const path of paths)
+      this.waiting.set(path, (this.waiting.get(path) ?? 0) + 1);
     const next = this.queue.then(async () => {
       await this.policy.learn(paths);
       return work();
     }).catch((error) => {
       console.error("artifacts:", error?.message ?? error);
       return;
+    }).finally(() => {
+      for (const path of paths) {
+        const left = (this.waiting.get(path) ?? 1) - 1;
+        if (left > 0)
+          this.waiting.set(path, left);
+        else
+          this.waiting.delete(path);
+      }
     });
     this.queue = next;
     return next;
@@ -2078,10 +2093,9 @@ class BotFolders {
   }
   turnEnded(bot, since, made) {
     this.flush(bot);
-    if (this.watching)
-      return;
     const folder = join7(this.bots, bot);
-    this.store.changeAll(changedSince(folder, since, (inside) => recordable(join7(bot, inside))), made("shell"));
+    const found = changedSince(folder, since, (inside) => recordable(join7(bot, inside)));
+    this.store.changeAll(this.watching ? found.filter((path) => !this.store.asSeen(path)) : found, made("shell"));
   }
   flush(bot) {
     for (const path of [...this.pending.keys()]) {
@@ -27501,4 +27515,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 680728f4e6f3b7f927cf9aa3228e7c2084a2db85e4fa8ee3ca49f23e0946bb6c
+// Built from Packages/Box/src/agents 97230a62b35184bb9082f47d56786d169d8f8e471a09de8948cc290142470fea

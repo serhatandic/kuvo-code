@@ -141,7 +141,7 @@ export class BotFolders {
 
   /** What changed since it last looked, for what the watch may not have told (as it started, or
    * as another started or stopped): each the record hasn't seen as it is, as the watch would have
-   * told it. */
+   * told it. (By the files' times: a file moved in keeps its own, and one gone isn't found.) */
   missed() {
     const since = this.lookedAt
     this.lookedAt = Date.now()
@@ -163,14 +163,16 @@ export class BotFolders {
   }
 
   /**
-   * A bot's turn ended: what changed in its folder meanwhile, recorded now as that turn's. Without
-   * a watch, the folder is looked through for what changed since the turn began.
+   * A bot's turn ended: what changed in its folder meanwhile, recorded now as that turn's. The
+   * folder is looked through for what changed since the turn began: without a watch, all of it;
+   * with one, what the record hasn't seen as it is (what the watch didn't tell, its stream made
+   * anew for longer than it looked again).
    */
   turnEnded(bot: string, since: number, made: (via: string) => Made) {
     this.flush(bot)
-    if (this.watching) return
     const folder = join(this.bots, bot)
-    void this.store.changeAll(changedSince(folder, since, (inside) => recordable(join(bot, inside))), made("shell"))
+    const found = changedSince(folder, since, (inside) => recordable(join(bot, inside)))
+    void this.store.changeAll(this.watching ? found.filter((path) => !this.store.asSeen(path)) : found, made("shell"))
   }
 
   /** What's waiting to settle in `bot`'s folder (all bots' without one), recorded now. */
