@@ -113,11 +113,31 @@ final class BotWork {
         if let asks = app?.botAsks, report.asks.contains(where: { ask in !asks.asks(for: ask.session).contains { $0.ask.id == ask.id } }) {
             await asks.read(bot.box)
         }
-        // A project it made on a machine since its projects were read there: read again (on its
-        // own, so the next read of its work never waits on it).
+        // A project it made on a machine since its projects were read there: read again.
         if let machine = bot.machine, let workspace = app?.workspace,
            report.projects.contains(where: { !workspace.folders.contains(RemoteFolder.folder($0.directory, on: machine)) }) {
-            Task { await workspace.loadProjects(on: machine) }
+            loadProjects(on: machine, in: workspace)
+        }
+    }
+
+    /// Machines whose projects are being read again for a bot's work, and those to read once more
+    /// after (one at a time, however many reads ask).
+    @ObservationIgnored private var loadingProjects: Set<String> = []
+    @ObservationIgnored private var loadProjectsAgain: Set<String> = []
+
+    /// `machine`'s projects read again, on their own, so the next read of a bot's work never waits
+    /// on them: one read under way, one more after it at most.
+    private func loadProjects(on machine: String, in workspace: Workspace) {
+        guard loadingProjects.insert(machine).inserted else {
+            loadProjectsAgain.insert(machine)
+            return
+        }
+        Task { [weak self, weak workspace] in
+            repeat {
+                self?.loadProjectsAgain.remove(machine)
+                await workspace?.loadProjects(on: machine)
+            } while self?.loadProjectsAgain.contains(machine) == true
+            self?.loadingProjects.remove(machine)
         }
     }
 

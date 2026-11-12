@@ -269,6 +269,9 @@ const reviewFollowers = new Set<() => void>();
 export const listAskReviews = (): AskReview[] => [...askReviews.values()];
 export const listSettledReviews = (): SettledReview[] => [...settledReviews.values()];
 
+/** Whether an ask Auto's reviewer took up is over (answered or gone): nothing to tell of it. */
+export const isOver = (id: unknown): boolean => typeof id === "string" && settledReviews.has(id);
+
 // The asks the reviewer is answering now, whose answer's event is its own; true once one came, which
 // is someone else's should its own answer not go.
 const replying = new Map<string, boolean>();
@@ -333,10 +336,11 @@ export function onAskReviewsChanged(changed: () => void): () => void {
 }
 
 /** `fresh`: as it's heard (or found waiting); otherwise one answered or gone meanwhile stays so,
- * never checked or left for you again, and only what the reviewer decided is noted. */
+ * never checked or left for you again, and only what the reviewer decided is noted. (One that
+ * just fell off the list, past two hundred, is listed again.) */
 function noteReview(id: string, session: string, state: AskReview["state"], call?: string, place?: string, fresh = false): void {
   const waiting = state === "checking" || state === "yours";
-  if (waiting && !fresh && !askReviews.has(id)) return;
+  if (waiting && !fresh && settledReviews.has(id)) return;
   askReviews.delete(id);
   settledReviews.delete(id);
   askReviews.set(id, { id, session, ...(call ? { call } : {}), state, at: Date.now() });
@@ -601,7 +605,9 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
   // as an ask it doesn't take up is.
   if (!permission) {
     if (askReviews.get(id)?.state === "checking") {
-      const own = await engineCall(source, "GET", `/api/session/${encodeURIComponent(sessionID)}/permission`, undefined, signal).catch(() => null);
+      // (Its session deleted meanwhile asks nothing.)
+      const own = await engineCall(source, "GET", `/api/session/${encodeURIComponent(sessionID)}/permission`, undefined, signal)
+        .catch(error => ((error as { status?: number } | null)?.status === 404 ? [] : null));
       const now = askReviews.get(id);
       if (now?.state !== "checking") return null;
       if (Array.isArray(own) && !own.some(each => isObject(each) && each.id === id)) settle([now], "gone");

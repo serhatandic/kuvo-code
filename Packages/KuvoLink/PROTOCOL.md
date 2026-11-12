@@ -5642,7 +5642,7 @@ while the sandbox is `on`) and pass a call to `POST kuvo/sandbox/tools` `{sessio
 making that call. The asks, the tool and the answers live in the box's long-running process, as the
 vault does (`run/vault.sock`); another passes them on.
 
-- `GET kuvo/sandbox/asks` → `{asks: [ask], restart?, reviews?}`, oldest first, with `restart: true` while
+- `GET kuvo/sandbox/asks` → `{asks: [ask], restart?, reviews?, settled?}`, oldest first, with `restart: true` while
   the box asks you to restart its agents (the state's `restart`); `kuvo/sandbox/asks/events`, NDJSON,
   the same at once and on every change. `reviews` (bridge 0.9.192): what Auto's reviewer did with
   the engine's asks to work outside a conversation's folder (`permission.asked`, action
@@ -5670,7 +5670,9 @@ vault does (`run/vault.sock`); another passes them on.
   `gone`; one it was about to check and finds no longer asked is `gone` too, never `yours`. A
   client never takes an ask listed in `settled` for one that waits, heard or not, so none is left
   with an ask that's over (a session's row saying it asks). Such a client holds nothing of its own
-  for an ask the box takes up: it tells you of one (a notification) once it's listed `yours`,
+  for an ask the box takes up but one it heard asked that the box hasn't listed yet (it lists each
+  as it hears it), which is yours, and told, should the box go quiet first, as above. It tells you
+  of one (a notification) once it's listed `yours`,
   reading it from its engine then (one its engine no longer asks isn't told; where its engine
   can't be read, it's told without its words), and lets go of one listed in `settled`. The
   reviewer's own answer isn't listed `answered`: the ask goes from `checking` to what it decided. The box's

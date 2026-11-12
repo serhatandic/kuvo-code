@@ -52,6 +52,8 @@ final class Sandboxes {
     /// Told when its box lists an ask its reviewer took up as over (answered or gone), so nothing
     /// says it waits on you, though its answer or its run's end wasn't heard here.
     @ObservationIgnored var onOver: ((String) -> Void)?
+    /// Told the asks a box lists now, each time its list changes.
+    @ObservationIgnored var onListed: ((Set<String>) -> Void)?
 
     /// A conversation's open asks, on its box.
     func asks(for session: String, on box: String) -> [SandboxAsk] {
@@ -277,6 +279,7 @@ final class Sandboxes {
         reviews[box] = now.isEmpty ? nil : now
         for (id, review) in now where review.state == .yours && before[id]?.state != .yours { onYours?(id) }
         for (id, review) in now where [.answered, .gone].contains(review.state) && before[id]?.state != review.state { onOver?(id) }
+        onListed?(Set(now.keys))
     }
 
     private func forgetReviews(of box: String) {

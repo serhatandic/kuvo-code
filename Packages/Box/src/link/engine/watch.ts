@@ -16,7 +16,7 @@ import { applyCompatibility, followSettingsFile, learnCompatibility } from "./co
 import { modelsDue, settleDueModels, WORK_ENDS } from "./models";
 import { goalHolds, settleGoalHolds } from "../work/goals";
 import { workWatcher } from "../work/wakes";
-import { reviewPermission, settleAskReview, settleRunReviews, takeUpWaitingAsks } from "../work/reviewing";
+import { isOver, reviewPermission, settleAskReview, settleRunReviews, takeUpWaitingAsks } from "../work/reviewing";
 import { forgetReviews } from "../work/reviewer";
 import { forgetDecided } from "../work/autopilot";
 import { backUpSession } from "../work/backups";
@@ -440,9 +440,11 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
           continue;
         }
         // (What it asks, once the box has looked: on Autopilot it may have gone ahead.)
+        // (Never one Auto's reviewer took up that's over meanwhile: stopped as it was checked, say.)
+        const over = () => event.type === "permission.asked" && isOver(event.data?.id);
         Promise.all([reviewed, event.type === "form.created" ? followed : null])
-          .then(([verdict]) => (verdict ? null : noticeFor(event, (route, folder) => engineGet(source, route, folder))))
-          .then(notice => notice && tell(notice))
+          .then(([verdict]) => (verdict || over() ? null : noticeFor(event, (route, folder) => engineGet(source, route, folder))))
+          .then(notice => notice && !over() && tell(notice))
           .catch(() => {});
       }
     } catch {}

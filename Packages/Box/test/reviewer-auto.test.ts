@@ -430,6 +430,11 @@ test("the box keeps each ask Auto's reviewer takes up as every client reads it: 
     }
     expect(stateOf(await listed(), "per_k9")).toBe("answered")
 
+    // Heard as its session was deleted, before the box could read it: gone, never yours.
+    await reviewing.reviewPermission(source, { type: "permission.asked", data: { id: "per_k10", sessionID: "ses_vanished", action: "external_directory" } }, undefined, undefined, "engine")
+    expect(stateOf(await listed(), "per_k10")).toBe("gone")
+    expect(reviewing.isOver("per_k10") && reviewing.isOver("per_k1") && !reviewing.isOver("per_k4")).toBe(true)
+
     // Two left for you, and the box starts again: one its engine still asks is listed again from
     // the start (checked, then yours), the one gone meanwhile isn't listed as waiting.
     conversation("ses_kept2", "askFirst", "Update the shared notes")
@@ -448,6 +453,77 @@ test("the box keeps each ask Auto's reviewer takes up as every client reads it: 
     stop()
   }
 })
+
+test("an ask Auto's reviewer was checking when you stopped its run reaches none of your phones (sandbox.reviews.settled)", async () => {
+  const { watchEvents } = await import("../src/link/engine/watch")
+  const told: { data?: Record<string, unknown> }[] = []
+  let send: (event: unknown) => void = () => {}
+  let following: () => void = () => {}
+  const followed = new Promise<void>(done => { following = done })
+  let answered: () => void = () => {}
+  const answerRefused = new Promise<void>(done => { answered = done })
+  let toldOther: () => void = () => {}
+  const otherTold = new Promise<void>(done => { toldOther = done })
+  // Its engine, with its events, but for what's said here: as the reviewer asks the model, you
+  // stop the run (its event comes, and the box lists the ask gone); then its answer can't go.
+  const engineAt = Bun.serve({
+    port: 0,
+    idleTimeout: 0,
+    async fetch(request) {
+      const url = new URL(request.url)
+      if (url.pathname === "/api/event") {
+        return new Response(new ReadableStream({ start(stream) {
+          send = event => stream.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`))
+          following()
+        } }), { headers: { "content-type": "text/event-stream" } })
+      }
+      if (request.method === "POST" && url.pathname === "/api/experimental/generate") {
+        const stopped = new Promise<void>(done => {
+          const stop = reviewing.onAskReviewsChanged(() => { if (reviewing.isOver("per_n1")) { stop(); done() } })
+        })
+        asking.ses_tell = []
+        send({ type: "session.execution.interrupted", data: { sessionID: "ses_tell", reason: "user" } })
+        await stopped
+      }
+      if (request.method === "POST" && url.pathname.endsWith("/permission/per_n1/reply")) {
+        answered()
+        return Response.json({ message: "That request isn't asked any more." }, { status: 404 })
+      }
+      return fetch(`http://127.0.0.1:${engine.port}${url.pathname}${url.search}`, { method: request.method, headers: request.headers, body: request.method === "GET" ? undefined : await request.text() })
+    },
+  })
+  writeFileSync(engineFile, JSON.stringify({ pid: process.pid, port: engineAt.port, password: "pw", version: "test" }))
+  const stop = new AbortController()
+  const asked = (id: string, session: string, action: string, resources: string[]) => ({ type: "permission.asked", data: { id, sessionID: session, action, resources } })
+  try {
+    conversation("ses_tell", "auto", "Update the shared notes")
+    conversation("ses_other", "askFirst", "Run the tests")
+    asking.ses_other = [{ id: "per_n2", action: "shell", resources: ["npm test"] }]
+    reply = () => '{"decision": "allow", "reason": "The notes the user asked for."}'
+    calling.ses_tell = [{ type: "tool", id: "call_per_n1", name: "edit", state: { input: { filePath: join(box, "notes", "per_n1.md") } } }]
+    asking.ses_tell = [{ id: "per_n1", action: "external_directory", resources: [join(box, "notes", "*")], source: { id: "call_per_n1", messageID: "msg_1" } }]
+    void watchEvents(() => ({ port: engineAt.port, password: "pw" }) as never, notice => {
+      told.push(notice as never)
+      if ((notice as { data?: { request?: unknown } }).data?.request === "per_n2") toldOther()
+      return true
+    }, stop.signal, () => {}, { work: "engine" })
+    await followed
+    const first = asked("per_n1", "ses_tell", "external_directory", [join(box, "notes", "*")])
+    send(first)
+    await answerRefused
+    // (The reviewer's answer couldn't go: what follows of that ask has come by now.)
+    await reviewing.reviewPermission({ port: engineAt.port, password: "pw" } as never, first).catch(() => null)
+    // Then another conversation asks you something: told, and nothing before it.
+    send(asked("per_n2", "ses_other", "shell", ["npm test"]))
+    await otherTold
+    expect(reviewing.isOver("per_n1")).toBe(true)
+    expect(told.map(each => each.data?.request)).toEqual(["per_n2"])
+  } finally {
+    stop.abort()
+    engineAt.stop(true)
+    writeFileSync(engineFile, JSON.stringify({ pid: process.pid, port: engine.port, password: "pw", version: "test" }))
+  }
+}, 30_000)
 
 // The engine doesn't answer for a moment (starting again, busy): `work` runs meanwhile.
 async function engineDown(work: () => Promise<void>) {

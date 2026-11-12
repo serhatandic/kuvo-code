@@ -240,6 +240,31 @@ import Testing
         #expect(workspace.asking["per_b2"] == nil)
     }
 
+    /// One heard asked in a conversation not open here whose box goes quiet before listing it (a
+    /// machine's read that fails): nothing will list it, so it's yours, and told; one it listed as
+    /// checked before that stays its box's (#575).
+    @Test func anAskItsBoxNeverListedIsYoursOnceItGoesQuiet() async throws {
+        let workspace = workspace
+        Sandboxes.shared.onYours = { workspace.reviewLeftForYou($0) }
+        Sandboxes.shared.onListed = { workspace.reviewsListed($0) }
+        defer {
+            Sandboxes.shared.forget(box)
+            Sandboxes.shared.onYours = nil
+            Sandboxes.shared.onListed = nil
+            engine.stop()
+        }
+        engine.list([StubEngine.session(id, title: "Notes", directory: "/tmp/kuvo-tests-reviews")], running: [id])
+        await workspace.refresh()
+        Sandboxes.shared.setLive(true, box)
+        workspace.handle(try engine.event("permission.asked", outside("per_q1")))
+        workspace.handle(try engine.event("permission.asked", outside("per_q2")))
+        Sandboxes.shared.take(reviews: [review("per_q2", .checking)], from: box)
+        #expect(!workspace.needsAttention(id), "its box's to say")
+        Sandboxes.shared.setLive(false, box)
+        #expect(workspace.asking["per_q1"] == id, "never listed, its box quiet: yours, and told")
+        #expect(workspace.asking["per_q2"] == nil, "being checked: a cut doesn't tell you of it")
+    }
+
     /// Back after a reconnect: one Auto was checking that its engine no longer asks (its run ended
     /// unheard) is gone, never yours later; one it still asks stays, and is told once it's yours.
     @Test func aResyncLetsGoOfWhatsNoLongerAsked() async throws {

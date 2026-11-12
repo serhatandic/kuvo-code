@@ -16709,6 +16709,7 @@ var askedOn = new Map;
 var reviewFollowers = new Set;
 var listAskReviews = () => [...askReviews.values()];
 var listSettledReviews = () => [...settledReviews.values()];
+var isOver = (id) => typeof id === "string" && settledReviews.has(id);
 var replying = new Map;
 var waitsOnReview = (review) => review?.state === "yours" || review?.state === "checking";
 function settle(reviews, state) {
@@ -16759,7 +16760,7 @@ function onAskReviewsChanged(changed) {
 }
 function noteReview(id, session, state, call, place, fresh = false) {
   const waiting = state === "checking" || state === "yours";
-  if (waiting && !fresh && !askReviews.has(id))
+  if (waiting && !fresh && settledReviews.has(id))
     return;
   askReviews.delete(id);
   settledReviews.delete(id);
@@ -16980,7 +16981,7 @@ async function answerPermission(source, id, sessionID, signal, found) {
   }
   if (!permission) {
     if (askReviews.get(id)?.state === "checking") {
-      const own = await call(source, "GET", `/api/session/${encodeURIComponent(sessionID)}/permission`, undefined, signal).catch(() => null);
+      const own = await call(source, "GET", `/api/session/${encodeURIComponent(sessionID)}/permission`, undefined, signal).catch((error) => error?.status === 404 ? [] : null);
       const now = askReviews.get(id);
       if (now?.state !== "checking")
         return null;
@@ -32857,7 +32858,8 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
             tell(notice);
           continue;
         }
-        Promise.all([reviewed, event.type === "form.created" ? followed : null]).then(([verdict]) => verdict ? null : noticeFor(event, (route, folder) => engineGet(source, route, folder))).then((notice) => notice && tell(notice)).catch(() => {});
+        const over = () => event.type === "permission.asked" && isOver(event.data?.id);
+        Promise.all([reviewed, event.type === "form.created" ? followed : null]).then(([verdict]) => verdict || over() ? null : noticeFor(event, (route, folder) => engineGet(source, route, folder))).then((notice) => notice && !over() && tell(notice)).catch(() => {});
       }
     } catch {}
     workGone?.();
@@ -37254,7 +37256,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "505bf2dbd334";
+var BRIDGE_VERSION = "669d02254cfe";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

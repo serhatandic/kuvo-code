@@ -58,9 +58,13 @@ final class Workspace {
     /// Permissions kept until their box says whether its reviewer takes them up: the old-box path,
     /// for a box from before `sandbox.reviews.settled`. A box with it keeps them itself, to their
     /// end (`Sandboxes.settles`), and nothing is kept here.
-    // COMPAT(0.8 sandbox-reviews-settled): `awaitingReview` and what keeps it (each marked "old-box
-    // path"), for a machine's box from before `sandbox.reviews.settled`. Goes 3 months after 0.8.0.
+    // (Old-box path: it and what keeps it, each marked so, go once no box before
+    // `sandbox.reviews.settled` is supported.)
     @ObservationIgnored private var awaitingReview: [String: PermissionRequest] = [:]
+    /// From a box that keeps them to their end, those heard asked that it hasn't listed yet (it lists
+    /// each as it hears it): until it does, one is yours should it go quiet first, as nothing would
+    /// list it, and told then.
+    @ObservationIgnored private var heardUnlisted: [String: PermissionRequest] = [:]
     /// Machines' sessions as last seen, kept across launches so their tabs wait for the machine
     /// to connect instead of closing.
     @ObservationIgnored private var remoteSessions: [String: RemoteSession] = {
@@ -2067,6 +2071,7 @@ final class Workspace {
         }
         // (Old-box path: what Auto's reviewer was checking here, kept for a box before `sandbox.reviews.settled`.)
         awaitingReview = awaitingReview.filter { !isMac($0.value.sessionID) }
+        heardUnlisted = heardUnlisted.filter { !isMac($0.value.sessionID) }
         running = running.filter { !isMac($0) }
         dropShellJobs(where: isMac)
         for model in models.values where isMac(model.id) { model.bridgeStopped() }
@@ -2089,6 +2094,7 @@ final class Workspace {
         }
         // (Old-box path: what Auto's reviewer was checking there.)
         awaitingReview = awaitingReview.filter { !isMacs($0.value.sessionID) }
+        heardUnlisted = heardUnlisted.filter { !isMacs($0.value.sessionID) }
         running = running.filter { !isMacs($0) }
         dropShellJobs(where: isMacs)
         for model in models.values where isMacs(model.id) { model.bridgeStopped() }
@@ -2447,6 +2453,7 @@ final class Workspace {
             }
             // (Old-box path: what Auto's reviewer was checking there.)
             awaitingReview = awaitingReview.filter { !gone.contains($0.value.sessionID) && sessionMachines[$0.value.sessionID] != machine }
+            heardUnlisted = heardUnlisted.filter { !gone.contains($0.value.sessionID) && sessionMachines[$0.value.sessionID] != machine }
             sessionMachines = sessionMachines.filter { $0.value != machine }
         }
     }
@@ -2705,6 +2712,7 @@ final class Workspace {
             asking = asking.filter { $0.value != id }
             // (Old-box path: what Auto's reviewer was checking in it.)
             awaitingReview = awaitingReview.filter { $0.value.sessionID != id && root(of: $0.value.sessionID) != id }
+            heardUnlisted = heardUnlisted.filter { $0.value.sessionID != id && root(of: $0.value.sessionID) != id }
             // Deleted while it worked: it isn't working any more (nor keeping the Mac awake).
             if running.contains(id) { running.remove(id) }
             shellJobs[id] = nil
@@ -2942,6 +2950,7 @@ final class Workspace {
             // And one Auto's reviewer was checking: gone too, never yours later (#425; the old-box
             // path, as a box with `sandbox.reviews.settled` lists it gone).
             for (request, permission) in awaitingReview where permission.sessionID == ended && request.hasPrefix("per_") { settled(request) }
+            for (request, permission) in heardUnlisted where permission.sessionID == ended && request.hasPrefix("per_") { heardUnlisted[request] = nil }
         default:
             break
         }
@@ -3024,6 +3033,7 @@ final class Workspace {
     private func settled(_ request: String) {
         asking[request] = nil
         awaitingReview[request] = nil
+        heardUnlisted[request] = nil
         if notifying.contains(request) { settledWhileNotifying.insert(request) }
         Notifier.shared.clear(request: request)
     }
@@ -3034,7 +3044,11 @@ final class Workspace {
     private func tellsOnceYours(_ request: PermissionRequest) -> Bool {
         let box = box(of: request)
         guard !Sandboxes.shared.isYours(request, on: box) else { return true }
-        if !Sandboxes.shared.settles(box) { awaitingReview[request.id] = request }
+        if !Sandboxes.shared.settles(box) {
+            awaitingReview[request.id] = request
+        } else if Sandboxes.shared.review(of: request.id) == nil {
+            heardUnlisted[request.id] = request
+        }
         return false
     }
 
@@ -3069,6 +3083,22 @@ final class Workspace {
             awaitingReview[id] = nil
             tellYours(request)
         }
+        // Heard asked and not listed by a box that keeps them, which went quiet first: yours.
+        guard id == nil else { return }
+        for (id, request) in heardUnlisted {
+            if Sandboxes.shared.review(of: id) != nil {
+                heardUnlisted[id] = nil
+            } else if Sandboxes.shared.isYours(request, on: box(of: request)) {
+                heardUnlisted[id] = nil
+                if asking[id] == nil { tellYours(request) }
+            }
+        }
+    }
+
+    /// The asks a box lists now: those heard asked are its word's from now on.
+    func reviewsListed(_ ids: Set<String>) {
+        guard !heardUnlisted.isEmpty else { return }
+        heardUnlisted = heardUnlisted.filter { !ids.contains($0.key) }
     }
 
     /// One its box's reviewer took up that its box lists as over (answered, or gone with its run
@@ -3082,9 +3112,17 @@ final class Workspace {
     /// An ask its box lists yours in a conversation not open here, told as its engine asks it now:
     /// one its engine no longer asks (answered, or gone with its run) is never told.
     private func tellLeftForYou(_ id: String, in session: String) async {
-        guard asking[id] == nil, let api = api(forSession: session) else { return }
+        // (Where it's known, its own engine or bridge; else its box's engine, never this Mac's.)
+        let known = self.session(session) != nil || bridgeSessions.contains(session) || sessionMachines[session] != nil
+        guard asking[id] == nil, let box = Sandboxes.shared.review(of: id)?.box,
+              let engine = known ? self.api(forSession: session) : box == BoxClient.mac ? self.api : machineAPI(box) else { return }
         let read: [PermissionRequest]?
-        do { read = try await api.permissions(session: session) } catch { read = nil }
+        do { read = try await engine.permissions(session: session) } catch let error as ServerError where error.status == 404 {
+            // (Its session gone there: it asks nothing.)
+            read = []
+        } catch {
+            read = nil
+        }
         guard asking[id] == nil, Sandboxes.shared.review(of: id)?.review.state == .yours else { return }
         guard let read else {
             // Its engine not read now: yours as its box says, told without its words (opened, the
