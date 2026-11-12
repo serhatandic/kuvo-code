@@ -20,7 +20,7 @@ import { peersOf, removedBoxes } from "../peers/known";
 import { awaySince } from "../peers/reach";
 import { readLink } from "../state";
 import { categories, categoryNamed, keepCategory } from "./categories";
-import { linkSession } from "./ops";
+import { intoNext, linkSession } from "./ops";
 import {
   allItems, changeQueues, FILE_NAME, filesOf, itemOf, MOST_FILE, MOST_ITEMS, noteHanded, OWNER, placeIn, Refusal, WORK_QUEUE, whoOf,
   type Book, type Item, type Who,
@@ -304,7 +304,7 @@ export async function handArrived(sender: MailSender, given: unknown, reply: (pa
       refused = `That queue has ${MOST_ITEMS} open items already.`;
       return;
     }
-    if (!categoryNamed(item.category)) item.category = "next";
+    if (!categoryNamed(item.category)) intoNext(item, item.category, now);
     item.owner = owner;
     item.order = placeIn(book.items(), item.category);
     delete item.removed;

@@ -167,7 +167,8 @@ struct OpenSessionButtonStyle: ButtonStyle {
 }
 
 /// The mark leading a line of an item's activity: who did it (a bot's face, you, a session), or
-/// what happened (handed on, done, deleted).
+/// what happened (work started, as an item in progress is marked, or stopped; moved or handed on,
+/// done, deleted).
 struct WorkActivityMark: View {
     let line: WorkQueue.Activity
     let size: CGFloat
@@ -176,7 +177,9 @@ struct WorkActivityMark: View {
     var body: some View {
         Group {
             switch line.kind {
-            case .handed: symbol("arrow.right.circle", Color.secondary)
+            case .started: WorkItemDot(.inProgress, size: size)
+            case .stopped: symbol("pause.circle", Color.secondary)
+            case .moved, .handed: symbol("arrow.right.circle", Color.secondary)
             case .done: symbol("checkmark.circle.fill", Color.green)
             case .deleted: symbol("trash.circle", Color.secondary)
             case .added, .note:

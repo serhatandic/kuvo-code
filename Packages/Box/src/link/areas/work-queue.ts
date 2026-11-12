@@ -213,13 +213,14 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
     const item = find(allItems());
     if (!item) {
       // One on another of your computers: as it last told it, without what only that computer
-      // keeps (its description, notes, files, links), which a client reads there.
+      // keeps (its description, notes, what happened to it, files, links), which a client reads
+      // there.
       let far = itemElsewhere(ref);
       if (far) {
         await readSeen([itemElsewhere(ref, readLink(), { asTold: true }) ?? far], GITHUB_WAIT);
         far = itemElsewhere({ id: far.id }) ?? far;
         const { handedFrom: _, ...summary } = far;
-        return yield* json(200, { item: { ...summary, body: "", notes: [], files: [], links: [], handed: [] } });
+        return yield* json(200, { item: { ...summary, body: "", notes: [], events: [], files: [], links: [], handed: [] } });
       }
       return yield* json(404, { message: "There's no such item." });
     }

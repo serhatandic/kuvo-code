@@ -38,6 +38,8 @@ export const MOST_NOTES = 200;
 export const MOST_FILE = 25_000_000;
 export const MOST_FILES = 50;
 export const MOST_LINKS = 50;
+/** What happened to an item, kept for its feed: the last this many. */
+export const MOST_EVENTS = 50;
 const MOST_HANDED = 20;
 
 /** Who did something: you, from a client, an agent (its conversation and name), or someone this box
@@ -57,6 +59,10 @@ export const whoWords = (who: Who): string => {
 export const byUser = (who: Who): boolean => (who as Record<string, unknown>).user === true;
 
 export interface Note { at: number; by: Who; text: string }
+/** Something that happened to an item, for its feed: a session `started` or `stopped` work on it
+ * (as its agent said), it `moved` (`from` and `to` its categories, `top` when it went to the top),
+ * it was `done`. A newer box may keep other kinds, kept as they came. */
+export interface ItemEvent { at: number; by: Who; kind: string; from?: string; to?: string; top?: true }
 export interface KeptFile { name: string; size: number; type: string; at: number }
 /** An outside link; `kind` (`pr`, `mr`, `issue`, `doc`) and `ref` kept for outside sources later. */
 export interface Link { url: string; title?: string; kind?: string; ref?: string }
@@ -84,6 +90,8 @@ export interface Item {
   order: number;
   progress?: { value?: number; note?: string };
   notes: Note[];
+  /** What happened to it, oldest first (none for an item from before the box kept them). */
+  events?: ItemEvent[];
   files: KeptFile[];
   links: Link[];
   sessions: Linked[];
@@ -135,13 +143,20 @@ export const whoOf = (given: unknown): Who | null => {
 export const FILE_NAME = /^(?!\.\.?$)[^/\\\0]{1,200}$/;
 
 // What this box knows of an item: every other field a newer box wrote is kept as it was.
-const KNOWN = new Set(["id", "number", "owner", "title", "body", "category", "order", "progress", "notes", "files", "links", "sessions", "handed", "handedBy", "wanted", "importedAs", "backGranted", "stays", "source", "handing", "created", "updated", "doneAt", "removed"]);
+const KNOWN = new Set(["id", "number", "owner", "title", "body", "category", "order", "progress", "notes", "events", "files", "links", "sessions", "handed", "handedBy", "wanted", "importedAs", "backGranted", "stays", "source", "handing", "created", "updated", "doneAt", "removed"]);
 
 const handingOf = (given: unknown): Handing | null => {
   if (!isObject(given) || typeof given.id !== "string" || !/^wqh_[A-Za-z0-9_-]{8,40}$/.test(given.id) || typeof given.to !== "string" || !OWNER.test(given.to)
     || typeof given.key !== "string" || typeof given.at !== "number") return null;
   return { id: given.id, to: given.to, key: given.key, name: typeof given.name === "string" ? given.name : "", at: given.at, by: whoOf(given.by) ?? { user: true }, ...(typeof given.sent === "number" ? { sent: given.sent } : {}), ...(typeof given.missing === "number" ? { missing: given.missing } : {}) };
 };
+
+/** An event as it was read (or came with an item from another box): when, its kind and who, of a
+ * size an event has; what else it says (a newer box's) kept as it came, for a client to read. */
+const MOST_EVENT = 2_000;
+const eventKept = (each: Record<string, unknown>): boolean =>
+  typeof each.at === "number" && Number.isFinite(each.at) && typeof each.kind === "string" && each.kind.length > 0 && each.kind.length <= 40 && whoOf(each.by) !== null
+  && JSON.stringify(each.by).length <= 500 && JSON.stringify(each).length <= MOST_EVENT;
 
 /** An item as it was read (or as a move brought it), checked: null for one that isn't. Fields this
  * box doesn't know (a newer box's) are kept as they are, so writing it here doesn't drop them. */
@@ -162,6 +177,7 @@ export function itemOf(given: unknown, owner: string): Item | null {
     order: typeof given.order === "number" && Number.isFinite(given.order) ? given.order : 0,
     ...(isObject(given.progress) ? { progress: { ...(typeof given.progress.value === "number" ? { value: given.progress.value } : {}), ...(typeof given.progress.note === "string" ? { note: given.progress.note } : {}) } } : {}),
     notes: list<Note>(given.notes, each => typeof each.at === "number" && typeof each.text === "string" && whoOf(each.by) !== null),
+    ...(Array.isArray(given.events) ? { events: list<ItemEvent>(given.events, eventKept).slice(-MOST_EVENTS) } : {}),
     files: list<KeptFile>(given.files, each => typeof each.name === "string" && FILE_NAME.test(each.name) && typeof each.size === "number"),
     links: list<Link>(given.links, each => typeof each.url === "string"),
     sessions: list<Linked>(given.sessions, each => typeof each.session === "string" && SESSION.test(each.session)),

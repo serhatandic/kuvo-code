@@ -3532,9 +3532,47 @@ kind: mac|machine, id?}`: the computer it's on, when that isn't the box asked, a
 it; `id`, a machine's name on this Mac, for a client to reach it), `created` and `updated` (`{at,
 by}`: `by` is `{user: true}`, `{session, name}`, or another shape kept as it came, such as an outside
 tracker's `{source, name?}`: a client shows its `name`, never takes it for you), `doneAt`, `removed`
-(`{at, by}`, deleted). Whole, it has `body` (Markdown), `notes` (`[{at, by, text}]`), `files`
-(`[{name, size, type, at}]`), `links` (`[{url, title?, kind?, ref?}]`) and `handed` (`[{from, to,
-at}]`, the last 20).
+(`{at, by}`, deleted). Whole, it has `body` (Markdown), `notes` (`[{at, by, text}]`), `events`
+(below), `files` (`[{name, size, type, at}]`), `links` (`[{url, title?, kind?, ref?}]`) and
+`handed` (`[{from, to, at}]`, the last 20).
+
+**What happened to it** (`events`, for its feed): `[{at, by, kind, from?, to?, top?}]`, oldest
+first, the last 50, kept with the item and going with it wherever it goes (a hand-off to another
+computer, a move), as its notes do. `by` is who did it, as for `created` (`{source: "kuvo", name:
+"Kuvo Code"}` for what the box did itself). A box keeps an event by its `at`, its `kind` (up to 40
+characters) and its `by`, each of a size an event has; what else it says is
+kept as it came, for a client to read (a newer box's `top: false` or `from: null` too).
+
+- `started`: a session's agent said it's working on it (`working: true`), unless it's at it already:
+  linked, with its own last word `started` since the item was last `done`. A session linked some other way (`sessions`, a
+  hand-off) says `started` the first time it says it's working; one linked before this box kept
+  events, or whose `started` went past the last 50, says it once more then. (A delete keeps no
+  event: a session linked again to an item brought back, that had said `started` before its
+  delete, says no new `started`.)
+- `stopped`: its link went while its own last word was `started`: it said it stopped (`working:
+  false`), or it was unlinked (`unlink`, or its oldest link dropped as it linked a fourth item), by
+  the same `by` as that `started` but where it said so itself. One that never said it started says
+  no `stopped`. Done and a delete unlink everyone and say no `stopped`: they say it. A session that
+  starts again within 2 minutes of its `stopped`, with nothing between (no other event, note or
+  hand-off), never stopped: the `stopped` goes.
+- `moved`: you or an agent moved it to another category, or to another place in its own (`from` and
+  `to`, category ids, the same for a reorder; `top` when it went to the top). Its place is among
+  every owner's items in that category on the box, as the All view lists them, so a move past
+  another queue's item is one; a move that leaves it where it was isn't. One's reorders in one
+  category within 10 minutes of each other, with nothing between (no other event, note or
+  hand-off), are one `moved`. (Neither fold reaches back in time: an event from a computer whose
+  clock was ahead is never folded into.) An item whose category the box doesn't keep (brought back after its
+  category was removed, or come by a hand-off or a move) goes to Next, a `moved` by the box. An
+  item added isn't moved, wherever it's put (`top`, `before`, `after`).
+- `done`: moved to Done (a move out of Done is `moved`).
+
+A hand-off is in `handed`, not here. A newer box may keep other kinds: a box keeps them as they
+came, a client leaves them out. An item from before this has none (`[]`), and keeps what happens
+from then on. A client puts `notes` and `events` (with `created`, `handed`, `doneAt` where no `done`
+was kept at it or since, and `removed`) in one feed, oldest first. At one moment: `created`; the
+box's events up to its last `started` at that moment, in its order (a move and the work it
+started); notes; hand-offs; its other events, in its order; `doneAt`; `removed`. A category an
+event names that the view doesn't (a custom one removed since) is "another category".
 
 **In progress** isn't a category: an item is in progress while a session linked to it is at work
 (its turn running, or what it left running), unless it's Done or deleted. A session is linked to
@@ -3571,7 +3609,7 @@ before (a linked item is its owner's to change). A client shows them first, as "
 - `GET kuvo/work-queue/items/<id or number>` → `{item}`, whole (an issue's `gh:` ref names it too,
   but its "/" can't go in a path through every client: a client asks by the `id` its chip has). `…/files/<name>` → its bytes. An
   item on another computer answers as that one told it, with `computer` and an empty `body`,
-  `notes`, `files`, `links` and `handed`: a client reads it whole, and its files, from that computer
+  `notes`, `events`, `files`, `links` and `handed`: a client reads it whole, and its files, from that computer
   (a machine by `computer.id`; a Mac, its own box).
 - `GET kuvo/work-queue/refs?refs=243,12`, or `POST kuvo/work-queue/refs {refs: [...],
   conversation?}` (a list, so a ref with a comma in it, an outside one later, goes whole;

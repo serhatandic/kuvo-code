@@ -8,6 +8,9 @@ import { any, bool, BYTES, list, map, nullable, number, object, oneOf, type Rout
 const WHO = oneOf(object({ user: bool }), object({ session: string, name: string }), map(any));
 const STAMP = object({ at: number, by: WHO });
 const NOTE = object({ at: number, by: WHO, text: string });
+/** Something that happened to an item: `started`, `stopped`, `moved` (`from`, `to`, `top`), `done`; a
+ * newer box may say other kinds, which a client leaves out. */
+const EVENT = object({ at: number, by: WHO, kind: string, "from?": string, "to?": string, "top?": bool });
 const PROGRESS = object({ "value?": number, "note?": string });
 
 /** An outside source's item (an issue or a pull request), named by its ref, never numbered; `name`
@@ -60,6 +63,7 @@ export const QUEUE_ITEM_WHOLE = object({
   ...QUEUE_ITEM.object,
   body: string,
   notes: list(NOTE),
+  events: list(EVENT),
   files: list(object({ name: string, size: number, type: string, at: number })),
   links: list(object({ url: string, "title?": string, "kind?": string, "ref?": string })),
   handed: list(object({ from: string, to: string, at: number })),

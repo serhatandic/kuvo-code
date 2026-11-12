@@ -151,8 +151,14 @@ public extension WorkQueue {
     struct Activity: Hashable, Sendable, Identifiable {
         public enum Kind: Hashable, Sendable {
             case added
+            /// A session started work on it.
+            case started
             case note
             case handed
+            /// A session stopped work on it.
+            case stopped
+            /// Moved to another category, or within its own.
+            case moved
             case done
             case deleted
         }
@@ -163,15 +169,18 @@ public extension WorkQueue {
         public var who: WorkWho?
         /// "You", "Kuvo Foreman", "Sign-in": who, as the line starts.
         public var whoWords: String
-        /// "added the item", "left a note", "handed it to Sign-in", "marked it done", "deleted it".
+        /// "added the item", "started work", "left a note", "handed it to Sign-in", "moved it to the
+        /// top of Next", "stopped work", "marked it done", "deleted it".
         public var what: String
         public var text: String?
         public var at: Double
         public var date: Date { Date(timeIntervalSince1970: at / 1000) }
     }
 
-    /// An item's activity, oldest first: who added it, its notes, its hand-offs, when it was done
-    /// and deleted; what the box keeps of it today.
+    /// An item's activity, oldest first: who added it, its notes and what the box kept of what
+    /// happened to it (work started and stopped, moves, done), its hand-offs, and when it was
+    /// deleted. Of lines at one moment, the box's events up to its last start then go first (in
+    /// its order), then notes and hand-offs, then its other events.
     static func activity(of detail: WorkItemDetail, in view: WorkQueueView) -> [Activity] {
         let item = detail.item
         var lines: [Activity] = []
@@ -182,7 +191,9 @@ public extension WorkQueue {
         for (index, handed) in detail.handed.enumerated() {
             lines.append(Activity(id: "handed-\(index)", kind: .handed, who: nil, whoWords: ownerWords(handed.from, in: view) ?? "A conversation", what: "handed it to \(ownerWords(handed.to, in: view) ?? "another conversation")", at: handed.at))
         }
-        if item.isDone, item.keptIn == nil, let doneAt = item.doneAt {
+        // (Done, from when it was done, where the box kept no word of it then: an item from before,
+        // or one done again on a box that keeps none.)
+        if item.isDone, item.keptIn == nil, let doneAt = item.doneAt, !detail.events.contains(where: { $0.kind == "done" && $0.at >= doneAt - 1000 }) {
             // (Who marked it done is kept only as its last change, when that's the same moment.)
             let by = abs(item.updated.at - doneAt) < 1000 ? item.updated.by : nil
             lines.append(Activity(id: "done", kind: .done, who: by, whoWords: by.map { capitalized($0.words) } ?? "", what: by == nil ? "Marked done" : "marked it done", at: doneAt))
@@ -190,8 +201,47 @@ public extension WorkQueue {
         if let removed = item.removed {
             lines.append(Activity(id: "deleted", kind: .deleted, who: removed.by, whoWords: capitalized(removed.by.words), what: "deleted it", at: removed.at))
         }
-        // (Oldest first; the same moment keeps the order above.)
-        return lines.enumerated().sorted { $0.element.at != $1.element.at ? $0.element.at < $1.element.at : $0.offset < $1.offset }.map(\.element)
+        // The box's events in the order it kept them (a move then the work it started).
+        let events = detail.events.enumerated().compactMap { index, event -> Activity? in
+            guard let (kind, what) = eventWords(event, in: view) else { return nil }
+            return Activity(id: "event-\(index)", kind: kind, who: event.by, whoWords: capitalized(event.by.words), what: what, at: event.at)
+        }
+        // At one moment: the item added; the box's events up to its last start then (the work and
+        // what came with it); notes; hand-offs; its other events; Done; deleted.
+        let lastStart = Dictionary(events.enumerated().filter { $0.element.kind == .started }.map { ($0.element.at, $0.offset) }) { max($0, $1) }
+        func place(_ line: Activity) -> Int {
+            switch line.kind {
+            case .added: 0
+            case .note: 2
+            case .handed: 3
+            case .deleted: 6
+            case .started, .stopped, .moved, .done: 5
+            }
+        }
+        let keyed = lines.enumerated().map { (line: $0.element, place: place($0.element), order: $0.offset) }
+            + events.enumerated().map { index, line in (line: line, place: index <= (lastStart[line.at] ?? -1) ? 1 : 4, order: index) }
+        return keyed.sorted { a, b in
+            if a.line.at != b.line.at { return a.line.at < b.line.at }
+            if a.place != b.place { return a.place < b.place }
+            return a.order < b.order
+        }.map(\.line)
+    }
+
+    /// What an event says it did ("started work", "moved it to the top of Next"), and its kind; nil
+    /// for a kind this client doesn't know (a newer box's).
+    private static func eventWords(_ event: WorkEvent, in view: WorkQueueView) -> (Activity.Kind, String)? {
+        switch event.kind {
+        case "started": return (.started, "started work")
+        case "stopped": return (.stopped, "stopped work")
+        case "done": return (.done, "marked it done")
+        case "moved":
+            guard let to = event.to else { return nil }
+            // (One the view doesn't name, a custom one removed since: never its id.)
+            let name = view.categories.contains { $0.id == to } || !to.hasPrefix("cat_") ? categoryName(to, in: view.categories) : "another category"
+            if event.top { return (.moved, "moved it to the top of \(name)") }
+            return (.moved, event.from == to ? "moved it within \(name)" : "moved it to \(name)")
+        default: return nil
+        }
     }
 
     private static func capitalized(_ words: String) -> String {
