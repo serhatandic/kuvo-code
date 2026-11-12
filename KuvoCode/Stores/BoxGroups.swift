@@ -928,6 +928,6 @@ extension OpenCodeAPI {
     }
 
     func giveBoxGroupSettings(_ settings: JSONValue) async throws {
-        _ = try await client.send(try client.request("PUT", "api/kuvo/groups/settings", body: settings), as: JSONValue.self)
+        _ = try await client.send(try client.request("PUT", "api/kuvo/groups/clock", body: settings), as: JSONValue.self)
     }
 }

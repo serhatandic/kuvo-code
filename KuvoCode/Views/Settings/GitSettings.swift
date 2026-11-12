@@ -10,7 +10,8 @@ struct GitSettings: View {
         ScrollingSettingsForm {
             Section {
                 SettingsTextRow {
-                    GitField(title: "Branch prefix", path: ["branch_prefix"], prompt: "kuvo/", unset: "kuvo/")
+                    // Emptied: no prefix at all.
+                    ConfigTextField(title: "Branch prefix", path: ["branch_prefix"], prompt: "None", unset: "kuvo/", bare: true)
                 } label: {
                     Text("Branch prefix")
                     Text("How a session’s own branch in a worktree starts.")
@@ -20,7 +21,8 @@ struct GitSettings: View {
             }
 
             Section {
-                GitField(title: "Instructions", path: ["commit_instructions"], prompt: "For example: Start with the area changed, like “ui: …”, and never mention tickets.", multiline: true)
+                ConfigTextField(title: "Instructions", path: ["commit_instructions"], prompt: "For example: Start with the area changed, like “ui: …”, and never mention tickets.", multiline: true, bare: true)
+                    .lineLimit(3...8)
             } header: {
                 Text("Commit Messages")
             } footer: {
@@ -29,7 +31,8 @@ struct GitSettings: View {
             }
 
             Section {
-                GitField(title: "Instructions", path: ["pull_request_instructions"], prompt: "For example: Add a Testing section, and link the issue if the branch names one.", multiline: true)
+                ConfigTextField(title: "Instructions", path: ["pull_request_instructions"], prompt: "For example: Add a Testing section, and link the issue if the branch names one.", multiline: true, bare: true)
+                    .lineLimit(3...8)
             } header: {
                 Text("Pull Requests")
             } footer: {
@@ -37,42 +40,6 @@ struct GitSettings: View {
                     .foregroundStyle(.secondary)
             }
         }
-    }
-}
-
-/// One of a computer's Git settings, saved when you press Return or leave the field. `unset`: what
-/// it shows when the computer has none (the branch prefix's `kuvo/`); emptied, it's kept empty (no
-/// prefix). Without one, an emptied field removes the setting (no instructions).
-private struct GitField: View {
-    let title: String
-    let path: [String]
-    let prompt: String
-    var unset: String?
-    /// A few lines of instructions for the model.
-    var multiline = false
-    @Environment(AppModel.self) private var app
-    @Environment(\.settingsBox) private var box
-    @State private var field = SettingField()
-    @FocusState private var isFocused: Bool
-
-    private var config: EngineConfig { app.config(for: box) }
-
-    var body: some View {
-        let stored = config.value(at: path)?.string ?? unset ?? ""
-        TextField(title, text: $field.text, prompt: Text(prompt), axis: multiline ? .vertical : .horizontal)
-            .labelsHidden()
-            .lineLimit(multiline ? 3...8 : 1...1)
-            .focused($isFocused)
-            .onSubmit(commit)
-            .onChange(of: isFocused) { if !isFocused { commit() } }
-            .onAppear { field.load(stored) }
-            .onChange(of: stored) { if !isFocused { field.load(stored) } }
-            .onDisappear(perform: commit)
-    }
-
-    private func commit() {
-        guard let value = field.edit(trimming: true) else { return }
-        config.set(value.isEmpty && unset == nil ? nil : .string(value), at: path)
     }
 }
 
