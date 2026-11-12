@@ -328,9 +328,11 @@ final class Bots {
     /// A box's bots as it keeps them, from now on (`kuvo/bots/events`): one made, changed or deleted,
     /// by an agent, a phone or here, shows as it happens. This Mac's always; a machine's while it's
     /// connected (its connection ends this).
-    func follow(_ box: String = BoxClient.mac) async {
+    func follow(_ box: String = BoxClient.thisMac) async {
         struct Line: Decodable { var bots: [ListedBot] }
-        let onThisMac = box == BoxClient.mac
+        // (Followed as it changes on the app's own box, which streams; read now and then on any
+        // other, the one attached in place too, which answers once a read.)
+        let onThisMac = BoxClient.streams(box)
         // (A machine's box from before it had them: asked again only now and then.)
         var older = false
         while !Task.isCancelled {
@@ -405,7 +407,7 @@ final class Bots {
     /// The box `machine` (nil: this Mac) keeps its bots on, while it can be asked.
     private func box(_ machine: String?) throws -> BoxClient {
         if let machine, !canReach(machine) { throw Failure.notConnected(placeName(machine)) }
-        guard let client = client(machine ?? BoxClient.mac) else { throw CancellationError() }
+        guard let client = client(machine ?? BoxClient.thisMac) else { throw CancellationError() }
         return client
     }
 
@@ -607,34 +609,12 @@ final class Bots {
         forgetHere(bot)
     }
 
-    /// A bot on this Mac keeping its job with its set_job tool (`BrowserTools.job`): its box keeps it,
-    /// and tells it. What it answers is what the bot hears.
-    func setJob(_ arguments: [String: Any], caller: String?) async -> (text: String, isError: Bool) {
-        guard let shown = bot(forSession: caller), let bot = known.first(where: { $0.id == shown.id }) else {
-            return ("Only a bot keeps a job, and this conversation isn't one.", true)
-        }
-        let clear = arguments["clear"] as? Bool == true
-        let inputLine = (arguments["summary"] ?? arguments["job"]) as? String
-        let details = arguments["details"] as? String
-        guard clear || (inputLine?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false && details != nil) else {
-            return ("Provide a non-empty summary and details, or clear: true to clear your job.", true)
-        }
-        let job: JSONValue = .object(["line": .string(clear ? "" : inputLine!), "details": .string(clear ? "" : details!)])
-        do {
-            try await send(["job": job], to: bot)
-        } catch {
-            return ("Couldn't keep it: \(error.localizedDescription)", true)
-        }
-        let line = self.bot(bot.id)?.job ?? ""
-        return (line.isEmpty ? "Kept: you have no job now." : "Kept. Kuvo Code shows \"\(line)\" under your name.", false)
-    }
-
     /// Your personalities changed: this Mac's box tells its bots with them what they are now, at
     /// their next run (each machine's has your personalities too).
     func personalitiesChanged() {
         writeMacKit()
         // Told at once, as before, rather than at their next run.
-        guard let client = client(BoxClient.mac) else { return }
+        guard let client = client(BoxClient.thisMac) else { return }
         Task { _ = try? await client.send("POST", "kuvo/bots/retell") }
     }
 

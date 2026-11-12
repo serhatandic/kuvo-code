@@ -22,7 +22,8 @@ export type GitSetting = keyof typeof GIT_SETTINGS;
 export const DEFAULT_BRANCH_PREFIX = "kuvo/";
 
 /** What `box/git.json` keeps: whether a Mac's settings from before moved here (`moved`). (A box
- * from before kept the branch prefix a client last gave there too, no longer read.) */
+ * from before kept the branch prefix a client last gave there too, `branchPrefix`, taken into the
+ * settings once: `keepOldBranchPrefix`.) */
 function readGitFile(file = BRANCH_PREFIX_FILE): Record<string, unknown> {
   try {
     const kept: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -81,13 +82,40 @@ export function pullRequestPrompt(summary: string, file = CONFIG_FILE): string {
 ${summary}`, instructionsHere("pullRequest", file));
 }
 
+// COMPAT(0.7 box-branch-prefix): the branch prefix a box from before kept in `box/git.json`, taken into its settings once. Goes 3 months after 0.8.0.
+/** With the settings' lock held: the branch prefix a box from before kept (the one a client last
+ * made a worktree with, so a phone's started as yours did) made Settings › Git's here where it has
+ * none, then gone from `box/git.json`, so one you clear here later stays cleared. A problem with the
+ * settings, or one not written, leaves it there for next time. */
+function takeOldBranchPrefix(file: string, gitFile: string): void {
+  const kept = readGitFile(gitFile);
+  if (!("branchPrefix" in kept)) return;
+  const { settings, problem } = readSettings(file);
+  if (problem) return;
+  if (typeof kept.branchPrefix === "string" && valueAt(settings, [...GIT_SETTINGS.branchPrefix]) === undefined
+    && writeSettings(settings!, [{ path: [...GIT_SETTINGS.branchPrefix], value: kept.branchPrefix }], file).status !== 200) return;
+  const { branchPrefix: _taken, ...rest } = kept;
+  writePrivate(gitFile, JSON.stringify(rest));
+}
+
+/** As a machine's box starts, or its settings become its own (`box adopt`): the branch prefix a box
+ * from before kept, taken into its settings, once they are its own (else when a Mac moves its
+ * Settings › Git here, `moveGitSettings`). */
+export function keepOldBranchPrefix(file = CONFIG_FILE, lock = CONFIG_LOCK, gitFile = BRANCH_PREFIX_FILE): void {
+  if (!("branchPrefix" in readGitFile(gitFile)) || !ownsSettings()) return;
+  try {
+    locked(lock, () => takeOldBranchPrefix(file, gitFile));
+  } catch {}
+}
+
 /** What `kuvo/git/settings/move` answers: whether this box took them now, and its settings as they are. */
 export type Moved = { status: 200; moved: boolean } | { status: 400 | 409 | 500; message: string };
 
 // COMPAT(0.7 mac-git-settings): a Mac's Settings › Git from before boxes kept their own, moved to each box once. Goes 3 months after 0.8.0.
 /** A Mac's Settings › Git from before, given to this box: each kept where this box has none of its
- * own yet, the first time only (`box/git.json`'s `moved`), so a later one from another Mac, or
- * after you cleared one here, changes nothing. */
+ * own yet, the first time a Mac offers any (`box/git.json`'s `moved`), so a later one from another
+ * Mac, or after you cleared one here, changes nothing. A Mac with nothing to give (no prefix, only
+ * empty instructions) leaves it to a later one. */
 export function moveGitSettings(given: unknown, file = CONFIG_FILE, lock = CONFIG_LOCK, gitFile = BRANCH_PREFIX_FILE): Moved {
   if (!isObject(given)) return { status: 400, message: "Send {branchPrefix?, commitInstructions?, pullRequestInstructions?}." };
   const offered = (Object.keys(GIT_SETTINGS) as GitSetting[]).filter(key => key in given && given[key] !== null);
@@ -96,15 +124,23 @@ export function moveGitSettings(given: unknown, file = CONFIG_FILE, lock = CONFI
   return locked(lock, () => {
     const { settings, problem } = readSettings(file);
     if (problem) return { status: 409, message: `The engine's settings file can't be changed from here: ${problem}` };
-    if (readGitFile(gitFile).moved === true) return { status: 200, moved: false };
-    const changes: SettingChange[] = offered
-      .filter(key => valueAt(settings, [...GIT_SETTINGS[key]]) === undefined)
-      .map(key => ({ path: [...GIT_SETTINGS[key]], value: key === "branchPrefix" ? given[key] : (given[key] as string).trim() }))
-      // (No instructions is what a box without any has already.)
-      .filter(change => change.value !== "" || change.path[0] === GIT_SETTINGS.branchPrefix[0]);
-    const written = changes.length ? writeSettings(settings!, changes, file) : null;
-    if (written && written.status !== 200) return { status: written.status, message: written.message };
-    keepInGitFile({ moved: true }, gitFile);
+    // What it gives: a branch prefix (an empty one too, as no prefix is one), and instructions that
+    // aren't empty (no instructions is what a box without any has already).
+    const real = offered
+      .map(key => ({ key, value: key === "branchPrefix" ? given[key] as string : (given[key] as string).trim() }))
+      .filter(each => each.value !== "" || each.key === "branchPrefix");
+    const movedBefore = readGitFile(gitFile).moved === true;
+    const changes: SettingChange[] = movedBefore ? [] : real
+      .filter(each => valueAt(settings, [...GIT_SETTINGS[each.key]]) === undefined)
+      .map(each => ({ path: [...GIT_SETTINGS[each.key]], value: each.value }));
+    if (changes.length) {
+      const written = writeSettings(settings!, changes, file);
+      if (written.status !== 200) return { status: written.status, message: written.message };
+    }
+    if (!movedBefore && real.length) keepInGitFile({ moved: true }, gitFile);
+    // Then this box's own from before, where the Mac gave no prefix (as it would have taken it as
+    // it started had its settings been its own then).
+    takeOldBranchPrefix(file, gitFile);
     return { status: 200, moved: changes.length > 0 };
   });
 }

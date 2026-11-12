@@ -54,19 +54,23 @@ extension AppModel {
     /// What it's called: this Mac's name, or the machine's.
     func name(of box: SidebarBox) -> String {
         guard let machine = box.machine else { return PhoneLink.computerName }
-        return machines.list.first { $0.id == machine }?.name ?? machine
+        return machines.list.first { $0.id == machine }?.name ?? Machine(destination: machine).name
     }
 
-    /// This Mac, then your machines.
+    /// This Mac, then your machines. Attached to the box already here (#183), this Mac is that box
+    /// (first of the machines), and there's no box of the app's own.
     var boxes: [SidebarBox] {
-        [.mac] + machines.list.map { .machine($0.id) }
+        (attached == nil ? [.mac] : []) + machines.list.map { .machine($0.id) }
     }
+
+    /// This Mac's box: the app's own, or the one attached in place.
+    var thisMacsBox: SidebarBox { attached == nil ? .mac : .attached }
 
     /// The box whose page the sidebar shows, while it's still there: where New Bot and New Group
     /// Chat start.
     var boxInView: SidebarBox {
         let picked = SidebarBox(id: UserDefaults.standard.string(forKey: SidebarBox.inViewKey) ?? "mac")
-        return boxes.contains(picked) ? picked : .mac
+        return boxes.contains(picked) ? picked : thisMacsBox
     }
 
     /// Coding agents on `box` (while its agents are up) with a newer version that their installer
@@ -104,5 +108,6 @@ extension AppModel {
 
 extension EnvironmentValues {
     /// The computer a page of Settings is about: this Mac, or a machine, with its own settings.
+    /// (Settings gives each page its own; a page shown elsewhere is given `thisMacsBox`.)
     @Entry var settingsBox: SidebarBox = .mac
 }

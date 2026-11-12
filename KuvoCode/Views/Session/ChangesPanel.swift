@@ -462,7 +462,7 @@ private struct CommitForm: View {
     /// The box the project is on, and the folder as it names it.
     private var box: (client: BoxClient, path: String) {
         if let (machine, path) = RemoteFolder.parse(changes.directory) { return (app.box(machine), path) }
-        return (app.box(BoxClient.mac), changes.directory)
+        return (app.box(BoxClient.thisMac), changes.directory)
     }
 
     private var place: String {
@@ -790,7 +790,7 @@ private struct PullRequestForm: View {
     /// The box the project is on, and the folder as it names it.
     private var box: (client: BoxClient, path: String) {
         if let (machine, path) = RemoteFolder.parse(directory) { return (app.box(machine), path) }
-        return (app.box(BoxClient.mac), directory)
+        return (app.box(BoxClient.thisMac), directory)
     }
 
     private var place: String {

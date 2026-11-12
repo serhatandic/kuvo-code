@@ -141,10 +141,11 @@ final class AgentMail {
     /// A tool's call from one of this Mac's conversations (`caller`; nil from outside one): this
     /// Mac's box answers it (`kuvo/agent-tools`). Stopped (its turn ended), the box stops waiting
     /// for an answer, which then reaches the conversation as a message.
-    func call(_ name: String, arguments: [String: Any], caller: String?) async -> (text: String, isError: Bool) {
+    func call(_ name: String, arguments: [String: Any], caller: String?, inView: Bool? = nil) async -> (text: String, isError: Bool) {
         guard let client = box() else { return ("Kuvo Code isn't ready yet.", true) }
         var body: [String: Any] = ["name": name, "arguments": arguments]
         if let caller { body["session"] = caller }
+        if let inView { body["inView"] = inView }
         guard JSONSerialization.isValidJSONObject(body), let data = try? JSONSerialization.data(withJSONObject: body) else {
             return ("Those arguments couldn't be read.", true)
         }
@@ -158,21 +159,48 @@ final class AgentMail {
         }
         let said = try? JSONDecoder().decode(Said.self, from: answer.body)
         guard answer.status == 200, let text = said?.text else {
+            // An older box, still running a session's work after an update (the keeper makes way
+            // once it's over), doesn't answer Kuvo Code's own tools yet: this app's own box script
+            // answers them meanwhile (`OwnToolsOnce`), or, where it can't run, the agent's told why.
+            // (Not while this app is attached to a box in another folder, whose folders it isn't.)
+            if [400, 404].contains(answer.status), Self.ownTools.contains(name), app?.attached == nil, await !boxAnswersOwnTools(client) {
+                let said = await OwnToolsOnce.call(name, body: data, environment: app?.shellEnvironment ?? ProcessInfo.processInfo.environment) ?? (Self.updating, true)
+                if !said.isError { track(name, arguments, caller: caller) }
+                return said
+            }
             return (said?.message ?? "Kuvo Code’s background service on this Mac didn’t answer. Try again in a moment.", true)
         }
         let failed = said?.isError ?? false
-        if !failed { track(name, arguments) }
+        if !failed { track(name, arguments, caller: caller) }
         // A session started: there as you name it.
         if !failed, name == "start_session" { Task { await refresh() } }
         return (text, failed)
     }
 
-    private func track(_ name: String, _ arguments: [String: Any]) {
+    // COMPAT(beta.1 agent-tools-own): hands Kuvo Code's own tools to `OwnToolsOnce` while an older box after an update answers them 400. Goes when 0.8.0 ships.
+    /// The tools every box answers since it says `agent-tools.own` (PROTOCOL.md, "Agents' tools").
+    static let ownTools: Set<String> = ["schedule_wake_up", "watch_for_change", "list_wake_ups", "cancel_wake_up", "set_job", "show_in_panel", "show_file", "mark_final", "show_widget"]
+    /// What an agent hears from one of them while an older box runs on after an update and this
+    /// app's own box script can't answer it either (no engine to run it yet).
+    static let updating = "Kuvo Code on this Mac is finishing an update, and its background service can't do this until the work that's running ends. Try again later; if you work on your own, say what's left in your reply."
+
+    /// Whether this Mac's box says it answers them.
+    private func boxAnswersOwnTools(_ client: BoxClient) async -> Bool {
+        struct Info: Decodable { var features: [String]? }
+        guard let info = try? await client.value(Info.self, "GET", "kuvo/info") else { return true }
+        return info.features?.contains("agent-tools.own") == true
+    }
+
+    private func track(_ name: String, _ arguments: [String: Any], caller: String?) {
         let waits = (arguments["wait"] as? NSNumber)?.boolValue ?? false
         switch name {
         case "send_message": Analytics.shared.track("agent_message_sent", ["waits": waits])
         case "read_conversation": Analytics.shared.track("agent_conversation_read", ["query": (arguments["query"] as? String)?.isEmpty == false])
         case "start_session": Analytics.shared.track("agent_started_session", ["waits": waits])
+        case "schedule_wake_up", "watch_for_change":
+            let isBot = caller.flatMap { caller in app?.bots.bot(forSession: app?.workspace.root(of: caller) ?? caller) } != nil
+            let repeats = name == "watch_for_change" || (arguments["every"] as? String)?.isEmpty == false
+            Analytics.shared.track(isBot ? "bot_wake_added" : "session_wake_added", ["repeats": repeats, "by": "agent"])
         default: break
         }
     }

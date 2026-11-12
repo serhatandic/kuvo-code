@@ -41,11 +41,15 @@ extension PhoneLink {
             return (200, Self.json(["machine": Self.machineEntry(engine)]))
         // Make This Mac Its Home: this Mac runs it from now on, in place of the Mac that does.
         case ("POST", "home", 4):
+            // (This Mac's own box, attached in place, is here already.)
+            guard !machine.isThisMac else { return (409, Self.message("\(machine.name) is this Mac’s own box.")) }
             guard !engine.isReady || engine.isAnotherMacsEngine else { return (409, Self.message("This Mac runs \(machine.name) already.")) }
             if let why = await app.makeHome(engine) { return (409, Self.message(why)) }
             return (200, Self.json(["machine": Self.machineEntry(engine)]))
         case ("POST", "same-as", 4):
             guard let other = (body["other"] as? String).flatMap({ app.machines.engine($0) }), other.machine.id != machine.id else { return (404, Data()) }
+            // (This Mac's own box, attached in place, is this computer: never another's address.)
+            guard !machine.isThisMac, !other.machine.isThisMac else { return (409, Self.message("\(machine.isThisMac ? machine.name : other.machine.name) is this Mac’s own box.")) }
             guard app.machines.sameComputer(machine.id, as: other.machine.id) else {
                 return (409, Self.message("\(machine.name) and \(other.machine.name) are two computers: each told Kuvo Code its own name when it connected, and they differ, so they stay two machines."))
             }

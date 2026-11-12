@@ -1036,7 +1036,7 @@ struct UserBubble: View {
         let names = part.contains(AgentReferences.trigger) || (!folders.isEmpty && part.contains("@"))
         let marks = part.contains("http") || part.contains("www.") || part.contains("[Image ")
         // The Work Queue items it names, as chips once the box says what they are.
-        let refs = part.contains("#") ? app.workQueues.refs(in: part, box: workChipQueue?.box ?? BoxClient.mac, owner: workChipQueue?.owner) : [:]
+        let refs = part.contains("#") ? app.workQueues.refs(in: part, box: workChipQueue?.box ?? BoxClient.thisMac, owner: workChipQueue?.owner) : [:]
         guard names || marks || !refs.isEmpty else { return own }
         var text = own ?? AttributedString(part)
         if names { MessageMentions.apply(to: &text, agents: agents, folders: folders) }
@@ -1408,7 +1408,7 @@ private struct MarkdownPiece: View, Equatable {
     private var textKit: some View {
         // Its ```mermaid blocks drawn as diagrams, as in a Markdown file's preview.
         // The Work Queue items it names, drawn as their chips once the box says what they are.
-        let refs = text.contains("#") ? app.workQueues.refs(in: text, box: workChipQueue?.box ?? BoxClient.mac, owner: workChipQueue?.owner) : [:]
+        let refs = text.contains("#") ? app.workQueues.refs(in: text, box: workChipQueue?.box ?? BoxClient.thisMac, owner: workChipQueue?.owner) : [:]
         return ReplyView(markdown: text, parser: FileLinkingParser(folders: folders, mentions: mentions, agents: agents, highlight: highlight, refs: refs), diagrams: true) { url in
             // A file opens in the side panel, a named agent its conversation, a Work Queue item
             // the Work Queue; web links in the browser.
