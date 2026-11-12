@@ -116,3 +116,18 @@ test("a worktree's session gets its project's folders; one in the project by ano
     keep([docs])
   }
 })
+
+test("a folder Settings › Permissions names stays allowed when a session's project folders are given (Auto allows what it asks about)", async () => {
+  const { giveFolders } = await import("../src/link/areas/projects")
+  const outside = join(home, "work", "shared")
+  const settings = join(home, "box", "opencode.json")
+  writeFileSync(settings, JSON.stringify({ permissions: [{ action: "external_directory", resource: join(outside, "*"), effect: "ask" }] }))
+  const allowsOutside = { action: "external_directory", resource: join(outside, "*"), effect: "allow" }
+  sessions.ses_auto = { id: "ses_auto", location: { directory: shop }, permissions: [asks, allowsOutside], metadata: {} }
+  try {
+    expect(await giveFolders(target, "ses_auto", { whenChanged: true })).toBe(true)
+    expect(sessions.ses_auto!.permissions).toEqual([asks, allowsOutside, docsRule])
+  } finally {
+    rmSync(settings, { force: true })
+  }
+})

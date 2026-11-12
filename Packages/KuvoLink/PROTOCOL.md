@@ -4733,7 +4733,8 @@ while a box is away goes there when it's back.
   `kuvo.project-folders` naming them, or neither once there are none: as it's started or moved
   there, as a client opens it (`POST kuvo/sessions/<id>/folders` → `200 {session}`, 404 for none
   here, 502 where the engine didn't take it: so it has them before you write to it), and as each of
-  its runs starts where they changed since (for one nobody opens: a wake-up's, a letter's). Each is
+  its runs starts where they changed since (for one nobody opens: a wake-up's, a letter's; that run's
+  first step may go without them). Each is
   written only where they changed (a write makes a session the newest). One filed under a project
   that's the same place by another name (`kuvo.filed`, a link) has that project's. A folder rule
   Settings › Permissions names stays. Not a subagent's, nor a hidden run's (a group chat's seat, an
