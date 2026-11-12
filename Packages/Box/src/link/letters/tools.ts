@@ -281,6 +281,8 @@ async function readOne(args: Record<string, unknown>, caller: string | null, all
  * from outside one): what it says back. */
 export async function agentTool(name: AgentToolName, args: Record<string, unknown>, session: string | null, place: ToolPlace): Promise<ToolAnswer> {
   const targets = targetsOf(place);
+  // Showing a file or a widget needs nothing of the conversation: said at once, whatever its engine.
+  if (name === "show_file" || name === "mark_final" || name === "show_widget") return showTool(name, args, { session, own: null, root: null }, place.inView);
   // A subagent writes, reads and starts sessions as its conversation: its name, its folder, its
   // approval, where answers go.
   const root = await rootOf(session, targets);
@@ -295,15 +297,12 @@ export async function agentTool(name: AgentToolName, args: Record<string, unknow
     case "list_wake_ups":
     case "cancel_wake_up":
     case "set_job":
-    case "show_in_panel":
-    case "show_file":
-    case "mark_final":
-    case "show_widget": {
+    case "show_in_panel": {
       const own = session === root?.session ? root.place : session ? await placeOfSession(session, targets).catch(() => null) : null;
       const calling = { session, own, root };
       if (name === "set_job") return setJobTool(args, calling, place.readEngine, place.bridge);
-      if (name === "show_in_panel" || name === "show_file" || name === "mark_final" || name === "show_widget") return showTool(name, args, calling, place.inView);
-      return wakeTool(name, args, calling, place.readEngine, place.bridge);
+      if (name === "show_in_panel") return showTool(name, args, calling, place.inView);
+      return wakeTool(name, args, calling, place.bridge());
     }
   }
   const all = await everyone(place);

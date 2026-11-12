@@ -47,6 +47,7 @@ const sessions = new Map([
   ["ses_oldasks", { id: "ses_oldasks", title: "Old", location: { directory: project }, permissions: [shellAsks] }],
   ["ses_asks", { id: "ses_asks", title: "Asks", location: { directory: project }, permissions: [shellAsks, { action: "kuvo-browser_watch_for_change", resource: "*", effect: "ask" }] }],
   ["ses_away", { id: "ses_away", title: "Put away", location: { directory: project }, metadata: { "kuvo.archived": true } }],
+  ["ses_quiet", { id: "ses_quiet", title: "Quiet", location: { directory: project } }],
   ["ses_seat", { id: "ses_seat", title: "Seat", location: { directory: project }, metadata: { kuvo: { seat: "grp_1" } } }],
 ]);
 const told = [];
@@ -155,13 +156,13 @@ test("what a wake-up is missing, or a conversation that can't keep one, comes ba
     { text: "Not from a group chat: a chat can meet on a schedule instead (its editor's Meets on a Schedule).", isError: true });
   assert.deepEqual(await tool("schedule_wake_up", { when: "+2h", note: "Later." }, "ses_nobody"), { text: "Kuvo Code doesn't know this conversation yet. Try again in a moment.", isError: true });
   // Nothing kept yet: none to cancel, and none listed (no folder made for either).
-  assert.deepEqual(await tool("cancel_wake_up", { id: "abc" }, "ses_asks"), { text: 'No wake-up "abc". See list_wake_ups.', isError: true });
-  assert.deepEqual(await tool("list_wake_ups", {}, "ses_asks"), { text: "No wake-ups scheduled.", isError: false });
-  assert.equal(fs.existsSync(sessionFolder("ses_asks")), false);
-  // kuvo-wake's own refusal, in its words.
-  const early = await tool("schedule_wake_up", { when: "yesterday-ish", note: "Later." }, "ses_work");
+  assert.deepEqual(await tool("cancel_wake_up", { id: "abc" }, "ses_quiet"), { text: 'No wake-up "abc". See list_wake_ups.', isError: true });
+  assert.deepEqual(await tool("list_wake_ups", {}, "ses_quiet"), { text: "No wake-ups scheduled.", isError: false });
+  // kuvo-wake's own refusal, in its words, before anything's kept.
+  const early = await tool("schedule_wake_up", { when: "yesterday-ish", note: "Later." }, "ses_quiet");
   assert.equal(early.isError, true);
   assert.match(early.text, /Couldn't read the time/);
+  assert.equal(fs.existsSync(sessionFolder("ses_quiet")), false, "no folder for nothing kept");
 });
 
 test("an archived conversation's wake-up waits with it, held as archiving holds it", async () => {

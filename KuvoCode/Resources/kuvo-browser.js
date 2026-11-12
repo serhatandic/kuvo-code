@@ -2130,6 +2130,8 @@ const text = (value, isError = false) => ({ content: [{ type: "text", text: valu
 // (which Kuvo Code then shows from the call).
 const MAIL_TOOLS = new Set(["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "compact_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal", "notify_user", "plan_limits",
   "schedule_wake_up", "watch_for_change", "list_wake_ups", "cancel_wake_up", "set_job", "show_in_panel", "show_file", "mark_final", "show_widget"]);
+// Those that change what's kept, which the call stopping doesn't cut off.
+const KEPT_WHOLE = new Set(["schedule_wake_up", "watch_for_change", "cancel_wake_up", "set_job"]);
 // Kuvo Code's own tools (agents writing to each other, wake-ups, a bot's job, showing things): this
 // machine's box answers them, as every box does (`POST kuvo/agent-tools`), so they're the same on all
 // your computers. A call that waits for an answer holds up to eleven minutes; stopped, the
@@ -2829,7 +2831,9 @@ async function mcp() {
           return;
         }
         if (MAIL_TOOLS.has(params.name)) {
-          mail(params.name, params.arguments || {}, call.session, () => call.cancelled).then(reply, (error) => reply(text(error instanceof ToolError ? error.message : String(error), true)));
+          // (A wake-up or a job is never stopped half way: what's kept would be half of it.)
+          const stops = !KEPT_WHOLE.has(params.name);
+          mail(params.name, params.arguments || {}, call.session, () => stops && call.cancelled).then(reply, (error) => reply(text(error instanceof ToolError ? error.message : String(error), true)));
           return;
         }
         // An added integration's site: to its tools instead, with no browser needed.

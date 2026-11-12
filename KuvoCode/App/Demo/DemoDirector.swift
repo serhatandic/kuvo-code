@@ -506,7 +506,9 @@ enum DemoDirector {
                 await DemoWait.pause(.connectedAWhile)
                 guard let id = app.tabs.sessionID, let session = workspace.session(id), parts.count == 2 else { return }
                 let machine = RemoteFolder.machine(of: session.location.directory)
-                // (As its box words a show it answers while the user looks at the conversation.)
+                // (A copy of its box's words for one shown while the user looks at the conversation,
+                // `shownWords` in Packages/Box/src/link/letters/own-tools.ts: only what starts it,
+                // "Shown: the file", is read, by `BrowserTools.shownFolder`.)
                 let said = "Shown: the \(parts[1] == "folder" ? "folder" : "file") \(parts[0]) is open in Kuvo Code's side panel, beside this conversation."
                 for (type, data) in [
                     ("session.tool.input.started", #""name":"kuvo-browser_show_in_panel""#),

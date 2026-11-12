@@ -952,7 +952,8 @@ short) is lifted.
 ### Agents' tools
 
 Every box answers Kuvo Code's own agent tools itself, the same on every computer (bridge 0.9.100;
-wake-ups, `set_job` and the show tools later, which an older box answers 400 for): writing to
+wake-ups, `set_job` and the show tools where a box says `agent-tools.own`, "Features"; an older one
+answers 400 for them): writing to
 each other and starting sessions, and the rest listed under the route. The tool servers (this Mac's app and its keeper, a machine's
 `kuvo-browser.js`) only pass a call on, and draw nothing from it but what it shows; a machine's
 through `kuvo-link.js box route`, a process of its own, which a `SIGTERM` stops waiting. Only the
@@ -4148,6 +4149,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `accounts.found` | `kuvo/accounts/found`, `…/found/use` |
 | `accounts.refresh` | `GET kuvo/accounts/refreshable` and `POST kuvo/accounts/<provider>/refresh` (Refresh Models) |
 | `agent-tools` | `POST kuvo/agent-tools`: the agents' tools, answered by the box (bridge 0.9.100) |
+| `agent-tools.own` | `POST kuvo/agent-tools` answers the wake-up tools, `set_job` and the show tools too ("Agents' tools") |
 | `agents` | `kuvo/agents/api/…`: the coding agents (`agents` in `kuvo/info` says whether their bridge is up now) |
 | `approval` | `kuvo/approval` and `kuvo/sessions/<id>/approval` ("Approval", bridge 0.9.180) |
 | `approval.default` | A new conversation's approval where its client doesn't say: Auto the first time on a computer, then the last one picked there (`kuvo/approval`'s `default`, bridge 0.9.185); one a client made with `kuvo.approval` alone gets that ("Approval") |

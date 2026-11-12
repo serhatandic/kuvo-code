@@ -2131,6 +2131,7 @@ var FEATURES = [
   "accounts.found",
   "accounts.refresh",
   "agent-tools",
+  "agent-tools.own",
   "agents",
   "approval",
   "approval.default",
@@ -21532,9 +21533,8 @@ function watchWentUnasked(rules, agents) {
     return false;
   return agents || !all.some((rule) => rule.action === "kuvo-browser_watch_for_change" && rule.effect === "ask");
 }
-async function wakeTool(name, args, calling, readEngine, readBridge) {
+async function wakeTool(name, args, calling, bridge) {
   const { session, own, root } = calling;
-  const bridge = readBridge();
   if (!session)
     return refused2("This needs a conversation of its own.");
   if (isSeat(own) || isSeat(root?.place))
@@ -21578,18 +21578,9 @@ async function wakeTool(name, args, calling, readEngine, readBridge) {
     }
   }
   const folder = bot?.folder ?? path81.join(SESSION_WAKES, owner);
-  let exists = fs80.existsSync(path81.join(folder, bot ? "bot.json" : "session"));
+  const exists = fs80.existsSync(path81.join(folder, bot ? "bot.json" : "session"));
   if (!exists && name === "cancel_wake_up")
     return refused2(`No wake-up "${given("id")}". See list_wake_ups.`);
-  if (!exists && (name === "schedule_wake_up" || name === "watch_for_change")) {
-    try {
-      exists = await wakeFolderFor(owner, readEngine, readBridge) !== null;
-    } catch (error) {
-      return refused2(`Couldn't keep it: ${error?.message ?? error}`);
-    }
-    if (!exists)
-      return refused2("Kuvo Code doesn't know this conversation yet. Try again in a moment.");
-  }
   if (exists && isMoving(folder))
     return refused2(MOVING);
   const directory = root?.place.data.location?.directory ?? root?.place.data.directory;
@@ -21902,6 +21893,8 @@ async function readOne2(args, caller, all, targets, place) {
 }
 async function agentTool(name, args, session, place) {
   const targets = targetsOf(place);
+  if (name === "show_file" || name === "mark_final" || name === "show_widget")
+    return showTool(name, args, { session, own: null, root: null }, place.inView);
   const root = await rootOf(session, targets);
   const caller = root?.session ?? session;
   if (root?.place.data.metadata?.kuvo?.seat && (name === "send_message" || name === "start_session"))
@@ -21912,17 +21905,14 @@ async function agentTool(name, args, session, place) {
     case "list_wake_ups":
     case "cancel_wake_up":
     case "set_job":
-    case "show_in_panel":
-    case "show_file":
-    case "mark_final":
-    case "show_widget": {
+    case "show_in_panel": {
       const own = session === root?.session ? root.place : session ? await placeOfSession(session, targets).catch(() => null) : null;
       const calling = { session, own, root };
       if (name === "set_job")
         return setJobTool(args, calling, place.readEngine, place.bridge);
-      if (name === "show_in_panel" || name === "show_file" || name === "mark_final" || name === "show_widget")
+      if (name === "show_in_panel")
         return showTool(name, args, calling, place.inView);
-      return wakeTool(name, args, calling, place.readEngine, place.bridge);
+      return wakeTool(name, args, calling, place.bridge());
     }
   }
   const all = await everyone(place);
@@ -38320,7 +38310,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "fbb8c0d183b7";
+var BRIDGE_VERSION = "04d3d31c6e3d";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

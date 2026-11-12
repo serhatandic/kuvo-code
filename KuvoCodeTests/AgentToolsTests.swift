@@ -82,4 +82,28 @@ import Testing
         let said = await AgentMail.shared.call("list_agents", arguments: [:], caller: "ses_lead")
         #expect(said == (text: "Kuvo Code’s background service on this Mac isn’t running. Try again in a moment.", isError: true))
     }
+
+    /// Just updated, while the older box still runs a session's work (the keeper makes way once
+    /// it's over): a wake-up, a job or a file shown goes to it, which doesn't answer those yet, and
+    /// the agent hears why, not the box's list of tool names. Another tool's refusal is the box's.
+    @Test func anOlderBoxAfterAnUpdateSaysItsFinishingTheUpdate() async throws {
+        defer { engine.stop() }
+        let mail = AgentMail()
+        mail.box = {
+            BoxClient(box: BoxClient.mac, transport: LocalBox { request in
+                AsyncThrowingStream { continuation in
+                    let older = request.path == "kuvo/info"
+                        ? (200, ["features": ["agent-tools", "agents"]] as [String: Any])
+                        : (400, ["message": "Send {name, arguments, session}: name one of list_agents, send_message."] as [String: Any])
+                    continuation.yield(.head(status: older.0, headers: ["content-type": "application/json"]))
+                    continuation.yield(.body((try? JSONSerialization.data(withJSONObject: older.1)) ?? Data()))
+                    continuation.finish()
+                }
+            })
+        }
+        let said = await mail.call("schedule_wake_up", arguments: ["when": "+2h", "note": "Look again"], caller: "ses_lead")
+        #expect(said == (text: AgentMail.updating, isError: true))
+        let other = await mail.call("list_agents", arguments: [:], caller: "ses_lead")
+        #expect(other == (text: "Send {name, arguments, session}: name one of list_agents, send_message.", isError: true))
+    }
 }

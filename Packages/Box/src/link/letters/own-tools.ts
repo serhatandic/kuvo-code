@@ -14,7 +14,7 @@ import { changeBot } from "../bots/edit";
 import { botHere, isMoving, MOVING } from "../bots/here";
 import { listOf } from "../files";
 import { BOTS, SESSION_WAKES, WAKE_COMMAND } from "../home";
-import { wakeFolderFor, wakesChanged } from "../areas/wakes";
+import { wakesChanged } from "../areas/wakes";
 import type { Target } from "../../shared/records";
 import type { SessionPlace } from "./letter";
 
@@ -74,9 +74,8 @@ export function watchWentUnasked(rules: readonly { action: string; resource: str
  * part of (a subagent's, the one that started it; a bot's, the bot's folder), run from the folder it
  * works in, so a session's wake-ups folder knows where that is. Never from a group chat's seat:
  * meetings are the chat's. Never stopped half way by the caller going: it changes what's kept. */
-export async function wakeTool(name: WakeToolName, args: Record<string, unknown>, calling: Calling, readEngine: () => Target, readBridge: () => Target | null): Promise<Said> {
+export async function wakeTool(name: WakeToolName, args: Record<string, unknown>, calling: Calling, bridge: Target | null): Promise<Said> {
   const { session, own, root } = calling;
-  const bridge = readBridge();
   if (!session) return refused("This needs a conversation of its own.");
   if (isSeat(own) || isSeat(root?.place)) return refused("Not from a group chat: a chat can meet on a schedule instead (its editor's Meets on a Schedule).");
   const owner = root?.session ?? session;
@@ -115,19 +114,12 @@ export async function wakeTool(name: WakeToolName, args: Record<string, unknown>
       break;
     }
   }
-  // Its folder: a bot's own, or the session's in the wake-ups folder, made with its first wake-up
-  // or watch as the routes make it.
+  // Its folder: a bot's own, or the session's in the wake-ups folder, which kuvo-wake makes with its
+  // first wake-up or watch, once what's asked checks out: where it works (the folder it runs in),
+  // `via` for a coding agent's, and held from the start while it's archived.
   const folder = bot?.folder ?? path.join(SESSION_WAKES, owner);
-  let exists = fs.existsSync(path.join(folder, bot ? "bot.json" : "session"));
+  const exists = fs.existsSync(path.join(folder, bot ? "bot.json" : "session"));
   if (!exists && name === "cancel_wake_up") return refused(`No wake-up "${given("id")}". See list_wake_ups.`);
-  if (!exists && (name === "schedule_wake_up" || name === "watch_for_change")) {
-    try {
-      exists = (await wakeFolderFor(owner, readEngine, readBridge)) !== null;
-    } catch (error) {
-      return refused(`Couldn't keep it: ${(error as Error | null)?.message ?? error}`);
-    }
-    if (!exists) return refused("Kuvo Code doesn't know this conversation yet. Try again in a moment.");
-  }
   if (exists && isMoving(folder)) return refused(MOVING);
   const directory = root?.place.data.location?.directory ?? root?.place.data.directory;
   const cwd = directory && fs.existsSync(directory) ? directory : os.homedir();

@@ -159,6 +159,9 @@ final class AgentMail {
         }
         let said = try? JSONDecoder().decode(Said.self, from: answer.body)
         guard answer.status == 200, let text = said?.text else {
+            // An older box, still running a session's work after an update (the keeper makes way
+            // once it's over), doesn't answer Kuvo Code's own tools yet: said plainly.
+            if answer.status == 400, Self.ownTools.contains(name), await !boxAnswersOwnTools(client) { return (Self.updating, true) }
             return (said?.message ?? "Kuvo Code’s background service on this Mac didn’t answer. Try again in a moment.", true)
         }
         let failed = said?.isError ?? false
@@ -166,6 +169,18 @@ final class AgentMail {
         // A session started: there as you name it.
         if !failed, name == "start_session" { Task { await refresh() } }
         return (text, failed)
+    }
+
+    /// The tools every box answers since it says `agent-tools.own` (PROTOCOL.md, "Agents' tools").
+    static let ownTools: Set<String> = ["schedule_wake_up", "watch_for_change", "list_wake_ups", "cancel_wake_up", "set_job", "show_in_panel", "show_file", "mark_final", "show_widget"]
+    /// What an agent hears from one of them while an older box runs on after an update.
+    static let updating = "Kuvo Code on this Mac is finishing an update, and its background service can't do this until the work that's running ends. Try again later; if you work on your own, say what's left in your reply."
+
+    /// Whether this Mac's box says it answers them.
+    private func boxAnswersOwnTools(_ client: BoxClient) async -> Bool {
+        struct Info: Decodable { var features: [String]? }
+        guard let info = try? await client.value(Info.self, "GET", "kuvo/info") else { return true }
+        return info.features?.contains("agent-tools.own") == true
     }
 
     private func track(_ name: String, _ arguments: [String: Any], caller: String?) {
