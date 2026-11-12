@@ -1050,7 +1050,7 @@ browser's tools (`browser_…`), which work in a client's own browser, aren't th
     Auto (503 while it isn't running), else on the engine. Its answer adds `info`, the session as
     its engine (or the bridge) lists it then, and with `worktree: true`, `worktree`, the worktree made
     for it as `POST kuvo/worktrees` makes one (`{project, root, folder, branch, base?}`); the box
-    takes that away again should the session not be made. With `wait`, or from a conversation, a
+    takes that away again, branch and all, should the session not be made. With `wait`, or from a conversation, a
     task is still needed (400). A box from before needs a task: a client makes the session with its
     engine then, and gives it its project's folders, approval and Autopilot itself.
   - Either way its project's other folders (those of the project whose folder it's in, or a
@@ -4335,7 +4335,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `pieces` | a machine only: `kuvo/info`'s `pieces`, which version its link, coding agents' bridge and engine run ("Updates", "A new version while it works") |
 | `plugins.search` | `kuvo/plugins/search` |
 | `programs` | `kuvo/programs` |
-| `projects.folders` | A change to a project's `folders` reaches each of its sessions, and a session the box starts or moves gets them ("Projects", #341) |
+| `projects.folders` | A project's `folders` reach each of its sessions as it's started or moved there and as each run starts where they changed ("Projects", #341) |
 | `providers.models` | `POST kuvo/providers/models` |
 | `queue` | `kuvo/sessions/<id>/queue…`, `…/stop` and `kuvo/sessions/queues/events`: the box carries the queue (bridge 0.9.100) |
 | `queue.waits` | A Stop holds the conversation: what arrives waits on the box (`waiting`), `…/queue/add` and `DELETE …/queue/<item>` (bridge 0.9.128) |
@@ -4726,18 +4726,20 @@ while a box is away goes there when it's back.
   `200 {project}`; 400 for a folder that isn't a whole path. The folder is kept as it's named,
   as its sessions run there (a link isn't followed), and whether it's there now or not (a drive
   that's away).
-  A change to its `folders` reaches each of its sessions before the answer (`projects.folders`,
-  #341), whichever client made it: on the engine and the coding agents' bridge, in its folder and
-  its worktrees', but for subagents' and those put away, each gets a rule allowing each folder
-  (`external_directory` `<folder>/*`, and where a link leads, after its approval's rules; a bot's own
-  folder's rule stays) and the instruction `kuvo.project-folders` naming them, or neither once
-  there are none. A box from before doesn't: a client gives each session it opens its folders then.
+  Its `folders` reach each of its sessions (`projects.folders`, #341), whichever client changed
+  them: on the engine and the coding agents' bridge, in its folder or one of its worktrees, a
+  session gets a rule allowing each folder (`external_directory` `<folder>/*`, and where a link
+  leads, after its approval's rules; a bot's own folder's rule stays) and the instruction
+  `kuvo.project-folders` naming them, or neither once there are none: as it's started or moved
+  there, and as each of its runs starts where they changed since (never one at rest, which a write
+  would make the newest). Not a subagent's, nor a hidden run's (a group chat's seat, an engine run,
+  a review's part). A box from before doesn't: a client gives each session it opens its folders then.
 - `POST kuvo/sessions/<id>/move` `{directory}` (`sessions.move`, #341) moves a conversation into the
   project at `directory` here, as a chat that turns into work is: the engine moves it (one at work at
   its next step), and it gets that project's other folders as above. `200 {session, directory,
   info?}` (`info`, the session as its engine lists it now); 400 for a folder that isn't here; 404
   for no such conversation; 409 for a coding agent's session (their sessions keep the folder they
-  started in) and one moving to another computer; 502 where the engine didn't take it; 503 with no
+  started in), one moving to another computer, and a subagent's or hidden run's; 502 where the engine didn't take it; 503 with no
   engine. A box from before: a client moves it with the engine's `POST api/session/<id>/move` and
   gives it the project's folders itself.
 - `DELETE kuvo/projects?directory=<folder>` is Remove Project: every session of it, its worktrees' and

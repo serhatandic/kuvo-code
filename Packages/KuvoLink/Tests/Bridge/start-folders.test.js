@@ -97,6 +97,7 @@ beforeEach(() => {
     kept("ses_blog", blog),
     kept("ses_old", shop, { time: { created: 1, updated: 2, archived: 3 } }),
     kept("ses_chat", chats, { metadata: { kuvo: { chat: chats } } }),
+    kept("ses_seat", chats, { metadata: { kuvo: { seat: "grp_1" } } }),
   ]);
   made = [];
   prompts = [];
@@ -182,35 +183,19 @@ test("a chat moved into a project goes there with its conversation and gets the 
 
   assert.equal((await route("POST", "kuvo/sessions/ses_chat/move", { directory: path.join(home, "nowhere") })).status, 400);
   assert.equal((await route("POST", "kuvo/sessions/ses_gone/move", { directory: shop })).status, 404);
+  // A group chat's seat goes with its group chat.
+  assert.equal((await route("POST", "kuvo/sessions/ses_seat/move", { directory: shop })).status, 409);
   assert.equal(moves.length, 2);
 });
 
-test("a project's folders changed by any client reach each of its sessions, its worktrees' too, and no other", async () => {
+test("a project's folders changed by any client are given to no session at rest, which would make each the newest: each gets them as it next runs", async () => {
   const other = path.join(home, "work", "assets");
   fs.mkdirSync(other, { recursive: true });
-  const otherRule = { action: "external_directory", resource: path.join(other, "*"), effect: "allow" };
+  const before = JSON.stringify([...sessions.values()]);
   const changed = await route("PUT", `kuvo/projects?directory=${encodeURIComponent(shop)}`, { folders: [other] });
   assert.equal(changed.status, 200, JSON.stringify(changed.body));
-  for (const id of ["ses_shop", "ses_tree"]) {
-    assert.ok(allows(id, otherRule), id);
-    assert.ok(!allows(id, docsRule), id);
-    assert.ok(allows(id, asks), id);
-    assert.match(told.get(`${id} kuvo.project-folders`) ?? "", new RegExp(`- assets: ${other}`), id);
-  }
-  for (const id of ["ses_blog", "ses_old", "ses_chat"]) {
-    assert.ok(!allows(id, otherRule), id);
-    assert.equal(told.get(`${id} kuvo.project-folders`), undefined, id);
-  }
-
-  // Its name changed alone: no session is touched.
-  told = new Map();
-  assert.equal((await route("PUT", `kuvo/projects?directory=${encodeURIComponent(shop)}`, { name: "Shop" })).status, 200);
+  assert.deepEqual(changed.body.project.folders, [other]);
+  assert.equal(JSON.stringify([...sessions.values()]), before, "no session was written");
   assert.equal(told.size, 0);
-
-  // None left: they go from each.
-  assert.equal((await route("PUT", `kuvo/projects?directory=${encodeURIComponent(shop)}`, { folders: [] })).status, 200);
-  for (const id of ["ses_shop", "ses_tree"]) {
-    assert.ok(!allows(id, otherRule), id);
-    assert.equal(told.get(`${id} kuvo.project-folders`), null, id);
-  }
+  // (As each runs: box test project-folders.test.ts.)
 });

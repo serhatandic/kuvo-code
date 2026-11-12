@@ -6,6 +6,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { isObject, parsed } from "../../shared/json";
 import { call } from "../engine/client";
+import { isHiddenRun } from "../engine/sessions";
+import { askedAbout } from "../fence/policy";
 import { frozen } from "../moves/records";
 import { giveFolders } from "./projects";
 import type { Target } from "../../shared/records";
@@ -29,6 +31,8 @@ export async function* sessionMoveRoute(context: RouteContext): AsyncGenerator<A
   const body = parsed(request.body);
   const directory = isObject(body) && typeof body.directory === "string" ? body.directory : "";
   let isFolder = false;
+  // (Asked about off the box's thread first, as macOS may ask: one on your Desktop would hold it.)
+  if (path.isAbsolute(directory)) await askedAbout([directory]);
   try { isFolder = path.isAbsolute(directory) && fs.statSync(directory).isDirectory(); } catch {}
   if (!isFolder) return yield* json(400, { message: directory ? `${directory} isn't a folder here.` : "Say where it goes (directory, a full path)." });
   // Moving to another computer: nothing changes it until it's there.
@@ -42,6 +46,8 @@ export async function* sessionMoveRoute(context: RouteContext): AsyncGenerator<A
     if (await read(bridge(), id, signal)) return yield* json(409, { message: "Moving a chat into a project isn't available in sessions with this agent." });
     return yield* json(engine ? 404 : 503, { message: engine ? "That conversation isn't here." : "The engine isn't running." });
   }
+  // (A subagent's, a group chat's seat, an engine run or a review's part goes with what it's part of.)
+  if (before.parentID || isHiddenRun(before)) return yield* json(409, { message: "Only a conversation of its own moves into a project." });
   try {
     await call(engine!, "POST", `/api/session/${encodeURIComponent(id)}/move`, { directory }, signal);
   } catch (error) {
@@ -49,7 +55,7 @@ export async function* sessionMoveRoute(context: RouteContext): AsyncGenerator<A
   }
   // Its project's folders there, as a session started there has them (the engine moves one at work
   // at its next step: by where it goes).
-  await giveFolders(engine!, id, signal, directory);
+  await giveFolders(engine!, id, { signal, folder: directory });
   const info = await read(engine, id, signal);
   return yield* json(200, { session: id, directory, ...(info ? { info } : {}) } satisfies SessionMoved);
 }

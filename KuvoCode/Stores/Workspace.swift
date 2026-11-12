@@ -947,7 +947,8 @@ final class Workspace {
         settings[directory] = project == ProjectSettings() ? nil : project
         saveSettings()
         keepOnBox(directory)
-        // Sessions not open yet catch up when they open.
+        // Sessions not open yet catch up when they open (from a box with `projects.folders`, as each
+        // next runs: its box gives them).
         for model in models.values where projectDirectory(of: model.session) == directory {
             Task { await model.syncFolders() }
         }

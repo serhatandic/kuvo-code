@@ -9,7 +9,8 @@ import type { BridgeRecord, EngineRecord, Target } from "../../shared/records";
 import type { Project, Projects } from "../../shared/routes/projects";
 import { call, readBridgeFile, readEngineFile } from "../engine/client";
 import { rewriteOn } from "../engine/notes";
-import type { EngineSession } from "../engine/sessions";
+import { isHiddenRun, type EngineSession } from "../engine/sessions";
+import { askedAbout } from "../fence/policy";
 import { locked, writePrivate } from "../files";
 import { followed } from "../follow";
 import { K } from "../home";
@@ -86,78 +87,52 @@ export const withFolders = (rules: readonly KitRule[], folders: readonly string[
 
 /** A session on `target` given its project's other folders as they're set where it is now (or in
  * `folder`, where it's moving: the engine moves one at work at its next step), `foldersFor`: its
- * rules allowing them, in its turn, and its instructions naming them (or neither, for none). False
- * where the engine didn't answer or take it, or it's gone. */
-export async function giveFolders(target: Target, session: string, signal?: AbortSignal, folder?: string): Promise<boolean> {
-  let at: string | null = null;
-  let folders: readonly string[] = [];
-  let done;
-  try {
-    done = await rewriteOn(target, session, now => {
-      at = folder ?? now.location?.directory ?? now.directory ?? null;
-      folders = at ? foldersFor(at) : [];
-      const current = (now.permissions ?? []) as KitRule[];
-      const permissions = withFolders(current, folders);
-      return JSON.stringify(permissions) === JSON.stringify(current) ? null : { permissions } as Partial<EngineSession>;
-    }, signal);
-  } catch {
-    return false;
-  }
-  if (!done || !at) return false;
-  const entry = `/api/experimental/session/${encodeURIComponent(session)}/instructions/entries/${PROJECT_FOLDERS_ENTRY}`;
-  try {
-    if (folders.length) await call(target, "PUT", entry, { value: projectFoldersNote(at, folders) }, signal);
-    // (None to name: one it had goes; there's none to take away for most.)
-    else await call(target, "DELETE", entry, undefined, signal).catch(() => {});
-  } catch {
-    return false;
-  }
-  return true;
-}
-
-/** How many sessions a project's change of folders reaches at once. */
-const GIVING_AT_ONCE = 8;
-
-/** Each session of the project at `directory` (in its own folder or one of its worktrees, on the
- * engine and the coding agents' bridge, but for subagents' and those put away) given its folders as
- * they're set now (`giveFolders`), as they change. How many couldn't be: tried again as each opens
- * on a client from before, and as it's moved or its folders change again. */
-export async function giveProjectFolders(directory: string, readEngine: () => EngineRecord, readBridge: () => BridgeRecord, signal?: AbortSignal): Promise<number> {
-  const trees = Object.entries(worktreeProjects()).filter(([, project]) => project === directory).map(([folder]) => folder);
-  const targets: Target[] = [];
-  try { targets.push(readEngine()); } catch {}
-  try {
-    const bridge = readBridge();
-    if (bridge?.port && bridge?.password && runs(bridge.pid, "kuvo-agents")) targets.push(bridge);
-  } catch {}
-  let missed = 0;
-  for (const target of targets) {
-    for (const folder of [...new Set([directory, ...trees])]) {
-      let query: string | null = `limit=100&order=desc&parentID=null&directory=${encodeURIComponent(folder)}`;
-      for (let page = 0; page < 1000 && query; page++) {
-        let listed: SessionPage | undefined;
-        try {
-          const response = await fetch(`http://127.0.0.1:${target.port}/api/session?${query}`, { headers: { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` }, signal });
-          if (!response.ok) throw new Error();
-          listed = await response.json() as SessionPage;
-        } catch {
-          missed += 1;
-          break;
-        }
-        const sessions = Array.isArray(listed?.data) ? listed.data : [];
-        const giving = sessions.filter(session => session?.id && !session.parentID && session.location?.directory === folder && !session.time?.archived && session.metadata?.["kuvo.archived"] !== true);
-        let taken = 0;
-        await Promise.all(Array.from({ length: Math.min(GIVING_AT_ONCE, giving.length) }, async () => {
-          while (taken < giving.length) {
-            if (!await giveFolders(target, giving[taken++]!.id, signal)) missed += 1;
-          }
-        }));
-        const next = listed?.cursor?.next;
-        query = sessions.length === 100 && next ? `limit=100&cursor=${encodeURIComponent(next)}` : null;
-      }
+ * rules allowing them, in its turn, and its instructions naming them (or neither, for none). With
+ * `whenChanged`, the instructions only where its rules changed (as each of its runs starts: a write
+ * makes it the newest, so one whose folders are as set is left alone). A subagent's and a hidden
+ * run's (a group chat's seat, an engine run, a review's part) are never given any. False where the
+ * engine didn't answer or take it, or it's gone. */
+export async function giveFolders(target: Target, session: string, { signal, folder, whenChanged = false }: { signal?: AbortSignal; folder?: string; whenChanged?: boolean } = {}): Promise<boolean> {
+  const address = encodeURIComponent(session);
+  // (Each folder it's given asked about off the box's thread first, as macOS may ask: a project on
+  // your Desktop would hold the box until you answer.)
+  const before = await call(target, "GET", `/api/session/${address}`, undefined, signal).catch(() => null) as EngineSession | null;
+  if (!before?.id) return false;
+  if (before.parentID || isHiddenRun(before)) return true;
+  const where = (now: EngineSession) => folder ?? now.location?.directory ?? now.directory ?? null;
+  const first = where(before);
+  await askedAbout(first ? foldersFor(first) : []);
+  // (Folders changed again while they were given: given again, so its rules and its note agree.)
+  for (let tries = 0; tries < 3; tries++) {
+    let at: string | null = null;
+    let folders: readonly string[] = [];
+    let changed = false;
+    try {
+      const done = await rewriteOn(target, session, now => {
+        at = where(now);
+        folders = at ? foldersFor(at) : [];
+        const current = (now.permissions ?? []) as KitRule[];
+        const permissions = withFolders(current, folders);
+        changed = JSON.stringify(permissions) !== JSON.stringify(current);
+        return changed ? { permissions } as Partial<EngineSession> : null;
+      }, signal);
+      if (!done || !at) return false;
+    } catch {
+      return false;
     }
+    if (JSON.stringify(foldersFor(at)) !== JSON.stringify(folders)) continue;
+    if (whenChanged && !changed) return true;
+    const entry = `/api/experimental/session/${address}/instructions/entries/${PROJECT_FOLDERS_ENTRY}`;
+    try {
+      if (folders.length) await call(target, "PUT", entry, { value: projectFoldersNote(at, folders) }, signal);
+      // (None to name: one it had goes; most have none to take away.)
+      else await call(target, "DELETE", entry, undefined, signal).catch(() => {});
+    } catch {
+      return false;
+    }
+    return true;
   }
-  return missed;
+  return false;
 }
 
 /** The projects New Bot offers here, `{directory, name}` each: the box's own, once it keeps them;
@@ -326,17 +301,13 @@ export async function* answerProjects(request: LinkRequest, readEngine: () => En
     if (!isObject(body)) return yield* json(400, { message: "That isn’t a project." });
     // Kept as it's named: its sessions run there, by that name (a link followed would be another
     // project), and one whose drive isn't there now stays.
+    // (Its sessions get its folders as each next runs: `giveFolders`.)
     let project!: Project;
-    let folders: readonly string[] = [];
     changeProjects(projects => {
       const before = projects.find(each => each.directory === given);
-      folders = before?.folders ?? [];
       project = keptProject(given, body, before);
       return before ? projects.map(each => (each === before ? project : each)) : [project, ...projects];
     }, file, lock);
-    // Its folders changed: each of its sessions is given them now, whichever client changed them,
-    // before the answer, so a client reading its sessions after finds them so.
-    if (JSON.stringify(folders) !== JSON.stringify(project.folders)) await giveProjectFolders(given, readEngine, readBridge, signal);
     return yield* json(200, { project } satisfies { project: Project });
   }
   if (method === "DELETE") {

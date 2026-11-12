@@ -2447,652 +2447,10 @@ function notesPlace(target) {
 var rewriteOn = (target, id, change, signal) => rewriteSession(notesPlace(target), id, change, signal);
 var inTurnOn = (target, id, work, signal) => inTurn(placeName(target), id, work, across, signal);
 
-// Packages/Box/src/link/follow.ts
-import fs14 from "node:fs";
-
-// Packages/Box/src/shared/watch.ts
-import fs13 from "node:fs";
-var WATCH_LOOKS_AGAIN = [250, 1000];
-var watching = new Set;
-var looks = new Map;
-function startedOrStopped() {
-  for (const after of WATCH_LOOKS_AGAIN) {
-    const at = Math.ceil((performance.now() + after) / 100) * 100;
-    if (looks.has(at))
-      continue;
-    const timer = setTimeout(() => {
-      looks.delete(at);
-      for (const look of [...watching]) {
-        if (!watching.has(look))
-          continue;
-        try {
-          look();
-        } catch {}
-      }
-    }, at - performance.now());
-    timer.unref?.();
-    looks.set(at, timer);
-  }
-}
-function watchFolder(folder, changed, { recursive = false, missed = () => changed() } = {}) {
-  const watcher = fs13.watch(folder, { recursive }, (event, name) => changed(event, name === null ? null : String(name)));
-  const look = () => missed();
-  watching.add(look);
-  startedOrStopped();
-  const close = watcher.close.bind(watcher);
-  watcher.close = () => {
-    if (watching.delete(look))
-      startedOrStopped();
-    close();
-  };
-  return watcher;
-}
-
-// Packages/Box/src/link/follow.ts
-function watchFolders(folders, changed, { recursive = true, missed = changed } = {}) {
-  let whole = folders.length > 0;
-  const watchers = [];
-  for (const folder of folders) {
-    try {
-      fs14.mkdirSync(folder, { recursive: true });
-      const watcher = watchFolder(folder, changed, { recursive, missed });
-      watcher.on("error", () => {
-        whole = false;
-        watcher.close();
-      });
-      watchers.push(watcher);
-    } catch {
-      whole = false;
-    }
-  }
-  return { get whole() {
-    return whole;
-  }, close: () => {
-    for (const watcher of watchers)
-      watcher.close();
-  } };
-}
-async function* followed(read, followers, signal, { folders = [], recursive = true, watch = watchFolders } = {}) {
-  let wake = null;
-  const queue = [];
-  const told = () => {
-    queue.push(JSON.stringify(read()));
-    wake?.();
-  };
-  followers.add(told);
-  const watching = watch(folders, told, { recursive });
-  queue.push(JSON.stringify(read()));
-  const settled = WATCH_SETTLES.map((ms) => setTimeout(told, ms));
-  signal?.addEventListener("abort", () => wake?.(), { once: true });
-  try {
-    let last = "";
-    while (!signal?.aborted) {
-      while (queue.length) {
-        const line = queue.shift();
-        if (line !== last) {
-          yield { body: Buffer.from(line + `
-`) };
-          last = line;
-        }
-      }
-      if (signal?.aborted)
-        break;
-      await new Promise((done) => {
-        const timer = setTimeout(done, watching.whole ? 30000 : 1000);
-        wake = () => {
-          clearTimeout(timer);
-          done();
-        };
-      });
-      wake = null;
-      queue.push(JSON.stringify(read()));
-    }
-  } finally {
-    for (const timer of settled)
-      clearTimeout(timer);
-    followers.delete(told);
-    watching.close();
-  }
-}
-var WATCH_SETTLES = [250, 1000, 5000];
-
-// Packages/Box/src/link/areas/wakes.ts
-import { execFile as execFile10 } from "node:child_process";
-import fs96 from "node:fs";
-import path98 from "node:path";
-
-// Packages/Box/src/link/bots/tell.ts
-import crypto10 from "node:crypto";
-import fs25 from "node:fs";
-import path26 from "node:path";
-
-// Packages/Box/src/link/areas/config.ts
-import fs15 from "node:fs";
-import path14 from "node:path";
-var CONFIG_FILE = IS_MAC ? path14.join(ENGINE_CONFIG, "opencode", "opencode.json") : path14.join(BOX, "opencode.json");
-var OWN_MARK = IS_MAC ? null : CONFIG_FILE;
-var SERVERS = ["mcp", "servers"];
-var ownsSettings = (mark = OWN_MARK) => mark === null || fs15.existsSync(mark);
-var sortedKeys = (value) => Array.isArray(value) ? value.map(sortedKeys) : isObject(value) ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sortedKeys(value[key])])) : value;
-function readSettings(file = CONFIG_FILE) {
-  let text;
-  try {
-    text = fs15.readFileSync(file, "utf8");
-  } catch (error) {
-    let link = false;
-    try {
-      link = fs15.lstatSync(file).isSymbolicLink();
-    } catch {}
-    if (error?.code === "ENOENT" && !link)
-      return { settings: {} };
-    return { problem: link && error?.code === "ENOENT" ? "It's a link to a file that isn't there, so Kuvo Code leaves it alone." : `It couldn't be read, so Kuvo Code leaves it alone (${error?.code ?? error?.message}).` };
-  }
-  try {
-    const parsed = text.trim() ? JSON.parse(text) : {};
-    if (!isObject(parsed))
-      throw new Error("not an object");
-    return { settings: parsed };
-  } catch {
-    return { problem: "It isn't plain JSON, so Kuvo Code leaves it alone. (Comments aren't supported here.)" };
-  }
-}
-var valueAt = (object, keys) => keys.reduce((current, key) => isObject(current) ? current[key] : undefined, object);
-function settingAt(object, keys, value) {
-  const [key, ...rest] = keys;
-  const next = { ...object };
-  if (!rest.length) {
-    if (value === null || value === undefined)
-      delete next[key];
-    else
-      next[key] = value;
-    return next;
-  }
-  const inner = settingAt(isObject(next[key]) ? next[key] : {}, rest, value);
-  if (Object.keys(inner).length)
-    next[key] = inner;
-  else
-    delete next[key];
-  return next;
-}
-function changeSettings(changes, file = CONFIG_FILE, lock = CONFIG_LOCK) {
-  const fits = Array.isArray(changes) && changes.length >= 1 && changes.length <= 100 && changes.every((change) => Array.isArray(change?.path) && change.path.length >= 1 && change.path.length <= 16 && change.path.every((key) => typeof key === "string" && key.length >= 1 && key.length <= 200) && ("value" in change));
-  if (!fits)
-    return { status: 400, message: 'Send {"changes": [{"path": [keys…], "value": …}]}.' };
-  return locked(lock, () => {
-    const { settings, problem } = readSettings(file);
-    if (problem)
-      return { status: 409, message: `The engine's settings file can't be changed from here: ${problem}`, problem };
-    if (changes.some((change) => change.path.slice(0, -1).some((_, at) => {
-      const above = valueAt(settings, change.path.slice(0, at + 1));
-      return above !== undefined && !isObject(above);
-    })))
-      return { status: 400, message: "A path goes through objects only; send a list whole, at its own path." };
-    if (changes.some((change) => ("was" in change) && sortedJSON(valueAt(settings, change.path) ?? null) !== sortedJSON(change.was))) {
-      return { status: 409, message: "It changed since you read it." };
-    }
-    return writeSettings(settings, changes, file);
-  });
-}
-function writeSettings(settings, changes, file) {
-  let next = settings;
-  for (const change of changes)
-    next = settingAt(next, change.path, keysNamedHere(change.value));
-  const target = linkTarget(file);
-  const temporary = `${target}.${process.pid}.tmp`;
-  try {
-    fs15.mkdirSync(path14.dirname(target), { recursive: true, mode: 448 });
-    fs15.writeFileSync(temporary, JSON.stringify(sortedKeys(next), null, 2) + `
-`, { mode: 384 });
-    fs15.renameSync(temporary, target);
-  } catch (error) {
-    fs15.rmSync(temporary, { force: true });
-    return { status: 500, message: `It couldn't be saved: ${error.message}` };
-  }
-  return { status: 200, settings: next };
-}
-function linkTarget(file) {
-  let target = file;
-  for (let i = 0;i < 8; i++) {
-    let destination;
-    try {
-      destination = fs15.readlinkSync(target);
-    } catch {
-      break;
-    }
-    target = path14.resolve(path14.dirname(target), destination);
-  }
-  return target;
-}
-function deepMerged(under, over) {
-  if (!isObject(under) || !isObject(over))
-    return over === undefined ? under : over;
-  const merged = { ...under };
-  for (const [key, value] of Object.entries(over))
-    merged[key] = key in under ? deepMerged(under[key], value) : value;
-  return merged;
-}
-var KEY_NAME = /^KUVO_KEY_[A-Za-z0-9_]+$/;
-var KEYS_NAMED = IS_MAC && APP_KEY_FILES ? APP_KEY_FILES : `${shownRoot}/box/keys`;
-var namingKeysHere = (named) => {
-  const rename = (value) => {
-    if (typeof value === "string")
-      return value.replace(named, (_, name) => `{file:${KEYS_NAMED}/${name}}`);
-    if (Array.isArray(value))
-      return value.map(rename);
-    if (isObject(value))
-      return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, rename(inner)]));
-    return value;
-  };
-  return rename;
-};
-var keysNamedHere = namingKeysHere(/\{file:[^{}]*?(KUVO_KEY_[A-Za-z0-9_]+)\}/g);
-var olderKeysNamedHere = namingKeysHere(/\{(?:env|file):[^{}]*?(KUVO_KEY_[A-Za-z0-9_]+)\}/g);
-var BOT_MEMORY_RULE = { action: "edit", resource: "*/bots/bot_*/MEMORY.md", effect: "allow" };
-var DEFAULTS_ADDED = path14.join(BOX, "defaults-added");
-function addDefaultRules(mac = IS_MAC, file = CONFIG_FILE, marks = DEFAULTS_ADDED) {
-  let done = [];
-  try {
-    done = fs15.readFileSync(marks, "utf8").split(`
-`).filter(Boolean);
-  } catch {}
-  const wanted = mac ? ["bot-memory", "websearch", "search-exa"] : ["bot-memory"];
-  if (wanted.every((mark) => done.includes(mark)))
-    return;
-  const { settings, problem } = readSettings(file);
-  if (problem)
-    return;
-  const changes = [];
-  const exa = { provider: "exa" };
-  if (mac && (!Object.keys(settings).length || !done.includes("websearch"))) {
-    if (settings.websearch === undefined)
-      changes.push({ path: ["websearch"], value: exa });
-    done.push("websearch", "search-exa");
-  } else if (mac && !done.includes("search-exa")) {
-    if (sameJSON(settings.websearch, { provider: "random" }))
-      changes.push({ path: ["websearch"], value: exa });
-    done.push("search-exa");
-  }
-  if (!done.includes("bot-memory")) {
-    const rules = Array.isArray(settings.permissions) ? settings.permissions : [];
-    if (!rules.some((rule) => sameJSON(rule, BOT_MEMORY_RULE)))
-      changes.push({ path: ["permissions"], value: [...rules, BOT_MEMORY_RULE] });
-    done.push("bot-memory");
-  }
-  if (changes.length && writeSettings(settings, changes, file).status !== 200)
-    return;
-  writePrivate(marks, [...new Set(done)].join(`
-`) + `
-`);
-}
-function addMacDefaults(file = CONFIG_FILE, marks = DEFAULTS_ADDED) {
-  locked(CONFIG_LOCK, () => addDefaultRules(true, file, marks));
-}
-
-// Packages/Box/src/link/personalities/library.ts
-import fs16 from "node:fs";
-import path15 from "node:path";
-
-// Packages/Box/src/link/documents/format.ts
-import crypto7 from "node:crypto";
-
-// Packages/Box/src/shared/documents.ts
-var DOC_KINDS = ["peers", "phones", "personalities"];
-
-// Packages/Box/src/link/documents/format.ts
-var DOC_SIGNED = Buffer.from("kuvo-link doc v1\x00");
-var MOST_DOC = 512 * 1024;
-var DOC_PART = 40000;
-var MOST_PARTS = Math.ceil(MOST_DOC * 4 / 3 / DOC_PART) + 1;
-var SIGN = /^[A-Za-z0-9_-]{43}$/;
-var ED_PKCS8 = Buffer.from("302e020100300506032b657004220420", "hex");
-var ED_SPKI = Buffer.from("302a300506032b6570032100", "hex");
-var newSigningSeed = () => crypto7.randomBytes(32).toString("base64url");
-var edPrivate = (seed) => crypto7.createPrivateKey({ key: Buffer.concat([ED_PKCS8, Buffer.from(seed, "base64url")]), format: "der", type: "pkcs8" });
-var edPublic = (key) => crypto7.createPublicKey({ key: Buffer.concat([ED_SPKI, Buffer.from(key, "base64url")]), format: "der", type: "spki" });
-var signingKeys = new Map;
-function signingKeyOf(seed) {
-  let key = signingKeys.get(seed);
-  if (!key) {
-    key = crypto7.createPublicKey(edPrivate(seed)).export({ format: "der", type: "spki" }).subarray(ED_SPKI.length).toString("base64url");
-    signingKeys.set(seed, key);
-  }
-  return key;
-}
-var ownSign = (link) => {
-  try {
-    return typeof link?.sign === "string" ? signingKeyOf(link.sign) : null;
-  } catch {
-    return null;
-  }
-};
-var shortHash = (bytes) => crypto7.createHash("sha256").update(bytes).digest().subarray(0, 8).toString("base64url");
-var bodyHash = (body) => shortHash(Buffer.from(JSON.stringify(body)));
-var docBytes = (origin, kind, n, body) => Buffer.from(JSON.stringify({ v: 1, kind, origin, n, body }));
-function signDoc(seed, kind, n, body) {
-  const bytes = docBytes(signingKeyOf(seed), kind, n, body);
-  return { d: bytes.toString("base64url"), s: crypto7.sign(null, Buffer.concat([DOC_SIGNED, bytes]), edPrivate(seed)).toString("base64url") };
-}
-function readDoc(envelope) {
-  if (!isObject(envelope) || typeof envelope.d !== "string" || typeof envelope.s !== "string" || envelope.d.length > Math.ceil(MOST_DOC * 4 / 3) + 4)
-    return null;
-  let bytes, doc;
-  try {
-    bytes = Buffer.from(envelope.d, "base64url");
-    if (bytes.length > MOST_DOC || bytes.toString("base64url") !== envelope.d)
-      return null;
-    doc = JSON.parse(bytes.toString("utf8"));
-  } catch {
-    return null;
-  }
-  if (!isObject(doc) || doc.v !== 1 || !DOC_KINDS.includes(doc.kind) || typeof doc.origin !== "string" || !SIGN.test(doc.origin) || !Number.isSafeInteger(doc.n) || doc.n < 1 || !isObject(doc.body))
-    return null;
-  try {
-    const signature = Buffer.from(envelope.s, "base64url");
-    if (signature.length !== 64 || !crypto7.verify(null, Buffer.concat([DOC_SIGNED, bytes]), edPublic(doc.origin), signature))
-      return null;
-  } catch {
-    return null;
-  }
-  return { origin: doc.origin, kind: doc.kind, n: doc.n, body: doc.body, h: shortHash(bytes), envelope: { d: envelope.d, s: envelope.s } };
-}
-var heldDocs = new Map;
-function held(envelope) {
-  if (typeof envelope?.d !== "string")
-    return null;
-  let doc = heldDocs.get(envelope.d);
-  if (!doc) {
-    try {
-      const bytes = Buffer.from(envelope.d, "base64url");
-      const parsed = JSON.parse(bytes.toString("utf8"));
-      doc = { origin: parsed.origin, kind: parsed.kind, n: parsed.n, body: isObject(parsed.body) ? parsed.body : {}, h: shortHash(bytes), envelope };
-    } catch {
-      return null;
-    }
-    if (heldDocs.size >= 256)
-      heldDocs.delete(heldDocs.keys().next().value);
-    heldDocs.set(envelope.d, doc);
-  }
-  return doc;
-}
-var docKey = (origin, kind) => `${origin} ${kind}`;
-
-// Packages/Box/src/link/personalities/library.ts
-var PERSONALITIES_FILE = path15.join(BOTS, "personalities.json");
-var PERSONALITIES_LOCK = path15.join(RUN, ".personalities.lock");
-var personalityFollowers = new Set;
-var PERSONALITY_ID = /^custom\.[A-Za-z0-9._-]{1,80}$/;
-var MOST_REMOVALS = 500;
-var MOST_COUNT = 2 ** 52;
-var changedAt = (entry) => Number(entry?.removed ?? entry?.updated ?? 0) || 0;
-var isRemoval = (entry) => entry?.removed !== undefined;
-function keptPersonality(entry) {
-  if (!isObject(entry) || typeof entry.id !== "string" || !PERSONALITY_ID.test(entry.id) || changedAt(entry) > MOST_COUNT)
-    return null;
-  if (isRemoval(entry))
-    return Number.isFinite(Number(entry.removed)) ? { id: entry.id, removed: Number(entry.removed) } : null;
-  const name = plainName(entry.name).slice(0, 80);
-  const description = String(entry.description ?? "").trim().slice(0, 2000);
-  if (!name || !description)
-    return null;
-  return { id: entry.id, name, description, symbol: typeof entry.symbol === "string" && entry.symbol ? entry.symbol.slice(0, 80) : "person.crop.circle", updated: Number(entry.updated) || 0 };
-}
-function newerTake(a, b) {
-  if (isRemoval(a) !== isRemoval(b))
-    return isRemoval(a) ? a : b;
-  const at = changedAt(a), bt = changedAt(b);
-  if (at !== bt)
-    return at > bt ? a : b;
-  return `${a.name ?? ""}
-${a.description ?? ""}` >= `${b.name ?? ""}
-${b.description ?? ""}` ? a : b;
-}
-function mergePersonalities(...libraries) {
-  const byID = new Map;
-  for (const library of libraries) {
-    for (const entry of [...Array.isArray(library?.personalities) ? library.personalities : [], ...Array.isArray(library?.removed) ? library.removed : []]) {
-      const kept = keptPersonality(entry);
-      if (!kept)
-        continue;
-      const had = byID.get(kept.id);
-      byID.set(kept.id, had ? newerTake(had, kept) : kept);
-    }
-  }
-  const all = [...byID.values()];
-  return {
-    personalities: all.filter((entry) => !isRemoval(entry)),
-    removed: all.filter(isRemoval).sort((a, b) => b.removed - a.removed).slice(0, MOST_REMOVALS)
-  };
-}
-function readPersonalities(file = PERSONALITIES_FILE) {
-  try {
-    return mergePersonalities(JSON.parse(fs16.readFileSync(file, "utf8")));
-  } catch {
-    return { personalities: [], removed: [] };
-  }
-}
-function changePersonalities(change, file = PERSONALITIES_FILE, lock = PERSONALITIES_LOCK) {
-  return locked(lock, () => {
-    const library = mergePersonalities(change(readPersonalities(file)));
-    const text = JSON.stringify({ kuvo: 1, ...library }, null, 2) + `
-`;
-    if (textOf(file) !== text) {
-      writePrivate(file, text);
-      for (const tell of personalityFollowers)
-        tell();
-    }
-    return library;
-  });
-}
-function meetPersonalities(given, file, lock) {
-  let changed = [];
-  changePersonalities((library) => {
-    const was = new Map([...library.personalities, ...library.removed].map((entry) => [entry.id, JSON.stringify(entry)]));
-    const met = mergePersonalities(library, given);
-    changed = [...met.personalities, ...met.removed].filter((entry) => was.get(entry.id) !== JSON.stringify(entry)).map((entry) => entry.id);
-    return met;
-  }, file, lock);
-  return changed;
-}
-function personalitiesDocument(file = PERSONALITIES_FILE) {
-  return { kuvo: 1, ...readPersonalities(file) };
-}
-var FULL_LIBRARY = "There’s no room for more in your personalities. Shorten or remove one, then try again.";
-var fitsLibrary = (library) => Buffer.byteLength(JSON.stringify(mergePersonalities(library))) <= MOST_DOC - 4096;
-function botPersonalities(kit, library = readPersonalities()) {
-  const told = (each) => kit.personalityWords.replaceAll("⟦name⟧", each.name).replaceAll("⟦description⟧", each.description);
-  const presets = kit.personalities.filter((each) => !each.custom);
-  const fromKit = kit.personalities.filter((each) => each.custom && !library.personalities.some((mine) => mine.id === each.id) && !library.removed.some((gone) => gone.id === each.id));
-  return [...presets, ...fromKit, ...library.personalities.map((each) => ({ id: each.id, name: each.name, description: each.description, custom: true, instruction: told(each) }))];
-}
-
-// Packages/Box/src/link/work/former-asks.ts
-var same = (a, b) => a.action === b.action && a.resource === b.resource && a.effect === b.effect;
-var PROGRAMS = [
-  "useradd",
-  "adduser",
-  "sysadminctl",
-  "dscl",
-  "mail",
-  "mailx",
-  "sendmail",
-  "mutt",
-  "msmtp",
-  "swaks"
-];
-var PUBLISH_ASK_RULES = [
-  "git push*",
-  "npm publish*",
-  "pnpm publish*",
-  "yarn publish*",
-  "yarn npm publish*",
-  "bun publish*",
-  "cargo publish*",
-  "gem push*",
-  "twine upload*",
-  "poetry publish*",
-  "swift package-registry publish*",
-  "vercel*",
-  "npx vercel*",
-  "netlify deploy*",
-  "npx netlify*",
-  "wrangler deploy*",
-  "wrangler publish*",
-  "wrangler pages deploy*",
-  "npx wrangler*",
-  "firebase deploy*",
-  "fly deploy*",
-  "flyctl deploy*",
-  "railway up*",
-  "render deploy*",
-  "serverless deploy*",
-  "sls deploy*",
-  "docker push*",
-  "podman push*",
-  "kubectl apply*",
-  "helm upgrade*",
-  "helm install*",
-  "terraform apply*",
-  "tofu apply*",
-  "pulumi up*",
-  "eas submit*",
-  "eas build*--auto-submit*",
-  "fastlane*",
-  "xcrun altool*",
-  "gh release*",
-  "gh pr merge*",
-  "gh workflow run*"
-].map((resource) => ({ action: "shell", resource, effect: "ask" }));
-var ALWAYS_ASK_RULES = [
-  ...PROGRAMS.flatMap((program) => [program, `${program} *`, `*/${program} *`].map((resource) => ({ action: "shell", resource, effect: "ask" }))),
-  ...[
-    "git push *--force*",
-    "git push * -f*",
-    "git push * +*",
-    "git push *--delete*",
-    "git push * -d *",
-    "git push * :*",
-    "git push *--mirror*",
-    "gh issue create*",
-    "gh issue comment*",
-    "gh pr create*",
-    "gh pr comment*",
-    "gh pr review*",
-    "gh gist create*",
-    "gh release create*",
-    "gh repo delete*",
-    "gh repo edit*",
-    "gh api *-X *",
-    "gh api *--method*",
-    "gh api * -f *",
-    "gh api * -F *",
-    "gh api *--field*",
-    "stripe *",
-    "npx stripe *",
-    "bunx stripe *",
-    "*://api.stripe.com*",
-    "*://api.paypal.com*",
-    "*://hooks.slack.com*",
-    "*://slack.com/api/chat.*",
-    "*://discord.com/api/webhooks*",
-    "*://discordapp.com/api/webhooks*",
-    "*://api.telegram.org*",
-    "*://api.twilio.com*",
-    "*://api.sendgrid.com*",
-    "*://api.mailgun.net*",
-    "*://api.resend.com*",
-    "*://gmail.googleapis.com*"
-  ].map((resource) => ({ action: "shell", resource, effect: "ask" }))
-];
-var FORMER_PROGRAMS = [
-  "rm",
-  "rmdir",
-  "unlink",
-  "shred",
-  "srm",
-  "truncate",
-  "dd",
-  "mkfs",
-  "wipefs",
-  "chmod",
-  "chown",
-  "chgrp",
-  "chflags",
-  "setfacl",
-  "chattr",
-  "sudo",
-  "su",
-  "doas",
-  "visudo",
-  "pkexec",
-  "ssh-keygen",
-  "ssh-add",
-  "security",
-  "op",
-  "bw",
-  "gpg",
-  "keyring",
-  "git-credential"
-];
-var FORMER_ASK_RULES = [
-  ...FORMER_PROGRAMS.flatMap((program) => [program, `${program} *`, `*/${program} *`].map((resource) => ({ action: "shell", resource, effect: "ask" }))),
-  ...[
-    "* xargs rm*",
-    "*-c *rm *",
-    "git config *",
-    "git -c *",
-    "git -C *",
-    "git --git-dir*",
-    "git remote add*",
-    "git remote set-url*",
-    "git remote remove*",
-    "git remote rm*",
-    "git clean *",
-    "git reset --hard*",
-    "git reset * --hard*",
-    "git branch -D*",
-    "git branch * -D*",
-    "gh secret *",
-    "gh auth token*",
-    "gh auth login*",
-    "gh auth refresh*",
-    "gh auth setup-git*",
-    "find * -delete*",
-    "find * -exec rm*",
-    "*.ssh/*",
-    "*.aws/credentials*",
-    "*.netrc*",
-    "*.git-credentials*"
-  ].map((resource) => ({ action: "shell", resource, effect: "ask" })),
-  ...["git config --get*", "git config --list*", "git config -l*", "git config --get-all*", "git config --get-regexp*", "git config get *", "git config list", "git config list -*"].map((resource) => ({ action: "shell", resource, effect: "allow" })),
-  ...["*.env", "*.env.*", "*/.ssh/*", "*/.gitconfig", "*/.gitmodules", "*/.git/config", "*/.netrc", "*/.npmrc", "*/.pypirc", "*/.git-credentials", "*/.aws/credentials", "*/.docker/config.json", "*/.kube/config"].map((resource) => ({ action: "edit", resource, effect: "ask" })),
-  { action: "edit", resource: "*.env.example", effect: "allow" }
-];
-var FORMER = [...ALWAYS_ASK_RULES, ...PUBLISH_ASK_RULES, ...FORMER_ASK_RULES];
-var withoutFormerAsks = (rules, kept = []) => rules.filter((rule) => !FORMER.some((each) => same(each, rule)) || kept.some((each) => same(each, rule)));
-var hasFormerAsks = (rules, kept = []) => rules.some((rule) => FORMER.some((each) => same(each, rule)) && !kept.some((each) => same(each, rule)));
-
-// Packages/Box/src/link/work/approval.ts
-import path22 from "node:path";
-
-// Packages/Box/src/link/work/sandbox.ts
-import path21 from "node:path";
-
-// Packages/Box/src/link/fence/state.ts
-import { spawnSync as spawnSync3 } from "node:child_process";
-import crypto9 from "node:crypto";
-import fs21 from "node:fs";
-import os4 from "node:os";
-import path20 from "node:path";
-
-// Packages/Box/src/link/fence/allowed.ts
-import crypto8 from "node:crypto";
-import fs18 from "node:fs";
-import path17 from "node:path";
-
 // Packages/Box/src/link/fence/policy.ts
-import fs17 from "node:fs";
+import fs13 from "node:fs";
 import os3 from "node:os";
-import path16 from "node:path";
+import path14 from "node:path";
 var CACHES = [
   ".npm",
   ".bun",
@@ -3371,18 +2729,18 @@ var LINUX_PERSONAL = {
 function xdgPersonal(home) {
   const named = {};
   try {
-    for (const line of fs17.readFileSync(path16.join(home, ".config", "user-dirs.dirs"), "utf8").split(`
+    for (const line of fs13.readFileSync(path14.join(home, ".config", "user-dirs.dirs"), "utf8").split(`
 `)) {
       const found = line.match(/^\s*XDG_([A-Z]+)_DIR\s*=\s*"(.*)"\s*$/);
       if (found)
         named[found[1]] = found[2].replace(/^\$HOME(?=\/|$)/, home);
     }
   } catch {}
-  return Object.entries(LINUX_PERSONAL).map(([key, name]) => named[key] ?? path16.join(home, name)).filter((folder) => path16.isAbsolute(folder) && path16.resolve(folder) !== path16.resolve(home) && path16.resolve(folder).startsWith(path16.resolve(home) + "/"));
+  return Object.entries(LINUX_PERSONAL).map(([key, name]) => named[key] ?? path14.join(home, name)).filter((folder) => path14.isAbsolute(folder) && path14.resolve(folder) !== path14.resolve(home) && path14.resolve(folder).startsWith(path14.resolve(home) + "/"));
 }
 function startingWith(home, prefixes) {
   try {
-    return fs17.readdirSync(home).filter((name) => prefixes.some((prefix) => name.startsWith(prefix))).map((name) => path16.join(home, name));
+    return fs13.readdirSync(home).filter((name) => prefixes.some((prefix) => name.startsWith(prefix))).map((name) => path14.join(home, name));
   } catch {
     return [];
   }
@@ -3392,14 +2750,14 @@ function sshSockets(home, system = "/etc/ssh/ssh_config") {
   const globs = new Set;
   const shared = new Set([
     home,
-    ...[".ssh", ".cache", ".config", ".local", ".local/share", ".local/state", "Library", "Library/Caches"].map((name) => path16.join(home, name)),
+    ...[".ssh", ".cache", ".config", ".local", ".local/share", ".local/state", "Library", "Library/Caches"].map((name) => path14.join(home, name)),
     "/tmp",
     "/private/tmp",
     "/var/tmp",
     "/private/var/tmp",
     os3.tmpdir(),
     `/run/user/${os3.userInfo().uid}`
-  ].map((each) => path16.resolve(each)));
+  ].map((each) => path14.resolve(each)));
   const holdsMore = (folder) => shared.has(folder) || folder === "/" || home.startsWith(folder + "/");
   const expand = (value) => {
     let unknown = false;
@@ -3426,7 +2784,7 @@ function sshSockets(home, system = "/etc/ssh/ssh_config") {
         for (const word of included[1].trim().split(/\s+/)) {
           const named = expand(word.replace(/^"|"$/g, ""));
           if (named)
-            for (const each of matching(path16.isAbsolute(named) ? named : path16.join(relative, named)))
+            for (const each of matching(path14.isAbsolute(named) ? named : path14.join(relative, named)))
               read(each, relative, depth + 1);
         }
         continue;
@@ -3441,26 +2799,26 @@ function sshSockets(home, system = "/etc/ssh/ssh_config") {
       if (expanded === null)
         continue;
       const value = expanded.replace(/%d/g, home).replace(/%%/g, "\x00");
-      if (!path16.isAbsolute(value))
+      if (!path14.isAbsolute(value))
         continue;
       if (!value.includes("%")) {
-        paths.add(path16.resolve(value.replace(/\0/g, "%")));
+        paths.add(path14.resolve(value.replace(/\0/g, "%")));
         continue;
       }
       if (/[*?[\]]/.test(value))
         continue;
-      const glob = path16.resolve(value.replace(/%./g, "*").replace(/\*+/g, "*").replace(/\0/g, "%"));
-      const folder = path16.dirname(glob);
-      if (!folder.includes("*") && path16.basename(glob).startsWith("*") && !holdsMore(folder))
+      const glob = path14.resolve(value.replace(/%./g, "*").replace(/\*+/g, "*").replace(/\0/g, "%"));
+      const folder = path14.dirname(glob);
+      if (!folder.includes("*") && path14.basename(glob).startsWith("*") && !holdsMore(folder))
         paths.add(folder);
       else
         globs.add(glob);
     }
   };
-  read(path16.join(home, ".ssh", "config"), path16.join(home, ".ssh"), 0);
-  for (const name of namesIn(path16.join(home, ".ssh", "config.d")).value ?? [])
-    read(path16.join(home, ".ssh", "config.d", name), path16.join(home, ".ssh"), 1);
-  read(system, path16.dirname(system), 0);
+  read(path14.join(home, ".ssh", "config"), path14.join(home, ".ssh"), 0);
+  for (const name of namesIn(path14.join(home, ".ssh", "config.d")).value ?? [])
+    read(path14.join(home, ".ssh", "config.d", name), path14.join(home, ".ssh"), 1);
+  read(system, path14.dirname(system), 0);
   return { paths: [...paths], globs: [...globs] };
 }
 function globPattern(glob) {
@@ -3476,11 +2834,11 @@ function matching(pattern) {
   let found = ["/"];
   for (const name of pattern.split("/").filter(Boolean)) {
     if (!/[*?]/.test(name)) {
-      found = found.map((at) => path16.join(at, name));
+      found = found.map((at) => path14.join(at, name));
       continue;
     }
     const like = new RegExp(`^${name.split("").map((char) => char === "*" ? ".*" : char === "?" ? "." : escapeRegex(char)).join("")}$`);
-    found = found.flatMap((at) => (namesIn(at).value ?? []).filter((each) => like.test(each) && (name.startsWith(".") || !each.startsWith("."))).sort().map((each) => path16.join(at, each)));
+    found = found.flatMap((at) => (namesIn(at).value ?? []).filter((each) => like.test(each) && (name.startsWith(".") || !each.startsWith("."))).sort().map((each) => path14.join(at, each)));
   }
   return found;
 }
@@ -3533,77 +2891,77 @@ var MAC_SECRETS = [
 ];
 var LINUX_SECRETS = [".config/google-chrome", ".config/chromium", ".config/BraveSoftware", ".mozilla", ".local/share/keyrings"];
 function keychainDaemons(home) {
-  const folder = path16.join(home, "Library", "Keychains");
+  const folder = path14.join(home, "Library", "Keychains");
   try {
-    return fs17.readdirSync(folder).filter((name) => /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i.test(name)).map((name) => path16.join(folder, name));
+    return fs13.readdirSync(folder).filter((name) => /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i.test(name)).map((name) => path14.join(folder, name));
   } catch {
     return [];
   }
 }
 function sshKeys(home) {
-  const folder = path16.join(home, ".ssh");
+  const folder = path14.join(home, ".ssh");
   const { known, value: names } = namesIn(folder);
   if (!known || !names && macMayAsk(folder))
     return [folder];
   if (!names)
     return [];
-  return names.filter((name) => !(name === "config" || name === "config.d" || name.startsWith("known_hosts") || name.endsWith(".pub") || name === "authorized_keys")).map((name) => path16.join(folder, name));
+  return names.filter((name) => !(name === "config" || name === "config.d" || name.startsWith("known_hosts") || name.endsWith(".pub") || name === "authorized_keys")).map((name) => path14.join(folder, name));
 }
 function ghHosts(home) {
-  const file = path16.join(home, ".config", "gh", "hosts.yml");
+  const file = path14.join(home, ".config", "gh", "hosts.yml");
   const { known, value: text } = textFor(file);
   return !known || (text === null ? macMayAsk(file) : /oauth_token\s*:/.test(text)) ? [file] : [];
 }
 function appTemporary() {
   if (!IS_MAC)
     return null;
-  const tmp = path16.dirname(path16.resolve(os3.tmpdir()));
-  return path16.basename(tmp) === path16.basename(path16.dirname(path16.resolve(K))) ? tmp : null;
+  const tmp = path14.dirname(path14.resolve(os3.tmpdir()));
+  return path14.basename(tmp) === path14.basename(path14.dirname(path14.resolve(K))) ? tmp : null;
 }
 function sandboxCaches() {
   const tmp = appTemporary();
-  const root = throughLinks(tmp ? path16.join(homeFolder(), "Library", "Caches", path16.basename(tmp)) : path16.join(K, "cache"));
-  return { npm: path16.join(root, "sandbox-npm"), pnpm: path16.join(root, "sandbox-pnpm"), uv: path16.join(root, "sandbox-uv"), corepack: path16.join(root, "sandbox-corepack") };
+  const root = throughLinks(tmp ? path14.join(homeFolder(), "Library", "Caches", path14.basename(tmp)) : path14.join(K, "cache"));
+  return { npm: path14.join(root, "sandbox-npm"), pnpm: path14.join(root, "sandbox-pnpm"), uv: path14.join(root, "sandbox-uv"), corepack: path14.join(root, "sandbox-corepack") };
 }
 function macFolders(home) {
-  const app = path16.dirname(path16.resolve(K));
-  const bundle = path16.basename(app);
+  const app = path14.dirname(path14.resolve(K));
+  const bundle = path14.basename(app);
   const tmp = appTemporary();
   const kuvo = [
     app,
-    path16.join(home, "Library", "Caches", bundle),
-    path16.join(home, "Library", "Logs", "Kuvo Code"),
-    path16.join(home, "Library", "WebKit", bundle),
-    path16.join(home, "Library", "HTTPStorages", bundle),
-    path16.join(home, "Library", "Preferences", `${bundle}.plist`),
+    path14.join(home, "Library", "Caches", bundle),
+    path14.join(home, "Library", "Logs", "Kuvo Code"),
+    path14.join(home, "Library", "WebKit", bundle),
+    path14.join(home, "Library", "HTTPStorages", bundle),
+    path14.join(home, "Library", "Preferences", `${bundle}.plist`),
     `/private/tmp/kuvo-ssh-${os3.userInfo().uid}`,
-    path16.join(home, ".kuvo-code")
+    path14.join(home, ".kuvo-code")
   ];
   if (tmp)
-    kuvo.push(tmp, path16.dirname(sandboxCaches().npm));
-  return { kuvo, readable: [path16.join(app, "bin")] };
+    kuvo.push(tmp, path14.dirname(sandboxCaches().npm));
+  return { kuvo, readable: [path14.join(app, "bin")] };
 }
 function fencePolicy(ports = []) {
   const home = realish(accountHome());
-  const inHome = (names) => names.map((name) => throughLinks(path16.join(home, name)));
-  const given = process.env.HOME && path16.isAbsolute(process.env.HOME) ? realish(process.env.HOME) : home;
+  const inHome = (names) => names.map((name) => throughLinks(path14.join(home, name)));
+  const given = process.env.HOME && path14.isAbsolute(process.env.HOME) ? realish(process.env.HOME) : home;
   const named = given === "/" || home.startsWith(given + "/") ? home : given;
   const homes = named === home ? [home] : [home, named];
-  const inHomes = (names) => homes.flatMap((each) => names.map((name) => throughLinks(path16.join(each, name))));
+  const inHomes = (names) => homes.flatMap((each) => names.map((name) => throughLinks(path14.join(each, name))));
   const opencodes = homes.map((each) => throughLinks(opencodeAuthFile(each))).filter((each) => !inHomes([".local/share/opencode/auth.json"]).includes(each));
-  const own = IS_MAC ? macFolders(home) : { kuvo: [K, path16.join(home, ".kuvo-code"), ...process.platform === "darwin" ? [`/private/tmp/kuvo-ssh-${os3.userInfo().uid}`, path16.join(home, "Library", "Logs", "Kuvo Code")] : []], readable: [path16.join(K, "bin")] };
+  const own = IS_MAC ? macFolders(home) : { kuvo: [K, path14.join(home, ".kuvo-code"), ...process.platform === "darwin" ? [`/private/tmp/kuvo-ssh-${os3.userInfo().uid}`, path14.join(home, "Library", "Logs", "Kuvo Code")] : []], readable: [path14.join(K, "bin")] };
   const kuvo = [...new Set(own.kuvo.map(throughLinks))];
   const kuvoReadable = own.readable.map(throughLinks);
   const commandCaches = Object.values(sandboxCaches());
   const ownCache = "KUVO_OWN_XDG_CACHE_HOME" in process.env ? process.env.KUVO_OWN_XDG_CACHE_HOME : process.env.XDG_CACHE_HOME;
-  const yourCaches = [throughLinks(path16.join(home, ".cache"))];
-  const ownCacheAt = ownCache && path16.isAbsolute(ownCache) ? throughLinks(ownCache) : null;
+  const yourCaches = [throughLinks(path14.join(home, ".cache"))];
+  const ownCacheAt = ownCache && path14.isAbsolute(ownCache) ? throughLinks(ownCache) : null;
   if (ownCacheAt && !kuvo.some((folder) => ownCacheAt === folder || ownCacheAt.startsWith(folder + "/")))
     yourCaches.push(ownCacheAt);
-  const runsLater = [...inHomes(RUNS_LATER), ...new Set(yourCaches.flatMap((folder) => [...TOOL_CACHES, ...SHELL_CACHES(accountName())].map((name) => path16.join(folder, name))))];
-  const onPath = [...new Set((process.env.PATH ?? "").split(":").filter((each) => path16.isAbsolute(each)).map(throughLinks))].filter((folder) => homes.some((each) => folder.startsWith(each + "/")) && !kuvo.some((each) => folder === each || folder.startsWith(each + "/"))).filter((folder) => {
+  const runsLater = [...inHomes(RUNS_LATER), ...new Set(yourCaches.flatMap((folder) => [...TOOL_CACHES, ...SHELL_CACHES(accountName())].map((name) => path14.join(folder, name))))];
+  const onPath = [...new Set((process.env.PATH ?? "").split(":").filter((each) => path14.isAbsolute(each)).map(throughLinks))].filter((folder) => homes.some((each) => folder.startsWith(each + "/")) && !kuvo.some((each) => folder === each || folder.startsWith(each + "/"))).filter((folder) => {
     try {
-      return fs17.statSync(folder).isDirectory();
+      return fs13.statSync(folder).isDirectory();
     } catch {
       return false;
     }
@@ -3671,7 +3029,7 @@ function fencePolicy(ports = []) {
         throughLinks("/var/run/docker.sock"),
         "/private/var/run/docker.sock",
         ...sshPaths,
-        ...process.env.SSH_AUTH_SOCK && path16.isAbsolute(process.env.SSH_AUTH_SOCK) ? [throughLinks(process.env.SSH_AUTH_SOCK)] : []
+        ...process.env.SSH_AUTH_SOCK && path14.isAbsolute(process.env.SSH_AUTH_SOCK) ? [throughLinks(process.env.SSH_AUTH_SOCK)] : []
       ],
       socketPatterns: [
         "^/private/(var/run|tmp)/com\\.apple\\.launchd\\.[^/]+/",
@@ -3721,7 +3079,7 @@ function fencePolicy(ports = []) {
       ]),
       `/tmp/zellij-${os3.userInfo().uid}`,
       ...[...new Set(["/var/run/tailscale/tailscaled.sock", "/run/tailscale/tailscaled.sock"].map(throughLinks))],
-      ...process.env.SSH_AUTH_SOCK && path16.isAbsolute(process.env.SSH_AUTH_SOCK) ? [process.env.SSH_AUTH_SOCK] : [],
+      ...process.env.SSH_AUTH_SOCK && path14.isAbsolute(process.env.SSH_AUTH_SOCK) ? [process.env.SSH_AUTH_SOCK] : [],
       ...[...new Set([
         "/var/run/docker.sock",
         "/run/docker.sock",
@@ -3743,13 +3101,13 @@ function fencePolicy(ports = []) {
 function userTemporary() {
   let t = os3.tmpdir();
   try {
-    t = fs17.realpathSync(t);
+    t = fs13.realpathSync(t);
   } catch {}
   const user = t.match(/^(\/private\/var\/folders\/[^/]+\/[^/]+)\//)?.[1];
   return user ? [user] : [];
 }
 function realish(where) {
-  return deepestThere(where, fs17.realpathSync);
+  return deepestThere(where, fs13.realpathSync);
 }
 function throughLinks(where) {
   if (process.platform !== "darwin")
@@ -3758,18 +3116,18 @@ function throughLinks(where) {
   return macAsksAbout(found) || macAsksAbout(leadsTo(where)) ? found : realish(found);
 }
 function macMayAsk(where) {
-  return process.platform === "darwin" && (macAsksAbout(path16.resolve(where)) || macAsksAbout(leadsTo(where)));
+  return process.platform === "darwin" && (macAsksAbout(path14.resolve(where)) || macAsksAbout(leadsTo(where)));
 }
 async function askedAbout(paths) {
-  const named = paths.filter((each) => typeof each === "string" && path16.isAbsolute(each) && macMayAsk(each));
-  await Promise.all([...new Set(named.map((each) => path16.resolve(each)))].map(askOne));
+  const named = paths.filter((each) => typeof each === "string" && path14.isAbsolute(each) && macMayAsk(each));
+  await Promise.all([...new Set(named.map((each) => path14.resolve(each)))].map(askOne));
 }
 var asking = new Map;
 async function askOne(where) {
   const place = askingIn(macAsksAbout(where) ? where : leadsTo(where));
   for (let pending = asking.get(place);pending; pending = asking.get(place))
     await pending;
-  const asked = fs17.promises.realpath(where).then(() => {}, () => {}).finally(() => {
+  const asked = fs13.promises.realpath(where).then(() => {}, () => {}).finally(() => {
     if (asking.get(place) === asked)
       asking.delete(place);
   });
@@ -3810,24 +3168,24 @@ function readLate(key, read) {
 }
 function textFor(file) {
   if (macMayAsk(file))
-    return readLate(`text ${path16.resolve(file)}`, async () => {
+    return readLate(`text ${path14.resolve(file)}`, async () => {
       await askedAbout([file]);
-      return fs17.promises.readFile(file, "utf8");
+      return fs13.promises.readFile(file, "utf8");
     });
   try {
-    return { known: true, value: fs17.readFileSync(file, "utf8") };
+    return { known: true, value: fs13.readFileSync(file, "utf8") };
   } catch {
     return { known: true, value: null };
   }
 }
 function namesIn(folder) {
   if (macMayAsk(folder))
-    return readLate(`names ${path16.resolve(folder)}`, async () => {
+    return readLate(`names ${path14.resolve(folder)}`, async () => {
       await askedAbout([folder]);
-      return fs17.promises.readdir(folder);
+      return fs13.promises.readdir(folder);
     });
   try {
-    return { known: true, value: fs17.readdirSync(folder) };
+    return { known: true, value: fs13.readdirSync(folder) };
   } catch {
     return { known: true, value: null };
   }
@@ -3842,12 +3200,12 @@ function macAsksAbout(at) {
   return macAsks.test(at.toLowerCase());
 }
 function deepestThere(where, resolve) {
-  const full = path16.resolve(where);
-  for (let at = full, rest = "";; rest = path16.join(path16.basename(at), rest), at = path16.dirname(at)) {
+  const full = path14.resolve(where);
+  for (let at = full, rest = "";; rest = path14.join(path14.basename(at), rest), at = path14.dirname(at)) {
     try {
-      return path16.join(resolve(at), rest);
+      return path14.join(resolve(at), rest);
     } catch {}
-    if (at === path16.dirname(at))
+    if (at === path14.dirname(at))
       return full;
   }
 }
@@ -3856,9 +3214,9 @@ function landsAt(where) {
 }
 function leadsTo(where) {
   try {
-    return followLinks(path16.resolve(where), true);
+    return followLinks(path14.resolve(where), true);
   } catch {
-    return path16.resolve(where);
+    return path14.resolve(where);
   }
 }
 function followLinks(where, loose = false) {
@@ -3869,17 +3227,17 @@ function followLinks(where, loose = false) {
     if (!name || name === ".")
       continue;
     if (name === "..") {
-      at = path16.dirname(at);
+      at = path14.dirname(at);
       continue;
     }
-    const next = path16.join(at, name);
+    const next = path14.join(at, name);
     let link;
     try {
-      link = fs17.lstatSync(next).isSymbolicLink();
+      link = fs13.lstatSync(next).isSymbolicLink();
     } catch (error) {
       if (!loose)
         throw error;
-      return path16.join(next, ...names);
+      return path14.join(next, ...names);
     }
     if (!link) {
       at = next;
@@ -3887,7 +3245,7 @@ function followLinks(where, loose = false) {
     }
     if (++links > 40)
       throw new Error(`Too many links: ${where}`);
-    const target = fs17.readlinkSync(next);
+    const target = fs13.readlinkSync(next);
     if (target.startsWith("/"))
       at = "/";
     names = [...target.split("/"), ...names];
@@ -3896,7 +3254,647 @@ function followLinks(where, loose = false) {
 }
 var escapeRegex = (text) => text.replace(/[.^$*+?()[\]{}|\\]/g, "\\$&");
 
+// Packages/Box/src/link/follow.ts
+import fs15 from "node:fs";
+
+// Packages/Box/src/shared/watch.ts
+import fs14 from "node:fs";
+var WATCH_LOOKS_AGAIN = [250, 1000];
+var watching = new Set;
+var looks = new Map;
+function startedOrStopped() {
+  for (const after of WATCH_LOOKS_AGAIN) {
+    const at = Math.ceil((performance.now() + after) / 100) * 100;
+    if (looks.has(at))
+      continue;
+    const timer = setTimeout(() => {
+      looks.delete(at);
+      for (const look of [...watching]) {
+        if (!watching.has(look))
+          continue;
+        try {
+          look();
+        } catch {}
+      }
+    }, at - performance.now());
+    timer.unref?.();
+    looks.set(at, timer);
+  }
+}
+function watchFolder(folder, changed, { recursive = false, missed = () => changed() } = {}) {
+  const watcher = fs14.watch(folder, { recursive }, (event, name) => changed(event, name === null ? null : String(name)));
+  const look = () => missed();
+  watching.add(look);
+  startedOrStopped();
+  const close = watcher.close.bind(watcher);
+  watcher.close = () => {
+    if (watching.delete(look))
+      startedOrStopped();
+    close();
+  };
+  return watcher;
+}
+
+// Packages/Box/src/link/follow.ts
+function watchFolders(folders, changed, { recursive = true, missed = changed } = {}) {
+  let whole = folders.length > 0;
+  const watchers = [];
+  for (const folder of folders) {
+    try {
+      fs15.mkdirSync(folder, { recursive: true });
+      const watcher = watchFolder(folder, changed, { recursive, missed });
+      watcher.on("error", () => {
+        whole = false;
+        watcher.close();
+      });
+      watchers.push(watcher);
+    } catch {
+      whole = false;
+    }
+  }
+  return { get whole() {
+    return whole;
+  }, close: () => {
+    for (const watcher of watchers)
+      watcher.close();
+  } };
+}
+async function* followed(read, followers, signal, { folders = [], recursive = true, watch = watchFolders } = {}) {
+  let wake = null;
+  const queue = [];
+  const told = () => {
+    queue.push(JSON.stringify(read()));
+    wake?.();
+  };
+  followers.add(told);
+  const watching = watch(folders, told, { recursive });
+  queue.push(JSON.stringify(read()));
+  const settled = WATCH_SETTLES.map((ms) => setTimeout(told, ms));
+  signal?.addEventListener("abort", () => wake?.(), { once: true });
+  try {
+    let last = "";
+    while (!signal?.aborted) {
+      while (queue.length) {
+        const line = queue.shift();
+        if (line !== last) {
+          yield { body: Buffer.from(line + `
+`) };
+          last = line;
+        }
+      }
+      if (signal?.aborted)
+        break;
+      await new Promise((done) => {
+        const timer = setTimeout(done, watching.whole ? 30000 : 1000);
+        wake = () => {
+          clearTimeout(timer);
+          done();
+        };
+      });
+      wake = null;
+      queue.push(JSON.stringify(read()));
+    }
+  } finally {
+    for (const timer of settled)
+      clearTimeout(timer);
+    followers.delete(told);
+    watching.close();
+  }
+}
+var WATCH_SETTLES = [250, 1000, 5000];
+
+// Packages/Box/src/link/areas/wakes.ts
+import { execFile as execFile10 } from "node:child_process";
+import fs96 from "node:fs";
+import path98 from "node:path";
+
+// Packages/Box/src/link/bots/tell.ts
+import crypto10 from "node:crypto";
+import fs25 from "node:fs";
+import path26 from "node:path";
+
+// Packages/Box/src/link/areas/config.ts
+import fs16 from "node:fs";
+import path15 from "node:path";
+var CONFIG_FILE = IS_MAC ? path15.join(ENGINE_CONFIG, "opencode", "opencode.json") : path15.join(BOX, "opencode.json");
+var OWN_MARK = IS_MAC ? null : CONFIG_FILE;
+var SERVERS = ["mcp", "servers"];
+var ownsSettings = (mark = OWN_MARK) => mark === null || fs16.existsSync(mark);
+var sortedKeys = (value) => Array.isArray(value) ? value.map(sortedKeys) : isObject(value) ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sortedKeys(value[key])])) : value;
+function readSettings(file = CONFIG_FILE) {
+  let text;
+  try {
+    text = fs16.readFileSync(file, "utf8");
+  } catch (error) {
+    let link = false;
+    try {
+      link = fs16.lstatSync(file).isSymbolicLink();
+    } catch {}
+    if (error?.code === "ENOENT" && !link)
+      return { settings: {} };
+    return { problem: link && error?.code === "ENOENT" ? "It's a link to a file that isn't there, so Kuvo Code leaves it alone." : `It couldn't be read, so Kuvo Code leaves it alone (${error?.code ?? error?.message}).` };
+  }
+  try {
+    const parsed = text.trim() ? JSON.parse(text) : {};
+    if (!isObject(parsed))
+      throw new Error("not an object");
+    return { settings: parsed };
+  } catch {
+    return { problem: "It isn't plain JSON, so Kuvo Code leaves it alone. (Comments aren't supported here.)" };
+  }
+}
+var valueAt = (object, keys) => keys.reduce((current, key) => isObject(current) ? current[key] : undefined, object);
+function settingAt(object, keys, value) {
+  const [key, ...rest] = keys;
+  const next = { ...object };
+  if (!rest.length) {
+    if (value === null || value === undefined)
+      delete next[key];
+    else
+      next[key] = value;
+    return next;
+  }
+  const inner = settingAt(isObject(next[key]) ? next[key] : {}, rest, value);
+  if (Object.keys(inner).length)
+    next[key] = inner;
+  else
+    delete next[key];
+  return next;
+}
+function changeSettings(changes, file = CONFIG_FILE, lock = CONFIG_LOCK) {
+  const fits = Array.isArray(changes) && changes.length >= 1 && changes.length <= 100 && changes.every((change) => Array.isArray(change?.path) && change.path.length >= 1 && change.path.length <= 16 && change.path.every((key) => typeof key === "string" && key.length >= 1 && key.length <= 200) && ("value" in change));
+  if (!fits)
+    return { status: 400, message: 'Send {"changes": [{"path": [keys…], "value": …}]}.' };
+  return locked(lock, () => {
+    const { settings, problem } = readSettings(file);
+    if (problem)
+      return { status: 409, message: `The engine's settings file can't be changed from here: ${problem}`, problem };
+    if (changes.some((change) => change.path.slice(0, -1).some((_, at) => {
+      const above = valueAt(settings, change.path.slice(0, at + 1));
+      return above !== undefined && !isObject(above);
+    })))
+      return { status: 400, message: "A path goes through objects only; send a list whole, at its own path." };
+    if (changes.some((change) => ("was" in change) && sortedJSON(valueAt(settings, change.path) ?? null) !== sortedJSON(change.was))) {
+      return { status: 409, message: "It changed since you read it." };
+    }
+    return writeSettings(settings, changes, file);
+  });
+}
+function writeSettings(settings, changes, file) {
+  let next = settings;
+  for (const change of changes)
+    next = settingAt(next, change.path, keysNamedHere(change.value));
+  const target = linkTarget(file);
+  const temporary = `${target}.${process.pid}.tmp`;
+  try {
+    fs16.mkdirSync(path15.dirname(target), { recursive: true, mode: 448 });
+    fs16.writeFileSync(temporary, JSON.stringify(sortedKeys(next), null, 2) + `
+`, { mode: 384 });
+    fs16.renameSync(temporary, target);
+  } catch (error) {
+    fs16.rmSync(temporary, { force: true });
+    return { status: 500, message: `It couldn't be saved: ${error.message}` };
+  }
+  return { status: 200, settings: next };
+}
+function linkTarget(file) {
+  let target = file;
+  for (let i = 0;i < 8; i++) {
+    let destination;
+    try {
+      destination = fs16.readlinkSync(target);
+    } catch {
+      break;
+    }
+    target = path15.resolve(path15.dirname(target), destination);
+  }
+  return target;
+}
+function deepMerged(under, over) {
+  if (!isObject(under) || !isObject(over))
+    return over === undefined ? under : over;
+  const merged = { ...under };
+  for (const [key, value] of Object.entries(over))
+    merged[key] = key in under ? deepMerged(under[key], value) : value;
+  return merged;
+}
+var KEY_NAME = /^KUVO_KEY_[A-Za-z0-9_]+$/;
+var KEYS_NAMED = IS_MAC && APP_KEY_FILES ? APP_KEY_FILES : `${shownRoot}/box/keys`;
+var namingKeysHere = (named) => {
+  const rename = (value) => {
+    if (typeof value === "string")
+      return value.replace(named, (_, name) => `{file:${KEYS_NAMED}/${name}}`);
+    if (Array.isArray(value))
+      return value.map(rename);
+    if (isObject(value))
+      return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, rename(inner)]));
+    return value;
+  };
+  return rename;
+};
+var keysNamedHere = namingKeysHere(/\{file:[^{}]*?(KUVO_KEY_[A-Za-z0-9_]+)\}/g);
+var olderKeysNamedHere = namingKeysHere(/\{(?:env|file):[^{}]*?(KUVO_KEY_[A-Za-z0-9_]+)\}/g);
+var BOT_MEMORY_RULE = { action: "edit", resource: "*/bots/bot_*/MEMORY.md", effect: "allow" };
+var DEFAULTS_ADDED = path15.join(BOX, "defaults-added");
+function addDefaultRules(mac = IS_MAC, file = CONFIG_FILE, marks = DEFAULTS_ADDED) {
+  let done = [];
+  try {
+    done = fs16.readFileSync(marks, "utf8").split(`
+`).filter(Boolean);
+  } catch {}
+  const wanted = mac ? ["bot-memory", "websearch", "search-exa"] : ["bot-memory"];
+  if (wanted.every((mark) => done.includes(mark)))
+    return;
+  const { settings, problem } = readSettings(file);
+  if (problem)
+    return;
+  const changes = [];
+  const exa = { provider: "exa" };
+  if (mac && (!Object.keys(settings).length || !done.includes("websearch"))) {
+    if (settings.websearch === undefined)
+      changes.push({ path: ["websearch"], value: exa });
+    done.push("websearch", "search-exa");
+  } else if (mac && !done.includes("search-exa")) {
+    if (sameJSON(settings.websearch, { provider: "random" }))
+      changes.push({ path: ["websearch"], value: exa });
+    done.push("search-exa");
+  }
+  if (!done.includes("bot-memory")) {
+    const rules = Array.isArray(settings.permissions) ? settings.permissions : [];
+    if (!rules.some((rule) => sameJSON(rule, BOT_MEMORY_RULE)))
+      changes.push({ path: ["permissions"], value: [...rules, BOT_MEMORY_RULE] });
+    done.push("bot-memory");
+  }
+  if (changes.length && writeSettings(settings, changes, file).status !== 200)
+    return;
+  writePrivate(marks, [...new Set(done)].join(`
+`) + `
+`);
+}
+function addMacDefaults(file = CONFIG_FILE, marks = DEFAULTS_ADDED) {
+  locked(CONFIG_LOCK, () => addDefaultRules(true, file, marks));
+}
+
+// Packages/Box/src/link/personalities/library.ts
+import fs17 from "node:fs";
+import path16 from "node:path";
+
+// Packages/Box/src/link/documents/format.ts
+import crypto7 from "node:crypto";
+
+// Packages/Box/src/shared/documents.ts
+var DOC_KINDS = ["peers", "phones", "personalities"];
+
+// Packages/Box/src/link/documents/format.ts
+var DOC_SIGNED = Buffer.from("kuvo-link doc v1\x00");
+var MOST_DOC = 512 * 1024;
+var DOC_PART = 40000;
+var MOST_PARTS = Math.ceil(MOST_DOC * 4 / 3 / DOC_PART) + 1;
+var SIGN = /^[A-Za-z0-9_-]{43}$/;
+var ED_PKCS8 = Buffer.from("302e020100300506032b657004220420", "hex");
+var ED_SPKI = Buffer.from("302a300506032b6570032100", "hex");
+var newSigningSeed = () => crypto7.randomBytes(32).toString("base64url");
+var edPrivate = (seed) => crypto7.createPrivateKey({ key: Buffer.concat([ED_PKCS8, Buffer.from(seed, "base64url")]), format: "der", type: "pkcs8" });
+var edPublic = (key) => crypto7.createPublicKey({ key: Buffer.concat([ED_SPKI, Buffer.from(key, "base64url")]), format: "der", type: "spki" });
+var signingKeys = new Map;
+function signingKeyOf(seed) {
+  let key = signingKeys.get(seed);
+  if (!key) {
+    key = crypto7.createPublicKey(edPrivate(seed)).export({ format: "der", type: "spki" }).subarray(ED_SPKI.length).toString("base64url");
+    signingKeys.set(seed, key);
+  }
+  return key;
+}
+var ownSign = (link) => {
+  try {
+    return typeof link?.sign === "string" ? signingKeyOf(link.sign) : null;
+  } catch {
+    return null;
+  }
+};
+var shortHash = (bytes) => crypto7.createHash("sha256").update(bytes).digest().subarray(0, 8).toString("base64url");
+var bodyHash = (body) => shortHash(Buffer.from(JSON.stringify(body)));
+var docBytes = (origin, kind, n, body) => Buffer.from(JSON.stringify({ v: 1, kind, origin, n, body }));
+function signDoc(seed, kind, n, body) {
+  const bytes = docBytes(signingKeyOf(seed), kind, n, body);
+  return { d: bytes.toString("base64url"), s: crypto7.sign(null, Buffer.concat([DOC_SIGNED, bytes]), edPrivate(seed)).toString("base64url") };
+}
+function readDoc(envelope) {
+  if (!isObject(envelope) || typeof envelope.d !== "string" || typeof envelope.s !== "string" || envelope.d.length > Math.ceil(MOST_DOC * 4 / 3) + 4)
+    return null;
+  let bytes, doc;
+  try {
+    bytes = Buffer.from(envelope.d, "base64url");
+    if (bytes.length > MOST_DOC || bytes.toString("base64url") !== envelope.d)
+      return null;
+    doc = JSON.parse(bytes.toString("utf8"));
+  } catch {
+    return null;
+  }
+  if (!isObject(doc) || doc.v !== 1 || !DOC_KINDS.includes(doc.kind) || typeof doc.origin !== "string" || !SIGN.test(doc.origin) || !Number.isSafeInteger(doc.n) || doc.n < 1 || !isObject(doc.body))
+    return null;
+  try {
+    const signature = Buffer.from(envelope.s, "base64url");
+    if (signature.length !== 64 || !crypto7.verify(null, Buffer.concat([DOC_SIGNED, bytes]), edPublic(doc.origin), signature))
+      return null;
+  } catch {
+    return null;
+  }
+  return { origin: doc.origin, kind: doc.kind, n: doc.n, body: doc.body, h: shortHash(bytes), envelope: { d: envelope.d, s: envelope.s } };
+}
+var heldDocs = new Map;
+function held(envelope) {
+  if (typeof envelope?.d !== "string")
+    return null;
+  let doc = heldDocs.get(envelope.d);
+  if (!doc) {
+    try {
+      const bytes = Buffer.from(envelope.d, "base64url");
+      const parsed = JSON.parse(bytes.toString("utf8"));
+      doc = { origin: parsed.origin, kind: parsed.kind, n: parsed.n, body: isObject(parsed.body) ? parsed.body : {}, h: shortHash(bytes), envelope };
+    } catch {
+      return null;
+    }
+    if (heldDocs.size >= 256)
+      heldDocs.delete(heldDocs.keys().next().value);
+    heldDocs.set(envelope.d, doc);
+  }
+  return doc;
+}
+var docKey = (origin, kind) => `${origin} ${kind}`;
+
+// Packages/Box/src/link/personalities/library.ts
+var PERSONALITIES_FILE = path16.join(BOTS, "personalities.json");
+var PERSONALITIES_LOCK = path16.join(RUN, ".personalities.lock");
+var personalityFollowers = new Set;
+var PERSONALITY_ID = /^custom\.[A-Za-z0-9._-]{1,80}$/;
+var MOST_REMOVALS = 500;
+var MOST_COUNT = 2 ** 52;
+var changedAt = (entry) => Number(entry?.removed ?? entry?.updated ?? 0) || 0;
+var isRemoval = (entry) => entry?.removed !== undefined;
+function keptPersonality(entry) {
+  if (!isObject(entry) || typeof entry.id !== "string" || !PERSONALITY_ID.test(entry.id) || changedAt(entry) > MOST_COUNT)
+    return null;
+  if (isRemoval(entry))
+    return Number.isFinite(Number(entry.removed)) ? { id: entry.id, removed: Number(entry.removed) } : null;
+  const name = plainName(entry.name).slice(0, 80);
+  const description = String(entry.description ?? "").trim().slice(0, 2000);
+  if (!name || !description)
+    return null;
+  return { id: entry.id, name, description, symbol: typeof entry.symbol === "string" && entry.symbol ? entry.symbol.slice(0, 80) : "person.crop.circle", updated: Number(entry.updated) || 0 };
+}
+function newerTake(a, b) {
+  if (isRemoval(a) !== isRemoval(b))
+    return isRemoval(a) ? a : b;
+  const at = changedAt(a), bt = changedAt(b);
+  if (at !== bt)
+    return at > bt ? a : b;
+  return `${a.name ?? ""}
+${a.description ?? ""}` >= `${b.name ?? ""}
+${b.description ?? ""}` ? a : b;
+}
+function mergePersonalities(...libraries) {
+  const byID = new Map;
+  for (const library of libraries) {
+    for (const entry of [...Array.isArray(library?.personalities) ? library.personalities : [], ...Array.isArray(library?.removed) ? library.removed : []]) {
+      const kept = keptPersonality(entry);
+      if (!kept)
+        continue;
+      const had = byID.get(kept.id);
+      byID.set(kept.id, had ? newerTake(had, kept) : kept);
+    }
+  }
+  const all = [...byID.values()];
+  return {
+    personalities: all.filter((entry) => !isRemoval(entry)),
+    removed: all.filter(isRemoval).sort((a, b) => b.removed - a.removed).slice(0, MOST_REMOVALS)
+  };
+}
+function readPersonalities(file = PERSONALITIES_FILE) {
+  try {
+    return mergePersonalities(JSON.parse(fs17.readFileSync(file, "utf8")));
+  } catch {
+    return { personalities: [], removed: [] };
+  }
+}
+function changePersonalities(change, file = PERSONALITIES_FILE, lock = PERSONALITIES_LOCK) {
+  return locked(lock, () => {
+    const library = mergePersonalities(change(readPersonalities(file)));
+    const text = JSON.stringify({ kuvo: 1, ...library }, null, 2) + `
+`;
+    if (textOf(file) !== text) {
+      writePrivate(file, text);
+      for (const tell of personalityFollowers)
+        tell();
+    }
+    return library;
+  });
+}
+function meetPersonalities(given, file, lock) {
+  let changed = [];
+  changePersonalities((library) => {
+    const was = new Map([...library.personalities, ...library.removed].map((entry) => [entry.id, JSON.stringify(entry)]));
+    const met = mergePersonalities(library, given);
+    changed = [...met.personalities, ...met.removed].filter((entry) => was.get(entry.id) !== JSON.stringify(entry)).map((entry) => entry.id);
+    return met;
+  }, file, lock);
+  return changed;
+}
+function personalitiesDocument(file = PERSONALITIES_FILE) {
+  return { kuvo: 1, ...readPersonalities(file) };
+}
+var FULL_LIBRARY = "There’s no room for more in your personalities. Shorten or remove one, then try again.";
+var fitsLibrary = (library) => Buffer.byteLength(JSON.stringify(mergePersonalities(library))) <= MOST_DOC - 4096;
+function botPersonalities(kit, library = readPersonalities()) {
+  const told = (each) => kit.personalityWords.replaceAll("⟦name⟧", each.name).replaceAll("⟦description⟧", each.description);
+  const presets = kit.personalities.filter((each) => !each.custom);
+  const fromKit = kit.personalities.filter((each) => each.custom && !library.personalities.some((mine) => mine.id === each.id) && !library.removed.some((gone) => gone.id === each.id));
+  return [...presets, ...fromKit, ...library.personalities.map((each) => ({ id: each.id, name: each.name, description: each.description, custom: true, instruction: told(each) }))];
+}
+
+// Packages/Box/src/link/work/former-asks.ts
+var same = (a, b) => a.action === b.action && a.resource === b.resource && a.effect === b.effect;
+var PROGRAMS = [
+  "useradd",
+  "adduser",
+  "sysadminctl",
+  "dscl",
+  "mail",
+  "mailx",
+  "sendmail",
+  "mutt",
+  "msmtp",
+  "swaks"
+];
+var PUBLISH_ASK_RULES = [
+  "git push*",
+  "npm publish*",
+  "pnpm publish*",
+  "yarn publish*",
+  "yarn npm publish*",
+  "bun publish*",
+  "cargo publish*",
+  "gem push*",
+  "twine upload*",
+  "poetry publish*",
+  "swift package-registry publish*",
+  "vercel*",
+  "npx vercel*",
+  "netlify deploy*",
+  "npx netlify*",
+  "wrangler deploy*",
+  "wrangler publish*",
+  "wrangler pages deploy*",
+  "npx wrangler*",
+  "firebase deploy*",
+  "fly deploy*",
+  "flyctl deploy*",
+  "railway up*",
+  "render deploy*",
+  "serverless deploy*",
+  "sls deploy*",
+  "docker push*",
+  "podman push*",
+  "kubectl apply*",
+  "helm upgrade*",
+  "helm install*",
+  "terraform apply*",
+  "tofu apply*",
+  "pulumi up*",
+  "eas submit*",
+  "eas build*--auto-submit*",
+  "fastlane*",
+  "xcrun altool*",
+  "gh release*",
+  "gh pr merge*",
+  "gh workflow run*"
+].map((resource) => ({ action: "shell", resource, effect: "ask" }));
+var ALWAYS_ASK_RULES = [
+  ...PROGRAMS.flatMap((program) => [program, `${program} *`, `*/${program} *`].map((resource) => ({ action: "shell", resource, effect: "ask" }))),
+  ...[
+    "git push *--force*",
+    "git push * -f*",
+    "git push * +*",
+    "git push *--delete*",
+    "git push * -d *",
+    "git push * :*",
+    "git push *--mirror*",
+    "gh issue create*",
+    "gh issue comment*",
+    "gh pr create*",
+    "gh pr comment*",
+    "gh pr review*",
+    "gh gist create*",
+    "gh release create*",
+    "gh repo delete*",
+    "gh repo edit*",
+    "gh api *-X *",
+    "gh api *--method*",
+    "gh api * -f *",
+    "gh api * -F *",
+    "gh api *--field*",
+    "stripe *",
+    "npx stripe *",
+    "bunx stripe *",
+    "*://api.stripe.com*",
+    "*://api.paypal.com*",
+    "*://hooks.slack.com*",
+    "*://slack.com/api/chat.*",
+    "*://discord.com/api/webhooks*",
+    "*://discordapp.com/api/webhooks*",
+    "*://api.telegram.org*",
+    "*://api.twilio.com*",
+    "*://api.sendgrid.com*",
+    "*://api.mailgun.net*",
+    "*://api.resend.com*",
+    "*://gmail.googleapis.com*"
+  ].map((resource) => ({ action: "shell", resource, effect: "ask" }))
+];
+var FORMER_PROGRAMS = [
+  "rm",
+  "rmdir",
+  "unlink",
+  "shred",
+  "srm",
+  "truncate",
+  "dd",
+  "mkfs",
+  "wipefs",
+  "chmod",
+  "chown",
+  "chgrp",
+  "chflags",
+  "setfacl",
+  "chattr",
+  "sudo",
+  "su",
+  "doas",
+  "visudo",
+  "pkexec",
+  "ssh-keygen",
+  "ssh-add",
+  "security",
+  "op",
+  "bw",
+  "gpg",
+  "keyring",
+  "git-credential"
+];
+var FORMER_ASK_RULES = [
+  ...FORMER_PROGRAMS.flatMap((program) => [program, `${program} *`, `*/${program} *`].map((resource) => ({ action: "shell", resource, effect: "ask" }))),
+  ...[
+    "* xargs rm*",
+    "*-c *rm *",
+    "git config *",
+    "git -c *",
+    "git -C *",
+    "git --git-dir*",
+    "git remote add*",
+    "git remote set-url*",
+    "git remote remove*",
+    "git remote rm*",
+    "git clean *",
+    "git reset --hard*",
+    "git reset * --hard*",
+    "git branch -D*",
+    "git branch * -D*",
+    "gh secret *",
+    "gh auth token*",
+    "gh auth login*",
+    "gh auth refresh*",
+    "gh auth setup-git*",
+    "find * -delete*",
+    "find * -exec rm*",
+    "*.ssh/*",
+    "*.aws/credentials*",
+    "*.netrc*",
+    "*.git-credentials*"
+  ].map((resource) => ({ action: "shell", resource, effect: "ask" })),
+  ...["git config --get*", "git config --list*", "git config -l*", "git config --get-all*", "git config --get-regexp*", "git config get *", "git config list", "git config list -*"].map((resource) => ({ action: "shell", resource, effect: "allow" })),
+  ...["*.env", "*.env.*", "*/.ssh/*", "*/.gitconfig", "*/.gitmodules", "*/.git/config", "*/.netrc", "*/.npmrc", "*/.pypirc", "*/.git-credentials", "*/.aws/credentials", "*/.docker/config.json", "*/.kube/config"].map((resource) => ({ action: "edit", resource, effect: "ask" })),
+  { action: "edit", resource: "*.env.example", effect: "allow" }
+];
+var FORMER = [...ALWAYS_ASK_RULES, ...PUBLISH_ASK_RULES, ...FORMER_ASK_RULES];
+var withoutFormerAsks = (rules, kept = []) => rules.filter((rule) => !FORMER.some((each) => same(each, rule)) || kept.some((each) => same(each, rule)));
+var hasFormerAsks = (rules, kept = []) => rules.some((rule) => FORMER.some((each) => same(each, rule)) && !kept.some((each) => same(each, rule)));
+
+// Packages/Box/src/link/work/approval.ts
+import path22 from "node:path";
+
+// Packages/Box/src/link/work/sandbox.ts
+import path21 from "node:path";
+
+// Packages/Box/src/link/fence/state.ts
+import { spawnSync as spawnSync3 } from "node:child_process";
+import crypto9 from "node:crypto";
+import fs21 from "node:fs";
+import os4 from "node:os";
+import path20 from "node:path";
+
 // Packages/Box/src/link/fence/allowed.ts
+import crypto8 from "node:crypto";
+import fs18 from "node:fs";
+import path17 from "node:path";
 var FILE = path17.join(BOX, "sandbox-allowed.json");
 var FOR_LAUNCHER = path17.join(realish(path17.join(RUN, "fence")), "allowed");
 var MOST_FOLDERS = 8;
@@ -18670,7 +18668,7 @@ async function startSession(given, by, place) {
   let treeMade = null;
   const removeTree = async () => {
     if (madeTree)
-      await answerWorktrees("POST", "kuvo/worktrees/remove", { path: madeTree, discard: true }, engine, place.signal).catch(() => {});
+      await answerWorktrees("POST", "kuvo/worktrees/remove", { path: madeTree, discard: true, forget: true }, engine, place.signal).catch(() => {});
   };
   if (given.worktree === true && named && folder && realish(folder) !== realish(named.directory)) {
     giveBack();
@@ -18713,7 +18711,7 @@ async function startSession(given, by, place) {
   const applied = asBefore ? wanted : effective.approval;
   const kept = remote && wanted === "fullAccess" && unavailable("fullAccess") ? "auto" : wanted;
   const got = applied !== (requested ?? wanted) && lowerOf(applied, requested ?? wanted) === applied ? applied : undefined;
-  if (folder !== CHATS && !readProjects().some((each) => each.directory === folder && !each.removed))
+  if (folder !== CHATS && !readProjects().some((each) => each.directory === folder && !each.removed) && !(folder in worktreeProjects()))
     await inTime(findLinkedTrees(), undefined, 3000);
   const startersFiled = filedOf(parent);
   const mapped = folder === CHATS ? null : filedUnder(folder);
@@ -29583,76 +29581,50 @@ function folderRules(folders) {
 }
 var isFolderRule = (rule) => rule.action === "external_directory" && rule.effect === "allow" && rule.resource.endsWith("/*");
 var withFolders = (rules, folders) => [...rules.filter((rule) => !isFolderRule(rule) || rule.resource.includes("/bots/bot_")), ...folderRules(folders)];
-async function giveFolders(target, session, signal, folder) {
-  let at = null;
-  let folders = [];
-  let done;
-  try {
-    done = await rewriteOn(target, session, (now) => {
-      at = folder ?? now.location?.directory ?? now.directory ?? null;
-      folders = at ? foldersFor(at) : [];
-      const current = now.permissions ?? [];
-      const permissions = withFolders(current, folders);
-      return JSON.stringify(permissions) === JSON.stringify(current) ? null : { permissions };
-    }, signal);
-  } catch {
+async function giveFolders(target, session, { signal, folder, whenChanged = false } = {}) {
+  const address = encodeURIComponent(session);
+  const before = await call(target, "GET", `/api/session/${address}`, undefined, signal).catch(() => null);
+  if (!before?.id)
     return false;
-  }
-  if (!done || !at)
-    return false;
-  const entry = `/api/experimental/session/${encodeURIComponent(session)}/instructions/entries/${PROJECT_FOLDERS_ENTRY}`;
-  try {
-    if (folders.length)
-      await call(target, "PUT", entry, { value: projectFoldersNote(at, folders) }, signal);
-    else
-      await call(target, "DELETE", entry, undefined, signal).catch(() => {});
-  } catch {
-    return false;
-  }
-  return true;
-}
-var GIVING_AT_ONCE = 8;
-async function giveProjectFolders(directory, readEngine, readBridge, signal) {
-  const trees = Object.entries(worktreeProjects()).filter(([, project]) => project === directory).map(([folder]) => folder);
-  const targets = [];
-  try {
-    targets.push(readEngine());
-  } catch {}
-  try {
-    const bridge = readBridge();
-    if (bridge?.port && bridge?.password && processRuns(bridge.pid, "kuvo-agents"))
-      targets.push(bridge);
-  } catch {}
-  let missed = 0;
-  for (const target of targets) {
-    for (const folder of [...new Set([directory, ...trees])]) {
-      let query = `limit=100&order=desc&parentID=null&directory=${encodeURIComponent(folder)}`;
-      for (let page = 0;page < 1000 && query; page++) {
-        let listed;
-        try {
-          const response = await fetch(`http://127.0.0.1:${target.port}/api/session?${query}`, { headers: { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` }, signal });
-          if (!response.ok)
-            throw new Error;
-          listed = await response.json();
-        } catch {
-          missed += 1;
-          break;
-        }
-        const sessions = Array.isArray(listed?.data) ? listed.data : [];
-        const giving = sessions.filter((session) => session?.id && !session.parentID && session.location?.directory === folder && !session.time?.archived && session.metadata?.["kuvo.archived"] !== true);
-        let taken = 0;
-        await Promise.all(Array.from({ length: Math.min(GIVING_AT_ONCE, giving.length) }, async () => {
-          while (taken < giving.length) {
-            if (!await giveFolders(target, giving[taken++].id, signal))
-              missed += 1;
-          }
-        }));
-        const next = listed?.cursor?.next;
-        query = sessions.length === 100 && next ? `limit=100&cursor=${encodeURIComponent(next)}` : null;
-      }
+  if (before.parentID || isHiddenRun(before))
+    return true;
+  const where = (now) => folder ?? now.location?.directory ?? now.directory ?? null;
+  const first = where(before);
+  await askedAbout(first ? foldersFor(first) : []);
+  for (let tries = 0;tries < 3; tries++) {
+    let at = null;
+    let folders = [];
+    let changed = false;
+    try {
+      const done = await rewriteOn(target, session, (now) => {
+        at = where(now);
+        folders = at ? foldersFor(at) : [];
+        const current = now.permissions ?? [];
+        const permissions = withFolders(current, folders);
+        changed = JSON.stringify(permissions) !== JSON.stringify(current);
+        return changed ? { permissions } : null;
+      }, signal);
+      if (!done || !at)
+        return false;
+    } catch {
+      return false;
     }
+    if (JSON.stringify(foldersFor(at)) !== JSON.stringify(folders))
+      continue;
+    if (whenChanged && !changed)
+      return true;
+    const entry = `/api/experimental/session/${address}/instructions/entries/${PROJECT_FOLDERS_ENTRY}`;
+    try {
+      if (folders.length)
+        await call(target, "PUT", entry, { value: projectFoldersNote(at, folders) }, signal);
+      else
+        await call(target, "DELETE", entry, undefined, signal).catch(() => {});
+    } catch {
+      return false;
+    }
+    return true;
   }
-  return missed;
+  return false;
 }
 function boxProjects(kit, file = PROJECTS_FILE) {
   if (!fs97.existsSync(file))
@@ -29807,15 +29779,11 @@ async function* answerProjects(request, readEngine = readEngineFile, readBridge 
     if (!isObject(body))
       return yield* json(400, { message: "That isn’t a project." });
     let project;
-    let folders = [];
     changeProjects((projects) => {
       const before = projects.find((each) => each.directory === given);
-      folders = before?.folders ?? [];
       project = keptProject(given, body, before);
       return before ? projects.map((each) => each === before ? project : each) : [project, ...projects];
     }, file, lock);
-    if (JSON.stringify(folders) !== JSON.stringify(project.folders))
-      await giveProjectFolders(given, readEngine, readBridge, signal);
     return yield* json(200, { project });
   }
   if (method === "DELETE") {
@@ -34682,6 +34650,8 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
           noteFullAccess(event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
         if (work && event.type === "session.deleted" && typeof event.data?.sessionID === "string")
           markConversation(event.data.sessionID, false);
+        if (work && event.type === "session.execution.started" && typeof event.data?.sessionID === "string")
+          giveFolders(source, event.data.sessionID, { whenChanged: true, signal: connection.signal }).catch(() => {});
         const adopted = work && event.type === "session.created" ? adoptConversation(source, event.data?.sessionID ?? event.data?.info?.id, work === "bridge").catch(() => {}) : null;
         if (work)
           Promise.resolve(adopted).then(() => markChatOn(source, event.type, event.data, connection.signal)).catch(() => {});
@@ -38469,6 +38439,8 @@ async function* sessionMoveRoute(context) {
   const body = parsed(request.body);
   const directory = isObject(body) && typeof body.directory === "string" ? body.directory : "";
   let isFolder = false;
+  if (path123.isAbsolute(directory))
+    await askedAbout([directory]);
   try {
     isFolder = path123.isAbsolute(directory) && fs121.statSync(directory).isDirectory();
   } catch {}
@@ -38488,12 +38460,14 @@ async function* sessionMoveRoute(context) {
       return yield* json(409, { message: "Moving a chat into a project isn't available in sessions with this agent." });
     return yield* json(engine ? 404 : 503, { message: engine ? "That conversation isn't here." : "The engine isn't running." });
   }
+  if (before.parentID || isHiddenRun(before))
+    return yield* json(409, { message: "Only a conversation of its own moves into a project." });
   try {
     await call(engine, "POST", `/api/session/${encodeURIComponent(id)}/move`, { directory }, signal);
   } catch (error) {
     return yield* json(502, { message: `It couldn't be moved: ${String(error?.message ?? error)}` });
   }
-  await giveFolders(engine, id, signal, directory);
+  await giveFolders(engine, id, { signal, folder: directory });
   const info = await read3(engine, id, signal);
   return yield* json(200, { session: id, directory, ...info ? { info } : {} });
 }
@@ -39194,7 +39168,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "4bc9f7e0f1a5";
+var BRIDGE_VERSION = "bc9bebe7dbc3";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

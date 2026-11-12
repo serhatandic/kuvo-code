@@ -1,0 +1,88 @@
+import "./safety"
+import { afterAll, expect, test } from "bun:test"
+import { mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
+
+// A project's other folders reach each of its sessions as it next runs (PROTOCOL.md, "Projects",
+// `projects.folders`): whichever client changed them, and a session made before they did, gets the
+// rule allowing each and the note naming them as its run starts. One whose folders are as set, a
+// subagent's and a group chat's seat are left alone: a write would make each the newest.
+
+const home = process.env.KUVO_HOME!
+const shop = join(home, "work", "shop")
+const docs = join(home, "work", "docs")
+for (const folder of [shop, docs]) mkdirSync(folder, { recursive: true })
+mkdirSync(join(home, "box"), { recursive: true })
+writeFileSync(join(home, "box", "projects.json"), JSON.stringify({ version: 1, projects: [{ directory: shop, folders: [docs] }] }))
+afterAll(() => rmSync(join(home, "box", "projects.json"), { force: true }))
+
+const asks = { action: "shell", resource: "*", effect: "ask" }
+const docsRule = { action: "external_directory", resource: join(docs, "*"), effect: "allow" }
+type Session = { id: string; parentID?: string; location: { directory: string }; permissions: unknown[]; metadata: Record<string, unknown> }
+const sessions: Record<string, Session> = {
+  ses_stale: { id: "ses_stale", location: { directory: shop }, permissions: [asks], metadata: {} },
+  ses_given: { id: "ses_given", location: { directory: shop }, permissions: [asks, docsRule], metadata: {} },
+  ses_seat: { id: "ses_seat", location: { directory: shop }, permissions: [asks], metadata: { kuvo: { seat: "grp_1" } } },
+  ses_helper: { id: "ses_helper", parentID: "ses_given", location: { directory: shop }, permissions: [asks], metadata: {} },
+}
+const written: string[] = []
+const notes: Record<string, string | null> = {}
+let noted: (id: string) => void = () => {}
+let send: (event: unknown) => void = () => {}
+let following: () => void = () => {}
+const followed = new Promise<void>(done => { following = done })
+const engine = Bun.serve({
+  port: 0,
+  idleTimeout: 0,
+  async fetch(request) {
+    const url = new URL(request.url)
+    if (url.pathname === "/api/event") {
+      return new Response(new ReadableStream({ start(stream) {
+        send = event => stream.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`))
+        following()
+      } }), { headers: { "content-type": "text/event-stream" } })
+    }
+    const entry = url.pathname.match(/^\/api\/experimental\/session\/([^/]+)\/instructions\/entries\/kuvo\.project-folders$/)
+    if (entry) {
+      notes[entry[1]!] = request.method === "DELETE" ? null : ((await request.json()) as { value: string }).value
+      noted(entry[1]!)
+      return Response.json({})
+    }
+    const one = url.pathname.match(/^\/api\/session\/([^/]+)$/)
+    const session = one ? sessions[one[1]!] : undefined
+    if (session && request.method === "GET") return Response.json({ data: session })
+    if (session && request.method === "PATCH") {
+      written.push(session.id)
+      Object.assign(session, await request.json())
+      return Response.json({ data: session })
+    }
+    return Response.json({ message: "Not here." }, { status: 404 })
+  },
+})
+const target = { port: engine.port, password: "pw" } as never
+afterAll(() => engine.stop(true))
+
+test("a session whose project's folders changed gets them as its run starts", async () => {
+  const { watchEvents } = await import("../src/link/engine/watch")
+  const stop = new AbortController()
+  const told = new Promise<void>(done => { noted = id => { if (id === "ses_stale") done() } })
+  try {
+    void watchEvents(() => target, () => true, stop.signal, () => {}, { work: "engine" })
+    await followed
+    send({ type: "session.execution.started", data: { sessionID: "ses_stale" } })
+    await told
+    expect(sessions.ses_stale!.permissions).toEqual([asks, docsRule])
+    expect(notes.ses_stale).toContain(`- docs: ${docs}`)
+  } finally {
+    stop.abort()
+  }
+})
+
+test("one whose folders are as set, a subagent's and a group chat's seat aren't written", async () => {
+  const { giveFolders } = await import("../src/link/areas/projects")
+  written.length = 0
+  for (const id of ["ses_given", "ses_helper", "ses_seat"]) expect(await giveFolders(target, id, { whenChanged: true })).toBe(true)
+  expect(written).toEqual([])
+  expect(notes.ses_given).toBeUndefined()
+  expect(sessions.ses_seat!.permissions).toEqual([asks])
+})

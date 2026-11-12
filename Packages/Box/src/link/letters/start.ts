@@ -20,7 +20,7 @@ import { withNotes } from "../../shared/session-notes";
 import { askedAbout, realish } from "../fence/policy";
 import { changeProjects, filedUnder, folderRules, foldersFor, isFolderRule, PROJECT_FOLDERS_ENTRY, PROJECTS_FILE, projectFoldersNote, readProjects } from "../areas/projects";
 import { runsWithAgents } from "../bots/kit";
-import { projectOf as projectOfFolder, readWorktrees } from "../areas/worktree-records";
+import { projectOf as projectOfFolder, readWorktrees, worktreeProjects } from "../areas/worktree-records";
 import { answerWorktrees, settleNewSession } from "../areas/worktrees";
 import { composeLetter } from "./letter";
 import { allowed, noteStarting, startedAs, startsBefore, takeBack } from "./limits";
@@ -475,7 +475,8 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   // (For a client: the worktree's record, as `kuvo/worktrees` gives it, to show it at once.)
   let treeMade: Record<string, unknown> | null = null;
   const removeTree = async () => {
-    if (madeTree) await answerWorktrees("POST", "kuvo/worktrees/remove", { path: madeTree, discard: true }, engine, place.signal).catch(() => {});
+    // (Never to restore: no session ran in it.)
+    if (madeTree) await answerWorktrees("POST", "kuvo/worktrees/remove", { path: madeTree, discard: true, forget: true }, engine, place.signal).catch(() => {});
   };
   // (A worktree of its own is made from the project: one given a folder too would leave that.)
   if (given.worktree === true && named && folder && realish(folder) !== realish(named.directory)) {
@@ -529,9 +530,9 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const kept: Approval = remote && wanted === "fullAccess" && unavailable("fullAccess") ? "auto" : wanted;
   const got = applied !== (requested ?? wanted) && lowerOf(applied, requested ?? wanted) === applied ? applied : undefined;
   // (A worktree made elsewhere is its project's, as the projects' worktrees are found now: not
-  // looked for in a project's own folder, which is no other's, so New Session there waits for no
-  // git.)
-  if (folder !== CHATS && !readProjects().some(each => each.directory === folder && !each.removed)) await inTime(findLinkedTrees(), undefined, 3_000);
+  // looked for in a project's own folder, which is no other's, nor one whose project is known, so
+  // New Session there waits for no git.)
+  if (folder !== CHATS && !readProjects().some(each => each.directory === folder && !each.removed) && !(folder in worktreeProjects())) await inTime(findLinkedTrees(), undefined, 3_000);
   // The project it's filed under: the one named; else its folder's (a worktree's, or a project's
   // other folder's); else, in its starter's folder, the one its starter is filed under there. One
   // filed under another folder than its own carries it from the first (`kuvo.filed`), so every

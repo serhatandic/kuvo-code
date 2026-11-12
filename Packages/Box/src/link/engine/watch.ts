@@ -23,6 +23,7 @@ import { backUpSession } from "../work/backups";
 import { markConversation, noteFullAccess, noteFullAccessAtWork } from "../work/full";
 import { queueWatcher, scanQueues, writtenByYou, type ScanFound } from "./queue";
 import { adoptConversation } from "../areas/approval";
+import { giveFolders } from "../areas/projects";
 import { followAsks, forgetAsksOn, noteAskEvent } from "../glance/asked";
 import { forgetModelLists, noteModelsEvent } from "../areas/session-models";
 import { pullCatcher } from "../glance/pulls";
@@ -391,6 +392,10 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         // run starts, before any command of it, and as its approval changes.
         if (work && (event.type === "session.execution.started" || event.type === "session.created" || event.type === "session.metadata.updated" || event.type === "session.updated")) noteFullAccess(event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
         if (work && event.type === "session.deleted" && typeof event.data?.sessionID === "string") markConversation(event.data.sessionID, false);
+        // Its project's other folders, where they changed since it last had them, as each run starts
+        // (whichever client changed them, and one made before them): never at rest, as a write makes
+        // a session the newest.
+        if (work && event.type === "session.execution.started" && typeof event.data?.sessionID === "string") giveFolders(source, event.data.sessionID, { whenChanged: true, signal: connection.signal }).catch(() => {});
         // One a client made without a kept approval: the one it was made with, else this computer's
         // default (a client from before never gets Full Access unasked).
         const adopted = work && event.type === "session.created" ? adoptConversation(source, event.data?.sessionID ?? event.data?.info?.id, work === "bridge").catch(() => {}) : null;
