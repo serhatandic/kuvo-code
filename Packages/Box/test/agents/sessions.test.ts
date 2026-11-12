@@ -78,6 +78,8 @@ class FakeAgent implements Agent {
 }
 
 class FakeThread implements Thread {
+  /** Its process started outside the box's sandbox, and still runs. */
+  outside?: boolean
   interrupted = 0
   closed = false
   turnedAway = 0
@@ -427,7 +429,7 @@ describe("permissions", () => {
   // The box takes its sandbox away after a failed check only once it has made every conversation's
   // rules for it being off; a bridge not running then, or started again before its round, still
   // has a conversation in Auto ask before its commands while the sandbox isn't on.
-  test("a conversation in Auto asks before its commands while the box's sandbox is off, and goes on its own once it's on again", async () => {
+  test("a conversation in Auto asks before its commands while the box's sandbox is off, goes on its own once it's on again, and asks while its agent runs outside it", async () => {
     const fence = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-fence-off-")))
     const was = process.env.KUVO_FENCE
     process.env.KUVO_FENCE = fence
@@ -455,6 +457,17 @@ describe("permissions", () => {
       send(id, "again")
       await settled(id, 2)
       expect(seen).toEqual([true, "its own", "once", "once"])
+      // On, but its agent's process started while it wasn't, and still runs outside it: it asks.
+      a.script = async (_input, _turn, hooks, thread) => {
+        thread.outside = true
+        seen.push(hooks.approvesAll())
+        seen.push(hooks.check({ action: "shell", resources: ["ls"] }) ?? "its own")
+        return { outcome: "succeeded" }
+      }
+      seen.length = 0
+      send(id, "and again")
+      await settled(id, 3)
+      expect(seen).toEqual([false, "ask"])
     } finally {
       if (was === undefined) delete process.env.KUVO_FENCE
       else process.env.KUVO_FENCE = was

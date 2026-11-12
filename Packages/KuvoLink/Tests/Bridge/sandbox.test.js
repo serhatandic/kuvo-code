@@ -1731,10 +1731,12 @@ test("Check Now runs a watch's check in the sandbox, and none whose folder is go
 
 // While the sandbox is held, nothing can be let out of it: sandbox_ask isn't listed, and a call to it
 // is told the sandbox is being checked.
-async function nothingLetOut(running) {
+const BEING_CHECKED = "The sandbox is being checked again, so nothing can be let out of it yet: commands still run in it. Try again in a minute, or tell the user what you need.";
+const CHECK_FAILED = "The sandbox's check failed here, so nothing can be let out of it: run the command with your shell tool, which asks the user first.";
+async function nothingLetOut(running, said = BEING_CHECKED) {
   assert.deepEqual((await running.ask("GET", "kuvo/sandbox/tools")).value.tools, []);
   const asked = (await running.ask("POST", "kuvo/sandbox/tools", { name: "sandbox_ask", session: "ses_x", arguments: { command: "ls", why: "to see" } })).value;
-  assert.deepEqual([asked.isError, asked.text], [true, "The sandbox is being checked again, so nothing can be let out of it yet: commands still run in it. Try again in a minute, or tell the user what you need."]);
+  assert.deepEqual([asked.isError, asked.text], [true, said]);
 }
 
 // What a Mac asks a machine's box over SSH (`box route`): a process of its own, its answer's body.
@@ -1904,7 +1906,7 @@ test("a failed check takes the sandbox away only once Auto asks first, and one t
     const ran = await engineRuns(box, project, `cat ${JSON.stringify(own)}`, "ses_auto");
     assert.notEqual(ran.status, 0, `a command in Auto ran outside the sandbox without asking: ${ran.out}`);
     assert.equal((await running.ask("GET", "kuvo/approval")).value.auto.engine.held?.reason, "sandbox");
-    await nothingLetOut(running);
+    await nothingLetOut(running, CHECK_FAILED);
     // Then its rules ask first, and only then does the sandbox go.
     engine.go();
     await applied("askFirst");

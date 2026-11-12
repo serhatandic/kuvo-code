@@ -4987,6 +4987,16 @@ function engineCommandsInSandbox() {
 var fencePending = () => fenceWanted() && (checked.unfinished === true || fs20.existsSync(HELD));
 var BEING_CHECKED = "The sandbox is being checked again, so nothing can be let out of it yet: commands still run in it. Try again in a minute, or tell the user what you need.";
 var NOT_ON_NOW = "The sandbox isn't on here now, so Auto lets nothing out of it: run the command with your shell tool, which asks the user first.";
+var CHECK_FAILED = "The sandbox's check failed here, so nothing can be let out of it: run the command with your shell tool, which asks the user first.";
+function notOnWords() {
+  if (!fenceWanted())
+    return NOT_ON_NOW;
+  if (checked.unfinished)
+    return BEING_CHECKED;
+  if (checked.reason === "checkFailed")
+    return CHECK_FAILED;
+  return fs20.existsSync(HELD) ? BEING_CHECKED : NOT_ON_NOW;
+}
 var agentsCommandsInSandbox = () => fenceWanted() && fs20.existsSync(ON) && !fs20.existsSync(HELD);
 function bridgeSays() {
   if (!agentsCommandsInSandbox())
@@ -17752,6 +17762,9 @@ function keepApprovals(engine = ownEngine2, bridge = bridgeTarget, every = (roun
   let last = null;
   let going = false;
   const adopted = new Set;
+  let failed = null;
+  let failures = 0;
+  let waiting = 0;
   every(async () => {
     const [here, agents] = [engine(), bridge()];
     const mark = heldMark();
@@ -17762,8 +17775,14 @@ function keepApprovals(engine = ownEngine2, bridge = bridgeTarget, every = (roun
     going = true;
     try {
       const settings = JSON.stringify(permissionsHere());
-      if ((now !== last || settings !== settingsMade) && await reapplyApprovals(here, agents, settings !== settingsMade))
-        [last, settingsMade] = [now, settings];
+      const state = `${now}
+${settings}`;
+      if ((now !== last || settings !== settingsMade) && (state !== failed || --waiting <= 0)) {
+        if (await reapplyApprovals(here, agents, settings !== settingsMade))
+          [last, settingsMade, failed, failures] = [now, settings, null, 0];
+        else
+          [failed, failures, waiting] = [state, failures + 1, Math.min(2 ** (failures + 1), 30)];
+      }
       if (off && last === now && here)
         nothingCountsOnIt(mark);
       await adoptPending(here, agents);
@@ -32143,9 +32162,10 @@ async function askToRun(caller, args, signal) {
       how = "always";
     } catch {}
   }
-  if (verdict?.decision === "allow" && !fenceState().on) {
+  const notNow = verdict?.decision === "allow" ? stillOff(at?.agents ?? true) : null;
+  if (notNow) {
     forgetFetched(fetched);
-    return { text: fencePending() ? BEING_CHECKED : NOT_ON_NOW, isError: false };
+    return { text: notNow, isError: false };
   }
   const left = Math.floor((CALL_BUDGET - (Date.now() - started)) / 1000);
   const seconds = Math.max(1, Math.min(600, left, Number(args.timeout) || 300));
@@ -32202,9 +32222,10 @@ async function stoppedInAuto(caller, input, printed, calling, signal) {
     return null;
   if (verdict.decision === "refuse")
     return { text: refusalWords(verdict) };
-  if (!fenceState().on) {
+  const notNow = stillOff(at.agents);
+  if (notNow) {
     forgetFetched(verdict.fetched);
-    return { text: fencePending() ? BEING_CHECKED : NOT_ON_NOW };
+    return { text: notNow };
   }
   const asked = Number(input.timeout);
   const left = Math.floor((CALL_BUDGET - (Date.now() - started)) / 1000);
@@ -32227,6 +32248,14 @@ async function stoppedInAuto(caller, input, printed, calling, signal) {
 ${ran.shown.trimEnd()}${ran.timedOut ? `
 
 It was stopped after ${seconds} seconds.` : ""}`, exit: ran.timedOut ? 124 : ran.code ?? 1 };
+}
+function stillOff(agents) {
+  const gap = sandboxGap(agents);
+  if (gap === "partial")
+    return "Auto needs the whole sandbox, and on this computer it can't keep commands from your login's services now, so nothing is let out of it: run the command with your shell tool, which asks the user first.";
+  if (gap === "agents")
+    return "Auto needs the coding agents' own programs in the sandbox, and some still run outside it, so nothing is let out of it: run the command with your shell tool, which asks the user first.";
+  return gap ? notOnWords() : null;
 }
 async function runOutside(command, folder, seconds, signal) {
   const { output, code, timedOut } = await runCommand(command, folder, commandEnv(), seconds * 1000, signal);
@@ -38237,7 +38266,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "ed80a8e0e9b6";
+var BRIDGE_VERSION = "8d2c20d5cc6f";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -41649,7 +41678,7 @@ async function* sandboxRoute(context) {
     if (method !== "POST")
       return yield* json(405, {});
     if (!on)
-      return yield* json(200, { text: fencePending() ? BEING_CHECKED : NOT_ON, isError: true });
+      return yield* json(200, { text: fencePending() ? notOnWords() : NOT_ON, isError: true });
     const args = isObject(given.arguments) ? given.arguments : {};
     const session = typeof given.session === "string" ? given.session : undefined;
     if (typeof given.name !== "string" || !await isCalling(session, [given.name], args, readEngine, readBridge)) {

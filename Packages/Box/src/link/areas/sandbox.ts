@@ -9,7 +9,7 @@ import { isObject, parsed } from "../../shared/json";
 import type { SandboxState } from "../../shared/routes/sandbox";
 import { addableOwners, addRule, allowedFor, folderOfOwner, forgetGoneBots, listed, removeRule, RuleRefusal } from "../fence/allowed";
 import { answerSandboxAsk, callSandboxTool, listSandboxAsks, onSandboxAsksChanged, SANDBOX_TOOLS, stoppedInAuto } from "../fence/outside";
-import { answeredRestart, asksToRestart, BEING_CHECKED, fencePending, fenceState, restartSettled, setUpFence, tellAgents } from "../fence/state";
+import { answeredRestart, asksToRestart, fencePending, fenceState, notOnWords, restartSettled, setUpFence, tellAgents } from "../fence/state";
 import { bridgeTarget, call } from "../engine/client";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import { readLink } from "../state";
@@ -109,7 +109,7 @@ export async function* sandboxRoute(context: RouteContext): AsyncGenerator<Answe
     // What a tool server lists (`tools/list`): only while commands here are in the sandbox.
     if (method === "GET") return yield* json(200, { tools: on ? SANDBOX_TOOLS : [] });
     if (method !== "POST") return yield* json(405, {});
-    if (!on) return yield* json(200, { text: fencePending() ? BEING_CHECKED : NOT_ON, isError: true });
+    if (!on) return yield* json(200, { text: fencePending() ? notOnWords() : NOT_ON, isError: true });
     // Only a call the conversation it names is making now, with these arguments (vault/who.ts).
     const args = isObject(given.arguments) ? given.arguments : {};
     const session = typeof given.session === "string" ? given.session : undefined;

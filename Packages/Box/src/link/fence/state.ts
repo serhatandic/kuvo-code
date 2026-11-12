@@ -175,8 +175,19 @@ export const fencePending = (): boolean => fenceWanted() && (checked.unfinished 
 
 /** What a command that would leave the sandbox is told while it's held (`fencePending`). */
 export const BEING_CHECKED = "The sandbox is being checked again, so nothing can be let out of it yet: commands still run in it. Try again in a minute, or tell the user what you need.";
-/** And once it isn't on at all (taken away after a failed check): Auto lets nothing out. */
+/** And once it isn't on at all: Auto lets nothing out. */
 export const NOT_ON_NOW = "The sandbox isn't on here now, so Auto lets nothing out of it: run the command with your shell tool, which asks the user first.";
+/** After a failed check, held or taken away. */
+export const CHECK_FAILED = "The sandbox's check failed here, so nothing can be let out of it: run the command with your shell tool, which asks the user first.";
+
+/** What a command that would leave the sandbox is told while it isn't on: being checked, its check
+ * failed, or not on. */
+export function notOnWords(): string {
+  if (!fenceWanted()) return NOT_ON_NOW;
+  if (checked.unfinished) return BEING_CHECKED;
+  if (checked.reason === "checkFailed") return CHECK_FAILED;
+  return fs.existsSync(HELD) ? BEING_CHECKED : NOT_ON_NOW;
+}
 
 /** Whether the coding agents' own programs (Claude Code, Codex, Cursor, Grok, Antigravity, whose
  * commands don't go through the engine) run in it: each runs whole in it, as the bridge starts

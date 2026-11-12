@@ -324,6 +324,12 @@ export function keepApprovals(engine: () => Target | null = ownEngine, bridge: (
   let last: string | null = null;
   let going = false;
   const adopted = new Set<string>();
+  // A pass that didn't get through (an engine or bridge that doesn't answer, or won't take one):
+  // tried again as things stay so less and less often, up to once a minute, and at once when
+  // something changes.
+  let failed: string | null = null;
+  let failures = 0;
+  let waiting = 0;
   every(async () => {
     const [here, agents] = [engine(), bridge()];
     // (And which hold of the sandbox is on, if any: one let go of and taken again meanwhile is a new
@@ -337,12 +343,17 @@ export function keepApprovals(engine: () => Target | null = ownEngine, bridge: (
       // (Settings › Permissions changed, from any client or by hand in the file, or not made with
       // yet as the box runs: they reach every conversation within a round.)
       const settings = JSON.stringify(permissionsHere());
-      if ((now !== last || settings !== settingsMade) && await reapplyApprovals(here, agents, settings !== settingsMade)) [last, settingsMade] = [now, settings];
+      const state = `${now}\n${settings}`;
+      if ((now !== last || settings !== settingsMade) && (state !== failed || --waiting <= 0)) {
+        if (await reapplyApprovals(here, agents, settings !== settingsMade)) [last, settingsMade, failed, failures] = [now, settings, null, 0];
+        else [failed, failures, waiting] = [state, failures + 1, Math.min(2 ** (failures + 1), 30)];
+      }
       // Every conversation's rules made for the sandbox being off (Auto asks first), with the engine
-      // answering: what the sandbox held for that, taking itself away after a failed check, goes
-      // ahead (fence/state.ts). Until then it stays held, which is safe: commands still go through
-      // it. (The coding agents' bridge needn't answer: one not running, or started again, has a
-      // conversation in Auto ask before its commands while the sandbox is off, agents/sessions.ts.)
+      // answering, and the coding agents' bridge where it runs: what the sandbox held for that,
+      // taking itself away after a failed check, goes ahead (fence/state.ts). Until then it stays
+      // held, which is safe: commands still go through it. (A bridge that isn't running isn't
+      // waited for, nor its record left behind: one started again asks in Auto before its commands
+      // while the sandbox is off, agents/sessions.ts. One running that doesn't answer keeps it held.)
       if (off && last === now && here) nothingCountsOnIt(mark);
       await adoptPending(here, agents);
       await adoptBots(here, agents, adopted);
