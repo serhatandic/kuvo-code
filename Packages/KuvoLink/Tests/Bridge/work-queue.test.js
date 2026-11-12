@@ -447,6 +447,7 @@ test("an item added isn't moved, wherever it's put", async () => {
   await tool("queue_add", { title: "First" }, "ses_lead");
   await tool("queue_add", { title: "Second", before: 1 }, "ses_lead");
   await tool("queue_add", { title: "Third", top: true, category: "later" }, "ses_lead");
+  assert.deepEqual((await view("ses_lead")).items.map(item => item.title), ["Second", "First", "Third"], "put where it was asked");
   for (const number of [2, 3]) assert.deepEqual((await route("GET", `kuvo/work-queue/items/${number}`)).body.item.events, []);
 });
 
@@ -498,10 +499,39 @@ test("a reorder isn't folded into the one before it across a note, and a move pa
   await tool("queue_update", { item: 1, note: "Why it waits." }, "ses_lead");
   await route("POST", "kuvo/work-queue/items/1/move", { after: 3 });
   assert.deepEqual((await route("GET", "kuvo/work-queue/items/1")).body.item.events.map(event => event.kind), ["moved", "moved"]);
-  // (Its place is among every queue's items on the box, as All lists them.)
+  // (Its place is among every queue's items on the box, as All lists them: an agent moving it past
+  // only another queue's item moves it.)
   await tool("queue_add", { title: "Another's" }, "ses_other");
-  await route("POST", "kuvo/work-queue/items/1/move", { after: 4 });
-  assert.equal((await route("GET", "kuvo/work-queue/items/1")).body.item.events.length, 3);
+  await tool("queue_update", { item: 1, after: 4 }, "ses_lead");
+  const events = (await route("GET", "kuvo/work-queue/items/1")).body.item.events;
+  assert.deepEqual(events.map(event => [event.kind, event.by]), [["moved", { user: true }], ["moved", { user: true }], ["moved", { session: "ses_lead", name: "Lead" }]]);
+});
+
+test("a stop with no start before it isn't said, so a start right after it is; nor is one folded across a note", async () => {
+  const kinds = async number => (await route("GET", `kuvo/work-queue/items/${number}`)).body.item.events.map(event => event.kind);
+  // Linked by a hand-off, never said to start: its stop says nothing, and its start then is said.
+  await tool("queue_add", { title: "Handed" }, "ses_lead");
+  await tool("queue_hand", { item: 1, to: "ses_child" }, "ses_lead");
+  await tool("queue_update", { item: 1, working: false }, "ses_child");
+  assert.deepEqual(await kinds(1), []);
+  assert.deepEqual((await route("GET", "kuvo/work-queue/items/1")).body.item.sessions, [], "unlinked all the same");
+  await tool("queue_update", { item: 1, working: true }, "ses_child");
+  assert.deepEqual(await kinds(1), ["started"]);
+  // Stopped with a note, back within two minutes: the stop stays, and the start is said.
+  await tool("queue_update", { item: 1, working: false, note: "Blocked on the API key." }, "ses_child");
+  await tool("queue_update", { item: 1, working: true }, "ses_child");
+  assert.deepEqual(await kinds(1), ["started", "stopped", "started"]);
+});
+
+test("what's kept of an item's history never folds back in time (a clock ahead on another computer)", async () => {
+  await tool("queue_add", { title: "From ahead", working: true }, "ses_lead");
+  await tool("queue_update", { item: 1, working: false }, "ses_lead");
+  const file = path.join(queues, "queues", "ses_lead.json");
+  const kept = JSON.parse(fs.readFileSync(file, "utf8"));
+  kept.items[0].events[1].at += 3_600_000;
+  fs.writeFileSync(file, JSON.stringify(kept));
+  await tool("queue_update", { item: 1, working: true }, "ses_lead");
+  assert.deepEqual((await route("GET", "kuvo/work-queue/items/1")).body.item.events.map(event => event.kind), ["started", "stopped", "started"]);
 });
 
 test("an item from before the box kept its history has none, and keeps what happens from now on", async () => {

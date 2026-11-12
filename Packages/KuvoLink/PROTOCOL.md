@@ -3546,18 +3546,21 @@ kept as it came, for a client to read (a newer box's `top: false` or `from: null
   linked, with its own last word `started`. A session linked some other way (`sessions`, a
   hand-off) says `started` the first time it says it's working; one linked before this box kept
   events, or whose `started` went past the last 50, says it once more then.
-- `stopped`: it said it stopped (`working: false`) while linked; or its link went while its last
-  word was `started` (`unlink`, or its oldest link dropped as it linked a fourth item), by the same
-  `by` as that `started`. Done and a delete unlink everyone and say no `stopped`: they say it. A
-  session that starts again within 2 minutes of its `stopped` never stopped: the `stopped` goes.
+- `stopped`: its link went while its own last word was `started`: it said it stopped (`working:
+  false`), or it was unlinked (`unlink`, or its oldest link dropped as it linked a fourth item), by
+  the same `by` as that `started` but where it said so itself. One that never said it started says
+  no `stopped`. Done and a delete unlink everyone and say no `stopped`: they say it. A session that
+  starts again within 2 minutes of its `stopped`, with nothing between (no other event, note or
+  hand-off), never stopped: the `stopped` goes.
 - `moved`: you or an agent moved it to another category, or to another place in its own (`from` and
   `to`, category ids, the same for a reorder; `top` when it went to the top). Its place is among
   every owner's items in that category on the box, as the All view lists them, so a move past
   another queue's item is one; a move that leaves it where it was isn't. One's reorders in one
   category within 10 minutes of each other, with nothing between (no other event, note or
-  hand-off), are one `moved`. An item whose category the box doesn't keep (brought back after its
+  hand-off), are one `moved`. (Neither fold reaches back in time: an event from a computer whose
+  clock was ahead is never folded into.) An item whose category the box doesn't keep (brought back after its
   category was removed, or come by a hand-off or a move) goes to Next, a `moved` by the box. An
-  item added isn't moved, wherever it's put.
+  item added isn't moved, wherever it's put (`top`, `before`, `after`).
 - `done`: moved to Done (a move out of Done is `moved`).
 
 A hand-off is in `handed`, not here. A newer box may keep other kinds: a box keeps them as they

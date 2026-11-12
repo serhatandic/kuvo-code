@@ -19930,10 +19930,11 @@ function noteEvent(item, event) {
   const last = events.at(-1);
   const reorder = (each) => each.kind === "moved" && each.from === each.to;
   const quiet = (since) => !item.notes.some((note) => note.at >= since) && !(item.handed ?? []).some((each) => each.at >= since);
-  if (last && reorder(last) && reorder(event) && last.to === event.to && sameWho2(last.by, event.by) && event.at - last.at < FOLD_REORDERS && quiet(last.at)) {
+  const within = (most) => last !== undefined && event.at >= last.at && event.at - last.at < most;
+  if (last && reorder(last) && reorder(event) && last.to === event.to && sameWho2(last.by, event.by) && within(FOLD_REORDERS) && quiet(last.at)) {
     const { top: _, ...folded } = last;
     events[events.length - 1] = { ...folded, at: event.at, ...event.top ? { top: true } : {} };
-  } else if (last && last.kind === "stopped" && event.kind === "started" && sameWho2(last.by, event.by) && event.at - last.at < FOLD_RESTART) {
+  } else if (last && last.kind === "stopped" && event.kind === "started" && sameWho2(last.by, event.by) && within(FOLD_RESTART) && quiet(last.at)) {
     events.pop();
   } else {
     events.push(event);
@@ -19958,10 +19959,7 @@ function startWork(book, item, session, { who, now }) {
     noteEvent(item, { at: now, by: who, kind: "started" });
 }
 function stopWork2(item, session, { who, now }) {
-  if (!item.sessions.some((each) => each.session === session))
-    return;
-  item.sessions = item.sessions.filter((each) => each.session !== session);
-  noteEvent(item, { at: now, by: who, kind: "stopped" });
+  unlinkSessions(item, [session], now, who);
 }
 var THE_BOX = { source: "kuvo", name: "Kuvo Code" };
 function intoNext(item, from, now) {
@@ -20000,7 +19998,7 @@ function addItem2(book, owner, fields, acting, primary, source) {
     ...source ? { source } : {}
   };
   book.queue(owner).items.push(item);
-  changeItem2(book, item, { ...fields, title: undefined, category: undefined, top: undefined, before: undefined, after: undefined }, acting);
+  changeItem2(book, item, { ...fields, title: undefined, category: undefined, top: undefined }, acting, { added: true });
   if (item.source)
     return item;
   const number = takeNumber(primary);
@@ -20009,7 +20007,7 @@ function addItem2(book, owner, fields, acting, primary, source) {
   return item;
 }
 var refuseDone = (name) => refuse(`${name} is Done once it's closed on GitHub (or, a pull request, merged): close it there, or let the pull request that fixes it close it.`);
-function changeItem2(book, item, fields, acting) {
+function changeItem2(book, item, fields, acting, { added = false } = {}) {
   const { who, now } = acting;
   const placeNow = () => ({ category: item.category, index: book.items().filter((each) => each.id !== item.id && !each.removed && each.category === item.category && each.order < item.order).length });
   const was = placeNow();
@@ -20055,7 +20053,7 @@ function changeItem2(book, item, fields, acting) {
   else if (fields.top === true && fields.category === undefined)
     item.order = placeIn(book.items().filter((each) => each.id !== item.id), item.category, { top: true });
   const placed = placeNow();
-  if (placed.category !== was.category && placed.category === "done")
+  if (added) {} else if (placed.category !== was.category && placed.category === "done")
     noteEvent(item, { at: now, by: who, kind: "done" });
   else if (placed.category !== was.category || placed.index !== was.index) {
     const top = placed.index === 0 && (fields.top === true || fields.before !== undefined || fields.after !== undefined);
@@ -37182,7 +37180,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "35d0fc22e5e9";
+var BRIDGE_VERSION = "587b9cb1d256";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
