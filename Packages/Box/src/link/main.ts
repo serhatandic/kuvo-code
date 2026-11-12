@@ -66,6 +66,7 @@ import { watchFolders } from "./follow";
 import { pushRows } from "./work/elsewhere";
 import { pushNumbers } from "./work-queue/numbers";
 import { noteSetupNow } from "./setup/lead";
+import { mainElsewhere, pairElsewhere } from "./setup/main-only";
 import { writeCard } from "./setup/card";
 import { hereNow } from "./setup/judge";
 import { pushQueues } from "./work-queue/across";
@@ -890,6 +891,12 @@ export function leave(mac: unknown): boolean {
 }
 
 function pair(relay: string | undefined): void {
+  // Only your setup's main computer pairs phones: a member names it, and pairs none (exit 3).
+  const main = mainElsewhere(readLink());
+  if (main) {
+    console.error(pairElsewhere(main).message);
+    process.exit(3);
+  }
   const link = updateLink(current => {
     const next = current ?? { secret: crypto.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), name: os.hostname(), phones: [] };
     next.sign ??= newSigningSeed();

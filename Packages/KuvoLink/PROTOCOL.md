@@ -223,8 +223,8 @@ each box pairs and removes (`phones`), and each box's view of your personalities
 
 All of your computers that know each other are one **setup**, with one **main computer**: a Mac
 with the app, whose box signs who's in it. Every other computer is a **member**. (Built so far: the
-setup, who's main, and what boxes take and number by it. Changing the main computer, joining two
-setups, and pairing and adding only from the main computer come later: #183.)
+setup, who's main, what boxes take and number by it, and pairing and adding only from the main
+computer. Changing the main computer and joining two setups come later: #183.)
 
 - **The setup** has an id (`set_` and 16 random bytes, base64url) and an epoch (a whole number, one
   more with each change of main computer, never lower on any box). Its main computer's peers
@@ -249,7 +249,10 @@ setups, and pairing and adding only from the main computer come later: #183.)
   the one it led with its old keys is no longer its own, and its machines take the new one from it.
   Setting a machine up again, it names its static keys before (`replaces` in `kuvo/link/setup` and
   setup's input), which the machine lets go as `leave` does, so it's never two Macs to it. (Leading follows its machines' word, as the Work Queue's numbers already do
-  without a setup; a later part of #183 makes it hold against a member's word alone.)
+  without a setup. Known gap until setups can be joined (#183's phase 7, with which leading holds
+  against a member's word alone): a machine's word, `shared: true` or an earlier Mac named, sets
+  the setup aside, so a stolen member key can make a leading Mac step aside. Members still refuse
+  pairing and adding while it's aside ("Only the main computer adds and pairs").)
 - **What a box takes it from**: a machine follows the setup its Mac leads, from that Mac's
   document. Then it takes `peers` only from the main computer's signing key (as that Mac's setup
   over SSH last gave it, the trust root), never at a lower epoch of the setup (whoever signed it),
@@ -279,6 +282,23 @@ setups, and pairing and adding only from the main computer come later: #183.)
   earlier Mac doesn't lead either, with none of them named. Once it leads, a machine not heard from
   for days stays gone until it's heard from again (so a Mac back from a long sleep doesn't step
   aside while the relay hasn't looked again).
+- **Only the main computer adds and pairs** (`setup.mainOnly`). A member (a box whose setup names
+  another computer as main, kept aside too: a shared machine, or its main computer not naming it
+  now) answers, with `primary` the main computer's static key and words naming it for a client to
+  show as they are:
+  - `POST kuvo/phones/pair`: `409 {"message": "Pair new phones from <main>.", primary}`, and
+    `kuvo-link.js pair` prints those words and stops (exit 3), with no pairing made;
+  - adding, changing or removing computers, `kuvo/machines…` and `kuvo/hosts/…` but `GET`, and
+    `PUT kuvo/link/peers` from an app or `box route` there: `409 {"message": "Add and remove
+    computers from <main>.", primary}`, so only the main computer's app says who's in the setup;
+  - `GET kuvo/hosts`, as a Mac answers it: the machines the setup's document names (itself too),
+    each `{kind: "machine", name, address, key, relay, machine, anotherMac: false, removed:
+    false}` (`machine`, the id the main computer's app knows it by), by name; `503 {"message"}`
+    before it holds that document. Not the main computer's Mac: a phone pairs with it.
+
+  The main computer and a box in no setup (one you run alone, one whose Mac is older) pair and add
+  as before; with the main computer's app closed, adding says to open it (`kuvo/machines`, above).
+  Existing pairings stay. Pairing removes no one.
 - **The card**: `run/setup-card.json`, beside link.json, nothing secret in it, for what looks at a
   computer from outside its box (the app as it opens, a Mac adding it over SSH): `{setup, epoch,
   role, primary: {key, name, heard}, self: {key, name, kind}, app, computers, items, heldBy, macs}`
@@ -2556,7 +2576,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     `404` for one that isn't there, `409` for a sign-in, `503` with the engine down, `502` when it
     refused; each with `message`). Every box from bridge 0.9.79 (`accounts.found`).
   What a phone may ask an engine for is the same on both (`Vectors/link.json`, `routes`).
-- On a Mac, `kuvo/hosts`: the machines this phone may reach directly, with their addresses
+- On a Mac (and on a member of a setup, from its document: "Your setup"), `kuvo/hosts`: the machines this phone may reach directly, with their addresses
   and static keys, so pairing once with the Mac reaches them all; each with `machine`, its id
   (as a bot's `machine`), and `anotherMac`: its engine is another Mac's, which gives it its
   settings, so this Mac's (`kuvo/config`) don't reach it (as it was when it last connected).
@@ -4307,7 +4327,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `groups.make` | `POST kuvo/groups` |
 | `groups.seats` | its bots take turns in chats on other computers ("Peers", group chats) |
 | `handoff` | `kuvo/agents/api/kuvo/handoff…`: handoffs |
-| `hosts` | a Mac only: `kuvo/hosts…` (with its app closed its box still lists them, and `DELETE` says the app must be open) |
+| `hosts` | a Mac: `kuvo/hosts…` (with its app closed its box still lists them, and `DELETE` says the app must be open); a member of a setup answers it too, with `setup.mainOnly` |
 | `integrations` | `kuvo/integrations…` |
 | `keys` | `kuvo/keys…` |
 | `letters-read` | (in a peer's agents' mail) it takes a letter with `read` (bridge 0.9.100) |
@@ -4342,6 +4362,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `sessions.models` | `GET kuvo/sessions/models` ("A session's model") |
 | `sessions.start` | `POST kuvo/sessions`: a session started with a task (bridge 0.9.100) |
 | `setup` | `kuvo/setup`, `…/events`: your setup and its main computer ("Your setup") |
+| `setup.mainOnly` | a member refuses pairing and adding with `409 {message, primary}`, and answers `GET kuvo/hosts` from its setup ("Your setup", Only the main computer adds and pairs) |
 | `shell.stop` | `POST kuvo/shell/<id>/stop` |
 | `sign-in.return` | `POST kuvo/sign-in/return` |
 | `skills` | `kuvo/skills…` and `kuvo/skill-library…` |
@@ -6265,7 +6286,8 @@ On both, for a paired phone:
   ends that one alone, so one closed late never ends a newer one (bridge 0.9.61). `409 {"message"}`
   while the phone link is off. A machine's bridge answers it too, with the Mac closed: the phone
   it pairs is the machine's own (as `kuvo-link.js pair` pairs one), and `409` when the machine has
-  no relay.
+  no relay. On a member of a setup, `409 {"message", primary}`: only its main computer pairs
+  ("Your setup", `setup.mainOnly`).
 
 A machine keeps itself running: its keeper (`bin/kuvo-start keep`, `run/box.pid`) starts its
 engine again when it ends, unless it was stopped on purpose (`run/stopped`), and keeps the bridge

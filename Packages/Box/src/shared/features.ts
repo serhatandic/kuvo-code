@@ -98,6 +98,7 @@ export const FEATURES = [
   "sessions.models",
   "sessions.start",
   "setup",
+  "setup.mainOnly",
   "shell.stop",
   "sign-in.return",
   "skills",

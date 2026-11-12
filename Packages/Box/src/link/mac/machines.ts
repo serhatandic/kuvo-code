@@ -11,6 +11,7 @@ import path from "node:path";
 import { K } from "../home";
 import { readPeerAgents } from "../peers/directory";
 import { peersOf } from "../peers/known";
+import { addElsewhere, mainElsewhere } from "../setup/main-only";
 import { macLink, readLink } from "../state";
 import { appAnswer, passedOn } from "./app-route";
 import type { Hosts, MacMachines } from "../../shared/routes/mac";
@@ -183,6 +184,9 @@ export const isMachinesRoute = (route: string): boolean => /^kuvo\/(machines|hos
  * what it can, and that the rest needs the app. */
 export async function* machinesRoute(request: LinkRequest, phone: Asker | undefined, signal: AbortSignal | undefined, route: string, timing: AppTiming = TIMING): AsyncGenerator<AnswerPiece> {
   const read = request.method.toUpperCase() === "GET";
+  // On a member of a setup, only its main computer adds and removes computers (PROTOCOL.md, "Your setup").
+  const main = read ? null : mainElsewhere(readLink());
+  if (main) return yield* answer(409, addElsewhere(main));
   if (read && route === "kuvo/machines/events") return yield* machinesFollowed(request, phone, signal, timing);
   // Only what's read has this box to fall back on. What changes something may take as long as it
   // takes (adding a machine checks it over SSH first), and can't be said not to have happened.

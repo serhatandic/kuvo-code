@@ -1648,6 +1648,30 @@ test("a phone paired with a machine gets a link there for another phone, which p
   fs.rmSync(path.join(home, "run", "link.json"), { force: true });
 });
 
+test("a machine pairs phones by itself while it leads its own setup, and not as a member, even one set aside: it names its main computer", async () => {
+  fs.mkdirSync(path.join(home, "run"), { recursive: true });
+  const mine = crypto.randomBytes(32);
+  const main = link.publicOf(link.newKey()).toString("base64url");
+  const setup = { id: `set_${crypto.randomBytes(16).toString("base64url")}`, epoch: 1, sign: link.signingKeyOf(link.newSigningSeed()) };
+  const base = { secret: crypto.randomBytes(32).toString("base64url"), key: link.newKey().toString("base64url"), relay: "wss://relay.test", name: "lab",
+    phones: [{ key: mine.toString("base64url"), name: "Mine", added: 1, from: "pair", pairing: "a" }] };
+  const handle = link.engineHandler(() => { throw new Error("none"); }, {}, () => null);
+  const as = async (method, p) => {
+    const parts = [];
+    for await (const part of handle({ method, path: p, headers: {}, body: Buffer.alloc(0) }, { key: mine }, undefined)) parts.push(part);
+    const text = Buffer.concat(parts.filter(part => part.body).map(part => part.body)).toString();
+    return { status: parts[0].head.status, json: text ? JSON.parse(text) : undefined };
+  };
+  // Its own setup's main computer (a box you run alone): as before.
+  link.writeLink({ ...base, setup: { ...setup, primary: link.publicOf(Buffer.from(base.key, "base64url")).toString("base64url"), role: "primary" } });
+  assert.equal((await as("POST", "kuvo/phones/pair")).status, 200);
+  // A member, its setup set aside (a machine two Macs share): still that Mac's to pair from.
+  link.writeLink({ ...base, macs: [main], macNames: { [main]: "Studio" }, setup: { ...setup, primary: main, role: "member", aside: true } });
+  assert.deepEqual(await as("POST", "kuvo/phones/pair"), { status: 409, json: { message: "Pair new phones from Studio.", primary: main } });
+  assert.equal(link.readLink().pairing, undefined);
+  fs.rmSync(path.join(home, "run", "link.json"), { force: true });
+});
+
 test("a phone asks a machine who & can name: its own bots and sessions, then its other computers'", async () => {
   // Its own, from its engine.
   const engine = http.createServer((request, response) => {

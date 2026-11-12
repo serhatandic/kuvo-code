@@ -2213,6 +2213,7 @@ var FEATURES = [
   "sessions.models",
   "sessions.start",
   "setup",
+  "setup.mainOnly",
   "shell.stop",
   "sign-in.return",
   "skills",
@@ -37466,6 +37467,35 @@ async function* browserRoute(context) {
   return yield* json(405, {});
 }
 
+// Packages/Box/src/link/setup/main-only.ts
+function mainElsewhere(link) {
+  const setup = link?.setup;
+  if (!setup || setup.role !== "member" || typeof setup.primary !== "string")
+    return null;
+  const doc = macDoc(link, setup.primary, "peers") ?? setupDoc(link);
+  const named = (Array.isArray(doc?.body.boxes) ? doc.body.boxes : []).find((box) => isObject(box) && box.key === setup.primary);
+  const name = String(isObject(named) && typeof named.name === "string" && named.name || link?.macNames?.[setup.primary] || "").slice(0, 100);
+  return { key: setup.primary, name };
+}
+var named3 = (main) => main.name || "your main computer";
+var pairElsewhere = (main) => ({ message: `Pair new phones from ${named3(main)}.`, primary: main.key });
+var addElsewhere = (main) => ({ message: `Add and remove computers from ${named3(main)}.`, primary: main.key });
+function memberHosts(link) {
+  if (IS_MAC || !mainElsewhere(link) || !link?.relay)
+    return null;
+  const doc = setupDoc(link) ?? macDoc(link, link.setup.primary, "peers");
+  if (!doc)
+    return null;
+  const hosts = [];
+  for (const box of Array.isArray(doc.body.boxes) ? doc.body.boxes.slice(0, 64) : []) {
+    if (!isObject(box) || box.kind !== "machine" || typeof box.key !== "string" || typeof box.address !== "string" || hosts.some((each) => each.key === box.key))
+      continue;
+    const name = String(box.name ?? "").slice(0, 100);
+    hosts.push({ kind: "machine", name, address: box.address, key: box.key, relay: link.relay, machine: typeof box.id === "string" && box.id ? box.id : name, anotherMac: false, removed: false });
+  }
+  return { hosts: hosts.sort((one, other) => one.name < other.name ? -1 : one.name > other.name ? 1 : 0) };
+}
+
 // Packages/Box/src/link/mac/link.ts
 import fs119 from "node:fs";
 import path121 from "node:path";
@@ -37643,6 +37673,9 @@ var OWN_ANSWERS = { "kuvo/machines": machinesWithoutApp, "kuvo/hosts": hostsWith
 var isMachinesRoute = (route) => /^kuvo\/(machines|hosts)(\/|$)/.test(route);
 async function* machinesRoute(request, phone, signal, route, timing = TIMING) {
   const read = request.method.toUpperCase() === "GET";
+  const main = read ? null : mainElsewhere(readLink());
+  if (main)
+    return yield* answer3(409, addElsewhere(main));
   if (read && route === "kuvo/machines/events")
     return yield* machinesFollowed(request, phone, signal, timing);
   const response = read ? await appWithin(request, phone, signal, timing.wait) : await appAnswer(request, phone, signal);
@@ -38721,6 +38754,187 @@ function snippet(text, at, length) {
 // Packages/Box/src/link/areas/setup.ts
 import fs122 from "node:fs";
 import path124 from "node:path";
+
+// Packages/Box/src/link/server/forward.ts
+var AGENTS = "kuvo/agents/";
+var FROM_PHONE = ["<from-phone>", "The user sent this from Kuvo Code on their iPhone.", "They read your reply on a small screen, and can't open file paths, links to files on the computer or Kuvo Code's side panel there. Keep your reply short and easy to read on a phone. To show them a file (a picture, a chart, a PDF, a document you made or found), use show_file: it puts the file in this conversation, where they see it. A widget (show_widget) shows there too: keep it narrow, and make it work with taps rather than hovering.", "</from-phone>"].join(`
+`);
+function fromPhone(body) {
+  let prompt;
+  try {
+    prompt = JSON.parse(Buffer.from(body ?? "").toString());
+  } catch {
+    return body;
+  }
+  if (typeof prompt?.text !== "string" || prompt.text.trimEnd().endsWith("</from-phone>"))
+    return body;
+  return Buffer.from(JSON.stringify({ ...prompt, text: `${prompt.text}
+
+${FROM_PHONE}` }));
+}
+function modelInput(base, headers, signal) {
+  const read = async (at) => {
+    const response = await fetch(new URL(at, base), { headers, signal });
+    return response.ok ? (await response.json())?.data ?? null : null;
+  };
+  return async (session) => {
+    const own = (await read(`/api/session/${encodeURIComponent(session)}`))?.model;
+    const ref = own ?? await read("/api/model/default");
+    if (!ref)
+      return null;
+    const model = Array.isArray(ref.capabilities?.input) ? ref : (await read("/api/model") ?? []).find((listed) => (listed?.id === ref.id || Array.isArray(listed?.aliases) && listed.aliases.includes(ref.id)) && listed?.providerID === ref.providerID);
+    const input = model?.capabilities?.input;
+    return Array.isArray(input) ? input.filter((kind) => typeof kind === "string") : null;
+  };
+}
+async function* forward(target, path, request, signal, allows, naming = null, down = engineDown, toAgents = false) {
+  const method = request.method.toUpperCase();
+  const sent = canonicalPath(path);
+  if (sent === null || !allows(sent, method)) {
+    yield { head: { status: 403, headers: { "content-type": "text/plain" } } };
+    yield { body: Buffer.from("That isn't available over the link.") };
+    return;
+  }
+  const url = new URL(`http://127.0.0.1:${target.port}/${sent}`);
+  const headers = { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` };
+  const given = Object.fromEntries(Object.entries(request.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
+  for (const name of REQUEST_HEADERS)
+    if (given[name])
+      headers[name] = given[name];
+  const sending = method === "POST" && /^\/api\/session\/([^/]+)\/(prompt|command)$/.exec(url.pathname);
+  const prompt = sending && sending[2] === "prompt" && !request.fromMac ? sending : null;
+  let moving = false;
+  try {
+    moving = Boolean(sending) && frozen().has(decodeURIComponent(sending ? sending[1] : ""));
+  } catch {}
+  if (moving) {
+    yield { head: { status: 409, headers: { "content-type": "application/json" } } };
+    yield { body: Buffer.from(JSON.stringify({ message: MOVING })) };
+    return;
+  }
+  const changed = method === "PATCH" && /^\/api\/session\/([^/]+)$/.exec(url.pathname);
+  let wasArchived = null;
+  const readBefore = async () => {
+    try {
+      const patience = AbortSignal.timeout(NOTES_STEP);
+      const before = await fetch(url, { headers, signal: signal ? AbortSignal.any([signal, patience]) : patience });
+      if (before.ok)
+        wasArchived = (await before.json())?.data?.metadata?.["kuvo.archived"] === true;
+    } catch {}
+  };
+  const delivering = sending && sending[2] === "prompt" ? undefined : signal;
+  const outgoing = async () => {
+    if (!sending)
+      return request.body;
+    const session = decodeURIComponent(sending[1]);
+    const body = await attachedIn(request.body, session, modelInput(url, headers, delivering), request.fromMac === true, toAgents);
+    return prompt ? fromPhone(await namedIn(body, session, naming)) : body;
+  };
+  const send = async () => fetch(url, {
+    method,
+    headers,
+    body: method === "GET" || method === "HEAD" ? undefined : await outgoing(),
+    signal: delivering
+  });
+  let response;
+  try {
+    if (changed) {
+      const turn = {};
+      await inTurnOn(target, decodeURIComponent(changed[1]), async () => {
+        await readBefore();
+        const sent = turn.sent = send();
+        const done = new AbortController;
+        await Promise.race([sent.catch(() => {}), pause(NOTES_STEP, done.signal)]);
+        done.abort();
+      }, signal);
+      if (!turn.sent)
+        throw new Error("It wasn't sent.");
+      response = await turn.sent;
+    } else
+      response = await send();
+  } catch (error) {
+    if (signal?.aborted)
+      throw error;
+    yield { head: { status: 503, headers: { "content-type": "application/json" } } };
+    yield { body: Buffer.from(JSON.stringify({ message: down() })) };
+    return;
+  }
+  const out = {};
+  for (const name of RESPONSE_HEADERS) {
+    const value = response.headers.get(name);
+    if (value)
+      out[name] = value;
+  }
+  if (changed && response.ok) {
+    let archived;
+    try {
+      archived = JSON.parse(Buffer.from(request.body ?? []).toString("utf8"))?.metadata?.["kuvo.archived"];
+    } catch {}
+    if (typeof archived === "boolean" && archived !== wasArchived) {
+      try {
+        holdArchived(decodeURIComponent(changed[1]), archived);
+      } catch {}
+      if (archived)
+        await stopIfWaiting(target, decodeURIComponent(changed[1]));
+    }
+  }
+  yield { head: { status: response.status, headers: out } };
+  if (!response.body)
+    return;
+  const reader = response.body.getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done)
+        return;
+      yield { body: Buffer.from(value) };
+    }
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+}
+async function* agentsRoute(context) {
+  const { request, signal, readEngine, bridge, text } = context;
+  const path = request.path.slice(AGENTS.length);
+  if (!agentsAllowed(path, request.method))
+    return yield* text(403, "That isn't available over the link.");
+  const target = bridge();
+  if (!target) {
+    yield { head: { status: 503, headers: { "content-type": "application/json" } } };
+    yield { body: Buffer.from(JSON.stringify({ message: agentsDown() ?? (IS_MAC ? "The coding agents on this Mac are starting. Try again in a moment." : "The coding agents aren't running on this machine.") })) };
+    return;
+  }
+  return yield* forward(target, path, request, signal, agentsAllowed, namingHere(readEngine), () => "The coding agents aren't answering on this computer. Try again in a moment.", true);
+}
+async function* engineRoute(context) {
+  const { request, signal, route, readEngine, bridge, json, text } = context;
+  const stop = route.match(/^kuvo\/shell\/([^/]+)\/stop$/);
+  if (!stop && route.startsWith("kuvo/") && canonicalPath(request.path) === request.path)
+    return yield* json(404, {});
+  if (!stop && !allowed(request.path, request.method))
+    return yield* text(403, "That isn't available over the link.");
+  let engine = null;
+  try {
+    engine = readEngine();
+  } catch {
+    if (!stop || !bridge())
+      return yield* json(503, { message: engineDown() });
+  }
+  if (stop) {
+    if (request.method.toUpperCase() !== "POST")
+      return yield* text(405, "Stop it with POST.");
+    const headers = {};
+    const given = Object.fromEntries(Object.entries(request.headers).map(([k, v]) => [k.toLowerCase(), v]));
+    for (const name of REQUEST_HEADERS)
+      if (given[name])
+        headers[name] = given[name];
+    const runners = [engine, bridge()].filter(Boolean);
+    return yield* stopShell(decodeURIComponent(stop[1]), runners, headers, signal);
+  }
+  return yield* forward(engine, request.path, request, signal, allowed, namingHere(readEngine));
+}
+
+// Packages/Box/src/link/areas/setup.ts
 var followers = new Set;
 onLinkWritten(() => {
   for (const tell of followers)
@@ -38757,6 +38971,19 @@ async function* setupRoute(context) {
     return yield* followed(() => setupView(readLink()), followers, signal);
   }
   return yield* json(200, setupView(readLink()));
+}
+async function* memberComputersRoute(context) {
+  const { request, route, json } = context;
+  const link = readLink();
+  const main = mainElsewhere(link);
+  if (!main)
+    return yield* engineRoute(context);
+  if (request.method.toUpperCase() !== "GET")
+    return yield* json(409, addElsewhere(main));
+  if (route !== "kuvo/hosts")
+    return yield* engineRoute(context);
+  const hosts = memberHosts(link);
+  return yield* json(hosts ? 200 : 503, hosts ?? { message: "This computer doesn't have its setup's list of computers yet. Try again in a moment." });
 }
 
 // Packages/Box/src/link/areas/attention.ts
@@ -39045,7 +39272,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "b2d67f9bdecf";
+var BRIDGE_VERSION = "3add70a3a05e";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -39225,6 +39452,9 @@ async function* pairingRoute(context) {
   }
   if (method !== "POST")
     return yield* json(405, {});
+  const main = mainElsewhere(readLink());
+  if (main)
+    return yield* json(409, pairElsewhere(main));
   if (IS_MAC && !macLink.config?.phones)
     return yield* json(409, { message: "The phone link is off on this Mac." });
   const link = updateLink((current) => current?.relay && current?.secret ? { ...current, [slot]: newPairingToken() } : null);
@@ -39232,185 +39462,6 @@ async function* pairingRoute(context) {
     return yield* json(409, { message: IS_MAC ? "The phone link isn't ready yet. Try again in a moment." : "This machine has no relay to pair through." });
   macLink.wake?.();
   return yield* json(200, { link: pairingLink({ ...link, pairing: link[slot] }), ends: Math.floor(link[slot].expires / 1000) });
-}
-
-// Packages/Box/src/link/server/forward.ts
-var AGENTS = "kuvo/agents/";
-var FROM_PHONE = ["<from-phone>", "The user sent this from Kuvo Code on their iPhone.", "They read your reply on a small screen, and can't open file paths, links to files on the computer or Kuvo Code's side panel there. Keep your reply short and easy to read on a phone. To show them a file (a picture, a chart, a PDF, a document you made or found), use show_file: it puts the file in this conversation, where they see it. A widget (show_widget) shows there too: keep it narrow, and make it work with taps rather than hovering.", "</from-phone>"].join(`
-`);
-function fromPhone(body) {
-  let prompt;
-  try {
-    prompt = JSON.parse(Buffer.from(body ?? "").toString());
-  } catch {
-    return body;
-  }
-  if (typeof prompt?.text !== "string" || prompt.text.trimEnd().endsWith("</from-phone>"))
-    return body;
-  return Buffer.from(JSON.stringify({ ...prompt, text: `${prompt.text}
-
-${FROM_PHONE}` }));
-}
-function modelInput(base, headers, signal) {
-  const read = async (at) => {
-    const response = await fetch(new URL(at, base), { headers, signal });
-    return response.ok ? (await response.json())?.data ?? null : null;
-  };
-  return async (session) => {
-    const own = (await read(`/api/session/${encodeURIComponent(session)}`))?.model;
-    const ref = own ?? await read("/api/model/default");
-    if (!ref)
-      return null;
-    const model = Array.isArray(ref.capabilities?.input) ? ref : (await read("/api/model") ?? []).find((listed) => (listed?.id === ref.id || Array.isArray(listed?.aliases) && listed.aliases.includes(ref.id)) && listed?.providerID === ref.providerID);
-    const input = model?.capabilities?.input;
-    return Array.isArray(input) ? input.filter((kind) => typeof kind === "string") : null;
-  };
-}
-async function* forward(target, path, request, signal, allows, naming = null, down = engineDown, toAgents = false) {
-  const method = request.method.toUpperCase();
-  const sent = canonicalPath(path);
-  if (sent === null || !allows(sent, method)) {
-    yield { head: { status: 403, headers: { "content-type": "text/plain" } } };
-    yield { body: Buffer.from("That isn't available over the link.") };
-    return;
-  }
-  const url = new URL(`http://127.0.0.1:${target.port}/${sent}`);
-  const headers = { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` };
-  const given = Object.fromEntries(Object.entries(request.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
-  for (const name of REQUEST_HEADERS)
-    if (given[name])
-      headers[name] = given[name];
-  const sending = method === "POST" && /^\/api\/session\/([^/]+)\/(prompt|command)$/.exec(url.pathname);
-  const prompt = sending && sending[2] === "prompt" && !request.fromMac ? sending : null;
-  let moving = false;
-  try {
-    moving = Boolean(sending) && frozen().has(decodeURIComponent(sending ? sending[1] : ""));
-  } catch {}
-  if (moving) {
-    yield { head: { status: 409, headers: { "content-type": "application/json" } } };
-    yield { body: Buffer.from(JSON.stringify({ message: MOVING })) };
-    return;
-  }
-  const changed = method === "PATCH" && /^\/api\/session\/([^/]+)$/.exec(url.pathname);
-  let wasArchived = null;
-  const readBefore = async () => {
-    try {
-      const patience = AbortSignal.timeout(NOTES_STEP);
-      const before = await fetch(url, { headers, signal: signal ? AbortSignal.any([signal, patience]) : patience });
-      if (before.ok)
-        wasArchived = (await before.json())?.data?.metadata?.["kuvo.archived"] === true;
-    } catch {}
-  };
-  const delivering = sending && sending[2] === "prompt" ? undefined : signal;
-  const outgoing = async () => {
-    if (!sending)
-      return request.body;
-    const session = decodeURIComponent(sending[1]);
-    const body = await attachedIn(request.body, session, modelInput(url, headers, delivering), request.fromMac === true, toAgents);
-    return prompt ? fromPhone(await namedIn(body, session, naming)) : body;
-  };
-  const send = async () => fetch(url, {
-    method,
-    headers,
-    body: method === "GET" || method === "HEAD" ? undefined : await outgoing(),
-    signal: delivering
-  });
-  let response;
-  try {
-    if (changed) {
-      const turn = {};
-      await inTurnOn(target, decodeURIComponent(changed[1]), async () => {
-        await readBefore();
-        const sent = turn.sent = send();
-        const done = new AbortController;
-        await Promise.race([sent.catch(() => {}), pause(NOTES_STEP, done.signal)]);
-        done.abort();
-      }, signal);
-      if (!turn.sent)
-        throw new Error("It wasn't sent.");
-      response = await turn.sent;
-    } else
-      response = await send();
-  } catch (error) {
-    if (signal?.aborted)
-      throw error;
-    yield { head: { status: 503, headers: { "content-type": "application/json" } } };
-    yield { body: Buffer.from(JSON.stringify({ message: down() })) };
-    return;
-  }
-  const out = {};
-  for (const name of RESPONSE_HEADERS) {
-    const value = response.headers.get(name);
-    if (value)
-      out[name] = value;
-  }
-  if (changed && response.ok) {
-    let archived;
-    try {
-      archived = JSON.parse(Buffer.from(request.body ?? []).toString("utf8"))?.metadata?.["kuvo.archived"];
-    } catch {}
-    if (typeof archived === "boolean" && archived !== wasArchived) {
-      try {
-        holdArchived(decodeURIComponent(changed[1]), archived);
-      } catch {}
-      if (archived)
-        await stopIfWaiting(target, decodeURIComponent(changed[1]));
-    }
-  }
-  yield { head: { status: response.status, headers: out } };
-  if (!response.body)
-    return;
-  const reader = response.body.getReader();
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done)
-        return;
-      yield { body: Buffer.from(value) };
-    }
-  } finally {
-    reader.cancel().catch(() => {});
-  }
-}
-async function* agentsRoute(context) {
-  const { request, signal, readEngine, bridge, text } = context;
-  const path = request.path.slice(AGENTS.length);
-  if (!agentsAllowed(path, request.method))
-    return yield* text(403, "That isn't available over the link.");
-  const target = bridge();
-  if (!target) {
-    yield { head: { status: 503, headers: { "content-type": "application/json" } } };
-    yield { body: Buffer.from(JSON.stringify({ message: agentsDown() ?? (IS_MAC ? "The coding agents on this Mac are starting. Try again in a moment." : "The coding agents aren't running on this machine.") })) };
-    return;
-  }
-  return yield* forward(target, path, request, signal, agentsAllowed, namingHere(readEngine), () => "The coding agents aren't answering on this computer. Try again in a moment.", true);
-}
-async function* engineRoute(context) {
-  const { request, signal, route, readEngine, bridge, json, text } = context;
-  const stop = route.match(/^kuvo\/shell\/([^/]+)\/stop$/);
-  if (!stop && route.startsWith("kuvo/") && canonicalPath(request.path) === request.path)
-    return yield* json(404, {});
-  if (!stop && !allowed(request.path, request.method))
-    return yield* text(403, "That isn't available over the link.");
-  let engine = null;
-  try {
-    engine = readEngine();
-  } catch {
-    if (!stop || !bridge())
-      return yield* json(503, { message: engineDown() });
-  }
-  if (stop) {
-    if (request.method.toUpperCase() !== "POST")
-      return yield* text(405, "Stop it with POST.");
-    const headers = {};
-    const given = Object.fromEntries(Object.entries(request.headers).map(([k, v]) => [k.toLowerCase(), v]));
-    for (const name of REQUEST_HEADERS)
-      if (given[name])
-        headers[name] = given[name];
-    const runners = [engine, bridge()].filter(Boolean);
-    return yield* stopShell(decodeURIComponent(stop[1]), runners, headers, signal);
-  }
-  return yield* forward(engine, request.path, request, signal, allowed, namingHere(readEngine));
 }
 
 // Packages/Box/src/link/areas/queue.ts
@@ -43209,6 +43260,11 @@ async function* macLinkRoute(route, request, signal) {
 }
 async function* linkRoute(context) {
   const { request, signal, route, json } = context;
+  if (route === "kuvo/link/peers" && (request.fromApp || request.fromMac)) {
+    const main = mainElsewhere(readLink());
+    if (main)
+      return yield* json(409, addElsewhere(main));
+  }
   if (!IS_MAC || !request.fromApp)
     return yield* json(403, { message: "Only Kuvo Code on this computer can do that." });
   return yield* macLinkRoute(route, request, signal);
@@ -43230,6 +43286,7 @@ var ROUTES = [
   { when: (route, request) => /^kuvo\/(skills|skill-library|skill-trash)(\/|\?|$)/.test(request.path), answer: skillsRoute },
   { when: (route, request) => /^kuvo\/(config|mcp\/catalog|keys)(\/|\?|$)/.test(request.path), answer: settingsRoute },
   { when: (route) => route === "kuvo/setup" || route === "kuvo/setup/events" || route === "kuvo/setup/judge" || route === "kuvo/setup/attached", answer: setupRoute },
+  { when: (route) => !IS_MAC && isMachinesRoute(route), answer: memberComputersRoute },
   { when: (route) => route === "kuvo/phones", answer: phonesRoute },
   { when: (route) => route === "kuvo/phones/remove", answer: phonesRemoveRoute },
   { when: (route) => route === "kuvo/phones/pair", answer: pairingRoute },
@@ -44132,6 +44189,11 @@ function leave(mac) {
   return true;
 }
 function pair(relay) {
+  const main = mainElsewhere(readLink());
+  if (main) {
+    console.error(pairElsewhere(main).message);
+    process.exit(3);
+  }
   const link = updateLink((current) => {
     const next = current ?? { secret: crypto54.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), name: os20.hostname(), phones: [] };
     next.sign ??= newSigningSeed();

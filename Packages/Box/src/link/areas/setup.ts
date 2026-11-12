@@ -11,7 +11,9 @@ import { RUN } from "../home";
 import { followed } from "../follow";
 import { writeCard } from "../setup/card";
 import { appsOf, ATTACHED_FILE, foundOf, judgeComputer, oursNow } from "../setup/judge";
+import { addElsewhere, mainElsewhere, memberHosts } from "../setup/main-only";
 import { setupView } from "../setup/view";
+import { engineRoute } from "../server/forward";
 import { onLinkWritten, readLink } from "../state";
 import type { AnswerPiece, RouteContext } from "../server/context";
 
@@ -49,4 +51,19 @@ export async function* setupRoute(context: RouteContext): AsyncGenerator<AnswerP
     return yield* followed(() => setupView(readLink()), followers, signal);
   }
   return yield* json(200, setupView(readLink()));
+}
+
+/** A machine's `kuvo/machines…` and `kuvo/hosts…` (a Mac's box answers them with its app,
+ * `mac/machines.ts`): on a member of a setup, `GET kuvo/hosts` lists the setup's machines from its
+ * document, as a Mac lists its own, and adding, changing or removing any is its main computer's,
+ * named in a 409. Elsewhere they go on to the engine, as before. */
+export async function* memberComputersRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
+  const { request, route, json } = context;
+  const link = readLink();
+  const main = mainElsewhere(link);
+  if (!main) return yield* engineRoute(context);
+  if (request.method.toUpperCase() !== "GET") return yield* json(409, addElsewhere(main));
+  if (route !== "kuvo/hosts") return yield* engineRoute(context);
+  const hosts = memberHosts(link);
+  return yield* json(hosts ? 200 : 503, hosts ?? { message: "This computer doesn't have its setup's list of computers yet. Try again in a moment." });
 }

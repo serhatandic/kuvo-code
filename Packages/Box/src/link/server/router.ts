@@ -8,7 +8,7 @@ import { accountsRoute, credentialsRoute } from "../areas/accounts";
 import { agentToolsRoute, startRoute } from "../areas/agent-tools";
 import { foundRoute } from "../areas/found";
 import { searchRoute } from "../areas/search";
-import { setupRoute } from "../areas/setup";
+import { memberComputersRoute, setupRoute } from "../areas/setup";
 import { changesRoute } from "../areas/changes";
 import { askAnswerRoute, asksRoute } from "../areas/asks";
 import { appNoticeRoute, attentionRoute } from "../areas/attention";
@@ -47,6 +47,7 @@ import { worktreeEventsRoute, worktreesRoute } from "../areas/worktrees";
 import { APP_ICON_ROUTE, appIconRoute, newProjectRoute, GOALS_ROUTE, goalsRoute, WORK_ASKS_ROUTE, WORK_ROUTE, workAsksRoute, workRoute } from "../areas/work";
 import { phoneHere } from "../compat/leave-running";
 import { readBridgeFile, readEngineFile } from "../engine/client";
+import { isMachinesRoute } from "../mac/machines";
 import { linkRoute } from "../mac/routes";
 import { updateRoute } from "../updates/update";
 import { browserRoute } from "../browser/install";
@@ -85,6 +86,8 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: (route, request) => /^kuvo\/(skills|skill-library|skill-trash)(\/|\?|$)/.test(request.path), answer: skillsRoute },
   { when: (route, request) => /^kuvo\/(config|mcp\/catalog|keys)(\/|\?|$)/.test(request.path), answer: settingsRoute },
   { when: route => route === "kuvo/setup" || route === "kuvo/setup/events" || route === "kuvo/setup/judge" || route === "kuvo/setup/attached", answer: setupRoute },
+  // (A Mac's box answers these with its app, before this: `macFront`.)
+  { when: route => !IS_MAC && isMachinesRoute(route), answer: memberComputersRoute },
   { when: route => route === "kuvo/phones", answer: phonesRoute },
   { when: route => route === "kuvo/phones/remove", answer: phonesRemoveRoute },
   { when: route => route === "kuvo/phones/pair", answer: pairingRoute },

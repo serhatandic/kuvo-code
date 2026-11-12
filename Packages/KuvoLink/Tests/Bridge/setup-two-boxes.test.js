@@ -243,3 +243,31 @@ test("this Mac leads a setup and its machine takes it: kuvo/setup says the same 
   assert.match((await onLab("queue_add", { title: "Second" })).text, /#71/);
   assert.equal(read(path.join(machineHome, "run", "work-queue", "numbers.json")).primary, macPub);
 });
+
+// Only the main computer adds and pairs (PROTOCOL.md, "Your setup"): lab, a member now, names this
+// Mac for each, pairs no phone and lets no app say who's in the setup; it still tells a phone the
+// setup's machines it reaches directly, as this Mac's `kuvo/hosts` does.
+test("a member pairs no phone and adds no computer, naming the main computer, and lists the setup's machines for a phone", { timeout: 120_000 }, async t => {
+  signal = t.signal;
+  await eventually(() => read(path.join(machineHome, "run", "link.json"))?.setup?.role === "member");
+  const named = { primary: macPub };
+  const linkFile = path.join(machineHome, "run", "link.json");
+
+  // A phone asking lab for a pairing link, and `kuvo-link.js pair` run there.
+  assert.deepEqual(labRoute("POST", "kuvo/phones/pair"), { status: 409, json: { message: "Pair new phones from Studio Mac.", ...named } });
+  const cli = spawnSync(process.execPath, [script, "pair", relay.url], { env: machineEnv, encoding: "utf8" });
+  assert.equal(cli.status, 3, cli.stderr);
+  assert.equal(cli.stdout, "");
+  assert.match(cli.stderr, /^Pair new phones from Studio Mac\.$/m);
+  assert.equal(read(linkFile).pairing, undefined);
+
+  // Adding, changing or removing computers there, and an app there saying who's in the setup.
+  const elsewhere = { status: 409, json: { message: "Add and remove computers from Studio Mac.", ...named } };
+  assert.deepEqual(labRoute("POST", "kuvo/machines"), elsewhere);
+  assert.deepEqual(labRoute("DELETE", "kuvo/hosts/lab"), elsewhere);
+  assert.deepEqual(labRoute("PUT", "kuvo/link/peers"), elsewhere);
+  assert.equal(read(linkFile).setup.primary, macPub);
+
+  // What an older phone asks a Mac, asked of lab: the setup's machines, from its document.
+  assert.deepEqual(labRoute("GET", "kuvo/hosts"), { status: 200, json: { hosts: [{ kind: "machine", name: "lab", address: lab.address, key: lab.key, relay: relay.url, machine: "lab", anotherMac: false, removed: false }] } });
+});
