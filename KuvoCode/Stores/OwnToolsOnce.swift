@@ -2,7 +2,7 @@ import Foundation
 import OpenCodeKit
 import os
 
-// COMPAT(agent-tools.own): an older box still running after an update, which doesn't answer Kuvo Code's own tools yet. Goes once 0.8.0 ships (every released box has `agent-tools.own` from then on).
+// COMPAT(beta.1 agent-tools-own): runs Kuvo Code's own tools with this app's box script while an older box after an update answers them 400. Goes when 0.8.0 ships.
 /// Kuvo Code's own tools (`AgentMail.ownTools`) while this Mac's box doesn't answer them yet: after
 /// an update, the keeper keeps the older box until the work under way ends, which can take hours,
 /// and the older box answers these 400. Then the call goes to this app's own box script, run once
@@ -88,10 +88,11 @@ enum OwnToolsOnce {
         let result: ChildProcess.Result
         do {
             result = try await ChildProcess.run(runtime.executable.path, flags + [script.path, "box", "route"], environment: env,
-                                                directory: BoxProcess.home, input: .file(file), errors: .discard,
+                                                directory: BoxProcess.home, input: .file(file), errors: .collect,
                                                 limit: .seconds(TimeInterval(BrowserTools.executionTimeout) / 1000),
                                                 cancellable: !keptWhole.contains(name))
         } catch {
+            log.error("\(name, privacy: .public) didn't run with this app's box script: \(error.localizedDescription, privacy: .public)")
             return nil
         }
         // Its last line: `{status, body}`, the body the route's answer as text.
@@ -99,7 +100,12 @@ enum OwnToolsOnce {
         struct Said: Decodable { var text: String?; var isError: Bool?; var message: String? }
         guard let line = result.outputText.split(separator: "\n").last,
               let answer = try? JSONDecoder().decode(Answer.self, from: Data(line.utf8)),
-              let said = try? JSONDecoder().decode(Said.self, from: Data(answer.body.utf8)) else { return nil }
+              let said = try? JSONDecoder().decode(Said.self, from: Data(answer.body.utf8)) else {
+            // What went wrong, for the log: how it ended, and the end of what it said.
+            let said = String(result.errorText.trimmingCharacters(in: .whitespacesAndNewlines).suffix(600))
+            log.error("\(name, privacy: .public) with this app's box script gave no answer: status \(result.status, privacy: .public), timed out \(result.timedOut, privacy: .public): \(said, privacy: .public)")
+            return nil
+        }
         guard answer.status == 200, let text = said.text else { return said.message.map { ($0, true) } }
         return (text, said.isError ?? false)
     }

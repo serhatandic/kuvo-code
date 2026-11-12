@@ -6214,3 +6214,7 @@ can go three months after 0.8.0 ships.
 - It asks a machine to rename a worktree's branch (`POST kuvo/worktrees/rename`, through `box
   route`), which the box names itself now: it's refused, and that Mac reads the machine's records
   again.
+- Its keeper's box, still running after an update until the work under way ends, answers 400 for
+  Kuvo Code's own tools that every box answers since `agent-tools.own` ("Agents' tools"): the newer
+  app runs those calls with its own `kuvo-link.js box route`, once each, meanwhile.
+  <!-- compat: beta.1 agent-tools-own -->

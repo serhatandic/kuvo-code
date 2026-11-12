@@ -177,7 +177,7 @@ final class AgentMail {
         return (text, failed)
     }
 
-    // COMPAT(agent-tools.own): an older box still running after an update (`OwnToolsOnce`). Goes once 0.8.0 ships (every released box has `agent-tools.own` from then on).
+    // COMPAT(beta.1 agent-tools-own): hands Kuvo Code's own tools to `OwnToolsOnce` while an older box after an update answers them 400. Goes when 0.8.0 ships.
     /// The tools every box answers since it says `agent-tools.own` (PROTOCOL.md, "Agents' tools").
     static let ownTools: Set<String> = ["schedule_wake_up", "watch_for_change", "list_wake_ups", "cancel_wake_up", "set_job", "show_in_panel", "show_file", "mark_final", "show_widget"]
     /// What an agent hears from one of them while an older box runs on after an update and this
