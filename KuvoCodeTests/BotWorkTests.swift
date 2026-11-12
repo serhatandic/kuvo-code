@@ -198,7 +198,7 @@ import Testing
         let pixel = try #require(app.bots.bot("bot_pixel00001"))
         // Read as its box follows it: slow, while Sign-in still asks.
         let slow = Task { await app.botWork.read(pixel) }
-        _ = await box.arrived.first { _ in true }
+        for await _ in box.arrived { break }
         // Meanwhile Sign-in's ask is answered and it finishes; the bar reads again as it changes.
         box.finish()
         let again = Task { await app.botWork.read(pixel) }
