@@ -34,8 +34,8 @@ import type { LinkState } from "../state";
 // What only this Mac's app answers a phone, by area: its machines (which this box answers in part
 // with the app closed: machines.ts), the machines your phones reach directly, its usage panel's
 // numbers, what its panel's browser asks you, its macOS services (`kuvo/mac`), Claude Code's
-// agents and commands it reads from ~/.claude, and its engine's restart while the app runs this box
-// itself (`boxAnswers` says when this box takes it). The one
+// agents and commands for one of its machines (`kuvo/claude-code?machine=`), and its engine's
+// restart while the app runs this box itself (`boxAnswers` says when this box takes them). The one
 // list of them: the app keeps none, and hands its own requests for anything else to this box.
 // Everything else a phone asks this box answers itself, as a machine's does, with the app open or
 // closed.
@@ -43,12 +43,14 @@ export const MAC_APP_ROUTES = ["kuvo/machines", "kuvo/hosts", "kuvo/usage", "kuv
 export const macAppAnswers = (route: string, request?: LinkRequest): boolean =>
   MAC_APP_ROUTES.some(area => route === area || route.startsWith(`${area}/`)) && !(request && boxAnswers(route, request));
 
-// Those of the app's areas this box answers itself: its engine's restart while the keeper runs this
+// Those of the app's areas this box answers itself: this Mac's own Claude Code agents and commands
+// (each box lists its own: `kuvo/claude-code`), and its engine's restart while the keeper runs this
 // box (`kuvo-start restart` asks it, as a machine's box asks its own), with the app closed too.
 // While the app runs the box itself, the app restarts the engine: `bin/kuvo-start` stays once a
 // keeper has run, and would answer 202 with nothing to ask.
-// (The app answers it still, for a box from before it did: PhoneLink's old-box path.)
-function boxAnswers(route: string, _request: LinkRequest): boolean {
+// (The app answers both still, for a box from before it did: PhoneLink's old-box path.)
+function boxAnswers(route: string, request: LinkRequest): boolean {
+  if (route === "kuvo/claude-code") return !new URLSearchParams(String(request.path ?? "").split("?")[1] ?? "").has("machine");
   if (route === "kuvo/engine/restart") return keeperRuns();
   return false;
 }

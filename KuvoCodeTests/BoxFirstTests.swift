@@ -43,4 +43,24 @@ import Testing
         // And one no box has, the box's to say.
         #expect(try await client.send("GET", "kuvo/nothing-here").status == 404)
     }
+
+    /// Settings › Agents' and Commands' From Claude Code on this Mac: its own ~/.claude, as its box
+    /// lists it (every box lists its own), with nothing read in the app.
+    @Test func thisMacsOwnClaudeCodeIsItsBoxs() async throws {
+        let home = FileManager.default.temporaryDirectory.appending(path: "box-first-home-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        try FileManager.default.createDirectory(at: home.appending(path: ".claude/agents"), withIntermediateDirectories: true)
+        try Data("---\nname: Reviewer\ndescription: Reviews code\n---\nReview it.\n".utf8).write(to: home.appending(path: ".claude/agents/reviewer.md"))
+        let box = try await TestBox(engine: engine.url, environment: ["HOME": home.path])
+        defer {
+            box.stop()
+            engine.stop()
+        }
+        let client = box.client(engine: engine.url)
+        #expect(try await client.send("GET", "kuvo/claude-code").status == 200)
+        let listed = await ClaudeCodeImports.read(for: client, others: [])
+        #expect(listed.agents.map(\.path) == [["agents", "reviewer"]])
+        #expect(listed.agents.first?.name == "Reviewer")
+        #expect(listed.agents.first?.settings == .object(["mode": .string("subagent"), "description": .string("Reviews code"), "system": .string("Review it.")]))
+    }
 }

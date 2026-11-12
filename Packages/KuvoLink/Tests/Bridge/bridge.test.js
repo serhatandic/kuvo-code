@@ -1402,6 +1402,7 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     btw: ["GET", "kuvo/agents/api/kuvo/btw"],
     // (What a side question's routes take besides, on the coding agents' bridge.)
     "btw.threads": ["GET", "kuvo/agents/api/kuvo/btw"],
+    "claude-code": ["GET", "kuvo/claude-code"],
     config: ["GET", "kuvo/config"],
     "config.apply": ["GET", "kuvo/config/apply"],
     "engine.restart": ["GET", "kuvo/engine/restart"],

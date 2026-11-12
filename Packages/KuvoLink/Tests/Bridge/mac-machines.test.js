@@ -451,3 +451,22 @@ test("a phone restarts this Mac's engine through its keeper with the app closed;
     for (const file of [keeper, told, path.join(bin, "kuvo-start")]) fs.rmSync(file, { force: true });
   }
 });
+
+test("this Mac's own Claude Code agents and commands come from its box with the app closed; one of its machines' are still the app's", async () => {
+  app.state = "closed";
+  const saved = process.env.HOME;
+  process.env.HOME = path.join(support, "home");
+  fs.mkdirSync(path.join(process.env.HOME, ".claude", "agents"), { recursive: true });
+  fs.writeFileSync(path.join(process.env.HOME, ".claude", "agents", "reviewer.md"), "---\nname: reviewer\ndescription: Reviews\n---\nReview.\n");
+  const front = link.macFront(link.engineHandler(() => { throw new Error("not running"); }));
+  try {
+    const own = await asked(front, "GET", "kuvo/claude-code");
+    assert.equal(own.status, 200);
+    assert.deepEqual(own.json.agents.map(agent => agent.path), [["agents", "reviewer"]]);
+    // (Its machines' are the Mac's ~/.claude brought to them, which only the app answers.)
+    assert.equal((await asked(front, "GET", "kuvo/claude-code?machine=lab")).status, 503);
+    assert.equal(app.asked.at(-1).path, "kuvo/claude-code?machine=lab");
+  } finally {
+    process.env.HOME = saved;
+  }
+});

@@ -39,6 +39,7 @@ export const FEATURES = [
   "browser",
   "btw",
   "btw.threads",
+  "claude-code",
   "config",
   "config.apply",
   "engine.restart",

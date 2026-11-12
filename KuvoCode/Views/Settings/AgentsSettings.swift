@@ -11,8 +11,8 @@ struct AgentsSettings: View {
     @State private var editing: AgentEdit?
     /// What to remove once its sheet has closed (and its fields are done saving).
     @State private var removal: [String]?
-    /// Claude Code's agents, to bring over.
-    @State private var claudeAgents: [ClaudeAgents.Agent] = []
+    /// Claude Code's agents, to bring over: this Mac's, as its box lists them.
+    @State private var claudeAgents: [ClaudeCodeImports.Item] = []
 
     private var config: EngineConfig { app.config(for: box) }
 
@@ -102,7 +102,7 @@ struct AgentsSettings: View {
                                 }
                             }
                             Spacer()
-                            if config.value(at: ["agents", agent.id]) != nil {
+                            if config.value(at: agent.path) != nil {
                                 Label("Imported", systemImage: "checkmark")
                                     .font(.callout)
                                     .foregroundStyle(.secondary)
@@ -119,9 +119,9 @@ struct AgentsSettings: View {
                 }
             }
         }
-        // Claude Code's agents are read from this Mac's folder: offered on this Mac's page only,
-        // not brought onto a machine as if they were its own. (No box lists a computer's yet.)
-        .task(id: box.machine) { claudeAgents = box.machine == nil ? await Task.detached { ClaudeAgents.load() }.value : [] }
+        // Claude Code's agents are this Mac's: offered on this Mac's page only, not brought onto a
+        // machine as if they were its own.
+        .task(id: box.id) { claudeAgents = await ClaudeCodeImports.read(for: app.box(box.id), others: []).agents }
         .settingsDetail(item: $editing, title: { $0.agentID ?? "New Agent" }, onDismiss: removePending) { edit in
             AgentEditor(id: edit.agentID, isBuiltIn: edit.isBuiltIn) { editing = nil } remove: { path in
                 removal = path
@@ -130,8 +130,8 @@ struct AgentsSettings: View {
         }
     }
 
-    private func importAgent(_ agent: ClaudeAgents.Agent) {
-        config.set(agent.settings, at: ["agents", agent.id])
+    private func importAgent(_ agent: ClaudeCodeImports.Item) {
+        config.set(agent.settings, at: agent.path)
         Analytics.shared.track("agent_created", ["from": "claude"])
     }
 

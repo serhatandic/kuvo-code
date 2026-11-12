@@ -2965,15 +2965,17 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   it's turned off in Login Items & Extensions, on the Mac. `openAtLogin` means the same as
   `backgroundWork` (it never adds Open at Login's own login item again, so the two don't both open
   Kuvo Code); `false` also takes away that item, if it's still there.
-- On a Mac, `GET kuvo/claude-code[?machine=<id>]`: what Settings › Agents and Settings › Commands
-  offer to bring over from Claude Code (the Mac's `~/.claude/agents` and `~/.claude/commands`) to
-  that computer (the Mac without `machine`; `404` for a machine that isn't one of its own):
+- `GET kuvo/claude-code` (every box, from #341; before, a Mac's app only): what Settings › Agents
+  and Settings › Commands offer to bring over from Claude Code on this computer (its own
+  `~/.claude/agents` and `~/.claude/commands`), with its app closed too:
   `{"agents": [{name, description, path, settings, imported}], "commands": [...]}`. An agent's
   `name` is the one it's shown by; a command's is the one it comes over as, `<name>-claude` when
-  that computer has one by its name already (the engine's own, a plugin's or an MCP server's, as
-  its page reads them while it's connected). Import is writing `settings` at `path`
-  (`["agents", "<id>"]` or `["commands", "<name>"]`) through that computer's `kuvo/config`;
-  `imported` says whether its settings have it there.
+  this computer has one by its name already (the engine's own, a plugin's or an MCP server's, as
+  its engine lists them). Import is writing `settings` at `path` (`["agents", "<id>"]` or
+  `["commands", "<name>"]`) through this computer's `kuvo/config`; `imported` says whether its
+  settings have it there. A computer with no `~/.claude` lists none. On a Mac,
+  `?machine=<id>` is the Mac's own `~/.claude` named and marked for one of its machines, which only
+  its app answers (`404` for a machine that isn't one of its own); a box answers `404` to it.
 - `POST kuvo/engine/restart`: the computer's engine starts over, as Settings › Engine's Restart
   does on a Mac; what's running in it stops. It answers `202 {}` first. On a Mac whose keeper runs
   the box, the box asks its keeper (`bin/kuvo-start restart`), with the app closed too, and stays
@@ -4054,7 +4056,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `browser` | a machine only: `kuvo/browser`, its browser set up by the box itself ("The browser on a machine") |
 | `btw` | `kuvo/agents/api/kuvo/btw…`: side questions ("Side questions, handoffs and reviews") |
 | `btw.threads` | a side question's `thread`, follow-ups and a thread's removal (bridge 0.9.98) |
-| `claude-code` | a Mac only: `kuvo/claude-code` |
+| `claude-code` | `kuvo/claude-code` (a Mac only, before #341) |
 | `config` | `kuvo/config` |
 | `config.apply` | `POST kuvo/config/apply` |
 | `engine.restart` | `POST kuvo/engine/restart` |
@@ -4372,8 +4374,9 @@ machine's, while its keeper's next start is more than half a minute away (`run/e
 in seconds since 1970), "This machine's engine keeps stopping. It's started again in about N
 minutes." The Mac's own routes (`MAC_APP_ROUTES`, the one list of them: `kuvo/machines…`,
 `kuvo/hosts…`, `kuvo/usage…`, `kuvo/asks…`, `kuvo/mac`, `kuvo/claude-code`, `kuvo/engine/…`), it
-hands the app (`link/route`), but for `kuvo/engine/restart` while its keeper runs (`run/keeper.json`,
-its process alive), which it answers itself (from #341). Those it hands the app as it comes, whether its app or its keeper runs the box (the keeper's
+hands the app (`link/route`), but for those it answers itself (from #341): `kuvo/claude-code`
+without `?machine=`, and `kuvo/engine/restart` while its keeper runs (`run/keeper.json`, its
+process alive). Those it hands the app as it comes, whether its app or its keeper runs the box (the keeper's
 host passes on the app's answer as it came, `x-kuvo-answer` with it), `503 {"message"}` at once when
 the app isn't answering (of its machines and hosts it says what it can itself then: "Machines").
 The app answers those alone, and hands its box everything else it's asked, its own requests

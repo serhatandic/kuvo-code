@@ -15,6 +15,7 @@ import { appNoticeRoute, attentionRoute } from "../areas/attention";
 import { botKeysRefreshRoute, botKeysRoute } from "../areas/bot-keys";
 import { arrivedRoute, botEventsRoute, botRoute, botsRoute, botTemplatesRoute, newBotRoute, retellRoute } from "../areas/bots";
 import { CARRY_ROUTE, carryRoute } from "../areas/carry";
+import { claudeCodeRoute } from "../areas/claude-code";
 import { engineControlRoute, signInReturnRoute } from "../areas/engine";
 import { fileAt } from "../areas/file";
 import { foldersRoute } from "../areas/folders";
@@ -110,6 +111,7 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route.match(/^kuvo\/asks\/([^/]+)$/), answer: askAnswerRoute },
   { when: route => route.match(/^kuvo\/engine\/(start|restart)$/), answer: engineControlRoute },
   { when: route => route === "kuvo/sign-in/return", answer: signInReturnRoute },
+  { when: route => route === "kuvo/claude-code", answer: claudeCodeRoute },
   { when: (route, request) => request.path.startsWith(AGENTS), answer: agentsRoute },
   { when: route => route === "kuvo/accounts/ended" || route === "kuvo/accounts/refreshable" || /^kuvo\/accounts\/[^/]+\/(forget|refresh)$/.test(route), answer: accountsRoute },
   { when: route => route === "kuvo/accounts/credentials", answer: credentialsRoute },

@@ -820,7 +820,9 @@ final class PhoneLink {
         // Those that read the query get the request whole; the rest, its route.
         let route = request.path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? request.path
         // All but this Mac's own areas are its box's: answered there, as a machine's box answers them.
-        if !Self.appAnswers(route) {
+        // (The app's own read of this Mac's Claude Code too, which every box lists for itself; what
+        // the box hands here of a phone's is an older box's, which doesn't.)
+        if !Self.appAnswers(route) || asking == nil && route == "kuvo/claude-code" && !request.path.contains("?") {
             guard let box = Self.box.withLock({ $0 }) else { return Self.boxUnavailable() }
             let base = box.url.absoluteString.hasSuffix("/") ? box.url : URL(string: box.url.absoluteString + "/")!
             // The app's own requests (no phone asking) say so: they aren't a phone using the box.
@@ -870,7 +872,9 @@ final class PhoneLink {
                 if route == "kuvo/machines" { continuation.onTermination = { _ in task.cancel() } }
             }
         }
-        // Settings › Agents' and Commands' From Claude Code: this Mac's ~/.claude, read here.
+        // Settings › Agents' and Commands' From Claude Code: this Mac's ~/.claude, read here, for
+        // one of its machines (`?machine=`), and for a phone through an older box (old-box path:
+        // every box lists its own now, `kuvo/claude-code`).
         if route == "kuvo/claude-code" {
             // `?machine=<id>`: named and said to be there as that machine's pages have them.
             let machine = URLComponents(string: request.path)?.queryItems?.first { $0.name == "machine" }?.value
