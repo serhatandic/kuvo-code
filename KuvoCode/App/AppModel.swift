@@ -366,6 +366,8 @@ final class AppModel {
         botAsks.onChange = { [weak self] sessions in self?.workspace.askingForWork = sessions }
         Sandboxes.shared.onChange = { [weak self] sessions in self?.workspace.askingOutsideSandbox = sessions }
         Sandboxes.shared.onYours = { [weak self] id in self?.workspace.reviewLeftForYou(id) }
+        Sandboxes.shared.onOver = { [weak self] id in self?.workspace.reviewOver(id) }
+        Sandboxes.shared.onListed = { [weak self] ids in self?.workspace.reviewsListed(ids) }
         goalPlans.app = self
         botOversight.app = self
         workQueues.app = self

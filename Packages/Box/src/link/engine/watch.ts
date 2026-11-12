@@ -16,7 +16,7 @@ import { applyCompatibility, followSettingsFile, learnCompatibility } from "./co
 import { modelsDue, settleDueModels, WORK_ENDS } from "./models";
 import { goalHolds, settleGoalHolds } from "../work/goals";
 import { workWatcher } from "../work/wakes";
-import { reviewPermission, settleAskReview, settleRunReviews, takeUpWaitingAsks } from "../work/reviewing";
+import { isOver, reviewPermission, settleAskReview, settleRunReviews, takeUpWaitingAsks } from "../work/reviewing";
 import { forgetReviews } from "../work/reviewer";
 import { forgetDecided } from "../work/autopilot";
 import { backUpSession } from "../work/backups";
@@ -368,7 +368,8 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       if (work) noteFullAccessAtWork(source, atWork).catch(() => {});
       // Asks to work outside a folder waiting already (it started again as they came, or their
       // event went by unheard): taken up now, so every client's list of them is whole.
-      if (work) atWork(source).then(sessions => takeUpWaitingAsks(source, sessions, connection.signal)).catch(() => {});
+      // And what it listed as checked or left for you there that's no longer asked, gone.
+      if (work) atWork(source).then(sessions => takeUpWaitingAsks(source, sessions, connection.signal, work || undefined)).catch(() => {});
       // Agents' work that ended while it wasn't listening (or before boxes read it so): read, unless
       // what came since you read it is news to you, or it asks you (READ_RULE).
       if (work) settleWorkRead(source, connection.signal).catch(() => {});
@@ -411,7 +412,7 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         const followed = followWork?.(event);
         // A conversation in Auto: what its agent's file tools ask outside its folder, reviewed (and
         // told to your phones below only where it isn't: the reviewer never leaves one for you).
-        const reviewed = work && event.type === "permission.asked" ? reviewPermission(source, event, connection.signal).catch(() => null) : null;
+        const reviewed = work && event.type === "permission.asked" ? reviewPermission(source, event, connection.signal, undefined, work).catch(() => null) : null;
         goalHeld?.(event).catch(() => {});
         if (signIns) noteSignIn(event, source).catch(() => {}).finally(() => signedIn(event));
         if (work && event.type === "session.execution.succeeded" && typeof event.data?.sessionID === "string") keepReadThroughSummary(source, event.data.sessionID, connection.signal).catch(() => {});
@@ -428,8 +429,8 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         // An ask answered: off the list of what waits (on every source, the bridge's too).
         const settled = ANSWERED.has(event.type) ? event.data?.requestID ?? event.data?.id : undefined;
         if (typeof settled === "string") settleAskReview(settled);
-        // A run's end takes what it asked with it, with no word of each.
-        if (RUN_ENDS.has(event.type) && typeof event.data?.sessionID === "string") settleRunReviews(event.data.sessionID);
+        // A run's end takes what it asked with it, with no word of each, and so does its session deleted.
+        if ((RUN_ENDS.has(event.type) || event.type === "session.deleted") && typeof event.data?.sessionID === "string") settleRunReviews(event.data.sessionID);
         if (!notices) continue;
         if (ANSWERED.has(event.type)) answered(event.data?.requestID ?? event.data?.id);
         // A run's end: what it asked the engine let go with it, without a word (stopped, say). Looked
@@ -442,9 +443,11 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
           continue;
         }
         // (What it asks, once the box has looked: on Autopilot it may have gone ahead.)
+        // (Never one Auto's reviewer took up that's over meanwhile: stopped as it was checked, say.)
+        const over = () => event.type === "permission.asked" && isOver(event.data?.id);
         Promise.all([reviewed, event.type === "form.created" ? followed : null])
-          .then(([verdict]) => (verdict ? null : noticeFor(event, (route, folder) => engineGet(source, route, folder))))
-          .then(notice => notice && tell(notice))
+          .then(([verdict]) => (verdict || over() ? null : noticeFor(event, (route, folder) => engineGet(source, route, folder))))
+          .then(notice => notice && !over() && tell(notice))
           .catch(() => {});
       }
     } catch {}

@@ -1457,6 +1457,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     sandbox: ["GET", "kuvo/sandbox"],
     "sandbox.asks": ["GET", "kuvo/sandbox/allowed"],
     "sandbox.check": ["POST", "kuvo/sandbox/check"],
+    // (Its asks' `settled` list those Auto's reviewer took up that are over: what kuvo/sandbox/asks says.)
+    "sandbox.reviews.settled": ["GET", "kuvo/sandbox/asks"],
     // (Its asks' `reviews` list every ask Auto's reviewer may take up: what kuvo/sandbox/asks says.)
     "sandbox.reviews.whole": ["GET", "kuvo/sandbox/asks"],
     search: ["GET", "kuvo/search?q=none"],

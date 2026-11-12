@@ -83,7 +83,17 @@ export const ASK_REVIEW = object({
   id: string, session: string, "call?": string,
   state: words("checking", "allowed", "heldBack", "refused", "yours"), at: number,
 });
-export const SANDBOX_ASKS = object({ asks: list(SANDBOX_ASK), "restart?": bool, "reviews?": list(ASK_REVIEW) });
+/**
+ * An ask Auto's reviewer was checking or had left for you that's over without its word: `answered`
+ * (by you, on any client, or by its engine) or `gone` (its run ended, its session was deleted, or
+ * its engine let it go while the box wasn't listening). A client never takes one listed so for one
+ * that waits, heard or not. The latest two hundred (`sandbox.reviews.settled`).
+ */
+export const SETTLED_REVIEW = object({
+  id: string, session: string, "call?": string,
+  state: words("answered", "gone"), at: number,
+});
+export const SANDBOX_ASKS = object({ asks: list(SANDBOX_ASK), "restart?": bool, "reviews?": list(ASK_REVIEW), "settled?": list(SETTLED_REVIEW) });
 
 /** The agents' sandbox tool (`sandbox_ask`), as a tool server lists it, and what a call answers. */
 export const SANDBOX_TOOL_LIST = object({ tools: list(any) });

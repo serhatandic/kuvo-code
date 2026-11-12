@@ -3227,6 +3227,9 @@
             "literal": "sandbox.check"
            },
            {
+            "literal": "sandbox.reviews.settled"
+           },
+           {
             "literal": "sandbox.reviews.whole"
            },
            {
@@ -3593,6 +3596,9 @@
            },
            {
             "literal": "sandbox.check"
+           },
+           {
+            "literal": "sandbox.reviews.settled"
            },
            {
             "literal": "sandbox.reviews.whole"
@@ -7254,6 +7260,26 @@
            },
            {
             "literal": "yours"
+           }
+          ]
+         },
+         "at": "number"
+        }
+       }
+      },
+      "settled?": {
+       "list": {
+        "object": {
+         "id": "string",
+         "session": "string",
+         "call?": "string",
+         "state": {
+          "oneOf": [
+           {
+            "literal": "answered"
+           },
+           {
+            "literal": "gone"
            }
           ]
          },
@@ -11943,6 +11969,35 @@
             ]
            },
            "text": "string"
+          }
+         }
+        },
+        "events": {
+         "list": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             },
+             {
+              "map": "any"
+             }
+            ]
+           },
+           "kind": "string",
+           "from?": "string",
+           "to?": "string",
+           "top?": "bool"
           }
          }
         },

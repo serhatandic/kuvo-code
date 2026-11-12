@@ -2144,6 +2144,7 @@ var FEATURES = [
   "sandbox",
   "sandbox.asks",
   "sandbox.check",
+  "sandbox.reviews.settled",
   "sandbox.reviews.whole",
   "search",
   "sessions.agents",
@@ -11506,6 +11507,7 @@ var MOST_NOTES = 200;
 var MOST_FILE = 25000000;
 var MOST_FILES = 50;
 var MOST_LINKS = 50;
+var MOST_EVENTS = 50;
 var MOST_HANDED = 20;
 var whoWords = (who) => {
   const given = who;
@@ -11530,12 +11532,14 @@ var whoOf = (given) => {
   return Object.keys(kept).length ? kept : null;
 };
 var FILE_NAME = /^(?!\.\.?$)[^/\\\0]{1,200}$/;
-var KNOWN2 = new Set(["id", "number", "owner", "title", "body", "category", "order", "progress", "notes", "files", "links", "sessions", "handed", "handedBy", "wanted", "importedAs", "backGranted", "stays", "source", "handing", "created", "updated", "doneAt", "removed"]);
+var KNOWN2 = new Set(["id", "number", "owner", "title", "body", "category", "order", "progress", "notes", "events", "files", "links", "sessions", "handed", "handedBy", "wanted", "importedAs", "backGranted", "stays", "source", "handing", "created", "updated", "doneAt", "removed"]);
 var handingOf = (given) => {
   if (!isObject(given) || typeof given.id !== "string" || !/^wqh_[A-Za-z0-9_-]{8,40}$/.test(given.id) || typeof given.to !== "string" || !OWNER2.test(given.to) || typeof given.key !== "string" || typeof given.at !== "number")
     return null;
   return { id: given.id, to: given.to, key: given.key, name: typeof given.name === "string" ? given.name : "", at: given.at, by: whoOf(given.by) ?? { user: true }, ...typeof given.sent === "number" ? { sent: given.sent } : {}, ...typeof given.missing === "number" ? { missing: given.missing } : {} };
 };
+var MOST_EVENT = 2000;
+var eventKept = (each) => typeof each.at === "number" && Number.isFinite(each.at) && typeof each.kind === "string" && each.kind.length > 0 && each.kind.length <= 40 && whoOf(each.by) !== null && JSON.stringify(each.by).length <= 500 && JSON.stringify(each).length <= MOST_EVENT;
 function itemOf(given, owner) {
   if (!isObject(given) || typeof given.id !== "string" || !ITEM_ID.test(given.id) || typeof given.title !== "string" || typeof given.category !== "string")
     return null;
@@ -11554,6 +11558,7 @@ function itemOf(given, owner) {
     order: typeof given.order === "number" && Number.isFinite(given.order) ? given.order : 0,
     ...isObject(given.progress) ? { progress: { ...typeof given.progress.value === "number" ? { value: given.progress.value } : {}, ...typeof given.progress.note === "string" ? { note: given.progress.note } : {} } } : {},
     notes: list(given.notes, (each) => typeof each.at === "number" && typeof each.text === "string" && whoOf(each.by) !== null),
+    ...Array.isArray(given.events) ? { events: list(given.events, eventKept).slice(-MOST_EVENTS) } : {},
     files: list(given.files, (each) => typeof each.name === "string" && FILE_NAME.test(each.name) && typeof each.size === "number"),
     links: list(given.links, (each) => typeof each.url === "string"),
     sessions: list(given.sessions, (each) => typeof each.session === "string" && SESSION2.test(each.session)),
@@ -16704,24 +16709,58 @@ var READING = new Set(["read", "glob", "grep", "list", "ls", "view", "notebookre
 var OWN_READING = new Set(["read", "view", "notebookread"]);
 var reviewing = new Map;
 var askReviews = new Map;
+var settledReviews = new Map;
+var droppedWaiting = new Map;
+var askedOn = new Map;
 var reviewFollowers = new Set;
 var listAskReviews = () => [...askReviews.values()];
-function settleAskReview(id) {
-  const review = askReviews.get(id);
-  if (!review || review.state !== "yours" && review.state !== "checking")
+var listSettledReviews = () => [...settledReviews.values()];
+var isOver = (id) => typeof id === "string" && settledReviews.has(id);
+var replying = new Map;
+var waitsOnReview = (review) => review?.state === "yours" || review?.state === "checking";
+function settle(reviews, state) {
+  if (!reviews.length)
     return;
-  askReviews.delete(id);
+  for (const { id, session, call } of reviews) {
+    askReviews.delete(id);
+    askedOn.delete(id);
+    settledReviews.delete(id);
+    settledReviews.set(id, { id, session, ...call ? { call } : {}, state, at: Date.now() });
+    if (settledReviews.size > 200)
+      settledReviews.delete(settledReviews.keys().next().value);
+  }
   for (const changed of reviewFollowers)
     changed();
 }
-function settleRunReviews(session) {
-  const gone = [...askReviews.values()].filter((each) => each.session === session && (each.state === "yours" || each.state === "checking"));
-  if (!gone.length)
+function settleAskReview(id) {
+  droppedWaiting.delete(id);
+  if (replying.has(id)) {
+    replying.set(id, true);
     return;
-  for (const each of gone)
-    askReviews.delete(each.id);
-  for (const changed of reviewFollowers)
-    changed();
+  }
+  const review = askReviews.get(id);
+  if (waitsOnReview(review))
+    settle([review], "answered");
+}
+function settleRunReviews(session) {
+  for (const [id, of] of droppedWaiting)
+    if (of === session)
+      droppedWaiting.delete(id);
+  settle([...askReviews.values()].filter((each) => each.session === session && waitsOnReview(each)), "gone");
+}
+async function settleGoneReviews(source, place, since, signal) {
+  const looked = [...askReviews.values()].filter((each) => waitsOnReview(each) && each.at <= since && askedOn.get(each.id) === place);
+  const gone = [];
+  for (const session of new Set(looked.map((each) => each.session))) {
+    if (signal?.aborted)
+      return;
+    const listed = await call(source, "GET", `/api/session/${encodeURIComponent(session)}/permission`, undefined, signal).catch((error) => error?.status === 404 ? [] : null);
+    if (!Array.isArray(listed))
+      continue;
+    const asked = new Set(listed.filter(isObject).map((each) => each.id));
+    gone.push(...looked.filter((each) => each.session === session && !asked.has(each.id) && askReviews.get(each.id) === each));
+  }
+  settle(gone, "gone");
 }
 function onAskReviewsChanged(changed) {
   reviewFollowers.add(changed);
@@ -16729,17 +16768,34 @@ function onAskReviewsChanged(changed) {
     reviewFollowers.delete(changed);
   };
 }
-function noteReview(id, session, state, call) {
+function noteReview(id, session, state, call, place, fresh = false) {
+  const waiting = state === "checking" || state === "yours";
+  if (waiting && !fresh && !askReviews.has(id) && !droppedWaiting.has(id))
+    return;
+  droppedWaiting.delete(id);
   askReviews.delete(id);
+  settledReviews.delete(id);
   askReviews.set(id, { id, session, ...call ? { call } : {}, state, at: Date.now() });
+  if (place)
+    askedOn.set(id, place);
+  if (state !== "checking" && state !== "yours")
+    askedOn.delete(id);
   if (askReviews.size > 200) {
     const decided = [...askReviews.values()].find((each) => each.state !== "checking" && each.state !== "yours");
-    askReviews.delete(decided?.id ?? askReviews.keys().next().value);
+    const dropped = decided?.id ?? askReviews.keys().next().value;
+    const waited = askReviews.get(dropped);
+    if (waitsOnReview(waited)) {
+      droppedWaiting.set(dropped, waited.session);
+      if (droppedWaiting.size > 200)
+        droppedWaiting.delete(droppedWaiting.values().next().value);
+    }
+    askReviews.delete(dropped);
+    askedOn.delete(dropped);
   }
   for (const changed of reviewFollowers)
     changed();
 }
-async function reviewPermission(source, event, signal, found) {
+async function reviewPermission(source, event, signal, found, place) {
   const { id, sessionID } = event.data ?? {};
   if (event.type !== "permission.asked" || typeof id !== "string" || typeof sessionID !== "string")
     return null;
@@ -16747,7 +16803,7 @@ async function reviewPermission(source, event, signal, found) {
   if (taken)
     return taken;
   if (event.data?.action === "external_directory")
-    noteReview(id, sessionID, "checking");
+    noteReview(id, sessionID, "checking", undefined, place, true);
   const answering = answerPermission(source, id, sessionID, signal, found).catch((error) => {
     reviewing.delete(id);
     if (askReviews.has(id))
@@ -16759,21 +16815,26 @@ async function reviewPermission(source, event, signal, found) {
     reviewing.delete(reviewing.keys().next().value);
   return answering;
 }
-async function takeUpWaitingAsks(source, sessions, signal) {
+async function takeUpWaitingAsks(source, sessions, signal, place) {
+  const since = Date.now();
   const waiting = [];
   for (const session of sessions) {
     if (signal?.aborted)
       return;
     const { permissions } = await asksIn(source, session, signal).catch(() => ({ permissions: [] }));
     for (const each of permissions) {
+      if (each.action === "external_directory" && settledReviews.has(each.id))
+        reviewing.delete(each.id);
       if (each.action !== "external_directory" || reviewing.has(each.id) || askReviews.has(each.id))
         continue;
-      noteReview(each.id, each.asker, "checking");
+      noteReview(each.id, each.asker, "checking", undefined, place, true);
       waiting.push(each);
     }
   }
+  if (place)
+    await settleGoneReviews(source, place, since, signal);
   for (const each of waiting) {
-    await reviewPermission(source, { type: "permission.asked", data: { id: each.id, sessionID: each.asker, action: each.action } }, signal).catch(() => null);
+    await reviewPermission(source, { type: "permission.asked", data: { id: each.id, sessionID: each.asker, action: each.action } }, signal, undefined, place).catch(() => null);
   }
 }
 var attachedOf = (session) => attachmentRoots().map((root) => path63.join(root, session));
@@ -16936,8 +16997,16 @@ async function answerPermission(source, id, sessionID, signal, found) {
     permission = permissions.find((each) => each.id === id && each.asker === sessionID);
   }
   if (!permission) {
-    if (askReviews.get(id)?.state === "checking")
-      noteReview(id, sessionID, "yours", askReviews.get(id)?.call);
+    if (askReviews.get(id)?.state === "checking") {
+      const own = await call(source, "GET", `/api/session/${encodeURIComponent(sessionID)}/permission`, undefined, signal).catch((error) => error?.status === 404 ? [] : null);
+      const now = askReviews.get(id);
+      if (now?.state !== "checking")
+        return null;
+      if (Array.isArray(own) && !own.some((each) => isObject(each) && each.id === id))
+        settle([now], "gone");
+      else
+        noteReview(id, sessionID, "yours", now.call);
+    }
     return null;
   }
   if (permission.action !== "external_directory")
@@ -16966,17 +17035,30 @@ async function answerPermission(source, id, sessionID, signal, found) {
     noteReview(id, sessionID, "yours", call2);
     return null;
   }
+  const reply = async (body, decided) => {
+    replying.set(id, false);
+    try {
+      await call(source, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, body, signal);
+      noteReview(id, sessionID, decided, call2);
+    } catch (error) {
+      if (replying.get(id)) {
+        replying.delete(id);
+        settleAskReview(id);
+      }
+      throw error;
+    } finally {
+      replying.delete(id);
+    }
+  };
   await askedAbout([folder, ...actions.flatMap((action) => action.kind === "file" ? [action.path] : [])]);
   if (ownByName && ownReads((file, place) => within2(realPath2(file), foundAt(place)))) {
-    await call(source, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, { decision: "once" }, signal);
-    noteReview(id, sessionID, "allowed", call2);
+    await reply({ decision: "once" }, "allowed");
     return { decision: "allow", reason: "Its own files.", by: "code" };
   }
   if (!inAuto(at)) {
     noteReview(id, sessionID, "yours", call2);
     return null;
   }
-  const reply = (body) => call(source, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, body, signal);
   const own = await ownFolders(at, false);
   await askedAbout(own);
   const trees = typeof folder === "string" ? await projectTrees(folder) : [];
@@ -16998,11 +17080,12 @@ async function answerPermission(source, id, sessionID, signal, found) {
   const known = !seen || [WRITING, READING, RUNNING].some((each) => each.has(seen.tool.toLowerCase()));
   const ownChanges = known && !unread && !renames && resources.length > 0 && permission.resources.every((each) => each.startsWith("/")) && changes.every((each) => !each.raw.split("/").includes("..") && !UNPLAIN.test(each.raw) && plainly(each)) && actions.every((action) => action.kind === "file");
   if (ownChanges) {
-    await reply({ decision: "once" });
-    noteReview(id, sessionID, "allowed", call2);
+    await reply({ decision: "once" }, "allowed");
     return { decision: "allow", reason: "Its own project.", by: "code" };
   }
   noteReview(id, sessionID, "checking", call2);
+  if (!askReviews.has(id))
+    return null;
   let verdict = null;
   for (const action of actions) {
     verdict = await reviewIn(sessionID, action, signal, at, false);
@@ -17013,8 +17096,7 @@ async function answerPermission(source, id, sessionID, signal, found) {
     noteReview(id, sessionID, "yours", call2);
     return null;
   }
-  await reply(verdict.decision === "allow" ? { decision: "once" } : { decision: "reject", message: refusalWords(verdict) });
-  noteReview(id, sessionID, verdict.decision === "allow" ? "allowed" : verdict.held ? "heldBack" : "refused", call2);
+  await reply(verdict.decision === "allow" ? { decision: "once" } : { decision: "reject", message: refusalWords(verdict) }, verdict.decision === "allow" ? "allowed" : verdict.held ? "heldBack" : "refused");
   return verdict;
 }
 
@@ -17115,7 +17197,7 @@ async function write2(at, change, signal) {
   at.data = { ...at.data, permissions: change.permissions, metadata: change.metadata };
   return true;
 }
-async function settle(at, signal) {
+async function settle2(at, signal) {
   const now = approvalOf(at.data, { agents: at.agents, bot: at.bot });
   if (now.stored ? now.applied === now.effective && !madeBefore(at.data.permissions ?? [], now.effective) : !(at.bot || now.pending))
     return true;
@@ -17146,7 +17228,7 @@ async function adoptConversation(target, id, agents, signal) {
     return;
   if (isApproval(asked))
     rememberApproval(asked);
-  await settle(at, signal);
+  await settle2(at, signal);
   markConversation(at.data.id, approvalOf(at.data, { agents, bot: at.bot }).effective === "fullAccess");
 }
 async function adoptPending(engine, bridge, signal) {
@@ -17167,7 +17249,7 @@ async function settleAgain(target, id, agents, signal) {
   if (!data?.id)
     return;
   const at = found2(target, data, agents);
-  await settle(at, signal);
+  await settle2(at, signal);
   markConversation(at.data.id, approvalOf(at.data, { agents, bot: at.bot }).effective === "fullAccess");
 }
 async function setApproval(id, wanted, engine, bridge, signal) {
@@ -17184,7 +17266,7 @@ async function setApproval(id, wanted, engine, bridge, signal) {
     return { status: 502, value: { message: "It couldn't be changed: the engine didn't take it. Try again." } };
   if (!at.data.parentID)
     rememberApproval(wanted);
-  await settle(at, signal);
+  await settle2(at, signal);
   const effective = approvalOf(at.data, { agents: at.agents, bot: at.bot }).effective;
   markConversation(at.data.id, effective === "fullAccess");
   if (effective !== "auto")
@@ -17234,7 +17316,7 @@ async function reapplyApprovals(engine, bridge, settings = false) {
           done = false;
           continue;
         }
-        if (!await (remade ? remake(found2(target, fresh, agents)) : settle(found2(target, fresh, agents))))
+        if (!await (remade ? remake(found2(target, fresh, agents)) : settle2(found2(target, fresh, agents))))
           done = false;
       }
       const next = page.cursor?.next;
@@ -17271,7 +17353,7 @@ async function adoptBots(engine, bridge, done) {
     if (!target || done.has(bot.session))
       continue;
     const data = (await engineGet(target, `api/session/${encodeURIComponent(bot.session)}`).catch(() => null))?.data;
-    if (data?.id && await settle(found2(target, data, bot.agents)))
+    if (data?.id && await settle2(found2(target, data, bot.agents)))
       done.add(bot.session);
   }
 }
@@ -18731,12 +18813,12 @@ async function takeStart(journal, places) {
     return null;
   startsRunning.add(journal.id);
   try {
-    return await settle2(journal, places);
+    return await settle3(journal, places);
   } finally {
     startsRunning.delete(journal.id);
   }
 }
-async function settle2(journal, places) {
+async function settle3(journal, places) {
   const done = await finishStart(journal, places);
   if (!done)
     return null;
@@ -18933,7 +19015,7 @@ async function resumeOne(journal, places, now) {
   const off = !otherComputersAllowed() ? "this computer stopped taking work from your other computers" : !peersOf(readLink()).some((peer) => peer.key === journal.sender) ? "your computer was removed from this one" : null;
   const old = now - journal.made > LETTER_LIFE;
   if (!off && !old)
-    return await ready(journal, places) ? settle2(journal, places) : null;
+    return await ready(journal, places) ? settle3(journal, places) : null;
   let unknown = false;
   if (journal.making && !journal.session) {
     const found = await sessionOf(journal, places);
@@ -19792,7 +19874,7 @@ function summaryOf(item, working, titles) {
   });
 }
 function wholeOf(item, working, titles) {
-  return { ...summaryOf(item, working, titles), body: item.body, notes: item.notes, files: item.files, links: item.links, handed: item.handed ?? [] };
+  return { ...summaryOf(item, working, titles), body: item.body, notes: item.notes, events: item.events ?? [], files: item.files, links: item.links, handed: item.handed ?? [] };
 }
 async function ownersOf(owner, items, facts, targets, cache) {
   const keys = new Set([...owner === "all" ? [] : [owner], ...items.map((item) => item.owner), ...items.flatMap((item) => item.handedBy ? [item.handedBy] : [])]);
@@ -19981,9 +20063,61 @@ function linkSession2(book, item, session, now) {
   const others = book.items().filter((each) => each.id !== item.id && each.sessions.some((link) => link.session === session));
   if (others.length >= LINKS_EACH) {
     const oldest = others.sort((a, b) => a.sessions.find((link) => link.session === session).since - b.sessions.find((link) => link.session === session).since)[0];
-    oldest.sessions = oldest.sessions.filter((link) => link.session !== session);
+    unlinkSessions(oldest, [session], now);
   }
   item.sessions.push({ session, since: now });
+}
+var FOLD_REORDERS = 10 * 60000;
+var FOLD_RESTART = 2 * 60000;
+var sameWho2 = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+function noteEvent(item, event) {
+  const events = [...item.events ?? []];
+  const last = events.at(-1);
+  const reorder = (each) => each.kind === "moved" && each.from === each.to;
+  const quiet = (since) => !item.notes.some((note) => note.at >= since) && !(item.handed ?? []).some((each) => each.at >= since);
+  const within = (most) => last !== undefined && event.at >= last.at && event.at - last.at < most;
+  if (last && reorder(last) && reorder(event) && last.to === event.to && sameWho2(last.by, event.by) && within(FOLD_REORDERS) && quiet(last.at)) {
+    const { top: _, ...folded } = last;
+    events[events.length - 1] = { ...folded, at: event.at, ...event.top ? { top: true } : {} };
+  } else if (last && last.kind === "stopped" && event.kind === "started" && sameWho2(last.by, event.by) && within(FOLD_RESTART) && quiet(last.at)) {
+    events.pop();
+  } else {
+    events.push(event);
+  }
+  item.events = events.slice(-MOST_EVENTS);
+}
+function lastWord(item, session) {
+  for (const each of [...item.events ?? []].reverse()) {
+    if (each.kind === "done")
+      return;
+    if ((each.kind === "started" || each.kind === "stopped") && each.by.session === session)
+      return each;
+  }
+  return;
+}
+function unlinkSessions(item, sessions, now, who) {
+  for (const session of sessions) {
+    if (!item.sessions.some((each) => each.session === session))
+      continue;
+    item.sessions = item.sessions.filter((each) => each.session !== session);
+    const word = lastWord(item, session);
+    if (word?.kind === "started")
+      noteEvent(item, { at: now, by: who ?? word.by, kind: "stopped" });
+  }
+}
+function startWork(book, item, session, { who, now }) {
+  const linked = item.sessions.some((each) => each.session === session);
+  linkSession2(book, item, session, now);
+  if (!linked || lastWord(item, session)?.kind !== "started")
+    noteEvent(item, { at: now, by: who, kind: "started" });
+}
+function stopWork2(item, session, { who, now }) {
+  unlinkSessions(item, [session], now, who);
+}
+var THE_BOX = { source: "kuvo", name: "Kuvo Code" };
+function intoNext(item, from, now) {
+  item.category = "next";
+  noteEvent(item, { at: now, by: THE_BOX, kind: "moved", from, to: "next" });
 }
 function applyFileOps(acting) {
   for (const op of acting.fileOps.splice(0))
@@ -20017,7 +20151,7 @@ function addItem2(book, owner, fields, acting, primary, source) {
     ...source ? { source } : {}
   };
   book.queue(owner).items.push(item);
-  changeItem2(book, item, { ...fields, title: undefined, category: undefined, top: undefined }, acting);
+  changeItem2(book, item, { ...fields, title: undefined, category: undefined, top: undefined }, acting, { added: true });
   if (item.source)
     return item;
   const number = takeNumber(primary);
@@ -20026,8 +20160,10 @@ function addItem2(book, owner, fields, acting, primary, source) {
   return item;
 }
 var refuseDone = (name) => refuse(`${name} is Done once it's closed on GitHub (or, a pull request, merged): close it there, or let the pull request that fixes it close it.`);
-function changeItem2(book, item, fields, acting) {
+function changeItem2(book, item, fields, acting, { added = false } = {}) {
   const { who, now } = acting;
+  const placeNow = () => ({ category: item.category, index: book.items().filter((each) => each.id !== item.id && !each.removed && each.category === item.category && each.order < item.order).length });
+  const was = placeNow();
   if (fields.title !== undefined) {
     const title = plainName(text2(fields.title, MOST_TITLE * 4, "The title")).slice(0, MOST_TITLE);
     if (!title)
@@ -20069,6 +20205,13 @@ function changeItem2(book, item, fields, acting) {
     item.order = placeBeside(book.items(), beside(fields.after), true, item);
   else if (fields.top === true && fields.category === undefined)
     item.order = placeIn(book.items().filter((each) => each.id !== item.id), item.category, { top: true });
+  const placed = placeNow();
+  if (added) {} else if (placed.category !== was.category && placed.category === "done")
+    noteEvent(item, { at: now, by: who, kind: "done" });
+  else if (placed.category !== was.category || placed.index !== was.index) {
+    const top = placed.index === 0 && (fields.top === true || fields.before !== undefined || fields.after !== undefined);
+    noteEvent(item, { at: now, by: who, kind: "moved", from: was.category, to: placed.category, ...top ? { top: true } : {} });
+  }
   if (fields.progress !== undefined) {
     if (fields.progress === null) {
       if (item.progress)
@@ -20155,7 +20298,7 @@ function removeItem2(item, who, now) {
 function restoreItem(book, item, who, now) {
   delete item.removed;
   if (!categoryNamed(item.category))
-    item.category = "next";
+    intoNext(item, item.category, now);
   item.order = placeIn(book.items(), item.category);
   item.updated = { at: now, by: who };
 }
@@ -20451,7 +20594,7 @@ async function handArrived(sender, given, reply, places, now = Date.now()) {
       return;
     }
     if (!categoryNamed(item.category))
-      item.category = "next";
+      intoNext(item, item.category, now);
     item.owner = owner;
     item.order = placeIn(book.items(), item.category);
     delete item.removed;
@@ -22378,7 +22521,7 @@ function placeWorkQueues(carried, owners, opened) {
       keepCategory(each.id, each.name);
   for (const item of items)
     if (!categoryNamed(item.category))
-      item.category = "next";
+      intoNext(item, item.category, Date.now());
   changeQueues((book) => {
     for (const item of items) {
       const before = book.find({ id: item.id });
@@ -23295,7 +23438,7 @@ function unhold(folder, wasPaused, pausedAs) {
       fs85.rmSync(PAUSED2(folder), { force: true });
   } catch {}
 }
-async function settle3(target, sessions, name) {
+async function settle4(target, sessions, name) {
   let busy = false;
   for (let tries = 0;tries < SETTLE_FOR; tries++) {
     const active = await call(target, "GET", "/api/session/active", undefined, engineWait()).catch(() => ({}));
@@ -23371,7 +23514,7 @@ async function carryOn(id) {
         throw new Refused(`${record.name}’s goal couldn’t be checked on ${HERE}. Try again in a moment.`);
     }
     const target = record.lane ? readBridgeFile() : readEngineFile();
-    await settle3(target, record.sessions, record.name);
+    await settle4(target, record.sessions, record.name);
     const running = runningOf(record.sessions);
     if (running)
       throw new Refused(say.background(record.name, running));
@@ -23540,7 +23683,7 @@ async function arrived(record, placed) {
   };
   if (record.kind !== "group") {
     const target = record.lane ? readBridgeFile() : readEngineFile();
-    await settle3(target, record.sessions, record.name);
+    await settle4(target, record.sessions, record.name);
     if (record.lane && placed !== outgoing.get(record.id)?.digest)
       throw new Refused(say.notSame(record.name));
     const again = record.lane ? (await carry(target, "digest", { root: record.sessions[0] }).catch((error) => {
@@ -33145,7 +33288,7 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
       if (work)
         noteFullAccessAtWork(source, atWork3).catch(() => {});
       if (work)
-        atWork3(source).then((sessions) => takeUpWaitingAsks(source, sessions, connection.signal)).catch(() => {});
+        atWork3(source).then((sessions) => takeUpWaitingAsks(source, sessions, connection.signal, work || undefined)).catch(() => {});
       if (work)
         settleWorkRead(source, connection.signal).catch(() => {});
       for await (const event of serverEvents(response.body)) {
@@ -33176,7 +33319,7 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
         steer?.(event);
         queue?.(event);
         const followed = followWork?.(event);
-        const reviewed = work && event.type === "permission.asked" ? reviewPermission(source, event, connection.signal).catch(() => null) : null;
+        const reviewed = work && event.type === "permission.asked" ? reviewPermission(source, event, connection.signal, undefined, work).catch(() => null) : null;
         goalHeld?.(event).catch(() => {});
         if (signIns)
           noteSignIn(event, source).catch(() => {}).finally(() => signedIn(event));
@@ -33195,7 +33338,7 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
         const settled = ANSWERED2.has(event.type) ? event.data?.requestID ?? event.data?.id : undefined;
         if (typeof settled === "string")
           settleAskReview(settled);
-        if (RUN_ENDS.has(event.type) && typeof event.data?.sessionID === "string")
+        if ((RUN_ENDS.has(event.type) || event.type === "session.deleted") && typeof event.data?.sessionID === "string")
           settleRunReviews(event.data.sessionID);
         if (!notices)
           continue;
@@ -33211,7 +33354,8 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
             tell(notice);
           continue;
         }
-        Promise.all([reviewed, event.type === "form.created" ? followed : null]).then(([verdict]) => verdict ? null : noticeFor(event, (route, folder) => engineGet(source, route, folder))).then((notice) => notice && tell(notice)).catch(() => {});
+        const over = () => event.type === "permission.asked" && isOver(event.data?.id);
+        Promise.all([reviewed, event.type === "form.created" ? followed : null]).then(([verdict]) => verdict || over() ? null : noticeFor(event, (route, folder) => engineGet(source, route, folder))).then((notice) => notice && !over() && tell(notice)).catch(() => {});
       }
     } catch {}
     workGone?.();
@@ -37608,7 +37752,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "f78abfb024ba";
+var BRIDGE_VERSION = "ab38dac0b5d9";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -40105,7 +40249,7 @@ async function run3(name, args, caller, targets, signal) {
         if (issue)
           made.body = issue.body.slice(0, MOST_BODY);
         if (args.working === true && !caller.seat)
-          linkSession2(book, made, caller.session, now);
+          startWork(book, made, caller.session, acting);
         applyFileOps(acting);
         return made;
       }));
@@ -40143,14 +40287,13 @@ async function run3(name, args, caller, targets, signal) {
         const named = (value) => (Array.isArray(value) ? value : value === undefined ? [] : [value]).map(String).filter((each) => /^ses_[A-Za-z0-9]{1,60}$/.test(each));
         if (item.category !== "done") {
           if (args.working === true && !caller.seat)
-            linkSession2(book, item, caller.session, now);
+            startWork(book, item, caller.session, acting);
           for (const session of named(args.sessions))
             linkSession2(book, item, session, now);
         }
         if (args.working === false)
-          item.sessions = item.sessions.filter((each) => each.session !== caller.session);
-        const unlinked = new Set(named(args.unlink));
-        item.sessions = item.sessions.filter((each) => !unlinked.has(each.session));
+          stopWork2(item, caller.session, acting);
+        unlinkSessions(item, named(args.unlink), now);
         applyFileOps(acting);
         return item;
       }));
@@ -40582,7 +40725,7 @@ async function* workQueueRoute(context, match) {
         await readSeen([itemElsewhere(ref, readLink(), { asTold: true }) ?? far], GITHUB_WAIT);
         far = itemElsewhere({ id: far.id }) ?? far;
         const { handedFrom: _, ...summary } = far;
-        return yield* json(200, { item: { ...summary, body: "", notes: [], files: [], links: [], handed: [] } });
+        return yield* json(200, { item: { ...summary, body: "", notes: [], events: [], files: [], links: [], handed: [] } });
       }
       return yield* json(404, { message: "There's no such item." });
     }
@@ -41030,7 +41173,7 @@ async function* sandboxRoute(context) {
   if (route === "kuvo/sandbox/asks" || route === "kuvo/sandbox/asks/events") {
     if (method !== "GET")
       return yield* json(405, {});
-    const listed = () => ({ asks: listSandboxAsks(), ...asksToRestart() ? { restart: true } : {}, reviews: listAskReviews() });
+    const listed = () => ({ asks: listSandboxAsks(), ...asksToRestart() ? { restart: true } : {}, reviews: listAskReviews(), settled: listSettledReviews() });
     if (route === "kuvo/sandbox/asks")
       return yield* json(200, listed());
     yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
