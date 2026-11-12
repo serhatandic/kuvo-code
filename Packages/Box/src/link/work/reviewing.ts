@@ -644,8 +644,11 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
   // (Each as a command's path reads: \`~\` as your home, one not from \`/\` from its folder.)
   const named = permission.resources.filter(each => each !== "*").map(each => path.resolve(folder, each.replace(/^~(?=\/|$)/, homeFolder()).replace(/\/\*$/, "") || "/"));
   // (And a read of a file that isn't there, by each beside it whose name looks the same, one of
-  // which the engine reads in its place without asking again: fence/lookalike.ts.)
-  const alikes = seen && file && seen.tool.toLowerCase() === "read" ? lookalikesOf(path.resolve(file)) : [];
+  // which the engine reads in its place without asking again: fence/lookalike.ts. Its folder asked
+  // about off the box's thread first, as below.)
+  const reads = Boolean(seen && file && seen.tool.toLowerCase() === "read");
+  if (reads) await askedAbout([folder, path.resolve(file!)]);
+  const alikes = reads ? lookalikesOf(path.resolve(file!)) : [];
   const actions: ReviewedAction[] = seen && file ? [file, ...alikes].map(each => ({ kind: "file" as const, path: each, access: READING.has(seen.tool.toLowerCase()) ? "read" as const : "write" as const, folder, tool: seen.tool, input: seen.input }))
     : named.length ? named.map(each => ({ kind: "file" as const, path: each, access: "write" as const, folder }))
     : [{ kind: "tool", tool: seen?.tool || "work outside its folder", args: seen?.input ?? { asked: permission.resources }, folder }];

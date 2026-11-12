@@ -1068,6 +1068,8 @@ test("in Auto, a read by a look-alike name beside a link a command made to your 
       // (Judged as the file read reads in its place, which is your key.)
       "a key itself, by a look-alike name": "refused at the engine",
     })
+    // (The reviewer was asked about the key itself, not only the name given.)
+    expect(prompts.at(-1)).toContain(join(fake, ".ssh", "work key"))
   } finally {
     process.env.HOME = runsHome
     rmSync(fake, { recursive: true, force: true })
