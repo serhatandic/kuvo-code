@@ -59,6 +59,7 @@ struct SessionView: View {
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
         // Its machine out of reach: the conversation to read, without what needs the engine.
+        .environment(\.workChipQueue, WorkQueues.Key(box: Workspace.box(of: model.session.location.directory), owner: app.workspace.root(of: model.id)))
         .environment(\.isOffline, Self.offlineMachine(of: model, in: app) != nil)
         // A conversation as last seen is read once its machine is back.
         // A copy shown while the engine reads (this Mac's) is read too; one waiting for its

@@ -11,7 +11,7 @@ import ClientText
         ("(#243) [#5] {#6} \"#8\" '#9' a/#10, b,#11 – #12 -#13", [243, 5, 6, 8, 9, 10, 11, 12, 13]),
         ("Line one\n#44 on the next", [44]),
         ("PR #12, pr#13, MR #14, pull request #15, Issue #16, step #17, Step#18", []),
-        ("the #1 reason, not a#2, #3a, #4_x, #1234567, #0", [1]),
+        ("the #1 reason, not a#2, #3a, #4_x, #1234567, #0", []),
         ("`#5` and ``#6 `x` `` but #7", [7]),
         ("```\n#8\n```\n#9", [9]),
         ("```swift\nlet a = 1 // #10, still writing", []),
@@ -22,6 +22,21 @@ import ClientText
     ])
     func found(text: String, numbers: [Int]) {
         #expect(WorkItemRefs.find(in: text).map(\.number) == numbers)
+    }
+
+    @Test(arguments: ["the #1 Google result", "to #1 on Google", "ranked #1", "#1 spot", "at #1", "rank #1", "number #1", "#1 result", "#1 place", "#1 position"])
+    func ordinalsStayPlain(text: String) {
+        #expect(WorkItemRefs.refs(in: text).isEmpty)
+    }
+
+    @Test func chipsRequireConversationVisibility() {
+        let global = ["1": "Unrelated bot's item", "243": "Our item"]
+        let ours = ["243": "Our item"]
+        #expect(WorkItemRefs.chipRefs(in: "see #243", known: global, visible: ours) == ours)
+        #expect(WorkItemRefs.chipRefs(in: "#243", known: global, visible: [:]).isEmpty)
+        #expect(WorkItemRefs.chipRefs(in: "#1", known: global, visible: ours).isEmpty)
+        #expect(WorkItemRefs.chipRefs(in: "the #1 Google result", known: global, visible: global).isEmpty)
+        #expect(WorkItemRefs.chipRefs(in: "#243 then the #243 result", known: global, visible: ours) == ours)
     }
 
     @Test func eachRangeIsTheWrittenReference() {

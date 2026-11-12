@@ -137,6 +137,7 @@ struct TranscriptView: View {
         .environment(\.answerAgent) { text in model.send(text, for: nil, withComments: false) }
         // What the bot that runs it answered for it, on the steps that asked; a subagent's are kept
         // on the session it works for.
+        .environment(\.workChipQueue, WorkQueues.Key(box: Workspace.box(of: model.session.location.directory), owner: workspace.root(of: model.id)))
         .environment(\.workAnswers, workAnswers)
         // The calls it made on Autopilot, where its questions would have waited.
         .environment(\.autopilotCalls, autopilotCalls)
@@ -1024,6 +1025,7 @@ struct UserBubble: View {
     var status: String?
     @Environment(\.findHighlight) private var highlight
     @Environment(AppModel.self) private var app
+    @Environment(\.workChipQueue) private var workChipQueue
     /// The conversation this is in, where what it opens comes back to.
     @Environment(\.conversationTab) private var here
 
@@ -1034,7 +1036,7 @@ struct UserBubble: View {
         let names = part.contains(AgentReferences.trigger) || (!folders.isEmpty && part.contains("@"))
         let marks = part.contains("http") || part.contains("www.") || part.contains("[Image ")
         // The Work Queue items it names, as chips once the box says what they are.
-        let refs = part.contains("#") ? app.workQueues.refs(in: part, box: app.utilities.queueBox) : [:]
+        let refs = part.contains("#") ? app.workQueues.refs(in: part, box: workChipQueue?.box ?? BoxClient.mac, owner: workChipQueue?.owner ?? "") : [:]
         guard names || marks || !refs.isEmpty else { return own }
         var text = own ?? AttributedString(part)
         if names { MessageMentions.apply(to: &text, agents: agents, folders: folders) }
@@ -1386,6 +1388,7 @@ private struct MarkdownPiece: View, Equatable {
     let agents: [MessageMentions.Agent]
     let highlight: FindHighlight?
     @Environment(AppModel.self) private var app
+    @Environment(\.workChipQueue) private var workChipQueue
     /// The conversation this is in, where what it opens comes back to.
     @Environment(\.conversationTab) private var here
 
@@ -1405,7 +1408,7 @@ private struct MarkdownPiece: View, Equatable {
     private var textKit: some View {
         // Its ```mermaid blocks drawn as diagrams, as in a Markdown file's preview.
         // The Work Queue items it names, drawn as their chips once the box says what they are.
-        let refs = text.contains("#") ? app.workQueues.refs(in: text, box: app.utilities.queueBox) : [:]
+        let refs = text.contains("#") ? app.workQueues.refs(in: text, box: workChipQueue?.box ?? BoxClient.mac, owner: workChipQueue?.owner ?? "") : [:]
         return ReplyView(markdown: text, parser: FileLinkingParser(folders: folders, mentions: mentions, agents: agents, highlight: highlight, refs: refs), diagrams: true) { url in
             // A file opens in the side panel, a named agent its conversation, a Work Queue item
             // the Work Queue; web links in the browser.
@@ -1539,6 +1542,7 @@ private struct TurnEndView: View {
     /// The latest turn's end: its row stays in view.
     var isLatest = false
     @Environment(AppModel.self) private var app
+    @Environment(\.workChipQueue) private var workChipQueue
     @Environment(Catalog.self) private var catalog
     @Environment(\.conversationSignIn) private var signIn
     @Environment(TurnHover.self) private var hover: TurnHover?
@@ -1727,6 +1731,7 @@ private struct TurnFiles: View {
     let files: [TurnStats.TurnFile]
     let directory: String
     @Environment(AppModel.self) private var app
+    @Environment(\.workChipQueue) private var workChipQueue
     @Environment(\.bot) private var bot
     @State private var isShowing = false
 
@@ -2007,6 +2012,7 @@ struct ErrorCard: View {
 private struct AgentSentRow: View {
     let call: Message.ToolCall
     @Environment(AppModel.self) private var app
+    @Environment(\.workChipQueue) private var workChipQueue
     /// The conversation this is in, where what it opens comes back to.
     @Environment(\.conversationTab) private var here
 
@@ -2305,6 +2311,7 @@ private struct AgentMessageRow: View {
     /// What happened, after its name, for one of its sessions' news: "finished", "still working".
     var status: String?
     @Environment(AppModel.self) private var app
+    @Environment(\.workChipQueue) private var workChipQueue
     /// The conversation this is in, where what it opens comes back to.
     @Environment(\.conversationTab) private var here
 
@@ -2345,6 +2352,7 @@ private struct GroupWorkRow: View {
     let task: String
     let at: Milliseconds
     @Environment(AppModel.self) private var app
+    @Environment(\.workChipQueue) private var workChipQueue
     /// The conversation this is in, where what it opens comes back to.
     @Environment(\.conversationTab) private var here
 

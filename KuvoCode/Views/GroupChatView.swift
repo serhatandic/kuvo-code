@@ -1,5 +1,6 @@
 import ClientDesign
 import ClientText
+import ClientSessions
 import ClientVault
 import OpenCodeKit
 import SwiftUI
@@ -154,6 +155,7 @@ struct GroupChatView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in if !isKept { groups.markViewed(group.id) } }
         // What's opened from it comes back to it.
         .environment(\.conversationTab, .group(group.id))
+        .environment(\.workChipQueue, WorkQueues.Key(box: groups.machine(of: group.id) ?? BoxClient.mac, owner: group.id))
         // Its pictures, which each of them (and the composer's, after them) opens among.
         .environment(\.conversationPictures, ConversationPictureSet(group: group.id, groups: groups, bots: bots))
     }

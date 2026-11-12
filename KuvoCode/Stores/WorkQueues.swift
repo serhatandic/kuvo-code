@@ -426,7 +426,14 @@ final class WorkQueues {
     /// What the refs in `text` name on `box` (by the ref as asked: "243", `gh:owner/repo#12`), as
     /// far as it's known now; the ones not known yet are asked (once a minute at most each), and
     /// their chips come when the box answers.
-    func refs(in text: String, box: String, typing: Bool = false) -> [String: WorkRef] {
+    func refs(in text: String, box: String, owner: String? = nil, typing: Bool = false) -> [String: WorkRef] {
+        if let owner {
+            let key = Key(box: box, owner: owner)
+            if askedViews[key].map({ Date().timeIntervalSince($0) > refreshAfter }) ?? true {
+                askedViews[key] = Date()
+                Task { await read(key) }
+            }
+        }
         var found = WorkItemRefs.findRefs(in: text)
         // One being typed at the end of a draft isn't asked for until it's whole ("#2" of "#243").
         if typing, let last = found.last, last.range.upperBound == text.endIndex { found.removeLast() }
@@ -443,6 +450,9 @@ final class WorkQueues {
         let known = refs[box] ?? [:]
         var named: [String: WorkRef] = [:]
         for key in keys { if let ref = known[key] { named[key] = ref } }
+        if let owner {
+            return WorkQueue.chipRefs(in: text, known: named, view: views[Key(box: box, owner: owner)]).filter { keys.contains($0.key) }
+        }
         return named
     }
 
@@ -455,6 +465,7 @@ final class WorkQueues {
                 try? await Task.sleep(for: .seconds(30))
                 guard let self else { return }
                 let now = Date()
+                for (key, date) in askedViews where now.timeIntervalSince(date) < 600 { await read(key) }
                 for (box, keys) in asked {
                     let recent = keys.filter { now.timeIntervalSince($0.value) < 600 }.map(\.key)
                     if !recent.isEmpty { await lookUp(recent, on: box) }
@@ -463,6 +474,7 @@ final class WorkQueues {
         }
     }
 
+    @ObservationIgnored private var askedViews: [Key: Date] = [:]
     @ObservationIgnored private var refreshing: Task<Void, Never>?
     /// How long before a chip's item is asked about again when it's drawn (a test's own).
     @ObservationIgnored var refreshAfter: TimeInterval = 60
@@ -513,4 +525,9 @@ extension AppModel {
             showsSettings = false
         }
     }
+}
+
+extension EnvironmentValues {
+    /// The conversation drawing this text, independent of which split pane has focus.
+    @Entry var workChipQueue: WorkQueues.Key?
 }
