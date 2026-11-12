@@ -87,6 +87,7 @@ export const FEATURES = [
   "sandbox",
   "sandbox.asks",
   "sandbox.check",
+  "sandbox.reviews.settled",
   "sandbox.reviews.whole",
   "search",
   "sessions.agents",

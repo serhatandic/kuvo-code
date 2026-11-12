@@ -319,6 +319,76 @@ test("every client hears which of a conversation's asks Auto's reviewer is check
   }
 })
 
+test("the box keeps each ask Auto's reviewer takes up as every client reads it: checked, then yours, then answered or gone, and nothing stale once its run ends or its engine or the box starts again (sandbox.reviews.settled)", async () => {
+  type Listed = { reviews?: { id: string; state: string }[]; settled?: { id: string; session: string; state: string }[] }
+  // What a client reads (`reviews` and `settled` on `kuvo/sandbox/asks`): each ask's state, wherever it's listed.
+  const listed = async (): Promise<Listed> => JSON.parse(JSON.stringify({ reviews: reviewing.listAskReviews(), settled: reviewing.listSettledReviews?.() ?? [] }))
+  const stateOf = (list: Listed, id: string) => list.reviews?.find(each => each.id === id)?.state ?? list.settled?.find(each => each.id === id)?.state ?? null
+  const waits = (list: Listed, id: string) => list.reviews?.some(each => each.id === id && (each.state === "checking" || each.state === "yours")) ?? false
+  const source = { port: engine.port, password: "pw" } as never
+  const states: Record<string, string[]> = {}
+  const stop = reviewing.onAskReviewsChanged(() => {
+    for (const each of reviewing.listAskReviews()) if (each.id.startsWith("per_k") && states[each.id]?.at(-1) !== each.state) (states[each.id] ??= []).push(each.state)
+  })
+  // `session` asks to edit a file outside its folder, as the engine's event says.
+  const asks = (session: string, ...ids: string[]) => {
+    calling[session] = ids.map(id => ({ type: "tool", id: `call_${id}`, name: "edit", state: { input: { filePath: join(box, "notes", `${id}.md`) } } }))
+    asking[session] = ids.map(id => ({ id, action: "external_directory", resources: [join(box, "notes", "*")], source: { id: `call_${id}`, messageID: "msg_1" } }))
+  }
+  const heard = (session: string, id: string) => reviewing.reviewPermission(source, { type: "permission.asked", data: { id, sessionID: session, action: "external_directory" } }, undefined, undefined, "engine")
+  try {
+    // Checked as it's heard, then left for you (not in Auto), then answered.
+    conversation("ses_kept", "askFirst", "Update the shared notes")
+    asks("ses_kept", "per_k1")
+    await heard("ses_kept", "per_k1")
+    expect(states.per_k1).toEqual(["checking", "yours"])
+    expect(stateOf(await listed(), "per_k1")).toBe("yours")
+    asking.ses_kept = []
+    reviewing.settleAskReview("per_k1")
+    let now = await listed()
+    expect(stateOf(now, "per_k1")).toBe("answered")
+    expect(waits(now, "per_k1")).toBe(false)
+
+    // Left for you, and its run ends (stopped, say): gone with it, with no word of the ask.
+    asks("ses_kept", "per_k2")
+    await heard("ses_kept", "per_k2")
+    expect(stateOf(await listed(), "per_k2")).toBe("yours")
+    asking.ses_kept = []
+    reviewing.settleRunReviews("ses_kept")
+    now = await listed()
+    expect(now.settled?.find(each => each.id === "per_k2")).toMatchObject({ session: "ses_kept", state: "gone" })
+    expect(waits(now, "per_k2")).toBe(false)
+
+    // Left for you, and its engine starts again unheard, taking the ask with it: as the box hears
+    // the engine again, it's gone, never left for you.
+    asks("ses_kept", "per_k3")
+    await heard("ses_kept", "per_k3")
+    expect(stateOf(await listed(), "per_k3")).toBe("yours")
+    asking.ses_kept = []
+    await reviewing.takeUpWaitingAsks(source, [], undefined, "engine")
+    now = await listed()
+    expect(stateOf(now, "per_k3")).toBe("gone")
+    expect(waits(now, "per_k3")).toBe(false)
+
+    // Two left for you, and the box starts again: one its engine still asks is listed again from
+    // the start (checked, then yours), the one gone meanwhile isn't listed as waiting.
+    conversation("ses_kept2", "askFirst", "Update the shared notes")
+    asks("ses_kept2", "per_k4", "per_k5")
+    await heard("ses_kept2", "per_k4")
+    await heard("ses_kept2", "per_k5")
+    asks("ses_kept2", "per_k4")
+    // (The box's process started again: the module fresh, as the engine still runs.)
+    const restarted = await import(String("../src/link/work/reviewing.ts?restarted")) as typeof import("../src/link/work/reviewing")
+    expect(restarted.listAskReviews()).toEqual([])
+    await restarted.takeUpWaitingAsks(source, ["ses_kept2"], undefined, "engine")
+    const after = { reviews: restarted.listAskReviews(), settled: restarted.listSettledReviews?.() ?? [] }
+    expect(stateOf(after, "per_k4")).toBe("yours")
+    expect(waits(after, "per_k5")).toBe(false)
+  } finally {
+    stop()
+  }
+})
+
 // The engine doesn't answer for a moment (starting again, busy): `work` runs meanwhile.
 async function engineDown(work: () => Promise<void>) {
   down = true

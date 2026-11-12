@@ -244,30 +244,75 @@ export interface AskReview {
   at: number;
 }
 
+/** An ask Auto's reviewer took up that's over without its word (`settled` on `kuvo/sandbox/asks`,
+ * `sandbox.reviews.settled`): still checked or left for you when it was `answered` (by you, on any
+ * client, or by its engine) or `gone` (its run ended, its session was deleted, or its engine let it
+ * go while the box wasn't listening), so no client takes it for one that waits. */
+export interface SettledReview {
+  id: string;
+  session: string;
+  call?: string;
+  state: "answered" | "gone";
+  at: number;
+}
+
 // The latest two hundred, as they changed last: an ask's step shows how it went after it's answered.
 // Past that, a decided one goes first, so one still checked or waiting on you stays listed.
 const askReviews = new Map<string, AskReview>();
+// Those still checked or left for you that were answered or went since, the latest two hundred.
+const settledReviews = new Map<string, SettledReview>();
+// The place each ask still checked or left for you was asked on ("engine", "bridge"), which looks
+// for it again as the box hears that place again.
+const askedOn = new Map<string, string>();
 const reviewFollowers = new Set<() => void>();
 
 export const listAskReviews = (): AskReview[] => [...askReviews.values()];
+export const listSettledReviews = (): SettledReview[] => [...settledReviews.values()];
 
-/** An ask answered (here, on a client, by the reviewer) or gone: one left for you, or still checked,
- * is off the list, so what's listed as waiting is what waits; what the reviewer decided stays, for
- * the mark on its step. */
-export function settleAskReview(id: string): void {
-  const review = askReviews.get(id);
-  if (!review || (review.state !== "yours" && review.state !== "checking")) return;
-  askReviews.delete(id);
+const waitsOnReview = (review: AskReview | undefined) => review?.state === "yours" || review?.state === "checking";
+
+function settle(reviews: AskReview[], state: SettledReview["state"]): void {
+  if (!reviews.length) return;
+  for (const { id, session, call } of reviews) {
+    askReviews.delete(id);
+    askedOn.delete(id);
+    settledReviews.delete(id);
+    settledReviews.set(id, { id, session, ...(call ? { call } : {}), state, at: Date.now() });
+    if (settledReviews.size > 200) settledReviews.delete(settledReviews.keys().next().value!);
+  }
   for (const changed of reviewFollowers) changed();
 }
 
-/** A run's end, which takes what it asked with it, without a word of each: its asks left for you
- * or still checked are off the list, as `settleAskReview` takes one. */
+/** An ask answered (here, on a client, by the reviewer): one left for you, or still checked, is
+ * listed `answered` from now on, so what's listed as waiting is what waits; what the reviewer
+ * decided stays, for the mark on its step. */
+export function settleAskReview(id: string): void {
+  const review = askReviews.get(id);
+  if (waitsOnReview(review)) settle([review!], "answered");
+}
+
+/** A run's end (or its session deleted), which takes what it asked with it, without a word of each:
+ * its asks left for you or still checked are listed `gone`. */
 export function settleRunReviews(session: string): void {
-  const gone = [...askReviews.values()].filter(each => each.session === session && (each.state === "yours" || each.state === "checking"));
-  if (!gone.length) return;
-  for (const each of gone) askReviews.delete(each.id);
-  for (const changed of reviewFollowers) changed();
+  settle([...askReviews.values()].filter(each => each.session === session && waitsOnReview(each)), "gone");
+}
+
+/** A place heard again (`place`: "engine", "bridge"), whose asks may have gone while the box wasn't
+ * listening (its engine started again, a run ended unheard): each still checked or left for you
+ * there, noted by `since`, that its session no longer asks is `gone`. One whose session
+ * couldn't be read stays as it was. */
+async function settleGoneReviews(source: Target, place: string, since: number, signal?: AbortSignal): Promise<void> {
+  const looked = [...askReviews.values()].filter(each => waitsOnReview(each) && each.at <= since && askedOn.get(each.id) === place);
+  const gone: AskReview[] = [];
+  for (const review of looked) {
+    if (signal?.aborted) return;
+    const listed = await call(source, "GET", `/api/session/${encodeURIComponent(review.session)}/permission`, undefined, signal)
+      .catch(error => (String((error as Error)?.message) === "404" ? [] : null));
+    if (!Array.isArray(listed) || listed.some(each => isObject(each) && each.id === review.id)) continue;
+    // (Noted again meanwhile, as it's taken up again: it's that one's.)
+    if (askReviews.get(review.id) === review) gone.push(review);
+  }
+  settle(gone, "gone");
 }
 
 /** Tells `changed` each time an ask's review changes, until the function it returns is called. */
@@ -276,12 +321,17 @@ export function onAskReviewsChanged(changed: () => void): () => void {
   return () => { reviewFollowers.delete(changed); };
 }
 
-function noteReview(id: string, session: string, state: AskReview["state"], call?: string): void {
+function noteReview(id: string, session: string, state: AskReview["state"], call?: string, place?: string): void {
   askReviews.delete(id);
+  settledReviews.delete(id);
   askReviews.set(id, { id, session, ...(call ? { call } : {}), state, at: Date.now() });
+  if (place) askedOn.set(id, place);
+  if (state !== "checking" && state !== "yours") askedOn.delete(id);
   if (askReviews.size > 200) {
     const decided = [...askReviews.values()].find(each => each.state !== "checking" && each.state !== "yours");
-    askReviews.delete(decided?.id ?? askReviews.keys().next().value!);
+    const dropped = decided?.id ?? askReviews.keys().next().value!;
+    askReviews.delete(dropped);
+    askedOn.delete(dropped);
   }
   for (const changed of reviewFollowers) changed();
 }
@@ -291,13 +341,13 @@ function noteReview(id: string, session: string, state: AskReview["state"], call
  * file the tool call names. Allowed, or refused with why for the agent, which goes on another way:
  * never left waiting for you. Anything that can't be read is left for you, and so is what your own
  * Settings › Permissions ask. */
-export async function reviewPermission(source: Target, event: { type?: string; data?: { id?: unknown; sessionID?: unknown; action?: unknown } }, signal?: AbortSignal, found?: Conversation | null): Promise<Verdict | null> {
+export async function reviewPermission(source: Target, event: { type?: string; data?: { id?: unknown; sessionID?: unknown; action?: unknown } }, signal?: AbortSignal, found?: Conversation | null, place?: string): Promise<Verdict | null> {
   const { id, sessionID } = event.data ?? {};
   if (event.type !== "permission.asked" || typeof id !== "string" || typeof sessionID !== "string") return null;
   const taken = reviewing.get(id);
   if (taken) return taken;
   // Listed as checked at once, before anything is read, so no client shows it meanwhile.
-  if (event.data?.action === "external_directory") noteReview(id, sessionID, "checking");
+  if (event.data?.action === "external_directory") noteReview(id, sessionID, "checking", undefined, place);
   // (Taken up again as the event comes again, should this one fail; meanwhile it's yours.)
   const answering = answerPermission(source, id, sessionID, signal, found).catch(error => {
     reviewing.delete(id);
@@ -310,10 +360,13 @@ export async function reviewPermission(source: Target, event: { type?: string; d
 }
 
 /** The asks to work outside a folder already waiting as the box (re)connects to an engine or the
- * bridge, in the sessions at work there (an ask holds its session's run): taken up as they would
- * have been as they came, so the box lists each one, as `sandbox.reviews.whole` says (one asked
- * while it was starting again, or whose event went by unheard). */
-export async function takeUpWaitingAsks(source: Target, sessions: string[], signal?: AbortSignal): Promise<void> {
+ * bridge (`place`: "engine", "bridge"), in the sessions at work there (an ask holds its session's
+ * run): taken up as they would have been as they came, so the box lists each one, as
+ * `sandbox.reviews.whole` says (one asked while it was starting again, or whose event went by
+ * unheard). And each it listed as still checked or left for you there that's no longer asked (its
+ * engine started again, its run ended unheard) is listed `gone`. */
+export async function takeUpWaitingAsks(source: Target, sessions: string[], signal?: AbortSignal, place?: string): Promise<void> {
+  const since = Date.now();
   const waiting: { id: string; asker: string; action: string }[] = [];
   for (const session of sessions) {
     if (signal?.aborted) return;
@@ -321,12 +374,13 @@ export async function takeUpWaitingAsks(source: Target, sessions: string[], sign
     for (const each of permissions) {
       if (each.action !== "external_directory" || reviewing.has(each.id) || askReviews.has(each.id)) continue;
       // Listed as checked at once, all of them, before any is read.
-      noteReview(each.id, each.asker, "checking");
+      noteReview(each.id, each.asker, "checking", undefined, place);
       waiting.push(each);
     }
   }
+  if (place) await settleGoneReviews(source, place, since, signal);
   for (const each of waiting) {
-    await reviewPermission(source, { type: "permission.asked", data: { id: each.id, sessionID: each.asker, action: each.action } }, signal).catch(() => null);
+    await reviewPermission(source, { type: "permission.asked", data: { id: each.id, sessionID: each.asker, action: each.action } }, signal, undefined, place).catch(() => null);
   }
 }
 
@@ -525,10 +579,17 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
     ({ permissions } = await asksIn(source, sessionID, signal));
     permission = permissions.find(each => each.id === id && each.asker === sessionID);
   }
-  // Still not listed: never left checked, which no client would show; yours, as an ask it doesn't
-  // take up is.
+  // Still not listed: never left checked, which no client would show. Gone, where its session's
+  // asks were read and it isn't among them (answered meanwhile, or gone with its run); else yours,
+  // as an ask it doesn't take up is.
   if (!permission) {
-    if (askReviews.get(id)?.state === "checking") noteReview(id, sessionID, "yours", askReviews.get(id)?.call);
+    if (askReviews.get(id)?.state === "checking") {
+      const own = await call(source, "GET", `/api/session/${encodeURIComponent(sessionID)}/permission`, undefined, signal).catch(() => null);
+      const now = askReviews.get(id);
+      if (now?.state !== "checking") return null;
+      if (Array.isArray(own) && !own.some(each => isObject(each) && each.id === id)) settle([now], "gone");
+      else noteReview(id, sessionID, "yours", now.call);
+    }
     return null;
   }
   // (Anything else asked is your own rules'.)

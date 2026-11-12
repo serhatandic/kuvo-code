@@ -13,7 +13,7 @@ import { answeredRestart, asksToRestart, fenceState, restartSettled, setUpFence,
 import { bridgeTarget, call } from "../engine/client";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import { readLink } from "../state";
-import { listAskReviews, onAskReviewsChanged } from "../work/reviewing";
+import { listAskReviews, listSettledReviews, onAskReviewsChanged } from "../work/reviewing";
 import { askHolder, heldHere, holdsVault } from "../vault/holder";
 import { callerOf, isCalling } from "../vault/who";
 
@@ -135,8 +135,9 @@ export async function* sandboxRoute(context: RouteContext): AsyncGenerator<Answe
   if (route === "kuvo/sandbox/asks" || route === "kuvo/sandbox/asks/events") {
     if (method !== "GET") return yield* json(405, {});
     // With the box's one ask to restart the agents started before the sandbox was on, while it asks.
-    // With how Auto's reviewer is taking up what the agents ask to work outside their folders.
-    const listed = () => ({ asks: listSandboxAsks(), ...(asksToRestart() ? { restart: true } : {}), reviews: listAskReviews() });
+    // With how Auto's reviewer is taking up what the agents ask to work outside their folders, and
+    // those it was checking or left for you that were answered or went since.
+    const listed = () => ({ asks: listSandboxAsks(), ...(asksToRestart() ? { restart: true } : {}), reviews: listAskReviews(), settled: listSettledReviews() });
     if (route === "kuvo/sandbox/asks") return yield* json(200, listed());
     yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
     let wake: () => void = () => {};

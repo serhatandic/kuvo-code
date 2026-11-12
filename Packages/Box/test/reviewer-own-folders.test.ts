@@ -200,7 +200,7 @@ test.skipIf(!canFence)("in Auto, a conversation whose folder is in Kuvo Code's (
   expect(prompts.length).toBe(2)
 }, 60_000)
 
-test.skipIf(!canFence)("asks waiting as the box starts again are taken up and listed, and one gone before it's read isn't left checked (sandbox.reviews.whole)", async () => {
+test.skipIf(!canFence)("asks waiting as the box starts again are taken up and listed, and one gone before it's read is listed gone (sandbox.reviews.whole, sandbox.reviews.settled)", async () => {
   const project = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-waiting-")))
   try {
     const { said } = await inBox({ ses_wait: project }, `
@@ -212,17 +212,18 @@ test.skipIf(!canFence)("asks waiting as the box starts again are taken up and li
       said.before = reviewing.listAskReviews().find(each => each.id === "per_w")?.state ?? null;
       await reviewing.takeUpWaitingAsks(engine, ["ses_wait"]);
       said.after = reviewing.listAskReviews().find(each => each.id === "per_w")?.state ?? null;
-      // Heard, but answered before the box could read it: listed as yours, never left checked.
+      // Heard, but answered before the box could read it: its session doesn't ask it, so it's
+      // listed gone, never left checked nor left for you.
       await reviewing.reviewPermission(engine, { type: "permission.asked", data: { id: "per_gone", sessionID: "ses_wait", action: "external_directory" } });
-      said.gone = reviewing.listAskReviews().find(each => each.id === "per_gone")?.state ?? null;
-      // Answered: one left for you leaves the list; what the reviewer decided stays, for its mark.
+      said.gone = reviewing.listAskReviews().find(each => each.id === "per_gone")?.state ?? reviewing.listSettledReviews().find(each => each.id === "per_gone")?.state ?? null;
+      // What the reviewer decided stays, for its mark.
       reviewing.settleAskReview("per_gone");
       reviewing.settleAskReview("per_w");
       said.listed = reviewing.listAskReviews().map(each => each.id);
     `)
     expect(said.before).toBeNull()
     expect(said.after).toBe("allowed")
-    expect(said.gone).toBe("yours")
+    expect(said.gone).toBe("gone")
     expect(said.listed).toEqual(["per_w"])
   } finally {
     rmSync(project, { recursive: true, force: true })

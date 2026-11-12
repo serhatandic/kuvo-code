@@ -2144,6 +2144,7 @@ var FEATURES = [
   "sandbox",
   "sandbox.asks",
   "sandbox.check",
+  "sandbox.reviews.settled",
   "sandbox.reviews.whole",
   "search",
   "sessions.agents",
@@ -16638,24 +16639,47 @@ var READING = new Set(["read", "glob", "grep", "list", "ls", "view", "notebookre
 var OWN_READING = new Set(["read", "view", "notebookread"]);
 var reviewing = new Map;
 var askReviews = new Map;
+var settledReviews = new Map;
+var askedOn = new Map;
 var reviewFollowers = new Set;
 var listAskReviews = () => [...askReviews.values()];
-function settleAskReview(id) {
-  const review = askReviews.get(id);
-  if (!review || review.state !== "yours" && review.state !== "checking")
+var listSettledReviews = () => [...settledReviews.values()];
+var waitsOnReview = (review) => review?.state === "yours" || review?.state === "checking";
+function settle(reviews, state) {
+  if (!reviews.length)
     return;
-  askReviews.delete(id);
+  for (const { id, session, call } of reviews) {
+    askReviews.delete(id);
+    askedOn.delete(id);
+    settledReviews.delete(id);
+    settledReviews.set(id, { id, session, ...call ? { call } : {}, state, at: Date.now() });
+    if (settledReviews.size > 200)
+      settledReviews.delete(settledReviews.keys().next().value);
+  }
   for (const changed of reviewFollowers)
     changed();
 }
+function settleAskReview(id) {
+  const review = askReviews.get(id);
+  if (waitsOnReview(review))
+    settle([review], "answered");
+}
 function settleRunReviews(session) {
-  const gone = [...askReviews.values()].filter((each) => each.session === session && (each.state === "yours" || each.state === "checking"));
-  if (!gone.length)
-    return;
-  for (const each of gone)
-    askReviews.delete(each.id);
-  for (const changed of reviewFollowers)
-    changed();
+  settle([...askReviews.values()].filter((each) => each.session === session && waitsOnReview(each)), "gone");
+}
+async function settleGoneReviews(source, place, since, signal) {
+  const looked = [...askReviews.values()].filter((each) => waitsOnReview(each) && each.at <= since && askedOn.get(each.id) === place);
+  const gone = [];
+  for (const review of looked) {
+    if (signal?.aborted)
+      return;
+    const listed = await call(source, "GET", `/api/session/${encodeURIComponent(review.session)}/permission`, undefined, signal).catch((error) => String(error?.message) === "404" ? [] : null);
+    if (!Array.isArray(listed) || listed.some((each) => isObject(each) && each.id === review.id))
+      continue;
+    if (askReviews.get(review.id) === review)
+      gone.push(review);
+  }
+  settle(gone, "gone");
 }
 function onAskReviewsChanged(changed) {
   reviewFollowers.add(changed);
@@ -16663,17 +16687,24 @@ function onAskReviewsChanged(changed) {
     reviewFollowers.delete(changed);
   };
 }
-function noteReview(id, session, state, call) {
+function noteReview(id, session, state, call, place) {
   askReviews.delete(id);
+  settledReviews.delete(id);
   askReviews.set(id, { id, session, ...call ? { call } : {}, state, at: Date.now() });
+  if (place)
+    askedOn.set(id, place);
+  if (state !== "checking" && state !== "yours")
+    askedOn.delete(id);
   if (askReviews.size > 200) {
     const decided = [...askReviews.values()].find((each) => each.state !== "checking" && each.state !== "yours");
-    askReviews.delete(decided?.id ?? askReviews.keys().next().value);
+    const dropped = decided?.id ?? askReviews.keys().next().value;
+    askReviews.delete(dropped);
+    askedOn.delete(dropped);
   }
   for (const changed of reviewFollowers)
     changed();
 }
-async function reviewPermission(source, event, signal, found) {
+async function reviewPermission(source, event, signal, found, place) {
   const { id, sessionID } = event.data ?? {};
   if (event.type !== "permission.asked" || typeof id !== "string" || typeof sessionID !== "string")
     return null;
@@ -16681,7 +16712,7 @@ async function reviewPermission(source, event, signal, found) {
   if (taken)
     return taken;
   if (event.data?.action === "external_directory")
-    noteReview(id, sessionID, "checking");
+    noteReview(id, sessionID, "checking", undefined, place);
   const answering = answerPermission(source, id, sessionID, signal, found).catch((error) => {
     reviewing.delete(id);
     if (askReviews.has(id))
@@ -16693,7 +16724,8 @@ async function reviewPermission(source, event, signal, found) {
     reviewing.delete(reviewing.keys().next().value);
   return answering;
 }
-async function takeUpWaitingAsks(source, sessions, signal) {
+async function takeUpWaitingAsks(source, sessions, signal, place) {
+  const since = Date.now();
   const waiting = [];
   for (const session of sessions) {
     if (signal?.aborted)
@@ -16702,12 +16734,14 @@ async function takeUpWaitingAsks(source, sessions, signal) {
     for (const each of permissions) {
       if (each.action !== "external_directory" || reviewing.has(each.id) || askReviews.has(each.id))
         continue;
-      noteReview(each.id, each.asker, "checking");
+      noteReview(each.id, each.asker, "checking", undefined, place);
       waiting.push(each);
     }
   }
+  if (place)
+    await settleGoneReviews(source, place, since, signal);
   for (const each of waiting) {
-    await reviewPermission(source, { type: "permission.asked", data: { id: each.id, sessionID: each.asker, action: each.action } }, signal).catch(() => null);
+    await reviewPermission(source, { type: "permission.asked", data: { id: each.id, sessionID: each.asker, action: each.action } }, signal, undefined, place).catch(() => null);
   }
 }
 var attachedOf = (session) => attachmentRoots().map((root) => path63.join(root, session));
@@ -16870,8 +16904,16 @@ async function answerPermission(source, id, sessionID, signal, found) {
     permission = permissions.find((each) => each.id === id && each.asker === sessionID);
   }
   if (!permission) {
-    if (askReviews.get(id)?.state === "checking")
-      noteReview(id, sessionID, "yours", askReviews.get(id)?.call);
+    if (askReviews.get(id)?.state === "checking") {
+      const own = await call2(source, "GET", `/api/session/${encodeURIComponent(sessionID)}/permission`, undefined, signal).catch(() => null);
+      const now = askReviews.get(id);
+      if (now?.state !== "checking")
+        return null;
+      if (Array.isArray(own) && !own.some((each) => isObject(each) && each.id === id))
+        settle([now], "gone");
+      else
+        noteReview(id, sessionID, "yours", now.call);
+    }
     return null;
   }
   if (permission.action !== "external_directory")
@@ -17049,7 +17091,7 @@ async function write2(at, change, signal) {
   at.data = { ...at.data, permissions: change.permissions, metadata: change.metadata };
   return true;
 }
-async function settle(at, signal) {
+async function settle2(at, signal) {
   const now = approvalOf(at.data, { agents: at.agents, bot: at.bot });
   if (now.stored ? now.applied === now.effective && !madeBefore(at.data.permissions ?? [], now.effective) : !(at.bot || now.pending))
     return true;
@@ -17080,7 +17122,7 @@ async function adoptConversation(target, id, agents, signal) {
     return;
   if (isApproval(asked))
     rememberApproval(asked);
-  await settle(at, signal);
+  await settle2(at, signal);
   markConversation(at.data.id, approvalOf(at.data, { agents, bot: at.bot }).effective === "fullAccess");
 }
 async function adoptPending(engine, bridge, signal) {
@@ -17101,7 +17143,7 @@ async function settleAgain(target, id, agents, signal) {
   if (!data?.id)
     return;
   const at = found2(target, data, agents);
-  await settle(at, signal);
+  await settle2(at, signal);
   markConversation(at.data.id, approvalOf(at.data, { agents, bot: at.bot }).effective === "fullAccess");
 }
 async function setApproval(id, wanted, engine, bridge, signal) {
@@ -17118,7 +17160,7 @@ async function setApproval(id, wanted, engine, bridge, signal) {
     return { status: 502, value: { message: "It couldn't be changed: the engine didn't take it. Try again." } };
   if (!at.data.parentID)
     rememberApproval(wanted);
-  await settle(at, signal);
+  await settle2(at, signal);
   const effective = approvalOf(at.data, { agents: at.agents, bot: at.bot }).effective;
   markConversation(at.data.id, effective === "fullAccess");
   if (effective !== "auto")
@@ -17168,7 +17210,7 @@ async function reapplyApprovals(engine, bridge, settings = false) {
           done = false;
           continue;
         }
-        if (!await (remade ? remake(found2(target, fresh, agents)) : settle(found2(target, fresh, agents))))
+        if (!await (remade ? remake(found2(target, fresh, agents)) : settle2(found2(target, fresh, agents))))
           done = false;
       }
       const next = page.cursor?.next;
@@ -17205,7 +17247,7 @@ async function adoptBots(engine, bridge, done) {
     if (!target || done.has(bot.session))
       continue;
     const data = (await engineGet(target, `api/session/${encodeURIComponent(bot.session)}`).catch(() => null))?.data;
-    if (data?.id && await settle(found2(target, data, bot.agents)))
+    if (data?.id && await settle2(found2(target, data, bot.agents)))
       done.add(bot.session);
   }
 }
@@ -18664,12 +18706,12 @@ async function takeStart(journal, places) {
     return null;
   startsRunning.add(journal.id);
   try {
-    return await settle2(journal, places);
+    return await settle3(journal, places);
   } finally {
     startsRunning.delete(journal.id);
   }
 }
-async function settle2(journal, places) {
+async function settle3(journal, places) {
   const done = await finishStart(journal, places);
   if (!done)
     return null;
@@ -18866,7 +18908,7 @@ async function resumeOne(journal, places, now) {
   const off = !otherComputersAllowed() ? "this computer stopped taking work from your other computers" : !peersOf(readLink()).some((peer) => peer.key === journal.sender) ? "your computer was removed from this one" : null;
   const old = now - journal.made > LETTER_LIFE;
   if (!off && !old)
-    return await ready(journal, places) ? settle2(journal, places) : null;
+    return await ready(journal, places) ? settle3(journal, places) : null;
   let unknown = false;
   if (journal.making && !journal.session) {
     const found = await sessionOf(journal, places);
@@ -23228,7 +23270,7 @@ function unhold(folder, wasPaused, pausedAs) {
       fs84.rmSync(PAUSED2(folder), { force: true });
   } catch {}
 }
-async function settle3(target, sessions, name) {
+async function settle4(target, sessions, name) {
   let busy = false;
   for (let tries = 0;tries < SETTLE_FOR; tries++) {
     const active = await call(target, "GET", "/api/session/active", undefined, engineWait()).catch(() => ({}));
@@ -23304,7 +23346,7 @@ async function carryOn(id) {
         throw new Refused(`${record.name}’s goal couldn’t be checked on ${HERE}. Try again in a moment.`);
     }
     const target = record.lane ? readBridgeFile() : readEngineFile();
-    await settle3(target, record.sessions, record.name);
+    await settle4(target, record.sessions, record.name);
     const running = runningOf(record.sessions);
     if (running)
       throw new Refused(say.background(record.name, running));
@@ -23473,7 +23515,7 @@ async function arrived(record, placed) {
   };
   if (record.kind !== "group") {
     const target = record.lane ? readBridgeFile() : readEngineFile();
-    await settle3(target, record.sessions, record.name);
+    await settle4(target, record.sessions, record.name);
     if (record.lane && placed !== outgoing.get(record.id)?.digest)
       throw new Refused(say.notSame(record.name));
     const again = record.lane ? (await carry(target, "digest", { root: record.sessions[0] }).catch((error) => {
@@ -32662,7 +32704,7 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
       if (work)
         noteFullAccessAtWork(source, atWork3).catch(() => {});
       if (work)
-        atWork3(source).then((sessions) => takeUpWaitingAsks(source, sessions, connection.signal)).catch(() => {});
+        atWork3(source).then((sessions) => takeUpWaitingAsks(source, sessions, connection.signal, work || undefined)).catch(() => {});
       if (work)
         settleWorkRead(source, connection.signal).catch(() => {});
       for await (const event of serverEvents(response.body)) {
@@ -32691,7 +32733,7 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
         steer?.(event);
         queue?.(event);
         const followed = followWork?.(event);
-        const reviewed = work && event.type === "permission.asked" ? reviewPermission(source, event, connection.signal).catch(() => null) : null;
+        const reviewed = work && event.type === "permission.asked" ? reviewPermission(source, event, connection.signal, undefined, work).catch(() => null) : null;
         goalHeld?.(event).catch(() => {});
         if (signIns)
           noteSignIn(event, source).catch(() => {}).finally(() => signedIn(event));
@@ -32710,7 +32752,7 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
         const settled = ANSWERED2.has(event.type) ? event.data?.requestID ?? event.data?.id : undefined;
         if (typeof settled === "string")
           settleAskReview(settled);
-        if (RUN_ENDS.has(event.type) && typeof event.data?.sessionID === "string")
+        if ((RUN_ENDS.has(event.type) || event.type === "session.deleted") && typeof event.data?.sessionID === "string")
           settleRunReviews(event.data.sessionID);
         if (!notices)
           continue;
@@ -37123,7 +37165,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "6a88312aeade";
+var BRIDGE_VERSION = "bec99750575c";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -40761,7 +40803,7 @@ async function* sandboxRoute(context) {
   if (route === "kuvo/sandbox/asks" || route === "kuvo/sandbox/asks/events") {
     if (method !== "GET")
       return yield* json(405, {});
-    const listed = () => ({ asks: listSandboxAsks(), ...asksToRestart() ? { restart: true } : {}, reviews: listAskReviews() });
+    const listed = () => ({ asks: listSandboxAsks(), ...asksToRestart() ? { restart: true } : {}, reviews: listAskReviews(), settled: listSettledReviews() });
     if (route === "kuvo/sandbox/asks")
       return yield* json(200, listed());
     yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };

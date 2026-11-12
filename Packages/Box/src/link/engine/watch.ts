@@ -366,7 +366,8 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       if (work) noteFullAccessAtWork(source, atWork).catch(() => {});
       // Asks to work outside a folder waiting already (it started again as they came, or their
       // event went by unheard): taken up now, so every client's list of them is whole.
-      if (work) atWork(source).then(sessions => takeUpWaitingAsks(source, sessions, connection.signal)).catch(() => {});
+      // And what it listed as checked or left for you there that's no longer asked, gone.
+      if (work) atWork(source).then(sessions => takeUpWaitingAsks(source, sessions, connection.signal, work || undefined)).catch(() => {});
       // Agents' work that ended while it wasn't listening (or before boxes read it so): read, unless
       // what came since you read it is news to you, or it asks you (READ_RULE).
       if (work) settleWorkRead(source, connection.signal).catch(() => {});
@@ -403,7 +404,7 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         const followed = followWork?.(event);
         // A conversation in Auto: what its agent's file tools ask outside its folder, reviewed (and
         // told to your phones below only where it isn't: the reviewer never leaves one for you).
-        const reviewed = work && event.type === "permission.asked" ? reviewPermission(source, event, connection.signal).catch(() => null) : null;
+        const reviewed = work && event.type === "permission.asked" ? reviewPermission(source, event, connection.signal, undefined, work).catch(() => null) : null;
         goalHeld?.(event).catch(() => {});
         if (signIns) noteSignIn(event, source).catch(() => {}).finally(() => signedIn(event));
         if (work && event.type === "session.execution.succeeded" && typeof event.data?.sessionID === "string") keepReadThroughSummary(source, event.data.sessionID, connection.signal).catch(() => {});
@@ -420,8 +421,8 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         // An ask answered: off the list of what waits (on every source, the bridge's too).
         const settled = ANSWERED.has(event.type) ? event.data?.requestID ?? event.data?.id : undefined;
         if (typeof settled === "string") settleAskReview(settled);
-        // A run's end takes what it asked with it, with no word of each.
-        if (RUN_ENDS.has(event.type) && typeof event.data?.sessionID === "string") settleRunReviews(event.data.sessionID);
+        // A run's end takes what it asked with it, with no word of each, and so does its session deleted.
+        if ((RUN_ENDS.has(event.type) || event.type === "session.deleted") && typeof event.data?.sessionID === "string") settleRunReviews(event.data.sessionID);
         if (!notices) continue;
         if (ANSWERED.has(event.type)) answered(event.data?.requestID ?? event.data?.id);
         // A run's end: what it asked the engine let go with it, without a word (stopped, say). Looked
