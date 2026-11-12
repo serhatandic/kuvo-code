@@ -22,6 +22,18 @@ import Textual
         app.workQueues.app = app
     }
 
+    @Test func chipVisibilityAndTypingStayInTheirConversation() throws {
+        let store = app.workQueues
+        let first = try JSONDecoder().decode(WorkItem.self, from: JSONSerialization.data(withJSONObject: Self.item(1, "First", order: 0)))
+        let second = try JSONDecoder().decode(WorkItem.self, from: JSONSerialization.data(withJSONObject: Self.item(2, "Second", order: 1)))
+        store.standIn(WorkQueueView(owner: "ses_ours", items: [first, second]), for: .init(box: BoxClient.mac, owner: "ses_ours"))
+        store.standIn(WorkQueueView(owner: "ses_other"), for: .init(box: BoxClient.mac, owner: "ses_other"))
+        #expect(store.refs(in: "see #1", box: BoxClient.mac, owner: "ses_ours")["1"] != nil)
+        #expect(store.refs(in: "see #1", box: BoxClient.mac, owner: "ses_other").isEmpty)
+        #expect(store.refs(in: "#1 #2", box: BoxClient.mac, owner: "ses_ours", typing: true).keys.sorted() == ["1"])
+        #expect(store.refs(in: "the #1 Google result", box: BoxClient.mac, owner: "ses_ours").isEmpty)
+    }
+
     /// The box, as this Mac's app reaches it (as you, not an agent).
     private func use(_ machine: MachineTestBox) {
         let client = Self.appClient(machine, box: BoxClient.mac)
