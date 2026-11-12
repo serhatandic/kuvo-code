@@ -238,7 +238,8 @@ struct GoalCard: View {
     // MARK: The sandbox row
 
     private var sandboxRow: GoalSandbox.Row? {
-        GoalSandbox.row(sandbox, computer: computer, onThisMac: box == BoxClient.mac, bot: plan.name,
+        // (The box attached in place is updated as a machine is, so it's named as one here.)
+        GoalSandbox.row(sandbox, computer: box == BoxClient.mac ? computer : app.name(of: SidebarBox(id: box)), onThisMac: box == BoxClient.mac, bot: plan.name,
                         codingAgent: bot?.agents == true, restarting: restartingAgents, restartingSessions: restartingSessions)
     }
 

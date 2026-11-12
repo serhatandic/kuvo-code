@@ -1502,7 +1502,9 @@ final class Workspace {
     }
 
     /// Where this Mac's chats run: the app's own folder for them, or, attached in place, the box's
-    /// there (`kuvo-code/chats` in its home folder, as its box keeps them).
+    /// there (`chats` in its folder: the box's `CHATS`, Packages/Box/src/link/home.ts, for a box
+    /// with no `KUVO_CHATS`, which only the app's own box is given). (A new chat on a machine asks
+    /// its box, `kuvo/info`'s `chats`; this one is needed at once, for ⌘N's draft.)
     static var thisMacsChats: String {
         guard BoxClient.thisMac != BoxClient.mac else { return chatsFolder }
         return RemoteFolder.folder(SSHConnection.thisMacHome + "/\(RemoteEngineInstaller.root)/chats", on: BoxClient.thisMac)

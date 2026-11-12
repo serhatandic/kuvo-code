@@ -109,7 +109,8 @@ final class BoxNotices {
     /// A notice as this Mac's notification: its conversation or group chat opens from it, Reply
     /// writes back; its box tells your phones itself.
     static func notify(_ notice: Told.Notice, box: String) {
-        let machine = BoxClient.isThisMac(box) ? nil : box
+        // (The box it's from, told it's shown here, and that tells phones itself; nil: the app's own.)
+        let machine = box == BoxClient.mac ? nil : box
         let group = notice.data?["group"]
         guard let session = group.map(BotGroups.tabKey) ?? notice.data?["session"] else { return }
         Notifier.shared.notify(session: session, title: notice.title ?? "", subtitle: notice.subtitle, body: notice.body ?? "",

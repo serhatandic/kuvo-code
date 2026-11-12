@@ -125,7 +125,7 @@ final class BotAsks {
     private func tell(_ ask: WorkAsk, on box: String) {
         let title = ask.action == .cloneProject ? "\(ask.name) asks to clone a project" : "\(ask.name) asks to make a project"
         let body = ask.folder.map { BoxClient.isThisMac(box) ? ($0 as NSString).abbreviatingWithTildeInPath : $0 } ?? ask.project
-        Notifier.shared.notify(session: ask.session, title: title, body: body, push: .init(.ask, ask: ask.id, machine: BoxClient.isThisMac(box) ? nil : box, answerable: false))
+        Notifier.shared.notify(session: ask.session, title: title, body: body, push: .init(.ask, ask: ask.id, machine: box == BoxClient.mac ? nil : box, answerable: false))
     }
 
     /// How an answer went: what was done, in words (the bot is told too), and whether it failed.

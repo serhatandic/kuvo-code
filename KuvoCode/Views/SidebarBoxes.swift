@@ -40,7 +40,7 @@ enum SidebarBox: Hashable, Identifiable {
     var isThisMac: Bool { self == .mac || self == .attached }
 
     /// This Mac's box now (`BoxClient.thisMac`): what has no computer of its own is on.
-    nonisolated static var thisMac: SidebarBox {
+    static var thisMac: SidebarBox {
         let id = BoxClient.thisMac
         return id == BoxClient.mac ? .mac : .machine(id)
     }

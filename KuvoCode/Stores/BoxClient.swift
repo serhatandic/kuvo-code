@@ -19,7 +19,7 @@ struct BoxClient: Sendable {
     /// This Mac's box: the app's own (`mac`), or the box already here that the app attached to in
     /// place (`SSHConnection.thisMac`, a machine to the app, reached with no SSH). What something
     /// with no computer of its own is on. Follows `AppModel.attached`.
-    nonisolated(unsafe) static var thisMac: String = mac
+    @MainActor static var thisMac: String = mac
 
     /// Whether `id` is this Mac's box, either way: what's on it is on this disk, under this account
     /// (its folders open here, its apps open here, it's named "this Mac"), and it's never away or

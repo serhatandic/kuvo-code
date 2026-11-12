@@ -61,6 +61,8 @@ import Testing
             try Data().write(to: data.appending(path: "opencode.db"))
         }
         AppModel.hereHome = home
+        // (No projects of another test's: a new session with none is a chat.)
+        for key in ["projectFolders", "projectSettings", "worktrees"] { UserDefaults.standard.removeObject(forKey: key) }
         return binary
     }
 
@@ -210,8 +212,22 @@ import Testing
         #expect(model.tabs.selection == .draft(chats) && Workspace.isChat(chats))
         #expect(Workspace.onThisMac("/Users/me/project") == RemoteFolder.folder("/Users/me/project", on: SSHConnection.thisMac))
         #expect(Workspace.box(of: "/Users/me/project") == SSHConnection.thisMac)
-        let box = try #require(model.machines.engine(SSHConnection.thisMac))
-        #expect(![.disconnect, .start].contains(box.offer))
+    }
+
+    /// Connected, this Mac's own box offers nothing in Settings › Machines (or to a phone): it's
+    /// never disconnected from the window that's on it, nor started or removed from here.
+    @Test func thisMacsBoxIsntDisconnectedFromHere() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        engine.list([])
+        engine.on("GET", "/api/mcp", json: ["location": ["directory": "/"], "data": []])
+        engine.on("GET", "/api/credential", json: ["data": []])
+        let api = OpenCodeAPI(endpoint: ServerEndpoint(url: URL(string: engine.url)!, password: "test"), folderPrefix: RemoteFolder.prefix(for: SSHConnection.thisMac))
+        MachineEngine.standIn = { _ in api }
+        app = try await started { try memberOfMacBooks() }
+        let box = try #require(app?.machines.engine(SSHConnection.thisMac))
+        try await until { box.isReady }
+        #expect(box.offer == nil, "no Disconnect")
     }
 
     /// Its routes go to its own CLI here, in its own home folder, with no SSH: as a machine's do.
