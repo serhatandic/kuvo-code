@@ -2292,8 +2292,9 @@ computer, whichever comes first; none goes before one sent ahead of it, and one 
 waits goes behind them. A computer that isn't connected to the relay (asleep, offline), turns the
 phone away, or can't talk with it isn't tried again: that's said at once, as before. Once a try has
 gone (it was put on a session, so the computer may have it), though, a computer not on the relay is
-tried again like a dropped link (the relay or its link started again, and it's still connecting). A try whose wait ends
-after its two minutes (the app was suspended meanwhile) fails then, rather than going late.
+tried again like a dropped link (the relay or its link started again, and it's still connecting).
+One that never went still says offline at once, as its computer can't have it. A try whose wait
+ends after its two minutes (the app was suspended meanwhile) fails then, rather than going late.
 
 Stopping a request (the client stops reading, or cancels it) ends it at once: one waiting to go
 again never goes. The phone's Stop waits up to 3 s for messages still on their way, then takes back
