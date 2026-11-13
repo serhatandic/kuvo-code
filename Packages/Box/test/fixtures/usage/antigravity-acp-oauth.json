@@ -1,0 +1,24 @@
+{
+  "source": {
+    "version": "1.3.0",
+    "platform": "darwin-arm64",
+    "url": "https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.3.0-darwin-arm64.zip",
+    "sha256": "7cd97045f7b4fe81175a107cdf16f9c51484e3c78a5162cae415338bb6aa5b88",
+    "module": "google3/cloud/developer_experience/antigravity_extensions/acp_server/oauth_manager.py",
+    "verification": "Inspected embedded Python source in a separate checksum-verified downloaded release archive; no account data or live agent was used."
+  },
+  "defaults": {
+    "clientID": "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com",
+    "clientSecret": "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"
+  },
+  "ownToken": {
+    "client_id": "fixture-agent-client.apps.googleusercontent.com",
+    "client_secret": "fixture-installed-app-secret",
+    "refresh_token": "fixture-refresh-only",
+    "token_uri": "https://oauth2.googleapis.com/token",
+    "scopes": [
+      "https://www.googleapis.com/auth/cloud-platform"
+    ],
+    "project_id": "fixture-project"
+  }
+}

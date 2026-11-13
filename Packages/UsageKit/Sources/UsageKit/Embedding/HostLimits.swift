@@ -257,7 +257,7 @@ public final class HostLimits {
     /// to this Mac's box, by this).
     /// Every other provider's bar reads its own limits (yours, outside Kuvo Code) until this Mac's
     /// box has a row of it.
-    static let limitsOnlyFromHost: Set<String> = ["claude", "cursor"]
+    static let limitsOnlyFromHost: Set<String> = ["claude", "cursor", "antigravity"]
 
     /// The rows that take the place of the panel's own bar of a covered provider: this Mac's own
     /// logins; with none yet, where its bar has no limits of its own, the other computers' (one row

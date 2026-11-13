@@ -1,0 +1,4 @@
+[
+  {"name":"missing profile", "database":false, "tokens":0},
+  {"name":"empty conversation database", "database":true, "tokens":0}
+]

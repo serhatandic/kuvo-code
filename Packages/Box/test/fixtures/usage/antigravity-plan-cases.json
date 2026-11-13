@@ -1,0 +1,204 @@
+[
+  {
+    "name": "shared pools and rounding",
+    "bodies": [
+      {
+        "groups": [
+          {
+            "buckets": [
+              {
+                "bucketId": "gemini-5h",
+                "remainingFraction": 0.754
+              },
+              {
+                "bucketId": "gemini-weekly",
+                "remainingFraction": 1.2
+              },
+              {
+                "bucketId": "3p-5h",
+                "remainingFraction": -0.1
+              },
+              {
+                "bucketId": "3p-weekly",
+                "remainingFraction": 0.5
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "expected": [
+      {
+        "label": "Session",
+        "used": 25,
+        "periodMs": 18000000
+      },
+      {
+        "label": "Weekly",
+        "used": 0,
+        "periodMs": 604800000
+      },
+      {
+        "label": "Claude",
+        "used": 100,
+        "periodMs": 18000000
+      },
+      {
+        "label": "Claude Weekly",
+        "used": 50,
+        "periodMs": 604800000
+      }
+    ]
+  },
+  {
+    "name": "first usable across hosts",
+    "bodies": [
+      {
+        "response": {
+          "groups": [
+            {
+              "buckets": [
+                {
+                  "bucketId": "gemini-5h",
+                  "remainingFraction": "bad"
+                },
+                {
+                  "bucketId": "3p-5h",
+                  "remainingFraction": 0.9
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "groups": [
+          {
+            "buckets": [
+              {
+                "bucketId": "gemini-5h",
+                "remainingFraction": 0.6
+              },
+              {
+                "bucketId": "3p-5h",
+                "remainingFraction": 0
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "expected": [
+      {
+        "label": "Session",
+        "used": 40,
+        "periodMs": 18000000
+      },
+      {
+        "label": "Claude",
+        "used": 10,
+        "periodMs": 18000000
+      }
+    ]
+  },
+  {
+    "name": "argon separate weekly",
+    "bodies": [
+      {
+        "groups": [
+          {
+            "displayName": "Gemini 4 Argon",
+            "buckets": [
+              {
+                "bucketId": "argon-quota",
+                "window": "weekly",
+                "remainingFraction": 0.3
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "expected": [
+      {
+        "label": "Argon Weekly",
+        "used": 70,
+        "periodMs": 604800000
+      }
+    ]
+  },
+  {
+    "name": "argon ambiguity",
+    "bodies": [
+      {
+        "groups": [
+          {
+            "displayName": "Gemini 4 Argon",
+            "buckets": [
+              {
+                "bucketId": "a",
+                "window": "weekly",
+                "remainingFraction": 0.3
+              },
+              {
+                "bucketId": "b",
+                "window": "weekly",
+                "remainingFraction": 0.4
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "expected": []
+  },
+  {
+    "name": "unknown malformed and disabled",
+    "bodies": [
+      {
+        "groups": [
+          {
+            "buckets": [
+              {
+                "bucketId": "gemini-image-5h",
+                "remainingFraction": 0
+              },
+              null,
+              {
+                "bucketId": "gemini-5h"
+              }
+            ]
+          },
+          {
+            "displayName": "Gemini 4 Argon",
+            "buckets": [
+              {
+                "bucketId": "a",
+                "window": "weekly",
+                "remainingFraction": 0.2,
+                "disabled": true
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "expected": []
+  },
+  {
+    "name": "authoritative empty",
+    "bodies": [
+      {
+        "groups": []
+      }
+    ],
+    "expected": []
+  },
+  {
+    "name": "not a summary",
+    "bodies": [
+      {}
+    ],
+    "expected": null
+  }
+]
