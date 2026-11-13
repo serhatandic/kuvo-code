@@ -3231,6 +3231,26 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     elsewhere, never deleted for good.
   - `GET kuvo/git/show?root=<repository>&object=<HEAD:path | :path>`: a file as git keeps it (a
     picture's old side), its bytes; `404` for one git doesn't have, `413` over 25 MB.
+  - `POST kuvo/git/branches {"directory"}` (`git.branches`, #660): the repository's branches, for a
+    branch menu (the Mac's title bar) → `{"repository": false}` outside one, else `{"repository":
+    true, root, current, branches}`: `root` its top folder, null for a folder with no checkout
+    (its `.git` names a bare repository beside it, `gitdir: ./.bare`), `current` the branch checked
+    out (null on none), `branches` its local branches by their names, the latest commit first. Read by names only: nothing the
+    repository's settings name runs. `500 {"message"}` when git couldn't say. A client also reads
+    `repository` for whether a folder is in a repository at all (Edit Project's worktree setup).
+  - `POST kuvo/git/switch {"directory", "branch", "create"?}` (`git.branches`): switches the
+    repository to `branch`, or with `"create": true` to a new branch of that name from where it is,
+    the changes not committed coming along, as `git switch [-c]` does in your terminal (its hooks
+    run, with your environment as a commit's) → `200 {}`, or `422 {"message"}` with git's words (a
+    change in the way, no such branch, a name git won't take, or a folder with no checkout of its
+    own). `400 {"message"}` for no name, one starting with `-`, or one with a line break, saying
+    which.
+  - `POST kuvo/git/status {"directory"}` (`git.status`, #660): whether anything in the repository
+    isn't committed, as removing a worktree would delete it (what a client's Delete says goes with
+    one) → `{"repository": false}`, or `{"repository": true, root, uncommitted}`: a change, a new
+    file git doesn't ignore, or a change in a submodule whatever its `ignore` setting (`root` as
+    for `kuvo/git/branches`; with no checkout, nothing uncommitted). `500
+    {"message"}` when git couldn't say: a client takes that, and a box away, as changes that may go.
   - `POST kuvo/git/commit {"directory", "message", "push"?, "author"?}` commits what's staged, or
     everything in the folder when nothing is, and pushes when asked (a new branch is pushed and
     tracked) → `200 {}`, or `422 {"message"}` with git's words. A push that didn't go through
@@ -3318,6 +3338,20 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `POST kuvo/folders {"path"}` makes a new folder in one that's there, as a folder panel's New
   Folder does → `{"path"}`; `409 {"message"}` for something there already, `404` when the folder
   it's in isn't there, `403` when one can't be made there, `400` for a path that isn't a full one.
+- `GET kuvo/folders/tree?path=<folder>` (`folders.tree`, #660): every file under one of this box's
+  folders, for a project's file filter, "@" and a palette → `{"path", "files", "git"}`, `files`
+  by their paths in the folder, 20,000 at most. In a repository, git's list (`git` true): tracked
+  files and new ones, without what it ignores, each once, names as they are, the first 20,000 git
+  gives in one with more (read as git writes them; after ten minutes, those it gave by then, none
+  perhaps, never a walk); otherwise, and where
+  git lists none there (a folder its repository ignores), a walk that skips `.git`,
+  `node_modules`, `build`, `DerivedData`, `.build`, `Pods`, `dist` and `.next`, follows no links,
+  and on a Mac leaves out the home folder's Desktop, Documents, Downloads, Library, Movies, Music
+  and Pictures (macOS would ask for them). With `dated=1`, `modified` too: when each file last
+  changed, in milliseconds since 1970, in the same order (null where it can't be read), for a
+  list that puts the newest first. A request no one waits for any longer stops git and the walk
+  (`503 {"message"}`, which no one reads). `path` is needed (`~/` starts at the home folder); refused as
+  `kuvo/folders` refuses, with `reason`.
 - `GET kuvo/programs?name=<program>` (`programs`): whether the box has a program an MCP server's
   command names, found on its PATH as its engine finds it (a name like `npx`, or a path, `~/`
   from the home folder) → `{"name", "path"}`, `path` null when it hasn't; `"unknown": true` (and
@@ -4000,36 +4034,47 @@ as OpenUsage did), never Pi's or another tool's. And what your
 ChatGPT sign-in in Kuvo Code (the engine's `openai`, Settings › Accounts) used through the engine's
 own models, read (only read) from the engine's databases on that computer (each `opencode*.db` in
 its data folder: on a Mac the app's, on a machine `~/.kuvo-code/data/opencode`), Codex's, the same
-row as a Codex account signed in to the same ChatGPT account; never your own opencode's. It prices them as OpenUsage does (its supplement,
+row as a Codex account signed in to the same ChatGPT account; never your own opencode's. And Grok's, each Grok account's home's `sessions` (an account you added:
+its own home; a machine: Kuvo Code's; a Mac's own sign-in: your `GROK_HOME`, else `~/.grok`, where
+Grok runs with it, its sessions there counted whoever ran them, your Terminal's too; a folder two
+accounts name, the first's), only each session's `updates.jsonl`, never Grok's debug log
+(`logs/unified.jsonl`, which it cuts short). It prices them as OpenUsage does (its supplement,
 LiteLLM's catalog, models.dev's; snapshots ship with the bridge, and each feed is fetched again
 hourly, kept in the bridge's `usage/pricing`, only by a real box's bridge, in a Mac app's folder or
-a machine's `~/.kuvo-code`, never a test's): estimates, not your bill. A client reaches them as
+a machine's `~/.kuvo-code`, never a test's): estimates, not your bill, but where the maker said
+what it cost (Claude Code's `costUSD`, Grok's own costs). And what the engine's own hosted models
+cost (OpenCode Go, `opencode-go`, and OpenCode Zen, `opencode`), as OpenCode billed it, read (only
+read) from the engine's databases on that computer (each `opencode*.db` in its data folder: on a
+Mac the app's, on a machine `~/.kuvo-code/data/opencode`), never your own opencode's: a box that
+doesn't know its engine's folder doesn't state it (`services` without `opencode`). A client reaches them as
 `kuvo/agents/api/kuvo/usage…` (the Mac app at `api/kuvo/usage…` on the bridge itself), where
 `features` has `usage.history`.
 
 - `GET kuvo/agents/api/kuvo/usage?zone=<IANA time zone>` → `{data: {zone, services, scanned?, rows:
   [row], totals: {<service>: [day]}, partial?: {<service>: {away?, cut?}}}}`. The box works out the days in `zone` (the client's, so a
   Mac in Istanbul reading a machine in UTC gets its own days); one it doesn't know is its own,
-  `zone` says which. `services`: what this box states the usage of (`claude`, `codex`): a client
-  shows those from here, and reads the rest as it did. `scanned`: when this box last read its logs.
+  `zone` says which. `services`: what this box states the usage of (`claude`, `codex`,
+  `grok`, `opencode`): a client shows those from here, and reads the rest as it did. `scanned`: when this box last read its logs.
   `pricing: {codex: {fallback, chosen, choices}}`: Codex's fallback model, this box's setting
   (below), `null` for none; `chosen`, whether it was ever chosen on this box (none counts);
   `choices`, the models it may be, in order.
   - A `row` is one account across your computers, with the same `id` as its plan limits row
     (`<service>#<identity>`, or `<box key>/<provider>` for one that can't say who it is), so a
     client puts an account's limits and its usage side by side: `{id, service, provider, agent?,
-    account?, label?, identity?, scanned?, boxes, away?, cut?, vouched?, days}`, `boxes` as limits'
-    rows have them (`{key, name, provider, agent?, account?, label?, scanned?, here?, away?,
+    account?, label?, identity?, scanned?, boxes, away?, cut?, vouched?, estimated?, days}`:
+    `estimated: false` where its dollars are what its maker billed (OpenCode's hosted models'), not
+    an estimate; `boxes` as limits' rows have them (`{key, name, provider, agent?, account?, label?, scanned?, here?, away?,
     vouched?, same?}`): `vouched`, a box a peer vouches for (another Mac beside a machine you
     share), not one of your computers, and the row `vouched` when all of them are; `same`, a box
     that reads a folder another of them already does (two boxes on one computer), not added again.
     Its `days` are the **sum** of every box's own (each box reads only its own logs), each folder
-    once. A conversation moved to another
+    once. OpenCode's: a row for Go (the same row as its plan limits') and one for Zen, each only
+    while it has use in the window. A conversation moved to another
     computer (`kuvo/moves`) is copied there, and the one it left keeps its copy for a while: its
     past use counts on both meanwhile.
   - `totals`: each service's days, the accounts on your own computers added up (this box and its
     peers, not a box a peer vouches for, whose accounts may be another person's: their rows show,
-    in no total), each folder once: what the Mac's Claude and Codex cards show. `partial`: a service whose
+    in no total), each folder once: what the Mac's Claude, Codex, Grok and OpenCode cards show. `partial`: a service whose
     totals are short, `away` (one of your computers isn't answering: its share is as of then) or
     `cut` (one told less than all: its oldest days).
   - A `day`: `{date, tokens, cost, models: [{model, tokens, cost}], unknown?, fallback?}`, newest first, for
@@ -4070,9 +4115,30 @@ a machine's `~/.kuvo-code`, never a test's): estimates, not your bill. A client 
     `session_message` (opencode 2, a compaction too, from when the sign-in was made on), a message
     copied between two databases once (by its ID). Priced as Codex's. Whether the sign-in is OAuth
     is asked of SQLite: its tokens never leave the database. A database that can't be read now
-    (and none that could) leaves what was read before as it was, never none (its box's `scanned`
-    as of when it last was); one in WAL mode whose
-    `-wal` and `-shm` are gone (its engine stopped) is read as it is.
+    leaves what was read before as it was (its box's `scanned` as of when it last was), and such a
+    read is never kept as whole, until that database has failed three reads in a row (one that's
+    always broken doesn't hold up the rest); one in WAL mode whose `-wal` and `-shm` are gone (its
+    engine stopped) is read as it is.
+  - Grok's (OpenUsage's rules): a transcript line holding `turn_completed` that parses, a
+    `turn_completed` session update (under `params.update`, else `update`) with `usage.modelUsage`
+    and a time (`_meta.agentTimestampMs`, under `params`, else the line's own; else the line's
+    `timestamp`, seconds or ISO 8601). Each model in it with input tokens is its own entry: cached
+    reads and cache writes come out of the input (never more than it), reasoning is in the output
+    already, counts past 10^12 held there. Its cost is Grok's own where it says one
+    (`costUsdTicks`, 10^-10 dollars, the model's, or the turn's when it ran one model), else its
+    tokens at its model's rates. An event (`_meta.eventId`) copied into another session's
+    transcript counts once per model.
+  - OpenCode's hosted models (OpenUsage's `OpenCodeUsageScanner`): each assistant message, and each
+    completed compaction, of `opencode-go` or `opencode` with a numeric cost, from `message`
+    (opencode 1) and `session_message` (opencode 2), on the day it was made; its tokens the total it
+    says, else its buckets added up; its cost as written, never priced again (a negative one left
+    out); a message in both tables, or in two channels' databases, once (by its ID, the first by
+    path). A database without either table says nothing. One that can't be read now gives the rows
+    it gave last, in this bridge's run; one with none of its rows known (as the bridge starts), or
+    every one failing, leaves what this box had as it was (not known now), until it has failed three
+    reads in a row (one that's always broken doesn't hold up the rest). While one fails, they're
+    read every round. One in WAL mode whose `-wal` and `-shm` are gone is read as it is. A model you reach with a key
+    of your own is its provider's, never counted here.
 - `PUT kuvo/agents/api/kuvo/usage/pricing[?zone=]` `{"codex": {"fallback": <model> | null}}`: Codex's
   fallback model, whose rates estimate what a Codex model with no known price used (in this box's
   own Codex logs, not the engine's ChatGPT slice: each box prices its own with its own); one of `choices` (the supplement's
@@ -4087,8 +4153,10 @@ a machine's `~/.kuvo-code`, never a test's): estimates, not your bill. A client 
 - How often: every five minutes, and when asked; one round at a time. The event, and the mail
   below, only when what was used changed. A log is read on from where
   it was last read as it grows, and again whole when it shrank or was rewritten; what each log held
-  is kept in the bridge's folder (`usage/claude-files` and `usage/codex-files`, a file a log, with
-  a Codex log's running total and model so far, rebuilt from the logs when it's lost), and each account's use by the quarter hour, UTC (`usage/usage.json`), so a restart
+  is kept in the bridge's folder (`usage/claude-files`, `usage/codex-files` and `usage/grok-files`,
+  a file a log, with a Codex log's running total and model so far, rebuilt from the logs when it's
+  lost; the engine's databases are read again whole, when one or its write-ahead log changed, or
+  one failed last time), and each account's use by the quarter hour, UTC (`usage/usage.json`), so a restart
   answers at once, and every zone's days come out whole (India's midnight is on the half hour).
   Kept 35 days.
 - **Across your computers**, as plan limits are ("Plan limits", "Across your computers": the same
@@ -4105,9 +4173,10 @@ a machine's `~/.kuvo-code`, never a test's): estimates, not your bill. A client 
   receiver whose own, put together, isn't that asks for all of it (`ask`, at most once a minute),
   and is answered at once. Each account is `{provider, service, agent?, account?, label?,
   identity?, scanned?, cut?, whole, places?, slots: {models, used: [[slot, model, tokens,
-  dollars]], unknown?: [[slot, model]], fallback?: [[slot, model]]}}` (`fallback`, a model whose
-  rates estimated that slot's use of one with no price; not in `digest`, which a box from before
-  it works out without it): `places`, the folders its logs are in, each 16 hex
+  dollars]], unknown?: [[slot, model]], fallback?: [[slot, model]]}, estimated?: false}` (`fallback`, a model whose
+  rates estimated that slot's use of one with no price; `estimated`, as a row's; neither in
+  `digest`, which a box from before works out without them): `places`, the folders its logs are
+  in (for the engine's hosted models, its data folder with the provider), each 16 hex
   characters of a hash of its computer (on Linux its machine ID, `/etc/machine-id` or D-Bus's, with
   its name; on a Mac its hardware UUID; else its name) and the folder's real path (never either); `slot`, quarter hours since 1970 (UTC), `model`, an index into
   `models`, `tokens` a whole number; `whole`, the first slot the sender has all of (a UTC midnight
@@ -4738,8 +4807,11 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `bots.job` | a bot's job as its box's record: `jobDetails` in `kuvo/bots`, `job` in `PATCH kuvo/bots/<id>` |
 | `bots.keys` | `kuvo/bots/<id>/keys…` |
 | `bots.make` | `kuvo/bots/templates` and `POST kuvo/bots` |
+| `box.app` | `kuvo/box/app` and `kuvo/box/app/open`: this Mac's app registering with a Mac's box in a home of its own, and opened by it for its agents' browser ("This Mac's box: this Mac's app") |
 | `box.ownHome` | a Mac's box can run in a home of its own, laid out as a machine's (`box/kind`, "This Mac's box: a home of its own"); there, `keepsAwake` and `awakeNow` in `kuvo/work/settings` |
 | `box.rehome` | `kuvo/box/rehome`: moving this Mac's box into a home of its own, and back ("This Mac's box: moving this Mac's box"); `kuvo-link.js rehome`, and `here`'s `moving` |
+| `box.serve` | `kuvo/box/serve`: the box's server kept running for clients ("Kept for clients"); `kuvo-link.js serve --kept` |
+| `box.uninstall` | `kuvo-link.js uninstall [--check]`: removing Kuvo Code from this computer ("Uninstalling") |
 | `box.update` | `POST kuvo/box/update {from}`: a release from a folder on the box's computer, the one Kuvo Code carries, taken at the next quiet moment ("Updates"); a release's Mac bundles, swapped whole; `kuvo/update`'s `offered` |
 | `branch` | `kuvo/agents/api/kuvo/branch/<session>`: Branch from here, marked |
 | `browser` | a machine only: `kuvo/browser`, its browser set up by the box itself ("The browser on a machine") |
@@ -4753,13 +4825,16 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `file` | `kuvo/file` |
 | `folders` | `kuvo/folders` |
 | `folders.files` | `kuvo/folders?files=1`: a folder's files too, and `reason` on a refusal |
+| `folders.tree` | `GET kuvo/folders/tree`: every file under a folder, for a file filter and "@" (#660) |
 | `git` | `kuvo/git/…`: Changes (bridge 0.9.94) |
 | `git.backups` | `kuvo/git/backups…`: branch backups, and taking one back (bridge 0.9.182) |
+| `git.branches` | `POST kuvo/git/branches` and `POST kuvo/git/switch`: a branch menu (#660) |
 | `git.changes.count` | `POST kuvo/git/changes/count`: how much changed, without the diff (bridge 0.9.211) |
 | `git.merge` | `POST kuvo/git/merge`: Merge into… (bridge 0.9.143) |
 | `git.pull-request` | `POST kuvo/git/pull-request`: Create Pull Request (bridge 0.9.143) |
 | `git.pull-request.draft` | `POST kuvo/git/pull-request/draft`: Create Pull Request's confirmation (bridge 0.9.179) |
 | `git.push` | `POST kuvo/git/push`, and a commit's `committed` when only its push failed (bridge 0.9.143) |
+| `git.status` | `POST kuvo/git/status`: whether anything isn't committed (#660) |
 | `git.words` | Settings › Git in `kuvo/config` (each computer's own), `prompt` from `kuvo/git/commit-diff` and `kuvo/git/pull-request/draft`, and `POST kuvo/git/settings/move` |
 | `goals` | `kuvo/agents/api/kuvo/goals…`: goals ("Goals") |
 | `groups` | `kuvo/groups`, `…/events`, one chat's events, and writing, stopping, keep going, viewed, undo and start |
@@ -4958,7 +5033,11 @@ is. With the app closed, the tools are listed as the app last listed them (`run/
 and the keeper answers them through this Mac's box, as a machine's `kuvo-browser.js` does: the
 agents' tools (`POST kuvo/agent-tools`), wake-ups (kuvo-wake), `set_job` (`PATCH kuvo/bots/<id>`),
 the vault (`POST kuvo/vault/tools`), and show_file, show_widget and mark_final. Only the browser's
-tools and show_in_panel need the app: a call answers `isError`, saying Kuvo Code must be open.
+tools and show_in_panel need the app: a call answers `isError`, saying Kuvo Code must be open. A
+browser call with the app closed opens it in the background (#211: the keeper opens the app it runs
+from, once for every call waiting, 30 seconds, five minutes' rest after one that failed, never while
+an update installs). A Mac's box in a home of its own has no keeper's tools: its own
+`kuvo-browser.js` sends the browser's tools to the app, and the box opens it ("This Mac's app").
 
 Its group chats run in its coding agents' bridge, as a machine's do, with folders in the app's
 own: the chats in `groups` (`KUVO_GROUPS`), its bots' in `bots` (`KUVO_BOTS`), what it lets go
@@ -5146,6 +5225,50 @@ only for the home `KUVO_MACHINE_ROOT` names, else nothing: it never reads or ask
 same: only from Kuvo Code itself (the app, or `box route`; 403 from a phone), 409 with why when it
 can't (a machine, or nothing to move back).
 
+#### This Mac's app
+
+`box.app` (#333 piece 3). A Mac's box in a home of its own (`box/kind` says `mac`; not the app's box
+in its folder, whose keeper does this) is where its app registers, and its agents browse in the
+app's panel through it, with no Chromium of its own. A machine's box answers `409` to both routes
+(after a phone's `403` where one asks what only Kuvo Code may).
+
+- **`kuvo/box/app`**: `POST` from Kuvo Code itself (`403` from a phone), `{tools: {url, token}, bundle}`
+  as the app opens: where its panel's tools answer (MCP over HTTP, on `127.0.0.1`, `localhost` or
+  `[::1]` only, to `Authorization: Bearer <token>`), and where it's installed (a whole path to its
+  `.app`). `{tools: null}` as it quits, its place kept. `{updating: true}` as it quits to install an
+  update (today's app doesn't say it yet: #333 piece 6b, with telling the box it quits; until then
+  the box finds it gone when its tools stop answering). `bundle` left out keeps the one before. `GET` and each `POST` answer `{bundle, open,
+  updating, opening, failed}`: where it's installed (null before it ever said), whether its tools
+  answer now, whether an update installs (said in the last two minutes), whether an opening is under
+  way, and the last opening that failed, within its rest (`{at, message}`, `at` in ms). Kept in
+  `run/app.json` (`{bundle, tools, at}`, `0600`).
+- **The browser's tools.** The box's tool server (`kuvo-browser.js mcp`, as its engine and coding
+  agents run it) sends each `browser_*` call to the app's tools as it came (`tools/call`, with the
+  session's `_meta`, `x-kuvo-session` naming the conversation, and an `mcp-session-id` of its own;
+  a call stopped is told to the app as `notifications/cancelled`), and gives back what the app
+  answers. Nothing there, or something there that doesn't answer as the app's tools do (a `401`, not
+  JSON-RPC), is the app gone: the call has it opened again. Its other tools are the box's, as on a
+  machine. On a Mac the app's tools' port is refused to agents' commands in the sandbox, as the box's
+  own servers are.
+- **Opening the app**, when a browser call comes with no app registered:
+  `POST kuvo/box/app/open` (from Kuvo Code's own processes; `{gone: <token>}` says the app
+  registered with that token didn't answer, so it's taken for closed). The box decides:
+  - one opening at a time, across all its processes (`run/app-opening.json`, `{at, by}`): a call
+    while one's under way waits for it, and hears how it ended; one whose process is gone (a call
+    stopped is told to stop once, and sees its opening through; one cut off anyway), or that ran
+    past its time, is taken over;
+  - the app is opened where it last registered, by what runs as the app (its host interface's
+    `app/open`, below), and waited for: 30 seconds from the opening's start, for it to register;
+  - while an update of the app installs (`{updating: true}` in the last two minutes,
+    `run/app-updating`), it isn't opened: calls wait for Sparkle to open it;
+  - after one that failed (`run/app-open-failed.json`), none for five minutes: calls are told what
+    it said. The app registering forgets it, and the update's note.
+  It answers `200` with the app's state once the app's registered, else `503 {"message"}`, what the
+  agent's told (Kuvo Code's own words, as the keeper said them): it isn't where it was installed
+  any more; it couldn't be opened (and why); it wasn't ready within 30 seconds; it never registered
+  here (nothing to open). A call stopped while it waits stops waiting; the one that asked for the
+  opening sees it through, for the others.
+
 #### Host interface
 
 What only the app can do for this Mac's box, the box asks the app for (bridge 0.9.46): the keeper
@@ -5184,6 +5307,11 @@ application/json`:
   0.9.100);
 - `trash {"path"}` → `{}`: a folder the box put in its trash (`box/trash`, a deleted bot's), to the
   Finder's Trash (bridge 0.9.52); one anywhere else stays where it is;
+- `app/open {"bundle"}` → `{}`: Kuvo Code at `bundle` opened in the background, as the box asks for
+  its agents' browser ("This Mac's app"): no window, out of the Dock, not taking focus; one running
+  from there already is left as it is. The keeper opens only the app it runs from, whose bundle ID
+  is its own and whose signature meets its own designated requirement (`403` for anything else),
+  answering `410` when there's nothing there and `502 {"message"}` when macOS didn't open it. The open app answers `{}` (it's open). A host that doesn't know it answers `404`;
 - for its link (bridge 0.9.61, "The relay, on this Mac's box"):
   - `link/identity {}` → `{"key", "secret", "sign"}` (each 32 bytes, base64url): this Mac's link
     key, relay secret and signing key, from the Keychain, never asking you to unlock it; `503` while
@@ -6854,7 +6982,7 @@ repository written by anything.
   fsmonitor--daemon`) for the repository then, and it runs on as it would for your terminal.
 - What the box does by itself (Changes' reads, Undo's snapshots, branch backups and taking one
   back, reviews' scopes, voice and artifacts' reads of what a turn changed, naming a worktree's
-  branch) also gets `-c safe.bareRepository=explicit -c core.hooksPath=/dev/null -c
+  branch, a branch menu's list, whether anything isn't committed, a folder's files) also gets `-c safe.bareRepository=explicit -c core.hooksPath=/dev/null -c
   commit.gpgSign=false -c tag.gpgSign=false -c credential.helper=`. Unless the command only reads
   names and objects, the box first reads, with `git config --show-scope --get-regexp`, the hooks
   any settings name (`hook.<name>.command`, which git 2.54 runs) and the filters and diff
@@ -6868,8 +6996,8 @@ repository written by anything.
   `=` in it), or the read fails; Changes then says the repository names a program it won't run.
   git before 2.26 can't say the scope, so every filter or converter counts as the repository's
   there.
-- What you ask git for yourself (Stage, Commit, Push, Pull and the rest in Changes, a worktree made,
-  switched, removed with what wasn't committed in it, or brought back, a project cloned) gets only
+- What you ask git for yourself (Stage, Commit, Push, Pull and the rest in Changes, switching
+  branches, a worktree made, switched, removed with what wasn't committed in it, or brought back, a project cloned) gets only
   the first set: the repository's hooks, filters and sign-ins run as in your terminal, so husky,
   LFS and git-crypt work, and what's kept of a removed worktree is stored as your `git add` would.
 - Neither runs (but what only reads names and objects, which starts nothing) where the repository's
@@ -6936,6 +7064,51 @@ engine again when it ends, unless it was stopped on purpose (`run/stopped`), and
 running while it has something to answer: a phone paired, a pairing waiting, or peers
 (`run/link.needed`, which the bridge writes). The bridge stays up while the engine is down, and
 starts the keeper when it isn't running. A Mac quitting or disconnecting leaves all of it running.
+
+**Kept for clients** (`box.serve`, #333 piece 3). While a client wants the box's own server here
+(`run/serve.needed`: `POST kuvo/box/serve {needed: true}`, from Kuvo Code itself (`403` from a
+phone), which starts the
+keeper too if it isn't running; `{needed: false}` lets it go), the keeper keeps `kuvo-link.js serve
+--kept` running, as it keeps the link, starting it again within a round (15 s) when it ends. It
+answers clients' routes as `serve` does, streams included, at `127.0.0.1`, with a password of its
+own, where `run/serve.json` says (`{pid, port, password, kept: true}`, `0600`); on a Mac its port
+is refused to agents' commands in the sandbox, as the box's other servers are, from the sandbox's
+next look (ten seconds at most). It does nothing else: what the
+box does in the background stays with its link and its keeper. It goes once `run/serve.needed` is
+gone (it looks every 30 s) or another took its place, after an update (the keeper starts the new
+one), and with `kuvo-start off`, which takes `run/serve.needed` away too (and stops only a server
+its record says it keeps, `kept`). One at a time: one
+started while another runs leaves. `GET kuvo/box/serve` answers `{needed, serving}`. Not on a Mac's
+own box (`409`): its server is Kuvo Code's to run.
+
+**Uninstalling** (`box.uninstall`, #333 piece 3). Removing Kuvo Code from a computer is the box's
+own command, which the app or a Terminal line runs: `kuvo-link.js uninstall`. Nothing of the box
+starts again, and nothing of it runs:
+- the launch agent that starts it at login on a Mac (`~/Library/LaunchAgents/run.kuvo.code.machine.plist`)
+  is let go of (`launchctl bootout gui/<uid>/run.kuvo.code.machine`) and removed, first, so nothing
+  starts it as it stops;
+- its line in your crontab (by its mark, `# kuvo-code: starts its engine again after a restart`)
+  is taken out, the rest kept; a crontab that can't be read is never written over;
+- `run/serve.needed` and `run/link.needed` go, it's marked off (`run/off`), and its keeper stops
+  everything for good (`kuvo-start off`, run only where its script names this very folder, with
+  `HOME` the folder around it, so another home's box is never touched); then whatever of it still
+  runs by its records (its keeper, engine, coding agents, link, server and browser, each only while
+  its process's command line says it's that one), waiting up to ten seconds for them to end.
+
+Its folder stays, with your sessions and settings: the command says where, for you to remove (or the
+app to move to the Trash). The launch agent and the crontab line are touched only for the real
+`~/.kuvo-code` (a test's home uses stand-ins it names, `KUVO_TEST_UNINSTALL_TOOLS`, else leaves
+both alone). It prints one JSON line: `{result: "uninstalled" | "unfinished", stopped, launchAgent,
+crontab, startsAgain, left, message}` (`startsAgain`, what it found but couldn't take away, the
+launch agent or the crontab line; `left`, the folders it leaves), says `message` on stderr, and
+exits 0 when everything's stopped and nothing would start it again, 1 otherwise (run it again) or
+for a folder that isn't a box (neither `bin/kuvo-start` nor `run`, `{result: "refused"}`), 2 for an
+argument it doesn't know. `uninstall --check` changes nothing and says what it would stop: `{folder, kind, running,
+starts: {launchAgent, crontab, checked}, bots, wakes, phones, computers}` (what runs of it now, by
+name; whether its launch agent and crontab line are there, `checked` false where it doesn't look;
+how many bots, wake-ups and watches, phones paired, and your other computers it talks to). This
+Mac's box in its app's folder refuses both (exit 1, `{result: "refused", message}`): the app's own
+keeper runs it, and removing Kuvo Code removes that.
 
 **A server that hangs while running** (from 0.9.201, on this Mac and on machines alike:
 `src/shared/hang.ts`). The coding agents' bridge watches the engine, and the link watches the
@@ -7149,3 +7322,18 @@ can go three months after 0.8.0 ships.
 - Its keeper's box, the same, has no Merge into… (`kuvo/git/merge`, 404; nor, from before #341,
   one without `into`, 400): the newer app says Merge into… works again once the work under way
   ends. <!-- compat: beta.1 merge-older-box -->
+- Boxes from before #660 have no `kuvo/git/branches`, `kuvo/git/switch`, `kuvo/git/status` or
+  `kuvo/folders/tree`: 404 with nothing said, or, from 0.8.0-beta.1 (which has no `kuvo/git/…` at
+  all), `403` in plain words ("That isn't available over the link."), which the newer app takes the
+  same way for these four, Merge into… and Create Pull Request's confirmation (which say such a
+  machine needs a newer Kuvo Code); Changes' other routes, and any route's refusal of that kind,
+  say its computer needs a newer Kuvo Code. A
+  path is sent as a box writes it (`EngineRoutes.canonical`), so such a box never refuses it as one
+  that isn't what it seems. For a beta.1 machine's box, the newer app runs the machine's git (and,
+  outside a repository, `find`) over SSH, as before (a 0.7 machine, whose bridge has no `box
+  route`, isn't reached for any of it until it's updated). For its keeper's box on this Mac,
+  running on after an update until the work under way ends, it runs no git of its own: the title
+  bar's branch menu lists no branches and Switch says it works again then, the file filter says
+  so too, Delete says changes not committed may go with a worktree, and Edit Project leaves out
+  the worktree setup. A box the app is attached to in place, from before, gets the same, but
+  Switch and the file filter say it needs a newer version. <!-- compat: beta.1 git-older-box -->

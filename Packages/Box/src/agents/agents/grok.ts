@@ -142,11 +142,30 @@ export class GrokAgent implements Agent {
   }
 
   /**
+   * Grok's home (GROK_HOME) as it runs here: an added account's own folder (Kuvo Code's on a
+   * machine), else your `GROK_HOME` (`~/` as your home), else your `~/.grok`.
+   */
+  get grokHome(): string {
+    if (this.instance.home) return this.instance.home
+    const set = process.env.GROK_HOME?.trim()
+    if (set) return set === "~" ? homedir() : set.startsWith("~/") ? join(homedir(), set.slice(2)) : set
+    return join(homedir(), ".grok")
+  }
+
+  /**
+   * Where it keeps its conversations (each session's `updates.jsonl`, which its usage is read from).
+   * A moved session's leftovers are cleared only from here, and Grok has none (no `conversationFiles`).
+   */
+  conversationRoots() {
+    return [join(this.grokHome, "sessions")]
+  }
+
+  /**
    * Where Grok reads skills itself: its home's, and Claude Code's and Cursor's (`~/.claude/skills`,
    * `~/.cursor/skills`), and a project's `.grok`, `.claude`, `.cursor` and `.agents` skills.
    */
   ownSkillFolders(directory: string): string[] {
-    const home = this.instance.home ?? process.env.GROK_HOME ?? join(homedir(), ".grok")
+    const home = this.grokHome
     const projects = upward(directory).flatMap((folder) => [".grok", ".claude", ".cursor", ".agents"].map((name) => join(folder, name, "skills")))
     return [join(home, "skills"), join(homedir(), ".claude", "skills"), join(homedir(), ".cursor", "skills"), ...projects]
   }
@@ -176,7 +195,7 @@ export class GrokAgent implements Agent {
 
   /** The sign-in Grok keeps in its home, as it is now. */
   private grokSignIn(): { key: string; id_token?: string; expires_at?: string; expiresAt?: string; expires?: string } | undefined {
-    const home = this.instance.home ?? process.env.GROK_HOME ?? join(homedir(), ".grok")
+    const home = this.grokHome
     try {
       const entries = JSON.parse(readFileSync(join(home, "auth.json"), "utf8")) ?? {}
       return Object.values<any>(entries).find((each) => typeof each?.key === "string" && each.key.trim())

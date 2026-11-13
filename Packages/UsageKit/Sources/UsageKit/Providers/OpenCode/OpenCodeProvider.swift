@@ -102,13 +102,18 @@ final class OpenCodeProvider: ProviderRuntime {
         // Same sources as `refresh()`: the local `opencode-go` auth key, or any hosted usage already in
         // the local database. Local-only, off the main actor. An unreadable auth.json is itself an
         // OpenCode footprint — enable the provider so `refresh()` can surface the actionable error.
-        await loadOffMainActor { [authStore, usageScanner] in
+        // Once the host states OpenCode's spend (fork addition), its days say whether there's any,
+        // and the databases here aren't read for it (until it has answered, they're read as before).
+        let hosted = HostHistory.shared.scan(for: provider.id)
+        if let scan = hosted ?? nil, !scan.series.daily.isEmpty { return true }
+        let hostCovers = hosted.map { $0 != nil } ?? false
+        return await loadOffMainActor { [authStore, usageScanner] in
             do {
                 if try authStore.goAPIKey() != nil { return true }
             } catch {
                 return true
             }
-            return usageScanner.hasHostedUsage()
+            return hostCovers ? false : usageScanner.hasHostedUsage()
         }
     }
 
@@ -151,17 +156,28 @@ final class OpenCodeProvider: ProviderRuntime {
         }
 
         let scan: OpenCodeUsageScan?
-        do {
-            scan = try await usageScanner.scan(now: refreshedAt)
-        } catch {
-            if meterLines.isEmpty {
-                return ProviderSnapshot.error(provider: provider, error: error)
+        var note = sourceNote
+        // The host's boxes state OpenCode's spend themselves (`HostHistory`, fork addition): what the
+        // engine's hosted models cost on every computer of yours, as OpenCode billed it; nothing is
+        // read here then. Not answered yet: none meanwhile, and no error for it.
+        let hosted = HostHistory.shared.scan(for: provider.id)
+        if let hosted {
+            scan = hosted.map { OpenCodeUsageScan(logScan: $0) }
+            note = "From your OpenCode usage history"
+            if let asOf = HostHistory.shared.asOfNote(for: provider.id) { note += ", \(asOf)" }
+        } else {
+            do {
+                scan = try await usageScanner.scan(now: refreshedAt)
+            } catch {
+                if meterLines.isEmpty {
+                    return ProviderSnapshot.error(provider: provider, error: error)
+                }
+                AppLog.warn(
+                    LogTag.plugin("opencode"),
+                    "local database unreadable; showing Go meters only: \(error.localizedDescription)"
+                )
+                scan = nil
             }
-            AppLog.warn(
-                LogTag.plugin("opencode"),
-                "local database unreadable; showing Go meters only: \(error.localizedDescription)"
-            )
-            scan = nil
         }
 
         var lines = meterLines
@@ -171,9 +187,9 @@ final class OpenCodeProvider: ProviderRuntime {
                 estimated: false,
                 unknownModelsByDay: scan.logScan.unknownModelsByDay,
                 modelUsage: scan.logScan.modelUsage,
-                modelSourceNote: sourceNote
+                modelSourceNote: note
             )
-            SpendTileMapper.appendUsageTrend(scan.logScan.series, to: &lines, now: refreshedAt, note: sourceNote)
+            SpendTileMapper.appendUsageTrend(scan.logScan.series, to: &lines, now: refreshedAt, note: note)
         }
 
         if lines.isEmpty {
@@ -183,7 +199,7 @@ final class OpenCodeProvider: ProviderRuntime {
             if goKey != nil {
                 return ProviderSnapshot.error(provider: provider, error: OpenCodeUsageError.noGoSubscription)
             }
-            if scan == nil {
+            if scan == nil, hosted == nil {
                 return ProviderSnapshot.error(
                     provider: provider, error: authReadError ?? OpenCodeUsageError.notLoggedIn
                 )

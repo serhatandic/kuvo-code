@@ -244,7 +244,7 @@ struct ProjectEditor: View {
         setup = nil
         setupFolder = nil
         guard let primary = folders.first, let api = workspace.api(forFolder: primary),
-              await Task.detached(operation: { Git.run(["rev-parse", "--git-dir"], in: primary) != nil }).value,
+              await Git.branches(at: GitPlace.of(primary, box: app.box))?.repository == true,
               let project = try? await api.location(directory: primary).project else { return }
         let command = (try? await api.projects())?.first { $0.id == project.id }?.commands?.start ?? ""
         // Another folder since, or the form went away: this one's read again when it's back.

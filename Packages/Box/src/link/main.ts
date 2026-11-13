@@ -102,6 +102,8 @@ import { serveBox } from "./server/serve";
 import { macLink, macSign, onLinkWritten, readLink, updateLink } from "./state";
 import { keepKeyFiles } from "./keys";
 import { keepAwakeWhileWorking } from "./work/awake";
+import { runningServe, SERVE_FILE, SERVE_NEEDED, stopKeptServe } from "./serve-kept";
+import { uninstallCommand } from "./uninstall";
 import { type UpdateOptions, agentsWorking, checkDrift, confirmUpdate, isUpdating, noteLauncher, noteOlderMacs, noteUpdate, startOfferedUpdate, startUpdate, takeOffer, update, UPDATE_KEYS, updateNight, updatesBlocked, updateState, updateStatus } from "./updates/update";
 import { BRIDGE_VERSION } from "./version";
 import type { AddressInfo } from "node:net";
@@ -663,7 +665,52 @@ function keepBridgeAnswering(): void {
   new HangWatch({ name: "bridge", run: RUN, record: BRIDGE_FILE, isIt: runsBridge }).start();
 }
 
+/** `serve --kept` (serve-kept.ts): the box's server for clients, which its keeper keeps running
+ * while one wants it (`run/serve.needed`), answering until it isn't wanted any more (looked at
+ * every 30 s) or another took its place. With a password of its own, said in `run/serve.json`. */
+async function keptServe(): Promise<void> {
+  // One at a time: another that runs stays.
+  const other = runningServe();
+  if (other && other.pid !== process.pid) {
+    console.error(`The box's server already runs (${other.pid}).`);
+    return;
+  }
+  if (!fs.existsSync(SERVE_NEEDED())) {
+    console.error("No client wants the box's server here (run/serve.needed).");
+    return;
+  }
+  fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
+  const password = crypto.randomBytes(24).toString("hex");
+  const server = serveBox(password, engineHandler(readEngineFile, { name: os.hostname() }, readBridgeFile));
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const port = (server.address() as AddressInfo).port;
+  // The key to its sockets, before it says where it is (the sandbox refuses its port to agents'
+  // commands, found in serve.json).
+  try { socketKey(); } catch {}
+  const mine = () => {
+    try { return JSON.parse(fs.readFileSync(SERVE_FILE(), "utf8"))?.pid === process.pid; } catch { return false; }
+  };
+  const leave = () => {
+    try { if (mine()) fs.rmSync(SERVE_FILE(), { force: true }); } catch {}
+    process.exit(0);
+  };
+  process.on("SIGTERM", leave);
+  process.on("SIGINT", leave);
+  writePrivate(SERVE_FILE(), JSON.stringify({ pid: process.pid, port, password, kept: true }));
+  console.log(JSON.stringify({ url: `http://127.0.0.1:${port}` }));
+  // Not wanted any more, or another took its place (two started at once: the last one stays). (A
+  // test's box looks as often as it says.)
+  const every = !REAL_BOX && Number(process.env.KUVO_TEST_SERVE_EVERY) > 0 ? Number(process.env.KUVO_TEST_SERVE_EVERY) : 30_000;
+  setInterval(() => {
+    if (!fs.existsSync(SERVE_NEEDED()) || !mine()) leave();
+  }, every);
+}
+
 async function serve(): Promise<void> {
+  if (process.argv.includes("--kept")) return keptServe();
   // Its password, and this Mac's vault's secrets, from the app on stdin (never its environment,
   // which any of your processes can read); a test's box, in OPENCODE_PASSWORD.
   let password = process.env.OPENCODE_PASSWORD;
@@ -1052,6 +1099,8 @@ if (main) {
     if (outcome?.result === "updated") {
       const pid = runningBridge();
       if (pid) process.kill(pid, "SIGTERM");
+      // And the server kept for clients, which the keeper starts again, new (serve-kept.ts).
+      stopKeptServe();
       // No bridge to start again (nothing for it to answer): the new version came up, so it's done.
       if (!needed(readLink())) {
         confirmUpdate();
@@ -1083,12 +1132,17 @@ if (main) {
   else if (mode === "rehome") {
     process.exitCode = await rehomeCommand(argument, process.argv.slice(4));
   }
+  // Removing Kuvo Code from this computer (PROTOCOL.md, "Uninstalling"): `uninstall [--check]`,
+  // from the app or a Terminal line.
+  else if (mode === "uninstall") {
+    process.exitCode = uninstallCommand(process.argv.slice(3));
+  }
   else if (mode === "selftest") {
     const ok = selftest();
     console.log(ok ? "ok" : "failed");
     process.exit(ok ? 0 : 1);
   } else {
-    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | here <root> | rehome <root> | engine-config | login-path | update [--now] | browser install|start|status | selftest");
+    console.error("Usage: kuvo-link.js run | serve [--kept] | setup | pair [relay] | box <command> | leave <mac> | here <root> | rehome <root> | uninstall [--check] | engine-config | login-path | update [--now] | browser install|start|status | selftest");
     process.exit(2);
   }
 }

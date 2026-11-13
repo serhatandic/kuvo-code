@@ -42,6 +42,23 @@ struct UsageHistoryTests {
         #expect(usage.totals["claude"]?.map(\.tokens) == [1307, 0])
         #expect(usage.partial["claude"]?.away == true)
         #expect(usage.partial["claude"]?.cut == false)
+        #expect(usage.rows.map(\.estimated) == [true, true])
+    }
+
+    /// What the engine's hosted models cost, as OpenCode billed it, and Grok's, priced.
+    @Test func aBilledRowSaysItsNotAnEstimate() throws {
+        struct Envelope: Decodable { var data: BoxUsage }
+        let answer = """
+        {"data": {"zone": "UTC", "services": ["claude", "grok", "opencode"], "rows": [
+          {"id": "opencode#cccccccccccccccc", "service": "opencode", "provider": "opencode-go", "estimated": false, "boxes": [],
+           "days": [{"date": "2026-11-12", "tokens": 900, "cost": 0.5, "models": [{"model": "glm-5.2", "tokens": 900, "cost": 0.5}]}]},
+          {"id": "grok#dddddddddddddddd", "service": "grok", "provider": "grok-cli", "boxes": [], "days": []}
+        ], "totals": {"opencode": [{"date": "2026-11-12", "tokens": 900, "cost": 0.5, "models": [{"model": "glm-5.2", "tokens": 900, "cost": 0.5}]}]}}}
+        """
+        let usage = try JSONDecoder().decode(Envelope.self, from: Data(answer.utf8)).data
+        #expect(usage.services == ["claude", "grok", "opencode"])
+        #expect(usage.rows.map(\.estimated) == [false, true])
+        #expect(usage.totals["opencode"]?.map(\.cost) == [0.5])
     }
 
     /// Codex's days, a model estimated at the fallback model's rates, and the box's choice of it.

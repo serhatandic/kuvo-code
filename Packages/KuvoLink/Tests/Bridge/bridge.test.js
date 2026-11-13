@@ -1538,10 +1538,16 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "bots.job": ["GET", "kuvo/bots"],
     "bots.keys": ["GET", "kuvo/bots/bot_none/keys"],
     "bots.make": ["GET", "kuvo/bots/templates"],
+    // (This Mac's app, registered with a Mac's box in a home of its own: a machine says it has none.)
+    "box.app": ["GET", "kuvo/box/app"],
     // (A box in a home of its own: on a Mac's, kuvo/work/settings's keepsAwake.)
     "box.ownHome": ["GET", "kuvo/work/settings"],
     // (Moving this Mac's box into a home of its own: how it stands, here nothing.)
     "box.rehome": ["GET", "kuvo/box/rehome"],
+    // (Its server kept for clients while one wants it.)
+    "box.serve": ["GET", "kuvo/box/serve"],
+    // (A command, `kuvo-link.js uninstall`, not a route: kuvo/info names it.)
+    "box.uninstall": ["GET", "kuvo/info"],
     // (A release from a folder here, which only Kuvo Code offers: a GET is the wrong method.)
     "box.update": ["GET", "kuvo/box/update"],
     branch: ["POST", "kuvo/agents/api/kuvo/branch/ses_none"],
@@ -1558,13 +1564,17 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     file: ["GET", "kuvo/file"],
     folders: ["DELETE", "kuvo/folders"],
     "folders.files": ["GET", "kuvo/folders?files=1"],
+    "folders.tree": ["GET", "kuvo/folders/tree?path=/kuvo-none"],
     git: ["POST", "kuvo/git/changes"],
     "git.backups": ["GET", "kuvo/git/backups?folder=/"],
+    // (Switching them too: kuvo/git/switch.)
+    "git.branches": ["POST", "kuvo/git/branches"],
     "git.changes.count": ["POST", "kuvo/git/changes/count"],
     "git.merge": ["POST", "kuvo/git/merge"],
     "git.pull-request": ["POST", "kuvo/git/pull-request"],
     "git.pull-request.draft": ["POST", "kuvo/git/pull-request/draft"],
     "git.push": ["POST", "kuvo/git/push"],
+    "git.status": ["POST", "kuvo/git/status"],
     // (Settings › Git kept here, and the prompts written here: a Mac's from before moves in once.)
     "git.words": ["POST", "kuvo/git/settings/move"],
     goals: ["GET", "kuvo/agents/api/kuvo/goals"],

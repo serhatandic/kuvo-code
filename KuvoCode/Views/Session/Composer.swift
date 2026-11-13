@@ -1038,7 +1038,9 @@ struct Composer: View {
         let folders = folders
         let roots = folders.map(RemoteFolder.url)
         Task {
-            let files = await Task.detached { ProjectFiles.mentionable(roots) }.value
+            let files = await ProjectFiles.mentionable(roots)
+            // None (this Mac's box starting, say): asked again as more is typed.
+            if files.isEmpty { mentionFilesRead = nil }
             mentionFiles = files
             mentionFilesFolders = folders
         }

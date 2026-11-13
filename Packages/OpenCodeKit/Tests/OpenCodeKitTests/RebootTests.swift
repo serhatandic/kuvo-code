@@ -9,8 +9,10 @@ import Testing
 /// phone is paired, sends wake-ups each minute, and goes when its script does. A start from the Mac
 /// keeps a stopped engine stopped, unless it's Start, and replaces one in the same start. Run
 /// here, in a home folder of the test's own, with a stand-in engine, with what this computer has
-/// (on a Mac, no `setsid` and no `/proc`, as on a Mac you add as a machine). The live suite does
-/// the same on a real machine.
+/// (on a Mac, no `setsid` and no `/proc`, as on a Mac you add as a machine), and a stand-in for the
+/// `pkill` the keeper's COMPAT line runs. What it starts is stopped by its number, and each stand-in
+/// that waits ends once the test's home says so (`.alive`). The live suite does the same on a real
+/// machine.
 @Suite(.serialized, AccountUntouched()) struct RebootTests {
     let home: URL
     let tools: URL
@@ -21,6 +23,8 @@ import Testing
         home = FileManager.default.temporaryDirectory.appending(path: "opencodekit-reboot-\(UUID().uuidString)")
         tools = home.appending(path: "tools")
         try FileManager.default.createDirectory(at: tools, withIntermediateDirectories: true)
+        // While it's here, the stand-ins that wait keep waiting (`cleanUp` takes it away).
+        FileManager.default.createFile(atPath: home.appending(path: ".alive").path, contents: nil)
         // The account's crontab and launchd, which a home of the test's own doesn't keep them from:
         // these run in their place, first on the PATH, and note what they're told in that home.
         try Self.write(tools.appending(path: "crontab"), """
@@ -48,14 +52,17 @@ import Testing
               printf '{"learned":"%s","given":%s}' "$KUVO_HOME" "${OPENCODE_CONFIG_CONTENT:-null}"; exit 0 ;;
             *"kuvo-link.js browser")
               echo "$*" >>"$HOME/browser-setups"; exit 0 ;;
+            *"kuvo-link.js serve")
+              echo "$*" >>"$HOME/serves"; printf '{"pid":%s,"port":1,"password":"p","kept":true}\n' $$ >"$KUVO_HOME/run/serve.json"
+              while [ -f "$HOME/.alive" ]; do /bin/sleep 1; done; exit 0 ;;
             *"kuvo-link.js login-path")
               [ -f "$KUVO_HOME/bin/.old-link" ] && { echo "Usage: kuvo-link.js run | serve" >&2; exit 2; }
               printf '%s' "$HOME/.nvm/bin:$PATH"; exit 0 ;;
             esac
-            case "$1" in *kuvo-link.js) env | sort >"$HOME/link.env"; echo $$ >"$KUVO_HOME/run/link.pid"; while :; do /bin/sleep 1; done ;; esac
+            case "$1" in *kuvo-link.js) env | sort >"$HOME/link.env"; echo $$ >"$KUVO_HOME/run/link.pid"; while [ -f "$HOME/.alive" ]; do /bin/sleep 1; done; exit 0 ;; esac
             env | sort >"$HOME/engine-$$.env"
             echo "server listening on http://127.0.0.1:$3"
-            while :; do /bin/sleep 1; done
+            while [ -f "$HOME/.alive" ]; do /bin/sleep 1; done
             """, executable: true)
         // What the Mac's last start left: how it started it, and its notes.
         try FileManager.default.createDirectory(at: run, withIntermediateDirectories: true)
@@ -72,8 +79,10 @@ import Testing
         try write(keys.appending(path: "settings.json"), #"{"mcp":{}}"#)
         // The keeper's rounds made quick (15 seconds each on a machine), each wake-up round counted.
         try tool("sleep", "exec /bin/sleep 0.02")
+        // What the keeper's COMPAT line would kill by pattern, noted, never run for real.
+        try tool("pkill", "echo \"$*\" >>\"$HOME/pkill\"")
         // Held awake, the way it can be seen: not this test's Mac for real.
-        try tool("caffeinate", "echo \"$*\" >>\"$HOME/awake\"; while :; do /bin/sleep 1; done")
+        try tool("caffeinate", "echo \"$*\" >>\"$HOME/awake\"; while [ -f \"$HOME/.alive\" ]; do /bin/sleep 1; done")
         try write(bin.appending(path: "kuvo-wake"), "#!/bin/sh\necho >>\"$HOME/rounds\"\n", executable: true)
     }
 
@@ -91,14 +100,36 @@ import Testing
         if executable { try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path) }
     }
 
-    /// Everything it started (the keeper, the engine, the phone link) stopped, and its folder gone.
+    /// Everything it started stopped, and its folder gone: what its home recorded starting (the
+    /// keeper, the engine, the phone link, the server for clients, the hold), by its number, never by
+    /// a pattern; and every stand-in that waits ends by itself once the home's `.alive` is gone.
     private func cleanUp() {
-        let stop = Process()
-        stop.executableURL = URL(filePath: "/usr/bin/pkill")
-        stop.arguments = ["-f", home.path]
-        try? stop.run()
-        stop.waitUntilExit()
+        try? FileManager.default.removeItem(at: home.appending(path: ".alive"))
+        var pids: [Int32] = []
+        for record in ["box.pid", "awake.pid", "link.pid", "agents.pid", "engine.json", "serve.json"] {
+            let said = (try? String(contentsOf: run.appending(path: record), encoding: .utf8)) ?? ""
+            if let pid = Int32(said.trimmingCharacters(in: .whitespacesAndNewlines)) ?? said.firstMatch(of: /"pid":(\d+)/).flatMap({ Int32($0.1) }) { pids.append(pid) }
+        }
+        for line in ((try? String(contentsOf: home.appending(path: "engines"), encoding: .utf8)) ?? "").split(separator: "\n") {
+            if let pid = Int32(line) { pids.append(pid) }
+        }
+        // Only one still running from this home (a number taken since by another process isn't it).
+        for pid in pids where pid > 1 && commandLine(pid).contains(home.path) { kill(pid, SIGKILL) }
         try? FileManager.default.removeItem(at: home)
+    }
+
+    /// `pid`'s command line, as `ps` says it ("" once it's gone).
+    private func commandLine(_ pid: Int32) -> String {
+        let ps = Process()
+        ps.executableURL = URL(filePath: "/bin/ps")
+        ps.arguments = ["-ww", "-o", "command=", "-p", "\(pid)"]
+        let out = Pipe()
+        ps.standardOutput = out
+        ps.standardError = FileHandle.nullDevice
+        guard (try? ps.run()) != nil else { return "" }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        ps.waitUntilExit()
+        return String(decoding: data, as: UTF8.self)
     }
 
     /// The machine's engine record as a restart left it, as it was before (a dead number).
@@ -164,7 +195,7 @@ import Testing
     private func atWork() throws -> Process {
         let process = Process()
         process.executableURL = URL(filePath: "/bin/sh")
-        process.arguments = ["-c", "while :; do /bin/sleep 1; done", "kuvo-start", home.path]
+        process.arguments = ["-c", "while [ -f \"$1/.alive\" ]; do /bin/sleep 1; done", "kuvo-start", home.path]
         try process.run()
         return process
     }
@@ -178,7 +209,7 @@ import Testing
             trap 'touch "$HOME/\(name)-ended"; exit' TERM
             trap 'touch "$HOME/\(name)-here"' USR1
             touch "$HOME/\(name)-ready"
-            while :; do /bin/sleep 1 & wait $!; done
+            while [ -f "$HOME/.alive" ]; do /bin/sleep 1 & wait $!; done
             """, name, home.path]
         process.environment = ["HOME": home.path, "PATH": "/usr/bin:/bin"]
         try process.run()
@@ -418,6 +449,47 @@ import Testing
         let environment = try String(contentsOf: home.appending(path: "link.env"), encoding: .utf8)
         #expect(environment.contains("XDG_CACHE_HOME=\(root.path)/cache") && environment.contains("TMPDIR=\(root.path)/tmp"))
         #expect(environment.contains("LANG=tr_TR.UTF-8"), "as Kuvo Code last started it")
+    }
+
+    /// The box's server for clients (`serve --kept`, #333 piece 3), its process as `run/serve.json` names it.
+    private func serveProcess() -> Int? {
+        (try? String(contentsOf: run.appending(path: "serve.json"), encoding: .utf8))?.firstMatch(of: /"pid":(\d+)/).flatMap { Int($0.1) }
+    }
+
+    /// The box's server for clients, while one wants it (`run/serve.needed`): up, and up again should
+    /// it go, with or without a Mac; `off` stops it, and what wanted it goes with it.
+    @Test func theServerForClientsStaysUpWhileOneWantsIt() throws {
+        defer { cleanUp() }
+        try write(root.appending(path: "bin/kuvo-link.js"), "// the box\n")
+        try write(run.appending(path: "serve.needed"), "")
+        try start()
+        until { serveProcess().map(alive) ?? false }
+        let serve = try #require(serveProcess())
+        #expect(((try? String(contentsOf: home.appending(path: "serves"), encoding: .utf8)) ?? "").contains("kuvo-link.js serve --kept"))
+        kill(pid_t(serve), SIGKILL)
+        until { serveProcess().map { $0 != serve && alive($0) } ?? false }
+        let again = try #require(serveProcess())
+        #expect(again != serve && alive(again))
+        #expect(try start("off") == 0)
+        until { !alive(again) }
+        #expect(!alive(again))
+        #expect(!FileManager.default.fileExists(atPath: run.appending(path: "serve.needed").path))
+    }
+
+    /// Nobody wanting it, or a Mac's own box (whose server Kuvo Code runs itself): none is started.
+    @Test(arguments: [false, true]) func noServerForClientsUnlessOneWantsItOnABoxOfItsOwn(_ macs: Bool) throws {
+        defer { cleanUp() }
+        try write(root.appending(path: "bin/kuvo-link.js"), "// the box\n")
+        if macs {
+            try FileManager.default.createDirectory(at: root.appending(path: "box"), withIntermediateDirectories: true)
+            try write(root.appending(path: "box/kind"), "mac\n")
+            try write(run.appending(path: "serve.needed"), "")
+        }
+        try start()
+        // A few of its rounds (each wake-up round is four).
+        until { rounds() >= 2 }
+        #expect(rounds() >= 2)
+        #expect(!FileManager.default.fileExists(atPath: home.appending(path: "serves").path))
     }
 
     /// The browser agents use there: the box sets it up itself as its keeper starts (a newer Kuvo
@@ -917,19 +989,19 @@ import Testing
         let inside = """
             mkdir "$R/inside" 2>/dev/null || touch "$HOME/overlap"
             touch "$HOME/$1-has-it"
-            until [ -f "$HOME/$1-done" ]; do /bin/sleep 0.02; done
+            until [ -f "$HOME/$1-done" ] || [ ! -f "$HOME/.alive" ]; do /bin/sleep 0.02; done
             rmdir "$R/inside"
             unlock
             """
         // C waits once it has judged that taker gone (asking `ps` of it), and says what else it asks.
         let cTools = try toolFolder("c-tools", ["ps": """
             echo "$*" >>"$HOME/c-asked"
-            case "$*" in *"-p \(taker)") touch "$HOME/c-judged"; until [ -f "$HOME/go-c" ]; do /bin/sleep 0.02; done ;; esac
+            case "$*" in *"-p \(taker)") touch "$HOME/c-judged"; until [ -f "$HOME/go-c" ] || [ ! -f "$HOME/.alive" ]; do /bin/sleep 0.02; done ;; esac
             exec /bin/ps "$@"
             """])
         // A waits just before it takes the lock away.
         let aTools = try toolFolder("a-tools", ["rmdir": """
-            case "$*" in *"/run/.launching") touch "$HOME/a-taking"; until [ -f "$HOME/go-a" ]; do /bin/sleep 0.02; done ;; esac
+            case "$*" in *"/run/.launching") touch "$HOME/a-taking"; until [ -f "$HOME/go-a" ] || [ ! -f "$HOME/.alive" ]; do /bin/sleep 0.02; done ;; esac
             exec /bin/rmdir "$@"
             """])
         let c = try withLock(shell, "set -- c\ntake_lock 3000 || exit 3\n" + inside, tools: cTools)
@@ -1080,9 +1152,9 @@ import Testing
             #!/bin/sh
             trap '' TERM
             echo $$ >>"$HOME/engines"
-            until [ -f "$HOME/listen" ]; do /bin/sleep 0.05; done
+            until [ -f "$HOME/listen" ] || [ ! -f "$HOME/.alive" ]; do /bin/sleep 0.05; done
             echo "server listening on http://127.0.0.1:$3"
-            while :; do /bin/sleep 1; done
+            while [ -f "$HOME/.alive" ]; do /bin/sleep 1; done
             """, executable: true)
         let engines = home.appending(path: "engines")
         try start()
@@ -1122,9 +1194,9 @@ import Testing
         try write(root.appending(path: "engine/\(OpenCodeEngine.version)/opencode"), """
             #!/bin/sh
             echo $$ >>"$HOME/engines"
-            until [ -f "$HOME/listen" ]; do /bin/sleep 0.05; done
+            until [ -f "$HOME/listen" ] || [ ! -f "$HOME/.alive" ]; do /bin/sleep 0.05; done
             echo "server listening on http://127.0.0.1:$3"
-            while :; do /bin/sleep 1; done
+            while [ -f "$HOME/.alive" ]; do /bin/sleep 1; done
             """, executable: true)
         let engines = home.appending(path: "engines")
         let lines = ["PATH=\(tools.path):/usr/bin:/bin", "OPENCODE_PASSWORD=\(String(repeating: "a", count: 32))", "KUVO_PORT=23456",
@@ -1248,7 +1320,7 @@ import Testing
         defer { cleanUp() }
         let restore = root.appending(path: "updates/rollback/restore.sh")
         try FileManager.default.createDirectory(at: restore.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try write(restore, "#!/bin/sh\ntouch \"$HOME/restoring\"\nuntil [ -f \"$HOME/go\" ]; do /bin/sleep 0.02; done\ntouch \"$HOME/restored\"\n", executable: true)
+        try write(restore, "#!/bin/sh\ntouch \"$HOME/restoring\"\nuntil [ -f \"$HOME/go\" ] || [ ! -f \"$HOME/.alive\" ]; do /bin/sleep 0.02; done\ntouch \"$HOME/restored\"\n", executable: true)
         let trial = run.appending(path: "update-trial")
         try write(trial, "9.9.9")
         try FileManager.default.setAttributes([.modificationDate: Date.now.addingTimeInterval(-1300)], ofItemAtPath: trial.path)

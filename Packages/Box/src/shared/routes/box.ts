@@ -103,6 +103,21 @@ export const REHOME = object({
   to: nullable(string),
 });
 
+/** This Mac's app as its box knows it (`kuvo/box/app`, PROTOCOL.md, "This Mac's app"): where it's
+ * installed, as it last registered; whether it's open (its tools answer), quits to install an update
+ * now, is being opened for a browser call; and the last opening that failed, within its five-minute
+ * rest (`at` in ms, and what agents were told). */
+export const BOX_APP = object({
+  bundle: nullable(string),
+  open: bool,
+  updating: bool,
+  opening: bool,
+  failed: nullable(object({ at: number, message: string })),
+});
+
+/** Whether a client wants the box's server kept running (`kuvo/box/serve`), and whether it runs. */
+export const BOX_SERVE = object({ needed: bool, serving: bool });
+
 /** The browser agents use on a machine (`kuvo/browser`, PROTOCOL.md, "The browser on a machine"):
  * `missing` (none, and none being set up), `checking`, `downloading` (with `progress`, 0 to 1),
  * `installing`, `ready`, or `failed` (`message`, and when it tries again by itself, ms, or null for
@@ -218,6 +233,8 @@ export type LastUpdate = Infer<typeof LAST_UPDATE>;
 export type RehomeStatus = Infer<typeof REHOME>;
 export type RehomeStep = Infer<typeof REHOME_STEP>;
 export type BrowserStatus = Infer<typeof BROWSER>;
+export type BoxApp = Infer<typeof BOX_APP>;
+export type BoxServe = Infer<typeof BOX_SERVE>;
 export type Phones = Infer<typeof PHONES>;
 export type Named = Infer<typeof NAMED>;
 export type Credentials = Infer<typeof CREDENTIALS>;
@@ -231,6 +248,11 @@ export const BOX_ROUTES: RouteShape[] = [
   { route: "POST kuvo/box/update", answers: { 202: UPDATE } },
   { route: "GET kuvo/box/rehome", answers: { 200: REHOME } },
   { route: "POST kuvo/box/rehome", answers: { 200: REHOME } },
+  { route: "GET kuvo/box/app", answers: { 200: BOX_APP } },
+  { route: "POST kuvo/box/app", answers: { 200: BOX_APP } },
+  { route: "POST kuvo/box/app/open", answers: { 200: BOX_APP } },
+  { route: "GET kuvo/box/serve", answers: { 200: BOX_SERVE } },
+  { route: "POST kuvo/box/serve", answers: { 200: BOX_SERVE } },
   { route: "GET kuvo/browser", answers: { 200: BROWSER } },
   { route: "POST kuvo/browser", answers: { 202: BROWSER } },
   { route: "GET kuvo/file", answers: { 200: BYTES } },

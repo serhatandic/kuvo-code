@@ -19,7 +19,7 @@ import { CARRY_ROUTE, carryRoute } from "../areas/carry";
 import { claudeCodeRoute } from "../areas/claude-code";
 import { engineControlRoute, signInReturnRoute } from "../areas/engine";
 import { fileAt } from "../areas/file";
-import { foldersRoute } from "../areas/folders";
+import { folderTreeRoute, foldersRoute } from "../areas/folders";
 import { ARTIFACT_ROUTE, artifactsRoute } from "../areas/artifacts";
 import { GROUP_ROUTE, groupsRoute } from "../areas/groups";
 import { infoRoute } from "../areas/info";
@@ -54,6 +54,8 @@ import { isMachinesRoute } from "../mac/machines";
 import { linkRoute } from "../mac/routes";
 import { boxUpdateRoute, updateRoute } from "../updates/update";
 import { rehomeRoute } from "../rehome/route";
+import { appOpenRoute, appRoute } from "../mac/app";
+import { serveRoute } from "../serve-kept";
 import { browserRoute } from "../browser/install";
 import { IS_MAC } from "../home";
 import { vaultRoute } from "../areas/vault";
@@ -84,10 +86,16 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route === "kuvo/box/update", answer: boxUpdateRoute },
   // Moving this Mac's box into a home of its own (PROTOCOL.md, "Moving this Mac's box").
   { when: route => route === "kuvo/box/rehome", answer: rehomeRoute },
+  // This Mac's app, registered with a Mac's box in a home of its own, and opened for its browser
+  // (PROTOCOL.md, "This Mac's app"); the box's server kept for clients ("Kept for clients").
+  { when: route => route === "kuvo/box/app", answer: appRoute },
+  { when: route => route === "kuvo/box/app/open", answer: appOpenRoute },
+  { when: route => route === "kuvo/box/serve", answer: serveRoute },
   // (A machine's: this Mac's agents browse in its app's panel.)
   { when: route => !IS_MAC && route === "kuvo/browser", answer: browserRoute },
   { when: (route, request) => /^kuvo\/integrations(\/|\?|$)/.test(request.path), answer: integrationsRoute },
   { when: route => route === "kuvo/folders", answer: foldersRoute },
+  { when: route => route === "kuvo/folders/tree", answer: folderTreeRoute },
   { when: route => route === "kuvo/plugins/search", answer: pluginSearchRoute },
   { when: route => route === "kuvo/programs", answer: programsRoute },
   { when: route => route === "kuvo/providers/models", answer: providerModelsRoute },

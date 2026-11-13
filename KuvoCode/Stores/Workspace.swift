@@ -1671,7 +1671,7 @@ final class Workspace {
     private static func here(_ path: String, on box: String) -> String { box == BoxClient.mac ? path : RemoteFolder.folder(path, on: box) }
 
     /// A query's value, written so a box reads it back exactly (a "+" is a space in a query).
-    static func queryValue(_ text: String) -> String {
+    nonisolated static func queryValue(_ text: String) -> String {
         text.addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~/")) ?? text
     }
 

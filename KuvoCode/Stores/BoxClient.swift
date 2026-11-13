@@ -147,7 +147,18 @@ struct BoxRefusal: LocalizedError {
     var problem: String?
     /// Why, as a word a client maps (`reason`): Full Access not confirmed on that computer, say.
     var reason: String?
+    /// The box hasn't the route at all: one from before it (`olderBox`).
+    var isOlderBox = false
     var errorDescription: String? { message }
+
+    /// Whether a box answered as one from before the route asked: `404` with nothing said, as every
+    /// box answers a route of its own it hasn't; or a released one's `403` in plain words.
+    nonisolated static func olderBox(status: Int, data: Data) -> Bool {
+        let said = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        if status == 404 && said?["message"] == nil { return true }
+        // COMPAT(beta.1 git-older-box): a box of 0.7 or 0.8.0-beta.1 refuses a route it hasn't with `403 "That isn't available over the link."`, words but no JSON (a path refused as not what it seems has no words). Goes when 0.8.0 ships.
+        return status == 403 && said == nil && !data.isEmpty
+    }
 
     init(status: Int, message: String, problem: String? = nil, reason: String? = nil) {
         self.status = status
@@ -156,9 +167,22 @@ struct BoxRefusal: LocalizedError {
         self.reason = reason
     }
 
+    /// What a box from before a route says, in words: what a client says when it has nothing
+    /// better (a machine named, Merge into…'s own).
+    static let olderBoxMessage = "Its computer needs a newer Kuvo Code for this. It updates by itself overnight."
+
     init(status: Int, data: Data) {
         let said = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-        self.init(status: status, message: said?["message"] as? String ?? "It said no (\(status)).", problem: said?["problem"] as? String, reason: said?["reason"] as? String)
+        // Without JSON, a refusal's words as they are, when they're a line of text (a box's own
+        // sentences, as its 4xx answers are), never a page nor what went wrong on the way (5xx).
+        let words = said == nil && (400..<500).contains(status) ? String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) : nil
+        let plain = words.flatMap { !$0.isEmpty && $0.count <= 300 && !$0.hasPrefix("<") && !$0.contains("\n") ? $0 : nil }
+        let older = Self.olderBox(status: status, data: data)
+        // A box from before the route: that, rather than its words for it ("That isn't available
+        // over the link.", which reads as a rule).
+        self.init(status: status, message: said?["message"] as? String ?? (older ? Self.olderBoxMessage : plain) ?? "It said no (\(status)).",
+                  problem: said?["problem"] as? String, reason: said?["reason"] as? String)
+        isOlderBox = older
     }
 }
 

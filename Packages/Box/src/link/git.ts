@@ -2,7 +2,7 @@
 // starting nothing the repository's own settings name (`../shared/git`), and what takes a
 // while without holding up the bridge.
 
-import { execFile, spawnSync } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import { askedArgs, ownArgs, ownArgsLater } from "../shared/git";
 
 const GIT_ENV = { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" };
@@ -51,6 +51,40 @@ export async function gitLater(folder: string, args: string[]): Promise<string |
   if (!own) return null;
   return new Promise(resolve => {
     execFile("git", own, { cwd: folder, encoding: "utf8", env: GIT_ENV, timeout: 60_000, maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => resolve(error ? null : String(stdout ?? "").trim()));
+  });
+}
+
+/** The names a git command lists in `folder`, each ended by a NUL (`-z`), each once, as many as
+ * `limit`: read as git writes them, and git stopped once there are enough, so a repository of a
+ * million files is never held whole (`complete` false then). null when git failed (outside a
+ * repository) or `signal` said no one waits any longer, which stops it. Stopped after `timeout`
+ * (ten minutes: stuck on a lock or a hung disk), with what it gave by then, `complete` false. */
+export async function gitNamesLater(folder: string, args: string[], limit: number, signal?: AbortSignal, timeout = 600_000): Promise<{ names: string[]; complete: boolean } | null> {
+  const own = await ownArgsLater(args, folder);
+  if (!own || signal?.aborted) return null;
+  return new Promise(resolve => {
+    const names = new Set<string>();
+    let rest = "";
+    let enough = false;
+    const child = spawn("git", own, { cwd: folder, env: GIT_ENV, stdio: ["ignore", "pipe", "ignore"], timeout, ...(signal ? { signal } : {}) });
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (piece: string) => {
+      if (enough) return;
+      const parts = (rest + piece).split("\0");
+      rest = parts.pop() ?? "";
+      for (const name of parts) {
+        if (name) names.add(name);
+        if (names.size >= limit) {
+          enough = true;
+          child.kill();
+          return;
+        }
+      }
+    });
+    child.on("error", () => resolve(null));
+    // Stopped (`code` null) by its time running out: what it gave, never a walk that lists what git
+    // ignores (so too one killed otherwise, a crash or the system short of memory); by `signal`, nothing.
+    child.on("close", code => resolve(signal?.aborted ? null : enough || code === 0 || code === null ? { names: [...names], complete: code === 0 && !enough } : null));
   });
 }
 

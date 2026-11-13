@@ -972,7 +972,8 @@ public final class RemoteServer: @unchecked Sendable {
     /// it's taken away, or one an older script took after taking away a newer one's, can still
     /// be had twice, as between older scripts before.) `$R` is the box's `run`.
     ///
-    /// `take_lock <tenths>` takes it, waiting that many tenths of a second at most: false if it
+    /// `take_lock <tenths>` takes it, waiting that many tenths of a second at most (or until the
+    /// box's `run` folder is gone, removed meanwhile): false if it
     /// isn't had. `unlock` lets go of it, if it's still its own. `holding <pid>`: it runs as one
     /// of the scripts that take it (`kuvo-start`, `kuvo-launch`, a Mac's `kuvo_script`, the box's
     /// `kuvo-link`), and isn't this one; `starting <pid>`: one of those that starts or stops an
@@ -1035,6 +1036,8 @@ public final class RemoteServer: @unchecked Sendable {
         take_lock() {
           waited=0
           while :; do
+            # The box's folder gone meanwhile (removed): nothing to wait for.
+            [ -d "$R" ] || return 1
             ( trap '' HUP INT TERM; mkdir "$R/.launching" 2>/dev/null || exit 1; locked; [ -z "$unsaid" ] || exit 2 )
             case $? in 0) unsaid=; return 0 ;; 2) unsaid=1; return 0 ;; esac
             unheld
@@ -1225,6 +1228,12 @@ public final class RemoteServer: @unchecked Sendable {
             if [ -f "$R/link.needed" ] && [ -f "$K/bin/kuvo-link.js" ] && [ -n "$V" ] && ! is "$(cat "$R/link.pid" 2>/dev/null)" kuvo-link; then
               (environment; cd "$K/workspace" 2>/dev/null || cd "$K"; KUVO_HOME="$K" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$S" "$K/engine/$V/opencode" --config=/dev/null --no-env-file "$K/bin/kuvo-link.js" run >"$R/link.log" 2>&1 </dev/null &)
             fi
+            # The box's server for clients (`serve --kept`, which says where it answers in
+            # run/serve.json), while one wants it here (run/serve.needed): not on a Mac's own box,
+            # whose server Kuvo Code runs itself.
+            if [ -f "$R/serve.needed" ] && [ -f "$K/bin/kuvo-link.js" ] && [ -n "$V" ] && [ "$(tr -d ' \t\r\n' 2>/dev/null <"$K/box/kind")" != mac ] && ! { s=$(sed -n 's/.*"pid":\([0-9]*\).*/\1/p' "$R/serve.json" 2>/dev/null); is "$s" kuvo-link.js && is "$s" --kept; }; then
+              (environment; cd "$K/workspace" 2>/dev/null || cd "$K"; KUVO_HOME="$K" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$S" "$K/engine/$V/opencode" --config=/dev/null --no-env-file "$K/bin/kuvo-link.js" serve --kept >"$R/serve.log" 2>&1 </dev/null &)
+            fi
             # Wake-ups that are due, each minute, while the engine's up, as the engine was started:
             # beside this loop, which a slow watch never holds up, one round at a time.
             round=$((round + 1))
@@ -1297,8 +1306,10 @@ public final class RemoteServer: @unchecked Sendable {
           # again, so nothing takes it for a box that runs, or starts it, meanwhile: no start
           # under way goes on to start the engine once it sees it.
           touch "$R/off" "$R/stopped"
-          rm -f "$R/link.needed"
+          rm -f "$R/link.needed" "$R/serve.needed"
           l=$(cat "$R/link.pid" 2>/dev/null); is "$l" kuvo-link && kill "$l" 2>/dev/null
+          # The server it keeps for clients (only one it keeps: `"kept":true`; a Mac's own box's is its app's).
+          if grep -q '"kept":true' "$R/serve.json" 2>/dev/null; then l=$(sed -n 's/.*"pid":\([0-9]*\).*/\1/p' "$R/serve.json"); is "$l" kuvo-link.js && is "$l" --kept && kill "$l" 2>/dev/null; fi
           # The keeper with the start it's at (its engine's tries and their launch, in its session),
           # which would go on after it.
           b=$(cat "$R/box.pid" 2>/dev/null); if is "$b" kuvo-start; then kill -- "-$b" 2>/dev/null || kill "$b" 2>/dev/null; fi; rm -f "$R/box.pid"

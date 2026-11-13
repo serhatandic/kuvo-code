@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"turn_completed","usage":{"modelUsage":{"grok-5":{"inputTokens":8888,"outputTokens":8,"costUsdTicks":88880000000}}}},"_meta":{"eventId":"ev-y","agentTimestampMs":1794484800000}}}
