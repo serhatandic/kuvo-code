@@ -122,7 +122,7 @@ public struct MessageParts: Codable, Hashable, Sendable {
     /// A message's parts: kept with it, else as its box read them (`read`), else (not read yet) its
     /// text as it is.
     public static func of(id: String, text: String, metadata: JSONValue?) -> MessageParts {
-        kept(in: metadata) ?? known(id) ?? MessageParts(words: text)
+        kept(in: metadata) ?? known(id, text: text) ?? MessageParts(words: text)
     }
 
     /// `metadata` with `parts` kept in it, as a box keeps them: for a message shown before its box
@@ -140,19 +140,21 @@ public struct MessageParts: Codable, Hashable, Sendable {
 
     // MARK: Messages from before
 
-    nonisolated(unsafe) private static var read: [String: MessageParts] = [:]
+    /// What boxes read, by message id, with the text each was read from.
+    nonisolated(unsafe) private static var read: [String: (text: String, parts: MessageParts)] = [:]
     private static let lock = NSLock()
 
-    /// What its box read of a message from before, by its id.
-    public static func known(_ id: String) -> MessageParts? {
-        lock.withLock { read[id] }
+    /// What its box read of a message from before with `text`, by its id (one read from another
+    /// text under the same id isn't it).
+    public static func known(_ id: String, text: String) -> MessageParts? {
+        lock.withLock { read[id].flatMap { $0.text == text ? $0.parts : nil } }
     }
 
     /// The ones of `messages` (by id, with their text and metadata) whose parts are still to be read
     /// from their box: none kept with them, none read yet.
     public static func unread(_ messages: [(id: String, text: String, metadata: JSONValue?)]) -> [(id: String, text: String)] {
         lock.withLock {
-            messages.filter { read[$0.id] == nil && kept(in: $0.metadata) == nil }.map { ($0.id, $0.text) }
+            messages.filter { read[$0.id]?.text != $0.text && kept(in: $0.metadata) == nil }.map { ($0.id, $0.text) }
         }
     }
 
@@ -180,7 +182,7 @@ public struct MessageParts: Codable, Hashable, Sendable {
                   let told = try? JSONDecoder().decode(Told.self, from: answer.body), told.parts.count == batch.count else { continue }
             lock.withLock {
                 if read.count > 20_000 { read.removeAll() }
-                for (message, parts) in zip(batch, told.parts) { read[message.id] = parts }
+                for (message, parts) in zip(batch, told.parts) { read[message.id] = (message.text, parts) }
             }
             any = true
         }

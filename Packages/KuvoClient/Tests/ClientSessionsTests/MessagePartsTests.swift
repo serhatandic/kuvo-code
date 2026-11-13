@@ -80,9 +80,20 @@ struct MessagePartsTests {
         #expect(any)
         #expect(asked.texts == [read.map { $0["text"] as! String }])
         for (index, each) in read.enumerated() {
-            #expect(Self.json(encoding: MessageParts.of(id: "msg_\(index)", text: "", metadata: nil)) == Self.json(each["parts"]!))
+            #expect(Self.json(encoding: MessageParts.of(id: "msg_\(index)", text: each["text"] as! String, metadata: nil)) == Self.json(each["parts"]!))
         }
         #expect(MessageParts.unread(messages).isEmpty)
+    }
+
+    /// What a box read is for the text it read: another message under the same id is read anew.
+    @Test func whatWasReadIsForItsOwnText() async throws {
+        MessageParts.forgetRead()
+        defer { MessageParts.forgetRead() }
+        let answer = try JSONSerialization.data(withJSONObject: ["parts": [["words": "Hi", "keyword": "/plan"]]])
+        #expect(await MessageParts.read([("msg_a", "Hi\n\n<sent-with>…")]) { _ in (200, answer) })
+        #expect(MessageParts.of(id: "msg_a", text: "Hi\n\n<sent-with>…", metadata: nil).keyword == "/plan")
+        #expect(MessageParts.of(id: "msg_a", text: "Something else", metadata: nil) == MessageParts(words: "Something else"))
+        #expect(MessageParts.unread([("msg_a", "Something else", nil)]).map(\.id) == ["msg_a"])
     }
 
     @Test func aBoxThatCantSayLeavesThemToAskAgain() async {
