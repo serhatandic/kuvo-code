@@ -3,7 +3,7 @@
 import { bool, type Infer, list, map, number, object, type RouteShape, string } from "../shape";
 
 /** A project: its folder, its name (only when it isn't the folder's own), its other folders, the
- * commands its Run and its terminal start with (left out for none), and `removed`, for one Remove
+ * command Run starts (left out for none), and `removed`, for one Remove
  * Project took off the list, kept with its settings for when one of its sessions comes back; and
  * the bot that made it, for one a bot made (`make_project`); `addedByBox`, for one the box added
  * itself as a session started in a folder it didn't list, whose folders no client has set yet. */
@@ -12,7 +12,6 @@ export const PROJECT = object({
   "name?": string,
   folders: list(string),
   "run?": string,
-  "terminal?": string,
   "removed?": bool,
   "madeBy?": object({ bot: string, name: string, at: number }),
   "addedByBox?": bool,

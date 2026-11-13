@@ -10665,7 +10665,6 @@ var PROJECT = object({
   "name?": string,
   folders: list(string),
   "run?": string,
-  "terminal?": string,
   "removed?": bool,
   "madeBy?": object({ bot: string, name: string, at: number }),
   "addedByBox?": bool
@@ -31276,10 +31275,35 @@ async function repairRules(target, here, sessionID) {
 // Packages/Box/src/link/areas/projects.ts
 var PROJECTS_FILE = path104.join(K, "box", "projects.json");
 var PROJECTS_LOCK = PROJECTS_FILE + ".lock";
-function readProjects(file = PROJECTS_FILE) {
+function readProjects(file = PROJECTS_FILE, migrate = true) {
+  const read = () => {
+    const saved = JSON.parse(fs102.readFileSync(file, "utf8"));
+    let changed = false;
+    if (!Array.isArray(saved.projects))
+      return { saved, projects: [], changed };
+    for (const project of saved.projects) {
+      if (isObject(project) && "terminal" in project) {
+        delete project.terminal;
+        changed = true;
+      }
+    }
+    const projects = saved.projects.filter((each) => typeof each?.directory === "string" && path104.isAbsolute(each.directory)).map((each) => ({ ...each, folders: Array.isArray(each.folders) ? each.folders.filter((folder) => typeof folder === "string") : [] }));
+    return { saved, projects, changed };
+  };
   try {
-    const list = JSON.parse(fs102.readFileSync(file, "utf8")).projects;
-    return Array.isArray(list) ? list.filter((each) => typeof each?.directory === "string" && path104.isAbsolute(each.directory)).map((each) => ({ ...each, folders: Array.isArray(each.folders) ? each.folders.filter((folder) => typeof folder === "string") : [] })) : [];
+    const first = read();
+    if (!first.changed || !migrate)
+      return first.projects;
+    try {
+      return locked(file + ".lock", () => {
+        const latest = read();
+        if (latest.changed)
+          writePrivate(file, JSON.stringify(latest.saved, null, 2));
+        return latest.projects;
+      });
+    } catch {
+      return first.projects;
+    }
   } catch {
     return [];
   }
@@ -31423,7 +31447,7 @@ function boxProjects(kit, file = PROJECTS_FILE) {
 }
 function changeProjects(change, file = PROJECTS_FILE, lock = PROJECTS_LOCK) {
   const projects = locked(lock, () => {
-    const projects = change(readProjects(file));
+    const projects = change(readProjects(file, false));
     writePrivate(file, JSON.stringify({ version: 1, projects }, null, 2));
     return projects;
   });
@@ -31460,9 +31484,7 @@ function keptProject(directory, given, before = {}) {
     project.folders = [...new Set((Array.isArray(given.folders) ? given.folders : []).filter((folder) => typeof folder === "string" && path104.isAbsolute(folder) && folder !== directory))];
   if ("run" in given)
     project.run = text(given.run);
-  if ("terminal" in given)
-    project.terminal = text(given.terminal);
-  for (const key of ["name", "run", "terminal"])
+  for (const key of ["name", "run"])
     if (project[key] === undefined)
       delete project[key];
   return project;
@@ -39853,7 +39875,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "8efbbc3fa7fa";
+var BRIDGE_VERSION = "8ce845b7cbf2";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";

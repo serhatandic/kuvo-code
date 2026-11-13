@@ -98,7 +98,7 @@ test("a project added from any client is kept on the box as it's named, and chan
   // A link stays a link: its sessions run there, by that name.
   const linked = path.join(work, "shop-link");
   fs.symlinkSync(shop, linked);
-  const added = await ask(handle, "PUT", `kuvo/projects?directory=${encodeURIComponent(linked)}`, { name: "  Shop  ", folders: [blog, linked], run: "npm run dev", terminal: " " });
+  const added = await ask(handle, "PUT", `kuvo/projects?directory=${encodeURIComponent(linked)}`, { name: "  Shop  ", folders: [blog, linked], run: "npm run dev", terminal: "claude --continue" });
   assert.equal(added.status, 200);
   assert.deepEqual(added.json.project, { directory: linked, name: "Shop", folders: [blog], run: "npm run dev" });
 
@@ -117,6 +117,17 @@ test("a project added from any client is kept on the box as it's named, and chan
   assert.equal((await ask(handle, "PUT", "kuvo/projects", {})).status, 400);
   assert.equal((await ask(handle, "PUT", "kuvo/projects?directory=relative/path", {})).status, 400);
   assert.equal((await ask(handle, "POST", `kuvo/projects?directory=${encodeURIComponent(shop)}`, {})).status, 405);
+});
+
+test("a saved terminal project is returned as an ordinary project and cleaned on disk", async () => {
+  const file = path.join(home, "box", "projects.json");
+  const project = { directory: shop, name: "Shop", folders: [blog], run: "bun dev", removed: true };
+  fs.writeFileSync(file, JSON.stringify({ version: 1, projects: [{ ...project, terminal: "opencode" }] }));
+  const handle = link.engineHandler(() => { throw new Error("no engine"); }, { name: "box" }, () => null);
+  const answer = await ask(handle, "GET", "kuvo/projects");
+  assert.equal(answer.status, 200);
+  assert.deepEqual(answer.json.projects, [project]);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { version: 1, projects: [project] });
 });
 
 test("Remove Project archives every session of it, its worktree's, its other folders', those filed under it from a subfolder and older ones too, and keeps its settings for when one comes back", async t => {

@@ -38,12 +38,37 @@ interface SessionPage {
   cursor?: { next?: string };
 }
 
-/** The box's projects: `{directory, name?, folders, run?, terminal?, removed?}` each. One removed
- * (Remove Project) keeps its settings, for when one of its sessions is brought back. */
-export function readProjects(file = PROJECTS_FILE): Project[] {
+/** Read saved projects without the retired terminal setting. Migration takes the same lock as
+ * edits, and rereads there so a simultaneous client edit is never overwritten. */
+export function readProjects(file = PROJECTS_FILE, migrate = true): Project[] {
+  const read = () => {
+    const saved = JSON.parse(fs.readFileSync(file, "utf8"));
+    let changed = false;
+    if (!Array.isArray(saved.projects)) return { saved, projects: [], changed };
+    for (const project of saved.projects) {
+      if (isObject(project) && "terminal" in project) {
+        delete project.terminal;
+        changed = true;
+      }
+    }
+    const projects = saved.projects
+      .filter((each: Project) => typeof each?.directory === "string" && path.isAbsolute(each.directory))
+      .map((each: Project) => ({ ...each, folders: Array.isArray(each.folders) ? each.folders.filter((folder: unknown) => typeof folder === "string") : [] }));
+    return { saved, projects, changed };
+  };
   try {
-    const list = JSON.parse(fs.readFileSync(file, "utf8")).projects;
-    return Array.isArray(list) ? list.filter(each => typeof each?.directory === "string" && path.isAbsolute(each.directory)).map(each => ({ ...each, folders: Array.isArray(each.folders) ? each.folders.filter((folder: unknown) => typeof folder === "string") : [] })) : [];
+    const first = read();
+    if (!first.changed || !migrate) return first.projects;
+    try {
+      return locked(file + ".lock", () => {
+        const latest = read();
+        if (latest.changed) writePrivate(file, JSON.stringify(latest.saved, null, 2));
+        return latest.projects;
+      });
+    } catch {
+      // A read-only disk must still let the client open all its existing projects.
+      return first.projects;
+    }
   } catch {
     return [];
   }
@@ -248,7 +273,7 @@ export function boxProjects(kit: { projects?: OfferedProject[] } | null | undefi
 /** The list as `change` makes it, read again just before, under its lock. */
 export function changeProjects(change: (projects: Project[]) => Project[], file = PROJECTS_FILE, lock = PROJECTS_LOCK): Project[] {
   const projects = locked(lock, () => {
-    const projects = change(readProjects(file));
+    const projects = change(readProjects(file, false));
     writePrivate(file, JSON.stringify({ version: 1, projects }, null, 2));
     return projects;
   });
@@ -287,8 +312,7 @@ function keptProject(directory: string, given: Record<string, unknown>, before: 
   if ("folders" in given) delete project.addedByBox;
   if ("folders" in given) project.folders = [...new Set((Array.isArray(given.folders) ? given.folders : []).filter(folder => typeof folder === "string" && path.isAbsolute(folder) && folder !== directory))];
   if ("run" in given) project.run = text(given.run);
-  if ("terminal" in given) project.terminal = text(given.terminal);
-  for (const key of ["name", "run", "terminal"] as const) if (project[key] === undefined) delete project[key];
+  for (const key of ["name", "run"] as const) if (project[key] === undefined) delete project[key];
   return project;
 }
 
