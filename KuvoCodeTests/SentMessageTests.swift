@@ -97,7 +97,7 @@ import Testing
         model.apply(try engine.event("session.execution.succeeded", session: id))
         await SessionCopies.written()
         let copy = try #require(SessionCopies.load(id))
-        guard case .user(let user)? = copy.messages.first else { return Issue.record("no message in the copy") }
+        guard case .user(let user)? = copy.messages.first else { Issue.record("no message in the copy"); return }
         #expect(MessageParts.kept(in: user.metadata) == MessageParts(words: "Check the build", keyword: "/plan"))
     }
 
