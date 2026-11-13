@@ -64,6 +64,7 @@ final class MermaidView: NSView {
         if let appearance, abs(requestedWidth - width) > 1,
            let saved = MermaidRenderer.shared.known(content, dark: appearance.dark, width: width) {
             requestedWidth = width
+            renderTask?.cancel()
             switch saved {
             case .drawn(let image): imageView.image = image; failure = nil
             case .failed(let explanation): failure = explanation

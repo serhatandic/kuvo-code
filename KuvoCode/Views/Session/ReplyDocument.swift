@@ -211,6 +211,17 @@ struct ReplyDocument {
         }
     }
 
+    private static func fencedSegment(_ source: String, language: String?, marks: [ReplyCodeMark], diagrams: Bool) -> Segment {
+        switch language?.lowercased() {
+        case "math", MathText.blockLanguage:
+            return .math(latex: source.trimmingCharacters(in: .whitespacesAndNewlines))
+        case "mermaid" where diagrams && marks.isEmpty:
+            return .diagram(source: source)
+        default:
+            return .code(code: source, language: language, marks: marks)
+        }
+    }
+
     /// `images`: the folder a file's own pictures are looked for in (a Markdown file's); none from
     /// the web (a README's badges and tracking pixels would reach their hosts as it opens).
     /// `diagrams`: ` ```mermaid ` blocks are drawn as diagrams (a reply's, a file's preview), not
@@ -246,19 +257,8 @@ struct ReplyDocument {
                 flushText()
                 var code = String(content.characters)
                 if code.hasSuffix("\n") { code.removeLast() }
-                if language == MathText.blockLanguage || language?.lowercased() == "math" {
-                    segments.append(.math(latex: code.trimmingCharacters(in: .whitespacesAndNewlines)))
-                } else {
-                    // Find's marks only while Find has some: looking through every run of a
-                    // code block for them was a good part of reading one.
-                    let marks = findsMarks ? Self.marks(in: content) : []
-                    // A diagram, unless Find has places in it, which show in its code.
-                    if diagrams, language?.lowercased() == "mermaid", marks.isEmpty {
-                        segments.append(.diagram(source: code))
-                    } else {
-                        segments.append(.code(code: code, language: language, marks: marks))
-                    }
-                }
+                let highlighted = findsMarks ? Self.marks(in: content) : []
+                segments.append(Self.fencedSegment(code, language: language, marks: highlighted, diagrams: diagrams))
                 gaps.append(segments.count == 1 ? 0 : gap)
                 last = (Spacing(top: 0, bottom: 16), nil, nil, nil)
                 continue
