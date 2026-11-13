@@ -114,4 +114,22 @@ final class UsageBoxParityAntigravityTests: XCTestCase {
         XCTAssertEqual(scan.series.daily.first?.costUSD ?? -1, fixture.bounded.cost, accuracy: 1e-9)
     }
 
+    func testEmptyAndMissingStoresMatchTheBox() async throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Box/test/fixtures/usage/antigravity-empty-cases.json")
+        let cases = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [[String: Any]])
+        for each in cases {
+            let directory = try makeAntigravityDatabaseDirectory(for: self)
+            let path = try XCTUnwrap(directory.paths.first)
+            let sqlite = SQLiteCLIAccessor()
+            if each["database"] as? Bool == true {
+                try sqlite.execute(path: path, sql: "CREATE TABLE gen_metadata(idx INTEGER PRIMARY KEY, data BLOB); CREATE TABLE steps(idx INTEGER PRIMARY KEY, metadata BLOB);")
+            } else { try? FileManager.default.removeItem(atPath: path) }
+            let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectories: { [directory.url.path] })
+            let scan = await scanner.scan(pricing: antigravityPricing)
+            XCTAssertEqual(scan?.series.daily.reduce(0) { $0 + $1.totalTokens } ?? 0, each["tokens"] as? Int, each["name"] as? String ?? "")
+        }
+    }
+
 }

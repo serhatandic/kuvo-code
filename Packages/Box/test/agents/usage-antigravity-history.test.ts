@@ -222,3 +222,14 @@ test("blob bounds match Swift: skip oversized generations and absent step timing
   expect(day.tokens).toBe(fixture.bounded.tokens)
   expect(day.cost).toBeCloseTo(fixture.bounded.cost, 10)
 })
+
+test("shared missing/empty profile fixtures contain no history, as Swift", async () => {
+  const cases = JSON.parse(readFileSync(join(import.meta.dir, "../fixtures/usage/antigravity-empty-cases.json"), "utf8")) as { name: string; database: boolean; tokens: number }[]
+  for (const each of cases) {
+    let home: string
+    if (each.database) { const empty = store(); empty.db.close(); home = empty.home }
+    else home = join(base, "missing-empty-parity")
+    const events = await new AntigravityHistory().scan(home, 0)
+    expect(events.reduce((tokens, e) => tokens + e.inputTokens + e.outputTokens + e.cacheReadTokens, 0), each.name).toBe(each.tokens)
+  }
+})
