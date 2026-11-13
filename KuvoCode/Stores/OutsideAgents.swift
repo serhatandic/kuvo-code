@@ -611,12 +611,22 @@ final class OutsideAgents {
         sideQuestionCounts[session] = left.isEmpty ? nil : left.count
     }
 
-    func took(_ review: Review) { reviews[review.session] = review }
+    func took(_ review: Review) {
+        // Its end can be told before the answer that started it (one that fails at once): that stays.
+        if let known = reviews[review.session], known.id == review.id, known.state != .reviewing, review.state == .reviewing { return }
+        reviews[review.session] = review
+    }
     func dropReview(_ session: String) { reviews[session] = nil }
     /// One just asked for here: the box's answer, before its events.
-    func startedHandoff(_ handoff: Handoff) {
-        handoffs[handoff.from] = handoff
+    /// `before`: its handoff as it was when it was asked for. Its end, told before this answer
+    /// (its note written quickly, or failing at once), stays, and opens what it made.
+    func startedHandoff(_ handoff: Handoff, before: Handoff? = nil) {
         opensWhenDone.insert(handoff.from)
+        if let known = handoffs[handoff.from], known != before, known.state != .writing {
+            ended(known)
+            return
+        }
+        handoffs[handoff.from] = handoff
         ended(handoff)
     }
 

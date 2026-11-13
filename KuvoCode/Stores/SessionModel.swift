@@ -1255,6 +1255,8 @@ final class SessionModel {
             editTranscript { $0.addLocal(id: shown, text: text, delivery: .steer) }
         }
         let shownBefore = shownSideQuestion
+        // (As it was: its end, told before the box's answer, isn't taken back by it.)
+        let handoffBefore = handoff
         if let onSide, goalBridge()?.showAsking(onSide) == true { shownSideQuestion = onSide.id }
         let ask = Typed.Ask(id: shown, text: text, files: !files.isEmpty, side: side, refusal: refusal, reviewer: Catalog.lastReviewer)
         let route = Typed.route(id)
@@ -1286,7 +1288,7 @@ final class SessionModel {
                 outgoing[shown] = nil
                 typedRows.remove(shown)
                 dropSideShown(shown, before: shownBefore)
-                await took(answer, written: text, files: files, quotes: quotes, for: model, queue: queue, keptElsewhere: keptElsewhere, cancelled: cancelled)
+                await took(answer, written: text, files: files, quotes: quotes, for: model, queue: queue, keptElsewhere: keptElsewhere, cancelled: cancelled, handoffBefore: handoffBefore)
             } catch {
                 // (Cancelled meanwhile: it's gone as asked.)
                 guard outgoing[shown]?.state != .cancelled else { return }
@@ -1342,7 +1344,7 @@ final class SessionModel {
 
     /// What its box said a typed text means, done: what the box did, shown at once, before its
     /// events come; then what's left to do here; then what goes back to the composer.
-    private func took(_ answer: Typed.Answer<AutopilotShown>, written: String, files: [URL], quotes: [Drafts.Quote], for model: Model?, queue: Bool, keptElsewhere: Bool, cancelled: Bool = false) async {
+    private func took(_ answer: Typed.Answer<AutopilotShown>, written: String, files: [URL], quotes: [Drafts.Quote], for model: Model?, queue: Bool, keptElsewhere: Bool, cancelled: Bool = false, handoffBefore: Handoff? = nil) async {
         if let keyword = answer.keyword { Analytics.shared.track("keyword_run", ["keyword": keyword]) }
         let bridge = goalBridge()
         if let goal = answer.goal {
@@ -1366,7 +1368,7 @@ final class SessionModel {
             bridge.took(question)
             shownSideQuestion = question.id
         }
-        if let handoff = answer.handoff { bridge?.startedHandoff(handoff) }
+        if let handoff = answer.handoff { bridge?.startedHandoff(handoff, before: handoffBefore) }
         if let review = answer.review { bridge?.took(review) }
         // Cancelled while its box was asked: what it did shows, nothing more is done, nothing comes back.
         if cancelled {
