@@ -216,7 +216,7 @@ struct SidebarView: View {
             guard ProcessInfo.processInfo.environment["KUVO_DEMO_RENAME"] == "sidebar" else { return }
             try? await Task.sleep(for: .seconds(2))
             if let selection, let session = workspace.session(selection) {
-                renaming = RenameTarget(id: selection, place: Workspace.isChat(session) ? .chats : .project)
+                renaming = RenameTarget(id: selection, place: workspace.isInChats(session) ? .chats : .project)
             }
         }
         #endif
@@ -372,7 +372,21 @@ struct SidebarView: View {
                 .help("What keeps your projects on this Mac stopped. \(failure)")
                 .accessibilityLabel("Projects can’t be saved. Try Again")
             }
-            if workspace.isLoaded && projects.isEmpty {
+            // A box from before it listed its sessions: what to do, where they'd be.
+            if workspace.outdatedLists.contains(box.machine ?? BoxClient.thisMac) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Sessions Need a Newer Kuvo Code")
+                        .sidebarFont(13, weight: .medium)
+                    Text("Update Kuvo Code on \(boxName(box)) to list its sessions here.")
+                        .sidebarFont(12)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .accessibilityElement(children: .combine)
+            }
+            // (Once its box has said what its sessions are: until then there may be some.)
+            if workspace.isLoaded && workspace.isListed(box.machine ?? BoxClient.thisMac) && projects.isEmpty {
                 Text(box.machine == nil ? "Open a folder for the agent to work in." : "Open a folder on \(boxName(box)) for the agent to work in.")
                     .sidebarFont(13)
                     .foregroundStyle(.secondary)
@@ -920,7 +934,7 @@ struct SidebarView: View {
     private func isHighlighted(_ session: Session, in place: Place) -> Bool {
         guard let selection, topConversation(selection) == session.id else { return false }
         if let picked = pickedIn[session.id] { return picked == place }
-        return place == (Workspace.isChat(session) ? .chats : .project)
+        return place == (workspace.isInChats(session) ? .chats : .project)
     }
 
     /// A session's row, and under it, unfolded, the conversations branched or handed off from it
@@ -1057,7 +1071,7 @@ struct SidebarView: View {
                     .foregroundStyle(.tertiary)
             } else {
                 HStack(spacing: 6) {
-                    if look.isSearching, Workspace.isChat(session), let machine = RemoteFolder.machine(of: session.location.directory) {
+                    if look.isSearching, workspace.isInChats(session), let machine = RemoteFolder.machine(of: session.location.directory) {
                         Image(systemName: "server.rack")
                             .sidebarFont(10)
                             .foregroundStyle(.tertiary)
@@ -1184,7 +1198,7 @@ struct SidebarView: View {
                 renaming = RenameTarget(id: session.id, place: place)
             }
         }
-        if Workspace.isChat(session) {
+        if workspace.isInChats(session) {
             moveToProject(session, disabled: moving)
             MoveToComputerItems(thing: .chat(session), app: app).submenu
         } else if !RemoteFolder.isRemote(session.location.directory) {

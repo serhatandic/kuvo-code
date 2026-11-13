@@ -1285,6 +1285,58 @@ the branch, the model, effort and account, and the pull request with its checks 
 - What a client draws from it (which mark, which lines on the card) is the clients' to decide
   alike; a box without `sessions.glance` gives no marks beyond the worktree's branch, as before.
 
+### Session lists
+
+What each session is, and where every client's lists show it (`sessions.list`): the box decides it
+from its engine's and coding agents' sessions, so a client draws its sidebar from facts and works
+nothing out. A client needs a box with `sessions.list`: the app brings a box up to date before it
+uses it ("Updating…"), so no client keeps an older way; a box that hasn't the feature, or answers
+`503`, leaves a client's lists waiting ("Loading sessions") until the update gate has brought it up
+to date (#679).
+
+- `GET kuvo/sessions/list[?since=<at>]` → `{at, full?, sessions: {<id>: facts}, gone?: [<id>],
+  projects: {<folder>: {name?, updated?}}, pending?: ["bridge"]}`. `…/events[?since=<at>]` (ndjson) sends that now, then
+  a line as anything in it changes; through `box route` (a machine reached over SSH) it answers its
+  first line, and a client reads it again as that machine's sessions change and every half minute.
+  `503 {"message"}` while the engine can't be read; `405` for anything but `GET`. `pending`: the
+  coding agents' bridge runs but couldn't be read yet, so its sessions are as last read (none are
+  said gone for it).
+- The box keeps the list in `run/lists/sessions.json`: its long-running process works it out as its
+  engine's and bridge's events come, from each read whole as it's heard (and every five minutes),
+  and only once the engine's has been, and again a moment after the box's projects, worktrees,
+  bots or moves change, whichever process changed them (a `box route` over SSH too: it watches
+  their files). A `box route` reads that file while that process runs, and never writes it then;
+  otherwise it reads the engine itself and keeps what it read there.
+- `at` says where the list is; `since` resumes from it: only the sessions that changed after it,
+  and `gone`, those deleted since. A cursor the box can't resume from (it restarted, or the change
+  is older than the day and 2000 deletions it keeps, or its file went) gets the whole list, `full: true`, in place of
+  what the client had. `projects` is whole in every line.
+- Facts, each flag left out where it isn't: `kind`, `project` (a `project` session's), `directory`,
+  `title?`, `created`, `updated` (ms; the lists' order), `parent?` (a `subagent`'s session),
+  `pinned?`, `archived?`, `running?`, `asked?` (since when it's waited on you, ms, as "A session at a
+  glance" says it), `away?` (this copy isn't the box's own: moved away, or on its way here, "Moves").
+  A kind a client doesn't know shows nowhere.
+- `kind`, in this order: `subagent` (it has a `parentID`); `seat` (`kuvo.seat`, a bot's seat in a
+  group chat); `hidden` (`kuvo.engineFor` or `kuvo.reviewPart`: a run its session or review shows);
+  `bot` (one of its bots' conversations, as `kuvo/bots` lists them, or anything in its bots folder);
+  `chat` (marked a chat naming the folder it's in, or in its chats folder, "Chats"); else
+  `project`, filed under the project of its folder as `kuvo/projects`' `worktrees` says, else the
+  one `kuvo.filed` names while it still runs in that folder (as that project is filed), else its
+  own folder ("Projects").
+- `projects`: every project of the box's list that isn't removed, and each one a `project` session
+  that isn't archived is filed under (a removed one comes back so), with its list's `name` where
+  it has one, and `updated`, its newest such session's.
+- What a client draws: a `project` session in its project and a `chat` in Chats, unless archived;
+  any other kind nowhere. Pinned and Chats newest first; projects by their newest session shown,
+  those with none last, ties by name (its `name`, else its folder's last part; Finder's order:
+  case-insensitive, numbers by value); a project's sessions newest first. A client shows a pin or
+  an archive it just made at once, from the session it holds, before the box's next line. A move
+  between computers (`away`) is the client's to place, as it sees every computer's list.
+- `Packages/KuvoLink/Vectors/session-lists.json` holds engine sessions and what the box knows
+  beside them, the facts the box answers (`Packages/Box/test/session-lists.test.ts`), and the
+  sidebar a client draws from them (KuvoClient's `SessionListsTests`): a client in another language
+  checks itself against it.
+
 ### A session's model
 
 What a conversation's model button names, and whether its model can run (`sessions.models`): the
@@ -3178,7 +3230,8 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     `503` while the engine isn't running. A repository with no commits yet gets an empty first one
     (bridge 0.9.198; what's staged stays staged), as a project the box makes does. `POST kuvo/worktrees/record {project, root, folder?,
     branch, base?}` keeps one a Mac kept before its box did ("For released Macs"; `404` when it
-    isn't there any more).
+    isn't there any more); `{removed: true, project, folder}` keeps one such a Mac removed, so its
+    sessions stay filed under its project (not over one the box has).
   - `GET kuvo/worktrees/where[?directory=<value>]` (`worktrees.where`): where new worktrees go
     with `value` as `worktree.directory` (none: the engine's own), as the engine reads it, so
     Settings shows real folders before and after you choose one → `{"directory", "default", "home",
@@ -5057,6 +5110,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `sessions.agents` | `POST kuvo/sessions/<id>/agents` |
 | `sessions.chat` | A chat made, moved or with its metadata written since carries `kuvo.chat` in its metadata, naming the chats folder it's in; older ones go by their folder ("Chats") |
 | `sessions.glance` | `kuvo/sessions/glance`, `…/events`, and `session` in `POST kuvo/git/pull-request` ("A session at a glance") |
+| `sessions.list` | `kuvo/sessions/list` and `…/events`: what each session is, the project it's filed under, and the projects the lists show ("Session lists") |
 | `sessions.models` | `GET kuvo/sessions/models` ("A session's model") |
 | `sessions.move` | `POST kuvo/sessions/<id>/move`: a conversation moved into a project, given its folders ("Projects", #341) |
 | `sessions.start` | `POST kuvo/sessions`: a session started with a task (bridge 0.9.100) |
@@ -7544,6 +7598,11 @@ them, and only for them, is here; the rest of this file is the protocol as it is
 for phones: the phone link has never been on in a release, so no phone needs an earlier shape of
 anything.
 
+**Session lists.** A released Mac doesn't read `kuvo/sessions/list`: it works its lists out from
+the engine's `api/session` as it did, which the box answers as before; nothing here changes for it.
+A Kuvo Code from #668 on reads only the box's list, and brings an older box up to date before using
+it ("Session lists").
+
 **Kuvo Code 0.5 to 0.7.2.** It can go once 0.8.0 has been out three months and no Mac with 0.7 or
 before connects (the box notes one: `run/attached`).
 - **Its files**: such a Mac doesn't know box versions, and puts its own engine, bridge, helpers,
@@ -7592,7 +7651,8 @@ before connects (the box notes one: `run/attached`).
   its `job` there, so the box writes a job's line there too, beside its record (`job.json`).
   <!-- compat: 0.7 bot-json-job -->
 - **Its worktrees**: it kept a machine's worktrees itself. A Mac that has such records gives them
-  to the machine with `POST kuvo/worktrees/record`.
+  to the machine with `POST kuvo/worktrees/record`, those it removed too (`removed`), so the box's
+  session lists file their sessions as that Mac did.
   <!-- compat: 0.7 worktrees -->
 - **Its agents bridge** installed the agents' programs in `~/.kuvo-code/agents/runtime` on a
   machine, carried the Mac's sign-ins over (`<file>.from-mac`), and kept its downloads in its cache

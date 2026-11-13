@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import os
 import KuvoLink
 import OpenCodeKit
 import Testing
@@ -306,21 +307,32 @@ import Testing
         await app.connect(engine).value
         let session = try #require(sessions(on: id).first)
         let answer = WakesThere()
-        SSHConnection.standIn = { [ssh] address, script in
+        // What each request to its box there asked for (its route), as it's sent: a request carries
+        // what it asks on its input (a script that only names `box route`, the wake-ups' own, doesn't).
+        let routed = OSAllocatedUnfairLock(initialState: [String]())
+        SSHConnection.fedStandIn = { [ssh] address, script, input in
             ssh.note(script, to: address)
-            if script.contains(" box route") { return answer.routed }
-            return script.contains("timezone") ? "" : nil
+            guard script.contains(" box route") else { return script.contains("timezone") ? "" : nil }
+            if let asked = input.flatMap({ try? Data(contentsOf: $0) }).flatMap({ try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }),
+               let path = asked["path"] as? String {
+                routed.withLock { $0.append(path) }
+                // (Its session list, read as the sidebar follows it: not this one's to answer.)
+                if path.hasPrefix("kuvo/sessions/list") { return #"{"status":503,"body":"{}"}"# }
+            }
+            return answer.routed
         }
+        defer { SSHConnection.fedStandIn = nil }
         await app.wakeUps.share(with: engine)
         let due = Wakes.name(due: .now.addingTimeInterval(7200), every: nil)
         answer.set(["sessions": [["session": session.id, "next": 1, "watching": false,
                                   "wakes": [["id": due, "due": 1, "note": "Check the deploy"]], "watches": [], "paused": false]]])
-        let before = ssh.scripts(to: id).count
+        let before = routed.withLock { $0.count }
 
         await app.wakeUps.share(with: engine)
 
         #expect(app.wakeUps.wakes[session.id]?.map(\.note) == ["Check the deploy"])
-        #expect(ssh.scripts(to: id).dropFirst(before).filter { $0.contains(" box route") }.count == 1)
+        let asked = routed.withLock { Array($0.dropFirst(before)) }.filter { !$0.hasPrefix("kuvo/sessions/list") }
+        #expect(asked.count == 1 && asked.allSatisfy { $0.hasPrefix("kuvo/wakes") }, "one read of them all: \(asked)")
     }
 
     /// Removed while its engine starts over (its Settings › Engine), before it connects again: it

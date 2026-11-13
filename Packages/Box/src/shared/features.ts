@@ -110,6 +110,7 @@ export const FEATURES = [
   "sessions.agents",
   "sessions.chat",
   "sessions.glance",
+  "sessions.list",
   "sessions.models",
   "sessions.move",
   "sessions.start",

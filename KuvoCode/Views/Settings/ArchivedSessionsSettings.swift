@@ -19,7 +19,8 @@ struct ArchivedSessionsSettings: View {
     /// By project (its folder: two of the same name, on this Mac and a machine, say, are two), the
     /// most recently used first.
     private var byProject: [(directory: String, sessions: [Session])] {
-        let groups = Dictionary(grouping: archived) { workspace.projectDirectory(of: $0) }
+        // (Chats by their folder: one on this Mac and one a machine's are two.)
+        let groups = Dictionary(grouping: archived) { workspace.listedProject(of: $0) ?? $0.location.directory }
         return groups.map { ($0.key, $0.value) }.sorted { ($0.sessions.first?.time.updated ?? 0) > ($1.sessions.first?.time.updated ?? 0) }
     }
 

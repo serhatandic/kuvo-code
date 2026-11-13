@@ -104,8 +104,9 @@ export function forgetAsksOn(place: string): void {
   if (changed) keep();
 }
 
-/** The asks waiting, as the long-running process noted them. */
-function readAsks(): OpenAsk[] {
+/** The asks waiting, as the long-running process noted them: the session asking (a subagent's own)
+ * and when (ms). */
+export function readAsks(): OpenAsk[] {
   try {
     const kept = JSON.parse(fs.readFileSync(ASKS_FILE, "utf8")).asks;
     return isObject(kept) ? Object.values(kept).filter((ask): ask is OpenAsk => isObject(ask) && typeof ask.session === "string" && typeof ask.at === "number") : [];
