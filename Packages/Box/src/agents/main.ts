@@ -315,7 +315,7 @@ const engineHostedUsage = engineHostedSources(engineData)
 // Cursor's plan and its usage history, asked of Cursor with Kuvo Code's own Cursor sign-in: only
 // from a real box's bridge, never a test's, whatever sign-in its folder holds.
 cursorEndpoints.live = !noPriceFeeds
-const cursorUsage = cursorSources(usageFolder, (provider) => limits.readsElsewhere(provider))
+const cursorUsage = cursorSources(usageFolder, (provider, identity) => limits.held(provider) || (identity !== undefined && !!usage.peers?.readsWhole("cursor", identity)))
 const usage = new Usage(() => [...claudeUsage(roster.all()), ...codexUsage(roster.all()), ...grokUsage(roster.all()), ...engineCodexUsage(), ...engineHostedUsage(), ...cursorUsage(roster.all())], new PricingStore(join(usageFolder, "pricing"), noPriceFeeds ? null : undefined), (provider) => limits.identity(provider), join(usageFolder, "usage.json"))
 usage.settings = usageSettings
 // The engine's sign-ins known (a box's first ChatGPT use shows at once, not a round later).

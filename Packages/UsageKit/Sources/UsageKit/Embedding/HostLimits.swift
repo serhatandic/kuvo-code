@@ -268,6 +268,12 @@ public final class HostLimits {
         return local.isEmpty && Self.limitsOnlyFromHost.contains(family) ? mine : local
     }
 
+    /// The lines a covered provider's card has from the host's rows rather than of its own (Cursor's
+    /// `Credits` and `On-demand`): a phone draws them from the rows themselves, under each account.
+    func rowLines(for family: String) -> Set<String> {
+        rows.filter { ProviderAccountID.family(of: $0.providerID) == family }.reduce(into: Set<String>()) { $0.formUnion(HostLimitData.labels($1)) }
+    }
+
     /// The panel's own bars a phone gets (`kuvo/usage`), in the Bars view's order: those whose
     /// place the box's rows take, as the Bars view takes them (`takingPlace`), say so (`covers`,
     /// their service), keeping only what the box doesn't state (spend, its trend), which the phone
@@ -345,9 +351,12 @@ enum HostLimitData {
     }
 
     /// The lines a row's own rows stand for beyond its meters (`Credits`, each extra's name), which
-    /// the card's widgets of the same lines mustn't show again beside them.
+    /// the card's widgets of the same lines mustn't show again beside them: only for a card that
+    /// reads nothing of its own (Cursor's), whose lines of those names are the row's (another's,
+    /// OpenRouter's "Credits", say, is its own, and stays).
     static func labels(_ row: HostLimitRow) -> Set<String> {
-        Set((row.balance == nil ? [] : ["Credits"]) + row.extras.map(\.name))
+        guard HostLimits.limitsOnlyFromHost.contains(ProviderAccountID.family(of: row.providerID)) else { return [] }
+        return Set((row.balance == nil ? [] : ["Credits"]) + row.extras.map(\.name))
     }
 
     /// "As of …" once what it shows was read longer ago than that, or its computers aren't heard from.

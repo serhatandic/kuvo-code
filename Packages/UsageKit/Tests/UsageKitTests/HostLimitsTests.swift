@@ -234,6 +234,19 @@ final class HostLimitsTests: XCTestCase {
         XCTAssertEqual(later?.lines.first { $0.label == "Credits" }, .values(label: "Credits", values: [MetricValue(number: 18, kind: .dollars)]))
     }
 
+    /// What a phone gets of a covered card: not the lines it has from the rows (Cursor's credits and
+    /// on-demand spend), which the phone draws from each row, under its own account; another card's
+    /// credits (OpenRouter's) are its own, and go.
+    func testThePhoneDrawsCursorsCreditsAndSpendFromItsRowsNotTheCards() {
+        let limits = HostLimits()
+        limits.update(rows: [
+            HostLimitRow(id: "cursor#a", providerID: "cursor", name: "Cursor", meters: [], balance: .init(left: 18, unit: "usd"), extras: [.init(id: "on_demand", name: "On-demand", amount: 4, unit: "usd")]),
+            HostLimitRow(id: "openrouter#b", providerID: "openrouter", name: "OpenRouter", meters: [], balance: .init(left: 2, unit: "usd")),
+        ], covered: ["cursor", "openrouter"])
+        XCTAssertEqual(limits.rowLines(for: "cursor"), ["Credits", "On-demand"])
+        XCTAssertEqual(limits.rowLines(for: "openrouter"), [])
+    }
+
     /// The credits a row has go on the card only where the card reads nothing of its own (Cursor's):
     /// OpenRouter's card keeps its own credits meter, not the box's credits left in its place.
     func testOnlyACardThatReadsNothingTakesTheRowsCredits() {

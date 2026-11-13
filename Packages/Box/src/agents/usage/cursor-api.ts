@@ -77,12 +77,23 @@ export function cursorKeyUnreadable(folder: string): boolean {
   }
 }
 
+/** A 429 that doesn't say for how long holds Cursor's reads for this long. */
+const HOLD_WITHOUT_WORD = 15 * 60_000
+
 /**
  * Asks Cursor for one account (`key`, its sign-in now): exchanges its key for an access token, kept
- * until five minutes before it lapses, and again when Cursor turns it away.
+ * until five minutes before it lapses, and again when Cursor turns it away. A key Cursor turned away
+ * isn't sent again until the sign-in changes, and nothing is asked while Cursor holds reads off (a
+ * 429, as long as it says), whatever asks (its plan, its history, a refresh, a peer's).
  */
 export class CursorClient {
   private token?: { key: string; access: string; until: number }
+  /** The key (its fingerprint) Cursor turned away: not sent again. */
+  private refused?: string
+  /** Until when Cursor holds reads off, in ms. */
+  private holdUntil = 0
+  /** The exchange under way, for one key: whoever asks meanwhile waits for it. */
+  private exchanging?: { key: string; answer: Promise<string> }
 
   constructor(
     readonly key: () => string | undefined,
@@ -108,6 +119,16 @@ export class CursorClient {
     return user ? `cursor:${user.toLowerCase()}` : undefined
   }
 
+  /** Cursor turned reads away (a 429): none until `until` (none said: a while). */
+  hold(until: number | undefined) {
+    this.holdUntil = Math.max(this.holdUntil, until ?? this.now() + HOLD_WITHOUT_WORD)
+  }
+
+  /** Until when Cursor holds reads off, if it does now. */
+  heldUntil(): number | undefined {
+    return this.now() < this.holdUntil ? this.holdUntil : undefined
+  }
+
   /** An access token for the sign-in now; `fresh`, exchanged again whatever's kept. */
   async accessToken(fresh = false): Promise<string> {
     if (!cursorReachable()) throw new LimitsProblem("none", "Cursor isn't asked from this box.", undefined, false)
@@ -115,8 +136,21 @@ export class CursorClient {
     // (What was read of it stays, and it's tried again soon.)
     if (!key && this.unreadable()) throw new LimitsProblem("failed", "Cursor's sign-in here can't be read just now.", undefined, false)
     if (!key) throw new LimitsProblem("none", "Not signed in to Cursor here.", undefined, false)
+    if (this.refused === fingerprint(key)) throw new LimitsProblem("expired", "Cursor turned its sign-in away: sign in to Cursor again in Settings › Accounts.", undefined, false)
+    const held = this.heldUntil()
+    if (held) throw new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", held, false)
     const kept = this.token
     if (!fresh && kept && kept.key === key && this.now() < kept.until) return kept.access
+    // (One exchange at a time for a key: the plan's and the history's reads as the box starts share it.)
+    if (this.exchanging?.key === key) return this.exchanging.answer
+    const answer = this.exchange(key).finally(() => {
+      if (this.exchanging?.answer === answer) this.exchanging = undefined
+    })
+    this.exchanging = { key, answer }
+    return answer
+  }
+
+  private async exchange(key: string): Promise<string> {
     let answer: CursorAnswer
     try {
       answer = await send(`${cursorEndpoints.api2}/auth/exchange_user_api_key`, { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: "{}" }, 10_000)
@@ -124,8 +158,14 @@ export class CursorClient {
       throw new LimitsProblem("failed", "Couldn't reach Cursor. Check your connection.")
     }
     // (Cursor not answering, or answering otherwise, isn't the sign-in ending.)
-    if (answer.status === 400 || answer.status === 401) throw new LimitsProblem("expired", "Cursor turned its sign-in away: sign in to Cursor again in Settings › Accounts.")
-    if (answer.status === 429) throw new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", retryAt(answer.headers.get("retry-after"), this.now()))
+    if (answer.status === 400 || answer.status === 401) {
+      this.refused = fingerprint(key)
+      throw new LimitsProblem("expired", "Cursor turned its sign-in away: sign in to Cursor again in Settings › Accounts.")
+    }
+    if (answer.status === 429) {
+      this.hold(retryAt(answer.headers.get("retry-after"), this.now()))
+      throw new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", this.holdUntil)
+    }
     if (answer.status < 200 || answer.status >= 300) throw new LimitsProblem("failed", `Cursor answered ${answer.status}.`)
     const access = typeof answer.body?.accessToken === "string" ? answer.body.accessToken.trim() : ""
     if (!access) throw new LimitsProblem("failed", "Cursor's answer wasn't one it gives.")

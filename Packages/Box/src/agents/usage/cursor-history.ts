@@ -11,7 +11,7 @@
 import { createHash } from "node:crypto"
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { LimitsProblem } from "../limits"
+import { LimitsProblem, retryAt } from "../limits"
 import { CursorClient, cursorSession } from "./cursor-api"
 import { add, addUnknown, noSlots, SLOT, UNATTRIBUTED, type Slots } from "./history"
 import { totalTokens, type Pricing, type Tokens } from "./pricing"
@@ -87,7 +87,14 @@ export interface CursorDay {
   uses: [number, string, number, number, number, number][]
 }
 
-type Failure = "http" | "request" | "invalid" | "incomplete"
+/** Why a day didn't come: `held`, Cursor turned reads away (a 429), so nothing more is asked. */
+type Failure = "http" | "request" | "invalid" | "incomplete" | "held"
+
+/** A read's access token, exchanged again at most once if Cursor turns it away midway. */
+interface Token {
+  access: string
+  renewing?: Promise<void>
+}
 
 /** UTC day `start` (ms) as `yyyy-MM-dd`. */
 const dayKey = (start: number) => new Date(start).toISOString().slice(0, 10)
@@ -139,6 +146,7 @@ export class CursorHistory {
   }
 
   private async readFor(client: CursorClient, access: string, key: string, now: number): Promise<Map<string, CursorDay>> {
+    const token: Token = { access }
     const today = Math.floor(now / DAY) * DAY
     const window = Array.from({ length: CURSOR_DAYS }, (_, back) => {
       const start = today - back * DAY
@@ -156,11 +164,13 @@ export class CursorHistory {
     const queue = [...due]
     const worker = async () => {
       for (let day = queue.shift(); day && !stopped; day = queue.shift()) {
-        const result = await this.fetchDay(client, access, day, () => stopped)
+        const result = await this.fetchDay(client, token, day, () => stopped)
         if (stopped) return
         if (typeof result === "string") {
           failures++
           first ??= result
+          // (Turned away: no day more this round, nor until the hold's over.)
+          if (result === "held") stopped = true
         } else {
           succeeded++
           cached.set(day.key, result)
@@ -185,7 +195,8 @@ export class CursorHistory {
   }
 
   /** One UTC day, page after page until Cursor has said all of it; what it didn't say whole is a failure. */
-  private async fetchDay(client: CursorClient, access: string, day: { key: string; start: number; end: number; complete: boolean }, stopped: () => boolean): Promise<CursorDay | Failure> {
+  private async fetchDay(client: CursorClient, token: Token, day: { key: string; start: number; end: number; complete: boolean }, stopped: () => boolean): Promise<CursorDay | Failure> {
+    let renewed = false
     const pageSize = this.options.pageSize ?? 1000
     let page = 1
     let expected: number | undefined
@@ -196,11 +207,26 @@ export class CursorHistory {
       if (stopped()) return "request"
       let answer
       try {
-        answer = await client.website("/api/dashboard/get-filtered-usage-events", access, { method: "POST", body: { startDate: String(day.start), endDate: String(day.end - 1), page, pageSize } }, 15_000)
+        answer = await client.website("/api/dashboard/get-filtered-usage-events", token.access, { method: "POST", body: { startDate: String(day.start), endDate: String(day.end - 1), page, pageSize } }, 15_000)
       } catch {
         return "request"
       }
       if (!answer) return "request"
+      if (answer.status === 429) {
+        client.hold(retryAt(answer.headers.get("retry-after"), Date.now()))
+        return "held"
+      }
+      // Its token turned away: exchanged again once for the whole read (as the plan's read does), and this page asked again.
+      if ((answer.status === 401 || answer.status === 403) && !renewed) {
+        renewed = true
+        token.renewing ??= client.accessToken(true).then((access) => void (token.access = access))
+        try {
+          await token.renewing
+        } catch {
+          return "http"
+        }
+        continue
+      }
       if (answer.status < 200 || answer.status >= 300) return "http"
       const parsed = cursorEventsPage(answer.body)
       if (!parsed) return "invalid"

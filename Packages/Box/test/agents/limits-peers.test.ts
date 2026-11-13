@@ -562,7 +562,11 @@ describe("plan limits across your computers", () => {
         ],
       },
     }))
-    expect(mac.rows()[0]!.extras).toEqual([{ id: "on_demand", name: "On-demand", kind: "spent", amount: 43.21, unit: "usd" }])
+    // (A kind this box doesn't know yet, a newer box's, is passed on as told: only its plain fields.)
+    expect(mac.rows()[0]!.extras).toEqual([
+      { id: "on_demand", name: "On-demand", kind: "spent", amount: 43.21, unit: "usd" },
+      { id: "x", name: "X", kind: "grants", amount: 1, unit: "usd" },
+    ])
   })
 
   test("a computer you removed goes from the list, with its accounts", async () => {

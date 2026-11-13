@@ -995,11 +995,11 @@ function cursorClientOf(agent: Agent): { client: CursorClient; unreadable: () =>
  * The Cursor accounts whose usage is read here, from Cursor's own record of each (cursor-history.ts),
  * while each is signed in to Kuvo Code's own Cursor sign-in here and Cursor may be asked from this box
  * (`cursorReachable`). Its maker's account of the whole account (`accountWide`): one of your
- * computers asks Cursor for it at a time, the one that reads its plan limits (`elsewhere`: another
- * does now). A round whose days and prices are as before works nothing out again. `folder`: where
+ * computers asks Cursor for it at a time (`elsewhere`: another does now, `UsagePeers.readsWhole`,
+ * or Cursor isn't to be asked now, `Limits.held`). A round whose days and prices are as before works nothing out again. `folder`: where
  * each user's days are kept (`cursor-history`).
  */
-export function cursorSources(folder: string | undefined, elsewhere: (provider: string) => boolean, history = new CursorHistory(folder ? join(folder, "cursor-history") : undefined), now: () => number = Date.now): (agents: Agent[]) => UsageSource[] {
+export function cursorSources(folder: string | undefined, elsewhere: (provider: string, identity: string | undefined) => boolean, history = new CursorHistory(folder ? join(folder, "cursor-history") : undefined), now: () => number = Date.now): (agents: Agent[]) => UsageSource[] {
   const last = new Map<string, { days: string; pricing: Pricing; since: number; slots: Slots }>()
   return (agents) => {
     if (!cursorReachable()) return []
@@ -1023,7 +1023,8 @@ export function cursorSources(folder: string | undefined, elsewhere: (provider: 
           return raw ? identityOf(raw) : undefined
         },
         slots: async (pricing, since) => {
-          if (elsewhere(agent.providerID)) return null
+          const raw = client.identity()
+          if (elsewhere(agent.providerID, raw ? identityOf(raw) : undefined)) return null
           if (!client.key()) throw new Error("Cursor's sign-in can't be read just now.")
           const days = await history.read(client, now())
           const said = createHash("sha256").update(JSON.stringify([...days] satisfies [string, CursorDay][])).digest("hex")

@@ -11,7 +11,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 import { kinds, type AgentKind } from "./accounts"
-import type { AccountLimits, LimitedAccount, LimitWindow, Limits, LimitsService } from "./limits"
+import type { AccountLimits, LimitedAccount, LimitExtra, LimitWindow, Limits, LimitsService } from "./limits"
 import { limitRows, type LimitRow, type LimitsBox } from "./limits-rows"
 
 /** What one box tells another of its limits (`{"limits": …}` between links). */
@@ -95,19 +95,15 @@ export class LimitsPeers {
     transport.onFollowed?.(() => this.told.clear())
   }
 
-  /**
-   * The newest time a peer read this account from its maker (on this box's clock), if any did.
-   * `yours`: only one of your own computers, not a box a peer vouches for (nor one not known yet).
-   */
-  fresh(service: LimitsService, identity: string, yours = false): number | undefined {
-    return this.freshest(service, identity, yours)?.checked
+  /** The newest time a peer read this account from its maker (on this box's clock), if any did. */
+  fresh(service: LimitsService, identity: string): number | undefined {
+    return this.freshest(service, identity)?.checked
   }
 
   /** The newest reading a peer had of this account from its maker, without a problem, if any did. */
-  freshest(service: LimitsService, identity: string, yours = false): AccountLimits | undefined {
+  freshest(service: LimitsService, identity: string): AccountLimits | undefined {
     let newest: AccountLimits | undefined
-    for (const [key, kept] of this.peers) {
-      if (yours && !(this.directory.told && (this.directory.isPeer?.(key) ?? true))) continue
+    for (const kept of this.peers.values()) {
       for (const account of kept.accounts) {
         if (account.service !== service || account.identity !== identity || account.problem || !account.checked) continue
         if (!newest || account.checked > newest.checked!) newest = account
@@ -259,6 +255,30 @@ export class LimitsPeers {
 const text = (value: unknown, most = 200) => (typeof value === "string" && value ? value.slice(0, most) : undefined)
 const time = (value: unknown) => (typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined)
 
+/** The most of an extra of a kind this box doesn't know (a newer box's), as JSON. */
+const MOST_EXTRA = 1_000
+
+/**
+ * What a peer's account has beyond its windows, as kept: a `spent` one checked; one of a kind this
+ * box doesn't know yet (a newer box's, #631 piece E's) passed on as told, but only its plain fields
+ * (text, numbers, true or false) and only while it's small, so a newer box's facts survive a hop
+ * through this one.
+ */
+function takenExtra(extra: any): LimitExtra[] {
+  if (!extra || typeof extra !== "object" || Array.isArray(extra) || !text(extra.id) || !text(extra.name, 100) || !text(extra.kind, 40)) return []
+  if (extra.kind === "spent") {
+    if (typeof extra.amount !== "number" || !Number.isFinite(extra.amount) || !["usd", "credits", "requests"].includes(extra.unit)) return []
+    return [{ id: text(extra.id)!, name: text(extra.name, 100)!, kind: "spent", amount: extra.amount, unit: extra.unit, ...(time(extra.resetsAt) ? { resetsAt: extra.resetsAt } : {}) }]
+  }
+  const plain = Object.fromEntries(
+    Object.entries(extra)
+      .slice(0, 20)
+      .filter(([, value]) => (typeof value === "string" && value.length <= 200) || (typeof value === "number" && Number.isFinite(value)) || typeof value === "boolean"),
+  )
+  if (Buffer.byteLength(JSON.stringify(plain)) > MOST_EXTRA) return []
+  return [{ ...plain, id: text(extra.id)!, name: text(extra.name, 100)!, kind: text(extra.kind, 40)! }]
+}
+
 /**
  * A peer's account as it's kept: only what an account says, checked, its times moved by `off` onto
  * this box's clock (never past `now`); null for what isn't one.
@@ -291,11 +311,7 @@ function takenAccount(given: unknown, off: number, now: number): AccountLimits |
     ]
   })
   const balance = account.balance
-  const extras = (Array.isArray(account.extras) ? account.extras : []).slice(0, 10).flatMap((extra: any) =>
-    extra && typeof extra === "object" && text(extra.id) && text(extra.name, 100) && extra.kind === "spent" && typeof extra.amount === "number" && Number.isFinite(extra.amount) && ["usd", "credits", "requests"].includes(extra.unit)
-      ? [{ id: text(extra.id)!, name: text(extra.name, 100)!, kind: "spent" as const, amount: extra.amount, unit: extra.unit, ...(time(extra.resetsAt) ? { resetsAt: extra.resetsAt } : {}) }]
-      : [],
-  )
+  const extras = (Array.isArray(account.extras) ? account.extras : []).slice(0, 10).flatMap((extra: any): LimitExtra[] => takenExtra(extra))
   const problem = account.problem
   const checked = moved(account.checked)
   const next = time(account.next) === undefined ? undefined : account.next + off

@@ -11641,14 +11641,14 @@ class Limits {
   identity(provider) {
     return this.entries.get(provider)?.identity;
   }
-  readsElsewhere(provider) {
+  held(provider) {
     const entry = this.entries.get(provider);
-    const account = this.accounts().find((each) => each.provider === provider);
-    if (!entry?.elsewhere || !account?.limits.read || !entry.identity)
+    const source = this.accounts().find((each) => each.provider === provider)?.limits;
+    if (!entry || !source)
       return false;
-    const peer = this.peers?.fresh(account.service, entry.identity, true);
-    const at = this.now();
-    return peer !== undefined && peer > (entry.checked ?? 0) && at - peer < account.limits.every + SHARED_SLACK;
+    if (entry.problem?.kind === "expired" && entry.signIn !== undefined && entry.signIn === source.signIn?.())
+      return true;
+    return this.heldBack(source, entry, this.now());
   }
   reads() {
     return new Set(this.accounts().filter((account) => account.limits.read).map((account) => account.provider));
@@ -17181,12 +17181,16 @@ function cursorKeyUnreadable(folder) {
     return true;
   }
 }
+var HOLD_WITHOUT_WORD = 15 * 60000;
 
 class CursorClient {
   key;
   now;
   unreadable;
   token;
+  refused;
+  holdUntil = 0;
+  exchanging;
   constructor(key, now = Date.now, unreadable = () => false) {
     this.key = key;
     this.now = now;
@@ -17202,6 +17206,12 @@ class CursorClient {
     const user = cursorSession(kept.access)?.user;
     return user ? `cursor:${user.toLowerCase()}` : undefined;
   }
+  hold(until) {
+    this.holdUntil = Math.max(this.holdUntil, until ?? this.now() + HOLD_WITHOUT_WORD);
+  }
+  heldUntil() {
+    return this.now() < this.holdUntil ? this.holdUntil : undefined;
+  }
   async accessToken(fresh = false) {
     if (!cursorReachable())
       throw new LimitsProblem("none", "Cursor isn't asked from this box.", undefined, false);
@@ -17210,19 +17220,38 @@ class CursorClient {
       throw new LimitsProblem("failed", "Cursor's sign-in here can't be read just now.", undefined, false);
     if (!key)
       throw new LimitsProblem("none", "Not signed in to Cursor here.", undefined, false);
+    if (this.refused === fingerprint(key))
+      throw new LimitsProblem("expired", "Cursor turned its sign-in away: sign in to Cursor again in Settings \u203A Accounts.", undefined, false);
+    const held = this.heldUntil();
+    if (held)
+      throw new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", held, false);
     const kept = this.token;
     if (!fresh && kept && kept.key === key && this.now() < kept.until)
       return kept.access;
+    if (this.exchanging?.key === key)
+      return this.exchanging.answer;
+    const answer = this.exchange(key).finally(() => {
+      if (this.exchanging?.answer === answer)
+        this.exchanging = undefined;
+    });
+    this.exchanging = { key, answer };
+    return answer;
+  }
+  async exchange(key) {
     let answer;
     try {
       answer = await send(`${cursorEndpoints.api2}/auth/exchange_user_api_key`, { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: "{}" }, 1e4);
     } catch {
       throw new LimitsProblem("failed", "Couldn't reach Cursor. Check your connection.");
     }
-    if (answer.status === 400 || answer.status === 401)
+    if (answer.status === 400 || answer.status === 401) {
+      this.refused = fingerprint(key);
       throw new LimitsProblem("expired", "Cursor turned its sign-in away: sign in to Cursor again in Settings \u203A Accounts.");
-    if (answer.status === 429)
-      throw new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", retryAt(answer.headers.get("retry-after"), this.now()));
+    }
+    if (answer.status === 429) {
+      this.hold(retryAt(answer.headers.get("retry-after"), this.now()));
+      throw new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", this.holdUntil);
+    }
     if (answer.status < 200 || answer.status >= 300)
       throw new LimitsProblem("failed", `Cursor answered ${answer.status}.`);
     const access = typeof answer.body?.accessToken === "string" ? answer.body.accessToken.trim() : "";
@@ -17662,8 +17691,10 @@ async function readCursorPlan(client, now = Date.now) {
     if (answer.status === 401 || answer.status === 403)
       throw new LimitsProblem("expired", "Cursor turned its sign-in away: sign in to Cursor again in Settings \u203A Accounts.");
   }
-  if (answer.status === 429)
-    throw new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", retryAt(answer.headers.get("retry-after"), now()));
+  if (answer.status === 429) {
+    client.hold(retryAt(answer.headers.get("retry-after"), now()));
+    throw new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", client.heldUntil());
+  }
   if (answer.status < 200 || answer.status >= 300)
     throw new LimitsProblem("failed", `Cursor answered ${answer.status}.`);
   const usage = object(answer.body);
@@ -21357,6 +21388,7 @@ class CursorHistory {
     return read;
   }
   async readFor(client, access, key, now) {
+    const token = { access };
     const today = Math.floor(now / DAY2) * DAY2;
     const window = Array.from({ length: CURSOR_DAYS }, (_, back) => {
       const start = today - back * DAY2;
@@ -21374,12 +21406,14 @@ class CursorHistory {
     const queue = [...due];
     const worker = async () => {
       for (let day = queue.shift();day && !stopped; day = queue.shift()) {
-        const result = await this.fetchDay(client, access, day, () => stopped);
+        const result = await this.fetchDay(client, token, day, () => stopped);
         if (stopped)
           return;
         if (typeof result === "string") {
           failures++;
           first ??= result;
+          if (result === "held")
+            stopped = true;
         } else {
           succeeded++;
           cached.set(day.key, result);
@@ -21405,7 +21439,8 @@ class CursorHistory {
       throw new Error(`Cursor's usage events: ${window.filter((day) => !cached.has(day.key)).length} of ${window.length} days aren't known yet.`);
     return new Map(window.map((day) => [day.key, cached.get(day.key)]));
   }
-  async fetchDay(client, access, day, stopped) {
+  async fetchDay(client, token, day, stopped) {
+    let renewed = false;
     const pageSize = this.options.pageSize ?? 1000;
     let page = 1;
     let expected;
@@ -21416,12 +21451,26 @@ class CursorHistory {
         return "request";
       let answer;
       try {
-        answer = await client.website("/api/dashboard/get-filtered-usage-events", access, { method: "POST", body: { startDate: String(day.start), endDate: String(day.end - 1), page, pageSize } }, 15000);
+        answer = await client.website("/api/dashboard/get-filtered-usage-events", token.access, { method: "POST", body: { startDate: String(day.start), endDate: String(day.end - 1), page, pageSize } }, 15000);
       } catch {
         return "request";
       }
       if (!answer)
         return "request";
+      if (answer.status === 429) {
+        client.hold(retryAt(answer.headers.get("retry-after"), Date.now()));
+        return "held";
+      }
+      if ((answer.status === 401 || answer.status === 403) && !renewed) {
+        renewed = true;
+        token.renewing ??= client.accessToken(true).then((access) => void (token.access = access));
+        try {
+          await token.renewing;
+        } catch {
+          return "http";
+        }
+        continue;
+      }
       if (answer.status < 200 || answer.status >= 300)
         return "http";
       const parsed = cursorEventsPage(answer.body);
@@ -22678,7 +22727,8 @@ function cursorSources(folder, elsewhere, history = new CursorHistory(folder ? j
           return raw ? identityOf(raw) : undefined;
         },
         slots: async (pricing, since) => {
-          if (elsewhere(agent.providerID))
+          const raw = client.identity();
+          if (elsewhere(agent.providerID, raw ? identityOf(raw) : undefined))
             return null;
           if (!client.key())
             throw new Error("Cursor's sign-in can't be read just now.");
@@ -28462,6 +28512,7 @@ var MOST_USES = 50000;
 var MOST_BYTES2 = 400000;
 var RECENT = 2 * 24 * 60 * MINUTE3;
 var SERVICE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+var WHOLE_FRESH = 25 * MINUTE3;
 var text5 = (value, most = 200) => typeof value === "string" && value ? value.slice(0, most) : undefined;
 
 class UsagePeers {
@@ -28490,6 +28541,23 @@ class UsagePeers {
     directory.listen(() => this.directorySaid());
     transport.onFollowed?.(() => this.told.clear());
   }
+  send(to, mail, durable) {
+    const fresh = Object.fromEntries(this.usage.own().flatMap((account) => account.accountWide && account.scanned ? [[account.provider, account.scanned]] : []));
+    this.transport.send(to, Object.keys(fresh).length ? { ...mail, fresh } : mail, durable);
+  }
+  readsWhole(service, identity) {
+    const self = this.directory.own()?.key;
+    if (!self || !this.directory.told)
+      return false;
+    const now = this.now();
+    for (const [key, kept] of this.peers) {
+      if (key >= self || this.vouched(key) || now - kept.heard > PEER_AWAY)
+        continue;
+      if (kept.accounts.some((account) => account.accountWide && account.service === service && account.identity === identity && account.scanned !== undefined && now - account.scanned < WHOLE_FRESH))
+        return true;
+    }
+    return false;
+  }
   rows(own) {
     const now = this.now();
     const self = this.directory.own();
@@ -28514,11 +28582,11 @@ class UsagePeers {
     for (const { key } of this.directory.peerBoxes()) {
       const last = this.told.get(key);
       if (!last)
-        this.transport.send(key, { kind: "usage", at: now, accounts, digest, ask: true }, false);
+        this.send(key, { kind: "usage", at: now, accounts, digest, ask: true }, false);
       else if (last.digest !== digest && (changed || now - last.at >= TELL_AGAIN))
-        this.transport.send(key, { kind: "usage", at: now, accounts: recent(), from, digest }, false);
+        this.send(key, { kind: "usage", at: now, accounts: recent(), from, digest }, false);
       else if (now - last.at >= TELL_AGAIN)
-        this.transport.send(key, { kind: "usage", at: now, digest }, false);
+        this.send(key, { kind: "usage", at: now, digest }, false);
       else
         continue;
       this.told.set(key, { digest, at: now });
@@ -28532,7 +28600,7 @@ class UsagePeers {
     const now = this.now();
     const { accounts, digest } = this.shared();
     for (const { key } of this.directory.peerBoxes()) {
-      this.transport.send(key, { kind: "usage", at: now, accounts, digest, ...this.told.has(key) ? {} : { ask: true } }, false);
+      this.send(key, { kind: "usage", at: now, accounts, digest, ...this.told.has(key) ? {} : { ask: true } }, false);
       this.told.set(key, { digest, at: now });
     }
   }
@@ -28545,7 +28613,7 @@ class UsagePeers {
     this.refreshedElsewhere = now;
     const digest = this.lastDigest ?? this.shared().digest;
     for (const { key } of this.directory.peerBoxes())
-      this.transport.send(key, { kind: "usage", at: now, digest, refresh: true }, false);
+      this.send(key, { kind: "usage", at: now, digest, refresh: true }, false);
   }
   take(from, mail) {
     if (!isUsageMail(mail))
@@ -28557,6 +28625,7 @@ class UsagePeers {
     const name = this.directory.peerBoxes().find((box) => box.key === from)?.name ?? before?.name ?? "another computer";
     const digest = text5(mail.digest, 64);
     const wasAway = !!before && now - before.heard > PEER_AWAY;
+    const skew = typeof mail.at === "number" && Number.isFinite(mail.at) && Math.abs(now - mail.at) >= SKEW ? now - mail.at : 0;
     let whole = !!before && !!digest && before.digest === digest;
     if (Array.isArray(mail.accounts)) {
       const off = typeof mail.at === "number" && Number.isFinite(mail.at) && Math.abs(now - mail.at) >= SKEW ? now - mail.at : 0;
@@ -28578,10 +28647,22 @@ class UsagePeers {
       if (wasAway)
         this.usage.peersChanged();
     }
+    const fresh = mail.fresh && typeof mail.fresh === "object" ? mail.fresh : undefined;
+    const kept = this.peers.get(from);
+    if (fresh && kept) {
+      for (const account of kept.accounts) {
+        const at = fresh[account.provider];
+        if (!account.accountWide || typeof at !== "number" || !Number.isFinite(at))
+          continue;
+        const moved = Math.min(at + skew, now);
+        if (moved > (account.scanned ?? 0))
+          account.scanned = moved;
+      }
+    }
     if (!whole && digest && mail.ask !== true && now - (this.askedBack.get(from) ?? -Infinity) >= MINUTE3) {
       this.askedBack.set(from, now);
       const mine = this.shared();
-      this.transport.send(from, { kind: "usage", at: now, ...mine, ask: true }, false);
+      this.send(from, { kind: "usage", at: now, ...mine, ask: true }, false);
       this.told.set(from, { digest: mine.digest, at: now });
     }
     if (mail.ask === true || wasAway)
@@ -28605,7 +28686,7 @@ class UsagePeers {
       return;
     this.answered.set(key, now);
     const mine = this.shared();
-    this.transport.send(key, { kind: "usage", at: now, ...mine }, false);
+    this.send(key, { kind: "usage", at: now, ...mine }, false);
     this.told.set(key, { digest: mine.digest, at: now });
   }
   lastDigest;
@@ -32946,14 +33027,12 @@ class LimitsPeers {
     directory.listen(() => this.directorySaid());
     transport.onFollowed?.(() => this.told.clear());
   }
-  fresh(service, identity, yours = false) {
-    return this.freshest(service, identity, yours)?.checked;
+  fresh(service, identity) {
+    return this.freshest(service, identity)?.checked;
   }
-  freshest(service, identity, yours = false) {
+  freshest(service, identity) {
     let newest;
-    for (const [key, kept] of this.peers) {
-      if (yours && !(this.directory.told && (this.directory.isPeer?.(key) ?? true)))
-        continue;
+    for (const kept of this.peers.values()) {
       for (const account of kept.accounts) {
         if (account.service !== service || account.identity !== identity || account.problem || !account.checked)
           continue;
@@ -33098,6 +33177,20 @@ class LimitsPeers {
 }
 var text6 = (value, most = 200) => typeof value === "string" && value ? value.slice(0, most) : undefined;
 var time = (value) => typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+var MOST_EXTRA = 1000;
+function takenExtra(extra) {
+  if (!extra || typeof extra !== "object" || Array.isArray(extra) || !text6(extra.id) || !text6(extra.name, 100) || !text6(extra.kind, 40))
+    return [];
+  if (extra.kind === "spent") {
+    if (typeof extra.amount !== "number" || !Number.isFinite(extra.amount) || !["usd", "credits", "requests"].includes(extra.unit))
+      return [];
+    return [{ id: text6(extra.id), name: text6(extra.name, 100), kind: "spent", amount: extra.amount, unit: extra.unit, ...time(extra.resetsAt) ? { resetsAt: extra.resetsAt } : {} }];
+  }
+  const plain = Object.fromEntries(Object.entries(extra).slice(0, 20).filter(([, value]) => typeof value === "string" && value.length <= 200 || typeof value === "number" && Number.isFinite(value) || typeof value === "boolean"));
+  if (Buffer.byteLength(JSON.stringify(plain)) > MOST_EXTRA)
+    return [];
+  return [{ ...plain, id: text6(extra.id), name: text6(extra.name, 100), kind: text6(extra.kind, 40) }];
+}
 function takenAccount2(given, off, now) {
   if (!given || typeof given !== "object")
     return null;
@@ -33129,7 +33222,7 @@ function takenAccount2(given, off, now) {
     ];
   });
   const balance = account.balance;
-  const extras = (Array.isArray(account.extras) ? account.extras : []).slice(0, 10).flatMap((extra) => extra && typeof extra === "object" && text6(extra.id) && text6(extra.name, 100) && extra.kind === "spent" && typeof extra.amount === "number" && Number.isFinite(extra.amount) && ["usd", "credits", "requests"].includes(extra.unit) ? [{ id: text6(extra.id), name: text6(extra.name, 100), kind: "spent", amount: extra.amount, unit: extra.unit, ...time(extra.resetsAt) ? { resetsAt: extra.resetsAt } : {} }] : []);
+  const extras = (Array.isArray(account.extras) ? account.extras : []).slice(0, 10).flatMap((extra) => takenExtra(extra));
   const problem = account.problem;
   const checked = moved(account.checked);
   const next = time(account.next) === undefined ? undefined : account.next + off;
@@ -33321,7 +33414,7 @@ var engineCodexUsage = engineCodexSource(engineData, () => engineAccounts.answer
 var grokUsage = grokSources(usageFolder);
 var engineHostedUsage = engineHostedSources(engineData);
 cursorEndpoints.live = !noPriceFeeds;
-var cursorUsage = cursorSources(usageFolder, (provider) => limits.readsElsewhere(provider));
+var cursorUsage = cursorSources(usageFolder, (provider, identity) => limits.held(provider) || identity !== undefined && !!usage.peers?.readsWhole("cursor", identity));
 var usage = new Usage(() => [...claudeUsage2(roster.all()), ...codexUsage(roster.all()), ...grokUsage(roster.all()), ...engineCodexUsage(), ...engineHostedUsage(), ...cursorUsage(roster.all())], new PricingStore(join40(usageFolder, "pricing"), noPriceFeeds ? null : undefined), (provider) => limits.identity(provider), join40(usageFolder, "usage.json"));
 usage.settings = usageSettings;
 engineAccounts.onAnswered = () => void usage.tick();
@@ -33523,4 +33616,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents a30911a459ac5517cdb27b3a43176edcf06dc1b3de3ef14cbe3da462ec0e4b29
+// Built from Packages/Box/src/agents ddf60f535deb634d41d557bff683ab76b93f5ecb2674fc4a5dbe0cafc9da5034

@@ -3874,7 +3874,8 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     piece E grows this list with more kinds (Claude's extra usage and reset grants, Codex's credits,
     OpenRouter's key spend by period): a client leaves out a kind it doesn't know, and one whose
     `resetsAt` has passed (not known now, as a window), and a box from before this keeps none from a
-    peer's mail. Absent when there's none. A row's are its newest reading's that had no problem: a
+    peer's mail (one from now on passes a kind it doesn't know on as told, only its plain fields,
+    1 KB at most). Absent when there's none. A row's are its newest reading's that had no problem: a
     reading without them says there are none now.
   - `checked`, when its maker last answered (with its limits or a problem; absent for an account
     only its turns tell of); `next`, when it's read again (absent for one that's never read).
@@ -4031,9 +4032,10 @@ doesn't know its engine's folder doesn't state it (`services` without `opencode`
 from Cursor's own record of each Cursor account signed in to Kuvo Code (its dashboard's usage
 events, asked with the sign-in its plan limits are read with: "Plan limits"), which is the whole
 account's, wherever it ran: so a row of it is its newest box's, never a sum (below), and one of
-your computers asks Cursor for it at a time, the one that reads its plan limits ("One read per
-account"; a box a peer vouches for reading them doesn't stand for it, as its row is in none of
-your totals). A client reaches them as
+your own computers asks Cursor for it at a time, however its plan limits' read went: of those
+that read it lately (each tells when it last did, `fresh`, below), the one whose link key comes
+first; one that stopped telling for 25 minutes, or is away, is taken over. Nothing is asked of
+Cursor while its plan's sign-in was turned away as it is now, or while Cursor holds reads off. A client reaches them as
 `kuvo/agents/api/kuvo/usage…` (the Mac app at `api/kuvo/usage…` on the bridge itself), where
 `features` has `usage.history`.
 
@@ -4139,7 +4141,10 @@ your totals). A client reaches them as
     as it was known before. Today and yesterday are asked every round, an older day until Cursor
     answered it after it ended. An event with no `tokenUsage` used none; one whose time, model or
     token counts (whole numbers, not negative) aren't readable counts nowhere. Priced without
-    long-context rates (an event isn't a request's whole prompt). What came is kept per Cursor user
+    long-context rates (an event isn't a request's whole prompt). A key Cursor turned away isn't
+    sent again until the sign-in changes; a 429 (the exchange's or the events') stops the read and
+    holds every read of the account for as long as its `Retry-After` says (15 minutes without
+    one); a token turned away midway is exchanged again once. One exchange at a time per key. What came is kept per Cursor user
     (`usage/cursor-history/<a hash of the user>.json`, never the user's ID); a read with a day still
     not known leaves what this box had as it was, never a day of nothing, as does a sign-in file
     that can't be read just now (being rewritten); signed out, the account's use from this box goes.
@@ -4165,7 +4170,7 @@ your totals). A client reaches them as
   Kept 35 days.
 - **Across your computers**, as plan limits are ("Plan limits", "Across your computers": the same
   boxes, no hub, each working with the others off): each box tells each of them its own accounts'
-  use, `{"seat": {"kind": "usage", at, digest, accounts?, from?, ask?, refresh?}}` through its link
+  use, `{"seat": {"kind": "usage", at, digest, accounts?, from?, ask?, refresh?, fresh?}}` through its link
   (in parts when it's big, as a group chat's mail is; to and from a box a peer vouches for too,
   which sends nothing else that's taken): all of it (`accounts`) with `ask` to one it hasn't told
   since its bridge or link started, and to one that asks; after a read that changed what they used
@@ -4175,7 +4180,9 @@ your totals). A client reaches them as
   fallback model is chosen (which model estimated what isn't in `digest`). `digest` is a hash of all of it (each account's
   `provider`, `service`, `agent`, `account`, `label`, `identity`, `cut` and slots as kept); a
   receiver whose own, put together, isn't that asks for all of it (`ask`, at most once a minute),
-  and is answered at once. Each account is `{provider, service, agent?, account?, label?,
+  and is answered at once. `fresh`, in every mail: when the sender last read each of its
+  `accountWide` accounts, by provider (its clock), so your computers know which reads it though
+  what it read didn't change (a box from before ignores it). Each account is `{provider, service, agent?, account?, label?,
   identity?, scanned?, cut?, whole, places?, slots: {models, used: [[slot, model, tokens,
   dollars]], unknown?: [[slot, model]], fallback?: [[slot, model]]}, estimated?: false,
   accountWide?: true}` (`fallback`, a model whose rates estimated that slot's use of one with no

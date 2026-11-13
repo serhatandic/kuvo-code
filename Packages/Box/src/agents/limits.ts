@@ -55,12 +55,16 @@ export interface LimitExtra {
   id: string
   /** What a client calls it, as its maker's own label ("On-demand"). */
   name: string
-  /** `spent`: an amount used so far, with no limit to it. */
-  kind: "spent"
-  amount: number
-  unit: "usd" | "credits" | "requests"
+  /**
+   * `spent`: an amount used so far, with no limit to it (`amount`, `unit`). A kind a newer box
+   * states (piece E's) is passed on as told, its other fields kept as they came.
+   */
+  kind: "spent" | (string & {})
+  amount?: number
+  unit?: "usd" | "credits" | "requests"
   /** When it starts over, in ms since 1970, where its maker says. */
   resetsAt?: number
+  [more: string]: unknown
 }
 
 /** What an agent read of its plan just now. */
@@ -338,18 +342,15 @@ export class Limits {
   }
 
   /**
-   * Whether another of your computers reads this account from its maker in this box's place now:
-   * it read it lately, and this box hasn't since (one read per account across them, as above).
-   * What else is asked of its maker for the account (Cursor's usage history) waits on the same,
-   * only for one of your own computers (a box a peer vouches for counts in none of your totals).
+   * Whether nothing more is to be asked of this account's maker now (Cursor's usage history waits
+   * on it too): its sign-in was turned away and is as it was then, or its maker holds reads off.
    */
-  readsElsewhere(provider: string): boolean {
+  held(provider: string): boolean {
     const entry = this.entries.get(provider)
-    const account = this.accounts().find((each) => each.provider === provider)
-    if (!entry?.elsewhere || !account?.limits.read || !entry.identity) return false
-    const peer = this.peers?.fresh(account.service, entry.identity, true)
-    const at = this.now()
-    return peer !== undefined && peer > (entry.checked ?? 0) && at - peer < account.limits.every + SHARED_SLACK
+    const source = this.accounts().find((each) => each.provider === provider)?.limits
+    if (!entry || !source) return false
+    if (entry.problem?.kind === "expired" && entry.signIn !== undefined && entry.signIn === source.signIn?.()) return true
+    return this.heldBack(source, entry, this.now())
   }
 
   /** The accounts this box reads from their makers itself (not only from what turns hear), by provider. */

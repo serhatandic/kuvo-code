@@ -18,6 +18,7 @@ import * as plan from "../../src/agents/usage/cursor-plan"
 import { daysIn, SLOT, type Slots } from "../../src/agents/usage/history"
 import { catalogFromCompact, Pricing, supplementFrom, type PricingStore } from "../../src/agents/usage/pricing"
 import { cursorSources, Usage, usageRoutes, usageRows, type OwnUsage } from "../../src/agents/usage/usage"
+import { UsagePeers } from "../../src/agents/usage/usage-peers"
 import { cursorEvent, CursorStandIn } from "./support/cursor-standin"
 
 const base = mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-usage-cursor-test-"))
@@ -369,7 +370,7 @@ describe("Cursor's usage history", () => {
     const folder = mkdtempSync(join(base, "usage-"))
     const limits = limitsOf([agent])
     await limits.refresh()
-    const sources = cursorSources(folder, (provider) => limits.readsElsewhere(provider), new CursorHistory(join(folder, "cursor-history"), { deadline: instant, log: () => {} }), () => now)
+    const sources = cursorSources(folder, (provider) => limits.held(provider), new CursorHistory(join(folder, "cursor-history"), { deadline: instant, log: () => {} }), () => now)
     const usage = new Usage(() => sources([agent]), store(cursorPricing()), (provider) => limits.identity(provider), join(folder, "usage.json"), () => now)
     await usage.refresh()
     const view = ((await (await usageRoutes(usage, "GET", [], new URLSearchParams({ zone: "Asia/Tokyo" }))).json()) as any).data
@@ -403,7 +404,7 @@ describe("Cursor's usage history", () => {
     await limits.refresh()
     expect(limits.list()[0]!.problem?.message).toBe("No active Cursor subscription.")
     expect(limits.identity("cursor@work")).toBe(identityOf("cursor:user_abc"))
-    const sources = cursorSources(undefined, (provider) => limits.readsElsewhere(provider), new CursorHistory(undefined, { deadline: instant, log: () => {} }), () => now)
+    const sources = cursorSources(undefined, (provider) => limits.held(provider), new CursorHistory(undefined, { deadline: instant, log: () => {} }), () => now)
     const usage = new Usage(() => sources([agent]), store(cursorPricing()), (provider) => limits.identity(provider), undefined, () => now)
     await usage.refresh()
     const [mine] = usage.own()
@@ -507,26 +508,127 @@ describe("Cursor's account across your computers", () => {
     expect(usage.own()[0]!.scanned).toBe(mine!.scanned)
   })
 
-  test("the box that reads its limits elsewhere is the one it waits on: Limits.readsElsewhere", async () => {
-    const source: LimitsSource = { every: 5 * 60_000, account: () => "its-key", read: async () => ({ windows: [{ id: "total", used: 0.1 }], identity: "cursor:user_abc" }) }
-    let peerChecked: number | undefined
-    const limits = new Limits(() => [{ provider: "cursor", service: "cursor", limits: source }], undefined, () => now)
-    let yours = true
-    limits.peers = { fresh: (_service: string, _identity: string, mine?: boolean) => (mine && !yours ? undefined : peerChecked), rows: (own: any) => own, tell: () => {}, freshest: () => undefined } as any
-    await limits.tick()
-    expect(limits.readsElsewhere("cursor")).toBe(false)
-    // Another computer read it after this one: it reads it, and this one waits.
+  test("one of your computers asks Cursor for an account's history at a time, however its plan read went; one that stops, or is away, is taken over; one a peer vouches for isn't waited on", async () => {
+    cursor.keys.set("key_mac", "auth0|user_abc")
+    cursor.keys.set("key_dev", "auth0|user_abc")
+    // Its plan can't be read (no subscription): neither computer's limits stand for the other's.
+    cursor.usage = { enabled: false }
+    cursor.events = eventsEachDay(1)
+    const directory = (self: string, other: string) => ({ told: true, own: () => ({ key: self, name: self }), peerBoxes: () => [{ key: other, name: other }], listen: () => {}, isPeer: () => true })
+    const boxes: { key: string; peers: UsagePeers }[] = []
+    let down = new Set<string>()
+    const box = (key: string, other: string, sign: string) => {
+      const agent = account(sign) as unknown as Agent
+      const limits = limitsOf([agent])
+      const sources = cursorSources(undefined, (provider, identity) => limits.held(provider) || (identity !== undefined && !!usage.peers?.readsWhole("cursor", identity)), new CursorHistory(undefined, { deadline: instant, log: () => {} }), () => now)
+      const usage = new Usage(() => sources([agent]), store(cursorPricing()), (provider) => limits.identity(provider), undefined, () => now)
+      const transport = { followed: true, send: (to: string, mail: any) => void (down.has(key) || down.has(to) ? undefined : boxes.find((each) => each.key === to)?.peers.take(key, structuredClone(mail))) }
+      const peers = new UsagePeers(usage, transport, directory(key, other) as any, undefined, () => now)
+      boxes.push({ key, peers })
+      return { key, usage, peers, limits }
+    }
+    const mac = box("a-mac", "b-dev", "key_mac")
+    const dev = box("b-dev", "a-mac", "key_dev")
+    const round = async () => {
+      for (const each of [mac, dev]) {
+        await each.limits.refresh()
+        await each.usage.refresh()
+      }
+    }
+    const events = () => cursor.eventDays().length
+    // Both start, neither has heard of the other: both ask once.
+    await round()
+    // Then the one whose key comes first asks; the other waits, though no plan read worked.
     now += 6 * 60_000
-    peerChecked = now - 30_000
-    await limits.tick()
-    expect(limits.readsElsewhere("cursor")).toBe(true)
-    // Read by a box a peer vouches for (another person's Mac beside a machine you share): its
-    // limits stand for this one's, but its history counts in none of your totals, so it's asked here.
-    yours = false
-    expect(limits.readsElsewhere("cursor")).toBe(false)
-    yours = true
-    // It stopped: this one reads it again.
-    now += 20 * 60_000
-    expect(limits.readsElsewhere("cursor")).toBe(false)
+    let before = events()
+    await mac.usage.refresh()
+    expect(events()).toBeGreaterThan(before)
+    before = events()
+    await dev.usage.refresh()
+    expect(events()).toBe(before)
+    // Still waits rounds later, though what the Mac read didn't change (its mail says when it read).
+    for (let i = 0; i < 4; i++) {
+      now += 6 * 60_000
+      await mac.usage.refresh()
+      mac.peers.tell()
+      before = events()
+      await dev.usage.refresh()
+      expect(events()).toBe(before)
+    }
+    // The Mac stops telling (off): past 25 minutes, the devbox asks itself.
+    down = new Set(["a-mac"])
+    now += 26 * 60_000
+    before = events()
+    await dev.usage.refresh()
+    expect(events()).toBeGreaterThan(before)
+    expect(dev.usage.rows()[0]!.accountWide).toBe(true)
+  })
+
+  test("a box a peer vouches for (another person's Mac beside a machine you share) is never waited on", async () => {
+    const peers = new UsagePeers(new Usage(() => [], store(cursorPricing()), () => undefined, undefined, () => now), { followed: true, send: () => {} }, { told: true, own: () => ({ key: "b", name: "b" }), peerBoxes: () => [{ key: "a", name: "a" }], listen: () => {}, isPeer: () => false } as any, undefined, () => now)
+    const identity = "aaaaaaaaaaaaaaaa"
+    peers.take("a", { kind: "usage", at: now, digest: "x", accounts: [{ provider: "cursor", service: "cursor", identity, scanned: now, accountWide: true, slots: { models: [], used: [] } }] })
+    expect(peers.readsWhole("cursor", identity)).toBe(false)
+  })
+
+  test("a key Cursor turned away isn't sent again, nor anything while Cursor holds reads off (the exchange's 429, the events' 429), whatever asks", async () => {
+    const exchanges = () => cursor.asked.filter((each) => each.path.endsWith("exchange_user_api_key")).length
+    const pages = () => cursor.eventDays().length
+    // Revoked: its plan's read finds it so, and the history never sends it again.
+    const revoked = account("key_gone") as unknown as Agent
+    const limits = limitsOf([revoked])
+    await limits.refresh()
+    expect(limits.held("cursor@work")).toBe(true)
+    const history = new CursorHistory(undefined, { deadline: instant, log: () => {} })
+    const sources = cursorSources(undefined, (provider) => limits.held(provider), history, () => now)
+    const usage = new Usage(() => sources([revoked]), store(cursorPricing()), (provider) => limits.identity(provider), undefined, () => now)
+    for (let i = 0; i < 3; i++) {
+      now += 6 * 60_000
+      await usage.refresh()
+      await limits.refresh()
+    }
+    expect(exchanges()).toBe(1)
+    // Asked straight (a refresh as the plan's state is still unknown): the client itself won't send it again.
+    await expect((revoked as unknown as CursorAgent).cursor.accessToken()).rejects.toMatchObject({ kind: "expired", sent: false })
+    expect(exchanges()).toBe(1)
+
+    // The exchange held off (429): nothing more is asked until it's over.
+    cursor.keys.set("key_work", "auth0|user_abc")
+    const busy = account("key_work", "busy")
+    cursor.exchange = 429
+    cursor.retryAfter = "600"
+    await expect(busy.cursor.accessToken()).rejects.toMatchObject({ kind: "rate-limited" })
+    cursor.exchange = undefined
+    const asked = cursor.asked.length
+    await expect(busy.cursor.accessToken()).rejects.toMatchObject({ kind: "rate-limited", sent: false })
+    await expect(new CursorHistory(undefined, { deadline: instant, log: () => {} }).read(busy.cursor, Date.now())).rejects.toMatchObject({ kind: "rate-limited" })
+    expect(cursor.asked.length).toBe(asked)
+
+    // The events held off (429): the read stops there, and the next asks nothing until it's over.
+    const other = account("key_work", "other")
+    cursor.events = eventsEachDay(1)
+    cursor.failing = () => 429
+    await expect(new CursorHistory(undefined, { deadline: instant, concurrency: 1, log: () => {} }).read(other.cursor, now)).rejects.toThrow("aren't known yet")
+    expect(pages()).toBe(1)
+    await expect(new CursorHistory(undefined, { deadline: instant, log: () => {} }).read(other.cursor, now)).rejects.toMatchObject({ kind: "rate-limited" })
+    expect(pages()).toBe(1)
+  })
+
+  test("a token Cursor turns away midway through the history is exchanged again once, and its page asked again; two reads as the box starts share one exchange", async () => {
+    cursor.keys.set("key_work", "auth0|user_abc")
+    cursor.events = eventsEachDay(1)
+    const agent = account("key_work")
+    const exchanges = () => cursor.asked.filter((each) => each.path.endsWith("exchange_user_api_key")).length
+    await Promise.all([agent.cursor.accessToken(), agent.cursor.accessToken()])
+    expect(exchanges()).toBe(1)
+    let once = true
+    cursor.failing = () => {
+      if (!once) return undefined
+      once = false
+      return 401
+    }
+    const days = await new CursorHistory(undefined, { deadline: instant, concurrency: 1, log: () => {} }).read(agent.cursor, now)
+    expect(days.size).toBe(CURSOR_DAYS)
+    expect(exchanges()).toBe(2)
   })
 })

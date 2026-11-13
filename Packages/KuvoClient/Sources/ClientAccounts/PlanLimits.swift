@@ -597,7 +597,8 @@ extension UsageListing {
         let newest = members.sorted { ($0.checked ?? $0.windows.map(\.read).max() ?? .distantPast) > ($1.checked ?? $1.windows.map(\.read).max() ?? .distantPast) }
         account.plan = newest.lazy.compactMap(\.plan).first
         account.balance = newest.lazy.compactMap(\.balance).first
-        account.extras = newest.first { !$0.extras.isEmpty }?.extras ?? []
+        // (As the box does: the newest reading without a problem's; one without any says there are none now.)
+        account.extras = newest.first { $0.checked != nil && $0.problem == nil }?.extras ?? []
         account.checked = members.compactMap(\.checked).max()
         account.next = members.compactMap(\.next).min()
         account.problem = members.allSatisfy { $0.problem != nil } ? newest.first?.problem : nil
