@@ -152,7 +152,9 @@ import Testing
         // without saying its changes go.
         try Data("total = sum(items)\n".utf8).write(to: URL(filePath: folder).appending(path: "checkout.py"))
         let named = try #require(workspace.worktrees[folder])
-        guard case .failed(let notCommitted) = named.mergeBack(from: folder, environment: [:]) else { Issue.record("merged uncommitted work"); return }
+        // As the Changes panel's Merge asks: its box, this Mac's.
+        let place = GitPlace(client: box.client(engine: Self.engine), path: folder, machine: nil)
+        guard case .failed(let notCommitted) = await named.mergeBack(at: place, author: [:]) else { Issue.record("merged uncommitted work"); return }
         #expect(notCommitted.contains("Commit the changes first"))
         let kept = await #expect(throws: BoxRefusal.self) { try await workspace.removeWorktree(folder, discardingChanges: false) }
         #expect(kept?.status == 409 && kept?.message.contains("changes that aren’t committed") == true)
@@ -161,9 +163,9 @@ import Testing
         // Committed: it merges into main, in the project's folder.
         _ = try git("add", "-A", in: folder)
         _ = try git("commit", "-q", "-m", "Fix the total", in: folder)
-        #expect(named.mergeBack(from: folder, environment: [:]) == .merged(into: "main"))
+        #expect(await named.mergeBack(at: place, author: [:]) == .merged(into: "main"))
         #expect(repository.read("checkout.py") == "total = sum(items)\n")
-        #expect(named.mergeBack(from: folder, environment: [:]) == .failed("\(branch) has nothing main doesn’t have yet."))
+        #expect(await named.mergeBack(at: place, author: [:]) == .failed("\(branch) has nothing main doesn’t have yet."))
 
         // Removed, then archived: the worktree and its merged branch go; the session is still the
         // project's.
@@ -171,6 +173,54 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: folder))
         #expect(try git("branch", "--list", branch, in: repository.path).isEmpty)
         #expect(workspace.projectDirectory(of: session) == workspace.folderPath(repository.path))
+    }
+
+    /// Stop on a command an agent left running: this Mac's box finds it where the engine lists it,
+    /// in the session's folder, and sends its process group SIGTERM, so it ends as the engine sees.
+    @Test func stopEndsACommandLeftRunningThroughTheBox() async throws {
+        defer { done() }
+        let session = try await workspace.createSession(in: repository.path, model: nil, agent: "build", worktree: true)
+        let folder = session.location.directory
+        // A command in a process group of its own, as the engine starts one.
+        var attributes: posix_spawnattr_t?
+        posix_spawnattr_init(&attributes)
+        defer { posix_spawnattr_destroy(&attributes) }
+        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP))
+        posix_spawnattr_setpgroup(&attributes, 0)
+        var pid: pid_t = 0
+        let arguments: [UnsafeMutablePointer<CChar>?] = [strdup("/bin/sleep"), strdup("600"), nil]
+        defer { arguments.forEach { free($0) } }
+        #expect(posix_spawn(&pid, "/bin/sleep", nil, &attributes, arguments, nil) == 0)
+        // The engine has it only in the session's folder, which it reads from the request's header.
+        let started = Int(pid)
+        StubWeb.route(Self.engine + "/api/shell/sh_left", sent: { request, _ in
+            guard request.value(forHTTPHeaderField: "x-opencode-directory")?.removingPercentEncoding == folder else { return StubWeb.json([:], status: 404) }
+            return StubWeb.json(["data": ["id": "sh_left", "status": "running", "command": "sleep 600", "pid": started]])
+        })
+        let stopped = try? await workspace.stopShellJob(ShellJob(id: "sh_left", status: "running", command: "sleep 600"), in: session.id)
+        #expect(stopped == "signal")
+        if stopped != "signal" { kill(-pid, SIGKILL) }
+        var status: Int32 = 0
+        waitpid(pid, &status, 0)
+        #expect(status & 0x7f == SIGTERM, "ended by its SIGTERM")
+
+        // One that's ended since, or a box that can't be asked: Stop says so, rather than nothing.
+        StubWeb.route(Self.engine + "/api/shell/sh_gone", sent: { _, _ in StubWeb.json([:], status: 404) })
+        do {
+            try await workspace.stopShellJob(ShellJob(id: "sh_gone", status: "running", command: "npm run dev"), in: session.id)
+            Issue.record("stopped one that isn't running")
+        } catch {
+            #expect(error.localizedDescription == "“npm run dev” isn’t running any more.")
+        }
+        let boxes = workspace.boxes
+        workspace.boxes = { id in BoxClient(box: id, transport: LocalBox { _ in PhoneLink.boxUnavailable(starting: false) }) }
+        defer { workspace.boxes = boxes }
+        do {
+            try await workspace.stopShellJob(ShellJob(id: "sh_gone", status: "running", command: "npm run dev"), in: session.id)
+            Issue.record("stopped with no box to ask")
+        } catch {
+            #expect(error.localizedDescription == "Couldn’t stop “npm run dev”. Kuvo Code’s background service on this Mac isn’t running. Try again in a moment.")
+        }
     }
 
     /// The project's folder switched to another branch since: Merge says so rather than merging
@@ -197,7 +247,8 @@ import Testing
         _ = try git("commit", "-q", "-m", "x", in: folder)
         try repository.git("switch", "-q", "-c", "release")
         let tree = try #require(workspace.worktrees[folder])
-        guard case .failed(let message) = tree.mergeBack(from: folder, environment: [:]) else { Issue.record("merged into release"); return }
+        let place = GitPlace(client: box.client(engine: Self.engine), path: folder, machine: nil)
+        guard case .failed(let message) = await tree.mergeBack(at: place, author: [:]) else { Issue.record("merged into release"); return }
         #expect(message.contains("on release now"))
         #expect(!repository.exists("x.txt"))
     }

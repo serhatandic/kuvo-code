@@ -2,59 +2,17 @@ import ClientChanges
 import Foundation
 import OpenCodeKit
 
-/// Branches and worktrees: what a session in a worktree needs to start, and to bring its work
-/// back (a merge, or a pull request).
+/// Whether a worktree has changes before Delete says what goes with it: one of what's left of git
+/// run by this app (`Git.run`), with the title bar's branches and the file list.
 nonisolated extension Git {
-    /// The branch `directory` has checked out, or nil (no repository, or no branch).
-    static func currentBranch(in directory: String) -> String? {
-        let name = run(["symbolic-ref", "--quiet", "--short", "HEAD"], in: directory)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return name?.isEmpty == false ? name : nil
-    }
-
     /// Changes that aren't committed, new files included; and, when git can't say (a machine's
     /// connection dropped), as if there were, so nothing is thrown away on a guess.
     /// New files count whatever git's settings say, as the Changes panel lists them.
     /// `includingHidden`: also changes in submodules their `ignore` setting leaves out, for
     /// before a worktree is removed, which would delete them unasked.
     static func hasUncommittedChanges(in directory: String, includingHidden: Bool = false) -> Bool {
-        uncommittedChanges(in: directory, includingHidden: includingHidden) ?? true
-    }
-
-    /// The same, or nil when git can't say.
-    static func uncommittedChanges(in directory: String, includingHidden: Bool = false) -> Bool? {
         let hidden = ["--untracked-files=normal"] + (includingHidden ? ["--ignore-submodules=none"] : [])
-        return run(["status", "--porcelain"] + hidden, in: directory).map { !$0.isEmpty }
-    }
-
-    /// How many commits `directory`'s branch has that `base` doesn't; nil when git can't say (its
-    /// base is gone, a machine's connection dropped).
-    static func commitsAhead(of base: String, in directory: String) -> Int? {
-        run(["rev-list", "--count", base + "..HEAD"], in: directory).flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
-    }
-
-    enum MergeResult: Equatable, Sendable {
-        case merged
-        /// Nothing changed: the merge stopped on these files.
-        case conflict([String])
-        case failed(String)
-    }
-
-    /// Merges `branch` into what `directory` has checked out. A merge that conflicts is
-    /// taken back, so the folder is as it was.
-    static func merge(_ branch: String, into directory: String, environment: [String: String]) -> MergeResult {
-        // One you're in the middle of there is yours: never taken back with this one.
-        if run(["rev-parse", "-q", "--verify", "MERGE_HEAD"], in: directory) != nil {
-            return .failed("The project’s folder is in the middle of a merge. Finish it there first.")
-        }
-        guard let failure = report(["merge", "--no-edit", branch], in: directory, environment: environment) else { return .merged }
-        // By their names as they are: not quoted or escaped, whatever letters are in them.
-        let conflicted = (run(["-c", "core.quotepath=off", "diff", "--name-only", "-z", "--diff-filter=U"], in: directory) ?? "").split(separator: "\0").map(String.init)
-        // Stopped partway for another reason (a hook, signing the commit): taken back too, or the
-        // folder stays in the middle of a merge.
-        if run(["rev-parse", "-q", "--verify", "MERGE_HEAD"], in: directory) != nil {
-            _ = report(["merge", "--abort"], in: directory, environment: environment)
-        }
-        return conflicted.isEmpty ? .failed(failure) : .conflict(conflicted)
+        return run(["status", "--porcelain"] + hidden, in: directory).map { !$0.isEmpty } ?? true
     }
 }
 
@@ -90,7 +48,8 @@ nonisolated enum PullRequests {
     }
 }
 
-/// Bringing a worktree session's work back: Merge in its Changes panel.
+/// Bringing a worktree session's work back: Merge in its Changes panel, on the box the worktree is
+/// on (`kuvo/git/merge`), as a phone asks it.
 nonisolated extension Workspace.Worktree {
     enum MergeOutcome: Equatable, Sendable {
         case merged(into: String)
@@ -99,26 +58,38 @@ nonisolated extension Workspace.Worktree {
         case failed(String)
     }
 
-    /// Merges what's committed on the worktree's branch (`directory` is the session's folder in
-    /// it) into the project's folder, on the branch it was made from.
-    func mergeBack(from directory: String, environment: [String: String]) -> MergeOutcome {
-        guard let target = Git.currentBranch(in: project) else { return .failed("The project’s folder isn’t on a branch.") }
-        if let base, target != base {
-            return .failed("The project’s folder is on \(target) now. Switch it back to \(base) to merge, or create a pull request.")
-        }
-        if let reason = unready(in: directory, against: target) { return .failed(reason) }
-        return switch Git.merge(branch, into: project, environment: environment) {
-        case .merged: .merged(into: target)
-        case .conflict(let files): .conflict(files, into: target)
-        case .failed(let message): .failed(message)
-        }
-    }
+    /// Merge into… on this Mac while Kuvo Code finishes an update: its background service moves to
+    /// the new version once the work that's running ends.
+    static let mergeAfterUpdate = "Kuvo Code on this Mac is finishing an update. Merge into… works again once the work that’s running now ends; try again then."
 
-    /// Why the work can't go anywhere yet, if it can't.
-    func unready(in directory: String, against target: String) -> String? {
-        if Git.hasUncommittedChanges(in: directory) { return "Commit the changes first. Only what’s committed goes." }
-        if Git.commitsAhead(of: target, in: directory) == 0 { return "\(branch) has nothing \(target) doesn’t have yet." }
-        return nil
+    /// Merges what's committed on the worktree's branch (`place`: the session's folder in it) into
+    /// the branch it was made from, in the project's folder. Its box says whether it can go (the
+    /// project's folder on that branch and not in the middle of a merge of yours, the work
+    /// committed, something new in it), and takes back a merge that conflicts. `author`: your
+    /// shell's git author, for a merge commit.
+    @concurrent func mergeBack(at place: GitPlace, author: [String: String]) async -> MergeOutcome {
+        struct Asked: Encodable { let directory: String; let into: String?; let author: [String: String] }
+        struct Answer: Decodable { var into: String?; var message: String?; var conflicts: [String]? }
+        // Without a branch it was made from, its box picks: the one the project's folder is on.
+        let asked = Asked(directory: place.path, into: base, author: author)
+        do {
+            let (status, data) = try await place.client.send("POST", "kuvo/git/merge", body: JSONEncoder().encode(asked))
+            let answer = try? JSONDecoder().decode(Answer.self, from: data)
+            let into = answer?.into ?? base ?? "the project’s branch"
+            if (200..<300).contains(status) { return .merged(into: into) }
+            if let conflicts = answer?.conflicts, !conflicts.isEmpty { return .conflict(conflicts, into: into) }
+            // A box from before Merge into… (bridge 0.9.143) has no such route, nor, from before
+            // #341, merges without a branch named. A machine takes this Mac's as it connects, so
+            // only one not updated since.
+            if status == 404 && answer?.message == nil || status == 400 && base == nil {
+                // COMPAT(beta.1 merge-older-box): says Merge into… waits while this Mac's older box runs on after an update, until the work under way ends (its keeper makes way then). Goes when 0.8.0 ships.
+                guard let machine = place.machine else { return .failed(Self.mergeAfterUpdate) }
+                return .failed("\(machine) needs a newer Kuvo Code to merge. It updates by itself overnight, or connect to it from this Mac.")
+            }
+            return .failed(BoxRefusal(status: status, data: data).message)
+        } catch {
+            return .failed(place.unreachable(error))
+        }
     }
 }
 

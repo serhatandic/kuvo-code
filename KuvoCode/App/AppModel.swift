@@ -351,6 +351,7 @@ final class AppModel {
     /// Also what the route scenarios run with (RouteContractTests).
     func wireStores() {
         workspace.boxes = { [weak self] id in self?.box(id) }
+        BoxClient.routes = { [weak self] id in self?.box(id) ?? .unwired(id) }
         // Your personalities, one library on every computer, kept by this Mac's box. However one
         // changed there (here, from a phone, taken from a machine's copy), the machines take it,
         // and this Mac's bots with it are told what it is now, by its box.

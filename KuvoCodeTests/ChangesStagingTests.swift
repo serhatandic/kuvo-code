@@ -10,10 +10,13 @@ import Testing
 @Suite struct ChangesStagingTests {
     let repo: TestRepository
     let changes: ProjectChanges
+    /// This Mac's box, which runs git for it.
+    let box: GitTestBox
 
-    init() throws {
+    init() async throws {
         repo = try TestRepository()
-        changes = ProjectChanges(directory: repo.path)
+        box = try await GitTestBox()
+        changes = box.changes(repo.path)
     }
 
     private func start() throws {

@@ -32,7 +32,7 @@ import Testing
         // Written a while ago, so it has a stamp (one changed in the last few seconds is read each look).
         try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -3600)], ofItemAtPath: repo.url.appending(path: "notes/todo.txt").path(percentEncoded: false))
 
-        guard case .listed(let files, let uncommitted) = await Git.found(in: root, scope: .uncommitted, base: nil, box: { _ in client }) else {
+        guard case .listed(let files, let uncommitted) = await Git.found(at: GitPlace.of(root, box: { _ in client }), scope: .uncommitted, base: nil) else {
             Issue.record("the box should list the changes")
             return
         }
@@ -52,9 +52,9 @@ import Testing
         #expect(new.hash != nil, "read again only when it changes")
 
         // Stage: it moves to Staged, there on the machine.
-        #expect(await Git.performing(.stage, on: edit, root: try #require(edit.root), scope: .unstaged) { _ in client } == nil)
+        #expect(await Git.performing(.stage, on: edit, at: GitPlace.of(try #require(edit.root), box: { _ in client }), scope: .unstaged) == nil)
         #expect(try repo.status().contains("M  README.md"))
-        guard case .listed(let staged, _) = await Git.found(in: root, scope: .staged, base: nil, box: { _ in client }) else {
+        guard case .listed(let staged, _) = await Git.found(at: GitPlace.of(root, box: { _ in client }), scope: .staged, base: nil) else {
             Issue.record("the box should list what's staged")
             return
         }
@@ -66,21 +66,21 @@ import Testing
         defer { box.stop() }
         let client = box.client
         try Data("not a picture".utf8).write(to: repo.url.appending(path: "logo.png"))
-        guard case .listed(let files, _) = await Git.found(in: root, scope: .uncommitted, base: nil, box: { _ in client }) else {
+        guard case .listed(let files, _) = await Git.found(at: GitPlace.of(root, box: { _ in client }), scope: .uncommitted, base: nil) else {
             Issue.record("the box should list the changes")
             return
         }
         let picture = try #require(files.first { $0.path == "logo.png" })
         let old = try #require(picture.oldObject)
-        #expect(await Git.shown(old, in: root) { _ in client } == Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0xFF, 0x00]))
+        #expect(await Git.shown(old, at: GitPlace.of(root, box: { _ in client })) == Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0xFF, 0x00]))
 
-        let wouldTake = await Git.commitDiffing(in: root) { _ in client }
+        let wouldTake = await Git.commitDiffing(at: GitPlace.of(root, box: { _ in client }))
         #expect(!wouldTake.staged && wouldTake.diff.contains("logo.png"))
-        #expect(await Git.committing(message: "New logo", push: false, in: root, environment: [:]) { _ in client } == nil)
+        #expect(await Git.committing(message: "New logo", push: false, at: GitPlace.of(root, box: { _ in client }), environment: [:]) == nil)
         #expect(try repo.status().isEmpty)
         #expect(try repo.git("log", "-1", "--format=%s") == "New logo\n")
         // Nothing left to commit: git's words, as it said them.
-        let refused = await Git.committing(message: "Again", push: false, in: root, environment: [:]) { _ in client }
+        let refused = await Git.committing(message: "Again", push: false, at: GitPlace.of(root, box: { _ in client }), environment: [:])
         #expect(refused?.contains("nothing to commit") == true)
     }
 
@@ -114,7 +114,7 @@ import Testing
         }
         let asked = Asked()
         func look(known: [String: ChangedFile]) async throws -> [ChangedFile] {
-            guard case .listed(let files, _) = await Git.found(in: root, scope: .uncommitted, base: nil, box: { _ in client }) else {
+            guard case .listed(let files, _) = await Git.found(at: GitPlace.of(root, box: { _ in client }), scope: .uncommitted, base: nil) else {
                 Issue.record("the box should list the changes")
                 return []
             }
@@ -155,27 +155,27 @@ import Testing
         try repo.write("README.md", "Hello\nWorld\n")
         try repo.git("add", "README.md")
 
-        guard case .listed(let staged, _) = await Git.found(in: root, scope: .staged, base: nil, box: { _ in client }) else {
+        guard case .listed(let staged, _) = await Git.found(at: GitPlace.of(root, box: { _ in client }), scope: .staged, base: nil) else {
             Issue.record("the box should list what's staged")
             return
         }
         let readme = try #require(staged.first { $0.path == "README.md" })
-        #expect(await Git.performing(.unstage, on: readme, root: try #require(readme.root), scope: .staged) { _ in client } == nil)
+        #expect(await Git.performing(.unstage, on: readme, at: GitPlace.of(try #require(readme.root), box: { _ in client }), scope: .staged) == nil)
         #expect(try repo.status().contains(" M README.md"))
 
-        guard case .listed(let unstaged, _) = await Git.found(in: root, scope: .unstaged, base: nil, box: { _ in client }) else {
+        guard case .listed(let unstaged, _) = await Git.found(at: GitPlace.of(root, box: { _ in client }), scope: .unstaged, base: nil) else {
             Issue.record("the box should list what's changed")
             return
         }
         let edited = try #require(unstaged.first { $0.path == "README.md" })
-        #expect(await Git.performing(.discard, on: edited, root: try #require(edited.root), scope: .unstaged) { _ in client } == nil)
+        #expect(await Git.performing(.discard, on: edited, at: GitPlace.of(try #require(edited.root), box: { _ in client }), scope: .unstaged) == nil)
         #expect(try repo.status().isEmpty)
         #expect(try String(contentsOf: repo.url.appending(path: "README.md"), encoding: .utf8) == "Hello\n")
     }
 
     /// The new files' lines as the Mac shows them, read from the box (`known`: those read before).
     private func newFiles(known: [String: ChangedFile], _ client: BoxClient) async throws -> [ChangedFile] {
-        guard case .listed(let files, _) = await Git.found(in: root, scope: .uncommitted, base: nil, box: { _ in client }) else {
+        guard case .listed(let files, _) = await Git.found(at: GitPlace.of(root, box: { _ in client }), scope: .uncommitted, base: nil) else {
             Issue.record("the box should list the changes")
             return []
         }
@@ -186,7 +186,7 @@ import Testing
     /// list that showed stays.
     @Test func aMachineOutOfReachKeepsItsList() async throws {
         let away = BoxClient(box: "lab", transport: LocalBox { _ in AsyncThrowingStream { $0.finish(throwing: URLError(.networkConnectionLost)) } })
-        guard case .unreachable = await Git.found(in: root, scope: .uncommitted, base: nil, box: { _ in away }) else {
+        guard case .unreachable = await Git.found(at: GitPlace.of(root, box: { _ in away }), scope: .uncommitted, base: nil) else {
             Issue.record("a box out of reach should say so")
             return
         }

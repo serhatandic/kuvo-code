@@ -139,17 +139,36 @@ function joinPath(...folders) {
   return [...new Set(folders.flatMap((list) => (list ?? "").split(":")).filter(Boolean))].join(":");
 }
 async function loginPath(env = process.env, wait = { interactive: 6000, login: 2000 }) {
+  const found = await fromLogin(env, wait, `"$PATH"`, (text) => joinPath(text.trim()) || undefined);
+  return found && joinPath(found, env.PATH);
+}
+async function loginEnvironment(env = process.env, wait = { interactive: 6000, login: 2000 }) {
+  return fromLogin(env, wait, "; env -0; printf ''", (text) => {
+    const found = {};
+    for (const line of text.split("\x00")) {
+      const at = line.indexOf("=");
+      if (at > 0)
+        found[line.slice(0, at)] = line.slice(at + 1);
+    }
+    if (!found.PATH)
+      return;
+    found.PATH = joinPath(found.PATH, env.PATH);
+    return found;
+  });
+}
+async function fromLogin(env, wait, printed, parse) {
   const shell = loginShell(env);
   if (/\/(nu|csh|tcsh)$/.test(shell))
     return;
   const kept = Object.entries(env).filter(([name, value]) => value !== undefined && /^(HOME|USER|LOGNAME|LANG|LC_[A-Z_]+|TERM|TMPDIR|PATH|SSH_AUTH_SOCK)$/.test(name));
   const login = { ...Object.fromEntries(kept), SHELL: shell, DISABLE_AUTO_UPDATE: "true" };
+  const command = printed.startsWith(";") ? `printf '%s' ${LOGIN_PATH_MARKERS[0]}${printed}; printf '%s' ${LOGIN_PATH_MARKERS[1]}` : `printf '%s%s%s' ${LOGIN_PATH_MARKERS[0]} ${printed} ${LOGIN_PATH_MARKERS[1]}`;
   for (const [flags, timeout] of [["-ilc", wait.interactive], ["-lc", wait.login]]) {
     const found = await new Promise((resolve) => {
       let output = "";
       let child;
       try {
-        child = spawn("/bin/sh", ["-c", WATCHED, shell, flags, `printf '%s%s%s' ${LOGIN_PATH_MARKERS[0]} "$PATH" ${LOGIN_PATH_MARKERS[1]}`], { cwd: login.HOME, env: login, detached: true, stdio: ["pipe", "pipe", "ignore"] });
+        child = spawn("/bin/sh", ["-c", WATCHED, shell, flags, command], { cwd: login.HOME, env: login, detached: true, stdio: ["pipe", "pipe", "ignore"] });
       } catch {
         return resolve(undefined);
       }
@@ -178,7 +197,7 @@ async function loginPath(env = process.env, wait = { interactive: 6000, login: 2
         const at = output.indexOf(LOGIN_PATH_MARKERS[0]);
         const end = at < 0 ? -1 : output.indexOf(LOGIN_PATH_MARKERS[1], at);
         if (end >= 0)
-          done(joinPath(output.slice(at + LOGIN_PATH_MARKERS[0].length, end).trim()) || undefined);
+          done(parse(output.slice(at + LOGIN_PATH_MARKERS[0].length, end)));
       });
       child.on("error", () => done(undefined));
       child.on("close", () => done(undefined));
@@ -187,8 +206,8 @@ async function loginPath(env = process.env, wait = { interactive: 6000, login: 2
           gone = setTimeout(() => done(undefined), 300);
       });
     });
-    if (found)
-      return joinPath(found, env.PATH);
+    if (found !== undefined)
+      return found;
   }
   return;
 }
@@ -7237,7 +7256,14 @@ import { basename, dirname, join, resolve } from "node:path";
 var EVERY = ["-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "log.showSignature=false"];
 var OWN = [...EVERY, "-c", "safe.bareRepository=explicit", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", "-c", "tag.gpgSign=false", "-c", "credential.helper="];
 var GIT_QUIET = { GIT_TERMINAL_PROMPT: "0" };
-var DRIVERS = String.raw`^(filter\..+\.(clean|smudge|process)|diff\..+\.textconv|hook\..+\.command)$`;
+var DRIVERS = String.raw`^(filter\..+\.(clean|smudge|process)|diff\..+\.textconv|hook\..+\.command|core\.fsmonitor)$`;
+var WATCHER = process.platform === "darwin" ? ["-c", "core.fsmonitor=true"] : [];
+var watches = (value) => value === undefined || /^(true|yes|on)$/i.test(value.trim()) || /^-?[1-9]\d*$/.test(value.trim());
+var watcherIn = (read) => {
+  const last = read.split("\x00").filter(Boolean).at(-1)?.split(/\n(.*)/s);
+  return last?.[0] === "core.fsmonitor" && watches(last[1]) ? WATCHER : [];
+};
+var watcherRead = (lead) => [...lead, "config", "-z", "--get-regexp", String.raw`^core\.fsmonitor$`];
 var KNOWN = /^"?([^"\s]+)"? (?:filter-process|clean|smudge|diff)(?: --skip| --key-name=[\w-]+| -- %f)*$/;
 var TOOLS = new Set(["git-lfs", "git-crypt"]);
 var VALUED = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--exec-path"]);
@@ -7315,11 +7341,16 @@ function switchedOff(read, scoped) {
   const parts = read.split("\x00").filter(Boolean);
   const settings = [];
   let converters = false;
+  let watcher = [];
   for (let at = 0;at < parts.length; at += scoped ? 2 : 1) {
     const scope = scoped ? parts[at] : "local";
     const [name, value] = (scoped ? parts[at + 1] : parts[at])?.split(/\n(.*)/s) ?? [];
     if (!name)
       continue;
+    if (name === "core.fsmonitor") {
+      watcher = watches(value) ? WATCHER : [];
+      continue;
+    }
     const where = name.slice(0, name.lastIndexOf("."));
     if (name.startsWith("hook.")) {
       if (where.includes("="))
@@ -7337,7 +7368,7 @@ function switchedOff(read, scoped) {
       return;
     settings.push("-c", `${name}=`, "-c", `${where}.required=false`);
   }
-  return { settings, converters };
+  return { settings: [...settings, ...watcher], converters };
 }
 function answer(code, out, scoped) {
   if (code === 0)
@@ -7483,13 +7514,15 @@ function askedArgs(args, cwd) {
   const { lead, rest } = split(args);
   if (strayCommon(lead, rest, cwd))
     return;
-  return [...lead, ...EVERY, ...withOptions(rest, false) ?? rest];
+  const watcher = MAKING.has(rest[0] ?? "") || !WATCHER.length ? [] : watcherIn(String(spawnSync4("git", watcherRead(lead), { cwd, encoding: "utf8", env: { ...process.env, ...GIT_QUIET }, timeout: 30000 }).stdout ?? ""));
+  return [...lead, ...EVERY, ...watcher, ...withOptions(rest, false) ?? rest];
 }
 async function askedArgsLater(args, cwd) {
   const { lead, rest } = split(args);
   if (await strayCommonLater(lead, rest, cwd))
     return;
-  return [...lead, ...EVERY, ...withOptions(rest, false) ?? rest];
+  const watcher = MAKING.has(rest[0] ?? "") || !WATCHER.length ? [] : await new Promise((done) => execFile3("git", watcherRead(lead), { cwd, encoding: "utf8", env: { ...process.env, ...GIT_QUIET }, timeout: 30000 }, (error, out) => done(error ? [] : watcherIn(String(out ?? "")))));
+  return [...lead, ...EVERY, ...watcher, ...withOptions(rest, false) ?? rest];
 }
 
 // Packages/Box/src/link/git.ts
@@ -8444,11 +8477,13 @@ async function* loadSignInReturn(body, signal) {
 async function* stopShell(id, runners, headers, signal) {
   const json = (status, value) => [{ head: { status, headers: { "content-type": "application/json" } } }, { body: Buffer.from(JSON.stringify(value)) }];
   let job, url;
+  let answered = false;
   for (const runner of runners) {
     url = `http://127.0.0.1:${runner.port}/api/shell/${encodeURIComponent(id)}`;
     const asking = { ...headers, authorization: `Basic ${Buffer.from(`opencode:${runner.password}`).toString("base64")}` };
     try {
       const response = await fetch(url, { headers: asking, signal });
+      answered ||= response.ok || response.status === 404;
       if (response.ok)
         job = (await response.json()).data;
     } catch {}
@@ -8457,10 +8492,12 @@ async function* stopShell(id, runners, headers, signal) {
       break;
     }
   }
+  if (!job && !answered)
+    return yield* json(503, { message: "Its engine didn’t answer. Try again in a moment." });
   if (!job || job.status !== "running")
     return yield* json(404, {});
   const stopped = await endShellJob(job, url, headers, signal);
-  return stopped ? yield* json(200, { stopped }) : yield* json(404, {});
+  return stopped ? yield* json(200, { stopped }) : yield* json(422, { message: "It’s still running: neither its signal nor removing it went through." });
 }
 async function endShellJob(job, url, headers, signal) {
   if (Number.isInteger(job.pid) && job.pid > 1) {
@@ -33624,6 +33661,32 @@ function commandEnv(from = process.env) {
   }
   return env;
 }
+var NOT_FROM_LOGIN = /^(DYLD_|BUN_|KUVO_|OPENCODE_)|^(NODE_OPTIONS|PWD|OLDPWD|SHLVL|_)$/;
+var LOGIN_READ_FOR = 60000;
+var loginRead = null;
+var loginReading = null;
+async function askedEnv(from = process.env, platform = process.platform, now = Date.now(), wait = 1000) {
+  const env = commandEnv(from);
+  if (platform !== "darwin" || !from.HOME || from.KUVO_TEST_LOGIN_ENV === "off")
+    return env;
+  if (!loginReading && (!loginRead || now - loginRead.at > LOGIN_READ_FOR)) {
+    const at = now;
+    loginReading = loginEnvironment(from).then((found) => {
+      loginRead = { at, env: found ?? loginRead?.env };
+    }, () => {}).finally(() => {
+      loginReading = null;
+    });
+  }
+  if (loginReading) {
+    let timer;
+    await (loginRead ? Promise.race([loginReading, new Promise((resolve) => timer = setTimeout(resolve, wait))]) : loginReading);
+    clearTimeout(timer);
+  }
+  for (const [name, value] of Object.entries(loginRead?.env ?? {}))
+    if (!NOT_FROM_LOGIN.test(name))
+      env[name] = value;
+  return env;
+}
 var running2 = new Map;
 process.once("exit", () => {
   for (const { pid, ended } of running2.values()) {
@@ -34254,7 +34317,7 @@ async function git2(folder, given, changing = false, more = {}, program = "git",
   const args = program !== "git" ? given : changing ? await askedArgsLater(given, folder) : await ownArgsLater(given, folder);
   if (!args)
     return { ok: false, out: Buffer.alloc(0), said: "This repository’s own settings name a program Kuvo Code won’t run for it, or lead git to another repository’s." };
-  const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", ...changing ? {} : { GIT_OPTIONAL_LOCKS: "0" }, ...more };
+  const env = { ...changing === "yours" ? await askedEnv() : commandEnv(), GIT_TERMINAL_PROMPT: "0", ...changing ? {} : { GIT_OPTIONAL_LOCKS: "0" }, ...more };
   if (!changing) {
     return new Promise((resolve) => {
       execFile12(program, args, { cwd: folder, env, encoding: "buffer", maxBuffer: 1024 * 1024 * 1024, timeout }, (error, stdout, stderr) => resolve({ ok: !error, out: stdout ?? Buffer.alloc(0), said: String(stderr ?? "").trim() }));
@@ -34387,7 +34450,7 @@ async function countIn(directory, scope, base) {
 function trash(file) {
   const name = path121.basename(file);
   let into;
-  if (IS_MAC && process.platform === "darwin" && !process.env.KUVO_CHANGES_TRASH) {
+  if (process.platform === "darwin" && !process.env.KUVO_CHANGES_TRASH) {
     if (fs118.existsSync("/usr/bin/trash"))
       return void execFileSync3("/usr/bin/trash", [file], { stdio: "ignore" });
     const bin = path121.join(os14.homedir(), ".Trash");
@@ -34491,7 +34554,7 @@ async function perform(action, root, file, scope) {
   return scope === "unstaged" ? run(["restore", "--worktree", "--", ...paths]) : run(["restore", "--source=HEAD", "--staged", "--worktree", "--", file.path]);
 }
 var refusal = (root, author = {}) => async (args) => {
-  const ran = await git2(root, args, true, author);
+  const ran = await git2(root, args, "yours", author);
   if (ran.ok)
     return null;
   const words = (ran.out.toString("utf8") + `
@@ -34536,8 +34599,21 @@ function worktreeOf(directory) {
   const real = realOr2(directory);
   return readWorktrees().find((tree) => real === realOr2(tree.root) || real.startsWith(realOr2(tree.root) + path121.sep));
 }
-async function mergeInto(directory, into, author = {}) {
+async function mergedFrom(directory) {
   const tree = worktreeOf(directory);
+  if (tree)
+    return tree;
+  const [own, common] = (await text4(directory, ["rev-parse", "--absolute-git-dir", "--git-common-dir"]) ?? "").trim().split(`
+`);
+  if (!own || !common)
+    return null;
+  const shared = path121.resolve(directory, common);
+  if (realOr2(own) === realOr2(shared) || path121.basename(shared) !== ".git")
+    return null;
+  return { project: path121.dirname(shared) };
+}
+async function mergeInto(directory, given, author = {}) {
+  const tree = await mergedFrom(directory);
   if (!tree || !fs118.existsSync(tree.project))
     return { status: 409, failed: "Only a worktree’s branch is merged here. Create a pull request instead." };
   const branch = await branchOf(directory);
@@ -34545,7 +34621,8 @@ async function mergeInto(directory, into, author = {}) {
     return { status: 409, failed: "This folder isn’t on a branch." };
   const target = tree.project;
   const checkedOut = await branchOf(target);
-  if (checkedOut !== into) {
+  const into = given ?? tree.base ?? checkedOut;
+  if (!into || checkedOut !== into) {
     return { status: 409, failed: checkedOut ? `The project’s folder is on ${checkedOut} now. Switch it back to ${into} to merge, or create a pull request.` : "The project’s folder isn’t on a branch." };
   }
   if ((await git2(target, ["rev-parse", "-q", "--verify", "MERGE_HEAD"])).ok)
@@ -34556,14 +34633,14 @@ async function mergeInto(directory, into, author = {}) {
   const said = refusal(target, author);
   const failed = await said(["merge", "--no-edit", branch]);
   if (!failed)
-    return null;
+    return { into };
   const conflicts = (await text4(target, ["-c", "core.quotepath=off", "diff", "--name-only", "-z", "--diff-filter=U"]) ?? "").split("\x00").filter(Boolean);
   if ((await git2(target, ["rev-parse", "-q", "--verify", "MERGE_HEAD"])).ok)
     await said(["merge", "--abort"]);
   if (!conflicts.length)
     return { status: 422, failed };
   const named = conflicts.slice(0, 5).join(", ") + (conflicts.length > 5 ? ` and ${conflicts.length - 5} more` : "");
-  return { status: 409, failed: `${into} changed some of the same lines: ${named}. Nothing was merged.`, conflicts };
+  return { status: 409, failed: `${into} changed some of the same lines: ${named}. Nothing was merged.`, conflicts, into };
 }
 function webPage(remote) {
   let address = remote.trim().replace(/\.git$/, "");
@@ -34818,11 +34895,11 @@ async function* changesRoute(context) {
       return yield* failed ? json(422, { message: failed }) : json(200, {});
     }
     if (route === "kuvo/git/merge") {
-      const into = body.into;
-      if (typeof into !== "string" || !into || into.startsWith("-"))
+      const into = body.into ?? undefined;
+      if (into !== undefined && (typeof into !== "string" || !into || into.startsWith("-")))
         return yield* json(400, { message: "Name the branch to merge into." });
-      const failed = await mergeInto(directory, into, authorOf(body));
-      return yield* failed ? json(failed.status, { message: failed.failed, ...failed.conflicts ? { conflicts: failed.conflicts } : {} }) : json(200, {});
+      const merged = await mergeInto(directory, into, authorOf(body));
+      return yield* "failed" in merged ? json(merged.status, { message: merged.failed, ...merged.conflicts ? { conflicts: merged.conflicts, into: merged.into } : {} }) : json(200, merged);
     }
     const words = (value) => typeof value === "string" && value.trim() ? value.trim() : undefined;
     const made = await pullRequest(directory, words(body.title), words(body.body));
@@ -40537,7 +40614,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "58f2164931bb";
+var BRIDGE_VERSION = "0fa0cb9d2068";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

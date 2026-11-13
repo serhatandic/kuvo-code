@@ -1,7 +1,9 @@
 // git as the box runs it in a repository (PROTOCOL.md, "Git"): a repository's own settings (its
 // `.git/config`, and what that includes) never start a program on their own, since whoever could
 // write in the folder (a download, an agent let outside the sandbox) could have put one there.
-// Every git the box runs gets no fsmonitor, pager, external diff or signature check. What the box
+// Every git the box runs gets no fsmonitor program, pager, external diff or signature check (on a
+// Mac, git's own watcher, `core.fsmonitor=true`, which starts no program a setting names, stays on
+// where it's set, for a big repository's sake, in all but the plainest reads). What the box
 // does by itself (reading the changes, keeping snapshots and backups) also runs no hooks (those in
 // a hooks folder or named in settings), signing or credential helpers, finds no bare repository by
 // sitting in its folder, and switches off the filters and diff converters the repository names,
@@ -27,7 +29,21 @@ export const GIT_QUIET = { GIT_TERMINAL_PROMPT: "0" }
 // an empty setting) and diff converter (by --no-textconv, as an empty one fails), by its
 // attributes, and a hook (by `hook.<name>.enabled=false`; an empty one fails). (A diff program is
 // never run: diffs get --no-ext-diff. A merge program runs only in merges you ask for.)
-const DRIVERS = String.raw`^(filter\..+\.(clean|smudge|process)|diff\..+\.textconv|hook\..+\.command)$`
+const DRIVERS = String.raw`^(filter\..+\.(clean|smudge|process)|diff\..+\.textconv|hook\..+\.command|core\.fsmonitor)$`
+
+// git's own watcher, kept on when settings ask for it (`core.fsmonitor` true as git reads a yes:
+// `true`, `yes`, `on`, a number but 0, or the name alone), never when they name a program. Only on
+// a Mac: Linux's git has no watcher of its own, and one before 2.36 (Ubuntu 22.04's) reads `true` as
+// a program by that name.
+const WATCHER = process.platform === "darwin" ? ["-c", "core.fsmonitor=true"] : []
+const watches = (value: string | undefined) => value === undefined || /^(true|yes|on)$/i.test(value.trim()) || /^-?[1-9]\d*$/.test(value.trim())
+/** WATCHER when the last `core.fsmonitor` of a `config -z --get-regexp` read (no scopes) says git's own. */
+const watcherIn = (read: string) => {
+  const last = read.split("\0").filter(Boolean).at(-1)?.split(/\n(.*)/s)
+  return last?.[0] === "core.fsmonitor" && watches(last[1]) ? WATCHER : []
+}
+// (`config` starts nothing; without EVERY, whose own `core.fsmonitor=false` it would read last.)
+const watcherRead = (lead: string[]) => [...lead, "config", "-z", "--get-regexp", String.raw`^core\.fsmonitor$`]
 
 // The filters and converters git-lfs and git-crypt set up, which stay on when the program is the
 // one installed (as your PATH finds it): Changes would show every file they keep as changed.
@@ -125,10 +141,15 @@ function switchedOff(read: string, scoped: boolean): Found | undefined {
   const parts = read.split("\0").filter(Boolean)
   const settings: string[] = []
   let converters = false
+  let watcher: string[] = []
   for (let at = 0; at < parts.length; at += scoped ? 2 : 1) {
     const scope = scoped ? parts[at] : "local"
     const [name, value] = (scoped ? parts[at + 1] : parts[at])?.split(/\n(.*)/s) ?? []
     if (!name) continue
+    if (name === "core.fsmonitor") {
+      watcher = watches(value) ? WATCHER : []
+      continue
+    }
     const where = name.slice(0, name.lastIndexOf("."))
     if (name.startsWith("hook.")) {
       if (where.includes("=")) return undefined
@@ -143,7 +164,7 @@ function switchedOff(read: string, scoped: boolean): Found | undefined {
     if (name.includes("=")) return undefined
     settings.push("-c", `${name}=`, "-c", `${where}.required=false`)
   }
-  return { settings, converters }
+  return { settings: [...settings, ...watcher], converters }
 }
 
 /** What the read said, or undefined (don't run it: the read failed, stopped or found what can't
@@ -310,12 +331,15 @@ export async function ownArgsLater(args: string[], cwd?: string): Promise<string
 export function askedArgs(args: string[], cwd?: string): string[] | undefined {
   const { lead, rest } = split(args)
   if (strayCommon(lead, rest, cwd)) return undefined
-  return [...lead, ...EVERY, ...(withOptions(rest, false) ?? rest)]
+  const watcher = MAKING.has(rest[0] ?? "") || !WATCHER.length ? [] : watcherIn(String(spawnSync("git", watcherRead(lead), { cwd, encoding: "utf8", env: { ...process.env, ...GIT_QUIET }, timeout: 30_000 }).stdout ?? ""))
+  return [...lead, ...EVERY, ...watcher, ...(withOptions(rest, false) ?? rest)]
 }
 
 /** [askedArgs], without holding up the bridge. */
 export async function askedArgsLater(args: string[], cwd?: string): Promise<string[] | undefined> {
   const { lead, rest } = split(args)
   if (await strayCommonLater(lead, rest, cwd)) return undefined
-  return [...lead, ...EVERY, ...(withOptions(rest, false) ?? rest)]
+  const watcher = MAKING.has(rest[0] ?? "") || !WATCHER.length ? [] : await new Promise<string[]>(done =>
+    execFile("git", watcherRead(lead), { cwd, encoding: "utf8", env: { ...process.env, ...GIT_QUIET }, timeout: 30_000 }, (error, out) => done(error ? [] : watcherIn(String(out ?? "")))))
+  return [...lead, ...EVERY, ...watcher, ...(withOptions(rest, false) ?? rest)]
 }

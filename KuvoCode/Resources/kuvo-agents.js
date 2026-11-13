@@ -506,7 +506,9 @@ import { basename as basename2, dirname, join as join3, resolve } from "path";
 var EVERY = ["-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "log.showSignature=false"];
 var OWN = [...EVERY, "-c", "safe.bareRepository=explicit", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", "-c", "tag.gpgSign=false", "-c", "credential.helper="];
 var GIT_QUIET = { GIT_TERMINAL_PROMPT: "0" };
-var DRIVERS = String.raw`^(filter\..+\.(clean|smudge|process)|diff\..+\.textconv|hook\..+\.command)$`;
+var DRIVERS = String.raw`^(filter\..+\.(clean|smudge|process)|diff\..+\.textconv|hook\..+\.command|core\.fsmonitor)$`;
+var WATCHER = process.platform === "darwin" ? ["-c", "core.fsmonitor=true"] : [];
+var watches = (value) => value === undefined || /^(true|yes|on)$/i.test(value.trim()) || /^-?[1-9]\d*$/.test(value.trim());
 var KNOWN = /^"?([^"\s]+)"? (?:filter-process|clean|smudge|diff)(?: --skip| --key-name=[\w-]+| -- %f)*$/;
 var TOOLS = new Set(["git-lfs", "git-crypt"]);
 var VALUED = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--exec-path"]);
@@ -584,11 +586,16 @@ function switchedOff(read, scoped) {
   const parts = read.split("\x00").filter(Boolean);
   const settings = [];
   let converters = false;
+  let watcher = [];
   for (let at = 0;at < parts.length; at += scoped ? 2 : 1) {
     const scope = scoped ? parts[at] : "local";
     const [name, value] = (scoped ? parts[at + 1] : parts[at])?.split(/\n(.*)/s) ?? [];
     if (!name)
       continue;
+    if (name === "core.fsmonitor") {
+      watcher = watches(value) ? WATCHER : [];
+      continue;
+    }
     const where = name.slice(0, name.lastIndexOf("."));
     if (name.startsWith("hook.")) {
       if (where.includes("="))
@@ -606,7 +613,7 @@ function switchedOff(read, scoped) {
       return;
     settings.push("-c", `${name}=`, "-c", `${where}.required=false`);
   }
-  return { settings, converters };
+  return { settings: [...settings, ...watcher], converters };
 }
 function answer(code, out, scoped) {
   if (code === 0)
@@ -829,17 +836,22 @@ function joinPath(...folders) {
   return [...new Set(folders.flatMap((list) => (list ?? "").split(":")).filter(Boolean))].join(":");
 }
 async function loginPath(env = process.env, wait = { interactive: 6000, login: 2000 }) {
+  const found = await fromLogin(env, wait, `"$PATH"`, (text) => joinPath(text.trim()) || undefined);
+  return found && joinPath(found, env.PATH);
+}
+async function fromLogin(env, wait, printed, parse) {
   const shell = loginShell(env);
   if (/\/(nu|csh|tcsh)$/.test(shell))
     return;
   const kept = Object.entries(env).filter(([name, value]) => value !== undefined && /^(HOME|USER|LOGNAME|LANG|LC_[A-Z_]+|TERM|TMPDIR|PATH|SSH_AUTH_SOCK)$/.test(name));
   const login = { ...Object.fromEntries(kept), SHELL: shell, DISABLE_AUTO_UPDATE: "true" };
+  const command = printed.startsWith(";") ? `printf '%s' ${LOGIN_PATH_MARKERS[0]}${printed}; printf '%s' ${LOGIN_PATH_MARKERS[1]}` : `printf '%s%s%s' ${LOGIN_PATH_MARKERS[0]} ${printed} ${LOGIN_PATH_MARKERS[1]}`;
   for (const [flags, timeout] of [["-ilc", wait.interactive], ["-lc", wait.login]]) {
     const found = await new Promise((resolve) => {
       let output = "";
       let child;
       try {
-        child = spawn("/bin/sh", ["-c", WATCHED, shell, flags, `printf '%s%s%s' ${LOGIN_PATH_MARKERS[0]} "$PATH" ${LOGIN_PATH_MARKERS[1]}`], { cwd: login.HOME, env: login, detached: true, stdio: ["pipe", "pipe", "ignore"] });
+        child = spawn("/bin/sh", ["-c", WATCHED, shell, flags, command], { cwd: login.HOME, env: login, detached: true, stdio: ["pipe", "pipe", "ignore"] });
       } catch {
         return resolve(undefined);
       }
@@ -868,7 +880,7 @@ async function loginPath(env = process.env, wait = { interactive: 6000, login: 2
         const at = output.indexOf(LOGIN_PATH_MARKERS[0]);
         const end = at < 0 ? -1 : output.indexOf(LOGIN_PATH_MARKERS[1], at);
         if (end >= 0)
-          done(joinPath(output.slice(at + LOGIN_PATH_MARKERS[0].length, end).trim()) || undefined);
+          done(parse(output.slice(at + LOGIN_PATH_MARKERS[0].length, end)));
       });
       child.on("error", () => done(undefined));
       child.on("close", () => done(undefined));
@@ -877,8 +889,8 @@ async function loginPath(env = process.env, wait = { interactive: 6000, login: 2
           gone = setTimeout(() => done(undefined), 300);
       });
     });
-    if (found)
-      return joinPath(found, env.PATH);
+    if (found !== undefined)
+      return found;
   }
   return;
 }
@@ -31143,4 +31155,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents a98add2b3a2358182d9781035ca6dfa193011f9a10a2892a5c50fc78338084b5
+// Built from Packages/Box/src/agents c4d237f077b045e04c2676555652a53e43027519e469b49e527a91b91ed38a8d

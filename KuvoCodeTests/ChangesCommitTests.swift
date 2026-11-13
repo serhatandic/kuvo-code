@@ -8,16 +8,19 @@ import Testing
 @MainActor
 @Suite struct ChangesCommitTests {
     let repo: TestRepository
+    /// This Mac's box, which commits and pushes.
+    let box: GitTestBox
 
-    init() throws {
+    init() async throws {
         repo = try TestRepository()
+        box = try await GitTestBox()
         try repo.write("app/main.swift", "print(1)\n")
         try repo.write("docs/notes.md", "notes\n")
         try repo.commitAll("Start")
     }
 
     private func commit(in directory: String? = nil, push: Bool = false) async -> String? {
-        await ProjectChanges(directory: directory ?? repo.path).commit(message: "Change", push: push, environment: [:])
+        await box.changes(directory ?? repo.path).commit(message: "Change", push: push, environment: [:])
     }
 
     private func lastCommitFiles() throws -> [String] {
@@ -73,7 +76,7 @@ import Testing
         try repo.commitAll("Main")
         try repo.git("checkout", "-q", "feature")
         try repo.write("app/main.swift", "print(5)\n")
-        let changes = ProjectChanges(directory: repo.path)
+        let changes = box.changes(repo.path)
         changes.scope = .branch
         changes.base = "main"
         await changes.refresh()
@@ -108,7 +111,7 @@ import Testing
         try repo.git("remote", "add", "origin", repo.url.appending(path: "nowhere").path(percentEncoded: false))
         try repo.write("app/main.swift", "print(4)\n")
         let failure = await commit(push: true)
-        #expect(failure?.hasPrefix("Committed, but the push didn't go through") == true)
+        #expect(failure?.hasPrefix("Committed, but the push didn’t go through") == true)
         #expect(try lastCommitFiles() == ["app/main.swift"])
     }
 }

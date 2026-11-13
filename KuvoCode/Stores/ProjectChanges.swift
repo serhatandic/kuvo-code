@@ -107,13 +107,16 @@ final class ProjectChanges {
     /// reads only those that changed: after an install in a project with no .gitignore, thousands.
     private var reads: [String: ChangedFile] = [:]
 
-    /// A machine's box, by the machine's id.
-    private let box: @Sendable (String) -> BoxClient
+    /// A box's routes, by its id: git runs on the box the folder is on, this Mac's too.
+    private let box: (String) -> BoxClient
 
-    init(directory: String, box: @escaping @Sendable (String) -> BoxClient = BoxClient.machine) {
+    init(directory: String, box: @escaping (String) -> BoxClient = { BoxClient.routes($0) }) {
         self.directory = directory
         self.box = box
     }
+
+    /// Where `folder`'s git runs.
+    private func place(_ folder: String) -> GitPlace { GitPlace.of(folder, box: box) }
 
     /// The list as it is, as last seen under the away bar, or (never read) the machine's connection
     /// in its place.
@@ -139,7 +142,11 @@ final class ProjectChanges {
             stamp()
             return
         }
-        let found = await Git.found(in: directory, scope: scope, base: base, box: box)
+        let place = place(directory)
+        let found = await Git.found(at: place, scope: scope, base: base)
+        // This Mac's box starting (with the app, or again after an update): still loading, or what
+        // showed stays, until it answers or says why it can't.
+        if case .starting = found { return }
         // A machine's box out of reach for a moment: what showed stays, rather than reading as no
         // repository. Out of reach from the start: said so.
         if case .unreachable = found {
@@ -151,7 +158,8 @@ final class ProjectChanges {
         // Answered, but not with the changes (git couldn't say for a moment): what showed stays.
         if case .refused = found, isLoaded, !isUnreachable { return }
         if case .listed(let result, let uncommitted) = found {
-            let read = await Git.readNew(result, known: reads, box: box)
+            let client = place.client
+            let read = await Git.readNew(result, known: reads) { _ in client }
             // Kept whichever list shows: what was read is the file as it is.
             reads = Git.kept(read)
             let signature = await Task.detached { Git.signature(of: read) }.value
@@ -180,18 +188,17 @@ final class ProjectChanges {
         guard let root = file.root else { return nil }
         // (Asked for before it went: its alert was open.)
         if isAway { return ChangesAway.notBack(RemoteFolder.machine(of: directory) ?? "Its machine") }
-        let failure = await Git.performing(action, on: file, root: root, scope: scope)
+        let failure = await Git.performing(action, on: file, at: place(root), scope: scope)
         await refresh()
         return failure
     }
 
     /// Commits what's staged, or everything in the project's folder when nothing is, and
-    /// pushes if asked. Returns git's complaint, if any. `environment` is your shell's, so
-    /// hooks, signing and pushing see what they do in Terminal.
+    /// pushes if asked, on the box the folder is on. Returns git's complaint, if any.
+    /// `environment` is your shell's: its git author goes along.
     func commit(message: String, push: Bool, environment: [String: String]) async -> String? {
-        let directory = directory
         if isAway { return ChangesAway.notBack(RemoteFolder.machine(of: directory) ?? "Its machine") }
-        let failure = await Git.committing(message: message, push: push, in: directory, environment: environment)
+        let failure = await Git.committing(message: message, push: push, at: place(directory), environment: environment)
         if failure == nil { Analytics.shared.track("changes_committed", ["pushed": push]) }
         await refresh()
         return failure
@@ -199,9 +206,7 @@ final class ProjectChanges {
 
     /// Whether anything is staged, which is what a commit takes then.
     func hasStaged() async -> Bool {
-        let directory = directory
-        guard RemoteFolder.parse(directory) != nil else { return await Task.detached { Git.hasStaged(in: directory) }.value }
-        return await Git.commitDiffing(in: directory).staged
+        await Git.commitDiffing(at: place(directory)).staged
     }
 
     private func stamp() {
@@ -220,28 +225,50 @@ final class ProjectChanges {
 
 // MARK: - Git
 
+/// Where a folder's git runs: on the box it's on, this Mac's or a machine's, as a phone asks it
+/// (`kuvo/git/…`), with the folder as that box names it.
+nonisolated struct GitPlace: Sendable {
+    let client: BoxClient
+    /// The folder as its box names it.
+    let path: String
+    /// The machine it's on, as this Mac names its folders; nil for this Mac's own.
+    let machine: String?
+
+    /// `folder` (as this Mac names it) on its box: a machine's, or this Mac's (`BoxClient.thisMac`,
+    /// the one attached in place when it's that), by `box`, a box's routes by its id.
+    @MainActor static func of(_ folder: String, box: (String) -> BoxClient = { BoxClient.routes($0) }) -> GitPlace {
+        if let (machine, path) = RemoteFolder.parse(folder) { return GitPlace(client: box(machine), path: path, machine: machine) }
+        return GitPlace(client: box(BoxClient.thisMac), path: folder, machine: nil)
+    }
+
+    /// A folder its box named, as this Mac names it.
+    func here(_ path: String) -> String { machine.map { RemoteFolder.folder(path, on: $0) } ?? path }
+
+    /// Why its box couldn't be asked, in words.
+    func unreachable(_ error: any Error) -> String {
+        machine == nil ? "Kuvo Code’s background service on this Mac didn’t answer. Try again in a moment." : error.localizedDescription
+    }
+}
+
 nonisolated enum Git {
-    // MARK: A machine's, from its box
+    // MARK: On the folder's box
 
     enum Found {
         /// The changed files, and whether anything isn't committed yet.
         case listed([ChangedFile], Bool)
         /// Not in a repository, or git couldn't say.
         case notRepository
-        /// A machine's box couldn't be asked (the connection, not what it answered).
+        /// Its box couldn't be asked (the connection, not what it answered).
         case unreachable
-        /// A machine's box answered, but not with the changes (git couldn't say, an older box).
+        /// This Mac's box is starting, and will answer.
+        case starting
+        /// Its box answered, but not with the changes (git couldn't say, an older box).
         case refused
     }
 
-    /// The changed files in `scope`. A machine's come from its box (`kuvo/git/changes`), as a
-    /// phone reads them; this Mac's from its git.
-    @concurrent static func found(in directory: String, scope: ProjectChanges.Scope, base: String?,
-                                  box: @Sendable (String) -> BoxClient = BoxClient.machine) async -> Found {
-        guard let (machine, path) = RemoteFolder.parse(directory) else {
-            guard let files = changes(in: directory, scope: scope, base: base) else { return .notRepository }
-            return .listed(files, scope != .branch || hasUncommittedChanges(in: directory))
-        }
+    /// The changed files in `scope`, from the box the folder is on (`kuvo/git/changes`), as a
+    /// phone reads them.
+    @concurrent static func found(at place: GitPlace, scope: ProjectChanges.Scope, base: String?) async -> Found {
         struct Asked: Encodable { let directory: String, scope: String, base: String? }
         struct Answer: Decodable {
             let repository: Bool
@@ -250,10 +277,14 @@ nonisolated enum Git {
             let hashes: [String: String]?
             let uncommitted: Bool?
         }
-        let asked = Asked(directory: path, scope: scope == .session ? "uncommitted" : scope.rawValue, base: base)
+        let asked = Asked(directory: place.path, scope: scope == .session ? "uncommitted" : scope.rawValue, base: base)
         let found: Answer
         do {
-            found = try await box(machine).value(Answer.self, "POST", "kuvo/git/changes", body: asked)
+            found = try await place.client.value(Answer.self, "POST", "kuvo/git/changes", body: asked)
+        } catch let refusal as BoxRefusal where refusal.status == 503 {
+            // Not up: starting (with the app, or again after an update), or out of reach (it
+            // couldn't start); never a folder without git.
+            return refusal.reason == "starting" ? .starting : .unreachable
         } catch is BoxRefusal {
             return .refused
         } catch is DecodingError {
@@ -262,15 +293,14 @@ nonisolated enum Git {
             return .unreachable
         }
         guard found.repository, let root = found.root, let against = found.against, let patch = found.patch else { return .notRepository }
-        let files = listed(patch: patch, root: RemoteFolder.folder(root, on: machine), base: against, scope: scope,
+        let files = listed(patch: patch, root: place.here(root), base: against, scope: scope,
                            untracked: found.untracked ?? [], hashes: found.hashes ?? [:])
         return .listed(files, found.uncommitted ?? true)
     }
 
-    /// Stages, unstages or discards one file's changes (`perform`): a machine's on its box.
-    @concurrent static func performing(_ action: ProjectChanges.Action, on file: ChangedFile, root: String, scope: ProjectChanges.Scope,
-                                       box: @Sendable (String) -> BoxClient = BoxClient.machine) async -> String? {
-        guard let (machine, path) = RemoteFolder.parse(root) else { return perform(action, on: file, root: root, scope: scope) }
+    /// Stages, unstages or discards one file's changes (`perform`), on its box: `place` is its
+    /// repository's.
+    @concurrent static func performing(_ action: ProjectChanges.Action, on file: ChangedFile, at place: GitPlace, scope: ProjectChanges.Scope) async -> String? {
         struct Asked: Encodable { let root, path: String, oldPath: String?, status, scope: String }
         let status = switch file.status {
         case .added: "added"
@@ -283,90 +313,62 @@ nonisolated enum Git {
         case .unstage: "unstage"
         case .discard: "discard"
         }
-        let asked = Asked(root: path, path: file.path, oldPath: file.oldPath, status: status, scope: scope == .session ? "uncommitted" : scope.rawValue)
-        return await said { try await box(machine).send("POST", "kuvo/git/" + route, body: JSONEncoder().encode(asked)) }
+        let asked = Asked(root: place.path, path: file.path, oldPath: file.oldPath, status: status, scope: scope == .session ? "uncommitted" : scope.rawValue)
+        return await said(at: place) { try await place.client.send("POST", "kuvo/git/" + route, body: JSONEncoder().encode(asked)) }
     }
 
-    /// Commits (`commit`): a machine's on its box, with only your shell's git author settings,
-    /// which mean the same there.
-    @concurrent static func committing(message: String, push: Bool, in directory: String, environment: [String: String],
-                                       box: @Sendable (String) -> BoxClient = BoxClient.machine) async -> String? {
-        guard let (machine, path) = RemoteFolder.parse(directory) else { return commit(message: message, push: push, in: directory, environment: environment) }
+    /// Commits (`commit`) on the folder's box, with only your shell's git author settings, which
+    /// mean the same there. Its hooks, signing and push run there, with that box's environment.
+    @concurrent static func committing(message: String, push: Bool, at place: GitPlace, environment: [String: String]) async -> String? {
         struct Asked: Encodable { let directory, message: String, push: Bool, author: [String: String] }
-        let author = environment.filter { ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"].contains($0.key) }
-        return await said { try await box(machine).send("POST", "kuvo/git/commit", body: JSONEncoder().encode(Asked(directory: path, message: message, push: push, author: author))) }
+        let asked = Asked(directory: place.path, message: message, push: push, author: author(of: environment))
+        return await said(at: place) { try await place.client.send("POST", "kuvo/git/commit", body: JSONEncoder().encode(asked)) }
     }
 
-    /// What a commit would take, and whether that's what's staged: a machine's from its box.
-    @concurrent static func commitDiffing(in directory: String, box: @Sendable (String) -> BoxClient = BoxClient.machine) async -> (diff: String, staged: Bool) {
-        guard let (machine, path) = RemoteFolder.parse(directory) else { return (commitDiff(in: directory), hasStaged(in: directory)) }
+    /// Your shell's git author settings, the only ones a box takes along (`author`).
+    static func author(of environment: [String: String]) -> [String: String] {
+        environment.filter { ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"].contains($0.key) }
+    }
+
+    /// What a commit would take, and whether that's what's staged, from the folder's box.
+    @concurrent static func commitDiffing(at place: GitPlace) async -> (diff: String, staged: Bool) {
         struct Asked: Encodable { let directory: String }
         struct Answer: Decodable { let diff: String, staged: Bool }
-        let answer = try? await box(machine).value(Answer.self, "POST", "kuvo/git/commit-diff", body: Asked(directory: path))
+        let answer = try? await place.client.value(Answer.self, "POST", "kuvo/git/commit-diff", body: Asked(directory: place.path))
         return (answer?.diff ?? "", answer?.staged ?? false)
     }
 
-    /// A file as git keeps it (`object`: "HEAD:path", ":path" for the index), a machine's from its box.
-    @concurrent static func shown(_ object: String, in root: String, box: @Sendable (String) -> BoxClient = BoxClient.machine) async -> Data? {
-        guard let (machine, path) = RemoteFolder.parse(root) else { return data(["show", object], in: root) }
+    /// A file as git keeps it (`object`: "HEAD:path", ":path" for the index), from its box: `place`
+    /// is its repository's.
+    @concurrent static func shown(_ object: String, at place: GitPlace) async -> Data? {
         var query = URLComponents()
-        query.queryItems = [URLQueryItem(name: "root", value: path), URLQueryItem(name: "object", value: object)]
+        query.queryItems = [URLQueryItem(name: "root", value: place.path), URLQueryItem(name: "object", value: object)]
         guard let encoded = query.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B"),
-              let (status, data) = try? await box(machine).send("GET", "kuvo/git/show?" + encoded), status == 200 else { return nil }
+              let (status, data) = try? await place.client.send("GET", "kuvo/git/show?" + encoded), status == 200 else { return nil }
         return data
     }
 
     /// nil when the box did it, else what it said (or that it couldn't be reached).
-    private static func said(_ answer: () async throws -> (status: Int, body: Data)) async -> String? {
+    private static func said(at place: GitPlace, _ answer: () async throws -> (status: Int, body: Data)) async -> String? {
         do {
             let (status, data) = try await answer()
             return (200..<300).contains(status) ? nil : BoxRefusal(status: status, data: data).message
         } catch {
-            return error.localizedDescription
+            return place.unreachable(error)
         }
     }
 
-    // MARK: This Mac's
-
-    /// The changed files in `scope`, or nil when `directory` isn't in a repository.
-    static func changes(in directory: String, scope: ProjectChanges.Scope, base branch: String? = nil) -> [ChangedFile]? {
-        guard let root = toplevel(of: directory) else { return nil }
-        // A repository without commits yet: compare with the empty tree.
-        var base = run(["rev-parse", "--verify", "-q", "HEAD"], in: root) == nil ? "4b825dc642cb6eb9a060e54bf8d69288fbee4904" : "HEAD"
-        // Since the branch left its base: from where they part, to the files as they are now.
-        if scope == .branch, let branch,
-           let fork = run(["merge-base", "HEAD", branch], in: root)?.trimmingCharacters(in: .whitespacesAndNewlines), !fork.isEmpty {
-            base = fork
-        }
-        let limit = relativePath(of: directory, in: root)
-        // Its own prefixes, whatever the git settings (diff.noprefix, diff.mnemonicPrefix): the
-        // paths are read after them. The file's own lines: an unchanged blank line written as " "
-        // (diff.suppressBlankEmpty), none through a converter (textconv); each line is counted.
-        var arguments = ["-c", "core.quotepath=off", "-c", "diff.suppressBlankEmpty=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--src-prefix=a/", "--dst-prefix=b/", "-U100000"]
-        switch scope {
-        // The session's edits come from the engine, not git; read like Uncommitted here.
-        case .uncommitted, .branch, .session: arguments.append(base)
-        case .unstaged: break
-        case .staged: arguments += ["--cached", base]
-        }
-        arguments += ["--", limit.isEmpty ? "." : limit]
-        guard let patch = run(arguments, in: root) else { return nil }
-        let untracked = scope == .staged ? [] : (run(["-c", "core.quotepath=off", "ls-files", "--others", "--exclude-standard", "-z", "--", limit.isEmpty ? "." : limit], in: root) ?? "")
-            .split(separator: "\0").map(String.init)
-        return listed(patch: patch, root: root, base: base, scope: scope, untracked: untracked, hashes: [:])
-    }
-
-    /// The changed files from git's diff and its new files (`untracked`), wherever git ran: `root`
-    /// as this Mac names it, `base` what the diff compared with, `hashes` git's of a machine's new
-    /// files, by path.
+    /// The changed files from git's diff and its new files (`untracked`), as the box sent them:
+    /// `root` as this Mac names it, `base` what the diff compared with, `hashes` the box's stamps of
+    /// the new files, by path.
     static func listed(patch: String, root: String, base: String, scope: ProjectChanges.Scope, untracked: [String], hashes: [String: String]) -> [ChangedFile] {
         DiffParser.listed(patch: patch, untracked: untracked).map { parsed in
             var file = ChangedFile(parsed, root: root)
             file.root = root
             // A new file git doesn't know (a repository inside this one by its folder, "web/").
             if parsed.unread || parsed.path.hasSuffix("/") {
-                // Its stamp (a machine's box sends them), so it's read (`readNew`) only when it changes.
-                file.hash = file.url.isFileURL ? stamp(file.url) : hashes[file.path]
+                // Its stamp, so it's read (`readNew`) only when it changes.
+                file.hash = hashes[file.path]
                 return file
             }
             // Where each side lives, for showing pictures.
@@ -376,162 +378,8 @@ nonisolated enum Git {
         }
     }
 
-    /// Why Discard leaves a submodule be, as a machine's box says it too.
-    static func submoduleRefusal(_ path: String) -> String {
-        "\(path) is a submodule: its changes are in its own repository, so discard them there."
-    }
-
-    static func perform(_ action: ProjectChanges.Action, on file: ChangedFile, root: String, scope: ProjectChanges.Scope) -> String? {
-        let paths = [file.path] + (file.oldPath.map { [$0] } ?? [])
-        // The file's own path, never a pattern: "app/[slug]/page.tsx" would match others, and
-        // ":!x" every file but x.
-        func on(_ arguments: [String]) -> String? { run(["--literal-pathspecs"] + arguments, in: root) }
-        func git(_ arguments: [String]) -> String? {
-            on(arguments) == nil ? "git couldn't \(arguments.first ?? "do that") \(file.path)." : nil
-        }
-        switch action {
-        case .stage:
-            // A rename's old path only while git still has it: once staged as moved, naming it fails.
-            let old = file.oldPath.flatMap { on(["ls-files", "--error-unmatch", "--", $0]) != nil ? $0 : nil }
-            return git(["add", "-A", "--", file.path] + (old.map { [$0] } ?? []))
-        case .unstage:
-            if on(["restore", "--staged", "--"] + paths) != nil { return nil }
-            // A repository with no commits yet has nothing to go back to (`restore --staged`
-            // fails there): out of what's staged, the file left as it is. Only when git says it
-            // has none, not when it couldn't be asked (a machine's connection dropping).
-            guard on(["rev-parse", "--git-dir"]) != nil, on(["rev-parse", "--verify", "-q", "HEAD"]) == nil else {
-                return "git couldn't restore \(file.path)."
-            }
-            return git(["rm", "--cached", "-f", "-q", "--"] + paths)
-        case .discard:
-            // Out of git first, and only once that worked: a file still staged would go with the
-            // next commit. `-f` for one staged and then changed again.
-            func untrack(_ path: String) -> String? {
-                on(["ls-files", "--error-unmatch", "--", path]) == nil ? nil : git(["rm", "--cached", "-f", "-q", "--", path])
-            }
-            // A folder where a file goes back (put in its place, a repository cloned there): git
-            // would delete it, and all in it, for good. It goes to the Trash first. Not a
-            // submodule that's one already, which git puts back by its commit and leaves be.
-            func clear(_ paths: [String]) -> String? {
-                for path in paths {
-                    let url = RemoteFolder.url(root).appending(path: path)
-                    // A file (or a link) where one of its folders goes back: the same.
-                    if let blocking = fileInPlace(ofFoldersOf: path, in: root) {
-                        do { try trash(blocking) } catch { return error.localizedDescription }
-                        continue
-                    }
-                    guard isFolder(url) else { continue }
-                    let kept = scope == .unstaged ? on(["ls-files", "-s", "--", path]) : on(["ls-tree", "HEAD", "--", path])
-                    if kept?.hasPrefix("160000") == true { continue }
-                    do { try trash(url) } catch { return error.localizedDescription }
-                }
-                return nil
-            }
-            // New to git (untracked, only staged, or only noted with `git add -N`): it has no
-            // committed version to go back to, so the file goes to the Trash. (Restoring one only
-            // noted would empty it.)
-            if file.status == .added {
-                if let failure = untrack(file.path) { return failure }
-                do { try trash(file.url) } catch { return error.localizedDescription }
-                return nil
-            }
-            // Moved: the new path goes as a new file does, and the old one comes back (from the
-            // staged version for unstaged changes, where a move shows only through `add -N`).
-            if file.status == .renamed, let old = file.oldPath {
-                if let failure = untrack(file.path) ?? clear([old]) { return failure }
-                if let failure = git(scope == .unstaged ? ["restore", "--worktree", "--", old] : ["restore", "--source=HEAD", "--staged", "--worktree", "--", old]) {
-                    return failure
-                }
-                do { try trash(file.url) } catch { return error.localizedDescription }
-                return nil
-            }
-            // A submodule with edits of its own: they're in its repository, and git's restore
-            // leaves them as they are and says nothing, which read as done. (One moved to another
-            // commit, or gone, goes back as before.)
-            if file.status == .modified, on(["ls-files", "-s", "--", file.path])?.hasPrefix("160000") == true,
-               let edits = run(["status", "--porcelain"], in: (root as NSString).appendingPathComponent(file.path)),
-               !edits.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return submoduleRefusal(file.path)
-            }
-            if let failure = clear(scope == .unstaged ? paths : [file.path]) { return failure }
-            if scope == .unstaged { return git(["restore", "--worktree", "--"] + paths) }
-            return git(["restore", "--source=HEAD", "--staged", "--worktree", "--", file.path])
-        }
-    }
-
-    /// A folder (not a link to one) is at `url`.
-    private static func isFolder(_ url: URL) -> Bool {
-        (try? FileManager.default.attributesOfItem(atPath: url.path))?[.type] as? FileAttributeType == .typeDirectory
-    }
-
-    /// The first of the folders `path` is in (in the repository at `root`) that is something else
-    /// now, a file or a link: git would delete it to put the folder back.
-    private static func fileInPlace(ofFoldersOf path: String, in root: String) -> URL? {
-        let folders = path.split(separator: "/").dropLast().map(String.init)
-        guard !folders.isEmpty else { return nil }
-        var url = URL(filePath: root)
-        for folder in folders {
-            url = url.appending(path: folder)
-            guard let type = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.type] as? FileAttributeType else { return nil }
-            if type != .typeDirectory { return url }
-        }
-        return nil
-    }
-
-    /// To the Trash.
-    private static func trash(_ url: URL) throws {
-        try FileManager.default.moveToTrash(url)
-    }
-
-    static func commitDiff(in directory: String, limit: Int = 40_000) -> String {
-        var text: String
-        if hasStaged(in: directory) {
-            text = run(["diff", "--cached", "--no-color", "--no-ext-diff"], in: directory) ?? ""
-        } else {
-            // What committing would take: this folder's, as `commit` adds only it.
-            text = run(["diff", "HEAD", "--no-color", "--no-ext-diff", "--", "."], in: directory) ?? ""
-            let untracked = run(["ls-files", "--others", "--exclude-standard"], in: directory) ?? ""
-            if !untracked.isEmpty { text += "\nNew files:\n" + untracked }
-        }
-        return text.count > limit ? String(text.prefix(limit)) + "\n…" : text
-    }
-
-    static func hasStaged(in directory: String) -> Bool {
-        // `diff --quiet` fails when there are differences.
-        run(["diff", "--cached", "--quiet"], in: directory) == nil
-    }
-
-    static func commit(message: String, push: Bool, in directory: String, environment: [String: String]) -> String? {
-        guard let root = toplevel(of: directory) else { return "Not a git repository." }
-        if !hasStaged(in: root) {
-            let limit = relativePath(of: directory, in: root)
-            if let failure = report(["add", "-A", "--", limit.isEmpty ? "." : limit], in: root, environment: environment) { return failure }
-        }
-        if let failure = report(["commit", "-m", message], in: root, environment: environment) { return failure }
-        guard push else { return nil }
-        var failure = report(["push"], in: root, environment: environment)
-        // A new branch: push it and track it, as `git push -u` would.
-        if failure?.contains("no upstream branch") == true {
-            failure = report(["push", "-u", "origin", "HEAD"], in: root, environment: environment)
-        }
-        return failure.map { "Committed, but the push didn't go through:\n\($0)" }
-    }
-
-    /// Runs git for something that changes the repository; nil when it worked, else what git
-    /// said. It never waits for a password: with nothing to answer, it fails instead. As long as
-    /// it takes (a push, a commit's hooks), and what a hook leaves running doesn't hold it up.
-    static func report(_ arguments: [String], in directory: String, environment: [String: String]) -> String? {
-        var environment = environment.isEmpty ? ProcessInfo.processInfo.environment : environment
-        environment["GIT_TERMINAL_PROMPT"] = "0"
-        let result: ChildProcess.Result
-        do { result = try run(git: arguments, in: directory, environment: environment, errors: .withOutput, limit: nil) } catch { return error.localizedDescription }
-        guard !result.succeeded else { return nil }
-        let text = result.outputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        return text.isEmpty ? "git \(arguments.first ?? "") failed." : text
-    }
-
     /// New files' lines, or binary or too big: this Mac's from its disk, a machine's from its box
-    /// (`box`, by the machine's id), as a phone reads them, several at a time. `known`: those read
+    /// (`box`, by the machine's id, `kuvo/file`), as a phone reads them, several at a time. `known`: those read
     /// before (`kept`), used again while their stamp is the same.
     @concurrent static func readNew(_ files: [ChangedFile], known: [String: ChangedFile] = [:],
                                     box: @escaping @Sendable (String) -> BoxClient = BoxClient.machine) async -> [ChangedFile] {
@@ -586,17 +434,6 @@ nonisolated enum Git {
         return file
     }
 
-    /// A file on this Mac as it is now: its size and when it last changed, as a box stamps a
-    /// machine's. nil when it can't be read (a broken link), so it's read each time.
-    /// One changed in the last few seconds has none (as git treats one it can't be sure of): a
-    /// disk that keeps times to the second could change it again, the same size, unseen.
-    private static func stamp(_ url: URL) -> String? {
-        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
-              let size = values.fileSize, let modified = values.contentModificationDate,
-              Date().timeIntervalSince(modified) > 3 else { return nil }
-        return "\(size)-\(modified.timeIntervalSinceReferenceDate)"
-    }
-
     /// What tells one list from another: a new file by its path and stamp, not by hashing its
     /// lines again each look (thousands, after an install).
     static func signature(of files: [ChangedFile]) -> Int {
@@ -628,23 +465,23 @@ nonisolated enum Git {
         file.isTooBig = parsed.isTooBig
     }
 
-    static func relativePath(of directory: String, in root: String) -> String {
-        if let folder = RemoteFolder.parse(directory), let top = RemoteFolder.parse(root) {
-            guard folder.path.hasPrefix(top.path) else { return "" }
-            return String(folder.path.dropFirst(top.path.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        }
-        let resolved = URL(filePath: directory).resolvingSymlinksInPath().path
-        let base = URL(filePath: root).resolvingSymlinksInPath().path
-        guard resolved.hasPrefix(base) else { return "" }
-        return String(resolved.dropFirst(base.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-    }
+    // MARK: Run by this app
 
-    /// The repository's top folder, written the way `directory` is (on its machine, for a
-    /// machine's folder), or nil when it isn't in one.
-    static func toplevel(of directory: String) -> String? {
-        guard let path = run(["rev-parse", "--show-toplevel"], in: directory)?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !path.isEmpty else { return nil }
-        return RemoteFolder.machine(of: directory).map { RemoteFolder.folder(path, on: $0) } ?? path
+    // Left for what hasn't moved to the boxes yet (the title bar's branches, the file list, a
+    // worktree's changes before Delete): this Mac's git, or a machine's over SSH.
+
+
+    /// Runs git for something that changes the repository; nil when it worked, else what git
+    /// said. It never waits for a password: with nothing to answer, it fails instead. As long as
+    /// it takes, and what a hook leaves running doesn't hold it up.
+    static func report(_ arguments: [String], in directory: String, environment: [String: String]) -> String? {
+        var environment = environment.isEmpty ? ProcessInfo.processInfo.environment : environment
+        environment["GIT_TERMINAL_PROMPT"] = "0"
+        let result: ChildProcess.Result
+        do { result = try run(git: arguments, in: directory, environment: environment, errors: .withOutput, limit: nil) } catch { return error.localizedDescription }
+        guard !result.succeeded else { return nil }
+        let text = result.outputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? "git \(arguments.first ?? "") failed." : text
     }
 
     /// git in `directory`, waited for off the main thread: this Mac's, or, for a folder on a

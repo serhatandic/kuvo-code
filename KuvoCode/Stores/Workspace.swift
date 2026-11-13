@@ -3646,28 +3646,40 @@ final class Workspace {
         if !lastingShellJobs.isSubset(of: running) { lastingShellJobs.formIntersection(running) }
     }
 
-    /// Stops a command an agent left running: its process group is sent SIGTERM, on this Mac or
-    /// on its machine, so the engine sees it end and tells the agent, with what it printed. The
-    /// engine's own stop also deletes the output, and the agent hears the command was never
-    /// found, so it's only for when that can't be done.
-    /// How it went: "signal" or "removed" (the engine's stop), for a phone that asked.
+    /// Stops a command an agent left running, on the box its session's folder is on
+    /// (`kuvo/shell/<id>/stop`), as a phone asks it: its process group is sent SIGTERM there, so the
+    /// engine sees it end and tells the agent, with what it printed. The engine's own stop deletes
+    /// the output too, and the agent hears the command was never found, so the box does that only
+    /// when it can't send the signal.
+    /// How it went: "signal" or "removed"; why not, in words to show (`BoxRefusal`): none such runs
+    /// there any more, or its box couldn't be asked or said no.
     @discardableResult
-    func stopShellJob(_ job: ShellJob, in session: String) async -> String {
+    func stopShellJob(_ job: ShellJob, in session: String) async throws -> String {
         let directory = self.session(session)?.location.directory ?? ""
-        let engine = api(forSession: session)
-        // Its process as the engine knows it now: one noted earlier (announced before it had one,
-        // or from before a machine restarted, when it can be another process's) isn't signalled.
-        let current = try? await engine?.shell(job.id, directory: directory)
-        if let current, current.status == "running", let pid = current.pid, pid > 1 {
-            let machine = RemoteFolder.machine(of: directory)
-            let sent = await Task.detached { () -> Bool in
-                guard let machine else { return kill(-pid_t(pid), SIGTERM) == 0 }
-                return RemoteShell.run("kill -TERM -\(pid) 2>/dev/null && echo sent", on: machine).map { String(decoding: $0, as: UTF8.self).contains("sent") } ?? false
-            }.value
-            if sent { return "signal" }
+        struct Stopped: Decodable { var stopped: String }
+        // As JavaScript's `encodeURIComponent` writes them, as the engine reads its folder.
+        let plain = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()")
+        let id = job.id.addingPercentEncoding(withAllowedCharacters: plain) ?? job.id
+        // The engine looks for it in the session's folder, as its box names it.
+        let folder = Self.onBox(directory).addingPercentEncoding(withAllowedCharacters: plain) ?? directory
+        let command = job.command.count > 60 ? job.command.prefix(59) + "…" : job.command
+        let machine = RemoteFolder.machine(of: directory)
+        let notAnswered = "Kuvo Code’s background service on this Mac didn’t answer. Try again in a moment."
+        guard let client = boxes?(Self.box(of: directory)) else { throw BoxRefusal(status: 503, message: "Couldn’t stop “\(command)”. \(notAnswered)") }
+        let status: Int, data: Data
+        do {
+            (status, data) = try await client.send("POST", "kuvo/shell/\(id)/stop", body: try? JSONSerialization.data(withJSONObject: ["session": session]),
+                                                   headers: directory.isEmpty ? [:] : ["x-opencode-directory": folder])
+        } catch {
+            throw BoxRefusal(status: 503, message: "Couldn’t stop “\(command)”. \(machine == nil ? notAnswered : error.localizedDescription)")
         }
-        try? await engine?.removeShell(job.id, directory: directory)
-        return "removed"
+        guard (200..<300).contains(status) else {
+            let refused = BoxRefusal(status: status, data: data)
+            // None such runs there (`404 {}`): it ended meanwhile.
+            let said = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["message"] as? String
+            throw BoxRefusal(status: status, message: status == 404 && said == nil ? "“\(command)” isn’t running any more." : "Couldn’t stop “\(command)”. \(refused.message)")
+        }
+        return (try? JSONDecoder().decode(Stopped.self, from: data))?.stopped ?? "signal"
     }
 
     /// Hears a conversation go on Autopilot, from any client: what it has waiting on you here stops waiting.

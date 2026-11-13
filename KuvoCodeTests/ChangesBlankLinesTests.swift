@@ -16,7 +16,8 @@ import Testing
         try repo.commitAll("Start")
         try repo.write("app.js", "let a = 1\n\nlet b = 3\n")
 
-        let changes = ProjectChanges(directory: repo.path)
+        let box = try await GitTestBox()
+        let changes = box.changes(repo.path)
         await changes.refresh()
         let row = try #require(changes.files.first)
         #expect(row.lines.map(\.text) == ["let a = 1", "", "let b = 2", "let b = 3"])
@@ -31,7 +32,8 @@ import Testing
         try repo.commitAll("Start")
         try repo.write("app.js", "let a = 2\n")
 
-        let changes = ProjectChanges(directory: repo.path)
+        let box = try await GitTestBox()
+        let changes = box.changes(repo.path)
         await changes.refresh()
         let row = try #require(changes.files.first { $0.path == "app.js" })
         #expect(row.lines.map(\.text) == ["let a = 1", "let a = 2"])
