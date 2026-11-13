@@ -9,7 +9,7 @@
 // kind only between your own computers too.
 
 import type { LimitsDirectory, LimitsTransport } from "../limits-peers"
-import type { KeptUnit, SettingsUnit, UsageSettings } from "./settings"
+import type { KeptUnit, UsageSettings } from "./settings"
 
 /** What one box tells another of its usage settings. */
 export interface SettingsMail {
@@ -19,7 +19,7 @@ export interface SettingsMail {
   /** What it holds, hashed (`UsageSettings.digest`). */
   digest: string
   /** Its parts, with their versions: none in a mail that only says what it holds. */
-  usage?: Partial<Record<SettingsUnit, KeptUnit>>
+  usage?: Record<string, KeptUnit>
   /** Tell me yours (it just started, or holds something else). */
   ask?: true
   /** The setup the sender follows (its id): taken only by a box of the same. */
@@ -122,6 +122,8 @@ export class SettingsPeers {
   }
 
   private directorySaid() {
+    // In another setup than the one these were shared in: they start over (`UsageSettings.inSetup`).
+    if (this.directory.told && this.directory.setup) this.settings.inSetup(this.directory.setup)
     const ours = new Set(this.ours())
     // (A computer gone, or one that's now a box a peer vouches for: forgotten, told again should it come back as yours.)
     for (const map of [this.told, this.answered]) for (const key of [...map.keys()]) if (!ours.has(key)) map.delete(key)

@@ -379,4 +379,89 @@ describe("across your own computers", () => {
     dev.peers.take("mac-key", { kind: "settings", at, digest: "y", usage: yours.settings.kept(), setup: "set_yours" })
     expect((await dev.read()).settings.layout).toEqual(layout(["claude.session"], ["claude.session"]))
   })
+
+  test("a box that leaves your setup for another person's starts over: none of your settings go there, and its own Mac's come in again", async () => {
+    // Alice's Mac and a machine in her setup.
+    const alice = make("alice-key", "Alice's Mac")
+    const machineHome = mkdtempSync(join(base, "machine-"))
+    let machine = make("m-key", "machine", machineHome)
+    await alice.meet([machine], [], "set_alice")
+    await machine.meet([alice], [], "set_alice")
+    await relay.settled()
+    await alice.route("POST", ["import"], { notifications: alerts(true) })
+    at += MINUTE
+    await alice.route("PUT", [], { layout: layout(["claude.session"], ["claude.session"]) })
+    await relay.settled()
+    expect((await machine.read()).settings).toEqual({ notifications: alerts(true), layout: layout(["claude.session"], ["claude.session"]) })
+    // A restart keeps which setup they were shared in.
+    machine.stop()
+    machine = make("m-key", "machine", machineHome)
+    await machine.meet([alice], [], "set_alice")
+    expect((await machine.read()).settings.layout).toEqual(layout(["claude.session"], ["claude.session"]))
+
+    // Alice removes it; Bob sets it up, and it joins his setup alone.
+    const bob = make("bob-key", "Bob's Mac")
+    await bob.route("POST", ["import"], { layout: layout(["codex.weekly"]) })
+    const told: unknown[] = []
+    const stop = subscribe((event) => event.type === "kuvo.usage.settings" && told.push(event.data))
+    try {
+      await alice.meet([], [], "set_alice")
+      await machine.meet([bob], [], "set_bob")
+      await bob.meet([machine], [], "set_bob")
+      await relay.settled()
+    } finally {
+      stop()
+    }
+    // It started over (its clients were told), and holds Bob's alone; Alice's never went to Bob.
+    expect(told.length).toBeGreaterThan(0)
+    expect((await machine.read()).settings).toEqual({ layout: layout(["codex.weekly"]) })
+    expect((await bob.read()).settings).toEqual({ layout: layout(["codex.weekly"]) })
+    expect(relay.sent.filter((each) => each.to === "bob-key" && each.mail.kind === "settings").every((each) => !each.mail.usage?.notifications)).toBe(true)
+    // What its own Mac kept comes in again (a machine's Mac is a client of it like any other).
+    expect((await machine.read()).imported).toBe(false)
+    expect(JSON.parse(readFileSync(join(machineHome, "usage", "settings.json"), "utf8")).setup).toBe("set_bob")
+  })
+
+  test("a client of an older app sends the cards and meters it knows: the box keeps a newer app's", async () => {
+    const box = make("box-key", "devbox")
+    const newer = { ...layout(["claude.session", "grok.weekly"], ["grok.weekly"]), metricOrder: { claude: ["claude.session"], grok: ["grok.weekly"] }, providerOrder: ["grok", "claude", "codex"] }
+    await box.route("PUT", [], { layout: newer, providers: { enabled: ["claude", "grok"], known: ["claude", "codex", "grok"] } })
+    at += MINUTE
+    // The older app stars Codex's session; it knows Claude's and Codex's cards and meters, not Grok's.
+    const knows = { cards: ["claude", "codex"], meters: ["claude.session", "claude.weekly", "codex.session", "codex.weekly"] }
+    const older = { ...layout(["claude.session"], ["codex.session"]), metricOrder: { claude: ["claude.session"] }, providerOrder: ["claude", "codex"] }
+    const answer = await box.route("PUT", [], { layout: older, providers: { enabled: ["claude"], known: ["claude", "codex"] }, knows })
+    expect(answer.status).toBe(200)
+    const kept = answer.body.data.settings
+    expect(kept.layout.placed).toEqual(["claude.session", "grok.weekly"])
+    expect(kept.layout.pinned).toEqual(["codex.session", "grok.weekly"])
+    expect(kept.layout.providerOrder).toEqual(["claude", "codex", "grok"])
+    expect(kept.layout.metricOrder.grok).toEqual(["grok.weekly"])
+    expect(kept.providers).toEqual({ enabled: ["claude", "grok"], known: ["claude", "codex", "grok"] })
+    // One that says nothing of what it knows sends the part whole.
+    at += MINUTE
+    expect((await box.route("PUT", [], { layout: older })).body.data.settings.layout).toEqual(older)
+  })
+
+  test("two boxes of different versions hold the same: a part or field one doesn't know is kept as it came, so they agree and stop telling each other", async () => {
+    const mac = make("mac-key", "MacBook")
+    const dev = make("dev-key", "devbox")
+    await mac.meet([dev])
+    await dev.meet([mac])
+    await relay.settled()
+    // What a newer box told: a part this version doesn't know, and a field of one it does.
+    const stamp = { v: at, by: "newer-key" }
+    mac.peers.take("dev-key", { kind: "settings", at, digest: "newer", setup: "set_yours", usage: { theme: { value: { accent: "blue" }, stamp }, notifications: { value: { ...alerts(true), dailyDigest: true }, stamp } } })
+    await relay.settled()
+    expect((await mac.read()).settings).toEqual({ notifications: { ...alerts(true), dailyDigest: true } })
+    expect(Object.keys(dev.settings.kept()).sort()).toEqual(["notifications", "theme"])
+    expect(dev.settings.digest()).toBe(mac.settings.digest())
+    // Ten minutes on: each says only what it holds, and nothing more goes.
+    at += 10 * MINUTE
+    const before = relay.sent.length
+    mac.peers.tell()
+    dev.peers.tell()
+    await relay.settled()
+    expect(relay.sent.slice(before).map((each) => !!each.mail.usage)).toEqual([false, false])
+  })
 })

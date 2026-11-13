@@ -88,6 +88,7 @@ export function newer(a: Stamp, b: Stamp): boolean {
   return a.by > b.by
 }
 
+const LAYOUT_LISTS = ["placed", "providerOrder", "pinned", "expanded", "expandOnEnable", "seeded"] as const
 const MOST_IDS = 1_000
 const MOST_PROVIDERS = 200
 const ID = /^[^\u0000-\u001f]{1,200}$/
@@ -104,6 +105,31 @@ const ids = (value: unknown): string[] | null => {
 
 const word = (value: unknown): string | undefined => (typeof value === "string" && /^[^\u0000-\u001f]{1,40}$/.test(value) ? value : undefined)
 
+/** At most this much of what a newer box knows and this one doesn't, per part, kept as it came. */
+const MOST_OTHER = 16_000
+/** At most this many parts a newer box knows and this one doesn't, each at most this big. */
+const MOST_OTHER_PARTS = 20
+const MOST_OTHER_PART = 64_000
+const OTHER_PART = /^[a-z][A-Za-z0-9]{0,39}$/
+
+/**
+ * JSON with every object's keys in one order: what two boxes hold reads the same, whichever of a
+ * part's fields each knows (one it doesn't is kept after the rest, as it came).
+ */
+export function canonical(value: unknown): string {
+  if (Array.isArray(value)) return "[" + value.map(canonical).join(",") + "]"
+  if (value && typeof value === "object") {
+    return "{" + Object.keys(value as object).sort().map((key) => JSON.stringify(key) + ":" + canonical((value as Record<string, unknown>)[key])).join(",") + "}"
+  }
+  return JSON.stringify(value) ?? "null"
+}
+
+/** The fields of a part this box doesn't know (a newer box's), kept as they came, while they're small. */
+function others(given: Record<string, unknown>, known: readonly string[]): Record<string, unknown> {
+  const rest = Object.fromEntries(Object.entries(given).filter(([key]) => !known.includes(key)))
+  return Object.keys(rest).length && canonical(rest).length <= MOST_OTHER ? rest : {}
+}
+
 /** A part's value, checked and cleaned; undefined for one that isn't that part. */
 export function checked(unit: SettingsUnit, value: unknown): unknown {
   const given = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined
@@ -118,20 +144,20 @@ export function checked(unit: SettingsUnit, value: unknown): unknown {
         if (!ID.test(provider) || !each) return undefined
         metricOrder[provider] = each
       }
-      const lists = (["placed", "providerOrder", "pinned", "expanded", "expandOnEnable", "seeded"] as const).map((key) => [key, ids(given[key] ?? [])] as const)
+      const lists = LAYOUT_LISTS.map((key) => [key, ids(given[key] ?? [])] as const)
       if (lists.some(([, list]) => !list)) return undefined
-      return { ...Object.fromEntries(lists), metricOrder } as LayoutSettings
+      return { ...Object.fromEntries(lists), metricOrder, ...others(given, [...LAYOUT_LISTS, "metricOrder"]) } as LayoutSettings
     }
     case "providers": {
       const enabled = given && ids(given.enabled)
       const known = given && ids(given.known ?? [])
-      return enabled && known ? { enabled, known } : undefined
+      return enabled && known ? { enabled, known, ...others(given!, ["enabled", "known"]) } : undefined
     }
     case "totalSpend": {
       if (!given || typeof given.show !== "boolean") return undefined
       const period = word(given.period)
       const metric = word(given.metric)
-      return { show: given.show, ...(period ? { period } : {}), ...(metric ? { metric } : {}) }
+      return { show: given.show, ...(period ? { period } : {}), ...(metric ? { metric } : {}), ...others(given, ["show", "period", "metric"]) }
     }
     case "codexFallback":
       return value === null || (typeof value === "string" && ID.test(value)) ? value : undefined
@@ -139,7 +165,7 @@ export function checked(unit: SettingsUnit, value: unknown): unknown {
       if (!given) return undefined
       const flags = ["underTenPercent", "healthyToClose", "closeToRunningOut"] as const
       if (!flags.every((flag) => typeof given[flag] === "boolean")) return undefined
-      return Object.fromEntries(flags.map((flag) => [flag, given[flag]])) as unknown as NotificationSettings
+      return { ...Object.fromEntries(flags.map((flag) => [flag, given[flag]])), ...others(given, flags) } as unknown as NotificationSettings
     }
   }
 }
@@ -153,28 +179,86 @@ const stampOf = (value: unknown): Stamp | null => {
   return { v: stamp.v as number, by: stamp.by, ...(stamp.imported === true ? { imported: true as const } : {}) }
 }
 
-/** Parts as kept or told (`{unit: {value, stamp}}`), each checked; what isn't one left out. */
-export function unitsFrom(given: unknown): Partial<Record<SettingsUnit, KeptUnit>> {
-  const units: Partial<Record<SettingsUnit, KeptUnit>> = {}
+/** Each part kept, by name: this box's own, and those of a newer box it doesn't know (kept as they came). */
+type Units = Record<string, KeptUnit>
+
+/**
+ * Parts as kept or told (`{unit: {value, stamp}}`), each checked; what isn't one left out. A part
+ * this box doesn't know (a newer box's) is kept as it came, while there are few and they're small,
+ * so two boxes of different versions still hold the same.
+ */
+export function unitsFrom(given: unknown): Units {
+  const units: Units = {}
   if (!given || typeof given !== "object" || Array.isArray(given)) return units
+  let other = 0
   for (const [name, kept] of Object.entries(given)) {
-    if (!isUnit(name) || !kept || typeof kept !== "object") continue
+    if (!kept || typeof kept !== "object") continue
     const stamp = stampOf((kept as KeptUnit).stamp)
-    const value = checked(name, (kept as KeptUnit).value)
-    if (!stamp || value === undefined) continue
-    units[name] = { value, stamp }
+    if (!stamp) continue
+    if (isUnit(name)) {
+      const value = checked(name, (kept as KeptUnit).value)
+      if (value !== undefined) units[name] = { value, stamp }
+    } else if (OTHER_PART.test(name) && other < MOST_OTHER_PARTS && "value" in kept && canonical((kept as KeptUnit).value).length <= MOST_OTHER_PART) {
+      units[name] = { value: (kept as KeptUnit).value, stamp }
+      other++
+    }
   }
   return units
+}
+
+/** The cards and meters a client knows (its own app's), by id: what it sends is whole for those alone. */
+export interface Knows {
+  cards: Set<string>
+  meters: Set<string>
+}
+
+/** What a client said it knows (`knows: {cards, meters}`), checked; none for nothing it said. */
+export function knowsFrom(given: unknown): Knows | undefined {
+  if (!given || typeof given !== "object") return undefined
+  const cards = ids((given as Record<string, unknown>).cards)
+  const meters = ids((given as Record<string, unknown>).meters)
+  return cards && meters ? { cards: new Set(cards), meters: new Set(meters) } : undefined
+}
+
+/**
+ * A part a client changed, with what it was before that the client doesn't know (a newer app's
+ * cards and meters, and fields): kept, so a client of an older app never takes them from your
+ * other computers. A client that says nothing of what it knows sends the part whole.
+ */
+function keeping(unit: SettingsUnit, before: unknown, given: unknown, knows?: Knows): unknown {
+  if (!knows || !before || typeof before !== "object" || (unit !== "layout" && unit !== "providers")) return given
+  const was = before as Record<string, any>
+  const now = { ...(given as Record<string, any>) }
+  const otherMeter = (id: string) => !knows.meters.has(id)
+  const otherCard = (id: string) => !knows.cards.has(id)
+  const add = (list: string[], from: unknown, other: (id: string) => boolean) => [...list, ...(Array.isArray(from) ? from : []).filter((id: string) => other(id) && !list.includes(id))]
+  if (unit === "layout") {
+    for (const key of ["placed", "pinned", "expanded", "expandOnEnable", "seeded"]) now[key] = add(now[key] ?? [], was[key], otherMeter)
+    now.providerOrder = add(now.providerOrder ?? [], was.providerOrder, otherCard)
+    const metricOrder: Record<string, string[]> = { ...(now.metricOrder ?? {}) }
+    for (const [card, list] of Object.entries((was.metricOrder ?? {}) as Record<string, string[]>)) {
+      metricOrder[card] = otherCard(card) && !metricOrder[card] ? list : add(metricOrder[card] ?? [], list, otherMeter)
+    }
+    now.metricOrder = metricOrder
+  } else {
+    for (const key of ["enabled", "known"]) now[key] = add(now[key] ?? [], was[key], otherCard)
+  }
+  // (Fields of it the client's app doesn't know.)
+  for (const [key, value] of Object.entries(was)) if (!(key in now)) now[key] = value
+  return checked(unit, now) ?? given
 }
 
 /**
  * A box's usage settings, kept in its usage folder (`settings.json`, which keeps Codex's fallback
  * model where a box from before reads it too). `self`: this box's link key, once the link says it.
+ * They belong to the setup they were shared in (`setup`): in another, the box starts over.
  */
 export class UsageSettings {
-  private units: Partial<Record<SettingsUnit, KeptUnit>> = {}
+  private units: Units = {}
   /** Whether what a Mac kept before came in here (once). */
   imported = false
+  /** The setup these were shared in, by its id (none named yet). */
+  setup?: string
   /** The highest version seen, so a change counts on from it whatever this clock says. */
   private highest = 0
   private listeners: ((units: SettingsUnit[]) => void)[] = []
@@ -191,6 +275,7 @@ export class UsageSettings {
       const saved = JSON.parse(readFileSync(file, "utf8"))
       this.units = unitsFrom(saved?.units)
       this.imported = saved?.imported === true
+      if (typeof saved?.setup === "string") this.setup = saved.setup
       // A box from before kept only Codex's fallback model: what was chosen there counts as an import.
       const codex = saved?.codex
       if (!this.units.codexFallback && codex && typeof codex === "object" && "fallback" in codex) {
@@ -198,12 +283,33 @@ export class UsageSettings {
         if (value !== undefined) this.units.codexFallback = { value, stamp: { v: Math.floor(statSync(file).mtimeMs), by: "", imported: true } }
       }
     } catch {}
-    for (const unit of Object.values(this.units)) this.highest = Math.max(this.highest, unit!.stamp.v)
+    for (const unit of Object.values(this.units)) if (!unit.stamp.imported) this.highest = Math.max(this.highest, unit.stamp.v)
   }
 
   /** Told each time parts change (here, or from another of your computers). */
   listen(listener: (units: SettingsUnit[]) => void) {
     this.listeners.push(listener)
+  }
+
+  /**
+   * The setup this box follows now (`id`, as the link says). The first named is taken as theirs;
+   * another one (this computer left that setup and joined another, whose computers may be another
+   * person's) starts over: every part goes, and what this box's own Mac kept comes in again. True
+   * when it started over.
+   */
+  inSetup(id: string): boolean {
+    if (this.setup === id) return false
+    const was = this.setup
+    this.setup = id
+    if (was === undefined) {
+      this.save()
+      return false
+    }
+    this.units = {}
+    this.imported = false
+    this.save()
+    for (const listener of this.listeners) listener([...SETTINGS_UNITS])
+    return true
   }
 
   /** Codex's fallback model (none: undefined). */
@@ -221,42 +327,48 @@ export class UsageSettings {
     this.change({ codexFallback: model })
   }
 
-  /** The parts' values (a part never set: absent, the panel's own default). */
+  /** The parts' values (a part never set: absent, the panel's own default), of those this box knows. */
   values(): SettingsValues {
-    return Object.fromEntries(Object.entries(this.units).map(([name, unit]) => [name, unit!.value])) as SettingsValues
+    return Object.fromEntries(Object.entries(this.units).flatMap(([name, unit]) => (isUnit(name) ? [[name, unit.value]] : []))) as SettingsValues
   }
 
-  /** The parts as kept, with their versions (to tell another box). */
-  kept(): Partial<Record<SettingsUnit, KeptUnit>> {
+  /** The parts as kept, with their versions (to tell another box), a newer box's too. */
+  kept(): Units {
     return structuredClone(this.units)
   }
 
-  /** What's kept, hashed: two boxes with the same parts at the same versions say the same. */
+  /**
+   * What's kept, hashed: two boxes with the same parts at the same versions say the same, whatever
+   * version of Kuvo Code each is (a part or field one doesn't know is kept as it came).
+   */
   digest(): string {
-    const canonical = SETTINGS_UNITS.map((name) => {
-      const unit = this.units[name]
-      return unit ? [name, unit.stamp.v, unit.stamp.by, unit.stamp.imported === true, unit.value] : [name]
-    })
-    return createHash("sha256").update(JSON.stringify(canonical)).digest("hex").slice(0, 32)
+    const all = Object.keys(this.units)
+      .sort()
+      .map((name) => {
+        const unit = this.units[name]!
+        return [name, unit.stamp.v, unit.stamp.by, unit.stamp.imported === true, unit.value]
+      })
+    return createHash("sha256").update(canonical(all)).digest("hex").slice(0, 32)
   }
 
   /**
    * Parts changed here (through a route): each checked, then kept at a version past every one seen.
-   * A message for a part that isn't what it should be; nothing changes then.
+   * `knows`: the cards and meters the client knows; what it was before of others is kept. A message
+   * for a part that isn't what it should be; nothing changes then.
    */
-  change(given: Record<string, unknown>): { changed: SettingsUnit[] } | { message: string } {
+  change(given: Record<string, unknown>, knows?: Knows): { changed: SettingsUnit[] } | { message: string } {
     const values: [SettingsUnit, unknown][] = []
     for (const [name, value] of Object.entries(given)) {
       if (!isUnit(name)) return { message: `There's no usage setting called ${name}.` }
       const clean = checked(name, value)
       if (clean === undefined) return { message: `That isn't a ${name} setting.` }
-      values.push([name, clean])
+      values.push([name, keeping(name, this.units[name]?.value, clean, knows)])
     }
     const changed: SettingsUnit[] = []
     for (const [name, value] of values) {
       const before = this.units[name]
       // (The same as it is: no new version, so nothing goes to your other computers.)
-      if (before && !before.stamp.imported && JSON.stringify(before.value) === JSON.stringify(value)) continue
+      if (before && !before.stamp.imported && canonical(before.value) === canonical(value)) continue
       this.highest = Math.max(this.now(), this.highest + 1)
       this.units[name] = { value, stamp: { v: this.highest, by: this.self() || this.unnamed } }
       changed.push(name)
@@ -267,8 +379,8 @@ export class UsageSettings {
 
   /**
    * What a Mac kept before its box did, once: each part no box has set yet (here, or come from
-   * another of your computers) at an import's version; the rest left as they are. Nothing the
-   * second time. Each part checked; one that isn't what it should be is left out.
+   * another of your computers) at an import's version, this box's clock's now; the rest left as
+   * they are. Nothing the second time. Each part checked; one that isn't what it should be is left out.
    */
   take(given: Record<string, unknown>): SettingsUnit[] {
     if (this.imported) return []
@@ -289,16 +401,16 @@ export class UsageSettings {
 
   /** Parts another of your computers told: each newer than this box's taken. The parts that changed. */
   merge(given: unknown): SettingsUnit[] {
-    const changed: SettingsUnit[] = []
-    for (const [name, unit] of Object.entries(unitsFrom(given)) as [SettingsUnit, KeptUnit][]) {
+    const changed: string[] = []
+    for (const [name, unit] of Object.entries(unitsFrom(given))) {
       if (!unit.stamp.imported) this.highest = Math.max(this.highest, unit.stamp.v)
       const before = this.units[name]
       if (before && !newer(unit.stamp, before.stamp)) continue
       this.units[name] = unit
       changed.push(name)
     }
-    if (changed.length) this.changed(changed)
-    return changed
+    if (changed.length) this.changed(changed as SettingsUnit[])
+    return changed.filter(isUnit)
   }
 
   private changed(units: SettingsUnit[], save = true) {
@@ -312,7 +424,7 @@ export class UsageSettings {
       mkdirSync(dirname(this.file), { recursive: true })
       // (Codex's fallback model where a box from before reads it, while it's one this box chose or took.)
       const codex = this.units.codexFallback ? { codex: { fallback: this.units.codexFallback.value } } : {}
-      writeFileSync(this.file + ".new", JSON.stringify({ ...codex, kuvo: 1, units: this.units, ...(this.imported ? { imported: true } : {}) }), { mode: 0o600 })
+      writeFileSync(this.file + ".new", JSON.stringify({ ...codex, kuvo: 1, units: this.units, ...(this.imported ? { imported: true } : {}), ...(this.setup ? { setup: this.setup } : {}) }), { mode: 0o600 })
       renameSync(this.file + ".new", this.file)
     } catch {}
   }
@@ -326,7 +438,8 @@ const answer = (settings: UsageSettings, extra: Record<string, unknown> = {}) =>
 /**
  * `GET api/kuvo/usage/settings` → `{data: {settings, imported}}`; `PUT api/kuvo/usage/settings`
  * with the parts changed (`{layout?, providers?, totalSpend?, codexFallback?, notifications?}`, each
- * whole) answers the same; `POST api/kuvo/usage/settings/import` with what a Mac kept before takes
+ * whole, and `knows: {cards, meters}`, those the client's app knows: what it doesn't is kept)
+ * answers the same; `POST api/kuvo/usage/settings/import` with what a Mac kept before takes
  * the parts no box has set, once, and answers with `took` (PROTOCOL.md, "Usage settings").
  * `choices`: the models Codex's fallback model may be now.
  */
@@ -338,7 +451,8 @@ export async function settingsRoutes(settings: UsageSettings, choices: () => str
     if ("codexFallback" in given && given.codexFallback !== null && (typeof given.codexFallback !== "string" || !choices().includes(given.codexFallback))) {
       return json({ message: "This model's prices aren't available now. Choose another model or None." }, 400)
     }
-    const changed = settings.change(given)
+    const { knows, ...parts } = given as Record<string, unknown>
+    const changed = settings.change(parts, knowsFrom(knows))
     if ("message" in changed) return json({ message: changed.message }, 400)
     return answer(settings)
   }
