@@ -577,8 +577,14 @@ test("an offered release that fails before anything changes (its engine's downlo
   assert.equal(link.offeredVersion(), "0.10.0", "still offered");
   assert.equal(await take(), null, "not again at once");
   assert.deepEqual(offer(folder), { status: 202, version: "0.10.0" }, "offered again meanwhile: it's there already");
+  // Failing again an hour on (as one whose own checks fail would, every time), it rests a day.
+  const at = hours => ({ clock: () => Date.now() + hours * 3_600_000 + 1000 });
+  assert.equal((await take(at(1))).result, "failed");
+  assert.equal(read(path.join(home, "run", "update.json")).offerFailed.tries, 2);
+  assert.equal(await take(at(2)), null, "not an hour on");
+  assert.equal(link.offeredVersion(), "0.10.0");
   served["/engine.tgz"] = engine;
-  assert.equal((await take({ clock: () => Date.now() + 3_600_001 })).result, "updated");
+  assert.equal((await take(at(26))).result, "updated");
   engines.add(read(engineFile).pid);
   assert.equal(fs.existsSync(offered), false);
   assert.equal(read(path.join(home, "run", "update.json")).offerFailed, undefined, "forgotten once it's taken");

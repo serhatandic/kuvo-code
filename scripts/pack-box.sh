@@ -26,7 +26,7 @@ case "$URL" in
 esac
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/kuvo-box-release.XXXXXXXX")
-trap 'rm -rf "$work"' EXIT
+trap 'rm -rf "$work"; rm -f "$OUT/box-$VERSION.tar.gz.new" "$OUT/boxes.json.new"' EXIT
 box="$work/box"
 # (Never with the key: the app only writes files.)
 env -u KUVO_BOX_SIGNING_KEY "$APP/Contents/MacOS/Kuvo Code" --write-box-files "$box"

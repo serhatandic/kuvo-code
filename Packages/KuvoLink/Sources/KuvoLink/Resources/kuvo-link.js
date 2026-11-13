@@ -7914,7 +7914,7 @@ async function cameUp(version, withAgents, timeout = 120000, readEngine = readEn
 }
 var OWN_TOOLS = ["kuvo-agents.js", "kuvo-browser.js", "kuvo-wake", "kuvo-npx"];
 var installOrder = (files) => [...files].sort((a, b) => a === "bin/box-version" ? -1 : b === "bin/box-version" ? 1 : a === "bin/.kuvo-boot" ? 1 : b === "bin/.kuvo-boot" ? -1 : a < b ? -1 : 1);
-async function update({ now = false, from, keys = UPDATE_KEYS, url = UPDATE_URL, blocked = updatesBlocked(), clock = Date.now, step = () => {}, upWithin = 120000, swapping = () => {} } = {}) {
+async function update({ now = false, from, keys = UPDATE_KEYS, url = UPDATE_URL, blocked = updatesBlocked(), clock = Date.now, step = () => {}, upWithin = 120000, swapping = () => {}, taking = () => {} } = {}) {
   if (!keys.length)
     return { result: "off", message: "Updates aren't set up for this machine yet." };
   if (blocked)
@@ -7941,6 +7941,7 @@ async function update({ now = false, from, keys = UPDATE_KEYS, url = UPDATE_URL,
         throw error;
       }
     const manifest = verifyBoxes(released.toString("utf8"), keys);
+    taking(manifest.version);
     if (!from)
       noteUpdate({ latest: manifest.version, checked: clock() });
     if (!newerVersion(manifest.version, before))
@@ -8287,7 +8288,7 @@ function offeredVersion() {
 var dropOffer = () => fs34.rmSync(OFFERED, { recursive: true, force: true });
 function offerRests(version, now) {
   const { offerFailed: failed, trial } = updateState();
-  if (failed?.version === version && now - failed.at < (failed.takenBack ? OFFER_REST : OFFER_RETRY))
+  if (failed?.version === version && now - failed.at < (failed.takenBack || (failed.tries ?? 1) > 1 ? OFFER_REST : OFFER_RETRY))
     return true;
   return trial?.to === version && boxVersion() !== version && !updateOnTrial() && now - trial.at < OFFER_REST;
 }
@@ -8352,7 +8353,8 @@ async function offerDue({ blocked = updatesBlocked(), clock = Date.now } = {}) {
   if (!offered)
     return false;
   if (before && !newerVersion(offered, before)) {
-    dropOffer();
+    if (!isUpdating())
+      dropOffer();
     return false;
   }
   return !blocked && !!before && !updating && !isUpdating() && !updateOnTrial() && !fs34.existsSync(path35.join(RUN, "stopped")) && !offerRests(offered, clock()) && !await boxBusy();
@@ -8360,13 +8362,17 @@ async function offerDue({ blocked = updatesBlocked(), clock = Date.now } = {}) {
 async function takeOffer(options = {}) {
   if (!await offerDue(options))
     return null;
-  const version = offeredVersion();
-  let takenBack = false;
+  let version = offeredVersion(), takenBack = false;
   const outcome = await update({ ...options, from: OFFERED, swapping: () => {
     takenBack = true;
+  }, taking: (taken) => {
+    version = taken;
   } });
-  if (outcome.result === "failed")
-    noteUpdate({ offerFailed: { version, at: (options.clock ?? Date.now)(), takenBack } });
+  if (outcome.result === "failed") {
+    const before = updateState().offerFailed;
+    const tries = before?.version === version && !before.takenBack ? (before.tries ?? 1) + 1 : 1;
+    noteUpdate({ offerFailed: { version, at: (options.clock ?? Date.now)(), takenBack, tries } });
+  }
   if (outcome.result === "updated" || outcome.result === "current")
     noteUpdate({ offerFailed: null });
   if (outcome.result === "updated" || outcome.result === "current" || takenBack)
@@ -39132,7 +39138,7 @@ import fs123 from "node:fs";
 import path126 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "2c3dd345dfc7";
+var BRIDGE_VERSION = "d0015c0718f9";
 
 // Packages/Box/src/link/rehome/rewrite.ts
 var NO_REWRITE = {

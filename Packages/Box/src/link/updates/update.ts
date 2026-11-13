@@ -56,7 +56,8 @@ const BUNDLE = /^bin\/[A-Za-z0-9][A-Za-z0-9._ -]*\.app$/;
 const BUNDLE_PART = /^(?:[A-Za-z0-9_][A-Za-z0-9._+ -]*\/)*[A-Za-z0-9_][A-Za-z0-9._+ -]*$/;
 // How long a release that was offered rests before it's taken again: one that was put in place and
 // didn't come up (taken back), a day; one that failed before anything changed (the engine's
-// download offline, say), an hour.
+// download offline, say), an hour the first time, then a day (one whose own checks fail every
+// time isn't downloaded again every hour).
 const OFFER_REST = 86_400_000;
 const OFFER_RETRY = 3_600_000;
 // A release offered from a folder on this computer (`kuvo/box/update`), kept until it's taken.
@@ -144,9 +145,9 @@ export interface UpdateState {
   /** How the last update went, when (shared/routes/box.ts, `LAST_UPDATE`). */
   last?: LastUpdate;
   night?: string;
-  /** A release offered from a folder here that failed as it was taken: its version, when, and
-   * whether it was put in place and taken back. */
-  offerFailed?: { version: string; at: number; takenBack: boolean };
+  /** A release offered from a folder here that failed as it was taken: its version, when, whether
+   * it was put in place and taken back, and how many times in a row it failed. */
+  offerFailed?: { version: string; at: number; takenBack: boolean; tries?: number };
 }
 
 /** A change to `run/update.json`: each field given, null to take it away. */
@@ -352,6 +353,8 @@ export interface UpdateOptions {
   upWithin?: number;
   /** Told as it starts putting the new version in place (from there, a failure is taken back). */
   swapping?: () => void;
+  /** Told the version of the release it takes, once it's checked its signature. */
+  taking?: (version: string) => void;
 }
 
 /** A release's `box.json`, in its pack: its version, its engine's, each file's SHA-256, and its
@@ -368,7 +371,7 @@ interface BoxFiles {
 // "failed", version?, message?}`; once "updated", the bridge goes for the keeper to start the new
 // one. `from`: a release in a folder here, taken whatever its age (the Kuvo Code it came with is
 // here already). `keys` and `url`: a test's (a test's folder only).
-export async function update({ now = false, from, keys = UPDATE_KEYS, url = UPDATE_URL, blocked = updatesBlocked(), clock = Date.now, step = () => {}, upWithin = 120_000, swapping = () => {} }: UpdateOptions = {}): Promise<UpdateOutcome> {
+export async function update({ now = false, from, keys = UPDATE_KEYS, url = UPDATE_URL, blocked = updatesBlocked(), clock = Date.now, step = () => {}, upWithin = 120_000, swapping = () => {}, taking = () => {} }: UpdateOptions = {}): Promise<UpdateOutcome> {
   if (!keys.length) return { result: "off", message: "Updates aren't set up for this machine yet." };
   if (blocked) return { result: "blocked", message: blocked };
   // COMPAT(0.7 engine-stop): no update while an older Mac's Stop holds the engine down. Goes 3 months after 0.8.0.
@@ -390,6 +393,7 @@ export async function update({ now = false, from, keys = UPDATE_KEYS, url = UPDA
       throw error;
     }
     const manifest = verifyBoxes(released.toString("utf8"), keys);
+    taking(manifest.version);
     // (Only GitHub's says what the newest release is.)
     if (!from) noteUpdate({ latest: manifest.version, checked: clock() });
     if (!newerVersion(manifest.version, before)) return { result: "current", version: before };
@@ -754,7 +758,7 @@ export interface Offered {
 // says it's on its way to it, and the box is back where it was).
 function offerRests(version: string, now: number): boolean {
   const { offerFailed: failed, trial } = updateState();
-  if (failed?.version === version && now - failed.at < (failed.takenBack ? OFFER_REST : OFFER_RETRY)) return true;
+  if (failed?.version === version && now - failed.at < (failed.takenBack || (failed.tries ?? 1) > 1 ? OFFER_REST : OFFER_RETRY)) return true;
   return trial?.to === version && boxVersion() !== version && !updateOnTrial() && now - trial.at < OFFER_REST;
 }
 
@@ -821,7 +825,8 @@ export async function offerDue({ blocked = updatesBlocked(), clock = Date.now }:
   // (None, or one being written: nothing to do yet.)
   if (!offered) return false;
   if (before && !newerVersion(offered, before)) {
-    dropOffer();
+    // (Not while an update could be writing a new one in its place.)
+    if (!isUpdating()) dropOffer();
     return false;
   }
   return !blocked && !!before && !updating && !isUpdating() && !updateOnTrial() && !fs.existsSync(path.join(RUN, "stopped")) && !offerRests(offered, clock()) && !(await boxBusy());
@@ -830,14 +835,17 @@ export async function offerDue({ blocked = updatesBlocked(), clock = Date.now }:
 /** The release offered from a folder here, taken when it's due (`offerDue`), as `update --offered`
  * does in a process of its own. Taken, or no longer newer, it goes. One that fails once it was put
  * in place is taken back, goes, and rests a day (offered again sooner, it's refused); one that
- * fails before anything changed stays, and is tried again in an hour. Busy, it waits. Nothing due:
- * null. */
+ * fails before anything changed stays, and is tried again in an hour, then a day after each next
+ * failure. Busy, it waits. Nothing due: null. */
 export async function takeOffer(options: UpdateOptions = {}): Promise<UpdateOutcome | null> {
   if (!(await offerDue(options))) return null;
-  const version = offeredVersion()!;
-  let takenBack = false;
-  const outcome = await update({ ...options, from: OFFERED, swapping: () => { takenBack = true; } });
-  if (outcome.result === "failed") noteUpdate({ offerFailed: { version, at: (options.clock ?? Date.now)(), takenBack } });
+  let version = offeredVersion()!, takenBack = false;
+  const outcome = await update({ ...options, from: OFFERED, swapping: () => { takenBack = true; }, taking: taken => { version = taken; } });
+  if (outcome.result === "failed") {
+    const before = updateState().offerFailed;
+    const tries = before?.version === version && !before.takenBack ? (before.tries ?? 1) + 1 : 1;
+    noteUpdate({ offerFailed: { version, at: (options.clock ?? Date.now)(), takenBack, tries } });
+  }
   if (outcome.result === "updated" || outcome.result === "current") noteUpdate({ offerFailed: null });
   if (outcome.result === "updated" || outcome.result === "current" || takenBack) dropOffer();
   return outcome;

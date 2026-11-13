@@ -2045,8 +2045,9 @@ did: the box keeps working as itself ("For released Macs").
     and its version rests a day (`offerFailed` in `run/update.json`; offered again sooner, it's
     refused with 409), as it does when the keeper took an update to it back (its new bridge never
     said it was well), so a release that never comes up isn't tried at every offer. One that failed
-    before anything changed (its engine's download, offline) stays, and is tried again an hour on;
-    offered again meanwhile, it's there already (202).
+    before anything changed (its engine's download, offline) stays, and is tried again an hour on,
+    then a day after each next failure (`offerFailed.tries`); offered again meanwhile, it's there
+    already (202).
   - Its engine, when the box doesn't have it yet, still comes from the manifest's URL.
 - **When**: the night's window, 02:00 to 05:00 in `KUVO_TZ`, once a night, always (there's no
   switch: a machine keeps up with the Macs and phones that use it), for a release at least three
