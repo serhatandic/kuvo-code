@@ -291,7 +291,7 @@ import Testing
     }
 
     /// A machine's box's `kuvo/info` over SSH, as one of this version answers it: all the app needs.
-    private static let currentInfo: String = {
+    private nonisolated static let currentInfo: String = {
         let body = String(decoding: try! JSONSerialization.data(withJSONObject: ["kind": "machine", "features": BoxGate.required]), as: UTF8.self)
         return String(decoding: try! JSONSerialization.data(withJSONObject: ["status": 200, "body": body]), as: UTF8.self)
     }()

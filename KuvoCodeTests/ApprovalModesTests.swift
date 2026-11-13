@@ -290,5 +290,167 @@ import Testing
         #expect(((picked["metadata"] as? [String: Any])?["kuvo"] as? [String: Any])?["approval"] as? String == "acceptEdits")
         #expect((picked["permissions"] as? [[String: Any]])?.contains { $0["action"] as? String == "shell" && $0["effect"] as? String == "ask" } == true)
     }
+}
 
+/// A box's decisions: the first read held on its way until `release()`, answering what was there
+/// when it was asked; the reads after it answer what's there now.
+private nonisolated final class SlowDecisions: @unchecked Sendable {
+    private let lock = NSLock()
+    private let first: String
+    private let later: String
+    private var reads = 0
+    private var held: AsyncThrowingStream<LinkResponsePart, Error>.Continuation?
+
+    init(first: String, later: String) {
+        self.first = first
+        self.later = later
+    }
+
+    var holding: Bool { lock.withLock { held != nil } }
+
+    func release() {
+        guard let held = lock.withLock({ () -> AsyncThrowingStream<LinkResponsePart, Error>.Continuation? in
+            defer { self.held = nil }
+            return self.held
+        }) else { return }
+        Self.answer(first, to: held)
+    }
+
+    private static func answer(_ body: String, to continuation: AsyncThrowingStream<LinkResponsePart, Error>.Continuation) {
+        continuation.yield(.head(status: 200, headers: ["content-type": "application/json"]))
+        continuation.yield(.body(Data(body.utf8)))
+        continuation.finish()
+    }
+
+    @MainActor var client: BoxClient {
+        BoxClient(box: BoxClient.mac, transport: LocalBox { [self] _ in
+            AsyncThrowingStream { continuation in
+                let isFirst = lock.withLock {
+                    reads += 1
+                    if reads == 1 { held = continuation }
+                    return reads == 1
+                }
+                if !isFirst { Self.answer(later, to: continuation) }
+                TestPulse.beat()
+            }
+        })
+    }
+}
+
+/// A box keeping one conversation's approval: it takes each pick as it comes, but the first one's
+/// answer is held on its way until `release()`.
+private nonisolated final class SlowPicks: @unchecked Sendable {
+    private let lock = NSLock()
+    private var approval = "askFirst"
+    private var puts = 0
+    private var gets = 0
+    private var held: (AsyncThrowingStream<LinkResponsePart, Error>.Continuation, String)?
+
+    var holding: Bool { lock.withLock { held != nil } }
+    /// Reads of the conversation's approval.
+    var reads: Int { lock.withLock { gets } }
+
+    func release() {
+        guard let (continuation, body) = lock.withLock({ () -> (AsyncThrowingStream<LinkResponsePart, Error>.Continuation, String)? in
+            defer { held = nil }
+            return held
+        }) else { return }
+        Self.answer(body, to: continuation)
+        TestPulse.beat()
+    }
+
+    private static func shown(_ approval: String) -> String {
+        let options = ["askFirst", "acceptEdits", "auto", "fullAccess"].map { #"{"approval":"\#($0)"}"# }.joined(separator: ",")
+        return #"{"approval":"\#(approval)","effective":"\#(approval)","options":[\#(options)]}"#
+    }
+
+    private static func answer(_ body: String, to continuation: AsyncThrowingStream<LinkResponsePart, Error>.Continuation) {
+        continuation.yield(.head(status: 200, headers: ["content-type": "application/json"]))
+        continuation.yield(.body(Data(body.utf8)))
+        continuation.finish()
+    }
+
+    @MainActor var client: BoxClient {
+        BoxClient(box: BoxClient.mac, transport: LocalBox { [self] request in
+            AsyncThrowingStream { continuation in
+                let picked = (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any])?["approval"] as? String
+                let now = lock.withLock { () -> String? in
+                    if request.method == "PUT", let picked { approval = picked; puts += 1 } else if request.path.hasSuffix("/approval") { gets += 1 }
+                    if request.method == "PUT" && puts == 1 {
+                        held = (continuation, Self.shown(approval))
+                        return nil
+                    }
+                    return Self.shown(approval)
+                }
+                if let now { Self.answer(now, to: continuation) }
+                TestPulse.beat()
+            }
+        })
+    }
+}
+
+/// A bot's conversation's approval on a box from before bridge 0.9.188, which never gives a bot
+/// Full Access: its options say so while `says` (a read made before it did doesn't), and a pick of
+/// it is turned down with `409`, `reason: "bot"`.
+private nonisolated final class OlderBotBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var approval = "askFirst"
+    private var saying = true
+    private var sent: [String] = []
+
+    var says: Bool {
+        get { lock.withLock { saying } }
+        set { lock.withLock { saying = newValue } }
+    }
+    /// The modes it was asked to set, in turn, Full Access included.
+    var picks: [String] { lock.withLock { sent } }
+
+    @MainActor var client: BoxClient {
+        BoxClient(box: BoxClient.mac, transport: LocalBox { [self] request in
+            AsyncThrowingStream { continuation in
+                let picked = (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any])?["approval"] as? String
+                let (status, body) = lock.withLock { () -> (Int, String) in
+                    if request.method == "PUT", let picked {
+                        sent.append(picked)
+                        if picked == "fullAccess" {
+                            return (409, #"{"error":"Not for a bot.","message":"Bots can't use Full Access: Auto is the most they get.","reason":"bot"}"#)
+                        }
+                        approval = picked
+                    }
+                    let full = saying ? #"{"approval":"fullAccess","unavailable":{"reason":"bot","why":"Bots can't use Full Access: Auto is the most they get."}}"# : #"{"approval":"fullAccess"}"#
+                    let options = ["askFirst", "acceptEdits", "auto"].map { #"{"approval":"\#($0)"}"# } + [full]
+                    return (200, #"{"approval":"\#(approval)","effective":"\#(approval)","options":[\#(options.joined(separator: ","))]}"#)
+                }
+                continuation.yield(.head(status: status, headers: ["content-type": "application/json"]))
+                continuation.yield(.body(Data(body.utf8)))
+                continuation.finish()
+                TestPulse.beat()
+            }
+        })
+    }
+}
+
+/// A box that can't be reached until `reachable`, then has no decisions to show.
+private nonisolated final class Unreachable: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isReachable = false
+    var reachable: Bool {
+        get { lock.withLock { isReachable } }
+        set { lock.withLock { isReachable = newValue } }
+    }
+
+    @MainActor var client: BoxClient {
+        BoxClient(box: BoxClient.mac, transport: LocalBox { [self] _ in
+            AsyncThrowingStream { continuation in
+                if reachable {
+                    continuation.yield(.head(status: 200, headers: ["content-type": "application/json"]))
+                    continuation.yield(.body(Data(#"{"decisions":[]}"#.utf8)))
+                    continuation.finish()
+                } else {
+                    continuation.finish(throwing: URLError(.cannotConnectToHost))
+                }
+                TestPulse.beat()
+            }
+        })
+    }
 }
