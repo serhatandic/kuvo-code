@@ -158,7 +158,7 @@ public struct UsageSettingsSections: View {
                     }
                     Button("Cancel", role: .cancel) {}
                 } message: {
-                    Text("Every setting here and in Customize goes back to how it started, and providers for the tools you have are turned on again.")
+                    Text("Every setting here and in Customize goes back to how it started, and providers for the tools you have are turned on again. Your other computers get the same cards, meters, spend and notification settings.")
                 }
             } header: {
                 Text("Privacy and Logs")

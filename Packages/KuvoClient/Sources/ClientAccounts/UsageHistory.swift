@@ -169,7 +169,7 @@ public struct BoxUsage: Decodable, Hashable, Sendable {
     /// Where a box's bridge answers it (with `zone`, the client's time zone, as a query), and reads it again.
     public static let bridgePath = "api/kuvo/usage"
     public static let bridgeRefreshPath = "api/kuvo/usage/refresh"
-    /// `PUT` `{"codex": {"fallback": <model> | null}}`: Codex's fallback model, this box's; answers as `bridgePath` does.
+    /// `PUT` `{"codex": {"fallback": <model> | null}}`: Codex's fallback model, shared with your other computers (`BoxUsageSettings`); answers as `bridgePath` does.
     public static let bridgePricingPath = "api/kuvo/usage/pricing"
 
     /// The event that says it changed, on the bridge's events: ask again.
