@@ -1042,8 +1042,15 @@ public final class RemoteServer: @unchecked Sendable {
           echo $$ >"$R/box.pid"
           # A Mac sleeps by itself, and a box works with nobody there: awake while it's on power,
           # for as long as this keeper runs (its display still sleeps). No setting of yours changes.
-          # Looked at each round: one held for a keeper that has since gone is gone with it.
+          # Looked at each round: one held for a keeper that has since gone is gone with it. A Mac's
+          # own box (`box/kind` says `mac`) keeps its Mac awake itself, while agents work there and
+          # as its own setting says: this holds nothing for it, and lets go of one it held.
           hold() {
+            if [ "$(tr -d ' \t\r\n' <"$K/box/kind" 2>/dev/null)" = mac ]; then
+              a=$(cat "$R/awake.pid" 2>/dev/null); is "$a" caffeinate && kill "$a" 2>/dev/null
+              rm -f "$R/awake.pid"
+              return 0
+            fi
             if command -v caffeinate >/dev/null 2>&1 && ! is "$(cat "$R/awake.pid" 2>/dev/null)" caffeinate; then
               caffeinate -s -w $$ </dev/null >/dev/null 2>&1 &
               echo $! >"$R/awake.pid"

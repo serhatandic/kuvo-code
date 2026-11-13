@@ -743,6 +743,10 @@ final class AppModel {
     /// so, which the window shows instead of starting (with a state of its own, not `.starting`,
     /// which it stays in meanwhile); the tests' until then.
     nonisolated(unsafe) static var attachesInPlace = false
+    /// Whether this Mac's box moves out of the app's folder to a home of its own, `~/.kuvo-code`,
+    /// laid out as a machine's (#333; its box says it can with `box.ownHome`). Off until the move
+    /// and the app's side of it are built: nothing turns it on yet.
+    nonisolated(unsafe) static var movesOwnBox = false
     /// The home folder `here` looks in: a folder of the tests' own while they run, which they set.
     nonisolated(unsafe) static var hereHome = defaultHereHome
     nonisolated static var defaultHereHome: URL {
