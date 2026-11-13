@@ -1,6 +1,6 @@
 // @bun
 // Packages/Box/src/agents/main.ts
-import { mkdirSync as mkdirSync28, readdirSync as readdirSync22, readFileSync as readFileSync39, rmSync as rmSync17 } from "fs";
+import { mkdirSync as mkdirSync26, readdirSync as readdirSync22, readFileSync as readFileSync38, rmSync as rmSync18 } from "fs";
 import { basename as basename13, dirname as dirname22, join as join42 } from "path";
 
 // Packages/Box/src/agents/accounts.ts
@@ -7127,7 +7127,7 @@ function ancestors(path) {
 
 // Packages/Box/src/agents/agents/antigravity.ts
 import { createHash as createHash7 } from "crypto";
-import { chmodSync, existsSync as existsSync13, mkdirSync as mkdirSync14, readdirSync as readdirSync14, readFileSync as readFileSync21, renameSync as renameSync12, rmSync as rmSync10, statSync as statSync8, writeFileSync as writeFileSync16 } from "fs";
+import { chmodSync, existsSync as existsSync13, mkdirSync as mkdirSync13, readdirSync as readdirSync14, readFileSync as readFileSync21, renameSync as renameSync11, rmSync as rmSync11, statSync as statSync8, writeFileSync as writeFileSync15 } from "fs";
 import { dirname as dirname12, join as join23 } from "path";
 import { pathToFileURL as pathToFileURL2 } from "url";
 
@@ -9515,7 +9515,7 @@ function questionFields(questions) {
 }
 
 // Packages/Box/src/agents/usage/antigravity-plan.ts
-import { readFileSync as readFileSync17, readdirSync as readdirSync10, readlinkSync, mkdirSync as mkdirSync11, renameSync as renameSync9, writeFileSync as writeFileSync13 } from "fs";
+import { readFileSync as readFileSync17, readdirSync as readdirSync10, readlinkSync, rmSync as rmSync7 } from "fs";
 import { join as join19 } from "path";
 
 // Packages/Box/src/agents/limits.ts
@@ -9837,7 +9837,9 @@ class Limits {
       entry.plan = reading.plan ?? entry.plan;
       entry.balance = reading.balance;
       entry.extras = reading.extras?.length ? reading.extras : undefined;
-      const heard = entry.windows.filter((window) => reading.partial && !reading.windows.some((each) => each.id === window.id) || window.source === "turn" && (window.read >= started || !reading.windows.some((each) => each.id === window.id)));
+      const missing = reading.partial ? entry.windows.filter((window) => !reading.windows.some((each) => each.id === window.id)) : [];
+      const heard = entry.windows.filter((window) => reading.partial && !reading.windows.some((each) => each.id === window.id) && (window.resetsAt !== undefined ? at < window.resetsAt : !entry.partialMissing?.includes(window.id)) || window.source === "turn" && (window.read >= started || !reading.windows.some((each) => each.id === window.id)));
+      entry.partialMissing = reading.partial ? missing.map((window) => window.id) : undefined;
       entry.windows = [...reading.windows.filter((window) => !heard.some((each) => each.id === window.id)).map((window) => ({ ...window, used: clamp(window.used), read: at, source: "usage" })), ...heard];
       entry.problem = undefined;
       entry.signIn = undefined;
@@ -9897,6 +9899,7 @@ class Limits {
   }
   forget(entry) {
     entry.windows = [];
+    entry.partialMissing = undefined;
     entry.plan = undefined;
     entry.balance = undefined;
     entry.extras = undefined;
@@ -10796,7 +10799,7 @@ function antigravityPlanName(raw) {
   if (!name)
     return;
   if (name.startsWith("Google AI "))
-    return name.slice(10).split(/\s+/).map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
+    return name.slice(10).split(/\s+/).filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
   for (const word of ["Ultra", "Pro", "Free"])
     if (name.toLowerCase().includes(word.toLowerCase()))
       return word;
@@ -10902,9 +10905,12 @@ async function discoverAntigravity(profile, platform = process.platform, procRoo
     const match = /^\s*(\d+)\s+(.+)$/.exec(line);
     if (!match || !/language_server|\/agy\b/.test(match[2]))
       continue;
-    const argv = match[2].split(/\s+/);
     if (!antigravityMacOwns(match[2], profile))
       continue;
+    const executable = await runner("/bin/ps", ["-p", match[1], "-o", "comm="], { timeout: 5000 });
+    if (executable.code || !executable.stdout.trim())
+      continue;
+    const argv = [executable.stdout.trim(), ...match[2].split(/\s+/).slice(1)];
     const result = await runner("/usr/sbin/lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-a", "-p", match[1]], { timeout: 5000 });
     const ports = [...new Set(result.stdout.split(`
 `).filter((l) => l.includes("LISTEN")).flatMap((l) => {
@@ -10928,10 +10934,12 @@ function antigravityCredential(raw) {
 }
 var credentialGeneration = (credential) => fingerprint(JSON.stringify([credential.access ?? null, credential.refresh ?? null]));
 var antigravityTransport = { live: false };
+var antigravityOAuthDefaults = { clientID: "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com", clientSecret: "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" };
 var productionBases = ["https://cloudcode-pa.googleapis.com", "https://daily-cloudcode-pa.googleapis.com"];
 
 class AntigravityPlan {
   profile;
+  stateFolder;
   fetcher;
   discover;
   bases;
@@ -10946,7 +10954,7 @@ class AntigravityPlan {
     if (this.refusalsLoaded)
       return;
     try {
-      const saved = JSON.parse(readFileSync17(join19(this.profile(), "kuvo-usage-refusals.json"), "utf8"));
+      const saved = JSON.parse(readFileSync17(join19(this.stateFolder(), "refusals.json"), "utf8"));
       if (saved.refresh === undefined)
         saved.refresh = [];
       for (const name of ["generations", "access", "csrf", "refresh"]) {
@@ -10973,11 +10981,9 @@ class AntigravityPlan {
   saveRefusals() {
     if (!this.refusalsDirty)
       return;
-    const file = join19(this.profile(), "kuvo-usage-refusals.json");
+    const file = join19(this.stateFolder(), "refusals.json");
     try {
-      mkdirSync11(this.profile(), { recursive: true, mode: 448 });
-      writeFileSync13(file + ".new", JSON.stringify({ generations: [...this.denied], access: [...this.deniedAccess], csrf: [...this.deniedCSRF], refresh: [...this.deniedRefresh] }), { mode: 384 });
-      renameSync9(file + ".new", file);
+      writeSecret(file, JSON.stringify({ generations: [...this.denied], access: [...this.deniedAccess], csrf: [...this.deniedCSRF], refresh: [...this.deniedRefresh] }));
       this.refusalsDirty = false;
     } catch {
       throw new LimitsProblem("failed", "Antigravity's credential refusal record cannot be saved; the last quota reading is kept.", undefined, false);
@@ -10988,13 +10994,27 @@ class AntigravityPlan {
   lastAccount;
   access;
   limits;
-  constructor(profile, fetcher = (url, init) => fetch(url, init), discover = discoverAntigravity, bases = productionBases, oauth = "https://oauth2.googleapis.com/token") {
+  constructor(profile, stateFolder, fetcher = (url, init) => fetch(url, init), discover = discoverAntigravity, bases = productionBases, oauth = "https://oauth2.googleapis.com/token") {
     this.profile = profile;
+    this.stateFolder = stateFolder;
     this.fetcher = fetcher;
     this.discover = discover;
     this.bases = bases;
     this.oauth = oauth;
     this.limits = { every: 10 * 60000, bucket: "antigravity", read: (now) => this.read(now), signIn: () => this.signIn(), account: () => this.account(), identity: () => this.credential()?.identity };
+  }
+  signOut() {
+    rmSync7(join19(this.stateFolder(), "refusals.json"), { force: true });
+    this.denied.clear();
+    this.deniedAccess.clear();
+    this.deniedCSRF.clear();
+    this.deniedRefresh.clear();
+    this.refusalsLoaded = false;
+    this.refusalsDirty = false;
+    this.lastCredential = undefined;
+    this.lastSignIn = undefined;
+    this.lastAccount = undefined;
+    this.access = undefined;
   }
   raw() {
     if (!antigravityTransport.live && this.bases === productionBases)
@@ -11080,7 +11100,7 @@ class AntigravityPlan {
     try {
       const endpoints = await this.discover(this.profile());
       for (const e of endpoints) {
-        if (this.deniedCSRF.has(fingerprint(e.csrf || "agy:no-csrf")))
+        if (e.csrf && this.deniedCSRF.has(fingerprint(e.csrf)))
           continue;
         const call = (method) => this.request(`${e.scheme}://127.0.0.1:${e.port}/exa.language_server_pb.LanguageServerService/${method}`, { method: "POST", headers: { "Content-Type": "application/json", "Connect-Protocol-Version": "1", "x-codeium-csrf-token": e.csrf }, body: JSON.stringify({ metadata: { ideName: "antigravity", extensionName: "antigravity", ideVersion: "unknown", locale: "en" } }), ...e.scheme === "https" ? { tls: { rejectUnauthorized: false } } : {} }, now, true);
         let summary;
@@ -11090,7 +11110,7 @@ class AntigravityPlan {
           if (error instanceof LimitsProblem && error.kind === "rate-limited")
             throw error;
           if (error instanceof LimitsProblem && error.kind === "expired")
-            this.refuse(this.deniedCSRF, fingerprint(e.csrf || "agy:no-csrf"));
+            e.csrf && this.refuse(this.deniedCSRF, fingerprint(e.csrf));
           continue;
         }
         const windows = antigravitySummary([summary]);
@@ -11104,8 +11124,7 @@ class AntigravityPlan {
           } catch (error) {
             if (error instanceof LimitsProblem && error.kind === "rate-limited")
               throw error;
-            if (error instanceof LimitsProblem && error.kind === "expired")
-              this.refuse(this.deniedCSRF, fingerprint(e.csrf || "agy:no-csrf"));
+            console.warn("Antigravity optional plan status is unavailable; quota windows are kept.");
           }
           return { windows, plan, partial: windows.filter((w) => w.id !== "argon-weekly").length < 4, identity: c.identity };
         }
@@ -11122,7 +11141,7 @@ class AntigravityPlan {
           if (error instanceof LimitsProblem && error.kind === "rate-limited")
             throw error;
           if (error instanceof LimitsProblem && error.kind === "expired")
-            this.refuse(this.deniedCSRF, fingerprint(e.csrf || "agy:no-csrf"));
+            e.csrf && this.refuse(this.deniedCSRF, fingerprint(e.csrf));
         }
       }
       const cached = this.access && this.access.credential === this.account() && this.access.expires > now + 60000 ? this.access : undefined;
@@ -11132,7 +11151,7 @@ class AntigravityPlan {
       if ((!access || !cached && c.expires !== undefined && c.expires <= now + 60000) && c.refresh) {
         if (this.deniedRefresh.has(fingerprint(c.refresh)))
           throw new LimitsProblem("expired", "Antigravity already refused this refresh token. Sign in again.", undefined, false);
-        const body = new URLSearchParams({ grant_type: "refresh_token", refresh_token: c.refresh, client_id: c.clientID ?? "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com", client_secret: c.clientSecret ?? "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" });
+        const body = new URLSearchParams({ grant_type: "refresh_token", refresh_token: c.refresh, client_id: c.clientID ?? antigravityOAuthDefaults.clientID, client_secret: c.clientSecret ?? antigravityOAuthDefaults.clientSecret });
         const refreshed = await this.request(this.oauth, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: body.toString() }, now);
         access = text4(refreshed.access_token);
         if (!access)
@@ -11145,20 +11164,24 @@ class AntigravityPlan {
         throw new LimitsProblem("failed", "Antigravity's language server isn't available on this computer and its sign-in has no usable access token.", undefined, false);
       const headers = { "Content-Type": "application/json", Authorization: `Bearer ${access}`, "User-Agent": `antigravity/2.24.0 (aidev_client; os_type=${process.platform}; arch=${process.arch === "arm64" ? "arm64" : "amd64"})` };
       let refreshFailed = false;
-      const cloudRequest = async (url, body) => {
+      const cloudRequest = async (url, body, authoritative = true, refused) => {
         if (refreshFailed || this.refusalsDirty)
           throw new LimitsProblem("failed", "Antigravity refresh could not finish; no refused credential was sent again.", undefined, false);
         try {
+          if (refused)
+            throw refused;
           return await this.request(url, { method: "POST", headers, body: JSON.stringify(body) }, now);
         } catch (error) {
           if (!(error instanceof LimitsProblem) || error.kind !== "expired")
+            throw error;
+          if (!authoritative)
             throw error;
           this.refuse(this.deniedAccess, fingerprint(access));
           if (!c.refresh)
             throw error;
           if (this.deniedRefresh.has(fingerprint(c.refresh)))
             throw new LimitsProblem("expired", "Antigravity already refused this refresh token. Sign in again.", undefined, false);
-          const form = new URLSearchParams({ grant_type: "refresh_token", refresh_token: c.refresh, client_id: c.clientID ?? "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com", client_secret: c.clientSecret ?? "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" });
+          const form = new URLSearchParams({ grant_type: "refresh_token", refresh_token: c.refresh, client_id: c.clientID ?? antigravityOAuthDefaults.clientID, client_secret: c.clientSecret ?? antigravityOAuthDefaults.clientSecret });
           let refreshed;
           try {
             refreshed = await this.request(this.oauth, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: form.toString() }, now);
@@ -11181,11 +11204,11 @@ class AntigravityPlan {
           }
         }
       };
-      const call = async (path, body) => {
+      const call = async (path, body, authoritative = true) => {
         let last;
         for (const base of this.bases) {
           try {
-            return await cloudRequest(base + path, body);
+            return await cloudRequest(base + path, body, authoritative);
           } catch (e) {
             if (e instanceof LimitsProblem && ["expired", "rate-limited"].includes(e.kind))
               throw e;
@@ -11195,16 +11218,23 @@ class AntigravityPlan {
         throw last;
       };
       const summaries = [];
+      let refusal;
       for (const base of this.bases) {
+        const url = base + "/v1internal:retrieveUserQuotaSummary";
         try {
-          summaries.push(await cloudRequest(base + "/v1internal:retrieveUserQuotaSummary", {}));
-        } catch (e) {
-          if (e instanceof LimitsProblem && ["expired", "rate-limited"].includes(e.kind))
-            throw e;
+          summaries.push(await cloudRequest(url, {}, false));
+        } catch (error) {
+          if (error instanceof LimitsProblem && error.kind === "rate-limited")
+            throw error;
+          if (error instanceof LimitsProblem && error.kind === "expired")
+            refusal ??= { url, error };
+          console.warn("Antigravity quota summary unavailable on one host; trying the remaining host.");
         }
         if (antigravitySummary(summaries)?.filter((w) => w.id !== "argon-weekly").length === 4)
           break;
       }
+      if (!summaries.length && refusal)
+        summaries.push(await cloudRequest(refusal.url, {}, true, refusal.error));
       let windows = antigravitySummary(summaries);
       if (windows === undefined) {
         try {
@@ -11215,7 +11245,14 @@ class AntigravityPlan {
             throw error;
         }
         if (!windows?.length) {
-          const status = await call("/v1internal:loadCodeAssist", { metadata: { ideType: "ANTIGRAVITY", platform: "PLATFORM_UNSPECIFIED", pluginType: "GEMINI" } });
+          let status = {};
+          try {
+            status = await call("/v1internal:loadCodeAssist", { metadata: { ideType: "ANTIGRAVITY", platform: "PLATFORM_UNSPECIFIED", pluginType: "GEMINI" } }, false);
+          } catch (error) {
+            if (error instanceof LimitsProblem && error.kind === "rate-limited")
+              throw error;
+            console.warn("Antigravity optional project lookup is unavailable; querying quota without a project.");
+          }
           let quota = await call("/v1internal:retrieveUserQuota", text4(status?.cloudaicompanionProject) ? { project: status.cloudaicompanionProject } : {});
           if (!quota?.buckets?.length && status?.cloudaicompanionProject)
             quota = await call("/v1internal:retrieveUserQuota", {});
@@ -11226,11 +11263,12 @@ class AntigravityPlan {
         throw new LimitsProblem("failed", "Antigravity's quota response has no readable buckets; the last reading is kept.");
       let plan;
       try {
-        const status = await call("/v1internal:loadCodeAssist", { metadata: { ideType: "ANTIGRAVITY", platform: "PLATFORM_UNSPECIFIED", pluginType: "GEMINI" } });
+        const status = await call("/v1internal:loadCodeAssist", { metadata: { ideType: "ANTIGRAVITY", platform: "PLATFORM_UNSPECIFIED", pluginType: "GEMINI" } }, false);
         plan = { "g1-pro-tier": "Pro", "g1-ultra-tier": "Ultra", "g1-ultra-lite-tier": "Ultra Lite" }[status?.paidTier?.id] ?? antigravityPlanName(status?.paidTier?.name ?? status?.currentTier?.name);
       } catch (e) {
-        if (e instanceof LimitsProblem && ["expired", "rate-limited"].includes(e.kind))
+        if (e instanceof LimitsProblem && e.kind === "rate-limited")
           throw e;
+        console.warn("Antigravity optional plan lookup is unavailable; successful quota windows are kept.");
       }
       return { windows, plan, partial: windows.filter((w) => w.id !== "argon-weekly").length < 4, identity: c.identity };
     } catch (e) {
@@ -11242,7 +11280,7 @@ class AntigravityPlan {
 }
 
 // Packages/Box/src/agents/signin.ts
-import { existsSync as existsSync10, lstatSync as lstatSync5, mkdtempSync, readdirSync as readdirSync11, readFileSync as readFileSync18, rmSync as rmSync7 } from "fs";
+import { existsSync as existsSync10, lstatSync as lstatSync5, mkdtempSync, readdirSync as readdirSync11, readFileSync as readFileSync18, rmSync as rmSync8 } from "fs";
 import { join as join20 } from "path";
 
 // Packages/Box/src/agents/screen.ts
@@ -11602,7 +11640,7 @@ function leftSignIns(temporary) {
       process.kill(pid, 0);
     } catch (error) {
       if (error.code === "ESRCH")
-        rmSync7(join20(temporary, name), { recursive: true, force: true });
+        rmSync8(join20(temporary, name), { recursive: true, force: true });
     }
   }
 }
@@ -11686,7 +11724,7 @@ async function commandSignIn(options) {
       };
     }
   } catch (error) {
-    rmSync7(own, { recursive: true, force: true });
+    rmSync8(own, { recursive: true, force: true });
     throw error;
   }
   let status = { status: "pending" };
@@ -11697,7 +11735,7 @@ async function commandSignIn(options) {
     options.onComplete?.();
   };
   child.exited.then(async (code) => {
-    rmSync7(own, { recursive: true, force: true });
+    rmSync8(own, { recursive: true, force: true });
     options.onEnd?.();
     if (status.status !== "pending")
       return;
@@ -11813,7 +11851,7 @@ function lastLines(text) {
 
 // Packages/Box/src/agents/skills.ts
 import { createHash as createHash5 } from "crypto";
-import { cpSync, existsSync as existsSync11, mkdirSync as mkdirSync12, readdirSync as readdirSync12, readFileSync as readFileSync19, renameSync as renameSync10, rmSync as rmSync8, statSync as statSync6, symlinkSync, utimesSync, writeFileSync as writeFileSync14 } from "fs";
+import { cpSync, existsSync as existsSync11, mkdirSync as mkdirSync11, readdirSync as readdirSync12, readFileSync as readFileSync19, renameSync as renameSync9, rmSync as rmSync9, statSync as statSync6, symlinkSync, utimesSync, writeFileSync as writeFileSync13 } from "fs";
 import { dirname as dirname11, join as join21, resolve as resolve6, sep as sep10 } from "path";
 var link2;
 var home;
@@ -11937,7 +11975,7 @@ function copy(from, to) {
     cpSync(from, to, { recursive: true, dereference: true, errorOnExist: false, force: true });
     return true;
   } catch {
-    rmSync8(to, { recursive: true, force: true });
+    rmSync9(to, { recursive: true, force: true });
     return false;
   }
 }
@@ -11960,19 +11998,19 @@ function skillsFolder(skills) {
   }
   tidy(root);
   const making = join21(root, `.${set}-${process.pid}`);
-  rmSync8(making, { recursive: true, force: true });
-  mkdirSync12(join21(making, "skills"), { recursive: true, mode: 448 });
-  mkdirSync12(join21(making, ".claude-plugin"), { recursive: true });
-  mkdirSync12(join21(making, ".cursor"), { recursive: true });
+  rmSync9(making, { recursive: true, force: true });
+  mkdirSync11(join21(making, "skills"), { recursive: true, mode: 448 });
+  mkdirSync11(join21(making, ".claude-plugin"), { recursive: true });
+  mkdirSync11(join21(making, ".cursor"), { recursive: true });
   for (const entry of list)
     copy(entry.skill.folder, join21(making, "skills", entry.name));
-  writeFileSync14(join21(making, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "kuvo-code", description: "The skills in Kuvo Code's Settings \u203A Skills.", version: "1.0.0" }, null, 2) + `
+  writeFileSync13(join21(making, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "kuvo-code", description: "The skills in Kuvo Code's Settings \u203A Skills.", version: "1.0.0" }, null, 2) + `
 `);
   symlinkSync(join21("..", "skills"), join21(making, ".cursor", "skills"));
   try {
-    renameSync10(making, folder);
+    renameSync9(making, folder);
   } catch {
-    rmSync8(making, { recursive: true, force: true });
+    rmSync9(making, { recursive: true, force: true });
   }
   return folder;
 }
@@ -11987,7 +12025,7 @@ function tidy(root) {
     const path = join21(root, name);
     try {
       if (Date.now() - statSync6(path).mtimeMs > 86400000)
-        rmSync8(path, { recursive: true, force: true });
+        rmSync9(path, { recursive: true, force: true });
     } catch {}
   }
 }
@@ -12002,24 +12040,24 @@ function copySkillsInto(folder, skills) {
   for (const entry of list)
     after[entry.name] = `${entry.skill.folder}\x00${entry.stamp}`;
   if (JSON.stringify(before) !== JSON.stringify(after)) {
-    mkdirSync12(folder, { recursive: true, mode: 448 });
+    mkdirSync11(folder, { recursive: true, mode: 448 });
     for (const name of Object.keys(before))
       if (before[name] !== after[name])
-        rmSync8(join21(folder, folderName(name)), { recursive: true, force: true });
+        rmSync9(join21(folder, folderName(name)), { recursive: true, force: true });
     for (const entry of list) {
       if (before[entry.name] === after[entry.name] && existsSync11(join21(folder, entry.name)))
         continue;
       if (!existsSync11(join21(folder, entry.name)) && !copy(entry.skill.folder, join21(folder, entry.name)))
         delete after[entry.name];
     }
-    writeFileSync14(record, JSON.stringify(after));
+    writeFileSync13(record, JSON.stringify(after));
   }
   return list.length ? createHash5("sha256").update(JSON.stringify(after)).digest("hex").slice(0, 16) : undefined;
 }
 
 // Packages/Box/src/agents/subagents.ts
 import { createHash as createHash6 } from "crypto";
-import { existsSync as existsSync12, lstatSync as lstatSync6, mkdirSync as mkdirSync13, readdirSync as readdirSync13, readFileSync as readFileSync20, realpathSync as realpathSync5, renameSync as renameSync11, rmSync as rmSync9, statSync as statSync7, utimesSync as utimesSync2, writeFileSync as writeFileSync15 } from "fs";
+import { existsSync as existsSync12, lstatSync as lstatSync6, mkdirSync as mkdirSync12, readdirSync as readdirSync13, readFileSync as readFileSync20, realpathSync as realpathSync5, renameSync as renameSync10, rmSync as rmSync10, statSync as statSync7, utimesSync as utimesSync2, writeFileSync as writeFileSync14 } from "fs";
 import { join as join22 } from "path";
 
 // Packages/Box/src/shared/subagents.ts
@@ -12209,7 +12247,7 @@ function antigravityCustomAgents(home, subagents) {
   try {
     const config = join22(home, "config");
     const folder = join22(config, "agents");
-    mkdirSync13(folder, { recursive: true, mode: 448 });
+    mkdirSync12(folder, { recursive: true, mode: 448 });
     if (lstatSync6(config).isSymbolicLink() || lstatSync6(folder).isSymbolicLink() || realpathSync5(folder) !== join22(realpathSync5(home), "config", "agents")) {
       throw new Error("its agents folder isn't its own");
     }
@@ -12223,12 +12261,12 @@ function antigravityCustomAgents(home, subagents) {
     if (JSON.stringify(before) !== JSON.stringify(stamps)) {
       for (const name of Object.keys(before))
         if (ownFile.test(name) && !(name in after))
-          rmSync9(join22(folder, name), { force: true });
+          rmSync10(join22(folder, name), { force: true });
       for (const [name, text] of Object.entries({ ...after, ".kuvo-code": JSON.stringify(stamps) })) {
         const making = join22(folder, `.${name}.${process.pid}.tmp`);
-        rmSync9(making, { force: true });
-        writeFileSync15(making, text, { mode: 384, flag: "wx" });
-        renameSync11(making, join22(folder, name));
+        rmSync10(making, { force: true });
+        writeFileSync14(making, text, { mode: 384, flag: "wx" });
+        renameSync10(making, join22(folder, name));
       }
     }
   } catch (error) {
@@ -12264,16 +12302,16 @@ function setFolder(kind, files) {
   }
   tidy2(root);
   const making = join22(root, `.${kind}-${set}-${process.pid}`);
-  rmSync9(making, { recursive: true, force: true });
+  rmSync10(making, { recursive: true, force: true });
   for (const name of names) {
-    mkdirSync13(join22(making, name, ".."), { recursive: true, mode: 448 });
-    writeFileSync15(join22(making, name), files[name]);
+    mkdirSync12(join22(making, name, ".."), { recursive: true, mode: 448 });
+    writeFileSync14(join22(making, name), files[name]);
   }
-  writeFileSync15(join22(making, ".complete"), "");
+  writeFileSync14(join22(making, ".complete"), "");
   try {
-    renameSync11(making, folder);
+    renameSync10(making, folder);
   } catch {
-    rmSync9(making, { recursive: true, force: true });
+    rmSync10(making, { recursive: true, force: true });
   }
   return folder;
 }
@@ -12288,7 +12326,7 @@ function tidy2(root) {
     const path = join22(root, name);
     try {
       if (Date.now() - statSync7(path).mtimeMs > 86400000)
-        rmSync9(path, { recursive: true, force: true });
+        rmSync10(path, { recursive: true, force: true });
     } catch {}
   }
 }
@@ -12611,7 +12649,7 @@ class AntigravityAgent {
   get profile() {
     return this.instance.home ? join23(this.instance.home, "profile") : join23(this.root, "profile");
   }
-  antigravity = new AntigravityPlan(() => this.profile);
+  antigravity = new AntigravityPlan(() => this.profile, () => join23(this.context.home, "usage", "antigravity", this.instance.id));
   limits = this.antigravity.limits;
   get tokenFile() {
     return join23(this.profile, "antigravity-acp", "acp_token.json");
@@ -12665,7 +12703,7 @@ class AntigravityAgent {
     if (!release)
       throw new Error("Google doesn't make Antigravity's agent for this computer.");
     const staging = join23(this.root, `.install-${newID("att")}`);
-    mkdirSync14(staging, { recursive: true });
+    mkdirSync13(staging, { recursive: true });
     try {
       const archive = join23(staging, "download.zip");
       const response = await fetch(release.url);
@@ -12693,19 +12731,19 @@ class AntigravityAgent {
       const unzipped = await run(zip.program, zip.extract(archive, staging));
       if (unzipped.code !== 0)
         throw new Error(`Couldn't unpack Antigravity's agent: ${unzipped.stderr.trim()}`);
-      rmSync10(archive, { force: true });
+      rmSync11(archive, { force: true });
       for (const name of [executableName, harnessName])
         chmodSync(join23(staging, name), 493);
-      writeFileSync16(join23(staging, ".complete"), JSON.stringify({ version, sha256: release.sha256 }));
-      rmSync10(this.folder, { recursive: true, force: true });
-      renameSync12(staging, this.folder);
+      writeFileSync15(join23(staging, ".complete"), JSON.stringify({ version, sha256: release.sha256 }));
+      rmSync11(this.folder, { recursive: true, force: true });
+      renameSync11(staging, this.folder);
       for (const name of readdirSync14(this.root)) {
         if (name !== version && name !== "profile" && /^\d/.test(name))
-          rmSync10(join23(this.root, name), { recursive: true, force: true });
+          rmSync11(join23(this.root, name), { recursive: true, force: true });
       }
     } finally {
       this.downloaded = undefined;
-      rmSync10(staging, { recursive: true, force: true });
+      rmSync11(staging, { recursive: true, force: true });
     }
   }
   ownSkillFolders(directory) {
@@ -12718,12 +12756,12 @@ class AntigravityAgent {
     return [env.ANTIGRAVITY_HARNESS_PATH, env.BROWSER].filter((place) => Boolean(place)).map((place) => dirname12(place));
   }
   launch() {
-    mkdirSync14(join23(this.profile, "antigravity-acp", "tmp"), { recursive: true, mode: 448 });
+    mkdirSync13(join23(this.profile, "antigravity-acp", "tmp"), { recursive: true, mode: 448 });
     const settings = join23(this.profile, "antigravity-acp", "settings.json");
     if (!existsSync13(settings))
-      writeFileSync16(settings, JSON.stringify({ auth: { type: "oauth-personal" } }));
+      writeFileSync15(settings, JSON.stringify({ auth: { type: "oauth-personal" } }));
     const temporary = join23(this.context.temporary, "antigravity", newID("att"));
-    mkdirSync14(temporary, { recursive: true, mode: 448 });
+    mkdirSync13(temporary, { recursive: true, mode: 448 });
     let env = {};
     for (const [key, value] of Object.entries(process.env))
       if (!scrubbed.includes(key.toUpperCase()))
@@ -12739,7 +12777,7 @@ class AntigravityAgent {
       ANTIGRAVITY_HARNESS_PATH: join23(this.folder, harnessName)
     });
     const argv = [join23(this.folder, executableName), "--nosyslog_on_start", ...process.platform === "linux" ? ["--uid="] : []];
-    return { argv, env, cleanEnv: true, onExit: () => rmSync10(temporary, { recursive: true, force: true }), signInFile: join23(temporary, "url"), temporary };
+    return { argv, env, cleanEnv: true, onExit: () => rmSync11(temporary, { recursive: true, force: true }), signInFile: join23(temporary, "url"), temporary };
   }
   signsInRemotely = true;
   async signIn() {
@@ -12759,7 +12797,7 @@ class AntigravityAgent {
       const cwd = join23(launch.temporary, "work");
       let whole;
       try {
-        mkdirSync14(cwd);
+        mkdirSync13(cwd);
         whole = fenceRules() ? fenceAgent(launch.argv[0], cwd, { ...this.places(launch.env), read: this.reads(launch.env) }) : undefined;
         if (fenceRules() && !whole)
           throw new Error("Antigravity runs in the sandbox here, and it isn't ready: restart Kuvo Code.");
@@ -12848,8 +12886,9 @@ ${rpc.stderr.trim()}`);
     };
   }
   async signOut() {
-    rmSync10(this.tokenFile, { force: true });
-    rmSync10(this.modelsFile, { force: true });
+    this.antigravity.signOut();
+    rmSync11(this.tokenFile, { force: true });
+    rmSync11(this.modelsFile, { force: true });
   }
   saveModels(setup) {
     const option = (setup?.configOptions ?? []).find((option) => option.id === "model" || option.category === "model");
@@ -12866,7 +12905,7 @@ ${rpc.stderr.trim()}`);
         flat.push({ value: info.modelId, name: info.name ?? info.modelId });
     }
     if (flat.length) {
-      writeFileSync16(this.modelsFile, JSON.stringify({ current: option?.currentValue, models: flat }));
+      writeFileSync15(this.modelsFile, JSON.stringify({ current: option?.currentValue, models: flat }));
       this.listedHere = true;
     }
   }
@@ -12877,8 +12916,8 @@ ${rpc.stderr.trim()}`);
   removeSessionFiles(sessionID) {
     const folder = join23(this.profile, "antigravity-acp");
     for (const suffix of [".db", ".db-wal", ".db-shm", ".db-journal", ".meta"])
-      rmSync10(join23(folder, "conversations", sessionID + suffix), { force: true });
-    rmSync10(join23(folder, "brain", sessionID), { recursive: true, force: true });
+      rmSync11(join23(folder, "conversations", sessionID + suffix), { force: true });
+    rmSync11(join23(folder, "brain", sessionID), { recursive: true, force: true });
   }
   async models() {
     try {
@@ -12977,7 +13016,7 @@ function unzipper() {
 // Packages/Box/src/agents/agents/claude.ts
 import { spawn as spawn5 } from "child_process";
 import { createHash as createHash9, randomUUID } from "crypto";
-import { existsSync as existsSync15, mkdirSync as mkdirSync15, readdirSync as readdirSync15, readFileSync as readFileSync23, rmdirSync as rmdirSync2, rmSync as rmSync11, statSync as statSync10 } from "fs";
+import { existsSync as existsSync15, mkdirSync as mkdirSync14, readdirSync as readdirSync15, readFileSync as readFileSync23, rmdirSync as rmdirSync2, rmSync as rmSync12, statSync as statSync10 } from "fs";
 import { homedir } from "os";
 import { basename as basename8, dirname as dirname13, join as join26, resolve as resolve7 } from "path";
 import { pathToFileURL as pathToFileURL3 } from "url";
@@ -13644,7 +13683,7 @@ class ClaudeAgent {
     this.providerID = providerID("claude", instance.id);
     if (ClaudeAgent.keychain) {
       this.signOut = async () => {
-        rmSync11(this.tokenFile, { force: true });
+        rmSync12(this.tokenFile, { force: true });
         try {
           if ((await this.readStatus(this.consoleEnv()).catch(() => {
             return;
@@ -13889,7 +13928,7 @@ class ClaudeAgent {
       });
     }
     if (ClaudeAgent.keychain)
-      mkdirSync15(this.consoleHome, { recursive: true, mode: 448 });
+      mkdirSync14(this.consoleHome, { recursive: true, mode: 448 });
     const env = ClaudeAgent.keychain ? this.consoleEnv() : this.env();
     return commandSignIn({
       command: executable,
@@ -13902,7 +13941,7 @@ class ClaudeAgent {
       codePrompt: /Paste code here if prompted >\s*/g,
       onComplete: () => {
         if (ClaudeAgent.keychain) {
-          rmSync11(this.tokenFile, { force: true });
+          rmSync12(this.tokenFile, { force: true });
           this.modelList = undefined;
           this.programUpdated();
         }
@@ -14006,7 +14045,7 @@ class ClaudeAgent {
     return env;
   }
   async removeAccount() {
-    rmSync11(this.tokenFile, { force: true });
+    rmSync12(this.tokenFile, { force: true });
     const executable = this.executable();
     if (executable && this.instance.home)
       await run(executable, ["auth", "logout"], { timeout: 20000, env: this.env() }).catch(() => {});
@@ -14689,7 +14728,7 @@ ${input.text}` } : input, this.copies());
       return;
     const folder = join26(this.agent.configHome, "session-env", conversation);
     try {
-      mkdirSync15(folder, { recursive: true });
+      mkdirSync14(folder, { recursive: true });
       this.environments.add(folder);
     } catch {}
   }
@@ -15713,7 +15752,7 @@ function describe(status) {
 }
 
 // Packages/Box/src/agents/agents/codex.ts
-import { existsSync as existsSync16, lstatSync as lstatSync7, mkdirSync as mkdirSync16, readdirSync as readdirSync16, readFileSync as readFileSync24, readlinkSync as readlinkSync2, rmSync as rmSync12, symlinkSync as symlinkSync2 } from "fs";
+import { existsSync as existsSync16, lstatSync as lstatSync7, mkdirSync as mkdirSync15, readdirSync as readdirSync16, readFileSync as readFileSync24, readlinkSync as readlinkSync2, rmSync as rmSync13, symlinkSync as symlinkSync2 } from "fs";
 import { homedir as homedir2 } from "os";
 import { basename as basename10, join as join27 } from "path";
 
@@ -16121,10 +16160,10 @@ class CodexAgent {
   fenced(directory, sessionID, bot) {
     const skills = skillsRoot();
     if (skills)
-      mkdirSync16(skills, { recursive: true, mode: 448 });
+      mkdirSync15(skills, { recursive: true, mode: 448 });
     const subagents = subagentsRoot();
     if (subagents)
-      mkdirSync16(subagents, { recursive: true, mode: 448 });
+      mkdirSync15(subagents, { recursive: true, mode: 448 });
     const homes = [this.home, ...this.instance.home && yourHomes ? [this.yourCodex] : []];
     const attached = sessionID ? fenceAttachments(directory) : undefined;
     return fenceAgent(this.executable(), directory, {
@@ -16480,7 +16519,7 @@ class CodexAgent {
   }
   accountFolder() {
     const folder = join27(this.home, "sessions");
-    mkdirSync16(folder, { recursive: true, mode: 448 });
+    mkdirSync15(folder, { recursive: true, mode: 448 });
     return folder;
   }
   get yourCodex() {
@@ -18039,7 +18078,7 @@ function agentTitle(path) {
 }
 function shadowHome(home, own) {
   const kept = new Set(["auth.json", "models_cache.json"]);
-  mkdirSync16(home, { recursive: true, mode: 448 });
+  mkdirSync15(home, { recursive: true, mode: 448 });
   const wanted = existsSync16(own) ? readdirSync16(own).filter((name) => !kept.has(name)) : [];
   for (const name of wanted) {
     const link = join27(home, name);
@@ -18051,7 +18090,7 @@ function shadowHome(home, own) {
       if (stat && !stat.isSymbolicLink())
         continue;
       if (stat)
-        rmSync12(link, { force: true });
+        rmSync13(link, { force: true });
       symlinkSync2(target, link);
     } catch {}
   }
@@ -18059,7 +18098,7 @@ function shadowHome(home, own) {
     const link = join27(home, name);
     try {
       if (lstatSync7(link).isSymbolicLink() && !wanted.includes(name))
-        rmSync12(link, { force: true });
+        rmSync13(link, { force: true });
     } catch {}
   }
 }
@@ -18121,12 +18160,12 @@ function codexPlan(type) {
 }
 
 // Packages/Box/src/agents/agents/cursor.ts
-import { existsSync as existsSync17, mkdirSync as mkdirSync17, readFileSync as readFileSync26, rmSync as rmSync13 } from "fs";
+import { existsSync as existsSync17, mkdirSync as mkdirSync16, readFileSync as readFileSync26, rmSync as rmSync14 } from "fs";
 import { homedir as homedir3 } from "os";
 import { dirname as dirname14, join as join29 } from "path";
 
 // Packages/Box/src/agents/agents/cursor-worker.ts
-import { readFileSync as readFileSync25, renameSync as renameSync14, writeFileSync as writeFileSync18 } from "fs";
+import { readFileSync as readFileSync25, renameSync as renameSync13, writeFileSync as writeFileSync17 } from "fs";
 import { join as join28 } from "path";
 var WORKER = `// Kuvo Code's agents bridge's Cursor, run in the box's sandbox (cursor-worker.ts).
 console.log = console.error
@@ -18205,8 +18244,8 @@ function cursorWorker(folder) {
       return file;
   } catch {}
   const written = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}`;
-  writeFileSync18(written, WORKER, { mode: 384 });
-  renameSync14(written, file);
+  writeFileSync17(written, WORKER, { mode: 384 });
+  renameSync13(written, file);
   return file;
 }
 function revived(error) {
@@ -18443,7 +18482,7 @@ class CursorAgent {
     this.modelList = undefined;
   }
   async signOut() {
-    rmSync13(this.authFile, { force: true });
+    rmSync14(this.authFile, { force: true });
     this.known.reset();
     this.modelList = undefined;
   }
@@ -18499,7 +18538,7 @@ class CursorAgent {
   }
   agentStore(sdk) {
     const root = join29(this.folder, "agents");
-    mkdirSync17(root, { recursive: true });
+    mkdirSync16(root, { recursive: true });
     return new sdk.JsonlLocalAgentStore(root);
   }
   thread(session, state) {
@@ -18849,7 +18888,7 @@ ${text}`;
     const conversations = options.local.store.root;
     const own = join29(this.owner.context.home, "cursor", "in-sandbox");
     for (const folder of [conversations, own])
-      mkdirSync17(folder, { recursive: true, mode: 448 });
+      mkdirSync16(folder, { recursive: true, mode: 448 });
     const fence = fenceAgent(process.execPath, directory, {
       homes: [conversations, own],
       state: ["*"],
@@ -19061,7 +19100,7 @@ function withTimeout2(promise, milliseconds) {
 
 // Packages/Box/src/agents/agents/grok.ts
 import { homedir as homedir4 } from "os";
-import { mkdirSync as mkdirSync18, readFileSync as readFileSync27, writeFileSync as writeFileSync19 } from "fs";
+import { mkdirSync as mkdirSync17, readFileSync as readFileSync27, writeFileSync as writeFileSync18 } from "fs";
 import { dirname as dirname15, join as join30 } from "path";
 
 // Packages/Box/src/agents/engine-limits.ts
@@ -19393,8 +19432,8 @@ class GrokAgent {
     if (!Object.keys(known).length || JSON.stringify(known) === JSON.stringify(this.efforts()))
       return;
     try {
-      mkdirSync18(dirname15(this.effortsFile), { recursive: true });
-      writeFileSync19(this.effortsFile, JSON.stringify(known));
+      mkdirSync17(dirname15(this.effortsFile), { recursive: true });
+      writeFileSync18(this.effortsFile, JSON.stringify(known));
     } catch {}
   }
   signOut;
@@ -19765,8 +19804,8 @@ async function branchRoutes(places, method, parts, body) {
 
 // Packages/Box/src/agents/usage/usage.ts
 import { execFileSync as execFileSync2 } from "child_process";
-import { createHash as createHash13 } from "crypto";
-import { lstatSync as lstatSync8, mkdirSync as mkdirSync23, readFileSync as readFileSync31, realpathSync as realpathSync8, renameSync as renameSync19, statSync as statSync14, writeFileSync as writeFileSync24 } from "fs";
+import { createHash as createHash12 } from "crypto";
+import { lstatSync as lstatSync8, mkdirSync as mkdirSync21, readFileSync as readFileSync30, realpathSync as realpathSync8, renameSync as renameSync17, statSync as statSync14, writeFileSync as writeFileSync22 } from "fs";
 import { homedir as homedir5, hostname } from "os";
 import { basename as basename11, dirname as dirname16, join as join37 } from "path";
 
@@ -19939,7 +19978,7 @@ function fromKeptClaude(kept) {
 }
 
 // Packages/Box/src/agents/usage/pricing.ts
-import { mkdirSync as mkdirSync19, readFileSync as readFileSync28, renameSync as renameSync15, writeFileSync as writeFileSync20 } from "fs";
+import { mkdirSync as mkdirSync18, readFileSync as readFileSync28, renameSync as renameSync14, writeFileSync as writeFileSync19 } from "fs";
 import { join as join31 } from "path";
 // Packages/Box/src/agents/usage/pricing/pricing_litellm_snapshot.json
 var pricing_litellm_snapshot_default = {
@@ -20877,9 +20916,9 @@ class PricingStore {
     if (!this.folder)
       return;
     try {
-      mkdirSync19(this.folder, { recursive: true });
-      writeFileSync20(join31(this.folder, name + ".new"), text);
-      renameSync15(join31(this.folder, name + ".new"), join31(this.folder, name));
+      mkdirSync18(this.folder, { recursive: true });
+      writeFileSync19(join31(this.folder, name + ".new"), text);
+      renameSync14(join31(this.folder, name + ".new"), join31(this.folder, name));
     } catch {}
   }
   build() {
@@ -21825,8 +21864,7 @@ function fromKeptGrok(kept) {
 }
 
 // Packages/Box/src/agents/usage/antigravity-history.ts
-import { createHash as createHash10 } from "crypto";
-import { mkdirSync as mkdirSync20, readFileSync as readFileSync29, readdirSync as readdirSync18, realpathSync as realpathSync7, renameSync as renameSync16, statSync as statSync12, writeFileSync as writeFileSync21 } from "fs";
+import { readdirSync as readdirSync18, realpathSync as realpathSync7, statSync as statSync12 } from "fs";
 import { join as join33 } from "path";
 function generationEvent(blob, stepMetadata) {
   function varint(bytes, start) {
@@ -21960,18 +21998,21 @@ function antigravityDatabases(geminiHome) {
     return names(folder).filter((file) => file.endsWith(".db")).map((file) => realpathSync7(join33(folder, file)));
   }))].sort();
 }
-function antigravityStamp(geminiHome) {
-  return antigravityDatabases(geminiHome).flatMap((path) => [path, path + "-wal"]).map((path) => {
+function fingerprint2(path) {
+  let latest = -Infinity;
+  const stamp = [path, path + "-wal"].map((file) => {
     try {
-      const s = statSync12(path);
-      return `${path}:${s.ino}:${s.size}:${s.mtimeMs}:${s.ctimeMs}`;
+      const info = statSync12(file);
+      latest = Math.max(latest, info.mtimeMs);
+      return `${file}:${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`;
     } catch (error) {
-      if (error.code === "ENOENT" && path.endsWith("-wal"))
-        return `${path}:-`;
+      if (error.code === "ENOENT" && file.endsWith("-wal"))
+        return `${file}:-`;
       throw error;
     }
   }).join(`
 `);
+  return { stamp, latest };
 }
 var READER2 = `
 import { Database } from "bun:sqlite"
@@ -22009,7 +22050,9 @@ self.onmessage = ({ data: { paths } }) => {
           for (const row of rows) {
             if (!Number.isSafeInteger(row.idx) || row.idx <= index) throw new Error("Invalid Antigravity generation index")
             index = row.idx
-            if (row.data === null || row.stepLength > 1048576) throw new Error("Antigravity generation exceeds the 1 MiB limit")
+            // Swift skips an oversized generation; oversized step metadata is absent, so
+            // embedded timing can still date an otherwise valid generation.
+            if (row.data === null) continue
             const event = generationEvent(row.data, row.step ?? undefined)
             if (event) events.push(event)
           }
@@ -22024,76 +22067,76 @@ self.onmessage = ({ data: { paths } }) => {
 var readerURL2;
 
 class AntigravityHistory {
-  folder;
-  constructor(folder) {
-    this.folder = folder;
+  read;
+  constructor(_folder, read = readAntigravityDatabase) {
+    this.read = read;
   }
-  manifest(home) {
-    return this.folder ? join33(this.folder, createHash10("sha256").update(home).digest("hex") + ".json") : undefined;
-  }
-  knownPaths(home) {
-    const file = this.manifest(home);
-    if (!file)
-      return [];
-    try {
-      const paths = JSON.parse(readFileSync29(file, "utf8"));
-      if (!Array.isArray(paths) || !paths.every((p) => typeof p === "string"))
-        throw new Error("Invalid Antigravity database list");
-      return paths;
-    } catch (error) {
-      if (error.code === "ENOENT")
-        return [];
-      throw error;
-    }
-  }
-  cached = new Map;
+  databases = new Map;
+  combined = new Map;
   async scan(geminiHome, since) {
-    const stamp = antigravityStamp(geminiHome);
-    const before = this.cached.get(geminiHome);
     const paths = antigravityDatabases(geminiHome);
-    if (!paths.length || (before?.paths ?? this.knownPaths(geminiHome)).some((path) => !paths.includes(path)))
-      throw new Error("An Antigravity database is missing; keeping the last complete reading");
-    if (before?.stamp === stamp) {
-      if (before.since !== since) {
-        before.since = since;
-        before.filtered = before.events.filter((event) => event.timestampSeconds * 1000 >= since);
+    let cached = this.databases.get(geminiHome);
+    if (!cached)
+      this.databases.set(geminiHome, cached = new Map);
+    for (const path of cached.keys())
+      if (!paths.includes(path))
+        cached.delete(path);
+    const parts = [];
+    let failure;
+    for (const path of paths) {
+      const before = cached.get(path);
+      try {
+        const stamp = fingerprint2(path);
+        if (stamp.latest < since) {
+          cached.delete(path);
+          continue;
+        }
+        if (before?.stamp === stamp.stamp) {
+          parts.push(before.events);
+          continue;
+        }
+        const events = await this.read(path);
+        if (fingerprint2(path).stamp !== stamp.stamp)
+          throw new Error("Antigravity database changed during the read");
+        cached.set(path, { stamp: stamp.stamp, events });
+        parts.push(events);
+      } catch (error) {
+        if (before)
+          parts.push(before.events);
+        else
+          failure ??= error;
       }
-      return before.filtered;
     }
-    const events = await this.read(paths);
-    if (antigravityStamp(geminiHome) !== stamp)
-      throw new Error("Antigravity databases changed during the read");
-    const filtered = events.filter((event) => event.timestampSeconds * 1000 >= since);
-    const manifest = this.manifest(geminiHome);
-    if (manifest) {
-      mkdirSync20(this.folder, { recursive: true });
-      writeFileSync21(manifest + ".new", JSON.stringify(paths), { mode: 384 });
-      renameSync16(manifest + ".new", manifest);
-    }
-    this.cached.set(geminiHome, { stamp, paths, events, since, filtered });
-    return filtered;
+    if (failure)
+      throw failure;
+    const previous = this.combined.get(geminiHome);
+    if (previous?.since === since && previous.parts.length === parts.length && previous.parts.every((part, index) => part === parts[index]))
+      return previous.events;
+    const events = parts.flatMap((part) => part.filter((event) => event.timestampSeconds * 1000 >= since));
+    this.combined.set(geminiHome, { since, parts, events });
+    return events;
   }
-  read(paths) {
-    readerURL2 ??= URL.createObjectURL(new Blob([READER2], { type: "application/javascript" }));
-    const worker = new Worker(readerURL2);
-    worker.unref?.();
-    let timer;
-    return new Promise((resolve, reject) => {
-      timer = setTimeout(() => reject(new Error("Antigravity databases took too long to read")), 120000);
-      timer.unref?.();
-      worker.onmessage = ({ data }) => data.failed ? reject(new Error(data.failed)) : resolve(data.events);
-      worker.onerror = (event) => reject(new Error(event.message));
-      worker.postMessage({ paths });
-    }).finally(() => {
-      clearTimeout(timer);
-      worker.terminate();
-    });
-  }
+}
+function readAntigravityDatabase(path) {
+  readerURL2 ??= URL.createObjectURL(new Blob([READER2], { type: "application/javascript" }));
+  const worker = new Worker(readerURL2);
+  worker.unref?.();
+  let timer;
+  return new Promise((resolve, reject) => {
+    timer = setTimeout(() => reject(new Error("Antigravity databases took too long to read")), 120000);
+    timer.unref?.();
+    worker.onmessage = ({ data }) => data.failed ? reject(new Error(data.failed)) : resolve(data.events);
+    worker.onerror = (event) => reject(new Error(event.message));
+    worker.postMessage({ paths: [path] });
+  }).finally(() => {
+    clearTimeout(timer);
+    worker.terminate();
+  });
 }
 
 // Packages/Box/src/agents/usage/cursor-history.ts
-import { createHash as createHash11 } from "crypto";
-import { mkdirSync as mkdirSync21, readFileSync as readFileSync30, renameSync as renameSync17, writeFileSync as writeFileSync22 } from "fs";
+import { createHash as createHash10 } from "crypto";
+import { mkdirSync as mkdirSync19, readFileSync as readFileSync29, renameSync as renameSync15, writeFileSync as writeFileSync20 } from "fs";
 import { join as join34 } from "path";
 var DAY2 = 24 * 60 * 60000;
 var CURSOR_DAYS = 32;
@@ -22166,7 +22209,7 @@ class CursorHistory {
     const user = cursorSession(access)?.user;
     if (!user)
       throw new LimitsProblem("failed", "Cursor's sign-in doesn't say whose it is.");
-    const key = createHash11("sha256").update(`kuvo-code cursor history v1
+    const key = createHash10("sha256").update(`kuvo-code cursor history v1
 `).update(user).digest("hex").slice(0, 16);
     const under = this.reading.get(key);
     if (under)
@@ -22315,7 +22358,7 @@ ${event.model}`;
     const days = new Map;
     if (this.folder) {
       try {
-        const saved = JSON.parse(readFileSync30(join34(this.folder, `${key}.json`), "utf8"));
+        const saved = JSON.parse(readFileSync29(join34(this.folder, `${key}.json`), "utf8"));
         if (saved?.version === 1 && saved.user === key && saved.days && typeof saved.days === "object") {
           for (const [day, value] of Object.entries(saved.days)) {
             if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !value || typeof value !== "object" || !Array.isArray(value.uses))
@@ -22334,10 +22377,10 @@ ${event.model}`;
     if (!this.folder)
       return;
     try {
-      mkdirSync21(this.folder, { recursive: true, mode: 448 });
+      mkdirSync19(this.folder, { recursive: true, mode: 448 });
       const file = join34(this.folder, `${key}.json`);
-      writeFileSync22(file + ".new", JSON.stringify({ version: 1, user: key, days: Object.fromEntries(days) }), { mode: 384 });
-      renameSync17(file + ".new", file);
+      writeFileSync20(file + ".new", JSON.stringify({ version: 1, user: key, days: Object.fromEntries(days) }), { mode: 384 });
+      renameSync15(file + ".new", file);
     } catch {
       this.log("usage: Cursor's usage history couldn't be kept");
     }
@@ -22561,8 +22604,8 @@ function hostedSlots(rows, provider, since) {
 }
 
 // Packages/Box/src/agents/usage/jsonl.ts
-import { createHash as createHash12 } from "crypto";
-import { mkdirSync as mkdirSync22, renameSync as renameSync18, rmSync as rmSync14, writeFileSync as writeFileSync23 } from "fs";
+import { createHash as createHash11 } from "crypto";
+import { mkdirSync as mkdirSync20, renameSync as renameSync16, rmSync as rmSync15, writeFileSync as writeFileSync21 } from "fs";
 import { open, readdir, readFile as readFile3, stat as stat2 } from "fs/promises";
 import { join as join36 } from "path";
 var CHUNK = 1 << 20;
@@ -22638,7 +22681,7 @@ class JSONLFiles {
           if (saved?.version === this.format && typeof saved.path === "string" && keptName(saved.path) === name && record && Array.isArray(record.items) && typeof record.offset === "number" && typeof record.size === "number" && (!this.state || state !== undefined))
             this.records.set(saved.path, { ...record, state });
           else
-            rmSync14(join36(this.folder, name), { force: true });
+            rmSync15(join36(this.folder, name), { force: true });
         } catch {}
       }
     })();
@@ -22683,21 +22726,21 @@ class JSONLFiles {
     if (!this.folder)
       return;
     try {
-      mkdirSync22(this.folder, { recursive: true, mode: 448 });
+      mkdirSync20(this.folder, { recursive: true, mode: 448 });
     } catch {
       return;
     }
     for (const path of this.forgotten) {
       try {
-        rmSync14(join36(this.folder, keptName(path)), { force: true });
+        rmSync15(join36(this.folder, keptName(path)), { force: true });
       } catch {}
     }
     this.forgotten.clear();
     for (const path of this.changed) {
       const file = join36(this.folder, keptName(path));
       try {
-        writeFileSync23(file + ".new", JSON.stringify({ version: this.format, path, record: this.records.get(path) }), { mode: 384 });
-        renameSync18(file + ".new", file);
+        writeFileSync21(file + ".new", JSON.stringify({ version: this.format, path, record: this.records.get(path) }), { mode: 384 });
+        renameSync16(file + ".new", file);
       } catch {}
     }
     this.changed.clear();
@@ -22788,13 +22831,13 @@ class JSONLFiles {
     return consumed;
   }
 }
-var keptName = (path) => createHash12("sha256").update(path).digest("hex").slice(0, 32) + ".json";
+var keptName = (path) => createHash11("sha256").update(path).digest("hex").slice(0, 32) + ".json";
 async function headOf(handle, length) {
   if (!length)
     return "";
   const buffer = Buffer.alloc(length);
   const { bytesRead } = await handle.read(buffer, 0, length, 0);
-  return createHash12("sha256").update(buffer.subarray(0, bytesRead)).digest("hex").slice(0, 32);
+  return createHash11("sha256").update(buffer.subarray(0, bytesRead)).digest("hex").slice(0, 32);
 }
 
 // Packages/Box/src/agents/usage/usage.ts
@@ -23077,7 +23120,7 @@ class Usage {
     if (!this.file)
       return;
     try {
-      const saved = JSON.parse(readFileSync31(this.file, "utf8"));
+      const saved = JSON.parse(readFileSync30(this.file, "utf8"));
       for (const [provider, kept] of Object.entries(saved?.accounts ?? {})) {
         if (!kept || typeof kept !== "object")
           continue;
@@ -23095,9 +23138,9 @@ class Usage {
       return;
     const accounts = Object.fromEntries([...this.entries].map(([provider, entry]) => [provider, { ...entry.identity ? { identity: entry.identity } : {}, ...entry.scanned ? { scanned: entry.scanned } : {}, slots: keptSlots(entry.slots) }]));
     try {
-      mkdirSync23(dirname16(this.file), { recursive: true });
-      writeFileSync24(this.file + ".new", JSON.stringify({ accounts }), { mode: 384 });
-      renameSync19(this.file + ".new", this.file);
+      mkdirSync21(dirname16(this.file), { recursive: true });
+      writeFileSync22(this.file + ".new", JSON.stringify({ accounts }), { mode: 384 });
+      renameSync17(this.file + ".new", this.file);
     } catch {}
   }
 }
@@ -23130,7 +23173,7 @@ function placeOf(computer, folder, part) {
   try {
     real = realpathSync8(folder);
   } catch {}
-  const hash = createHash13("sha256").update(`kuvo-code usage place v2
+  const hash = createHash12("sha256").update(`kuvo-code usage place v2
 `).update(computer).update(`
 `).update(real);
   if (part !== undefined)
@@ -23138,7 +23181,7 @@ function placeOf(computer, folder, part) {
 `).update(part);
   return hash.digest("hex").slice(0, 16);
 }
-function thisComputer(platform = process.platform, read = (path) => readFileSync31(path, "utf8"), macUUID = () => uuidOf(ioreg()), name = hostname) {
+function thisComputer(platform = process.platform, read = (path) => readFileSync30(path, "utf8"), macUUID = () => uuidOf(ioreg()), name = hostname) {
   if (platform === "darwin") {
     const uuid = macUUID();
     if (uuid)
@@ -23207,7 +23250,7 @@ function claudeSources(folder, computer = ownComputer) {
             found.set(file.path, file);
         const ordered = [...found.values()].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
         await files.refresh(ordered, since);
-        const listed = createHash13("sha256").update(ordered.map((file) => file.path).join(`
+        const listed = createHash12("sha256").update(ordered.map((file) => file.path).join(`
 `)).digest("hex");
         const before = last.get(agent.providerID);
         if (before && before.version === files.version && before.pricing === pricing && before.since === since && before.listed === listed)
@@ -23231,7 +23274,7 @@ class UsageSettings {
     if (!file)
       return;
     try {
-      const saved = JSON.parse(readFileSync31(file, "utf8"))?.codex;
+      const saved = JSON.parse(readFileSync30(file, "utf8"))?.codex;
       if (saved && typeof saved === "object" && "fallback" in saved) {
         this.chosen = true;
         if (typeof saved.fallback === "string" && saved.fallback && saved.fallback.length <= 200)
@@ -23245,9 +23288,9 @@ class UsageSettings {
     if (!this.file)
       return;
     try {
-      mkdirSync23(dirname16(this.file), { recursive: true });
-      writeFileSync24(this.file + ".new", JSON.stringify({ codex: { fallback: model } }), { mode: 384 });
-      renameSync19(this.file + ".new", this.file);
+      mkdirSync21(dirname16(this.file), { recursive: true });
+      writeFileSync22(this.file + ".new", JSON.stringify({ codex: { fallback: model } }), { mode: 384 });
+      renameSync17(this.file + ".new", this.file);
     } catch {}
   }
 }
@@ -23327,7 +23370,7 @@ function codexSources(folder, fallback = () => {
             }
           }
           await files.refresh(found, since);
-          const listed = createHash13("sha256").update(found.map((file) => file.path).join(`
+          const listed = createHash12("sha256").update(found.map((file) => file.path).join(`
 `)).digest("hex");
           const model = fallback();
           const before = last.get(agent.providerID);
@@ -23410,7 +23453,7 @@ function grokSources(folder, computer = ownComputer) {
                 found.set(file.path, file);
           const ordered = [...found.values()].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
           await files.refresh(ordered, since);
-          const listed = createHash13("sha256").update(ordered.map((file) => file.path).join(`
+          const listed = createHash12("sha256").update(ordered.map((file) => file.path).join(`
 `)).digest("hex");
           const before = last.get(agent.providerID);
           if (before && before.version === files.version && before.pricing === pricing && before.since === since && before.listed === listed)
@@ -23541,7 +23584,7 @@ function cursorSources(folder, elsewhere, history = new CursorHistory(folder ? j
           if (read.whole)
             wholeAt.set(agent.providerID, now());
           const days = read.days;
-          const said = createHash13("sha256").update(JSON.stringify([...days])).digest("hex");
+          const said = createHash12("sha256").update(JSON.stringify([...days])).digest("hex");
           const before = last.get(agent.providerID);
           if (before && before.days === said && before.pricing === pricing && before.since === since)
             return before.slots;
@@ -23697,9 +23740,9 @@ async function updateAll(agents, accounts, noted, known) {
 }
 
 // Packages/Box/src/agents/sessions.ts
-import { createHash as createHash14 } from "crypto";
+import { createHash as createHash13 } from "crypto";
 import { spawn as spawnProcess } from "child_process";
-import { readFileSync as readFileSync32, realpathSync as realpathSync9, statSync as statSync15 } from "fs";
+import { readFileSync as readFileSync31, realpathSync as realpathSync9, statSync as statSync15 } from "fs";
 import { homedir as homedir6 } from "os";
 import { dirname as dirname17, join as join38, resolve as resolve8 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
@@ -25058,7 +25101,7 @@ class Sessions {
     const directory = body.location.directory;
     const session = {
       id: newID("ses"),
-      projectID: "prj_" + createHash14("sha1").update(directory).digest("hex").slice(0, 16),
+      projectID: "prj_" + createHash13("sha1").update(directory).digest("hex").slice(0, 16),
       agent: typeof body.agent === "string" && body.agent ? body.agent : "build",
       model: body.model,
       cost: 0,
@@ -27033,7 +27076,7 @@ function withTextFiles(text, files) {
     let contents;
     if (!file.mime.startsWith("image/") && file.mime !== "application/pdf") {
       try {
-        const bytes = file.data ? Buffer.from(file.data, "base64") : file.path && statSync15(file.path).isFile() && statSync15(file.path).size <= textFileLimit ? readFileSync32(file.path) : undefined;
+        const bytes = file.data ? Buffer.from(file.data, "base64") : file.path && statSync15(file.path).isFile() && statSync15(file.path).size <= textFileLimit ? readFileSync31(file.path) : undefined;
         if (bytes && !bytes.includes(0))
           contents = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
       } catch {}
@@ -27330,7 +27373,7 @@ function followed(store, read, signal) {
 }
 
 // Packages/Box/src/agents/carry.ts
-import { createHash as createHash15 } from "crypto";
+import { createHash as createHash14 } from "crypto";
 import { createReadStream } from "fs";
 import { copyFile, lstat as lstat2, mkdir, readFile as readFile4, readdir as readdir2, rename, rm, stat as stat3, writeFile } from "fs/promises";
 import { basename as basename12, dirname as dirname18, isAbsolute as isAbsolute3, join as join39, normalize, sep as sep11 } from "path";
@@ -27344,7 +27387,7 @@ class CantCarry extends Error {
   }
 }
 async function hashOf(file) {
-  const hash = createHash15("sha256");
+  const hash = createHash14("sha256");
   for await (const chunk of createReadStream(file))
     hash.update(chunk);
   return hash.digest("hex");
@@ -27362,7 +27405,7 @@ async function plainFiles(from, link, at = "") {
   return files;
 }
 var digestOf = (records, lanes, said = []) => {
-  const hash = createHash15("sha256");
+  const hash = createHash14("sha256");
   for (const record of records)
     hash.update(`r ${record.path} ${record.size} ${record.sha256}
 `);
@@ -27652,7 +27695,7 @@ class Carrying {
           const { chat: _, ...kuvo } = session.metadata?.kuvo ?? {};
           session.metadata = { ...session.metadata ?? {}, kuvo: chat ? { ...kuvo, chat } : kuvo };
         }
-        session.projectID = "prj_" + createHash15("sha1").update(directory).digest("hex").slice(0, 16);
+        session.projectID = "prj_" + createHash14("sha1").update(directory).digest("hex").slice(0, 16);
         delete agent.snapshots;
         const lanesHere = manifest.lanes.filter((lane) => lane.session === id);
         const threads = agent.threads ?? {};
@@ -28463,7 +28506,7 @@ function seatRules(folder, askFirst, denies) {
 }
 
 // Packages/Box/src/agents/groups/store.ts
-import { existsSync as existsSync18, mkdirSync as mkdirSync24, readdirSync as readdirSync20, readFileSync as readFileSync33, renameSync as renameSync20, rmSync as rmSync15, writeFileSync as writeFileSync25 } from "fs";
+import { existsSync as existsSync18, mkdirSync as mkdirSync22, readdirSync as readdirSync20, readFileSync as readFileSync32, renameSync as renameSync18, rmSync as rmSync16, writeFileSync as writeFileSync23 } from "fs";
 import { join as join40 } from "path";
 var version2 = 1;
 function isTurning(value) {
@@ -28506,21 +28549,21 @@ function isMessages(value) {
 var forgottenFor = 3 * 86400000;
 var read2 = (file) => {
   try {
-    return JSON.parse(readFileSync33(file, "utf8"));
+    return JSON.parse(readFileSync32(file, "utf8"));
   } catch {
     return;
   }
 };
 var text5 = (file) => {
   try {
-    return readFileSync33(file, "utf8");
+    return readFileSync32(file, "utf8");
   } catch {
     return;
   }
 };
 function write(file, value) {
-  writeFileSync25(file + ".new", JSON.stringify(value, null, 2), { mode: 384 });
-  renameSync20(file + ".new", file);
+  writeFileSync23(file + ".new", JSON.stringify(value, null, 2), { mode: 384 });
+  renameSync18(file + ".new", file);
 }
 
 class GroupStore {
@@ -28531,7 +28574,7 @@ class GroupStore {
     this.root = root;
     this.bots = bots;
     this.agentsFile = agentsFile;
-    mkdirSync24(root, { recursive: true, mode: 448 });
+    mkdirSync22(root, { recursive: true, mode: 448 });
   }
   folder(id) {
     return join40(this.root, id);
@@ -28561,26 +28604,26 @@ class GroupStore {
     return { group: record.group, status: record.status === "held" ? "held" : "active", talking: record.talking === true, paused: record.paused === true, ...isTurning(record.turning) ? { turning: record.turning } : {}, messages };
   }
   saveGroup(kept) {
-    mkdirSync24(this.folder(kept.group.id), { recursive: true, mode: 448 });
+    mkdirSync22(this.folder(kept.group.id), { recursive: true, mode: 448 });
     write(join40(this.folder(kept.group.id), "group.json"), { kuvo: version2, status: kept.status, ...kept.talking ? { talking: true } : {}, ...kept.paused ? { paused: true } : {}, ...kept.turning ? { turning: kept.turning } : {}, group: kept.group });
   }
   saveMessages(kept) {
-    mkdirSync24(this.folder(kept.group.id), { recursive: true, mode: 448 });
+    mkdirSync22(this.folder(kept.group.id), { recursive: true, mode: 448 });
     write(join40(this.folder(kept.group.id), "messages.json"), kept.messages);
   }
   setAwake(id, awake) {
     const file = join40(this.folder(id), "awake");
     if (awake && !existsSync18(file) && existsSync18(this.folder(id)))
-      writeFileSync25(file, "");
+      writeFileSync23(file, "");
     if (!awake)
-      rmSync15(file, { force: true });
+      rmSync16(file, { force: true });
   }
   trash(id, trash) {
     if (!existsSync18(this.folder(id)))
       return;
     const into = join40(trash, `${new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "")}-group-${id}`);
-    mkdirSync24(into, { recursive: true, mode: 448 });
-    renameSync20(this.folder(id), join40(into, id));
+    mkdirSync22(into, { recursive: true, mode: 448 });
+    renameSync18(this.folder(id), join40(into, id));
     emit("kuvo.group.trashed", { id, path: into });
   }
   settings() {
@@ -28696,7 +28739,7 @@ class GroupStore {
   }
   setPendingMemory(pending) {
     if (Object.keys(pending).length === 0)
-      rmSync15(join40(this.root, "pending-memory.json"), { force: true });
+      rmSync16(join40(this.root, "pending-memory.json"), { force: true });
     else
       write(join40(this.root, "pending-memory.json"), pending);
   }
@@ -28708,17 +28751,17 @@ class GroupStore {
     write(join40(this.root, "peer-turns.json"), turns);
   }
   writeFile(path, contents) {
-    mkdirSync24(join40(path, ".."), { recursive: true });
-    writeFileSync25(path + ".new", contents, { mode: 384 });
-    renameSync20(path + ".new", path);
+    mkdirSync22(join40(path, ".."), { recursive: true });
+    writeFileSync23(path + ".new", contents, { mode: 384 });
+    renameSync18(path + ".new", path);
   }
   removeFile(path) {
-    rmSync15(path, { force: true });
+    rmSync16(path, { force: true });
   }
 }
 
 // Packages/Box/src/agents/groups/named.ts
-import { readFileSync as readFileSync34 } from "fs";
+import { readFileSync as readFileSync33 } from "fs";
 var start = "<named-agents>";
 var end = "</named-agents>";
 var heading = "Agents the user named with & in this message, by their address. Read one's conversation with read_conversation only when what the user asks needs what it knows or did, and write to it with send_message only to ask it something or hand it work; when the user only mentions one, do neither:";
@@ -28726,7 +28769,7 @@ function readDirectory(file) {
   if (!file)
     return { machine: null, agents: [] };
   try {
-    const value = JSON.parse(readFileSync34(file, "utf8"));
+    const value = JSON.parse(readFileSync33(file, "utf8"));
     const agents = Array.isArray(value?.agents) ? value.agents.filter((agent) => agent && typeof agent.session === "string" && agent.session.startsWith("ses_") && typeof agent.name === "string" && agent.name) : [];
     return { machine: typeof value?.machine === "string" ? value.machine : null, agents };
   } catch {
@@ -29326,14 +29369,14 @@ async function make(runner, store, given, here) {
 }
 
 // Packages/Box/src/agents/groups/post.ts
-import { existsSync as existsSync19, readFileSync as readFileSync36, renameSync as renameSync22, writeFileSync as writeFileSync27 } from "fs";
+import { existsSync as existsSync19, readFileSync as readFileSync35, renameSync as renameSync20, writeFileSync as writeFileSync25 } from "fs";
 
 // Packages/Box/src/shared/seats.ts
 var SEAT_MAIL_KINDS = ["turn", "state", "result", "steer", "stop", "drop", "work", "held", "report", "memory"];
 
 // Packages/Box/src/agents/usage/usage-peers.ts
-import { createHash as createHash16 } from "crypto";
-import { mkdirSync as mkdirSync25, readFileSync as readFileSync35, renameSync as renameSync21, writeFileSync as writeFileSync26 } from "fs";
+import { createHash as createHash15 } from "crypto";
+import { mkdirSync as mkdirSync23, readFileSync as readFileSync34, renameSync as renameSync19, writeFileSync as writeFileSync24 } from "fs";
 import { dirname as dirname19 } from "path";
 var isUsageMail = (value) => value !== null && typeof value === "object" && value.kind === "usage";
 var MINUTE3 = 60000;
@@ -29585,7 +29628,7 @@ class UsagePeers {
     if (!this.file)
       return;
     try {
-      const saved = JSON.parse(readFileSync35(this.file, "utf8"));
+      const saved = JSON.parse(readFileSync34(this.file, "utf8"));
       for (const [key, kept] of Object.entries(saved.peers ?? {})) {
         if (!kept || typeof kept.heard !== "number" || !Array.isArray(kept.accounts))
           continue;
@@ -29598,16 +29641,16 @@ class UsagePeers {
     if (!this.file)
       return;
     try {
-      mkdirSync25(dirname19(this.file), { recursive: true });
+      mkdirSync23(dirname19(this.file), { recursive: true });
       const peers = Object.fromEntries([...this.peers].map(([key, kept]) => [key, { ...kept, accounts: kept.accounts.map(({ slots, ...account }) => ({ ...account, slots: keptSlots(slots) })) }]));
-      writeFileSync26(this.file + ".new", JSON.stringify({ peers }), { mode: 384 });
-      renameSync21(this.file + ".new", this.file);
+      writeFileSync24(this.file + ".new", JSON.stringify({ peers }), { mode: 384 });
+      renameSync19(this.file + ".new", this.file);
     } catch {}
   }
 }
 function digestOf2(accounts) {
   const canonical = accounts.map((account) => [account.provider, account.service, account.agent ?? null, account.account ?? null, account.label ?? null, account.identity ?? null, account.cut === true, account.places ?? [], account.slots.models, account.slots.used, account.slots.unknown ?? []]);
-  return createHash16("sha256").update(JSON.stringify(canonical)).digest("hex").slice(0, 32);
+  return createHash15("sha256").update(JSON.stringify(canonical)).digest("hex").slice(0, 32);
 }
 var toldOf2 = ({ slots, ...account }) => ({ ...account, slots: keptSlots(slots) });
 function fromSlot(slots, first) {
@@ -32452,7 +32495,7 @@ class PeerPost {
     let kept = [];
     try {
       if (file && existsSync19(file))
-        kept = JSON.parse(readFileSync36(file, "utf8"));
+        kept = JSON.parse(readFileSync35(file, "utf8"));
     } catch {}
     this.kept = Array.isArray(kept) ? kept.filter((line) => line && typeof line.id === "string" && typeof line.to === "string" && isSeatMail(line.mail)) : [];
   }
@@ -32477,8 +32520,8 @@ class PeerPost {
     if (!this.file)
       return;
     try {
-      writeFileSync27(this.file + ".new", JSON.stringify(this.kept), { mode: 384 });
-      renameSync22(this.file + ".new", this.file);
+      writeFileSync25(this.file + ".new", JSON.stringify(this.kept), { mode: 384 });
+      renameSync20(this.file + ".new", this.file);
     } catch {}
   }
   follow(signal) {
@@ -33570,7 +33613,7 @@ function updateUnderWay(run) {
 import { spawn as spawn6 } from "child_process";
 
 // Packages/Box/src/agents/store.ts
-import { mkdirSync as mkdirSync26, readdirSync as readdirSync21, readFileSync as readFileSync37, renameSync as renameSync23, rmSync as rmSync16, statSync as statSync17, writeFileSync as writeFileSync28 } from "fs";
+import { mkdirSync as mkdirSync24, readdirSync as readdirSync21, readFileSync as readFileSync36, renameSync as renameSync21, rmSync as rmSync17, statSync as statSync17, writeFileSync as writeFileSync26 } from "fs";
 import { join as join41 } from "path";
 
 class Store {
@@ -33579,18 +33622,18 @@ class Store {
   pending = new Map;
   constructor(root) {
     this.root = root;
-    mkdirSync26(root, { recursive: true });
+    mkdirSync24(root, { recursive: true });
     for (const id of readdirSync21(root)) {
       try {
         const folder = join41(root, id);
-        const session = JSON.parse(readFileSync37(join41(folder, "session.json"), "utf8"));
+        const session = JSON.parse(readFileSync36(join41(folder, "session.json"), "utf8"));
         let messages = [];
         try {
-          messages = JSON.parse(readFileSync37(join41(folder, "messages.json"), "utf8"));
+          messages = JSON.parse(readFileSync36(join41(folder, "messages.json"), "utf8"));
         } catch {}
         let agent = {};
         try {
-          agent = JSON.parse(readFileSync37(join41(folder, "agent.json"), "utf8"));
+          agent = JSON.parse(readFileSync36(join41(folder, "agent.json"), "utf8"));
         } catch {}
         this.records.set(session.id, { session, messages, agent });
       } catch {}
@@ -33624,7 +33667,7 @@ class Store {
     this.records.delete(id);
     clearTimeout(this.pending.get(id));
     this.pending.delete(id);
-    rmSync16(join41(this.root, id), { recursive: true, force: true });
+    rmSync17(join41(this.root, id), { recursive: true, force: true });
   }
   save(id, now = false) {
     clearTimeout(this.pending.get(id));
@@ -33648,15 +33691,15 @@ class Store {
       return;
     try {
       const folder = join41(this.root, id);
-      mkdirSync26(folder, { recursive: true });
+      mkdirSync24(folder, { recursive: true });
       for (const [name, value] of [
         ["session.json", record.session],
         ["messages.json", record.messages],
         ["agent.json", record.agent]
       ]) {
         const file = join41(folder, name);
-        writeFileSync28(file + ".new", JSON.stringify(value));
-        renameSync23(file + ".new", file);
+        writeFileSync26(file + ".new", JSON.stringify(value));
+        renameSync21(file + ".new", file);
       }
     } catch (error) {
       console.error(`session ${id} not written:`, error);
@@ -33836,7 +33879,7 @@ class HangWatch {
 var isEngine = (command) => /\bserve\b/.test(command) && !command.includes("kuvo-link");
 
 // Packages/Box/src/agents/limits-peers.ts
-import { mkdirSync as mkdirSync27, readFileSync as readFileSync38, renameSync as renameSync24, writeFileSync as writeFileSync29 } from "fs";
+import { mkdirSync as mkdirSync25, readFileSync as readFileSync37, renameSync as renameSync22, writeFileSync as writeFileSync27 } from "fs";
 import { dirname as dirname21 } from "path";
 var MINUTE4 = 60000;
 var TELL_AGAIN2 = 10 * MINUTE4;
@@ -33997,7 +34040,7 @@ class LimitsPeers {
     if (!this.file)
       return;
     try {
-      const saved = JSON.parse(readFileSync38(this.file, "utf8"));
+      const saved = JSON.parse(readFileSync37(this.file, "utf8"));
       for (const [key, kept] of Object.entries(saved.peers ?? {})) {
         if (!kept || typeof kept.heard !== "number" || !Array.isArray(kept.accounts))
           continue;
@@ -34009,9 +34052,9 @@ class LimitsPeers {
     if (!this.file)
       return;
     try {
-      mkdirSync27(dirname21(this.file), { recursive: true });
-      writeFileSync29(this.file + ".new", JSON.stringify({ peers: Object.fromEntries(this.peers) }), { mode: 384 });
-      renameSync24(this.file + ".new", this.file);
+      mkdirSync25(dirname21(this.file), { recursive: true });
+      writeFileSync27(this.file + ".new", JSON.stringify({ peers: Object.fromEntries(this.peers) }), { mode: 384 });
+      renameSync22(this.file + ".new", this.file);
     } catch {}
   }
 }
@@ -34115,13 +34158,13 @@ var renewUptime = process.env.KUVO_TEST_RENEW_UPTIME ? Number(process.env.KUVO_T
 for (const name of ["KUVO_TEST_RENEW_HOLD", "KUVO_TEST_RENEW_SETTLE", "KUVO_TEST_RENEW_UPTIME"])
   delete process.env[name];
 var temporary = process.env.TMPDIR?.replace(/\/$/, "") || join42(home3, "tmp");
-mkdirSync28(temporary, { recursive: true });
-rmSync17(join42(temporary, "antigravity"), { recursive: true, force: true });
+mkdirSync26(temporary, { recursive: true });
+rmSync18(join42(temporary, "antigravity"), { recursive: true, force: true });
 leftSignIns(temporary);
 try {
   for (const name of readdirSync22(join42(home3, "antigravity")))
     if (name.startsWith(".install-"))
-      rmSync17(join42(home3, "antigravity", name), { recursive: true, force: true });
+      rmSync18(join42(home3, "antigravity", name), { recursive: true, force: true });
 } catch {}
 delete process.env.BUN_BE_BUN;
 process.env.KUVO_WAKE_VIA = "bridge";
@@ -34136,7 +34179,7 @@ if (onMachine) {
   dropOwnPrograms(join42(home3, "runtime"));
   useSavedLoginPath();
 }
-rmSync17(join42(home3, "cache", "install"), { recursive: true, force: true });
+rmSync18(join42(home3, "cache", "install"), { recursive: true, force: true });
 var context = { home: home3, temporary, deps };
 var roster = new Roster(new Accounts(home3), context);
 var store = new Store(join42(home3, "sessions"));
@@ -34387,7 +34430,7 @@ renewal = onMachine && build ? new Renewal({
       return launchSaid.lets;
     const lets = launchLets(commandLineOf(process.ppid), () => {
       try {
-        return readFileSync39(join42(machineHome, "run", "agents.log"), "utf8");
+        return readFileSync38(join42(machineHome, "run", "agents.log"), "utf8");
       } catch {
         return;
       }
@@ -34434,8 +34477,8 @@ function stop() {
   reviews.stopAll();
   cancelSignIns();
   try {
-    if (record2 && JSON.parse(readFileSync39(record2, "utf8")).pid === process.pid)
-      rmSync17(record2, { force: true });
+    if (record2 && JSON.parse(readFileSync38(record2, "utf8")).pid === process.pid)
+      rmSync18(record2, { force: true });
   } catch {}
   sessions.closeAll();
   store.flush();
@@ -34457,4 +34500,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 46afbf5f953ab15edbd9c3bfb50e3e4000afb70ebe3b2c7d8f2b5e5a5fe685c6
+// Built from Packages/Box/src/agents 33781b1d09b752aae8e272e3f36405a48f80051c1cfac17caf0a49a65295828b
