@@ -116,6 +116,8 @@ import Testing
         (503, #"{"message":"Starting.","reason":"starting"}"#, BoxClient.mac, FolderFailure.starting),
         (404, "{}", BoxClient.mac, FolderFailure.updating),
         (404, "{}", "attached", FolderFailure.olderService),
+        (403, "That isn't available over the link.", BoxClient.mac, FolderFailure.updating),
+        (403, "That isn't available over the link.", "attached", FolderFailure.olderService),
         (403, #"{"message":"It can't be read here.","reason":"Permission denied"}"#, BoxClient.mac, FolderFailure.denied),
     ])
     func whyTheListIsntThere(status: Int, body: String, box id: String, failure: FolderFailure) async throws {
@@ -135,5 +137,34 @@ import Testing
         }
         let client = box.client
         #expect(await ProjectFiles.newestFirst([repo.url]) { _ in client }.map(\.path) == ["new.txt", "middle.txt", "old.txt"])
+    }
+
+    /// A folder whose name has what a path writes as it is ("site (copy)", "@scope", "a+b"): asked for
+    /// as every box writes a path, so one from before the route says it hasn't it; and listed.
+    @Test(arguments: ["site (copy)", "@scope, pkg; v1:2 $!*", "a+b & c=d"])
+    func aFolderNamedWithMarks(name: String) async throws {
+        let folder = AppInfo.testRoot.appending(path: "Folders/\(UUID().uuidString)/\(name)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder.deletingLastPathComponent()) }
+        try Data("x".utf8).write(to: folder.appending(path: "index.html"))
+        let sent = Sent()
+        let recording = BoxClient(box: BoxClient.mac, transport: LocalBox { request in
+            sent.add(request.path)
+            return AsyncThrowingStream { continuation in
+                continuation.yield(.head(status: 404, headers: [:]))
+                continuation.yield(.body(Data("{}".utf8)))
+                continuation.finish()
+            }
+        })
+        _ = await ProjectFiles.listing([folder]) { _ in recording }
+        let path = try #require(sent.paths.first)
+        #expect(EngineRoutes.canonical(path) == path, "written as a box writes it")
+        #expect(await paths([folder]) == ["index.html"])
+    }
+
+    private final class Sent: @unchecked Sendable {
+        private(set) var paths: [String] = []
+        private let lock = NSLock()
+        func add(_ path: String) { lock.withLock { paths.append(path) } }
     }
 }

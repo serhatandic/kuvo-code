@@ -147,7 +147,18 @@ struct BoxRefusal: LocalizedError {
     var problem: String?
     /// Why, as a word a client maps (`reason`): Full Access not confirmed on that computer, say.
     var reason: String?
+    /// The box hasn't the route at all: one from before it (`olderBox`).
+    var isOlderBox = false
     var errorDescription: String? { message }
+
+    /// Whether a box answered as one from before the route asked: `404` with nothing said, as every
+    /// box answers a route of its own it hasn't; or a released one's `403` in plain words.
+    nonisolated static func olderBox(status: Int, data: Data) -> Bool {
+        let said = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        if status == 404 && said?["message"] == nil { return true }
+        // COMPAT(beta.1 git-older-box): a box of 0.7 or 0.8.0-beta.1 refuses a route it hasn't with `403 "That isn't available over the link."`, no JSON. Goes when 0.8.0 ships.
+        return status == 403 && said == nil
+    }
 
     init(status: Int, message: String, problem: String? = nil, reason: String? = nil) {
         self.status = status
@@ -159,6 +170,7 @@ struct BoxRefusal: LocalizedError {
     init(status: Int, data: Data) {
         let said = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         self.init(status: status, message: said?["message"] as? String ?? "It said no (\(status)).", problem: said?["problem"] as? String, reason: said?["reason"] as? String)
+        isOlderBox = Self.olderBox(status: status, data: data)
     }
 }
 

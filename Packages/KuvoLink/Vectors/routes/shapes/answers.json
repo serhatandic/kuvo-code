@@ -5024,7 +5024,12 @@
         "repository": {
          "literal": true
         },
-        "root": "string",
+        "root": {
+         "oneOf": [
+          "string",
+          "null"
+         ]
+        },
         "current": {
          "oneOf": [
           "string",
@@ -5090,7 +5095,12 @@
         "repository": {
          "literal": true
         },
-        "root": "string",
+        "root": {
+         "oneOf": [
+          "string",
+          "null"
+         ]
+        },
         "uncommitted": "bool"
        }
       }

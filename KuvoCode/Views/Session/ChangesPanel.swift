@@ -804,7 +804,7 @@ private struct PullRequestForm: View {
             title = found.title
             description = found.body
             isFocused = true
-        } catch let refusal as BoxRefusal where refusal.status == 404 && refusal.message.hasPrefix("It said no") {
+        } catch let refusal as BoxRefusal where refusal.isOlderBox {
             // A machine's box from before it made pull requests itself.
             failure = "\(place) needs a newer Kuvo Code to create pull requests. It updates by itself overnight, or connect to it from this Mac."
         } catch {

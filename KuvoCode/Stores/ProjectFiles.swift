@@ -1,4 +1,5 @@
 import Foundation
+import KuvoLink
 import OpenCodeKit
 
 /// Every file in a project's folders, for filtering the file tree and for @ mentions.
@@ -81,7 +82,10 @@ nonisolated enum ProjectFiles {
     /// nothing (a folder its repository ignores), a walk that skips the usual heavy folders;
     /// `dated`, with when each last changed.
     private static func listFiles(in root: URL, at place: GitPlace, dated: Bool) async -> Result<FolderTree, FolderFailure> {
-        let asked = "kuvo/folders/tree?path=" + Workspace.queryValue(place.path) + (dated ? "&dated=1" : "")
+        // Written as every box writes a path (`EngineRoutes.canonical`: "site (copy)", "@scope"), so
+        // a box from before the route says it hasn't it, rather than that the path isn't one.
+        let written = "kuvo/folders/tree?path=" + Workspace.queryValue(place.path) + (dated ? "&dated=1" : "")
+        let asked = EngineRoutes.canonical(written) ?? written
         let status: Int, data: Data
         do {
             (status, data) = try await place.client.send("GET", asked)

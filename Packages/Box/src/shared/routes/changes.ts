@@ -26,10 +26,11 @@ export const GIT_CHANGES_COUNT = oneOf(
 export type GitChangesCount = Infer<typeof GIT_CHANGES_COUNT>;
 
 /** The repository a folder is in, for a branch menu: outside one `repository: false`; in one, its
- * top folder, the branch checked out (null on none) and its branches, the latest commit first. */
+ * top folder (null with no checkout there: a bare repository its `.git` names), the branch checked
+ * out (null on none) and its branches, the latest commit first. */
 export const GIT_BRANCHES = oneOf(
   object({ repository: literal(false) }),
-  object({ repository: literal(true), root: string, current: nullable(string), branches: list(string) }),
+  object({ repository: literal(true), root: nullable(string), current: nullable(string), branches: list(string) }),
 );
 export type GitBranches = Infer<typeof GIT_BRANCHES>;
 
@@ -37,7 +38,7 @@ export type GitBranches = Infer<typeof GIT_BRANCHES>;
  * ignore, changes in submodules whatever their `ignore` setting): outside one `repository: false`. */
 export const GIT_STATUS = oneOf(
   object({ repository: literal(false) }),
-  object({ repository: literal(true), root: string, uncommitted: bool }),
+  object({ repository: literal(true), root: nullable(string), uncommitted: bool }),
 );
 export type GitStatus = Infer<typeof GIT_STATUS>;
 

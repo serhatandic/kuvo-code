@@ -381,17 +381,29 @@ export async function commit(directory: string, message: string, push: boolean, 
 /** `directory`'s repository's top folder, or null outside one. */
 const rootOf = async (directory: string) => (await text(directory, ["rev-parse", "--show-toplevel"]))?.trim() || null;
 
-/** The repository `directory` is in, as a client's branch menu lists it: its top folder, the branch
- * checked out (null on none) and its branches, the latest commit first; `{repository: false}`
- * outside one, and null when git couldn't say. Read by names only: nothing settings name runs. */
-export async function branchesIn(directory: string): Promise<GitBranches | null> {
+/** Whether `directory` is in a repository: its checkout's top folder, or (`root` null) one with no
+ * checkout there, as a bare repository beside it that its `.git` names (`gitdir: ./.bare`), whose
+ * worktrees are elsewhere; null outside one. */
+async function repositoryOf(directory: string): Promise<{ root: string | null } | null> {
   const root = await rootOf(directory);
-  if (!root) return { repository: false };
+  if (root) return { root };
+  return (await text(directory, ["rev-parse", "--git-dir"]))?.trim() ? { root: null } : null;
+}
+
+/** The repository `directory` is in, as a client's branch menu lists it: its top folder (null with
+ * no checkout there), the branch checked out (null on none) and its branches, the latest commit
+ * first; `{repository: false}` outside one, and null when git couldn't say. Read by names only:
+ * nothing settings name runs. */
+export async function branchesIn(directory: string): Promise<GitBranches | null> {
+  const found = await repositoryOf(directory);
+  if (!found) return { repository: false };
+  const { root } = found;
+  const at = root ?? directory;
   // By their full names: a tag of the same name would have `refname:short` write "heads/x".
-  const listed = await text(root, ["for-each-ref", "--sort=-committerdate", "--format=%(refname)", "refs/heads"]);
+  const listed = await text(at, ["for-each-ref", "--sort=-committerdate", "--format=%(refname)", "refs/heads"]);
   if (listed === null) return null;
   const branch = (ref: string) => (ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : null);
-  const head = (await text(root, ["symbolic-ref", "--quiet", "HEAD"]))?.trim() ?? "";
+  const head = (await text(at, ["symbolic-ref", "--quiet", "HEAD"]))?.trim() ?? "";
   return { repository: true, root, current: branch(head), branches: listed.split("\n").map(branch).filter((name): name is string => !!name) };
 }
 
@@ -406,10 +418,13 @@ export async function switchBranch(directory: string, branch: string, create: bo
 
 /** Whether anything in `directory`'s repository isn't committed: a change, a new file git doesn't
  * ignore, or a change in a submodule whatever its `ignore` setting says, as removing a worktree
- * would delete them; `{repository: false}` outside one, null when git couldn't say. */
+ * would delete them; `{repository: false}` outside one, null when git couldn't say. With no checkout
+ * there (`root` null), nothing that isn't committed. */
 export async function statusIn(directory: string): Promise<GitStatus | null> {
-  const root = await rootOf(directory);
-  if (!root) return { repository: false };
+  const found = await repositoryOf(directory);
+  if (!found) return { repository: false };
+  const { root } = found;
+  if (!root) return { repository: true, root, uncommitted: false };
   const status = await text(root, ["status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none"]);
   return status === null ? null : { repository: true, root, uncommitted: status.length > 0 };
 }

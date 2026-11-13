@@ -34,17 +34,23 @@ nonisolated extension Git {
     /// Switching branches where this Mac is attached in place to a box from before it.
     static let switchNeedsNewerService = "Kuvo Code’s background service on this Mac needs a newer version to switch branches. It updates by itself overnight."
 
-    /// Whether a box answered as one from before the route: `404` with nothing to say (a folder
-    /// that isn't there says why).
-    static func lacksRoute(_ status: Int, _ data: Data) -> Bool {
-        status == 404 && ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["message"] == nil
-    }
+    /// Whether a box answered as one from before the route (`BoxRefusal.olderBox`; a folder that
+    /// isn't there says why).
+    static func lacksRoute(_ status: Int, _ data: Data) -> Bool { BoxRefusal.olderBox(status: status, data: data) }
 
     private struct InFolder: Encodable { let directory: String }
 
-    /// The folder's repository and its branches; nil when its box couldn't say.
-    @concurrent static func branches(at place: GitPlace) async -> Branches? {
-        guard let (status, data) = try? await place.client.send("POST", "kuvo/git/branches", body: JSONEncoder().encode(InFolder(directory: place.path))) else { return nil }
+    /// The folder's repository and its branches; nil when its box couldn't say. While this Mac's box
+    /// is starting (with the app, or again after an update), asked again each `pause`, for as long
+    /// as it says so (a minute at most), as the Changes panel waits for it.
+    @concurrent static func branches(at place: GitPlace, pause: Duration = .seconds(1)) async -> Branches? {
+        let asked = try? JSONEncoder().encode(InFolder(directory: place.path))
+        var answer = try? await place.client.send("POST", "kuvo/git/branches", body: asked)
+        while let (status, data) = answer, status == 503, BoxRefusal(status: status, data: data).reason == "starting", !Task.isCancelled {
+            try? await Task.sleep(for: pause)
+            answer = try? await place.client.send("POST", "kuvo/git/branches", body: asked)
+        }
+        guard let (status, data) = answer, !Task.isCancelled else { return nil }
         if (200..<300).contains(status) { return try? JSONDecoder().decode(Branches.self, from: data) }
         guard lacksRoute(status, data), place.machine != nil else { return nil }
         // COMPAT(beta.1 git-older-box): a machine's box from before `kuvo/git/branches`: its git over SSH, as before. Goes when 0.8.0 ships.
@@ -153,7 +159,7 @@ nonisolated extension Workspace.Worktree {
             // A box from before Merge into… (bridge 0.9.143) has no such route, nor, from before
             // #341, merges without a branch named. A machine takes this Mac's as it connects, so
             // only one not updated since.
-            if status == 404 && answer?.message == nil || status == 400 && base == nil {
+            if BoxRefusal.olderBox(status: status, data: data) || status == 400 && base == nil {
                 // COMPAT(beta.1 merge-older-box): says Merge into… waits while this Mac's older box runs on after an update, until the work under way ends (its keeper makes way then). Goes when 0.8.0 ships.
                 guard let machine = place.machine else { return .failed(Self.mergeAfterUpdate) }
                 return .failed("\(machine) needs a newer Kuvo Code to merge. It updates by itself overnight, or connect to it from this Mac.")

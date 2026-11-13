@@ -1,7 +1,7 @@
 // Built from Packages/Box/src by scripts/build-box.sh: change those, then run it. Never edit this file.
 
 // Packages/Box/src/link/main.ts
-import { spawn as spawn14 } from "node:child_process";
+import { spawn as spawn15 } from "node:child_process";
 import crypto55 from "node:crypto";
 import fs147 from "node:fs";
 import os21 from "node:os";
@@ -7272,7 +7272,7 @@ async function askedArgsLater(args, cwd) {
 }
 
 // Packages/Box/src/link/git.ts
-import { execFile as execFile4, spawnSync as spawnSync5 } from "node:child_process";
+import { execFile as execFile4, spawn as spawn4, spawnSync as spawnSync5 } from "node:child_process";
 var GIT_ENV = { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" };
 var BY_KUVO = { GIT_AUTHOR_NAME: "Kuvo Code", GIT_AUTHOR_EMAIL: "kuvo-code@localhost", GIT_COMMITTER_NAME: "Kuvo Code", GIT_COMMITTER_EMAIL: "kuvo-code@localhost" };
 function ranIn(folder, args, env) {
@@ -7299,14 +7299,40 @@ function gitAsked(folder, args, env = {}) {
   return ranIn(folder, askedArgs(args, folder), env);
 }
 async function gitLater(folder, args) {
-  return (await gitOutLater(folder, args))?.trim() ?? null;
-}
-async function gitOutLater(folder, args) {
   const own = await ownArgsLater(args, folder);
   if (!own)
     return null;
   return new Promise((resolve) => {
-    execFile4("git", own, { cwd: folder, encoding: "utf8", env: GIT_ENV, timeout: 60000, maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => resolve(error ? null : String(stdout ?? "")));
+    execFile4("git", own, { cwd: folder, encoding: "utf8", env: GIT_ENV, timeout: 60000, maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => resolve(error ? null : String(stdout ?? "").trim()));
+  });
+}
+async function gitNamesLater(folder, args, limit) {
+  const own = await ownArgsLater(args, folder);
+  if (!own)
+    return null;
+  return new Promise((resolve) => {
+    const names = new Set;
+    let rest = "";
+    let enough = false;
+    const child = spawn4("git", own, { cwd: folder, env: GIT_ENV, stdio: ["ignore", "pipe", "ignore"], timeout: 600000 });
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (piece) => {
+      if (enough)
+        return;
+      const parts = (rest + piece).split("\x00");
+      rest = parts.pop() ?? "";
+      for (const name of parts) {
+        if (name)
+          names.add(name);
+        if (names.size >= limit) {
+          enough = true;
+          child.kill();
+          return;
+        }
+      }
+    });
+    child.on("error", () => resolve(null));
+    child.on("close", (code) => resolve(enough || code === 0 ? [...names] : null));
   });
 }
 function sizeLater(folder) {
@@ -7490,7 +7516,7 @@ import fs42 from "node:fs";
 import path44 from "node:path";
 
 // Packages/Box/src/link/areas/engine.ts
-import { spawn as spawn4 } from "node:child_process";
+import { spawn as spawn5 } from "node:child_process";
 import fs35 from "node:fs";
 import path36 from "node:path";
 
@@ -8183,7 +8209,7 @@ async function engineControl(command) {
   const workspace = path36.join(K, "workspace");
   const options = { cwd: fs35.existsSync(workspace) ? workspace : K, env: environment };
   try {
-    const child = spawn4("sh", [start, command], { ...options, detached: true, stdio: "ignore" });
+    const child = spawn5("sh", [start, command], { ...options, detached: true, stdio: "ignore" });
     lastToolRun = { child, ended: new Promise((resolve) => {
       child.on("exit", resolve);
       child.on("error", resolve);
@@ -8418,7 +8444,7 @@ import path43 from "node:path";
 import path42 from "node:path";
 
 // Packages/Box/src/link/keeper.ts
-import { spawn as spawn5 } from "node:child_process";
+import { spawn as spawn6 } from "node:child_process";
 import fs41 from "node:fs";
 import path41 from "node:path";
 
@@ -9728,7 +9754,7 @@ function keepKeeper() {
   delete environment.BUN_BE_BUN;
   delete environment.BUN_RUNTIME_TRANSPILER_CACHE_PATH;
   try {
-    spawn5("sh", [start], { cwd: K, env: environment, detached: true, stdio: "ignore" }).unref();
+    spawn6("sh", [start], { cwd: K, env: environment, detached: true, stdio: "ignore" }).unref();
   } catch {}
 }
 function runningBridge() {
@@ -9741,7 +9767,7 @@ function runningBridge() {
 }
 function startBridge() {
   const workspace = path41.join(K, "workspace");
-  const child = spawn5(process.execPath, [...OWN_RUNTIME, SCRIPT, "run"], {
+  const child = spawn6(process.execPath, [...OWN_RUNTIME, SCRIPT, "run"], {
     detached: true,
     stdio: "ignore",
     cwd: fs41.existsSync(workspace) ? workspace : K,
@@ -20416,7 +20442,7 @@ import path75 from "node:path";
 import fs74 from "node:fs";
 
 // Packages/Box/src/link/github/graphql.ts
-import { execFile as execFile8, spawn as spawn6 } from "node:child_process";
+import { execFile as execFile8, spawn as spawn7 } from "node:child_process";
 import crypto27 from "node:crypto";
 import fs73 from "node:fs";
 import os8 from "node:os";
@@ -20690,7 +20716,7 @@ ${reader.keyOf(ask)}`;
     if (due.length && !recent(reader.file + ".lock", HOLD) && !recent(started, 1e4)) {
       try {
         writePrivate(started, "");
-        const child = spawn6(process.execPath, [...OWN_RUNTIME, SCRIPT, "box", "github-read", reader.name], { detached: true, stdio: ["pipe", "ignore", "ignore"], cwd: K, env: process.env });
+        const child = spawn7(process.execPath, [...OWN_RUNTIME, SCRIPT, "box", "github-read", reader.name], { detached: true, stdio: ["pipe", "ignore", "ignore"], cwd: K, env: process.env });
         child.stdin?.end(JSON.stringify(due));
         child.unref();
       } catch {}
@@ -24595,7 +24621,7 @@ import fs91 from "node:fs";
 import path92 from "node:path";
 
 // Packages/Box/src/link/areas/integrations.ts
-import { spawn as spawn7 } from "node:child_process";
+import { spawn as spawn8 } from "node:child_process";
 import fs90 from "node:fs";
 import path91 from "node:path";
 
@@ -24915,7 +24941,7 @@ function reconnectLater(engine, id, later) {
   if (!engine)
     return;
   if (answeringOnce() && later === soon) {
-    spawn7(process.execPath, [...OWN_RUNTIME, SCRIPT, "box", "reconnect", id], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
+    spawn8(process.execPath, [...OWN_RUNTIME, SCRIPT, "box", "reconnect", id], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
     return;
   }
   later(() => reconnectEverywhere(engine, id), 2000);
@@ -25285,7 +25311,7 @@ async function* botKeysRoute(context) {
 }
 
 // Packages/Box/src/link/moves/bundle.ts
-import { spawn as spawn8 } from "node:child_process";
+import { spawn as spawn9 } from "node:child_process";
 import crypto35 from "node:crypto";
 import fs92 from "node:fs";
 import path93 from "node:path";
@@ -25297,7 +25323,7 @@ var folderOf3 = (kind, thing) => kind === "bot" ? path93.join(BOTS, thing) : kin
 var directoryOf = (kind, thing) => kind === "bot" ? path93.join(BOTS, thing, "workspace") : CHATS;
 function run2(program, args) {
   return new Promise((resolve, reject) => {
-    const child = spawn8(program, args, { stdio: ["ignore", "ignore", "pipe"], env: { ...process.env, COPYFILE_DISABLE: "1" } });
+    const child = spawn9(program, args, { stdio: ["ignore", "ignore", "pipe"], env: { ...process.env, COPYFILE_DISABLE: "1" } });
     let said = "";
     child.stderr.on("data", (chunk) => {
       said += chunk;
@@ -33601,7 +33627,7 @@ async function stillShown(places, ids) {
 }
 
 // Packages/Box/src/link/work/backups.ts
-import { execFile as execFile11, spawn as spawn9 } from "node:child_process";
+import { execFile as execFile11, spawn as spawn10 } from "node:child_process";
 import crypto45 from "node:crypto";
 import fs113 from "node:fs";
 import path117 from "node:path";
@@ -33628,8 +33654,8 @@ async function gitPipe(given, input, receiving) {
     return REFUSED2;
   return new Promise((resolve) => {
     const options = { env: ENV, stdio: ["pipe", "pipe", "pipe"] };
-    const sender = spawn9("git", from, options);
-    const taker = spawn9("git", to, options);
+    const sender = spawn10("git", from, options);
+    const taker = spawn10("git", to, options);
     let error = "";
     sender.stderr.on("data", (chunk) => {
       error += chunk;
@@ -33990,7 +34016,7 @@ import fs116 from "node:fs";
 import path119 from "node:path";
 
 // Packages/Box/src/link/fence/outside.ts
-import { spawn as spawn11 } from "node:child_process";
+import { spawn as spawn12 } from "node:child_process";
 import crypto46 from "node:crypto";
 import fs115 from "node:fs";
 import os13 from "node:os";
@@ -34087,7 +34113,7 @@ function askBook(prefix, no) {
 }
 
 // Packages/Box/src/link/run-command.ts
-import { spawn as spawn10 } from "node:child_process";
+import { spawn as spawn11 } from "node:child_process";
 import fs114 from "node:fs";
 var PRIVATE = ["BUN_BE_BUN", "BUN_RUNTIME_TRANSPILER_CACHE_PATH"];
 var MOST_KEPT2 = 4 * 1024 * 1024;
@@ -34151,7 +34177,7 @@ process.once("exit", () => {
 function runCommand(command, folder, env, timeout, signal, name = String(Math.random()), ended) {
   return new Promise((resolve) => {
     const shell = env.SHELL && fs114.existsSync(env.SHELL) ? env.SHELL : "/bin/sh";
-    const child = spawn10(shell, ["-lc", command], { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
+    const child = spawn11(shell, ["-lc", command], { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
     if (child.pid)
       running2.set(name, { pid: child.pid, ended });
     let output = Buffer.alloc(0);
@@ -34241,7 +34267,7 @@ async function stopsFor(session, command, minutes = 3, signal) {
     return [];
   const tagged = `kuvo-sandbox ${session} ${commandSum(command)}`;
   const read = await new Promise((resolve) => {
-    const child = spawn11("/usr/bin/log", ["show", "--last", `${minutes}m`, "--style", "ndjson", "--predicate", `sender == "Sandbox" AND eventMessage CONTAINS "${tagged}"`], { stdio: ["ignore", "pipe", "ignore"] });
+    const child = spawn12("/usr/bin/log", ["show", "--last", `${minutes}m`, "--style", "ndjson", "--predicate", `sender == "Sandbox" AND eventMessage CONTAINS "${tagged}"`], { stdio: ["ignore", "pipe", "ignore"] });
     let out = "";
     const timer = setTimeout(() => child.kill("SIGKILL"), 20000);
     signal?.addEventListener("abort", () => child.kill("SIGKILL"), { once: true });
@@ -34656,7 +34682,7 @@ import fs119 from "node:fs";
 import path122 from "node:path";
 
 // Packages/Box/src/link/areas/changes.ts
-import { execFile as execFile12, execFileSync as execFileSync3, spawn as spawn12 } from "node:child_process";
+import { execFile as execFile12, execFileSync as execFileSync3, spawn as spawn13 } from "node:child_process";
 import fs118 from "node:fs";
 import os14 from "node:os";
 import path121 from "node:path";
@@ -34743,7 +34769,7 @@ async function git2(folder, given, changing = false, more = {}, program = "git",
   return new Promise((resolve) => {
     const out = [];
     const said = [];
-    const child = spawn12(program, args, { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn13(program, args, { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"] });
     child.stdout.on("data", (piece) => out.push(piece));
     child.stderr.on("data", (piece) => said.push(piece));
     child.on("error", () => resolve({ ok: false, out: Buffer.alloc(0), said: `${program} isn’t there.` }));
@@ -35003,15 +35029,23 @@ async function commit(directory, message, push, author) {
 ${pushed}`, committed: true } : null;
 }
 var rootOf3 = async (directory) => (await text4(directory, ["rev-parse", "--show-toplevel"]))?.trim() || null;
-async function branchesIn(directory) {
+async function repositoryOf3(directory) {
   const root = await rootOf3(directory);
-  if (!root)
+  if (root)
+    return { root };
+  return (await text4(directory, ["rev-parse", "--git-dir"]))?.trim() ? { root: null } : null;
+}
+async function branchesIn(directory) {
+  const found = await repositoryOf3(directory);
+  if (!found)
     return { repository: false };
-  const listed = await text4(root, ["for-each-ref", "--sort=-committerdate", "--format=%(refname)", "refs/heads"]);
+  const { root } = found;
+  const at = root ?? directory;
+  const listed = await text4(at, ["for-each-ref", "--sort=-committerdate", "--format=%(refname)", "refs/heads"]);
   if (listed === null)
     return null;
   const branch = (ref) => ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : null;
-  const head = (await text4(root, ["symbolic-ref", "--quiet", "HEAD"]))?.trim() ?? "";
+  const head = (await text4(at, ["symbolic-ref", "--quiet", "HEAD"]))?.trim() ?? "";
   return { repository: true, root, current: branch(head), branches: listed.split(`
 `).map(branch).filter((name) => !!name) };
 }
@@ -35022,9 +35056,12 @@ async function switchBranch(directory, branch, create) {
   return refusal(root)(["switch", ...create ? ["-c"] : [], branch]);
 }
 async function statusIn(directory) {
-  const root = await rootOf3(directory);
-  if (!root)
+  const found = await repositoryOf3(directory);
+  if (!found)
     return { repository: false };
+  const { root } = found;
+  if (!root)
+    return { repository: true, root, uncommitted: false };
   const status = await text4(root, ["status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none"]);
   return status === null ? null : { repository: true, root, uncommitted: status.length > 0 };
 }
@@ -35774,7 +35811,7 @@ async function atWork3(target) {
 }
 
 // Packages/Box/src/link/browser/install.ts
-import { execFileSync as execFileSync4, spawn as spawn13 } from "node:child_process";
+import { execFileSync as execFileSync4, spawn as spawn14 } from "node:child_process";
 import crypto48 from "node:crypto";
 import fs121 from "node:fs";
 import os15 from "node:os";
@@ -38568,7 +38605,7 @@ function startBrowserInstall({ now = false, repair = false } = {}) {
   if (decided.outcome === null && SCRIPT) {
     note2({ state: "checking", progress: undefined, message: undefined });
     const flags = [...now ? ["--now"] : [], ...decided.repair ? ["--repair"] : []];
-    const child = spawn13(process.execPath, [...OWN_RUNTIME, SCRIPT, "browser", "install", ...flags], { detached: true, stdio: "ignore", cwd: K, env: process.env });
+    const child = spawn14(process.execPath, [...OWN_RUNTIME, SCRIPT, "browser", "install", ...flags], { detached: true, stdio: "ignore", cwd: K, env: process.env });
     const here = runtimeHere();
     child.on("error", (error) => note2({ state: "failed", id: "id" in here ? here.id : undefined, retryAt: Date.now() + 60000, failures: (readRecord().failures ?? 0) + 1, message: `The browser's setup couldn't start (${error.message}). It tries again in a minute.` }));
     child.unref();
@@ -40629,11 +40666,10 @@ async function listTree(requestPath, limit = TREE_LIMIT) {
   } catch (error) {
     return refusal2(at, error);
   }
-  const listed = await gitOutLater(at, ["-c", "core.quotepath=off", "ls-files", "-z", "--cached", "--others", "--exclude-standard"]);
-  const named = [...new Set((listed ?? "").split("\x00").filter(Boolean))];
+  const named = await gitNamesLater(at, ["-c", "core.quotepath=off", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], limit) ?? [];
   const dated = query.get("dated") === "1";
   if (named.length)
-    return { status: 200, value: await withDates({ path: at, files: named.slice(0, limit), git: true }, dated) };
+    return { status: 200, value: await withDates({ path: at, files: named, git: true }, dated) };
   const asks = at === home ? promptedFolders() : new Set;
   const files = [];
   const walk = async (inside) => {
@@ -40840,7 +40876,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "47a074e0657f";
+var BRIDGE_VERSION = "581dc496a077";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -41167,7 +41203,7 @@ async function workAccounts(sessions, signal) {
 var GLANCE_ROUTE = /^kuvo\/sessions\/glance(\/events)?$/;
 var GLANCE_MOST = 200;
 var repositories = new Map;
-async function repositoryOf3(root, now) {
+async function repositoryOf4(root, now) {
   const kept = repositories.get(root);
   if (kept && now - kept.at < 5 * 60000)
     return kept.repository;
@@ -41231,7 +41267,7 @@ async function glances(ids, targets, signal, now = Date.now) {
     if (made)
       wanted.set(data.id, { ask: { host: made.host, owner: made.owner, repo: made.repo, number: made.number }, url: made.url, number: made.number });
     else if (tree) {
-      const repository = await repositoryOf3(tree.root, now());
+      const repository = await repositoryOf4(tree.root, now());
       const since = madeAt(tree.root);
       if (repository)
         wanted.set(data.id, { ask: { ...repository, branch: tree.branch, ...since ? { since: since - 60000 } : {} } });
@@ -45831,7 +45867,7 @@ async function box(command) {
         return say({ status: 409, message: blocked });
       if (isUpdating())
         return say({ status: 409, message: "It's updating already." });
-      spawn14(process.execPath, [...OWN_RUNTIME, fileURLToPath3(import.meta.url), "update", "--now"], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
+      spawn15(process.execPath, [...OWN_RUNTIME, fileURLToPath3(import.meta.url), "update", "--now"], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
       return say({ status: 202, ...updateStatus(), updating: "checking" });
     }
     case "route": {

@@ -143,22 +143,62 @@ import Testing
         #expect(await Git.hasUncommittedChanges(at: gone), "can't say: as if there were")
     }
 
-    /// This Mac's box from before these routes, running on after an update: no git of this Mac's
-    /// runs; Switch says it waits, Delete says changes may go, the menu lists none.
-    @Test func thisMacsOlderBoxRunsNoGitHere() async throws {
-        try repo.write("a.txt", "one\n")
-        try repo.commitAll()
-        let older = BoxClient(box: BoxClient.mac, transport: LocalBox { _ in
-            AsyncThrowingStream { continuation in
-                continuation.yield(.head(status: 404, headers: [:]))
-                continuation.yield(.body(Data("{}".utf8)))
+    /// A box answering each request with `answers`' next (the last again once they run out).
+    private func answering(_ answers: [(Int, String)], box id: String = BoxClient.mac) -> BoxClient {
+        let next = Answers(answers)
+        return BoxClient(box: id, transport: LocalBox { _ in
+            let (status, body) = next.take()
+            return AsyncThrowingStream { continuation in
+                continuation.yield(.head(status: status, headers: [:]))
+                continuation.yield(.body(Data(body.utf8)))
                 continuation.finish()
             }
         })
+    }
+
+    private final class Answers: @unchecked Sendable {
+        private var left: [(Int, String)]
+        private let lock = NSLock()
+        init(_ answers: [(Int, String)]) { left = answers }
+        func take() -> (Int, String) { lock.withLock { left.count > 1 ? left.removeFirst() : left[0] } }
+    }
+
+    /// How a box from before these routes says it hasn't one: `404 {}` (every box since), or a
+    /// released one's (0.7, 0.8.0-beta.1) `403` in plain words.
+    nonisolated static let olderAnswers: [(Int, String)] = [(404, "{}"), (403, "That isn't available over the link.")]
+
+    /// This Mac's box from before these routes, running on after an update: no git of this Mac's
+    /// runs; Switch says it waits, Delete says changes may go, the menu lists none.
+    @Test(arguments: olderAnswers)
+    func thisMacsOlderBoxRunsNoGitHere(status: Int, body: String) async throws {
+        try repo.write("a.txt", "one\n")
+        try repo.commitAll()
+        let older = answering([(status, body)])
         let there = GitPlace(client: older, path: repo.path, machine: nil)
         #expect(await Git.branches(at: there) == nil)
         #expect(await Git.switching(to: "idea", creating: true, at: there, environment: [:]) == Git.switchAfterUpdate)
         #expect(await Git.hasUncommittedChanges(at: there))
         #expect(try repo.git("branch", "--list", "idea").isEmpty, "nothing switched here")
+    }
+
+    /// Merge into… on a machine whose box is from before it, whichever way that box says so: it
+    /// needs a newer Kuvo Code, never "It said no".
+    @Test(arguments: olderAnswers)
+    func mergeOnAMachinesOlderBoxSaysItNeedsANewerOne(status: Int, body: String) async {
+        let place = GitPlace(client: answering([(status, body)], box: "studio"), path: "/home/ada/site", machine: "studio")
+        let tree = Workspace.Worktree(project: "/home/ada/site", root: "/home/ada/site-work", branch: "work", base: "main")
+        #expect(await tree.mergeBack(at: place, author: [:]) == .failed("studio needs a newer Kuvo Code to merge. It updates by itself overnight, or connect to it from this Mac."))
+    }
+
+    /// The branch menu and Edit Project's setup while this Mac's box is starting: they wait for it,
+    /// rather than show no branches or no setup.
+    @Test func theBranchMenuWaitsWhileThisMacsBoxStarts() async {
+        let client = answering([
+            (503, #"{"message":"Starting.","reason":"starting"}"#),
+            (503, #"{"message":"Starting.","reason":"starting"}"#),
+            (200, #"{"repository":true,"root":"/x","current":"main","branches":["main","idea"]}"#),
+        ])
+        let place = GitPlace(client: client, path: "/x", machine: nil)
+        #expect(await Git.branches(at: place, pause: .zero) == Git.Branches(repository: true, current: "main", branches: ["main", "idea"]))
     }
 }

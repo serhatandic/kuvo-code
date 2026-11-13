@@ -2,7 +2,7 @@
 // starting nothing the repository's own settings name (`../shared/git`), and what takes a
 // while without holding up the bridge.
 
-import { execFile, spawnSync } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import { askedArgs, ownArgs, ownArgsLater } from "../shared/git";
 
 const GIT_ENV = { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" };
@@ -47,15 +47,41 @@ export function gitAsked(folder: string, args: string[], env: Record<string, str
 
 /** [gitIn] without holding up the bridge, for what takes a while in a big worktree. */
 export async function gitLater(folder: string, args: string[]): Promise<string | null> {
-  return (await gitOutLater(folder, args))?.trim() ?? null;
-}
-
-/** [gitLater]'s output as git wrote it (a list of names, where one may start with a space). */
-export async function gitOutLater(folder: string, args: string[]): Promise<string | null> {
   const own = await ownArgsLater(args, folder);
   if (!own) return null;
   return new Promise(resolve => {
-    execFile("git", own, { cwd: folder, encoding: "utf8", env: GIT_ENV, timeout: 60_000, maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => resolve(error ? null : String(stdout ?? "")));
+    execFile("git", own, { cwd: folder, encoding: "utf8", env: GIT_ENV, timeout: 60_000, maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => resolve(error ? null : String(stdout ?? "").trim()));
+  });
+}
+
+/** The names a git command lists in `folder`, each ended by a NUL (`-z`), each once, as many as
+ * `limit`: read as git writes them, and git stopped once there are enough, so a repository of a
+ * million files is never held whole. null when git failed (outside a repository); stopped after ten
+ * minutes (stuck on a lock or a hung disk). */
+export async function gitNamesLater(folder: string, args: string[], limit: number): Promise<string[] | null> {
+  const own = await ownArgsLater(args, folder);
+  if (!own) return null;
+  return new Promise(resolve => {
+    const names = new Set<string>();
+    let rest = "";
+    let enough = false;
+    const child = spawn("git", own, { cwd: folder, env: GIT_ENV, stdio: ["ignore", "pipe", "ignore"], timeout: 600_000 });
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (piece: string) => {
+      if (enough) return;
+      const parts = (rest + piece).split("\0");
+      rest = parts.pop() ?? "";
+      for (const name of parts) {
+        if (name) names.add(name);
+        if (names.size >= limit) {
+          enough = true;
+          child.kill();
+          return;
+        }
+      }
+    });
+    child.on("error", () => resolve(null));
+    child.on("close", code => resolve(enough || code === 0 ? [...names] : null));
   });
 }
 

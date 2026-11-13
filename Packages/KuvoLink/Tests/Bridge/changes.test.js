@@ -845,3 +845,13 @@ test("every file under a folder, for the file filter and @: git's list without w
   assert.equal((await tree(path.join(plain, "index.html"))).status, 404);
   assert.equal((await route("GET", "kuvo/folders/tree")).status, 400, "never the whole home folder by default");
 });
+
+test("a folder whose .git names a bare repository beside it (gitdir: ./.bare) is a repository with no checkout there: its branches, nothing uncommitted", async () => {
+  const folder = fs.mkdtempSync(path.join(root, "bare-layout-"));
+  execFileSync("git", ["clone", "-q", "--bare", repo, path.join(folder, ".bare")], { env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
+  fs.writeFileSync(path.join(folder, ".git"), "gitdir: ./.bare\n");
+  const { status: code, json } = await route("POST", "kuvo/git/branches", { directory: folder });
+  assert.equal(code, 200);
+  assert.deepEqual(json, { repository: true, root: null, current: "main", branches: ["main"] });
+  assert.deepEqual((await route("POST", "kuvo/git/status", { directory: folder })).json, { repository: true, root: null, uncommitted: false });
+});
