@@ -135,13 +135,15 @@ final class AppContainer {
         var resetClaims: [String: any ResetClaimService] = [:]
         for codex in providers.compactMap({ $0 as? CodexProvider }) {
             let id = codex.provider.id
-            resetClaims[id] = CodexResetClaimService(
+            let claims = CodexResetClaimService(
                 authStore: codex.authStore,
                 usageClient: codex.usageClient,
                 refreshAfterClaim: { [weak dataStore] in
                     await ResetClaimRefresh.run(dataStore: dataStore, providerID: id, tag: "codex")
                 }
             )
+            claims.hostCovers = { HostLimits.shared.covers(id) }
+            resetClaims[id] = claims
         }
         for claude in providers.compactMap({ $0 as? ClaudeProvider }) {
             let id = claude.provider.id

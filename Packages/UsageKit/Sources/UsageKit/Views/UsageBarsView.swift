@@ -157,7 +157,11 @@ struct UsageBarsView: View {
                 links: provider.visibleLinks,
                 refresh: hostLimits.refresh,
                 toggleMeterStyle: { dataStore.meterStyle.toggle() },
-                toggleResetDisplay: { dataStore.resetDisplayMode.toggle() }
+                toggleResetDisplay: { dataStore.resetDisplayMode.toggle() },
+                // Its resets (and what its login can't read), after its own rows, before the panel's spend.
+                resets: row.resets.map { ($0, hostLimits.resetFlow(for: row.id)) },
+                unreadable: row.resets == nil ? row.unreadable : nil,
+                extrasEnd: HostLimitData.rows(row, store: dataStore).count
             )
             .padding(.vertical, 4)
         }

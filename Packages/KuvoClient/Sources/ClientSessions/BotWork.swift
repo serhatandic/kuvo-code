@@ -278,6 +278,9 @@ struct Lenient<Value: Decodable>: Decodable {
 /// What a bot can do once you allow it, and what "Always" keeps for it (`work.allowed`).
 public enum WorkAction: String, Codable, Sendable, Hashable, CaseIterable {
     case makeProject, cloneProject
+    /// Using one of a plan's rate-limit resets (an agent's `use_limit_reset`): its Always is kept
+    /// with the account, never with a bot.
+    case resetLimits
 }
 
 /// What you let a bot do without asking, as its box lists it (`allowed` in `kuvo/bots`): what a
@@ -298,7 +301,7 @@ public struct WorkActions: Codable, Sendable, Hashable {
 }
 
 /// What a bot (or another conversation) asks you before it does it (`kuvo/work/asks`): making a
-/// project, or cloning one into a new project.
+/// project, or cloning one into a new project; or using one of a plan's resets (`reset`).
 public struct WorkAsk: Decodable, Sendable, Hashable, Identifiable {
     public let id: String
     public let action: WorkAction
@@ -319,8 +322,32 @@ public struct WorkAsk: Decodable, Sendable, Hashable, Identifiable {
     public let suggested: String?
     /// When it was asked, in ms since 1970.
     public let at: Double
+    /// For a reset: the account, what it has, and where it's used.
+    public let reset: ResetAsk?
 
-    public init(id: String, action: WorkAction, session: String, name: String, bot: String?, project: String, clone: String? = nil, folderName: String, folder: String?, suggested: String? = nil, at: Double) {
+    /// The reset an agent asks to use: the account (its row in the plan limits), how many resets it
+    /// has, what one refills, and the computer of yours that uses it where that isn't the asking one.
+    public struct ResetAsk: Decodable, Sendable, Hashable {
+        public let row: String
+        /// "Codex", "Claude Code (Work)".
+        public let account: String
+        public let service: String
+        public let count: Int
+        public let refills: [String]?
+        public let on: String?
+
+        public init(row: String, account: String, service: String, count: Int, refills: [String]? = nil, on: String? = nil) {
+            self.row = row
+            self.account = account
+            self.service = service
+            self.count = count
+            self.refills = refills
+            self.on = on
+        }
+    }
+
+    public init(id: String, action: WorkAction, session: String, name: String, bot: String?, project: String, clone: String? = nil, folderName: String, folder: String?, suggested: String? = nil, at: Double, reset: ResetAsk? = nil) {
+        self.reset = reset
         self.id = id
         self.action = action
         self.session = session
@@ -335,7 +362,7 @@ public struct WorkAsk: Decodable, Sendable, Hashable, Identifiable {
     }
 
     /// Whether answering it picks where projects go on its box too: none is picked yet.
-    public var needsFolder: Bool { folder == nil }
+    public var needsFolder: Bool { action != .resetLimits && folder == nil }
 }
 
 /// What's asked on a box (`GET kuvo/work/asks`, and each line of its events): those of a kind a
@@ -359,27 +386,50 @@ public enum WorkAskAnswer: String, Encodable, Sendable {
 public enum WorkWords {
     /// The asking card's title: "Allow making a project?"
     public static func askTitle(_ ask: WorkAsk) -> String {
-        ask.action == .cloneProject ? "Allow cloning a project?" : "Allow making a project?"
+        switch ask.action {
+        case .cloneProject: "Allow cloning a project?"
+        case .makeProject: "Allow making a project?"
+        case .resetLimits: "Allow using a reset?"
+        }
     }
 
-    /// Who asks, and for what: "Pixel wants to make Tidepool."
+    /// Who asks, and for what: "Pixel wants to make Tidepool."; "Mira wants to use 1 of 2 resets on Codex."
     public static func askLine(_ ask: WorkAsk) -> String {
-        ask.action == .cloneProject ? "\(ask.name) wants to clone a repository as \(ask.project)." : "\(ask.name) wants to make \(ask.project)."
+        switch ask.action {
+        case .cloneProject: "\(ask.name) wants to clone a repository as \(ask.project)."
+        case .makeProject: "\(ask.name) wants to make \(ask.project)."
+        case .resetLimits: "\(ask.name) wants to use \(ResetWords.oneOf(ask.reset?.count ?? 1)) on \(ask.reset?.account ?? ask.project)."
+        }
     }
 
-    /// What Allow does, under where it goes: "A new git repository, added to your projects."
+    /// What Allow does, under where it goes: "A new git repository, added to your projects."; for a
+    /// reset, what starts over, and where it's used.
     public static func askDoes(_ ask: WorkAsk) -> String {
-        ask.action == .cloneProject ? "Cloned from \(ask.clone ?? "its repository"), added to your projects." : "A new git repository, added to your projects."
+        switch ask.action {
+        case .cloneProject: "Cloned from \(ask.clone ?? "its repository"), added to your projects."
+        case .makeProject: "A new git repository, added to your projects."
+        case .resetLimits: ResetWords.consequence(ask.reset?.refills ?? []) + (ask.reset?.on.map { " " + ResetWords.usedOn($0) } ?? "")
+        }
     }
 
-    /// The button that allows it from now on: "Always for Pixel".
-    public static func always(_ ask: WorkAsk) -> String { "Always for \(ask.name)" }
+    /// The button that allows it from now on: "Always for Pixel"; for a reset, the account's: "Always Allow for Codex".
+    public static func always(_ ask: WorkAsk) -> String {
+        ask.action == .resetLimits ? "Always Allow for \(ask.reset?.account ?? ask.project)" : "Always for \(ask.name)"
+    }
+
+    /// What Always does, for its help: where it's kept, and where it's taken back.
+    public static func alwaysHelp(_ ask: WorkAsk) -> String {
+        ask.action == .resetLimits
+            ? "Let agents use \(ask.reset?.account ?? ask.project)'s resets without asking from now on. Each use still shows in its conversation. Settings › Accounts takes it back."
+            : "Let \(ask.name) \(allowed(ask.action).lowercased()) without asking from now on. Edit Bot › Work takes it back."
+    }
 
     /// What a bot may do without asking, as Edit Bot › Work lists it.
     public static func allowed(_ action: WorkAction) -> String {
         switch action {
         case .makeProject: "Make projects"
         case .cloneProject: "Clone projects"
+        case .resetLimits: "Use resets"
         }
     }
 

@@ -40,6 +40,11 @@ public struct BoxLimits: Decodable, Hashable, Sendable {
 
     public static let path = "kuvo/agents/api/kuvo/limits"
     public static let refreshPath = "kuvo/agents/api/kuvo/limits/refresh"
+    /// Using a reset (`ResetOffer`, `ResetDone`), and whether agents may without asking (feature `limits.resets`).
+    public static let resetPath = "kuvo/agents/api/kuvo/limits/reset"
+    public static let alwaysPath = "kuvo/agents/api/kuvo/limits/reset/always"
+    public static let bridgeResetPath = "api/kuvo/limits/reset"
+    public static let bridgeAlwaysPath = "api/kuvo/limits/reset/always"
     /// The bridge's own path, for a client talking to it directly (the Mac app to its boxes' bridges).
     public static let bridgePath = "api/kuvo/limits"
     public static let bridgeRefreshPath = "api/kuvo/limits/refresh"
@@ -137,27 +142,80 @@ public struct LimitsAccount: Decodable, Hashable, Sendable, Identifiable {
         }
     }
 
-    /// A fact of the plan beyond its windows: so far, an amount spent with no limit to it (`spent`).
+    /// A fact of the plan beyond its windows (PROTOCOL.md, "Plan limits", `extras`), by `kind`:
+    /// `spent` (an amount used, no limit), `capped` (an amount used of `limit`), `left` (an amount
+    /// left), `resets` (the plan's rate-limit resets: `count`, each one's expiry, what one refills,
+    /// whether one can be used and on which computer), `unreadable` (what this sign-in can't read,
+    /// `message`). A kind this copy doesn't know is left out of the list.
     public struct Extra: Decodable, Hashable, Sendable {
         public var id: String
-        /// Its maker's own label ("On-demand").
+        /// Its maker's own label ("On-demand", "Extra Usage", "Rate Limit Resets").
         public var name: String
         public var kind: String
+        /// `spent`, `capped`, `left`: the amount (0 for the others).
         public var amount: Double
-        /// `usd`, `credits` or `requests`.
+        /// `capped`: the most it may come to.
+        public var limit: Double?
+        /// `usd`, `credits` or `requests` ("" for `resets` and `unreadable`).
         public var unit: String
         public var resetsAt: Date?
+        /// `resets`: how many there are.
+        public var count: Int
+        /// `resets`: when each expires, soonest first.
+        public var expiries: [Date]
+        /// `resets`: the windows one refills (`five_hour`, `seven_day`), where its maker says.
+        public var refills: [String]
+        /// `resets`: one can be used now, from one of your computers (`on`).
+        public var usable: Bool
+        /// `resets`: the computer of yours whose sign-in uses one (`here`: the box that answered).
+        public var on: Place?
+        /// `resets`: agents may use one without asking (Always Allow).
+        public var agents: Bool
+        /// `unreadable`: why, in words.
+        public var message: String?
 
-        public init(id: String, name: String, kind: String = "spent", amount: Double, unit: String, resetsAt: Date? = nil) {
+        public struct Place: Decodable, Hashable, Sendable {
+            public var key: String
+            public var name: String
+            public var here: Bool
+
+            public init(key: String, name: String, here: Bool = false) {
+                self.key = key
+                self.name = name
+                self.here = here
+            }
+
+            private enum CodingKeys: String, CodingKey { case key, name, here }
+
+            public init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                key = try container.decodeIfPresent(String.self, forKey: .key) ?? ""
+                name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
+                here = try container.decodeIfPresent(Bool.self, forKey: .here) ?? false
+            }
+        }
+
+        public static let kinds: Set<String> = ["spent", "capped", "left", "resets", "unreadable"]
+
+        public init(id: String, name: String, kind: String = "spent", amount: Double = 0, limit: Double? = nil, unit: String = "", resetsAt: Date? = nil, count: Int = 0,
+                    expiries: [Date] = [], refills: [String] = [], usable: Bool = false, on: Place? = nil, agents: Bool = false, message: String? = nil) {
             self.id = id
             self.name = name
             self.kind = kind
             self.amount = amount
+            self.limit = limit
             self.unit = unit
             self.resetsAt = resetsAt
+            self.count = count
+            self.expiries = expiries
+            self.refills = refills
+            self.usable = usable
+            self.on = on
+            self.agents = agents
+            self.message = message
         }
 
-        private enum CodingKeys: String, CodingKey { case id, name, kind, amount, unit, resetsAt }
+        private enum CodingKeys: String, CodingKey { case id, name, kind, amount, limit, unit, resetsAt, count, expiries, refills, usable, on, agents, message }
 
         public init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -165,12 +223,24 @@ public struct LimitsAccount: Decodable, Hashable, Sendable, Identifiable {
             name = try container.decode(String.self, forKey: .name)
             kind = try container.decode(String.self, forKey: .kind)
             // (A kind this copy doesn't know is left out of the list: `Readable`.)
-            guard kind == "spent" else { throw DecodingError.dataCorruptedError(forKey: .kind, in: container, debugDescription: "an extra this copy doesn't know") }
-            amount = try container.decode(Double.self, forKey: .amount)
-            unit = try container.decode(String.self, forKey: .unit)
+            guard Self.kinds.contains(kind) else { throw DecodingError.dataCorruptedError(forKey: .kind, in: container, debugDescription: "an extra this copy doesn't know") }
+            let amounts = kind == "spent" || kind == "capped" || kind == "left"
+            amount = amounts ? try container.decode(Double.self, forKey: .amount) : 0
+            unit = amounts ? try container.decode(String.self, forKey: .unit) : ""
+            limit = kind == "capped" ? try container.decode(Double.self, forKey: .limit) : nil
             resetsAt = try container.decodeIfPresent(Double.self, forKey: .resetsAt).map(Date.init(milliseconds:))
+            count = kind == "resets" ? Int(try container.decode(Double.self, forKey: .count)) : 0
+            expiries = (try? container.decodeIfPresent([Double].self, forKey: .expiries))?.map(Date.init(milliseconds:)) ?? []
+            refills = (try? container.decodeIfPresent([String].self, forKey: .refills)) ?? []
+            usable = (try? container.decodeIfPresent(Bool.self, forKey: .usable)) ?? false
+            on = try? container.decodeIfPresent(Place.self, forKey: .on)
+            agents = (try? container.decodeIfPresent(Bool.self, forKey: .agents)) ?? false
+            message = kind == "unreadable" ? try container.decode(String.self, forKey: .message) : nil
         }
     }
+
+    /// Its rate-limit resets, where it has them (`resets`).
+    public var resets: Extra? { extras.first { $0.kind == "resets" } }
 
     public struct Problem: Decodable, Hashable, Sendable {
         /// `rate-limited`, `expired`, `unreadable` or `failed`.
@@ -613,4 +683,110 @@ extension LimitsWindow {
         if model == nil, name == nil, minutes == nil { return "id:" + id }
         return "\(model?.lowercased() ?? "")|\(name ?? "")|\(minutes.map(String.init) ?? "")"
     }
+}
+
+
+/// What a box offers on the first ask to use one of a row's resets (`POST …/limits/reset {row}`):
+/// what one more ask, with `confirm`, spends, once.
+public struct ResetOffer: Decodable, Hashable, Sendable {
+    public var confirm: String
+    public var row: String
+    public var service: String
+    /// How many there are now: one of them is used.
+    public var count: Int
+    public var refills: [String]
+    /// The computer whose sign-in uses it.
+    public var on: LimitsAccount.Extra.Place
+    /// Agents may use this account's resets without asking.
+    public var always: Bool
+    /// Until when `confirm` holds.
+    public var expires: Date
+
+    public init(confirm: String, row: String, service: String, count: Int, refills: [String] = [], on: LimitsAccount.Extra.Place, always: Bool = false, expires: Date) {
+        self.confirm = confirm
+        self.row = row
+        self.service = service
+        self.count = count
+        self.refills = refills
+        self.on = on
+        self.always = always
+        self.expires = expires
+    }
+
+    private enum CodingKeys: String, CodingKey { case confirm, row, service, count, refills, on, always, expires }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        confirm = try container.decode(String.self, forKey: .confirm)
+        row = try container.decode(String.self, forKey: .row)
+        service = try container.decodeIfPresent(String.self, forKey: .service) ?? ""
+        count = Int(try container.decode(Double.self, forKey: .count))
+        refills = (try? container.decodeIfPresent([String].self, forKey: .refills)) ?? []
+        on = try container.decode(LimitsAccount.Extra.Place.self, forKey: .on)
+        always = (try? container.decodeIfPresent(Bool.self, forKey: .always)) ?? false
+        expires = Date(milliseconds: try container.decode(Double.self, forKey: .expires))
+    }
+}
+
+/// How using a reset went (`POST …/limits/reset {row, confirm}`): `reset` when it did; else why
+/// not, in the box's words (`message`), and nothing was used unless it says it may still go through.
+public struct ResetDone: Decodable, Hashable, Sendable {
+    /// `reset`, `unconfirmed`, `nothing-to-reset`, `no-reset`, `not-now` or `failed`.
+    public var outcome: String
+    public var until: Date?
+    public var message: String?
+
+    public init(outcome: String, until: Date? = nil, message: String? = nil) {
+        self.outcome = outcome
+        self.until = until
+        self.message = message
+    }
+
+    public var succeeded: Bool { outcome == "reset" }
+
+    private enum CodingKeys: String, CodingKey { case outcome, until, message }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        outcome = try container.decode(String.self, forKey: .outcome)
+        until = try container.decodeIfPresent(Double.self, forKey: .until).map(Date.init(milliseconds:))
+        message = try container.decodeIfPresent(String.self, forKey: .message)
+    }
+}
+
+/// What both apps say of a plan's resets: the row's count, the question and what it does, where
+/// it's used, and how it went.
+public enum ResetWords {
+    /// "2 available".
+    public static func available(_ count: Int) -> String { "\(count) available" }
+
+    /// "1 of 2 resets", "your last reset".
+    public static func oneOf(_ count: Int) -> String { count <= 1 ? "your last reset" : "1 of \(count) resets" }
+
+    /// The confirmation's question: "Use 1 of 2 resets?", "Use your last reset?"
+    public static func question(_ count: Int) -> String { "Use \(oneOf(count))?" }
+
+    /// What it does, from what one refills: "Your 5-hour window starts over now."
+    public static func consequence(_ refills: [String]) -> String {
+        let session = refills.contains("five_hour"), week = refills.contains("seven_day")
+        if session && week { return "Your 5-hour and weekly limits start over now." }
+        if session { return "Your 5-hour window starts over now." }
+        if week { return "Your weekly limit starts over now." }
+        return "Your usage limits start over now."
+    }
+
+    /// Where it's used, when that's another of your computers: "Used on hetzner, which has this account's sign-in."
+    public static func usedOn(_ name: String) -> String { "Used on \(name.isEmpty ? "another of your computers" : name), which has this account's sign-in." }
+
+    /// The help on the control that uses it on another computer.
+    public static func elsewhereHelp(_ name: String) -> String {
+        "This computer's sign-in can't use resets. \(name.isEmpty ? "Another of your computers" : name) can: using one asks it to."
+    }
+
+    /// What went wrong, as the box said it (else in a line).
+    public static func failure(_ done: ResetDone?) -> String { done?.message ?? "Didn't go through. Nothing was used." }
+
+    /// What the row's control says while it works, and once it's done, for VoiceOver.
+    public static let using = "Using a reset"
+    public static let used = "Reset used"
 }

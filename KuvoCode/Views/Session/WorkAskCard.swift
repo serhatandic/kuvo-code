@@ -1,11 +1,14 @@
 import AppKit
+import ClientAccounts
 import ClientDesign
 import ClientSessions
 import SwiftUI
 
 /// What a bot asks you before it does it (making a project, or cloning one): the permission card,
 /// for the bot. Exactly what Allow does, sunk in a well; the first time on a computer, where its
-/// projects go, picked here for every bot there; Deny, Always for the bot, Allow.
+/// projects go, picked here for every bot there; Deny, Always for the bot, Allow. An agent's ask to
+/// use one of a plan's resets (`use_limit_reset`) is the same card: the account, how many resets it
+/// has and what one refills; Don't, Always Allow for the account, Allow.
 struct WorkAskCard: View {
     let ask: WorkAsk
     /// The box it's asked on: "mac", or a machine's id.
@@ -30,11 +33,14 @@ struct WorkAskCard: View {
     private var computer: String { onThisMac ? "this Mac" : app.machines.engine(box)?.machine.name ?? box }
     /// The folder projects go in: as its box has it, else the one picked here.
     private var projectsFolder: String? { ask.folder.map { ($0 as NSString).deletingLastPathComponent } ?? picked }
+    private var isReset: Bool { ask.action == .resetLimits }
+    /// Allow can go: a reset needs nothing more; a project, where it goes.
+    private var canAllow: Bool { isReset || projectsFolder != nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
-                Image(systemName: ask.action == .cloneProject ? "square.and.arrow.down.on.square" : "folder.badge.plus")
+                Image(systemName: isReset ? "arrow.counterclockwise" : ask.action == .cloneProject ? "square.and.arrow.down.on.square" : "folder.badge.plus")
                     .font(.title3)
                     .foregroundStyle(.orange)
                     .frame(width: 24)
@@ -49,14 +55,20 @@ struct WorkAskCard: View {
                 }
             }
 
-            // Exactly what Allow does: where it goes, and what it is.
+            // Exactly what Allow does: where it goes, and what it is; for a reset, the account and
+            // what starts over.
             VStack(alignment: .leading, spacing: 4) {
-                Text(projectsFolder.map { shown(($0 as NSString).appendingPathComponent(ask.folderName)) } ?? "Pick where projects go")
-                    .transcriptCodeFont()
-                    .foregroundStyle(projectsFolder == nil ? .secondary : .primary)
-                    .lineLimit(2)
-                    .truncationMode(.middle)
-                    .textSelection(.enabled)
+                if isReset {
+                    Text(ask.reset.map { "\($0.account) · \(ResetWords.available($0.count))" } ?? ask.project)
+                        .font(.callout.weight(.medium))
+                } else {
+                    Text(projectsFolder.map { shown(($0 as NSString).appendingPathComponent(ask.folderName)) } ?? "Pick where projects go")
+                        .transcriptCodeFont()
+                        .foregroundStyle(projectsFolder == nil ? .secondary : .primary)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
                 Text(WorkWords.askDoes(ask))
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -79,22 +91,24 @@ struct WorkAskCard: View {
             }
 
             HStack(spacing: 8) {
-                Button("Deny", role: .cancel) { send(.deny) }
+                Button(isReset ? "Don’t" : "Deny", role: .cancel) { send(.deny) }
                     .keyboardShortcut(takesKeys ? .cancelAction : nil)
                 Spacer()
                 if isAnswering, sent != .deny {
                     Spinner()
-                        .accessibilityLabel(ask.action == .cloneProject ? "Cloning" : "Making the project")
+                        .accessibilityLabel(isReset ? ResetWords.using : ask.action == .cloneProject ? "Cloning" : "Making the project")
                 }
-                if ask.bot != nil {
+                // (A reset's Always is the account's, whoever asks; a project's, the bot's.)
+                if ask.bot != nil || isReset {
                     Button { send(.always) } label: { Text(WorkWords.always(ask)).lineLimit(1) }
-                        .help("Let \(ask.name) \(WorkWords.allowed(ask.action).lowercased()) without asking from now on. Edit Bot › Work takes it back.")
-                        .disabled(projectsFolder == nil)
+                        .help(WorkWords.alwaysHelp(ask))
+                        .disabled(!canAllow)
                 }
                 Button("Allow") { send(.allow) }
                     .buttonStyle(.glassProminent)
-                    .keyboardShortcut(takesKeys ? .defaultAction : nil)
-                    .disabled(projectsFolder == nil)
+                    // (A reset spends what's yours: never on Return.)
+                    .keyboardShortcut(takesKeys && !isReset ? .defaultAction : nil)
+                    .disabled(!canAllow)
             }
             .buttonStyle(.glass)
             .controlSize(.large)

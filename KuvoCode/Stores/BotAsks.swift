@@ -1,3 +1,4 @@
+import ClientAccounts
 import ClientSessions
 import Foundation
 import KuvoLink
@@ -123,8 +124,8 @@ final class BotAsks {
 
     // A notification for it: this Mac's box tells your phones its own; a machine tells them itself.
     private func tell(_ ask: WorkAsk, on box: String) {
-        let title = ask.action == .cloneProject ? "\(ask.name) asks to clone a project" : "\(ask.name) asks to make a project"
-        let body = ask.folder.map { BoxClient.isThisMac(box) ? ($0 as NSString).abbreviatingWithTildeInPath : $0 } ?? ask.project
+        let title = ask.action == .resetLimits ? "\(ask.name) asks to use a reset" : ask.action == .cloneProject ? "\(ask.name) asks to clone a project" : "\(ask.name) asks to make a project"
+        let body = ask.reset.map { "\($0.account): \(ResetWords.oneOf($0.count))" } ?? ask.folder.map { BoxClient.isThisMac(box) ? ($0 as NSString).abbreviatingWithTildeInPath : $0 } ?? ask.project
         Notifier.shared.notify(session: ask.session, title: title, body: body, push: .init(.ask, ask: ask.id, machine: box == BoxClient.mac ? nil : box, answerable: false))
     }
 

@@ -28,7 +28,51 @@ final class BoxPlanLimits {
 
     init() {
         HostLimits.shared.refresh = { [weak self] in self?.refreshAll() }
+        HostLimits.shared.askReset = { [weak self] row in
+            guard let self else { throw BoxNotRunning() }
+            return try await self.askReset(row)
+        }
+        HostLimits.shared.useReset = { [weak self] row, confirm in
+            guard let self else { throw BoxNotRunning() }
+            return try await self.useReset(row, confirm: confirm)
+        }
         publish()
+    }
+
+    // MARK: Resets
+
+    /// The box whose rows the panel shows, which uses a reset (or asks the computer of yours with
+    /// the account's sign-in to: PROTOCOL.md, "Plan limits", "Resets").
+    private func resetBox() throws -> OpenCodeAPI {
+        guard let api = listing.lister.flatMap({ apis[$0] }) ?? apis[""] else { throw BoxNotRunning() }
+        return api
+    }
+
+    /// Why there's no box to ask.
+    private struct BoxNotRunning: LocalizedError {
+        var errorDescription: String? { "Kuvo Code's box isn't running on this Mac. Try again in a moment." }
+    }
+
+    private struct ResetAsk: Encodable {
+        var row: String
+        var confirm: String?
+    }
+
+    /// What using one of a row's resets would spend, in the words the confirmation shows.
+    func askReset(_ row: String) async throws -> HostResetOffer {
+        let api = try resetBox()
+        let offer = try await api.client.send(try api.client.request("POST", BoxLimits.bridgeResetPath, body: ResetAsk(row: row)), as: DataEnvelope<ResetOffer>.self).data
+        return HostResetOffer(confirm: offer.confirm, question: ResetWords.question(offer.count),
+                              detail: ResetWords.consequence(offer.refills) + (offer.on.here ? "" : " " + ResetWords.usedOn(offer.on.name)))
+    }
+
+    /// Uses it, once (the box keeps it to one however often it's asked with `confirm`); the rows
+    /// are read again as it answers.
+    func useReset(_ row: String, confirm: String) async throws -> HostResetDone {
+        let api = try resetBox()
+        let done = try await api.client.send(try api.client.request("POST", BoxLimits.bridgeResetPath, body: ResetAsk(row: row, confirm: confirm)), as: DataEnvelope<ResetDone>.self, patience: .seconds(90)).data
+        refreshAll()
+        return HostResetDone(succeeded: done.succeeded, message: done.succeeded ? nil : ResetWords.failure(done))
     }
 
     /// A box's bridge is up (again): what it has is read.
@@ -167,8 +211,8 @@ final class BoxPlanLimits {
                     count: window.amount.map { (used: $0.used, limit: $0.limit, unit: $0.unit) }
                 )
             },
-            balance: account.balance.map { HostLimitRow.Balance(left: $0.left, unit: $0.unit) },
-            extras: account.extras.map { HostLimitRow.Extra(id: $0.id, name: $0.name, amount: $0.amount, unit: $0.unit, resetsAt: $0.resetsAt) },
+            balance: account.balance.map { HostLimitRow.Balance(left: $0.left, limit: $0.limit, unit: $0.unit) },
+            extras: account.extras.compactMap(Self.extra),
             notice: account.problem?.message,
             readAt: account.readAt(now: now),
             isLocal: listed.sources.contains { $0.box.isEmpty },
@@ -177,6 +221,31 @@ final class BoxPlanLimits {
             place: listed.sources.contains { $0.box.isEmpty } ? nil : Self.places(listed.sources),
             isAway: account.away
         )
+    }
+
+    /// An account's resets as its own box states them (Settings › Accounts, that box's page), by
+    /// its provider there: whether agents may use them without asking.
+    func resets(of provider: String, on machine: String?) -> LimitsAccount.Extra? {
+        boxes[machine ?? ""]?.accounts.first { $0.provider == provider }?.resets
+    }
+
+    /// Always Allow for an account's resets, on or off, kept with the account on its box.
+    func setAgentsUseResets(_ on: Bool, provider: String, machine: String?) async throws {
+        guard let api = apis[machine ?? ""] else { throw BoxNotRunning() }
+        struct Always: Encodable { var provider: String; var always: Bool }
+        struct Kept: Decodable {}
+        _ = try await api.client.send(try api.client.request("PUT", BoxLimits.bridgeAlwaysPath, body: Always(provider: provider, always: on)), as: DataEnvelope<Kept>.self)
+        read(machine ?? "")
+    }
+
+    /// What a row has beyond its windows, as the panel draws it: its resets used here, or on the
+    /// computer of yours named (`elsewhere`) where this Mac's box doesn't have the sign-in.
+    static func extra(_ extra: LimitsAccount.Extra) -> HostLimitRow.Extra? {
+        guard let kind = HostLimitRow.Extra.Kind(rawValue: extra.kind) else { return nil }
+        let elsewhere = extra.on.flatMap { $0.here ? nil : ($0.name.isEmpty ? "another computer" : $0.name) }
+        return HostLimitRow.Extra(id: extra.id, name: extra.name, kind: kind, amount: extra.amount, limit: extra.limit, unit: extra.unit, resetsAt: extra.resetsAt,
+                                  count: extra.count, expiries: extra.expiries, usable: extra.usable && extra.on != nil,
+                                  elsewhere: elsewhere, elsewhereHelp: elsewhere.map { ResetWords.elsewhereHelp($0) }, message: extra.message)
     }
 
     /// The machines a row is from, by name ("hetzner, lokum").
