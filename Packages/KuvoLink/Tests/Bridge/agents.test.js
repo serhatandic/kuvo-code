@@ -3,13 +3,13 @@
 // `node --test Packages/KuvoLink/Tests/Bridge/*.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { removeAtEnd } from "./at-end.js";
+import { runningAs } from "./running-as.js";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-agents-"));
 process.env.KUVO_HOME = home;
@@ -45,10 +45,9 @@ test("the coding agents' bridge gets what a phone asks, with its password; where
   const bridge = await fakeBridge();
   t.after(bridge.close);
   // A process its record names, whose command line says it's the agents' bridge (on Linux, the
-  // bridge checks).
-  const named = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "kuvo-agents"], { stdio: "ignore" });
-  t.after(() => named.kill());
-  let record = { pid: named.pid, port: bridge.port, password: "agents" };
+  // bridge checks), and its command line is its own before its pid is handed over.
+  const agents = await runningAs("kuvo-agents", t);
+  let record = { pid: agents, port: bridge.port, password: "agents" };
   const handle = link.engineHandler(() => ({ port: 1, password: "engine", version: "2.0.32" }), { name: "my-server" }, () => record);
 
   const info = await ask(handle, "GET", "kuvo/info");
