@@ -1,3 +1,4 @@
+import "../safety"
 import { describe, expect, test } from "bun:test"
 import fixtures from "../fixtures/usage/antigravity-plan-cases.json"
 import legacyFixtures from "../fixtures/usage/antigravity-legacy-plan-cases.json"
@@ -495,14 +496,34 @@ describe("Antigravity own-account stand-in service", () => {
   test("the language server's plan status waiting keeps its windows, and only that call waits", async () => {
     const root = temp(); credential(root)
     const asked: string[] = []
-    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(req) { const method = new URL(req.url).pathname.split("/").pop()!; asked.push(method); return method === "GetUserStatus" ? status(429, { "Retry-After": "3600" }) : Response.json(summary(0.25)) } })
+    let groups = true
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(req) { const method = new URL(req.url).pathname.split("/").pop()!; asked.push(method); return method === "GetUserStatus" ? status(429, { "Retry-After": "3600" }) : Response.json(groups ? summary(0.25) : {}) } })
+    const cloud = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch() { return Response.json(summary(0.5)) } })
     try {
-      const plan = new AntigravityPlan(() => root, () => join(root, "box-usage"), undefined, async () => [{ scheme: "http", port: server.port!, csrf: "fixture-csrf" }], ["http://127.0.0.1:9"])
+      const plan = new AntigravityPlan(() => root, () => join(root, "box-usage"), undefined, async () => [{ scheme: "http", port: server.port!, csrf: "fixture-csrf" }], [cloud.url.origin])
       const reading = await plan.limits.read!(1000)
       expect(reading?.windows.map(w => w.used)).toEqual([0.75, 0.75, 0.75, 0.75])
       expect(reading?.partial).toBe(true)
       expect((await plan.limits.read!(2000))?.windows.length).toBe(4)
       expect(asked).toEqual(["RetrieveUserQuotaSummary", "GetUserStatus", "RetrieveUserQuotaSummary"])
-    } finally { server.stop(true); rmSync(root, { recursive: true, force: true }) }
+      // Its summary without groups: its legacy quotas wait with its status, and the cloud is read.
+      groups = false
+      expect((await plan.limits.read!(3000))?.windows.map(w => w.used)).toEqual([0.5, 0.5, 0.5, 0.5])
+      expect(asked).toEqual(["RetrieveUserQuotaSummary", "GetUserStatus", "RetrieveUserQuotaSummary", "RetrieveUserQuotaSummary"])
+    } finally { server.stop(true); cloud.stop(true); rmSync(root, { recursive: true, force: true }) }
+  })
+
+  test("with every host waiting, the read waits for the soonest, and says whether a request left", async () => {
+    const root = temp(); credential(root)
+    const both = hosts(() => status(429, { "Retry-After": "7200" }), () => status(429, { "Retry-After": "300" }))
+    try {
+      const plan = new AntigravityPlan(() => root, () => join(root, "box-usage"), undefined, async () => [], both.bases)
+      await expect(plan.limits.read!(1000)).rejects.toMatchObject({ kind: "rate-limited", until: 301_000, sent: true })
+      await expect(plan.limits.read!(2000)).rejects.toMatchObject({ kind: "rate-limited", until: 301_000, sent: false })
+      // The daily host's wait over, it alone is asked; the main host still waits.
+      await expect(plan.limits.read!(302_000)).rejects.toMatchObject({ kind: "rate-limited", until: 602_000, sent: true })
+      expect(both.asked.main).toEqual(["retrieveUserQuotaSummary"])
+      expect(both.asked.daily).toEqual(["retrieveUserQuotaSummary", "retrieveUserQuotaSummary"])
+    } finally { both.stop(); rmSync(root, { recursive: true, force: true }) }
   })
 })

@@ -115,19 +115,27 @@ export function antigravitySlots(events: AntigravityEvent[], pricing: Pricing, s
   return slots
 }
 
-function names(folder: string): string[] {
+/** A folder's names; one that's missing is empty, and one that can't be listed is told to `problems` and empty. */
+function names(folder: string, problems?: Map<string, string>): string[] {
   try { return readdirSync(folder).sort() } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return []
-    throw error
+    if (!problems) throw error
+    problems.set(folder, error instanceof Error ? error.message : String(error))
+    return []
   }
 }
 
-/** Same antigravity* surfaces as Swift, but under the agent's isolated .gemini, never the user's. */
-export function antigravityDatabases(geminiHome: string): string[] {
-  return [...new Set(names(geminiHome).filter((name) => name.startsWith("antigravity")).flatMap((name) => {
+/**
+ * Same antigravity* surfaces as Swift, but under the agent's isolated .gemini, never the user's.
+ * With `problems`, as Swift's discovery: a folder that can't be listed is told there and the others
+ * are still listed; a link that can't be resolved stays as it is, so reading it fails and is logged.
+ */
+export function antigravityDatabases(geminiHome: string, problems?: Map<string, string>): string[] {
+  return [...new Set(names(geminiHome, problems).filter((name) => name.startsWith("antigravity")).flatMap((name) => {
     const folder = join(geminiHome, name, "conversations")
-    // (A link to a database that's gone is no database, as for Swift's scanner, and doesn't stop the others.)
-    return names(folder).filter((file) => file.endsWith(".db")).flatMap((file) => { try { return [realpathSync(join(folder, file))] } catch { return [] } })
+    return names(folder, problems).filter((file) => file.endsWith(".db")).map((file) => {
+      try { return realpathSync(join(folder, file)) } catch (error) { if (!problems) throw error; return join(folder, file) }
+    })
   }))].sort()
 }
 
@@ -218,13 +226,20 @@ export class AntigravityHistory {
   /** Each profile's databases that failed, with what was last logged: a failure is logged once, not every round. */
   private failing = new Map<string, Map<string, string>>()
   async scan(geminiHome: string, since: number): Promise<AntigravityEvent[]> {
-    const paths = antigravityDatabases(geminiHome)
+    const problems = new Map<string, string>()
+    const paths = antigravityDatabases(geminiHome, problems)
     let cached = this.databases.get(geminiHome)
     if (!cached) this.databases.set(geminiHome, cached = new Map())
     for (const path of cached.keys()) if (!paths.includes(path)) cached.delete(path)
     let failing = this.failing.get(geminiHome)
     if (!failing) this.failing.set(geminiHome, failing = new Map())
-    for (const path of failing.keys()) if (!paths.includes(path)) failing.delete(path)
+    for (const path of failing.keys()) if (!paths.includes(path) && !problems.has(path)) failing.delete(path)
+    const fail = (path: string, message: string) => {
+      if (failing!.get(path) !== message) this.log(`usage: Antigravity's ${path} couldn't be read: ${message}`)
+      failing!.set(path, message)
+    }
+    // (A folder that can't be listed is left out the same way, as Swift's discovery does.)
+    for (const [folder, message] of problems) fail(folder, message)
     const parts: AntigravityEvent[][] = []
     for (const path of paths) {
       const before = cached.get(path)
@@ -242,9 +257,7 @@ export class AntigravityHistory {
         // As Swift's scanner: one database that can't be read (changing as it's read, no
         // gen_metadata, corrupt) is logged and left out, and the others still count. One read
         // before keeps its last whole answer and old stamp, so it is retried next round.
-        const message = error instanceof Error ? error.message : String(error)
-        if (failing.get(path) !== message) this.log(`usage: Antigravity's database ${path} couldn't be read: ${message}`)
-        failing.set(path, message)
+        fail(path, error instanceof Error ? error.message : String(error))
         if (before) parts.push(before.events)
       }
     }

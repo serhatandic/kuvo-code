@@ -183,7 +183,10 @@ export class AntigravityPlan {
   /** Calls a host turned away for now, by URL, until when (ms): only that call waits, not the read. */
   private held = new Map<string, number>()
   private hold(url: string, error: LimitsProblem, now: number) { this.held.set(url, error.until ?? now + 60 * 60_000) }
-  private holding(url: string, now: number) { return (this.held.get(url) ?? 0) > now }
+  private holding(url: string, now: number) {
+    for (const [each, until] of this.held) if (until <= now) this.held.delete(each)
+    return this.held.has(url)
+  }
   private lastCredential?: Credential
   private lastSignIn?: string
   private lastAccount?: string
@@ -198,6 +201,7 @@ export class AntigravityPlan {
     this.denied.clear(); this.deniedAccess.clear(); this.deniedCSRF.clear(); this.deniedRefresh.clear()
     this.refusalsLoaded = false; this.refusalsDirty = false
     this.lastCredential = undefined; this.lastSignIn = undefined; this.lastAccount = undefined; this.access = undefined
+    this.held.clear()
   }
   private raw(): string | undefined { if (!antigravityTransport.live && this.bases === productionBases) return undefined; try { return readFileSync(join(this.profile(), "antigravity-acp", "acp_token.json"), "utf8") } catch (e: any) { if (e?.code === "ENOENT") return undefined; throw new LimitsProblem("failed", "Antigravity's own sign-in cannot be read here.", undefined, false) } }
   private credential(): Credential | undefined {
@@ -257,6 +261,8 @@ export class AntigravityPlan {
           }
           return { windows, plan, partial: waiting || windows.filter(w => w.id !== "argon-weekly").length < 4, identity: c.identity }
         }
+        // (Its status waiting: this server's legacy quotas wait with it, and the next way is tried.)
+        if (this.holding(local("GetUserStatus"), now)) continue
         try {
           const status = await call("GetUserStatus")
           let legacy = antigravityLegacy(status?.userStatus?.cascadeModelConfigData?.clientModelConfigs ?? [])
@@ -307,17 +313,18 @@ export class AntigravityPlan {
       /** One call to each host in turn until `enough` (by default, the first answer). */
       const across = async (path: string, body: any, options: { authoritative?: boolean; enough?: (answers: any[]) => boolean } = {}) => {
         const answers: any[] = []
-        let refusal: LimitsProblem | undefined, limit: LimitsProblem | undefined, failure: unknown
+        let refusal: LimitsProblem | undefined, until: number | undefined, failure: unknown, sent = false
         for (const base of this.bases) {
           const url = base + path
           if (this.holding(url, now)) {
             waiting = true
-            limit ??= new LimitsProblem("rate-limited", "Antigravity asked this computer to wait.", this.held.get(url), false)
+            until = Math.min(until ?? Infinity, this.held.get(url)!)
             continue
           }
+          sent = true
           try { answers.push(await cloudRequest(url, body)); proven = true }
           catch (error) {
-            if (error instanceof LimitsProblem && error.kind === "rate-limited") { this.hold(url, error, now); waiting = true; if (!limit || (error.until ?? Infinity) < (limit.until ?? Infinity)) limit = error }
+            if (error instanceof LimitsProblem && error.kind === "rate-limited") { this.hold(url, error, now); waiting = true; until = Math.min(until ?? Infinity, this.held.get(url)!) }
             // Only the main host's own refusal speaks for the sign-in; another host's is that host's failure.
             else if (error instanceof LimitsProblem && error.kind === "expired") { if (base === main) refusal = error; failure ??= new LimitsProblem("failed", "An Antigravity quota host refused this call.") }
             else failure ??= error
@@ -325,6 +332,8 @@ export class AntigravityPlan {
           if ((options.enough ?? ((found: any[]) => found.length > 0))(answers)) break
         }
         if (!answers.length && refusal && (options.authoritative ?? true) && !proven) { answers.push(await cloudRequest(main + path, body, refusal)); proven = true }
+        // (A wait, when nothing answered: the soonest any host may be asked again, and whether a request left.)
+        const limit = until === undefined ? undefined : new LimitsProblem("rate-limited", "Antigravity asked this computer to wait.", until, sent)
         return { answers, problem: answers.length ? undefined : limit ?? failure }
       }
       /** A call the read can't do without: nothing answered stops the read (a host's wait first). */

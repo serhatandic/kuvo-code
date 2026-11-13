@@ -10994,7 +10994,10 @@ class AntigravityPlan {
     this.held.set(url, error.until ?? now + 60 * 60000);
   }
   holding(url, now) {
-    return (this.held.get(url) ?? 0) > now;
+    for (const [each, until] of this.held)
+      if (until <= now)
+        this.held.delete(each);
+    return this.held.has(url);
   }
   lastCredential;
   lastSignIn;
@@ -11022,6 +11025,7 @@ class AntigravityPlan {
     this.lastSignIn = undefined;
     this.lastAccount = undefined;
     this.access = undefined;
+    this.held.clear();
   }
   raw() {
     if (!antigravityTransport.live && this.bases === productionBases)
@@ -11139,6 +11143,8 @@ class AntigravityPlan {
             }
           return { windows, plan, partial: waiting || windows.filter((w) => w.id !== "argon-weekly").length < 4, identity: c.identity };
         }
+        if (this.holding(local("GetUserStatus"), now))
+          continue;
         try {
           const status = await call("GetUserStatus");
           let legacy = antigravityLegacy(status?.userStatus?.cascadeModelConfigData?.clientModelConfigs ?? []);
@@ -11212,14 +11218,15 @@ class AntigravityPlan {
       let waiting = false;
       const across = async (path, body, options = {}) => {
         const answers = [];
-        let refusal, limit, failure;
+        let refusal, until, failure, sent = false;
         for (const base of this.bases) {
           const url = base + path;
           if (this.holding(url, now)) {
             waiting = true;
-            limit ??= new LimitsProblem("rate-limited", "Antigravity asked this computer to wait.", this.held.get(url), false);
+            until = Math.min(until ?? Infinity, this.held.get(url));
             continue;
           }
+          sent = true;
           try {
             answers.push(await cloudRequest(url, body));
             proven = true;
@@ -11227,8 +11234,7 @@ class AntigravityPlan {
             if (error instanceof LimitsProblem && error.kind === "rate-limited") {
               this.hold(url, error, now);
               waiting = true;
-              if (!limit || (error.until ?? Infinity) < (limit.until ?? Infinity))
-                limit = error;
+              until = Math.min(until ?? Infinity, this.held.get(url));
             } else if (error instanceof LimitsProblem && error.kind === "expired") {
               if (base === main)
                 refusal = error;
@@ -11243,6 +11249,7 @@ class AntigravityPlan {
           answers.push(await cloudRequest(main + path, body, refusal));
           proven = true;
         }
+        const limit = until === undefined ? undefined : new LimitsProblem("rate-limited", "Antigravity asked this computer to wait.", until, sent);
         return { answers, problem: answers.length ? undefined : limit ?? failure };
       };
       const required = async (path, body) => {
@@ -21996,23 +22003,28 @@ function antigravitySlots(events, pricing, since) {
   }
   return slots;
 }
-function names(folder) {
+function names(folder, problems) {
   try {
     return readdirSync18(folder).sort();
   } catch (error) {
     if (error.code === "ENOENT")
       return [];
-    throw error;
+    if (!problems)
+      throw error;
+    problems.set(folder, error instanceof Error ? error.message : String(error));
+    return [];
   }
 }
-function antigravityDatabases(geminiHome) {
-  return [...new Set(names(geminiHome).filter((name) => name.startsWith("antigravity")).flatMap((name) => {
+function antigravityDatabases(geminiHome, problems) {
+  return [...new Set(names(geminiHome, problems).filter((name) => name.startsWith("antigravity")).flatMap((name) => {
     const folder = join33(geminiHome, name, "conversations");
-    return names(folder).filter((file) => file.endsWith(".db")).flatMap((file) => {
+    return names(folder, problems).filter((file) => file.endsWith(".db")).map((file) => {
       try {
-        return [realpathSync7(join33(folder, file))];
-      } catch {
-        return [];
+        return realpathSync7(join33(folder, file));
+      } catch (error) {
+        if (!problems)
+          throw error;
+        return join33(folder, file);
       }
     });
   }))].sort();
@@ -22096,7 +22108,8 @@ class AntigravityHistory {
   combined = new Map;
   failing = new Map;
   async scan(geminiHome, since) {
-    const paths = antigravityDatabases(geminiHome);
+    const problems = new Map;
+    const paths = antigravityDatabases(geminiHome, problems);
     let cached = this.databases.get(geminiHome);
     if (!cached)
       this.databases.set(geminiHome, cached = new Map);
@@ -22107,8 +22120,15 @@ class AntigravityHistory {
     if (!failing)
       this.failing.set(geminiHome, failing = new Map);
     for (const path of failing.keys())
-      if (!paths.includes(path))
+      if (!paths.includes(path) && !problems.has(path))
         failing.delete(path);
+    const fail = (path, message) => {
+      if (failing.get(path) !== message)
+        this.log(`usage: Antigravity's ${path} couldn't be read: ${message}`);
+      failing.set(path, message);
+    };
+    for (const [folder, message] of problems)
+      fail(folder, message);
     const parts = [];
     for (const path of paths) {
       const before = cached.get(path);
@@ -22129,10 +22149,7 @@ class AntigravityHistory {
         failing.delete(path);
         parts.push(events);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (failing.get(path) !== message)
-          this.log(`usage: Antigravity's database ${path} couldn't be read: ${message}`);
-        failing.set(path, message);
+        fail(path, error instanceof Error ? error.message : String(error));
         if (before)
           parts.push(before.events);
       }
@@ -34528,4 +34545,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 4ecbc5ccc91b7771021ef0363dae94b0fc1352996bb600c29485a306752e8038
+// Built from Packages/Box/src/agents 4377aae29054cc716671229aad6cf0c3529131aac490ae3e4afe23aad8c65634
