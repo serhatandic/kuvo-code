@@ -22,7 +22,7 @@ import { movePast, ownSince, primaryOf, takeNumbersMail, topOf } from "./numbers
 import { sharedMachine } from "../setup/settle";
 import { noteSetupNow } from "../setup/lead";
 import { allItems, OWNER, queueFollowers, refNames, WORK_QUEUE, type Item, type ItemRef } from "./store";
-import { doneOnGitHub, SEEN_FILE, seenOf, withSeen } from "./github";
+import { doneByRead, SEEN_FILE, seenOf, withSeen } from "./github";
 import { forgetTold, keepTold, MOST_TOLD, MOST_TOLD_DONE, readTold, TOLD, toldKeys, toldOf, type Numbering, type ToldItem } from "./told";
 import { factsOf, linkedTo, ownersOf, summaryOf, type Computer, type OwnerFacts } from "./view";
 import { rowsOf } from "../work/elsewhere";
@@ -84,17 +84,23 @@ export async function tellingNow(targets: Target[], link: LinkState | null, sign
   const facts = await factsOf(targets, signal);
   const all = allItems().filter(item => OWNER.test(item.owner) && !item.removed);
   // (An issue closed on GitHub is Done here too: among the latest Done, not the open ones.)
-  const isDone = (item: Item) => item.category === "done" || Boolean(item.source && doneOnGitHub(seenOf(item.source)?.value?.state));
-  const done = all.filter(isDone).sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0)).slice(0, MOST_TOLD_DONE);
+  const isDone = (item: Item) => item.category === "done" || Boolean(item.source && doneByRead(seenOf(item.source)));
+  // (When it was Done: an issue Done on GitHub, when it was closed there or, gone, since when, as
+  // clients show it; it has no Done time of its own here.)
+  const doneTime = (item: Item) => {
+    const read = item.source ? seenOf(item.source) : undefined;
+    return read?.value && doneByRead(read) ? read.value.closedAt ?? read.at : item.doneAt ?? 0;
+  };
+  const done = all.filter(isDone).sort((a, b) => doneTime(b) - doneTime(a)).slice(0, MOST_TOLD_DONE);
   const items = [...all.filter(item => !isDone(item)).sort((a, b) => b.updated.at - a.updated.at).slice(0, MOST_TOLD - done.length), ...done];
   const { owners, titles } = await ownersOf("all", items, facts, targets, cache);
   const told = items.map(item => toldItem(item, facts.working, titles));
   const custom = categories().filter(each => !each.builtIn).map(({ id, name }) => ({ id, name }));
   const content = { items: told, owners, categories: custom, ...numberingNow(link) };
-  // (When GitHub was last asked of an issue is told too, so the others don't ask it again meanwhile:
-  // by the two minutes, so it goes again no more often than that for it.)
-  const byTwo = { ...content, items: told.map(item => (item.seen?.checked !== undefined ? { ...item, seen: { ...item.seen, checked: Math.floor(item.seen.checked / 120_000) } } : item)) };
-  const id = "wqt_" + crypto.createHash("sha256").update(JSON.stringify(byTwo)).digest("base64url").slice(0, 22);
+  // (When GitHub was last asked of an issue goes with it, so the others don't ask again meanwhile,
+  // but isn't a change: what's told goes again only once something else changes.)
+  const unchecked = { ...content, items: told.map(item => (item.seen?.checked !== undefined ? { ...item, seen: { ...item.seen, checked: undefined } } : item)) };
+  const id = "wqt_" + crypto.createHash("sha256").update(JSON.stringify(unchecked)).digest("base64url").slice(0, 22);
   return { id, payload: { told: { id, at: Date.now(), ...content } } };
 }
 

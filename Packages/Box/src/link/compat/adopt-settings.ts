@@ -9,12 +9,12 @@ import { isObject } from "../../shared/json";
 import { addDefaultRules, CONFIG_FILE, deepMerged, KEY_NAME, readSettings, sortedKeys } from "../areas/config";
 import { locked, writePrivate, writeSecret } from "../files";
 import { BOX, BOX_KEYS, CONFIG_LOCK, IS_MAC, K, RUN, shownRoot } from "../home";
+import { launchLocked } from "./launch-lock";
 
 // What a Mac's start used to write: its settings in the global file, the rest beside its keys.
 const GLOBAL_FILE = path.join(K, "config", "opencode", "opencode.json");
 const MAC_SETTINGS = path.join(K, "keys", "settings.json");
 const MAC_KEYS = path.join(K, "keys");
-const LAUNCH_LOCK = path.join(RUN, ".launching");
 
 // Key paths the Mac's start wrote (`<root>/keys/KUVO_KEY_…`), as the box keeps its keys now.
 function boxKeyPaths(value: unknown): unknown {
@@ -33,11 +33,12 @@ function boxKeyPaths(value: unknown): unknown {
 // keys}: the Mac's, as it would have sent them). The launch's lines for them go, so no start writes
 // them back. An engine running now keeps reading what it started with, untouched; the next start
 // reads the box, and clears what's below it (`global-adopted` says the global file came in whole).
-// Under the launch's lock and the settings' own, so no start or change comes between.
+// Under the launch's lock (as the box's scripts take it: a start takes three minutes at most, and one
+// whose holder runs is waited for) and the settings' own, so no start or change comes between.
 // {status: "own" | "adopted", seeded, settings}.
 // COMPAT(0.7 settings): makes the settings an older Mac's start left the box's own. Goes 3 months after 0.8.0.
 export function adoptBox(seed: { settings?: unknown; keys?: unknown } | null | undefined): { status: "own" | "adopted"; seeded?: boolean; settings: unknown } {
-  return locked(LAUNCH_LOCK, () => locked(CONFIG_LOCK, () => {
+  return launchLocked(() => locked(CONFIG_LOCK, () => {
     // A Mac's box has had its own from the start: in a home of its own, its settings file is the one
     // a machine's older Mac wrote (`config`), so nothing's taken in from there.
     if (IS_MAC || fs.existsSync(CONFIG_FILE)) {
@@ -81,5 +82,5 @@ export function adoptBox(seed: { settings?: unknown; keys?: unknown } | null | u
       writePrivate(launchEnv, lines.join("\n"));
     } catch {}
     return { status: "adopted", seeded, settings: readSettings().settings ?? settings };
-  }, { stale: 300_000, wait: 120_000 }));
+  }));
 }

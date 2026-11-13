@@ -35,9 +35,42 @@ const PER_QUERY = 50;
 /** Why `gh` read nothing: it isn't on this computer, it isn't signed in, or it couldn't ask. */
 export type Unread = "missing" | "signed-out" | "failed";
 
-/** `gh api graphql` on `host`: what it answered (GitHub's `data`, with nulls for what it couldn't
- * find or may not see), or why it couldn't ask. */
-export function askGitHub(host: string, query: string, timeout = 30_000): Promise<{ data: Record<string, unknown> } | { unread: Unread }> {
+/** What GitHub answered: its `data`, with nulls for what it couldn't find or may not see; and the
+ * aliases whose nulls say nothing of whether they're there (`held`: GitHub wouldn't answer for them,
+ * an organization's SAML sign-on or IP allow list, say, or didn't say why), with what it said
+ * (`said`, its first error's words). */
+export interface Answered { data: Record<string, unknown>; held?: Set<string>; said?: string }
+
+/** The aliases of `data` GitHub's answer says nothing of whether they're there: only one its
+ * `errors` say it didn't find (`NOT_FOUND`), or that came back as something (not what was asked
+ * for: an issue that's a discussion now, or a repository with no such number in it, a nested null),
+ * is missing; one named for anything else, or null itself with no word why, is held, and every one
+ * is when an error names none (a timeout, GitHub's own trouble). One missing where it was is asked
+ * by its id before it's gone (`Reader.again`), where a null with no word why is held. */
+function heldOf(data: Record<string, unknown>, errors: unknown): Pick<Answered, "held" | "said"> {
+  const held = new Set<string>();
+  const missing = new Set<string>();
+  let all = false;
+  let said: string | undefined;
+  for (const error of Array.isArray(errors) ? errors : []) {
+    if (!isObject(error)) continue;
+    const alias = Array.isArray(error.path) && typeof error.path[0] === "string" ? error.path[0] : null;
+    if (error.type === "NOT_FOUND") {
+      if (alias) missing.add(alias);
+      continue;
+    }
+    said ??= typeof error.message === "string" ? error.message.slice(0, 300) : undefined;
+    if (alias) held.add(alias);
+    else all = true;
+  }
+  for (const [alias, value] of Object.entries(data)) {
+    if (all || (value == null && !missing.has(alias))) held.add(alias);
+  }
+  return held.size ? { held, ...(said ? { said } : {}) } : {};
+}
+
+/** `gh api graphql` on `host`: what it answered, or why it couldn't ask. */
+export function askGitHub(host: string, query: string, timeout = 30_000): Promise<Answered | { unread: Unread }> {
   return new Promise(resolve => {
     execFile("gh", ["api", "graphql", "--hostname", host, "-f", `query=${query}`], {
       // (Never in a repository: what a folder's own settings say has nothing to do with it.)
@@ -47,7 +80,9 @@ export function askGitHub(host: string, query: string, timeout = 30_000): Promis
       // Some not found (a repository gone, an issue it may not see) still answers the rest.
       try {
         const answer = JSON.parse(String(stdout));
-        if (isObject(answer) && isObject(answer.data)) return resolve({ data: answer.data });
+        if (isObject(answer) && isObject(answer.data)) {
+          return resolve({ data: answer.data, ...heldOf(answer.data, answer.errors) });
+        }
       } catch {}
       const code = (error as NodeJS.ErrnoException | null)?.code;
       if (code === "ENOENT") return resolve({ unread: "missing" });
@@ -92,12 +127,23 @@ export interface Reader<Ask, Value> {
   /** Keep what was read when it's found missing later (GitHub says the same of one gone and one
    * this sign-in may no longer see), rather than forget it. */
   keepsLast?: boolean;
+  /** For one found missing where it was: how to ask for it again in the same read (by GitHub's id
+   * for it, wherever it went), before it's taken as gone; null for no other way. */
+  again?(ask: Ask, before: Read<Value> | undefined): Ask | null;
 }
 
 export function readKept<Value>(file: string): Kept<Value> {
   try {
     const kept = JSON.parse(fs.readFileSync(file, "utf8"));
-    return { reads: isObject(kept.reads) ? kept.reads as Kept<Value>["reads"] : {}, hosts: isObject(kept.hosts) ? kept.hosts as Kept<Value>["hosts"] : {} };
+    const reads: Kept<Value>["reads"] = {};
+    for (const [key, read] of Object.entries(isObject(kept.reads) ? kept.reads : {})) {
+      if (!isObject(read) || typeof read.at !== "number") continue;
+      // (As the glance kept a pull request before one reader read GitHub for all, `{at, pull}`:
+      // taken as what was read, and kept in this shape from the next write on. Kept 2 hours at
+      // most, so this goes once no box from before #541 is about.)
+      reads[key] = "value" in read ? read as unknown as Read<Value> : { at: read.at, value: (read.pull ?? null) as Value | null };
+    }
+    return { reads, hosts: isObject(kept.hosts) ? kept.hosts as Kept<Value>["hosts"] : {} };
   } catch {
     return { reads: {}, hosts: {} };
   }
@@ -169,7 +215,8 @@ function keep<Value>(reader: Reader<unknown, Value>, kept: Kept<Value>, now: num
 
 /** What a read found of one thing, kept after what was read of it before. */
 function readOf<Value>(before: Read<Value> | undefined, value: Value | null, keepsLast: boolean | undefined, now: number): Read<Value> {
-  if (value === null && keepsLast && before?.value) return { at: before.at, value: before.value, checked: now, gone: true };
+  // (Found gone is a word of its own: since when, the first read that found it so.)
+  if (value === null && keepsLast && before?.value) return { at: before.gone ? before.at : now, value: before.value, checked: now, gone: true };
   if (before && JSON.stringify(before.value) === JSON.stringify(value) && !before.gone) return { at: before.at, value, checked: now };
   return { at: now, value };
 }
@@ -205,10 +252,46 @@ async function readDue<Ask, Value>(reader: Reader<Ask, Value>, asks: Ask[], now:
           held.set(host, now() + BACK_OFF);
           break;
         }
+        // (One GitHub wouldn't answer for, rather than didn't find, stays as it was, asked now, so
+        // it isn't asked again until it's due.)
+        const values = new Map<string, Value | null>();
+        const heldBack = (key: string) => {
+          const before = kept.reads[key];
+          read.set(key, before ? { ...before, checked: now() } : { at: now(), value: null });
+        };
         part.forEach((ask, index) => {
           const key = reader.keyOf(ask);
-          read.set(key, readOf(kept.reads[key], reader.valueOf(answer.data[`p${index}`], ask), reader.keepsLast, now()));
+          if (answer.held?.has(`p${index}`)) return heldBack(key);
+          values.set(key, reader.valueOf(answer.data[`p${index}`], ask));
         });
+        // (Missing where it was: asked again another way, a moved issue by its id, before it's gone.)
+        const again = part.flatMap(ask => {
+          const key = reader.keyOf(ask);
+          const other = values.has(key) && values.get(key) === null ? reader.again?.(ask, kept.reads[key]) : null;
+          return other ? [other] : [];
+        });
+        let unread = false;
+        if (again.length) {
+          const second = await askGitHub(host, reader.query(again));
+          if ("unread" in second) {
+            // (Not asked: what's kept of those stands, and the host is held off as for any.)
+            unread = true;
+            held.set(host, now() + BACK_OFF);
+            for (const ask of again) values.delete(reader.keyOf(ask));
+          } else {
+            again.forEach((ask, index) => {
+              const key = reader.keyOf(ask);
+              if (second.held?.has(`p${index}`)) {
+                values.delete(key);
+                return heldBack(key);
+              }
+              const value = reader.valueOf(second.data[`p${index}`], ask);
+              if (value !== null) values.set(key, value);
+            });
+          }
+        }
+        for (const [key, value] of values) read.set(key, readOf(kept.reads[key], value, reader.keepsLast, now()));
+        if (unread) break;
       }
     }
     // (Into what's kept now: a read kept meanwhile apart from this one, `keepRead`, stays.)
@@ -296,7 +379,7 @@ export async function readThrough<Ask, Value>(reader: Reader<Ask, Value>, asks: 
  * whatever the back-off (someone asked for it: signed in again, say), and setting it, or lifting
  * it, as it goes; what `valueOf` makes of GitHub's answer kept as the reader's. GitHub's answer, or
  * why it wasn't read. */
-export async function readOne<Ask, Value>(reader: Reader<Ask, Value>, ask: Ask, query: string, valueOf: (data: Record<string, unknown>) => Value | null, now = Date.now): Promise<{ data: Record<string, unknown> } | { unread: Unread }> {
+export async function readOne<Ask, Value>(reader: Reader<Ask, Value>, ask: Ask, query: string, valueOf: (data: Record<string, unknown>) => Value | null, now = Date.now): Promise<Answered | { unread: Unread }> {
   const host = reader.hostOf(ask);
   const lock = reader.file + ".lock";
   let token = takeLock(lock, Date.now());
@@ -310,7 +393,8 @@ export async function readOne<Ask, Value>(reader: Reader<Ask, Value>, ask: Ask, 
     if ("unread" in answer) kept.hosts[host] = Math.max(kept.hosts[host] ?? 0, now() + BACK_OFF);
     else {
       delete kept.hosts[host];
-      kept.reads[reader.keyOf(ask)] = readOf(kept.reads[reader.keyOf(ask)], valueOf(answer.data), reader.keepsLast, now());
+      // (Not one GitHub wouldn't answer for: as it was.)
+      if (!answer.held?.size) kept.reads[reader.keyOf(ask)] = readOf(kept.reads[reader.keyOf(ask)], valueOf(answer.data), reader.keepsLast, now());
     }
     keep(reader as Reader<unknown, Value>, kept, now());
     return answer;

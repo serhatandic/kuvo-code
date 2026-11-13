@@ -84,6 +84,8 @@ public final class LinkURLProtocol: URLProtocol, @unchecked Sendable {
     /// `LinkError` under it, to tell "pair again" from "asleep"), rather than URLError's generic
     /// "The operation couldn't be completed".
     static func failure(for error: Error) -> URLError {
+        // Taken back (`LinkClient.takeBack`): cancelled, as a cancelled task's is.
+        if error is CancellationError { return URLError(.cancelled, userInfo: [NSUnderlyingErrorKey: error]) }
         let link = error as? LinkError
         let code: URLError.Code = switch link {
         case .hostOffline?, .refused?: .cannotConnectToHost

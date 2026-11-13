@@ -5,13 +5,13 @@
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/shells.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { atEnd, removeAtEnd } from "./at-end.js";
+import { runningAs } from "./running-as.js";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-shells-"));
 process.env.KUVO_HOME = home;
@@ -40,10 +40,10 @@ async function runner(running) {
 test("a command a coding agent left running stops, as one the engine runs does; one nobody runs is a 404", async t => {
   const engine = await runner(["sh_engine1"]);
   const bridge = await runner(["shl_agent1"]);
-  // The coding agents' bridge, as it runs (its process says what it is).
-  const process_ = spawn(process.execPath, ["-e", "setInterval(() => {}, 1e6)", "kuvo-agents"], { stdio: "ignore" });
-  t.after(() => process_.kill());
-  const handle = link.engineHandler(() => engine.target, {}, () => ({ ...bridge.target, pid: process_.pid }));
+  // The coding agents' bridge, as it runs (its process says what it is, and its command line is
+  // its own before its pid is handed over).
+  const agents = await runningAs("kuvo-agents", t);
+  const handle = link.engineHandler(() => engine.target, {}, () => ({ ...bridge.target, pid: agents }));
   const stop = async id => {
     const parts = [];
     for await (const part of handle({ method: "POST", path: `kuvo/shell/${id}/stop`, headers: {}, body: Buffer.from("{}") }, {}, undefined)) parts.push(part);
@@ -58,10 +58,9 @@ test("a command a coding agent left running stops, as one the engine runs does; 
 
 test("a coding agent's command stops while the engine is down; with neither there, the engine's said to be starting", async t => {
   const bridge = await runner(["shl_agent2"]);
-  const process_ = spawn(process.execPath, ["-e", "setInterval(() => {}, 1e6)", "kuvo-agents"], { stdio: "ignore" });
-  t.after(() => process_.kill());
+  const agents = await runningAs("kuvo-agents", t);
   let running = true;
-  const handle = link.engineHandler(() => { throw new Error("no record"); }, {}, () => (running ? { ...bridge.target, pid: process_.pid } : null));
+  const handle = link.engineHandler(() => { throw new Error("no record"); }, {}, () => (running ? { ...bridge.target, pid: agents } : null));
   const stop = async id => {
     const parts = [];
     for await (const part of handle({ method: "POST", path: `kuvo/shell/${id}/stop`, headers: {}, body: Buffer.from("{}") }, {}, undefined)) parts.push(part);

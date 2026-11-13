@@ -17,7 +17,7 @@ import {
   type Book, type Item, type ItemEvent, type KeptFile, type Source, type Who,
 } from "./store";
 import { nameOf, refOf } from "./view";
-import { doneOnGitHub, seenOf } from "./github";
+import { doneByRead, seenOf } from "./github";
 import { frozen } from "../moves/records";
 
 /** A session is linked to this many items at most: linking one more drops its oldest link. */
@@ -290,7 +290,7 @@ export function applyFileOps(acting: Acting): void {
 }
 
 // (An issue or a pull request closed on GitHub is Done, whatever category it's kept in.)
-const openIn = (book: Book, owner: string) => book.queue(owner).items.filter(item => !item.removed && item.category !== "done" && !(item.source && doneOnGitHub(seenOf(item.source)?.value?.state))).length;
+const openIn = (book: Book, owner: string) => book.queue(owner).items.filter(item => !item.removed && item.category !== "done" && !(item.source && doneByRead(seenOf(item.source)))).length;
 
 /** A new item in `owner`'s queue: numbered now if there's a number to give, else once one comes;
  * an outside source's (`source`, an issue or a pull request) never. */
@@ -346,7 +346,9 @@ export function changeItem(book: Book, item: Item, fields: Fields, acting: Actin
     const category = categoryFor(fields.category);
     // (An issue's or a pull request's Done is GitHub's: never set, nor left, here.)
     if (item.source && category === "done") refuseDone(nameOf(item));
-    if (item.source && doneOnGitHub(seenOf(item.source)?.value?.state)) refuse(`${nameOf(item)} is closed on GitHub, so it's Done: it's back in its place once it's reopened there.`);
+    if (item.source && doneByRead(seenOf(item.source))) refuse(seenOf(item.source)!.gone
+      ? `${nameOf(item)} is gone from GitHub (or gh here can no longer see it), so it's Done: it's back in its place once GitHub shows it again.`
+      : `${nameOf(item)} is closed on GitHub, so it's Done: it's back in its place once it's reopened there.`);
     if (category !== item.category) {
       item.category = category;
       item.order = placeIn(book.items(), category, { top: fields.top === true });
