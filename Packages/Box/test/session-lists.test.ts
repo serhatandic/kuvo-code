@@ -9,7 +9,7 @@ import { join } from "node:path"
 // as the engine's events come, and resumed from where a client was after its stream dropped.
 
 const { factsOf, listedProjects } = await import("../src/link/lists/rule")
-const { keepList, listPlaceHeard, noteListEvent, workOut, LIST_FILE } = await import("../src/link/lists/sessions")
+const { keepList, listPlaceHeard, listRoute, noteListEvent, readList, workOut, LIST_FILE } = await import("../src/link/lists/sessions")
 const { engineHandler } = await import("../src/link/server/router")
 
 const vectors = JSON.parse(readFileSync(new URL("../../KuvoLink/Vectors/session-lists.json", import.meta.url), "utf8"))
@@ -229,6 +229,72 @@ test("its projects changing changes what's filed where, with no engine read", as
     sessions.delete("ses_tree")
     writeFileSync(join(home, "box", "projects.json"), JSON.stringify({ version: 1, projects: [{ directory: work, folders: [], name: "Work" }] }))
   }
+})
+
+test("an event while its place is first read whole says nothing's gone: the list waits for the read", async () => {
+  rmSync(LIST_FILE, { force: true })
+  const stop = keepList()
+  try {
+    let letGo: () => void = () => {}
+    held = new Promise(done => { letGo = done })
+    const asked = new Promise<void>(done => { heldAsked = done })
+    const reading = listPlaceHeard("engine", target)
+    await asked
+    // (The reviewer's case: a session changing during the first read's paging.)
+    await noteListEvent("engine", target, { type: "session.updated", data: { sessionID: "ses_a" } })
+    workOut()
+    expect(readList()).toBeNull()
+    held = null
+    letGo()
+    await reading
+    const kept = readList()!
+    expect(Object.keys(kept.sessions).sort()).toEqual(["ses_a", "ses_chat"])
+    expect(kept.gone).toEqual({})
+  } finally {
+    held = null
+    stop()
+  }
+})
+
+test("a place asked to be read whole again while it's read is read once more after, never twice at once", async () => {
+  const stop = keepList()
+  try {
+    await listPlaceHeard("engine", target)
+    let letGo: () => void = () => {}
+    held = new Promise(done => { letGo = done })
+    const asked = new Promise<void>(done => { heldAsked = done })
+    const reads = listReads
+    const first = listPlaceHeard("engine", target)
+    await asked
+    add("ses_late", work, 700)
+    const second = listPlaceHeard("engine", target)
+    held = null
+    letGo()
+    await Promise.all([first, second])
+    // (The one under way, then the one asked for meanwhile, after it.)
+    expect(listReads - reads).toBe(2)
+    expect(Object.keys(readList()!.sessions)).toContain("ses_late")
+  } finally {
+    held = null
+    sessions.delete("ses_late")
+    stop()
+  }
+})
+
+test("a coding agents' bridge that doesn't answer holds nothing up: the engine's are listed, the bridge's as last read", async () => {
+  const silent = { port: 9, password: "pw" } as any
+  const pieces: any[] = []
+  const context = { request: { method: "GET", path: "kuvo/sessions/list", headers: {} }, signal: undefined, readEngine: () => target, bridge: () => silent,
+    json: (status: number, value: unknown) => [{ head: { status, headers: {} } }, { body: Buffer.from(JSON.stringify(value)) }] } as any
+  for await (const piece of listRoute(context, "kuvo/sessions/list".match(/^kuvo\/sessions\/list(\/events)?$/)!)) pieces.push(piece)
+  expect(pieces[0].head.status).toBe(200)
+  const answer = JSON.parse(Buffer.from(pieces[1].body).toString())
+  expect(answer.pending).toEqual(["bridge"])
+  expect(Object.keys(answer.sessions)).toContain("ses_a")
+  // An engine that isn't there: no list rather than one without its sessions.
+  const none: any[] = []
+  for await (const piece of listRoute({ ...context, readEngine: () => { throw new Error("no engine") } }, "kuvo/sessions/list".match(/^kuvo\/sessions\/list(\/events)?$/)!)) none.push(piece)
+  expect((none[0] as any).head.status).toBe(503)
 })
 
 test("a stream tells each change as a line of what changed", async () => {

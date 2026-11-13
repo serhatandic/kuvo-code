@@ -8900,6 +8900,9 @@
          "updated?": "number"
         }
        }
+      },
+      "pending?": {
+       "list": "string"
       }
      }
     },
@@ -8971,6 +8974,9 @@
          "updated?": "number"
         }
        }
+      },
+      "pending?": {
+       "list": "string"
       }
      }
     },

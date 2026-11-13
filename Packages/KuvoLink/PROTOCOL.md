@@ -1290,17 +1290,24 @@ the branch, the model, effort and account, and the pull request with its checks 
 What each session is, and where every client's lists show it (`sessions.list`): the box decides it
 from its engine's and coding agents' sessions, so a client draws its sidebar from facts and works
 nothing out. A client needs a box with `sessions.list`: the app brings a box up to date before it
-uses it ("Updating…"), so no client keeps an older way.
+uses it ("Updating…"), so no client keeps an older way; a box that hasn't the feature, or answers
+`503`, leaves a client's lists waiting ("Loading sessions") until the update gate has brought it up
+to date (#679).
 
 - `GET kuvo/sessions/list[?since=<at>]` → `{at, full?, sessions: {<id>: facts}, gone?: [<id>],
-  projects: {<folder>: {name?, updated?}}}`. `…/events[?since=<at>]` (ndjson) sends that now, then
+  projects: {<folder>: {name?, updated?}}, pending?: ["bridge"]}`. `…/events[?since=<at>]` (ndjson) sends that now, then
   a line as anything in it changes; through `box route` (a machine reached over SSH) it answers its
   first line, and a client reads it again as that machine's sessions change and every half minute.
-  `503 {"message"}` with neither the engine nor the coding agents' bridge answering; `405` for
-  anything but `GET`.
+  `503 {"message"}` while the engine can't be read; `405` for anything but `GET`. `pending`: the
+  coding agents' bridge runs but couldn't be read yet, so its sessions are as last read (none are
+  said gone for it).
+- The box keeps the list in `run/lists/sessions.json`: its long-running process works it out as its
+  engine's and bridge's events come, from each read whole as it's heard (and every five minutes),
+  and only once the engine's has been; a `box route` reads that file while that process runs, and
+  otherwise reads the engine itself and keeps what it read there.
 - `at` says where the list is; `since` resumes from it: only the sessions that changed after it,
   and `gone`, those deleted since. A cursor the box can't resume from (it restarted, or the change
-  is older than the day and 2000 deletions it keeps) gets the whole list, `full: true`, in place of
+  is older than the day and 2000 deletions it keeps, or its file went) gets the whole list, `full: true`, in place of
   what the client had. `projects` is whole in every line.
 - Facts, each flag left out where it isn't: `kind`, `project` (a `project` session's), `directory`,
   `title?`, `created`, `updated` (ms; the lists' order), `parent?` (a `subagent`'s session),

@@ -35347,16 +35347,27 @@ function readList(file = LIST_FILE) {
     return null;
   }
 }
-function commit(listed, now = Date.now(), file = LIST_FILE) {
+function commit(listed, now = Date.now(), file = LIST_FILE, owner) {
   return locked(file + ".lock", () => {
     const list = readList(file) ?? { epoch: `${now.toString(36)}-${process.pid.toString(36)}`, seq: 0, floor: 0, sessions: {}, gone: {}, projects: {} };
     const next = list.seq + 1;
     let changed = false;
+    let noted = list.owner !== owner;
+    if (owner === undefined)
+      delete list.owner;
+    else
+      list.owner = owner;
     for (const [id, facts] of Object.entries(listed.sessions)) {
       const before = list.sessions[id];
-      if (before && JSON.stringify(before.facts) === JSON.stringify(facts))
+      const place = listed.placeOf?.[id];
+      if (before && JSON.stringify(before.facts) === JSON.stringify(facts)) {
+        if (place && before.place !== place) {
+          before.place = place;
+          noted = true;
+        }
         continue;
-      list.sessions[id] = { seq: next, facts };
+      }
+      list.sessions[id] = { seq: next, facts, ...place ? { place } : {} };
       delete list.gone[id];
       changed = true;
     }
@@ -35371,8 +35382,21 @@ function commit(listed, now = Date.now(), file = LIST_FILE) {
       list.projects = listed.projects;
       changed = true;
     }
-    if (!changed)
+    const pending = listed.pending?.length ? [...listed.pending].sort() : undefined;
+    if (JSON.stringify(list.pending) !== JSON.stringify(pending)) {
+      if (pending)
+        list.pending = pending;
+      else
+        delete list.pending;
+      changed = true;
+    }
+    if (!changed) {
+      if (noted)
+        try {
+          writePrivate(file, JSON.stringify(list));
+        } catch {}
       return list;
+    }
     list.seq = next;
     const gone = Object.entries(list.gone).sort((a, b) => b[1].seq - a[1].seq);
     for (const [index, [id, { seq, at }]] of gone.entries()) {
@@ -35394,10 +35418,11 @@ function answerFrom(list, since) {
   for (const [id, entry] of Object.entries(list.sessions))
     if (whole || entry.seq > from.seq)
       sessions[id] = entry.facts;
+  const pending = list.pending?.length ? { pending: list.pending } : {};
   if (whole)
-    return { at: cursorOf(list), full: true, sessions, projects: list.projects };
+    return { at: cursorOf(list), full: true, sessions, projects: list.projects, ...pending };
   const gone = Object.entries(list.gone).filter(([, entry]) => entry.seq > from.seq).map(([id]) => id).sort();
-  return { at: cursorOf(list), sessions, ...gone.length ? { gone } : {}, projects: list.projects };
+  return { at: cursorOf(list), sessions, ...gone.length ? { gone } : {}, projects: list.projects, ...pending };
 }
 function keepList() {
   keeping2 = true;
@@ -35423,20 +35448,41 @@ function keepList() {
     places3.clear();
     placeTargets.clear();
     reading3.clear();
+    wholeReads.clear();
   };
 }
 var placeTargets = new Map;
 var reading3 = new Map;
-function ready2() {
-  return places3.has("engine") && (places3.has("bridge") || bridgeTarget() === null);
-}
+var wholeReads = new Map;
 function listPlaceHeard(name, target) {
   if (!keeping2)
     return Promise.resolve();
   placeTargets.set(name, target);
   return readPlace(name, target);
 }
-async function readPlace(name, target) {
+function readPlace(name, target) {
+  const under = wholeReads.get(name);
+  if (under) {
+    under.again = true;
+    under.target = target;
+    return under.done;
+  }
+  const read = { done: Promise.resolve(), again: false, target };
+  read.done = (async () => {
+    try {
+      do {
+        read.again = false;
+        await readOnce(name, read.target);
+      } while (read.again && keeping2);
+    } finally {
+      if (wholeReads.get(name) === read)
+        wholeReads.delete(name);
+    }
+  })();
+  wholeReads.set(name, read);
+  return read.done;
+}
+async function readOnce(name, target) {
   const touched = new Set;
   reading3.set(name, touched);
   let sessions = null;
@@ -35478,10 +35524,10 @@ async function noteListEvent(name, target, event) {
   const id = event.data?.sessionID ?? event.data?.info?.id;
   if (typeof id !== "string" || !id.startsWith("ses"))
     return;
-  if (!places3.has(name))
-    places3.set(name, { sessions: new Map, running: new Set });
-  const place = places3.get(name);
   reading3.get(name)?.add(id);
+  const place = places3.get(name);
+  if (!place)
+    return;
   if (event.type === "session.deleted") {
     place.sessions.delete(id);
     place.running.delete(id);
@@ -35495,7 +35541,7 @@ async function noteListEvent(name, target, event) {
     return;
   scheduleWorkOut();
   await readOne3(name, target, id);
-  workOut();
+  scheduleWorkOut();
 }
 var workOutTimer;
 function scheduleWorkOut() {
@@ -35507,23 +35553,40 @@ function scheduleWorkOut() {
   }, 50);
   workOutTimer.unref?.();
 }
+var pendingPlaces = () => places3.has("bridge") || bridgeTarget() === null ? [] : ["bridge"];
+function withPending(sessions, placeOf, running, pending, before) {
+  const box = placeNow(running, sessions);
+  const listed = listOfSessions(sessions, box).sessions;
+  if (pending.length && before) {
+    for (const [id, entry] of Object.entries(before.sessions)) {
+      if (id in listed || !entry.place || !pending.includes(entry.place))
+        continue;
+      listed[id] = entry.facts;
+      placeOf[id] = entry.place;
+    }
+  }
+  return { sessions: listed, projects: listedProjects(listed, box), placeOf, pending };
+}
 function workOut(now = Date.now()) {
   if (!keeping2)
     return;
   clearTimeout(workOutTimer);
   workOutTimer = undefined;
-  if (!ready2())
+  if (!places3.has("engine"))
     return;
   const sessions = [];
+  const placeOf = {};
   const running = new Set;
-  for (const place of places3.values()) {
-    for (const session of place.sessions.values())
+  for (const [name, place] of places3) {
+    for (const session of place.sessions.values()) {
       sessions.push(session);
+      placeOf[session.id] ??= name;
+    }
     for (const id of place.running)
       running.add(id);
   }
   const before = latest2;
-  latest2 = commit(listOfSessions(sessions, placeNow(running, sessions)), now);
+  latest2 = commit(withPending(sessions, placeOf, running, pendingPlaces(), before ?? readList()), now, LIST_FILE, process.pid);
   if (before && before.epoch === latest2.epoch && before.seq === latest2.seq)
     return;
   for (const tell of [...listFollowers])
@@ -35537,30 +35600,51 @@ async function readPlaces(context) {
     engine = context.readEngine();
   } catch {}
   const bridge = context.bridge();
-  await Promise.all([engine ? readPlace("engine", engine) : null, bridge ? readPlace("bridge", bridge) : null]);
+  if (bridge && !places3.has("bridge"))
+    readPlace("bridge", bridge).catch(() => {});
+  if (engine && !places3.has("engine"))
+    await readPlace("engine", engine);
 }
 async function listNow(context, signal) {
   if (keeping2) {
-    if (!ready2())
+    if (!places3.has("engine") || context.bridge() && !places3.has("bridge"))
       await readPlaces(context);
-    if (!ready2())
+    if (!places3.has("engine"))
       return null;
     workOut();
     return latest2;
   }
-  const sessions = [];
-  const running = new Set;
-  let read = false;
-  for (const target of targetsOf(context)) {
-    const [listed, active] = await Promise.all([readSessions(target, signal), readRunning(target, signal)]);
-    if (!listed)
-      return null;
-    read = true;
-    sessions.push(...listed);
-    for (const id of active ?? [])
-      running.add(id);
+  const file = readList();
+  if (file?.owner && file.owner !== process.pid && processRuns(file.owner, "kuvo-link"))
+    return file;
+  let engine;
+  try {
+    engine = context.readEngine();
+  } catch {
+    return null;
   }
-  return read ? commit(listOfSessions(sessions, placeNow(running, sessions))) : null;
+  const bridge = context.bridge();
+  const [engineSessions, engineRunning, bridgeSessions, bridgeRunning] = await Promise.all([
+    readSessions(engine, signal),
+    readRunning(engine, signal),
+    bridge ? readSessions(bridge, signal) : Promise.resolve(null),
+    bridge ? readRunning(bridge, signal) : Promise.resolve(null)
+  ]);
+  if (!engineSessions)
+    return null;
+  const sessions = [...engineSessions];
+  const placeOf = Object.fromEntries(engineSessions.map((each) => [each.id, "engine"]));
+  if (bridgeSessions) {
+    for (const each of bridgeSessions)
+      if (!(each.id in placeOf)) {
+        sessions.push(each);
+        placeOf[each.id] = "bridge";
+      }
+  }
+  const wasRunning = (name) => Object.entries(file?.sessions ?? {}).filter(([, entry]) => entry.place === name && entry.facts.running).map(([id]) => id);
+  const running = new Set([...engineRunning ?? wasRunning("engine"), ...bridgeRunning ?? (bridge ? wasRunning("bridge") : [])]);
+  const pending = bridge && !bridgeSessions ? ["bridge"] : [];
+  return commit(withPending(sessions, placeOf, running, pending, file));
 }
 async function* listRoute(context, match) {
   const { request, signal, json } = context;
@@ -39581,7 +39665,7 @@ import fs124 from "node:fs";
 import path128 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "a2e5b4b2edf5";
+var BRIDGE_VERSION = "e0c8cec5bd4a";
 
 // Packages/Box/src/link/rehome/rewrite.ts
 var NO_REWRITE = {

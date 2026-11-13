@@ -133,13 +133,15 @@ export const SESSION_FACTS = object({
 export const LISTED_PROJECT = object({ "name?": string, "updated?": number });
 
 /** The list (`kuvo/sessions/list`): where it's at (`since` resumes from it), whether it's whole
- * (`full`) or only what changed since, the sessions by id, those gone since, and its projects. */
+ * (`full`) or only what changed since, the sessions by id, those gone since, its projects, and the
+ * places it couldn't read now (`bridge`: the coding agents' sessions as they were last read). */
 export const SESSION_LIST = object({
   at: string,
   "full?": bool,
   sessions: map(SESSION_FACTS),
   "gone?": list(string),
   projects: map(LISTED_PROJECT),
+  "pending?": list(string),
 });
 
 export type SessionKind = (typeof SESSION_KINDS)[number];
