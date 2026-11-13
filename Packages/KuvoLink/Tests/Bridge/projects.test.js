@@ -119,7 +119,7 @@ test("a project added from any client is kept on the box as it's named, and chan
   assert.equal((await ask(handle, "POST", `kuvo/projects?directory=${encodeURIComponent(shop)}`, {})).status, 405);
 });
 
-test("a saved terminal project is returned as an ordinary project and cleaned on disk", async () => {
+test("a saved terminal project is returned as an ordinary project and cleaned on its next edit", async () => {
   const file = path.join(home, "box", "projects.json");
   const project = { directory: shop, name: "Shop", folders: [blog], run: "bun dev", removed: true };
   fs.writeFileSync(file, JSON.stringify({ version: 1, projects: [{ ...project, terminal: "opencode" }] }));
@@ -127,7 +127,12 @@ test("a saved terminal project is returned as an ordinary project and cleaned on
   const answer = await ask(handle, "GET", "kuvo/projects");
   assert.equal(answer.status, 200);
   assert.deepEqual(answer.json.projects, [project]);
-  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { version: 1, projects: [project] });
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { version: 1, projects: [{ ...project, terminal: "opencode" }] });
+  const edited = { ...project, name: "Shop renamed" };
+  const saved = await ask(handle, "PUT", `kuvo/projects?directory=${encodeURIComponent(shop)}`, { name: edited.name, removed: true });
+  assert.equal(saved.status, 200);
+  assert.deepEqual(saved.json.project, edited);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { version: 1, projects: [edited] });
 });
 
 test("Remove Project archives every session of it, its worktree's, its other folders', those filed under it from a subfolder and older ones too, and keeps its settings for when one comes back", async t => {
