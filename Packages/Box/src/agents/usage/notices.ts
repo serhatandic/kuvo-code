@@ -102,7 +102,7 @@ export function takeStates(given: unknown): Record<string, NoticeState> {
   if (!given || typeof given !== "object" || Array.isArray(given)) return {}
   return Object.fromEntries(Object.entries(given).slice(0, 30).flatMap(([id, value]) => {
     const s = value as NoticeState
-    return s && Array.isArray(s.fired) && s.fired.every(m => milestones.includes(m)) && ["untracked", "healthy", "close", "runningOut"].includes(s.previous) && typeof s.under === "boolean" && typeof s.primed === "boolean" && (s.resetsAt === undefined || Number.isFinite(s.resetsAt)) ? [[id, s]] : []
+    return s && Array.isArray(s.fired) && s.fired.every(m => milestones.includes(m)) && ["untracked", "healthy", "close", "runningOut"].includes(s.previous) && typeof s.under === "boolean" && typeof s.primed === "boolean" && (s.resetsAt === undefined || Number.isFinite(s.resetsAt)) && (s.read === undefined || Number.isFinite(s.read)) ? [[id, s]] : []
   }))
 }
 

@@ -659,10 +659,10 @@ export class Limits {
     const toggles = settings?.notifications ?? { underTenPercent: false, healthyToClose: false, closeToRunningOut: false }
     const disabled = settings?.providers?.known.includes(account.service) && !settings.providers.enabled.includes(account.service)
     if (disabled) { entry.noticeState = {}; return }
-    const peer = entry.identity ? this.peers?.freshest(account.service, entry.identity) : undefined
+    const peers = entry.identity ? this.peers?.noticeStates(account.service, entry.identity) ?? [] : []
     entry.noticeState ??= {}
     const siblings = entry.identity ? [...this.entries.values()].filter(e => e !== entry && e.identity === entry.identity) : []
-    const candidates = [peer?.noticeState, ...siblings.map(e => e.noticeState)]
+    const candidates = [...peers, ...siblings.map(e => e.noticeState)]
     for (const candidate of candidates) for (const [id, state] of Object.entries(takeStates(candidate))) {
       if ((state.read ?? 0) > (entry.noticeState[id]?.read ?? -1)) entry.noticeState[id] = structuredClone(state)
     }

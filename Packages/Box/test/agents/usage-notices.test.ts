@@ -62,3 +62,14 @@ test("notice peers preserve facts, strip from vouched boxes", async () => {
   peers.take("peer", sent[0].mail); expect(peers.notices()).toEqual(f.limits.notices())
   peers.take("vouched", sent[0].mail); expect(peers.notices()).toEqual(f.limits.notices())
 })
+test("large notice history cannot evict the current limits account from peer mail", async () => {
+  const f = fixture(); await f.limits.tick(); f.advance(0.95); await f.limits.tick()
+  const account = f.limits.list(false)[0]
+  account.notices = Array.from({length:100}, (_,i) => ({ ...f.limits.notices()[0], id:`usage_${i}`, row:"a".repeat(300),window:"w".repeat(200) }))
+  const sent: LimitsMail[] = []
+  const limits = { list: () => [account] } as unknown as Limits
+  new LimitsPeers(limits, {followed:true,send:(_,mail)=>{sent.push(mail)}}, {told:true,own:()=>({key:"own",name:"own"}),peerBoxes:()=>[{key:"peer",name:"peer"}],listen:()=>{},isPeer:()=>true}).tell(true)
+  expect(sent[0].accounts).toHaveLength(1)
+  expect(sent[0].accounts[0].windows).toEqual(account.windows)
+  expect(Buffer.byteLength(JSON.stringify(sent[0]))).toBeLessThan(40000)
+})

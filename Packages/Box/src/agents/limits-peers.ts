@@ -12,7 +12,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 import { kinds, type AgentKind } from "./accounts"
 import type { AccountLimits, LimitedAccount, LimitExtra, LimitWindow, Limits, LimitsService } from "./limits"
-import { takeNotices, takeStates, type UsageNotice } from "./usage/notices"
+import { takeNotices, takeStates, type UsageNotice, type NoticeState } from "./usage/notices"
 import { emit } from "./events"
 import { limitRows, type LimitRow, type LimitsBox } from "./limits-rows"
 
@@ -112,6 +112,12 @@ export class LimitsPeers {
       }
     }
     return newest
+  }
+
+  /** Per-window decisions, including turn-only accounts whose maker was never checked here. */
+  noticeStates(service: LimitsService, identity: string): Record<string, NoticeState>[] {
+    if (!this.directory.told || !this.directory.isPeer) return []
+    return [...this.peers].flatMap(([key, kept]) => this.directory.isPeer!(key) ? kept.accounts.filter(a => a.service === service && a.identity === identity).map(a => a.noticeState ?? {}) : [])
   }
 
   /** Only direct peers' decided notices: vouched-for computers never send or receive these. */
@@ -224,7 +230,13 @@ export class LimitsPeers {
 
   /** This box's own accounts, as many as fit in one mail (with up to 200 rows' ids asked of it besides). */
   private shared(): AccountLimits[] {
-    const accounts = this.limits.list(false)
+    const accounts = structuredClone(this.limits.list(false))
+    // History must never push an otherwise small account's current limits out of the mail.
+    while (Buffer.byteLength(JSON.stringify(accounts)) > MOST_BYTES - 200 * 60) {
+      const largest = accounts.filter(a => a.notices?.length).sort((a, b) => b.notices!.length - a.notices!.length)[0]
+      if (!largest) break
+      largest.notices!.shift()
+    }
     while (accounts.length && Buffer.byteLength(JSON.stringify(accounts)) > MOST_BYTES - 200 * 60) accounts.pop()
     return accounts
   }
