@@ -340,11 +340,11 @@ final class Workspace {
     }
 
     /// A session `box` just made, shown at once where its start answer says (in Chats, or in the
-    /// project it names, else `project`'s), until its list says. (A box not listed yet: its sessions
+    /// project of its worktree, else `project`'s), until its list says. (A box not listed yet: its sessions
     /// show as last filed, this one with them.)
     private func noteMade(_ session: Session, as started: SessionStart.Started, in project: String, on box: String) {
         guard var listing = sessionLists[box] else { return }
-        let filed = started.project ?? started.worktree?.project ?? Self.onBox(projectDirectory(project))
+        let filed = started.worktree?.project ?? Self.onBox(projectDirectory(project))
         listing.noteMade(session.id, facts: .init(kind: started.isChat ? .chat : .project, project: started.isChat ? nil : filed, directory: Self.onBox(session.location.directory),
                                                   title: session.title, created: session.time.created, updated: session.time.updated))
         sessionLists[box] = listing

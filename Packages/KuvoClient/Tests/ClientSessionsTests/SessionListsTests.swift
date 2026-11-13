@@ -61,4 +61,37 @@ struct SessionListsTests {
         #expect(SessionLists.route(since: "e.3") == "kuvo/sessions/list?since=e.3")
         #expect(SessionLists.eventsRoute() == "kuvo/sessions/list/events")
     }
+
+    /// A session a client just started shows at once, as its box's start answer says, until its list
+    /// says (a line naming it, or a whole one without it); one its list already names stays as listed.
+    @Test func aSessionJustMadeShowsUntilItsListSays() throws {
+        func line(_ json: String) throws -> SessionLists.Line { try JSONDecoder().decode(SessionLists.Line.self, from: Data(json.utf8)) }
+        var listing = SessionLists.Listing()
+        listing.take(try line(#"{"at":"e.1","full":true,"sessions":{"ses_a":{"kind":"project","project":"/p","directory":"/p","created":1,"updated":2}},"projects":{}}"#))
+        listing.noteMade("ses_new", facts: .init(kind: .chat, directory: "/c", updated: 5))
+        listing.noteMade("ses_a", facts: .init(kind: .chat, directory: "/c", updated: 5))
+        #expect(SessionLists.place(of: listing.facts(of: "ses_new"), isArchived: false) == .chat)
+        #expect(listing.facts(of: "ses_a")?.kind == .project)
+        listing.take(try line(#"{"at":"e.2","sessions":{"ses_new":{"kind":"project","project":"/p","directory":"/p/tree","created":5,"updated":6}},"projects":{}}"#))
+        #expect(SessionLists.place(of: listing.facts(of: "ses_new"), isArchived: false) == .project("/p"))
+        listing.noteMade("ses_other", facts: .init(kind: .chat, directory: "/c", updated: 7))
+        listing.take(try line(#"{"at":"e.3","full":true,"sessions":{},"projects":{}}"#))
+        #expect(listing.sessions["ses_other"] == nil)
+    }
+
+    /// What its box said of a session it let go (deleted, or moved away) is kept for a row a client
+    /// still holds, until it's listed again: then as it's listed.
+    @Test func aSessionLetGoKeepsWhatItsBoxSaid() throws {
+        func line(_ json: String) throws -> SessionLists.Line { try JSONDecoder().decode(SessionLists.Line.self, from: Data(json.utf8)) }
+        var listing = SessionLists.Listing()
+        listing.take(try line(#"{"at":"e.1","full":true,"sessions":{"ses_a":{"kind":"project","project":"/p","directory":"/p","created":1,"updated":2},"ses_b":{"kind":"chat","directory":"/c","created":1,"updated":3}},"projects":{}}"#))
+        listing.take(try line(#"{"at":"e.2","sessions":{},"gone":["ses_a"],"projects":{}}"#))
+        listing.take(try line(#"{"at":"f.1","full":true,"sessions":{},"projects":{}}"#))
+        #expect(listing.sessions.isEmpty)
+        #expect(listing.facts(of: "ses_a")?.project == "/p")
+        #expect(listing.facts(of: "ses_b")?.kind == .chat)
+        listing.take(try line(#"{"at":"f.2","sessions":{"ses_a":{"kind":"chat","directory":"/c","created":1,"updated":9}},"projects":{}}"#))
+        #expect(listing.facts(of: "ses_a")?.kind == .chat)
+        #expect(listing.former["ses_a"] == nil)
+    }
 }

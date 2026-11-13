@@ -45,9 +45,6 @@ public enum SessionStart {
         public var got: String?
         /// Whether its box made it a chat (`project` null), as it says before its list does.
         public var isChat = false
-        /// The project its box filed it under (its folder as the box names it), as it says before its
-        /// list does; nil for a chat, or a box from before that didn't say.
-        public var project: String?
 
         private enum CodingKeys: String, CodingKey { case session, info, worktree, got, project }
 
@@ -58,7 +55,6 @@ public enum SessionStart {
             worktree = try? container.decodeIfPresent(Worktree.self, forKey: .worktree)
             got = try? container.decodeIfPresent(String.self, forKey: .got)
             isChat = container.contains(.project) && (try? container.decodeNil(forKey: .project)) == true
-            project = try? container.decodeIfPresent(String.self, forKey: .project)
         }
 
         /// A worktree made for it, as `kuvo/worktrees` makes one.
