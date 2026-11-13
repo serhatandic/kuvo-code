@@ -162,15 +162,18 @@ export function keepTold(key: string, told: Omit<Told, "heard">, now = Date.now(
 }
 
 /** A change you made to item `id` on the computer `key`, through this box, put in what that computer
- * last told, as its box answered it (`item`; null, deleted: taken out), until it tells again: what
- * it says of its sessions stays as it told it. */
-export function patchTold(key: string, id: string, item: unknown): void {
+ * last told, as its box answered it (`item`; `deleted`: taken out), until it tells again: what it
+ * says of its sessions stays as it told it. Only over what it told as the change was asked
+ * (`toldID`): what it told since is its own newer word. */
+export function patchTold(key: string, id: string, change: { item: unknown } | { deleted: true }, toldID: string | undefined): void {
   if (!KEY.test(key)) return;
-  const fresh = toldItemOf(item);
+  const fresh = "item" in change ? toldItemOf(change.item) : null;
+  // (An answer this box can't read changes nothing.)
+  if ("item" in change && (!fresh || fresh.id !== id)) return;
   try {
     locked(LOCK, () => {
       const kept = readTold(key);
-      if (!kept) return;
+      if (!kept || kept.id !== toldID) return;
       const before = kept.items.find(each => each.id === id);
       const others = kept.items.filter(each => each.id !== id);
       const items = !fresh ? others

@@ -12746,14 +12746,16 @@ function keepTold2(key, told, now = Date.now()) {
     return true;
   });
 }
-function patchTold(key, id, item) {
+function patchTold(key, id, change, toldID) {
   if (!KEY.test(key))
     return;
-  const fresh = toldItemOf(item);
+  const fresh = "item" in change ? toldItemOf(change.item) : null;
+  if ("item" in change && (!fresh || fresh.id !== id))
+    return;
   try {
     locked(LOCK11, () => {
       const kept = readTold3(key);
-      if (!kept)
+      if (!kept || kept.id !== toldID)
         return;
       const before = kept.items.find((each) => each.id === id);
       const others = kept.items.filter((each) => each.id !== id);
@@ -23105,9 +23107,8 @@ async function actForPeer(act, targets) {
     const file = fileOf4(ref, act.name ?? "");
     if (!file)
       return { status: 404, value: { message: "There's no such file." } };
-    const mb = (bytes) => (bytes / 1e6).toFixed(1);
     if (file.bytes.length > MOST_FORWARDED_FILE)
-      return { status: 413, value: { message: `${act.name} is ${mb(file.bytes.length)} MB: too big to bring from ${here} (${mb(MOST_FORWARDED_FILE)} MB at most). Open it there.` } };
+      return { status: 413, value: { message: `${act.name} is ${(Math.ceil(file.bytes.length / 1e5) / 10).toFixed(1)} MB: too big to bring from ${here} (${MOST_FORWARDED_FILE / 1e6} MB at most). Open it there.` } };
     return { status: 200, value: { type: file.type, data: file.bytes.toString("base64") } };
   }
   const done = await actHere({ method: act.method, action: act.action, ref, given: act.body ?? {}, targets });
@@ -23259,9 +23260,15 @@ function prune(asks, now) {
   for (const [key, each] of asks)
     if (each.until < now)
       asks.delete(key);
+  for (const [key, each] of asks) {
+    if (asks.size <= MOST_REMEMBERED)
+      return;
+    if (!each.answer && each.answered !== undefined)
+      asks.delete(key);
+  }
   for (const key of asks.keys()) {
     if (asks.size <= MOST_REMEMBERED)
-      break;
+      return;
     asks.delete(key);
   }
 }
@@ -23493,6 +23500,7 @@ function takeTold(sender, given, reply) {
   const before = readTold3(sender.key);
   if (!keepTold2(sender.key, told))
     return;
+  forgetDeletedThere(new Set(told.items.map((item) => item.id)));
   reply({ had: told.id });
   if (before?.shared !== told.shared || before?.primary?.key !== told.primary?.key || before?.primary?.since !== told.primary?.since)
     noteSetupNow(Date.now(), { soon: 0 });
@@ -23584,7 +23592,7 @@ function itemsElsewhere(owner, link = readLink(), here, deleted, { asTold = fals
   const named = new Set(items.flatMap((item) => [item.owner, ...item.handedBy ? [item.handedBy] : []]));
   return { items, owners: [...owners.values()].filter((each) => named.has(each.owner)), categories: [...custom].map(([id, name]) => ({ id, name })), computers };
 }
-function itemElsewhere(ref, link = readLink(), { asTold = false } = {}) {
+function itemElsewhere(ref, link = readLink(), { asTold = false, deleted = false } = {}) {
   let found = null;
   const peers = peersOf(link);
   const computerOf = (peer) => ({ key: peer.key, name: computerName2(peer), kind: peer.kind, ...peer.id ? { id: peer.id } : {} });
@@ -23594,7 +23602,7 @@ function itemElsewhere(ref, link = readLink(), { asTold = false } = {}) {
     if (item && (!found || newer(item, told.at, found.item, found.at)))
       found = { item: { ...asTold ? item : asAway(item, awaySince(peer.key)), computer: computerOf(peer) }, at: told.at };
   }
-  if (!found) {
+  if (!found && deleted) {
     for (const [, each] of Object.entries(readDeletedThere())) {
       const peer = peers.find((one) => one.key === each.key);
       const item = toldItemOf(each.item);
@@ -23606,22 +23614,35 @@ function itemElsewhere(ref, link = readLink(), { asTold = false } = {}) {
 }
 var DELETED_THERE = path86.join(WORK_QUEUE, "deleted-there.json");
 var DELETED_LOCK = path86.join(WORK_QUEUE, ".deleted-there.lock");
-var DELETED_FOR = 30 * 86400000;
+var DELETED_FOR = 86400000;
 function readDeletedThere(now = Date.now()) {
   try {
     const kept = JSON.parse(fs86.readFileSync(DELETED_THERE, "utf8"));
     if (!isObject(kept))
       return {};
-    return Object.fromEntries(Object.entries(kept).filter(([, each]) => isObject(each) && typeof each.key === "string" && typeof each.at === "number" && now - each.at < DELETED_FOR));
+    const here = new Set(allItems().map((item) => item.id));
+    return Object.fromEntries(Object.entries(kept).filter(([id, each]) => isObject(each) && typeof each.key === "string" && typeof each.at === "number" && now - each.at < DELETED_FOR && !here.has(id)));
   } catch {
     return {};
   }
 }
-function changedThere(key, action, item, now = Date.now()) {
+function forgetDeletedThere(told) {
+  if (!fs86.existsSync(DELETED_THERE))
+    return;
+  try {
+    locked(DELETED_LOCK, () => {
+      const kept = readDeletedThere();
+      const left = Object.entries(kept).filter(([id]) => !told.has(id));
+      if (left.length !== Object.keys(kept).length)
+        writePrivate(DELETED_THERE, JSON.stringify(Object.fromEntries(left)));
+    });
+  } catch {}
+}
+function changedThere(key, action, item, toldID, now = Date.now()) {
   const id = typeof item.id === "string" ? item.id : null;
   if (!id)
     return;
-  patchTold(key, id, action === "delete" ? null : item);
+  patchTold(key, id, action === "delete" ? { deleted: true } : { item }, toldID);
   try {
     locked(DELETED_LOCK, () => {
       const kept = readDeletedThere(now);
@@ -39668,7 +39689,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "47d88eaeb252";
+var BRIDGE_VERSION = "4e916fb544de";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -42638,7 +42659,7 @@ async function* workQueueRoute(context, match) {
   if (action === undefined && method === "GET") {
     if (find(allItems()))
       return yield* answered4(await actHere({ method: "GET", ref, targets, signal }), json);
-    let far = itemElsewhere(ref);
+    let far = itemElsewhere(ref, readLink(), { deleted: true });
     if (!far)
       return yield* json(404, { message: "There's no such item." });
     if (fromClient(context)) {
@@ -42680,15 +42701,16 @@ async function* workQueueRoute(context, match) {
     return yield* json(405, {});
   if (!fromClient(context))
     return yield* json(403, { message: notClient(context) });
-  const far = !find(allItems()) ? itemElsewhere(ref) : null;
+  const far = !find(allItems()) ? itemElsewhere(ref, readLink(), { deleted: asked.action === "restore" }) : null;
   if (!far)
     return yield* answered4(await actHere({ ...asked, ref, given, targets, signal }), json);
   const { category, before, after, top } = given;
+  const toldID = readTold3(far.computer.key)?.id;
   const there = await forwardAct(far.computer, nameOf2(far), { ...asked, item: far.id, ...asked.action === "move" ? { body: { category, before, after, top } } : {} }, signal);
   if ("refused" in there)
     return yield* json(there.status, { message: there.refused, computer: far.computer });
-  if (there.status === 200 && isObject(there.value) && isObject(there.value.item))
-    changedThere(far.computer.key, asked.method === "DELETE" ? "delete" : asked.action ?? "move", there.value.item);
+  if (there.status === 200 && isObject(there.value) && isObject(there.value.item) && there.value.item.id === far.id)
+    changedThere(far.computer.key, asked.method === "DELETE" ? "delete" : asked.action ?? "move", there.value.item, toldID);
   const value = !isObject(there.value) ? there.value : isObject(there.value.item) ? { ...there.value, item: { ...there.value.item, computer: far.computer } } : there.status === 200 ? there.value : { ...there.value, computer: far.computer };
   return yield* json(there.status, value);
 }

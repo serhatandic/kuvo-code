@@ -871,6 +871,14 @@ test("what you do to an item another computer keeps, asked of this box, is done 
   assert.deepEqual(moved.body.item.computer, { key: lab.pub, name: "lab", kind: "machine", id: "lab" }, "said to be on lab, as this box names it");
   assert.deepEqual(fs.readdirSync(forwards), [], "nothing left behind");
   assert.equal((await view("all")).items.find(item => item.number === 500).category, "later", "shown where it went at once, not when lab next tells");
+  // Lab tells something newer while its answer is on the way: lab's newer word stays.
+  const racing = route("POST", `kuvo/work-queue/items/500/move`, { category: "next", top: true });
+  const [raced] = await sentTo(lab);
+  receive(lab, { workQueue: telling([told(500, "ses_far", { category: "done", updated: { at: 9000, by: { session: "ses_far", name: "Far" } } }), told(501, "ses_far", { category: "later" })]) });
+  mailTo(lab);
+  receive(lab, { workQueue: { acted: { id: raced.workQueue.act.id, status: 200, value: { item: told(500, "ses_far", { category: "next" }) } } } });
+  assert.equal((await racing).status, 200);
+  assert.equal((await view("all")).items.find(item => item.number === 500).category, "done", "never over what lab told since");
 
   // Refused there: lab's words, as lab said them.
   const restoring = route("POST", "kuvo/work-queue/items/501/restore");

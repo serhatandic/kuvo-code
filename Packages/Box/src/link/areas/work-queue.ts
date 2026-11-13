@@ -15,7 +15,7 @@ import { importItems, importWords, parseBacklog, readBacklogFiles } from "../wor
 import { primaryOf } from "../work-queue/numbers";
 import { changedThere, itemElsewhere, itemsElsewhere, tellQueuesAgain } from "../work-queue/across";
 import { Refusal, refuseMoving } from "../work-queue/ops";
-import { TOLD } from "../work-queue/told";
+import { readTold, TOLD } from "../work-queue/told";
 import { readLink } from "../state";
 import { allItems, changeQueues, matching, OWNER, queueFollowers, readAll, WORK_QUEUE, type Item } from "../work-queue/store";
 import { readSeen, SEEN_FILE } from "../work-queue/github";
@@ -196,7 +196,7 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
     // One on another of your computers: whole, as that computer's box answers for a client (`told:
     // false`); else as it last told it (`told: true`), without what only it keeps (its description,
     // notes, what happened to it, files, links).
-    let far = itemElsewhere(ref);
+    let far = itemElsewhere(ref, readLink(), { deleted: true });
     if (!far) return yield* json(404, { message: "There's no such item." });
     if (fromClient(context)) {
       const there = await forwardAct(far.computer, nameOf(far), { method: "GET", item: far.id }, signal);
@@ -233,13 +233,15 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
   if (!fromClient(context)) return yield* json(403, { message: notClient(context) });
   // One on another of your computers is done there, by that computer's box: this one hands it on
   // and answers with what it said (a client never works out where an item is).
-  const far = !find(allItems()) ? itemElsewhere(ref) : null;
+  const far = !find(allItems()) ? itemElsewhere(ref, readLink(), { deleted: asked.action === "restore" }) : null;
   if (!far) return yield* answered(await actHere({ ...asked, ref, given, targets, signal }), json);
   const { category, before, after, top } = given;
+  // (What that computer had told as it was asked: the change is put over that, never over newer word.)
+  const toldID = readTold(far.computer.key)?.id;
   const there = await forwardAct(far.computer, nameOf(far), { ...asked, item: far.id, ...(asked.action === "move" ? { body: { category, before, after, top } } : {}) }, signal);
   if ("refused" in there) return yield* json(there.status, { message: there.refused, computer: far.computer });
   // What this box has of it now, as that computer's box answered (not when it next tells).
-  if (there.status === 200 && isObject(there.value) && isObject(there.value.item)) changedThere(far.computer.key, asked.method === "DELETE" ? "delete" : asked.action ?? "move", there.value.item);
+  if (there.status === 200 && isObject(there.value) && isObject(there.value.item) && there.value.item.id === far.id) changedThere(far.computer.key, asked.method === "DELETE" ? "delete" : asked.action ?? "move", there.value.item, toldID);
   // (As this box names that computer, so a client knows where it is.)
   const value = !isObject(there.value) ? there.value
     : isObject(there.value.item) ? { ...there.value, item: { ...there.value.item, computer: far.computer } }

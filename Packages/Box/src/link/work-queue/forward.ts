@@ -216,11 +216,16 @@ export function takeActed(sender: MailSender, given: unknown): void {
 interface Done { until: number; answer: Acted | null; answered?: number }
 const did = new Map<string, Done>();
 
-// The oldest of `asks` past MOST_REMEMBERED gone (in place), and those past their time.
-function prune<T extends { until: number }>(asks: Map<string, T>, now: number): void {
+// Those of `asks` past their time gone (in place), and past MOST_REMEMBERED, reads answered first
+// (one asked again is read again), then the oldest.
+function prune<T extends { until: number; answer: Acted | null; answered?: number }>(asks: Map<string, T>, now: number): void {
   for (const [key, each] of asks) if (each.until < now) asks.delete(key);
+  for (const [key, each] of asks) {
+    if (asks.size <= MOST_REMEMBERED) return;
+    if (!each.answer && each.answered !== undefined) asks.delete(key);
+  }
   for (const key of asks.keys()) {
-    if (asks.size <= MOST_REMEMBERED) break;
+    if (asks.size <= MOST_REMEMBERED) return;
     asks.delete(key);
   }
 }

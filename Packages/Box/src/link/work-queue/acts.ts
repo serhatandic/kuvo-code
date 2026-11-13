@@ -108,8 +108,8 @@ export async function actForPeer(act: Act, targets: Target[]): Promise<Acted> {
   if (act.action === "file") {
     const file = fileOf(ref, act.name ?? "");
     if (!file) return { status: 404, value: { message: "There's no such file." } };
-    const mb = (bytes: number) => (bytes / 1_000_000).toFixed(1);
-    if (file.bytes.length > MOST_FORWARDED_FILE) return { status: 413, value: { message: `${act.name} is ${mb(file.bytes.length)} MB: too big to bring from ${here} (${mb(MOST_FORWARDED_FILE)} MB at most). Open it there.` } };
+    // (Its size rounded up to a tenth, so it never reads as the most it may be.)
+    if (file.bytes.length > MOST_FORWARDED_FILE) return { status: 413, value: { message: `${act.name} is ${(Math.ceil(file.bytes.length / 100_000) / 10).toFixed(1)} MB: too big to bring from ${here} (${MOST_FORWARDED_FILE / 1_000_000} MB at most). Open it there.` } };
     return { status: 200, value: { type: file.type, data: file.bytes.toString("base64") } };
   }
   const done = await actHere({ method: act.method, action: act.action, ref, given: act.body ?? {}, targets });

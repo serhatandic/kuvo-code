@@ -212,6 +212,7 @@ function takeTold(sender: MailSender, given: unknown, reply: (payload: Record<st
   // (What came late, older than what's kept, isn't had: had, it would never go again.)
   const before = readTold(sender.key);
   if (!keepTold(sender.key, told)) return;
+  forgetDeletedThere(new Set(told.items.map(item => item.id)));
   reply({ had: told.id });
   // How it numbers changed (it's shared now, or numbers from another): this box's setup looked at now.
   if (before?.shared !== told.shared || before?.primary?.key !== told.primary?.key || before?.primary?.since !== told.primary?.since) noteSetupNow(Date.now(), { soon: 0 });
@@ -310,9 +311,9 @@ export function itemsElsewhere(owner: string, link: LinkState | null = readLink(
 }
 
 /** The item another computer told of that `ref` names (by id, number or source), or null: of two,
- * the newer word. One you deleted there through this box, that none tells of now, as that box
- * answered (`removed`), so Undo and Recently Deleted's bring it back there. */
-export function itemElsewhere(ref: ItemRef, link: LinkState | null = readLink(), { asTold = false }: { asTold?: boolean } = {}): ItemElsewhere | null {
+ * the newer word. With `deleted`, one you deleted there through this box that none tells of now, as
+ * that box answered (`removed`): for bringing it back there (Undo) and reading it, only. */
+export function itemElsewhere(ref: ItemRef, link: LinkState | null = readLink(), { asTold = false, deleted = false }: { asTold?: boolean; deleted?: boolean } = {}): ItemElsewhere | null {
   let found: { item: ItemElsewhere; at: number } | null = null;
   const peers = peersOf(link);
   const computerOf = (peer: Peer): Computer => ({ key: peer.key, name: computerName(peer), kind: peer.kind, ...(peer.id ? { id: peer.id } : {}) });
@@ -321,7 +322,7 @@ export function itemElsewhere(ref: ItemRef, link: LinkState | null = readLink(),
     const item = told?.items.find(each => refNames(ref, each));
     if (item && (!found || newer(item, told!.at, found.item, found.at))) found = { item: { ...(asTold ? item : asAway(item, awaySince(peer.key))), computer: computerOf(peer) }, at: told!.at };
   }
-  if (!found) {
+  if (!found && deleted) {
     for (const [, each] of Object.entries(readDeletedThere())) {
       const peer = peers.find(one => one.key === each.key);
       const item = toldItemOf(each.item);
@@ -332,30 +333,43 @@ export function itemElsewhere(ref: ItemRef, link: LinkState | null = readLink(),
 }
 
 // Items you deleted on another computer through this box (`run/work-queue/deleted-there.json`, by
-// id: the computer's key, when, and the item as its box answered), kept as long as Recently Deleted
-// keeps them there, 200 at most.
+// id: the computer's key, when, and the item as its box answered), for Undo: a day, 200 at most,
+// and only until that computer, or this box, has it again.
 const DELETED_THERE = path.join(WORK_QUEUE, "deleted-there.json");
 const DELETED_LOCK = path.join(WORK_QUEUE, ".deleted-there.lock");
-const DELETED_FOR = 30 * 86_400_000;
+const DELETED_FOR = 86_400_000;
 type DeletedThere = Record<string, { key: string; at: number; item: unknown }>;
 
 function readDeletedThere(now = Date.now()): DeletedThere {
   try {
     const kept: unknown = JSON.parse(fs.readFileSync(DELETED_THERE, "utf8"));
     if (!isObject(kept)) return {};
-    return Object.fromEntries(Object.entries(kept).filter(([, each]) => isObject(each) && typeof each.key === "string" && typeof each.at === "number" && now - each.at < DELETED_FOR)) as DeletedThere;
+    const here = new Set(allItems().map(item => item.id));
+    return Object.fromEntries(Object.entries(kept).filter(([id, each]) => isObject(each) && typeof each.key === "string" && typeof each.at === "number" && now - each.at < DELETED_FOR && !here.has(id))) as DeletedThere;
   } catch {
     return {};
   }
 }
 
+// What's kept of items deleted there, gone for those a computer tells of again (brought back).
+function forgetDeletedThere(told: Set<string>): void {
+  if (!fs.existsSync(DELETED_THERE)) return;
+  try {
+    locked(DELETED_LOCK, () => {
+      const kept = readDeletedThere();
+      const left = Object.entries(kept).filter(([id]) => !told.has(id));
+      if (left.length !== Object.keys(kept).length) writePrivate(DELETED_THERE, JSON.stringify(Object.fromEntries(left)));
+    });
+  } catch {}
+}
+
 /** A change you made through this box to an item the computer `key` keeps, as its box answered
  * (`item`): what this box has of it now, so its views show it at once, not when that computer next
  * tells (one deleted is gone from them, and kept for bringing back there). */
-export function changedThere(key: string, action: "delete" | "move" | "restore", item: Record<string, unknown>, now = Date.now()): void {
+export function changedThere(key: string, action: "delete" | "move" | "restore", item: Record<string, unknown>, toldID: string | undefined, now = Date.now()): void {
   const id = typeof item.id === "string" ? item.id : null;
   if (!id) return;
-  patchTold(key, id, action === "delete" ? null : item);
+  patchTold(key, id, action === "delete" ? { deleted: true } : { item }, toldID);
   try {
     locked(DELETED_LOCK, () => {
       const kept = readDeletedThere(now);
