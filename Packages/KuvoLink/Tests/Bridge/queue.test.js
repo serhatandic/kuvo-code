@@ -92,6 +92,8 @@ fs.mkdirSync(path.join(home, "run"), { recursive: true });
 fs.writeFileSync(path.join(home, "run", "engine.json"), JSON.stringify(target));
 
 beforeEach(() => {
+  // Each test's box as it starts: no message remembered as sent (their ids repeat across tests).
+  link.forgetEverythingSent();
   inboxes = {};
   running = new Set();
   asked = [];
@@ -452,6 +454,28 @@ test("a message added while the queue isn't paused goes straight to the engine, 
   const added = await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_q1", text: "After this, the docs." });
   assert.equal(added.json.waits, false);
   assert.deepEqual(prompted.map(each => [each.id, each.delivery]), [["msg_q1", "queue"]]);
+});
+
+test("a message for the queue sent again under its id (its phone's link dropped before the answer) is added once (#144)", async () => {
+  inboxes.ses_1 = [];
+  const message = { id: "msg_again1", text: "After this, the changelog.", files: [{ uri: "data:image/png;base64,iVBORw0KGgo=", name: "shot.png" }] };
+  const first = await ask("POST", "kuvo/sessions/ses_1/queue/add", message);
+  const again = await ask("POST", "kuvo/sessions/ses_1/queue/add", message);
+  assert.equal(first.json.waits, false);
+  assert.equal(again.status, 200);
+  assert.equal(again.json.waits, false);
+  assert.deepEqual(prompted.map(each => each.id), ["msg_again1"]);
+  // Paused, one sent again waits there once.
+  await ask("POST", "kuvo/sessions/ses_1/stop");
+  const held = { id: "msg_again2", text: "And the docs." };
+  assert.equal((await ask("POST", "kuvo/sessions/ses_1/queue/add", held)).json.waits, true);
+  assert.equal((await ask("POST", "kuvo/sessions/ses_1/queue/add", held)).json.waits, true);
+  assert.deepEqual(link.queueOf("ses_1").waiting.map(each => each.id), ["msg_again2"]);
+  // Taken away, then put back with Undo under the same id: it's there again.
+  const removed = (await ask("DELETE", "kuvo/sessions/ses_1/queue/msg_again2")).json.removed;
+  assert.deepEqual(link.queueOf("ses_1").waiting ?? [], []);
+  assert.equal((await ask("POST", "kuvo/sessions/ses_1/queue/add", { ...removed, kept: true })).json.waits, true);
+  assert.deepEqual(link.queueOf("ses_1").waiting.map(each => each.id), ["msg_again2"]);
 });
 
 test("paused, the queue stays so once what waited is taken away: what arrives after still waits for Resume", async () => {

@@ -24,9 +24,12 @@ const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-work-qu
 removeAtEnd(home);
 // GitHub's `gh`, standing in: it says each time it's asked (`gh-asked`), and answers what a test
 // says GitHub would (`gh-answer.json`), else that it's signed out. Never GitHub itself.
-const ghAsked = path.join(home, "gh-asked"), ghAnswer = path.join(home, "gh-answer.json");
+// It writes each query it was asked on a line, and answers one by GitHub's id with `gh-answer-id.json`
+// while that's there.
+const ghAsked = path.join(home, "gh-asked"), ghAnswer = path.join(home, "gh-answer.json"), ghAnswerID = path.join(home, "gh-answer-id.json");
 fs.mkdirSync(path.join(home, "bin"), { recursive: true });
-fs.writeFileSync(path.join(home, "bin", "gh"), `#!/bin/sh\necho asked >> '${ghAsked}'\nif [ -f '${ghAnswer}' ]; then cat '${ghAnswer}'; exit 0; fi\necho 'gh auth login' >&2\nexit 1\n`, { mode: 0o755 });
+fs.writeFileSync(path.join(home, "bin", "gh"), `#!/bin/sh\nfor last; do :; done\nprintf '%s\\n' "$last" | tr '\\n' ' ' >> '${ghAsked}'\necho >> '${ghAsked}'\ncase "$last" in *"node(id:"*) if [ -f '${ghAnswerID}' ]; then cat '${ghAnswerID}'; exit 0; fi ;; esac\nif [ -f '${ghAnswer}' ]; then cat '${ghAnswer}'; exit 0; fi\necho 'gh auth login' >&2\nexit 1\n`, { mode: 0o755 });
+const ghQueries = () => (fs.existsSync(ghAsked) ? fs.readFileSync(ghAsked, "utf8").split("\n").filter(Boolean) : []);
 const ghAsks = () => (fs.existsSync(ghAsked) ? fs.readFileSync(ghAsked, "utf8").split("\n").filter(Boolean).length : 0);
 process.env.PATH = `${path.join(home, "bin")}${path.delimiter}${process.env.PATH}`;
 process.env.KUVO_HOME = home;
@@ -140,6 +143,7 @@ const telling = (items, extra = {}) => ({ told: { id: `wqt_${crypto.randomBytes(
 beforeEach(() => {
   fs.rmSync(ghAsked, { force: true });
   fs.rmSync(ghAnswer, { force: true });
+  fs.rmSync(ghAnswerID, { force: true });
   fs.rmSync(run, { recursive: true, force: true });
   fs.mkdirSync(run, { recursive: true });
   write(path.join(run, "engine.json"), { ...target, version: "0.0.0" });
@@ -1156,4 +1160,168 @@ test("asked by another of your computers' boxes, this box does it to the item it
   await link.takeWorkQueueMail(stranger.peer, { act: { id: actID(), method: "POST", action: "restore", item: id, at: Date.now() } }, host, places);
   assert.deepEqual(sent, []);
   assert.equal(await deleted(), true);
+});
+
+// GitHub's answer for one issue, as a repository's (`p0`), or as the node itself when it's asked by
+// its id.
+const ghIssue = (number, { state = "OPEN", byID = false } = {}) => {
+  const node = { __typename: "Issue", id: `I_kw${number}`, number, title: `Issue ${number}`, url: `https://github.com/kuvo-test/app/issues/${number}`, state, stateReason: state === "CLOSED" ? "COMPLETED" : null, closedAt: state === "CLOSED" ? "2026-11-10T09:00:00Z" : null, body: "" };
+  write(ghAnswer, { data: { p0: byID ? node : { issueOrPullRequest: node } } });
+};
+const issueSource = number => ({ kind: "github", ref: `gh:kuvo-test/app#${number}`, url: `https://github.com/kuvo-test/app/issues/${number}`, host: "github.com", id: `I_kw${number}` });
+
+test("one item for each issue, wherever it's handed: one handed here that another item here is already comes back with why; one isn't handed to a computer that told it has that issue", async () => {
+  ghIssue(12);
+  assert.equal((await tool("queue_add", { issue: "gh:kuvo-test/app#12" }, "ses_lead")).isError, false);
+  const mine = (await view("ses_lead")).items.find(item => item.source?.ref === "gh:kuvo-test/app#12");
+  // Lab hands its own item for the same issue (added there while this box's word hadn't reached it).
+  const item = { ...told(1, "ses_farlead", { id: "wqi_handedsameissue00001", title: "Issue 12", source: { ...issueSource(12), ref: "gh:Kuvo-Test/App#12" }, body: "", notes: [], files: [], links: [], handed: [] }), number: undefined };
+  await takeFrom(lab, { hand: { id: "wqh_sameissue00000001", to: "ses_child", from: "ses_farlead", by: { user: true }, at: Date.now(), item, files: [] } });
+  const [answer] = mailTo(lab).map(each => each.workQueue.handed);
+  assert.equal(answer.ok, false);
+  assert.equal(answer.why, 'gh:kuvo-test/app#12 is in the Work Queue there already, in the queue of "Lead": one item for each issue', "by its title, as you know it");
+  assert.deepEqual((await view("all")).items.filter(each => each.source?.ref.toLowerCase() === "gh:kuvo-test/app#12").map(each => each.id), [mine.id], "still one");
+
+  // Lab told it has gh:kuvo-test/app#13 in ses_far's queue: this box's item for it isn't handed there.
+  ghIssue(13);
+  receive(lab, { workQueue: telling([]) });
+  assert.equal((await tool("queue_add", { issue: "gh:kuvo-test/app#13" }, "ses_lead")).isError, false);
+  receive(lab, { workQueue: telling([{ ...told(2, "ses_wren", { id: "wqi_labssameissue0000013", title: "Issue 13", source: issueSource(13) }), number: undefined }]) });
+  const handed = await tool("queue_hand", { item: "gh:kuvo-test/app#13", to: "ses_far" }, "ses_lead");
+  assert.deepEqual(handed, { isError: true, text: "gh:kuvo-test/app#13 is in the Work Queue on lab already, in the queue of ses_wren: one item for each issue. Ask that conversation (send_message), or the user." });
+});
+
+test("one item for each issue, wherever it's restored: a deleted one stays deleted while another item is that issue, here or on another computer", async () => {
+  ghIssue(12);
+  await tool("queue_add", { issue: "gh:kuvo-test/app#12" }, "ses_lead");
+  const deleted = (await view("ses_lead")).items[0];
+  assert.equal((await tool("queue_remove", { item: "gh:kuvo-test/app#12" }, "ses_lead")).isError, false);
+  // Meanwhile lab added it (it never heard of a deleted one).
+  receive(lab, { workQueue: telling([{ ...told(3, "ses_far", { id: "wqi_labaddeditlater00012", title: "Issue 12", source: issueSource(12) }), number: undefined }]) });
+  const undone = await tool("queue_remove", { item: deleted.id, undo: true }, "ses_lead");
+  assert.deepEqual(undone, { isError: true, text: "Another item is gh:kuvo-test/app#12 now, on lab: one item for each issue, so this one stays deleted." });
+  const restored = await route("POST", `kuvo/work-queue/items/${deleted.id}/restore`);
+  assert.deepEqual([restored.status, restored.body.message], [400, "Another item is gh:kuvo-test/app#12 now, on lab: one item for each issue, so this one stays deleted."]);
+  // Here too: one handed here meanwhile (the deleted one doesn't hold it off).
+  receive(lab, { workQueue: telling([]) });
+  const item = { ...told(4, "ses_farlead", { id: "wqi_handedafterdelete012", title: "Issue 12", source: issueSource(12), body: "", notes: [], files: [], links: [], handed: [] }), number: undefined };
+  await takeFrom(lab, { hand: { id: "wqh_afterdelete000001", to: "ses_child", from: "ses_farlead", by: { user: true }, at: Date.now(), item, files: [] } });
+  assert.equal(mailTo(lab).map(each => each.workQueue.handed).find(Boolean).ok, true);
+  const again = await route("POST", `kuvo/work-queue/items/${deleted.id}/restore`);
+  assert.deepEqual([again.status, again.body.message], [400, 'Another item is gh:kuvo-test/app#12 now, in the queue of "Sign-in": one item for each issue, so this one stays deleted.']);
+  assert.equal((await view("all")).items.filter(each => each.source?.ref === "gh:kuvo-test/app#12").length, 1);
+});
+
+test("what this box tells of an issue goes again only once it changes, never because GitHub was asked again and said the same", async () => {
+  ghIssue(12);
+  await tool("queue_add", { issue: "gh:kuvo-test/app#12" }, "ses_lead");
+  const now = Date.now();
+  await link.pushQueues(host, link.readLink(), targets, now);
+  const first = mailTo(lab)[0].workQueue.told;
+  receive(lab, { workQueue: { had: first.id } });
+  receive(mac, { workQueue: { had: first.id } });
+  sent.length = 0;
+  // Asked again each few minutes while a panel shows it, and the same each time: nothing goes.
+  const seenFile = path.join(queues, "seen.json");
+  for (const step of [1, 2, 3]) {
+    const kept = read(seenFile);
+    for (const each of Object.values(kept.reads)) each.checked = Date.now() - 600_000;
+    write(seenFile, kept);
+    const asks = ghAsks();
+    await view("ses_lead");
+    assert.equal(ghAsks(), asks + 1, "read again");
+    // (As though each read were minutes after the last: this test runs in less than one.)
+    const after = read(seenFile);
+    for (const each of Object.values(after.reads)) each.checked = Date.now() + step * 180_000;
+    write(seenFile, after);
+    await link.pushQueues(host, link.readLink(), targets, now + step * 180_000);
+    assert.equal(mailTo(lab).length, 0, `nothing told after read ${step}`);
+  }
+  // Closed there: that's a change, told once.
+  const kept = read(seenFile);
+  for (const each of Object.values(kept.reads)) each.checked = Date.now() - 600_000;
+  write(seenFile, kept);
+  ghIssue(12, { state: "CLOSED" });
+  await view("ses_lead");
+  await link.pushQueues(host, link.readLink(), targets, now + 800_000);
+  const closed = mailTo(lab);
+  assert.equal(closed.length, 1);
+  assert.deepEqual([closed[0].workQueue.told.items[0].seen.state, closed[0].workQueue.told.items[0].category], ["completed", "done"]);
+});
+
+test("closed and gone issues are among the latest Done told to your other computers, by when GitHub closed them or they went, not left out behind a hundred older ones", async () => {
+  ghIssue(12, { state: "CLOSED" });
+  await tool("queue_add", { issue: "gh:kuvo-test/app#12" }, "ses_lead");
+  ghIssue(13);
+  await tool("queue_add", { issue: "gh:kuvo-test/app#13" }, "ses_lead");
+  // #13 deleted on GitHub since: missing where it was, and by its id.
+  write(ghAnswer, { data: { p0: { issueOrPullRequest: null } }, errors: [{ type: "NOT_FOUND", path: ["p0", "issueOrPullRequest"], message: "Could not resolve." }] });
+  write(ghAnswerID, { data: { p0: null }, errors: [{ type: "NOT_FOUND", path: ["p0"], message: "Could not resolve." }] });
+  const seenFile = path.join(queues, "seen.json");
+  const kept = read(seenFile);
+  const gone = kept.reads[Object.keys(kept.reads).find(key => key.endsWith("#13"))];
+  gone.at = gone.checked = Date.now() - 3_600_000;
+  write(seenFile, kept);
+  const shown = (await view("ses_lead")).items.find(item => item.source?.ref === "gh:kuvo-test/app#13");
+  assert.equal(shown.seen.gone, true);
+  // A hundred Done before either, in the same queue.
+  const file = path.join(queues, "queues", "ses_lead.json");
+  const whole = read(file);
+  const { source: _, ...plain } = whole.items.find(item => item.source?.ref === "gh:kuvo-test/app#13");
+  const before = Date.parse("2026-11-01T00:00:00Z");
+  whole.items.push(...Array.from({ length: 100 }, (__, index) => ({ ...plain, id: `wqi_done${String(index).padStart(16, "0")}`, title: `Done ${index}`, category: "done", doneAt: before, number: 5000 + index, order: 5000 + index })));
+  write(file, whole);
+  await link.pushQueues(host, link.readLink(), targets, Date.now());
+  const told = mailTo(lab).flatMap(mail => mail.workQueue?.told?.items ?? []);
+  assert.deepEqual(told.map(item => item.source?.ref).filter(Boolean).sort(), ["gh:kuvo-test/app#12", "gh:kuvo-test/app#13"]);
+  assert.equal(told.length, 100, "the latest hundred Done");
+});
+
+test("an issue another computer told of, never read here and moved since, is found by the id its item knows: at once where that computer found it gone or elsewhere, else once it's missing where it was", async () => {
+  write(path.join(run, "work", "elsewhere", `${lab.pub}.json`), { at: Date.now(), heard: Date.now(), leads: {} });
+  const old = Date.now() - 7_200_000;
+  const moved = { __typename: "Issue", id: "I_kw20", number: 3, title: "Moved here", url: "https://github.com/kuvo-test/moved/issues/3", state: "OPEN", stateReason: null, closedAt: null };
+  const told20 = seen => ({ ...told(520, "ses_far", { id: "wqi_toldmovedissue000020", title: "Issue 20", seen, source: issueSource(20) }), number: undefined });
+  const shown = async ref => (await view("all")).items.find(item => item.source?.ref === ref);
+
+  // Lab found it gone: read here by its id at once.
+  receive(lab, { workQueue: telling([told20({ state: "open", at: old, checked: old, gone: true })]) });
+  write(ghAnswerID, { data: { p0: moved } });
+  let item = await shown("gh:kuvo-test/app#20");
+  assert.equal(ghQueries().length, 1);
+  assert.match(ghQueries()[0], /p0: node\(id: "I_kw20"\)/);
+  assert.deepEqual([item.title, item.source.url, item.seen.gone, item.category], ["Moved here", "https://github.com/kuvo-test/moved/issues/3", undefined, "next"]);
+
+  // Lab told it as it was: missing where it was here, then found by the id its item knows.
+  fs.rmSync(path.join(queues, "seen.json"), { force: true });
+  fs.rmSync(ghAsked, { force: true });
+  receive(lab, { workQueue: telling([told20({ state: "open", at: old, checked: old })]) });
+  write(ghAnswer, { data: { p0: { issueOrPullRequest: null } } });
+  item = await shown("gh:kuvo-test/app#20");
+  assert.equal(ghQueries().length, 2);
+  assert.match(ghQueries()[0], /repository\(owner: "kuvo-test", name: "app"\) \{ issueOrPullRequest\(number: 20\)/);
+  assert.match(ghQueries()[1], /p0: node\(id: "I_kw20"\)/);
+  assert.deepEqual([item.source.url, item.seen.gone, item.category], ["https://github.com/kuvo-test/moved/issues/3", undefined, "next"]);
+});
+
+test("a deleted item never stands for its issue while another item is it: adding it, showing it and its chip name the live one on another computer, and an agent's ref the live one in another queue here", async () => {
+  ghIssue(12);
+  await tool("queue_add", { issue: "gh:kuvo-test/app#12" }, "ses_lead");
+  assert.equal((await tool("queue_remove", { item: "gh:kuvo-test/app#12" }, "ses_lead")).isError, false);
+  receive(lab, { workQueue: telling([{ ...told(3, "ses_far", { id: "wqi_labaddeditlater00012", title: "Issue 12", source: issueSource(12) }), number: undefined }]) });
+  // Adding it: it's on lab, not "undo the delete" (which the one-item rule refuses).
+  assert.deepEqual(await tool("queue_add", { issue: "gh:kuvo-test/app#12" }, "ses_lead"), { isError: true, text: 'gh:kuvo-test/app#12 "Issue 12" is in the Work Queue already, on lab: one item for each issue.' });
+  // Its ref names lab's: shown, and drawn as a chip.
+  const shownText = (await tool("queue_show", { item: "gh:kuvo-test/app#12" }, "ses_lead")).text;
+  assert.match(shownText, /is on lab/);
+  const ref = (await route("POST", "kuvo/work-queue/refs", { refs: ["gh:kuvo-test/app#12"] })).body.refs["gh:kuvo-test/app#12"];
+  assert.deepEqual([ref.id, ref.removed, ref.computer?.name], ["wqi_labaddeditlater00012", undefined, "lab"]);
+
+  // The live one in another conversation's queue here, one ses_lead doesn't oversee: an agent's ref
+  // is that one (not its to change), never the deleted one in its own queue.
+  receive(lab, { workQueue: telling([]) });
+  const whole = read(path.join(queues, "queues", "ses_lead.json"));
+  const { removed: _, ...live } = whole.items[0];
+  write(path.join(queues, "queues", "ses_someone.json"), { ...whole, owner: "ses_someone", items: [{ ...live, id: "wqi_someoneslive00000012", owner: "ses_someone", order: 9 }] });
+  assert.deepEqual(await tool("queue_update", { item: "gh:kuvo-test/app#12", note: "More" }, "ses_lead"), { isError: true, text: 'gh:kuvo-test/app#12 "Issue 12" isn\'t in your Work Queue, nor in a session\'s you oversee: ask the conversation it belongs to, or the user.' });
 });

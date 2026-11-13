@@ -5,13 +5,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ownName } from "../letters/start";
-import { callOffHanding, MOST_HANDED_FILES, refuseLiveElsewhere } from "./hand";
+import { callOffHanding, MOST_HANDED_FILES, refuseLiveElsewhere, twinOf } from "./hand";
 import { readSeen } from "./github";
 import { numberWaiting, primaryOf } from "./numbers";
 import { changeItem, refuseHanding, refuseMoving, removeItem, restoreItem } from "./ops";
 import { allItems, changeQueues, FILE_NAME, filesOf, matching, Refusal, type Book, type Item, type ItemRef } from "./store";
 import { tellQueuesAgain } from "./across";
-import { factsOf, ownersOf, refOf, summaryOf, wholeOf } from "./view";
+import { factsOf, ownersOf, refOf, summaryOf, titlesHere, wholeOf } from "./view";
 import type { Act, Acted } from "./forward";
 import type { Target } from "../../shared/records";
 
@@ -69,9 +69,14 @@ export async function actHere({ method, action, ref, given = {}, targets, signal
     }, { handing: true }));
   }
   if (action === "restore") {
+    // (Another item here its issue: named by its conversation's title, as you know it, looked up
+    // only then.)
+    const deleted = find(allItems());
+    const twin = deleted?.removed ? twinOf(deleted) : null;
+    const titled = twin && !("computer" in twin) ? await titlesHere([twin.owner], targets) : undefined;
     return changed(inBook((item, book) => {
       if (!item.removed) throw new Refusal("It isn't deleted.");
-      refuseLiveElsewhere(item);
+      refuseLiveElsewhere(item, book.items(), titled);
       restoreItem(book, item, YOU, now);
     }));
   }

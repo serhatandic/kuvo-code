@@ -156,7 +156,7 @@ struct WorkItemPage: View {
 
     private func itemName(_ item: WorkItem) -> some View {
         HStack(spacing: 4) {
-            if let brand = item.brand { BrandMarkView(brand, size: 13) }
+            if let brand = item.brand { BrandMarkView(brand, size: 13).opacity(item.isGone ? WorkItemChip.goneOpacity : 1) }
             Text(item.name)
                 .font(.system(size: 13, weight: .semibold).monospacedDigit())
         }

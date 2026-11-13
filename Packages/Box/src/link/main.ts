@@ -42,6 +42,7 @@ import { finishDeletes, forgetLeftKeys } from "./bots/edit";
 import { keepJobs } from "./bots/jobs";
 import { forgetOldKit, readKit } from "./bots/kit";
 import { adoptBox } from "./compat/adopt-settings";
+import { LaunchLockBusy } from "./compat/launch-lock";
 import { forgetPhones } from "./compat/leave-running";
 import { addressOf, newKey, publicOf } from "./crypto/keys";
 import { IKInitiator, IKResponder, openOneWay, PROLOGUE, sealOneWay } from "./crypto/noise";
@@ -128,6 +129,7 @@ export { applyCompatibility, COMPATIBILITY_FILE, ENGINE_LAYER_FILE, engineConfig
 export { MODELS_DUE_FILE, refreshModels, settleDueModels } from "./engine/models";
 export { queueOf, queueWatcher, readQueues, scanQueues, stopSession } from "./engine/queue";
 export { PLACE_TRIES } from "./letters/letter";
+export { forgetEverythingSent, SENDING_PATIENCE } from "./server/sent-once";
 export { keepReadThroughSummary, keepWorkRead, settleWorkRead, under } from "./work/tree";
 export { readAllOn, readGroups } from "./areas/read-all";
 export { glances, Unreached } from "./areas/glance";
@@ -507,7 +509,16 @@ async function box(command: string): Promise<void> {
     case "adopt": {
       let seed: { settings?: unknown; keys?: unknown } | null = null;
       try { seed = JSON.parse((await input()) || "null"); } catch {}
-      const adopted = adoptBox(seed);
+      let adopted: ReturnType<typeof adoptBox>;
+      try {
+        adopted = adoptBox(seed);
+      } catch (error) {
+        // Said as it is, for the Mac to show.
+        if (!(error instanceof LaunchLockBusy)) throw error;
+        console.error(error.message);
+        process.exitCode = 1;
+        return;
+      }
       // Its settings its own now: the branch prefix it kept before, taken into them.
       keepOldBranchPrefix();
       // As its catalogs have them now: a Mac runs this as it connects, having just put newer ones here,
