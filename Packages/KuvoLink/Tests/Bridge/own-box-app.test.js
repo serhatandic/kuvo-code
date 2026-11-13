@@ -170,6 +170,26 @@ test("an app that quit without saying is opened again, and the call goes on", as
   assert.deepEqual(opened, [BUNDLE]);
 });
 
+test("something else answering where the app's tools were is taken for the app gone: nothing more is sent there, and the app's opened again", async () => {
+  const other = [];
+  const squatter = http.createServer(async (request, response) => {
+    other.push(await body(request));
+    json(response, { message: "who are you" }, 401);
+  });
+  const squatterPort = await listen(squatter);
+  await route("POST", "kuvo/box/app", { tools: { url: `http://127.0.0.1:${squatterPort}/mcp`, token: "y".repeat(32) } });
+  opened.length = 0;
+  opens = async () => {
+    await route("POST", "kuvo/box/app", { tools, bundle: BUNDLE });
+    return [200, {}];
+  };
+  const server = toolServer();
+  assert.equal(said(await server.call("browser_forward", {}, "ses_a")), "the panel did browser_forward {}");
+  assert.equal(said(await server.call("browser_forward", {}, "ses_a")), "the panel did browser_forward {}");
+  assert.deepEqual(opened, [BUNDLE]);
+  assert.equal(other.length, 1, "asked once, then never again");
+});
+
 test("an opening that fails: the agent hears why, and the app isn't opened again for a while", async () => {
   await route("POST", "kuvo/box/app", { tools: null });
   opened.length = 0;

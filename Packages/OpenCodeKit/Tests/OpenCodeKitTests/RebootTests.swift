@@ -54,12 +54,12 @@ import Testing
               echo "$*" >>"$HOME/browser-setups"; exit 0 ;;
             *"kuvo-link.js serve")
               echo "$*" >>"$HOME/serves"; printf '{"pid":%s,"port":1,"password":"p","kept":true}\n' $$ >"$KUVO_HOME/run/serve.json"
-              while [ -f "$HOME/.alive" ]; do /bin/sleep 1; done ;;
+              while [ -f "$HOME/.alive" ]; do /bin/sleep 1; done; exit 0 ;;
             *"kuvo-link.js login-path")
               [ -f "$KUVO_HOME/bin/.old-link" ] && { echo "Usage: kuvo-link.js run | serve" >&2; exit 2; }
               printf '%s' "$HOME/.nvm/bin:$PATH"; exit 0 ;;
             esac
-            case "$1" in *kuvo-link.js) env | sort >"$HOME/link.env"; echo $$ >"$KUVO_HOME/run/link.pid"; while [ -f "$HOME/.alive" ]; do /bin/sleep 1; done ;; esac
+            case "$1" in *kuvo-link.js) env | sort >"$HOME/link.env"; echo $$ >"$KUVO_HOME/run/link.pid"; while [ -f "$HOME/.alive" ]; do /bin/sleep 1; done; exit 0 ;; esac
             env | sort >"$HOME/engine-$$.env"
             echo "server listening on http://127.0.0.1:$3"
             while [ -f "$HOME/.alive" ]; do /bin/sleep 1; done
@@ -113,8 +113,23 @@ import Testing
         for line in ((try? String(contentsOf: home.appending(path: "engines"), encoding: .utf8)) ?? "").split(separator: "\n") {
             if let pid = Int32(line) { pids.append(pid) }
         }
-        for pid in pids where pid > 1 { kill(pid, SIGKILL) }
+        // Only one still running from this home (a number taken since by another process isn't it).
+        for pid in pids where pid > 1 && commandLine(pid).contains(home.path) { kill(pid, SIGKILL) }
         try? FileManager.default.removeItem(at: home)
+    }
+
+    /// `pid`'s command line, as `ps` says it ("" once it's gone).
+    private func commandLine(_ pid: Int32) -> String {
+        let ps = Process()
+        ps.executableURL = URL(filePath: "/bin/ps")
+        ps.arguments = ["-ww", "-o", "command=", "-p", "\(pid)"]
+        let out = Pipe()
+        ps.standardOutput = out
+        ps.standardError = FileHandle.nullDevice
+        guard (try? ps.run()) != nil else { return "" }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        ps.waitUntilExit()
+        return String(decoding: data, as: UTF8.self)
     }
 
     /// The machine's engine record as a restart left it, as it was before (a dead number).

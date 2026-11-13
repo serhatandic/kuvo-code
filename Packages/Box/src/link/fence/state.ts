@@ -286,6 +286,8 @@ function kuvoPorts(): number[] {
   try { add(JSON.parse(fs.readFileSync(path.join(RUN, "tools.json"), "utf8")).port); } catch {}
   // The box's own server for clients, wherever it runs from (its record, `run/serve.json`).
   try { add(JSON.parse(fs.readFileSync(path.join(RUN, "serve.json"), "utf8")).port); } catch {}
+  // This Mac's app's tools, as it registered with a Mac's box in a home of its own (run/app.json).
+  try { add(Number(new URL(JSON.parse(fs.readFileSync(path.join(RUN, "app.json"), "utf8")).tools.url).port)); } catch {}
   add(ownPort);
   return [...ports].sort((a, b) => a - b);
 }

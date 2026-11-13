@@ -106,6 +106,21 @@ function commandLine(pid) {
   commandLines.set(pid, { line, at: now });
   return line;
 }
+function commandLineOf(pid, proc = "/proc") {
+  try {
+    return fs.readFileSync(`${proc}/${pid}/cmdline`, "utf8").split("\x00").join(" ").trim();
+  } catch {
+    if (fs.existsSync(proc))
+      return;
+    return commandLine(pid)?.trim() || undefined;
+  }
+}
+function runsAs(pid, role, proc = "/proc") {
+  if (!Number.isInteger(pid) || pid <= 1 || !alive(pid))
+    return false;
+  const line = commandLineOf(pid, proc);
+  return line !== undefined && role.test(line);
+}
 function promptedFolders(platform = process.platform) {
   return platform === "darwin" ? new Set(["Desktop", "Documents", "Downloads", "Library", "Movies", "Music", "Pictures"]) : new Set;
 }
@@ -5316,6 +5331,9 @@ function kuvoPorts() {
   } catch {}
   try {
     add(JSON.parse(fs20.readFileSync(path21.join(RUN, "serve.json"), "utf8")).port);
+  } catch {}
+  try {
+    add(Number(new URL(JSON.parse(fs20.readFileSync(path21.join(RUN, "app.json"), "utf8")).tools.url).port));
   } catch {}
   add(ownPort);
   return [...ports].sort((a, b) => a - b);
@@ -38776,7 +38794,7 @@ import fs123 from "node:fs";
 import path126 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "b0285c328c75";
+var BRIDGE_VERSION = "9822d3a471eb";
 
 // Packages/Box/src/link/rehome/rewrite.ts
 var NO_REWRITE = {
@@ -46385,10 +46403,12 @@ import fs149 from "node:fs";
 import path150 from "node:path";
 var SERVE_NEEDED = () => path150.join(RUN, "serve.needed");
 var SERVE_FILE = () => path150.join(RUN, "serve.json");
+var SERVE_ROLE = /kuvo-link\.js serve(\s|$)/;
+var KEPT_ROLE = /kuvo-link\.js serve --kept(\s|$)/;
 function runningServe() {
   try {
     const record = JSON.parse(fs149.readFileSync(SERVE_FILE(), "utf8"));
-    if (isObject(record) && Number.isInteger(record.pid) && processRuns(record.pid, "kuvo-link")) {
+    if (isObject(record) && Number.isInteger(record.pid) && runsAs(record.pid, record.kept === true ? KEPT_ROLE : SERVE_ROLE)) {
       return { pid: record.pid, port: Number(record.port), kept: record.kept === true };
     }
   } catch {}
@@ -46744,7 +46764,16 @@ function starts() {
     checked: true
   };
 }
-function recorded(file, name) {
+var escaped = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+var RECORDS = [
+  ["box.pid", /kuvo-start(-keeper)? keep(\s|$)/, "keeper"],
+  ["engine.json", new RegExp(`${escaped(path152.join(K, "engine"))}/`), "engine"],
+  ["agents.pid", /kuvo-agents/, "coding agents"],
+  ["link.pid", /kuvo-link\.js run(\s|$)/, "link"],
+  ["serve.json", SERVE_ROLE, "server"],
+  ["browser.pid", /kuvo-browser\.js host(\s|$)/, "browser"]
+];
+function recorded(file, role) {
   let text = "";
   try {
     text = fs151.readFileSync(path152.join(RUN, file), "utf8");
@@ -46756,18 +46785,21 @@ function recorded(file, name) {
     try {
       pid = JSON.parse(text)?.pid;
     } catch {}
-  return processRuns(pid, name) ? pid : null;
+  return runsAs(pid, role) ? pid : null;
 }
 function running4() {
-  const records = [
-    ["box.pid", "kuvo-start", "keeper"],
-    ["engine.json", path152.join(K, "engine"), "engine"],
-    ["agents.pid", "kuvo-agents", "coding agents"],
-    ["link.pid", "kuvo-link", "link"],
-    ["serve.json", "kuvo-link", "server"],
-    ["browser.pid", "kuvo-browser", "browser"]
-  ];
-  return records.filter(([file, name]) => recorded(file, name) !== null).map(([, , what]) => what);
+  return RECORDS.filter(([file, role]) => recorded(file, role) !== null).map(([, , what]) => what);
+}
+function ownKeeper() {
+  const keeper = path152.join(K, "bin", "kuvo-start");
+  let text = "";
+  try {
+    text = fs151.readFileSync(keeper, "utf8");
+  } catch {
+    return null;
+  }
+  const named = text.match(/^K="\$HOME\/([^"/]+)"/m)?.[1];
+  return named === path152.basename(K) ? keeper : null;
 }
 function uninstallCheck() {
   const link = readLink();
@@ -46787,13 +46819,19 @@ function uninstall() {
   const tools = outside();
   let launchAgent = false;
   let crontabLine = false;
+  const startsAgain = [];
   if (tools && process.platform === "darwin") {
     const plist = path152.join(tools.agents, `${LAUNCH_AGENT}.plist`);
     if (fs151.existsSync(plist)) {
       const uid = process.getuid?.() ?? 0;
       run5(tools.launchctl, ["bootout", `gui/${uid}/${LAUNCH_AGENT}`]);
-      fs151.rmSync(plist, { force: true });
-      launchAgent = true;
+      try {
+        fs151.rmSync(plist, { force: true });
+      } catch {}
+      if (fs151.existsSync(plist))
+        startsAgain.push("its launch agent");
+      else
+        launchAgent = true;
     }
   }
   if (tools) {
@@ -46805,36 +46843,37 @@ function uninstall() {
       crontabLine = run5(tools.crontab, ["-"], kept.endsWith(`
 `) || !kept ? kept : `${kept}
 `).status === 0;
+      if (!crontabLine)
+        startsAgain.push("its line in your crontab");
     }
   }
+  fs151.mkdirSync(RUN, { recursive: true, mode: 448 });
   for (const file of ["serve.needed", "link.needed"])
     fs151.rmSync(path152.join(RUN, file), { force: true });
-  const keeper = path152.join(K, "bin", "kuvo-start");
+  fs151.writeFileSync(path152.join(RUN, "off"), "");
+  const keeper = ownKeeper();
   let stopped = true;
-  if (fs151.existsSync(keeper)) {
-    const off = spawnSync10("sh", [keeper, "off"], { cwd: K, encoding: "utf8", timeout: 120000, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, HOME: homeFolder() } });
+  if (keeper) {
+    const off = spawnSync10("sh", [keeper, "off"], { cwd: K, encoding: "utf8", timeout: 120000, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, HOME: path152.dirname(K) } });
     stopped = off.status === 0;
-  } else {
-    fs151.mkdirSync(RUN, { recursive: true, mode: 448 });
-    fs151.writeFileSync(path152.join(RUN, "off"), "");
   }
   const told = [];
-  for (const [file, name] of [["serve.json", "kuvo-link"], ["browser.pid", "kuvo-browser"], ["link.pid", "kuvo-link"]]) {
-    const pid = recorded(file, name);
+  for (const [file, role] of RECORDS) {
+    const pid = recorded(file, role);
     if (pid && pid !== process.pid)
       try {
         process.kill(pid, "SIGTERM");
-        told.push([pid, name]);
+        told.push([pid, role]);
       } catch {}
   }
   const pause = new Int32Array(new SharedArrayBuffer(4));
-  for (let waited = 0;waited < 200 && told.some(([pid, name]) => processRuns(pid, name)); waited++)
+  for (let waited = 0;waited < 200 && told.some(([pid, role]) => runsAs(pid, role)); waited++)
     Atomics.wait(pause, 0, 0, 50);
   const left = running4();
   stopped &&= left.length === 0;
   const where = K.startsWith(homeFolder() + "/") ? "~" + K.slice(homeFolder().length) : K;
-  const message = stopped ? `Kuvo Code is stopped on this computer and won't start again. Its folder stays, with your sessions and settings: remove ${where} to remove them too.` : `Kuvo Code won't start again on this computer, but ${left.length ? `its ${left.join(", ")} still ran` : "it couldn't stop everything"} just now. Run this again in a moment.`;
-  return { stopped, launchAgent, crontab: crontabLine, left: [K], message };
+  const message = !stopped ? `Kuvo Code ${startsAgain.length ? "" : "won't start again on this computer, but "}${left.length ? `its ${left.join(", ")} still ran` : "couldn't stop everything"} just now${startsAgain.length ? `, and ${startsAgain.join(" and ")} couldn't be taken away` : ""}. Run this again in a moment.` : startsAgain.length ? `Kuvo Code is stopped on this computer, but ${startsAgain.join(" and ")} couldn't be taken away, so it may start again. Run this again in a moment.` : `Kuvo Code is stopped on this computer and won't start again. Its folder stays, with your sessions and settings: remove ${where} to remove them too.`;
+  return { stopped, launchAgent, crontab: crontabLine, startsAgain, left: [K], message };
 }
 function uninstallCommand(args) {
   const unknown = args.filter((arg) => arg !== "--check");
@@ -46848,14 +46887,21 @@ function uninstallCommand(args) {
     console.error(message);
     return 1;
   }
+  if (!fs151.existsSync(path152.join(K, "bin", "kuvo-start")) && !fs151.existsSync(RUN)) {
+    const message = `There's no Kuvo Code box in ${K}.`;
+    console.log(JSON.stringify({ result: "refused", message }));
+    console.error(message);
+    return 1;
+  }
   if (args.includes("--check")) {
     console.log(JSON.stringify(uninstallCheck()));
     return 0;
   }
   const done = uninstall();
-  console.log(JSON.stringify({ result: done.stopped ? "uninstalled" : "unfinished", ...done }));
+  const finished = done.stopped && done.startsAgain.length === 0;
+  console.log(JSON.stringify({ result: finished ? "uninstalled" : "unfinished", ...done }));
   console.error(done.message);
-  return done.stopped ? 0 : 1;
+  return finished ? 0 : 1;
 }
 
 // Packages/Box/src/link/areas/group-settings.ts

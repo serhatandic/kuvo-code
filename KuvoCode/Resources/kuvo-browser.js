@@ -2253,8 +2253,8 @@ function registeredApp() {
 // Each process its own client to the app (its calls' ids are its own there, for a cancel to name).
 const APP_CLIENT = crypto.randomUUID();
 
-/// One browser call, to the app's tools: its result, or `{gone: true}` when nothing answers there
-/// (the app quit without saying). Stopped, the app's told.
+/// One browser call, to the app's tools: its result, or `{gone: true}` when the app doesn't answer
+/// there (it quit without saying: nothing there, or something else). Stopped, the app's told.
 async function appCall(tools, call) {
   const id = crypto.randomUUID();
   const send = (message, signal) =>
@@ -2279,8 +2279,11 @@ async function appCall(tools, call) {
   try {
     const response = await send({ id, method: "tools/call", params: { name: call.name, arguments: call.args, ...(call.meta ? { _meta: call.meta } : {}) } }, abort.signal);
     const answer = await response.json().catch(() => null);
-    if (answer?.result) return answer.result;
-    return text(answer?.error?.message ? `Kuvo Code's browser said: ${answer.error.message}` : `Kuvo Code's browser said ${response.status}.`, true);
+    // Something else answering there (the app quit, and another took its port; or one that refuses
+    // its token): taken for the app gone, so it's opened again, never asked of again.
+    if (answer?.jsonrpc !== "2.0" || answer.id !== id) return { gone: true };
+    if (answer.result) return answer.result;
+    return text(answer.error?.message ? `Kuvo Code's browser said: ${answer.error.message}` : `Kuvo Code's browser said ${response.status}.`, true);
   } catch (error) {
     if (call.cancelled) return text("The call was stopped.", true);
     const code = error?.cause?.code ?? error?.code;

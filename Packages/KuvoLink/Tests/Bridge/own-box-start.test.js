@@ -101,7 +101,8 @@ test("a Mac's own box has its server run by Kuvo Code itself, not kept for clien
 /** Stand-ins for the box's keeper, `launchctl` and `crontab`, noting what they're asked in the home. */
 function standIns(where, table) {
   const tools = path.join(where.home, "tools");
-  write(path.join(where.K, "bin", "kuvo-start"), `#!/bin/sh\necho "$*" >>"${where.home}/kuvo-start"\n[ "$1" = off ] && touch "$HOME/.kuvo-code/run/off"\nexit 0\n`, 0o755);
+  // (Naming its folder as the real one does, from HOME: K="$HOME/.kuvo-code".)
+  write(path.join(where.K, "bin", "kuvo-start"), `#!/bin/sh\nK="$HOME/${path.basename(where.K)}"\necho "$*" >>"${where.home}/kuvo-start"\necho "$K" >>"${where.home}/kuvo-start-folder"\nexit 0\n`, 0o755);
   write(path.join(tools, "launchctl"), `#!/bin/sh\necho "$*" >>"${where.home}/launchctl"\n`, 0o755);
   write(path.join(tools, "crontab"), `#!/bin/sh\nif [ "$1" = -l ]; then [ -f "${where.home}/crontab" ] || { echo "no crontab for you" >&2; exit 1; }; cat "${where.home}/crontab"; else cat >"${where.home}/crontab"; fi\n`, 0o755);
   if (table !== undefined) write(path.join(where.home, "crontab"), table);
@@ -213,6 +214,29 @@ test("uninstall refuses an app's box named by its folder alone, without the keep
   assert.equal(exists(path.join(folder, "kuvo-start")), false, "nothing stopped");
   assert.equal(exists(path.join(folder, "launchctl")), false);
   assert.equal(read(path.join(folder, "crontab")), `@reboot sh x ${TAG}\n`);
+});
+
+test("uninstall stops the box it names, whatever HOME says: another home's box is never touched", async () => {
+  const named = home();
+  const yours = home();
+  standIns(named);
+  standIns(yours);
+  // Run with your HOME, naming another box (a test's folder, say).
+  const done = await uninstall(named, [], { HOME: yours.home });
+  assert.equal(done.status, 0, done.stderr);
+  assert.equal(read(path.join(named.home, "kuvo-start")), "off\n");
+  assert.equal(read(path.join(named.home, "kuvo-start-folder")), `${named.K}\n`, "its keeper, for its own folder");
+  assert.equal(exists(path.join(yours.home, "kuvo-start")), false, "yours left alone");
+  assert.equal(exists(path.join(yours.run, "off")), false);
+});
+
+test("uninstall refuses a folder that isn't a box", async () => {
+  const where = home();
+  fs.rmSync(where.run, { recursive: true });
+  const done = await uninstall(where);
+  assert.equal(done.status, 1);
+  assert.equal(JSON.parse(done.stdout).result, "refused");
+  assert.equal(exists(where.run), false, "nothing made there");
 });
 
 test("uninstall says what it doesn't know", async () => {

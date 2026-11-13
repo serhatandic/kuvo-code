@@ -9,7 +9,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { processRuns } from "../shared/platform";
+import { runsAs } from "../shared/platform";
 import { isObject, parsed } from "../shared/json";
 import { writePrivate } from "../shared/files";
 import { IS_MAC, RUN } from "./home";
@@ -20,11 +20,15 @@ export const SERVE_NEEDED = () => path.join(RUN, "serve.needed");
 export const SERVE_FILE = () => path.join(RUN, "serve.json");
 
 interface ServeRecord { pid: number; port: number; kept: boolean }
-/** Where `serve` answers now, as its record says, when that process runs. */
+/** The command line of `serve`, and of one kept for clients. */
+export const SERVE_ROLE = /kuvo-link\.js serve(\s|$)/;
+export const KEPT_ROLE = /kuvo-link\.js serve --kept(\s|$)/;
+/** Where `serve` answers now, as its record says, when that process runs as `serve` (its number
+ * taken since by another process isn't believed). */
 export function runningServe(): ServeRecord | null {
   try {
     const record = JSON.parse(fs.readFileSync(SERVE_FILE(), "utf8"));
-    if (isObject(record) && Number.isInteger(record.pid) && processRuns(record.pid, "kuvo-link")) {
+    if (isObject(record) && Number.isInteger(record.pid) && runsAs(record.pid, record.kept === true ? KEPT_ROLE : SERVE_ROLE)) {
       return { pid: record.pid as number, port: Number(record.port), kept: record.kept === true };
     }
   } catch {}

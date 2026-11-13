@@ -5056,13 +5056,15 @@ can't (a machine, or nothing to move back).
 
 `box.app` (#333 piece 3). A Mac's box in a home of its own (`box/kind` says `mac`; not the app's box
 in its folder, whose keeper does this) is where its app registers, and its agents browse in the
-app's panel through it, with no Chromium of its own. A machine's box answers `409` to both routes.
+app's panel through it, with no Chromium of its own. A machine's box answers `409` to both routes
+(after a phone's `403` where one asks what only Kuvo Code may).
 
 - **`kuvo/box/app`**: `POST` from Kuvo Code itself (`403` from a phone), `{tools: {url, token}, bundle}`
   as the app opens: where its panel's tools answer (MCP over HTTP, on `127.0.0.1`, `localhost` or
   `[::1]` only, to `Authorization: Bearer <token>`), and where it's installed (a whole path to its
   `.app`). `{tools: null}` as it quits, its place kept. `{updating: true}` as it quits to install an
-  update. `bundle` left out keeps the one before. `GET` and each `POST` answer `{bundle, open,
+  update (today's app doesn't say it yet: #333 piece 6b, with telling the box it quits; until then
+  the box finds it gone when its tools stop answering). `bundle` left out keeps the one before. `GET` and each `POST` answer `{bundle, open,
   updating, opening, failed}`: where it's installed (null before it ever said), whether its tools
   answer now, whether an update installs (said in the last two minutes), whether an opening is under
   way, and the last opening that failed, within its rest (`{at, message}`, `at` in ms). Kept in
@@ -5071,7 +5073,10 @@ app's panel through it, with no Chromium of its own. A machine's box answers `40
   agents run it) sends each `browser_*` call to the app's tools as it came (`tools/call`, with the
   session's `_meta`, `x-kuvo-session` naming the conversation, and an `mcp-session-id` of its own;
   a call stopped is told to the app as `notifications/cancelled`), and gives back what the app
-  answers. Its other tools are the box's, as on a machine.
+  answers. Nothing there, or something there that doesn't answer as the app's tools do (a `401`, not
+  JSON-RPC), is the app gone: the call has it opened again. Its other tools are the box's, as on a
+  machine. On a Mac the app's tools' port is refused to agents' commands in the sandbox, as the box's
+  own servers are.
 - **Opening the app**, when a browser call comes with no app registered:
   `POST kuvo/box/app/open` (from Kuvo Code's own processes; `{gone: <token>}` says the app
   registered with that token didn't answer, so it's taken for closed). The box decides:
@@ -5131,9 +5136,9 @@ application/json`:
   Finder's Trash (bridge 0.9.52); one anywhere else stays where it is;
 - `app/open {"bundle"}` → `{}`: Kuvo Code at `bundle` opened in the background, as the box asks for
   its agents' browser ("This Mac's app"): no window, out of the Dock, not taking focus; one running
-  from there already is left as it is. The keeper opens only an app of its own bundle ID (`403`
-  for another), answering `410` when there's nothing there and `502 {"message"}` when macOS didn't
-  open it. The open app answers `{}` (it's open). A host that doesn't know it answers `404`;
+  from there already is left as it is. The keeper opens only the app it runs from, whose bundle ID
+  is its own and whose signature meets its own designated requirement (`403` for anything else),
+  answering `410` when there's nothing there and `502 {"message"}` when macOS didn't open it. The open app answers `{}` (it's open). A host that doesn't know it answers `404`;
 - for its link (bridge 0.9.61, "The relay, on this Mac's box"):
   - `link/identity {}` → `{"key", "secret", "sign"}` (each 32 bytes, base64url): this Mac's link
     key, relay secret and signing key, from the Keychain, never asking you to unlock it; `503` while
@@ -6911,17 +6916,21 @@ starts again, and nothing of it runs:
   starts it as it stops;
 - its line in your crontab (by its mark, `# kuvo-code: starts its engine again after a restart`)
   is taken out, the rest kept; a crontab that can't be read is never written over;
-- `run/serve.needed` and `run/link.needed` go, and its keeper stops everything for good
-  (`kuvo-start off`: `run/off`), then its server for clients, its browser and its link, by their
-  records, waiting up to ten seconds for them to end.
+- `run/serve.needed` and `run/link.needed` go, it's marked off (`run/off`), and its keeper stops
+  everything for good (`kuvo-start off`, run only where its script names this very folder, with
+  `HOME` the folder around it, so another home's box is never touched); then whatever of it still
+  runs by its records (its keeper, engine, coding agents, link, server and browser, each only while
+  its process's command line says it's that one), waiting up to ten seconds for them to end.
 
 Its folder stays, with your sessions and settings: the command says where, for you to remove (or the
 app to move to the Trash). The launch agent and the crontab line are touched only for the real
 `~/.kuvo-code` (a test's home uses stand-ins it names, `KUVO_TEST_UNINSTALL_TOOLS`, else leaves
 both alone). It prints one JSON line: `{result: "uninstalled" | "unfinished", stopped, launchAgent,
-crontab, left, message}` (`left`, the folders it leaves), says `message` on stderr, and exits 0
-when everything's stopped, 1 when something still ran (run it again), 2 for an argument it doesn't
-know. `uninstall --check` changes nothing and says what it would stop: `{folder, kind, running,
+crontab, startsAgain, left, message}` (`startsAgain`, what it found but couldn't take away, the
+launch agent or the crontab line; `left`, the folders it leaves), says `message` on stderr, and
+exits 0 when everything's stopped and nothing would start it again, 1 otherwise (run it again) or
+for a folder that isn't a box (neither `bin/kuvo-start` nor `run`, `{result: "refused"}`), 2 for an
+argument it doesn't know. `uninstall --check` changes nothing and says what it would stop: `{folder, kind, running,
 starts: {launchAgent, crontab, checked}, bots, wakes, phones, computers}` (what runs of it now, by
 name; whether its launch agent and crontab line are there, `checked` false where it doesn't look;
 how many bots, wake-ups and watches, phones paired, and your other computers it talks to). This

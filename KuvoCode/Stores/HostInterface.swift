@@ -341,7 +341,7 @@ final class HostInterface {
             // here, with what runs as the installed app (the keeper; the open app is open already).
             guard let bundle = given["bundle"] as? String, bundle.hasPrefix("/") else { return .init(status: 400) }
             if appAnswers { return .json([:]) }
-            return await Self.openApp(at: URL(filePath: bundle))
+            return await Self.openApp(at: URL(filePath: bundle), runningFrom: Bundle.main.bundleURL)
         case "/trash":
             // What the box let go of (a deleted bot's folder), from its own trash folder only, to
             // the Finder's Trash, where you look for what you deleted.
@@ -404,17 +404,20 @@ extension HostInterface {
 
     /// Kuvo Code at `bundle`, opened in the background as the keeper opens it for an agent's browser
     /// (`AppOpener.openQuietly`: no window, out of the Dock, not taking focus; one running already
-    /// is left as it is). Only Kuvo Code itself: an app its Info.plist says is (its bundle ID), and
-    /// whose signature meets this one's own designated requirement (the same identifier and team;
-    /// a development build's, this very build), never another app a file names. 410 when it isn't
-    /// there any more, 403 for another app, 502 with why it couldn't be opened.
-    static func openApp(at bundle: URL) async -> HTTPResponse {
+    /// is left as it is). Only the app this runs from (`runningFrom`: the keeper's own, as #211
+    /// opened it; never another copy, an older one say, that the box was told of), whose Info.plist
+    /// says it's Kuvo Code (its bundle ID) and whose signature meets this one's own designated
+    /// requirement (the same identifier and team; a development build's, this very build). 410 when
+    /// it isn't there any more, 403 for another app, 502 with why it couldn't be opened.
+    static func openApp(at bundle: URL, runningFrom own: URL) async -> HTTPResponse {
         func said(_ status: Int, _ message: String) -> HTTPResponse {
             var answer = HTTPResponse.json(["message": message])
             answer.status = status
             return answer
         }
         guard FileManager.default.fileExists(atPath: bundle.path(percentEncoded: false)) else { return said(410, "It isn’t there any more.") }
+        let place = { (url: URL) in url.resolvingSymlinksInPath().standardizedFileURL.path(percentEncoded: false).trimmingCharacters(in: CharacterSet(charactersIn: "/")) }
+        guard place(bundle) == place(own) else { return said(403, "That isn’t the Kuvo Code this runs from.") }
         guard let id = Bundle(url: bundle)?.bundleIdentifier, id == Bundle.main.bundleIdentifier,
               await Task.detached(operation: { isSignedAsThis(bundle) }).value else { return said(403, "That isn’t Kuvo Code.") }
         do {
