@@ -5308,9 +5308,15 @@ the box sends keeps its parts, which clients draw it by. No client writes or rea
   `{included?, paths?, unsent?}` (files the client sent with their contents, by path, or couldn't
   send). With `command`, that command runs with `words` as its arguments, as written, and only the
   files' note after them. `{id, text, files?, delivery?}` sends one sent before again as the agent
-  read it (Retry; another agent's letter put back), `words` then only how it's shown. It goes to the engine or the coding agents' bridge, wherever the session is, once per
-  `id` (`sentOnce`), and answers as they do; `400` nothing to send, `404` no such session, `409`
-  moving, `503` not running. `queue/add` takes the same fields (without `text`).
+  read it (Retry; another agent's letter put back; one from before whose parts couldn't be read),
+  `words` then only how it's shown; its files are kept as a message's are (a picture for a model that
+  only reads words goes as a path, in the note it has). A session picked in `named` that this box
+  doesn't list, after a moment's wait for its list, is refused (`409`), never dropped. It goes to the
+  engine or the coding agents' bridge, wherever the session is, once per `id` (`sentOnce`), and
+  answers as they do; `400` nothing to send, `404` no such session, `409` moving or an agent not
+  listed, `503` not running. `queue/add` takes the same fields, `{text, again: true, words?}` for one
+  sent again as the agent read it, and `{text, kept: true, words?, metadata?}` for one a DELETE gave
+  back (Undo) with the parts it had; `text` alone is an older client's own envelope.
 - **What the agent reads,** in this order (the words Kuvo Code wrote before, byte for byte): the
   words (trimmed; the widget's block after them: a line `<from-widget>`, a heading, its title on one
   line, `</from-widget>`), the keyword's block (`<sent-with>`, a heading, the keyword on one line,
