@@ -2263,9 +2263,10 @@ A client never keeps an older box's way of doing something (#679): it brings a b
 before it uses it, and meanwhile says so. A box is older than a client needs when its `kuvo/info`
 `features` lack any name the client uses with no way around it (or it has no `kuvo/info`): today
 `agent-tools.own`, `folders.tree`, `git.branches`, `git.merge`, `git.pull-request`, `git.status`,
-`models.offered`, `sessions.list`, `sessions.models` and `sessions.start.empty` (KuvoClient's
-`BoxGate.required`; a box with `sessions.list` has what came before it too). A client adds a name
-there as it drops its fallback for a box without it.
+`models.offered`, `sessions.list`, `sessions.models`, `sessions.start.empty` and `typed`
+(KuvoClient's `BoxGate.required`; a box with `sessions.list` and `typed` has what came before them
+too). A client adds a name there as it drops its fallback for a box without it, or its words that
+such a box needs a newer Kuvo Code.
 
 - **Held**: a client sends a held box nothing but `kuvo/info`, `kuvo/update` and `kuvo/box/update`,
   and a Mac the tool calls of the agents at work there (`kuvo/agent-tools`, so work under way goes

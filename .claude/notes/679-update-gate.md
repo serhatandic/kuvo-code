@@ -10,8 +10,9 @@ A client checks names, never versions (PROTOCOL.md, "Features"). `BoxGate.requir
 KuvoClient (ClientSessions) lists the features this client uses with no fallback. A box whose
 `kuvo/info` `features` lack any of them (or that has no `kuvo/info`) is **older than the app
 needs**. Today the list is `agent-tools.own`, `folders.tree`, `git.branches`, `git.merge`,
-`git.pull-request`, `git.status`, `models.offered`, `sessions.list`, `sessions.models` and
-`sessions.start.empty`. `sessions.list` (#668) came last, so a box that has it also has what came
+`git.pull-request`, `git.status`, `models.offered`, `sessions.list`, `sessions.models`,
+`sessions.start.empty` and `typed` (#668 item 2, whose "needs a newer Kuvo Code for / and !" is
+folded in). `sessions.list` (#668) came last, so a box that has it also has what came
 before: plan limits' `rows`, `kuvo/updates` and Cursor's limits. A client adds a name here when it
 drops the fallback for that name. PROTOCOL.md describes the rule so another client can do the
 same.
@@ -95,6 +96,7 @@ In no state does any client fall back to an old path.
 | 0.7 settings, box-branch-prefix, agents-runtime; beta.1 outbox, mac-agents | an older Mac's files on a machine, adopted or cleaned once |
 | 0.7 files, keeper, visits, engine-stop, leave-running, bot-json-job, limits-own-numbers, update-answer (box half), no-boxes-json | the box meeting an older Mac, which may still connect (and the Mac's side of the same files: `bin/.own`, `tolerates`, Start) |
 | beta.1 peers-list, connected, deleted-bots, box-read-change, mac-moves, worktree-prefix | the box meeting a beta.1 Mac |
+| 0.7 usage-settings-box (from main, #631 F) | data carried across: while this Mac's box can't keep the panel's settings, the panel keeps them here; sending them to an older box would drop unsent changes |
 | 0.7 limits-merge | it also covers a computer the first box doesn't hear from now (relay down); PROTOCOL.md says that needs an answer first |
 | 0.7 box-notices | it also covers a machine whose bridge isn't running (`telling: false`) |
 | 0.7 model-rule (for now) | the gate makes its older-box half unreachable, but a catalog with no box (34 test files) still takes it; goes once those tests give theirs a box |

@@ -9,9 +9,9 @@ import Foundation
 /// `features` lack any of `required` is older than this client needs.
 public enum BoxGate {
     /// What this client uses with no way around it on a box that hasn't it. A name goes in here
-    /// when the client drops its fallback for a box without it. `sessions.list` (#668) came last:
-    /// a box that has it has what came before it too (plan limits' `rows`, `kuvo/updates`,
-    /// Cursor's limits, `kuvo/sessions/read`).
+    /// when the client drops its fallback for a box without it, or would say it needs a newer
+    /// Kuvo Code. `sessions.list` and `typed` (#668) came last: a box that has them has what came
+    /// before them too (plan limits' `rows`, `kuvo/updates`, Cursor's limits, `kuvo/sessions/read`).
     public static let required: [String] = [
         "agent-tools.own",
         "folders.tree",
@@ -23,6 +23,7 @@ public enum BoxGate {
         "sessions.list",
         "sessions.models",
         "sessions.start.empty",
+        "typed",
     ]
 
     /// What `features` lack of `required`, in its order: none when the box is up to date. Nil
