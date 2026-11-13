@@ -12,6 +12,20 @@ export const onMachine = process.env.KUVO_AGENTS_REMOTE === "1"
 /** The machine's Kuvo Code folder (`~/.kuvo-code`). */
 export const machineHome = process.env.KUVO_HOME
 
+/** A Mac's box in a home of its own (`~/.kuvo-code`, its `box/kind` saying `mac`): its bridge runs
+ * as a machine's, but it's on your Mac, where the agents are yours. */
+export const onMacBox = onMachine && !!machineHome && (() => {
+  try {
+    return readFileSync(join(machineHome, "box", "kind"), "utf8").trim() === "mac"
+  } catch {
+    return false
+  }
+})()
+
+/** The agents' own sign-ins and history are in your home (`~/.claude`, `~/.codex`, `~/.grok`), as
+ * they keep them for you: on a Mac, whichever way its box runs. On a machine, in Kuvo Code's folder. */
+export const yourHomes = !onMachine || onMacBox
+
 /**
  * The machine's own folders (XDG_…, npm's cache, Bun's), as they were before its engine's launch
  * pointed them into Kuvo Code's folder (`KUVO_OWN_…`; undefined: not set). The agents keep theirs
