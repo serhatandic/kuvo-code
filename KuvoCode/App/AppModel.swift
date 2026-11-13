@@ -408,7 +408,8 @@ final class AppModel {
         phoneLink.readyMachines = { [weak self] in self?.machines.engines.values.filter(\.isReady) ?? [] }
         // With machines, this Mac meets them at the relay, phone or not.
         phoneLink.hasMachines = { [weak self] in self.map { !$0.machines.list.isEmpty || $0.machines.fileDidntRead } ?? false }
-        // (Attached in place, the app set up no machine with its own link: none to leave, as before.)
+        // (Attached in place, the app has no link of its own (the box here keeps its own), so it's
+        // on no machine's bridge to leave.)
         Machines.linkKey = { [weak self] in self?.attached == nil ? self?.phoneLink.macKey : nil }
         phoneLink.bots = bots
         phoneLink.browserAsks = browserAsks
@@ -767,6 +768,7 @@ final class AppModel {
         // the box here has its own.
         wireStores()
         wirePhoneLink()
+        followClock()
         followActivation()
         engine = .ready
         startMachines()
@@ -1098,15 +1100,19 @@ final class AppModel {
                 await workspace.refreshAgents()
             }
         }
-        // Your time zone or how you write dates changed: meetings go by the new ones.
-        if clockObservers.isEmpty {
-            for name in [Notification.Name.NSSystemTimeZoneDidChange, NSLocale.currentLocaleDidChangeNotification] {
-                clockObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                    MainActor.assumeIsolated { self?.boxGroups.settingsChanged() }
-                })
-            }
-        }
+        followClock()
         followActivation()
+    }
+
+    /// Your time zone or how you write dates changed: each computer's group chats go by the new
+    /// ones (this Mac's, or, attached in place, the box here's). Once, from either start.
+    func followClock() {
+        guard clockObservers.isEmpty else { return }
+        for name in [Notification.Name.NSSystemTimeZoneDidChange, NSLocale.currentLocaleDidChangeNotification] {
+            clockObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.boxGroups.settingsChanged() }
+            })
+        }
     }
 
     /// Back in the app, you may have installed an agent or signed in to one in Terminal: this Mac's
