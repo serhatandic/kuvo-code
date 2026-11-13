@@ -170,7 +170,8 @@ import UsageKit
         let (defaults, folder) = try suite()
         defer { StubWeb.stop(); try? FileManager.default.removeItem(at: folder) }
         let box = Box()
-        box.losesFirstAnswer = 503
+        // (A gateway's 502: the engine's client asks again by itself only after a 503.)
+        box.losesFirstAnswer = 502
         StubWeb.handle(Self.box + "/api/kuvo/usage/settings") { request, body in box.answer(request, body) }
         let host = HostSettings(defaults: defaults)
         let store = UsageSettingsOnBox(host: host, defaults: defaults)
@@ -184,9 +185,10 @@ import UsageKit
         defaults.set(true, forKey: "openusage.notifications.healthyToClose")
         host.flush()
         // Turned away against this Mac's own first: it goes again from the box's version.
-        try await until { box.puts.count == 3 }
+        let both = ["underTenPercent": true, "healthyToClose": true, "closeToRunningOut": false]
         try await until { store.answered == 3 }
-        #expect(box.notifications == ["underTenPercent": true, "healthyToClose": true, "closeToRunningOut": false])
+        #expect(box.puts.count == 3)
+        #expect(box.notifications == both)
         #expect(defaults.bool(forKey: "openusage.notifications.healthyToClose"))
     }
 
