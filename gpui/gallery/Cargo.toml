@@ -1,0 +1,26 @@
+[package]
+name = "kuvo_gallery"
+description = "A gallery of Kuvo's building blocks"
+edition.workspace = true
+version.workspace = true
+license-file.workspace = true
+publish.workspace = true
+
+[dependencies]
+gpui.workspace = true
+gpui_platform.workspace = true
+kuvo_ui.workspace = true
+anyhow = "1"
+
+[features]
+# Offscreen rendering for the shots binary; pulls in GPUI's test support.
+shots = ["gpui/test-support", "gpui_platform/test-support"]
+
+[[bin]]
+name = "kuvo_gallery"
+path = "src/main.rs"
+
+[[bin]]
+name = "shots"
+path = "src/bin/shots.rs"
+required-features = ["shots"]

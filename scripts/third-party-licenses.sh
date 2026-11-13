@@ -56,6 +56,12 @@ HEADER
     section "Simple Icons" 16.35.0 https://simpleicons.org \
         "Services' marks in Packages/KuvoClient/Sources/ClientDesign/Resources/Marks.xcassets, unchanged. Each mark is its owner's trademark, shown only to name its service." \
         Licenses/simple-icons.txt
+    section GPUI "(Zed, rev dc93abce)" https://github.com/zed-industries/zed/tree/main/crates/gpui \
+        "The UI framework of the GPUI client in gpui/. Parts of gpui/kuvo_ui/src/text_field are adapted from its examples/input.rs. Every Rust crate the client builds on, and its license, is listed in gpui/LICENSES-DEPS.md." \
+        Licenses/gpui.txt
+    section option-ext 0.2.0 https://github.com/soc/option-ext \
+        "Linked unmodified into the GPUI client through GPUI's font loading (font-kit, dirs). Its source is at the location above and on crates.io (crates.io/crates/option-ext)." \
+        Licenses/option-ext.txt
 
     python3 - "$resolved" <<'PY' | while IFS='|' read -r location version; do
 import json, sys
