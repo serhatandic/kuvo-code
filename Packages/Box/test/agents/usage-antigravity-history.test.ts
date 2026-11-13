@@ -1,15 +1,15 @@
 import "../safety"
 import { afterAll, describe, expect, test } from "bun:test"
 import type { Agent } from "../../src/agents/agent"
-import { antigravitySources, placeOf, Usage } from "../../src/agents/usage/usage"
-import type { PricingStore } from "../../src/agents/usage/pricing"
+import { antigravitySources, claudeSources, placeOf, Usage } from "../../src/agents/usage/usage"
+import { ClaudeAgent } from "../../src/agents/agents/claude"
 import { Database } from "bun:sqlite"
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { AntigravityHistory, antigravityDatabases, antigravitySlots, generationEvent, MAXIMUM_BLOB_BYTES, modelCandidates, readAntigravityDatabase } from "../../src/agents/usage/antigravity-history"
 import { daysIn } from "../../src/agents/usage/history"
-import { Catalog, Pricing, supplementFrom } from "../../src/agents/usage/pricing"
+import { Catalog, Pricing, PricingStore, supplementFrom } from "../../src/agents/usage/pricing"
 
 const base = realpathSync(mkdtempSync(join(tmpdir(), "antigravity-history-test-")))
 afterAll(() => rmSync(base, { recursive: true, force: true }))
@@ -80,11 +80,12 @@ describe("Antigravity's bounded local history", () => {
       expect(await history.scan(home, 0)).toEqual([modern.expected])
     } finally { db.close() }
   })
-  test("oversized blobs are skipped, while an unreadable new database rejects the round", async () => {
+  test("oversized blobs are skipped, and an unreadable new database is logged once and left out while the others count", async () => {
     const { home, db, path } = store()
     insert(db, 0)
     db.close()
-    const history = new AntigravityHistory()
+    const logged: string[] = []
+    const history = new AntigravityHistory(undefined, undefined, (message) => logged.push(message))
     expect(await history.scan(home, 0)).toHaveLength(1)
     const writable = new Database(path)
     writable.query("INSERT INTO gen_metadata VALUES (?,?)").run(1, new Uint8Array(MAXIMUM_BLOB_BYTES + 1))
@@ -94,8 +95,23 @@ describe("Antigravity's bounded local history", () => {
     repair.exec("DELETE FROM gen_metadata WHERE idx=1")
     repair.close()
     expect(await history.scan(home, 0)).toHaveLength(1)
-    writeFileSync(join(home, "antigravity", "conversations", "broken.db"), "not SQLite")
-    await expect(history.scan(home, 0)).rejects.toThrow()
+    expect(logged).toEqual([])
+    const broken = join(home, "antigravity", "conversations", "broken.db")
+    writeFileSync(broken, "not SQLite")
+    expect(await history.scan(home, 0)).toHaveLength(1)
+    expect(await history.scan(home, 0)).toHaveLength(1)
+    expect(logged).toHaveLength(1)
+    expect(logged[0]).toContain(realpathSync(broken))
+    // A database without gen_metadata, and a link to one that's gone, are left out the same way.
+    new Database(join(home, "antigravity", "conversations", "other.db")).close()
+    symlinkSync(join(home, "absent.db"), join(home, "antigravity", "conversations", "dangling.db"))
+    expect(await history.scan(home, 0)).toHaveLength(1)
+    expect(logged).toHaveLength(2)
+    expect(logged[1]).toContain("other.db")
+    // Repaired, it counts.
+    rmSync(broken)
+    const copy = new Database(broken); copy.exec("CREATE TABLE gen_metadata(idx INTEGER PRIMARY KEY, data BLOB)"); insert(copy, 0); copy.close()
+    expect(await history.scan(home, 0)).toHaveLength(2)
   })
   test("missing stores are empty and symlinked stores count only once", async () => {
     const { home, db } = store()
@@ -109,7 +125,7 @@ describe("Antigravity's bounded local history", () => {
 })
 
 
-test("own profiles alone, machine-hashed places, and a failed partial read retains the complete account", async () => {
+test("own profiles alone, machine-hashed places, and an unreadable new database leaves the rest of the account counted", async () => {
   const own = store()
   insert(own.db, 0)
   own.db.close()
@@ -135,7 +151,7 @@ test("own profiles alone, machine-hashed places, and a failed partial read retai
   now += 5 * 60_000
   await usage.refresh()
   expect(usage.view("UTC").totals).toEqual(before.totals)
-  expect(usage.own()[0]!.scanned).toBe(Date.parse(fixture.now))
+  expect(usage.own()[0]!.scanned).toBe(now)
   rmSync(join(own.folder, "partial.db"))
   rmSync(own.path)
   expect(await source.slots(pricing, 0)).toEqual({ used: new Map(), unknown: new Map(), fallback: new Map() })
@@ -232,4 +248,35 @@ test("shared missing/empty profile fixtures contain no history, as Swift", async
     const events = await new AntigravityHistory().scan(home, 0)
     expect(events.reduce((tokens, e) => tokens + e.inputTokens + e.outputTokens + e.cacheReadTokens, 0), each.name).toBe(each.tokens)
   }
+})
+
+test("an Antigravity database that can't be read never holds up forgetting the other services' deleted logs", async () => {
+  const own = store()
+  insert(own.db, 0); own.db.close()
+  writeFileSync(join(own.folder, "broken.db"), "not SQLite")
+  const home = mkdtempSync(join(base, "claude-"))
+  const account = join(home, "claude", "accounts", "work")
+  const project = join(account, "projects", "-work-site")
+  mkdirSync(project, { recursive: true })
+  const at = Date.parse(fixture.now)
+  const reply = (id: string) => JSON.stringify({ type: "assistant", timestamp: new Date(at - 60_000).toISOString(), sessionId: "s", version: "2.1.300", requestId: `req_${id}`, message: { id: `msg_${id}`, model: "claude-opus-4-5", role: "assistant", usage: { input_tokens: 100, output_tokens: 10 } } }) + "\n"
+  writeFileSync(join(project, "one.jsonl"), reply("1"))
+  writeFileSync(join(project, "two.jsonl"), reply("2"))
+  const claude = new ClaudeAgent({ home, temporary: home, deps: {} as any }, { id: "work", home: account }) as unknown as Agent
+  const antigravity = { providerID: "antigravity", profile: own.home, instance: { id: "default" } } as unknown as Agent
+  const folder = join(home, "usage")
+  const claudeOf = claudeSources(folder)
+  const antigravityOf = antigravitySources(folder, () => "machine-one")
+  const usage = new Usage(() => [...claudeOf([claude]), ...antigravityOf([antigravity])], new PricingStore(undefined, null), () => "0123456789abcdef", join(folder, "usage.json"), () => at)
+  await usage.refresh()
+  const totals = usage.view("UTC").totals
+  expect(totals.claude?.[0]?.tokens).toBe(220)
+  expect(totals.antigravity?.[0]?.tokens).toBe(1350)
+  expect(readdirSync(join(folder, "claude-files"))).toHaveLength(2)
+  rmSync(join(project, "two.jsonl"))
+  await usage.refresh()
+  // The round is whole: Claude's deleted log is forgotten, here and on disk.
+  expect(usage.view("UTC").totals.claude?.[0]?.tokens).toBe(110)
+  expect(readdirSync(join(folder, "claude-files"))).toHaveLength(1)
+  expect(usage.view("UTC").totals.antigravity?.[0]?.tokens).toBe(1350)
 })

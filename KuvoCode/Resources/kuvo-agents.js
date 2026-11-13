@@ -10989,6 +10989,13 @@ class AntigravityPlan {
       throw new LimitsProblem("failed", "Antigravity's credential refusal record cannot be saved; the last quota reading is kept.", undefined, false);
     }
   }
+  held = new Map;
+  hold(url, error, now) {
+    this.held.set(url, error.until ?? now + 60 * 60000);
+  }
+  holding(url, now) {
+    return (this.held.get(url) ?? 0) > now;
+  }
   lastCredential;
   lastSignIn;
   lastAccount;
@@ -11102,7 +11109,8 @@ class AntigravityPlan {
       for (const e of endpoints) {
         if (e.csrf && this.deniedCSRF.has(fingerprint(e.csrf)))
           continue;
-        const call = (method) => this.request(`${e.scheme}://127.0.0.1:${e.port}/exa.language_server_pb.LanguageServerService/${method}`, { method: "POST", headers: { "Content-Type": "application/json", "Connect-Protocol-Version": "1", "x-codeium-csrf-token": e.csrf }, body: JSON.stringify({ metadata: { ideName: "antigravity", extensionName: "antigravity", ideVersion: "unknown", locale: "en" } }), ...e.scheme === "https" ? { tls: { rejectUnauthorized: false } } : {} }, now, true);
+        const local = (method) => `${e.scheme}://127.0.0.1:${e.port}/exa.language_server_pb.LanguageServerService/${method}`;
+        const call = (method) => this.request(local(method), { method: "POST", headers: { "Content-Type": "application/json", "Connect-Protocol-Version": "1", "x-codeium-csrf-token": e.csrf }, body: JSON.stringify({ metadata: { ideName: "antigravity", extensionName: "antigravity", ideVersion: "unknown", locale: "en" } }), ...e.scheme === "https" ? { tls: { rejectUnauthorized: false } } : {} }, now, true);
         let summary;
         try {
           summary = await call("RetrieveUserQuotaSummary");
@@ -11117,16 +11125,19 @@ class AntigravityPlan {
         if (windows !== undefined) {
           if (!windows.length)
             throw new LimitsProblem("failed", "Antigravity's quota summary has no readable buckets.");
-          let plan;
-          try {
-            const status = await call("GetUserStatus");
-            plan = antigravityPlanName(status?.userStatus?.userTier?.name ?? status?.userStatus?.planStatus?.planInfo?.planName);
-          } catch (error) {
-            if (error instanceof LimitsProblem && error.kind === "rate-limited")
-              throw error;
-            console.warn("Antigravity optional plan status is unavailable; quota windows are kept.");
-          }
-          return { windows, plan, partial: windows.filter((w) => w.id !== "argon-weekly").length < 4, identity: c.identity };
+          let plan, waiting = this.holding(local("GetUserStatus"), now);
+          if (!waiting)
+            try {
+              const status = await call("GetUserStatus");
+              plan = antigravityPlanName(status?.userStatus?.userTier?.name ?? status?.userStatus?.planStatus?.planInfo?.planName);
+            } catch (error) {
+              if (error instanceof LimitsProblem && error.kind === "rate-limited") {
+                this.hold(local("GetUserStatus"), error, now);
+                waiting = true;
+              }
+              console.warn("Antigravity optional plan status is unavailable; quota windows are kept.");
+            }
+          return { windows, plan, partial: waiting || windows.filter((w) => w.id !== "argon-weekly").length < 4, identity: c.identity };
         }
         try {
           const status = await call("GetUserStatus");
@@ -11164,113 +11175,115 @@ class AntigravityPlan {
         throw new LimitsProblem("failed", "Antigravity's language server isn't available on this computer and its sign-in has no usable access token.", undefined, false);
       const headers = { "Content-Type": "application/json", Authorization: `Bearer ${access}`, "User-Agent": `antigravity/2.24.0 (aidev_client; os_type=${process.platform}; arch=${process.arch === "arm64" ? "arm64" : "amd64"})` };
       let refreshFailed = false;
-      const cloudRequest = async (url, body, authoritative = true, refused) => {
+      const cloudRequest = async (url, body, refused) => {
         if (refreshFailed || this.refusalsDirty)
           throw new LimitsProblem("failed", "Antigravity refresh could not finish; no refused credential was sent again.", undefined, false);
-        try {
-          if (refused)
-            throw refused;
+        if (!refused)
           return await this.request(url, { method: "POST", headers, body: JSON.stringify(body) }, now);
-        } catch (error) {
-          if (!(error instanceof LimitsProblem) || error.kind !== "expired")
-            throw error;
-          if (!authoritative)
-            throw error;
-          this.refuse(this.deniedAccess, fingerprint(access));
-          if (!c.refresh)
-            throw error;
-          if (this.deniedRefresh.has(fingerprint(c.refresh)))
-            throw new LimitsProblem("expired", "Antigravity already refused this refresh token. Sign in again.", undefined, false);
-          const form = new URLSearchParams({ grant_type: "refresh_token", refresh_token: c.refresh, client_id: c.clientID ?? antigravityOAuthDefaults.clientID, client_secret: c.clientSecret ?? antigravityOAuthDefaults.clientSecret });
-          let refreshed;
-          try {
-            refreshed = await this.request(this.oauth, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: form.toString() }, now);
-          } catch (refreshError) {
-            refreshFailed = true;
-            throw refreshError;
-          }
-          const token = text4(refreshed.access_token);
-          if (!token || this.deniedAccess.has(fingerprint(token)))
-            throw new LimitsProblem("expired", "Antigravity did not renew its refused access token.", undefined, false);
-          access = token;
-          this.access = { credential: this.account(), token, expires: now + (finite(refreshed.expires_in) ? refreshed.expires_in : 3600) * 1000 };
-          headers.Authorization = `Bearer ${token}`;
-          try {
-            return await this.request(url, { method: "POST", headers, body: JSON.stringify(body) }, now);
-          } catch (second) {
-            if (second instanceof LimitsProblem && second.kind === "expired")
-              this.refuse(this.deniedAccess, fingerprint(token));
-            throw second;
-          }
-        }
-      };
-      const call = async (path, body, authoritative = true) => {
-        let last;
-        for (const base of this.bases) {
-          try {
-            return await cloudRequest(base + path, body, authoritative);
-          } catch (e) {
-            if (e instanceof LimitsProblem && ["expired", "rate-limited"].includes(e.kind))
-              throw e;
-            last = e;
-          }
-        }
-        throw last;
-      };
-      const summaries = [];
-      let refusal;
-      for (const base of this.bases) {
-        const url = base + "/v1internal:retrieveUserQuotaSummary";
+        this.refuse(this.deniedAccess, fingerprint(access));
+        if (!c.refresh)
+          throw refused;
+        if (this.deniedRefresh.has(fingerprint(c.refresh)))
+          throw new LimitsProblem("expired", "Antigravity already refused this refresh token. Sign in again.", undefined, false);
+        const form = new URLSearchParams({ grant_type: "refresh_token", refresh_token: c.refresh, client_id: c.clientID ?? antigravityOAuthDefaults.clientID, client_secret: c.clientSecret ?? antigravityOAuthDefaults.clientSecret });
+        let refreshed;
         try {
-          summaries.push(await cloudRequest(url, {}, false));
-        } catch (error) {
-          if (error instanceof LimitsProblem && error.kind === "rate-limited")
-            throw error;
-          if (error instanceof LimitsProblem && error.kind === "expired")
-            refusal ??= { url, error };
-          console.warn("Antigravity quota summary unavailable on one host; trying the remaining host.");
+          refreshed = await this.request(this.oauth, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: form.toString() }, now);
+        } catch (refreshError) {
+          refreshFailed = true;
+          throw refreshError;
         }
-        if (antigravitySummary(summaries)?.filter((w) => w.id !== "argon-weekly").length === 4)
-          break;
-      }
-      if (!summaries.length && refusal)
-        summaries.push(await cloudRequest(refusal.url, {}, true, refusal.error));
-      let windows = antigravitySummary(summaries);
+        const token = text4(refreshed.access_token);
+        if (!token || this.deniedAccess.has(fingerprint(token)))
+          throw new LimitsProblem("expired", "Antigravity did not renew its refused access token.", undefined, false);
+        access = token;
+        this.access = { credential: this.account(), token, expires: now + (finite(refreshed.expires_in) ? refreshed.expires_in : 3600) * 1000 };
+        headers.Authorization = `Bearer ${token}`;
+        try {
+          return await this.request(url, { method: "POST", headers, body: JSON.stringify(body) }, now);
+        } catch (second) {
+          if (second instanceof LimitsProblem && second.kind === "expired")
+            this.refuse(this.deniedAccess, fingerprint(token));
+          throw second;
+        }
+      };
+      const main = this.bases[0];
+      let proven = false;
+      let waiting = false;
+      const across = async (path, body, options = {}) => {
+        const answers = [];
+        let refusal, limit, failure;
+        for (const base of this.bases) {
+          const url = base + path;
+          if (this.holding(url, now)) {
+            waiting = true;
+            limit ??= new LimitsProblem("rate-limited", "Antigravity asked this computer to wait.", this.held.get(url), false);
+            continue;
+          }
+          try {
+            answers.push(await cloudRequest(url, body));
+            proven = true;
+          } catch (error) {
+            if (error instanceof LimitsProblem && error.kind === "rate-limited") {
+              this.hold(url, error, now);
+              waiting = true;
+              if (!limit || (error.until ?? Infinity) < (limit.until ?? Infinity))
+                limit = error;
+            } else if (error instanceof LimitsProblem && error.kind === "expired") {
+              if (base === main)
+                refusal = error;
+              failure ??= new LimitsProblem("failed", "An Antigravity quota host refused this call.");
+            } else
+              failure ??= error;
+          }
+          if ((options.enough ?? ((found) => found.length > 0))(answers))
+            break;
+        }
+        if (!answers.length && refusal && (options.authoritative ?? true) && !proven) {
+          answers.push(await cloudRequest(main + path, body, refusal));
+          proven = true;
+        }
+        return { answers, problem: answers.length ? undefined : limit ?? failure };
+      };
+      const required = async (path, body) => {
+        const { answers, problem } = await across(path, body);
+        if (!answers.length)
+          throw problem;
+        return answers[0];
+      };
+      const optional = async (path, body, unavailable) => {
+        const { answers } = await across(path, body, { authoritative: false });
+        if (!answers.length)
+          console.warn(unavailable);
+        return answers[0];
+      };
+      const summary = await across("/v1internal:retrieveUserQuotaSummary", {}, { enough: (found) => antigravitySummary(found)?.filter((w) => w.id !== "argon-weekly").length === 4 });
+      if (!summary.answers.length && summary.problem instanceof LimitsProblem && summary.problem.kind === "rate-limited")
+        throw summary.problem;
+      if (summary.answers.length < this.bases.length && summary.problem)
+        console.warn("Antigravity quota summary unavailable on one host; the others' are used.");
+      let windows = antigravitySummary(summary.answers);
       if (windows === undefined) {
         try {
-          const models = await call("/v1internal:fetchAvailableModels", {});
+          const models = await required("/v1internal:fetchAvailableModels", {});
           windows = antigravityLegacy(Object.entries(models?.models ?? {}).map(([id, value]) => ({ ...value, modelID: value?.model ?? id })));
         } catch (error) {
           if (error instanceof LimitsProblem && ["expired", "rate-limited"].includes(error.kind))
             throw error;
         }
         if (!windows?.length) {
-          let status = {};
-          try {
-            status = await call("/v1internal:loadCodeAssist", { metadata: { ideType: "ANTIGRAVITY", platform: "PLATFORM_UNSPECIFIED", pluginType: "GEMINI" } }, false);
-          } catch (error) {
-            if (error instanceof LimitsProblem && error.kind === "rate-limited")
-              throw error;
-            console.warn("Antigravity optional project lookup is unavailable; querying quota without a project.");
-          }
-          let quota = await call("/v1internal:retrieveUserQuota", text4(status?.cloudaicompanionProject) ? { project: status.cloudaicompanionProject } : {});
+          const status = await optional("/v1internal:loadCodeAssist", { metadata: { ideType: "ANTIGRAVITY", platform: "PLATFORM_UNSPECIFIED", pluginType: "GEMINI" } }, "Antigravity optional project lookup is unavailable; querying quota without a project.") ?? {};
+          let quota = await required("/v1internal:retrieveUserQuota", text4(status?.cloudaicompanionProject) ? { project: status.cloudaicompanionProject } : {});
           if (!quota?.buckets?.length && status?.cloudaicompanionProject)
-            quota = await call("/v1internal:retrieveUserQuota", {});
+            quota = await required("/v1internal:retrieveUserQuota", {});
           windows = antigravityLegacy((Array.isArray(quota?.buckets) ? quota.buckets : []).filter((b) => text4(b?.modelId)).map((b) => ({ label: b.modelId, modelID: b.modelId, quotaInfo: b })));
         }
       }
       if (!windows?.length)
         throw new LimitsProblem("failed", "Antigravity's quota response has no readable buckets; the last reading is kept.");
-      let plan;
-      try {
-        const status = await call("/v1internal:loadCodeAssist", { metadata: { ideType: "ANTIGRAVITY", platform: "PLATFORM_UNSPECIFIED", pluginType: "GEMINI" } }, false);
-        plan = { "g1-pro-tier": "Pro", "g1-ultra-tier": "Ultra", "g1-ultra-lite-tier": "Ultra Lite" }[status?.paidTier?.id] ?? antigravityPlanName(status?.paidTier?.name ?? status?.currentTier?.name);
-      } catch (e) {
-        if (e instanceof LimitsProblem && e.kind === "rate-limited")
-          throw e;
-        console.warn("Antigravity optional plan lookup is unavailable; successful quota windows are kept.");
-      }
-      return { windows, plan, partial: windows.filter((w) => w.id !== "argon-weekly").length < 4, identity: c.identity };
+      const status = await optional("/v1internal:loadCodeAssist", { metadata: { ideType: "ANTIGRAVITY", platform: "PLATFORM_UNSPECIFIED", pluginType: "GEMINI" } }, "Antigravity optional plan lookup is unavailable; successful quota windows are kept.");
+      const plan = status && ({ "g1-pro-tier": "Pro", "g1-ultra-tier": "Ultra", "g1-ultra-lite-tier": "Ultra Lite" }[status?.paidTier?.id] ?? antigravityPlanName(status?.paidTier?.name ?? status?.currentTier?.name));
+      return { windows, plan, partial: waiting || windows.filter((w) => w.id !== "argon-weekly").length < 4, identity: c.identity };
     } catch (e) {
       if (e instanceof LimitsProblem && e.kind === "expired")
         this.refuse(this.denied, signIn);
@@ -21995,7 +22008,13 @@ function names(folder) {
 function antigravityDatabases(geminiHome) {
   return [...new Set(names(geminiHome).filter((name) => name.startsWith("antigravity")).flatMap((name) => {
     const folder = join33(geminiHome, name, "conversations");
-    return names(folder).filter((file) => file.endsWith(".db")).map((file) => realpathSync7(join33(folder, file)));
+    return names(folder).filter((file) => file.endsWith(".db")).flatMap((file) => {
+      try {
+        return [realpathSync7(join33(folder, file))];
+      } catch {
+        return [];
+      }
+    });
   }))].sort();
 }
 function fingerprint2(path) {
@@ -22068,11 +22087,14 @@ var readerURL2;
 
 class AntigravityHistory {
   read;
-  constructor(_folder, read = readAntigravityDatabase) {
+  log;
+  constructor(_folder, read = readAntigravityDatabase, log = (message) => console.warn(message)) {
     this.read = read;
+    this.log = log;
   }
   databases = new Map;
   combined = new Map;
+  failing = new Map;
   async scan(geminiHome, since) {
     const paths = antigravityDatabases(geminiHome);
     let cached = this.databases.get(geminiHome);
@@ -22081,8 +22103,13 @@ class AntigravityHistory {
     for (const path of cached.keys())
       if (!paths.includes(path))
         cached.delete(path);
+    let failing = this.failing.get(geminiHome);
+    if (!failing)
+      this.failing.set(geminiHome, failing = new Map);
+    for (const path of failing.keys())
+      if (!paths.includes(path))
+        failing.delete(path);
     const parts = [];
-    let failure;
     for (const path of paths) {
       const before = cached.get(path);
       try {
@@ -22099,16 +22126,17 @@ class AntigravityHistory {
         if (fingerprint2(path).stamp !== stamp.stamp)
           throw new Error("Antigravity database changed during the read");
         cached.set(path, { stamp: stamp.stamp, events });
+        failing.delete(path);
         parts.push(events);
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (failing.get(path) !== message)
+          this.log(`usage: Antigravity's database ${path} couldn't be read: ${message}`);
+        failing.set(path, message);
         if (before)
           parts.push(before.events);
-        else
-          failure ??= error;
       }
     }
-    if (failure)
-      throw failure;
     const previous = this.combined.get(geminiHome);
     if (previous?.since === since && previous.parts.length === parts.length && previous.parts.every((part, index) => part === parts[index]))
       return previous.events;
@@ -34500,4 +34528,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 33781b1d09b752aae8e272e3f36405a48f80051c1cfac17caf0a49a65295828b
+// Built from Packages/Box/src/agents 4ecbc5ccc91b7771021ef0363dae94b0fc1352996bb600c29485a306752e8038

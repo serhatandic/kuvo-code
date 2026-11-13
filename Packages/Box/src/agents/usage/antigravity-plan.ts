@@ -180,6 +180,10 @@ export class AntigravityPlan {
       this.refusalsDirty = false
     } catch { throw new LimitsProblem("failed", "Antigravity's credential refusal record cannot be saved; the last quota reading is kept.", undefined, false) }
   }
+  /** Calls a host turned away for now, by URL, until when (ms): only that call waits, not the read. */
+  private held = new Map<string, number>()
+  private hold(url: string, error: LimitsProblem, now: number) { this.held.set(url, error.until ?? now + 60 * 60_000) }
+  private holding(url: string, now: number) { return (this.held.get(url) ?? 0) > now }
   private lastCredential?: Credential
   private lastSignIn?: string
   private lastAccount?: string
@@ -238,15 +242,20 @@ export class AntigravityPlan {
       const endpoints = await this.discover(this.profile())
       for (const e of endpoints) {
         if (e.csrf && this.deniedCSRF.has(fingerprint(e.csrf)!)) continue
-        const call = (method: string) => this.request(`${e.scheme}://127.0.0.1:${e.port}/exa.language_server_pb.LanguageServerService/${method}`, { method: "POST", headers: { "Content-Type": "application/json", "Connect-Protocol-Version": "1", "x-codeium-csrf-token": e.csrf }, body: JSON.stringify({ metadata: { ideName: "antigravity", extensionName: "antigravity", ideVersion: "unknown", locale: "en" } }), ...(e.scheme === "https" ? { tls: { rejectUnauthorized: false } } : {}) }, now, true)
+        const local = (method: string) => `${e.scheme}://127.0.0.1:${e.port}/exa.language_server_pb.LanguageServerService/${method}`
+        const call = (method: string) => this.request(local(method), { method: "POST", headers: { "Content-Type": "application/json", "Connect-Protocol-Version": "1", "x-codeium-csrf-token": e.csrf }, body: JSON.stringify({ metadata: { ideName: "antigravity", extensionName: "antigravity", ideVersion: "unknown", locale: "en" } }), ...(e.scheme === "https" ? { tls: { rejectUnauthorized: false } } : {}) }, now, true)
         let summary: any
         try { summary = await call("RetrieveUserQuotaSummary") } catch (error) { if (error instanceof LimitsProblem && error.kind === "rate-limited") throw error; if (error instanceof LimitsProblem && error.kind === "expired") e.csrf && this.refuse(this.deniedCSRF, fingerprint(e.csrf)!); continue }
         const windows = antigravitySummary([summary])
         if (windows !== undefined) {
           if (!windows.length) throw new LimitsProblem("failed", "Antigravity's quota summary has no readable buckets.")
-          let plan: string | undefined
-          try { const status = await call("GetUserStatus"); plan = antigravityPlanName(status?.userStatus?.userTier?.name ?? status?.userStatus?.planStatus?.planInfo?.planName) } catch (error) { if (error instanceof LimitsProblem && error.kind === "rate-limited") throw error; console.warn("Antigravity optional plan status is unavailable; quota windows are kept.") }
-          return { windows, plan, partial: windows.filter(w => w.id !== "argon-weekly").length < 4, identity: c.identity }
+          let plan: string | undefined, waiting = this.holding(local("GetUserStatus"), now)
+          // (The plan is optional: one turned away for now waits alone, and the windows read are kept.)
+          if (!waiting) try { const status = await call("GetUserStatus"); plan = antigravityPlanName(status?.userStatus?.userTier?.name ?? status?.userStatus?.planStatus?.planInfo?.planName) } catch (error) {
+            if (error instanceof LimitsProblem && error.kind === "rate-limited") { this.hold(local("GetUserStatus"), error, now); waiting = true }
+            console.warn("Antigravity optional plan status is unavailable; quota windows are kept.")
+          }
+          return { windows, plan, partial: waiting || windows.filter(w => w.id !== "argon-weekly").length < 4, identity: c.identity }
         }
         try {
           const status = await call("GetUserStatus")
@@ -270,67 +279,88 @@ export class AntigravityPlan {
       if (!access) throw new LimitsProblem("failed", "Antigravity's language server isn't available on this computer and its sign-in has no usable access token.", undefined, false)
       const headers = { "Content-Type": "application/json", Authorization: `Bearer ${access}`, "User-Agent": `antigravity/2.24.0 (aidev_client; os_type=${process.platform}; arch=${process.arch === "arm64" ? "arm64" : "amd64"})` }
       let refreshFailed = false
-      const cloudRequest = async (url: string, body: any, authoritative = true, refused?: LimitsProblem) => {
+      // `refused`: the main host turned this token away on its own call, and no host answered.
+      // Only then is the token renewed once, and refused if it's turned away again.
+      const cloudRequest = async (url: string, body: any, refused?: LimitsProblem) => {
         if (refreshFailed || this.refusalsDirty) throw new LimitsProblem("failed", "Antigravity refresh could not finish; no refused credential was sent again.", undefined, false)
-        try { if (refused) throw refused; return await this.request(url, { method: "POST", headers, body: JSON.stringify(body) }, now) }
-        catch (error) {
-          if (!(error instanceof LimitsProblem) || error.kind !== "expired") throw error
-          if (!authoritative) throw error
-          this.refuse(this.deniedAccess, fingerprint(access)!)
-          if (!c.refresh) throw error
-          if (this.deniedRefresh.has(fingerprint(c.refresh)!)) throw new LimitsProblem("expired", "Antigravity already refused this refresh token. Sign in again.", undefined, false)
-          const form = new URLSearchParams({ grant_type: "refresh_token", refresh_token: c.refresh, client_id: c.clientID ?? antigravityOAuthDefaults.clientID, client_secret: c.clientSecret ?? antigravityOAuthDefaults.clientSecret })
-          let refreshed: any
-          try { refreshed = await this.request(this.oauth, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: form.toString() }, now) }
-          catch (refreshError) { refreshFailed = true; throw refreshError }
-          const token = text(refreshed.access_token)
-          if (!token || this.deniedAccess.has(fingerprint(token)!)) throw new LimitsProblem("expired", "Antigravity did not renew its refused access token.", undefined, false)
-          access = token
-          this.access = { credential: this.account()!, token, expires: now + (finite(refreshed.expires_in) ? refreshed.expires_in : 3600) * 1000 }
-          headers.Authorization = `Bearer ${token}`
-          try { return await this.request(url, { method: "POST", headers, body: JSON.stringify(body) }, now) }
-          catch (second) { if (second instanceof LimitsProblem && second.kind === "expired") this.refuse(this.deniedAccess, fingerprint(token)!); throw second }
+        if (!refused) return await this.request(url, { method: "POST", headers, body: JSON.stringify(body) }, now)
+        this.refuse(this.deniedAccess, fingerprint(access)!)
+        if (!c.refresh) throw refused
+        if (this.deniedRefresh.has(fingerprint(c.refresh)!)) throw new LimitsProblem("expired", "Antigravity already refused this refresh token. Sign in again.", undefined, false)
+        const form = new URLSearchParams({ grant_type: "refresh_token", refresh_token: c.refresh, client_id: c.clientID ?? antigravityOAuthDefaults.clientID, client_secret: c.clientSecret ?? antigravityOAuthDefaults.clientSecret })
+        let refreshed: any
+        try { refreshed = await this.request(this.oauth, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: form.toString() }, now) }
+        catch (refreshError) { refreshFailed = true; throw refreshError }
+        const token = text(refreshed.access_token)
+        if (!token || this.deniedAccess.has(fingerprint(token)!)) throw new LimitsProblem("expired", "Antigravity did not renew its refused access token.", undefined, false)
+        access = token
+        this.access = { credential: this.account()!, token, expires: now + (finite(refreshed.expires_in) ? refreshed.expires_in : 3600) * 1000 }
+        headers.Authorization = `Bearer ${token}`
+        try { return await this.request(url, { method: "POST", headers, body: JSON.stringify(body) }, now) }
+        catch (second) { if (second instanceof LimitsProblem && second.kind === "expired") this.refuse(this.deniedAccess, fingerprint(token)!); throw second }
+      }
+      const main = this.bases[0]!
+      // A token any host answered this read works: a later refusal is that call's, not the sign-in's.
+      let proven = false
+      // A host or call turned away for now: what was read is kept, and the read is partial.
+      let waiting = false
+      /** One call to each host in turn until `enough` (by default, the first answer). */
+      const across = async (path: string, body: any, options: { authoritative?: boolean; enough?: (answers: any[]) => boolean } = {}) => {
+        const answers: any[] = []
+        let refusal: LimitsProblem | undefined, limit: LimitsProblem | undefined, failure: unknown
+        for (const base of this.bases) {
+          const url = base + path
+          if (this.holding(url, now)) {
+            waiting = true
+            limit ??= new LimitsProblem("rate-limited", "Antigravity asked this computer to wait.", this.held.get(url), false)
+            continue
+          }
+          try { answers.push(await cloudRequest(url, body)); proven = true }
+          catch (error) {
+            if (error instanceof LimitsProblem && error.kind === "rate-limited") { this.hold(url, error, now); waiting = true; if (!limit || (error.until ?? Infinity) < (limit.until ?? Infinity)) limit = error }
+            // Only the main host's own refusal speaks for the sign-in; another host's is that host's failure.
+            else if (error instanceof LimitsProblem && error.kind === "expired") { if (base === main) refusal = error; failure ??= new LimitsProblem("failed", "An Antigravity quota host refused this call.") }
+            else failure ??= error
+          }
+          if ((options.enough ?? ((found: any[]) => found.length > 0))(answers)) break
         }
+        if (!answers.length && refusal && (options.authoritative ?? true) && !proven) { answers.push(await cloudRequest(main + path, body, refusal)); proven = true }
+        return { answers, problem: answers.length ? undefined : limit ?? failure }
       }
-      const call = async (path: string, body: any, authoritative = true) => {
-        let last: unknown
-        for (const base of this.bases) { try { return await cloudRequest(base + path, body, authoritative) } catch (e) { if (e instanceof LimitsProblem && ["expired", "rate-limited"].includes(e.kind)) throw e; last = e } }
-        throw last
+      /** A call the read can't do without: nothing answered stops the read (a host's wait first). */
+      const required = async (path: string, body: any) => {
+        const { answers, problem } = await across(path, body)
+        if (!answers.length) throw problem
+        return answers[0]
       }
-      const summaries: any[] = []
-      let refusal: { url: string; error: LimitsProblem } | undefined
-      for (const base of this.bases) {
-        const url = base + "/v1internal:retrieveUserQuotaSummary"
-        try { summaries.push(await cloudRequest(url, {}, false)) }
-        catch (error) {
-          if (error instanceof LimitsProblem && error.kind === "rate-limited") throw error
-          if (error instanceof LimitsProblem && error.kind === "expired") refusal ??= { url, error }
-          console.warn("Antigravity quota summary unavailable on one host; trying the remaining host.")
-        }
-        if (antigravitySummary(summaries)?.filter(w => w.id !== "argon-weekly").length === 4) break
+      /** A call the read can do without: nothing answered is logged, and the read goes on. */
+      const optional = async (path: string, body: any, unavailable: string) => {
+        const { answers } = await across(path, body, { authoritative: false })
+        if (!answers.length) console.warn(unavailable)
+        return answers[0]
       }
-      // Hosts can disagree on access. Any 2xx body wins, including an authoritative empty
-      // summary. Only when all hosts fail does a refusal mean the credential needs renewal.
-      if (!summaries.length && refusal) summaries.push(await cloudRequest(refusal.url, {}, true, refusal.error))
-      let windows = antigravitySummary(summaries)
+      const summary = await across("/v1internal:retrieveUserQuotaSummary", {}, { enough: found => antigravitySummary(found)?.filter(w => w.id !== "argon-weekly").length === 4 })
+      // Hosts can disagree on access. Any 2xx body wins, including an authoritative empty summary.
+      // A summary no host answered because one asked this computer to wait stops the read there.
+      if (!summary.answers.length && summary.problem instanceof LimitsProblem && summary.problem.kind === "rate-limited") throw summary.problem
+      if (summary.answers.length < this.bases.length && summary.problem) console.warn("Antigravity quota summary unavailable on one host; the others' are used.")
+      let windows = antigravitySummary(summary.answers)
       if (windows === undefined) {
         try {
-          const models = await call("/v1internal:fetchAvailableModels", {})
+          const models = await required("/v1internal:fetchAvailableModels", {})
           windows = antigravityLegacy(Object.entries(models?.models ?? {}).map(([id, value]: [string, any]) => ({ ...value, modelID: value?.model ?? id })))
         } catch (error) { if (error instanceof LimitsProblem && ["expired", "rate-limited"].includes(error.kind)) throw error }
         if (!windows?.length) {
-          let status: any = {}
-          try { status = await call("/v1internal:loadCodeAssist", { metadata: { ideType: "ANTIGRAVITY", platform: "PLATFORM_UNSPECIFIED", pluginType: "GEMINI" } }, false) }
-          catch (error) { if (error instanceof LimitsProblem && error.kind === "rate-limited") throw error; console.warn("Antigravity optional project lookup is unavailable; querying quota without a project.") }
-          let quota = await call("/v1internal:retrieveUserQuota", text(status?.cloudaicompanionProject) ? { project: status.cloudaicompanionProject } : {})
-          if (!(quota?.buckets?.length) && status?.cloudaicompanionProject) quota = await call("/v1internal:retrieveUserQuota", {})
+          const status = await optional("/v1internal:loadCodeAssist", { metadata: { ideType: "ANTIGRAVITY", platform: "PLATFORM_UNSPECIFIED", pluginType: "GEMINI" } }, "Antigravity optional project lookup is unavailable; querying quota without a project.") ?? {}
+          let quota = await required("/v1internal:retrieveUserQuota", text(status?.cloudaicompanionProject) ? { project: status.cloudaicompanionProject } : {})
+          if (!(quota?.buckets?.length) && status?.cloudaicompanionProject) quota = await required("/v1internal:retrieveUserQuota", {})
           windows = antigravityLegacy((Array.isArray(quota?.buckets) ? quota.buckets : []).filter((b: any) => text(b?.modelId)).map((b: any) => ({ label: b.modelId, modelID: b.modelId, quotaInfo: b })))
         }
       }
       if (!windows?.length) throw new LimitsProblem("failed", "Antigravity's quota response has no readable buckets; the last reading is kept.")
-      let plan: string | undefined
-      try { const status = await call("/v1internal:loadCodeAssist", { metadata: { ideType: "ANTIGRAVITY", platform: "PLATFORM_UNSPECIFIED", pluginType: "GEMINI" } }, false); plan = ({ "g1-pro-tier": "Pro", "g1-ultra-tier": "Ultra", "g1-ultra-lite-tier": "Ultra Lite" } as Record<string, string>)[status?.paidTier?.id] ?? antigravityPlanName(status?.paidTier?.name ?? status?.currentTier?.name) } catch (e) { if (e instanceof LimitsProblem && e.kind === "rate-limited") throw e; console.warn("Antigravity optional plan lookup is unavailable; successful quota windows are kept.") }
-      return { windows, plan, partial: windows.filter(w => w.id !== "argon-weekly").length < 4, identity: c.identity }
+      const status = await optional("/v1internal:loadCodeAssist", { metadata: { ideType: "ANTIGRAVITY", platform: "PLATFORM_UNSPECIFIED", pluginType: "GEMINI" } }, "Antigravity optional plan lookup is unavailable; successful quota windows are kept.")
+      const plan = status && (({ "g1-pro-tier": "Pro", "g1-ultra-tier": "Ultra", "g1-ultra-lite-tier": "Ultra Lite" } as Record<string, string>)[status?.paidTier?.id] ?? antigravityPlanName(status?.paidTier?.name ?? status?.currentTier?.name))
+      return { windows, plan, partial: waiting || windows.filter(w => w.id !== "argon-weekly").length < 4, identity: c.identity }
     } catch (e) { if (e instanceof LimitsProblem && e.kind === "expired") this.refuse(this.denied, signIn); throw e }
   }
 }

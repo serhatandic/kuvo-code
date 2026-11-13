@@ -126,7 +126,8 @@ function names(folder: string): string[] {
 export function antigravityDatabases(geminiHome: string): string[] {
   return [...new Set(names(geminiHome).filter((name) => name.startsWith("antigravity")).flatMap((name) => {
     const folder = join(geminiHome, name, "conversations")
-    return names(folder).filter((file) => file.endsWith(".db")).map((file) => realpathSync(join(folder, file)))
+    // (A link to a database that's gone is no database, as for Swift's scanner, and doesn't stop the others.)
+    return names(folder).filter((file) => file.endsWith(".db")).flatMap((file) => { try { return [realpathSync(join(folder, file))] } catch { return [] } })
   }))].sort()
 }
 
@@ -211,16 +212,20 @@ interface CachedDatabase {
 /** Each database is independently cached. Removed stores stop contributing, as Swift's do. */
 export class AntigravityHistory {
   // The legacy folder argument is accepted by usage.ts; no manifest should keep removed paths alive.
-  constructor(_folder?: string, private readonly read = readAntigravityDatabase) {}
+  constructor(_folder?: string, private readonly read = readAntigravityDatabase, private readonly log: (message: string) => void = (message) => console.warn(message)) {}
   private databases = new Map<string, Map<string, CachedDatabase>>()
   private combined = new Map<string, { since: number; parts: AntigravityEvent[][]; events: AntigravityEvent[] }>()
+  /** Each profile's databases that failed, with what was last logged: a failure is logged once, not every round. */
+  private failing = new Map<string, Map<string, string>>()
   async scan(geminiHome: string, since: number): Promise<AntigravityEvent[]> {
     const paths = antigravityDatabases(geminiHome)
     let cached = this.databases.get(geminiHome)
     if (!cached) this.databases.set(geminiHome, cached = new Map())
     for (const path of cached.keys()) if (!paths.includes(path)) cached.delete(path)
+    let failing = this.failing.get(geminiHome)
+    if (!failing) this.failing.set(geminiHome, failing = new Map())
+    for (const path of failing.keys()) if (!paths.includes(path)) failing.delete(path)
     const parts: AntigravityEvent[][] = []
-    let failure: unknown
     for (const path of paths) {
       const before = cached.get(path)
       try {
@@ -231,16 +236,18 @@ export class AntigravityHistory {
         const events = await this.read(path)
         if (fingerprint(path).stamp !== stamp.stamp) throw new Error("Antigravity database changed during the read")
         cached.set(path, { stamp: stamp.stamp, events })
+        failing.delete(path)
         parts.push(events)
       } catch (error) {
-        // Never let an unreadable/actively changing database replace its previous complete answer.
-        // Leave its old stamp too, so it is retried next round while the others keep advancing.
+        // As Swift's scanner: one database that can't be read (changing as it's read, no
+        // gen_metadata, corrupt) is logged and left out, and the others still count. One read
+        // before keeps its last whole answer and old stamp, so it is retried next round.
+        const message = error instanceof Error ? error.message : String(error)
+        if (failing.get(path) !== message) this.log(`usage: Antigravity's database ${path} couldn't be read: ${message}`)
+        failing.set(path, message)
         if (before) parts.push(before.events)
-        else failure ??= error
       }
     }
-    // An unreadable store with no prior result is unknown, not an empty contribution.
-    if (failure) throw failure
     const previous = this.combined.get(geminiHome)
     if (previous?.since === since && previous.parts.length === parts.length && previous.parts.every((part, index) => part === parts[index])) return previous.events
     const events = parts.flatMap((part) => part.filter((event) => event.timestampSeconds * 1000 >= since))

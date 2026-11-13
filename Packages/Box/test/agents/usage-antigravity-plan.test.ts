@@ -355,12 +355,15 @@ describe("Antigravity own-account stand-in service", () => {
       await expect(plan.limits.read!(1000)).rejects.toMatchObject({ kind: "rate-limited", until: 3601000 })
       expect(calls).toBe(1)
       status = 401
-      await expect(plan.limits.read!(2000)).rejects.toMatchObject({ kind: "expired" })
-      await expect(plan.limits.read!(3000)).rejects.toMatchObject({ kind: "expired", sent: false })
+      // The held call isn't sent again before its time, whoever asks.
+      await expect(plan.limits.read!(2000)).rejects.toMatchObject({ kind: "rate-limited", until: 3601000, sent: false })
+      expect(calls).toBe(1)
+      await expect(plan.limits.read!(3_602_000)).rejects.toMatchObject({ kind: "expired" })
+      await expect(plan.limits.read!(3_603_000)).rejects.toMatchObject({ kind: "expired", sent: false })
       expect(calls).toBe(2)
       credential(root, "new-fixture")
       status = 200
-      await expect(plan.limits.read!(4000)).rejects.toBeInstanceOf(LimitsProblem)
+      await expect(plan.limits.read!(3_604_000)).rejects.toBeInstanceOf(LimitsProblem)
       expect(calls).toBeGreaterThan(2)
     } finally { server.stop(true); rmSync(root, { recursive: true, force: true }) }
   })
@@ -380,6 +383,126 @@ describe("Antigravity own-account stand-in service", () => {
       mode = "empty"; at += 610_000; await limits.tick()
       expect(limits.list()[0]?.windows.length).toBe(4)
       expect(limits.list()[0]?.problem?.kind).toBe("failed")
+    } finally { server.stop(true); rmSync(root, { recursive: true, force: true }) }
+  })
+
+  /** Two stand-in hosts, main then daily, each answering `answer(path)`; what each was asked. */
+  function hosts(main: (path: string) => Response, daily: (path: string) => Response) {
+    const asked = { main: [] as string[], daily: [] as string[] }
+    const serve = (name: "main" | "daily", answer: (path: string) => Response) => Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(req) { const path = new URL(req.url).pathname; asked[name].push(path.split(":").pop()!); return answer(path) } })
+    const servers = [serve("main", main), serve("daily", daily)]
+    return { asked, bases: servers.map(server => server.url.origin), stop: () => servers.forEach(server => server.stop(true)) }
+  }
+  const status = (code: number, headers?: Record<string, string>) => new Response("{}", { status: code, headers })
+  const refusals = (root: string) => { try { return readFileSync(join(root, "box-usage", "refusals.json"), "utf8") } catch { return undefined } }
+
+  test("only the main host's own refusal of the token's call can refuse the sign-in", async () => {
+    // The main host failing and the daily host refusing: a failure, never a refused sign-in.
+    const root = temp(); credential(root)
+    const both = hosts(() => status(503), () => status(403))
+    try {
+      const plan = new AntigravityPlan(() => root, () => join(root, "box-usage"), undefined, async () => [], both.bases)
+      await expect(plan.limits.read!(1000)).rejects.toMatchObject({ kind: "failed" })
+      expect(refusals(root)).toBeUndefined()
+      await expect(plan.limits.read!(2000)).rejects.toMatchObject({ kind: "failed" })
+      expect(both.asked.main).toContain("retrieveUserQuotaSummary")
+      expect(both.asked.main.filter(path => path === "retrieveUserQuotaSummary")).toHaveLength(2)
+    } finally { both.stop(); rmSync(root, { recursive: true, force: true }) }
+    // The main host refusing the summary itself, and no host answering: the sign-in is refused.
+    const refused = temp(); credential(refused)
+    const main = hosts(() => status(403), () => status(503))
+    try {
+      const plan = new AntigravityPlan(() => refused, () => join(refused, "box-usage"), undefined, async () => [], main.bases)
+      await expect(plan.limits.read!(1000)).rejects.toMatchObject({ kind: "expired" })
+      await expect(plan.limits.read!(2000)).rejects.toMatchObject({ kind: "expired", sent: false })
+      expect(refusals(refused)).toBeDefined()
+    } finally { main.stop(); rmSync(refused, { recursive: true, force: true }) }
+  })
+
+  test("a token a summary just answered is never refused by a later call, which still tries the daily host", async () => {
+    for (const dailyModels of [true, false]) {
+      const root = temp(); credential(root)
+      const models = { models: { "gemini-3-pro": { label: "Gemini 3 Pro", quotaInfo: { remainingFraction: 0.6 } } } }
+      const both = hosts(path => path.includes("retrieveUserQuotaSummary") ? Response.json({}) : status(403),
+        path => path.includes("fetchAvailableModels") && dailyModels ? Response.json(models) : status(403))
+      try {
+        const plan = new AntigravityPlan(() => root, () => join(root, "box-usage"), undefined, async () => [], both.bases)
+        if (dailyModels) expect((await plan.limits.read!(1000))?.windows.map(w => [w.id, w.used])).toEqual([["gemini-5h", 0.4]])
+        else await expect(plan.limits.read!(1000)).rejects.toMatchObject({ kind: "failed" })
+        expect(both.asked.daily).toContain("fetchAvailableModels")
+        expect(refusals(root)).toBeUndefined()
+        // Not refused: the next read asks again with the same token.
+        const before = both.asked.main.length
+        await plan.limits.read!(2000).catch(() => undefined)
+        expect(both.asked.main.length).toBeGreaterThan(before)
+      } finally { both.stop(); rmSync(root, { recursive: true, force: true }) }
+    }
+  })
+
+  test("a daily host's wait keeps the main host's windows, and only that host waits", async () => {
+    const root = temp(); credential(root)
+    const partial = { groups: [{ buckets: [{ bucketId: "gemini-5h", remainingFraction: 0.3 }, { bucketId: "3p-5h", remainingFraction: 0.9 }] }] }
+    const both = hosts(path => path.includes("loadCodeAssist") ? Response.json({ paidTier: { id: "g1-pro-tier" } }) : Response.json(partial), () => status(429, { "Retry-After": "3600" }))
+    try {
+      const plan = new AntigravityPlan(() => root, () => join(root, "box-usage"), undefined, async () => [], both.bases)
+      const reading = await plan.limits.read!(1000)
+      expect(reading?.windows.map(w => [w.id, w.used])).toEqual([["gemini-5h", 0.7], ["3p-5h", 0.1]])
+      expect(reading?.partial).toBe(true)
+      expect(reading?.plan).toBe("Pro")
+      expect(both.asked.daily).toEqual(["retrieveUserQuotaSummary"])
+      // Within its Retry-After the daily host isn't asked; the main host still is.
+      const again = await plan.limits.read!(1_000_000)
+      expect(again?.windows.length).toBe(2)
+      expect(both.asked.daily).toEqual(["retrieveUserQuotaSummary"])
+      expect(both.asked.main.filter(path => path === "retrieveUserQuotaSummary")).toHaveLength(2)
+      // After it, the daily host is asked again.
+      await plan.limits.read!(3_602_000)
+      expect(both.asked.daily).toEqual(["retrieveUserQuotaSummary", "retrieveUserQuotaSummary"])
+    } finally { both.stop(); rmSync(root, { recursive: true, force: true }) }
+  })
+
+  test("a plan or project lookup's wait keeps the windows read, partial, and holds only that call", async () => {
+    // The plan lookup after a whole summary.
+    const root = temp(); credential(root)
+    const plan429 = hosts(path => path.includes("loadCodeAssist") ? status(429, { "Retry-After": "3600" }) : Response.json(summary(0.5)), path => path.includes("loadCodeAssist") ? status(429, { "Retry-After": "3600" }) : status(503))
+    try {
+      const plan = new AntigravityPlan(() => root, () => join(root, "box-usage"), undefined, async () => [], plan429.bases)
+      let at = 10_000_000
+      const limits = new Limits(() => [{ provider: "antigravity", service: "antigravity", limits: plan.limits }], undefined, () => at)
+      await limits.tick()
+      expect(limits.list()[0]?.windows.map(w => w.used)).toEqual([0.5, 0.5, 0.5, 0.5])
+      expect(limits.list()[0]?.problem).toBeUndefined()
+      expect(plan429.asked.main.filter(path => path === "loadCodeAssist")).toHaveLength(1)
+      at += 610_000; await limits.tick()
+      expect(limits.list()[0]?.problem).toBeUndefined()
+      expect(plan429.asked.main.filter(path => path === "retrieveUserQuotaSummary")).toHaveLength(2)
+      expect(plan429.asked.main.filter(path => path === "loadCodeAssist")).toHaveLength(1)
+    } finally { plan429.stop(); rmSync(root, { recursive: true, force: true }) }
+    // The project lookup on the legacy path, before the quota it's for.
+    const legacy = temp(); credential(legacy)
+    const project = hosts(path => path.includes("loadCodeAssist") ? status(429, { "Retry-After": "3600" }) : path.includes("retrieveUserQuota") && !path.includes("Summary") ? Response.json({ buckets: [{ modelId: "gemini-3-pro", remainingFraction: 0.8 }] }) : status(404), () => status(404))
+    try {
+      const plan = new AntigravityPlan(() => legacy, () => join(legacy, "box-usage"), undefined, async () => [], project.bases)
+      const reading = await plan.limits.read!(1000)
+      expect(reading?.windows.map(w => w.used)).toEqual([0.2])
+      expect(reading?.partial).toBe(true)
+      expect(project.asked.main.filter(path => path === "loadCodeAssist")).toHaveLength(1)
+      expect((await plan.limits.read!(2000))?.windows.map(w => w.used)).toEqual([0.2])
+      expect(project.asked.main.filter(path => path === "loadCodeAssist")).toHaveLength(1)
+    } finally { project.stop(); rmSync(legacy, { recursive: true, force: true }) }
+  })
+
+  test("the language server's plan status waiting keeps its windows, and only that call waits", async () => {
+    const root = temp(); credential(root)
+    const asked: string[] = []
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(req) { const method = new URL(req.url).pathname.split("/").pop()!; asked.push(method); return method === "GetUserStatus" ? status(429, { "Retry-After": "3600" }) : Response.json(summary(0.25)) } })
+    try {
+      const plan = new AntigravityPlan(() => root, () => join(root, "box-usage"), undefined, async () => [{ scheme: "http", port: server.port!, csrf: "fixture-csrf" }], ["http://127.0.0.1:9"])
+      const reading = await plan.limits.read!(1000)
+      expect(reading?.windows.map(w => w.used)).toEqual([0.75, 0.75, 0.75, 0.75])
+      expect(reading?.partial).toBe(true)
+      expect((await plan.limits.read!(2000))?.windows.length).toBe(4)
+      expect(asked).toEqual(["RetrieveUserQuotaSummary", "GetUserStatus", "RetrieveUserQuotaSummary"])
     } finally { server.stop(true); rmSync(root, { recursive: true, force: true }) }
   })
 })

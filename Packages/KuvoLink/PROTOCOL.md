@@ -4035,7 +4035,10 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   result. Refused credentials are remembered by hash in the box-owned
   `usage/antigravity/<account>/refusals.json`, including access, refresh and CSRF refusals, so a restart or
   temporary refresh failure cannot resend them. A good quota answer from either Google host
-  wins over a refusal from the other; a secondary plan lookup cannot invalidate good quotas.
+  wins over a refusal from the other; only the main host refusing the token's own call, with no
+  host answering, refuses the sign-in, and once any host answered a read, no later call does. A
+  host or call that asks to wait (429) waits alone until its `Retry-After`: windows already read
+  are kept and the reading is partial; a secondary plan lookup cannot invalidate good quotas.
   Token refresh uses the own agent token's OAuth client metadata (or the defaults verified in
   ACP 1.3.0); the refusal record is pruned on sign-out. Not yet: Ollama's, which ollama.com tells only the Ollama app's own signing key.
 - How often: Claude's each 15 minutes, the rest each 10. Anthropic limits these reads for the whole
@@ -7603,6 +7606,7 @@ Tokens are priced with the shared catalogs and kept in UTC quarter-hour slots, t
 across your own computers like Claude's history. Each database's WAL and file fingerprint reuse
 unchanged reads; idle databases outside the history window aren't read. Removed databases leave
 the total. An unreadable or changing database retains its previous result while other databases
-advance; one with no previous result retains the account's last complete reading for retry.
+advance; one with no previous result is logged and left out, as UsageKit's scanner does, and is
+retried next round. It never holds up the round for other services' logs.
 A new account with no conversations is empty. Places are hashed with the machine ID.
 The apps read Antigravity only from the box, with no older-box fallback (#679 updates boxes first).
