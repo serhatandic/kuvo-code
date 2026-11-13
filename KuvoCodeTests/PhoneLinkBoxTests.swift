@@ -279,7 +279,10 @@ import Testing
     @Test func withTheLinkOffNoKeysAreMade() async throws {
         UserDefaults.standard.set(false, forKey: "phoneLink")
         let box = try await SettingsBox(port: 47_959)
-        let link = PhoneLink(file: file)
+        // Its keys' place in the Keychain of its own: the tests' Keychain is one for the whole run,
+        // where an app of an earlier test's made this Mac's keys (as it does once a machine answers).
+        let service = "\(PhoneLink.keychainService).\(UUID().uuidString)"
+        let link = PhoneLink(file: file, keychain: service)
         let client = box.client
         link.box = { client }
         box.box.host.phoneLink = link
@@ -290,7 +293,7 @@ import Testing
         #expect(await link.boxIdentity() == nil)
         await link.saidToBox()
         var found: CFTypeRef?
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: PhoneLink.keychainService,
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
                                     kSecMatchLimit as String: kSecMatchLimitAll, kSecReturnAttributes as String: true]
         #expect(Keychain.copyMatching(query, &found) == errSecItemNotFound)
     }

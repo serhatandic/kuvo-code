@@ -985,6 +985,7 @@ struct SidebarView: View {
                                   isEditing: renaming == RenameTarget(id: session.id, place: place),
                                   branches: branches, folded: folded, branchInset: branchInset, isUnfolded: isUnfolded(session.id), isSearching: !search.isEmpty,
                                   isUnread: session.isUnread || workspace.hasNewSubSessions(session.id),
+                                  isArchived: workspace.isListedArchived(session),
                                   origin: Self.origin(of: session, in: workspace, nested: branchInset != nil),
                                   elsewhere: Self.tail(of: session, in: workspace, nested: branchInset != nil), acrossComputers: !search.isEmpty && boxes.count > 1)
         return StillRow(look: look) { sessionRowContent(look) }.equatable()
@@ -1007,6 +1008,8 @@ struct SidebarView: View {
         /// Finished and not seen, it or a sub-session: worked out here, as it reads the whole list
         /// of sessions, which opening any session changes.
         let isUnread: Bool
+        /// Archived, as its box says (or as this Mac just made it).
+        let isArchived: Bool
         /// Where a branch came from, for VoiceOver (from the list too).
         let origin: String
         /// Started by a lead on another computer that isn't listed here: "from Mini", at its end.
@@ -1037,11 +1040,11 @@ struct SidebarView: View {
                 } cancel: {
                     if renaming == target { renaming = nil }
                 }
-            } else if let elsewhere = look.elsewhere, !Workspace.isArchived(session) {
+            } else if let elsewhere = look.elsewhere, !look.isArchived {
                 // Started from another computer: which, in a word, at the title's end; pointed at,
                 // who and where. The title always wins: in a row too narrow for both, it goes.
                 TitleWithTail(session.title ?? "New Session") { words in
-                    sessionTitle(session, in: place, words: words)
+                    sessionTitle(session, in: place, isArchived: look.isArchived, words: words)
                 } tail: {
                     Text(elsewhere)
                         .sidebarFont(11)
@@ -1058,10 +1061,10 @@ struct SidebarView: View {
                 // Who and where, pointed at, the note shown or not.
                 .help(look.origin)
             } else {
-                sessionTitle(session, in: place)
+                sessionTitle(session, in: place, isArchived: look.isArchived)
             }
         } accessory: {
-            if Workspace.isArchived(session) {
+            if look.isArchived {
                 Text("Archived")
                     .sidebarFont(11)
                     .foregroundStyle(.tertiary)
@@ -1094,7 +1097,7 @@ struct SidebarView: View {
 
     /// A session's title in its row: a bot's face before it where its lane doesn't show it.
     /// `words`: in place of its title (what of it is kept, to measure by).
-    private func sessionTitle(_ session: Session, in place: Place, words: String? = nil) -> some View {
+    private func sessionTitle(_ session: Session, in place: Place, isArchived: Bool, words: String? = nil) -> some View {
         HStack(spacing: 6) {
             // A bot's work: its face, still, before the title; in a project, its lane shows
             // it instead, the session staying yours.
@@ -1105,7 +1108,7 @@ struct SidebarView: View {
             }
             Text(words ?? session.title ?? "New Session")
                 .fontWeight(session.isUnread ? .semibold : .regular)
-                .foregroundStyle(Workspace.isArchived(session) ? .secondary : .primary)
+                .foregroundStyle(isArchived ? .secondary : .primary)
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .accessibilityValue(place == .project ? WorksFor(session).flatMap { bots.bot($0.bot) }.map { Oversight.overseenBy($0.name) } ?? "" : "")
@@ -1177,7 +1180,7 @@ struct SidebarView: View {
         // Moving to another computer (or just moved, not yet shown where it lives now): what
         // would change it waits until it's there.
         let moving = app.moves.isHeld(session.id)
-        if !Workspace.isArchived(session) {
+        if !workspace.isListedArchived(session) {
             if Workspace.isPinned(session) {
                 HeldRow.button("Unpin", disabled: moving) { Task { await workspace.setPinned(session.id, false) } }
             } else {
@@ -1214,7 +1217,7 @@ struct SidebarView: View {
         }
         HeldRow.button("Export as Markdown…") { Task { await export(session) } }
         HeldRow.divider
-        if Workspace.isArchived(session) {
+        if workspace.isListedArchived(session) {
             HeldRow.button("Unarchive", disabled: moving) { Task { await workspace.setArchived(session.id, false) } }
         } else {
             HeldRow.button("Archive", disabled: moving) {

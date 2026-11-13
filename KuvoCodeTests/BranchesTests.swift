@@ -44,6 +44,8 @@ import Testing
         engine.conversation("ses_timer", messages)
         // The engine's copy, which says nothing of where it came from.
         engine.on("POST", "/api/session/ses_timer/fork", json: ["data": session("ses_tried", "Timer cycle", created: 5)])
+        // (Read by its box just before it's marked.)
+        engine.on("GET", "/api/session/ses_tried", json: ["data": session("ses_tried", "Timer cycle", created: 5)])
         engine.on("PATCH", "/api/session/ses_tried", json: ["data": [:]])
         await workspace.refresh()
         try await engine.listed(for: workspace)

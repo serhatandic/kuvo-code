@@ -13,6 +13,8 @@ import Testing
 
     /// The engine's plans: GitHub Copilot signed in with `credential`, OpenAI with a key.
     private func plans(copilot credential: String) {
+        // (Its plugins set up: the box asks before it trusts its list.)
+        engine.on("GET", "/api/provider", json: ["data": []])
         engine.on("GET", "/api/integration", json: ["location": ["directory": "/"], "data": [
             ["id": "github-copilot", "name": "GitHub Copilot", "methods": [["type": "oauth", "id": "github", "label": "Sign in with GitHub"]],
              "connections": [["type": "credential", "id": credential, "label": "GitHub", "method": "oauth"]]],
@@ -96,6 +98,8 @@ import Testing
     /// quota or a rate limit), though its words say 403 or forbidden: the failure says what the
     /// provider said, without telling you to sign in again. Refusals for want of one still do.
     @Test func aRefusalThatIsntAboutSigningInIsntSaidToBe() {
+        // (The suite's engine answers for 127.0.0.1 until stopped, the next suite's servers too.)
+        defer { engine.stop() }
         #expect(!Catalog.isSignInRefusal(type: "provider.content-filter", message: "403 Forbidden: your input was flagged by moderation"))
         #expect(!Catalog.isSignInRefusal(type: "provider.quota", message: "Forbidden: monthly quota exceeded"))
         #expect(!Catalog.isSignInRefusal(type: "provider.rate-limit", message: "403 rate limited"))

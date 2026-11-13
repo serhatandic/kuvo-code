@@ -5,8 +5,9 @@ import SwiftUI
 
 /// Signing in to one provider, whichever way it supports: browser sign-in,
 /// a device code, an API key, or credentials the Mac already has (AWS, gcloud).
-/// The engine runs the OAuth exchange and stores the result; this view guides
-/// the person through it.
+/// The engine runs the OAuth exchange and stores the result; its box says which ways to offer, in
+/// what order and words, and what to say when one didn't work (`kuvo/sign-in/methods`,
+/// `kuvo/sign-in/status`); this view guides the person through it.
 struct ConnectView: View {
     let integrationID: String
     /// What it's called and its mark, when the engine's name for it isn't the one you know
@@ -40,6 +41,10 @@ struct ConnectView: View {
     }
 
     @State private var step = Step.choose
+    /// The ways in, as its box offers them; nil until it has said.
+    @State private var offered: SignInMethods?
+    /// Why its box couldn't say them.
+    @State private var offeredFailure: String?
     @State private var answers: FormAnswer = [:]
     @State private var key = ""
     @FocusState private var isKeyFocused: Bool
@@ -115,6 +120,11 @@ struct ConnectView: View {
         .animation(.ui, value: step)
         .onAppear {
             Analytics.shared.onboardingStep("connect_account", ["provider": Analytics.provider(integrationID)])
+        }
+        .task {
+            await readMethods()
+            // (Closed meanwhile: nothing starts.)
+            guard !left, !Task.isCancelled else { return }
             chooseOnlyMethod()
         }
         .onDisappear {
@@ -157,23 +167,46 @@ struct ConnectView: View {
         }
     }
 
-    private var methods: some View {
-        // Signing in with a subscription leads; an API key is the fallback.
-        let methods = supportedMethods.sorted { rank($0) < rank($1) }
-        let primary = methods.filter { !isLegacy($0) }
-        let legacy = methods.filter(isLegacy)
+    @ViewBuilder private var methods: some View {
+        if let offeredFailure {
+            failed(offeredFailure)
+        } else if offered == nil {
+            VStack(spacing: 10) {
+                Spinner(size: 18)
+                    .frame(maxWidth: .infinity, minHeight: 60)
+                    .accessibilityLabel("Getting the ways to sign in")
+                if onCancel != nil {
+                    trailingCancel
+                        .padding(.top, 14)
+                }
+            }
+        } else {
+            offeredMethods
+        }
+    }
+
+    private var offeredMethods: some View {
+        // In the box's order: signing in with a subscription leads; an API key is the fallback.
+        let primary = supportedMethods.filter { !$0.legacy }
+        let legacy = supportedMethods.filter(\.legacy)
         return VStack(spacing: 10) {
-            ForEach(Array(primary.enumerated()), id: \.element.id) { index, method in
+            if supportedMethods.isEmpty {
+                Text("There’s no way to sign in to \(title) from here.")
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(Array(primary.enumerated()), id: \.element.id) { index, way in
+                let method = way.method
                 Button { start(method) } label: {
                     // The one getting ready (an agent installed first): no more taps meanwhile.
                     if isWorking, startedID == method.id {
                         HStack(spacing: 8) {
                             Spinner(size: 14)
-                            Text(label(for: method))
+                            Text(way.label)
                         }
                         .frame(maxWidth: .infinity)
                     } else {
-                        Label(label(for: method), systemImage: symbol(for: method))
+                        Label(way.label, systemImage: symbol(for: method))
                             .frame(maxWidth: .infinity)
                     }
                 }
@@ -185,8 +218,8 @@ struct ConnectView: View {
             if !legacy.isEmpty {
                 DisclosureGroup("Other ways to sign in") {
                     VStack(spacing: 8) {
-                        ForEach(legacy) { method in
-                            Button(label(for: method)) { start(method) }
+                        ForEach(legacy) { way in
+                            Button(way.label) { start(way.method) }
                                 .buttonStyle(.link)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -195,7 +228,7 @@ struct ConnectView: View {
                 }
                 .padding(.top, 6)
             }
-            if let names = integration?.environmentVariables, !names.isEmpty {
+            if let names = offered?.environment, !names.isEmpty {
                 Text("Or set \(names.joined(separator: " or ")) in your shell profile.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -452,7 +485,7 @@ struct ConnectView: View {
                     Spacer()
                     cancelButton
                 }
-                Button("Try Again") { step = .choose }
+                Button("Try Again") { tryAgain() }
                     .buttonStyle(.glass)
             }
             .controlSize(.large)
@@ -490,11 +523,60 @@ struct ConnectView: View {
 
     // MARK: Actions
 
-    private var supportedMethods: [Integration.Method] {
-        (integration?.offeredSignInMethods.filter(isSupported) ?? []).filter { method in
+    /// The ways its box offers, in its order; on the first launch's API Keys, only a key.
+    private var supportedMethods: [SignInMethods.Offered] {
+        (offered?.methods ?? []).filter { way in
             guard keysOnly else { return true }
-            if case .key = method { return true }
+            if case .key = way.method { return true }
             return false
+        }
+    }
+
+    /// Asks its box for the ways in. A box from before it can't say them: it needs updating.
+    private func readMethods() async {
+        guard let box = catalog.box else { return offeredFailure = unreachable }
+        if !BoxClient.hasEveryFeature(box.box) {
+            struct Info: Decodable { var features: [String]? }
+            guard let info = try? await box.value(Info.self, "GET", "kuvo/info") else { return offeredFailure = unreachable }
+            guard info.features?.contains(SignInMethods.feature) == true else {
+                guard let machine = catalog.machine else { return offeredFailure = "This Mac’s box needs a newer Kuvo Code to sign in. It updates by itself overnight." }
+                return offeredFailure = "\(app.name(of: .machine(machine))) needs a newer Kuvo Code to sign in from here. Update it, then try again."
+            }
+        }
+        let path = SignInMethods.path(integration: integrationID, agents: OutsideAgents.isAgent(integrationID))
+        // Its box still starting is asked again each second, for half a minute at most.
+        var tries = 0
+        while !Task.isCancelled, !left {
+            tries += 1
+            do {
+                offered = try await box.value(SignInMethods.self, "GET", path)
+                offeredFailure = nil
+                return
+            } catch let refusal as BoxRefusal where refusal.reason == "starting" && tries < 30 {
+                // Its box still starting (with the app, or after an update): asked again in a moment.
+                try? await Task.sleep(for: .seconds(1))
+            } catch let refusal as BoxRefusal where refusal.reason == "starting" {
+                // Starting for too long: as when it can't be reached.
+                offeredFailure = unreachable
+                return
+            } catch {
+                offeredFailure = error.localizedDescription
+                return
+            }
+        }
+    }
+
+    /// Back to the ways in, read again if its box couldn't say them.
+    private func tryAgain() {
+        step = .choose
+        guard offeredFailure != nil else { return }
+        offeredFailure = nil
+        offered = nil
+        Task {
+            await readMethods()
+            // (Closed meanwhile: nothing starts.)
+            guard !left else { return }
+            chooseOnlyMethod()
         }
     }
 
@@ -506,12 +588,12 @@ struct ConnectView: View {
             return
         }
         // KUVO_DEMO_CONNECT_METHOD=<id>: that way to sign in, started.
-        if let id = ProcessInfo.processInfo.environment["KUVO_DEMO_CONNECT_METHOD"], let method = supportedMethods.first(where: { $0.id == id }) {
-            start(method)
+        if let id = ProcessInfo.processInfo.environment["KUVO_DEMO_CONNECT_METHOD"], let way = supportedMethods.first(where: { $0.id == id }) {
+            start(way.method)
             return
         }
         #endif
-        if supportedMethods.count == 1, let method = supportedMethods.first { start(method) }
+        if supportedMethods.count == 1, let way = supportedMethods.first { start(way.method) }
     }
 
     private func start(_ method: Integration.Method) {
@@ -596,7 +678,7 @@ struct ConnectView: View {
         }
     }
 
-    /// The engine finishes the sign-in by itself; ask how it's going once a second.
+    /// The engine finishes the sign-in by itself; ask its box how it's going once a second.
     private func poll(_ attempt: OAuthAttempt) {
         pollTask?.cancel()
         pollTask = Task {
@@ -606,9 +688,12 @@ struct ConnectView: View {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
                 guard !Task.isCancelled else { return }
-                // Not there (the coding agents starting over) counts as not knowing it.
-                let api = catalog.api(forIntegration: integrationID)
-                guard let api, let status = try? await api.oauthStatus(integration: integrationID, attempt: attempt.attemptID) else {
+                // Not there (the coding agents starting over) counts as not knowing it. A box asked
+                // through a process run each time (a machine's) waits for a change before it answers.
+                let box = catalog.box
+                let path = SignInStatus.path(integration: integrationID, attempt: attempt.attemptID, agents: OutsideAgents.isAgent(integrationID),
+                                             wait: box.map { BoxClient.streams($0.box) } == false ? 20 : nil)
+                guard let box, let status = try? await box.value(SignInStatus.self, "GET", path) else {
                     misses += 1
                     if misses >= 10 {
                         noteFailure(method: "oauth", "engine")
@@ -634,26 +719,15 @@ struct ConnectView: View {
                 case .complete: finish(method: "oauth"); return
                 case .failed:
                     noteFailure(method: "oauth", Analytics.trouble(status: nil, status.message ?? ""))
-                    step = .failed(Self.failure(status.message))
+                    step = .failed(status.failure ?? status.message ?? "")
                     return
                 case .expired:
                     noteFailure(method: "oauth", "timeout")
-                    step = .failed("The sign-in timed out. Try again.")
+                    step = .failed(status.failure ?? "")
                     return
                 }
             }
         }
-    }
-
-    /// Why a sign-in page's answer didn't sign you in, in words rather than the OAuth error it
-    /// came back with (as the phone says it).
-    static func failure(_ message: String?) -> String {
-        guard let message, !message.isEmpty else { return "Signing in didn't work." }
-        let said = message.lowercased()
-        if said.contains("access_denied") { return "The sign-in was turned down on its page. Try again to sign in." }
-        if said.contains("server_error") || said.contains("temporarily_unavailable") { return "The service couldn't sign you in just now. Try again in a moment." }
-        if said.contains("state mismatch") || said.contains("state_mismatch") { return "That page was from an earlier sign-in. Try again to sign in." }
-        return message
     }
 
     private func complete(_ attempt: OAuthAttempt) {
@@ -790,33 +864,6 @@ struct ConnectView: View {
     }
 
     // MARK: Describing methods
-
-    private func isSupported(_ method: Integration.Method) -> Bool {
-        switch method {
-        case .oauth, .key, .external: true
-        default: false
-        }
-    }
-
-    private func rank(_ method: Integration.Method) -> Int {
-        switch method {
-        case .oauth: 0
-        case .external: 1
-        default: 2
-        }
-    }
-
-    private func isLegacy(_ method: Integration.Method) -> Bool {
-        label(for: method).localizedCaseInsensitiveContains("legacy")
-    }
-
-    private func label(for method: Integration.Method) -> String {
-        switch method {
-        case .oauth(_, let label, _), .external(_, let label, _): label
-        case .key(let label, _): label ?? "Use an API key"
-        default: ""
-        }
-    }
 
     private func symbol(for method: Integration.Method) -> String {
         switch method {

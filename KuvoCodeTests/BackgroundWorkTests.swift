@@ -47,6 +47,9 @@ import Testing
     private func recorded(_ name: String) -> ServerEndpoint? { KeeperFollower.record(name) }
 
     @Test func quittingTheAppLeavesThisMacsBoxRunningWhereLettersReachIt() async throws {
+        // First, so a test that throws early stops them too: they answer for 127.0.0.1 until stopped,
+        // the next suite's loopback servers included.
+        defer { engine.stop() }
         let node = try #require(TestBox.node, "Node runs this Mac's box in the tests")
         let binary = try standIns(node: node)
         setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
@@ -64,7 +67,6 @@ import Testing
             unsetenv("KUVO_KEEPER")
             try? FileManager.default.removeItem(at: folder)
             StubWeb.stopListening(port: 47921)
-            engine.stop()
         }
         engine.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 1])
         bridge.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 2])
@@ -100,6 +102,7 @@ import Testing
     /// keeper, says so with what the engine wrote last, as it does when it runs the engine itself,
     /// rather than only that it stopped.
     @Test func whenTheKeepersEngineCantStartTheAppShowsWhatItWrote() async throws {
+        defer { engine.stop() }
         let node = try #require(TestBox.node, "Node runs this Mac's box in the tests")
         let binary = try standIns(node: node, failing: "Error: the database disk image is malformed")
         setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
@@ -115,7 +118,6 @@ import Testing
             unsetenv("KUVO_OPENCODE_BINARY")
             unsetenv("KUVO_KEEPER")
             try? FileManager.default.removeItem(at: folder)
-            engine.stop()
         }
         bridge.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 2])
         // The keeper, as launchd runs it, recorded where the app finds it.
@@ -136,6 +138,7 @@ import Testing
     }
 
     @Test func anUpdateWaitsForTheSessionHoweverLongItRunsThenTheAppIsOnTheNewKeeper() async throws {
+        defer { engine.stop() }
         let node = try #require(TestBox.node, "Node runs this Mac's box in the tests")
         let binary = try standIns(node: node)
         setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
@@ -160,7 +163,6 @@ import Testing
             unsetenv("KUVO_KEEPER")
             try? FileManager.default.removeItem(at: folder)
             StubWeb.stopListening(port: 47921)
-            engine.stop()
         }
         engine.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 1])
         bridge.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 2])
@@ -221,6 +223,7 @@ import Testing
     /// app's keeper is up, rather than the workspace on the keeper that's going, then the loader
     /// again as it goes.
     @Test func afterAnUpdateWithNothingUnderWayTheWindowStartsOnceOnTheNewKeeper() async throws {
+        defer { engine.stop() }
         let node = try #require(TestBox.node, "Node runs this Mac's box in the tests")
         let binary = try standIns(node: node)
         setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
@@ -250,7 +253,6 @@ import Testing
             unsetenv("KUVO_KEEPER")
             try? FileManager.default.removeItem(at: folder)
             StubWeb.stopListening(port: 47921)
-            engine.stop()
         }
         engine.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 1])
         bridge.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 2])
@@ -309,6 +311,7 @@ import Testing
     /// waiting on a keeper that isn't coming; Settings says it didn't start, and quitting stops the
     /// work rather than leaving it to nothing.
     @Test func withBackgroundWorkOnButNoKeeperLaunchdCanStartTheAppRunsTheBoxItself() async throws {
+        defer { engine.stop() }
         let node = try #require(TestBox.node, "Node runs this Mac's box in the tests")
         let binary = try standIns(node: node)
         setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
@@ -329,7 +332,6 @@ import Testing
             unsetenv("KUVO_OPENCODE_BINARY")
             try? FileManager.default.removeItem(at: folder)
             StubWeb.stopListening(port: 47921)
-            engine.stop()
         }
         engine.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 1])
         engine.list([StubEngine.session("ses_here", title: "Here", directory: "/tmp/kuvo-tests-keeper")])
@@ -346,6 +348,7 @@ import Testing
     /// with KUVO_KEEPER=on before): it runs its work itself, as such a copy always does, never
     /// following a keeper launchd would start from wherever that copy was.
     @Test func aDemoCopyWhoseBundleIsRegisteredStillRunsTheBoxItself() async throws {
+        defer { engine.stop() }
         let node = try #require(TestBox.node, "Node runs this Mac's box in the tests")
         let binary = try standIns(node: node)
         setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
@@ -361,7 +364,6 @@ import Testing
             unsetenv("KUVO_OPENCODE_BINARY")
             try? FileManager.default.removeItem(at: folder)
             StubWeb.stopListening(port: 47921)
-            engine.stop()
         }
         engine.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 1])
         engine.list([StubEngine.session("ses_demo", title: "Demo", directory: "/tmp/kuvo-tests-keeper")])
@@ -378,6 +380,7 @@ import Testing
     /// make way, since launchd would only start it again as it was, to be asked again, its engine
     /// and box stopping and starting over and over. The app follows it, with no update to wait for.
     @Test func anotherCopyOfAnotherVersionNeverMakesTheKeeperGoOverAndOver() async throws {
+        defer { engine.stop() }
         let node = try #require(TestBox.node, "Node runs this Mac's box in the tests")
         let binary = try standIns(node: node)
         setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
@@ -399,7 +402,6 @@ import Testing
             unsetenv("KUVO_KEEPER")
             try? FileManager.default.removeItem(at: folder)
             StubWeb.stopListening(port: 47921)
-            engine.stop()
         }
         engine.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 1])
         bridge.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 2])
@@ -427,6 +429,7 @@ import Testing
     }
 
     @Test func afterARestartTheKeeperKeepsThisMacAwakeWhileASessionRunsAndTheAppNeverHoldsItTwice() async throws {
+        defer { engine.stop() }
         let node = try #require(TestBox.node, "Node runs this Mac's box in the tests")
         let binary = try standIns(node: node)
         setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
@@ -449,7 +452,6 @@ import Testing
             unsetenv("KUVO_KEEPER")
             try? FileManager.default.removeItem(at: folder)
             StubWeb.stopListening(port: 47921)
-            engine.stop()
         }
         engine.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 1])
         bridge.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 2])
@@ -529,6 +531,7 @@ import Testing
     /// itself from then on, rather than asking for the keeper again and waiting for it, over and
     /// over, with no engine meanwhile.
     @Test func aKeeperThatDidntComeUpIsntWaitedForAgain() async throws {
+        defer { engine.stop() }
         let node = try #require(TestBox.node, "Node runs this Mac's box in the tests")
         try #require(KeeperRecord.read() == nil, "no keeper runs for the tests")
         let binary = try standIns(node: node)
@@ -547,7 +550,6 @@ import Testing
             unsetenv("KUVO_KEEPER")
             try? FileManager.default.removeItem(at: folder)
             StubWeb.stopListening(port: 47921)
-            engine.stop()
         }
         engine.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 1])
         engine.list([StubEngine.session("ses_here", title: "Here", directory: "/tmp/kuvo-tests-keeper")])
@@ -562,6 +564,7 @@ import Testing
     /// You quit the app a moment after opening it, before it found the keeper: the keeper's engine
     /// goes on where the box and your other computers find it, and the app opened next finds it too.
     @Test func quittingBeforeTheAppFoundTheKeeperLeavesItsEngineFound() async throws {
+        defer { engine.stop() }
         let node = try #require(TestBox.node, "Node runs this Mac's box in the tests")
         let binary = try standIns(node: node)
         setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
@@ -578,7 +581,6 @@ import Testing
             unsetenv("KUVO_KEEPER")
             try? FileManager.default.removeItem(at: folder)
             StubWeb.stopListening(port: 47921)
-            engine.stop()
         }
         engine.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 1])
         bridge.on("GET", "/api/info", json: ["version": OpenCodeEngine.version, "pid": 2])
@@ -595,6 +597,7 @@ import Testing
     /// started over) never holds the main thread while launchctl runs, and its answer is heard
     /// from its end however soon that comes.
     @Test func askingLaunchdToStartTheKeeperNeverHoldsTheMainThread() async throws {
+        defer { engine.stop() }
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let launchctl = folder.appending(path: "launchctl")
         let asked = folder.appending(path: "asked")

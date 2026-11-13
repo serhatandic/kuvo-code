@@ -215,7 +215,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The Dock icon's menu: the latest sessions and chats, and a new session.
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
         let menu = NSMenu()
-        let sessions = (model.workspace.projects.flatMap(\.sessions) + model.workspace.chats).filter { !Workspace.isArchived($0) }
+        let sessions = (model.workspace.projects.flatMap(\.sessions) + model.workspace.chats)
             .sorted { $0.time.updated > $1.time.updated }.prefix(5)
         for session in sessions {
             let id = session.id

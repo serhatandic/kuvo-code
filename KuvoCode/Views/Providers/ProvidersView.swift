@@ -187,7 +187,7 @@ struct ProvidersView: View {
                 section("Popular") {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 12)], spacing: 12) {
                         ForEach(featured) { provider in
-                            ProviderTile(provider: provider) { connecting = Connecting(integration: provider, machine: box.machine) }
+                            ProviderTile(provider: provider, hint: catalog.signInHint(provider.id)) { connecting = Connecting(integration: provider, machine: box.machine) }
                         }
                     }
                 }
@@ -293,6 +293,8 @@ struct SearchField: View {
 /// A big, inviting tile for the providers most people use, with an explicit Connect button.
 private struct ProviderTile: View {
     let provider: Integration
+    /// The way in it names under its name, as its box says ("Sign in with ChatGPT", "API key").
+    let hint: String?
     let action: () -> Void
     @Environment(\.colorScheme) private var scheme
     @State private var isHovering = false
@@ -306,10 +308,12 @@ private struct ProviderTile: View {
                 Text(provider.name)
                     .font(.body.weight(.semibold))
                     .lineLimit(1)
-                Text(hint)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                if let hint {
+                    Text(hint)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
             Spacer(minLength: 8)
             Button("Connect", action: action)
@@ -330,18 +334,6 @@ private struct ProviderTile: View {
         .pointerStyle(.link)
     }
 
-    /// The headline way in: "Sign in with ChatGPT", "Sign in", "API key".
-    /// ("Login with" is the engine's wording for some; one wording reads better side by side.)
-    private var hint: String {
-        for method in provider.offeredSignInMethods {
-            if case .oauth(_, let label, _) = method, !label.localizedCaseInsensitiveContains("legacy") {
-                // Under the provider's name, its name again ("OpenCode Console account") says nothing.
-                if label.localizedCaseInsensitiveContains(provider.name) { return "Sign in" }
-                return label.replacingOccurrences(of: "Login with", with: "Sign in with")
-            }
-        }
-        return provider.offeredSignInMethods.contains { $0.id == "key" } ? "API key" : "Connect"
-    }
 }
 
 /// A row in the full list; the whole row is the button, and it highlights under the pointer.

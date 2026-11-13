@@ -465,7 +465,7 @@ extension AppModel {
     /// What's waiting on `box`: an answer it needs (a permission, a question, a sign-in), else
     /// news (a conversation, bot or group chat you haven't read).
     func news(on box: SidebarBox) -> BoxNews? {
-        let sessions = workspace.sessions.filter { SidebarBox(directory: $0.location.directory) == box && !Workspace.isArchived($0) }
+        let sessions = workspace.sessions.filter { SidebarBox(directory: $0.location.directory) == box && !workspace.isListedArchived($0) }
         if sessions.contains(where: { workspace.needsAttention($0.id) }) { return .needsYou }
         return hasNew(on: box) ? .new : nil
     }
@@ -473,7 +473,7 @@ extension AppModel {
     /// Whether `box` has something you haven't read (a conversation, a sub-session's finish, a group
     /// chat): what Mark All as Read reads.
     func hasNew(on box: SidebarBox) -> Bool {
-        let sessions = workspace.sessions.filter { SidebarBox(directory: $0.location.directory) == box && !Workspace.isArchived($0) }
+        let sessions = workspace.sessions.filter { SidebarBox(directory: $0.location.directory) == box && !workspace.isListedArchived($0) }
         // A session's sub-session finished since you read it is news too, as its folded row says.
         return sessions.contains(where: { $0.isUnread || workspace.hasNewSubSessions($0.id) }) || chats.list.contains(where: { SidebarBox(machine: chats.machine(of: $0.id)) == box && chats.isUnread($0) })
     }

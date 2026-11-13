@@ -118,6 +118,7 @@ export const FEATURES = [
   "setup",
   "setup.mainOnly",
   "shell.stop",
+  "sign-in.methods",
   "sign-in.return",
   "skills",
   "skills.trash",
