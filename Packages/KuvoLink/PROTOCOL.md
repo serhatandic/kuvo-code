@@ -4420,7 +4420,8 @@ is opened stay each app's own. A client reaches them as `kuvo/agents/api/kuvo/us
   restart too, goes once it's back; one made again while the last is on its way goes from the
   version the box answered with, unless the box turned that one away (another computer's came
   first: the box's shows); one turned away though the box holds this Mac's own last (the answer to
-  it was lost) goes again from the box's version: the app keeps what the box last said, and what's still to go,
+  it was lost, and the box hasn't held another value of that part since, as this Mac last read
+  it) goes again from the box's version: the app keeps what the box last said, and what's still to go,
   through a restart. Its panel's
   stores keep their own copy, so they start at once and work while the box doesn't answer; a change
   made meanwhile goes once it's back, and an answer that comes while one is on its way leaves that
