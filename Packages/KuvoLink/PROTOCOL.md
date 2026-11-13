@@ -7595,6 +7595,8 @@ Antigravity's machine-local history is read from each Kuvo Code agent's own prof
 SQLite databases are opened read-only; protobuf generation metadata is bounded to 1 MiB per blob.
 Tokens are priced with the shared catalogs and kept in UTC quarter-hour slots, then summed
 across your own computers like Claude's history. Database/WAL fingerprints reuse unchanged
-reads. A failed, partial or unreadable read keeps the last complete reading and is retried;
+reads. The last complete database list is kept under `usage/antigravity-files` so a
+missing database after a restart also retains the last spend. A failed, partial or unreadable
+read keeps the last complete reading and is retried;
 missing data is never converted to zero spend. Places are hashed with the machine ID.
 The apps read Antigravity only from the box, with no older-box fallback (#679 updates boxes first).

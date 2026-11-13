@@ -1,7 +1,8 @@
 // Antigravity's conversation accounting, as UsageKit's AntigravityDbUsageScanner and protobuf
 // decoder. Only the caller's own agent home is inspected. SQLite stays in a read-only worker;
 // a failed/partial read rejects the round so the account keeps its last complete answer.
-import { readdirSync, realpathSync, statSync } from "node:fs"
+import { createHash } from "node:crypto"
+import { mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { add, addUnknown, noSlots, slotOf, type Slots } from "./history"
 import type { Pricing } from "./pricing"
@@ -192,12 +193,29 @@ let readerURL: string | undefined
 
 /** A full successful scan is cached; failures never replace it and are retried next round. */
 export class AntigravityHistory {
+  constructor(private readonly folder?: string) {}
+  private manifest(home: string): string | undefined {
+    return this.folder ? join(this.folder, createHash("sha256").update(home).digest("hex") + ".json") : undefined
+  }
+  private knownPaths(home: string): string[] {
+    const file = this.manifest(home)
+    if (!file) return []
+    try {
+      const paths = JSON.parse(readFileSync(file, "utf8"))
+      if (!Array.isArray(paths) || !paths.every(p => typeof p === "string")) throw new Error("Invalid Antigravity database list")
+      return paths
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return []
+      throw error
+    }
+  }
+
   private cached = new Map<string, { stamp: string; paths: string[]; events: AntigravityEvent[]; since: number; filtered: AntigravityEvent[] }>()
   async scan(geminiHome: string, since: number): Promise<AntigravityEvent[]> {
     const stamp = antigravityStamp(geminiHome)
     const before = this.cached.get(geminiHome)
     const paths = antigravityDatabases(geminiHome)
-    if (before?.paths.some((path) => !paths.includes(path))) throw new Error("An Antigravity database is missing; keeping the last complete reading")
+    if (!paths.length || (before?.paths ?? this.knownPaths(geminiHome)).some((path) => !paths.includes(path))) throw new Error("An Antigravity database is missing; keeping the last complete reading")
     if (before?.stamp === stamp) {
       if (before.since !== since) {
         before.since = since
@@ -205,10 +223,16 @@ export class AntigravityHistory {
       }
       return before.filtered
     }
-    const events = paths.length ? await this.read(paths) : []
+    const events = await this.read(paths)
     // Files changing during a read may describe only part of a round: retry without caching it.
     if (antigravityStamp(geminiHome) !== stamp) throw new Error("Antigravity databases changed during the read")
     const filtered = events.filter((event) => event.timestampSeconds * 1000 >= since)
+    const manifest = this.manifest(geminiHome)
+    if (manifest) {
+      mkdirSync(this.folder!, { recursive: true })
+      writeFileSync(manifest + ".new", JSON.stringify(paths), { mode: 0o600 })
+      renameSync(manifest + ".new", manifest)
+    }
     this.cached.set(geminiHome, { stamp, paths, events, since, filtered })
     return filtered
   }

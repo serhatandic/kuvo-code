@@ -97,14 +97,14 @@ describe("Antigravity's bounded local history", () => {
     writeFileSync(join(home, "antigravity", "conversations", "broken.db"), "not SQLite")
     await expect(history.scan(home, 0)).rejects.toThrow()
   })
-  test("missing stores are empty and symlinked stores count only once", async () => {
+  test("missing stores are unavailable and symlinked stores count only once", async () => {
     const { home, db } = store()
     insert(db, 0)
     db.close()
     symlinkSync(join(home, "antigravity"), join(home, "antigravity-2"))
     expect(antigravityDatabases(home)).toHaveLength(1)
     expect(await new AntigravityHistory().scan(home, 0)).toHaveLength(1)
-    expect(await new AntigravityHistory().scan(join(base, "absent"), 0)).toEqual([])
+    await expect(new AntigravityHistory().scan(join(base, "absent"), 0)).rejects.toThrow("missing")
   })
 })
 
@@ -117,7 +117,7 @@ test("own profiles alone, machine-hashed places, and a failed partial read retai
   insert(other.db, 0)
   other.db.close()
   const agent = { providerID: "antigravity@work", profile: own.home, instance: { id: "work", label: "Work" } } as unknown as Agent
-  const sources = antigravitySources(() => "machine-one")
+  const sources = antigravitySources(undefined, () => "machine-one")
   expect(sources([{ providerID: "grok-cli", profile: other.home } as unknown as Agent])).toEqual([])
   const source = sources([agent])[0]!
   expect(source.places!()).toEqual([placeOf("machine-one", own.home)])
@@ -139,4 +139,27 @@ test("own profiles alone, machine-hashed places, and a failed partial read retai
   rmSync(join(own.folder, "partial.db"))
   rmSync(own.path)
   await expect(source.slots(pricing, 0)).rejects.toThrow("missing")
+})
+
+ test("a restarted box retains persisted spend when any database disappears", async () => {
+  const own = store()
+  insert(own.db, 0); own.db.close()
+  const second = join(own.folder, "second.db")
+  writeFileSync(second, readFileSync(own.path))
+  const folder = mkdtempSync(join(base, "restart-"))
+  const file = join(folder, "usage.json")
+  const agent = { providerID: "antigravity", profile: own.home, instance: { id: "default" } } as unknown as Agent
+  const make = () => {
+    const sources = antigravitySources(folder, () => "machine-one")
+    return new Usage(() => sources([agent]), { current: () => pricing } as unknown as PricingStore, () => "0123456789abcdef", file, () => Date.parse(fixture.now))
+  }
+  const first = make(); await first.refresh()
+  const totals = first.view("UTC").totals
+  rmSync(second)
+  const restarted = make(); await restarted.refresh()
+  expect(restarted.view("UTC").totals.antigravity![0]!.tokens).toEqual(totals.antigravity![0]!.tokens)
+  expect(restarted.view("UTC").totals.antigravity![0]!.cost).toBeCloseTo(totals.antigravity![0]!.cost, 12)
+  rmSync(own.path)
+  const absent = make(); await absent.refresh()
+  expect(absent.view("UTC").totals).toEqual(restarted.view("UTC").totals)
 })

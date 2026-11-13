@@ -311,7 +311,7 @@ const engineCodexUsage = engineCodexSource(
   () => (engineAccounts.answered ? engineAccounts.accounts().some((account) => account.provider === "openai") : undefined),
   () => usage.has("openai"),
 )
-const antigravityUsage = antigravitySources()
+const antigravityUsage = antigravitySources(usageFolder)
 const grokUsage = grokSources(usageFolder)
 const engineHostedUsage = engineHostedSources(engineData)
 // Cursor's plan and its usage history, asked of Cursor with Kuvo Code's own Cursor sign-in: only
