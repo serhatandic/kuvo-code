@@ -4889,13 +4889,15 @@ on stderr; one whose holder is gone is taken over), its staging folder, and the 
 
 `kuvo-link.js rehome <root> …`, with `KUVO_HOME` the app's own box's folder (`<app folder>/box`)
 and `root` the home's name in the home folder (`.kuvo-code`, or a test's), as `here` takes them.
-Each prints one JSON line, `{result, message?, status}`, and exits with what the keeper starts
+Each prints one JSON line, `{result, message?, status}` (`--ready` always as below, with why where
+it's not), and exits with what the keeper starts
 then: 0 (`done`, `back`, `nothing`), what's there; 1 (`refused`, `failed`: it never began, or went
 back, or something unforeseen went wrong before a move began), the box where it was; 3
 (`stuck`: it stopped past the point it goes back from, or its journal can't be read, with why in
 `state.json`'s `failed`; `--resume` carries it on), nothing; 4 (`waits`: another move holds the
 lock), nothing; 2, a command it doesn't know. It goes by whether each process runs, never a pid
-alone (it drops `KUVO_BOX`).
+alone (it drops `KUVO_BOX`). A copy of the app (its box's folder not in `run.kuvo.code`) is
+refused anything but `--status` on the real `~/.kuvo-code`.
 
 - **`rehome <root> --release <folder> [--keeps-awake off]`**: the move, with the old box stopped
   (its engine, coding agents' bridge and `serve`; the keeper may hold its lock). `status` is as
@@ -4929,9 +4931,10 @@ alone (it drops `KUVO_BOX`).
      (a name in both keeps both: the one there keeps its name, the other is `<name> 2`); then
      `box/kind` (`mac`), last.
   7. **Fix.** What outside the box names its folders (piece 2b; nothing yet).
-  8. **Clear.** Should something have started in the old box meanwhile, or anything changed where
-     it moves from since it cloned (the engine's own folders aside: a file the app kept as you sent
-     it, say), it goes back first: nothing is left only in the kept copy. So the app writes nothing
+  8. **Clear.** Should something have started in the old box meanwhile, or anything changed, or
+     been made, in what it clears since it cloned (the engine's `opencode` folder aside, which only
+     the engine writes, and in `run` its processes' records: a file the app kept as you sent it,
+     say, or its list of machines), it goes back first: nothing is left only in the kept copy. So the app writes nothing
      there during a move. From here it only goes forward. The originals, the app's `box` and `opencode`
      folders whole and each other, are renamed into `updates/rehome/kept/<date>/`, so nothing in
      the app's folder says a box ran there (`here`). Kept 30 days (`keptUntil`), then deleted, by

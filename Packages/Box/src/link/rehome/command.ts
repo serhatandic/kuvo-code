@@ -9,6 +9,8 @@
 //   rehome <root> --status                                      how it stands (`kuvo/box/rehome`)
 //   rehome <root> --settled keychain|agent                      what the app owed it, done
 
+import path from "node:path";
+import { accountHome, located } from "../home";
 import { appFolderOf, homeOfRoot, NOTHING_TO_MOVE, rehome, rehomeBack, rehomeReady, rehomeResume, settled, type RehomeOutcome } from "./move";
 import { moveUnderWay, rehomeStatus } from "./state";
 
@@ -40,6 +42,15 @@ export async function rehomeCommand(root: string | undefined, args: string[]): P
       say(rehomeStatus(home));
       return 0;
     }
+    // (A copy of the app, a demo's or a test's, never acts on the real one's move: only Kuvo Code
+    // itself, or the box in that home.)
+    const asked = process.env.KUVO_HOME ? path.resolve(process.env.KUVO_HOME) : null;
+    if (located(home) === located(path.join(accountHome(), ".kuvo-code")) && asked && located(asked) !== located(home)
+      && path.basename(path.dirname(asked)) !== "run.kuvo.code") {
+      const why = "Only Kuvo Code itself moves the box in ~/.kuvo-code.";
+      say(args.includes("--ready") ? { ready: false, how: null, why, status: rehomeStatus(home) } : { result: "refused", message: why, status: rehomeStatus(home) });
+      return args.includes("--ready") ? 0 : EXIT.refused;
+    }
     if (args.includes("--settled")) {
       const what = option("--settled");
       if (what !== "keychain" && what !== "agent") {
@@ -64,10 +75,16 @@ export async function rehomeCommand(root: string | undefined, args: string[]): P
     say(outcome);
     return EXIT[outcome.result];
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // (Asked whether it's ready: not, saying why.)
+    if (args.includes("--ready")) {
+      say({ ready: false, how: null, why: message, status: rehomeStatus(home) });
+      return 0;
+    }
     // (Something unforeseen: stuck where a move is under way, by its journal, which `here` says
     // too; else it never began, and the box where it was starts as it was.)
     const result = moveUnderWay(home) ? "stuck" : "failed";
-    say({ result, message: error instanceof Error ? error.message : String(error), status: rehomeStatus(home) });
+    say({ result, message, status: rehomeStatus(home) });
     return EXIT[result];
   }
 }

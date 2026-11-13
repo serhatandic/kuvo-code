@@ -268,13 +268,15 @@ const keptLike = (journal: Journal) => (folder: string): string | null => {
   return exists(was) ? was : null;
 };
 
-/** The first file in `files` (or in their folders) changed since `since` (ms), or null. A file's
- * status time, which a write, a rename into its folder or a change of its mode moves. */
-function changedSince(files: string[], since: number): string | null {
+/** The first file in `files` (or in their folders) changed since `since` (ms), or null: by a file's
+ * status time, which a write, a rename into its folder or a change of its mode moves. In `run`, the
+ * box's processes' records (never moved) and the folder itself, which they're written into, aside. */
+function changedSince(files: string[], since: number, run: string): string | null {
   const walk = (file: string): string | null => {
+    if (path.dirname(file) === run && PROCESS_RECORD.test(path.basename(file))) return null;
     let kind: fs.Stats;
     try { kind = fs.lstatSync(file); } catch { return null; }
-    if (kind.ctimeMs >= since) return file;
+    if (kind.ctimeMs >= since && file !== run) return file;
     if (!kind.isDirectory()) return null;
     for (const name of listOf(file)) {
       const found = walk(path.join(file, name));
@@ -495,7 +497,10 @@ function carryOn(journal: Journal, rewriter: Rewriter): void {
       if (running.length) throw new Error(`Something started in the box as it moved (${running.join(", ")}), so it went back.`);
       // Nor anything written meanwhile where it moves from (a file the app kept as you sent it):
       // only its copy would move.
-      const written = journal.way === "move" && journal.clonedAt ? changedSince(journal.placements.filter(each => !each.installed && !inside(each.from, path.join(journal.from, "opencode")) && !inside(each.from, path.join(journal.from, "engine"))).map(each => each.from), journal.clonedAt) : null;
+      // (All it clears but the engine's own folders, which its engine alone writes; new entries too.)
+      const written = journal.way === "move" && journal.clonedAt
+        ? changedSince(journal.clearing.filter(each => each !== path.join(journal.from, "opencode")), journal.clonedAt, path.join(journal.from, "box", "run"))
+        : null;
       if (written) throw new Error(`${written} changed as it moved, so it went back.`);
     }
     stepTo(journal, "clear");

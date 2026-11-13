@@ -556,3 +556,14 @@ test("an update's tidying of its folder leaves a move's state and kept copies al
   expect(readdirSync(updates).sort()).toEqual(["installed.json", "rehome", "rollback"])
   expect(existsSync(join(updates, "rehome", "kept", "x", "box", "f"))).toBe(true)
 })
+
+test.if(mac)("a list the app makes for the first time where it moves from, as it moves, sends it back too; the app's own records in run don't", () => {
+  const w = world(v => rmSync(join(v.S, "box", "machines.json")))
+  const added = move(w, { KUVO_TEST_REHOME_WRITE_AT: "after-fix", KUVO_TEST_REHOME_WRITE_FILE: join(w.S, "box", "machines.json"), KUVO_TEST_REHOME_WRITE_TEXT: "[\"added meanwhile\"]" })
+  expect(added.said).toMatchObject({ result: "failed" })
+  expect(readFileSync(join(w.S, "box", "machines.json"), "utf8")).toBe("[\"added meanwhile\"]")
+
+  const opened = world()
+  const moved = move(opened, { KUVO_TEST_REHOME_WRITE_AT: "after-fix", KUVO_TEST_REHOME_WRITE_FILE: join(opened.S, "box", "run", "host.json"), KUVO_TEST_REHOME_WRITE_TEXT: "{}" })
+  expect(moved.said).toMatchObject({ result: "done" })
+}, 60_000)
