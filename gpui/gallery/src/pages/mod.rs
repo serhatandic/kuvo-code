@@ -1,27 +1,29 @@
 //! One page per block.
 
 mod buttons;
+mod chat_list;
 mod icons;
 mod text_field;
 mod theme;
 
-use gpui::{AnyElement, Context, Window};
+use gpui::{AnyElement, Context, Window, px};
 
 use crate::{Block, Gallery};
 
 /// The live pieces some pages need (fields people type in, lists that stream).
 pub struct Demos {
     pub fields: text_field::Fields,
+    pub chats: chat_list::Chats,
 }
 
 impl Demos {
     pub fn new(_window: &mut Window, cx: &mut Context<Gallery>) -> Self {
-        Self { fields: text_field::Fields::new(cx) }
+        Self { fields: text_field::Fields::new(cx), chats: chat_list::Chats::new(cx) }
     }
 }
 
 pub(crate) fn is_built(block: Block) -> bool {
-    matches!(block, Block::Theme | Block::Icons | Block::Buttons | Block::TextField)
+    matches!(block, Block::Theme | Block::Icons | Block::Buttons | Block::TextField | Block::ChatList)
 }
 
 pub(crate) fn shot_height(block: Block) -> f32 {
@@ -30,6 +32,7 @@ pub(crate) fn shot_height(block: Block) -> f32 {
         Block::Icons => 1420.,
         Block::Buttons => 1100.,
         Block::TextField => 900.,
+        Block::ChatList => 840.,
         _ => 900.,
     }
 }
@@ -45,6 +48,7 @@ pub(crate) fn render(
         Block::Icons => icons::page(window, cx),
         Block::Buttons => buttons::page(window, cx),
         Block::TextField => text_field::page(&demos.fields, window, cx),
+        Block::ChatList => chat_list::page(&demos.chats, window, cx),
         _ => crate::page(block.title(), "Not built yet.", [], cx),
     }
 }
@@ -69,6 +73,16 @@ pub(crate) fn prepare_shot(
             });
             window.focus(&composer.focus_handle(cx), cx);
         })?;
+    }
+    if block == Block::ChatList {
+        let scrolled = cx.update(|cx| gallery.read(cx).expect("the gallery").demos().chats.scrolled.clone());
+        // Draw once so the list knows its heights, then scroll back and let a reply arrive.
+        cx.update_window(window, |_, window, _| window.refresh())?;
+        cx.run_until_parked();
+        cx.update(|cx| scrolled.update(cx, |c, _| c.list.scroll_by(px(-330.))));
+        cx.update_window(window, |_, window, _| window.refresh())?;
+        cx.run_until_parked();
+        cx.update(|cx| scrolled.update(cx, |c, cx| c.add_exchange(cx)));
     }
     cx.run_until_parked();
     Ok(())

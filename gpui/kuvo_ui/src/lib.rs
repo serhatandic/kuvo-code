@@ -5,6 +5,7 @@
 
 pub mod backdrop;
 pub mod button;
+pub mod chat_list;
 pub mod icon;
 pub mod menu;
 pub mod row;
