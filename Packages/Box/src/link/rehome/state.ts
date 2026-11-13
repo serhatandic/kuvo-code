@@ -43,6 +43,9 @@ export interface RehomeRecord extends Partial<RehomeStatus> {
   counted?: number;
   /** Moved back: it moves again only on Move Now, until a move's done. */
   movedBack?: boolean;
+  /** Where the old place is still named in what moved, but not where the box rewrites (people's and
+   * agents' words, what's made anew as the box starts): said for support. */
+  leftovers?: string[];
 }
 
 const stateFile = (home: string) => path.join(rehomeFolder(home), "state.json");
@@ -99,9 +102,15 @@ export function rehomeStatus(home: string, now = Date.now()): RehomeStatus {
 // The journal
 
 /** One thing a move did, journaled before it's done, so going back undoes exactly what was:
- * renamed (`from` → `to`; `source`, where it came from before it was staged), or made (a folder or
- * file that wasn't there). */
-export type Act = { act: "rename"; from: string; to: string; source?: string; merged?: boolean } | { act: "made"; path: string; folder?: boolean };
+ * renamed (`from` → `to`; `source`, where it came from before it was staged), made (a folder or
+ * file that wasn't there), written over (a file outside the box, `was` what it held: a git link),
+ * or a Keychain item written (`aside`, where the one that was there is kept meanwhile: never a
+ * secret in the journal). */
+export type Act =
+  | { act: "rename"; from: string; to: string; source?: string; merged?: boolean }
+  | { act: "made"; path: string; folder?: boolean }
+  | { act: "wrote"; path: string; was: string }
+  | { act: "keychain"; service: string; account: string; aside?: string };
 
 /** What moves where: each staged (`staged`, in the move's staging folder) from where it is
  * (`from`), then put in place (`to`). `run` takes its files but its processes' records. */
@@ -219,7 +228,7 @@ export function readActs(home: string): Act[] {
     if (!line) continue;
     try {
       const act = JSON.parse(line);
-      if (isObject(act) && (act.act === "rename" || act.act === "made")) acts.push(act as unknown as Act);
+      if (isObject(act) && ["rename", "made", "wrote", "keychain"].includes(act.act as string)) acts.push(act as unknown as Act);
     } catch {}
   }
   return acts;

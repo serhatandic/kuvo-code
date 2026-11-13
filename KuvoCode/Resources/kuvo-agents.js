@@ -13,6 +13,14 @@ import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync }
 import { join } from "path";
 var onMachine = process.env.KUVO_AGENTS_REMOTE === "1";
 var machineHome = process.env.KUVO_HOME;
+var onMacBox = onMachine && !!machineHome && (() => {
+  try {
+    return readFileSync(join(machineHome, "box", "kind"), "utf8").trim() === "mac";
+  } catch {
+    return false;
+  }
+})();
+var yourHomes = !onMachine || onMacBox;
 var ownFolders = {};
 function takeOwnFolders() {
   for (const key of Object.keys(process.env)) {
@@ -144,7 +152,7 @@ class Accounts {
   home(record) {
     if (record.id !== "default")
       return join2(this.root, record.kind, "accounts", record.id);
-    if (!onMachine || !["claude", "codex", "grok"].includes(record.kind))
+    if (yourHomes || !["claude", "codex", "grok"].includes(record.kind))
       return;
     const home = join2(this.root, record.kind, "home");
     mkdirSync2(home, { recursive: true, mode: 448 });
@@ -14962,7 +14970,7 @@ class CodexAgent {
     const subagents = subagentsRoot();
     if (subagents)
       mkdirSync15(subagents, { recursive: true, mode: 448 });
-    const homes = [this.home, ...this.instance.home && !onMachine ? [this.yourCodex] : []];
+    const homes = [this.home, ...this.instance.home && yourHomes ? [this.yourCodex] : []];
     const attached = sessionID ? fenceAttachments(directory) : undefined;
     return fenceAgent(this.executable(), directory, {
       homes,
@@ -14978,7 +14986,7 @@ class CodexAgent {
     const executable = this.executable();
     if (!executable)
       throw new Error(`Install Codex first: ${this.install}`);
-    if (this.instance.home && !onMachine)
+    if (this.instance.home && yourHomes)
       shadowHome(this.instance.home, this.yourCodex);
     const directory = key === ACCOUNT ? this.accountFolder() : thread?.session.location.directory ?? this.home;
     const fence = key === SHARED ? undefined : this.fenced(directory, key === ACCOUNT ? undefined : key, seatBot(thread?.session));
@@ -32672,13 +32680,16 @@ function byNumbers(a, b) {
   return 0;
 }
 function enginesThere(root) {
+  return enginesIn(path5.join(root, "engine"));
+}
+function enginesIn(folder) {
   let names = [];
   try {
-    names = fs7.readdirSync(path5.join(root, "engine"));
+    names = fs7.readdirSync(folder);
   } catch {}
   const runs = (name) => {
     try {
-      fs7.accessSync(path5.join(root, "engine", name, "opencode"), fs7.constants.X_OK);
+      fs7.accessSync(path5.join(folder, name, "opencode"), fs7.constants.X_OK);
       return true;
     } catch {
       return false;
@@ -33655,4 +33666,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 3928b04641c60ee501e053f46143855f29f197f7fb815a66934eb6cbc25ab60f
+// Built from Packages/Box/src/agents 2cbb6c1445b03a32e5aafe7068c7d1e8fb9375811cd1969d2a1f3e5a3ea09991

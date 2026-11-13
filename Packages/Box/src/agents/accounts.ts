@@ -4,12 +4,13 @@
 // which the agent is pointed at (CLAUDE_CONFIG_DIR, CODEX_HOME, GROK_HOME…), as T3 Code runs a
 // second instance. An added account's models and sessions are its own: its provider is
 // `<agent's provider>@<id>`. On a machine, the agent's own sign-in is in the bridge's folder too
-// (`<agent>/home`): nothing goes in the machine's home.
+// (`<agent>/home`): nothing goes in the machine's home. A Mac's box in a home of its own is on your
+// Mac: the defaults stay yours (`yourHomes`).
 
 import { randomBytes } from "node:crypto"
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { onMachine } from "./machine"
+import { yourHomes } from "./machine"
 
 export type AgentKind = "claude" | "codex" | "cursor" | "grok" | "antigravity"
 
@@ -72,8 +73,9 @@ export class Accounts {
 
   home(record: AccountRecord): string | undefined {
     if (record.id !== "default") return join(this.root, record.kind, "accounts", record.id)
-    // (Cursor's and Antigravity's own are in the bridge's folder anyway.)
-    if (!onMachine || !["claude", "codex", "grok"].includes(record.kind)) return undefined
+    // (Cursor's and Antigravity's own are in the bridge's folder anyway. A Mac's box in a home of
+    // its own keeps yours, as the app's did.)
+    if (yourHomes || !["claude", "codex", "grok"].includes(record.kind)) return undefined
     const home = join(this.root, record.kind, "home")
     mkdirSync(home, { recursive: true, mode: 0o700 })
     return home
