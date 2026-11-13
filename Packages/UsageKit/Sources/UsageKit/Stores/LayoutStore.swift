@@ -191,6 +191,18 @@ final class LayoutStore {
         ]
     }
 
+    /// Whether the layout is as a fresh panel's (fork addition, `HostSettings`): the default meters,
+    /// stars and On Demand meters, the cards and each card's meters in their own order. After Reset,
+    /// or a change put back, it is.
+    func isDefaultArrangement() -> Bool {
+        let known = { [registry] (ids: [String]) in Set(ids.filter { registry.descriptor(id: $0) != nil }) }
+        return Set(placed.map(\.descriptorID)) == known(defaultMetricIDs)
+            && orderedProviderIDs() == registry.providers.map(\.id)
+            && registry.providers.allSatisfy { metricOrder(for: $0.id) == registry.descriptors(for: $0.id).map(\.id) }
+            && pinnedMetricIDs == known(defaultPinnedMetricIDs)
+            && expandedMetricIDs == known(defaultExpandedMetricIDs)
+    }
+
     func isProviderExpanded(_ providerID: String) -> Bool {
         expandedProviderIDs.contains(providerID)
     }

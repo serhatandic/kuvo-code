@@ -22900,6 +22900,7 @@ function newer(a, b) {
     return a.imported ? a.v < b.v : a.v > b.v;
   return a.by > b.by;
 }
+var LAYOUT_LISTS = ["placed", "providerOrder", "pinned", "expanded", "expandOnEnable", "seeded"];
 var MOST_IDS = 1000;
 var MOST_PROVIDERS = 200;
 var ID = /^[^\u0000-\u001f]{1,200}$/;
@@ -22916,6 +22917,22 @@ var ids = (value) => {
   return out;
 };
 var word = (value) => typeof value === "string" && /^[^\u0000-\u001f]{1,40}$/.test(value) ? value : undefined;
+var MOST_OTHER = 16000;
+var MOST_OTHER_PARTS = 20;
+var MOST_OTHER_PART = 64000;
+var OTHER_PART = /^[a-z][A-Za-z0-9]{0,39}$/;
+function canonical(value) {
+  if (Array.isArray(value))
+    return "[" + value.map(canonical).join(",") + "]";
+  if (value && typeof value === "object") {
+    return "{" + Object.keys(value).sort().map((key) => JSON.stringify(key) + ":" + canonical(value[key])).join(",") + "}";
+  }
+  return JSON.stringify(value) ?? "null";
+}
+function others(given, known) {
+  const rest = Object.fromEntries(Object.entries(given).filter(([key]) => !known.includes(key)));
+  return Object.keys(rest).length && canonical(rest).length <= MOST_OTHER ? rest : {};
+}
 function checked2(unit, value) {
   const given = value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
   switch (unit) {
@@ -22932,22 +22949,22 @@ function checked2(unit, value) {
           return;
         metricOrder[provider] = each;
       }
-      const lists = ["placed", "providerOrder", "pinned", "expanded", "expandOnEnable", "seeded"].map((key) => [key, ids(given[key] ?? [])]);
+      const lists = LAYOUT_LISTS.map((key) => [key, ids(given[key] ?? [])]);
       if (lists.some(([, list]) => !list))
         return;
-      return { ...Object.fromEntries(lists), metricOrder };
+      return { ...Object.fromEntries(lists), metricOrder, ...others(given, [...LAYOUT_LISTS, "metricOrder"]) };
     }
     case "providers": {
       const enabled = given && ids(given.enabled);
       const known = given && ids(given.known ?? []);
-      return enabled && known ? { enabled, known } : undefined;
+      return enabled && known ? { enabled, known, ...others(given, ["enabled", "known"]) } : undefined;
     }
     case "totalSpend": {
       if (!given || typeof given.show !== "boolean")
         return;
       const period = word(given.period);
       const metric = word(given.metric);
-      return { show: given.show, ...period ? { period } : {}, ...metric ? { metric } : {} };
+      return { show: given.show, ...period ? { period } : {}, ...metric ? { metric } : {}, ...others(given, ["show", "period", "metric"]) };
     }
     case "codexFallback":
       return value === null || typeof value === "string" && ID.test(value) ? value : undefined;
@@ -22957,7 +22974,7 @@ function checked2(unit, value) {
       const flags = ["underTenPercent", "healthyToClose", "closeToRunningOut"];
       if (!flags.every((flag) => typeof given[flag] === "boolean"))
         return;
-      return Object.fromEntries(flags.map((flag) => [flag, given[flag]]));
+      return { ...Object.fromEntries(flags.map((flag) => [flag, given[flag]])), ...others(given, flags) };
     }
   }
 }
@@ -22974,16 +22991,56 @@ function unitsFrom(given) {
   const units = {};
   if (!given || typeof given !== "object" || Array.isArray(given))
     return units;
+  let other = 0;
   for (const [name, kept] of Object.entries(given)) {
-    if (!isUnit(name) || !kept || typeof kept !== "object")
+    if (!kept || typeof kept !== "object")
       continue;
     const stamp = stampOf2(kept.stamp);
-    const value = checked2(name, kept.value);
-    if (!stamp || value === undefined)
+    if (!stamp)
       continue;
-    units[name] = { value, stamp };
+    if (isUnit(name)) {
+      const value = checked2(name, kept.value);
+      if (value !== undefined)
+        units[name] = { value, stamp };
+    } else if (OTHER_PART.test(name) && other < MOST_OTHER_PARTS && "value" in kept && canonical(kept.value).length <= MOST_OTHER_PART) {
+      units[name] = { value: kept.value, stamp };
+      other++;
+    }
   }
   return units;
+}
+function knowsFrom(given) {
+  if (!given || typeof given !== "object")
+    return;
+  const cards = ids(given.cards);
+  const meters = ids(given.meters);
+  return cards && meters ? { cards: new Set(cards), meters: new Set(meters) } : undefined;
+}
+function keeping(unit, before, given, knows) {
+  if (!knows || !before || typeof before !== "object" || unit !== "layout" && unit !== "providers")
+    return given;
+  const was = before;
+  const now = { ...given };
+  const otherMeter = (id) => !knows.meters.has(id);
+  const otherCard = (id) => !knows.cards.has(id);
+  const add = (list, from, other) => [...list, ...(Array.isArray(from) ? from : []).filter((id) => other(id) && !list.includes(id))];
+  if (unit === "layout") {
+    for (const key of ["placed", "pinned", "expanded", "expandOnEnable", "seeded"])
+      now[key] = add(now[key] ?? [], was[key], otherMeter);
+    now.providerOrder = add(now.providerOrder ?? [], was.providerOrder, otherCard);
+    const metricOrder = { ...now.metricOrder ?? {} };
+    for (const [card, list] of Object.entries(was.metricOrder ?? {})) {
+      metricOrder[card] = otherCard(card) && !metricOrder[card] ? list : add(metricOrder[card] ?? [], list, otherMeter);
+    }
+    now.metricOrder = metricOrder;
+  } else {
+    for (const key of ["enabled", "known"])
+      now[key] = add(now[key] ?? [], was[key], otherCard);
+  }
+  for (const [key, value] of Object.entries(was))
+    if (!(key in now))
+      now[key] = value;
+  return checked2(unit, now) ?? given;
 }
 
 class UsageSettings {
@@ -22992,6 +23049,7 @@ class UsageSettings {
   self;
   units = {};
   imported = false;
+  setup;
   highest = 0;
   listeners = [];
   unnamed = "?" + randomBytes5(8).toString("hex");
@@ -23005,6 +23063,8 @@ class UsageSettings {
       const saved = JSON.parse(readFileSync30(file, "utf8"));
       this.units = unitsFrom(saved?.units);
       this.imported = saved?.imported === true;
+      if (typeof saved?.setup === "string")
+        this.setup = saved.setup;
       const codex = saved?.codex;
       if (!this.units.codexFallback && codex && typeof codex === "object" && "fallback" in codex) {
         const value = checked2("codexFallback", codex.fallback === "" ? null : codex.fallback);
@@ -23013,10 +23073,27 @@ class UsageSettings {
       }
     } catch {}
     for (const unit of Object.values(this.units))
-      this.highest = Math.max(this.highest, unit.stamp.v);
+      if (!unit.stamp.imported)
+        this.highest = Math.max(this.highest, unit.stamp.v);
   }
   listen(listener) {
     this.listeners.push(listener);
+  }
+  inSetup(id) {
+    if (this.setup === id)
+      return false;
+    const was = this.setup;
+    this.setup = id;
+    if (was === undefined) {
+      this.save();
+      return false;
+    }
+    this.units = {};
+    this.imported = false;
+    this.save();
+    for (const listener of this.listeners)
+      listener([...SETTINGS_UNITS]);
+    return true;
   }
   get codexFallback() {
     const value = this.units.codexFallback?.value;
@@ -23029,19 +23106,19 @@ class UsageSettings {
     this.change({ codexFallback: model });
   }
   values() {
-    return Object.fromEntries(Object.entries(this.units).map(([name, unit]) => [name, unit.value]));
+    return Object.fromEntries(Object.entries(this.units).flatMap(([name, unit]) => isUnit(name) ? [[name, unit.value]] : []));
   }
   kept() {
     return structuredClone(this.units);
   }
   digest() {
-    const canonical = SETTINGS_UNITS.map((name) => {
+    const all = Object.keys(this.units).sort().map((name) => {
       const unit = this.units[name];
-      return unit ? [name, unit.stamp.v, unit.stamp.by, unit.stamp.imported === true, unit.value] : [name];
+      return [name, unit.stamp.v, unit.stamp.by, unit.stamp.imported === true, unit.value];
     });
-    return createHash12("sha256").update(JSON.stringify(canonical)).digest("hex").slice(0, 32);
+    return createHash12("sha256").update(canonical(all)).digest("hex").slice(0, 32);
   }
-  change(given) {
+  change(given, knows) {
     const values = [];
     for (const [name, value] of Object.entries(given)) {
       if (!isUnit(name))
@@ -23049,12 +23126,12 @@ class UsageSettings {
       const clean = checked2(name, value);
       if (clean === undefined)
         return { message: `That isn't a ${name} setting.` };
-      values.push([name, clean]);
+      values.push([name, keeping(name, this.units[name]?.value, clean, knows)]);
     }
     const changed = [];
     for (const [name, value] of values) {
       const before = this.units[name];
-      if (before && !before.stamp.imported && JSON.stringify(before.value) === JSON.stringify(value))
+      if (before && !before.stamp.imported && canonical(before.value) === canonical(value))
         continue;
       this.highest = Math.max(this.now(), this.highest + 1);
       this.units[name] = { value, stamp: { v: this.highest, by: this.self() || this.unnamed } };
@@ -23097,7 +23174,7 @@ class UsageSettings {
     }
     if (changed.length)
       this.changed(changed);
-    return changed;
+    return changed.filter(isUnit);
   }
   changed(units, save = true) {
     if (save)
@@ -23111,7 +23188,7 @@ class UsageSettings {
     try {
       mkdirSync21(dirname16(this.file), { recursive: true });
       const codex = this.units.codexFallback ? { codex: { fallback: this.units.codexFallback.value } } : {};
-      writeFileSync22(this.file + ".new", JSON.stringify({ ...codex, kuvo: 1, units: this.units, ...this.imported ? { imported: true } : {} }), { mode: 384 });
+      writeFileSync22(this.file + ".new", JSON.stringify({ ...codex, kuvo: 1, units: this.units, ...this.imported ? { imported: true } : {}, ...this.setup ? { setup: this.setup } : {} }), { mode: 384 });
       renameSync17(this.file + ".new", this.file);
     } catch {}
   }
@@ -23130,7 +23207,8 @@ async function settingsRoutes(settings, choices, method, rest, body) {
     if ("codexFallback" in given && given.codexFallback !== null && (typeof given.codexFallback !== "string" || !choices().includes(given.codexFallback))) {
       return json8({ message: "This model's prices aren't available now. Choose another model or None." }, 400);
     }
-    const changed = settings.change(given);
+    const { knows, ...parts } = given;
+    const changed = settings.change(parts, knowsFrom(knows));
     if ("message" in changed)
       return json8({ message: changed.message }, 400);
     return answer3(settings);
@@ -30085,6 +30163,8 @@ class SettingsPeers {
     this.transport.send(to, { ...mail, setup: this.directory.setup }, false);
   }
   directorySaid() {
+    if (this.directory.told && this.directory.setup)
+      this.settings.inSetup(this.directory.setup);
     const ours = new Set(this.ours());
     for (const map of [this.told, this.answered])
       for (const key of [...map.keys()])
@@ -34893,4 +34973,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents a22474a44fdd99e4a5451b7221d709980efbf3a8153e92530f22fd8553893d95
+// Built from Packages/Box/src/agents 6ba5815bfda9dcf0a6684efcd8a42771e1ce1b5f271c610e1788413e57c857ef

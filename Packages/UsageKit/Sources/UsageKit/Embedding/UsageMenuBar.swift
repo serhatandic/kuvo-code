@@ -138,6 +138,8 @@ public final class UsageMenuBar {
         if showsWelcome { KeychainAccessGuard.holdPopups() }
         let container = await AppContainer(isFreshInstall: isFreshInstall || showsWelcome)
         self.container = container
+        // (Its layout, checked against this Mac's providers, is where a change starts from.)
+        HostSettings.shared.panelStarted()
         if let pendingConnected {
             self.pendingConnected = nil
             connectedProvidersDidChange(pendingConnected)

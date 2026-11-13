@@ -10,27 +10,66 @@ private let log = Logger(subsystem: "run.kuvo.code", category: "usage")
 /// (`api/kuvo/usage/settings`, PROTOCOL.md "Usage settings"): which cards and meters show, their
 /// order, what's pinned, the total spend card's and which notifications are on. The panel shows the
 /// box's (`HostSettings`), and what's changed in it goes to the box, which shares it with your other
-/// computers; what this Mac kept before goes to its box once. This only carries them: what's newest
-/// and who gets it is the box's. A box from before them leaves the panel's own, as before.
+/// computers; what this Mac kept before goes to its box once. This only carries them: what's newest,
+/// what's kept of a newer app's, and who gets it is the box's.
 @MainActor
 final class UsageSettingsOnBox {
     private var api: OpenCodeAPI?
     private let host: HostSettings
+    private let defaults: UserDefaults
+    /// Whether this Mac's box keeps them (`usage.settings` in its features), as it last said.
+    private var kept = false
     /// One ask of the box at a time, in order: a change made here goes after what was asked before it.
     private var work: Task<Void, Never>?
-    /// Parts changed here the box hasn't taken yet (it wasn't answering): they go as it's back, before its own are read.
-    private var unsent: [String: JSONValue] = [:]
+    /// Parts changed here the box hasn't taken yet (it wasn't answering, or the app quit first), and
+    /// the cards and meters this panel knows: they go as it's back, before its own are read. Kept
+    /// through a restart.
+    private var unsent: [String: JSONValue] = [:] {
+        didSet { save() }
+    }
+    private var knows: JSONValue? {
+        didSet { save() }
+    }
+    private static let unsentKey = "usage.settingsUnsent"
 
-    init(host: HostSettings = .shared) {
+    init(host: HostSettings = .shared, defaults: UserDefaults = .standard) {
         self.host = host
+        self.defaults = defaults
+        if let data = defaults.data(forKey: Self.unsentKey), let saved = try? JSONDecoder().decode(Saved.self, from: data) {
+            unsent = saved.parts
+            knows = saved.knows
+        }
         host.onChange = { [weak self] parts in self?.changed(parts) }
     }
 
-    /// This Mac's box's bridge is up (again).
-    func connected(api: OpenCodeAPI?) {
+    private struct Saved: Codable {
+        var parts: [String: JSONValue]
+        var knows: JSONValue?
+    }
+
+    private func save() {
+        guard !unsent.isEmpty, let data = try? JSONEncoder().encode(Saved(parts: unsent, knows: knows)) else {
+            return defaults.removeObject(forKey: Self.unsentKey)
+        }
+        defaults.set(data, forKey: Self.unsentKey)
+    }
+
+    /// This Mac's box's bridge is up (again): `box`, its id (`BoxClient`), which says whether it keeps them.
+    func connected(api: OpenCodeAPI?, box: String) {
         guard let api else { return }
         self.api = api
-        then { await $0.read() }
+        then { step in
+            step.kept = await Self.keeps(box)
+            await step.read()
+        }
+    }
+
+    /// Whether `box` keeps the usage settings (`usage.settings`): this app's own box does.
+    private static func keeps(_ box: String) async -> Bool {
+        if BoxClient.hasEveryFeature(box) { return true }
+        struct Info: Decodable { var features: [String]? }
+        let info = try? await BoxClient.routes(box).value(Info.self, "GET", "kuvo/info")
+        return info?.features?.contains("usage.settings") ?? false
     }
 
     /// Its bridge said they changed (another computer's change, or one of its routes).
@@ -44,8 +83,9 @@ final class UsageSettingsOnBox {
         api = nil
     }
 
-    private func changed(_ parts: Data) {
-        guard let given = try? JSONDecoder().decode([String: JSONValue].self, from: parts) else { return }
+    private func changed(_ data: Data) {
+        guard var given = try? JSONDecoder().decode([String: JSONValue].self, from: data) else { return }
+        if let said = given.removeValue(forKey: "knows") { knows = said }
         unsent.merge(given) { _, newer in newer }
         then { await $0.send() }
     }
@@ -59,20 +99,22 @@ final class UsageSettingsOnBox {
         }
     }
 
-    /// The parts changed here, to the box; what it answers shows.
+    /// The parts changed here, to the box, with what this panel knows; what it answers shows.
     private func send() async {
-        guard let api, !unsent.isEmpty else { return }
+        guard let api, kept, !unsent.isEmpty else { return }
         let parts = unsent
+        var body = parts
+        if let knows { body["knows"] = knows }
         do {
-            let answer = try await api.client.send(try api.client.request("PUT", BoxUsageSettings.bridgePath, body: JSONValue.object(parts)), as: DataEnvelope<BoxUsageSettings>.self).data
+            let answer = try await api.client.send(try api.client.request("PUT", BoxUsageSettings.bridgePath, body: JSONValue.object(body)), as: DataEnvelope<BoxUsageSettings>.self).data
             for (name, value) in parts where unsent[name] == value { unsent[name] = nil }
             apply(answer)
-        } catch let error as ServerError where error.status == 400 || error.status == 404 {
-            // Not a part it takes (a box from before them, or a part it can't): the box's stay, and show again.
+        } catch let error as ServerError where error.status == 400 {
+            // A part it can't take: the box's stay, and show again.
             log.info("usage settings refused: \(String(describing: error), privacy: .public)")
             for (name, value) in parts where unsent[name] == value { unsent[name] = nil }
             host.forget(Set(parts.keys))
-            if error.status == 400 { await read() }
+            await read()
         } catch {
             // Not answering: they go again as it's back.
             log.info("usage settings: \(String(describing: error), privacy: .public)")
@@ -81,6 +123,8 @@ final class UsageSettingsOnBox {
 
     /// The box's, shown; the first time, what this Mac kept before goes to it (once, on the box's word).
     private func read() async {
+        // COMPAT(0.7 usage-settings-box): a box from before it kept them (no `usage.settings`): the panel keeps its own, in its stores here, and shares none, as before (it goes with #679's box updates and #631 piece H). Goes 3 months after 0.8.0.
+        guard kept else { return }
         if !unsent.isEmpty { await send() }
         guard let api, unsent.isEmpty else { return }
         do {
@@ -91,9 +135,6 @@ final class UsageSettingsOnBox {
                 log.info("usage settings brought to this Mac's box: \(answer.took.joined(separator: ", "), privacy: .public)")
             }
             apply(answer)
-        } catch let error as ServerError where error.status == 404 {
-            // A box from before them: the panel keeps its own.
-            return
         } catch {
             log.info("usage settings: \(String(describing: error), privacy: .public)")
         }

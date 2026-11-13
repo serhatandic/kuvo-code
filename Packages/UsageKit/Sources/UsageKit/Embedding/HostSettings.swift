@@ -17,23 +17,24 @@ import Foundation
 public final class HostSettings {
     public static let shared = HostSettings()
 
-    /// Told the parts the panel changed here (each whole, as JSON), once the host has said its own
-    /// (`apply`): never for what the host put here.
+    /// Told the parts the panel changed here (each whole, as JSON, with `knows`: the cards and
+    /// meters this panel knows, whose ids it sends), once the host has said its own (`apply`), this
+    /// launch or before: never for what the host put here.
     public var onChange: ((Data) -> Void)?
 
     private let defaults: UserDefaults
     private let layout: LayoutPersistence
     /// Each part as the panel had it when the host last said its own, or when a change went: what a
-    /// change is a change from.
-    private var said: [String: Data]?
-    /// Whether `said`'s layout is the running panel's (it may start after the host first said).
-    private var saidLive = false
-    /// Each part as the host last said it (or as a change here went to it): a part said again as it
-    /// was isn't put in the panel again (which would end a drag and Undo).
+    /// change is a change from. Kept through a restart, so a change made before the host answers
+    /// (it's starting, or not answering) is one too.
+    private var said: [String: Data]? {
+        didSet { defaults.set(said, forKey: Self.saidKey) }
+    }
+    /// Each part as the host last said it: one said again as it was isn't put in the panel again
+    /// (which would end a drag and Undo).
     private var heard: [String: Data] = [:]
-    /// The layout as the host last said it: what this Mac's panel doesn't know of it (a newer app's
-    /// cards and meters) goes back with a change made here, so it isn't lost to the others.
-    private var heardLayout: [String: Any]?
+    /// The panel's keys as they were last looked at: a change of anything else isn't looked into.
+    private var watched: NSDictionary = [:]
     private var observer: NSObjectProtocol?
     private var checking = false
     /// Takes what was put in the stored copy into the panel's stores (the parts put there, by name).
@@ -42,6 +43,7 @@ public final class HostSettings {
     var liveLayout: () -> LayoutStore?
 
     static let layoutStorageKey = "openusage.layout.v1"
+    static let saidKey = "usage.hostSettings.said"
     private static let names = ["layout", "providers", "totalSpend", "notifications"]
 
     init(defaults: UserDefaults = .standard, liveLayout: (() -> LayoutStore?)? = nil, reload: ((Set<String>) -> Void)? = nil) {
@@ -49,6 +51,8 @@ public final class HostSettings {
         layout = LayoutPersistence(defaults: defaults, storageKey: Self.layoutStorageKey)
         self.liveLayout = liveLayout ?? { UsageMenuBar.shared.container?.layout }
         self.reload = reload ?? { parts in UsageMenuBar.shared.container?.reloadShared(parts) }
+        said = defaults.dictionary(forKey: Self.saidKey) as? [String: Data]
+        watched = watchedNow()
         observer = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.changedSoon() }
         }
@@ -57,12 +61,13 @@ public final class HostSettings {
     /// What was set on this Mac before its host kept these, as the box's parts, to bring in once:
     /// only the parts changed here (a Mac still on its first-run settings brings none, so it never
     /// puts them over the ones you made on another), and Codex's fallback model when one was
-    /// chosen. Which cards are on isn't brought: each Mac turned on those for the tools it found,
-    /// so they're shared from the first time you turn one on or off.
+    /// chosen. The layout only as the panel shows it, when it isn't a fresh panel's (after Reset,
+    /// or put back as it was, it is). Which cards are on isn't brought: each Mac turned on those for
+    /// the tools it found, so they're shared from the first time you turn one on or off.
     public func toImport() -> Data {
         var parts = self.parts()
         parts["providers"] = nil
-        if !layout.hasArrangement { parts["layout"] = nil }
+        if liveLayout().map({ $0.isDefaultArrangement() }) ?? true { parts["layout"] = nil }
         let set = { [defaults] (keys: [String]) in keys.contains { defaults.object(forKey: $0) != nil } }
         if !set([TotalSpendSetting.key, TotalSpendSetting.periodKey, TotalSpendSetting.metricKey]) { parts["totalSpend"] = nil }
         let keys = NotificationSettingsStore.storageKeys
@@ -72,9 +77,9 @@ public final class HostSettings {
     }
 
     /// The host's parts (JSON, as the box words them): each one given goes in the panel's place and
-    /// shows, unless it's as the host said it before; one not given stays as the panel has it, and
-    /// so does one in `except` (a change made here, on its way to the host). From now on, the panel's
-    /// own changes go to `onChange`.
+    /// shows, unless it's as the host said it before, or what the panel shows of it already; one not
+    /// given stays as the panel has it, and so does one in `except` (a change made here, on its way
+    /// to the host). From now on, the panel's own changes go to `onChange`.
     public func apply(_ settings: Data, except: Set<String> = []) {
         let given = (try? JSONSerialization.jsonObject(with: settings)) as? [String: Any] ?? [:]
         let mine = self.parts()
@@ -84,16 +89,15 @@ public final class HostSettings {
             let theirs = Self.json(Self.sorted(name, value))
             let before = heard[name]
             heard[name] = theirs
-            if name == "layout" { heardLayout = value }
-            // (As it said before: the panel has it, or what it made of it.)
-            if before == theirs || mine[name].map({ Self.json(withHeard(name, $0)) }) == theirs { continue }
+            // (As it said before; or as the panel shows it, what this Mac can't show of it left aside.)
+            if before == theirs || mine[name].map({ Self.json($0) }) == Self.json(shown(name, value)) { continue }
             write(name, value)
             put.insert(name)
         }
         if !put.isEmpty { reload(put) }
         // (What the stores made of it, checked against this Mac's providers, is what a change is from.)
         said = partsJSON()
-        saidLive = liveLayout() != nil
+        watched = watchedNow()
     }
 
     /// The host turned these parts down: the next it says of them goes in, as it was.
@@ -101,9 +105,22 @@ public final class HostSettings {
         for name in parts { heard[name] = nil }
     }
 
-    /// The panel's own change: told once the stores have all written theirs.
+    /// The panel started (its layout read and checked against this Mac's providers): what it shows
+    /// is where a layout change starts from (an app updated since may show the same layout otherwise).
+    public func panelStarted() {
+        guard var said, let shown = partsJSON()["layout"] else { return }
+        said["layout"] = shown
+        self.said = said
+        watched = watchedNow()
+    }
+
+    /// The panel's own change: looked into once the stores have all written theirs, and only when one
+    /// of its keys changed.
     private func changedSoon() {
         guard said != nil, !checking else { return }
+        let now = watchedNow()
+        guard now != watched else { return }
+        watched = now
         checking = true
         DispatchQueue.main.async { [weak self] in
             MainActor.assumeIsolated {
@@ -114,53 +131,45 @@ public final class HostSettings {
         }
     }
 
-    /// The parts that aren't as last said, to the host.
+    /// The parts that aren't as last said, to the host, with the cards and meters this panel knows.
     func check() {
         guard let said else { return }
         let now = partsJSON()
-        // The panel started after the host last said: what it shows is where changes start from.
-        if !saidLive, liveLayout() != nil {
-            self.said = now
-            saidLive = true
-            return
-        }
         let changed = now.filter { said[$0.key] != $0.value }
         guard !changed.isEmpty else { return }
         self.said = now
-        var parts: [String: Any] = [:]
-        for (name, value) in self.parts() where changed[name] != nil {
-            let part = withHeard(name, value)
-            parts[name] = part
-            heard[name] = Self.json(part)
+        var parts = self.parts().filter { changed[$0.key] != nil }
+        if let registry = liveLayout()?.registry {
+            parts["knows"] = ["cards": registry.providers.map(\.id), "meters": registry.descriptors.map(\.id)]
         }
         onChange?(Self.json(parts))
     }
 
-    /// A part as it goes to the host: the layout with what the host said of it that this Mac's
-    /// panel doesn't know (a newer app's cards and meters) put back.
-    private func withHeard(_ name: String, _ value: Any) -> [String: Any] {
-        let mine = value as? [String: Any] ?? [:]
-        guard name == "layout", let box = heardLayout, let registry = liveLayout()?.registry else { return Self.sorted(name, mine) }
-        let unknownMeter = { (id: String) in registry.descriptor(id: id) == nil }
-        let unknownCard = { (id: String) in registry.provider(id: id) == nil }
-        var out = mine
-        for key in ["placed", "pinned", "expanded", "expandOnEnable", "seeded"] {
-            let have = mine[key] as? [String] ?? []
-            out[key] = have + (box[key] as? [String] ?? []).filter { unknownMeter($0) && !have.contains($0) }
+    /// A part as this Mac's panel can show it: what it doesn't know (a newer app's cards and meters,
+    /// which the host keeps) left out.
+    private func shown(_ name: String, _ value: [String: Any]) -> [String: Any] {
+        guard let registry = liveLayout()?.registry else { return Self.sorted(name, value) }
+        let meter = { (id: String) in registry.descriptor(id: id) != nil }
+        let card = { (id: String) in registry.provider(id: id) != nil }
+        var out = value
+        switch name {
+        case "layout":
+            for key in ["placed", "pinned", "expanded", "expandOnEnable", "seeded"] { out[key] = (value[key] as? [String] ?? []).filter(meter) }
+            out["providerOrder"] = (value["providerOrder"] as? [String] ?? []).filter(card)
+            out["metricOrder"] = (value["metricOrder"] as? [String: [String]] ?? [:]).filter { card($0.key) }.mapValues { $0.filter(meter) }
+        case "providers":
+            for key in ["enabled", "known"] { out[key] = (value[key] as? [String] ?? []).filter(card) }
+        default:
+            break
         }
-        let order = mine["providerOrder"] as? [String] ?? []
-        out["providerOrder"] = order + (box["providerOrder"] as? [String] ?? []).filter { unknownCard($0) && !order.contains($0) }
-        var metricOrder = mine["metricOrder"] as? [String: [String]] ?? [:]
-        for (card, ids) in box["metricOrder"] as? [String: [String]] ?? [:] {
-            if unknownCard(card) {
-                metricOrder[card] = ids
-            } else {
-                let have = metricOrder[card] ?? []
-                metricOrder[card] = have + ids.filter { unknownMeter($0) && !have.contains($0) }
-            }
-        }
-        out["metricOrder"] = metricOrder
         return Self.sorted(name, out)
+    }
+
+    /// The panel's own keys, as they're stored now.
+    private func watchedNow() -> NSDictionary {
+        let keys = NotificationSettingsStore.storageKeys
+        let names = layout.sharedKeys + [ProviderEnablementStore.enabledStorageKey, ProviderEnablementStore.knownStorageKey, TotalSpendSetting.key, TotalSpendSetting.periodKey, TotalSpendSetting.metricKey, keys.underTen, keys.healthyToClose, keys.closeToRunningOut]
+        return NSDictionary(dictionary: Dictionary(uniqueKeysWithValues: names.compactMap { name in defaults.object(forKey: name).map { (name, $0) } }))
     }
 
     // MARK: - The stored copy, as parts

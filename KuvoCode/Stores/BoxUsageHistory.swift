@@ -36,14 +36,14 @@ final class BoxUsageHistory {
         }
     }
 
-    /// This Mac's box's bridge is up (again).
-    func connected(api: OpenCodeAPI?) {
+    /// This Mac's box's bridge is up (again): `box`, its id (`BoxClient`).
+    func connected(api: OpenCodeAPI?, box: String) {
         guard let api else { return }
         self.api = api
         fallback?.cancel()
         fallback = nil
         read()
-        settings.connected(api: api)
+        settings.connected(api: api, box: box)
     }
 
     /// Its bridge said it changed.
