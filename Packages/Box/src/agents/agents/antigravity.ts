@@ -391,7 +391,7 @@ export class AntigravityAgent implements Agent {
     return this.instance.home ? join(this.instance.home, "profile") : join(this.root, "profile")
   }
 
-  readonly antigravity = new AntigravityPlan(() => this.profile)
+  readonly antigravity = new AntigravityPlan(() => this.profile, () => join(this.context.home, "usage", "antigravity", this.instance.id))
   readonly limits = this.antigravity.limits
 
   private get tokenFile() {
@@ -657,6 +657,7 @@ export class AntigravityAgent implements Agent {
   }
 
   async signOut() {
+    this.antigravity.signOut()
     rmSync(this.tokenFile, { force: true })
     rmSync(this.modelsFile, { force: true })
   }

@@ -182,6 +182,8 @@ export interface AccountLimits {
 interface Entry {
   plan?: string
   windows: LimitWindow[]
+  /** Missing windows without reset times survive just one partial reading. */
+  partialMissing?: string[]
   balance?: LimitReading["balance"]
   extras?: LimitExtra[]
   checked?: number
@@ -486,7 +488,9 @@ export class Limits {
       entry.extras = reading.extras?.length ? reading.extras : undefined
       // What it says now, in place of all it said before; a window a turn told of since it was
       // asked, or that only turns tell, stays as heard.
-      const heard = entry.windows.filter((window) => (reading.partial && !reading.windows.some((each) => each.id === window.id)) || (window.source === "turn" && (window.read >= started || !reading.windows.some((each) => each.id === window.id))))
+      const missing = reading.partial ? entry.windows.filter(window => !reading.windows.some(each => each.id === window.id)) : []
+      const heard = entry.windows.filter((window) => (reading.partial && !reading.windows.some((each) => each.id === window.id) && (window.resetsAt !== undefined ? at < window.resetsAt : !entry.partialMissing?.includes(window.id))) || (window.source === "turn" && (window.read >= started || !reading.windows.some((each) => each.id === window.id))))
+      entry.partialMissing = reading.partial ? missing.map(window => window.id) : undefined
       entry.windows = [...reading.windows.filter((window) => !heard.some((each) => each.id === window.id)).map((window) => ({ ...window, used: clamp(window.used), read: at, source: "usage" as const })), ...heard]
       entry.problem = undefined
       entry.signIn = undefined
@@ -553,6 +557,7 @@ export class Limits {
   /** Signed in to another account: what was kept of the one before goes, and this one is read soon. */
   private forget(entry: Entry) {
     entry.windows = []
+    entry.partialMissing = undefined
     entry.plan = undefined
     entry.balance = undefined
     entry.extras = undefined

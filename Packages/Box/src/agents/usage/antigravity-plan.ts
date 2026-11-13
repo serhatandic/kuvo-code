@@ -1,6 +1,7 @@
 // Antigravity quotas: Kuvo Code's own agent sign-in, never the editor's login or Keychain.
-import { readFileSync, readdirSync, readlinkSync, mkdirSync, renameSync, writeFileSync } from "node:fs"
+import { readFileSync, readdirSync, readlinkSync, rmSync } from "node:fs"
 import { join } from "node:path"
+import { writeSecret } from "../../shared/files"
 import { fingerprint, LimitsProblem, retryAt, tokenClaims, type LimitReading, type LimitsSource } from "../limits"
 import { run } from "../proc"
 import { isoTime } from "./cursor-plan"
@@ -39,7 +40,7 @@ export function antigravitySummary(bodies: any[]): LimitReading["windows"] | und
 export function antigravityPlanName(raw: unknown): string | undefined {
   const name = text(raw)
   if (!name) return undefined
-  if (name.startsWith("Google AI ")) return name.slice(10).split(/\s+/).map(w => w[0]!.toUpperCase() + w.slice(1)).join(" ")
+  if (name.startsWith("Google AI ")) return name.slice(10).split(/\s+/).filter(Boolean).map(w => w[0]!.toUpperCase() + w.slice(1)).join(" ")
   for (const word of ["Ultra", "Pro", "Free"]) if (name.toLowerCase().includes(word.toLowerCase())) return word
   return name.split(/\s+/).map(w => w[0]!.toUpperCase() + w.slice(1)).join(" ")
 }
@@ -112,8 +113,10 @@ export async function discoverAntigravity(profile: string, platform = process.pl
   for (const line of ps.stdout.split("\n")) {
     const match = /^\s*(\d+)\s+(.+)$/.exec(line)
     if (!match || !/language_server|\/agy\b/.test(match[2]!)) continue
-    const argv = match[2]!.split(/\s+/)
     if (!antigravityMacOwns(match[2]!, profile)) continue
+    const executable = await runner("/bin/ps", ["-p", match[1]!, "-o", "comm="], { timeout: 5000 })
+    if (executable.code || !executable.stdout.trim()) continue
+    const argv = [executable.stdout.trim(), ...match[2]!.split(/\s+/).slice(1)]
     const result = await runner("/usr/sbin/lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-a", "-p", match[1]!], { timeout: 5000 })
     const ports = [...new Set(result.stdout.split("\n").filter(l => l.includes("LISTEN")).flatMap(l => { const p = port(/:(\d+)\s+\(LISTEN\)/.exec(l)?.[1]); return p ? [p] : [] }))].sort((a,b) => a-b)
     const endpoints = antigravityEndpoints(argv, ports)
@@ -135,6 +138,9 @@ const credentialGeneration = (credential: Credential) => fingerprint(JSON.string
 export type AntigravityFetch = (url: string, init: RequestInit & { tls?: { rejectUnauthorized: boolean } }) => Promise<Response>
 /** Enabled only by main.ts in a real box folder; test constructors supply stand-in bases. */
 export const antigravityTransport = { live: false }
+/** Consumer OAuth constants verified in ACP 1.3.0's embedded oauth_manager source.
+ * See test/fixtures/usage/antigravity-acp-oauth.json for the archive URL and checksum. */
+export const antigravityOAuthDefaults = { clientID: "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com", clientSecret: "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" }
 const productionBases = ["https://cloudcode-pa.googleapis.com", "https://daily-cloudcode-pa.googleapis.com"]
 export class AntigravityPlan {
   private denied = new Set<string>()
@@ -146,7 +152,7 @@ export class AntigravityPlan {
   private loadRefusals() {
     if (this.refusalsLoaded) return
     try {
-      const saved = JSON.parse(readFileSync(join(this.profile(), "kuvo-usage-refusals.json"), "utf8"))
+      const saved = JSON.parse(readFileSync(join(this.stateFolder(), "refusals.json"), "utf8"))
       if (saved.refresh === undefined) saved.refresh = []
       for (const name of ["generations", "access", "csrf", "refresh"]) {
         if (!Array.isArray(saved?.[name]) || !saved[name].every((hash: unknown) => typeof hash === "string" && /^[a-f0-9]{16}$/.test(hash))) throw new Error("Unreadable refusal journal")
@@ -168,11 +174,9 @@ export class AntigravityPlan {
   }
   private saveRefusals() {
     if (!this.refusalsDirty) return
-    const file = join(this.profile(), "kuvo-usage-refusals.json")
+    const file = join(this.stateFolder(), "refusals.json")
     try {
-      mkdirSync(this.profile(), { recursive: true, mode: 0o700 })
-      writeFileSync(file + ".new", JSON.stringify({ generations: [...this.denied], access: [...this.deniedAccess], csrf: [...this.deniedCSRF], refresh: [...this.deniedRefresh] }), { mode: 0o600 })
-      renameSync(file + ".new", file)
+      writeSecret(file, JSON.stringify({ generations: [...this.denied], access: [...this.deniedAccess], csrf: [...this.deniedCSRF], refresh: [...this.deniedRefresh] }))
       this.refusalsDirty = false
     } catch { throw new LimitsProblem("failed", "Antigravity's credential refusal record cannot be saved; the last quota reading is kept.", undefined, false) }
   }
@@ -181,8 +185,15 @@ export class AntigravityPlan {
   private lastAccount?: string
   private access?: { credential: string; token: string; expires: number }
   readonly limits: LimitsSource
-  constructor(readonly profile: () => string, private readonly fetcher: AntigravityFetch = (url, init) => fetch(url, init), private readonly discover = discoverAntigravity, private readonly bases = productionBases, private readonly oauth = "https://oauth2.googleapis.com/token") {
+  constructor(readonly profile: () => string, private readonly stateFolder: () => string, private readonly fetcher: AntigravityFetch = (url, init) => fetch(url, init), private readonly discover = discoverAntigravity, private readonly bases = productionBases, private readonly oauth = "https://oauth2.googleapis.com/token") {
     this.limits = { every: 10 * 60_000, bucket: "antigravity", read: now => this.read(now), signIn: () => this.signIn(), account: () => this.account(), identity: () => this.credential()?.identity }
+  }
+  /** Signing out prunes only this account's box-owned derived refusal record. */
+  signOut() {
+    rmSync(join(this.stateFolder(), "refusals.json"), { force: true })
+    this.denied.clear(); this.deniedAccess.clear(); this.deniedCSRF.clear(); this.deniedRefresh.clear()
+    this.refusalsLoaded = false; this.refusalsDirty = false
+    this.lastCredential = undefined; this.lastSignIn = undefined; this.lastAccount = undefined; this.access = undefined
   }
   private raw(): string | undefined { if (!antigravityTransport.live && this.bases === productionBases) return undefined; try { return readFileSync(join(this.profile(), "antigravity-acp", "acp_token.json"), "utf8") } catch (e: any) { if (e?.code === "ENOENT") return undefined; throw new LimitsProblem("failed", "Antigravity's own sign-in cannot be read here.", undefined, false) } }
   private credential(): Credential | undefined {
@@ -226,15 +237,15 @@ export class AntigravityPlan {
       // scoped to the literal loopback URL; remote calls always retain TLS verification.
       const endpoints = await this.discover(this.profile())
       for (const e of endpoints) {
-        if (this.deniedCSRF.has(fingerprint(e.csrf || "agy:no-csrf")!)) continue
+        if (e.csrf && this.deniedCSRF.has(fingerprint(e.csrf)!)) continue
         const call = (method: string) => this.request(`${e.scheme}://127.0.0.1:${e.port}/exa.language_server_pb.LanguageServerService/${method}`, { method: "POST", headers: { "Content-Type": "application/json", "Connect-Protocol-Version": "1", "x-codeium-csrf-token": e.csrf }, body: JSON.stringify({ metadata: { ideName: "antigravity", extensionName: "antigravity", ideVersion: "unknown", locale: "en" } }), ...(e.scheme === "https" ? { tls: { rejectUnauthorized: false } } : {}) }, now, true)
         let summary: any
-        try { summary = await call("RetrieveUserQuotaSummary") } catch (error) { if (error instanceof LimitsProblem && error.kind === "rate-limited") throw error; if (error instanceof LimitsProblem && error.kind === "expired") this.refuse(this.deniedCSRF, fingerprint(e.csrf || "agy:no-csrf")!); continue }
+        try { summary = await call("RetrieveUserQuotaSummary") } catch (error) { if (error instanceof LimitsProblem && error.kind === "rate-limited") throw error; if (error instanceof LimitsProblem && error.kind === "expired") e.csrf && this.refuse(this.deniedCSRF, fingerprint(e.csrf)!); continue }
         const windows = antigravitySummary([summary])
         if (windows !== undefined) {
           if (!windows.length) throw new LimitsProblem("failed", "Antigravity's quota summary has no readable buckets.")
           let plan: string | undefined
-          try { const status = await call("GetUserStatus"); plan = antigravityPlanName(status?.userStatus?.userTier?.name ?? status?.userStatus?.planStatus?.planInfo?.planName) } catch (error) { if (error instanceof LimitsProblem && error.kind === "rate-limited") throw error; if (error instanceof LimitsProblem && error.kind === "expired") this.refuse(this.deniedCSRF, fingerprint(e.csrf || "agy:no-csrf")!) }
+          try { const status = await call("GetUserStatus"); plan = antigravityPlanName(status?.userStatus?.userTier?.name ?? status?.userStatus?.planStatus?.planInfo?.planName) } catch (error) { if (error instanceof LimitsProblem && error.kind === "rate-limited") throw error; console.warn("Antigravity optional plan status is unavailable; quota windows are kept.") }
           return { windows, plan, partial: windows.filter(w => w.id !== "argon-weekly").length < 4, identity: c.identity }
         }
         try {
@@ -242,14 +253,14 @@ export class AntigravityPlan {
           let legacy = antigravityLegacy(status?.userStatus?.cascadeModelConfigData?.clientModelConfigs ?? [])
           if (!legacy.length) { const configs = await call("GetCommandModelConfigs"); legacy = antigravityLegacy(configs?.clientModelConfigs ?? []) }
           if (legacy.length) return { windows: legacy, partial: true, plan: antigravityPlanName(status?.userStatus?.userTier?.name ?? status?.userStatus?.planStatus?.planInfo?.planName), identity: c.identity }
-        } catch (error) { if (error instanceof LimitsProblem && error.kind === "rate-limited") throw error; if (error instanceof LimitsProblem && error.kind === "expired") this.refuse(this.deniedCSRF, fingerprint(e.csrf || "agy:no-csrf")!) }
+        } catch (error) { if (error instanceof LimitsProblem && error.kind === "rate-limited") throw error; if (error instanceof LimitsProblem && error.kind === "expired") e.csrf && this.refuse(this.deniedCSRF, fingerprint(e.csrf)!) }
       }
       const cached = this.access && this.access.credential === this.account() && this.access.expires > now + 60_000 ? this.access : undefined
       let access = cached?.token ?? c.access
       if (access && this.deniedAccess.has(fingerprint(access)!)) access = undefined
       if ((!access || (!cached && c.expires !== undefined && c.expires <= now + 60_000)) && c.refresh) {
         if (this.deniedRefresh.has(fingerprint(c.refresh)!)) throw new LimitsProblem("expired", "Antigravity already refused this refresh token. Sign in again.", undefined, false)
-        const body = new URLSearchParams({ grant_type: "refresh_token", refresh_token: c.refresh, client_id: c.clientID ?? "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com", client_secret: c.clientSecret ?? "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" })
+        const body = new URLSearchParams({ grant_type: "refresh_token", refresh_token: c.refresh, client_id: c.clientID ?? antigravityOAuthDefaults.clientID, client_secret: c.clientSecret ?? antigravityOAuthDefaults.clientSecret })
         const refreshed = await this.request(this.oauth, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: body.toString() }, now)
         access = text(refreshed.access_token)
         if (!access) throw new LimitsProblem("failed", "Antigravity token refresh returned no access token.")
@@ -259,15 +270,16 @@ export class AntigravityPlan {
       if (!access) throw new LimitsProblem("failed", "Antigravity's language server isn't available on this computer and its sign-in has no usable access token.", undefined, false)
       const headers = { "Content-Type": "application/json", Authorization: `Bearer ${access}`, "User-Agent": `antigravity/2.24.0 (aidev_client; os_type=${process.platform}; arch=${process.arch === "arm64" ? "arm64" : "amd64"})` }
       let refreshFailed = false
-      const cloudRequest = async (url: string, body: any) => {
+      const cloudRequest = async (url: string, body: any, authoritative = true, refused?: LimitsProblem) => {
         if (refreshFailed || this.refusalsDirty) throw new LimitsProblem("failed", "Antigravity refresh could not finish; no refused credential was sent again.", undefined, false)
-        try { return await this.request(url, { method: "POST", headers, body: JSON.stringify(body) }, now) }
+        try { if (refused) throw refused; return await this.request(url, { method: "POST", headers, body: JSON.stringify(body) }, now) }
         catch (error) {
           if (!(error instanceof LimitsProblem) || error.kind !== "expired") throw error
+          if (!authoritative) throw error
           this.refuse(this.deniedAccess, fingerprint(access)!)
           if (!c.refresh) throw error
           if (this.deniedRefresh.has(fingerprint(c.refresh)!)) throw new LimitsProblem("expired", "Antigravity already refused this refresh token. Sign in again.", undefined, false)
-          const form = new URLSearchParams({ grant_type: "refresh_token", refresh_token: c.refresh, client_id: c.clientID ?? "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com", client_secret: c.clientSecret ?? "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" })
+          const form = new URLSearchParams({ grant_type: "refresh_token", refresh_token: c.refresh, client_id: c.clientID ?? antigravityOAuthDefaults.clientID, client_secret: c.clientSecret ?? antigravityOAuthDefaults.clientSecret })
           let refreshed: any
           try { refreshed = await this.request(this.oauth, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: form.toString() }, now) }
           catch (refreshError) { refreshFailed = true; throw refreshError }
@@ -280,16 +292,26 @@ export class AntigravityPlan {
           catch (second) { if (second instanceof LimitsProblem && second.kind === "expired") this.refuse(this.deniedAccess, fingerprint(token)!); throw second }
         }
       }
-      const call = async (path: string, body: any) => {
+      const call = async (path: string, body: any, authoritative = true) => {
         let last: unknown
-        for (const base of this.bases) { try { return await cloudRequest(base + path, body) } catch (e) { if (e instanceof LimitsProblem && ["expired", "rate-limited"].includes(e.kind)) throw e; last = e } }
+        for (const base of this.bases) { try { return await cloudRequest(base + path, body, authoritative) } catch (e) { if (e instanceof LimitsProblem && ["expired", "rate-limited"].includes(e.kind)) throw e; last = e } }
         throw last
       }
       const summaries: any[] = []
+      let refusal: { url: string; error: LimitsProblem } | undefined
       for (const base of this.bases) {
-        try { summaries.push(await cloudRequest(base + "/v1internal:retrieveUserQuotaSummary", {})) } catch (e) { if (e instanceof LimitsProblem && ["expired", "rate-limited"].includes(e.kind)) throw e }
+        const url = base + "/v1internal:retrieveUserQuotaSummary"
+        try { summaries.push(await cloudRequest(url, {}, false)) }
+        catch (error) {
+          if (error instanceof LimitsProblem && error.kind === "rate-limited") throw error
+          if (error instanceof LimitsProblem && error.kind === "expired") refusal ??= { url, error }
+          console.warn("Antigravity quota summary unavailable on one host; trying the remaining host.")
+        }
         if (antigravitySummary(summaries)?.filter(w => w.id !== "argon-weekly").length === 4) break
       }
+      // Hosts can disagree on access. Any 2xx body wins, including an authoritative empty
+      // summary. Only when all hosts fail does a refusal mean the credential needs renewal.
+      if (!summaries.length && refusal) summaries.push(await cloudRequest(refusal.url, {}, true, refusal.error))
       let windows = antigravitySummary(summaries)
       if (windows === undefined) {
         try {
@@ -297,7 +319,9 @@ export class AntigravityPlan {
           windows = antigravityLegacy(Object.entries(models?.models ?? {}).map(([id, value]: [string, any]) => ({ ...value, modelID: value?.model ?? id })))
         } catch (error) { if (error instanceof LimitsProblem && ["expired", "rate-limited"].includes(error.kind)) throw error }
         if (!windows?.length) {
-          const status = await call("/v1internal:loadCodeAssist", { metadata: { ideType: "ANTIGRAVITY", platform: "PLATFORM_UNSPECIFIED", pluginType: "GEMINI" } })
+          let status: any = {}
+          try { status = await call("/v1internal:loadCodeAssist", { metadata: { ideType: "ANTIGRAVITY", platform: "PLATFORM_UNSPECIFIED", pluginType: "GEMINI" } }, false) }
+          catch (error) { if (error instanceof LimitsProblem && error.kind === "rate-limited") throw error; console.warn("Antigravity optional project lookup is unavailable; querying quota without a project.") }
           let quota = await call("/v1internal:retrieveUserQuota", text(status?.cloudaicompanionProject) ? { project: status.cloudaicompanionProject } : {})
           if (!(quota?.buckets?.length) && status?.cloudaicompanionProject) quota = await call("/v1internal:retrieveUserQuota", {})
           windows = antigravityLegacy((Array.isArray(quota?.buckets) ? quota.buckets : []).filter((b: any) => text(b?.modelId)).map((b: any) => ({ label: b.modelId, modelID: b.modelId, quotaInfo: b })))
@@ -305,7 +329,7 @@ export class AntigravityPlan {
       }
       if (!windows?.length) throw new LimitsProblem("failed", "Antigravity's quota response has no readable buckets; the last reading is kept.")
       let plan: string | undefined
-      try { const status = await call("/v1internal:loadCodeAssist", { metadata: { ideType: "ANTIGRAVITY", platform: "PLATFORM_UNSPECIFIED", pluginType: "GEMINI" } }); plan = ({ "g1-pro-tier": "Pro", "g1-ultra-tier": "Ultra", "g1-ultra-lite-tier": "Ultra Lite" } as Record<string, string>)[status?.paidTier?.id] ?? antigravityPlanName(status?.paidTier?.name ?? status?.currentTier?.name) } catch (e) { if (e instanceof LimitsProblem && ["expired", "rate-limited"].includes(e.kind)) throw e }
+      try { const status = await call("/v1internal:loadCodeAssist", { metadata: { ideType: "ANTIGRAVITY", platform: "PLATFORM_UNSPECIFIED", pluginType: "GEMINI" } }, false); plan = ({ "g1-pro-tier": "Pro", "g1-ultra-tier": "Ultra", "g1-ultra-lite-tier": "Ultra Lite" } as Record<string, string>)[status?.paidTier?.id] ?? antigravityPlanName(status?.paidTier?.name ?? status?.currentTier?.name) } catch (e) { if (e instanceof LimitsProblem && e.kind === "rate-limited") throw e; console.warn("Antigravity optional plan lookup is unavailable; successful quota windows are kept.") }
       return { windows, plan, partial: windows.filter(w => w.id !== "argon-weekly").length < 4, identity: c.identity }
     } catch (e) { if (e instanceof LimitsProblem && e.kind === "expired") this.refuse(this.denied, signIn); throw e }
   }

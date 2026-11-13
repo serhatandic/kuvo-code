@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import fixtures from "../fixtures/usage/antigravity-plan-cases.json"
+import legacyFixtures from "../fixtures/usage/antigravity-legacy-plan-cases.json"
+import oauthFixture from "../fixtures/usage/antigravity-acp-oauth.json"
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { AntigravityPlan, antigravitySummary, antigravityLegacy, antigravityProcPorts, discoverAntigravity, antigravityMacOwns } from "../../src/agents/usage/antigravity-plan"
+import { AntigravityPlan, antigravitySummary, antigravityLegacy, antigravityProcPorts, discoverAntigravity, antigravityMacOwns, antigravityPlanName, antigravityOAuthDefaults } from "../../src/agents/usage/antigravity-plan"
 import { Limits, LimitsProblem } from "../../src/agents/limits"
 
 const summary = (fraction = 0.75) => ({ groups: [{ buckets: ["gemini-5h", "gemini-weekly", "3p-5h", "3p-weekly"].map(bucketId => ({ bucketId, remainingFraction: fraction })) }] })
@@ -11,6 +13,11 @@ const temp = () => mkdtempSync(join(tmpdir(), "kuvo-agy-plan-"))
 function credential(profile: string, access = "fixture-token") { mkdirSync(join(profile, "antigravity-acp"), { recursive: true }); writeFileSync(join(profile, "antigravity-acp/acp_token.json"), JSON.stringify({ access_token: access })) }
 
 describe("Antigravity quota mapper", () => {
+  test("shared legacy and plan-name parity fixtures", () => {
+    for (const fixture of legacyFixtures.legacy) expect(antigravityLegacy(fixture.configs).map(w => ({ label: w.name, used: Math.round(w.used * 100), periodMs: w.minutes! * 60_000 }))).toEqual(fixture.expected)
+    for (const fixture of legacyFixtures.plans) expect(antigravityPlanName(fixture.input) ?? null).toEqual(fixture.expected)
+    expect(antigravityOAuthDefaults).toEqual(oauthFixture.defaults)
+  })
   test("shared Swift parity fixtures", () => {
     for (const fixture of fixtures) expect(antigravitySummary(fixture.bodies)?.map(w => ({ label: w.name, used: Math.round(w.used * 100), periodMs: w.minutes! * 60_000 })) ?? null, fixture.name).toEqual(fixture.expected)
   })
@@ -59,7 +66,7 @@ describe("Antigravity discovery", () => {
   })
   test("Mac agy stand-in permits no CSRF and language_server still requires it", async () => {
     for (const executable of ["agy", "language_server"]) {
-      const runner: any = async (program: string) => ({ code: 0, stdout: program.endsWith("ps") ? `10 /fixture/${executable} GEMINI_HOME=/fixture/profile` : "agy 10 TCP 127.0.0.1:12345 (LISTEN)\n", stderr: "" })
+      const runner: any = async (program: string, args: string[]) => ({ code: 0, stdout: program.endsWith("ps") ? args.includes("comm=") ? `/fixture/Library/Application Support/${executable}` : `10 /fixture/Library/Application Support/${executable} GEMINI_HOME=/fixture/profile` : "agy 10 TCP 127.0.0.1:12345 (LISTEN)\n", stderr: "" })
       const endpoints = await discoverAntigravity("/fixture/profile", "darwin", "/unused", runner)
       expect(endpoints.length).toBe(executable === "agy" ? 2 : 0)
       if (executable === "agy") expect(endpoints[0]?.csrf).toBe("")
@@ -77,14 +84,118 @@ describe("Antigravity discovery", () => {
   })
   test("Mac ps/lsof stand-ins require own profile", async () => {
     const calls: string[] = []
-    const runner: any = async (program: string) => { calls.push(program); return { code: 0, stdout: program.endsWith("ps") ? "10 /fixture/language_server --csrf_token fixture GEMINI_HOME=/fixture/profile\n" : "agy 10 TCP 127.0.0.1:12345 (LISTEN)\n", stderr: "" } }
+    const runner: any = async (program: string, args: string[]) => { calls.push(program); return { code: 0, stdout: program.endsWith("ps") ? args.includes("comm=") ? "/fixture/language_server" : "10 /fixture/language_server --csrf_token fixture GEMINI_HOME=/fixture/profile\n" : "agy 10 TCP 127.0.0.1:12345 (LISTEN)\n", stderr: "" } }
     expect((await discoverAntigravity("/fixture/profile", "darwin", "/unused", runner))[0]?.port).toBe(12345)
-    expect(calls).toEqual(["/bin/ps", "/usr/sbin/lsof"])
+    expect(calls).toEqual(["/bin/ps", "/bin/ps", "/usr/sbin/lsof"])
     expect(await discoverAntigravity("/outside", "darwin", "/unused", runner)).toEqual([])
   })
 })
 
 describe("Antigravity own-account stand-in service", () => {
+  test("one host refusing and optional plan refusing cannot poison usable quotas", async () => {
+    for (const primaryRefuses of [false, true]) {
+      const root = temp(); credential(root)
+      let primaryCalls = 0, secondaryCalls = 0
+      const primary = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(req) {
+        primaryCalls++
+        if (new URL(req.url).pathname.includes("loadCodeAssist") || primaryRefuses) return new Response("{}", { status: 403 })
+        return Response.json({ groups: [{ buckets: [{ bucketId: "gemini-5h", remainingFraction: 0.7 }] }] })
+      } })
+      const secondary = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(req) {
+        secondaryCalls++
+        return primaryRefuses && !new URL(req.url).pathname.includes("loadCodeAssist") ? Response.json(summary()) : new Response("{}", { status: 403 })
+      } })
+      try {
+        const plan = new AntigravityPlan(() => root, () => join(root, "box-usage"), undefined, async () => [], [primary.url.origin, secondary.url.origin])
+        expect((await plan.limits.read!(1000))?.windows.length).toBe(primaryRefuses ? 4 : 1)
+        expect((await plan.limits.read!(2000))?.windows.length).toBe(primaryRefuses ? 4 : 1)
+        expect(primaryCalls).toBeGreaterThan(2); expect(secondaryCalls).toBeGreaterThanOrEqual(2)
+        expect(() => readFileSync(join(root, "box-usage", "refusals.json"))).toThrow()
+      } finally { primary.stop(true); secondary.stop(true); rmSync(root, { recursive: true, force: true }) }
+    }
+  })
+  test("legacy project-plan 403 still permits quota retrieval", async () => {
+    const root = temp(); credential(root)
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(req) {
+      const path = new URL(req.url).pathname
+      if (path.includes("loadCodeAssist")) return new Response("{}", { status: 403 })
+      if (path.includes("retrieveUserQuotaSummary") || path.includes("fetchAvailableModels")) return new Response("{}", { status: 404 })
+      return Response.json({ buckets: [{ modelId: "gemini-3-pro", remainingFraction: 0.8 }] })
+    } })
+    try {
+      const plan = new AntigravityPlan(() => root, () => join(root, "box-usage"), undefined, async () => [], [server.url.origin])
+      expect((await plan.limits.read!(1000))?.windows[0]?.used).toBe(0.2)
+      expect((await plan.limits.read!(2000))?.windows[0]?.used).toBe(0.2)
+    } finally { server.stop(true); rmSync(root, { recursive: true, force: true }) }
+  })
+  test("agent OAuth metadata and verified defaults are used by refresh-only own sign-ins", async () => {
+    for (const useMetadata of [true, false]) {
+      const root = temp(); credential(root)
+      const token: any = { ...oauthFixture.ownToken }
+      if (!useMetadata) { delete token.client_id; delete token.client_secret }
+      writeFileSync(join(root, "antigravity-acp/acp_token.json"), JSON.stringify(token))
+      let form: URLSearchParams | undefined
+      const server = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) {
+        if (new URL(req.url).pathname === "/oauth") { form = new URLSearchParams(await req.text()); return Response.json({ access_token: "renewed-fixture", expires_in: 3600 }) }
+        return Response.json(new URL(req.url).pathname.includes("loadCodeAssist") ? {} : summary())
+      } })
+      try {
+        const plan = new AntigravityPlan(() => root, () => join(root, "box-usage"), undefined, async () => [], [server.url.origin], server.url.origin + "/oauth")
+        expect((await plan.limits.read!(1000))?.windows.length).toBe(4)
+        expect(form!.get("client_id")).toBe(useMetadata ? oauthFixture.ownToken.client_id : oauthFixture.defaults.clientID)
+        expect(form!.get("client_secret")).toBe(useMetadata ? oauthFixture.ownToken.client_secret : oauthFixture.defaults.clientSecret)
+        expect(form!.get("refresh_token")).toBe(oauthFixture.ownToken.refresh_token)
+      } finally { server.stop(true); rmSync(root, { recursive: true, force: true }) }
+    }
+  })
+  test("profile and predictable state symlinks cannot redirect refusal writes; signout prunes state", async () => {
+    const root = temp(); credential(root)
+    const state = join(root, "box-usage")
+    mkdirSync(state)
+    const target = join(root, "sentinel")
+    writeFileSync(target, "fixture sentinel")
+    symlinkSync(target, join(root, "kuvo-usage-refusals.json.new"))
+    symlinkSync(target, join(state, "refusals.json.new"))
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch() {
+      symlinkSync(target, join(state, "refusals.json"))
+      return new Response("{}", { status: 403 })
+    } })
+    try {
+      const plan = new AntigravityPlan(() => root, () => state, undefined, async () => [], [server.url.origin])
+      await expect(plan.limits.read!(1000)).rejects.toMatchObject({ kind: "expired" })
+      expect(readFileSync(target, "utf8")).toBe("fixture sentinel")
+      expect(JSON.parse(readFileSync(join(state, "refusals.json"), "utf8")).access.length).toBe(1)
+      plan.signOut()
+      expect(() => readFileSync(join(state, "refusals.json"))).toThrow()
+      expect(readFileSync(target, "utf8")).toBe("fixture sentinel")
+    } finally { server.stop(true); rmSync(root, { recursive: true, force: true }) }
+  })
+  test("agy with no CSRF is retried after an authless endpoint 403", async () => {
+    const root = temp(); credential(root)
+    let localCalls = 0
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(req) {
+      if (new URL(req.url).pathname.includes("LanguageServerService")) { localCalls++; return new Response("{}", { status: 403 }) }
+      return Response.json(new URL(req.url).pathname.includes("loadCodeAssist") ? {} : summary())
+    } })
+    try {
+      const plan = new AntigravityPlan(() => root, () => join(root, "box-usage"), undefined, async () => [{ scheme: "http", port: server.port!, csrf: "" }], [server.url.origin])
+      await plan.limits.read!(1000); await plan.limits.read!(2000)
+      expect(localCalls).toBe(2)
+    } finally { server.stop(true); rmSync(root, { recursive: true, force: true }) }
+  })
+  test("missing windows without resets survive only one partial round across restart", async () => {
+    const root = temp()
+    let at = 10_000_000, partial = false
+    const source = { every: 60_000, read: async () => ({ partial, windows: partial ? [{ id: "present", used: 0.2 }] : [{ id: "present", used: 0.1 }, { id: "missing", used: 0.4 }] }) }
+    const start = () => new Limits(() => [{ provider: "antigravity", service: "antigravity", limits: source }], join(root, "limits.json"), () => at)
+    try {
+      const first = start(); await first.tick()
+      partial = true; at += 610_000; await first.tick()
+      expect(first.list()[0]?.windows.length).toBe(2)
+      at += 610_000; const restarted = start(); await restarted.tick()
+      expect(restarted.list()[0]?.windows.map(w => w.id)).toEqual(["present"])
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  })
   test("refused access refreshes once, valid refresh cache survives expired source expiry", async () => {
     const root = temp()
     credential(root)
@@ -96,7 +207,7 @@ describe("Antigravity own-account stand-in service", () => {
       return Response.json(new URL(req.url).pathname.includes("loadCodeAssist") ? { paidTier: { id: "g1-pro-tier" } } : summary())
     } })
     try {
-      const plan = new AntigravityPlan(() => root, undefined, async () => [], [server.url.origin], server.url.origin + "/oauth")
+      const plan = new AntigravityPlan(() => root, () => join(root, "box-usage"), undefined, async () => [], [server.url.origin], server.url.origin + "/oauth")
       expect((await plan.limits.read!(1000))?.plan).toBe("Pro")
       await plan.limits.read!(2000)
       expect(refreshes).toBe(1); expect(oldCalls).toBe(1)
@@ -113,7 +224,7 @@ describe("Antigravity own-account stand-in service", () => {
     let at = 10_000_000
     const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(req) { return Response.json(new URL(req.url).pathname.includes("loadCodeAssist") ? {} : summary()) } })
     try {
-      const plan = new AntigravityPlan(() => root, undefined, async () => [], [server.url.origin])
+      const plan = new AntigravityPlan(() => root, () => join(root, "box-usage"), undefined, async () => [], [server.url.origin])
       const limits = new Limits(() => [{ provider: "antigravity", service: "antigravity", limits: plan.limits }], undefined, () => at)
       await limits.tick()
       const before = limits.list()[0]!
@@ -139,7 +250,7 @@ describe("Antigravity own-account stand-in service", () => {
       if (req.headers.get("Authorization") === "Bearer old-fixture") { oldCalls++; return new Response("{}", { status: 401 }) }
       return Response.json(new URL(req.url).pathname.includes("loadCodeAssist") ? {} : summary())
     } })
-    const start = () => new AntigravityPlan(() => root, undefined, async () => [], [server.url.origin], server.url.origin + "/oauth")
+    const start = () => new AntigravityPlan(() => root, () => join(root, "box-usage"), undefined, async () => [], [server.url.origin], server.url.origin + "/oauth")
     try {
       await expect(start().limits.read!(1000)).rejects.toMatchObject({ kind: "failed" })
       expect(oldCalls).toBe(1); expect(refreshes).toBe(1)
@@ -152,17 +263,18 @@ describe("Antigravity own-account stand-in service", () => {
     const root = temp(); credential(root)
     let calls = 0
     const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch() { calls++; return new Response("{}", { status: 401 }) } })
-    const start = () => new AntigravityPlan(() => root, undefined, async () => [], [server.url.origin])
+    const start = () => new AntigravityPlan(() => root, () => join(root, "box-usage"), undefined, async () => [], [server.url.origin])
     try {
       const plan = start()
-      mkdirSync(join(root, "kuvo-usage-refusals.json.new"))
-      await expect(plan.limits.read!(1000)).rejects.toMatchObject({ kind: "failed" })
-      await expect(plan.limits.read!(2000)).rejects.toMatchObject({ kind: "failed", sent: false })
+      mkdirSync(join(root, "box-usage", "refusals.json"), { recursive: true })
+      await expect(plan.limits.read!(1000)).rejects.toMatchObject({ kind: "failed", sent: false })
+      expect(calls).toBe(0)
+      rmSync(join(root, "box-usage", "refusals.json"), { recursive: true })
+      // A refused access token with no refresh cannot be sent again.
+      await expect(plan.limits.read!(2000)).rejects.toMatchObject({ kind: "expired" })
       expect(calls).toBe(1)
-      rmSync(join(root, "kuvo-usage-refusals.json.new"), { recursive: true })
-      await expect(plan.limits.read!(3000)).rejects.toMatchObject({ kind: "failed" })
-      expect(readFileSync(join(root, "kuvo-usage-refusals.json"), "utf8")).not.toContain("fixture-token")
-      writeFileSync(join(root, "kuvo-usage-refusals.json"), "{broken")
+      expect(readFileSync(join(root, "box-usage", "refusals.json"), "utf8")).not.toContain("fixture-token")
+      writeFileSync(join(root, "box-usage", "refusals.json"), "{broken")
       await expect(start().limits.read!(4000)).rejects.toMatchObject({ kind: "failed", sent: false })
       expect(calls).toBe(1)
     } finally { server.stop(true); rmSync(root, { recursive: true, force: true }) }
@@ -175,7 +287,7 @@ describe("Antigravity own-account stand-in service", () => {
       if (new URL(req.url).pathname === "/oauth") { refreshCalls++; return returnOld ? Response.json({ access_token: "old-fixture", expires_in: 3600 }) : new Response("{}", { status: 503 }) }
       oldCalls++; return new Response("{}", { status: 401 })
     } })
-    const start = () => new AntigravityPlan(() => root, undefined, async () => [], [server.url.origin], server.url.origin + "/oauth")
+    const start = () => new AntigravityPlan(() => root, () => join(root, "box-usage"), undefined, async () => [], [server.url.origin], server.url.origin + "/oauth")
     try {
       await expect(start().limits.read!(1000)).rejects.toMatchObject({ kind: "failed" })
       returnOld = true
@@ -190,7 +302,7 @@ describe("Antigravity own-account stand-in service", () => {
       if (new URL(req.url).pathname === "/oauth") { refreshCalls++; return new Response("{}", { status: 400 }) }
       return new Response("{}", { status: 401 })
     } })
-    const start = () => new AntigravityPlan(() => root, undefined, async () => [], [server.url.origin], server.url.origin + "/oauth")
+    const start = () => new AntigravityPlan(() => root, () => join(root, "box-usage"), undefined, async () => [], [server.url.origin], server.url.origin + "/oauth")
     try {
       writeFileSync(join(root, "antigravity-acp/acp_token.json"), JSON.stringify({ access_token: "old-fixture", refresh_token: "refresh-fixture" }))
       await expect(start().limits.read!(1000)).rejects.toMatchObject({ kind: "expired" })
@@ -208,7 +320,7 @@ describe("Antigravity own-account stand-in service", () => {
       if (new URL(req.url).pathname.includes("LanguageServerService")) { localCalls++; return new Response("{}", { status: 403 }) }
       return Response.json(new URL(req.url).pathname.includes("loadCodeAssist") ? {} : summary())
     } })
-    const start = () => new AntigravityPlan(() => root, undefined, async () => [{ scheme: "http", port: server.port!, csrf: "refused-fixture-csrf" }], [server.url.origin])
+    const start = () => new AntigravityPlan(() => root, () => join(root, "box-usage"), undefined, async () => [{ scheme: "http", port: server.port!, csrf: "refused-fixture-csrf" }], [server.url.origin])
     try {
       expect((await start().limits.read!(1000))?.windows.length).toBe(4)
       expect((await start().limits.read!(2000))?.windows.length).toBe(4)
@@ -221,7 +333,7 @@ describe("Antigravity own-account stand-in service", () => {
     const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch() { calls++; return new Response("{}", { status: 401 }) } })
     const saved = join(root, "limits.json")
     const start = () => {
-      const plan = new AntigravityPlan(() => root, undefined, async () => [], [server.url.origin])
+      const plan = new AntigravityPlan(() => root, () => join(root, "box-usage"), undefined, async () => [], [server.url.origin])
       return new Limits(() => [{ provider: "antigravity", service: "antigravity", limits: plan.limits }], saved, () => at)
     }
     try {
@@ -239,7 +351,7 @@ describe("Antigravity own-account stand-in service", () => {
     let status = 429, calls = 0
     const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch() { calls++; return new Response("{}", { status, headers: { "Retry-After": "3600" } }) } })
     try {
-      const plan = new AntigravityPlan(() => root, undefined, async () => [], [server.url.origin], server.url.origin + "/oauth")
+      const plan = new AntigravityPlan(() => root, () => join(root, "box-usage"), undefined, async () => [], [server.url.origin], server.url.origin + "/oauth")
       await expect(plan.limits.read!(1000)).rejects.toMatchObject({ kind: "rate-limited", until: 3601000 })
       expect(calls).toBe(1)
       status = 401
@@ -257,7 +369,7 @@ describe("Antigravity own-account stand-in service", () => {
     let at = 10_000_000, mode = "complete", calls = 0
     const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(req) { calls++; const path = new URL(req.url).pathname; return Response.json(path.includes("loadCodeAssist") ? { paidTier: { id: "g1-ultra-lite-tier" } } : mode === "complete" ? summary() : mode === "partial" ? { groups: [{ buckets: [{ bucketId: "gemini-5h", remainingFraction: 0.1 }] }] } : { groups: [] }) } })
     try {
-      const plan = new AntigravityPlan(() => root, undefined, async () => [], [server.url.origin])
+      const plan = new AntigravityPlan(() => root, () => join(root, "box-usage"), undefined, async () => [], [server.url.origin])
       const limits = new Limits(() => [{ provider: "antigravity", service: "antigravity", limits: plan.limits }], undefined, () => at)
       await limits.tick()
       expect(limits.list()[0]?.windows.length).toBe(4)
