@@ -1,4 +1,5 @@
-// A box's folders to choose one from (PROTOCOL.md, `kuvo/folders`), npm's plugins its engine can
+// A box's folders to choose one from (PROTOCOL.md, `kuvo/folders`), every file under one
+// (`kuvo/folders/tree`), npm's plugins its engine can
 // load (`kuvo/plugins/search`), an MCP server's program (`kuvo/programs`), a provider of your
 // own's models (`kuvo/providers/models`), and a sign-in's return loaded on the computer it's for
 // (`kuvo/sign-in/return`).
@@ -15,6 +16,10 @@ export const FOLDER_LIST = object({
   folders: list(object({ name: string, "repository?": bool })),
   "files?": list(string),
 });
+/** Every file under one of this box's folders, by its path there, as a project's file filter and
+ * "@" list them: git's list in a repository (`git`), else a walk that skips the usual heavy folders;
+ * asked with `dated=1`, when each last changed (milliseconds since 1970, null where it can't say). */
+export const FOLDER_TREE = object({ path: string, files: list(string), git: bool, "modified?": list(nullable(number)) });
 /** Why a folder couldn't be read, as the computer says it ("Permission denied"). */
 export const FOLDER_REFUSED = object({ message: string, "reason?": string });
 /** A new folder, made where it was asked. */
@@ -59,6 +64,7 @@ export type SearchFound = Infer<typeof SEARCH_FOUND>;
 export const MISC_ROUTES: RouteShape[] = [
   { route: "GET kuvo/folders", answers: { 200: FOLDER_LIST, 403: FOLDER_REFUSED, 404: FOLDER_REFUSED, 500: FOLDER_REFUSED } },
   { route: "POST kuvo/folders", answers: { 200: FOLDER_MADE } },
+  { route: "GET kuvo/folders/tree", answers: { 200: FOLDER_TREE, 400: object({ message: string }), 403: FOLDER_REFUSED, 404: FOLDER_REFUSED, 500: FOLDER_REFUSED, 503: object({ message: string }) } },
   { route: "GET kuvo/plugins/search", answers: { 200: PLUGIN_SEARCH } },
   { route: "GET kuvo/programs", answers: { 200: PROGRAM_FOUND } },
   { route: "POST kuvo/providers/models", answers: { 200: PROVIDER_MODELS } },

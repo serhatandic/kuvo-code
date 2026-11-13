@@ -1,7 +1,7 @@
 // Built from Packages/Box/src by scripts/build-box.sh: change those, then run it. Never edit this file.
 
 // Packages/Box/src/link/main.ts
-import { spawn as spawn14 } from "node:child_process";
+import { spawn as spawn15 } from "node:child_process";
 import crypto55 from "node:crypto";
 import fs149 from "node:fs";
 import os21 from "node:os";
@@ -2205,13 +2205,16 @@ var FEATURES = [
   "file",
   "folders",
   "folders.files",
+  "folders.tree",
   "git",
   "git.backups",
+  "git.branches",
   "git.changes.count",
   "git.merge",
   "git.pull-request",
   "git.pull-request.draft",
   "git.push",
+  "git.status",
   "git.words",
   "goals",
   "groups",
@@ -7270,7 +7273,7 @@ async function askedArgsLater(args, cwd) {
 }
 
 // Packages/Box/src/link/git.ts
-import { execFile as execFile4, spawnSync as spawnSync5 } from "node:child_process";
+import { execFile as execFile4, spawn as spawn4, spawnSync as spawnSync5 } from "node:child_process";
 var GIT_ENV = { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" };
 var BY_KUVO = { GIT_AUTHOR_NAME: "Kuvo Code", GIT_AUTHOR_EMAIL: "kuvo-code@localhost", GIT_COMMITTER_NAME: "Kuvo Code", GIT_COMMITTER_EMAIL: "kuvo-code@localhost" };
 function ranIn(folder, args, env) {
@@ -7302,6 +7305,35 @@ async function gitLater(folder, args) {
     return null;
   return new Promise((resolve) => {
     execFile4("git", own, { cwd: folder, encoding: "utf8", env: GIT_ENV, timeout: 60000, maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => resolve(error ? null : String(stdout ?? "").trim()));
+  });
+}
+async function gitNamesLater(folder, args, limit, signal, timeout = 600000) {
+  const own = await ownArgsLater(args, folder);
+  if (!own || signal?.aborted)
+    return null;
+  return new Promise((resolve) => {
+    const names = new Set;
+    let rest = "";
+    let enough = false;
+    const child = spawn4("git", own, { cwd: folder, env: GIT_ENV, stdio: ["ignore", "pipe", "ignore"], timeout, ...signal ? { signal } : {} });
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (piece) => {
+      if (enough)
+        return;
+      const parts = (rest + piece).split("\x00");
+      rest = parts.pop() ?? "";
+      for (const name of parts) {
+        if (name)
+          names.add(name);
+        if (names.size >= limit) {
+          enough = true;
+          child.kill();
+          return;
+        }
+      }
+    });
+    child.on("error", () => resolve(null));
+    child.on("close", (code) => resolve(signal?.aborted ? null : enough || code === 0 || code === null ? { names: [...names], complete: code === 0 && !enough } : null));
   });
 }
 function sizeLater(folder) {
@@ -7485,7 +7517,7 @@ import fs42 from "node:fs";
 import path44 from "node:path";
 
 // Packages/Box/src/link/areas/engine.ts
-import { spawn as spawn4 } from "node:child_process";
+import { spawn as spawn5 } from "node:child_process";
 import fs35 from "node:fs";
 import path36 from "node:path";
 
@@ -8182,7 +8214,7 @@ async function engineControl(command) {
   const workspace = path36.join(K, "workspace");
   const options = { cwd: fs35.existsSync(workspace) ? workspace : K, env: environment };
   try {
-    const child = spawn4("sh", [start, command], { ...options, detached: true, stdio: "ignore" });
+    const child = spawn5("sh", [start, command], { ...options, detached: true, stdio: "ignore" });
     lastToolRun = { child, ended: new Promise((resolve) => {
       child.on("exit", resolve);
       child.on("error", resolve);
@@ -8417,7 +8449,7 @@ import path43 from "node:path";
 import path42 from "node:path";
 
 // Packages/Box/src/link/keeper.ts
-import { spawn as spawn5 } from "node:child_process";
+import { spawn as spawn6 } from "node:child_process";
 import fs41 from "node:fs";
 import path41 from "node:path";
 
@@ -9727,7 +9759,7 @@ function keepKeeper() {
   delete environment.BUN_BE_BUN;
   delete environment.BUN_RUNTIME_TRANSPILER_CACHE_PATH;
   try {
-    spawn5("sh", [start], { cwd: K, env: environment, detached: true, stdio: "ignore" }).unref();
+    spawn6("sh", [start], { cwd: K, env: environment, detached: true, stdio: "ignore" }).unref();
   } catch {}
 }
 function runningBridge() {
@@ -9740,7 +9772,7 @@ function runningBridge() {
 }
 function startBridge() {
   const workspace = path41.join(K, "workspace");
-  const child = spawn5(process.execPath, [...OWN_RUNTIME, SCRIPT, "run"], {
+  const child = spawn6(process.execPath, [...OWN_RUNTIME, SCRIPT, "run"], {
     detached: true,
     stdio: "ignore",
     cwd: fs41.existsSync(workspace) ? workspace : K,
@@ -20691,7 +20723,7 @@ import path76 from "node:path";
 import fs75 from "node:fs";
 
 // Packages/Box/src/link/github/graphql.ts
-import { execFile as execFile8, spawn as spawn6 } from "node:child_process";
+import { execFile as execFile8, spawn as spawn7 } from "node:child_process";
 import crypto27 from "node:crypto";
 import fs74 from "node:fs";
 import os8 from "node:os";
@@ -20965,7 +20997,7 @@ ${reader.keyOf(ask)}`;
     if (due.length && !recent(reader.file + ".lock", HOLD) && !recent(started, 1e4)) {
       try {
         writePrivate(started, "");
-        const child = spawn6(process.execPath, [...OWN_RUNTIME, SCRIPT, "box", "github-read", reader.name], { detached: true, stdio: ["pipe", "ignore", "ignore"], cwd: K, env: process.env });
+        const child = spawn7(process.execPath, [...OWN_RUNTIME, SCRIPT, "box", "github-read", reader.name], { detached: true, stdio: ["pipe", "ignore", "ignore"], cwd: K, env: process.env });
         child.stdin?.end(JSON.stringify(due));
         child.unref();
       } catch {}
@@ -24870,7 +24902,7 @@ import fs92 from "node:fs";
 import path93 from "node:path";
 
 // Packages/Box/src/link/areas/integrations.ts
-import { spawn as spawn7 } from "node:child_process";
+import { spawn as spawn8 } from "node:child_process";
 import fs91 from "node:fs";
 import path92 from "node:path";
 
@@ -25190,7 +25222,7 @@ function reconnectLater(engine, id, later) {
   if (!engine)
     return;
   if (answeringOnce() && later === soon) {
-    spawn7(process.execPath, [...OWN_RUNTIME, SCRIPT, "box", "reconnect", id], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
+    spawn8(process.execPath, [...OWN_RUNTIME, SCRIPT, "box", "reconnect", id], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
     return;
   }
   later(() => reconnectEverywhere(engine, id), 2000);
@@ -25560,7 +25592,7 @@ async function* botKeysRoute(context) {
 }
 
 // Packages/Box/src/link/moves/bundle.ts
-import { spawn as spawn8 } from "node:child_process";
+import { spawn as spawn9 } from "node:child_process";
 import crypto35 from "node:crypto";
 import fs93 from "node:fs";
 import path94 from "node:path";
@@ -25572,7 +25604,7 @@ var folderOf3 = (kind, thing) => kind === "bot" ? path94.join(BOTS, thing) : kin
 var directoryOf = (kind, thing) => kind === "bot" ? path94.join(BOTS, thing, "workspace") : CHATS;
 function run2(program, args) {
   return new Promise((resolve, reject) => {
-    const child = spawn8(program, args, { stdio: ["ignore", "ignore", "pipe"], env: { ...process.env, COPYFILE_DISABLE: "1" } });
+    const child = spawn9(program, args, { stdio: ["ignore", "ignore", "pipe"], env: { ...process.env, COPYFILE_DISABLE: "1" } });
     let said = "";
     child.stderr.on("data", (chunk) => {
       said += chunk;
@@ -33876,7 +33908,7 @@ async function stillShown(places, ids) {
 }
 
 // Packages/Box/src/link/work/backups.ts
-import { execFile as execFile11, spawn as spawn9 } from "node:child_process";
+import { execFile as execFile11, spawn as spawn10 } from "node:child_process";
 import crypto45 from "node:crypto";
 import fs114 from "node:fs";
 import path118 from "node:path";
@@ -33903,8 +33935,8 @@ async function gitPipe(given, input, receiving) {
     return REFUSED2;
   return new Promise((resolve) => {
     const options = { env: ENV, stdio: ["pipe", "pipe", "pipe"] };
-    const sender = spawn9("git", from, options);
-    const taker = spawn9("git", to, options);
+    const sender = spawn10("git", from, options);
+    const taker = spawn10("git", to, options);
     let error = "";
     sender.stderr.on("data", (chunk) => {
       error += chunk;
@@ -34265,7 +34297,7 @@ import fs117 from "node:fs";
 import path120 from "node:path";
 
 // Packages/Box/src/link/fence/outside.ts
-import { spawn as spawn11 } from "node:child_process";
+import { spawn as spawn12 } from "node:child_process";
 import crypto46 from "node:crypto";
 import fs116 from "node:fs";
 import os13 from "node:os";
@@ -34362,7 +34394,7 @@ function askBook(prefix, no) {
 }
 
 // Packages/Box/src/link/run-command.ts
-import { spawn as spawn10 } from "node:child_process";
+import { spawn as spawn11 } from "node:child_process";
 import fs115 from "node:fs";
 var PRIVATE = ["BUN_BE_BUN", "BUN_RUNTIME_TRANSPILER_CACHE_PATH"];
 var MOST_KEPT2 = 4 * 1024 * 1024;
@@ -34426,7 +34458,7 @@ process.once("exit", () => {
 function runCommand(command, folder, env, timeout, signal, name = String(Math.random()), ended) {
   return new Promise((resolve) => {
     const shell = env.SHELL && fs115.existsSync(env.SHELL) ? env.SHELL : "/bin/sh";
-    const child = spawn10(shell, ["-lc", command], { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
+    const child = spawn11(shell, ["-lc", command], { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
     if (child.pid)
       running2.set(name, { pid: child.pid, ended });
     let output = Buffer.alloc(0);
@@ -34516,7 +34548,7 @@ async function stopsFor(session, command, minutes = 3, signal) {
     return [];
   const tagged = `kuvo-sandbox ${session} ${commandSum(command)}`;
   const read = await new Promise((resolve) => {
-    const child = spawn11("/usr/bin/log", ["show", "--last", `${minutes}m`, "--style", "ndjson", "--predicate", `sender == "Sandbox" AND eventMessage CONTAINS "${tagged}"`], { stdio: ["ignore", "pipe", "ignore"] });
+    const child = spawn12("/usr/bin/log", ["show", "--last", `${minutes}m`, "--style", "ndjson", "--predicate", `sender == "Sandbox" AND eventMessage CONTAINS "${tagged}"`], { stdio: ["ignore", "pipe", "ignore"] });
     let out = "";
     const timer = setTimeout(() => child.kill("SIGKILL"), 20000);
     signal?.addEventListener("abort", () => child.kill("SIGKILL"), { once: true });
@@ -34931,7 +34963,7 @@ import fs120 from "node:fs";
 import path123 from "node:path";
 
 // Packages/Box/src/link/areas/changes.ts
-import { execFile as execFile12, execFileSync as execFileSync3, spawn as spawn12 } from "node:child_process";
+import { execFile as execFile12, execFileSync as execFileSync3, spawn as spawn13 } from "node:child_process";
 import fs119 from "node:fs";
 import os14 from "node:os";
 import path122 from "node:path";
@@ -35018,7 +35050,7 @@ async function git2(folder, given, changing = false, more = {}, program = "git",
   return new Promise((resolve) => {
     const out = [];
     const said = [];
-    const child = spawn12(program, args, { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn13(program, args, { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"] });
     child.stdout.on("data", (piece) => out.push(piece));
     child.stderr.on("data", (piece) => said.push(piece));
     child.on("error", () => resolve({ ok: false, out: Buffer.alloc(0), said: `${program} isn’t there.` }));
@@ -35276,6 +35308,46 @@ async function commit(directory, message, push, author) {
   const pushed = await pushFrom(root, said);
   return pushed ? { failed: `Committed, but the push didn’t go through:
 ${pushed}`, committed: true } : null;
+}
+var rootOf3 = async (directory) => (await text4(directory, ["rev-parse", "--show-toplevel"]))?.trim() || null;
+async function repositoryOf3(directory) {
+  const root = await rootOf3(directory);
+  if (root)
+    return { root };
+  return (await text4(directory, ["rev-parse", "--git-dir"]))?.trim() ? { root: null } : null;
+}
+async function branchesIn(directory) {
+  const found = await repositoryOf3(directory);
+  if (!found)
+    return { repository: false };
+  const { root } = found;
+  const at = root ?? directory;
+  const listed = await text4(at, ["for-each-ref", "--sort=-committerdate", "--format=%(refname)", "refs/heads"]);
+  if (listed === null)
+    return null;
+  const branch = (ref) => ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : null;
+  const head = (await text4(at, ["symbolic-ref", "--quiet", "HEAD"]))?.trim() ?? "";
+  return { repository: true, root, current: branch(head), branches: listed.split(`
+`).map(branch).filter((name) => !!name) };
+}
+async function switchBranch(directory, branch, create) {
+  const found = await repositoryOf3(directory);
+  if (!found)
+    return "Not a git repository.";
+  const { root } = found;
+  if (!root)
+    return "This folder has no checkout of its own to switch. Switch branches in one of its worktrees.";
+  return refusal(root)(["switch", ...create ? ["-c"] : [], branch]);
+}
+async function statusIn(directory) {
+  const found = await repositoryOf3(directory);
+  if (!found)
+    return { repository: false };
+  const { root } = found;
+  if (!root)
+    return { repository: true, root, uncommitted: false };
+  const status = await text4(root, ["status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none"]);
+  return status === null ? null : { repository: true, root, uncommitted: status.length > 0 };
 }
 var branchOf = async (directory) => (await text4(directory, ["symbolic-ref", "--quiet", "--short", "HEAD"]))?.trim() || null;
 async function unready(directory, branch, target) {
@@ -35547,6 +35619,24 @@ async function* changesRoute(context) {
       return yield* json(400, { message: "Name a repository and a file in it." });
     const failed = await perform(route.slice("kuvo/git/".length), root, { path: name, oldPath: old, status }, scope);
     return yield* failed ? json(422, { message: failed }) : json(200, {});
+  }
+  if (route === "kuvo/git/branches" || route === "kuvo/git/status" || route === "kuvo/git/switch") {
+    const directory = folderAt(body.directory);
+    if (!directory)
+      return yield* json(404, { message: "That folder isn’t there." });
+    if (route === "kuvo/git/switch") {
+      const branch = typeof body.branch === "string" ? body.branch : "";
+      if (!branch.trim())
+        return yield* json(400, { message: "Name the branch." });
+      if (branch.startsWith("-"))
+        return yield* json(400, { message: "A branch’s name can’t start with “-”." });
+      if (/[\0\n\r]/.test(branch))
+        return yield* json(400, { message: "A branch’s name is one line." });
+      const failed = await switchBranch(directory, branch, body.create === true);
+      return yield* failed ? json(422, { message: failed }) : json(200, {});
+    }
+    const found = route === "kuvo/git/branches" ? await branchesIn(directory) : await statusIn(directory);
+    return yield* found ? json(200, found) : json(500, { message: "git couldn’t say." });
   }
   if (route === "kuvo/git/commit" || route === "kuvo/git/commit-diff") {
     const directory = folderAt(body.directory);
@@ -36005,7 +36095,7 @@ async function atWork3(target) {
 }
 
 // Packages/Box/src/link/browser/install.ts
-import { execFileSync as execFileSync4, spawn as spawn13 } from "node:child_process";
+import { execFileSync as execFileSync4, spawn as spawn14 } from "node:child_process";
 import crypto48 from "node:crypto";
 import fs122 from "node:fs";
 import os15 from "node:os";
@@ -38799,7 +38889,7 @@ function startBrowserInstall({ now = false, repair = false } = {}) {
   if (decided.outcome === null && SCRIPT) {
     note2({ state: "checking", progress: undefined, message: undefined });
     const flags = [...now ? ["--now"] : [], ...decided.repair ? ["--repair"] : []];
-    const child = spawn13(process.execPath, [...OWN_RUNTIME, SCRIPT, "browser", "install", ...flags], { detached: true, stdio: "ignore", cwd: K, env: process.env });
+    const child = spawn14(process.execPath, [...OWN_RUNTIME, SCRIPT, "browser", "install", ...flags], { detached: true, stdio: "ignore", cwd: K, env: process.env });
     const here = runtimeHere();
     child.on("error", (error) => note2({ state: "failed", id: "id" in here ? here.id : undefined, retryAt: Date.now() + 60000, failures: (readRecord2().failures ?? 0) + 1, message: `The browser's setup couldn't start (${error.message}). It tries again in a minute.` }));
     child.unref();
@@ -38827,7 +38917,7 @@ import fs123 from "node:fs";
 import path126 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "e0b3829e5041";
+var BRIDGE_VERSION = "d773de47632e";
 
 // Packages/Box/src/link/rehome/rewrite.ts
 var NO_REWRITE = {
@@ -41657,14 +41747,75 @@ function refusal2(at, error) {
   const said = error?.message?.replace(/^[A-Z]+: /, "").split(",")[0]?.trim();
   return { status: 500, value: { message: `${at} can't be read here.`, reason: said ? said[0].toUpperCase() + said.slice(1) : "It couldn't be read" } };
 }
+function askedFolder(query, home) {
+  const given = (query.get("path") ?? "").trim();
+  const folder = !given || given === "~" ? home : given.startsWith("~/") ? path135.join(home, given.slice(2)) : given;
+  return path135.isAbsolute(folder) ? path135.resolve(folder) : null;
+}
+var TREE_LIMIT = 20000;
+var HEAVY = new Set([".git", "node_modules", "build", "DerivedData", ".build", "Pods", "dist", ".next"]);
+async function listTree(requestPath, limit = TREE_LIMIT, signal, timeout) {
+  const query = new URLSearchParams(requestPath.split("?")[1] ?? "");
+  const home = homeFolder();
+  const at = query.get("path")?.trim() ? askedFolder(query, home) : null;
+  if (!at)
+    return { status: 400, value: { message: "Send a folder's full path, or one that starts with ~/." } };
+  try {
+    await fs131.promises.readdir(at);
+  } catch (error) {
+    return refusal2(at, error);
+  }
+  const listed = await gitNamesLater(at, ["-c", "core.quotepath=off", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], limit, signal, timeout);
+  if (signal?.aborted)
+    return { status: 503, value: { message: "Stopped: no one asks any longer." } };
+  const dated = query.get("dated") === "1";
+  if (listed && (listed.names.length || !listed.complete))
+    return { status: 200, value: await withDates({ path: at, files: listed.names, git: true }, dated) };
+  const asks = at === home ? promptedFolders() : new Set;
+  const files = [];
+  const walk = async (inside) => {
+    let entries;
+    try {
+      entries = await fs131.promises.readdir(path135.join(at, inside), { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (files.length >= limit || signal?.aborted)
+        return;
+      if (HEAVY.has(entry.name) || !inside && asks.has(entry.name))
+        continue;
+      const name = inside ? `${inside}/${entry.name}` : entry.name;
+      if (entry.isDirectory())
+        await walk(name);
+      else
+        files.push(name);
+    }
+  };
+  await walk("");
+  if (signal?.aborted)
+    return { status: 503, value: { message: "Stopped: no one asks any longer." } };
+  return { status: 200, value: await withDates({ path: at, files, git: false }, dated) };
+}
+async function withDates(tree, dated) {
+  if (!dated)
+    return tree;
+  const modified = new Array(tree.files.length).fill(null);
+  for (let at = 0;at < tree.files.length; at += 64) {
+    await Promise.all(tree.files.slice(at, at + 64).map(async (name, offset) => {
+      try {
+        modified[at + offset] = Math.round((await fs131.promises.stat(path135.join(tree.path, name))).mtimeMs);
+      } catch {}
+    }));
+  }
+  return { ...tree, modified };
+}
 function listFolders(requestPath) {
   const query = new URLSearchParams(requestPath.split("?")[1] ?? "");
   const home = homeFolder();
-  const given = (query.get("path") ?? "").trim();
-  const folder = !given || given === "~" ? home : given.startsWith("~/") ? path135.join(home, given.slice(2)) : given;
-  if (!path135.isAbsolute(folder))
+  const at = askedFolder(query, home);
+  if (!at)
     return { status: 400, value: { message: "Send a folder's full path, or one that starts with ~/." } };
-  const at = path135.resolve(folder);
   let entries;
   try {
     entries = fs131.readdirSync(at, { withFileTypes: true });
@@ -41701,6 +41852,13 @@ function makeFolder(body) {
     return { status: 403, value: { message: `A folder can't be made in ${path135.dirname(at)} here.` } };
   }
   return { status: 200, value: { path: at } };
+}
+async function* folderTreeRoute(context) {
+  const { request, json, signal } = context;
+  if (request.method.toUpperCase() !== "GET")
+    return yield* json(405, {});
+  const { status, value } = await listTree(request.path, TREE_LIMIT, signal);
+  return yield* json(status, value);
 }
 async function* foldersRoute(context) {
   const { request, json } = context;
@@ -42145,7 +42303,7 @@ async function workAccounts(sessions, signal) {
 var GLANCE_ROUTE = /^kuvo\/sessions\/glance(\/events)?$/;
 var GLANCE_MOST = 200;
 var repositories = new Map;
-async function repositoryOf3(root, now) {
+async function repositoryOf4(root, now) {
   const kept = repositories.get(root);
   if (kept && now - kept.at < 5 * 60000)
     return kept.repository;
@@ -42209,7 +42367,7 @@ async function glances(ids, targets, signal, now = Date.now) {
     if (made)
       wanted.set(data.id, { ask: { host: made.host, owner: made.owner, repo: made.repo, number: made.number }, url: made.url, number: made.number });
     else if (tree) {
-      const repository = await repositoryOf3(tree.root, now());
+      const repository = await repositoryOf4(tree.root, now());
       const since = madeAt(tree.root);
       if (repository)
         wanted.set(data.id, { ask: { ...repository, branch: tree.branch, ...since ? { since: since - 60000 } : {} } });
@@ -46171,6 +46329,7 @@ var ROUTES = [
   { when: (route) => !IS_MAC && route === "kuvo/browser", answer: browserRoute },
   { when: (route, request) => /^kuvo\/integrations(\/|\?|$)/.test(request.path), answer: integrationsRoute },
   { when: (route) => route === "kuvo/folders", answer: foldersRoute },
+  { when: (route) => route === "kuvo/folders/tree", answer: folderTreeRoute },
   { when: (route) => route === "kuvo/plugins/search", answer: pluginSearchRoute },
   { when: (route) => route === "kuvo/programs", answer: programsRoute },
   { when: (route) => route === "kuvo/providers/models", answer: providerModelsRoute },
@@ -46854,7 +47013,7 @@ async function box(command) {
         return say({ status: 409, message: blocked });
       if (isUpdating())
         return say({ status: 409, message: "It's updating already." });
-      spawn14(process.execPath, [...OWN_RUNTIME, fileURLToPath3(import.meta.url), "update", "--now"], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
+      spawn15(process.execPath, [...OWN_RUNTIME, fileURLToPath3(import.meta.url), "update", "--now"], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
       return say({ status: 202, ...updateStatus(), updating: "checking" });
     }
     case "route": {

@@ -19,7 +19,7 @@ import { CARRY_ROUTE, carryRoute } from "../areas/carry";
 import { claudeCodeRoute } from "../areas/claude-code";
 import { engineControlRoute, signInReturnRoute } from "../areas/engine";
 import { fileAt } from "../areas/file";
-import { foldersRoute } from "../areas/folders";
+import { folderTreeRoute, foldersRoute } from "../areas/folders";
 import { ARTIFACT_ROUTE, artifactsRoute } from "../areas/artifacts";
 import { GROUP_ROUTE, groupsRoute } from "../areas/groups";
 import { infoRoute } from "../areas/info";
@@ -86,6 +86,7 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => !IS_MAC && route === "kuvo/browser", answer: browserRoute },
   { when: (route, request) => /^kuvo\/integrations(\/|\?|$)/.test(request.path), answer: integrationsRoute },
   { when: route => route === "kuvo/folders", answer: foldersRoute },
+  { when: route => route === "kuvo/folders/tree", answer: folderTreeRoute },
   { when: route => route === "kuvo/plugins/search", answer: pluginSearchRoute },
   { when: route => route === "kuvo/programs", answer: programsRoute },
   { when: route => route === "kuvo/providers/models", answer: providerModelsRoute },

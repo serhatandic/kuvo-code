@@ -1556,13 +1556,17 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     file: ["GET", "kuvo/file"],
     folders: ["DELETE", "kuvo/folders"],
     "folders.files": ["GET", "kuvo/folders?files=1"],
+    "folders.tree": ["GET", "kuvo/folders/tree?path=/kuvo-none"],
     git: ["POST", "kuvo/git/changes"],
     "git.backups": ["GET", "kuvo/git/backups?folder=/"],
+    // (Switching them too: kuvo/git/switch.)
+    "git.branches": ["POST", "kuvo/git/branches"],
     "git.changes.count": ["POST", "kuvo/git/changes/count"],
     "git.merge": ["POST", "kuvo/git/merge"],
     "git.pull-request": ["POST", "kuvo/git/pull-request"],
     "git.pull-request.draft": ["POST", "kuvo/git/pull-request/draft"],
     "git.push": ["POST", "kuvo/git/push"],
+    "git.status": ["POST", "kuvo/git/status"],
     // (Settings › Git kept here, and the prompts written here: a Mac's from before moves in once.)
     "git.words": ["POST", "kuvo/git/settings/move"],
     goals: ["GET", "kuvo/agents/api/kuvo/goals"],

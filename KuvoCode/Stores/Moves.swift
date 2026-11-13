@@ -353,7 +353,7 @@ final class Moves {
         } catch let refusal as BoxRefusal {
             await reload(box)
             // A box from before moves were the box's.
-            if refusal.status == 404, refusal.message.hasPrefix("It said no") { throw Failure.needsUpdate(placeName(from)) }
+            if refusal.isOlderBox { throw Failure.needsUpdate(placeName(from)) }
             throw Failure.refused(refusal.message)
         } catch where !(error is CancellationError) {
             // Lost on the way (the connection went): the boxes see it through all the same, and

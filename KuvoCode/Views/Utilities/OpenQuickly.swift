@@ -84,7 +84,7 @@ struct OpenQuickly: View {
         .onAppear { isFocused = true }
         .task {
             let roots = roots.map(RemoteFolder.url)
-            files = await Task.detached { ProjectFiles.newestFirst(ProjectFiles.list(roots, dated: true)) }.value
+            files = await ProjectFiles.newestFirst(roots)
         }
     }
 
