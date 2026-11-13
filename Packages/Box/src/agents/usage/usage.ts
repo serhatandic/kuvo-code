@@ -18,7 +18,7 @@ import type { AgentKind } from "../accounts"
 import { parseProvider } from "../accounts"
 import type { Agent } from "../agent"
 import { emit } from "../events"
-import type { LimitsService } from "../limits"
+import { identityOf, type LimitsService } from "../limits"
 import { claudeLine, dedupClaude, fromKeptClaude, keptClaude, type KeptClaudeEntry } from "./claude-log"
 import { codexLine, codexSlots, codexState, codexStateFrom, fromKeptCodex, keptCodex, type CodexState, type KeptCodexEvent } from "./codex-log"
 import { engineCodexRows, engineCodexSlots, engineStamp } from "./engine-codex"
@@ -60,6 +60,8 @@ export interface UsageSource {
   quiet?: true
   /** Its dollars are what its maker billed (the engine's hosted models'), not an estimate. */
   billed?: true
+  /** Who it is (`identityOf`) as its own read says, before plan limits next say (Cursor's: the token its history was read with). */
+  identity?(): string | undefined
   /**
    * Its use is its maker's account of the whole account (Cursor's), wherever it ran, not this
    * computer's logs: a row of it takes the newest box's, never a sum of them.
@@ -351,7 +353,7 @@ export class Usage {
       const entry = this.entries.get(source.provider)
       if (!entry) return []
       if (source.quiet && !entry.slots.used.size && !entry.slots.unknown.size) return []
-      const identity = this.identity(source.provider) ?? entry.identity
+      const identity = source.identity?.() ?? this.identity(source.provider) ?? entry.identity
       if (identity !== entry.identity) entry.identity = identity
       return [
         {
@@ -1016,6 +1018,10 @@ export function cursorSources(folder: string | undefined, elsewhere: (provider: 
         agent: { kind: "cursor", account: parsed.id },
         ...(agent.instance.label ? { label: agent.instance.label } : {}),
         accountWide: true,
+        identity: () => {
+          const raw = client.identity()
+          return raw ? identityOf(raw) : undefined
+        },
         slots: async (pricing, since) => {
           if (elsewhere(agent.providerID)) return null
           if (!client.key()) throw new Error("Cursor's sign-in can't be read just now.")

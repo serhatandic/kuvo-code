@@ -11506,7 +11506,7 @@ function merged(members) {
   const newest = [...members].sort((a, b) => newestOf(b) - newestOf(a));
   const plan = newest.find((member) => member.plan)?.plan;
   const balance = newest.find((member) => member.balance)?.balance;
-  const extras = newest.find((member) => member.extras?.length)?.extras;
+  const extras = newest.find((member) => member.checked && !member.problem)?.extras;
   const checked = Math.max(0, ...members.map((member) => member.checked ?? 0));
   const next = Math.min(...members.map((member) => member.next ?? Infinity));
   for (const key of ["plan", "balance", "extras", "checked", "next", "problem"])
@@ -11515,7 +11515,7 @@ function merged(members) {
     account.plan = plan;
   if (balance)
     account.balance = balance;
-  if (extras)
+  if (extras?.length)
     account.extras = extras;
   if (checked)
     account.checked = checked;
@@ -11615,7 +11615,7 @@ class Limits {
           ...peer.plan ?? entry.plan ? { plan: peer.plan ?? entry.plan } : {},
           windows: peer.windows,
           ...peer.balance ?? entry.balance ? { balance: peer.balance ?? entry.balance } : {},
-          ...(peer.extras ?? entry.extras)?.length ? { extras: peer.extras ?? entry.extras } : {},
+          ...peer.extras?.length ? { extras: peer.extras } : {},
           ...entry.checked ? { checked: entry.checked } : {},
           ...account.limits.read ? { next: entry.next } : {}
         });
@@ -17185,10 +17185,12 @@ function cursorKeyUnreadable(folder) {
 class CursorClient {
   key;
   now;
+  unreadable;
   token;
-  constructor(key, now = Date.now) {
+  constructor(key, now = Date.now, unreadable = () => false) {
     this.key = key;
     this.now = now;
+    this.unreadable = unreadable;
   }
   signIn() {
     return fingerprint(this.key());
@@ -17204,6 +17206,8 @@ class CursorClient {
     if (!cursorReachable())
       throw new LimitsProblem("none", "Cursor isn't asked from this box.", undefined, false);
     const key = this.key();
+    if (!key && this.unreadable())
+      throw new LimitsProblem("failed", "Cursor's sign-in here can't be read just now.", undefined, false);
     if (!key)
       throw new LimitsProblem("none", "Not signed in to Cursor here.", undefined, false);
     const kept = this.token;
@@ -17626,6 +17630,10 @@ function readingOf(mapped, identity) {
       continue;
     windows.push(window);
   }
+  const cycleEnd = mapped.lines.find((line) => line.kind === "progress" && line.label === "Total usage" && line.resetsAt !== undefined);
+  if (cycleEnd?.kind === "progress")
+    for (const extra of extras)
+      extra.resetsAt ??= cycleEnd.resetsAt;
   return { windows, ...mapped.plan ? { plan: mapped.plan } : {}, ...balance ? { balance } : {}, ...extras.length ? { extras } : {}, ...identity ? { identity } : {} };
 }
 async function optional(request) {
@@ -17760,7 +17768,7 @@ class CursorAgent {
     this.instance = instance;
     this.providerID = providerID("cursor", instance.id);
   }
-  cursor = new CursorClient(() => cursorKey(this.folder, !this.instance.home));
+  cursor = new CursorClient(() => cursorKey(this.folder, !this.instance.home), Date.now, () => cursorKeyUnreadable(this.folder));
   cursorKeyUnreadable() {
     return cursorKeyUnreadable(this.folder);
   }
@@ -22129,7 +22137,7 @@ class Usage {
         return [];
       if (source.quiet && !entry.slots.used.size && !entry.slots.unknown.size)
         return [];
-      const identity = this.identity(source.provider) ?? entry.identity;
+      const identity = source.identity?.() ?? this.identity(source.provider) ?? entry.identity;
       if (identity !== entry.identity)
         entry.identity = identity;
       return [
@@ -22665,6 +22673,10 @@ function cursorSources(folder, elsewhere, history = new CursorHistory(folder ? j
         agent: { kind: "cursor", account: parsed.id },
         ...agent.instance.label ? { label: agent.instance.label } : {},
         accountWide: true,
+        identity: () => {
+          const raw = client.identity();
+          return raw ? identityOf(raw) : undefined;
+        },
         slots: async (pricing, since) => {
           if (elsewhere(agent.providerID))
             return null;
@@ -33511,4 +33523,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents ffdb81a0921c408004e2bd7be39176512d7ddd391b2aa74d971b5680994e603c
+// Built from Packages/Box/src/agents a30911a459ac5517cdb27b3a43176edcf06dc1b3de3ef14cbe3da462ec0e4b29

@@ -210,6 +210,30 @@ final class HostLimitsTests: XCTestCase {
         XCTAssertEqual(applied["openrouter"]?.lines.first?.label, "Mine")
     }
 
+    /// Cursor's on-demand spend with no cap, from the box: on its card as before ("Extra Usage …
+    /// spent"), until its billing cycle starts over; and in the bar's detail once, its card's own
+    /// widgets of the same lines (Extra Usage, Credits) not again beside it.
+    func testCursorsSpendWithNoCapShowsOnceAndGoesWhenItsCycleStartsOver() {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let limits = HostLimits()
+        let row = HostLimitRow(id: "cursor#aaaaaaaaaaaaaaaa", providerID: "cursor", name: "Cursor", meters: [HostLimitRow.Meter(title: "Total usage", fraction: 1)],
+                               balance: .init(left: 18, unit: "usd"), extras: [.init(id: "on_demand", name: "On-demand", amount: 43.21, unit: "usd", resetsAt: now.addingTimeInterval(86_400))],
+                               readAt: now, isOwnLogin: true)
+        limits.update(rows: [row], covered: ["cursor"])
+        let empty = ProviderSnapshot.make(provider: Provider(id: "cursor", displayName: "Cursor", icon: .providerMark("cursor")), plan: nil, lines: [], refreshedAt: now)
+        let drawn = limits.applied(to: ["cursor": empty], now: now)["cursor"]
+        XCTAssertEqual(drawn?.lines.first { $0.label == "On-demand" }, .values(label: "On-demand", values: [MetricValue(number: 43.21, kind: .dollars)]))
+        let shown = HostLimitData.labels(row)
+        let repeated = CursorProvider().widgetDescriptors.filter { shown.contains($0.metricLabel) }.map(\.id)
+        XCTAssertEqual(Set(repeated), ["cursor.onDemand", "cursor.credits"], "the card's widgets the bar's detail leaves out beside the row's own")
+        var over = row
+        over.extras[0].resetsAt = now.addingTimeInterval(-60)
+        limits.update(rows: [over], covered: ["cursor"])
+        let later = limits.applied(to: ["cursor": empty], now: now)["cursor"]
+        XCTAssertNil(later?.lines.first { $0.label == "On-demand" }, "started over since it was read: not known now")
+        XCTAssertEqual(later?.lines.first { $0.label == "Credits" }, .values(label: "Credits", values: [MetricValue(number: 18, kind: .dollars)]))
+    }
+
     /// The credits a row has go on the card only where the card reads nothing of its own (Cursor's):
     /// OpenRouter's card keeps its own credits meter, not the box's credits left in its place.
     func testOnlyACardThatReadsNothingTakesTheRowsCredits() {

@@ -70,16 +70,22 @@ public struct HostLimitRow: Sendable, Hashable, Identifiable {
     }
 
     public struct Extra: Sendable, Hashable {
+        /// The box's own name for it (`on_demand`).
+        public var id: String
         /// Its maker's own label ("On-demand").
         public var name: String
         public var amount: Double
         /// `usd`, `credits` or `requests`.
         public var unit: String
+        /// When it starts over (its billing cycle's end), where its maker says.
+        public var resetsAt: Date?
 
-        public init(name: String, amount: Double, unit: String) {
+        public init(id: String, name: String, amount: Double, unit: String, resetsAt: Date? = nil) {
+            self.id = id
             self.name = name
             self.amount = amount
             self.unit = unit
+            self.resetsAt = resetsAt
         }
     }
 
@@ -173,7 +179,8 @@ public final class HostLimits {
             if let balance = row.balance, balance.unit == "usd" {
                 lines.append(.values(label: "Credits", values: [MetricValue(number: balance.left, kind: .dollars)]))
             }
-            for extra in row.extras {
+            // (One that started over since it was read isn't known now, as a meter.)
+            for extra in row.extras where (extra.resetsAt ?? .distantFuture) > now {
                 lines.append(.values(label: extra.name, values: [extra.unit == "usd" ? MetricValue(number: extra.amount, kind: .dollars) : MetricValue(number: extra.amount, kind: .count, label: extra.unit)]))
             }
         }
@@ -327,7 +334,7 @@ enum HostLimitData {
             rows.append(data)
         }
         // What it spent with no limit, as the card shows it ("On-demand $12.34 spent").
-        for extra in row.extras {
+        for extra in row.extras where (extra.resetsAt ?? .distantFuture) > now {
             let dollars = extra.unit == "usd"
             var data = WidgetData(title: extra.name, icon: .providerMark(row.providerID), kind: dollars ? .dollars : .count, used: extra.amount, limit: nil,
                                   countSuffix: dollars ? nil : extra.unit)
@@ -335,6 +342,12 @@ enum HostLimitData {
             rows.append(data)
         }
         return rows
+    }
+
+    /// The lines a row's own rows stand for beyond its meters (`Credits`, each extra's name), which
+    /// the card's widgets of the same lines mustn't show again beside them.
+    static func labels(_ row: HostLimitRow) -> Set<String> {
+        Set((row.balance == nil ? [] : ["Credits"]) + row.extras.map(\.name))
     }
 
     /// "As of …" once what it shows was read longer ago than that, or its computers aren't heard from.

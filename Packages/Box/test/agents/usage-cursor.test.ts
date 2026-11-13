@@ -202,6 +202,19 @@ describe("Cursor's plan limits", () => {
     expect(again.accounts[0].extras).toBeUndefined()
   })
 
+  test("a sign-in file that can't be read just now keeps the plan's numbers (tried again soon), not a sign-out", async () => {
+    cursor.keys.set("key_work", "auth0|user_abc")
+    const agent = account("key_work")
+    const limits = limitsOf([agent as unknown as Agent])
+    await limits.refresh()
+    writeFileSync(join(agent.folder, "auth.json"), '{"apiKey": "key_wo')
+    now += 11 * 60_000
+    await limits.refresh()
+    const [row] = limits.list()
+    expect(row!.windows.map((window) => window.id)).toContain("total")
+    expect(row!.problem).toMatchObject({ kind: "failed" })
+  })
+
   test("a request-based plan: its requests as its total, said once; the summary's on-demand", async () => {
     cursor.keys.set("key_work", "auth0|user_abc")
     cursor.usage = { enabled: true, planUsage: {} }
@@ -331,6 +344,23 @@ describe("Cursor's usage history", () => {
     expect(asked.length).toBeLessThan(CURSOR_DAYS)
   })
 
+  test("out of time in the middle of a day of many pages: no page after it is asked", async () => {
+    cursor.keys.set("key_work", "auth0|user_abc")
+    cursor.events = eventsEachDay(3)
+    const agent = account("key_work")
+    let release!: () => void
+    const today = Math.floor(now / DAY) * DAY
+    // Out of time as today's second page is asked.
+    cursor.failing = (start, page) => {
+      if (start === today && page === 2) release()
+      return undefined
+    }
+    const deadline = () => ({ done: new Promise<void>((resolve) => (release = resolve)), cancel() {} })
+    await expect(new CursorHistory(undefined, { deadline, concurrency: 1, pageSize: 1, log: () => {} }).read(agent.cursor, now)).rejects.toThrow("aren't known yet")
+    const pages = cursor.asked.filter((each) => each.path.endsWith("get-filtered-usage-events")).map((each) => each.body.page)
+    expect(pages).toEqual([1, 2])
+  })
+
   test("on the box: Cursor's row by the day in the client's zone, by family; a read that fails keeps the last known; a round with nothing new works nothing out again", async () => {
     cursor.keys.set("key_work", "auth0|user_abc")
     // (One late on the 11th, UTC: the 12th already in Tokyo.)
@@ -421,6 +451,17 @@ const slotsOf = (at: number, tokens: number, cost: number): Slots => {
 const wide = (scanned: number, tokens: number): OwnUsage => ({ provider: "cursor", service: "cursor", agent: "cursor", account: "default", identity: "aaaaaaaaaaaaaaaa", scanned, slots: slotsOf(Date.parse("2026-11-12T09:00:00Z"), tokens, tokens / 1000), accountWide: true })
 
 describe("Cursor's account across your computers", () => {
+  test("a row's extras are its newest reading's: one with none says there are none now, though an older box still has some", async () => {
+    const { limitRows } = await import("../../src/agents/limits-rows")
+    const extra = { id: "on_demand", name: "On-demand", kind: "spent" as const, amount: 43, unit: "usd" as const }
+    const account = (checked: number, extras?: (typeof extra)[], problem?: boolean) => ({ provider: "cursor", service: "cursor" as const, identity: "aaaaaaaaaaaaaaaa", windows: [], checked, ...(extras ? { extras } : {}), ...(problem ? { problem: { kind: "failed" as const, message: "x" } } : {}) })
+    const rows = (mac: any, dev: any) => limitRows([{ key: "mac", name: "Mac", here: true, away: false, accounts: [mac] }, { key: "dev", name: "devbox", here: false, away: false, accounts: [dev] }])
+    expect(rows(account(100, [extra]), account(200))[0]!.extras).toBeUndefined()
+    expect(rows(account(100), account(200, [extra]))[0]!.extras).toEqual([extra])
+    // (A newer read that failed says nothing of them: the one before stands.)
+    expect(rows(account(100, [extra]), account(200, undefined, true))[0]!.extras).toEqual([extra])
+  })
+
   test("a row takes its newest box's reading, never a sum; your totals, your own computers' newest", () => {
     const rows = usageRows([
       { key: "mac", name: "Mac", here: true, away: false, accounts: [wide(100, 10)] },

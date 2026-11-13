@@ -307,7 +307,7 @@ export class Limits {
           ...((peer.plan ?? entry.plan) ? { plan: peer.plan ?? entry.plan } : {}),
           windows: peer.windows,
           ...((peer.balance ?? entry.balance) ? { balance: peer.balance ?? entry.balance } : {}),
-          ...((peer.extras ?? entry.extras)?.length ? { extras: peer.extras ?? entry.extras } : {}),
+          ...(peer.extras?.length ? { extras: peer.extras } : {}),
           ...(entry.checked ? { checked: entry.checked } : {}),
           ...(account.limits.read ? { next: entry.next } : {}),
         })

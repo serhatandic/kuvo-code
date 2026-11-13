@@ -108,13 +108,14 @@ function merged(members: AccountLimits[]): AccountLimits {
   const newest = [...members].sort((a, b) => newestOf(b) - newestOf(a))
   const plan = newest.find((member) => member.plan)?.plan
   const balance = newest.find((member) => member.balance)?.balance
-  const extras = newest.find((member) => member.extras?.length)?.extras
+  // (A reading without them says there are none now: the newest that read without a problem.)
+  const extras = newest.find((member) => member.checked && !member.problem)?.extras
   const checked = Math.max(0, ...members.map((member) => member.checked ?? 0))
   const next = Math.min(...members.map((member) => member.next ?? Infinity))
   for (const key of ["plan", "balance", "extras", "checked", "next", "problem"] as const) delete account[key]
   if (plan) account.plan = plan
   if (balance) account.balance = balance
-  if (extras) account.extras = extras
+  if (extras?.length) account.extras = extras
   if (checked) account.checked = checked
   if (Number.isFinite(next)) account.next = next
   if (members.every((member) => member.problem)) account.problem = newest[0]!.problem

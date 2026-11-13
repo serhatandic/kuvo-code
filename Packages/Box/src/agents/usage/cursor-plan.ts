@@ -390,6 +390,9 @@ export function readingOf(mapped: CursorMapped, identity: string | undefined): L
     if (id === "requests" && windows.some((each) => each.id === "total" && each.amount?.unit === "requests" && each.amount.used === line.used && each.amount.limit === line.limit)) continue
     windows.push(window)
   }
+  // (Spent this billing cycle: it starts over with the plan's total, where Cursor said when.)
+  const cycleEnd = mapped.lines.find((line) => line.kind === "progress" && line.label === "Total usage" && line.resetsAt !== undefined)
+  if (cycleEnd?.kind === "progress") for (const extra of extras) extra.resetsAt ??= cycleEnd.resetsAt
   return { windows, ...(mapped.plan ? { plan: mapped.plan } : {}), ...(balance ? { balance } : {}), ...(extras.length ? { extras } : {}), ...(identity ? { identity } : {}) }
 }
 

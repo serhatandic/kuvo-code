@@ -699,7 +699,8 @@
       "name": "On-demand",
       "kind": "spent",
       "amount": 43.21,
-      "unit": "usd"
+      "unit": "usd",
+      "resetsAt": 1764892800000
      }
     ]
    }

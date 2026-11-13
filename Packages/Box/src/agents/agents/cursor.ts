@@ -64,7 +64,7 @@ export class CursorAgent implements Agent {
    * Asks Cursor of this account's plan and use with its own sign-in here (cursor-api.ts): the key
    * your sign-in made (or CURSOR_API_KEY, your own account's), never the Cursor app's login.
    */
-  readonly cursor = new CursorClient(() => cursorKey(this.folder, !this.instance.home))
+  readonly cursor = new CursorClient(() => cursorKey(this.folder, !this.instance.home), Date.now, () => cursorKeyUnreadable(this.folder))
 
   /** Its sign-in file is there but can't be read just now: not signed out. */
   cursorKeyUnreadable(): boolean {

@@ -113,7 +113,8 @@ final class UsageBoxParityCursorTests: XCTestCase {
                 let windows = try XCTUnwrap(want["windows"] as? [[String: Any]])
                 let balance = want["balance"] as? [String: Any]
                 let extras = try XCTUnwrap(want["extras"] as? [[String: Any]])
-                let now = Date(timeIntervalSince1970: 2_000_000_000)
+                // (Within the fixture's billing cycle, which its spend starts over with.)
+                let now = Date(timeIntervalSince1970: 1_764_000_000)
                 let row = HostLimitRow(
                     id: "cursor#aaaaaaaaaaaaaaaa", providerID: "cursor", name: "Cursor",
                     meters: try windows.map { window in
@@ -122,7 +123,10 @@ final class UsageBoxParityCursorTests: XCTestCase {
                                                   count: try amount.map { (used: try XCTUnwrap($0["used"] as? Double), limit: try XCTUnwrap($0["limit"] as? Double), unit: try XCTUnwrap($0["unit"] as? String)) })
                     },
                     balance: try balance.map { HostLimitRow.Balance(left: try XCTUnwrap($0["left"] as? Double), unit: try XCTUnwrap($0["unit"] as? String)) },
-                    extras: try extras.map { HostLimitRow.Extra(name: try XCTUnwrap($0["name"] as? String), amount: try XCTUnwrap($0["amount"] as? Double), unit: try XCTUnwrap($0["unit"] as? String)) },
+                    extras: try extras.map {
+                        HostLimitRow.Extra(id: try XCTUnwrap($0["id"] as? String), name: try XCTUnwrap($0["name"] as? String), amount: try XCTUnwrap($0["amount"] as? Double),
+                                           unit: try XCTUnwrap($0["unit"] as? String), resetsAt: ($0["resetsAt"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) })
+                    },
                     readAt: now, isOwnLogin: true
                 )
                 let limits = HostLimits()

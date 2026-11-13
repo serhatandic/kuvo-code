@@ -87,6 +87,8 @@ export class CursorClient {
   constructor(
     readonly key: () => string | undefined,
     private readonly now: () => number = Date.now,
+    /** Its sign-in file is there but can't be read just now (being rewritten): not signed out. */
+    private readonly unreadable: () => boolean = () => false,
   ) {}
 
   /** The sign-in's fingerprint (never the key). */
@@ -110,6 +112,8 @@ export class CursorClient {
   async accessToken(fresh = false): Promise<string> {
     if (!cursorReachable()) throw new LimitsProblem("none", "Cursor isn't asked from this box.", undefined, false)
     const key = this.key()
+    // (What was read of it stays, and it's tried again soon.)
+    if (!key && this.unreadable()) throw new LimitsProblem("failed", "Cursor's sign-in here can't be read just now.", undefined, false)
     if (!key) throw new LimitsProblem("none", "Not signed in to Cursor here.", undefined, false)
     const kept = this.token
     if (!fresh && kept && kept.key === key && this.now() < kept.until) return kept.access

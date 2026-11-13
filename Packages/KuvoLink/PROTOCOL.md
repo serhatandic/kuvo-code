@@ -3870,10 +3870,12 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   - `extras`: what the plan has beyond its windows, each `{id, name, kind, …}`. So far one `kind`,
     `spent` `{amount, unit, resetsAt?}`: an amount used so far with no limit to it (`unit` `usd`,
     `credits` or `requests`; `name` its maker's own label), Cursor's on-demand spend without a cap
-    (`on_demand`, "On-demand"). #631 piece E grows this list with more kinds (Claude's extra usage
-    and reset grants, Codex's credits, OpenRouter's key spend by period): a client leaves out a kind
-    it doesn't know, and a box from before this keeps none from a peer's mail. Absent when there's
-    none. A row's are its newest reading's that has any.
+    (`on_demand`, "On-demand", its `resetsAt` the billing cycle's end where Cursor says it). #631
+    piece E grows this list with more kinds (Claude's extra usage and reset grants, Codex's credits,
+    OpenRouter's key spend by period): a client leaves out a kind it doesn't know, and one whose
+    `resetsAt` has passed (not known now, as a window), and a box from before this keeps none from a
+    peer's mail. Absent when there's none. A row's are its newest reading's that had no problem: a
+    reading without them says there are none now.
   - `checked`, when its maker last answered (with its limits or a problem; absent for an account
     only its turns tell of); `next`, when it's read again (absent for one that's never read).
   - `problem` `{kind, message, until?}` when the last read didn't work, with `windows` as last
@@ -3978,8 +3980,9 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   model pools, over the billing cycle; `on_demand` ("On-demand", dollars against its cap, `amount`
   in `usd`; a spend with no cap is no window but `extras`, `spent` in `usd`); `grok_bot` ("Grok Bot usage", its own week);
   `requests` (a request-based plan's, where its total isn't already them); the credits left
-  (grants and prepaid balance) as `balance` in `usd`. Each window's `name` is that label. Only a real
-  box's bridge asks Cursor, never a test's. Not yet: Antigravity's (the usage panel still shows it on a
+  (grants and prepaid balance) as `balance` in `usd`. Each window's `name` is that label. A sign-in
+  file that can't be read just now (being rewritten) is a `failed` read, not a sign-out: what was
+  read stays. Only a real box's bridge asks Cursor, never a test's. Not yet: Antigravity's (the usage panel still shows it on a
   Mac), nor Ollama's, which ollama.com tells only the Ollama app's own signing key.
 - How often: Claude's each 15 minutes, the rest each 10. Anthropic limits these reads for the whole
   computer, not a sign-in, and holds a reader off longer each time it asks too soon: Claude's
