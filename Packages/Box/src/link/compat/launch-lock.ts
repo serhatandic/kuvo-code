@@ -116,8 +116,9 @@ function unheld(stale: number) {
   } catch {}
 }
 
-// `work` done holding the launch's lock, saying so. Not had in `wait` ms (past `stale`, so it's one taken
-// again and again, or whose holder took over five minutes): LaunchLockBusy, never without it.
+// `work` done holding the launch's lock, saying so. Not had in `wait / 100` tries, 100 ms apart (each
+// longer by the look at whether its holder runs: past `stale`, so it's one taken again and again):
+// LaunchLockBusy, never without it. One held over `stale` is taken away as left behind.
 export function launchLocked<T>(work: () => T, { stale = 300_000, wait = 330_000 } = {}): T {
   fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
   const nap = new Int32Array(new SharedArrayBuffer(4));

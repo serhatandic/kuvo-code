@@ -975,11 +975,14 @@ public final class RemoteServer: @unchecked Sendable {
     /// `take_lock <tenths>` takes it, waiting that many tenths of a second at most: false if it
     /// isn't had. `unlock` lets go of it, if it's still its own. `holding <pid>`: it runs as one
     /// of the scripts that take it (`kuvo-start`, `kuvo-launch`, a Mac's `kuvo_script`, the box's
-    /// `kuvo-link`), and isn't this one; `mine <pid>`: it's this user's.
+    /// `kuvo-link`), and isn't this one; `starting <pid>`: one of those that starts or stops an
+    /// engine (not the box's own, whose `box adopt` starts none); `mine <pid>`: it's this user's.
     static let launchLock = #"""
-        holding() {
+        holding() { runs_as "$1" 'kuvo-start|kuvo-launch|kuvo_script|kuvo-link'; }
+        starting() { runs_as "$1" 'kuvo-start|kuvo-launch|kuvo_script'; }
+        runs_as() {
           [ -n "$1" ] && [ "$1" != "$$" ] || return 1
-          if [ -d /proc/self ]; then grep -qE -- 'kuvo-start|kuvo-launch|kuvo_script|kuvo-link' "/proc/$1/cmdline" 2>/dev/null; else ps -ww -o command= -p "$1" 2>/dev/null | grep -qE -- 'kuvo-start|kuvo-launch|kuvo_script|kuvo-link'; fi
+          if [ -d /proc/self ]; then grep -qE -- "$2" "/proc/$1/cmdline" 2>/dev/null; else ps -ww -o command= -p "$1" 2>/dev/null | grep -qE -- "$2"; fi
         }
         mine() {
           if [ -d /proc/self ]; then [ -n "$(find "/proc/$1" -maxdepth 0 -user "$(id -u)" 2>/dev/null)" ]; else [ "$(ps -o uid= -p "$1" 2>/dev/null | tr -d ' ')" = "$(id -u)" ]; fi
@@ -1293,9 +1296,10 @@ public final class RemoteServer: @unchecked Sendable {
           b=$(cat "$R/box.pid" 2>/dev/null); if is "$b" kuvo-start; then kill -- "-$b" 2>/dev/null || kill "$b" 2>/dev/null; fi; rm -f "$R/box.pid"
           # A start or stop that holds the lock (a Mac's, or the keeper's where it has no session of
           # its own), ended rather than waited for: it stops the engine it hasn't noted, and lets
-          # go. Only one the lock says holds it now, and that runs as one of these, as this user.
+          # go. Only one the lock says holds it now, and that runs as one of these, as this user
+          # (not the box making its settings its own, which starts no engine: it's waited for).
           h=$(cat "$R/.launching.pid" 2>/dev/null)
-          believed && holding "$h" && mine "$h" && kill "$h" 2>/dev/null
+          believed && starting "$h" && mine "$h" && kill "$h" 2>/dev/null
           if lock 600; then halt; unlock; else halt; fi
           rm -f "$R/stopped"
           ;;
@@ -1353,12 +1357,14 @@ public final class RemoteServer: @unchecked Sendable {
         # The lock goes as it ends, after an engine it started but didn't get to note with it:
         # nothing else would know to stop that one; one that won't end is ended, as `halt` does.
         # (Whole: a second TERM, `off` ending its keeper and it, doesn't cut it short.)
+        # (Its own, never a `pid` its environment brought.)
+        unset pid noted
         trap 'trap "" HUP INT TERM PIPE; [ -z "${began-}" ] || rm -f "$began"; [ -z "${pid-}" ] || [ -n "${noted-}" ] || { kill "$pid" 2>/dev/null; n=0; while kuvo_runs "$pid" "$K/engine/" && [ $n -lt 100 ]; do sleep 0.1; n=$((n + 1)); done; kuvo_runs "$pid" "$K/engine/" && kill -9 "$pid" 2>/dev/null; }; unlock' EXIT
-        trap 'exit 1' HUP INT TERM PIPE
+        \(boot ? "trap 'exit 1' HUP INT TERM PIPE" : "# Ended by an `off` since it began (the machine removed as it started): it says so.\ntrap '[ -n \"$(find \"$R/off\" -newer \"$began\" 2>/dev/null)\" ] && { echo \"It was removed from Kuvo Code meanwhile.\" >&2; exit 7; }; exit 1' HUP INT TERM PIPE")
         take_lock 2400 || \(boot ? "exit 0" : "{ echo \"Another start of the engine is under way there.\" >&2; exit 4; }")
         # Off (the machine removed): it starts nothing until a Mac starts it there. From a Mac, an
         # `off` since it began means it was removed meanwhile.
-        \(boot ? "[ -f \"$R/off\" ] && exit 0" : "if [ -n \"$(find \"$R/off\" -newer \"$began\" 2>/dev/null)\" ]; then echo \"It was removed from Kuvo Code meanwhile.\" >&2; exit 7; fi\n# A Mac starts it: no longer off (its Mac removed it before), if it was; under the lock, so an `off` under way finishes first.\nrm -f \"$R/off\" \"$began\"")
+        \(boot ? "[ -f \"$R/off\" ] && exit 0" : "if [ -n \"$(find \"$R/off\" -newer \"$began\" 2>/dev/null)\" ]; then echo \"It was removed from Kuvo Code meanwhile.\" >&2; exit 7; fi\n# A Mac starts it: no longer off (its Mac removed it before), if it was; under the lock, so an `off` under way finishes first.\nrm -f \"$R/off\"")
         # COMPAT(0.7 engine-stop): an engine an older Mac stopped stays down until Start. Goes 3 months after 0.8.0.
         # Stopped on purpose (Stop, from the Mac or a phone): it stays stopped, unless this is Start.
         if [ -f "$R/stopped" ]; then

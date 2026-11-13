@@ -1088,15 +1088,14 @@ import Testing
         try start()
         until { FileManager.default.fileExists(atPath: engines.path) }
         #expect(FileManager.default.fileExists(atPath: run.appending(path: ".launching").path), "its start under way")
-        let began = Date.now
         #expect(try start("off") == 0)
-        #expect(Date.now.timeIntervalSince(began) < 20, "off didn't wait for it")
-        try write(home.appending(path: "listen"), "")
         let pids = try String(contentsOf: engines, encoding: .utf8).split(separator: "\n").compactMap { Int32($0) }
-        // (Ended whatever happens: it doesn't end on cleanUp's TERM.)
-        defer { pids.forEach { kill($0, SIGKILL) } }
+        // (Ended whatever happens, if it still runs: it doesn't end on cleanUp's TERM.)
+        defer { pids.filter { alive(Int($0)) && isEngine($0) }.forEach { kill($0, SIGKILL) } }
+        // Ended by off, not waited for: gone before it was ever told to listen.
         until { pids.allSatisfy { !alive(Int($0)) } }
-        #expect(pids.allSatisfy { !alive(Int($0)) }, "nothing runs after off")
+        #expect(pids.allSatisfy { !alive(Int($0)) }, "off ended the start under way and its engine")
+        try write(home.appending(path: "listen"), "")
         #expect(running() == nil && keeper == nil)
         #expect(!FileManager.default.fileExists(atPath: run.appending(path: ".launching").path))
         // Nothing of the box's left at all (the keeper's engine loop and its tries included).
@@ -1112,6 +1111,63 @@ import Testing
         try until { try !left() }
         #expect(try !left())
         #expect(try String(contentsOf: engines, encoding: .utf8).split(separator: "\n").count == 1, "nothing started again")
+    }
+
+    /// A Mac's start that holds the lock as the machine is removed (its engine starting): `off`
+    /// ends it, with the engine it started, rather than waiting for it, and that start says it was
+    /// removed (status 7), rather than that SSH stopped; nothing starts after.
+    @Test func offEndsAMacsStartUnderWayWhichSaysItWasRemoved() throws {
+        defer { cleanUp() }
+        // An engine that listens only once it's told to.
+        try write(root.appending(path: "engine/\(OpenCodeEngine.version)/opencode"), """
+            #!/bin/sh
+            echo $$ >>"$HOME/engines"
+            until [ -f "$HOME/listen" ]; do /bin/sleep 0.05; done
+            echo "server listening on http://127.0.0.1:$3"
+            while :; do /bin/sleep 1; done
+            """, executable: true)
+        let engines = home.appending(path: "engines")
+        let lines = ["PATH=\(tools.path):/usr/bin:/bin", "OPENCODE_PASSWORD=\(String(repeating: "a", count: 32))", "KUVO_PORT=23456",
+                     #"KUVO_RECORD="port":23456,"password":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","version":"\#(OpenCodeEngine.version)","notes":{"mac":"test-mac"}}"#]
+        let input = home.appending(path: "launch-input")
+        try write(input, lines.joined(separator: "\n") + "\n\n")
+        let launch = Process()
+        launch.executableURL = URL(filePath: "/bin/sh")
+        launch.arguments = ["-c", RemoteServer.launchScript]
+        launch.environment = ["HOME": home.path, "PATH": "\(tools.path):/usr/bin:/bin"]
+        launch.standardInput = try FileHandle(forReadingFrom: input)
+        launch.standardOutput = FileHandle.nullDevice
+        launch.standardError = FileHandle.nullDevice
+        try launch.run()
+        defer { if launch.isRunning { launch.terminate() } }
+        until { FileManager.default.fileExists(atPath: engines.path) }
+        #expect(pid(".launching.pid") == Int(launch.processIdentifier), "the Mac's start holds the lock, with no keeper about")
+        #expect(try start("off") == 0)
+        launch.waitUntilExit()
+        #expect(launch.terminationStatus == 7, "it says it was removed")
+        let pids = try String(contentsOf: engines, encoding: .utf8).split(separator: "\n").compactMap { Int32($0) }
+        defer { pids.filter { alive(Int($0)) && isEngine($0) }.forEach { kill($0, SIGKILL) } }
+        until { pids.allSatisfy { !alive(Int($0)) } }
+        #expect(pids.allSatisfy { !alive(Int($0)) }, "its engine ended with it")
+        #expect(running() == nil && keeper == nil)
+        #expect(!FileManager.default.fileExists(atPath: run.appending(path: ".launching").path), "let go")
+        #expect(FileManager.default.fileExists(atPath: run.appending(path: "off").path), "still off")
+        try write(home.appending(path: "listen"), "")
+        #expect(try String(contentsOf: engines, encoding: .utf8).split(separator: "\n").count == 1, "nothing started again")
+    }
+
+    /// Whether `pid` is still one of the stand-in engines this test made (its command line names
+    /// this test's folder): never another process that took its number since.
+    private func isEngine(_ pid: Int32) -> Bool {
+        let ps = Process()
+        ps.executableURL = URL(filePath: "/bin/ps")
+        ps.arguments = ["-ww", "-o", "command=", "-p", String(pid)]
+        let out = Pipe()
+        ps.standardOutput = out
+        ps.standardError = FileHandle.nullDevice
+        guard (try? ps.run()) != nil else { return false }
+        ps.waitUntilExit()
+        return String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).contains(root.path)
     }
 
     /// `off` ends only a holder the lock says holds it now, that runs as one of the box's scripts:
