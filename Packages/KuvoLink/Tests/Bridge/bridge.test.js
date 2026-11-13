@@ -1581,6 +1581,7 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     // (Each account's plan limits, on the coding agents' bridge.)
     limits: ["GET", "kuvo/agents/api/kuvo/limits"],
     "mcp.catalog": ["GET", "kuvo/mcp/catalog"],
+    "models.offered": ["GET", "kuvo/models/offered"],
     moves: ["GET", "kuvo/moves"],
     // (Moves with a coding agent's own conversation: what kuvo/moves takes besides.)
     "moves.agents": ["GET", "kuvo/moves"],

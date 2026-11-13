@@ -1393,6 +1393,14 @@ start on a model by the same rule.
   retiring or hidden and isn't a Custom Auto list. `null`: nothing runs there. Left out while the engine
   can't say, or didn't say its default (and the one named is the engine's, or no longer there): a
   client starts on the one named, as it is.
+- An agent's `list_models`, and `start_session` with a `model` named, go by the same rule: one that
+  runs is taken (one its agent keeps out of its picker, or its provider is retiring, too); one of a
+  coding agent's account in `listing` with none of its own models listed yet (none, or only its
+  agent's usual ones) is taken as it's named (the bridge says whether it runs); one whose account
+  needs a sign-in, a key or its agent installed is refused saying which. While the engine can't
+  say, its models whose provider it says is ready (`api/provider`) are taken, as a start naming
+  none goes then; while the bridge can't say, one of the coding agents' is refused saying to try
+  again in a moment.
 - A lead on another computer starting a session there (`start_session` from "Peers") starts on it
   the same way, for the lead's model, where a bridge not running is no coding agents there; a new
   bot there (`kuvo/bots/templates`' `startingModel`) the same way, for the one its client named.
@@ -1461,8 +1469,10 @@ client shows it from the same routes.
   `kuvo/work` gives that row none), `stop_session`
   (`{session, archive?}`; only one of its own), `compact_session` (`{session}`; only one of its
   own, by `POST api/session/<id>/compact` where it runs), `answer_ask` (`{session, ask, decision: allow|deny,
-  reason}`, or `{session, ask, answer, reason}` for a question), `list_models` (the models there's
-  an account for here, `provider/model`, with their efforts; none its provider is retiring).
+  reason}`, or `{session, ask, answer, reason}` for a question), `list_models` (the models that run
+  here, as "The models offered" offers them, `provider/model`, with their efforts; none its
+  provider is retiring or its agent keeps out of its picker; then the coding agents' accounts
+  still listing theirs, and a place that can't say yet).
   - **Across your computers** (bridge 0.9.204): a lead reaches the sessions under it on another
     computer (a bot that moved, say) by a call ("Peers", `call`). `stop_session`, `compact_session`
     and `answer_ask` for a session that isn't here go to the computer that told of it, or where it's
@@ -4187,8 +4197,8 @@ answers `{item}`; a category removed only once nothing, deleted items included, 
 **Tools**: `GET kuvo/work-queue/tools` → `{tools, instructions}` (MCP definitions, and what the
 tool servers add to what they tell agents); `POST kuvo/work-queue/tools {name, arguments, session}`
 → `{text, isError}`, run only while the session named is making that call (as the vault's). The
-tool servers (this Mac's app, a machine's `kuvo-browser.js`) list them and pass on every `queue_…`
-call. `queue_list` (its own and its view's items, then those on your other computers, as each last
+tool servers (this Mac's app, and its keeper while the app is closed, and a machine's
+`kuvo-browser.js`) list them and pass on every `queue_…` call. `queue_list` (its own and its view's items, then those on your other computers, as each last
 told them), `queue_show` (one on another computer as it told it, saying it lives there),
 `queue_add`, `queue_update`, `queue_hand` (into a session's queue, linked to it: one on this box at
 once; one on another computer that takes the Work Queue's mail, by address or a bot's name, by mail,
