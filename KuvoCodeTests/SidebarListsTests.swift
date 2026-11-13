@@ -11,7 +11,7 @@ import Testing
 /// Code), done here one session at a time; ProjectsOnBoxTests has a box's own. The engine is stubbed,
 /// and what its box says of its sessions (`ListingBox`) follows what the engine lists.
 @MainActor
-@Suite(.serialized) struct SidebarListsTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct SidebarListsTests {
     static let engine = "http://127.0.0.1:47995"
     let workspace = Workspace()
 
