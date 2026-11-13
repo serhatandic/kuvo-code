@@ -125,6 +125,40 @@ import Testing
         #expect(workspace.projects.first { $0.directory == "/tmp/kuvo-tests/web" }?.sessions.map(\.id) == ["s_new", "s_web_new", "s_web_old"])
     }
 
+    /// A machine whose box is from before it listed its sessions: the sidebar says to update Kuvo
+    /// Code there rather than file them by a rule of its own, and the worktrees this Mac removed
+    /// there are kept to hand over once it's updated (the box refuses them until then).
+    @Test func aMachineFromBeforeSessionListsSaysToUpdateIt() async throws {
+        defer { done() }
+        let machine = "m_lists_old"
+        UserDefaults.standard.removeObject(forKey: "removedWorktreesHandedOver." + machine)
+        defer { UserDefaults.standard.removeObject(forKey: "removedWorktreesHandedOver." + machine) }
+        let old = OlderBox()
+        workspace.boxes = { id in id == machine ? BoxClient(box: id, transport: old) : nil }
+        let following = Task { await workspace.followSessionList(on: machine) }
+        defer { following.cancel() }
+        try await until { workspace.outdatedLists.contains(machine) }
+        #expect(!workspace.isListed(machine))
+        #expect(!UserDefaults.standard.bool(forKey: "removedWorktreesHandedOver." + machine))
+        #expect(old.paths == ["kuvo/info"])
+    }
+
+    /// A box from before `sessions.list`: its features say so, and the list's route isn't there.
+    private nonisolated final class OlderBox: BoxTransport, @unchecked Sendable {
+        private let lock = NSLock()
+        private var asked: [String] = []
+        var paths: [String] { lock.withLock { asked } }
+        func send(_ request: LinkRequest) -> AsyncThrowingStream<LinkResponsePart, Error> {
+            lock.withLock { asked.append(request.path) }
+            let info = request.path == "kuvo/info"
+            return AsyncThrowingStream { continuation in
+                continuation.yield(.head(status: info ? 200 : 404, headers: ["content-type": "application/json"]))
+                continuation.yield(.body(Data((info ? #"{"features":["projects","worktrees"]}"# : "{}").utf8)))
+                continuation.finish()
+            }
+        }
+    }
+
     /// A box that makes a session as New Session asks (`kuvo/sessions`), and answers nothing else.
     private struct Starts: BoxTransport, @unchecked Sendable {
         let made: [String: Any]

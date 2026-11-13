@@ -320,10 +320,27 @@ final class Workspace {
         sessionLists[box]?.isRead == true
     }
 
+    /// Boxes from before they listed their sessions (`sessions.list` isn't among their features):
+    /// none of their sessions is drawn, and the sidebar says to update Kuvo Code there. Asked again
+    /// now and then, as it may be updated meanwhile.
+    private(set) var outdatedLists: Set<String> = []
+
+    /// Whether `box` lists its sessions, as it says of itself: noted (`outdatedLists`); nil where it
+    /// can't be asked now.
+    private func checkLists(on box: String) async -> Bool? {
+        // (One that said it didn't, asked again: it may have been updated since.)
+        if outdatedLists.contains(box) { featuresHere[box] = nil }
+        let says = await boxSays(SessionLists.feature, on: box)
+        if says == false { outdatedLists.insert(box) } else if says == true { outdatedLists.remove(box) }
+        return says
+    }
+
     /// Where `session` shows in the sidebar, as its box says (folders as named here): in its
     /// project, in Chats, or nowhere (a bot's, a seat, one archived, one its box hasn't listed).
     private func listPlace(of session: Session) -> SessionLists.Place? {
         let box = Self.box(of: session.location.directory)
+        // A box from before it listed them: none drawn (the sidebar says to update it).
+        if outdatedLists.contains(box) { return nil }
         // A machine its box hasn't answered for since this update (away at the first launch with
         // it): its sessions as last seen, where this Mac filed them before, until its box says.
         guard let listing = sessionLists[box] else { return lastFiled(session) }
@@ -359,7 +376,8 @@ final class Workspace {
         let deletable: Set<SessionLists.Kind> = [.project, .chat]
         return sessions
             .filter { $0.time.updated < cutoff && !RemoteFolder.isRemote($0.location.directory) && !(keepsPinned && Self.isPinned($0)) && !running.contains($0.id) }
-            .filter { listKind(of: $0).map(deletable.contains) == true && Drafts.shared[$0.id].isEmpty }
+            // (Listed now: not as it was before its box let it go.)
+            .filter { sessionLists[BoxClient.thisMac]?.sessions[$0.id].map { deletable.contains($0.kind) } == true && Drafts.shared[$0.id].isEmpty }
             .sorted { $0.time.updated < $1.time.updated }
     }
 
@@ -409,6 +427,11 @@ final class Workspace {
     func followSessionList(on box: String = BoxClient.thisMac) async {
         if sessionLists[box] == nil, let kept = SessionCopies.list(of: box) { sessionLists[box] = kept }
         while !Task.isCancelled, !isRemoved(box) {
+            // A box from before the route: said, and asked again a while after.
+            if await checkLists(on: box) == false {
+                try? await Task.sleep(for: BoxClient.readAgainAfter)
+                continue
+            }
             await handOverRemovedWorktrees(on: box)
             var heard = false
             if BoxClient.streams(box), let client = listBox(box) {
@@ -431,7 +454,9 @@ final class Workspace {
     /// COMPAT(0.7 worktrees): worktrees this Mac removed before its boxes kept their records, given to `box` once, so its session lists file their sessions under their projects as this Mac did. Goes 3 months after 0.8.0.
     private func handOverRemovedWorktrees(on box: String) async {
         let key = "removedWorktreesHandedOver." + box
-        guard !UserDefaults.standard.bool(forKey: key), boxes?(box) != nil else { return }
+        // (Only to a box that keeps them, as one that lists its sessions does: an older one refuses
+        // the records, and they're given once it's updated.)
+        guard !UserDefaults.standard.bool(forKey: key), boxes?(box) != nil, await boxSays(SessionLists.feature, on: box) == true else { return }
         for (folder, project) in removedWorktrees.filter({ Self.isOn($0.key, box) }).sorted(by: { $0.key < $1.key }) {
             do {
                 let _: Empty = try await onBox(box, "POST", "kuvo/worktrees/record", ["removed": true, "folder": Self.onBox(folder), "project": Self.onBox(project)])
@@ -458,7 +483,12 @@ final class Workspace {
         repeat {
             listReads[box] = false
             guard !isAway(box), let client = listBox(box) else { return }
-            if let line = try? await client.value(SessionLists.Line.self, "GET", SessionLists.route(since: listCursor(box))) { take(line, on: box) }
+            do {
+                take(try await client.value(SessionLists.Line.self, "GET", SessionLists.route(since: listCursor(box))), on: box)
+            } catch let refusal as BoxRefusal where refusal.status == 404 {
+                // Not served: as it says of itself (its features), noted; else read again later.
+                _ = await checkLists(on: box)
+            } catch {}
         } while listReads[box] == true
     }
 
@@ -1149,6 +1179,8 @@ final class Workspace {
     /// hasn't answered for since this update, as this Mac filed it before (`lastFiled`).
     func listedProject(of session: Session) -> String? {
         let box = Self.box(of: session.location.directory)
+        // (A box from before it listed them: its own folder; one not answered yet: as last filed here.)
+        if outdatedLists.contains(box) { return session.location.directory }
         guard let listing = sessionLists[box] else { return Self.isChat(session) ? nil : projectDirectory(of: session) }
         let facts = listing.facts(of: session.id)
         if facts?.kind == .chat { return nil }

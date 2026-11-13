@@ -372,6 +372,19 @@ struct SidebarView: View {
                 .help("What keeps your projects on this Mac stopped. \(failure)")
                 .accessibilityLabel("Projects can’t be saved. Try Again")
             }
+            // A box from before it listed its sessions: what to do, where they'd be.
+            if workspace.outdatedLists.contains(box.machine ?? BoxClient.thisMac) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Sessions Need a Newer Kuvo Code")
+                        .sidebarFont(13, weight: .medium)
+                    Text("Update Kuvo Code on \(boxName(box)) to list its sessions here.")
+                        .sidebarFont(12)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .accessibilityElement(children: .combine)
+            }
             // (Once its box has said what its sessions are: until then there may be some.)
             if workspace.isLoaded && workspace.isListed(box.machine ?? BoxClient.thisMac) && projects.isEmpty {
                 Text(box.machine == nil ? "Open a folder for the agent to work in." : "Open a folder on \(boxName(box)) for the agent to work in.")

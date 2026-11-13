@@ -15447,12 +15447,25 @@ function readRemovedWorktrees() {
     return {};
   }
 }
+function readHandedOver() {
+  try {
+    const handed = JSON.parse(fs62.readFileSync(WORKTREES_FILE, "utf8")).handedOver;
+    return isObject(handed) ? Object.fromEntries(Object.entries(handed).filter(([, project]) => typeof project === "string")) : {};
+  } catch {
+    return {};
+  }
+}
 function worktreeProjects() {
   let kept = {};
   try {
     kept = JSON.parse(fs62.readFileSync(WORKTREES_FILE, "utf8")) ?? {};
   } catch {}
   const projects = { ...linkedTrees() };
+  if (isObject(kept.handedOver)) {
+    for (const [folder, project] of Object.entries(kept.handedOver))
+      if (typeof project === "string")
+        projects[folder] = project;
+  }
   if (isObject(kept.removed)) {
     for (const [folder, project] of Object.entries(kept.removed))
       if (typeof project === "string")
@@ -15476,11 +15489,14 @@ function readRestorableWorktrees() {
     return [];
   }
 }
-function updateWorktrees(change, gone, restorable = (list) => list) {
+function updateWorktrees(change, gone, restorable = (list) => list, handOver) {
   let removed = readRemovedWorktrees();
   if (gone)
     removed = Object.fromEntries([...Object.entries(removed).filter(([folder]) => folder !== (gone.folder ?? gone.root)), [gone.folder ?? gone.root, gone.project]].slice(-200));
-  writePrivate(WORKTREES_FILE, JSON.stringify({ worktrees: change(readWorktrees()), removed, restorable: restorable(readRestorableWorktrees()) }, null, 2));
+  const handedOver = readHandedOver();
+  if (handOver)
+    handedOver[handOver.folder] = handOver.project;
+  writePrivate(WORKTREES_FILE, JSON.stringify({ worktrees: change(readWorktrees()), removed, restorable: restorable(readRestorableWorktrees()), ...Object.keys(handedOver).length ? { handedOver } : {} }, null, 2));
   for (const tell of worktreeFollowers)
     tell();
 }
@@ -15802,8 +15818,8 @@ async function answerWorktrees(method, requestPath, body, engine, signal, bridge
       const folder = body?.folder, project = body?.project;
       if (typeof folder !== "string" || !path65.isAbsolute(folder) || typeof project !== "string" || !path65.isAbsolute(project) || folder === project)
         return { status: 400, value: message("Send {removed: true, project, folder}.") };
-      if (!list.some((each) => (each.folder ?? each.root) === folder || each.root === folder) && !(folder in readRemovedWorktrees()))
-        updateWorktrees((each) => each, { project, root: folder, folder, branch: "" });
+      if (!list.some((each) => (each.folder ?? each.root) === folder || each.root === folder) && !(folder in readRemovedWorktrees()) && !(folder in readHandedOver()))
+        updateWorktrees((each) => each, undefined, undefined, { folder, project });
       return { status: 200, value: {} };
     }
     const given = { project: body?.project, root: body?.root, folder: typeof body?.folder === "string" ? body.folder : body?.root, branch: body?.branch, ...typeof body?.base === "string" ? { base: body.base } : {} };
@@ -35290,32 +35306,47 @@ function parseCursor(given) {
   const match = given?.match(/^([A-Za-z0-9-]+)\.(\d+)$/);
   return match ? { epoch: match[1], seq: Number(match[2]) } : null;
 }
-function placeNow(running, sessions) {
+function readBoxKnows() {
   const projects = readProjects();
-  const parents = new Map;
-  for (const session of sessions)
-    if (session.parentID)
-      parents.set(session.id, session.parentID);
-  const asked = new Map;
-  for (const ask of readAsks2()) {
-    let root = ask.session;
-    for (let step = 0;step < 10 && parents.has(root); step++)
-      root = parents.get(root);
-    asked.set(root, Math.min(asked.get(root) ?? Infinity, ask.at));
-  }
   const botSessions = new Set;
   for (const id of listOf(BOTS)) {
     const bot = botHere(id);
     if (bot)
       botSessions.add(bot.session);
   }
-  return { isChatsFolder, botsFolder: BOTS, botSessions, filed: filedProjects(projects), projects, running, asked, away: new Set(awaySessions()) };
+  return { projects, filed: filedProjects(projects), botSessions, away: new Set(awaySessions()), asks: readAsks2() };
 }
-function listOfSessions(sessions, place) {
+function placeNow(running, sessions, known = readBoxKnows()) {
+  const parents = new Map;
+  for (const session of sessions)
+    if (session.parentID)
+      parents.set(session.id, session.parentID);
+  const asked = new Map;
+  for (const ask of known.asks) {
+    let root = ask.session;
+    for (let step = 0;step < 10 && parents.has(root); step++)
+      root = parents.get(root);
+    asked.set(root, Math.min(asked.get(root) ?? Infinity, ask.at));
+  }
+  return { isChatsFolder, botsFolder: BOTS, botSessions: known.botSessions, filed: known.filed, projects: known.projects, running, asked, away: known.away };
+}
+var factsMade = new WeakMap;
+function factsNow(session, place, known) {
+  if (!known)
+    return factsOf2(session, place);
+  const running = place.running.has(session.id), asked = place.asked.get(session.id), away = place.away.has(session.id);
+  const made = factsMade.get(session);
+  if (made && made.known === known && made.running === running && made.asked === asked && made.away === away)
+    return made.facts;
+  const facts = factsOf2(session, place);
+  factsMade.set(session, { known, running, asked, away, facts });
+  return facts;
+}
+function listOfSessions(sessions, place, known) {
   const facts = {};
   for (const session of sessions)
     if (typeof session?.id === "string" && !(session.id in facts))
-      facts[session.id] = factsOf2(session, place);
+      facts[session.id] = factsNow(session, place, known);
   return { sessions: facts, projects: listedProjects(facts, place) };
 }
 async function readSessions(target, signal) {
@@ -35334,7 +35365,7 @@ async function readSessions(target, signal) {
       seen.add(each.id);
     all.push(...fresh);
     const next = page?.cursor?.next;
-    query = listed.length === 200 && fresh.length && typeof next === "string" ? `limit=200&cursor=${encodeURIComponent(next)}` : null;
+    query = listed.length && fresh.length && typeof next === "string" && next ? `limit=200&cursor=${encodeURIComponent(next)}` : null;
   }
   return all;
 }
@@ -35361,66 +35392,79 @@ function commit(listed, now = Date.now(), file = LIST_FILE, owner) {
     const list = readList(file) ?? { epoch: `${now.toString(36)}-${process.pid.toString(36)}`, seq: 0, floor: 0, sessions: {}, gone: {}, projects: {} };
     if (owner === undefined && list.owner && list.owner !== process.pid && processRuns(list.owner, "kuvo-link"))
       return list;
-    const next = list.seq + 1;
-    let changed = false;
-    let noted = list.owner !== owner;
-    if (owner === undefined)
-      delete list.owner;
-    else
-      list.owner = owner;
-    for (const [id, facts] of Object.entries(listed.sessions)) {
-      const before = list.sessions[id];
-      const place = listed.placeOf?.[id];
-      if (before && JSON.stringify(before.facts) === JSON.stringify(facts)) {
-        if (place && before.place !== place) {
-          before.place = place;
-          noted = true;
-        }
-        continue;
-      }
-      list.sessions[id] = { seq: next, facts, ...place ? { place } : {} };
-      delete list.gone[id];
-      changed = true;
-    }
-    for (const id of Object.keys(list.sessions)) {
-      if (id in listed.sessions)
-        continue;
-      delete list.sessions[id];
-      list.gone[id] = { seq: next, at: now };
-      changed = true;
-    }
-    if (JSON.stringify(list.projects) !== JSON.stringify(listed.projects)) {
-      list.projects = listed.projects;
-      changed = true;
-    }
-    const pending = listed.pending?.length ? [...listed.pending].sort() : undefined;
-    if (JSON.stringify(list.pending) !== JSON.stringify(pending)) {
-      if (pending)
-        list.pending = pending;
-      else
-        delete list.pending;
-      changed = true;
-    }
-    if (!changed) {
-      if (noted)
-        try {
-          writePrivate(file, JSON.stringify(list));
-        } catch {}
-      return list;
-    }
-    list.seq = next;
-    const gone = Object.entries(list.gone).sort((a, b) => b[1].seq - a[1].seq);
-    for (const [index, [id, { seq, at }]] of gone.entries()) {
-      if (index < GONE_KEPT && now - at < GONE_FOR2)
-        continue;
-      delete list.gone[id];
-      list.floor = Math.max(list.floor, seq);
-    }
-    try {
-      writePrivate(file, JSON.stringify(list));
-    } catch {}
+    const { changed, noted } = takeIn(list, listed, now, owner);
+    if (changed || noted)
+      try {
+        writePrivate(file, JSON.stringify(list));
+      } catch {}
     return list;
   });
+}
+function sameFacts(a, b, ignoring) {
+  if (a === b)
+    return true;
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length)
+    return false;
+  return keys.every((key) => key === ignoring || a[key] === b[key]);
+}
+var projectsSaid = (projects, withUpdated) => JSON.stringify(withUpdated ? projects : Object.fromEntries(Object.entries(projects).map(([folder, { updated: _, ...rest }]) => [folder, rest])));
+function takeIn(list, listed, now, owner) {
+  const next = list.seq + 1;
+  let changed = false, telling = false;
+  let noted = list.owner !== owner;
+  if (owner === undefined)
+    delete list.owner;
+  else
+    list.owner = owner;
+  for (const [id, facts] of Object.entries(listed.sessions)) {
+    const before = list.sessions[id];
+    const place = listed.placeOf?.[id];
+    if (before && sameFacts(before.facts, facts)) {
+      if (place && before.place !== place) {
+        before.place = place;
+        noted = true;
+      }
+      continue;
+    }
+    if (!before || !sameFacts(before.facts, facts, "updated"))
+      telling = true;
+    list.sessions[id] = { seq: next, facts, ...place ? { place } : {} };
+    delete list.gone[id];
+    changed = true;
+  }
+  for (const id of Object.keys(list.sessions)) {
+    if (id in listed.sessions)
+      continue;
+    delete list.sessions[id];
+    list.gone[id] = { seq: next, at: now };
+    changed = telling = true;
+  }
+  if (projectsSaid(list.projects, true) !== projectsSaid(listed.projects, true)) {
+    if (projectsSaid(list.projects, false) !== projectsSaid(listed.projects, false))
+      telling = true;
+    list.projects = listed.projects;
+    changed = true;
+  }
+  const pending = listed.pending?.length ? [...listed.pending].sort() : undefined;
+  if (JSON.stringify(list.pending) !== JSON.stringify(pending)) {
+    if (pending)
+      list.pending = pending;
+    else
+      delete list.pending;
+    changed = telling = true;
+  }
+  if (!changed)
+    return { changed, noted, telling };
+  list.seq = next;
+  const gone = Object.entries(list.gone).sort((a, b) => b[1].seq - a[1].seq);
+  for (const [index, [id, { seq, at }]] of gone.entries()) {
+    if (index < GONE_KEPT && now - at < GONE_FOR2)
+      continue;
+    delete list.gone[id];
+    list.floor = Math.max(list.floor, seq);
+  }
+  return { changed, noted, telling };
 }
 function answerFrom(list, since) {
   const from = parseCursor(since);
@@ -35441,7 +35485,12 @@ function keepList() {
   keeping2 = true;
   latest2 = null;
   places3.clear();
-  const again = () => scheduleWorkOut();
+  known2 = null;
+  lastWrite = -Infinity;
+  const again = () => {
+    known2 = null;
+    scheduleWorkOut();
+  };
   const followers = [projectFollowers, botFollowers, moveFollowers, askFollowers2];
   for (const each of followers)
     each.add(again);
@@ -35493,8 +35542,13 @@ function keepList() {
     clearInterval(whole);
     clearTimeout(workOutTimer);
     workOutTimer = undefined;
+    if (writeTimer)
+      writeNow();
     keeping2 = false;
     latest2 = null;
+    known2 = null;
+    asked7.clear();
+    deleted.clear();
     places3.clear();
     placeTargets.clear();
     reading3.clear();
@@ -35546,7 +35600,13 @@ async function readOnce(name, target) {
   if (!keeping2 || !sessions)
     return;
   const place = places3.get(name) ?? { sessions: new Map, running: new Set };
-  place.sessions = new Map(sessions.map((each) => [each.id, each]));
+  const gone = deleted.get(name);
+  place.sessions = new Map(sessions.filter((each) => !gone?.has(each.id)).map((each) => [each.id, each]));
+  deleted.delete(name);
+  for (const key of asked7.keys())
+    if (key.startsWith(name + " "))
+      asked7.delete(key);
+  known2 = null;
   if (running)
     place.running = running;
   places3.set(name, place);
@@ -35558,13 +35618,19 @@ async function readOnce(name, target) {
   }
   workOut();
 }
+var asked7 = new Map;
+var deleted = new Map;
+var eventCount = 0;
 async function readOne3(name, target, id) {
+  const key = `${name} ${id}`;
+  const at = asked7.get(key);
+  const current = () => asked7.get(key) === at && !deleted.get(name)?.has(id);
   try {
     const session = await call(target, "GET", `/api/session/${encodeURIComponent(id)}`, undefined, AbortSignal.timeout(1e4));
-    if (isObject(session) && session.id === id)
+    if (current() && isObject(session) && session.id === id)
       places3.get(name)?.sessions.set(id, session);
   } catch (error) {
-    if (error.status === 404)
+    if (current() && error.status === 404)
       places3.get(name)?.sessions.delete(id);
   }
 }
@@ -35575,6 +35641,12 @@ async function noteListEvent(name, target, event) {
   if (typeof id !== "string" || !id.startsWith("ses"))
     return;
   reading3.get(name)?.add(id);
+  asked7.set(`${name} ${id}`, ++eventCount);
+  if (event.type === "session.deleted") {
+    deleted.set(name, (deleted.get(name) ?? new Set).add(id));
+    if (deleted.get(name).size > 5000)
+      deleted.get(name).clear();
+  }
   const place = places3.get(name);
   if (!place)
     return;
@@ -35604,9 +35676,9 @@ function scheduleWorkOut() {
   workOutTimer.unref?.();
 }
 var pendingPlaces = () => places3.has("bridge") || bridgeTarget() === null ? [] : ["bridge"];
-function withPending(sessions, placeOf, running, pending, before) {
-  const box = placeNow(running, sessions);
-  const listed = listOfSessions(sessions, box).sessions;
+function withPending(sessions, placeOf, running, pending, before, knows) {
+  const box = placeNow(running, sessions, knows);
+  const listed = listOfSessions(sessions, box, knows).sessions;
   if (pending.length && before) {
     for (const [id, entry] of Object.entries(before.sessions)) {
       if (id in listed || !entry.place || !pending.includes(entry.place))
@@ -35635,14 +35707,53 @@ function workOut(now = Date.now()) {
     for (const id of place.running)
       running.add(id);
   }
-  const before = latest2;
-  latest2 = commit(withPending(sessions, placeOf, running, pendingPlaces(), before ?? readList()), now, LIST_FILE, process.pid);
-  if (before && before.epoch === latest2.epoch && before.seq === latest2.seq)
+  const was = latest2 ? cursorOf(latest2) : null;
+  known2 ??= readBoxKnows();
+  const listed = withPending(sessions, placeOf, running, pendingPlaces(), latest2 ?? readList(), known2);
+  if (latest2?.owner === process.pid) {
+    const { changed, noted, telling } = takeIn(latest2, listed, now, process.pid);
+    if (changed || noted)
+      scheduleWrite(telling || noted);
+  } else {
+    latest2 = commit(listed, now, LIST_FILE, process.pid);
+    lastWrite = performance.now();
+  }
+  if (was === cursorOf(latest2))
     return;
   for (const tell of [...listFollowers])
     try {
       tell();
     } catch {}
+}
+var known2 = null;
+var WRITE_EVERY = 1000;
+var QUIET_WRITE_EVERY = 1e4;
+var lastWrite = -Infinity;
+var writeTimer;
+var writeDue2 = Infinity;
+function scheduleWrite(soon) {
+  const now = performance.now();
+  const due = Math.max(now, lastWrite + (soon ? WRITE_EVERY : QUIET_WRITE_EVERY));
+  if (due <= now)
+    return writeNow();
+  if (writeTimer && writeDue2 <= due)
+    return;
+  clearTimeout(writeTimer);
+  writeDue2 = due;
+  writeTimer = setTimeout(writeNow, due - now);
+  writeTimer.unref?.();
+}
+function writeNow() {
+  clearTimeout(writeTimer);
+  writeTimer = undefined;
+  writeDue2 = Infinity;
+  lastWrite = performance.now();
+  const kept = latest2;
+  if (!kept)
+    return;
+  try {
+    locked(LIST_FILE + ".lock", () => writePrivate(LIST_FILE, JSON.stringify(kept)));
+  } catch {}
 }
 async function readPlaces(context) {
   let engine = null;
@@ -35742,8 +35853,10 @@ async function* listRoute(context, match) {
         };
       });
       wake = null;
-      if (!woke)
+      if (!woke) {
+        known2 = null;
         workOut();
+      }
     }
   } finally {
     listFollowers.delete(told);
@@ -39715,7 +39828,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "6b18996901e0";
+var BRIDGE_VERSION = "a362262fa3ea";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
