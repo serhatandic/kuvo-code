@@ -62,7 +62,8 @@ struct SessionListsTests {
     }
 
     /// Archived is the box's word, wherever it was archived; one this client just archived or
-    /// brought back shows so at once, until its box's next line about it says.
+    /// brought back shows so at once, and stays so through lines its box worked out before, until
+    /// its box says the same; a refused one is the box's word again.
     @Test func archivedIsTheBoxsWordAndOneJustArchivedHereShowsSoAtOnce() throws {
         func line(_ json: String) throws -> SessionLists.Line { try JSONDecoder().decode(SessionLists.Line.self, from: Data(json.utf8)) }
         var listing = SessionLists.Listing()
@@ -70,17 +71,23 @@ struct SessionListsTests {
         // Archived elsewhere (a phone, Remove Project): its box says so, and it shows nowhere.
         listing.take(try line(#"{"at":"e.2","sessions":{"ses_b":{"kind":"chat","directory":"/c","created":1,"updated":4,"archived":true}},"projects":{}}"#))
         #expect(SessionLists.place(of: listing.facts(of: "ses_b")) == nil)
-        // Archived here: at once, before its box's line.
+        // Archived here: at once, and through a line its box worked out before it heard.
         listing.noteArchived("ses_a", true)
         #expect(SessionLists.place(of: listing.facts(of: "ses_a")) == nil)
-        // Brought back here: at once too; then its box's line has the last word.
+        listing.take(try line(#"{"at":"e.3","sessions":{"ses_a":{"kind":"project","project":"/p","directory":"/p","created":1,"updated":5}},"projects":{}}"#))
+        #expect(SessionLists.place(of: listing.facts(of: "ses_a")) == nil)
+        // Its box says so too: the note's done, and its word stands.
+        listing.take(try line(#"{"at":"e.4","sessions":{"ses_a":{"kind":"project","project":"/p","directory":"/p","created":1,"updated":6,"archived":true}},"projects":{}}"#))
+        #expect(listing.noted.isEmpty)
+        #expect(SessionLists.place(of: listing.facts(of: "ses_a")) == nil)
+        // Brought back here, and the engine refused: its box's word again.
         listing.noteArchived("ses_b", false)
         #expect(SessionLists.place(of: listing.facts(of: "ses_b")) == .chat)
-        listing.take(try line(#"{"at":"e.3","sessions":{"ses_a":{"kind":"project","project":"/p","directory":"/p","created":1,"updated":5,"archived":true}},"projects":{}}"#))
-        #expect(SessionLists.place(of: listing.facts(of: "ses_a")) == nil)
+        listing.forgetArchived("ses_b", false)
+        #expect(SessionLists.place(of: listing.facts(of: "ses_b")) == nil)
         // One its box hasn't listed isn't noted.
         listing.noteArchived("ses_new", true)
-        #expect(listing.facts(of: "ses_new") == nil)
+        #expect(listing.facts(of: "ses_new") == nil && listing.noted.isEmpty)
     }
 
     /// A session a client just started shows at once, as its box's start answer says, until its list

@@ -107,12 +107,20 @@ public enum SessionLists {
         /// few hundred: for a row a client still holds as a conversation moves, which it places as
         /// it was until it's listed where it went (`facts(of:)`).
         public private(set) var former: [String: Facts] = [:]
+        /// Archives (or bring-backs) this client just made that its box hasn't said yet, shown on top
+        /// of what it lists (`noteArchived`). Not kept across launches.
+        public private(set) var noted: [String: Bool] = [:]
+
+        private enum CodingKeys: String, CodingKey { case at, sessions, projects, former }
 
         public init() {}
 
-        /// What its box says of session `id`: as it's listed, else as it was before it was let go.
+        /// What its box says of session `id`: as it's listed, else as it was before it was let go;
+        /// archived as this client just made it, until its box says so too.
         public func facts(of id: String) -> Facts? {
-            sessions[id] ?? former[id]
+            guard var facts = sessions[id] ?? former[id] else { return nil }
+            if let archived = noted[id] { facts.archived = archived ? true : nil }
+            return facts
         }
 
         /// Whether its box has said it yet.
@@ -130,10 +138,18 @@ public enum SessionLists {
             if sessions[id] == nil { sessions[id] = facts }
         }
 
-        /// A session this client just archived (or brought back), shown so at once until its box's
-        /// next line about it says.
+        /// A session this client just archived (or brought back), shown so at once and until its box
+        /// says the same, whatever lines it worked out before come meanwhile. Nothing for one its
+        /// box hasn't listed, or already says so.
         public mutating func noteArchived(_ id: String, _ archived: Bool) {
-            sessions[id]?.archived = archived ? true : nil
+            guard let listed = sessions[id] else { return }
+            noted[id] = (listed.archived == true) == archived ? nil : archived
+        }
+
+        /// The note `noteArchived(id, archived)` made let go of, if it's still that one: the write it
+        /// stood for was refused, so the box's word shows again.
+        public mutating func forgetArchived(_ id: String, _ archived: Bool) {
+            if noted[id] == archived { noted[id] = nil }
         }
 
         /// `line` taken in: a whole one in place of what was, else what changed. Whether anything did.
@@ -149,10 +165,12 @@ public enum SessionLists {
                 for id in line.gone ?? [] { former[id] = sessions.removeValue(forKey: id) ?? former[id] }
             }
             for id in line.sessions.keys { former[id] = nil }
+            // A note goes once its box says the same, or lets the session go.
+            for (id, archived) in noted where sessions[id].map({ ($0.archived == true) == archived }) ?? true { noted[id] = nil }
             if former.count > 500 { former = [:] }
             projects = line.projects
             // (Its first line changes it either way: it's read now.)
-            return before.at == nil || sessions != before.sessions || projects != before.projects
+            return before.at == nil || sessions != before.sessions || projects != before.projects || noted != before.noted
         }
     }
 

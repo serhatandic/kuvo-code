@@ -35,6 +35,13 @@ import Testing
         func add(_ session: [String: Any]) { lock.withLock { listed.append(session) } }
         func all() -> [[String: Any]] { lock.withLock { listed } }
         func refuse(_ id: String) { lock.withLock { _ = refused.insert(id) } }
+        /// Archived (or brought back) by another client: this Mac's copy hasn't heard.
+        func archive(_ id: String, _ archived: Bool) {
+            lock.withLock {
+                guard let index = listed.firstIndex(where: { $0["id"] as? String == id }) else { return }
+                listed[index]["metadata"] = archived ? ["kuvo.archived": true] : [:]
+            }
+        }
 
         func list() -> StubWeb.Answer { lock.withLock { StubWeb.json(["data": listed]) } }
 
@@ -208,6 +215,26 @@ import Testing
         #expect(workspace.projects.first { $0.directory == "/tmp/kuvo-tests/web" }?.sessions.map(\.id) == ["s_web_new", "s_web_old"])
         await workspace.setArchived("s_chat", true)
         #expect(workspace.chats.isEmpty)
+    }
+
+    /// Archived on a phone (or by Remove Project, for a session this Mac didn't show under it): out
+    /// of the lists as its box says, before this Mac's copy hears, and back the same way. One the
+    /// engine won't archive is back at once.
+    @Test func archivedElsewhereGoesAsItsBoxSays() async throws {
+        defer { done() }
+        let web = { workspace.projects.first { $0.directory == "/tmp/kuvo-tests/web" }?.sessions.map(\.id) }
+        sessions.archive("s_web_new", true)
+        listing.push()
+        try await until { web() == ["s_web_old"] }
+        #expect(workspace.session("s_web_new").map(Workspace.isArchived) == false, "this Mac's copy hasn't heard")
+        #expect(workspace.session("s_web_new").map(workspace.isListedArchived) == true, "its row says so all the same")
+        sessions.archive("s_web_new", false)
+        listing.push()
+        try await until { web() == ["s_web_new", "s_web_old"] }
+
+        sessions.refuse("s_web_old")
+        #expect(await !workspace.setArchived("s_web_old", true))
+        #expect(web() == ["s_web_new", "s_web_old"])
     }
 
     @Test func pinningMarksIt() async {

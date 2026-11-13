@@ -374,9 +374,9 @@ import Testing
             ((request.body["metadata"] as? [String: Any])?["kuvo.archived"] as? Bool) == true ? String(request.path.split(separator: "/").last ?? "") : nil
         })
         #expect(patched == ["ses_shop", "ses_tree"])
-        // Off the list once its box's list says the worktree's session is archived too, as it does
-        // for one archived anywhere.
-        try await until { !workspace.projects.contains { $0.directory == shop } }
+        // Off the list at once, the worktree's session too (this Mac may not have shown it under the
+        // project yet, as its box files it only once it has the worktree).
+        #expect(!workspace.projects.contains { $0.directory == shop })
         // Its box keeps the worktree now.
         struct Listed: Decodable { var worktrees: [Workspace.BoxWorktree] }
         let kept = try await #require(workspace.boxes?(BoxClient.mac)).value(Listed.self, "GET", "kuvo/worktrees?records=1")

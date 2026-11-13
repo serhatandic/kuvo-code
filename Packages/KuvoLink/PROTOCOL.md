@@ -1329,11 +1329,12 @@ to date (#679).
 - What a client draws: a `project` session in its project and a `chat` in Chats, unless archived;
   any other kind nowhere. Pinned and Chats newest first; projects by their newest session shown,
   those with none last, ties by name (its `name`, else its folder's last part; Finder's order:
-  case-insensitive, numbers by value); a project's sessions newest first. Archived is the box's `archived`,
-  wherever the session was archived (here, on a phone, by Remove Project). A client shows a pin
-  or an archive it just made at once (an archive noted in its copy of the list), before the box's
-  next line. A move
-  between computers (`away`) is the client's to place, as it sees every computer's list.
+  case-insensitive, numbers by value); a project's sessions newest first. Archived is the box's
+  `archived`, wherever the session was archived (here, on a phone, by Remove Project). A client
+  shows a pin it just made at once, from the session it holds, and an archive (or a session
+  brought back) it just made from a note on its copy of the list, kept through lines until one
+  says the same, and dropped if the engine refuses the change. A move between computers (`away`)
+  is the client's to place, as it sees every computer's list.
 - `Packages/KuvoLink/Vectors/session-lists.json` holds engine sessions and what the box knows
   beside them, the facts the box answers (`Packages/Box/test/session-lists.test.ts`), and the
   sidebar a client draws from them (KuvoClient's `SessionListsTests`): a client in another language

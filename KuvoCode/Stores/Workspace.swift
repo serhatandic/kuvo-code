@@ -249,7 +249,7 @@ final class Workspace {
     /// number on the Dock icon. A subagent's ask is its session's.
     var waitingCount: Int {
         let askers = Set(asking.values.map(root(of:))).union(askingInBrowser.map(root(of:))).union(askingForWork).union(askingOutsideSandbox).union(goalCards).subtracting(seats)
-        return Set(sessions.filter { $0.isUnread && !Self.isArchived($0) }.map(\.id)).union(askers).count
+        return Set(sessions.filter { $0.isUnread && !isListedArchived($0) }.map(\.id)).union(askers).count
     }
 
     struct Project: Identifiable, Hashable {
@@ -728,32 +728,39 @@ final class Workspace {
     /// there). Whether the engine took it.
     @discardableResult
     func setArchived(_ id: String, _ archived: Bool, carriedTo: String? = nil) async -> Bool {
-        // Its box's list shows it so at once (until its next line says), and as it was if the
+        // Its box's list shows it so at once, until its box says so too; as its box says if the
         // engine doesn't take it.
-        let was = listedArchived(id)
-        noteListed(id, archived: archived)
+        changeListing(of: id) { $0.noteArchived(id, archived) }
         // Not archived if the engine didn't take it: its wake-ups aren't held for it.
         guard await setFlag(Self.archivedKey, archived, of: id, also: carriedTo.map { ["kuvo.carriedTo": .string($0)] } ?? [:]) else {
-            if let was, listedArchived(id) == archived { noteListed(id, archived: was) }
+            changeListing(of: id) { $0.forgetArchived(id, archived) }
             return false
         }
         onArchived?(id, archived, nil)
         return true
     }
 
-    /// Whether `id`'s box lists it as archived (or as this Mac just changed it); nil for one it hasn't listed.
-    private func listedArchived(_ id: String) -> Bool? {
-        guard let session = session(id) else { return nil }
-        return sessionLists[Self.box(of: session.location.directory)]?.sessions[id].map { $0.archived == true }
+    /// Whether `session` is archived, as its box says (or as this Mac just made it); as this Mac's
+    /// copy says for one its box hasn't listed.
+    func isListedArchived(_ session: Session) -> Bool {
+        sessionLists[Self.box(of: session.location.directory)]?.facts(of: session.id).map { $0.archived == true } ?? Self.isArchived(session)
     }
 
-    /// `id` archived or brought back here, noted in its box's list as this Mac shows it until the box's
-    /// next line about it says.
-    private func noteListed(_ id: String, archived: Bool) {
+    /// `id`'s box's list, as this Mac shows it, changed.
+    private func changeListing(of id: String, _ change: (inout SessionLists.Listing) -> Void) {
         guard let session = session(id) else { return }
         let box = Self.box(of: session.location.directory)
-        guard var listing = sessionLists[box], listing.sessions[id] != nil else { return }
-        listing.noteArchived(id, archived)
+        guard var listing = sessionLists[box] else { return }
+        change(&listing)
+        if listing != sessionLists[box] { sessionLists[box] = listing }
+    }
+
+    /// Every session `box` lists in `folders` (a project's own, its worktrees', those removed before)
+    /// or filed under `project`, noted archived: Remove Project archived them all there.
+    private func noteArchived(on box: String, project: String, folders: [String]) {
+        guard var listing = sessionLists[box] else { return }
+        let named = Set(folders.map(Self.onBox)), filed = Self.onBox(project)
+        for (id, facts) in listing.sessions where facts.project == filed || named.contains(facts.directory) { listing.noteArchived(id, true) }
         if listing != sessionLists[box] { sessionLists[box] = listing }
     }
 
@@ -1133,6 +1140,8 @@ final class Workspace {
         let box = Self.box(of: directory)
         let sessions = projects.first { $0.directory == directory }?.sessions ?? []
         guard Self.keepsProjects(box), let client = boxes?(box) else { return await archiveHere(sessions, removing: directory) }
+        // Its worktrees' folders, as this Mac and its box know them before they're handed over.
+        let trees = worktrees.filter { $0.value.project == directory }.map(\.key) + boxWorktreeProjects.filter { $0.value == directory }.map(\.key)
         // Its worktrees as this Mac knows them are its box's too (handed over, if they weren't), so
         // their sessions are archived there with the rest.
         guard await takeWorktrees(from: box) != nil else {
@@ -1146,6 +1155,8 @@ final class Workspace {
         case 200:
             // All of them, there: so here too, as the engine has them now, and it's off the list.
             for session in sessions { noteArchivedThere(session.id) }
+            // Its worktrees' too, those this Mac didn't show under it yet among them.
+            noteArchived(on: box, project: directory, folders: [directory] + trees + removed)
             folders.removeAll { $0 == directory }
             UserDefaults.standard.set(folders, forKey: "projectFolders")
             await loadProjects(on: box)
@@ -1180,7 +1191,7 @@ final class Workspace {
 
     /// A session its box archived: so here, and told, as one archived here is.
     private func noteArchivedThere(_ id: String) {
-        noteListed(id, archived: true)
+        changeListing(of: id) { $0.noteArchived(id, true) }
         guard let index = sessions.firstIndex(where: { $0.id == id }), !Self.isArchived(sessions[index]) else { return }
         var metadata = sessions[index].metadata?.object ?? [:]
         metadata[Self.archivedKey] = .bool(true)
