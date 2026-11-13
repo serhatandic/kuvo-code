@@ -302,6 +302,8 @@ const noPriceFeeds = process.env.KUVO_TEST_PRICE_FEEDS === "off" || !isRealBridg
 delete process.env.KUVO_TEST_PRICE_FEEDS
 const usageFolder = join(home, "usage")
 const usageSettings = new UsageSettings(join(usageFolder, "settings.json"))
+limits.settings = usageSettings
+limits.ownKey = () => directory.own()?.key ?? ""
 const claudeUsage = claudeSources(usageFolder)
 const codexUsage = codexSources(usageFolder, () => usageSettings.codexFallback)
 // The engine's own databases: in Kuvo Code's folder on a machine (`data/opencode`), in the app's

@@ -8,10 +8,12 @@ import { Frame, frame, relayPush } from "../relay/frames";
 import { masked } from "./mask";
 
 /** What a notice is about (PROTOCOL.md, "Notifications"), for its buttons: what's asked of you, or news. */
-export type NoticeCategory = "permission" | "question" | "ask" | "finished" | "failed" | "report" | "blocked" | "message";
+export type NoticeCategory = "permission" | "question" | "ask" | "finished" | "failed" | "report" | "blocked" | "message" | "usage";
 
 /** Where a notice opens (`session` or `group`), and what answering takes it back (`request`, `ask`). */
 export interface NoticeData {
+  notice?: string;
+  row?: string;
   session?: string;
   group?: string;
   request?: string;

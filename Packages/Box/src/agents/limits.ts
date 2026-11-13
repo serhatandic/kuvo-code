@@ -19,6 +19,8 @@ import type { Agent } from "./agent"
 import { emit } from "./events"
 import type { LimitsPeers } from "./limits-peers"
 import { limitRows, type LimitRow } from "./limits-rows"
+import { initialState, meter, metricID, newNotice, transitions, takeNotices, takeStates, type UsageNotice, type NoticeState } from "./usage/notices"
+import type { UsageSettings } from "./usage/settings"
 
 /** The services whose limits a box states, by the name clients know them by (their marks and colors). */
 export type LimitsService = "claude" | "codex" | "grok" | "cursor" | "antigravity" | "copilot" | "openrouter" | "zai" | "ollama" | "opencode"
@@ -164,6 +166,8 @@ export interface LimitedAccount {
 export interface AccountLimits {
   provider: string
   service: LimitsService
+  notices?: UsageNotice[]
+  noticeState?: Record<string, NoticeState>
   /** For a coding agent's account (absent for the engine's sign-ins). */
   agent?: AgentKind
   account?: string
@@ -186,6 +190,8 @@ export interface AccountLimits {
 }
 
 interface Entry {
+  notices?: UsageNotice[]
+  noticeState?: Record<string, NoticeState>
   plan?: string
   windows: LimitWindow[]
   /** Missing windows without reset times survive just one partial reading. */
@@ -266,6 +272,13 @@ export class Limits {
 
   /** Your other computers' readings, once the bridge's link is there to carry them (`LimitsPeers`). */
   peers?: LimitsPeers
+  settings?: UsageSettings
+  ownKey: () => string = () => ""
+
+  notices(): UsageNotice[] {
+    const all = [...this.list(false).flatMap(a => a.notices ?? []), ...(this.peers?.notices() ?? [])]
+    return [...new Map(all.filter(n => this.now() - n.at < 24 * 60 * MINUTE).map(n => [n.id, n])).values()].sort((a, b) => a.at - b.at)
+  }
 
   /** Every account across your computers, one row each (`limits-rows.ts`): this box's first. */
   rows(): LimitRow[] {
@@ -279,7 +292,7 @@ export class Limits {
   }
 
   private saying() {
-    return JSON.stringify([this.list(), this.rows()])
+    return JSON.stringify([this.list(), this.rows(), this.notices()])
   }
 
   /** Reads what's due every minute, and listens to what turns hear. */
@@ -335,6 +348,8 @@ export class Limits {
         ...(entry.identity ? { identity: entry.identity } : {}),
         ...(entry.plan ? { plan: entry.plan } : {}),
         windows: entry.windows,
+        ...(entry.notices?.length ? { notices: entry.notices } : {}),
+        ...(entry.noticeState ? { noticeState: entry.noticeState } : {}),
         ...(entry.balance ? { balance: entry.balance } : {}),
         ...(entry.extras?.length ? { extras: entry.extras } : {}),
         ...(entry.checked ? { checked: entry.checked } : {}),
@@ -461,7 +476,7 @@ export class Limits {
       // account of its maker at once); taken back when nothing went.
       const before = source.bucket ? this.asked.get(source.bucket) : undefined
       if (source.bucket) this.asked.set(source.bucket, at)
-      const sent = await this.readOne(source, entry)
+      const sent = await this.readOne(source, entry, account)
       if (source.bucket && !sent) {
         if (before === undefined) this.asked.delete(source.bucket)
         else this.asked.set(source.bucket, before)
@@ -474,7 +489,7 @@ export class Limits {
   }
 
   /** Reads one account; whether a request went to its maker. */
-  private async readOne(source: LimitsSource, entry: Entry): Promise<boolean> {
+  private async readOne(source: LimitsSource, entry: Entry, account: LimitedAccount): Promise<boolean> {
     const started = this.now()
     // Not asked again before its time, even if the box stops while it waits for the answer.
     entry.next = Math.max(entry.next, started + source.every)
@@ -503,6 +518,7 @@ export class Limits {
       entry.refusals = 0
       entry.failures = 0
       if (source.bucket) this.refusals.delete(source.bucket)
+      this.decide(account, entry, reading.windows.filter(w => Number.isFinite(w.used)).map(w => w.id))
       return true
     } catch (caught) {
       const at = this.now()
@@ -563,6 +579,8 @@ export class Limits {
   /** Signed in to another account: what was kept of the one before goes, and this one is read soon. */
   private forget(entry: Entry) {
     entry.windows = []
+    entry.notices = undefined
+    entry.noticeState = undefined
     entry.partialMissing = undefined
     entry.plan = undefined
     entry.balance = undefined
@@ -588,6 +606,8 @@ export class Limits {
     if (now === undefined) return
     if (entry.heardAs !== undefined && entry.heardAs !== now) {
       entry.windows = []
+      entry.notices = undefined
+      entry.noticeState = undefined
       entry.plan = undefined
       entry.balance = undefined
       entry.extras = undefined
@@ -603,6 +623,7 @@ export class Limits {
   private listen(provider: string, source: LimitsSource) {
     if (source.heard) return
     source.heard = (window) => {
+      if (!Number.isFinite(window.used)) return
       let entry = this.entries.get(provider)
       if (!entry) {
         entry = { windows: [], next: 0 }
@@ -627,8 +648,40 @@ export class Limits {
       if (heard.name === undefined) delete heard.name
       if (heard.resetsAt === undefined) delete heard.resetsAt
       entry.windows = before ? entry.windows.map((each) => (each.id === window.id ? heard : each)) : [...entry.windows, heard]
+      const account = this.accounts().find(a => a.provider === provider)
+      if (account) this.decide(account, entry, [heard.id])
       this.changed(true)
     }
+  }
+
+  private decide(account: LimitedAccount, entry: Entry, ids: string[]) {
+    const settings = this.settings?.values()
+    const toggles = settings?.notifications ?? { underTenPercent: false, healthyToClose: false, closeToRunningOut: false }
+    const disabled = settings?.providers?.known.includes(account.service) && !settings.providers.enabled.includes(account.service)
+    if (disabled) { entry.noticeState = {}; return }
+    const peer = entry.identity ? this.peers?.freshest(account.service, entry.identity) : undefined
+    entry.noticeState ??= {}
+    const siblings = entry.identity ? [...this.entries.values()].filter(e => e !== entry && e.identity === entry.identity) : []
+    const candidates = [peer?.noticeState, ...siblings.map(e => e.noticeState)]
+    for (const candidate of candidates) for (const [id, state] of Object.entries(takeStates(candidate))) {
+      if ((state.read ?? 0) > (entry.noticeState[id]?.read ?? -1)) entry.noticeState[id] = structuredClone(state)
+    }
+    const row = entry.identity ? `${account.service}#${entry.identity}` : `${this.ownKey()}/${account.provider}`
+    const created: UsageNotice[] = []
+    for (const window of entry.windows.filter(w => ids.includes(w.id))) {
+      if (settings?.layout && !settings.layout.placed.includes(metricID(account.service, window))) { delete entry.noticeState[window.id]; continue }
+      const previous = entry.noticeState[window.id] ?? initialState()
+      const result = transitions(meter(window, this.now()), 1 - window.used, window.resetsAt, previous, toggles)
+      result.state.fired.push(...result.fire)
+      entry.noticeState[window.id] = { ...result.state, read: window.read }
+      for (const milestone of result.fire) created.push(newNotice(row, account.service, window, milestone, this.now()))
+    }
+    const present = new Set(entry.windows.filter(w => !settings?.layout || settings.layout.placed.includes(metricID(account.service, w))).map(w => w.id))
+    for (const id of Object.keys(entry.noticeState)) if (!present.has(id)) delete entry.noticeState[id]
+    entry.notices = [...(entry.notices ?? []), ...created].filter(n => this.now() - n.at < 24 * 60 * MINUTE).slice(-100)
+    // Persist the decisions before telling anyone. Delivery failure is retried by each client's ID journal.
+    this.save()
+    if (created.length) emit("kuvo.usage.notices", { notices: created, push: true })
   }
 
   /** Accounts removed since: their records go. */
@@ -649,7 +702,8 @@ export class Limits {
   private changed(heard = false, own = true) {
     const list = this.list()
     const rows = this.rows()
-    const now = JSON.stringify([list, rows])
+    const notices = this.notices()
+    const now = JSON.stringify([list, rows, notices])
     if (own && (!heard || this.now() - this.lastHeardSave >= 30_000)) {
       if (heard) this.lastHeardSave = this.now()
       this.save()
@@ -657,7 +711,7 @@ export class Limits {
     if (own) this.peers?.tell(!heard)
     if (now === this.said) return
     this.said = now
-    emit("kuvo.limits.updated", { accounts: list, rows })
+    emit("kuvo.limits.updated", { accounts: list, rows, notices })
   }
 
   private load() {
@@ -666,6 +720,8 @@ export class Limits {
       const saved = JSON.parse(readFileSync(this.file, "utf8")) as Saved
       for (const [provider, entry] of Object.entries(saved.accounts ?? {})) {
         if (!entry || !Array.isArray(entry.windows) || typeof entry.next !== "number") continue
+        entry.notices = takeNotices(entry.notices)
+        entry.noticeState = takeStates(entry.noticeState)
         this.entries.set(provider, entry)
       }
       for (const [bucket, until] of Object.entries(saved.holds ?? {})) if (typeof until === "number") this.holds.set(bucket, until)
@@ -712,7 +768,7 @@ const json = (value: unknown, status = 200) => new Response(JSON.stringify(value
  */
 export async function limitsRoutes(limits: Limits | undefined, method: string, rest: string[]): Promise<Response> {
   if (!limits) return json({ message: "Plan limits aren't read on this computer." }, 503)
-  const answer = () => json({ data: { accounts: limits.list(), services: limits.services(), rows: limits.rows() } })
+  const answer = () => json({ data: { accounts: limits.list(), services: limits.services(), rows: limits.rows(), notices: limits.notices(), ownNotices: limits.list(false).flatMap(a => a.notices ?? []) } })
   if (!rest.length && method === "GET") return answer()
   if (rest.length === 1 && rest[0] === "refresh" && method === "POST") {
     // Here first, then on the computer each account only elsewhere is on: what's read here reaches

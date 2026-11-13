@@ -12,6 +12,8 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 import { kinds, type AgentKind } from "./accounts"
 import type { AccountLimits, LimitedAccount, LimitExtra, LimitWindow, Limits, LimitsService } from "./limits"
+import { takeNotices, takeStates, type UsageNotice } from "./usage/notices"
+import { emit } from "./events"
 import { limitRows, type LimitRow, type LimitsBox } from "./limits-rows"
 
 /** What one box tells another of its limits (`{"limits": …}` between links). */
@@ -112,6 +114,12 @@ export class LimitsPeers {
     return newest
   }
 
+  /** Only direct peers' decided notices: vouched-for computers never send or receive these. */
+  notices(): UsageNotice[] {
+    if (!this.directory.told || !this.directory.isPeer) return []
+    return [...this.peers].flatMap(([key, kept]) => this.directory.isPeer!(key) ? kept.accounts.flatMap(a => a.notices ?? []) : [])
+  }
+
   /** Every computer's accounts, this box's first, then each peer's by name. */
   rows(own: AccountLimits[]): LimitRow[] {
     const now = this.now()
@@ -137,7 +145,7 @@ export class LimitsPeers {
       const last = this.told.get(key)
       const due = !last || now - last.at >= TELL_AGAIN || (last.json !== json && (urgent || now - last.at >= HEARD_EVERY))
       if (!due) continue
-      this.transport.send(key, { kind: "limits", at: now, accounts, ...(!last ? { ask: true as const } : {}) }, false)
+      this.transport.send(key, { kind: "limits", at: now, accounts: this.forPeer(key, accounts), ...(!last ? { ask: true as const } : {}) }, false)
       this.told.set(key, { json, at: now })
     }
   }
@@ -153,11 +161,15 @@ export class LimitsPeers {
     const off = typeof given.at === "number" && Number.isFinite(given.at) && Math.abs(now - given.at) >= SKEW ? now - given.at : 0
     const accounts = given.accounts.slice(0, 100).flatMap((account) => {
       const taken = takenAccount(account, off, now)
+      if (taken && !this.directory.isPeer?.(from)) { delete taken.notices; delete taken.noticeState }
       return taken ? [taken] : []
     })
     const before = this.peers.get(from)
     const name = this.directory.peerBoxes().find((box) => box.key === from)?.name ?? before?.name ?? "another computer"
+    const seen = new Set(before?.accounts.flatMap(a => a.notices?.map(n => n.id) ?? []) ?? [])
+    const notices = accounts.flatMap(a => a.notices ?? []).filter(n => !seen.has(n.id))
     this.peers.set(from, { name, heard: now, accounts })
+    if (notices.length) emit("kuvo.usage.notices", { notices, push: false })
     this.save()
     this.limits.peersChanged()
     // Asked, or back after being away (it may have missed what was told meanwhile): told this box's,
@@ -187,7 +199,7 @@ export class LimitsPeers {
     }
     const now = this.now()
     const accounts = this.shared()
-    for (const [key, refresh] of asks) this.transport.send(key, { kind: "limits", at: now, accounts, refresh }, false)
+    for (const [key, refresh] of asks) this.transport.send(key, { kind: "limits", at: now, accounts: this.forPeer(key, accounts), refresh }, false)
   }
 
   /** An account of this box's, as rows name it. */
@@ -202,8 +214,12 @@ export class LimitsPeers {
     if (now - (this.answered.get(key) ?? -Infinity) < HEARD_EVERY) return
     this.answered.set(key, now)
     const accounts = this.shared()
-    this.transport.send(key, { kind: "limits", at: now, accounts }, false)
+    this.transport.send(key, { kind: "limits", at: now, accounts: this.forPeer(key, accounts) }, false)
     this.told.set(key, { json: JSON.stringify(accounts), at: now })
+  }
+
+  private forPeer(key: string, accounts: AccountLimits[]): AccountLimits[] {
+    return this.directory.isPeer?.(key) ? accounts : accounts.map(({ notices, noticeState, ...account }) => account)
   }
 
   /** This box's own accounts, as many as fit in one mail (with up to 200 rows' ids asked of it besides). */
@@ -324,6 +340,8 @@ function takenAccount(given: unknown, off: number, now: number): AccountLimits |
     ...(typeof account.identity === "string" && /^[0-9a-f]{16}$/.test(account.identity) ? { identity: account.identity } : {}),
     ...(text(account.plan, 100) ? { plan: text(account.plan, 100) } : {}),
     windows,
+    notices: takeNotices(account.notices),
+    noticeState: takeStates(account.noticeState),
     ...(balance && typeof balance === "object" && typeof balance.left === "number" && (balance.unit === "usd" || balance.unit === "credits") ? { balance: { left: balance.left, ...(typeof balance.limit === "number" ? { limit: balance.limit } : {}), unit: balance.unit } } : {}),
     ...(extras.length ? { extras } : {}),
     ...(checked ? { checked } : {}),

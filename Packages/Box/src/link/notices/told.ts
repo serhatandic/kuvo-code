@@ -62,7 +62,7 @@ export function readTold(): ToldNotice[] {
   }
 }
 
-const keptStill = (entry: ToldNotice, now: number) => now - entry.at < (entry.by === "agent" ? SENT_KEPT : NEWS_KEPT);
+const keptStill = (entry: ToldNotice, now: number) => now - entry.at < (entry.by === "agent" || entry.notice.category === "usage" ? SENT_KEPT : NEWS_KEPT);
 
 /** Clients following what's told in this process: told at once of each kept. */
 export const toldFollowers = new Set<() => void>();
@@ -76,6 +76,7 @@ export function keepTold(notice: Notice, { by, now = Date.now(), unless }: { by?
   try {
     locked(TOLD_LOCK, () => {
       const kept = readTold().filter(each => keptStill(each, now));
+      if (notice.category === "usage" && notice.data?.notice && kept.some(each => each.notice.category === "usage" && each.notice.data?.notice === notice.data?.notice)) { refused = "Already kept this usage notice."; return; }
       refused = unless?.(kept) ?? null;
       if (refused) return;
       kept.push(entry);
@@ -90,7 +91,7 @@ export function keepTold(notice: Notice, { by, now = Date.now(), unless }: { by?
 }
 
 /** What clients follow (`kuvo/notices`): the news of the last minutes, oldest first. */
-export const toldLately = (now = Date.now()): { notices: ToldNotice[] } => ({ notices: readTold().filter(each => now - each.at < NEWS_KEPT) });
+export const toldLately = (now = Date.now()): { notices: ToldNotice[] } => ({ notices: readTold().filter(each => now - each.at < (each.notice.category === "usage" ? SENT_KEPT : NEWS_KEPT)) });
 
 /** Tells `tell` (your phones) each notice an agent sends on purpose from now on, whichever process
  * kept it, once each: as the folder changes, and looked at every few seconds too. `look`: looked at

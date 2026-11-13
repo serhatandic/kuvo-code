@@ -1,3 +1,4 @@
+import { usageNotices } from "../notices/usage";
 // Watching this box's engine and its coding agents' bridge: their events followed, and what the
 // box does as they come (its bots kept told, ended sign-ins noted, news for your phones, a message
 // that steers an agent read at once).
@@ -349,6 +350,20 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       });
       if (!response.ok || !response.body) throw new Error(`${response.status}`);
       attempt = 0;
+      // The bridge may have decided notices while this link wasn't listening. Rehydrate facts on
+      // every connection and retry failed sends; peer decisions are kept for this Mac but never pushed.
+      if (work === "bridge") {
+        const catchUp = () => engineGet(source, "api/kuvo/limits").then((answer: any) => {
+          const data = answer?.data;
+          if (!data) return;
+          usageNotices({ notices: data.ownNotices, push: true }, tell);
+          usageNotices({ notices: data.notices, push: false }, tell);
+        }).catch(() => {});
+        void catchUp();
+        const retry = setInterval(catchUp, 60_000);
+        retry.unref?.();
+        connection.signal.addEventListener("abort", () => clearInterval(retry), { once: true });
+      }
       // When what it asks came: what it asked meanwhile went by unheard (glance/asked.ts).
       forgetAsksOn(work || String(source.port));
       // Its sessions read whole for the lists: what changed meanwhile went by unheard.
@@ -446,6 +461,7 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         if (typeof settled === "string") settleAskReview(settled);
         // A run's end takes what it asked with it, with no word of each, and so does its session deleted.
         if ((RUN_ENDS.has(event.type) || event.type === "session.deleted") && typeof event.data?.sessionID === "string") settleRunReviews(event.data.sessionID);
+        if (event.type === "kuvo.usage.notices") usageNotices(event.data ?? {}, tell);
         if (!notices) continue;
         if (ANSWERED.has(event.type)) answered(event.data?.requestID ?? event.data?.id);
         // A run's end: what it asked the engine let go with it, without a word (stopped, say). Looked
