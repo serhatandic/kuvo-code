@@ -47,10 +47,12 @@ import Testing
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let fixture: [String: Any] = [shop: ["name": "Storefront", "folders": [blog], "run": "bun dev", "terminal": "claude --continue"]]
-        defaults.set(try JSONSerialization.data(withJSONObject: fixture), forKey: "projectSettings")
+        let original = try JSONSerialization.data(withJSONObject: fixture)
+        defaults.set(original, forKey: "projectSettings")
         let saved = Workspace.loadSettings(defaults: defaults)
         #expect(saved[shop] == Workspace.ProjectSettings(name: "Storefront", folders: [blog], run: "bun dev"))
-        let cleaned = try #require(defaults.data(forKey: "projectSettings"))
+        #expect(defaults.data(forKey: "projectSettings") == original, "loading settings does not rewrite defaults")
+        let cleaned = try JSONEncoder().encode(saved)
         let object = try #require(JSONSerialization.jsonObject(with: cleaned) as? [String: [String: Any]])
         #expect(object[shop]?["terminal"] == nil)
         #expect(Workspace.loadSettings(defaults: defaults) == saved)

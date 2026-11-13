@@ -709,6 +709,20 @@ import Testing
 
     // MARK: Keeping them
 
+    @Test func retiredTerminalTabsAreNotRestored() {
+        defer { done() }
+        let saved = WindowTabs.Saved(tabs: [.session("terminal:old"), .session("ses_a")], selection: .session("terminal:old"),
+                                     pairs: [.init(tab: .session("ses_a"), beside: "terminal:beside")]).text
+        tabs.restore(saved, older: .init())
+        #expect(tabs.keys == [.session("ses_a")])
+        #expect(tabs.selection == .session("ses_a"))
+        #expect(tabs.pairs.isEmpty)
+        let older = AppModel()
+        older.tabs.restore("", older: .init(tabs: "terminal:old\nses_a", selection: "terminal:old"))
+        #expect(older.tabs.keys == [.session("ses_a")])
+        #expect(older.tabs.selection == .session("ses_a"))
+    }
+
     @Test func theTabsComeBackAtTheNextLaunch() async {
         defer { done() }
         await sessions(["ses_a", "ses_b", "ses_c"])

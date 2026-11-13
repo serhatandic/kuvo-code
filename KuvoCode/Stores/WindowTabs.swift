@@ -321,7 +321,7 @@ final class WindowTabs {
         }
     }
 
-    /// A tab picked in the sidebar (a session, a bot, a group chat, a terminal, a search's find):
+    /// A tab picked in the sidebar (a session, a bot, a group chat, a search's find):
     /// in view, and you work in its conversation, its composer with the keyboard, as a tab picked
     /// in the tab bar. It starts fresh there, with no way back to where its tab was before.
     func choose(_ key: TabKey) {
@@ -339,7 +339,7 @@ final class WindowTabs {
     /// conversation from a group chat, a subagent from the session it works for): in that one's
     /// place in its tab, with the way back to it at its top (`back`), as a link opens in a
     /// browser's tab. One it went through already is gone back to, not round again. Opened from
-    /// elsewhere (the session beside, nothing in view, a new session or a terminal, which its tab
+    /// elsewhere (the session beside, nothing in view, a new session, which its tab
     /// keeps), it opens as from the sidebar.
     func go(to key: TabKey, from origin: TabKey?) {
         guard let origin, origin == selection, origin.sessionID != nil || origin.groupID != nil, key != origin,
@@ -977,13 +977,13 @@ final class WindowTabs {
         isRestored = true
         let text = keptIn?.string(forKey: Self.keptKey) ?? text
         let saved = text.isEmpty ? older.saved : (try? JSONDecoder().decode(Saved.self, from: Data(text.utf8))) ?? Saved()
-        let opened = keys
+        let opened = keys.filter { !$0.text.hasPrefix("terminal:") }
         var restored: [TabKey] = []
-        for key in saved.tabs where !restored.contains(key) { restored.append(key) }
+        for key in saved.tabs where !key.text.hasPrefix("terminal:") && !restored.contains(key) { restored.append(key) }
         let all = restored + opened.filter { !restored.contains($0) }
         var pairs: [TabKey: String] = [:]
         // Each session in one place: in a pair at most once, never also in a tab of its own.
-        for pair in saved.pairs where restored.contains(pair.tab) && pairs[pair.tab] == nil && !pairs.values.contains(pair.beside)
+        for pair in saved.pairs where !pair.beside.hasPrefix("terminal:") && restored.contains(pair.tab) && pairs[pair.tab] == nil && !pairs.values.contains(pair.beside)
             && !all.contains(.session(pair.beside)) && !self.pairs.values.contains(pair.beside) {
             pairs[pair.tab] = pair.beside
         }
@@ -992,7 +992,7 @@ final class WindowTabs {
         if selection == nil { selection = saved.selection.flatMap { keys.contains($0) ? $0 : nil } ?? keys.last }
         // Each conversation's panel as it was; a version before kept one for the window, which
         // they all start as.
-        app.utilities.restoreOpen(saved.panels.map { ($0.key, $0.open) }, last: saved.showsPanel, in: openView)
+        app.utilities.restoreOpen(saved.panels.filter { !$0.key.hasPrefix("terminal:") }.map { ($0.key, $0.open) }, last: saved.showsPanel, in: openView)
         showsSidebar = saved.showsSidebar ?? older.showsSidebar
     }
 }

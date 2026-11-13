@@ -2090,8 +2090,6 @@ final class Workspace {
     static func loadSettings(defaults: UserDefaults = .standard) -> [String: ProjectSettings] {
         guard let data = defaults.data(forKey: "projectSettings"),
               let settings = try? JSONDecoder().decode([String: ProjectSettings].self, from: data) else { return [:] }
-        // Re-encoding removes retired fields while retaining every project's supported settings.
-        defaults.set(try? JSONEncoder().encode(settings), forKey: "projectSettings")
         return settings
     }
 

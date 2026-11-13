@@ -47,7 +47,7 @@ struct MainView: View {
     /// A tab's session being renamed, and the title being typed.
     @State private var renaming: Session?
     /// The session last in the middle card, kept made (out of sight) under another tab's card, a
-    /// draft's, a group chat's or a terminal's: going back to a session finds the conversations
+    /// draft's or a group chat's: going back to a session finds the conversations
     /// it keeps, and its composer, as they were, rather than making them all again.
     @State private var keptSession: String?
     /// The group chat last in view, kept made under another card while a tab's way back goes
@@ -326,7 +326,7 @@ struct MainView: View {
                 tabs.restore(savedTabs, older: .init(tabs: olderTabs, selection: olderSelection, pairs: olderPairs, showsPanel: olderShowsPanel, showsSidebar: olderShowsSidebar))
             }
             (olderTabs, olderSelection, olderPairs, olderShowsPanel) = ("", nil, "", false)
-            // Opened again after the window closed: the terminals went with it.
+            // Opened again after the window closed: remove sessions that have since gone.
             tabs.dropClosed()
             tabs.startIfEmpty()
             // What changed while the window was away, kept too.
@@ -450,9 +450,10 @@ struct MainView: View {
             return TabItem(id: id, title: group.name, logo: nil, group: faces(of: group), status: status)
         case .session(let sessionID):
             if workspace.waitingMachine(for: sessionID) != nil {
-                let waitingTitle = workspace.remoteTitle(sessionID) ?? "Session"
-                return TabItem(id: id, title: waitingTitle, logo: nil, status: .idle)
-            } else if workspace.session(sessionID) == nil, let sub = workspace.subSession(sessionID) {
+                return TabItem(id: id, title: workspace.remoteTitle(sessionID) ?? "Session", logo: nil, status: .idle)
+            }
+            // A sub-session: its task, with the sign of one.
+            if workspace.session(sessionID) == nil, let sub = workspace.subSession(sessionID) {
                 return TabItem(id: id, title: SubagentTask.title(sub.title ?? ""), logo: nil, status: status(of: sub), symbol: "arrow.turn.down.right")
             }
             guard let session = workspace.session(sessionID) else { return nil }
@@ -592,7 +593,7 @@ struct MainView: View {
         return workspace.model(for: id)
     }
 
-    /// The group chat in view, unless an editor or a terminal's card is over it.
+    /// The group chat in view, unless an editor is over it.
     private var groupInView: BotGroup? {
         guard tabs.groupEditor == nil, tabs.botEditor == nil else { return nil }
         return groupID.flatMap { groups.group($0) }
@@ -631,7 +632,7 @@ struct MainView: View {
     }
 
     /// The session whose card the tab in view shows, if that's what it shows: not with an editor
-    /// over it, nor for a terminal's, a group chat's or a subagent's conversation.
+    /// over it, nor for a group chat's or a subagent's conversation.
     private var sessionInView: SessionModel? {
         guard tabs.groupEditor == nil, tabs.botEditor == nil else { return nil }
         if let id = groupID, groups.group(id) != nil { return nil }
@@ -700,7 +701,7 @@ struct MainView: View {
         .environment(catalog(for: directory))
     }
 
-    /// Any other tab's card: an editor, a terminal, a subagent's conversation, a session waiting
+    /// Any other tab's card: an editor, a subagent's conversation, a session waiting
     /// for its machine, a new session, or the welcome (a group chat's is `groupCard`).
     @ViewBuilder private var otherCard: some View {
         Group {
@@ -1604,7 +1605,7 @@ struct WelcomeView: View {
 }
 
 /// What had the keyboard last in the conversation and in the session beside it (a composer, a
-/// terminal tab, a field), to give it back to when what took it goes: the panel or the sidebar
+/// field), to give it back to when what took it goes: the panel or the sidebar
 /// closing, Settings put away. And where the panel's and the sidebar's cards are, to tell whether
 /// the one going has it.
 @MainActor private final class KeyboardReturn {
