@@ -132,7 +132,7 @@ describe("one box", () => {
 
     const istanbul = await route(usage, "Europe/Istanbul")
     expect(istanbul.zone).toBe("Europe/Istanbul")
-    expect(istanbul.services).toEqual(["claude", "codex", "grok", "opencode", "cursor"])
+    expect(istanbul.services).toEqual(["claude", "codex", "grok", "opencode", "cursor", "antigravity"])
     expect(istanbul.rows).toHaveLength(1)
     const row = istanbul.rows[0]
     expect(row).toMatchObject({ id: "claude#0123456789abcdef", service: "claude", provider: "claude-code@work", agent: "claude", account: "work", label: "Work", identity: "0123456789abcdef", scanned: at })

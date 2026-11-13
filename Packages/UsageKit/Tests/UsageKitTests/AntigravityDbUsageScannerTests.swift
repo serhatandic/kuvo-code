@@ -387,7 +387,7 @@ final class AntigravityDbUsageScannerTests: XCTestCase {
 
         let credentials = #"{"token":{"access_token":"ya29.test","refresh_token":"1//test","expiry":"2099-01-01T00:00:00Z"}}"#
         let wrappedCredentials = "go-keyring-base64:" + Data(credentials.utf8).base64EncodedString()
-        let provider = AntigravityProvider(
+        let provider = LegacyAntigravityProvider(
             authStore: AntigravityAuthStore(keychain: FakeKeychain(wrappedCredentials), files: FakeFiles()),
             usageClient: AntigravityUsageClient(lsHTTP: routing, http: routing),
             discovery: LanguageServerDiscovery(processRunner: EmptyProcessRunner()),

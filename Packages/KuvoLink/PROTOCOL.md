@@ -4026,8 +4026,13 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   `requests` (a request-based plan's, where its total isn't already them); the credits left
   (grants and prepaid balance) as `balance` in `usd`. Each window's `name` is that label. A sign-in
   file that can't be read just now (being rewritten) is a `failed` read, not a sign-out: what was
-  read stays. Only a real box's bridge asks Cursor, never a test's. Not yet: Antigravity's (the usage panel still shows it on a
-  Mac), nor Ollama's, which ollama.com tells only the Ollama app's own signing key.
+  read stays. Only a real box's bridge asks Cursor or Antigravity, never a test's.
+  Antigravity uses only its Kuvo Code agent profile's sign-in, never an editor or Keychain login.
+  It reads merged Gemini/non-Gemini session and weekly quotas (and Argon weekly where supplied),
+  with the legacy per-model endpoints for older servers. Its own language server is discovered
+  with ps/lsof on macOS and /proc on Linux; self-signed HTTPS is accepted only on loopback.
+  An unavailable server or unreadable sign-in is stated on the row; failed reads retain the last
+  result. Not yet: Ollama's, which ollama.com tells only the Ollama app's own signing key.
 - How often: Claude's each 15 minutes, the rest each 10. Anthropic limits these reads for the whole
   computer, not a sign-in, and holds a reader off longer each time it asks too soon: Claude's
   accounts are read one a minute (counted before the request goes, through a restart too), and a
@@ -4087,7 +4092,7 @@ Cursor while its plan's sign-in was turned away as it is now, or while Cursor ho
   [row], totals: {<service>: [day]}, partial?: {<service>: {away?, cut?}}}}`. The box works out the days in `zone` (the client's, so a
   Mac in Istanbul reading a machine in UTC gets its own days); one it doesn't know is its own,
   `zone` says which. `services`: what this box states the usage of (`claude`, `codex`,
-  `grok`, `opencode`, `cursor`): a client shows those from here, and reads the rest as it did. `scanned`: when this box last read its logs.
+  `grok`, `opencode`, `cursor`, `antigravity`): a client shows those from here, and reads the rest as it did. `scanned`: when this box last read its logs.
   `pricing: {codex: {fallback, chosen, choices}}`: Codex's fallback model, this box's setting
   (below), `null` for none; `chosen`, whether it was ever chosen on this box (none counts);
   `choices`, the models it may be, in order.
@@ -7583,3 +7588,13 @@ can go three months after 0.8.0 ships.
   so too, Delete says changes not committed may go with a worktree, and Edit Project leaves out
   the worktree setup. A box the app is attached to in place, from before, gets the same, but
   Switch and the file filter say it needs a newer version. <!-- compat: beta.1 git-older-box -->
+
+### Antigravity conversation history
+
+Antigravity's machine-local history is read from each Kuvo Code agent's own profile only.
+SQLite databases are opened read-only; protobuf generation metadata is bounded to 1 MiB per blob.
+Tokens are priced with the shared catalogs and kept in UTC quarter-hour slots, then summed
+across your own computers like Claude's history. Database/WAL fingerprints reuse unchanged
+reads. A failed, partial or unreadable read keeps the last complete reading and is retried;
+missing data is never converted to zero spend. Places are hashed with the machine ID.
+The apps read Antigravity only from the box, with no older-box fallback (#679 updates boxes first).

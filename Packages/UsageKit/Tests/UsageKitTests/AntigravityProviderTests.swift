@@ -310,12 +310,12 @@ final class AntigravityProviderTests: XCTestCase {
     private func makeCloudCodeProvider(
         routing: RoutingHTTPClient,
         keychainExpiry: String? = "2099-01-01T00:00:00Z"
-    ) -> AntigravityProvider {
+    ) -> LegacyAntigravityProvider {
         let wrapped = keychainExpiry.map { expiry in
             let inner = #"{"token":{"access_token":"ya29.kc","refresh_token":"1//r","expiry":"\#(expiry)"}}"#
             return "go-keyring-base64:" + Data(inner.utf8).base64EncodedString()
         }
-        return AntigravityProvider(
+        return LegacyAntigravityProvider(
             authStore: AntigravityAuthStore(keychain: FakeKeychain(wrapped), files: FakeFiles()),
             usageClient: AntigravityUsageClient(lsHTTP: routing, http: routing),
             discovery: LanguageServerDiscovery(processRunner: EmptyProcessRunner()),

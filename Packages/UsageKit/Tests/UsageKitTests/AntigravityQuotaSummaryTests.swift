@@ -158,7 +158,7 @@ final class AntigravityQuotaSummaryTests: XCTestCase {
     @MainActor
     func testDescriptorLabelsMatchMapperEmittedLabels() {
         let descriptorLabels = Set(
-            AntigravityProvider().widgetDescriptors
+            LegacyAntigravityProvider().widgetDescriptors
                 .filter { !$0.limitResources.isEmpty }
                 .map(\.metricLabel)
         )
@@ -182,10 +182,10 @@ final class AntigravityQuotaSummaryTests: XCTestCase {
     // MARK: - Provider integration: Cloud Code transport
 
     @MainActor
-    private func makeCloudCodeProvider(routing: RoutingHTTPClient) -> AntigravityProvider {
+    private func makeCloudCodeProvider(routing: RoutingHTTPClient) -> LegacyAntigravityProvider {
         let inner = #"{"token":{"access_token":"ya29.kc","refresh_token":"1//r","expiry":"2099-01-01T00:00:00Z"}}"#
         let wrapped = "go-keyring-base64:" + Data(inner.utf8).base64EncodedString()
-        return AntigravityProvider(
+        return LegacyAntigravityProvider(
             authStore: AntigravityAuthStore(keychain: FakeKeychain(wrapped), files: FakeFiles()),
             usageClient: AntigravityUsageClient(lsHTTP: routing, http: routing),
             discovery: LanguageServerDiscovery(processRunner: NoProcessRunner()),
@@ -386,8 +386,8 @@ final class AntigravityQuotaSummaryTests: XCTestCase {
     // MARK: - Provider integration: language-server transport
 
     @MainActor
-    private func makeLSProvider(routing: RoutingHTTPClient) -> AntigravityProvider {
-        AntigravityProvider(
+    private func makeLSProvider(routing: RoutingHTTPClient) -> LegacyAntigravityProvider {
+        LegacyAntigravityProvider(
             authStore: AntigravityAuthStore(keychain: FakeKeychain(nil), files: FakeFiles()),
             usageClient: AntigravityUsageClient(lsHTTP: routing, http: routing),
             discovery: LanguageServerDiscovery(processRunner: FakeLSProcessRunner()),
