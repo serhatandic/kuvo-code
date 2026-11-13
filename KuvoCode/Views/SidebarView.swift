@@ -372,7 +372,8 @@ struct SidebarView: View {
                 .help("What keeps your projects on this Mac stopped. \(failure)")
                 .accessibilityLabel("Projects can’t be saved. Try Again")
             }
-            if workspace.isLoaded && projects.isEmpty {
+            // (Once its box has said what its sessions are: until then there may be some.)
+            if workspace.isLoaded && workspace.isListed(box.machine ?? BoxClient.thisMac) && projects.isEmpty {
                 Text(box.machine == nil ? "Open a folder for the agent to work in." : "Open a folder on \(boxName(box)) for the agent to work in.")
                     .sidebarFont(13)
                     .foregroundStyle(.secondary)
@@ -920,7 +921,7 @@ struct SidebarView: View {
     private func isHighlighted(_ session: Session, in place: Place) -> Bool {
         guard let selection, topConversation(selection) == session.id else { return false }
         if let picked = pickedIn[session.id] { return picked == place }
-        return place == (Workspace.isChat(session) ? .chats : .project)
+        return place == (workspace.isInChats(session) ? .chats : .project)
     }
 
     /// A session's row, and under it, unfolded, the conversations branched or handed off from it
@@ -1184,7 +1185,7 @@ struct SidebarView: View {
                 renaming = RenameTarget(id: session.id, place: place)
             }
         }
-        if Workspace.isChat(session) {
+        if workspace.isInChats(session) {
             moveToProject(session, disabled: moving)
             MoveToComputerItems(thing: .chat(session), app: app).submenu
         } else if !RemoteFolder.isRemote(session.location.directory) {

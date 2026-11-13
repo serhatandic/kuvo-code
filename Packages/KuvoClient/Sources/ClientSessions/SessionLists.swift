@@ -96,8 +96,9 @@ public enum SessionLists {
         public var projects: [String: Project]
     }
 
-    /// A box's list as a client keeps it, line after line.
-    public struct Listing: Hashable, Sendable {
+    /// A box's list as a client keeps it, line after line (and across launches, to show until its
+    /// box answers again).
+    public struct Listing: Codable, Hashable, Sendable {
         /// Where it's at: given back as `since` to resume after a dropped stream.
         public private(set) var at: String?
         public private(set) var sessions: [String: Facts] = [:]

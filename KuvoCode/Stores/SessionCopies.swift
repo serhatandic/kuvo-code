@@ -1,3 +1,4 @@
+import ClientSessions
 import Foundation
 import OpenCodeKit
 
@@ -113,5 +114,28 @@ nonisolated enum SessionCopies {
 
     static func removeSessions(of machine: String) {
         write { try? FileManager.default.removeItem(at: list(machine)) }
+    }
+
+    /// A box's session list (`kuvo/sessions/list`) as last read: what its sessions are and where
+    /// they're filed, shown from launch until it answers, and while it's away.
+    private static func sessionList(_ box: String) -> URL {
+        folder.appending(path: "lists").appending(path: safe(box) + ".json")
+    }
+
+    static func saveList(_ listing: SessionLists.Listing, of box: String) {
+        write {
+            guard let data = try? JSONEncoder().encode(listing) else { return }
+            try? FileManager.default.createDirectory(at: sessionList(box).deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? data.write(to: sessionList(box), options: .atomic)
+        }
+    }
+
+    static func list(of box: String) -> SessionLists.Listing? {
+        guard let data = try? Data(contentsOf: sessionList(box)) else { return nil }
+        return try? JSONDecoder().decode(SessionLists.Listing.self, from: data)
+    }
+
+    static func removeList(of box: String) {
+        write { try? FileManager.default.removeItem(at: sessionList(box)) }
     }
 }
