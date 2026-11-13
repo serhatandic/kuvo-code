@@ -10134,25 +10134,26 @@ async function askingNow(listed, signal) {
     return { id: questions[0].id, what: `Asks: ${questions[0].text}` };
   return null;
 }
-var blockMarks = /^\s*(?:#{1,6}(?=\s|$)|>|[-*+](?=\s)|\d{1,9}[.)](?=\s))\s*/;
-var unmarked = (line) => {
-  for (let was = "";was !== line; )
-    [was, line] = [line, line.replace(blockMarks, "")];
-  return line;
-};
-function oneLine2(text) {
-  const lines = text.split(`
-`).filter((line) => !/^\s*(?:`{3,}|~{3,})/.test(line) && !/^\s*(?:[-*_=]\s*)+$/.test(line));
-  return unmarked(lines.map(unmarked).join(" ").replace(/\s+/g, " ").trim());
+var blockMarks = /^(?:\s*(?:#{1,6}(?=\s|$)|>|[-*+](?=\s)|\d{1,9}[.)](?=\s)))+\s*/;
+function replyLine(text) {
+  return text.split(`
+`).map((line) => line.replace(blockMarks, "")).filter((line) => !/^\s*(?:`{3,}|~{3,})/.test(line) && !/^\s*(?:[-*_=]\s*)+$/.test(line)).join(" ").replace(/\s+/g, " ").trim();
 }
 function replyIn(messages) {
   for (const message of Array.isArray(messages) ? messages : []) {
     if (!isObject(message) || message.type !== "assistant" || !Array.isArray(message.content))
       continue;
-    const text = oneLine2(message.content.filter((part) => isObject(part) && part.type === "text").map((part) => String(part.text ?? "")).join(`
-`));
-    if (text)
-      return cut(text, 280);
+    const written = message.content.filter((part) => isObject(part) && part.type === "text").map((part) => String(part.text ?? "")).join(`
+`);
+    if (!written.trim())
+      continue;
+    const text = replyLine(written);
+    if (!text)
+      return null;
+    if (text.length <= 280)
+      return text;
+    const start = cut(text, 280);
+    return (start.match(/`/g)?.length ?? 0) % 2 ? start.slice(0, start.lastIndexOf("`")).trimEnd() + "…" : start;
   }
   return null;
 }
@@ -29379,7 +29380,7 @@ async function callOf(target, permission, signal) {
 var CHOICE_MOST = 2000;
 var RECOMMENDED = /\s*\(recommended\)\s*/i;
 var short2 = (words, most) => words.replace(/\s+/g, " ").trim().slice(0, most);
-var unmarked2 = (label) => short2(label.replace(RECOMMENDED, " "), 200);
+var unmarked = (label) => short2(label.replace(RECOMMENDED, " "), 200);
 function recommendationOf(form) {
   if (!isObject(form.metadata) || form.metadata.kind !== "question")
     return null;
@@ -29401,11 +29402,11 @@ function recommendationOf(form) {
     else
       return null;
     const why = marked.length === 1 && typeof marked[0].description === "string" ? short2(marked[0].description, 300) : "";
-    const labels = options.map((option) => unmarked2(option.label)).filter(Boolean);
+    const labels = options.map((option) => unmarked(option.label)).filter(Boolean);
     calls.push({
       key: field.key,
       text: short2(String(field.description || field.title || form.title || "A question"), 300),
-      choice: marked.map((option) => unmarked2(option.label)).join(", "),
+      choice: marked.map((option) => unmarked(option.label)).join(", "),
       ...why ? { why } : {},
       ...labels.length ? { options: labels } : {},
       ...multiple ? { multiple } : {}
@@ -40110,7 +40111,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "b2a4a2d45272";
+var BRIDGE_VERSION = "1a17b4ff2c8a";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

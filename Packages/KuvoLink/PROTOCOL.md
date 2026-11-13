@@ -3431,8 +3431,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   (the user, 11-10). Its sessions' news (`from` `Its sessions`) shows as a message from each
   session, in the design of a message from another agent, opening it: its text has one part per
   session, a blank line between them, each opening `[Session <kind>] "<title>" <place> (address
-  <session>)`, then for `finished` `, after <time>:` and the start of its reply on the line after,
-  its Markdown block marks (headings, quotes, list items, fences) taken off and inline Markdown kept
+  <session>)`, then for `finished` `, after <time>:` and the start of its reply (at most 280
+  characters, never cut inside code) on one line after it: block marks taken off each line's start
+  (headings, quotes, list items), fence, rule and underline lines left out, inline Markdown kept
   (boxes before #606 left a heading's marks at its start) (`(It ended without a reply.)` for none); for `failed`, `stopped: <why>.` or `stopped with an error[: <why>].`
   and words for the lead; for `asks`, `asks to <what> (ask <id>).` or `asks: <question> (ask <id>).`
   and words for the lead; for `stopped`, `was stopped by the user.` and words for the lead (show

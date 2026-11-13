@@ -41,6 +41,10 @@ test("a finish says the start of what the session said on one line, its block ma
     expect(await said("- ## Done\nok")).toBe("Done ok")
     expect(await said("#\nFoo bar")).toBe("Foo bar")
     expect(await said(">Note: all good\n\n---\n\n```ts\nconst a = 1\n```\nDone")).toBe("Note: all good const a = 1 Done")
+    expect(await said("> ~~~\n> x\n> ~~~\nDone")).toBe("x Done")
+    expect(await said("- ```bash\nnpm test\n```\n> ---\nok")).toBe("npm test ok")
+    // Cut short, not inside code.
+    expect(await said("Fixed " + "a".repeat(260) + " and `src/__tests__/b.ts`")).toBe("Fixed " + "a".repeat(260) + " and…")
     // Not marks: a number, an issue, a minus.
     expect(await said("#144 is merged\n-1 failing test left")).toBe("#144 is merged -1 failing test left")
   } finally {
