@@ -94,7 +94,7 @@ THE SOFTWARE.
 
 Mermaid 12.3.0
 https://github.com/mermaid-js/mermaid
-KuvoCode/Resources/mermaid.min.js, unchanged, as published on npm; the libraries it bundles are under their own licenses, MIT or similar.
+The upstream npm bundle is kept unchanged at KuvoCode/Resources/mermaid.min.js. Its bundled dependencies carry their own MIT or similar licenses.
 
 The MIT License (MIT)
 
