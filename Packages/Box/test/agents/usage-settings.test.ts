@@ -264,7 +264,7 @@ describe("across your own computers", () => {
     // Two changes to one part at the same moment, each box not yet told the other's: one wins, the same on all.
     at += MINUTE
     relay.off.add("mac-key")
-    await mac.route("PUT", [], { totalSpend: { show: true, period: "month" } })
+    await mac.route("PUT", [], { totalSpend: { show: true, period: "Last 30 Days" } })
     await dev.route("PUT", [], { totalSpend: { show: false } })
     relay.off.delete("mac-key")
     await relay.settled()
@@ -275,7 +275,7 @@ describe("across your own computers", () => {
     const held = await Promise.all([mac, dev, pi].map(async (box) => (await box.read()).settings.totalSpend))
     expect(new Set(held.map((each) => JSON.stringify(each))).size).toBe(1)
     // (At the same version, the box whose key sorts last.)
-    expect(held[0]).toEqual({ show: true, period: "month" })
+    expect(held[0]).toEqual({ show: true, period: "Last 30 Days" })
   })
 
   test("a box that was off catches up once it says what it holds; settings came from another computer stay through its restart", async () => {

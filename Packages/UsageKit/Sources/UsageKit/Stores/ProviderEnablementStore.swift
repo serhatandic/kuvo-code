@@ -23,8 +23,8 @@ import Observation
 @Observable
 final class ProviderEnablementStore {
     private static let disabledStorageKey = "openusage.disabledProviders.v1"
-    private static let enabledStorageKey = "openusage.enabledProviders.v1"
-    private static let knownStorageKey = "openusage.knownProviders.v1"
+    static let enabledStorageKey = "openusage.enabledProviders.v1"
+    static let knownStorageKey = "openusage.knownProviders.v1"
 
     /// Posted when the enabled-provider set actually changes. The refresh loop listens for this to wake
     /// early and fetch a newly-enabled provider promptly, instead of waiting out the full interval —
@@ -96,10 +96,20 @@ final class ProviderEnablementStore {
         NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
     }
 
-    /// Switches the store into enabled-list mode with exactly `ids` on. Used by `FirstRunSeeder`: a
-    /// fresh install starts with none on, and Reset All snaps to the fallback set, then the detected
-    /// set. Fires `onProviderEnabled` for each newly-on provider and posts the change notification, so
-    /// the refresh loop fetches them promptly.
+    /// Takes the stored sets again (fork addition): the host put your other computers' choice there
+    /// (`HostSettings`). Newly-on providers are fetched promptly, as after a toggle.
+    func reload() {
+        knownIDs = Set(defaults.stringArray(forKey: Self.knownStorageKey) ?? [])
+        guard let enabled = defaults.stringArray(forKey: Self.enabledStorageKey).map(Set.init) else { return }
+        let before = enabledIDs
+        guard enabled != before else { return }
+        enabledIDs = enabled
+        disabledIDs = []
+        for id in enabled.subtracting(before ?? []).sorted() { onProviderEnabled?(id) }
+        onChange?()
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+    }
+
     /// Records `ids` as seen and returns the ones that were new. Pure bookkeeping: no enablement
     /// change, no notification — `NewProviderSeeder` decides separately what to do with the new ones.
     @discardableResult

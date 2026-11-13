@@ -107,6 +107,8 @@ final class LayoutStore {
     private let defaultMetricIDs: [String]
     private let defaultPinnedMetricIDs: [String]
     private let defaultExpandedMetricIDs: [String]
+    /// The defaults startup worked from, for taking the stored layout again (`reloadShared`).
+    private let defaultSet: LayoutDefaultSet
     var defaultExpandedOnEnableIDs: Set<String>
     let isProviderEnabled: @MainActor (String) -> Bool
     /// Fork addition: whether a turned-on provider has something to show here (a login). The
@@ -132,16 +134,14 @@ final class LayoutStore {
         self.defaultExpandedMetricIDs = defaultExpandedMetricIDs
         self.isProviderEnabled = isProviderEnabled
 
-        let initial = LayoutBootstrap.load(
-            registry: registry,
-            persistence: persistence,
-            defaults: LayoutDefaultSet(
-                metricIDs: defaultMetricIDs,
-                migrationBaselineMetricIDs: migrationBaselineMetricIDs,
-                pinnedMetricIDs: defaultPinnedMetricIDs,
-                expandedMetricIDs: defaultExpandedMetricIDs
-            )
+        let defaultSet = LayoutDefaultSet(
+            metricIDs: defaultMetricIDs,
+            migrationBaselineMetricIDs: migrationBaselineMetricIDs,
+            pinnedMetricIDs: defaultPinnedMetricIDs,
+            expandedMetricIDs: defaultExpandedMetricIDs
         )
+        self.defaultSet = defaultSet
+        let initial = LayoutBootstrap.load(registry: registry, persistence: persistence, defaults: defaultSet)
         placed = initial.placed
         providerOrder = initial.providerOrder
         metricOrderByProvider = initial.metricOrderByProvider
@@ -155,6 +155,40 @@ final class LayoutStore {
         if initial.shouldPersistExpanded { persistExpanded() }
         if let seededDefaults = initial.seededDefaultsToPersist { persistSeededDefaults(seededDefaults) }
         syncPlacedOrder(persistChanges: initial.shouldPersistPlaced)
+    }
+
+    /// Takes the stored layout again (fork addition): the host put the one your computers share
+    /// there (`HostSettings`), checked against this Mac's providers as at startup. How each card is
+    /// opened and the menu bar's style stay this Mac's. Undo starts again: its steps were of the
+    /// layout before.
+    func reloadShared() {
+        cancelDrag()
+        undoHistory.clear()
+        let initial = LayoutBootstrap.load(registry: registry, persistence: persistence, defaults: defaultSet)
+        placed = initial.placed
+        providerOrder = initial.providerOrder
+        metricOrderByProvider = initial.metricOrderByProvider
+        pinnedMetricIDs = initial.pinnedMetricIDs
+        expandedMetricIDs = initial.expandedMetricIDs
+        defaultExpandedOnEnableIDs = initial.defaultExpandedOnEnableIDs
+        if initial.shouldPersistExpandOnEnable { persistExpandOnEnable() }
+        if initial.shouldPersistExpanded { persistExpanded() }
+        if let seededDefaults = initial.seededDefaultsToPersist { persistSeededDefaults(seededDefaults) }
+        syncPlacedOrder(persistChanges: initial.shouldPersistPlaced)
+    }
+
+    /// The layout your computers share, as the panel shows it now (fork addition, `HostSettings`):
+    /// a fresh panel's too, which keeps its meters only once they change.
+    func sharedLayout() -> [String: Any] {
+        [
+            "placed": placed.map(\.descriptorID),
+            "providerOrder": providerOrder,
+            "metricOrder": metricOrderByProvider,
+            "pinned": Array(pinnedMetricIDs),
+            "expanded": Array(expandedMetricIDs),
+            "expandOnEnable": Array(defaultExpandedOnEnableIDs),
+            "seeded": persistence.loadSeededDefaults() ?? [],
+        ]
     }
 
     func isProviderExpanded(_ providerID: String) -> Bool {

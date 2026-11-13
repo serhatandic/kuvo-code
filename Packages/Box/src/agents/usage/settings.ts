@@ -102,7 +102,7 @@ const ids = (value: unknown): string[] | null => {
   return out
 }
 
-const word = (value: unknown): string | undefined => (typeof value === "string" && /^[A-Za-z0-9._-]{1,40}$/.test(value) ? value : undefined)
+const word = (value: unknown): string | undefined => (typeof value === "string" && /^[^\u0000-\u001f]{1,40}$/.test(value) ? value : undefined)
 
 /** A part's value, checked and cleaned; undefined for one that isn't that part. */
 export function checked(unit: SettingsUnit, value: unknown): unknown {
