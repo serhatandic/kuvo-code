@@ -27,8 +27,9 @@ import {
 } from "./store";
 import { mailsFor } from "./parts";
 import { LOST_FOR, numberWaiting, primaryOf } from "./numbers";
-import { nameOf } from "./view";
-import { itemElsewhere } from "./across";
+import { nameOf, titlesHere } from "./view";
+import { itemElsewhere, itemsElsewhere, type ItemElsewhere } from "./across";
+import { sameSource } from "./sources";
 import type { PeerPlaces } from "../engine/client";
 import type { MailSender, Peer } from "../peers/known";
 import type { LinkHost } from "../relay/host";
@@ -168,11 +169,30 @@ export function callOffHanding(item: Item, who: Who, now: number): void {
   sent.delete(id);
 }
 
+/** The other item, not deleted, that's the same issue or pull request as `item`: here (among
+ * `items`), or as another of your computers told it. One item for each issue. */
+export function twinOf(item: Pick<Item, "id" | "source">, items: Item[] = allItems()): Item | ItemElsewhere | null {
+  const source = item.source;
+  if (!source) return null;
+  const isIt = (each: Pick<Item, "id" | "source" | "removed">) => each.id !== item.id && !each.removed && Boolean(each.source) && sameSource(each.source!, source);
+  return items.find(isIt) ?? itemsElsewhere("all").items.find(isIt) ?? null;
+}
+
+/** Where that other item is, in words: on another computer, or in a conversation's queue here,
+ * by its title for you (`titled`, `titlesHere`), else by its address, as agents name it. */
+export const twinWhere = (twin: Item | ItemElsewhere, titled?: (owner: string) => string | undefined): string => {
+  if ("computer" in twin) return `on ${twin.computer.name}`;
+  const title = titled?.(twin.owner);
+  return `in the queue of ${title ? `"${title}"` : twin.owner}`;
+};
+
 /** A deleted item isn't brought back while another of your computers has it (a hand-off called off
- * after it had got there): two would live. */
-export function refuseLiveElsewhere(item: Item): void {
+ * after it had got there), nor while another item is its issue: two would live. */
+export function refuseLiveElsewhere(item: Item, items?: Item[], titled?: (owner: string) => string | undefined): void {
   const far = itemElsewhere({ id: item.id });
   if (far && !far.handing) refuse(`${nameOf(item)} is on ${far.computer.name} now (it got there before its hand-off was called off): change it there.`);
+  const twin = twinOf(item, items);
+  if (twin) refuse(`Another item is ${item.source!.ref} now, ${twinWhere(twin, titled)}: one item for each issue, so this one stays deleted.`);
 }
 
 /** Hand-offs that won't go, back as they were, each with a note of why. */
@@ -262,6 +282,8 @@ export async function handArrived(sender: MailSender, given: unknown, reply: (pa
   const kept = whoOf(given.by) ?? { name: "someone else" };
   const by: Who = typeof (kept as { name?: unknown }).name === "string" ? { ...kept, name: plainName((kept as { name: string }).name).slice(0, 100) } as Who : kept;
   let refused: string | null = null;
+  // (The item here that's its issue already: said by its conversation's title, looked up after.)
+  let twinHere: Item | null = null;
   let again = false;
   const primary = primaryOf();
   changeQueues((book: Book) => {
@@ -279,6 +301,12 @@ export async function handArrived(sender: MailSender, given: unknown, reply: (pa
       here = null;
     }
     if (here) return;
+    // (An issue another item here is already: one item for each issue.)
+    const twin = item.source ? book.items().find(each => !each.removed && each.source && sameSource(each.source, item.source!)) : undefined;
+    if (twin) {
+      twinHere = twin;
+      return;
+    }
     if (book.queue(owner).items.filter(each => !each.removed && each.category !== "done").length >= MOST_ITEMS) {
       refused = `That queue has ${MOST_ITEMS} open items already.`;
       return;
@@ -300,6 +328,10 @@ export async function handArrived(sender: MailSender, given: unknown, reply: (pa
     if (item.number === undefined) numberWaiting(book, primary, null);
   }, now, { onItsOwn: true });
   if (again) return answer(false, `${HERE} is still handing that item on: it comes again once that's done.`, true);
+  if (twinHere) {
+    const twin: Item = twinHere;
+    return answer(false, `${twin.source!.ref} is in the Work Queue there already, ${twinWhere(twin, await titlesHere([twin.owner], targets))}: one item for each issue`);
+  }
   if (refused) return answer(false, refused);
   seenHand(id, now, true);
   answer(true);

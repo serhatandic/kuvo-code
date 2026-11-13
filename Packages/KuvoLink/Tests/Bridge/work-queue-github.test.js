@@ -31,6 +31,10 @@ fs.mkdirSync(bin);
 const asked = path.join(home, "gh-asked");
 const answer = path.join(home, "gh-answer.json");
 const fail = path.join(home, "gh-fail");
+// (What it answers a query by GitHub's id instead, while `gh-answer-id.json` is there.)
+const answerByID = path.join(home, "gh-answer-id.json");
+// (And while `gh-fail-id` is there, a query by GitHub's id fails: no network just then, say.)
+const failByID = path.join(home, "gh-fail-id");
 // (While `gh-hold` is there, it doesn't answer: GitHub slow to.)
 const hold = path.join(home, "gh-hold");
 fs.writeFileSync(path.join(bin, "gh"), `#!/bin/sh
@@ -39,6 +43,7 @@ printf '%s\\n' "$last" | tr '\\n' ' ' >> '${asked}'
 echo >> '${asked}'
 while [ -f '${hold}' ]; do sleep 0.05; done
 if [ -f '${fail}' ]; then cat '${fail}' >&2; exit 1; fi
+case "$last" in *"node(id:"*) if [ -f '${failByID}' ]; then echo 'error connecting to api.github.com' >&2; exit 1; fi; if [ -f '${answerByID}' ]; then cat '${answerByID}'; exit 0; fi ;; esac
 cat '${answer}'
 `, { mode: 0o755 });
 process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`;
@@ -99,6 +104,8 @@ beforeEach(() => {
   fs.rmSync(queues, { recursive: true, force: true });
   fs.rmSync(asked, { force: true });
   fs.rmSync(fail, { force: true });
+  fs.rmSync(answerByID, { force: true });
+  fs.rmSync(failByID, { force: true });
   calling.clear();
 });
 
@@ -172,7 +179,7 @@ test("GitHub's word on screen: read again only once it's due, closed is Done (it
   ageReads();
   let [item] = (await view()).items;
   assert.equal(queries().length, 2);
-  assert.deepEqual([item.category, item.keptIn, item.seen.state, item.title], ["done", "later", "completed", "Upload retries drop the name"]);
+  assert.deepEqual([item.category, item.keptIn, item.seen.state, item.title, item.doneAs], ["done", "later", "completed", "Upload retries drop the name", "Closed on GitHub"]);
   assert.equal(item.doneAt, Date.parse("2026-11-10T09:00:00Z"));
   assert.deepEqual(kept(), before, "the queue file is as it was: GitHub's word is kept beside it");
 
@@ -190,7 +197,7 @@ test("GitHub's word on screen: read again only once it's due, closed is Done (it
   github(issue(12, { title: "Upload retries drop the name" }));
   [item] = (await view()).items;
   assert.equal(queries().length, 3);
-  assert.deepEqual([item.category, item.keptIn, item.seen.state, item.doneAt], ["later", undefined, "open", undefined]);
+  assert.deepEqual([item.category, item.keptIn, item.seen.state, item.doneAt, item.doneAs], ["later", undefined, "open", undefined, undefined]);
   const intoDone = await route("POST", `kuvo/work-queue/items/${item.id}/move`, { category: "done" });
   assert.equal(intoDone.status, 400, "nor you, into Done");
   const done = await tool("queue_update", { item: "gh:kuvo-test/app#12", category: "done" });
@@ -237,11 +244,11 @@ test("a pull request is an item too: Done once it's merged, or closed unmerged",
   github(pull(57, { state: "MERGED", merged: true }));
   ageReads();
   [item] = (await view()).items;
-  assert.deepEqual([item.seen.state, item.category], ["merged", "done"]);
+  assert.deepEqual([item.seen.state, item.category, item.doneAs, item.struck], ["merged", "done", "Merged on GitHub", undefined]);
   github(pull(57, { state: "CLOSED" }));
   ageReads();
   [item] = (await view()).items;
-  assert.deepEqual([item.seen.state, item.category], ["closed", "done"]);
+  assert.deepEqual([item.seen.state, item.category, item.doneAs, item.struck], ["closed", "done", "Closed on GitHub", true]);
 });
 
 test("what gh can't read is said in words, and nothing is added; one gone later keeps what was last read", async () => {
@@ -257,17 +264,35 @@ test("what gh can't read is said in words, and nothing is added; one gone later 
   fs.rmSync(asked);
   github(issue(12));
   await tool("queue_add", { issue: "gh:kuvo-test/app#12" });
-  // No longer visible (a token's access taken away, or the issue deleted): shown as last read.
+  // No longer visible (a token's access taken away, or the issue deleted): shown as last read, gone:
+  // Done, struck through, said so; back in its place once GitHub shows it again.
   github(null);
   ageReads();
-  const [item] = (await view()).items;
-  assert.deepEqual([item.title, item.seen.state, item.seen.gone, item.category], ["Upload retries drop the file name", "open", true, "next"]);
+  let [item] = (await view()).items;
+  assert.deepEqual([item.title, item.seen.state, item.seen.gone, item.category, item.keptIn, item.struck, item.doneAs], ["Upload retries drop the file name", "open", true, "done", "next", true, "Gone from GitHub"]);
+  const goneAt = item.seen.at;
+  assert.ok(Date.now() - goneAt < 10_000, "since when it's been gone");
+  assert.equal(item.doneAt, goneAt);
+  const moved = await route("POST", `kuvo/work-queue/items/${item.id}/move`, { category: "later" });
+  assert.deepEqual([moved.status, moved.body.message], [400, 'gh:kuvo-test/app#12 "Upload retries drop the file name" is gone from GitHub (or gh here can no longer see it), so it\'s Done: it\'s back in its place once GitHub shows it again.']);
+  assert.match((await tool("queue_list", { done: true })).text, /- gh:kuvo-test\/app#12 "Upload retries drop the file name" · gone from GitHub/);
+  assert.match((await tool("queue_show", { item: "gh:kuvo-test/app#12" })).text, /\nOn GitHub: gone, or no longer visible to gh here, since .* \(open before\)/);
+  // Found gone again: still since then.
+  ageReads();
+  [item] = (await view()).items;
+  assert.equal(item.seen.at, goneAt - 3_600_000);
+  // (Read by GitHub's id now, wherever it went: GitHub answers the node itself.)
+  fs.writeFileSync(answer, JSON.stringify({ data: { p0: issue(12) } }));
+  ageReads();
+  [item] = (await view()).items;
+  assert.match(queries().at(-1), /p0: node\(id: "I_kw12"\)/);
+  assert.deepEqual([item.seen.gone, item.category, item.keptIn, item.struck, item.doneAs], [undefined, "next", undefined, undefined, undefined]);
   // Signed out since: not asked again for a while.
   fs.writeFileSync(fail, "gh auth login\n");
   ageReads();
   await view();
   await view();
-  assert.equal(queries().length, 3, "added, found gone, then signed out: held off since");
+  assert.equal(queries().length, 6, "added, found gone (asked by its id too), gone again, back, then signed out: held off since");
 });
 
 test("an issue's own description is GitHub's: fenced off for agents as outside text, its bare #n that repository's", async () => {
@@ -323,3 +348,143 @@ test("a request answered once (a machine's, from the Mac) never waits on GitHub:
   assert.equal((await view()).items[0].category, "done");
 });
 
+
+test("a glance at a queue (a count, as the phone's ••• shows it) never reads GitHub: what was last read is what it says", async () => {
+  github(issue(12));
+  await tool("queue_add", { issue: "gh:kuvo-test/app#12" });
+  github(issue(12, { state: "CLOSED", stateReason: "COMPLETED" }));
+  ageReads();
+  const glanced = (await route("GET", "kuvo/work-queue?owner=ses_lead&glance=1")).body;
+  assert.equal(glanced.items[0].category, "next", "as last read");
+  assert.equal(queries().length, 1, "only as it was added");
+  // Followed for a glance: lines as the queue changes, GitHub never asked.
+  const controller = new AbortController();
+  const lines = [];
+  const following = (async () => {
+    for await (const piece of handle({ method: "GET", path: "kuvo/work-queue/events?owner=ses_lead&glance=1", headers: {}, fromApp: true }, undefined, controller.signal)) if (piece.body) lines.push(JSON.parse(piece.body.toString()));
+  })();
+  const deadline = Date.now() + 5_000;
+  while (!lines.length) {
+    assert.ok(Date.now() < deadline, "no line");
+    await new Promise(done => setTimeout(done, 20));
+  }
+  await tool("queue_update", { item: "gh:kuvo-test/app#12", progress_note: "Looking" });
+  while (lines.length < 2) {
+    assert.ok(Date.now() < deadline, "no line for the change");
+    await new Promise(done => setTimeout(done, 20));
+  }
+  controller.abort();
+  await following;
+  assert.equal(lines.at(-1).items[0].progress.note, "Looking");
+  assert.equal(queries().length, 1, "never read for a glance");
+  // A panel's view reads it.
+  assert.equal((await view()).items[0].category, "done");
+  assert.equal(queries().length, 2);
+});
+
+test("only what GitHub didn't find is gone: one it wouldn't answer for (an organization's SAML sign-on, an IP allow list) stays as it was, and one moved is found by its id in the same read", async () => {
+  github(issue(12));
+  await tool("queue_add", { issue: "gh:kuvo-test/app#12" });
+  github(issue(14));
+  await tool("queue_add", { issue: "gh:kuvo-test/app#14" });
+  fs.rmSync(asked);
+  // #12 behind SSO this time; #14 moved to another repository (GitHub's id stays).
+  fs.writeFileSync(answer, JSON.stringify({ data: { p0: null, p1: { issueOrPullRequest: null } }, errors: [{ type: "FORBIDDEN", path: ["p0"], message: "Resource protected by organization SAML enforcement." }, { type: "NOT_FOUND", path: ["p1", "issueOrPullRequest"], message: "Could not resolve." }] }));
+  fs.writeFileSync(answerByID, JSON.stringify({ data: { p0: { ...issue(14), url: "https://github.com/kuvo-test/moved/issues/3", number: 3 } } }));
+  ageReads();
+  const items = (await view()).items;
+  const [sso, moved] = ["gh:kuvo-test/app#12", "gh:kuvo-test/app#14"].map(ref => items.find(item => item.source.ref === ref));
+  assert.deepEqual([sso.category, sso.seen.state, sso.seen.gone, sso.struck], ["next", "open", undefined, undefined], "not gone: GitHub wouldn't say");
+  assert.deepEqual([moved.category, moved.seen.gone, moved.source.url, moved.source.name], ["next", undefined, "https://github.com/kuvo-test/moved/issues/3", "app#14"]);
+  assert.equal(queries().length, 2, "the two, then the moved one by its id");
+  assert.match(queries()[1], /p0: node\(id: "I_kw14"\)/);
+  // (#12 asked now: not again at once.)
+  await view();
+  assert.equal(queries().length, 2);
+});
+
+test("an answer that doesn't say an issue isn't there leaves it as it was: a null with no word why, or an error that names none (GitHub timing out)", async () => {
+  github(issue(12));
+  await tool("queue_add", { issue: "gh:kuvo-test/app#12" });
+  github(issue(14));
+  await tool("queue_add", { issue: "gh:kuvo-test/app#14" });
+  const asIt = ref => (items => items.find(item => item.source.ref === ref));
+  // GitHub's own trouble: an error naming nothing, with what it could answer.
+  fs.writeFileSync(answer, JSON.stringify({ data: { p0: null, p1: { issueOrPullRequest: null } }, errors: [{ message: "Something went wrong while executing your query. This may be the result of a timeout." }] }));
+  ageReads();
+  let items = (await view()).items;
+  for (const ref of ["gh:kuvo-test/app#12", "gh:kuvo-test/app#14"]) {
+    const item = asIt(ref)(items);
+    assert.deepEqual([item.category, item.seen.state, item.seen.gone, item.struck], ["next", "open", undefined, undefined], `${ref}: GitHub didn't say it's gone`);
+  }
+  // A null with no word why beside one read: that one as read, the other as it was.
+  fs.writeFileSync(answer, JSON.stringify({ data: { p0: null, p1: { issueOrPullRequest: issue(14, { title: "Retries keep the name" }) } } }));
+  ageReads();
+  items = (await view()).items;
+  assert.deepEqual([asIt("gh:kuvo-test/app#12")(items).seen.gone, asIt("gh:kuvo-test/app#12")(items).category], [undefined, "next"]);
+  assert.equal(asIt("gh:kuvo-test/app#14")(items).title, "Retries keep the name");
+});
+
+test("an issue GitHub wouldn't answer for isn't said to be missing as an agent adds it: GitHub's own words say why", async () => {
+  fs.writeFileSync(answer, JSON.stringify({ data: { p0: null }, errors: [{ type: "FORBIDDEN", path: ["p0"], message: "Resource protected by organization SAML enforcement. You must grant your OAuth token access to this organization." }] }));
+  const added = await tool("queue_add", { issue: "gh:kuvo-test/app#20" });
+  assert.equal(added.isError, true);
+  assert.match(added.text, /^GitHub wouldn't answer for gh:kuvo-test\/app#20 to gh on .*: Resource protected by organization SAML enforcement\./);
+});
+
+test("a deleted item doesn't stand for its issue while another item is that issue: its ref names the live one", async () => {
+  github(issue(12));
+  await tool("queue_add", { issue: "gh:kuvo-test/app#12" });
+  await tool("queue_remove", { item: "gh:kuvo-test/app#12" });
+  // Another item for it comes (handed here from another computer, say): written beside it.
+  const file = path.join(queues, "queues", "ses_other.json");
+  const whole = JSON.parse(fs.readFileSync(path.join(queues, "queues", "ses_lead.json"), "utf8"));
+  const { removed: _, ...live } = whole.items[0];
+  fs.writeFileSync(file, JSON.stringify({ ...whole, owner: "ses_other", items: [{ ...live, id: "wqi_livesameissue0000012", owner: "ses_other", order: 9 }] }));
+  const refs = (await route("POST", "kuvo/work-queue/refs", { refs: ["gh:kuvo-test/app#12"] })).body.refs;
+  assert.equal(refs["gh:kuvo-test/app#12"].id, "wqi_livesameissue0000012");
+  assert.equal(refs["gh:kuvo-test/app#12"].removed, undefined);
+});
+
+test("one missing where it was isn't gone until GitHub says so by its id too: asked by its id and not answered, it stays as it was, and the host is held off", async () => {
+  github(issue(14));
+  await tool("queue_add", { issue: "gh:kuvo-test/app#14" });
+  fs.rmSync(asked);
+  fs.writeFileSync(answer, JSON.stringify({ data: { p0: { issueOrPullRequest: null } }, errors: [{ type: "NOT_FOUND", path: ["p0", "issueOrPullRequest"], message: "Could not resolve." }] }));
+  fs.writeFileSync(failByID, "");
+  ageReads();
+  let [item] = (await view()).items;
+  assert.deepEqual([item.category, item.seen.gone, item.struck, item.doneAs], ["next", undefined, undefined, undefined], "no word from GitHub: not gone");
+  assert.equal(queries().length, 2, "where it was, then by its id");
+  [item] = (await view()).items;
+  assert.equal(queries().length, 2, "held off since, as for any read gh couldn't make");
+});
+
+test("one GitHub wouldn't answer for is asked again only once it's due, however often it's shown: never read here before, or asked by its id", async () => {
+  const forbidden = { type: "FORBIDDEN", path: ["p0"], message: "Resource protected by organization SAML enforcement." };
+  // Never read here (its read let go): GitHub won't answer for it.
+  github(issue(12));
+  await tool("queue_add", { issue: "gh:kuvo-test/app#12" });
+  fs.writeFileSync(seenFile, JSON.stringify({ reads: {}, hosts: {} }));
+  fs.rmSync(asked);
+  fs.writeFileSync(answer, JSON.stringify({ data: { p0: null }, errors: [forbidden] }));
+  await view();
+  await view();
+  await view();
+  assert.equal(queries().length, 1, "asked once: not again on each look");
+
+  // Missing where it was, and GitHub won't answer for it by its id either.
+  fs.rmSync(path.join(queues, "queues"), { recursive: true, force: true });
+  fs.rmSync(seenFile, { force: true });
+  github(issue(14));
+  await tool("queue_add", { issue: "gh:kuvo-test/app#14" });
+  fs.rmSync(asked);
+  fs.writeFileSync(answer, JSON.stringify({ data: { p0: { issueOrPullRequest: null } }, errors: [{ type: "NOT_FOUND", path: ["p0", "issueOrPullRequest"], message: "Could not resolve." }] }));
+  fs.writeFileSync(answerByID, JSON.stringify({ data: { p0: null }, errors: [forbidden] }));
+  ageReads();
+  const [item] = (await view()).items;
+  await view();
+  await view();
+  assert.equal(queries().length, 2, "where it was, then by its id: not again on each look");
+  assert.deepEqual([item.category, item.seen.gone], ["next", undefined]);
+});

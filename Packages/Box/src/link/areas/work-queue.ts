@@ -15,13 +15,13 @@ import { importItems, importWords, parseBacklog, readBacklogFiles } from "../wor
 import { numberWaiting, primaryOf } from "../work-queue/numbers";
 import { itemElsewhere, itemsElsewhere, tellQueuesAgain } from "../work-queue/across";
 import { changeItem, Refusal, refuseHanding, refuseMoving, removeItem, restoreItem } from "../work-queue/ops";
-import { callOffHanding, refuseLiveElsewhere } from "../work-queue/hand";
+import { callOffHanding, refuseLiveElsewhere, twinOf } from "../work-queue/hand";
 import { TOLD } from "../work-queue/told";
 import { readLink } from "../state";
 import { allItems, changeQueues, FILE_NAME, filesOf, matching, OWNER, queueFollowers, readAll, WORK_QUEUE, type Item } from "../work-queue/store";
 import { readSeen, SEEN_FILE } from "../work-queue/github";
 import { callQueueTool, QUEUE_INSTRUCTIONS, QUEUE_TOOLS } from "../work-queue/tools";
-import { factsOf, inView, linkedTo, nameOf, overseenBy, ownersOf, refOf, summaryOf, wholeOf, type Facts, type ItemSummary } from "../work-queue/view";
+import { factsOf, inView, linkedTo, nameOf, overseenBy, ownersOf, refOf, summaryOf, titlesHere, wholeOf, type Facts, type ItemSummary } from "../work-queue/view";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import type { Target } from "../../shared/records";
 
@@ -51,8 +51,8 @@ const GITHUB_WAIT = 3_000;
  * or handed on (summaries), those linked to it that are someone else's (what it's working on: seen
  * here, changed only by their owner's side), whose each is, and what's deleted among them. `all` is
  * every item on the box, whoever's it is. Its issues and pull requests are read from GitHub where
- * that's due, waiting `wait` ms at most. */
-export async function viewOf(owner: string, targets: Target[], facts?: Facts, signal?: AbortSignal, cache?: Map<string, unknown>, wait = GITHUB_WAIT) {
+ * that's due, waiting `wait` ms at most (null: not read, as last read). */
+export async function viewOf(owner: string, targets: Target[], facts?: Facts, signal?: AbortSignal, cache?: Map<string, unknown>, wait: number | null = GITHUB_WAIT) {
   const known = facts ?? await factsOf(targets, signal);
   const overseen = owner === ALL ? new Set<string>() : overseenBy(owner, known.all);
   const here = allItems();
@@ -60,7 +60,7 @@ export async function viewOf(owner: string, targets: Target[], facts?: Facts, si
   const all = here.filter(item => owner === ALL || inView(owner, item, overseen) || linkedTo(owner, item));
   // (What's shown, here or told by another computer: GitHub is read for it, only now.)
   // (Another computer's as it told them: when it last asked GitHub decides whether this box does.)
-  await readSeen([...all, ...itemsElsewhere(owner, readLink(), undefined, undefined, { asTold: true, linked: true }).items], wait);
+  if (wait !== null) await readSeen([...all, ...itemsElsewhere(owner, readLink(), undefined, undefined, { asTold: true, linked: true }).items], wait);
   const { owners, titles } = await ownersOf(owner, all, known, targets, cache);
   // Your other computers' items in this view, as each last told them (one deleted here that's live
   // there, a hand-off called off that had got there, is theirs).
@@ -141,15 +141,17 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
     const facts = await factsOf(targets, signal ?? undefined);
     const found = wanted.map(ref => {
       const named = refOf(ref);
-      const item = named ? matching(items, named)[0] : undefined;
-      // One on another of your computers, as it last told it.
-      return { ref, item, far: !item && named ? itemElsewhere(named, readLink(), { asTold: true }) : null };
+      const here = named ? matching(items, named)[0] : undefined;
+      // One on another of your computers, as it last told it: before one deleted here.
+      const far = (!here || here.removed) && named ? itemElsewhere(named, readLink(), { asTold: true }) : null;
+      return { ref, item: far ? undefined : here, far, here };
     });
     // (Their issues and pull requests read from GitHub where that's due: the chips are on screen.)
     await readSeen(found.flatMap(each => [each.item ?? each.far].filter(Boolean) as { source?: Item["source"] }[]), GITHUB_WAIT);
     const refs: Record<string, unknown> = {};
-    for (const { ref, item, far } of found) {
+    for (const { ref, far, here } of found) {
       const again = far ? itemElsewhere({ id: far.id }) : null;
+      const item = again ? undefined : here;
       refs[ref] = item ? refFacts(summaryOf(item, facts.working, new Map())) : again ? { ...refFacts(again), computer: again.computer } : null;
     }
     return yield* json(200, { refs });
@@ -198,9 +200,11 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
     if (method !== "GET") return yield* json(405, {});
     const owner = queryOf(request).get("owner") ?? "";
     if (!OWNER.test(owner) && owner !== ALL) return yield* json(400, { message: "Say whose queue (owner): a conversation's address, a group chat's id, or all." });
-    if (part === undefined) return yield* json(200, await viewOf(owner, targets, undefined, signal ?? undefined));
+    // (A glance at it, a count say, as the phone's ••• shows: GitHub isn't read for it.)
+    const glance = queryOf(request).get("glance") === "1";
+    if (part === undefined) return yield* json(200, await viewOf(owner, targets, undefined, signal ?? undefined, undefined, glance ? null : GITHUB_WAIT));
     yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
-    return yield* followView(owner, targets, signal ?? undefined);
+    return yield* followView(owner, targets, signal ?? undefined, glance);
   }
 
   // One item.
@@ -266,9 +270,14 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
     }, { handing: true }), json);
   }
   if (action === "restore" && method === "POST") {
+    // (Another item here its issue: named by its conversation's title, as you know it, looked up
+    // only then.)
+    const deleted = find(allItems());
+    const twin = deleted?.removed ? twinOf(deleted) : null;
+    const titled = twin && !("computer" in twin) ? await titlesHere([twin.owner], targets) : undefined;
     return yield* changed(inBook((item, book) => {
       if (!item.removed) throw new Refusal("It isn't deleted.");
-      refuseLiveElsewhere(item);
+      refuseLiveElsewhere(item, book.items(), titled);
       restoreItem(book, item, YOU, now);
     }), json);
   }
@@ -287,7 +296,7 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
 // An owner's view, a line now and one each time it changes: a change to the queues (here, or by
 // another process: its files), or a session linked to one of its items starting or stopping work
 // (looked at every few seconds).
-async function* followView(owner: string, targets: Target[], signal?: AbortSignal): AsyncGenerator<AnswerPiece> {
+async function* followView(owner: string, targets: Target[], signal?: AbortSignal, glance = false): AsyncGenerator<AnswerPiece> {
   let wake: (() => void) | null = null;
   let dirty = true;
   const told = () => {
@@ -325,7 +334,7 @@ async function* followView(owner: string, targets: Target[], signal?: AbortSigna
       }
       dirty = false;
       // (GitHub isn't waited for: what it says comes as a line of its own once it's read.)
-      const line = JSON.stringify(await viewOf(owner, targets, facts, signal, titles, 0));
+      const line = JSON.stringify(await viewOf(owner, targets, facts, signal, titles, glance ? null : 0));
       if (line !== last) {
         yield { body: Buffer.from(line + "\n") };
         last = line;

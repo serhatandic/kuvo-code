@@ -3215,6 +3215,9 @@
             "literal": "queue"
            },
            {
+            "literal": "queue.once"
+           },
+           {
             "literal": "queue.waits"
            },
            {
@@ -3590,6 +3593,9 @@
            },
            {
             "literal": "queue"
+           },
+           {
+            "literal": "queue.once"
            },
            {
             "literal": "queue.waits"
@@ -10917,6 +10923,7 @@
          "keptIn?": "string",
          "struck?": "bool",
          "closesOn?": "string",
+         "doneAs?": "string",
          "handing?": {
           "object": {
            "to": "string",
@@ -11121,6 +11128,7 @@
          "keptIn?": "string",
          "struck?": "bool",
          "closesOn?": "string",
+         "doneAs?": "string",
          "handing?": {
           "object": {
            "to": "string",
@@ -11332,6 +11340,7 @@
          "keptIn?": "string",
          "struck?": "bool",
          "closesOn?": "string",
+         "doneAs?": "string",
          "handing?": {
           "object": {
            "to": "string",
@@ -11536,6 +11545,7 @@
          "keptIn?": "string",
          "struck?": "bool",
          "closesOn?": "string",
+         "doneAs?": "string",
          "handing?": {
           "object": {
            "to": "string",
@@ -11942,6 +11952,7 @@
         "keptIn?": "string",
         "struck?": "bool",
         "closesOn?": "string",
+        "doneAs?": "string",
         "handing?": {
          "object": {
           "to": "string",
@@ -12211,6 +12222,7 @@
         "keptIn?": "string",
         "struck?": "bool",
         "closesOn?": "string",
+        "doneAs?": "string",
         "handing?": {
          "object": {
           "to": "string",
@@ -12411,6 +12423,7 @@
         "keptIn?": "string",
         "struck?": "bool",
         "closesOn?": "string",
+        "doneAs?": "string",
         "handing?": {
          "object": {
           "to": "string",
@@ -12611,6 +12624,7 @@
         "keptIn?": "string",
         "struck?": "bool",
         "closesOn?": "string",
+        "doneAs?": "string",
         "handing?": {
          "object": {
           "to": "string",

@@ -17,6 +17,7 @@ struct RemoteEngineTests {
         // Only base64 between the quotes the login shell reads: nothing in it that fish, csh or sh
         // would take as an escape.
         let command = SSHConnection.command(running: "printf '%s\\n' \"a'b\\\\c\"")
+        // (`kuvo_script` in its command line too: the box's launch lock knows a Mac's launch by it.)
         #expect(command.hasPrefix("exec sh -c 'kuvo_script=$(printf %s "))
         #expect(!command.dropFirst("exec sh -c '".count).dropLast().contains { $0 == "'" || $0 == "\\" })
         #expect(arguments.contains("ControlMaster=auto"))

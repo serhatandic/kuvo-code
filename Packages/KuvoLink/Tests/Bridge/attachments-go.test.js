@@ -87,10 +87,13 @@ async function answer(handle, method, p, body) {
 
 // A file sent from a phone to `session` with a message: where the box kept it, as the message's
 // note says.
+let messages = 0;
 async function sent(engine, session, name) {
   const handle = link.engineHandler(() => engine.target);
   const files = [{ uri: `data:application/octet-stream;base64,${Buffer.from(name).toString("base64")}`, name }];
-  assert.equal((await answer(handle, "POST", `api/session/${session}/prompt`, JSON.stringify({ id: "msg_1", text: "Look", files }))).status, 200);
+  // Each message its own id, as a client gives it: one under an id sent already is taken once.
+  messages += 1;
+  assert.equal((await answer(handle, "POST", `api/session/${session}/prompt`, JSON.stringify({ id: `msg_${messages}`, text: "Look", files }))).status, 200);
   const where = engine.prompted[session].text.split("\n").filter(line => line.startsWith(kept + path.sep));
   assert.equal(where.length, 1, engine.prompted[session].text);
   assert.equal(path.basename(where[0]), name);
