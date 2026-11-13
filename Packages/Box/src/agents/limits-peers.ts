@@ -95,15 +95,19 @@ export class LimitsPeers {
     transport.onFollowed?.(() => this.told.clear())
   }
 
-  /** The newest time a peer read this account from its maker (on this box's clock), if any did. */
-  fresh(service: LimitsService, identity: string): number | undefined {
-    return this.freshest(service, identity)?.checked
+  /**
+   * The newest time a peer read this account from its maker (on this box's clock), if any did.
+   * `yours`: only one of your own computers, not a box a peer vouches for (nor one not known yet).
+   */
+  fresh(service: LimitsService, identity: string, yours = false): number | undefined {
+    return this.freshest(service, identity, yours)?.checked
   }
 
   /** The newest reading a peer had of this account from its maker, without a problem, if any did. */
-  freshest(service: LimitsService, identity: string): AccountLimits | undefined {
+  freshest(service: LimitsService, identity: string, yours = false): AccountLimits | undefined {
     let newest: AccountLimits | undefined
-    for (const kept of this.peers.values()) {
+    for (const [key, kept] of this.peers) {
+      if (yours && !(this.directory.told && (this.directory.isPeer?.(key) ?? true))) continue
       for (const account of kept.accounts) {
         if (account.service !== service || account.identity !== identity || account.problem || !account.checked) continue
         if (!newest || account.checked > newest.checked!) newest = account

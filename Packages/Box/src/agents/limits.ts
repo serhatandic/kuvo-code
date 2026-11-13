@@ -316,13 +316,14 @@ export class Limits {
   /**
    * Whether another of your computers reads this account from its maker in this box's place now:
    * it read it lately, and this box hasn't since (one read per account across them, as above).
-   * What else is asked of its maker for the account (Cursor's usage history) waits on the same.
+   * What else is asked of its maker for the account (Cursor's usage history) waits on the same,
+   * only for one of your own computers (a box a peer vouches for counts in none of your totals).
    */
   readsElsewhere(provider: string): boolean {
     const entry = this.entries.get(provider)
     const account = this.accounts().find((each) => each.provider === provider)
     if (!entry?.elsewhere || !account?.limits.read || !entry.identity) return false
-    const peer = this.peers?.fresh(account.service, entry.identity)
+    const peer = this.peers?.fresh(account.service, entry.identity, true)
     const at = this.now()
     return peer !== undefined && peer > (entry.checked ?? 0) && at - peer < account.limits.every + SHARED_SLACK
   }

@@ -11641,7 +11641,7 @@ class Limits {
     const account = this.accounts().find((each) => each.provider === provider);
     if (!entry?.elsewhere || !account?.limits.read || !entry.identity)
       return false;
-    const peer = this.peers?.fresh(account.service, entry.identity);
+    const peer = this.peers?.fresh(account.service, entry.identity, true);
     const at = this.now();
     return peer !== undefined && peer > (entry.checked ?? 0) && at - peer < account.limits.every + SHARED_SLACK;
   }
@@ -32878,12 +32878,14 @@ class LimitsPeers {
     directory.listen(() => this.directorySaid());
     transport.onFollowed?.(() => this.told.clear());
   }
-  fresh(service, identity) {
-    return this.freshest(service, identity)?.checked;
+  fresh(service, identity, yours = false) {
+    return this.freshest(service, identity, yours)?.checked;
   }
-  freshest(service, identity) {
+  freshest(service, identity, yours = false) {
     let newest;
-    for (const kept of this.peers.values()) {
+    for (const [key, kept] of this.peers) {
+      if (yours && !(this.directory.told && (this.directory.isPeer?.(key) ?? true)))
+        continue;
       for (const account of kept.accounts) {
         if (account.service !== service || account.identity !== identity || account.problem || !account.checked)
           continue;
@@ -33451,4 +33453,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents f808fcc3513c1b5576b1739baa473fcae03f537e924a64c5f4a9ad3cc9b65be2
+// Built from Packages/Box/src/agents 758bdd38ececfba042814a84baa9490f04b54ec316c8504b9f005634f824dbc8

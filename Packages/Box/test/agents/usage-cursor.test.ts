@@ -401,7 +401,8 @@ describe("Cursor's account across your computers", () => {
     const source: LimitsSource = { every: 5 * 60_000, account: () => "its-key", read: async () => ({ windows: [{ id: "total", used: 0.1 }], identity: "cursor:user_abc" }) }
     let peerChecked: number | undefined
     const limits = new Limits(() => [{ provider: "cursor", service: "cursor", limits: source }], undefined, () => now)
-    limits.peers = { fresh: () => peerChecked, rows: (own: any) => own, tell: () => {}, freshest: () => undefined } as any
+    let yours = true
+    limits.peers = { fresh: (_service: string, _identity: string, mine?: boolean) => (mine && !yours ? undefined : peerChecked), rows: (own: any) => own, tell: () => {}, freshest: () => undefined } as any
     await limits.tick()
     expect(limits.readsElsewhere("cursor")).toBe(false)
     // Another computer read it after this one: it reads it, and this one waits.
@@ -409,6 +410,11 @@ describe("Cursor's account across your computers", () => {
     peerChecked = now - 30_000
     await limits.tick()
     expect(limits.readsElsewhere("cursor")).toBe(true)
+    // Read by a box a peer vouches for (another person's Mac beside a machine you share): its
+    // limits stand for this one's, but its history counts in none of your totals, so it's asked here.
+    yours = false
+    expect(limits.readsElsewhere("cursor")).toBe(false)
+    yours = true
     // It stopped: this one reads it again.
     now += 20 * 60_000
     expect(limits.readsElsewhere("cursor")).toBe(false)

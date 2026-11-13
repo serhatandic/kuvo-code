@@ -4021,7 +4021,8 @@ from Cursor's own record of each Cursor account signed in to Kuvo Code (its dash
 events, asked with the sign-in its plan limits are read with: "Plan limits"), which is the whole
 account's, wherever it ran: so a row of it is its newest box's, never a sum (below), and one of
 your computers asks Cursor for it at a time, the one that reads its plan limits ("One read per
-account"). A client reaches them as
+account"; a box a peer vouches for reading them doesn't stand for it, as its row is in none of
+your totals). A client reaches them as
 `kuvo/agents/api/kuvo/usage…` (the Mac app at `api/kuvo/usage…` on the bridge itself), where
 `features` has `usage.history`.
 
