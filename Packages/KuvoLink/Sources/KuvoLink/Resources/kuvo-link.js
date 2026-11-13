@@ -35398,7 +35398,7 @@ function commit(listed, now = Date.now(), file = LIST_FILE, owner) {
     const list = readList(file) ?? { epoch: `${now.toString(36)}-${process.pid.toString(36)}`, seq: 0, floor: 0, sessions: {}, gone: {}, projects: {} };
     if (owner === undefined && list.owner && list.owner !== process.pid && processRuns(list.owner, "kuvo-link"))
       return list;
-    if (list.seq > 0 && list.owner !== undefined && (list.owner !== owner || list.started !== STARTED2)) {
+    if (list.owner !== undefined && (list.owner !== owner || list.started !== STARTED2)) {
       list.seq += LOST_GAP;
       list.floor = list.seq;
     }
@@ -39852,7 +39852,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "a4d288875dbe";
+var BRIDGE_VERSION = "d7d6d21d407d";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";

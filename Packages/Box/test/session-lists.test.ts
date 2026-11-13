@@ -516,6 +516,26 @@ test("a list taken over from a process that went is read whole by every client f
   }
 })
 
+test("a list kept by the same start, or by routes alone, resumes: no whole read each time", async () => {
+  rmSync(LIST_FILE, { force: true })
+  try {
+    // Routes alone (no process keeps it): each answer goes on from the last.
+    const first = (await ask("kuvo/sessions/list")).lines[0].at
+    expect((await ask(`kuvo/sessions/list?since=${first}`)).lines[0].full).toBeUndefined()
+    // The long-running process stopped and started again within one start (written as it stopped).
+    let stop = keepList()
+    await listPlaceHeard("engine", target)
+    const kept = (await ask("kuvo/sessions/list")).lines[0].at
+    stop()
+    stop = keepList()
+    await listPlaceHeard("engine", target)
+    expect((await ask(`kuvo/sessions/list?since=${kept}`)).lines[0].full).toBeUndefined()
+    stop()
+  } finally {
+    rmSync(LIST_FILE, { force: true })
+  }
+})
+
 test("a route never writes over the list the long-running process keeps, nor takes away its mark", async () => {
   // (A process named as the long-running one is: it started as the route read the engine.)
   const link = Bun.spawn(["/bin/sh", "-c", "while :; do sleep 1; done", "kuvo-link"], { stdin: "ignore", stdout: "ignore", stderr: "ignore" })

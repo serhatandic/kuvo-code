@@ -210,7 +210,7 @@ export function commit(listed: Listed, now = Date.now(), file = LIST_FILE, owner
     // Taken over from a long-running process that went (this one started again, or a route
     // answers in its place): it may have told changes it hadn't written yet. Numbered on past them,
     // and every cursor from before reads it all (one whole read after a restart).
-    if (list.seq > 0 && list.owner !== undefined && (list.owner !== owner || list.started !== STARTED)) {
+    if (list.owner !== undefined && (list.owner !== owner || list.started !== STARTED)) {
       list.seq += LOST_GAP;
       list.floor = list.seq;
     }
