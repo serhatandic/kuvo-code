@@ -90,6 +90,10 @@ public struct HostLimitRow: Sendable, Hashable, Identifiable {
         /// `resets`: how many, when each expires, and whether one can be used now.
         public var count: Int
         public var expiries: [Date]
+        /// `resets`: how soon the soonest expires, as the host says it (its clients share one rule).
+        public var soonest: Urgency?
+
+        public enum Urgency: Sendable, Hashable { case normal, warning, critical }
         public var usable: Bool
         /// `resets`: the computer that uses one, by name, where it isn't this Mac.
         public var elsewhere: String?
@@ -103,7 +107,8 @@ public struct HostLimitRow: Sendable, Hashable, Identifiable {
         }
 
         public init(id: String, name: String, kind: Kind, amount: Double = 0, limit: Double? = nil, unit: String = "", resetsAt: Date? = nil, count: Int = 0,
-                    expiries: [Date] = [], usable: Bool = false, elsewhere: String? = nil, elsewhereHelp: String? = nil, message: String? = nil) {
+                    expiries: [Date] = [], soonest: Urgency? = nil, usable: Bool = false, elsewhere: String? = nil, elsewhereHelp: String? = nil, message: String? = nil) {
+            self.soonest = soonest
             self.id = id
             self.name = name
             self.kind = kind

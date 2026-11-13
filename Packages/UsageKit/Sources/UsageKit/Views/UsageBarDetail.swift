@@ -334,8 +334,8 @@ struct BarResetsRow: View {
                 BarDetailText(extra.name, style: .label)
                 Spacer(minLength: 8)
                 HStack(spacing: 4) {
-                    if let soonest = extra.expiries.first {
-                        Circle().fill(Theme.meterFill(WidgetData.expirySeverity(secondsRemaining: soonest.timeIntervalSinceNow))).frame(width: 5, height: 5)
+                    if let soonest = extra.soonest {
+                        Circle().fill(Theme.meterFill(Self.severity(soonest))).frame(width: 5, height: 5)
                     }
                     BarDetailText("\(extra.count) available", style: .value)
                         .contentTransition(.numericText())
@@ -355,6 +355,15 @@ struct BarResetsRow: View {
                     .padding(.top, 6)
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
+        }
+    }
+
+    /// The dot's color for how soon the soonest expires.
+    static func severity(_ urgency: HostLimitRow.Extra.Urgency) -> WidgetData.MeterSeverity {
+        switch urgency {
+        case .normal: .normal
+        case .warning: .warning
+        case .critical: .critical
         }
     }
 

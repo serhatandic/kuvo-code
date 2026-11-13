@@ -252,8 +252,17 @@ final class BoxPlanLimits {
         guard let kind = HostLimitRow.Extra.Kind(rawValue: extra.kind) else { return nil }
         let elsewhere = extra.on.flatMap { $0.here ? nil : ($0.name.isEmpty ? "another computer" : $0.name) }
         return HostLimitRow.Extra(id: extra.id, name: extra.name, kind: kind, amount: extra.amount, limit: extra.limit, unit: extra.unit, resetsAt: extra.resetsAt,
-                                  count: extra.count, expiries: extra.expiries, usable: extra.usable && extra.on != nil,
+                                  count: extra.count, expiries: extra.expiries, soonest: extra.expiries.first.map { Self.urgency(ResetExpiry.of($0)) }, usable: extra.usable && extra.on != nil,
                                   elsewhere: elsewhere, elsewhereHelp: elsewhere.map { ResetWords.elsewhereHelp($0) }, message: extra.message)
+    }
+
+    /// How soon a reset expires, as both apps say it (`ResetExpiry`), for the panel's dot.
+    static func urgency(_ expiry: ResetExpiry) -> HostLimitRow.Extra.Urgency {
+        switch expiry {
+        case .soon: .critical
+        case .thisWeek: .warning
+        case .later: .normal
+        }
     }
 
     /// The machines a row is from, by name ("hetzner, lokum").

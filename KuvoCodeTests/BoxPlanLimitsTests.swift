@@ -162,7 +162,7 @@ import UsageKit
         var claude = Self.account("claude-code", "claude", agent: "claude", identity: "c1a0dec1a0dec1a0", used: 0.88)
         claude["extras"] = [
             ["id": "extra_usage", "name": "Extra Usage", "kind": "capped", "amount": 12.4, "limit": 50, "unit": "usd"],
-            ["id": "resets", "name": "Rate Limit Resets", "kind": "resets", "count": 2, "refills": ["five_hour", "seven_day"], "usable": true, "on": ["key": "key-hetzner", "name": "hetzner"]],
+            ["id": "resets", "name": "Rate Limit Resets", "kind": "resets", "count": 2, "expiries": [Date().timeIntervalSince1970 * 1000 + 3_600_000], "refills": ["five_hour", "seven_day"], "usable": true, "on": ["key": "key-hetzner", "name": "hetzner"]],
         ]
         var codex = Self.account("codex-cli", "codex", agent: "codex", identity: "c0dec0dec0dec0de", used: 0.5)
         codex["extras"] = [["id": "resets", "name": "Rate Limit Resets", "kind": "resets", "count": 1, "usable": true, "agents": true, "on": ["key": "", "name": "", "here": true]]]
@@ -190,6 +190,8 @@ import UsageKit
         let resets = try #require(row.resets)
         // Used on hetzner, which has the sign-in: its name is the row's control.
         #expect(resets.count == 2 && resets.usable && resets.elsewhere == "hetzner")
+        // (Its soonest expires within the hour: red, by both apps' one rule.)
+        #expect(resets.soonest == .critical)
         #expect(HostLimits.shared.rows.first { $0.providerID == "codex" }?.resets?.elsewhere == nil)
 
         let offer = try await planLimits.askReset(row.id)

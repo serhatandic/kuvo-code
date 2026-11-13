@@ -798,3 +798,16 @@ public enum ResetWords {
     public static let using = "Using a reset"
     public static let used = "Reset used"
 }
+
+/// How soon a plan's reset expires, as both apps color its dot: within 48 hours, within a week, or
+/// later (the Mac's usage panel's bands). A view, worked out the same on every client.
+public enum ResetExpiry: Sendable, Hashable {
+    case soon, thisWeek, later
+
+    public static func of(_ expiry: Date, now: Date = .now) -> ResetExpiry {
+        let left = expiry.timeIntervalSince(now)
+        if left <= 48 * 3600 { return .soon }
+        if left <= 7 * 86_400 { return .thisWeek }
+        return .later
+    }
+}

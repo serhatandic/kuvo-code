@@ -81,6 +81,14 @@ struct PlanResetsTests {
         #expect(ResetWords.failure(nil) == "Didn't go through. Nothing was used.")
     }
 
+    @Test func aResetsDotSaysHowSoonItExpires() {
+        let now = Date(timeIntervalSince1970: 1_794_600_000)
+        #expect(ResetExpiry.of(now + 47 * 3600, now: now) == .soon)
+        #expect(ResetExpiry.of(now - 60, now: now) == .soon)
+        #expect(ResetExpiry.of(now + 3 * 86_400, now: now) == .thisWeek)
+        #expect(ResetExpiry.of(now + 8 * 86_400, now: now) == .later)
+    }
+
     @Test func theConfirmationSaysWhatItSpendsAndWhatStartsOver() {
         #expect(ResetWords.question(2) == "Use 1 of 2 resets?")
         #expect(ResetWords.question(1) == "Use your last reset?")

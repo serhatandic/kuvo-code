@@ -30,14 +30,14 @@ struct ResetShots {
         HostLimitRow(id: "claude#work", providerID: "claude", name: "Claude · Work", plan: "Max 5x",
                      meters: [meter("Session", used: done ? 0 : 0.88, resetsIn: done ? nil : 72 * 60, minutes: 300), meter("Weekly", used: done ? 0 : 0.41, resetsIn: 3 * 86_400 + 6 * 3600, minutes: 10_080)],
                      extras: [.init(id: "extra_usage", name: "Extra Usage", kind: .capped, amount: 12.4, limit: 50, unit: "usd", resetsAt: now + 18 * 86_400 + 5 * 3600),
-                              .init(id: "resets", name: "Rate Limit Resets", kind: .resets, count: done ? 1 : 2, expiries: [now + 4 * 86_400], usable: true, elsewhere: elsewhere, elsewhereHelp: elsewhere.map { "\($0) has this account's sign-in." })])
+                              .init(id: "resets", name: "Rate Limit Resets", kind: .resets, count: done ? 1 : 2, expiries: [now + 4 * 86_400], soonest: .warning, usable: true, elsewhere: elsewhere, elsewhereHelp: elsewhere.map { "\($0) has this account's sign-in." })])
     }
 
     private var codex: HostLimitRow {
         HostLimitRow(id: "codex#own", providerID: "codex", name: "Codex", plan: "Plus",
                      meters: [meter("Session", used: 0.92, resetsIn: 100 * 60, minutes: 300), meter("Weekly", used: 0.22, resetsIn: 5 * 86_400 + 2 * 3600, minutes: 10_080)],
                      extras: [.init(id: "credits", name: "Extra Usage", kind: .left, amount: 1240, unit: "credits"),
-                              .init(id: "resets", name: "Rate Limit Resets", kind: .resets, count: 2, expiries: [now + 3 * 86_400], usable: true)])
+                              .init(id: "resets", name: "Rate Limit Resets", kind: .resets, count: 2, expiries: [now + 3 * 86_400], soonest: .warning, usable: true)])
     }
 
     private var openrouter: HostLimitRow {
