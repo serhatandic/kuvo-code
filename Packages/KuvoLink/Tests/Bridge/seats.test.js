@@ -500,7 +500,7 @@ test("the usage panel's settings (PROTOCOL.md, \"Usage settings\") go between yo
   const sent = [];
   const host = { send: bytes => sent.push(bytes) };
   // The bridge is told the setup this box follows, which settings stay within; none while it's set aside (a shared machine).
-  assert.equal(link.seatPeers(link.readLink()).setup, undefined, "in no setup");
+  assert.equal(link.seatPeers(link.readLink()).setup, undefined, "in no setup yet");
   const withSetup = { ...link.readLink(), setup: { id: "set_AAAAAAAAAAAAAAAAAAAAAA", epoch: 1, primary: mac.pub, sign: mac.pub, role: "member" } };
   assert.equal(link.seatPeers(withSetup).setup, "set_AAAAAAAAAAAAAAAAAAAAAA");
   assert.equal(link.seatPeers({ ...withSetup, setup: { ...withSetup.setup, aside: true } }).setup, undefined, "set aside: none");
@@ -509,7 +509,12 @@ test("the usage panel's settings (PROTOCOL.md, \"Usage settings\") go between yo
   const unread = link.seatPeers({ ...withSetup, setup: { ...withSetup.setup, role: "primary", primary: second.pub } });
   assert.equal(unread.setup, undefined);
   assert.equal(unread.setupUnknown, true);
-  assert.equal(link.seatPeers(link.readLink()).setupUnknown, undefined, "no setup at all: none");
+  // None made yet (a box from before setups, as it updates): not none either, until it's settled.
+  assert.equal(link.seatPeers(link.readLink()).setupUnknown, true, "no record yet: can't say");
+  // A machine two Macs set up: none, settled.
+  const shared = link.seatPeers({ ...link.readLink(), macs: [mac.pub, air.pub] });
+  assert.equal(shared.setup, undefined);
+  assert.equal(shared.setupUnknown, undefined, "a machine Macs share: none");
   const mail = { kind: "settings", at: 7, digest: "d", setup: "set_AAAAAAAAAAAAAAAAAAAAAA", usage: { notifications: { value: { underTenPercent: true, healthyToClose: false, closeToRunningOut: false }, stamp: { v: 7, by: here.pub } } } };
   // To one of your computers: as a seat's, kept nowhere.
   assert.equal(link.carrySeat(host, { id: "sm_settings01", to: second.pub, durable: false, mail }, link.readLink()), true);

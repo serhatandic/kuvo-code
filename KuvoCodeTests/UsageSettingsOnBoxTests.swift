@@ -25,6 +25,10 @@ import UsageKit
         /// The answer to the first change, held back until `release` (nil: none held).
         private var held: (@Sendable (StubWeb.Answer) -> Void)?
         var holdsFirstChange = false
+        /// The first change taken, but answered with this status, as a gateway that lost its answer.
+        var losesFirstAnswer: Int?
+        /// Every change answered 400, as a part it can't take.
+        var refuses = false
         var puts: [[String: Any]] { lock.withLock { _puts } }
 
         /// Answers a request, but the first change while `holdsFirstChange`, whose answer waits.
@@ -53,12 +57,14 @@ import UsageKit
                     _puts.append(given)
                     // As a box does: a change made from a version it has moved on from is turned away.
                     let based = (given["based"] as? [String: Any])?["notifications"] as? String
+                    if refuses { return StubWeb.json(["message": "That isn't a notifications setting."], status: 400) }
                     if !stale.isEmpty || (based != nil && based != version) {
                         extra["stale"] = stale.isEmpty ? ["notifications"] : stale
                     } else if let changed = given["notifications"] as? [String: Bool] {
                         notifications = changed
                         changes += 1
                         version = "\(changes + 1)/mac-key"
+                        if let status = losesFirstAnswer, changes == 1 { return StubWeb.json(["message": "Bad gateway"], status: status) }
                     }
                 }
                 return StubWeb.json(["data": ["settings": ["notifications": notifications], "versions": ["notifications": version], "imported": true].merging(extra) { first, _ in first }])
@@ -158,5 +164,48 @@ import UsageKit
         #expect(box.puts.count == 2)
         #expect(box.notifications == ["underTenPercent": true, "healthyToClose": true, "closeToRunningOut": false], "the box ends with the second")
         #expect(defaults.bool(forKey: "openusage.notifications.healthyToClose"), "and the panel keeps it")
+    }
+
+    @Test func aChangeWhoseAnswerWasLostDoesntTurnAwayTheNext() async throws {
+        let (defaults, folder) = try suite()
+        defer { StubWeb.stop(); try? FileManager.default.removeItem(at: folder) }
+        let box = Box()
+        box.losesFirstAnswer = 503
+        StubWeb.handle(Self.box + "/api/kuvo/usage/settings") { request, body in box.answer(request, body) }
+        let host = HostSettings(defaults: defaults)
+        let store = UsageSettingsOnBox(host: host, defaults: defaults)
+        store.connected(api: api(), box: BoxClient.mac)
+        try await until { store.answered == 1 }
+
+        // The box takes the first change, but its answer is lost on the way; another change follows.
+        defaults.set(true, forKey: Self.underTen)
+        host.flush()
+        try await until { box.puts.count == 1 }
+        defaults.set(true, forKey: "openusage.notifications.healthyToClose")
+        host.flush()
+        // Turned away against this Mac's own first: it goes again from the box's version.
+        try await until { box.puts.count == 3 }
+        try await until { store.answered == 3 }
+        #expect(box.notifications == ["underTenPercent": true, "healthyToClose": true, "closeToRunningOut": false])
+        #expect(defaults.bool(forKey: "openusage.notifications.healthyToClose"))
+    }
+
+    @Test func aChangeTheBoxCantTakeGivesWayToTheBoxs() async throws {
+        let (defaults, folder) = try suite()
+        defer { StubWeb.stop(); try? FileManager.default.removeItem(at: folder) }
+        let box = Box()
+        box.refuses = true
+        StubWeb.handle(Self.box + "/api/kuvo/usage/settings") { request, body in box.answer(request, body) }
+        let host = HostSettings(defaults: defaults)
+        let store = UsageSettingsOnBox(host: host, defaults: defaults)
+        store.connected(api: api(), box: BoxClient.mac)
+        try await until { store.answered == 1 }
+        defaults.set(true, forKey: Self.underTen)
+        host.flush()
+        // Refused: read again, the box's shown, nothing left to go.
+        try await until { store.answered == 2 }
+        #expect(box.puts.count == 1)
+        #expect(!defaults.bool(forKey: Self.underTen))
+        #expect(defaults.data(forKey: "usage.settingsUnsent").flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }.map { ($0["parts"] as? [String: Any])?.isEmpty ?? true } == true)
     }
 }

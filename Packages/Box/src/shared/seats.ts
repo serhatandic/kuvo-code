@@ -51,7 +51,9 @@ export interface SeatPeers {
    * none (a machine Macs share, a Mac that leads none). The usage panel's settings go only between
    * boxes of the same setup. */
   setup?: string;
-  /** This box has a setup it can't say yet (a main computer whose keys aren't read yet, as its
-   * link starts): the bridge waits for it, taking it neither as no setup nor sharing. */
+  /** This box can't say its setup yet (one it can't follow yet, its keys not read as its link
+   * starts; or none made yet): the bridge waits for it, taking it neither as no setup nor sharing.
+   * None (`setup` and this both absent) only once that's settled: a machine Macs share, or a
+   * setup set aside. */
   setupUnknown?: true;
 }

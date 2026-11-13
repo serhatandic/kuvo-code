@@ -36,6 +36,9 @@ final class UsageSettingsOnBox {
     @ObservationIgnored private var based: [String: JSONValue] = [:] { didSet { save() } }
     @ObservationIgnored private var knows: JSONValue? { didSet { save() } }
     @ObservationIgnored private var versions: [String: String] = [:] { didSet { save() } }
+    /// Each part as this Mac last sent it: a change turned away though the box holds this Mac's own
+    /// last (its answer was lost) goes again, from the box's version.
+    @ObservationIgnored private var sent: [String: JSONValue] = [:] { didSet { save() } }
     private static let unsentKey = "usage.settingsUnsent"
 
     init(host: HostSettings = .shared, defaults: UserDefaults = .standard) {
@@ -46,6 +49,7 @@ final class UsageSettingsOnBox {
             based = saved.based ?? [:]
             knows = saved.knows
             versions = saved.versions ?? [:]
+            sent = saved.sent ?? [:]
         }
         host.onChange = { [weak self] parts in self?.changed(parts) }
         // (The import waits for the panel's layout.)
@@ -63,10 +67,11 @@ final class UsageSettingsOnBox {
         var based: [String: JSONValue]?
         var knows: JSONValue?
         var versions: [String: String]?
+        var sent: [String: JSONValue]?
     }
 
     private func save() {
-        guard let data = try? JSONEncoder().encode(Saved(parts: unsent, based: based, knows: knows, versions: versions)) else { return }
+        guard let data = try? JSONEncoder().encode(Saved(parts: unsent, based: based, knows: knows, versions: versions, sent: sent)) else { return }
         defaults.set(data, forKey: Self.unsentKey)
     }
 
@@ -136,29 +141,38 @@ final class UsageSettingsOnBox {
         var body = parts
         body["based"] = .object(based.filter { parts[$0.key] != nil })
         if let knows { body["knows"] = knows }
-        let done = { [self] (answer: BoxUsageSettings?) in
+        let before = sent
+        sent.merge(parts) { _, now in now }
+        do {
+            let answer = try await api.client.send(try api.client.request("PUT", BoxUsageSettings.bridgePath, body: JSONValue.object(body)), as: DataEnvelope<BoxUsageSettings>.self).data
+            // Turned away though what the box holds is this Mac's own last (its answer was lost):
+            // still to go, from the box's version.
+            let own = Set(answer.stale.filter { name in before[name].map { answer.settings[name] == $0 } ?? false })
+            let stale = answer.stale.filter { !own.contains($0) }
             for (name, value) in parts {
-                if unsent[name] == value {
+                if own.contains(name) {
+                    based[name] = answer.versions[name].map(JSONValue.string) ?? .null
+                } else if unsent[name] == value {
                     unsent[name] = nil
                     based[name] = nil
-                } else if let answer, !answer.stale.contains(name) {
+                } else if !stale.contains(name) {
                     // Changed again while this went: the next goes from the version the box has now.
                     based[name] = answer.versions[name].map(JSONValue.string) ?? .null
                 }
             }
-        }
-        do {
-            let answer = try await api.client.send(try api.client.request("PUT", BoxUsageSettings.bridgePath, body: JSONValue.object(body)), as: DataEnvelope<BoxUsageSettings>.self).data
-            done(answer)
-            if !answer.stale.isEmpty {
-                log.info("usage settings changed on another computer meanwhile: \(answer.stale.joined(separator: ", "), privacy: .public)")
-                host.forget(Set(answer.stale))
+            if !stale.isEmpty {
+                log.info("usage settings changed on another computer meanwhile: \(stale.joined(separator: ", "), privacy: .public)")
+                host.forget(Set(stale))
             }
             apply(answer)
+            if !own.isEmpty { await send() }
         } catch let error as ServerError where ![502, 503, 504].contains(error.status) {
             // Not a change it takes: the box's stay, and show again.
             log.info("usage settings refused: \(String(describing: error), privacy: .public)")
-            done(nil)
+            for (name, value) in parts where unsent[name] == value {
+                unsent[name] = nil
+                based[name] = nil
+            }
             host.forget(Set(parts.keys))
             await read()
         } catch {

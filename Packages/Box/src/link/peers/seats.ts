@@ -26,6 +26,7 @@ import type { ToldAgents } from "../../shared/records";
 import type { SeatLine as SharedLine, SeatMailKind, SeatPeers } from "../../shared/seats";
 import type { DocPart, PendingParts } from "../documents/parts";
 import { followedSetup } from "../setup/record";
+import { sharedMachine } from "../setup/settle";
 import type { LinkHost } from "../relay/host";
 import type { LinkState } from "../state";
 import type { MailSender, Peer } from "./known";
@@ -208,9 +209,10 @@ export function seatPeers(link: LinkState | null = readLink(), told: Record<stri
     boxes: peers.map(peer => ({ key: peer.key, name: plainName(peer.name) || "another computer", seats: (told[peer.key]?.features ?? []).includes("groups.seats") })),
     bots: peers.flatMap(peer => (told[peer.key]?.list ?? []).filter(agent => agent.kind === "bot" && agent.id)
       .map(agent => ({ id: agent.id!, name: agent.name, job: agent.about ?? "", box: peer.key, session: agent.session, ...(agent.look ? { look: agent.look } : {}) }))),
-    // (The usage panel's settings go only between its boxes: never a shared machine's. One it has
-    // but can't follow yet, its keys not read as the link starts, isn't none.)
-    ...(setup ? { setup: setup.id } : link?.setup && !link.setup.aside ? { setupUnknown: true as const } : {}),
+    // (The usage panel's settings go only between its boxes: never a shared machine's. None only
+    // once that's settled, a machine Macs share or a setup set aside; else it can't say yet: one
+    // it can't follow yet, its keys not read as the link starts, or none made yet.)
+    ...(setup ? { setup: setup.id } : sharedMachine(link) || link?.setup?.aside ? {} : { setupUnknown: true as const }),
   };
 }
 

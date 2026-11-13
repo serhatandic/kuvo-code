@@ -4381,9 +4381,11 @@ is opened stay each app's own. A client reaches them as `kuvo/agents/api/kuvo/us
   ones you made on another), and at the same `v` the `by` that sorts last.
 - **Across your own computers** only: between the boxes of one setup ("Your setup"), whose
   boxes are all yours. The link tells the bridge the setup it follows now (`setup` in `PUT
-  /api/kuvo/peers`, its id; none while it follows none, or is set aside; `setupUnknown: true`
-  while it has one it can't say yet, a main computer's keys not read as its link starts, which the
-  bridge takes as neither: it records nothing and shares nothing until the link says), and a box sends and takes
+  /api/kuvo/peers`, its id; none once it's settled that it follows none: a machine more than one
+  Mac set up, or a setup set aside; `setupUnknown: true` otherwise while it can't say one: none made
+  yet, as a box from before setups updates, or one it can't follow yet, its keys not read as its
+  link starts or made anew, which the bridge takes as neither: it records nothing and shares
+  nothing until the link says), and a box sends and takes
   them only while it follows one, only with its peers (the setup's boxes), and only mail naming the
   same setup. So never to or from a box a peer vouches for, and never through a machine more than
   one Mac set up (it follows no setup, so it neither passes them on nor takes them): until setups
@@ -4404,7 +4406,9 @@ is opened stay each app's own. A client reaches them as `kuvo/agents/api/kuvo/us
   minute), asking for the other's when the mail held only a `digest`. `ask` is answered with all of
   them at once. A part a box doesn't know (a newer box's) is kept as it came, and passed on, and so
   are a part's fields it doesn't know (`digest` is of their JSON with every object's keys in one
-  order), so two boxes of different versions agree. Nothing is kept per computer: what's newer is
+  order), so two boxes of different versions agree (while what a part holds that a box doesn't know
+  is at most 16 KB: past that the older box drops it, and the two tell each other all of it every
+  ten minutes, at most once a minute each). Nothing is kept per computer: what's newer is
   taken into the box's own, kept in `usage/settings.json` (`{"kuvo": 1, units, imported?, setup?}`, `setup` an id or `null`, with `codex: {fallback}` where a box from
   before reads Codex's fallback model), through a restart. A box from before kept only that
   fallback model there: what it held counts as imported.
@@ -4414,7 +4418,9 @@ is opened stay each app's own. A client reaches them as `kuvo/agents/api/kuvo/us
   It reads whether its box keeps them from `features` (`usage.settings`; its own box of the same
   version does). A change made while the box doesn't answer, before its first answer since a
   restart too, goes once it's back; one made again while the last is on its way goes from the
-  version the box answered with: the app keeps what the box last said, and what's still to go,
+  version the box answered with, unless the box turned that one away (another computer's came
+  first: the box's shows); one turned away though the box holds this Mac's own last (the answer to
+  it was lost) goes again from the box's version: the app keeps what the box last said, and what's still to go,
   through a restart. Its panel's
   stores keep their own copy, so they start at once and work while the box doesn't answer; a change
   made meanwhile goes once it's back, and an answer that comes while one is on its way leaves that
