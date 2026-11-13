@@ -122,6 +122,8 @@ export type ResetOutcome =
 export interface ResetAttempt {
   request: string
   target?: string
+  /** The sign-in its maker was asked about just before (`LimitsSource.spender`): spent with that one. */
+  signIn?: unknown
   /** Keeps `target` in the journal: called before the request that spends it. */
   keep(target: string): void
 }
@@ -221,10 +223,11 @@ export interface LimitsSource {
   afterReset?(): void
   /**
    * Whether the sign-in a reset would be spent with is, as its maker says right now, the account
-   * `identity` says: asked right before a reset goes, where the sign-in's local files can lag (a new
-   * sign-in's record not written yet). Undefined where it can't be told now.
+   * `identity` says (`same`), and that sign-in (`signIn`, given back to `reset` as `attempt.signIn`,
+   * so it's the very one spent with): asked right before a reset goes, where the sign-in's local
+   * files can lag (a new sign-in's record not written yet). Undefined where it can't be told now.
    */
-  spender?(): Promise<boolean | undefined>
+  spender?(): Promise<{ same: boolean; signIn?: unknown } | undefined>
 }
 
 /** An account whose limits are read: a coding agent's, or a sign-in of the engine's. */

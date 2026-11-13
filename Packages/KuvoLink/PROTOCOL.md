@@ -4286,13 +4286,14 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     another is, nothing is spent (`no-reset`), and the slot's earlier account's Always Allow goes
     off (below). Claude on Linux: its token carries no claims and Claude Code's own record of the
     sign-in can lag a new one, so Anthropic's profile is asked too, right then; its account must be
-    the record's (and its organization, where both say one), else nothing is spent, and nothing of
+    the record's (and its organization, where both say one), and the reset is spent with that very
+    sign-in (one signed in meanwhile never is), else nothing is spent, and nothing of
     what's allowed changes on that (whichever of the two lags, the newly signed-in account's
     stays). `unasked: true` marks an agent's spend under Always Allow that no one confirmed:
     refused (`failed`) where the asking box's own decision for the row is off, and again by the box
     that spends it unless its decision is on. A confirmation by the user that joins an open
-    `unasked` spend makes it the user's, here and on the peer it was passed to (the same request:
-    nothing more is spent). A peer asked to spend one follows these same rules for a new ask
+    `unasked` spend (or, past the 10 minutes, asks it again first) makes it the user's, here and on
+    the peer it was passed to (the same request: nothing more is spent). A peer asked to spend one follows these same rules for a new ask
     (joining within 10 minutes, settling an older one first). A client sends the same
     `confirm` again after a lost answer, and after `unknown` or `unconfirmed`; a 404 then (the box no
     longer knows it) asks anew.

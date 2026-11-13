@@ -447,7 +447,8 @@ export class ClaudeAgent implements Agent {
         signIn: () => fingerprint(this.limitsSignIn()?.token),
         identity: () => (this.instance.home ? claudeIdentity(this.instance.home) : undefined),
         reset: async (attempt, now) => {
-          const signIn = this.limitsSignIn()
+          // (The very sign-in Anthropic was asked about, where it was: one signed in since isn't spent with.)
+          const signIn = (attempt.signIn as ClaudeSignIn | undefined) ?? this.limitsSignIn()
           const version = signIn ? await this.programVersion() : undefined
           // None read since the box started (a restart since its row said it has them): read now,
           // as the hourly read would.
@@ -468,7 +469,7 @@ export class ClaudeAgent implements Agent {
           const signIn = this.limitsSignIn()
           const recorded = this.instance.home ? claudeIdentity(this.instance.home) : undefined
           const token = signIn ? await tokenAccount(signIn, await this.programVersion()) : undefined
-          return recorded && token ? sameClaudeAccount(recorded, token) : undefined
+          return recorded && token ? { same: sameClaudeAccount(recorded, token), signIn } : undefined
         },
       }
 

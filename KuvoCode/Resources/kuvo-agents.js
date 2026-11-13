@@ -9594,8 +9594,18 @@ class LimitResets {
       return false;
     this.allowed.set(rowID, { on, at });
     this.save();
-    this.limits.ownChanged();
+    this.changedSoon();
     return true;
+  }
+  telling = false;
+  changedSoon() {
+    if (this.telling)
+      return;
+    this.telling = true;
+    queueMicrotask(() => {
+      this.telling = false;
+      this.limits.ownChanged();
+    });
   }
   setAlways(given, on) {
     const ownProvider = given.provider ?? (given.row ? this.limits.accountOf(given.row)?.provider : undefined);
@@ -9690,6 +9700,10 @@ class LimitResets {
       return this.rerun(open, rowID, given);
     }
     if (open) {
+      if (!given.unasked && open.unasked) {
+        delete open.unasked;
+        this.save();
+      }
       const settled = await this.rerun(open, rowID, given);
       if (OPEN.has(settled.outcome) || settled.open || settled.outcome === "reset" && !settled.already) {
         join(open);
@@ -9806,6 +9820,7 @@ class LimitResets {
       spend = { id, row: rowID, provider: account.provider, request: requestID(), at: this.now(), state: "sending", ...by ? { by } : {}, ...unasked ? { unasked: true } : {} };
       this.keep(spend);
     }
+    let signIn;
     const stopped = (outcome) => {
       if (!fresh)
         return { outcome, message: STILL_OPEN, open: true };
@@ -9823,19 +9838,20 @@ class LimitResets {
         return stopped("no-reset");
       }
       if (account.limits.spender) {
-        const same = await account.limits.spender().catch(() => {
+        const checked = await account.limits.spender().catch(() => {
           return;
         });
-        if (same === undefined)
+        if (checked === undefined)
           return stopped("not-now");
-        if (!same)
+        if (!checked.same)
           return stopped("no-reset");
+        signIn = checked.signIn;
       }
     }
     const kept = spend;
     let result;
     try {
-      result = await account.limits.reset({ request: kept.request, ...kept.target ? { target: kept.target } : {}, keep: (target) => {
+      result = await account.limits.reset({ request: kept.request, ...kept.target ? { target: kept.target } : {}, ...signIn !== undefined ? { signIn } : {}, keep: (target) => {
         kept.target = target;
         this.save();
       } }, this.now());
@@ -14518,7 +14534,7 @@ class ClaudeAgent {
     signIn: () => fingerprint(this.limitsSignIn()?.token),
     identity: () => this.instance.home ? claudeIdentity(this.instance.home) : undefined,
     reset: async (attempt, now) => {
-      const signIn = this.limitsSignIn();
+      const signIn = attempt.signIn ?? this.limitsSignIn();
       const version = signIn ? await this.programVersion() : undefined;
       if (signIn && !(this.grants && this.grants.as === fingerprint(signIn.token)))
         await this.grantsExtra(signIn, version, now);
@@ -14536,7 +14552,7 @@ class ClaudeAgent {
       const signIn = this.limitsSignIn();
       const recorded = this.instance.home ? claudeIdentity(this.instance.home) : undefined;
       const token = signIn ? await tokenAccount(signIn, await this.programVersion()) : undefined;
-      return recorded && token ? sameClaudeAccount(recorded, token) : undefined;
+      return recorded && token ? { same: sameClaudeAccount(recorded, token), signIn } : undefined;
     }
   };
   grants;
@@ -35962,4 +35978,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 1f0b8856c8759ad2cbbf15ffb01164b468ec17795a162440fc9bf96d5567d14f
+// Built from Packages/Box/src/agents ef7faa49bd83f2ec2902fdf7703ed65571752fcccfdfd516124a8be3dcb70e5f

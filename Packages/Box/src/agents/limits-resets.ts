@@ -210,8 +210,24 @@ export class LimitResets {
     if (kept && (kept.at > at || (kept.at === at && on && !kept.on))) return false
     this.allowed.set(rowID, { on, at })
     this.save()
-    this.limits.ownChanged()
+    this.changedSoon()
     return true
+  }
+
+  private telling = false
+
+  /**
+   * The accounts' listing told it changed, once this turn is over: a decision can be made while
+   * that listing is being made (a slot seen signed in to another account), which mustn't make it
+   * again from inside itself.
+   */
+  private changedSoon() {
+    if (this.telling) return
+    this.telling = true
+    queueMicrotask(() => {
+      this.telling = false
+      this.limits.ownChanged()
+    })
   }
 
   /**
@@ -323,6 +339,11 @@ export class LimitResets {
       return this.rerun(open, rowID, given)
     }
     if (open) {
+      // (Asked by the user now: theirs before it's asked again, here or on the peer it was passed to.)
+      if (!given.unasked && open.unasked) {
+        delete open.unasked
+        this.save()
+      }
       const settled = await this.rerun(open, rowID, given)
       if (OPEN.has(settled.outcome) || settled.open || (settled.outcome === "reset" && !settled.already)) {
         join(open)
@@ -458,6 +479,8 @@ export class LimitResets {
       // at once finds it).
       this.keep(spend)
     }
+    /** The sign-in its maker checked, where it was (`spender`). */
+    let signIn: unknown
     // A new one stopped before anything went: settled as that.
     const stopped = (outcome: ResetOutcome): Result => {
       if (!fresh) return { outcome, message: STILL_OPEN, open: true }
@@ -480,15 +503,17 @@ export class LimitResets {
       // Where the sign-in's own files can lag (Claude's), its maker is asked too. Nothing of what's
       // allowed changes on that: whichever of the two lags, the newly signed-in account's stays.
       if (account.limits.spender) {
-        const same = await account.limits.spender().catch(() => undefined)
-        if (same === undefined) return stopped("not-now")
-        if (!same) return stopped("no-reset")
+        const checked = await account.limits.spender().catch(() => undefined)
+        if (checked === undefined) return stopped("not-now")
+        if (!checked.same) return stopped("no-reset")
+        // (Spent with the very sign-in that was checked, whatever's signed in by then.)
+        signIn = checked.signIn
       }
     }
     const kept = spend
     let result: Result
     try {
-      result = await account.limits.reset({ request: kept.request, ...(kept.target ? { target: kept.target } : {}), keep: (target) => {
+      result = await account.limits.reset({ request: kept.request, ...(kept.target ? { target: kept.target } : {}), ...(signIn !== undefined ? { signIn } : {}), keep: (target) => {
         kept.target = target
         this.save()
       } }, this.now())

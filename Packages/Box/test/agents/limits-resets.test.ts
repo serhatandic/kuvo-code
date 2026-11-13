@@ -14,7 +14,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ClaudeAgent } from "../../src/agents/agents/claude"
-import { claudeUsage, MAC_TOKEN_CANT } from "../../src/agents/agents/claude-limits"
+import { claudeUsage, MAC_TOKEN_CANT, sameClaudeAccount } from "../../src/agents/agents/claude-limits"
 import { codexResetEndpoints } from "../../src/agents/codex-resets"
 import { EngineAccounts, engineEndpoints } from "../../src/agents/engine-limits"
 import { LinkDirectory, PeerPost, peerRoutes, type PeerParts } from "../../src/agents/groups/post"
@@ -59,7 +59,9 @@ class Gate {
  */
 class Makers {
   grants = { eligible: true, grants: [{ id: "promo_one", resets_left: 2, ends_at: new Date(time + 5 * DAY).toISOString(), clears: ["five_hour", "seven_day"] }], next_grant_id: "promo_one" }
-  claims: { org: string; grant: string; request: string }[] = []
+  claims: { org: string; grant: string; request: string; token?: string }[] = []
+  /** Held at: a profile request (who a token is for). */
+  holdProfile?: Gate
   credits = [
     { id: "credit_late", status: "available", expires_at: new Date(time + 9 * DAY).toISOString() },
     { id: "credit_soon", status: "available", expires_at: new Date(time + 2 * DAY).toISOString() },
@@ -100,13 +102,14 @@ class Makers {
       }
       // Who a token is for, as Anthropic says (its profile).
       if (url.pathname === "/api/oauth/profile") {
+        await this.holdProfile?.pass()
         const who = this.profiles.get(token) ?? (token.startsWith("claude-") ? { account: ACCOUNT, organization: ORG } : undefined)
         return who ? Response.json({ account: { uuid: who.account }, organization: { uuid: who.organization } }) : new Response("{}", { status: 401 })
       }
       const claim = url.pathname.match(/^\/api\/organizations\/([^/]+)\/reset_rate_limits$/)
       if (claim && request.method === "POST") {
         const body: any = await request.json()
-        this.claims.push({ org: claim[1]!, grant: body.grant_id, request: body.request_id })
+        this.claims.push({ org: claim[1]!, grant: body.grant_id, request: body.request_id, token })
         if (this.spent.has(body.request_id)) return Response.json({ result: "already_used" })
         // Spent, but it can't say so (Anthropic's `reset_unconfirmed`).
         if (this.unconfirmedOnce) {
@@ -1096,5 +1099,80 @@ describe("the fifth review's cases", () => {
     } finally {
       box.stop()
     }
+  })
+})
+
+describe("the sixth review's cases", () => {
+  test("an agent's reset that never heard back, Always Allow turned off since, and the user's Use a quarter of an hour on: it goes the first time, the agent's settled first", async () => {
+    const relay = new Map<string, Box>()
+    const macFolder = mkdtempSync(join(base, "mac-6-"))
+    const claudeMac = macClaude(macFolder)
+    const mac = new Box("key-mac", "MacBook Pro", () => agentAccounts([claudeMac]), macFolder, relay, 20)
+    const hetznerFolder = mkdtempSync(join(base, "hetzner-6-"))
+    const claudeLinux = linuxClaude(hetznerFolder)
+    const hetzner = new Box("key-hetzner", "hetzner", () => agentAccounts([claudeLinux]), hetznerFolder, relay)
+    try {
+      await mac.meet([hetzner])
+      await hetzner.meet([mac])
+      await mac.limits.tick()
+      claudeMac.limits.heard!({ id: "five_hour", used: 0.9, minutes: 300 })
+      await hetzner.limits.tick()
+      const merged = () => mac.limits.rows().find((row) => row.boxes.length === 2)
+      await until(() => !!merged()?.extras?.some((extra) => extra.kind === "resets"))
+      const id = merged()!.id
+      await limitsRoutes(mac.limits, "PUT", ["reset", "always"], async () => ({ row: id, always: true }))
+      await until(() => hetzner.resets.agentsMay("claude-code"))
+      makers.claimFailsAfterSpending = true
+      const agent = await post(mac.limits, { row: id })
+      expect((await post(mac.limits, { row: id, confirm: agent.body.data.confirm, unasked: true })).body.data.outcome).toBe("unknown")
+      await until(() => makers.claims.length === 1)
+      await limitsRoutes(mac.limits, "PUT", ["reset", "always"], async () => ({ row: id, always: false }))
+      await until(() => !hetzner.resets.agentsMay("claude-code"))
+      time += 15 * 60_000
+      const user = await post(mac.limits, { row: id })
+      const done = await post(mac.limits, { row: id, confirm: user.body.data.confirm })
+      expect(done.body.data.outcome).toBe("reset")
+      // The agent's asked again as itself (done before), then the user's, its own request.
+      expect(makers.claims.map((each) => each.request)).toEqual([makers.claims[0]!.request, makers.claims[0]!.request, makers.claims[2]!.request])
+      expect(makers.claims[2]!.request).not.toBe(makers.claims[0]!.request)
+      expect(makers.spends).toBe(2)
+    } finally {
+      mac.stop()
+      hetzner.stop()
+    }
+  })
+
+  test("signed in to another account while Anthropic is asked who the sign-in is: the reset is spent with the sign-in that was checked, never the new one", async () => {
+    const relay = new Map<string, Box>()
+    const folder = mkdtempSync(join(base, "switch-"))
+    const claude = linuxClaude(folder)
+    const box = new Box("key-l", "hetzner", () => agentAccounts([claude]), folder, relay)
+    try {
+      await box.meet([])
+      await box.limits.tick()
+      const id = box.limits.rows()[0]!.id
+      makers.profiles.set("claude-other", { account: "6f1e0c4a-0000-4000-8000-0000000000cc", organization: ORG })
+      makers.holdProfile = new Gate()
+      const offer = await post(box.limits, { row: id })
+      const spending = post(box.limits, { row: id, confirm: offer.body.data.confirm })
+      await makers.holdProfile.reached
+      // Claude Code signs in to another account meanwhile.
+      writeFileSync(join(folder, "claude", "home", ".credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: "claude-other", expiresAt: time + 30 * DAY, scopes: ["user:inference", "user:profile"] } }))
+      makers.holdProfile.release()
+      expect((await spending).body.data.outcome).toBe("reset")
+      expect(makers.claims.map((each) => each.token)).toEqual(["claude-linux"])
+    } finally {
+      box.stop()
+    }
+  })
+
+  test("Claude's record and its token's account: one account only where the accounts match, and the organizations where both say one", () => {
+    const a = "6f1e0c4a-0000-4000-8000-000000000001", b = "6f1e0c4a-0000-4000-8000-000000000002"
+    expect(sameClaudeAccount(`anthropic:${a}|org-1`, `anthropic:${a}|org-1`)).toBe(true)
+    expect(sameClaudeAccount(`anthropic:${a}|`, `anthropic:${a}|org-1`)).toBe(true)
+    expect(sameClaudeAccount(`anthropic:${a}|org-1`, `anthropic:${a}|org-2`)).toBe(false)
+    expect(sameClaudeAccount(`anthropic:${a}|`, `anthropic:${b}|org-1`)).toBe(false)
+    expect(sameClaudeAccount(`anthropic:${a}|org-1`, `anthropic:${b}|`)).toBe(false)
+    expect(sameClaudeAccount(`anthropic:|`, `anthropic:|`)).toBe(false)
   })
 })
