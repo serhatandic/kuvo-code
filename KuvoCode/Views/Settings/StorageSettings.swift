@@ -500,7 +500,10 @@ private struct OldSessions: View {
                 Toggle("Keep pinned sessions", isOn: $keepsPinned)
             }
             Section {
-                if old.isEmpty {
+                if !workspace.isListed(BoxClient.thisMac) {
+                    // (Which are people's conversations is its box's word: none offered until it says.)
+                    Text("This Mac’s sessions show once its box has listed them.").foregroundStyle(.secondary)
+                } else if old.isEmpty {
                     Text("None unused for that long.").foregroundStyle(.secondary)
                 }
                 ForEach(old.prefix(200)) { session in

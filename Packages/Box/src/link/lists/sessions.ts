@@ -15,6 +15,7 @@ import { isObject } from "../../shared/json";
 import { listOf, locked, writePrivate } from "../files";
 import { BOTS, BOX, RUN } from "../home";
 import { watchFolders } from "../follow";
+import { watchFolder } from "../../shared/watch";
 import { bridgeTarget, call, engineGet } from "../engine/client";
 import { processRuns } from "../../shared/platform";
 import { isChatsFolder } from "../engine/chats";
@@ -250,14 +251,28 @@ export function keepList(): () => void {
   // works, change often and say nothing of it.)
   const box = watchFolders([BOX], (...told: unknown[]) => { if (typeof told[1] !== "string" || LIST_FILES.has(told[1])) again(); }, { recursive: false, missed: again });
   const moves = watchFolders([MOVES], again, { recursive: false });
-  const bots = watchFolders([BOTS], (...told: unknown[]) => {
-    const name = typeof told[1] === "string" ? told[1].split(path.sep) : null;
-    if (!name || name.length === 1 || (name.length === 2 && BOT_FILES.has(name[1]!))) again();
-  }, { missed: again });
+  // Each bot's own folder, not what's in it (where its agent works: a repository, its packages,
+  // which on Linux would each take a watch of the user's): watched as bots come and go.
+  const botWatches = new Map<string, fs.FSWatcher>();
+  const watchBots = () => {
+    const now = new Set(listOf(BOTS).filter(id => /^bot_[A-Za-z0-9]+$/.test(id)));
+    for (const [id, watch] of botWatches) if (!now.has(id)) { watch.close(); botWatches.delete(id); }
+    for (const id of now) {
+      if (botWatches.has(id)) continue;
+      try {
+        const watch = watchFolder(path.join(BOTS, id), (_, name) => { if (!name || BOT_FILES.has(name)) again(); }, { missed: again });
+        watch.on("error", () => { watch.close(); botWatches.delete(id); });
+        botWatches.set(id, watch);
+      } catch {}
+    }
+  };
+  const bots = watchFolders([BOTS], () => { watchBots(); again(); }, { recursive: false });
+  watchBots();
   const whole = setInterval(() => { for (const [name, place] of placeTargets) readPlace(name, place).catch(() => {}); }, READ_EVERY);
   whole.unref?.();
   return () => {
-    for (const watch of [box, moves, bots]) watch.close();
+    for (const watch of [box, moves, bots, ...botWatches.values()]) watch.close();
+    botWatches.clear();
     for (const each of followers) each.delete(again);
     clearInterval(whole);
     clearTimeout(workOutTimer);

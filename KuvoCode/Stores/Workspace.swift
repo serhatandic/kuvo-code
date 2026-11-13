@@ -352,11 +352,11 @@ final class Workspace {
 
     /// This Mac's sessions, not a machine's, unused since `cutoff` (ms), oldest first: what Settings ›
     /// Storage offers to delete. Only those its box lists as people's conversations (a project's, a
-    /// chat) or runs kept out of sight: never a bot's (the bot lives on in it, wake-ups and all,
-    /// however long it's been quiet), a seat or a subagent's, nor one its box hasn't listed; nor one
-    /// at work, one with a message you started writing, or (`keepsPinned`) one pinned.
+    /// chat): never a bot's (the bot lives on in it, wake-ups and all, however long it's been quiet),
+    /// a seat or a subagent's, nor one its box hasn't listed; nor one at work, one with a message you
+    /// started writing, or (`keepsPinned`) one pinned.
     func oldSessions(unusedSince cutoff: Double, keepsPinned: Bool) -> [Session] {
-        let deletable: Set<SessionLists.Kind> = [.project, .chat, .hidden]
+        let deletable: Set<SessionLists.Kind> = [.project, .chat]
         return sessions
             .filter { $0.time.updated < cutoff && !RemoteFolder.isRemote($0.location.directory) && !(keepsPinned && Self.isPinned($0)) && !running.contains($0.id) }
             .filter { listKind(of: $0).map(deletable.contains) == true && Drafts.shared[$0.id].isEmpty }

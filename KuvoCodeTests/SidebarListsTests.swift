@@ -1,5 +1,6 @@
 import ClientSessions
 import Foundation
+import KuvoLink
 import OpenCodeKit
 import Testing
 @testable import KuvoCode
@@ -100,20 +101,42 @@ import Testing
     }
 
     /// Settings › Storage's Delete Old Sessions offers only what its box calls people's
-    /// conversations: never a bot's (one this Mac doesn't know is a bot's yet, too) nor a seat, however
-    /// long they've been quiet, as deleting one would end the bot's conversation or the group's seat.
-    @Test func deletingOldSessionsLeavesBotsAndSeats() async throws {
+    /// conversations: never a bot's, however long it's been quiet (deleting it would end the bot's
+    /// conversation), one this Mac doesn't know is a bot's too, as its box says.
+    @Test func deletingOldSessionsLeavesBotsConversations() async throws {
         defer { done() }
         sessions.add(Self.session("s_bot", in: "/tmp/kuvo-tests/web", updated: 5))
-        var seat = Self.session("s_seat", in: "/tmp/kuvo-tests/web", updated: 6)
-        seat["metadata"] = ["kuvo": ["seat": ["group": "g"]]]
-        sessions.add(seat)
         listing.change { $0.botSessions = ["s_bot"] }
         await workspace.refresh()
-        let kind = { (id: String) in workspace.session(id).flatMap { workspace.listKind(of: $0) } }
-        try await until { kind("s_bot") == .bot && kind("s_seat") == .seat }
-        // (Older than 45 ms since 1970: all but the archived one, the bot's and the seat left out.)
+        try await until { workspace.session("s_bot").flatMap { workspace.listKind(of: $0) } == .bot }
+        #expect(!workspace.botSessions.contains("s_bot"))
+        // (Older than 45 ms since 1970: all but the archived one, and the bot's left out.)
         #expect(workspace.oldSessions(unusedSince: 45, keepsPinned: true).map(\.id) == ["s_web_old", "s_chat", "s_api"])
+    }
+
+    /// A new session its box made (New Session, `kuvo/sessions`) has its row in its project at once,
+    /// as the box's answer says, before its list tells of it.
+    @Test func aNewSessionHasItsRowBeforeItsListSaysSo() async throws {
+        defer { done() }
+        let made = Self.session("s_new", in: "/tmp/kuvo-tests/web", updated: 60)
+        workspace.boxes = { id in id == BoxClient.mac ? BoxClient(box: id, transport: Starts(made: made)) : nil }
+        let session = try await workspace.createSession(in: "/tmp/kuvo-tests/web", model: nil, agent: "build")
+        #expect(session.id == "s_new")
+        #expect(workspace.projects.first { $0.directory == "/tmp/kuvo-tests/web" }?.sessions.map(\.id) == ["s_new", "s_web_new", "s_web_old"])
+    }
+
+    /// A box that makes a session as New Session asks (`kuvo/sessions`), and answers nothing else.
+    private struct Starts: BoxTransport, @unchecked Sendable {
+        let made: [String: Any]
+        func send(_ request: LinkRequest) -> AsyncThrowingStream<LinkResponsePart, Error> {
+            let answer: [String: Any]? = request.method == "POST" && request.path == "kuvo/sessions"
+                ? ["session": made["id"] ?? "", "title": NSNull(), "folder": "/tmp/kuvo-tests/web", "project": "web", "info": made] : nil
+            return AsyncThrowingStream { continuation in
+                continuation.yield(.head(status: answer == nil ? 404 : 200, headers: ["content-type": "application/json"]))
+                continuation.yield(.body((try? JSONSerialization.data(withJSONObject: answer ?? [:])) ?? Data()))
+                continuation.finish()
+            }
+        }
     }
 
     /// A chat is drawn as its box marks it (#571, `kuvo.chat`): in the chats, named Chats, whatever

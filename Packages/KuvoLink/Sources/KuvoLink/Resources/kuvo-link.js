@@ -35450,19 +35450,44 @@ function keepList() {
       again();
   }, { recursive: false, missed: again });
   const moves = watchFolders([MOVES], again, { recursive: false });
-  const bots = watchFolders([BOTS], (...told) => {
-    const name = typeof told[1] === "string" ? told[1].split(path122.sep) : null;
-    if (!name || name.length === 1 || name.length === 2 && BOT_FILES.has(name[1]))
-      again();
-  }, { missed: again });
+  const botWatches = new Map;
+  const watchBots = () => {
+    const now = new Set(listOf(BOTS).filter((id) => /^bot_[A-Za-z0-9]+$/.test(id)));
+    for (const [id, watch] of botWatches)
+      if (!now.has(id)) {
+        watch.close();
+        botWatches.delete(id);
+      }
+    for (const id of now) {
+      if (botWatches.has(id))
+        continue;
+      try {
+        const watch = watchFolder(path122.join(BOTS, id), (_, name) => {
+          if (!name || BOT_FILES.has(name))
+            again();
+        }, { missed: again });
+        watch.on("error", () => {
+          watch.close();
+          botWatches.delete(id);
+        });
+        botWatches.set(id, watch);
+      } catch {}
+    }
+  };
+  const bots = watchFolders([BOTS], () => {
+    watchBots();
+    again();
+  }, { recursive: false });
+  watchBots();
   const whole = setInterval(() => {
     for (const [name, place] of placeTargets)
       readPlace(name, place).catch(() => {});
   }, READ_EVERY);
   whole.unref?.();
   return () => {
-    for (const watch of [box, moves, bots])
+    for (const watch of [box, moves, bots, ...botWatches.values()])
       watch.close();
+    botWatches.clear();
     for (const each of followers)
       each.delete(again);
     clearInterval(whole);
@@ -39690,7 +39715,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "9ce8c5134ef0";
+var BRIDGE_VERSION = "6b18996901e0";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";

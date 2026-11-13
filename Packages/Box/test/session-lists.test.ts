@@ -367,6 +367,31 @@ test("a change another process makes to the box's projects reaches the kept list
   }
 }, 20_000)
 
+// A bot's conversation named by another process (a bot made over SSH, kuvo-wake): its folder's
+// files watched, not what its agent works on in it.
+test("a bot another process makes is listed as a bot's at once", async () => {
+  const { BOTS } = await import("../src/link/home")
+  const folder = join(BOTS, "bot_listtest")
+  add("ses_botty", work, 470)
+  mkdirSync(folder, { recursive: true })
+  const stop = keepList()
+  try {
+    await listPlaceHeard("engine", target)
+    expect(readList()!.sessions.ses_botty!.facts.kind).toBe("project")
+    const listed = new Promise<void>(done => {
+      const look = () => { if (readList()?.sessions.ses_botty?.facts.kind === "bot") { listFollowers.delete(look); done() } }
+      listFollowers.add(look)
+    })
+    writeFileSync(join(folder, "bot.json"), JSON.stringify({ kuvo: 1, id: "bot_listtest", name: "Lister" }))
+    writeFileSync(join(folder, "session"), "ses_botty")
+    await listed
+  } finally {
+    stop()
+    sessions.delete("ses_botty")
+    rmSync(folder, { recursive: true, force: true })
+  }
+}, 20_000)
+
 test("a route never writes over the list the long-running process keeps, nor takes away its mark", async () => {
   // (A process named as the long-running one is: it started as the route read the engine.)
   const link = Bun.spawn(["/bin/sh", "-c", "while :; do sleep 1; done", "kuvo-link"], { stdin: "ignore", stdout: "ignore", stderr: "ignore" })
