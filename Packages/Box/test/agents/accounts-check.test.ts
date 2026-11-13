@@ -21,6 +21,9 @@ let root: string
 let bin: string
 const path = process.env.PATH
 const keychain = ClaudeAgent.keychain
+// Each agent's program check (`maintenance`), put back after: every kind of agent this file makes
+// that has one (Cursor's has none).
+const checks = [ClaudeAgent, CodexAgent, GrokAgent].map((kind) => [kind.prototype, kind.prototype.maintenance] as const)
 
 beforeAll(() => {
   // Claude Code's own sign-in, as a machine's is (a Mac's is Kuvo Code's own: its describe below).
@@ -30,11 +33,17 @@ beforeAll(() => {
   mkdirSync(bin)
   // The fake programs first: they're the ones found.
   process.env.PATH = [bin, path].join(delimiter)
+  // Reading an account also checks its program (its version, and npm's newest), waiting at most 2 s
+  // and announcing an update once a later answer comes. That's not what these tests are about: on a
+  // loaded machine (the fake's `--version` slow to start, a slow registry) it came after the read and
+  // fell among the changes they count. Their agents check no program (as one that has none).
+  for (const [prototype] of checks) (prototype as { maintenance?: unknown }).maintenance = undefined
 })
 
 afterAll(() => {
   ClaudeAgent.keychain = keychain
   process.env.PATH = path
+  for (const [prototype, check] of checks) prototype.maintenance = check
   rmSync(root, { recursive: true, force: true })
 })
 
