@@ -39139,7 +39139,7 @@ import fs123 from "node:fs";
 import path126 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "c8fe79516321";
+var BRIDGE_VERSION = "d48908a47c67";
 
 // Packages/Box/src/link/rehome/rewrite.ts
 var NO_REWRITE = {
@@ -48020,9 +48020,9 @@ async function serve() {
   keepEngineDefaults();
   holdVault(engineHandler(readEngineFile, { name: os21.hostname() }, readBridgeFile));
   const port = server.address().port;
-  console.log(JSON.stringify({ url: `http://127.0.0.1:${port}` }));
   if (OWN_HOME_MAC)
     writePrivate(SERVE_FILE(), JSON.stringify({ pid: process.pid, port, password, kept: false }));
+  console.log(JSON.stringify({ url: `http://127.0.0.1:${port}` }));
   if (IS_MAC)
     (async () => {
       for (let tries = 0;tries < 120; tries++) {
