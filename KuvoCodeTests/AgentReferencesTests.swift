@@ -4,7 +4,8 @@ import Testing
 
 /// "&" in a composer names another conversation (a bot or a session): the list opens as you type
 /// a name, the best matches first, picking one writes its name, and the names in a message are
-/// found as written, whole, for your bubble to color and the agent to be told who they are.
+/// found as written, whole, for your bubble to color. (Who they are, the agent is told by its box:
+/// Vectors/message-parts.json.)
 @MainActor
 @Suite struct AgentReferencesTests {
     private func agent(_ name: String, _ session: String, kind: String = "session", project: String? = nil) -> AgentMail.Agent {
@@ -40,35 +41,13 @@ import Testing
         #expect(AgentReferences.matches("", in: agents, limit: 2).map(\.session) == ["s1", "s2"])
     }
 
-    /// Who a message names with "&", told at its end, as every box tells it for a phone's: the
-    /// cases this Mac's composer and the boxes' `nameAgents` both read (`names/agent-naming.json`;
-    /// those of a message with the blocks only a phone's has are the boxes').
-    @Test func namedAsEveryBoxNamesThem() throws {
-        struct Vector: Decodable {
-            struct Case: Decodable { var about: String; var message: String; var excluding: String?; var here: String?; var expected: String; var composer: Bool? }
-            var agents: [AgentMail.Agent]
-            var cases: [Case]
-        }
-        let file = try #require(RouteScenarios.folder).appending(path: "names/agent-naming.json")
-        let vector = try JSONDecoder().decode(Vector.self, from: Data(contentsOf: file))
-        let cases = vector.cases.filter { $0.composer == true }
-        #expect(cases.count >= 6)
-        for each in cases {
-            #expect(AgentReferences.text(each.message, excludingAll: Set([each.excluding].compactMap { $0 }), here: each.here, agents: vector.agents) == each.expected, "\(each.about)")
-        }
-    }
-
-    /// A message sent before the note's words changed still reads as naming its agents.
-    @Test func anEarlierNoteStillReads() {
-        let earlier = "Ask &Scout\n\n<named-agents>\nAgents the user named with & in this message. Read one's conversation with read_conversation, or write to it with send_message, by its address:\n- &Scout (ses_x): session, on the Mac\n</named-agents>"
-        let (text, references) = AgentReferences.split(earlier)
-        #expect(text == "Ask &Scout")
-        #expect(references.map(\.session) == ["ses_x"])
-    }
-
+    /// Picking one writes its name, and a message naming it says which was picked, for its box to
+    /// name that one where another has the same name (`MessageParts.Sending.named`).
     @Test func pickingOneWritesItsName() {
         let picked = AgentReferences.insert(agent("Fix login", "s2"), into: "Ask &fi")
         #expect(picked == "Ask &Fix login ")
+        #expect(AgentReferences.picked(in: picked + "now").contains("s2"))
+        #expect(!AgentReferences.picked(in: "Ask nobody").contains("s2"))
     }
 
     /// Each name as written, whole: a longer name over one it starts with, case and accents aside,

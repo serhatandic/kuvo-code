@@ -6,7 +6,8 @@ import OpenCodeKit
 /// `MachineTestBox` runs it), which reaches the test's stand-in engine where it listens and the
 /// agents bridge where a test runs one, recorded as the app records them for its box
 /// (`run/engine.json`, `run/bridge.json`). A "/" or "!" text goes there as it does in the app
-/// (`kuvo/sessions/<id>/typed`), and the keywords "/" offers come from it. Stop it with the test.
+/// (`kuvo/sessions/<id>/typed`), the keywords "/" offers come from it, and a message goes through it
+/// (`kuvo/sessions/<id>/send`), which writes what the agent reads. Stop it with the test.
 @MainActor
 final class ConversationBox {
     let machine: MachineTestBox
@@ -51,9 +52,15 @@ final class ConversationBox {
 
     /// `model`'s box is this one, and what "/" offers there is read.
     func serves(_ model: SessionModel) async {
-        let client = machine.client
+        let client = machine.appClient
         model.box = { client }
         await model.readKeywords()
+    }
+
+    /// Every session of `workspace` is on this box (as on this Mac's own): messages go through it.
+    func serves(_ workspace: Workspace) {
+        let client = machine.appClient
+        workspace.boxes = { _ in client }
     }
 
     func stop() {
@@ -67,5 +74,25 @@ final class ConversationBox {
     private func record(_ name: String, _ value: [String: Any]) throws {
         try FileManager.default.createDirectory(at: run, withIntermediateDirectories: true)
         try JSONSerialization.data(withJSONObject: value).write(to: run.appending(path: name), options: .atomic)
+    }
+}
+
+/// A test's box for its sessions: this Mac's own, as the app reaches it (`TestBox`), started as it
+/// opens one and stopped with the test. What its messages go through, as in the app.
+@MainActor
+final class SessionsBox {
+    private(set) var box: TestBox?
+
+    /// Started once, for `workspace`'s sessions on this Mac, on `engine`.
+    func start(_ engine: StubEngine, for workspace: Workspace) async throws {
+        if box == nil { box = try await TestBox(engine: engine.url) }
+        guard let box else { return }
+        let client = box.client(engine: engine.url)
+        workspace.boxes = { $0 == BoxClient.mac ? client : nil }
+    }
+
+    func stop() {
+        box?.stop()
+        box = nil
     }
 }

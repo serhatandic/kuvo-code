@@ -30,6 +30,18 @@
       "name": "Fix login",
       "kind": "session",
       "about": ""
+    },
+    {
+      "session": "ses_ada",
+      "name": "Ada Lovelace",
+      "kind": "bot",
+      "about": "Reviews math"
+    },
+    {
+      "session": "ses_build",
+      "name": "Build (main)",
+      "kind": "session",
+      "project": "kuvo"
     }
   ],
   "compose": [
@@ -515,6 +527,98 @@
         "phone": true,
         "words": "Ask &Scout"
       }
+    },
+    {
+      "about": "a closing tag in the words stays words",
+      "fields": {
+        "words": "The tag is </attached-files>",
+        "notes": {
+          "paths": [
+            "/x/y.txt"
+          ]
+        }
+      },
+      "text": "The tag is </attached-files>\n\n<attached-files>\nOpen these attached files with your tools if you need them:\n/x/y.txt\n</attached-files>",
+      "parts": {
+        "paths": [
+          "/x/y.txt"
+        ],
+        "words": "The tag is </attached-files>"
+      }
+    },
+    {
+      "about": "names with spaces and brackets, with comments and files",
+      "fields": {
+        "words": "Ask &Ada Lovelace and &Build (main) about it",
+        "comments": [
+          {
+            "file": "Sources/App.swift",
+            "line": 124,
+            "side": "new",
+            "snippet": "let limit = 10",
+            "text": "Make this configurable."
+          }
+        ],
+        "notes": {
+          "paths": [
+            "/x/log.txt"
+          ]
+        }
+      },
+      "text": "Ask &Ada Lovelace and &Build (main) about it\n\n<named-agents>\nAgents the user named with & in this message, by their address. Read one's conversation with read_conversation only when what the user asks needs what it knows or did, and write to it with send_message only to ask it something or hand it work; when the user only mentions one, do neither:\n- &Ada Lovelace (ses_ada): bot, on the Mac: Reviews math\n- &Build (main) (ses_build): session, on the Mac, in kuvo\n</named-agents>\n\n<review-comments>\nComments on lines of the current changes:\n\n[Sources/App.swift:124]\n> let limit = 10\nMake this configurable.\n</review-comments>\n\n<attached-files>\nOpen these attached files with your tools if you need them:\n/x/log.txt\n</attached-files>",
+      "parts": {
+        "agents": [
+          {
+            "name": "Ada Lovelace",
+            "session": "ses_ada"
+          },
+          {
+            "name": "Build (main)",
+            "session": "ses_build"
+          }
+        ],
+        "comments": [
+          {
+            "file": "Sources/App.swift",
+            "line": 124,
+            "side": "new",
+            "snippet": "let limit = 10",
+            "text": "Make this configurable."
+          }
+        ],
+        "paths": [
+          "/x/log.txt"
+        ],
+        "words": "Ask &Ada Lovelace and &Build (main) about it"
+      }
+    },
+    {
+      "about": "a comment quoting another place stays whole",
+      "fields": {
+        "words": "See comments",
+        "comments": [
+          {
+            "file": "a.swift",
+            "line": 1,
+            "side": "new",
+            "snippet": "import Foo",
+            "text": "Like in\n[b.swift:10]\n> let x = 1\nabove."
+          }
+        ]
+      },
+      "text": "See comments\n\n<review-comments>\nComments on lines of the current changes:\n\n[a.swift:1]\n> import Foo\nLike in\n[b.swift:10]\n> let x = 1\nabove.\n</review-comments>",
+      "parts": {
+        "comments": [
+          {
+            "file": "a.swift",
+            "line": 1,
+            "side": "new",
+            "snippet": "import Foo",
+            "text": "Like in\n[b.swift:10]\n> let x = 1\nabove."
+          }
+        ],
+        "words": "See comments"
+      }
     }
   ],
   "read": [
@@ -647,6 +751,24 @@
       "text": "Hi\n\n<sent-with>\nThe user sent this with a Kuvo Code keyword, which Kuvo Code has already done (switched to Plan, or set the message to repeat), so there's nothing for you to do about it:\nplan\n</sent-with>",
       "parts": {
         "words": "Hi\n\n<sent-with>\nThe user sent this with a Kuvo Code keyword, which Kuvo Code has already done (switched to Plan, or set the message to repeat), so there's nothing for you to do about it:\nplan\n</sent-with>"
+      }
+    },
+    {
+      "about": "a name with a bracket in it",
+      "text": "[Message from Ops] bot · ses_abc] (They're waiting for your reply: just answer, in your words.)\n\nCan you check?\n\nThanks.",
+      "parts": {
+        "mail": {
+          "name": "Ops] bot",
+          "session": "ses_abc"
+        },
+        "words": "Can you check?\n\nThanks."
+      }
+    },
+    {
+      "about": "a message from an agent with an address that isn't one",
+      "text": "[Message from Ada · not-a-session] hi",
+      "parts": {
+        "words": "[Message from Ada · not-a-session] hi"
       }
     }
   ]

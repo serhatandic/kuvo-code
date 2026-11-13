@@ -63,14 +63,16 @@ struct MessagePartsTests {
         let unread = MessageParts.unread(messages + [("msg_kept", "kept", kept)])
         #expect(unread.map(\.id) == messages.map(\.id))
         #expect(MessageParts.of(id: "msg_0", text: messages[0].text, metadata: nil).words == messages[0].text)
-        var asked: [[String]] = []
+        final class Asked: @unchecked Sendable { var texts: [[String]] = [] }
+        let asked = Asked()
+        let answer = try JSONSerialization.data(withJSONObject: ["parts": read.map { $0["parts"]! }])
         let any = await MessageParts.read(unread) { body in
-            let texts = try #require((try JSONSerialization.jsonObject(with: body) as? [String: Any])?["texts"] as? [String])
-            asked.append(texts)
-            return (200, try JSONSerialization.data(withJSONObject: ["parts": read.map { $0["parts"]! }]))
+            let texts = (try JSONSerialization.jsonObject(with: body) as? [String: Any])?["texts"] as? [String] ?? []
+            asked.texts.append(texts)
+            return (200, answer)
         }
         #expect(any)
-        #expect(asked == [read.map { $0["text"] as! String }])
+        #expect(asked.texts == [read.map { $0["text"] as! String }])
         for (index, each) in read.enumerated() {
             #expect(Self.json(encoding: MessageParts.of(id: "msg_\(index)", text: "", metadata: nil)) == Self.json(each["parts"]!))
         }

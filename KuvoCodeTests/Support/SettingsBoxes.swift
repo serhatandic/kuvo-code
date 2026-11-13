@@ -86,6 +86,14 @@ final class MachineTestBox {
         return BoxClient(box: name, transport: LocalBox { EngineRoutes.forward($0, to: base, password: endpoint.password, allowing: { path, _ in path.hasPrefix("kuvo/") }) })
     }
 
+    /// The same, asked as this Mac's app asks its own box (`x-kuvo-from: app`): what it sends isn't a
+    /// phone's.
+    var appClient: BoxClient {
+        let endpoint = server.endpoint
+        let base = endpoint.url.absoluteString.hasSuffix("/") ? endpoint.url : URL(string: endpoint.url.absoluteString + "/")!
+        return BoxClient(box: name, transport: LocalBox { EngineRoutes.forward($0, to: base, password: endpoint.password, adding: ["x-kuvo-from": "app"], allowing: { path, _ in path.hasPrefix("kuvo/") }) })
+    }
+
     /// Its settings file, as it is now.
     func onDisk() throws -> [String: Any] {
         try JSONSerialization.jsonObject(with: Data(contentsOf: folder.appending(path: "box/opencode.json"))) as? [String: Any] ?? [:]

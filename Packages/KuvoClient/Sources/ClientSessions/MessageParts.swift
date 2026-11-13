@@ -169,7 +169,7 @@ public struct MessageParts: Codable, Hashable, Sendable {
     /// `kuvo/messages/parts` a body and gives its answer. Kept by id, for as long as the app runs.
     /// Returns whether any were read; a box that can't say leaves them as they are.
     @discardableResult
-    public static func read(_ messages: [(id: String, text: String)], ask: (Data) async throws -> (status: Int, body: Data)) async -> Bool {
+    public static func read(_ messages: [(id: String, text: String)], ask: @Sendable (Data) async throws -> (status: Int, body: Data)) async -> Bool {
         var any = false
         var rest = messages[...]
         while !rest.isEmpty {
