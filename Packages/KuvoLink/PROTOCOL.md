@@ -5244,6 +5244,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `keys` | `kuvo/keys…` |
 | `letters-read` | (in a peer's agents' mail) it takes a letter with `read` (bridge 0.9.100) |
 | `limits` | `kuvo/agents/api/kuvo/limits…` and `plan_limits`: each account's plan limits ("Plan limits") |
+| `limits.resets` | `kuvo/agents/api/kuvo/limits/reset…` and `use_limit_reset`: using a plan's resets, once, on the computer with its sign-in ("Plan limits", "Resets") |
 | `mac` | a Mac only: `kuvo/mac` |
 | `machines` | a Mac only: `kuvo/machines…` (with its app closed its box still lists them, and the rest says the app must be open) |
 | `mcp.catalog` | `kuvo/mcp/catalog…` |
