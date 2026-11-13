@@ -23,6 +23,8 @@ final class BoxUsageHistory {
     private var services = Set(UserDefaults.standard.stringArray(forKey: BoxUsageHistory.servicesKey) ?? [])
     private static let servicesKey = "usage.boxHistoryServices"
     private var zoneObserver: NSObjectProtocol?
+    /// The panel's settings, kept by the same box.
+    let settings = UsageSettingsOnBox()
 
     init() {
         HostHistory.shared.refresh = { [weak self] in self?.refresh() }
@@ -34,17 +36,19 @@ final class BoxUsageHistory {
         }
     }
 
-    /// This Mac's box's bridge is up (again).
-    func connected(api: OpenCodeAPI?) {
+    /// This Mac's box's bridge is up (again): `box`, its id (`BoxClient`).
+    func connected(api: OpenCodeAPI?, box: String) {
         guard let api else { return }
         self.api = api
         fallback?.cancel()
         fallback = nil
         read()
+        settings.connected(api: api, box: box)
     }
 
     /// Its bridge said it changed.
     func handle(_ event: ServerEvent) {
+        settings.handle(event)
         guard event.type == BoxUsage.event else { return }
         read()
     }
@@ -55,6 +59,7 @@ final class BoxUsageHistory {
         reading?.cancel()
         reading = nil
         api = nil
+        settings.stopped()
         HostHistory.shared.setAway(true)
         // Not back in two minutes: the panel reads the logs here again meanwhile.
         fallback?.cancel()
@@ -66,8 +71,6 @@ final class BoxUsageHistory {
     }
 
     private var fallback: Task<Void, Never>?
-    /// This Mac's earlier Codex fallback model is on its way to the box (once).
-    private var broughtFallback = false
 
     /// Has the box read its logs now (the panel's Refresh), and your other computers theirs.
     func refresh() {
@@ -131,17 +134,8 @@ final class BoxUsageHistory {
         cover(Set(usage.services), days: Self.days(usage))
         let fallback = usage.services.contains("codex") ? usage.codexFallback : nil
         HostHistory.shared.update(codexFallback: fallback.map { .init(model: $0.model, choices: $0.choices, chosen: $0.chosen) })
-        // The fallback model this Mac chose before its box priced Codex (the panel kept it here),
-        // taken to its box once, while the box has none chosen (none counts as chosen). Goes with
-        // the panel's own Codex pricing (#631 piece H), once every Mac's box has taken it.
-        if let fallback, !fallback.chosen, !broughtFallback, let mine = HostHistory.localCodexFallback, fallback.choices.contains(mine) {
-            broughtFallback = true
-            Task { [weak self] in
-                guard let self else { return }
-                // (Not answered: tried again with the next answer. Refused: not one it can take, left.)
-                if await self.setCodexFallback(mine) == .unreachable { self.broughtFallback = false }
-            }
-        }
+        // (The fallback model this Mac chose before its box priced Codex goes to its box with the
+        // panel's other settings, once: `UsageSettingsOnBox`.)
     }
 
     private func cover(_ services: Set<String>, days: [String: [HostHistoryDay]]) {

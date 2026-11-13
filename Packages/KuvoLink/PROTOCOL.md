@@ -4158,8 +4158,8 @@ Cursor while its plan's sign-in was turned away as it is now, or while Cursor ho
   Mac in Istanbul reading a machine in UTC gets its own days); one it doesn't know is its own,
   `zone` says which. `services`: what this box states the usage of (`claude`, `codex`,
   `grok`, `opencode`, `cursor`, `antigravity`): a client shows those from here, and reads the rest as it did. `scanned`: when this box last read its logs.
-  `pricing: {codex: {fallback, chosen, choices}}`: Codex's fallback model, this box's setting
-  (below), `null` for none; `chosen`, whether it was ever chosen on this box (none counts);
+  `pricing: {codex: {fallback, chosen, choices}}`: Codex's fallback model, a usage setting
+  (below), `null` for none; `chosen`, whether it was ever chosen (none counts);
   `choices`, the models it may be, in order.
   - A `row` is one account across your computers, with the same `id` as its plan limits row
     (`<service>#<identity>`, or `<box key>/<provider>` for one that can't say who it is), so a
@@ -4264,10 +4264,12 @@ Cursor while its plan's sign-in was turned away as it is now, or while Cursor ho
     that can't be read just now (being rewritten); signed out, the account's use from this box goes.
 - `PUT kuvo/agents/api/kuvo/usage/pricing[?zone=]` `{"codex": {"fallback": <model> | null}}`: Codex's
   fallback model, whose rates estimate what a Codex model with no known price used (in this box's
-  own Codex logs, not the engine's ChatGPT slice: each box prices its own with its own); one of `choices` (the supplement's
+  own Codex logs, not the engine's ChatGPT slice: each box prices its own with it); one of `choices` (the supplement's
   `fallback_models.codex` priced exactly by a catalog), or `null` for none (`400 {message}` for
-  anything else, its `message` a client shows as it is). Kept in the bridge's `usage/settings.json`, through a restart; read again with it
-  at once, answered as `GET`.
+  anything else, its `message` a client shows as it is). One of the usage settings, the same on
+  your own computers ("Usage settings": `codexFallback`), kept in the bridge's `usage/settings.json`
+  through a restart; read again with it at once, here and on each computer it reaches, answered as
+  `GET`. `chosen`: whether it was set on any of them (none counts).
 - `POST kuvo/agents/api/kuvo/usage/refresh[?zone=]` reads the logs now, asks your other computers
   to read theirs and tell (below), and answers as `GET` once it's read here (or after five
   seconds, the rest coming as the event).
@@ -4315,6 +4317,119 @@ Cursor while its plan's sign-in was turned away as it is now, or while Cursor ho
   `away` when every box of theirs is), what it said kept, and whether it was one a peer vouches
   for, which holds after a restart until the link says again; a computer you removed goes, with
   what it said.
+
+### Usage settings
+
+The usage panel's settings (#631 piece F) are the same on every app, whichever box it asks: each
+box keeps them, and your own computers' boxes share them. They're what the panel shows and counts,
+not how it looks: density, theme, transparency, animation, the menu bar's style and how each card
+is opened stay each app's own. A client reaches them as `kuvo/agents/api/kuvo/usage/settings…`
+(the Mac app at `api/kuvo/usage/settings…` on its box's bridge), where `features` has
+`usage.settings`. A box from before them answers 404, and a client keeps its own settings there.
+
+- They're in parts, each changed and shared whole:
+  - `layout`: `{placed, providerOrder, metricOrder, pinned, expanded, expandOnEnable, seeded}`.
+    `placed` holds the meters shown, by id (`<provider>.<metric>`, as the Mac's panel names them),
+    in order. `providerOrder` is the cards' order, and `metricOrder` each card's meters' order
+    (`{<provider>: [id]}`), shown or not. `pinned` holds the meters pinned to the menu bar.
+    `expanded` holds the meters shown only when their card is opened, and `expandOnEnable` the ones
+    that go there when they're turned on. `seeded` holds the default meters already offered, so one
+    you turned off isn't turned on again.
+  - `providers`: `{enabled, known}`. `enabled` holds the cards turned on, and `known` every card
+    offered, so a new one is offered once.
+  - `totalSpend`: `{show, period?, metric?}`, the total spend card: whether it shows, its period
+    and what it counts, as the panel names them.
+  - `codexFallback`: Codex's fallback model ("Usage history"), `null` for none.
+  - `notifications`: `{underTenPercent, healthyToClose, closeToRunningOut}`, which of the
+    panel's notifications are on. They're delivered by each app, where it reads them.
+  A part never set is absent: the panel's own default. Lists hold at most 1,000 ids of up to 200
+  characters each, `metricOrder` at most 200 cards, and `period` and `metric` up to 40 characters.
+- `GET kuvo/agents/api/kuvo/usage/settings` → `{data: {settings: {<part>: value}, versions:
+  {<part>: version}, imported}}`. `versions`: each part's version as a client names it (below).
+  `imported` says whether what a client kept before has come in on this box (below).
+- `PUT kuvo/agents/api/kuvo/usage/settings` with the parts changed (`{layout?, …}`, each whole)
+  answers as `GET`. With `knows: {cards, meters}`, the card and meter ids the client's app knows
+  (all of them), `layout` and `providers` are whole for those alone: the ids the part held of the
+  others (a newer app's) are kept, each after the nearest one before it that's still there (first
+  when none is), so they keep their places. Without it, a part's ids are taken as sent. Fields of a
+  part the box doesn't know (a newer box's) are kept whatever a client sends. With `based:
+  {<part>: version | null}`, the version each part was changed from (`null`: the client had none),
+  a part that has changed since (another computer's change came meanwhile) isn't changed: the
+  answer names it in `stale`, and the client shows the box's. The Mac app sends both. The answer is `400 {message}` for a part that isn't one or isn't what it should
+  be, and for a `codexFallback` that isn't one of `choices` ("Usage history"); nothing changes then.
+  A part sent as it already is isn't a change.
+- `POST kuvo/agents/api/kuvo/usage/settings/import` with what a client kept before (its own
+  settings from before the box kept them, `codexFallback` among them) answers as `GET` with `took`,
+  the parts that came in. It happens once per box: each part no box has set yet comes in, here or
+  from another of your computers, and the rest stay as they are. A `codexFallback` the box can't
+  price with now is left out. After the first time, it takes nothing. The Mac app does this the
+  first time its box says `imported: false`, with only the parts you changed on it (a Mac still on
+  its first-run settings brings none, so it never puts them over the ones you made on another,
+  whichever comes first), never `providers` (each Mac turned on the cards for the tools it found:
+  they're shared from the first time you turn one on or off).
+- The bridge's events carry `kuvo.usage.settings` `{units}` when parts change (through these
+  routes, from another of your computers, or as the box starts over in another setup): ask again.
+- Each part carries the version of its last change, `{v, by, imported?}`. `v` counts on from every
+  version the box has seen: milliseconds since 1970, or one past the highest seen when its clock is
+  behind. `by` is the box that made it (its link key). `imported` marks what came in by import, at
+  `v` its time by the importing box's own clock (an import isn't counted on from what was seen, as
+  a change is). So between two imports on two computers whose clocks are off, the one whose clock
+  said earlier wins, which may not be the one made first; once either is changed anywhere, the
+  change wins. A client names a version as `<v>/<by>`, with `/i` after an import's
+  (`versions`, `based`). The newest wins: a change over an import, the higher `v` between two changes, the
+  lower `v` between two imports (so a Mac set up later never puts its first-run settings over the
+  ones you made on another), and at the same `v` the `by` that sorts last.
+- **Across your own computers** only: between the boxes of one setup ("Your setup"), whose
+  boxes are all yours. The link tells the bridge the setup it follows now (`setup` in `PUT
+  /api/kuvo/peers`, its id; `null` once it's settled that it follows none: a machine more than one
+  Mac set up, or a setup set aside; not said while it can't say one: none made yet, as a box from
+  before setups updates, or one it can't follow yet, its keys not read as its link starts or made
+  anew. A link from before this, met for a moment as a box updates, doesn't say it either. The
+  bridge takes not said as neither: it records nothing and shares nothing until the link says), and a box sends and takes
+  them only while it follows one, only with its peers (the setup's boxes), and only mail naming the
+  same setup. So never to or from a box a peer vouches for, and never through a machine more than
+  one Mac set up (it follows no setup, so it neither passes them on nor takes them): until setups
+  can be joined (#183), Macs that share a machine each keep their own, as their boxes keep them.
+  The settings belong to the setup they were shared in (`setup` in `settings.json`; `null` while
+  the box followed none; a box from before this takes the first the link names): a box the link
+  names in another setup (it left yours, and joined someone else's), or in one after following
+  none, starts over, every part and `imported` gone, so none of them reaches the new setup's
+  computers, and its own Mac's settings come in again.
+  Nothing goes before the link has said. Each box tells the others `{"seat": {"kind": "settings",
+  at, digest, setup, usage?, ask?}}` through its link, which carries this kind only between your
+  own computers (never to or from a box a peer vouches for), whole or in parts as a group chat's
+  mail is. `usage` is the parts with their versions (`{<part>: {value, stamp: {v, by,
+  imported?}}}`), and `digest` a hash of all of them. A box sends all of them, with `ask`, to one
+  it hasn't told since its bridge or link started. It sends all of them as they change, here or
+  from another computer (not back to the box whose mail it just took, when it now holds the same). Every ten minutes otherwise it sends `digest` alone. A box takes the parts
+  newer than its own. One whose `digest` then isn't the sender's sends all of its own (at most once a
+  minute), asking for the other's when the mail held only a `digest`. `ask` is answered with all of
+  them at once. A part a box doesn't know (a newer box's) is kept as it came, and passed on, and so
+  are a part's fields it doesn't know (`digest` is of their JSON with every object's keys in one
+  order), so two boxes of different versions agree (while what a part holds that a box doesn't know
+  is at most 16 KB: past that the older box drops it, and the two tell each other all of it every
+  ten minutes, at most once a minute each). Nothing is kept per computer: what's newer is
+  taken into the box's own, kept in `usage/settings.json` (`{"kuvo": 1, units, imported?, setup?}`, `setup` an id or `null`, with `codex: {fallback}` where a box from
+  before reads Codex's fallback model), through a restart. A box from before kept only that
+  fallback model there: what it held counts as imported.
+- A Mac app shows the box's parts in its panel and sends a part it changed, whole, with `knows`
+  and `based`. Its import waits until its panel has read its layout (the usage item starts with
+  the app); with the usage item off, it brings the layout as kept, once its meters were.
+  It reads whether its box keeps them from `features` (`usage.settings`; its own box of the same
+  version does). A change made while the box doesn't answer, before its first answer since a
+  restart too, goes once it's back; one made again while the last is on its way goes from the
+  version the box answered with, unless the box turned that one away (another computer's came
+  first: the box's shows); one turned away though the box holds this Mac's own last (the answer to
+  it was lost, and the box hasn't held another value of that part since, as this Mac last read
+  it) goes again from the box's version: the app keeps what the box last said, and what's still to go,
+  through a restart. Its panel's
+  stores keep their own copy, so they start at once and work while the box doesn't answer; a change
+  made meanwhile goes once it's back, and an answer that comes while one is on its way leaves that
+  part as it is here. A part the box says again as it said it before isn't put in again. A card or
+  meter a Mac doesn't know (a newer app's) is left out of its panel, and kept by the box (`knows`).
+  The layout comes over in the import only when it isn't a fresh panel's (after Reset, or a change
+  put back, it is). The phone shows the Mac's panel until it reads
+  boxes itself (#631 piece H).
 
 ### The Work Queue
 
@@ -7654,6 +7769,11 @@ before connects (the box notes one: `run/attached`).
   usage panel read Cursor's plan and spend itself, with the Cursor agent's key in this Mac's box
   folder, as before. Never the Cursor app's login.
   <!-- compat: 0.7 cursor-box -->
+- **Usage settings from before the box kept them** (#631 piece F): a Mac whose own box doesn't list
+  `usage.settings` in its features (one from before, still running as the Mac updates) keeps its
+  panel's settings in its own stores, as before, and shares none, until #679 updates its box
+  ("Usage settings").
+  <!-- compat: 0.7 usage-settings-box -->
 - **Updating an agent's program**: such a Mac asks `POST kuvo/agents/api/integration/<provider>/update`
   and waits for its answer, `{data: {updated, version?, message?}}`, so the agents bridge still
   answers that once the update is done (the same update every client sees, "Installing and

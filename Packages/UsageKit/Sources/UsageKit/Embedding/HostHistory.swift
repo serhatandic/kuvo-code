@@ -92,9 +92,6 @@ public final class HostHistory {
         self.codexFallback = codexFallback
     }
 
-    /// This Mac's choice from before the host priced Codex (Settings › Usage kept it here).
-    public static var localCodexFallback: String? { CodexFallbackModelSetting.current() }
-
     /// `answered`: what the host said (else what it last said, kept from before, while it starts).
     public func update(days: [String: [HostHistoryDay]], covered: Set<String>, answered: Bool = true, now: Date = .now) {
         if answered { asOf = now }

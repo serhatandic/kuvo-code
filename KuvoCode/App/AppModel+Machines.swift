@@ -440,7 +440,7 @@ extension AppModel {
         engine.agents.onConnected = { [weak self, weak engine] in
             guard let self, let engine else { return }
             planLimits.connected(machine, api: engine.agents.api)
-            if machine == SSHConnection.thisMac { usageHistory.connected(api: engine.agents.api) }
+            if machine == SSHConnection.thisMac { usageHistory.connected(api: engine.agents.api, box: machine) }
             Task {
                 await engine.catalog.refreshAgents()
                 _ = await self.workspace.refresh(engine)

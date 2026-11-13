@@ -1107,7 +1107,7 @@ final class AppModel {
                 // before this Mac's engine (it usually is), they're read once the stores are told
                 // of each other (`wireStores`).
                 planLimits.connected(nil, api: agents.api)
-                usageHistory.connected(api: agents.api)
+                usageHistory.connected(api: agents.api, box: BoxClient.mac)
                 if boxGroups.app == nil { chatsWaitForStores = true } else { await boxGroups.connected(nil) }
                 await catalog.refreshAgents()
                 await workspace.refreshAgents()
