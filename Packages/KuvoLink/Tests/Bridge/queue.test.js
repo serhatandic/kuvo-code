@@ -496,8 +496,9 @@ test("Undo puts one taken away from what waits back as it was, where it was: its
   await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_w2", text: "Second." });
   await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_w3", text: "Third." });
   const { removed } = (await ask("DELETE", "kuvo/sessions/ses_1/queue/msg_w1")).json;
-  // (`before`: what came after it, for Undo to put it back ahead of.)
-  assert.deepEqual(removed, { id: "msg_w1", text: "From Ada: the build is green.", delivery: "queue", from: "Ada", words: "From Ada: the build is green.", before: "msg_w2" });
+  // (`before`: what came after it, for Undo to put it back ahead of; its parts, kept with it.)
+  assert.deepEqual(removed, { id: "msg_w1", text: "From Ada: the build is green.", delivery: "queue", from: "Ada", words: "From Ada: the build is green.", before: "msg_w2",
+    metadata: { kuvo: { parts: { words: "From Ada: the build is green." } } } });
   const back = await ask("POST", "kuvo/sessions/ses_1/queue/add", { ...removed, words: "the build is green.", kept: true });
   assert.equal(back.json.waits, true);
   assert.deepEqual(back.json.waiting.map(each => [each.id, each.from ?? null, each.text]), [["msg_w1", "Ada", "the build is green."], ["msg_w2", null, "Second."], ["msg_w3", null, "Third."]], "first again, where it was");
