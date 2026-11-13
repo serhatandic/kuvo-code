@@ -41,6 +41,11 @@ final class BoxGates {
         }
     }
 
+    /// A box that said it has all this app needs (to what reads its features): let go, if held.
+    func foundCurrent(_ box: String, features: [String]) {
+        if BoxGate.isCurrent(features) { letGo(box) }
+    }
+
     /// Being brought up to date, saying what's waited for.
     func updating(_ box: String, detail: String? = nil) {
         set(box, .updating(detail: detail))

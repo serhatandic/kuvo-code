@@ -357,9 +357,7 @@ final class AppModel {
             guard let self else { return }
             machines.gates.foundOlder(box, features: features, name: BoxClient.isThisMac(box) ? "this Mac" : machines.engine(box)?.machine.name ?? box)
         }
-        workspace.onCurrentBox = { [weak self] box, features in
-            if BoxGate.isCurrent(features) { self?.machines.gates.letGo(box) }
-        }
+        workspace.onCurrentBox = { [weak self] box, features in self?.machines.gates.foundCurrent(box, features: features) }
         machines.gates.onLetGo = { [weak self] box in self?.workspace.boxUpdated(box) }
         BoxClient.routes = { [weak self] id in self?.box(id) ?? .unwired(id) }
         // Your personalities, one library on every computer, kept by this Mac's box. However one

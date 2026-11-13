@@ -128,7 +128,8 @@ import Testing
     /// A machine whose box is from before it listed its sessions (it went back to an older version
     /// since it connected, say): the update gate holds it, saying why and what to do, rather than
     /// filing them by a rule of its own; nothing but `kuvo/info` is sent it meanwhile, nor are the
-    /// worktrees this Mac removed there handed over (they are once it's up to date, #679).
+    /// worktrees this Mac removed there handed over (they are once it's up to date, #679). Updated
+    /// (by the Kuvo Code that set it up, say), it says so when it's next asked, and is let go.
     @Test func aMachineFromBeforeSessionListsIsHeldForItsUpdate() async throws {
         defer { done() }
         let machine = "m_lists_old"
@@ -137,6 +138,10 @@ import Testing
         let gates = BoxGates()
         defer { gates.letGo(machine) }
         workspace.onOlderBox = { box, features in gates.foundOlder(box, features: features, name: "lab") }
+        workspace.onCurrentBox = { box, features in gates.foundCurrent(box, features: features) }
+        let readAgain = BoxClient.readAgainAfter
+        BoxClient.readAgainAfter = .milliseconds(50)
+        defer { BoxClient.readAgainAfter = readAgain }
         let old = OlderBox()
         workspace.boxes = { id in id == machine ? BoxClient(box: id, transport: old) : nil }
         let following = Task { await workspace.followSessionList(on: machine) }
@@ -148,19 +153,28 @@ import Testing
         // Held: what reads it is refused here, and never reaches it.
         await #expect(throws: BoxRefusal.self) { try await BoxClient(box: machine, transport: old).value([String: String].self, "GET", "kuvo/projects") }
         #expect(Set(old.paths) == ["kuvo/info"])
+
+        old.update()
+        try await until { gates.state(of: machine) == nil }
+        try await until { old.paths.contains { $0.hasPrefix("kuvo/sessions/list") } }
     }
 
     /// A box from before `sessions.list`: its features say so, and the list's route isn't there.
     private nonisolated final class OlderBox: BoxTransport, @unchecked Sendable {
         private let lock = NSLock()
         private var asked: [String] = []
+        private var updated = false
         var paths: [String] { lock.withLock { asked } }
+        /// Brought up to date: it says it has all the app needs (and lists nothing yet).
+        func update() { lock.withLock { updated = true } }
         func send(_ request: LinkRequest) -> AsyncThrowingStream<LinkResponsePart, Error> {
-            lock.withLock { asked.append(request.path) }
+            let current = lock.withLock { asked.append(request.path); return updated }
             let info = request.path == "kuvo/info"
+            let features = current ? BoxGate.required : ["projects", "worktrees"]
+            let body = info ? (try? JSONSerialization.data(withJSONObject: ["features": features])) ?? Data() : Data("{}".utf8)
             return AsyncThrowingStream { continuation in
                 continuation.yield(.head(status: info ? 200 : 404, headers: ["content-type": "application/json"]))
-                continuation.yield(.body(Data((info ? #"{"features":["projects","worktrees"]}"# : "{}").utf8)))
+                continuation.yield(.body(body))
                 continuation.finish()
             }
         }

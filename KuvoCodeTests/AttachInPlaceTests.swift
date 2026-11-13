@@ -196,6 +196,47 @@ import Testing
 
     /// The box here isn't running now (its keeper ended, and only a login starts it by itself): the
     /// app starts it in place, as its start at login does; and starts nothing of its own.
+    /// The update gate (#679): the box here, older than this app needs, is offered the release the
+    /// app carries (`kuvo/box/update`), which it takes at its first quiet moment. Meanwhile its
+    /// connection goes on (its engine used: a session there waiting on you can be answered), its
+    /// routes are held ("Updating…"), and it's looked at again until it has all this app needs:
+    /// then it's let go, and its routes go to it again.
+    @Test func anOlderBoxHereIsOfferedTheAppsReleaseAndHeldUntilItsTaken() async throws {
+        var app: AppModel?
+        let release = FileManager.default.temporaryDirectory.appending(path: "box-release-\(UUID().uuidString)")
+        let (boxRelease, lookAgain) = (MachineEngine.boxRelease, MachineEngine.updateLookAgain)
+        let taken = PhoneLinkBoxTests.Gate()
+        defer {
+            cleanUp(app)
+            MachineEngine.boxRelease = boxRelease
+            MachineEngine.updateLookAgain = lookAgain
+            try? FileManager.default.removeItem(at: release)
+        }
+        try FileManager.default.createDirectory(at: release, withIntermediateDirectories: true)
+        MachineEngine.boxRelease = { release }
+        MachineEngine.updateLookAgain = { await taken.pass() }
+        connectsReady()
+        let older = BoxGate.required.filter { $0 != "sessions.list" } + ["box.update"]
+        app = try await started {
+            try memberOfMacBooks()
+            try boxHereAnswers(["kuvo/info": ["kind": "machine", "chats": home.appending(path: "box-chats").path(percentEncoded: false), "features": older]])
+        }
+        let model = try #require(app)
+        let here = try #require(model.machines.engine(SSHConnection.thisMac))
+        try await until { model.machines.gates.state(of: SSHConnection.thisMac) != nil && here.isReady }
+        #expect(model.machines.gates.state(of: SSHConnection.thisMac) == .updating(detail: BoxGate.Words.thisMacTaking))
+        #expect(asked("POST kuvo/box/update") == 1, "offered the release the app carries")
+        await #expect(throws: BoxRefusal.self) { try await model.box(SSHConnection.thisMac).value([String: String].self, "GET", "kuvo/projects") }
+        #expect(asked("GET kuvo/projects") == 0, "held: refused here, never sent")
+
+        // Taken (its quiet moment came): it has all this app needs now.
+        try boxHereAnswers(["kuvo/info": ["kind": "machine", "chats": home.appending(path: "box-chats").path(percentEncoded: false), "features": BoxGate.required + ["box.update"]]])
+        taken.open()
+        try await until { model.machines.gates.state(of: SSHConnection.thisMac) == nil }
+        _ = try? await model.box(SSHConnection.thisMac).send("GET", "kuvo/projects")
+        #expect(asked("GET kuvo/projects") >= 1, "let go: asked again")
+    }
+
     @Test func aStoppedBoxIsStartedInPlace() async throws {
         var app: AppModel?
         defer { cleanUp(app) }
