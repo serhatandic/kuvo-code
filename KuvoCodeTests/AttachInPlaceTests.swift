@@ -23,7 +23,7 @@ import Testing
         let script = """
             #!/bin/sh
             \(hereFails ? "[ \"$5\" = here ] && exit 3" : "")
-            case "$5" in here|box) shift 3; exec '\(node.path(percentEncoded: false))' "$@";; esac
+            case "$5" in here|box|helper) shift 3; exec '\(node.path(percentEncoded: false))' "$@";; esac
             [ "$1" = "run" ] && exit 1
             echo '{"url":"\(engine.url)"}'
             while [ -d '\(folder.path(percentEncoded: false))' ]; do sleep 0.05; done

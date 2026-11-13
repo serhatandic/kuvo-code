@@ -108,6 +108,49 @@ test("helper install: a path with characters XML reserves is written as launchd 
   assert.equal(listed.stdout.trim(), where.K);
 });
 
+test("helper start: the whole start through the helper, its launch agent put in place, loaded and started as each needs, one running left as it is", { skip: process.platform !== "darwin" && "only a Mac's box has the helper" }, () => {
+  const where = home("mac");
+  const uid = process.getuid();
+  const asked = () => { const said = exists(path.join(where.home, "launchctl")) ? read(path.join(where.home, "launchctl")).trim().split("\n") : []; fs.rmSync(path.join(where.home, "launchctl"), { force: true }); return said; };
+  // Not in place: written and loaded.
+  const first = helper(where, ["start", "--app", "run.kuvo.code.trial5"]);
+  assert.equal(first.status, 0, first.stderr);
+  assert.deepEqual(first.said, { started: true, mac: true, message: "Kuvo Code Box runs this Mac's box now, and at login." });
+  assert.match(read(plistOf(where)), /<string>run\.kuvo\.code\.trial5<\/string>/);
+  assert.equal(asked().filter(line => line.startsWith("bootstrap")).length, 1);
+  // Loaded: started if it isn't running (kickstart leaves one running as it is).
+  assert.deepEqual(helper(where, ["start"]).said, { started: true, mac: true, message: "Kuvo Code Box runs this Mac's box." });
+  assert.deepEqual(asked(), [`print gui/${uid}/run.kuvo.code.machine`, `kickstart gui/${uid}/run.kuvo.code.machine`]);
+  // In place but not loaded: loaded, then started.
+  fs.rmSync(path.join(where.home, "loaded"));
+  assert.equal(helper(where, ["start"]).said.started, true);
+  assert.deepEqual(asked().map(line => line.split(" ")[0]), ["print", "bootstrap", "kickstart"]);
+  // --if-missing: one in place is left as it is (switched off in Login Items, it stays off).
+  fs.rmSync(path.join(where.home, "loaded"));
+  const left = helper(where, ["start", "--if-missing"]);
+  assert.equal(left.status, 0);
+  assert.equal(left.said.left, true);
+  assert.deepEqual(asked().filter(line => !line.startsWith("print")), []);
+  // Switched off in Login Items: launchd won't load it, and it says so plainly.
+  fs.rmSync(path.join(where.home, "loaded"), { force: true });
+  write(path.join(where.tools, "launchctl"), `#!/bin/sh\necho "$*" >>"${where.home}/launchctl"\ncase "$1" in print) exit 113 ;; bootstrap) echo "Bootstrap failed: 5: Input/output error" >&2; exit 5 ;; print-disabled) printf '\\t"run.kuvo.code.machine" => disabled\\n' ;; esac\n`, 0o755);
+  const off = helper(where, ["start"]);
+  assert.equal(off.status, 1);
+  assert.deepEqual(off.said, { started: false, mac: true, disabled: true, message: "Kuvo Code Box is turned off in System Settings › General › Login Items. Turn it on, then try again." });
+  // A Mac's box with no helper in its bin: says why, which the app shows.
+  const bare = home("mac", { helper: false });
+  const refused = helper(bare, ["start"]);
+  assert.equal(refused.status, 1);
+  assert.equal(refused.said.mac, true);
+  assert.match(refused.said.message, /isn't in this box's bin/);
+  // Not a Mac's own box: nothing asked, and it says so.
+  const machine = home("machine");
+  const other = helper(machine, ["start"]);
+  assert.equal(other.status, 1);
+  assert.equal(other.said.mac, false, "not a Mac's own box: its own start, not the helper's");
+  assert.equal(exists(path.join(machine.home, "launchctl")), false);
+});
+
 test("helper install refuses what isn't a Mac's own box in a home of its own, and writes nothing", () => {
   // A machine's box (its launch agent is the machines' own, /bin/sh).
   const machine = home("machine");
@@ -129,7 +172,7 @@ test("helper install refuses what isn't a Mac's own box in a home of its own, an
 
 test("helper says what it doesn't know", () => {
   const where = home("mac");
-  for (const args of [[], ["remove"], ["install", "--now"], ["install", "--app"], ["install", "--app", "not an id"], ["status", "--load"]]) {
+  for (const args of [[], ["remove"], ["install", "--now"], ["install", "--app"], ["install", "--app", "not an id"], ["status", "--load"], ["start", "--load"]]) {
     const done = helper(where, args);
     assert.equal(done.status, 2, args.join(" "));
     assert.match(done.stderr, /Usage: kuvo-link\.js helper install/);

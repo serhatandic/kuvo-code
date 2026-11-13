@@ -390,7 +390,9 @@ computer. Changing the main computer and joining two setups come later: #183.)
     (`kuvo-start off` leaves `run/off`, which only a Mac's start there takes away, and then its way
     to start, `bin/kuvo-start`, goes with its keys, leaving its link.json and card: no
     `bin/kuvo-start`, or `run/off`, whatever still runs), else `running` (its keeper,
-    `run/box.pid`, runs `kuvo-start` now) or `stopped`; null with none there. A `gone` box is no
+    `run/box.pid`, runs `kuvo-start` now) or `stopped`; null with none there. A Mac's own box made
+    there before it first ran (`box/kind` says `mac`, no card or link.json yet) is a box there too,
+    with its verdict `free` and no name: never taken for none. A `gone` box is no
     box: as with none (`box` null), and the probe leaves it out too. `opens`: `window` where the box it uses is a member
     of a setup another computer is main of (a Mac mini another Mac set up, one that can't say yet,
     the old main computer after a handover, a Mac that joined: never main by itself, only by Make
@@ -2636,7 +2638,11 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `features`; after bridge 0.9.211, `bridge` is a hash of the link as built, which changes with
   every change, rather than a number), `features` (below), whether its coding agents' bridge is up (`agents`), and
   `started`, when the engine running now came up, in seconds since 1970 (null while none runs): a
-  restart changes it, so a phone tells the new engine from the old. Both name the folder of chats
+  restart changes it, so a phone tells the new engine from the old. A Mac's says how its box's move
+  into its home of its own stands while one waits, is under way or went back ("Moving this Mac's
+  box"): `moving: {state: waiting|moving|clearing|failed, step, overdue, why?}`, `why` the reason
+  it last didn't move; left out before one and once it's done. While the box is stopped for the
+  move itself (seconds to a minute) nothing answers for the Mac, as while its engine restarts. Both name the folder of chats
   (`chats`: conversations of no project, made if it isn't there yet, so a phone can start the first
   one there through the engine, as for a project; new chats' sessions are marked chats, "Chats"). A machine's bridge also says whether its engine
   is `running`, and whether it's `stopped` on purpose (it stays down until it's started, from a Mac
@@ -5293,8 +5299,9 @@ writes (only you can read them) as they start and removes as they stop.
 This Mac's box keeps running whether or not the app is open, as a machine's does with its Mac
 closed: its keeper is Kuvo Code's own executable run with `--box`, which launchd starts from the
 launch agent in the app (`Contents/Library/LaunchAgents/<bundle id>.box.plist`, registered with
-`SMAppService` the first time the app opens), at each login and again if it stops by itself. It has
-no window. It runs the engine, the box and the coding agents' bridge, starts each again when it
+`SMAppService` the first time the app opens; never once this Mac's box lives in its home of its
+own, with `movesOwnBox` on, where its helper starts it: "Moving this Mac's box"), at each login and
+again if it stops by itself. It has no window. It runs the engine, the box and the coding agents' bridge, starts each again when it
 stops (at once, up to three times in five minutes), and tries each again when it couldn't start or
 keeps stopping (after 15 s, 30 s, 1, 2 and 5 minutes, then every 10 minutes for good, as a machine's
 keeper waits, starting over once it ran for ten minutes; not when another try can't help: a program
@@ -5424,9 +5431,10 @@ own keeps:
   that `serve` runs, its `kuvo-start` holds nothing for it and lets go of a hold it had; until then
   it holds the Mac awake on power as a machine's does.
 
-Only the move below records `box/kind` (`mac`), and nothing runs it yet: the keeper that runs it
-and what the app does for a box there come later (#333), so this Mac's box runs in the app's folder
-as above.
+Only the move below records `box/kind` (`mac`), or a new Mac's box made there from the start
+(`rehome --new`). The keeper runs the move and the app makes a new Mac's box only with its
+`movesOwnBox` on (off: #333, until what the app does for a box there is built), so this Mac's box
+runs in the app's folder as above.
 
 #### Moving this Mac's box
 
@@ -5564,7 +5572,9 @@ refused anything but `--status` on the real `~/.kuvo-code`.
      say, or its list of machines), it goes back first: nothing is left only in the kept copy. So the app writes nothing
      there during a move. From here it only goes forward. The originals, the app's `box` and `opencode`
      folders whole and each other, are renamed into `updates/rehome/kept/<date>/`, so nothing in
-     the app's folder says a box ran there (`here`). Kept 30 days (`keptUntil`), then deleted, by
+     the app's folder says a box ran there (`here`). Kept 30 days (`keptUntil`), then deleted (only ever what's in the move's own `kept`, where it
+     really is, `..` and links followed, whatever `state.json` names; nothing where `kept` itself
+     isn't a folder of its own), by
      `serve` as it starts and by `--ready`.
   9. **Done.** `state.json` says `done`, with what the app's executable still owes (`owed`:
      `keychain`, the Keychain's originals deleted, and `agent`, its own launch agent
@@ -5576,8 +5586,7 @@ refused anything but `--status` on the real `~/.kuvo-code`.
 - **`--resume`**: a move (or move back) that stopped part way, finished: back before step 8,
   forward from it. Going back is done again from the start if it's cut short itself. While one is
   unfinished, `here` says `{verdict: "moving", use: "wait"}`: a keeper and app that know it start
-  no box (today's app doesn't know `wait`, and never runs a move: the keeper that does comes with
-  it). Gone back, `failed`; finished, `done` or `back`; nothing to finish, `nothing`, making nothing.
+  no box (an app from before #333 piece 5 doesn't know `wait`, and never runs a move). Gone back, `failed`; finished, `done` or `back`; nothing to finish, `nothing`, making nothing.
 - **`--back`**: Move Back, with the box in `~/.kuvo-code` stopped: the same steps the other way, on
   the data as it is now (what was made since goes back too), into the app's folder it came from
   (`state.json`'s `from`). What the move merged goes back where it came from; each other entry of
@@ -5603,6 +5612,87 @@ refused anything but `--status` on the real `~/.kuvo-code`.
   meanwhile) is `overdue`.
 - **`--status`**: `kuvo/box/rehome`'s answer. **`--settled keychain|agent`**: one of `owed`, done
   (`{settled, status}`).
+- **`--new --release <folder> [--keeps-awake off]`**: a new Mac's box, made in `~/.kuvo-code` from
+  the start, with nothing to move (the app, as it first opens): refused, saying why and changing
+  nothing (not even making `~/.kuvo-code`), where a box of the app's own ran in its folder or its
+  engine kept your sessions (`here`'s, with `KUVO_ENGINE_DATA`: that one moves instead), where a box
+  is in `~/.kuvo-code` (as a move is, and also one with no card yet that says it's a machine's in
+  `box/kind` or has keys of its own in `box/keys`), for a copy of the app into the real `~/.kuvo-code`, without
+  the release's files, or before the engine is in the app's folder. Under the move's lock: what's
+  there that isn't a box set aside into `trash/earlier-box-<date>` (as the move's install step
+  does), the release's `bin` put in place whole, the app's `engine` cloned beside it (copied where
+  the disk can't clone; the app's stays), Keep This Mac Awake off where it's off in the app, then
+  `box/kind` (`mac`), last, saying it's being made meanwhile (`updates/rehome/new`, written before
+  anything's set aside): one cut short is made again from the start, what it left set aside in the
+  trash like the rest, nothing deleted (but its own scratch copies, `bin.new` and `engine.new`).
+  The mark counts only where no move has been (no
+  `state.json` state, no journal) and no box of anyone's has been there since (a machine's kind,
+  keys of its own, a card); a move's install step sets it aside, journaled, so a box moved there
+  later is never taken for a making cut short. All of it holds the move's lock to the end; one that
+  fails part way (not cut short) takes its mark away again. `done` (exit 0); made already,
+  `nothing`. No `state.json`: nothing moved, so there's nothing to move back. **`--new --check`**,
+  changing nothing: `{ready, made, why?}`, `made` once its kind says so with no move under way (a
+  move writes it before it's done: never `made` then), `ready` where it would be made now (the
+  release aside).
+- **`--failed <why>`**: a try the keeper gave up on before the move began (the Keychain's copies, the
+  release), counted as a refusal is (`tries`, `nextTry` an hour on, `failed`), so `--ready` waits
+  for the next: `{noted, status}`, `noted` false once a move's under way or done.
+- A release (`--release`, to move or make one) must bring the helper,
+  `bin/Kuvo Code Box.app/Contents/MacOS/Kuvo Code Box`: without it nothing would start the box in
+  its home, so it's refused, saying so.
+
+**What the keeper does** (#333 piece 5, with the app's `movesOwnBox` on; off, nothing here happens
+and the keeper is as "The keeper" says). Everything above it asks of the box with this app's own
+`kuvo-link.js`, by the engine's Bun (the box's, once the app's moved with it):
+
+- **As it starts**, holding a lock of its own in the app's caches (`keeper-move.lock`: a second
+  keeper goes), before it writes anything in the app's folder (its records there would say a box of
+  the app's ran there again): `--status`. A move under way (`moving`, `clearing`, or a
+  journal not `done`) is finished first (`--resume`); one that's `done` is finished off (below), and
+  the keeper retires without starting anything (so does one that finds a new Mac's box there, its
+  helper's launch agent left as it is); otherwise copies of the app's Keychain items a try
+  left (their journal `copying` or `copied`) are taken away by the helper (`keys uncopy`), and the
+  box starts in the app's folder as always. While a move holds on (`stuck`, `waits`, or what's owed
+  can't be done yet), it starts nothing, and looks again every ten minutes.
+- **Running**, at its first look and every ten minutes after, and at once when `state.json`
+  changes (Move Now asked), unless an update waits for it or something's under way: `--ready`. Ready
+  (`move` or `resume`), it makes the box's release (`--write-box-files`' files, with the helper the
+  app carries) and asks `--ready --release` with it, the box still running; still ready, it stops
+  the engine, the bridge and `serve` (holding `run/box.lock`, so the
+  app starts none meanwhile, and answering every control but `status` `503` with a `message`,
+  Stop Background Work too, its `status` saying `moving: true`, and `movingWhy` while the move holds
+  on, stuck part way say, as the box said it; the app's window says it's moving, with why, in its
+  starting text, not as a failure), copies the app's Keychain items for the helper
+  (`KeychainMove`; an earlier try's copies taken away first, items an earlier box left cleared once
+  with `keys clear`) and has the helper read them back (`keys check`), then runs `--release`, with
+  `--keeps-awake off` where it's off in the app. What it gives up on before `--release` (the release
+  not made, the copies) it says with `--failed`, so the box's tries count it.
+- **Moved** (`done`), and whenever it finds the box moved: the helper's launch agent put in place
+  and loaded (`helper install --load --app <its bundle ID>`, run with `KUVO_HOME` the box's home;
+  one loaded already is started if it isn't running, `helper start`, as one that found the box
+  moving went), so the box runs from its home at once; the Keychain's originals deleted
+  (`deleteOriginals`), then `--settled keychain`; `--settled agent`, then its own launch agent
+  unregistered, and it exits as Stop Background Work does. Each only once the one before is done
+  (the box said it's settled), else tried again. Where the Keychain won't
+  change (locked), it stays registered and running nothing, looking again every ten minutes; the box
+  runs meanwhile, from the helper's copies.
+- **Not moved** (`refused`, `failed`, a copy the helper couldn't read; moved back, `back`): the
+  helper takes the copies away, and the box starts in the app's folder again (the bridge too).
+- **Stopped** meanwhile (SIGTERM, as you log out): it starts nothing again as it goes; the next
+  keeper finishes what the move left, as above.
+- **The app**, with `movesOwnBox` on, asks `here` before it starts a box (the keeper too, with either
+  flag on). While `here` says `moving` it starts nothing and says so in its starting text (why it
+  holds on, from `--status`'s `failed`, which a move under way has only once it's stuck), asking
+  `here` again, less often as it goes on (5 seconds, up to a minute); a copy that attaches in place
+  but doesn't move boxes says so once, as a failure. On a new Mac it asks `--new --check`, makes the box with `--new` where it's `ready`,
+  and has its helper load; where the box says it's `made`, it registers no keeper of its own
+  (`BackgroundWork`). Finding this Mac's box in its home stopped, it starts it through its helper
+  (`helper start`, else `helper install --load`), never by running its `kuvo-start` (where the box
+  can't say whether it's a Mac's, nothing).
+- **What piece 8 adds** (drafts first): the move's own view (waiting, moving, done, didn't finish,
+  Move Now…), Settings' "This Mac's box" (starts at login, where it is, Move Back, Uninstall…),
+  permissions for the helper, the `two` state, and the phone drawing `moving` (and the Mac away
+  for the move itself as moving, not offline).
 
 A Mac's box in a home of its own starts its bridge as a machine's (`KUVO_AGENTS_REMOTE`), but the
 coding agents' default accounts stay yours, in your home (`~/.claude`, `~/.codex`, `~/.grok`), as
@@ -5611,7 +5701,7 @@ the app's box keeps them: only on a machine are they in the bridge's folder (`<a
 `kuvo/box/rehome`: `GET` answers `{state, way, step, tries, nextTry, waitingSince, overdue,
 failed, movedAt, keptUntil, owed, asked, from, to}`. `state`: null before anything, `waiting`,
 `moving` or `clearing` (under way, at `step`, or a journal that can't be read: `plan`, `install`, `clone`, `rewrite`, `check`,
-`place`, `fix`, `clear`, `done`), `done`, `failed` (gone back; `failed` says `{at, step,
+`place`, `fix`, `clear`, `done`), `done`, `failed` (gone back; `failed` (cleared as a move begins: while one's under way, why it's stuck) says `{at, step,
 message}`), or `back`; `way`, `move` or `back`; `nextTry`, `waitingSince`, `movedAt` and
 `keptUntil` in ms; `asked`, `now` or `back`, until it's acted on. The app's box in its folder
 answers for the `~/.kuvo-code` it moves to (the real app's folder alone, `run.kuvo.code`; a copy,
@@ -5782,7 +5872,16 @@ place, which is what macOS keeps your permissions and its Keychain items by.
   message}`, exiting 0 once done, 1 when refused (not a Mac, not a Mac's own box in a home of its
   own, not the real `~/.kuvo-code`, or no helper in `bin`) or launchd didn't start it, 2 for what it
   doesn't know. `helper status` says `{helper, agent, loaded}` (`loaded` null where launchd couldn't
-  be asked). As `uninstall` does, it touches launchd only for the real `~/.kuvo-code`, or a test's
+  be asked). `helper start [--if-missing] [--app <bundle ID>]` is the whole start through the helper: its
+  launch agent put in place and loaded where it isn't there (as `install --load`), loaded where it's
+  there but not loaded, and started where it isn't running (`launchctl kickstart`, leaving one
+  running as it is); with `--if-missing`, one in place is left as it is, loaded or not (switched
+  off in Login Items, it stays off: `left: true`). It says `{started, mac, left?, disabled?,
+  message}` (`disabled` where launchd won't because it's switched off in Login Items, which
+  `message` then says plainly), `mac`
+  whether it's a Mac's own box in a home of its own (only then does its helper start it, and
+  nothing else may), `message` why not where it didn't; exit 0 once it has (or left it), 1 when
+  refused as `install` is or launchd didn't. As `uninstall` does, it touches launchd only for the real `~/.kuvo-code`, or a test's
   stand-ins (`KUVO_TEST_UNINSTALL_TOOLS`). `uninstall` takes it away. With Login Items off for it,
   the app opens it once (`open -g -j -n <bundle> --args keep --home <box>`), checked first: there,
   its signature whole, its ID the app's with `.box`, signed by the app's team (an ad hoc build: the

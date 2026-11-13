@@ -285,8 +285,9 @@ final class MacBoxRunner {
 
     /// Everything stopped: the engine, the bridge and the box, waited for (a few seconds at most)
     /// before another process may run the box (the keeper, as the app quits): never two engines on
-    /// the same data, and the engine always gets to close its database itself.
-    func stop() {
+    /// the same data, and the engine always gets to close its database itself. `keepingClaim`: its
+    /// lock still held, so no other process runs the box meanwhile (the keeper, as the box moves).
+    func stop(keepingClaim: Bool = false) {
         let running = [server?.processID, agents.processID, box.processID].compactMap(\.self)
         askingWatch?.cancel()
         askingWatch = nil
@@ -297,7 +298,7 @@ final class MacBoxRunner {
         host.stop()
         IntegrationKeys.removeFiles()
         Self.waitForExit(running)
-        if lock >= 0 {
+        if lock >= 0, !keepingClaim {
             close(lock)
             lock = -1
         }
