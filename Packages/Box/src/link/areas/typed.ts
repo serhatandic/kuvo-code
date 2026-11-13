@@ -20,7 +20,7 @@ import { isAutopilot } from "../work/autopilot";
 import { listsHere, offeredHere } from "../work/model-rule";
 import { botOfConversation } from "../work/tree";
 import { zone } from "../work/clock";
-import { decide, GOALS_NOT_RUNNING, KEYWORD_UNAVAILABLE, type BoxStep, type Decision, type Restore } from "../typed/decide";
+import { decide, writtenBack, GOALS_NOT_RUNNING, KEYWORD_UNAVAILABLE, type BoxStep, type Decision, type Restore } from "../typed/decide";
 import { KEYWORD_WORDS, KEYWORDS, commandsOffered, splitCommand, parseGoal, parseKeyword, type Command, type Keyword, type ModelRef, type Reader } from "../typed/words";
 import { autopilotRoute } from "./autopilot";
 import { answerWakes } from "./wakes";
@@ -146,16 +146,18 @@ export async function* typedRoute(context: RouteContext, match: RegExpMatchArray
   const given = parsed(request.body);
   const body = isObject(given) ? given : {};
   if (method === "POST" && typeof body.text !== "string") return yield* json(400, { message: "Send what was typed (text)." });
+  // A send it can't answer for: what was written goes back as a keyword's does, saying why.
+  const back = method === "POST" ? { restore: writtenBack(body.text as string) } : {};
   const targets = targetsOf({ readEngine, bridge });
-  if (!targets.length) return yield* json(503, { message: "The engine isn't running." });
+  if (!targets.length) return yield* json(503, { message: "The engine isn't running.", ...back });
   // (Patiently, as a message's send is: a busy computer's engine can take a while to answer.)
   let place: Awaited<ReturnType<typeof placeOfSessionPatiently>>;
   try {
     place = await placeOfSessionPatiently(session, targets);
   } catch (error) {
-    return yield* json(503, { message: isRefused(error) ? "The engine isn't running." : BUSY });
+    return yield* json(503, { message: isRefused(error) ? "The engine isn't running." : BUSY, ...back });
   }
-  if (!place) return yield* json(404, { message: "There's no such conversation here." });
+  if (!place) return yield* json(404, { message: "There's no such conversation here.", ...back });
   let engine: Target | null = null;
   try { engine = readEngine(); } catch {}
   if (!engine?.port) engine = null;
@@ -198,7 +200,7 @@ export async function* typedRoute(context: RouteContext, match: RegExpMatchArray
   });
   // The engine's commands unread: a keyword or goal goes on without them; what might have been one
   // of them can't be told from a message, and waits.
-  if (commands === null && (decision.send || decision.sideThread)) return yield* json(503, { message: "The engine didn't answer. Try again in a moment." });
+  if (commands === null && (decision.send || decision.sideThread)) return yield* json(503, { message: "The engine didn't answer. Try again in a moment.", restore: { text } });
   let done: Done = {};
   let failure: { restore: Restore; error: string } | null = null;
   if (decision.box) {

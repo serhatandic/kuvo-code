@@ -66,6 +66,7 @@ import Testing
         defer { done(machine) }
         let model = try conversation(on: machine)
         await model.readAutopilot()
+        await model.readKeywords()
         #expect(model.autopilotChoice == AutopilotChoice(on: false), "offered in the Mode menu, off")
         #expect(model.keywords.contains(.autopilot))
 

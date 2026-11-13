@@ -39139,7 +39139,7 @@ import fs123 from "node:fs";
 import path126 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "eccc82cb8904";
+var BRIDGE_VERSION = "84e5bd47a6f7";
 
 // Packages/Box/src/link/rehome/rewrite.ts
 var NO_REWRITE = {
@@ -46278,17 +46278,18 @@ async function* typedRoute(context, match) {
   const body = isObject(given) ? given : {};
   if (method === "POST" && typeof body.text !== "string")
     return yield* json(400, { message: "Send what was typed (text)." });
+  const back = method === "POST" ? { restore: writtenBack(body.text) } : {};
   const targets = targetsOf({ readEngine, bridge });
   if (!targets.length)
-    return yield* json(503, { message: "The engine isn't running." });
+    return yield* json(503, { message: "The engine isn't running.", ...back });
   let place;
   try {
     place = await placeOfSessionPatiently(session, targets);
   } catch (error) {
-    return yield* json(503, { message: isRefused(error) ? "The engine isn't running." : BUSY });
+    return yield* json(503, { message: isRefused(error) ? "The engine isn't running." : BUSY, ...back });
   }
   if (!place)
-    return yield* json(404, { message: "There's no such conversation here." });
+    return yield* json(404, { message: "There's no such conversation here.", ...back });
   let engine = null;
   try {
     engine = readEngine();
@@ -46329,7 +46330,7 @@ async function* typedRoute(context, match) {
     timeZone: zone2()
   });
   if (commands === null && (decision.send || decision.sideThread))
-    return yield* json(503, { message: "The engine didn't answer. Try again in a moment." });
+    return yield* json(503, { message: "The engine didn't answer. Try again in a moment.", restore: { text } });
   let done = {};
   let failure = null;
   if (decision.box) {

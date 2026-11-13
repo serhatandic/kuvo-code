@@ -47,8 +47,19 @@ public enum Typed {
         public var text: String
         public var beside: String?
 
+        public init(text: String, beside: String? = nil) {
+            self.text = text
+            self.beside = beside
+        }
+
         /// What goes in front of the composer's `draft`.
         public func text(beside draft: String) -> String { draft.isEmpty ? text : beside ?? text }
+    }
+
+    /// What a box that couldn't answer for a text says: why, and what goes back.
+    struct Refused: Decodable {
+        var message: String?
+        var restore: Restore?
     }
 
     public struct Run: Decodable, Equatable, Sendable {
@@ -106,6 +117,14 @@ public enum Typed {
 
         /// The composer's files go (with what's sent or run).
         public var takesFiles: Bool { send != nil || command != nil }
+
+        /// What a box that couldn't answer for it says (any status but 200, `body` its answer):
+        /// what goes back to the composer (`written` as it was, where the box didn't say), and why.
+        public init(refused body: Data, status: Int, written: String) {
+            let refused = try? JSONDecoder().decode(Refused.self, from: body)
+            restore = refused?.restore ?? Restore(text: written)
+            error = refused?.message ?? "Its computer couldn’t say what that means (\(status)). Try again."
+        }
     }
 
     /// A keyword "/" offers in a conversation, as its box words it.

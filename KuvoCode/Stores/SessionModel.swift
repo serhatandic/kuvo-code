@@ -1262,7 +1262,10 @@ final class SessionModel {
                 return
             }
             do {
-                let answer = try await box.value(Typed.Answer<AutopilotShown>.self, "POST", route, body: ask)
+                let (status, body) = try await box.send("POST", route, body: try JSONEncoder().encode(ask))
+                // One it couldn't answer for (the conversation isn't there): back as it says.
+                let answer = status == 200 ? try JSONDecoder().decode(Typed.Answer<AutopilotShown>.self, from: body)
+                    : Typed.Answer<AutopilotShown>(refused: body, status: status, written: text)
                 await took(answer, written: text, files: files, quotes: quotes, for: model, queue: queue, keptElsewhere: keptElsewhere)
             } catch {
                 restore(text: text, files: files)

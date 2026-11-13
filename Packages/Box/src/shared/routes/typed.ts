@@ -36,8 +36,10 @@ export const TYPED = object({
 export type TypedAnswer = Infer<typeof TYPED>;
 
 const REFUSED = object({ message: string });
+/** A send it couldn't answer for: why, and what goes back to the composer (as `restore`). */
+const SEND_REFUSED = object({ message: string, "restore?": TYPED_RESTORE });
 
 export const TYPED_ROUTES: RouteShape[] = [
   { route: "GET kuvo/sessions/:id/typed", answers: { 200: TYPED_OFFERS, 404: REFUSED, 503: REFUSED } },
-  { route: "POST kuvo/sessions/:id/typed", answers: { 200: TYPED, 400: REFUSED, 404: REFUSED, 503: REFUSED } },
+  { route: "POST kuvo/sessions/:id/typed", answers: { 200: TYPED, 400: REFUSED, 404: SEND_REFUSED, 503: SEND_REFUSED } },
 ];

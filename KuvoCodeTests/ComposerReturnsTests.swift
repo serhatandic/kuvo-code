@@ -147,9 +147,17 @@ import Testing
         let said = try #require(conversation.failure)
         #expect(said.contains("Luna") && said.contains("ChatGPT plan") && said.contains("Settings › Accounts"), "\(said)")
         #expect(!StubWeb.asked.contains { $0.hasSuffix("/prompt") }, "nothing sent into the void")
-        // A "!" command needs no model, and runs.
+        // A "!" command needs no model, and runs (its box says so, as the app's does).
+        let box = try await ConversationBox(stubWeb: Self.engine)
+        defer { box.stop() }
+        let shown = StubWeb.json(["data": ["id": id, "title": "Composer", "time": ["created": 1, "updated": 2], "location": ["directory": "/tmp/kuvo-tests-composer"]]])
+        StubWeb.route(Self.engine + "/api/session/\(id)") { _ in shown }
+        StubWeb.handle(Self.engine + "/api/session/\(id)/shell") { _, _ in StubWeb.json([:]) }
+        await box.serves(conversation)
         conversation.draftText = "!ls"
         conversation.submitDraft(for: nil, queue: false, unavailable: catalog.unavailable(luna))
+        #expect(conversation.failure == nil)
+        try await until { StubWeb.asked.contains { $0.hasSuffix("/api/session/\(id)/shell") } }
         #expect(conversation.failure == nil)
     }
 

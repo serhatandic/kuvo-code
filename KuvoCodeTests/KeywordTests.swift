@@ -9,7 +9,8 @@ import Testing
 /// (the agents bridge the app ships, run for real): a side question answered without a word added
 /// to the conversation, a review with fresh eyes whose findings go to the agent only when you ask,
 /// a handoff that carries the work on in a new conversation, /plan, and a /loop that can't be read.
-/// Only the engine is a stand-in.
+/// What each means is its box's to say (`ConversationBox`, the real one). Only the engine is a
+/// stand-in.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct KeywordTests {
     let engine = StubEngine(port: 47960)
@@ -73,12 +74,33 @@ import Testing
         return SessionModel(session: session, api: engine.api)
     }
 
-    /// The bridge up, and the conversation's keywords offered once it has said it runs them.
-    private func start(_ model: SessionModel) async throws -> RealBridge {
+    /// The bridge up, and the conversation's keywords offered once it has said it runs them, as
+    /// its box says them (the box beside it).
+    private func start(_ model: SessionModel) async throws -> Started {
         let bridge = try await RealBridge.start(engine: engine, folder: folder)
         model.goalBridge = { bridge.agents }
         try await until { bridge.agents.runsKeywords == true }
-        return bridge
+        let box = try await ConversationBox(engine: engine, bridge: bridge)
+        await box.serves(model)
+        return Started(bridge: bridge, box: box)
+    }
+
+    /// The bridge and the box beside it, stopped together.
+    @MainActor final class Started {
+        let bridge: RealBridge
+        let box: ConversationBox
+        var agents: OutsideAgents { bridge.agents }
+        var api: OpenCodeAPI? { bridge.api }
+
+        init(bridge: RealBridge, box: ConversationBox) {
+            self.bridge = bridge
+            self.box = box
+        }
+
+        func stop() {
+            box.stop()
+            bridge.stop()
+        }
     }
 
     /// `/compact` is on offer in a coding agent's conversation as in the engine's, goes to its box,
@@ -88,6 +110,9 @@ import Testing
         serve(directory: "/tmp", answers: [])
         let session = try JSONDecoder().decode(Session.self, from: JSONSerialization.data(withJSONObject: StubEngine.session(id, directory: "/tmp", extra: ["metadata": ["kuvoAgent": "cursor"]])))
         let model = SessionModel(session: session, api: engine.api)
+        let box = try await ConversationBox(engine: engine)
+        defer { box.stop() }
+        await box.serves(model)
         #expect(OutsideAgents.isAgentSession(session))
         #expect(model.keywords.contains(.compact))
 
@@ -95,6 +120,7 @@ import Testing
         engine.on("POST", "/api/session/\(id)/compact", json: ["message": why], status: 400)
         model.draftText = "/compact"
         model.submitDraft(for: nil, queue: false)
+        await model.messagesSent()
         #expect(model.draftText.isEmpty)
         try await until { model.failure != nil }
         #expect(engine.requests("POST", "/api/session/\(id)/compact").count == 1)
@@ -123,6 +149,8 @@ import Testing
 
         model.draftText = "/btw where does it pause?"
         model.submitDraft(for: nil, queue: false)
+
+        await model.messagesSent()
         #expect(model.draftText.isEmpty)
         try await until { model.sideQuestions.first?.state == .answered }
         let question = try #require(model.sideQuestions.first)
@@ -147,6 +175,7 @@ import Testing
         // "/btw" alone leaves what to type.
         model.draftText = "/btw"
         model.submitDraft(for: nil, queue: false)
+        await model.messagesSent()
         #expect(model.draftText == "/btw ")
         #expect(model.failure == nil)
     }
@@ -412,6 +441,7 @@ import Testing
         engine.on("GET", "/api/model/default", json: ["location": location, "data": NSNull()])
         engine.on("GET", "/api/agent", json: ["location": location, "data": []])
         engine.on("GET", "/api/command", json: ["location": location, "data": []])
+        engine.on("GET", "/api/provider", json: ["location": location, "data": [["id": "deepseek", "name": "DeepSeek"]]])
         let catalog = Catalog()
         catalog.api = engine.api
         await catalog.refresh()
@@ -424,6 +454,7 @@ import Testing
         // A name half typed comes back, saying so; nothing is read.
         model.draftText = "/review with deep"
         model.submitDraft(for: nil, queue: false)
+        await model.messagesSent()
         #expect(model.draftText == "/review with deep")
         #expect(model.failure == "Finish the model’s name, or pick it from the list.")
         #expect(model.review == nil)
@@ -491,6 +522,7 @@ import Testing
         defer { clean() }
         serve(directory: "/tmp", answers: [])
         engine.on("POST", "/api/session/\(id)/command", json: ["data": [:]])
+        engine.on("GET", "/api/command", json: ["data": [["name": "review", "description": "Review changes"]]])
         let model = try session()
         let bridge = try await start(model)
         defer { bridge.stop() }
@@ -515,6 +547,7 @@ import Testing
         serve(directory: "/tmp", answers: [])
         engine.on("POST", "/api/session/\(id)/command", json: ["data": [:]])
         engine.on("POST", "/api/session/\(id)/prompt", json: ["data": [:]])
+        engine.on("GET", "/api/command", json: ["data": [["name": "review", "description": "Review changes"]]])
         let model = try session()
         let bridge = try await start(model)
         defer { bridge.stop() }
@@ -619,10 +652,13 @@ import Testing
 
         model.draftText = "/loop now and then check CI"
         model.submitDraft(for: nil, queue: false)
+
+        await model.messagesSent()
         #expect(model.draftText == "/loop now and then check CI")
         #expect(model.failure?.hasPrefix("Can’t tell how often") == true)
         model.draftText = "/loop every morning at 9"
         model.submitDraft(for: nil, queue: false)
+        await model.messagesSent()
         #expect(model.draftText == "/loop every morning at 9")
         #expect(model.failure?.hasPrefix("Write what to do each time") == true)
         #expect(told == 0)

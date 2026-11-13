@@ -249,7 +249,10 @@ describe("kuvo/sessions/<id>/typed", () => {
   })
 
   test("a conversation that isn't here, and a send without text", async () => {
-    expect((await ask("POST", "ses_none", { text: "hi" })).status).toBe(404)
+    const none = await ask("POST", "ses_none", { text: "/goal ship it" })
+    expect(none.status).toBe(404)
+    // What was written goes back as a keyword's does: beside words typed meanwhile, its words.
+    expect(none.json).toEqual({ message: "There's no such conversation here.", restore: { text: "/goal ship it", beside: "ship it" } })
     expect((await ask("POST", "ses_main", {})).status).toBe(400)
   })
 })

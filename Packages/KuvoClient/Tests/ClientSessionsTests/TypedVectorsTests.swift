@@ -133,4 +133,23 @@ struct TypedVectorsTests {
         let refused = Set(decision.keys) == ["restore", "error"] && Self.same(decision["restore"], ["text": text])
         #expect(refused || plain.contains { Self.same($0, decision) }, "\(text)")
     }
+
+    /// A pretend computer (the phone's sample Mac, the apps' tests' computers) decides what a text
+    /// means as the box does, case by case.
+    @Test(arguments: cases("decide").indices) func aStandInDecidesAsTheBoxDoes(_ at: Int) throws {
+        let each = Self.cases("decide")[at]
+        let text = each["text"] as! String
+        let base = Self.vectors["decideFacts"] as! [String: Any]
+        let facts = base.merging(each["facts"] as! [String: Any]) { $1 }
+        let keywords = (facts["keywords"] as! [String]).compactMap(Keyword.init(rawValue:))
+        let commands = (facts["commands"] as! [String]).map { try! JSONDecoder().decode(Command.self, from: Data(#"{"name":"\#($0)"}"#.utf8)) }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: facts["timeZone"] as! String))
+        let decision = TypedStandIn.decide(text, TypedStandIn.Facts(
+            keywords: keywords, commands: commands, files: facts["files"] as? Bool ?? false, side: facts["side"] as? Bool ?? false,
+            refusal: facts["refusal"] as? String, readers: keywords.contains(.review) ? Self.readers : [], reviewer: nil,
+            subagent: facts["subagent"] as? Bool ?? false, hasGoal: facts["hasGoal"] as? Bool ?? false, botChat: facts["botChat"] as? Bool ?? false,
+            bridge: facts["bridge"] as? Bool ?? false, now: try Date.ISO8601FormatStyle().parse(facts["now"] as! String), calendar: calendar))
+        #expect(Self.same(decision, each["decision"]), "\(text) \(each["facts"]!): \(decision)")
+    }
 }

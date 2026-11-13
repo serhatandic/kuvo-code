@@ -9715,12 +9715,24 @@
     },
     "404": {
      "object": {
-      "message": "string"
+      "message": "string",
+      "restore?": {
+       "object": {
+        "text": "string",
+        "beside?": "string"
+       }
+      }
      }
     },
     "503": {
      "object": {
-      "message": "string"
+      "message": "string",
+      "restore?": {
+       "object": {
+        "text": "string",
+        "beside?": "string"
+       }
+      }
      }
     }
    }
