@@ -9611,6 +9611,8 @@ function limitOf2(window) {
 }
 
 // Packages/Box/src/agents/limits.ts
+var BOX_ONLY_SERVICES = ["antigravity"];
+
 class LimitsProblem extends Error {
   kind;
   until;
@@ -34796,7 +34798,7 @@ var reviews = new Reviews(join42(home3, "reviews.json"), places5);
 var voice = new VoiceWords(places5);
 var engineAccounts = new EngineAccounts(() => link4.request("GET", "/api/credential"));
 var limits = new Limits(() => [...agentAccounts(roster.all()), ...engineAccounts.accounts()], join42(home3, "limits.json"), Date.now, () => engineAccounts.refresh(), () => engineAccounts.answered);
-limits.alsoServices = ENGINE_SERVICES;
+limits.alsoServices = [...ENGINE_SERVICES, ...BOX_ONLY_SERVICES];
 peers.limits = new LimitsPeers(limits, post, directory, join42(home3, "limits-peers.json"));
 var noPriceFeeds = process.env.KUVO_TEST_PRICE_FEEDS === "off" || !isRealBridgeFolder(home3);
 delete process.env.KUVO_TEST_PRICE_FEEDS;
@@ -35015,4 +35017,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 21330624b0c4a5cd58652a60efbdd443d9e2a6db472e490cf74ebfead881b4e0
+// Built from Packages/Box/src/agents d1f80061ee98ce9d5f113d7cf9270f0bc8884688c90400bfa0b31ae4818b804e

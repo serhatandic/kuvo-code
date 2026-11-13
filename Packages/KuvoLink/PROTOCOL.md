@@ -3928,8 +3928,9 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   `rows`: every account across your computers (below, "Across your computers"), what a client
   lists. `services`: what
   this box reads the limits of (`claude`, `codex`, `grok`, `cursor`, `antigravity`, `copilot`,
-  `openrouter`, `zai`, `ollama`, `opencode`), whether or not one is signed in now: a client shows
-  those from here, and anything else from where it had them before. An account is listed once it's
+  `openrouter`, `zai`, `ollama`, `opencode`), whether or not one is signed in now (Antigravity's
+  always, since only boxes read it): a client shows those from here, and anything else from where
+  it had them before; a client never adds to it. An account is listed once it's
   been read (or a turn told of it, or a peer's reading stood for a read here); one with no plan
   limits to read (signed out, an API key) isn't.
   Each `account`:
