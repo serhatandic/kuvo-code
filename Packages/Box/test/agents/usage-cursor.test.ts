@@ -71,6 +71,11 @@ describe("as UsageKit reads Cursor", () => {
           got = { lines: lines.map(lineOf) }
           break
         }
+        case "reading": {
+          const reading = plan.readingOf(plan.mapUsage(a.usage, or(a.planName), or(a.creditGrants), a.stripeBalanceCents), undefined)
+          got = { plan: reading.plan ?? null, windows: reading.windows.map((window) => ({ id: window.id, name: window.name, used: window.used, amount: window.amount ?? null })), balance: reading.balance ?? null, extras: reading.extras ?? [] }
+          break
+        }
         case "planNames":
           got = { names: a.pairs.map(([name, membership]: [string | null, string | null]) => ({ routing: plan.routingPlanName(or(name), or(membership)) ?? null, resolved: plan.resolvedPlanName(or(name), or(membership)) ?? null, label: plan.resolvedPlanLabel(or(name), or(membership)) ?? null, preferred: plan.preferredMembership(or(membership), or(name)) ?? null })) }
           break
@@ -179,6 +184,22 @@ describe("Cursor's plan limits", () => {
     await expect(account(undefined).limits.read!(now)).rejects.toMatchObject({ kind: "none", sent: false })
     // (A sign-in that lapsed is no sign-in.)
     await expect(account("key_work", "old", { apiKeyExpiresAtMs: 1 }).limits.read!(now)).rejects.toMatchObject({ kind: "none" })
+  })
+
+  test("an on-demand spend with no cap: no window, but what the plan has beyond them (`extras`), on its row across your computers", async () => {
+    cursor.keys.set("key_work", "auth0|user_abc")
+    cursor.usage = { enabled: true, planUsage: { limit: 2000, totalSpend: 2000 }, spendLimitUsage: { totalSpend: 4321 } }
+    const limits = limitsOf([account("key_work") as unknown as Agent])
+    const data = ((await (await limitsRoutes(limits, "POST", ["refresh"])).json()) as any).data
+    const extras = [{ id: "on_demand", name: "On-demand", kind: "spent", amount: 43.21, unit: "usd" }]
+    expect(data.accounts[0].windows.map((window: any) => window.id)).toEqual(["total", "grok_bot"])
+    expect(data.accounts[0].extras).toEqual(extras)
+    expect(data.rows[0].extras).toEqual(extras)
+    // Read again with the cap back: what it had beyond its windows goes.
+    cursor.usage = { enabled: true, planUsage: { limit: 2000, totalSpend: 2000 }, spendLimitUsage: { individualLimit: 5000, individualRemaining: 4000 } }
+    now += 11 * 60_000
+    const again = ((await (await limitsRoutes(limits, "POST", ["refresh"])).json()) as any).data
+    expect(again.accounts[0].extras).toBeUndefined()
   })
 
   test("a request-based plan: its requests as its total, said once; the summary's on-demand", async () => {

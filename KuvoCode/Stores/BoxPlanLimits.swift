@@ -168,6 +168,7 @@ final class BoxPlanLimits {
                 )
             },
             balance: account.balance.map { HostLimitRow.Balance(left: $0.left, unit: $0.unit) },
+            extras: account.extras.map { HostLimitRow.Extra(name: $0.name, amount: $0.amount, unit: $0.unit) },
             notice: account.problem?.message,
             readAt: account.readAt(now: now),
             isLocal: listed.sources.contains { $0.box.isEmpty },

@@ -3867,6 +3867,13 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     window whose `resetsAt` has passed has started over since: show it as not read yet, not as
     used.
   - `balance` `{left, limit?, unit}`: credits left to spend, where the account has them.
+  - `extras`: what the plan has beyond its windows, each `{id, name, kind, …}`. So far one `kind`,
+    `spent` `{amount, unit, resetsAt?}`: an amount used so far with no limit to it (`unit` `usd`,
+    `credits` or `requests`; `name` its maker's own label), Cursor's on-demand spend without a cap
+    (`on_demand`, "On-demand"). #631 piece E grows this list with more kinds (Claude's extra usage
+    and reset grants, Codex's credits, OpenRouter's key spend by period): a client leaves out a kind
+    it doesn't know, and a box from before this keeps none from a peer's mail. Absent when there's
+    none. A row's are its newest reading's that has any.
   - `checked`, when its maker last answered (with its limits or a problem; absent for an account
     only its turns tell of); `next`, when it's read again (absent for one that's never read).
   - `problem` `{kind, message, until?}` when the last read didn't work, with `windows` as last
@@ -3894,7 +3901,7 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   - Each box's bridge tells each limits peer what it read of its own accounts, through its link:
     `{"limits": {at, accounts, ask?, refresh?}}`, `accounts` as its `GET` lists them, but its own
     numbers only (each account's hashed `identity`, its windows with when each was read, `checked`,
-    `next`, its plan, credits and problem; never a sign-in, a token or an ID), as many as fit in 28
+    `next`, its plan, credits, `extras` and problem; never a sign-in, a token or an ID), as many as fit in 28
     KB; `at`, the sender's clock. It's sent at once after a read, at most once a minute for what
     turns hear, again every ten minutes though nothing changed (the relay keeps nothing), and at once
     to a peer it hasn't told since its bridge started, or since its link started carrying its mail
@@ -3969,7 +3976,7 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   (OpenUsage's rules): `total` ("Total usage": the plan's share used, or a team seat's dollars, or
   a request-based plan's requests), `auto` ("Cursor Models") and `api` ("Other Models"), the
   model pools, over the billing cycle; `on_demand` ("On-demand", dollars against its cap, `amount`
-  in `usd`; a spend with no cap isn't a window); `grok_bot` ("Grok Bot usage", its own week);
+  in `usd`; a spend with no cap is no window but `extras`, `spent` in `usd`); `grok_bot` ("Grok Bot usage", its own week);
   `requests` (a request-based plan's, where its total isn't already them); the credits left
   (grants and prepaid balance) as `balance` in `usd`. Each window's `name` is that label. Only a real
   box's bridge asks Cursor, never a test's. Not yet: Antigravity's (the usage panel still shows it on a

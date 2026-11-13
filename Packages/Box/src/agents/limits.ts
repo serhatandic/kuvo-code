@@ -45,6 +45,24 @@ export interface LimitWindow {
   source: "usage" | "turn"
 }
 
+/**
+ * A fact of a plan beyond its windows (PROTOCOL.md, "Plan limits", `extras`). So far only what an
+ * account spent with no limit to it (Cursor's on-demand spend without a cap); #631 piece E adds the
+ * rest (reset grants, credits to spend, a key's spend by period) as further `kind`s.
+ */
+export interface LimitExtra {
+  /** Its own name for it, the same from every box: `on_demand`. */
+  id: string
+  /** What a client calls it, as its maker's own label ("On-demand"). */
+  name: string
+  /** `spent`: an amount used so far, with no limit to it. */
+  kind: "spent"
+  amount: number
+  unit: "usd" | "credits" | "requests"
+  /** When it starts over, in ms since 1970, where its maker says. */
+  resetsAt?: number
+}
+
 /** What an agent read of its plan just now. */
 export interface LimitReading {
   windows: Omit<LimitWindow, "read" | "source">[]
@@ -52,6 +70,8 @@ export interface LimitReading {
   plan?: string
   /** Credits left to spend, where the account has them (OpenRouter's), and the most it can, when there's a cap. */
   balance?: { left: number; limit?: number; unit: "usd" | "credits" }
+  /** What the plan has beyond its windows (`LimitExtra`). */
+  extras?: LimitExtra[]
   /** Who the account is, where only its maker's answer says (GitHub's login): as `LimitsSource.identity`. */
   identity?: string
 }
@@ -144,6 +164,7 @@ export interface AccountLimits {
   plan?: string
   windows: LimitWindow[]
   balance?: LimitReading["balance"]
+  extras?: LimitExtra[]
   /** When it was last read from its maker, whatever came of it, in ms. */
   checked?: number
   /** When it will be read again, in ms. */
@@ -156,6 +177,7 @@ interface Entry {
   plan?: string
   windows: LimitWindow[]
   balance?: LimitReading["balance"]
+  extras?: LimitExtra[]
   checked?: number
   next: number
   problem?: { kind: LimitsProblemKind; message: string; until?: number }
@@ -285,6 +307,7 @@ export class Limits {
           ...((peer.plan ?? entry.plan) ? { plan: peer.plan ?? entry.plan } : {}),
           windows: peer.windows,
           ...((peer.balance ?? entry.balance) ? { balance: peer.balance ?? entry.balance } : {}),
+          ...((peer.extras ?? entry.extras)?.length ? { extras: peer.extras ?? entry.extras } : {}),
           ...(entry.checked ? { checked: entry.checked } : {}),
           ...(account.limits.read ? { next: entry.next } : {}),
         })
@@ -299,6 +322,7 @@ export class Limits {
         ...(entry.plan ? { plan: entry.plan } : {}),
         windows: entry.windows,
         ...(entry.balance ? { balance: entry.balance } : {}),
+        ...(entry.extras?.length ? { extras: entry.extras } : {}),
         ...(entry.checked ? { checked: entry.checked } : {}),
         // (One only its turns tell of is never read.)
         ...(account.limits.read ? { next: entry.next } : {}),
@@ -456,6 +480,7 @@ export class Limits {
       entry.checked = at
       entry.plan = reading.plan ?? entry.plan
       entry.balance = reading.balance
+      entry.extras = reading.extras?.length ? reading.extras : undefined
       // What it says now, in place of all it said before; a window a turn told of since it was
       // asked, or that only turns tell, stays as heard.
       const heard = entry.windows.filter((window) => window.source === "turn" && (window.read >= started || !reading.windows.some((each) => each.id === window.id)))
@@ -493,6 +518,7 @@ export class Limits {
           entry.windows = []
           entry.plan = undefined
           entry.balance = undefined
+          entry.extras = undefined
           entry.next = at + NOTHING_AGAIN
           break
         case "expired":
@@ -526,6 +552,7 @@ export class Limits {
     entry.windows = []
     entry.plan = undefined
     entry.balance = undefined
+    entry.extras = undefined
     entry.checked = undefined
     // Listed meanwhile, saying why it has no numbers (a maker's hold can keep it unread for hours).
     entry.problem = { kind: "failed", message: "Signed in to another account here: its limits show once they're read." }
@@ -549,6 +576,7 @@ export class Limits {
       entry.windows = []
       entry.plan = undefined
       entry.balance = undefined
+      entry.extras = undefined
       entry.checked = undefined
       entry.problem = undefined
       entry.identity = undefined

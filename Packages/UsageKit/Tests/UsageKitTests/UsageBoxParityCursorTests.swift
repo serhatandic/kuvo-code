@@ -105,6 +105,43 @@ final class UsageBoxParityCursorTests: XCTestCase {
                 var lines: [MetricLine] = []
                 CursorUsageSummaryMapper.appendMissingOnDemand(from: try XCTUnwrap(args["summary"] as? [String: Any]), to: &lines)
                 try assertLines(lines, want["lines"], name)
+            case "reading":
+                // What the box states (its windows, credits and `extras`), drawn on the card as the
+                // host's (`HostLimits.applied`), shows on-demand and credits as UsageKit's own read did.
+                let mine = try CursorUsageMapper.mapUsage(usage: try XCTUnwrap(args["usage"] as? [String: Any]), planName: args["planName"] as? String,
+                                                          creditGrants: args["creditGrants"] as? [String: Any], stripeBalanceCents: try XCTUnwrap(args["stripeBalanceCents"] as? Double))
+                let windows = try XCTUnwrap(want["windows"] as? [[String: Any]])
+                let balance = want["balance"] as? [String: Any]
+                let extras = try XCTUnwrap(want["extras"] as? [[String: Any]])
+                let now = Date(timeIntervalSince1970: 2_000_000_000)
+                let row = HostLimitRow(
+                    id: "cursor#aaaaaaaaaaaaaaaa", providerID: "cursor", name: "Cursor",
+                    meters: try windows.map { window in
+                        let amount = window["amount"] as? [String: Any]
+                        return HostLimitRow.Meter(title: try XCTUnwrap(window["name"] as? String), fraction: try XCTUnwrap(window["used"] as? Double),
+                                                  count: try amount.map { (used: try XCTUnwrap($0["used"] as? Double), limit: try XCTUnwrap($0["limit"] as? Double), unit: try XCTUnwrap($0["unit"] as? String)) })
+                    },
+                    balance: try balance.map { HostLimitRow.Balance(left: try XCTUnwrap($0["left"] as? Double), unit: try XCTUnwrap($0["unit"] as? String)) },
+                    extras: try extras.map { HostLimitRow.Extra(name: try XCTUnwrap($0["name"] as? String), amount: try XCTUnwrap($0["amount"] as? Double), unit: try XCTUnwrap($0["unit"] as? String)) },
+                    readAt: now, isOwnLogin: true
+                )
+                let limits = HostLimits()
+                limits.update(rows: [row], covered: ["cursor"])
+                let empty = ProviderSnapshot.make(provider: Provider(id: "cursor", displayName: "Cursor", icon: .providerMark("cursor")), plan: nil, lines: [], refreshedAt: now)
+                let drawn = try XCTUnwrap(limits.applied(to: ["cursor": empty], now: now)["cursor"])
+                for label in ["On-demand", "Credits"] {
+                    let theirs = drawn.lines.first { $0.label == label }
+                    let ours = mine.lines.first { $0.label == label }
+                    if case .values = ours {
+                        XCTAssertEqual(theirs, ours, "\(name) \(label)")
+                    } else if case .progress(_, let used, let limit, _, _, _, _)? = ours {
+                        guard case .progress(_, let hostUsed, let hostLimit, _, _, _, _)? = theirs else { XCTFail("\(name) \(label): \(String(describing: theirs))"); continue }
+                        XCTAssertEqual(hostUsed, used, accuracy: 1e-9, "\(name) \(label)")
+                        XCTAssertEqual(hostLimit, limit, accuracy: 1e-9, "\(name) \(label)")
+                    } else {
+                        XCTAssertNil(theirs, "\(name) \(label)")
+                    }
+                }
             case "planNames":
                 let pairs = try XCTUnwrap(args["pairs"] as? [[Any]])
                 let names = try XCTUnwrap(want["names"] as? [[String: Any]])

@@ -4,7 +4,7 @@
 // `CursorUsageMapper` and `CursorUsageSummaryMapper`, ported (#631 piece D1): `cursorLines` gives the
 // lines as UsageKit's mapper does (the parity fixtures hold both to them), `readingOf` the windows.
 
-import { LimitsProblem, retryAt, type LimitReading, type LimitWindow } from "../limits"
+import { LimitsProblem, retryAt, type LimitExtra, type LimitReading, type LimitWindow } from "../limits"
 import { numberOf } from "./numbers"
 import { CursorClient, cursorSession, type CursorAnswer } from "./cursor-api"
 
@@ -367,14 +367,17 @@ const WINDOWS: Record<string, string> = {
  * Lines as plan limits' windows (`LimitWindow`): each meter its share used, with its amount where
  * it's dollars or requests; the credits left as the account's balance. A request-based plan's
  * `Requests` line that only says again what its total says is left out (one bar, not two); an
- * on-demand spend with no cap, which is no limit, isn't a window.
+ * on-demand spend with no cap, which is no limit, is what the plan has beyond its windows
+ * (`extras`: spent, in dollars), as UsageKit's card shows it ("Extra Usage", spent).
  */
 export function readingOf(mapped: CursorMapped, identity: string | undefined): LimitReading {
   const windows: LimitReading["windows"] = []
   let balance: LimitReading["balance"]
+  const extras: LimitExtra[] = []
   for (const line of mapped.lines) {
     if (line.kind === "dollars") {
       if (line.label === "Credits") balance = { left: line.amount, unit: "usd" }
+      if (line.label === "On-demand") extras.push({ id: "on_demand", name: line.label, kind: "spent", amount: line.amount, unit: "usd" })
       continue
     }
     const id = WINDOWS[line.label]
@@ -387,7 +390,7 @@ export function readingOf(mapped: CursorMapped, identity: string | undefined): L
     if (id === "requests" && windows.some((each) => each.id === "total" && each.amount?.unit === "requests" && each.amount.used === line.used && each.amount.limit === line.limit)) continue
     windows.push(window)
   }
-  return { windows, ...(mapped.plan ? { plan: mapped.plan } : {}), ...(balance ? { balance } : {}), ...(identity ? { identity } : {}) }
+  return { windows, ...(mapped.plan ? { plan: mapped.plan } : {}), ...(balance ? { balance } : {}), ...(extras.length ? { extras } : {}), ...(identity ? { identity } : {}) }
 }
 
 /** An optional endpoint's JSON object, or nothing (it never fails the read). */

@@ -11506,14 +11506,17 @@ function merged(members) {
   const newest = [...members].sort((a, b) => newestOf(b) - newestOf(a));
   const plan = newest.find((member) => member.plan)?.plan;
   const balance = newest.find((member) => member.balance)?.balance;
+  const extras = newest.find((member) => member.extras?.length)?.extras;
   const checked = Math.max(0, ...members.map((member) => member.checked ?? 0));
   const next = Math.min(...members.map((member) => member.next ?? Infinity));
-  for (const key of ["plan", "balance", "checked", "next", "problem"])
+  for (const key of ["plan", "balance", "extras", "checked", "next", "problem"])
     delete account[key];
   if (plan)
     account.plan = plan;
   if (balance)
     account.balance = balance;
+  if (extras)
+    account.extras = extras;
   if (checked)
     account.checked = checked;
   if (Number.isFinite(next))
@@ -11612,6 +11615,7 @@ class Limits {
           ...peer.plan ?? entry.plan ? { plan: peer.plan ?? entry.plan } : {},
           windows: peer.windows,
           ...peer.balance ?? entry.balance ? { balance: peer.balance ?? entry.balance } : {},
+          ...(peer.extras ?? entry.extras)?.length ? { extras: peer.extras ?? entry.extras } : {},
           ...entry.checked ? { checked: entry.checked } : {},
           ...account.limits.read ? { next: entry.next } : {}
         });
@@ -11626,6 +11630,7 @@ class Limits {
         ...entry.plan ? { plan: entry.plan } : {},
         windows: entry.windows,
         ...entry.balance ? { balance: entry.balance } : {},
+        ...entry.extras?.length ? { extras: entry.extras } : {},
         ...entry.checked ? { checked: entry.checked } : {},
         ...account.limits.read ? { next: entry.next } : {},
         ...problem ? { problem } : {}
@@ -11752,6 +11757,7 @@ class Limits {
       entry.checked = at;
       entry.plan = reading.plan ?? entry.plan;
       entry.balance = reading.balance;
+      entry.extras = reading.extras?.length ? reading.extras : undefined;
       const heard = entry.windows.filter((window) => window.source === "turn" && (window.read >= started || !reading.windows.some((each) => each.id === window.id)));
       entry.windows = [...reading.windows.filter((window) => !heard.some((each) => each.id === window.id)).map((window) => ({ ...window, used: clamp(window.used), read: at, source: "usage" })), ...heard];
       entry.problem = undefined;
@@ -11785,6 +11791,7 @@ class Limits {
           entry.windows = [];
           entry.plan = undefined;
           entry.balance = undefined;
+          entry.extras = undefined;
           entry.next = at + NOTHING_AGAIN;
           break;
         case "expired":
@@ -11813,6 +11820,7 @@ class Limits {
     entry.windows = [];
     entry.plan = undefined;
     entry.balance = undefined;
+    entry.extras = undefined;
     entry.checked = undefined;
     entry.problem = { kind: "failed", message: "Signed in to another account here: its limits show once they're read." };
     entry.signIn = undefined;
@@ -11831,6 +11839,7 @@ class Limits {
       entry.windows = [];
       entry.plan = undefined;
       entry.balance = undefined;
+      entry.extras = undefined;
       entry.checked = undefined;
       entry.problem = undefined;
       entry.identity = undefined;
@@ -17592,10 +17601,13 @@ var WINDOWS = {
 function readingOf(mapped, identity) {
   const windows = [];
   let balance;
+  const extras = [];
   for (const line of mapped.lines) {
     if (line.kind === "dollars") {
       if (line.label === "Credits")
         balance = { left: line.amount, unit: "usd" };
+      if (line.label === "On-demand")
+        extras.push({ id: "on_demand", name: line.label, kind: "spent", amount: line.amount, unit: "usd" });
       continue;
     }
     const id = WINDOWS[line.label];
@@ -17614,7 +17626,7 @@ function readingOf(mapped, identity) {
       continue;
     windows.push(window);
   }
-  return { windows, ...mapped.plan ? { plan: mapped.plan } : {}, ...balance ? { balance } : {}, ...identity ? { identity } : {} };
+  return { windows, ...mapped.plan ? { plan: mapped.plan } : {}, ...balance ? { balance } : {}, ...extras.length ? { extras } : {}, ...identity ? { identity } : {} };
 }
 async function optional(request) {
   try {
@@ -33105,6 +33117,7 @@ function takenAccount2(given, off, now) {
     ];
   });
   const balance = account.balance;
+  const extras = (Array.isArray(account.extras) ? account.extras : []).slice(0, 10).flatMap((extra) => extra && typeof extra === "object" && text6(extra.id) && text6(extra.name, 100) && extra.kind === "spent" && typeof extra.amount === "number" && Number.isFinite(extra.amount) && ["usd", "credits", "requests"].includes(extra.unit) ? [{ id: text6(extra.id), name: text6(extra.name, 100), kind: "spent", amount: extra.amount, unit: extra.unit, ...time(extra.resetsAt) ? { resetsAt: extra.resetsAt } : {} }] : []);
   const problem = account.problem;
   const checked = moved(account.checked);
   const next = time(account.next) === undefined ? undefined : account.next + off;
@@ -33117,6 +33130,7 @@ function takenAccount2(given, off, now) {
     ...text6(account.plan, 100) ? { plan: text6(account.plan, 100) } : {},
     windows,
     ...balance && typeof balance === "object" && typeof balance.left === "number" && (balance.unit === "usd" || balance.unit === "credits") ? { balance: { left: balance.left, ...typeof balance.limit === "number" ? { limit: balance.limit } : {}, unit: balance.unit } } : {},
+    ...extras.length ? { extras } : {},
     ...checked ? { checked } : {},
     ...next ? { next } : {},
     ...problem && typeof problem === "object" && PROBLEMS.has(problem.kind) && text6(problem.message, 500) ? { problem: { kind: problem.kind, message: text6(problem.message, 500), ...time(problem.until) ? { until: problem.until + off } : {} } } : {}
@@ -33497,4 +33511,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents b6f33bb055396f603d88dcc5ce87a905b21176f6b1ac3a3e0cfb54479ea69d99
+// Built from Packages/Box/src/agents ffdb81a0921c408004e2bd7be39176512d7ddd391b2aa74d971b5680994e603c

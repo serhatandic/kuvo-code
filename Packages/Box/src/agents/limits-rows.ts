@@ -86,7 +86,7 @@ const newestOf = (account: AccountLimits) => account.checked ?? Math.max(0, ...a
 /**
  * One account as its boxes state it, together: named as a coding agent's where one is among them
  * (else the engine's sign-in's), with the first name you gave it; each window as read last; the
- * plan, credits and when it was checked as the newest says; a problem only when none of them could
+ * plan, credits, what it has beyond its windows (`extras`) and when it was checked as the newest says; a problem only when none of them could
  * read it.
  */
 function merged(members: AccountLimits[]): AccountLimits {
@@ -108,11 +108,13 @@ function merged(members: AccountLimits[]): AccountLimits {
   const newest = [...members].sort((a, b) => newestOf(b) - newestOf(a))
   const plan = newest.find((member) => member.plan)?.plan
   const balance = newest.find((member) => member.balance)?.balance
+  const extras = newest.find((member) => member.extras?.length)?.extras
   const checked = Math.max(0, ...members.map((member) => member.checked ?? 0))
   const next = Math.min(...members.map((member) => member.next ?? Infinity))
-  for (const key of ["plan", "balance", "checked", "next", "problem"] as const) delete account[key]
+  for (const key of ["plan", "balance", "extras", "checked", "next", "problem"] as const) delete account[key]
   if (plan) account.plan = plan
   if (balance) account.balance = balance
+  if (extras) account.extras = extras
   if (checked) account.checked = checked
   if (Number.isFinite(next)) account.next = next
   if (members.every((member) => member.problem)) account.problem = newest[0]!.problem

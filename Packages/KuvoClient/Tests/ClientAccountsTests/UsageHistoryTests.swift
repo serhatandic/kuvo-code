@@ -61,6 +61,18 @@ struct UsageHistoryTests {
         #expect(try JSONDecoder().decode(Envelope.self, from: Data(self.answer.utf8)).data.rows.map(\.accountWide) == [false, false])
     }
 
+    /// What a plan has beyond its windows: Cursor's on-demand spend with no cap. A kind this copy
+    /// doesn't know yet (piece E's) is left out, not the account.
+    @Test func aPlansExtrasAreReadAndAKindNotKnownYetIsLeftOut() throws {
+        let answer = """
+        {"accounts": [{"provider": "cursor", "service": "cursor", "agent": "cursor", "windows": [],
+          "extras": [{"id": "on_demand", "name": "On-demand", "kind": "spent", "amount": 43.21, "unit": "usd"},
+                     {"id": "grants", "name": "Reset grants", "kind": "grants", "count": 2}]}], "services": ["cursor"]}
+        """
+        let limits = try BoxLimits.decode(Data(answer.utf8))
+        #expect(limits.accounts[0].extras == [LimitsAccount.Extra(id: "on_demand", name: "On-demand", amount: 43.21, unit: "usd")])
+    }
+
     /// What the engine's hosted models cost, as OpenCode billed it, and Grok's, priced.
     @Test func aBilledRowSaysItsNotAnEstimate() throws {
         struct Envelope: Decodable { var data: BoxUsage }

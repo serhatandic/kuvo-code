@@ -291,6 +291,11 @@ function takenAccount(given: unknown, off: number, now: number): AccountLimits |
     ]
   })
   const balance = account.balance
+  const extras = (Array.isArray(account.extras) ? account.extras : []).slice(0, 10).flatMap((extra: any) =>
+    extra && typeof extra === "object" && text(extra.id) && text(extra.name, 100) && extra.kind === "spent" && typeof extra.amount === "number" && Number.isFinite(extra.amount) && ["usd", "credits", "requests"].includes(extra.unit)
+      ? [{ id: text(extra.id)!, name: text(extra.name, 100)!, kind: "spent" as const, amount: extra.amount, unit: extra.unit, ...(time(extra.resetsAt) ? { resetsAt: extra.resetsAt } : {}) }]
+      : [],
+  )
   const problem = account.problem
   const checked = moved(account.checked)
   const next = time(account.next) === undefined ? undefined : account.next + off
@@ -303,6 +308,7 @@ function takenAccount(given: unknown, off: number, now: number): AccountLimits |
     ...(text(account.plan, 100) ? { plan: text(account.plan, 100) } : {}),
     windows,
     ...(balance && typeof balance === "object" && typeof balance.left === "number" && (balance.unit === "usd" || balance.unit === "credits") ? { balance: { left: balance.left, ...(typeof balance.limit === "number" ? { limit: balance.limit } : {}), unit: balance.unit } } : {}),
+    ...(extras.length ? { extras } : {}),
     ...(checked ? { checked } : {}),
     ...(next ? { next } : {}),
     ...(problem && typeof problem === "object" && PROBLEMS.has(problem.kind) && text(problem.message, 500) ? { problem: { kind: problem.kind, message: text(problem.message, 500)!, ...(time(problem.until) ? { until: problem.until + off } : {}) } } : {}),

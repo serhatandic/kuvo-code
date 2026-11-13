@@ -661,6 +661,117 @@
      }
     ]
    }
+  },
+  {
+   "name": "as the box states it: spend-only on-demand",
+   "fn": "reading",
+   "args": {
+    "usage": {
+     "enabled": true,
+     "billingCycleStart": "1762300800000",
+     "billingCycleEnd": 1764892800000,
+     "planUsage": {
+      "limit": 2000,
+      "totalSpend": 2000
+     },
+     "spendLimitUsage": {
+      "totalSpend": 4321
+     }
+    },
+    "planName": "pro",
+    "creditGrants": null,
+    "stripeBalanceCents": 0
+   },
+   "expected": {
+    "plan": "Pro",
+    "windows": [
+     {
+      "id": "total",
+      "name": "Total usage",
+      "used": 1,
+      "amount": null
+     }
+    ],
+    "balance": null,
+    "extras": [
+     {
+      "id": "on_demand",
+      "name": "On-demand",
+      "kind": "spent",
+      "amount": 43.21,
+      "unit": "usd"
+     }
+    ]
+   }
+  },
+  {
+   "name": "as the box states it: pro: pools, credits and prepaid balance, bounded on-demand",
+   "fn": "reading",
+   "args": {
+    "usage": {
+     "enabled": true,
+     "billingCycleStart": "1762300800000",
+     "billingCycleEnd": 1764892800000,
+     "planUsage": {
+      "limit": 2000,
+      "totalSpend": 1500,
+      "remaining": 500,
+      "autoPercentUsed": 40,
+      "apiPercentUsed": 12.5,
+      "totalPercentUsed": 55
+     },
+     "spendLimitUsage": {
+      "individualLimit": 10000,
+      "individualRemaining": 7500,
+      "individualUsed": 0
+     }
+    },
+    "planName": "pro",
+    "creditGrants": {
+     "hasCreditGrants": true,
+     "totalCents": 5000,
+     "usedCents": 1250
+    },
+    "stripeBalanceCents": 700
+   },
+   "expected": {
+    "plan": "Pro",
+    "windows": [
+     {
+      "id": "total",
+      "name": "Total usage",
+      "used": 0.55,
+      "amount": null
+     },
+     {
+      "id": "auto",
+      "name": "Cursor Models",
+      "used": 0.4,
+      "amount": null
+     },
+     {
+      "id": "api",
+      "name": "Other Models",
+      "used": 0.125,
+      "amount": null
+     },
+     {
+      "id": "on_demand",
+      "name": "On-demand",
+      "used": 0.25,
+      "amount": {
+       "used": 25,
+       "limit": 100,
+       "unit": "usd"
+      }
+     }
+    ],
+    "balance": {
+     "left": 44.5,
+     "unit": "usd"
+    },
+    "extras": []
+   }
   }
  ]
 }

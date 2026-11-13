@@ -18,6 +18,9 @@ public struct HostLimitRow: Sendable, Hashable, Identifiable {
     public var meters: [Meter]
     /// Credits left, where the account has them (OpenRouter's).
     public var balance: Balance?
+    /// What the plan has beyond its meters: an amount spent with no limit (Cursor's on-demand
+    /// spend without a cap).
+    public var extras: [Extra]
     /// Why it couldn't be read just now, in words to show.
     public var notice: String?
     /// When the oldest of its meters was read: shown as "As of …" once that's long ago
@@ -66,6 +69,20 @@ public struct HostLimitRow: Sendable, Hashable, Identifiable {
         }
     }
 
+    public struct Extra: Sendable, Hashable {
+        /// Its maker's own label ("On-demand").
+        public var name: String
+        public var amount: Double
+        /// `usd`, `credits` or `requests`.
+        public var unit: String
+
+        public init(name: String, amount: Double, unit: String) {
+            self.name = name
+            self.amount = amount
+            self.unit = unit
+        }
+    }
+
     public struct Balance: Sendable, Hashable {
         public var left: Double
         /// `usd` or `credits`.
@@ -77,7 +94,8 @@ public struct HostLimitRow: Sendable, Hashable, Identifiable {
         }
     }
 
-    public init(id: String, providerID: String, name: String, plan: String? = nil, meters: [Meter], balance: Balance? = nil, notice: String? = nil, readAt: Date? = nil, isLocal: Bool = true, isOwnLogin: Bool = false, place: String? = nil, isAway: Bool = false) {
+    public init(id: String, providerID: String, name: String, plan: String? = nil, meters: [Meter], balance: Balance? = nil, extras: [Extra] = [], notice: String? = nil, readAt: Date? = nil, isLocal: Bool = true, isOwnLogin: Bool = false, place: String? = nil, isAway: Bool = false) {
+        self.extras = extras
         self.isLocal = isLocal
         self.isAway = isAway
         self.place = place
@@ -136,8 +154,9 @@ public final class HostLimits {
 
     /// A covered provider's limits as the panel's own lines, from this Mac's own login's row; nil
     /// with none, or none read in the last half hour. For a card that reads nothing of its own
-    /// (`limitsOnlyFromHost`: Cursor's), its credits left too, as its `Credits` line; another
-    /// card's credits are its own (OpenRouter's is a meter of what's used).
+    /// (`limitsOnlyFromHost`: Cursor's), its credits left too, as its `Credits` line, and what it
+    /// spent with no limit, as a line of its name (Cursor's `On-demand`, "Extra Usage … spent");
+    /// another card's are its own (OpenRouter's credits are a meter of what's used).
     func lines(for providerID: String, now: Date = .now) -> (lines: [MetricLine], plan: String?, readAt: Date?, notice: String?)? {
         guard let row = ownRow(for: providerID) else { return nil }
         if let readAt = row.readAt, now.timeIntervalSince(readAt) > Self.outdated { return nil }
@@ -150,8 +169,13 @@ public final class HostLimits {
             return .progress(label: meter.title, used: ProviderParse.clampPercent(meter.fraction * 100), limit: 100, format: .percent,
                              resetsAt: meter.resetsAt, periodDurationMs: meter.periodMinutes.map { $0 * 60_000 })
         }
-        if Self.limitsOnlyFromHost.contains(ProviderAccountID.family(of: providerID)), let balance = row.balance, balance.unit == "usd" {
-            lines.append(.values(label: "Credits", values: [MetricValue(number: balance.left, kind: .dollars)]))
+        if Self.limitsOnlyFromHost.contains(ProviderAccountID.family(of: providerID)) {
+            if let balance = row.balance, balance.unit == "usd" {
+                lines.append(.values(label: "Credits", values: [MetricValue(number: balance.left, kind: .dollars)]))
+            }
+            for extra in row.extras {
+                lines.append(.values(label: extra.name, values: [extra.unit == "usd" ? MetricValue(number: extra.amount, kind: .dollars) : MetricValue(number: extra.amount, kind: .count, label: extra.unit)]))
+            }
         }
         return (lines, row.plan, row.readAt, row.notice)
     }
@@ -300,6 +324,14 @@ enum HostLimitData {
             var data = WidgetData(title: "Credits", icon: .providerMark(row.providerID), kind: balance.unit == "usd" ? .dollars : .count, used: balance.left, limit: nil,
                                   countSuffix: balance.unit == "usd" ? nil : "credits")
             data.unboundedValueWord = "left"
+            rows.append(data)
+        }
+        // What it spent with no limit, as the card shows it ("On-demand $12.34 spent").
+        for extra in row.extras {
+            let dollars = extra.unit == "usd"
+            var data = WidgetData(title: extra.name, icon: .providerMark(row.providerID), kind: dollars ? .dollars : .count, used: extra.amount, limit: nil,
+                                  countSuffix: dollars ? nil : extra.unit)
+            data.unboundedValueWord = "spent"
             rows.append(data)
         }
         return rows
