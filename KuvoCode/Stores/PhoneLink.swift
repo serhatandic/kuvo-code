@@ -1310,27 +1310,27 @@ final class PhoneLink {
         switch (given.answer, ask.kind) {
         case ("signIn", .signIn):
             let host = ask.host
-            let username: String?, password: String?, savedPassword: String?
+            let username: String?, password: String?, saved: BrowserAsks.Saved?
             if let account = given.saved {
                 // Said, and the card left up: a 404 would tell the phone it was answered.
                 guard let login = Passwords.logins(for: host).first(where: { $0.account == account }) else {
                     return (422, Self.message("No password is saved for \(account.isEmpty ? host : account) any more. Type it instead."))
                 }
-                guard let saved = await Passwords.password(for: login) else {
+                guard let value = await Passwords.password(for: login) else {
                     return (422, Self.message("The saved password for \(host) couldn’t be read. Type it instead."))
                 }
-                (username, password, savedPassword) = (account.isEmpty ? nil : account, saved, saved)
+                (username, password, saved) = (account.isEmpty ? nil : account, value, .same)
             } else {
                 username = given.username.flatMap { $0.isEmpty ? nil : $0 }
                 password = given.password.flatMap { $0.isEmpty ? nil : $0 }
                 // A saved account's password typed anew is kept too, as the card keeps it.
                 let savedLogin = Passwords.logins(for: host).first { $0.account == (username ?? "") }
-                savedPassword = await Passwords.savedForComparing(password ?? "", savedLogin)
+                saved = await Passwords.compared(password ?? "", savedLogin)
                 guard username != nil || password != nil else { return (400, Data()) }
             }
             asks.answer(id, .signIn(username: username, password: password))
             if let failure = await BrowserAsks.keep(host: host, account: username ?? "", password: password ?? "", saving: given.save == true,
-                                                    savedPassword: savedPassword, allowAgents: given.agents == true) {
+                                                    saved: saved, allowAgents: given.agents == true) {
                 if let session = ask.session { workspace?.model(for: session)?.failure = failure }
                 return (200, Self.message(failure))
             }

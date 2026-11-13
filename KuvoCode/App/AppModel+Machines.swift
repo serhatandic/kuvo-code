@@ -935,7 +935,10 @@ extension AppModel {
         guard let names = try? await own.value(Names.self, "GET", "kuvo/keys") else { throw cantRead }
         var keys: [String: String] = [:]
         for name in names.keys {
-            guard let key = try? await own.value(Key.self, "GET", "kuvo/keys/\(name)") else { throw cantRead }
+            // (One taken away since it was listed is none.)
+            let (status, data) = (try? await own.send("GET", "kuvo/keys/\(name)")) ?? (0, Data())
+            if status == 404 { continue }
+            guard status == 200, let key = try? JSONDecoder().decode(Key.self, from: data) else { throw cantRead }
             keys[name] = key.value
         }
         return keys

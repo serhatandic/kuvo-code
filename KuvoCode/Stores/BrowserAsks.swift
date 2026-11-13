@@ -263,17 +263,30 @@ final class BrowserAsks {
     /// or when a saved account's password changed (or agents allowed to sign in on their own would
     /// keep using the old one); and whether it's one you typed now, which allowing agents doesn't
     /// ask your Touch ID for (one filled in from the vault does).
-    static func handling(password: String, saving: Bool, secure: Bool, savedPassword: String?) -> (saves: Bool, typedNow: Bool) {
-        let typedNow = !password.isEmpty && password != savedPassword
-        return (secure && typedNow && (saving || savedPassword != nil), typedNow)
+    /// `saved`: how the password compares with the one saved for the account (nil: none saved).
+    static func handling(password: String, saving: Bool, secure: Bool, saved: Saved?) -> (saves: Bool, typedNow: Bool) {
+        // (One that couldn't be compared isn't taken for typed: agents aren't let use it unasked.)
+        let typedNow = !password.isEmpty && saved != .same && saved != .unknown
+        return (secure && typedNow && (saving || saved != nil), typedNow)
+    }
+
+    /// How a sign-in's password compares with the one saved for its account: the same, another, or
+    /// it couldn't be told now (this Mac's box, moved, not answering: `Passwords.compared`).
+    enum Saved { case same, other, unknown }
+
+    /// `password` against the saved one, read here (nil: none, or it couldn't be read).
+    static func compared(_ password: String, with saved: String?) -> Saved? {
+        saved.map { $0 == password ? .same : .other }
     }
 
     /// A sign-in answered (on its card, or from a phone) kept as `handling` says, over https only:
     /// saved in this Mac's vault, and agents let sign in there on their own when `allowAgents` (you
     /// allowed it already). Why it wasn't saved, when it wasn't.
-    static func keep(host: String, account: String, password: String, saving: Bool, savedPassword: String?, allowAgents: Bool) async -> String? {
+    static func keep(host: String, account: String, password: String, saving: Bool, saved: Saved?, allowAgents: Bool) async -> String? {
         guard isSecure(host), !password.isEmpty else { return nil }
-        if handling(password: password, saving: saving, secure: true, savedPassword: savedPassword).saves {
+        // Whether it changed couldn't be told: said, rather than left unsaved without a word.
+        if saved == .unknown { return "The password for \(host) wasn’t saved: this Mac’s vault didn’t answer. Sign in again to save it." }
+        if handling(password: password, saving: saving, secure: true, saved: saved).saves {
             if await Passwords.save(host: host, account: account, password: password, allowAgents: allowAgents) == nil {
                 return "The password for \(host) wasn’t saved: this Mac’s vault didn’t answer. Sign in again to save it."
             }

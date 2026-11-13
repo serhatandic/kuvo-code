@@ -75,10 +75,15 @@ nonisolated enum OwnBoxHome {
         })
     }
 
-    /// Where the box's server answers, as `run/serve.json` says: on this Mac, with its password.
+    /// Where the box's server answers, as `run/serve.json` says: on this Mac, with its password. Only
+    /// while the process it names runs as that server (`kuvo-link.js serve`), as the box itself
+    /// believes the record (`runningServe`): one a crash left names a port anyone on this Mac could
+    /// take, which would be sent what the app sends its box.
     static func served(in folder: URL) -> (base: URL, password: String)? {
         guard let data = try? Data(contentsOf: folder.appending(path: "run/serve.json")),
               let record = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let pid = record["pid"] as? Int, pid > 1, let pid = pid_t(exactly: pid),
+              RunningApp.arguments(of: pid)?.joined(separator: " ").contains(/kuvo-link\.js serve(\s|$)/) == true,
               let port = record["port"] as? Int, (1...65535).contains(port), let password = record["password"] as? String, !password.isEmpty,
               let base = URL(string: "http://127.0.0.1:\(port)/") else { return nil }
         return (base, password)

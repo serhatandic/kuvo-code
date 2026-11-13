@@ -42,6 +42,8 @@ struct BrowserAskCard: View {
     @Environment(\.colorScheme) private var scheme
     @State private var username = ""
     @State private var password = ""
+    /// A saved account's password on its way from this Mac's vault (`use`): sent only once it's in.
+    @State private var filling: UUID?
     @State private var code = ""
     @State private var saves = false
     /// Let agents sign in to this site with its saved password from now on, without asking.
@@ -220,7 +222,7 @@ struct BrowserAskCard: View {
                 Button(isSignIn ? "Sign In" : "Fill", action: send)
                     .buttonStyle(.glassProminent)
                     .keyboardShortcut(takesKeys ? .defaultAction : nil)
-                    .disabled(isSignIn ? username.isEmpty && password.isEmpty : code.isEmpty)
+                    .disabled(isSignIn ? (username.isEmpty && password.isEmpty) || filling != nil : code.isEmpty)
             case .action:
                 Button("I Can’t", role: .cancel) { app.browserAsks.answer(ask.id, .declined) }
                     .keyboardShortcut(takesKeys ? .cancelAction : nil)
@@ -247,9 +249,12 @@ struct BrowserAskCard: View {
         username = login.account
         // (Read through this Mac's box once it has moved: kept only while it's still the account
         // picked, and you haven't typed meanwhile.)
-        let before = password
+        let before = password, fill = UUID()
+        filling = fill
         Task {
             let saved = await Passwords.password(for: login) ?? ""
+            guard filling == fill else { return }
+            filling = nil
             guard username == login.account, password == before else { return }
             password = saved
         }
@@ -258,7 +263,7 @@ struct BrowserAskCard: View {
     private func send() {
         switch ask.kind {
         case .signIn:
-            guard !username.isEmpty || !password.isEmpty else { return }
+            guard !username.isEmpty || !password.isEmpty, filling == nil else { return }
             let savedLogin = saved.first { $0.account == username }
             let answer = BrowserAsks.Answer.signIn(username: username.isEmpty ? nil : username, password: password.isEmpty ? nil : password)
             let wantsAgents = allowsAgents && BrowserAsks.isSecure(ask.host) && !password.isEmpty
@@ -268,12 +273,12 @@ struct BrowserAskCard: View {
             let conversation = ask.session.flatMap { app.workspace.model(for: $0) }
             let secure = BrowserAsks.isSecure(ask.host)
             Task {
-                let savedPassword = await Passwords.savedForComparing(answerPassword, savedLogin)
-                let typed = BrowserAsks.handling(password: answerPassword, saving: saving, secure: secure, savedPassword: savedPassword).typedNow
+                let saved = await Passwords.compared(answerPassword, savedLogin)
+                let typed = BrowserAsks.handling(password: answerPassword, saving: saving, secure: secure, saved: saved).typedNow
                 let allowed = wantsAgents ? (typed ? true : await Passwords.authenticate(reason: "let agents sign in to \(host) with its saved password")) : false
                 asks.answer(id, answer)
                 // Said over its conversation's composer, where the card was.
-                if let failure = await BrowserAsks.keep(host: host, account: answerUsername, password: answerPassword, saving: saving, savedPassword: savedPassword, allowAgents: allowed) {
+                if let failure = await BrowserAsks.keep(host: host, account: answerUsername, password: answerPassword, saving: saving, saved: saved, allowAgents: allowed) {
                     conversation?.failure = failure
                 }
             }

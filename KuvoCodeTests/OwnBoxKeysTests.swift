@@ -192,14 +192,17 @@ import Testing
         #expect(await Passwords.matches("kept-in-the-keychain", login) == true)
         #expect(await Passwords.matches("typed-anew", login) == false)
         // A sign-in answered with it is the saved one; one typed anew isn't (so it's saved).
-        let same = BrowserAsks.handling(password: "kept-in-the-keychain", saving: false, secure: true, savedPassword: await Passwords.savedForComparing("kept-in-the-keychain", login))
+        let same = BrowserAsks.handling(password: "kept-in-the-keychain", saving: false, secure: true, saved: await Passwords.compared("kept-in-the-keychain", login))
         #expect(!same.saves && !same.typedNow)
-        let anew = BrowserAsks.handling(password: "typed-anew", saving: false, secure: true, savedPassword: await Passwords.savedForComparing("typed-anew", login))
+        let anew = BrowserAsks.handling(password: "typed-anew", saving: false, secure: true, saved: await Passwords.compared("typed-anew", login))
         #expect(anew.saves && anew.typedNow)
-        // One the box can't compare now (a vault locked meanwhile): taken for the saved one, so agents
-        // aren't let use it without your Touch ID.
+        // One the box can't compare now (a vault locked meanwhile): never taken for typed, so agents
+        // aren't let use it without your Touch ID, and you're told it wasn't saved.
         let unknown = Passwords.Login(host: "github.com", account: "me", item: "item_gone")
-        #expect(!BrowserAsks.handling(password: "filled-from-the-vault", saving: false, secure: true, savedPassword: await Passwords.savedForComparing("filled-from-the-vault", unknown)).typedNow)
+        let cantTell = await Passwords.compared("filled-from-the-vault", unknown)
+        #expect(cantTell == .unknown)
+        #expect(!BrowserAsks.handling(password: "filled-from-the-vault", saving: true, secure: true, saved: cantTell).typedNow)
+        #expect(await BrowserAsks.keep(host: "github.com", account: "me", password: "filled-from-the-vault", saving: true, saved: cantTell, allowAgents: false)?.contains("wasn’t saved") == true)
         #expect(standIn.asked.filter { $0.path.hasSuffix("/values") }.count == 1, "read only to fill it")
         #expect(standIn.asked.allSatisfy { $0.fromApp })
     }
@@ -243,12 +246,14 @@ import Testing
     @Test func theMachinesListIsKeptInTheBoxsHomeOnceMoved() throws {
         defer { done() }
         try moved()
+        let inSupport = AppInfo.supportDirectory.appending(path: "box/machines.json")
+        let before = try? Data(contentsOf: inSupport)
         let machines = Machines()
         _ = machines.add("mini.test")
         let kept = try box.appending(path: "machines.json")
         let list = try JSONSerialization.jsonObject(with: Data(contentsOf: kept)) as? [[String: Any]]
         #expect(list?.map { $0["destination"] as? String } == ["mini.test"])
-        #expect(!FileManager.default.fileExists(atPath: AppInfo.supportDirectory.appending(path: "box/machines.json").path))
+        #expect((try? Data(contentsOf: inSupport)) == before, "nothing written in the app's own folder")
         #expect(Machines().list.map(\.id).contains("mini.test"), "read back from there")
         machines.remove("mini.test", uninstall: false)
     }
@@ -261,6 +266,8 @@ private final class StandInBox {
     struct Asked { var method: String; var path: String; var body: Data; var fromApp: Bool }
     private(set) var asked: [Asked] = []
     private var server: LoopbackServer?
+    /// What its record names as the box's server: a process of the test's own, named as one.
+    private var named: pid_t = 0
 
     static func start(at box: URL, answer: @escaping (HTTPRequest) -> HTTPResponse) async throws -> StandInBox {
         let stand = StandInBox()
@@ -275,9 +282,22 @@ private final class StandInBox {
         let port = try await server.start()
         let record = box.appending(path: "run/serve.json")
         try FileManager.default.createDirectory(at: record.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try JSONSerialization.data(withJSONObject: ["pid": 1, "port": Int(port), "password": password, "kept": false]).write(to: record)
+        // (`/bin/sleep`, its first argument the server's name: started whole before this goes on.)
+        var pid: pid_t = 0
+        let argv: [UnsafeMutablePointer<CChar>?] = [strdup("kuvo-link.js serve"), strdup("3600"), nil]
+        defer { argv.forEach { free($0) } }
+        guard posix_spawn(&pid, "/bin/sleep", nil, nil, argv, nil) == 0 else { throw TestFailure("the stand-in server's process didn't start") }
+        stand.named = pid
+        try JSONSerialization.data(withJSONObject: ["pid": Int(pid), "port": Int(port), "password": password, "kept": false]).write(to: record)
         return stand
     }
 
-    func stop() { server?.stop() }
+    func stop() {
+        server?.stop()
+        // (Its own process, by its PID.)
+        guard named > 0 else { return }
+        kill(named, SIGTERM)
+        waitpid(named, nil, 0)
+        named = 0
+    }
 }
