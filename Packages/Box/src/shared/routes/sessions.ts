@@ -104,6 +104,51 @@ export const MODELS_OFFERED = object({
   "starting?": nullable(MODEL_REF),
 });
 
+/** What a session is, as every client's lists go by it (`kuvo/sessions/list`, PROTOCOL.md "Session
+ * lists"): a project's session, a chat, a bot's conversation, a bot's seat in a group chat, a run
+ * kept out of sight, or a subagent's. */
+export const SESSION_KINDS = ["project", "chat", "bot", "seat", "hidden", "subagent"] as const;
+
+/** One session's facts: its kind, the project it's filed under (a project's session's), its
+ * folder, title and times (`updated`, its order), the session it works for (a subagent's), whether
+ * it's pinned, archived, running, since when it's waited on you (ms), and whether this copy isn't
+ * its own (it moved, or is on its way here). Each flag left out where it isn't. */
+export const SESSION_FACTS = object({
+  kind: words(...SESSION_KINDS),
+  "project?": string,
+  directory: string,
+  "title?": string,
+  created: number,
+  updated: number,
+  "parent?": string,
+  "pinned?": bool,
+  "archived?": bool,
+  "running?": bool,
+  "asked?": number,
+  "away?": bool,
+});
+
+/** A project the lists show: its name where it isn't its folder's, and when its newest session
+ * listed in it changed (none for one with none). */
+export const LISTED_PROJECT = object({ "name?": string, "updated?": number });
+
+/** The list (`kuvo/sessions/list`): where it's at (`since` resumes from it), whether it's whole
+ * (`full`) or only what changed since, the sessions by id, those gone since, its projects, and the
+ * places it couldn't read now (`bridge`: the coding agents' sessions as they were last read). */
+export const SESSION_LIST = object({
+  at: string,
+  "full?": bool,
+  sessions: map(SESSION_FACTS),
+  "gone?": list(string),
+  projects: map(LISTED_PROJECT),
+  "pending?": list(string),
+});
+
+export type SessionKind = (typeof SESSION_KINDS)[number];
+export type SessionFacts = Infer<typeof SESSION_FACTS>;
+export type ListedProject = Infer<typeof LISTED_PROJECT>;
+export type SessionList = Infer<typeof SESSION_LIST>;
+
 export type Glance = Infer<typeof GLANCE>;
 export type GlancePull = Infer<typeof GLANCE_PULL>;
 export type GlanceChecks = Infer<typeof GLANCE_CHECKS>;
@@ -118,6 +163,8 @@ export const SESSION_ROUTES: RouteShape[] = [
   { route: "GET kuvo/sessions/glance", answers: { 200: GLANCES, 400: REFUSED, 503: REFUSED } },
   { route: "POST kuvo/sessions/read", answers: { 200: object({ read: number }), 503: REFUSED } },
   { route: "GET kuvo/sessions/glance/events", answers: { 200: GLANCES, 400: REFUSED, 503: REFUSED } },
+  { route: "GET kuvo/sessions/list", answers: { 200: SESSION_LIST, 405: REFUSED, 503: REFUSED } },
+  { route: "GET kuvo/sessions/list/events", answers: { 200: SESSION_LIST, 405: REFUSED, 503: REFUSED } },
   { route: "GET kuvo/sessions/models", answers: { 200: SESSION_MODELS, 400: REFUSED, 503: REFUSED } },
   { route: "GET kuvo/models/offered", answers: { 200: MODELS_OFFERED, 503: REFUSED } },
   { route: "GET kuvo/sessions/:id/queue", answers: { 200: QUEUE } },

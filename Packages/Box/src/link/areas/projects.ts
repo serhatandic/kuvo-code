@@ -432,7 +432,7 @@ export async function* answerProjects(request: LinkRequest, readEngine: () => En
 
 // Those following its projects (`kuvo/projects/events`): told of its worktrees' changes too, as the
 // list says which project each belongs to.
-const projectFollowers: Set<() => void> = new Set();
+export const projectFollowers: Set<() => void> = new Set();
 worktreeFollowers.add(() => { for (const tell of projectFollowers) tell(); });
 // Each project's git worktrees made elsewhere are filed under it too (`worktreeProjects`).
 linkedTreesOf(() => readProjects().filter(project => !project.removed).map(project => project.directory));

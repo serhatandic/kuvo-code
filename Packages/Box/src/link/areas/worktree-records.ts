@@ -41,6 +41,19 @@ export function readRemovedWorktrees(): Record<string, string> {
   }
 }
 
+/** Worktrees an older Mac removed before this box kept its records, handed over to it
+ * (`kuvo/worktrees/record {removed}`): the project each was of, by its folder. Kept apart from
+ * `removed`, whose latest 200 alone are kept: these are never let go, as nothing else files their
+ * sessions (from before `kuvo.filed`) under their projects. */
+export function readHandedOver(): Record<string, string> {
+  try {
+    const handed = JSON.parse(fs.readFileSync(WORKTREES_FILE, "utf8")).handedOver;
+    return isObject(handed) ? Object.fromEntries(Object.entries(handed).filter(([, project]) => typeof project === "string")) as Record<string, string> : {};
+  } catch {
+    return {};
+  }
+}
+
 /** The project each worktree folder here belongs to, by the folder its sessions run in (a
  * worktree's top folder too): those this box keeps, those removed that can come back, and those
  * removed before, so a session that ran in one is still filed under its project; and each project's
@@ -48,11 +61,12 @@ export function readRemovedWorktrees(): Record<string, string> {
  * notices go by. */
 export function worktreeProjects(): Record<string, string> {
   // Read once: followers ask each second.
-  let kept: { worktrees?: unknown; removed?: unknown; restorable?: unknown } = {};
+  let kept: { worktrees?: unknown; removed?: unknown; restorable?: unknown; handedOver?: unknown } = {};
   try { kept = JSON.parse(fs.readFileSync(WORKTREES_FILE, "utf8")) ?? {}; } catch {}
   // (A project's git worktrees made elsewhere, `git worktree add`, are its too; this box's own
   // records, after, say for theirs.)
   const projects: Record<string, string> = { ...linkedTrees() };
+  if (isObject(kept.handedOver)) for (const [folder, project] of Object.entries(kept.handedOver)) if (typeof project === "string") projects[folder] = project;
   if (isObject(kept.removed)) for (const [folder, project] of Object.entries(kept.removed)) if (typeof project === "string") projects[folder] = project;
   const records = (list: unknown) => (Array.isArray(list) ? list.filter(each => typeof each?.root === "string" && typeof each?.project === "string") as WorktreeRecord[] : []);
   for (const tree of records(kept.restorable)) projects[tree.folder ?? tree.root] = tree.project;
@@ -86,10 +100,12 @@ export function readRestorableWorktrees(): RestorableWorktree[] {
 /** The list as `change` makes it, read again just before: a phone's request and a Mac's run
  * beside each other, each in a process of its own. `gone`: a worktree removed, kept in `removed`
  * (the latest 200). `restorable`: the removed ones Restore Worktree can bring back, as it makes them. */
-export function updateWorktrees(change: (list: WorktreeRecord[]) => WorktreeRecord[], gone?: WorktreeRecord, restorable: (list: RestorableWorktree[]) => RestorableWorktree[] = list => list) {
+export function updateWorktrees(change: (list: WorktreeRecord[]) => WorktreeRecord[], gone?: WorktreeRecord, restorable: (list: RestorableWorktree[]) => RestorableWorktree[] = list => list, handOver?: { folder: string; project: string }) {
   let removed = readRemovedWorktrees();
   if (gone) removed = Object.fromEntries([...Object.entries(removed).filter(([folder]) => folder !== (gone.folder ?? gone.root)), [gone.folder ?? gone.root, gone.project]].slice(-200));
-  writePrivate(WORKTREES_FILE, JSON.stringify({ worktrees: change(readWorktrees()), removed, restorable: restorable(readRestorableWorktrees()) }, null, 2));
+  const handedOver = readHandedOver();
+  if (handOver) handedOver[handOver.folder] = handOver.project;
+  writePrivate(WORKTREES_FILE, JSON.stringify({ worktrees: change(readWorktrees()), removed, restorable: restorable(readRestorableWorktrees()), ...(Object.keys(handedOver).length ? { handedOver } : {}) }, null, 2));
   for (const tell of worktreeFollowers) tell();
 }
 

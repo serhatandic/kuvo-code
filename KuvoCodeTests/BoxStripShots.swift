@@ -74,6 +74,9 @@ struct BoxStripShots {
         let app = AppModel()
         app.workspace.api = engine.api
         await app.workspace.refresh()
+        // (Its sidebar as this Mac's box lists these sessions.)
+        let follows = try await engine.listing.follow(app.workspace)
+        defer { follows.cancel() }
         var engines: [MachineEngine] = []
         for (name, status) in shot.machines {
             let machine = app.machines.add(name)

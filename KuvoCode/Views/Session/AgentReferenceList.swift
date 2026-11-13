@@ -112,7 +112,7 @@ struct AgentReferenceList: View {
     }
 
     private func isChat(_ agent: AgentMail.Agent) -> Bool {
-        app.workspace.session(agent.session).map { Workspace.isChat($0) } ?? false
+        app.workspace.session(agent.session).map { app.workspace.isInChats($0) } ?? false
     }
 
     /// A bot's job; a session's project, or that it's a chat; and the machine it's on.

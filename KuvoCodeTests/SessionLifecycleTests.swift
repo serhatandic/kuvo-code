@@ -19,12 +19,13 @@ import Testing
         workspace.api = engine.api
     }
 
-    private func start(_ sessions: [[String: Any]]) async {
+    private func start(_ sessions: [[String: Any]]) async throws {
         engine.list(sessions)
         engine.on("DELETE", "/api/session/*", json: [:])
         engine.on("POST", "/api/session/*", json: [:])
         engine.on("PATCH", "/api/session/*", json: [:])
         await workspace.refresh()
+        try await engine.listed(for: workspace)
     }
 
     private func listed() -> [String] {
@@ -33,7 +34,7 @@ import Testing
 
     @Test func deletingASessionTakesItAndItsDraftAway() async throws {
         defer { engine.stop() }
-        await start([StubEngine.session("ses_a", directory: project, created: 2), StubEngine.session("ses_b", directory: project, created: 1)])
+        try await start([StubEngine.session("ses_a", directory: project, created: 2), StubEngine.session("ses_b", directory: project, created: 1)])
         Drafts.shared["ses_a"].text = "half a thought"
         Drafts.shared["ses_b"].text = "another thought"
         defer { Drafts.shared.remove("ses_b") }
@@ -54,7 +55,7 @@ import Testing
     /// over SSH), and back if it's refused.
     @Test func oneItsEngineRefusesStaysAndSaysWhy() async throws {
         defer { engine.stop() }
-        await start([StubEngine.session("ses_a", directory: project, created: 2), StubEngine.session("ses_b", directory: project, created: 1)])
+        try await start([StubEngine.session("ses_a", directory: project, created: 2), StubEngine.session("ses_b", directory: project, created: 1)])
         let answering = Gate()
         let refused = StubWeb.json(["message": "database is locked"], status: 500)
         engine.on("DELETE", "/api/session/*") { _ in
@@ -77,7 +78,7 @@ import Testing
     /// Delete takes it away here too.
     @Test func oneItsEngineHasNoMoreGoes() async throws {
         defer { engine.stop() }
-        await start([StubEngine.session("ses_a", directory: project, created: 2), StubEngine.session("ses_b", directory: project, created: 1)])
+        try await start([StubEngine.session("ses_a", directory: project, created: 2), StubEngine.session("ses_b", directory: project, created: 1)])
         engine.on("DELETE", "/api/session/*", json: ["message": "Session not found"], status: 404)
 
         try await workspace.delete("ses_a")
@@ -88,7 +89,7 @@ import Testing
     /// not counted.
     @Test func unreadUntilYouLook() async throws {
         defer { engine.stop() }
-        await start([
+        try await start([
             StubEngine.session("ses_done", directory: project, extra: ["time": ["created": 1, "updated": 9, "idle": 9, "viewed": 4]]),
             StubEngine.session("ses_seen", directory: project, extra: ["time": ["created": 1, "updated": 9, "idle": 5, "viewed": 5]]),
             StubEngine.session("ses_old", directory: project, extra: ["time": ["created": 1, "updated": 9, "idle": 9, "viewed": 1], "metadata": ["kuvo.archived": true]]),
@@ -105,7 +106,7 @@ import Testing
     /// Dock's count; a look at an earlier finish leaves a newer one unread.
     @Test func readElsewhereIsReadHere() async throws {
         defer { engine.stop() }
-        await start([
+        try await start([
             StubEngine.session("ses_done", directory: project, extra: ["time": ["created": 1, "updated": 9, "idle": 9, "viewed": 4]]),
             StubEngine.session("ses_again", directory: project, extra: ["time": ["created": 1, "updated": 9, "idle": 9, "viewed": 4]]),
         ])
@@ -133,7 +134,7 @@ import Testing
     /// in its conversation as it comes, and it has its row.
     @Test func aNewSessionShowsItsFirstTurn() async throws {
         defer { engine.stop() }
-        await start([])
+        try await start([])
         let made = StubEngine.session("ses_new", title: "New session", directory: project)
         engine.on("POST", "/api/session", json: ["data": made])
         engine.on("GET", "/api/session/ses_new", json: ["data": made])
@@ -162,7 +163,9 @@ import Testing
             }
         }
         #expect(said == ["Say hi in three words.", "Hi there, friend."])
-        #expect(workspace.projects.first { $0.directory == workspace.folderPath(project) }?.sessions.map(\.id) == ["ses_new"])
+        // (Its box lists it, as its engine does.)
+        engine.lists(made)
+        try await until { workspace.projects.first { $0.directory == workspace.folderPath(project) }?.sessions.map(\.id) == ["ses_new"] }
     }
 
     /// A session opened as it's made (a demo copy's prompt, a session another client starts): the
@@ -170,7 +173,7 @@ import Testing
     /// same one its turn goes to, not one of its own that stays empty.
     @Test func aSessionOpenedAsItsMadeShowsItsTurn() async throws {
         defer { engine.stop() }
-        await start([StubEngine.session("ses_open", title: "Open", directory: project)])
+        try await start([StubEngine.session("ses_open", title: "Open", directory: project)])
         let made = StubEngine.session("ses_new", title: "New session", directory: project)
         engine.on("POST", "/api/session", json: ["data": made])
         engine.conversation("ses_new", [])
@@ -208,32 +211,36 @@ import Testing
     /// Renamed, archived and moved elsewhere: the lists follow.
     @Test func changesMadeElsewhereShowHere() async throws {
         defer { engine.stop() }
-        await start([StubEngine.session("ses_a", title: "Fix login", directory: project), StubEngine.session("ses_chat", title: "Question", directory: Workspace.chatsFolder)])
+        try await start([StubEngine.session("ses_a", title: "Fix login", directory: project), StubEngine.session("ses_chat", title: "Question", directory: Workspace.chatsFolder)])
         engine.on("GET", "/api/session/ses_a", json: ["data": StubEngine.session("ses_a", title: "Fix the login form", directory: project)])
         workspace.handle(try engine.event("session.renamed", session: "ses_a"))
         try await until { workspace.session("ses_a")?.title == "Fix the login form" }
         #expect(workspace.session("ses_a")?.title == "Fix the login form")
 
         engine.on("GET", "/api/session/ses_a", json: ["data": StubEngine.session("ses_a", title: "Fix the login form", directory: project, extra: ["metadata": ["kuvo.archived": true]])])
+        engine.lists(StubEngine.session("ses_a", title: "Fix the login form", directory: project, extra: ["metadata": ["kuvo.archived": true]]))
         workspace.handle(try engine.event("session.metadata.updated", session: "ses_a"))
         try await until { !listed().contains("ses_a") }
         #expect(listed() == ["ses_chat"])
 
         engine.on("GET", "/api/session/ses_chat", json: ["data": StubEngine.session("ses_chat", title: "Question", directory: project)])
+        engine.lists(StubEngine.session("ses_chat", title: "Question", directory: project))
         workspace.handle(try engine.event("session.moved", session: "ses_chat"))
         try await until { workspace.chats.isEmpty }
-        #expect(workspace.projects.first { $0.directory == project }?.sessions.map(\.id) == ["ses_chat"])
+        try await until { workspace.projects.first { $0.directory == project }?.sessions.map(\.id) == ["ses_chat"] }
     }
 
     /// A chat that turns into work, moved into a project (D4): the engine moves it, and it's the
     /// project's, with the conversation it had.
     @Test func aChatMovedIntoAProject() async throws {
         defer { engine.stop() }
-        await start([StubEngine.session("ses_chat", title: "Question", directory: Workspace.chatsFolder)])
+        try await start([StubEngine.session("ses_chat", title: "Question", directory: Workspace.chatsFolder)])
         engine.on("GET", "/api/session/ses_chat", json: ["data": StubEngine.session("ses_chat", title: "Question", directory: project)])
         try await workspace.move("ses_chat", toProject: project)
         #expect(engine.requests("POST", "/api/session/ses_chat/move").first?.body["directory"] as? String == project)
-        #expect(workspace.chats.isEmpty)
-        #expect(workspace.projects.first { $0.directory == project }?.sessions.map(\.id) == ["ses_chat"])
+        // (Its box lists it where its engine moved it.)
+        engine.lists(StubEngine.session("ses_chat", title: "Question", directory: project))
+        try await until { workspace.chats.isEmpty }
+        try await until { workspace.projects.first { $0.directory == project }?.sessions.map(\.id) == ["ses_chat"] }
     }
 }

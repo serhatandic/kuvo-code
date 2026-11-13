@@ -1,0 +1,641 @@
+{
+ "about": [
+  "What each session is and where the lists show it (PROTOCOL.md, \"Session lists\"): `kuvo/sessions/list`'s facts from a box's engine sessions,",
+  "and the sidebar a client draws from them. `box` is what the box knows beside its sessions: its chats and bots folders, its bots' conversations,",
+  "the project each folder is filed under (`worktrees` of `kuvo/projects`), its project list, those at work, since when each waits on you (by the",
+  "conversation, a subagent's ask counting as its own), and the copies that aren't its own. `expect.sessions` and `expect.projects` are the box's",
+  "answer (Packages/Box/test/session-lists.test.ts checks them); `expect.sidebar` is what a client shows from them (KuvoClient's SessionListsTests):",
+  "pinned and chats newest first; projects by their newest session shown, ties by name (Finder order: case-insensitive, numbers by value), the",
+  "name its list gives else its folder's last part; sessions in a project newest first. Written by hand from the Mac's rule as it was before",
+  "the box said it (Workspace.makeProjects, 2026-11-13); change both together."
+ ],
+ "cases": [
+  {
+   "name": "a box's sessions: projects, worktrees, chats, bots, seats, hidden runs, subagents, archived and pinned; a bot's note alone, and its chats folder kept as a project, as the Mac had them",
+   "box": {
+    "chats": "/home/me/.kuvo-code/chats",
+    "bots": "/home/me/.kuvo-code/bots",
+    "botSessions": [
+     "ses_botlisted"
+    ],
+    "filed": {
+     "/home/me/.kuvo-code/worktrees/web/wt1": "/home/me/web",
+     "/home/me/web-docs": "/home/me/web"
+    },
+    "projects": [
+     {
+      "directory": "/home/me/web",
+      "name": "Website"
+     },
+     {
+      "directory": "/home/me/api"
+     },
+     {
+      "directory": "/home/me/zeta"
+     },
+     {
+      "directory": "/home/me/alpha"
+     },
+     {
+      "directory": "/home/me/old",
+      "removed": true
+     },
+     {
+      "directory": "/home/me/gone",
+      "removed": true
+     },
+     {
+      "directory": "/home/me/.kuvo-code/chats"
+     }
+    ],
+    "running": [
+     "ses_web1",
+     "ses_sub1"
+    ],
+    "asked": {
+     "ses_chat1": 1050
+    },
+    "away": []
+   },
+   "sessions": [
+    {
+     "id": "ses_web1",
+     "location": {
+      "directory": "/home/me/web"
+     },
+     "time": {
+      "created": 990,
+      "updated": 1000
+     },
+     "title": "Fix the nav",
+     "metadata": {
+      "kuvo.pinned": true
+     }
+    },
+    {
+     "id": "ses_web2",
+     "location": {
+      "directory": "/home/me/.kuvo-code/worktrees/web/wt1"
+     },
+     "time": {
+      "created": 890,
+      "updated": 900
+     },
+     "title": "Worktree work"
+    },
+    {
+     "id": "ses_web3",
+     "location": {
+      "directory": "/home/me/web-docs"
+     },
+     "time": {
+      "created": 790,
+      "updated": 800
+     }
+    },
+    {
+     "id": "ses_filed",
+     "location": {
+      "directory": "/home/me/.kuvo-code/worktrees/new/wt2"
+     },
+     "time": {
+      "created": 690,
+      "updated": 700
+     },
+     "metadata": {
+      "kuvo": {
+       "filed": {
+        "folder": "/home/me/.kuvo-code/worktrees/new/wt2",
+        "project": "/home/me/web-docs"
+       }
+      }
+     }
+    },
+    {
+     "id": "ses_movedoff",
+     "location": {
+      "directory": "/home/me/api/sub"
+     },
+     "time": {
+      "created": 640,
+      "updated": 650
+     },
+     "metadata": {
+      "kuvo": {
+       "filed": {
+        "folder": "/home/me/elsewhere",
+        "project": "/home/me/web"
+       }
+      }
+     }
+    },
+    {
+     "id": "ses_api1",
+     "location": {
+      "directory": "/home/me/api"
+     },
+     "time": {
+      "created": 590,
+      "updated": 600,
+      "archived": 601
+     }
+    },
+    {
+     "id": "ses_api2",
+     "location": {
+      "directory": "/home/me/api"
+     },
+     "time": {
+      "created": 490,
+      "updated": 500
+     },
+     "metadata": {
+      "kuvo.archived": true
+     }
+    },
+    {
+     "id": "ses_api3",
+     "location": {
+      "directory": "/home/me/api"
+     },
+     "time": {
+      "created": 390,
+      "updated": 400
+     },
+     "metadata": {
+      "kuvo": {
+       "archived": true
+      }
+     }
+    },
+    {
+     "id": "ses_chat1",
+     "location": {
+      "directory": "/home/me/.kuvo-code/chats"
+     },
+     "time": {
+      "created": 1090,
+      "updated": 1100
+     },
+     "title": "Recipe ideas",
+     "metadata": {
+      "kuvo": {
+       "chat": "/home/me/.kuvo-code/chats"
+      }
+     }
+    },
+    {
+     "id": "ses_chat2",
+     "location": {
+      "directory": "/home/me/.kuvo-code/chats"
+     },
+     "time": {
+      "created": 290,
+      "updated": 300
+     },
+     "metadata": {
+      "kuvo.pinned": true
+     }
+    },
+    {
+     "id": "ses_notchat",
+     "location": {
+      "directory": "/home/me/notes"
+     },
+     "time": {
+      "created": 990,
+      "updated": 1000
+     },
+     "metadata": {
+      "kuvo": {
+       "chat": "/home/me/.kuvo-code/chats"
+      }
+     }
+    },
+    {
+     "id": "ses_botlisted",
+     "location": {
+      "directory": "/home/me/web"
+     },
+     "time": {
+      "created": 1990,
+      "updated": 2000
+     }
+    },
+    {
+     "id": "ses_botmark",
+     "location": {
+      "directory": "/home/me/api"
+     },
+     "time": {
+      "created": 1991,
+      "updated": 2001
+     },
+     "metadata": {
+      "kuvo": {
+       "bot": "bot_x"
+      }
+     }
+    },
+    {
+     "id": "ses_botfolder",
+     "location": {
+      "directory": "/home/me/.kuvo-code/bots/bot_y/workspace"
+     },
+     "time": {
+      "created": 1992,
+      "updated": 2002
+     }
+    },
+    {
+     "id": "ses_seat",
+     "location": {
+      "directory": "/home/me/.kuvo-code/chats"
+     },
+     "time": {
+      "created": 1993,
+      "updated": 2003
+     },
+     "metadata": {
+      "kuvo": {
+       "seat": {
+        "group": "grp_a",
+        "bot": "bot_x"
+       }
+      }
+     }
+    },
+    {
+     "id": "ses_engine",
+     "location": {
+      "directory": "/home/me/web"
+     },
+     "time": {
+      "created": 1994,
+      "updated": 2004
+     },
+     "metadata": {
+      "kuvo": {
+       "engineFor": "ses_web1"
+      }
+     }
+    },
+    {
+     "id": "ses_review",
+     "location": {
+      "directory": "/home/me/web"
+     },
+     "time": {
+      "created": 1995,
+      "updated": 2005
+     },
+     "metadata": {
+      "kuvo": {
+       "reviewPart": {
+        "review": "rev_1"
+       }
+      }
+     }
+    },
+    {
+     "id": "ses_sub1",
+     "location": {
+      "directory": "/home/me/web"
+     },
+     "time": {
+      "created": 991,
+      "updated": 1001
+     },
+     "title": "Explore",
+     "parentID": "ses_web1"
+    },
+    {
+     "id": "ses_old1",
+     "location": {
+      "directory": "/home/me/old"
+     },
+     "time": {
+      "created": 90,
+      "updated": 100
+     }
+    },
+    {
+     "id": "ses_ten",
+     "location": {
+      "directory": "/home/me/web10"
+     },
+     "time": {
+      "created": 190,
+      "updated": 200
+     }
+    },
+    {
+     "id": "ses_two",
+     "location": {
+      "directory": "/home/me/web2"
+     },
+     "time": {
+      "created": 190,
+      "updated": 200
+     }
+    }
+   ],
+   "expect": {
+    "sessions": {
+     "ses_web1": {
+      "kind": "project",
+      "directory": "/home/me/web",
+      "created": 990,
+      "updated": 1000,
+      "project": "/home/me/web",
+      "title": "Fix the nav",
+      "pinned": true,
+      "running": true
+     },
+     "ses_web2": {
+      "kind": "project",
+      "directory": "/home/me/.kuvo-code/worktrees/web/wt1",
+      "created": 890,
+      "updated": 900,
+      "project": "/home/me/web",
+      "title": "Worktree work"
+     },
+     "ses_web3": {
+      "kind": "project",
+      "directory": "/home/me/web-docs",
+      "created": 790,
+      "updated": 800,
+      "project": "/home/me/web"
+     },
+     "ses_filed": {
+      "kind": "project",
+      "directory": "/home/me/.kuvo-code/worktrees/new/wt2",
+      "created": 690,
+      "updated": 700,
+      "project": "/home/me/web"
+     },
+     "ses_movedoff": {
+      "kind": "project",
+      "directory": "/home/me/api/sub",
+      "created": 640,
+      "updated": 650,
+      "project": "/home/me/api/sub"
+     },
+     "ses_api1": {
+      "kind": "project",
+      "directory": "/home/me/api",
+      "created": 590,
+      "updated": 600,
+      "project": "/home/me/api",
+      "archived": true
+     },
+     "ses_api2": {
+      "kind": "project",
+      "directory": "/home/me/api",
+      "created": 490,
+      "updated": 500,
+      "project": "/home/me/api",
+      "archived": true
+     },
+     "ses_api3": {
+      "kind": "project",
+      "directory": "/home/me/api",
+      "created": 390,
+      "updated": 400,
+      "project": "/home/me/api",
+      "archived": true
+     },
+     "ses_chat1": {
+      "kind": "chat",
+      "directory": "/home/me/.kuvo-code/chats",
+      "created": 1090,
+      "updated": 1100,
+      "title": "Recipe ideas",
+      "asked": 1050
+     },
+     "ses_chat2": {
+      "kind": "chat",
+      "directory": "/home/me/.kuvo-code/chats",
+      "created": 290,
+      "updated": 300,
+      "pinned": true
+     },
+     "ses_notchat": {
+      "kind": "project",
+      "directory": "/home/me/notes",
+      "created": 990,
+      "updated": 1000,
+      "project": "/home/me/notes"
+     },
+     "ses_botlisted": {
+      "kind": "bot",
+      "directory": "/home/me/web",
+      "created": 1990,
+      "updated": 2000
+     },
+     "ses_botmark": {
+      "kind": "project",
+      "directory": "/home/me/api",
+      "created": 1991,
+      "updated": 2001,
+      "project": "/home/me/api"
+     },
+     "ses_botfolder": {
+      "kind": "bot",
+      "directory": "/home/me/.kuvo-code/bots/bot_y/workspace",
+      "created": 1992,
+      "updated": 2002
+     },
+     "ses_seat": {
+      "kind": "seat",
+      "directory": "/home/me/.kuvo-code/chats",
+      "created": 1993,
+      "updated": 2003
+     },
+     "ses_engine": {
+      "kind": "hidden",
+      "directory": "/home/me/web",
+      "created": 1994,
+      "updated": 2004
+     },
+     "ses_review": {
+      "kind": "hidden",
+      "directory": "/home/me/web",
+      "created": 1995,
+      "updated": 2005
+     },
+     "ses_sub1": {
+      "kind": "subagent",
+      "directory": "/home/me/web",
+      "created": 991,
+      "updated": 1001,
+      "title": "Explore",
+      "parent": "ses_web1",
+      "running": true
+     },
+     "ses_old1": {
+      "kind": "project",
+      "directory": "/home/me/old",
+      "created": 90,
+      "updated": 100,
+      "project": "/home/me/old"
+     },
+     "ses_ten": {
+      "kind": "project",
+      "directory": "/home/me/web10",
+      "created": 190,
+      "updated": 200,
+      "project": "/home/me/web10"
+     },
+     "ses_two": {
+      "kind": "project",
+      "directory": "/home/me/web2",
+      "created": 190,
+      "updated": 200,
+      "project": "/home/me/web2"
+     }
+    },
+    "projects": {
+     "/home/me/alpha": {},
+     "/home/me/api": {
+      "updated": 2001
+     },
+     "/home/me/.kuvo-code/chats": {},
+     "/home/me/api/sub": {
+      "updated": 650
+     },
+     "/home/me/notes": {
+      "updated": 1000
+     },
+     "/home/me/old": {
+      "updated": 100
+     },
+     "/home/me/web": {
+      "name": "Website",
+      "updated": 1000
+     },
+     "/home/me/web10": {
+      "updated": 200
+     },
+     "/home/me/web2": {
+      "updated": 200
+     },
+     "/home/me/zeta": {}
+    },
+    "sidebar": {
+     "pinned": [
+      "ses_web1",
+      "ses_chat2"
+     ],
+     "chats": [
+      "ses_chat1",
+      "ses_chat2"
+     ],
+     "projects": [
+      {
+       "directory": "/home/me/api",
+       "sessions": [
+        "ses_botmark"
+       ]
+      },
+      {
+       "directory": "/home/me/notes",
+       "sessions": [
+        "ses_notchat"
+       ]
+      },
+      {
+       "directory": "/home/me/web",
+       "sessions": [
+        "ses_web1",
+        "ses_web2",
+        "ses_web3",
+        "ses_filed"
+       ]
+      },
+      {
+       "directory": "/home/me/api/sub",
+       "sessions": [
+        "ses_movedoff"
+       ]
+      },
+      {
+       "directory": "/home/me/web2",
+       "sessions": [
+        "ses_two"
+       ]
+      },
+      {
+       "directory": "/home/me/web10",
+       "sessions": [
+        "ses_ten"
+       ]
+      },
+      {
+       "directory": "/home/me/old",
+       "sessions": [
+        "ses_old1"
+       ]
+      },
+      {
+       "directory": "/home/me/alpha",
+       "sessions": []
+      },
+      {
+       "directory": "/home/me/.kuvo-code/chats",
+       "sessions": []
+      },
+      {
+       "directory": "/home/me/zeta",
+       "sessions": []
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "a copy that isn't this box's own says so, and keeps its project",
+   "box": {
+    "chats": "/home/me/.kuvo-code/chats",
+    "bots": "/home/me/.kuvo-code/bots",
+    "botSessions": [],
+    "filed": {},
+    "projects": [],
+    "running": [],
+    "asked": {},
+    "away": [
+     "ses_away"
+    ]
+   },
+   "sessions": [
+    {
+     "id": "ses_away",
+     "location": {
+      "directory": "/home/me/web"
+     },
+     "time": {
+      "created": 40,
+      "updated": 50
+     }
+    }
+   ],
+   "expect": {
+    "sessions": {
+     "ses_away": {
+      "kind": "project",
+      "directory": "/home/me/web",
+      "created": 40,
+      "updated": 50,
+      "project": "/home/me/web",
+      "away": true
+     }
+    },
+    "projects": {
+     "/home/me/web": {
+      "updated": 50
+     }
+    }
+   }
+  }
+ ]
+}

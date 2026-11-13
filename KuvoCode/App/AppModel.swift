@@ -650,6 +650,8 @@ final class AppModel {
                         async let worktrees: Void = workspace.followWorktrees()
                         async let queues: Void = workspace.followQueues()
                         async let background: Void = workspace.followBackground(BoxClient.mac)
+                        // What its sessions are and where they're filed: the sidebar's projects and chats.
+                        async let sessionList: Void = workspace.followSessionList(on: BoxClient.mac)
                         async let wakes: Void = wakeUps.follow()
                         async let personalities: Void = Personalities.shared.follow()
                         async let bots: Void = bots.follow()
@@ -665,6 +667,7 @@ final class AppModel {
                         await worktrees
                         await queues
                         await background
+                        await sessionList
                         await wakes
                         await personalities
                         await bots
