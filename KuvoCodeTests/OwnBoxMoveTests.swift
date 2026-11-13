@@ -581,7 +581,9 @@ import Testing
         AppModel.movesOwnBox = true
         OwnBoxHome.recheck()
         #expect(OwnBoxMove.forThisMac() != nil)
+        // (Made by the box as the app opens: the flag-off half's stand-in for one taken away first.)
         try FileManager.default.removeItem(at: K.appending(path: "updates/rehome/state.json"))
+        try FileManager.default.removeItem(at: K.appending(path: "box/kind"))
         #expect(try await keeper(Identity()).makeNew())
         #expect(BackgroundWork.boxStartsOnItsOwn)
         let work = BackgroundWork()
