@@ -230,9 +230,9 @@ final class OwnBoxMove {
         // (A journal there, read or not, is a move under way: the box says `moving` or `clearing`.)
         if state == "moving" || state == "clearing" { return await resume() }
         if state == "done", said.answer["way"] as? String == "move" { return await finish(owed: said.answer["owed"] as? [String] ?? []) }
-        // (A new Mac's box made there, with nothing moved: its helper starts it, never this keeper.)
-        // (Switched off in Login Items, its helper stays off.)
-        if state == nil, OwnBoxHome.kind(in: folder) == "mac" { return await finish(owed: [], helperOnlyIfMissing: true) }
+        // A new Mac's box made there, with nothing moved, as the box says: its helper starts it,
+        // never this keeper (switched off in Login Items, its helper stays off).
+        if state == nil, await rehome(["--new", "--check"])?.answer["made"] as? Bool == true { return await finish(owed: [], helperOnlyIfMissing: true) }
         return await wentBack()
     }
 
@@ -242,6 +242,17 @@ final class OwnBoxMove {
         log.notice("A move of this Mac's box stopped part way: finishing it")
         guard let said = await rehome(["--resume"], limit: .seconds(8 * 3600)) else { return .wait }
         return await after(said)
+    }
+
+    /// Why the move holds on, as the box last said it (stuck part way, or another holding its lock).
+    private(set) var holdsOnBecause: String?
+
+    /// How a move under way stands for the app while the keeper can't say (none runs): why it holds
+    /// on where it went wrong part way, "" while it just moves, nil with none under way.
+    func movingNow() async -> String? {
+        guard let said = await rehome(["--status"]), said.status == 0 else { return underWayOnDisk ? "" : nil }
+        guard ["moving", "clearing"].contains(said.answer["state"] as? String ?? "") else { return nil }
+        return (said.answer["failed"] as? [String: Any])?["message"] as? String ?? ""
     }
 
     /// What the box's `rehome` said it did, acted on.
@@ -256,8 +267,12 @@ final class OwnBoxMove {
                 return await finish(owed: said.status_["owed"] as? [String] ?? [])
             }
             return await wentBack()
+        case "back":
+            // (Moved back, Move Back: the box is in the app's folder again, as it was.)
+            return await wentBack()
         case "stuck", "waits":
-            log.error("This Mac's box's move holds on: \(said.answer["message"] as? String ?? "", privacy: .public)")
+            holdsOnBecause = said.answer["message"] as? String
+            log.error("This Mac's box's move holds on: \(self.holdsOnBecause ?? "", privacy: .public)")
             return .wait
         default:
             // (Cut off, or what it said can't be read: as the box has it now.)
@@ -360,10 +375,14 @@ final class OwnBoxMove {
     func makeNew() async -> Bool {
         // The box says whether it's made already, or could be now (never while a move's under way,
         // whose kind it writes before it's done), before its files are made for it.
+        BackgroundWork.boxStartsOnItsOwn = false
         guard let asked = await rehome(["--new", "--check"]) else { return false }
         // Made already (a start cut short before its helper was put in place: put there now; one in
         // place is left as it is, switched off in Login Items say).
-        if asked.answer["made"] as? Bool == true { return await helperRuns(onlyIfMissing: true) }
+        if asked.answer["made"] as? Bool == true {
+            BackgroundWork.boxStartsOnItsOwn = true
+            return await helperRuns(onlyIfMissing: true)
+        }
         guard asked.answer["ready"] as? Bool == true else { return false }
         let release: URL
         do {
@@ -376,6 +395,7 @@ final class OwnBoxMove {
         guard let said = await rehome(["--new", "--release", release.path(percentEncoded: false)] + (keepsAwakeOff() ? ["--keeps-awake", "off"] : [])),
               said.result == "done" || said.result == "nothing" else { return false }
         log.notice("This Mac's box is made in its own home")
+        BackgroundWork.boxStartsOnItsOwn = true
         return await helperRuns()
     }
 

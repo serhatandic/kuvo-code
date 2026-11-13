@@ -464,6 +464,12 @@ async function carryOn(journal: Journal, rewriter: Rewriter): Promise<void> {
         madeFolder(home, path.dirname(path.join(aside, path.relative(home, file))));
         rename(home, file, path.join(aside, path.relative(home, file)));
       }
+      // A new Mac's box's making that was cut short said so in the move's own folder: its mark set
+      // aside with what it left, so nothing ever takes the moved box for one.
+      if (exists(newMarker(home))) {
+        madeFolder(home, aside);
+        rename(home, newMarker(home), path.join(aside, "new-box-mark"));
+      }
       // (The trash it was in, set aside as well, once it's empty of all but that.)
       const trash = path.join(home, "trash");
       for (const name of listOf(trash).filter(name => path.join(trash, name) !== aside)) {
@@ -711,7 +717,7 @@ function newRefusal({ appFolder, home }: Folders, { release, engineData }: { rel
   if (appBoxRan(path.join(appFolder, "box"), engineData ?? path.join(appFolder, "opencode", "data", "opencode"))) return "Kuvo Code's own box is in its folder: it moves into its home instead.";
   if (located(home) === located(path.join(accountHome(), ".kuvo-code")) && path.basename(appFolder) !== "run.kuvo.code") return "Only Kuvo Code itself makes its box in ~/.kuvo-code: a copy makes it in a home of its own.";
   // (What a making cut short left isn't a box there: it's made again.)
-  const there = exists(newMarker(home)) ? "gone" : runsAt(home);
+  const there = makingCutShort(home) ? "gone" : runsAt(home);
   if (there !== "gone" && (there === "running" || foundAt(home, false) !== null)) return "There's a box in this Mac's ~/.kuvo-code already: both keep running as they are.";
   if (runningIn(path.join(home, "run")).length) return "Something is running in this Mac's ~/.kuvo-code: it's made there once that's stopped.";
   if (!listOf(path.join(appFolder, "engine")).length) return "The engine isn't downloaded yet: this Mac's box is made once it is.";
@@ -720,9 +726,15 @@ function newRefusal({ appFolder, home }: Folders, { release, engineData }: { rel
 
 /** Said while a new Mac's box is being made (`updates/rehome/new`): what a making cut short left is
  * taken away as it's made again, never kept. */
-const newMarker = (home: string) => path.join(rehomeFolder(home), "new");
-/** What a new Mac's box's making puts in its home. */
-const MADE_NEW = ["bin", "bin.new", "engine", "engine.new", "box"];
+function newMarker(home: string): string { return path.join(rehomeFolder(home), "new"); }
+/** Whether a new Mac's box's making was cut short in `home`: its mark there, with no move ever (no
+ * state, no journal). Once a move has been there, the mark says nothing (left over, the move's
+ * install step sets it aside), so a box there is never taken for a making cut short. */
+function makingCutShort(home: string): boolean {
+  if (!exists(newMarker(home))) return false;
+  if (exists(path.join(rehomeFolder(home), "journal.json"))) return false;
+  return readRecord(home).state == null;
+}
 
 /** `rehome --new --check`: whether a new Mac's box is made in `home` already (`made`: its kind says
  * so, with no move under way), or could be now (`ready`, the release aside), and why not. Changes
@@ -730,7 +742,7 @@ const MADE_NEW = ["bin", "bin.new", "engine", "engine.new", "box"];
 export function newReadiness(folders: Folders, { engineData }: { engineData?: string } = {}): { ready: boolean; made: boolean; why?: string } {
   if (process.platform !== "darwin") return { ready: false, made: false, why: NOTHING_TO_MOVE };
   if (moveUnderWay(folders.home)) return { ready: false, made: false, why: "A move of this Mac's box is under way: it's finished first." };
-  if (recordedKind(path.join(folders.home, "box", "kind")) === "mac" && !exists(newMarker(folders.home))) return { ready: false, made: true };
+  if (recordedKind(path.join(folders.home, "box", "kind")) === "mac" && !makingCutShort(folders.home)) return { ready: false, made: true };
   const why = newRefusal(folders, { release: undefined, engineData });
   return why ? { ready: false, made: false, why } : { ready: true, made: false };
 }
@@ -747,7 +759,7 @@ export async function rehomeNew(folders: Folders, options: MoveOptions & { engin
   // (Asked first without its lock, which makes its home: a Mac whose box moves instead gets none from asking.)
   const why = (): RehomeOutcome | null => {
     if (moveUnderWay(home)) return { result: "refused", message: "A move of this Mac's box is under way: it's finished first.", status: rehomeStatus(home) };
-    if (recordedKind(path.join(home, "box", "kind")) === "mac" && !exists(newMarker(home))) return { result: "nothing", status: rehomeStatus(home) };
+    if (recordedKind(path.join(home, "box", "kind")) === "mac" && !makingCutShort(home)) return { result: "nothing", status: rehomeStatus(home) };
     const refusal = newRefusal(folders, { release, engineData: options.engineData });
     return refusal ? { result: "refused", message: refusal, status: rehomeStatus(home) } : null;
   };
@@ -758,9 +770,10 @@ export async function rehomeNew(folders: Folders, options: MoveOptions & { engin
     const refused = why();
     if (refused) return refused;
     const now = Date.now();
-    // What a making cut short left, taken away; then what's there that isn't a box (one its Mac
-    // removed), aside.
-    if (exists(newMarker(home))) for (const name of MADE_NEW) fs.rmSync(path.join(home, name), { recursive: true, force: true });
+    // Said first: whatever stops it from here, it's made again from the start. What's there that
+    // isn't a box (one its Mac removed, or what a making cut short left) is set aside in its
+    // trash, nothing deleted.
+    writePrivate(newMarker(home), `${now}\n`);
     const aside = path.join(home, "trash", `earlier-box-${stamp(now)}`);
     const there = listOf(home).filter(name => name !== "updates" && name !== "trash").map(name => path.join(home, name))
       .concat(listOf(path.join(home, "updates")).filter(name => name !== "rehome").map(name => path.join(home, "updates", name)))
@@ -769,8 +782,6 @@ export async function rehomeNew(folders: Folders, options: MoveOptions & { engin
       fs.mkdirSync(path.dirname(path.join(aside, path.relative(home, file))), { recursive: true, mode: 0o700 });
       fs.renameSync(file, path.join(aside, path.relative(home, file)));
     }
-    // (Said once what was there is aside: all that a making cut short leaves from here is its own.)
-    writePrivate(newMarker(home), `${now}\n`);
     // Its files, whole (links followed: from the app, wherever it is), then in place.
     const bin = path.join(home, "bin");
     fs.rmSync(`${bin}.new`, { recursive: true, force: true });

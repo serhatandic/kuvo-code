@@ -75,10 +75,8 @@ final class BackgroundWork {
     /// Whether this Mac's box lives in its home of its own (`movesOwnBox`, its home's box says it's
     /// this Mac's): its helper starts it at login there, so no keeper of the app's is registered (two
     /// would start at login). The keeper registered before retires itself once the move's done.
-    static var boxStartsOnItsOwn: Bool {
-        guard AppModel.movesOwnBox, let folder = OwnBoxHome.folder else { return false }
-        return OwnBoxHome.kind(in: folder) == "mac"
-    }
+    /// As the box said it as the app opened (`rehome --new --check`'s `made`, `OwnBoxMove.makeNew`).
+    nonisolated(unsafe) static var boxStartsOnItsOwn = false
 
     /// Registered with macOS, once (the first time Kuvo Code opens, and again if it went): launchd
     /// starts the keeper now, and at each login. Whether it's on. Never once this Mac's box lives

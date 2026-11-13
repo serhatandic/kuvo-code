@@ -140,7 +140,13 @@ struct EngineSetupView: View {
         case .failed(let message):
             message
         default:
-            app.calibration.isRunning ? "Getting your bots and settings ready for this version…" : "Getting the agent engine ready…"
+            if let moving = app.boxMoving {
+                // (#333: the move's own view is piece 8's.)
+                moving.isEmpty ? "Moving this Mac’s box into its own home. Nothing is lost; it starts again in a moment."
+                    : "This Mac’s box is moving into its own home, and stopped part way: \(moving) It finishes when Kuvo Code’s background work starts again."
+            } else {
+                app.calibration.isRunning ? "Getting your bots and settings ready for this version…" : "Getting the agent engine ready…"
+            }
         }
     }
 }

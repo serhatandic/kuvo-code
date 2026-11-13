@@ -105,7 +105,8 @@ final class Keeper {
                 if await settledBeforeStart(move) == .retire { Darwin.exit(Exit.stopped.rawValue) }
                 settled = true
             }
-            if AppModel.attachesInPlace {
+            // (As the app checks `here`: with either on.)
+            if AppModel.attachesInPlace || AppModel.movesOwnBox {
                 let engine = await Task.detached { EngineInstaller(root: AppInfo.supportDirectory.appending(path: "engine")).installed() }.value
                 if let exit = await gated(engine: engine, checked: true) { Darwin.exit(exit.rawValue) }
             }
@@ -131,7 +132,7 @@ final class Keeper {
     static func gated(engine: URL?, checked: Bool) async -> Exit? {
         switch await Here.gate(engine: engine, script: BoxProcess.script, appBox: BoxProcess.home, engineData: AppModel.engineFolders.dataDirectory,
                                home: AppModel.hereHome, checked: checked) {
-        case .own:
+        case .own, .two:
             return nil
         case .attach:
             log.notice("The box already on this Mac is its box: no keeper of the app's")
@@ -304,7 +305,11 @@ final class Keeper {
                 "started": started.timeIntervalSince1970 * 1000, "engine": engine, "busy": await box.isBusy(),
                 "updating": handingOver, "awake": awakeNow,
             ]
-            if moving { answer["moving"] = true }
+            if moving {
+                answer["moving"] = true
+                // (Held on, stuck part way say: why, as the box said it.)
+                if let why = move?.holdsOnBecause { answer["movingWhy"] = why }
+            }
             if let failure = box.box.failure { answer["box"] = ["failure": failure] }
             if let failure = box.agents.failure { answer["agents"] = ["failure": failure] }
             return answer
@@ -378,12 +383,16 @@ final class Keeper {
         // anything meanwhile, so nothing is written where the box moves from.)
         box.stop(keepingClaim: true)
         var next = await move.move(release)
+        // (Stopped meanwhile, SIGTERM as you log out: gone, nothing started again; the next keeper
+        // finishes what the move left.)
+        guard !finished else { return false }
         while next == .wait {
             // (Stuck part way, or what's owed can't be done yet: nothing runs meanwhile.)
             await Self.clock(600)
             guard !finished else { return false }
             next = await move.settle()
         }
+        guard !finished else { return false }
         moving = false
         if next == .retire {
             finish(.stopped)

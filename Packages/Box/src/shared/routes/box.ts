@@ -28,6 +28,9 @@ export const INFO = oneOf(
     started: nullable(number),
     chats: string,
     integrations: map(string),
+    // How moving this Mac's box into its home of its own stands, while one waits, is under way or
+    // went back ("Moving this Mac's box"): left out otherwise.
+    "moving?": object({ state: words("waiting", "moving", "clearing", "failed"), step: nullable(string), overdue: bool, "why?": string }),
   }),
   object({
     kind: literal("machine"),

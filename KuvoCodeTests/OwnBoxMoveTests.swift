@@ -332,8 +332,16 @@ import Testing
     /// The keeper, as launchd runs it: its box running in the app's folder (the real `serve`, run
     /// with Node; the engine and bridge stand-ins), the move asked at its first look. Moved, it stops
     /// everything it ran and goes for good; not moved, it starts the box again as it was.
-    @Test(arguments: [true, false])
-    func theKeeperStopsItsBoxForTheMoveThenRetiresOrStartsItAgain(moves: Bool) async throws {
+    enum Ends: String, CaseIterable, Sendable { case moved, wentBack, stoppedPartWay }
+
+    /// The keeper, as launchd runs it: its box running in the app's folder (the real `serve`, run
+    /// with Node; the engine and bridge stand-ins), the move asked at its first look. Meanwhile it
+    /// says it's moving, and refuses what would start or stop anything, saying why. Moved, it stops
+    /// everything it ran and goes for good; not moved, it starts the box again as it was; stopped
+    /// part way (SIGTERM, as you log out), it starts nothing again and the next keeper finishes it.
+    @Test(arguments: Ends.allCases)
+    func theKeeperStopsItsBoxForTheMoveThenRetiresOrStartsItAgain(_ ends: Ends) async throws {
+        let moves = ends == .moved
         let node = try #require(TestBox.node, "Node runs this Mac's box in the tests")
         let engine = StubEngine(port: 47951)
         let bridge = StubEngine(port: 47952, alongside: true)
@@ -362,7 +370,10 @@ import Testing
         let gone = Gone()
         try ranInItsFolder()
         let identity = Identity()
-        if !moves { identity.checkFails = "unreadable: vault/files" }
+        if ends == .wentBack { identity.checkFails = "unreadable: vault/files" }
+        final class Holder { var keeper: Keeper? }
+        let holder = Holder()
+        var saidMeanwhile: (moving: Bool?, restart: String?)?
         // What the move finds as it starts, once the keeper stopped its box for it: nothing of its
         // box running (its records gone, its processes too), and its lock still held, so the app
         // starts none meanwhile. (The box moved here is the test's own folder, not the one the
@@ -370,6 +381,21 @@ import Testing
         var atTheMove: (records: [String], claimed: Bool)?
         let stands = try self.keeper(identity)
         var seen = stands.identity
+        seen.helper = { keys in
+            if keys == "check" {
+                // What the app hears meanwhile: moving, and Restart refused, saying why.
+                let status = try? await KeeperControl.send(.status)
+                var refused: String?
+                do { try await KeeperControl.send(.restartEngine) } catch { refused = error.localizedDescription }
+                saidMeanwhile = (status?["moving"] as? Bool, refused)
+                if ends == .stoppedPartWay {
+                    // Logging out: launchd's SIGTERM, then nothing more of this process (as a kill).
+                    holder.keeper?.finish(.stopped)
+                    OwnBoxMove.stopsAt = .checked
+                }
+            }
+            return await stands.identity.helper(keys)
+        }
         seen.copyKeys = {
             let records = ["engine.json", "bridge.json", "serve.json"].filter { KeeperFollower.record($0) != nil }
             let lock = open(KeeperRecord.run.appending(path: "box.lock").path(percentEncoded: false), O_RDWR | O_CLOEXEC)
@@ -385,7 +411,9 @@ import Testing
             gone.how = how
             TestPulse.beat()
         }, move: move)
+        holder.keeper = keeper
         defer {
+            OwnBoxMove.stopsAt = nil
             keeper.finish(.stopped)
             Keeper.clock = realClock
             unsetenv("KUVO_OPENCODE_BINARY")
@@ -400,10 +428,20 @@ import Testing
         var engineStarts: Int { ((try? String(contentsOf: starts, encoding: .utf8)) ?? "").filter { $0 == "\n" }.count }
 
         await keeper.start()
-        if moves { try await until { gone.how != nil } } else { try await until { engineStarts == 2 } }
+        try Self.reach(keeper: KeeperRecord.read())
+        if ends == .wentBack { try await until { engineStarts == 2 } } else { try await until { gone.how != nil } }
         #expect(atTheMove?.records == [], "nothing of the keeper's box ran as it moved")
         #expect(atTheMove?.claimed == true, "its lock held as it moved")
-        if moves {
+        #expect(saidMeanwhile?.moving == true)
+        #expect(saidMeanwhile?.restart == "This Mac’s box is moving into its own home: try again once that’s done.")
+        if ends == .stoppedPartWay {
+            #expect(gone.how == .stopped)
+            #expect(engineStarts == 1, "nothing started again as it went")
+            OwnBoxMove.stopsAt = nil
+            // The next keeper: the copies taken away, the box where it was.
+            #expect(try await self.keeper(identity).settle() == .startOld)
+            expectWhereItWas(identity)
+        } else if moves {
             try await until { gone.how != nil }
             #expect(gone.how == .stopped, "gone for good, as launchd leaves it")
             try expectMoved(identity)
@@ -466,17 +504,65 @@ import Testing
     /// With `movesOwnBox` off (as it ships), none of it happens: the keeper has no move to run
     /// whatever the box's home says (Move Now asked, even a box there that says it's this Mac's),
     /// and the app registers its keeper as always.
+    /// The app finding this Mac's box in its home stopped (Login Items let it be, but it ended): it's
+    /// started again through its helper's launch agent, never by the app running its `kuvo-start`,
+    /// which would make the app what macOS asks about, with no keys.
+    @Test func theAppStartsAStoppedMacsBoxInItsHomeThroughItsHelper() async throws {
+        let saved = (AppModel.hereHome, Here.environmentForTests)
+        defer {
+            (AppModel.hereHome, Here.environmentForTests) = saved
+            done()
+        }
+        try newMac()
+        let move = try keeper(Identity())
+        #expect(await move.makeNew())
+        try FileManager.default.removeItem(at: tools.appending(path: "loaded"))
+        // Its keeper, which only its helper runs: here it notes it ran.
+        let ran = world.appending(path: "kuvo-start-ran")
+        try executable("#!/bin/sh\ntouch '\(ran.path(percentEncoded: false))'\n", K.appending(path: "bin/kuvo-start"))
+        AppModel.hereHome = home
+        Here.environmentForTests = ["KUVO_TEST_UNINSTALL_TOOLS": tools.path(percentEncoded: false)]
+        let bun = try #require(await move.engine())
+        _ = await Here.started(engine: bun, script: try #require(BoxProcess.script), appBox: move.appBox, engineData: move.engineData, home: home)
+        #expect(launchctlAsked.last?.hasPrefix("kickstart gui/") == true, "launchd asked to start its helper")
+        #expect(!exists(ran), "never its keeper from the app")
+        // A machine's box there (one you set up): as before, its own start.
+        try put("machine\n", K.appending(path: "box/kind"))
+        _ = await Here.started(engine: bun, script: try #require(BoxProcess.script), appBox: move.appBox, engineData: move.engineData, home: home)
+        #expect(exists(ran))
+    }
+
+    /// A move stopped part way: the app, with no keeper to say so, hears it from the box.
+    @Test func aMoveStoppedPartWayIsSaidAsMovingNotFailing() async throws {
+        defer { done() }
+        try ranInItsFolder()
+        let identity = Identity()
+        #expect(try await keeper(identity).movingNow() == nil)
+        OwnBoxMove.stopsAt = .moved
+        #expect(try await keeper(identity, environment: ["KUVO_TEST_REHOME_STOP": "in-clear"]).moveNow() == .wait)
+        OwnBoxMove.stopsAt = nil
+        #expect(try await keeper(identity).movingNow() == "")
+    }
+
+    private static func reach(keeper record: KeeperRecord?) throws {
+        let record = try #require(record, "the keeper recorded itself")
+        StubWeb.letThrough(port: URL(string: record.url)?.port ?? 0)
+    }
+
     @Test func withTheFlagOffNothingChanges() async throws {
         let saved = (AppModel.movesOwnBox, AppModel.hereHome, BackgroundWork.status, BackgroundWork.asUsersCopy, BackgroundWork.registering)
         defer {
             (AppModel.movesOwnBox, AppModel.hereHome, BackgroundWork.status, BackgroundWork.asUsersCopy, BackgroundWork.registering) = saved
             BackgroundWork.heldBack = nil
+            BackgroundWork.boxStartsOnItsOwn = false
             OwnBoxHome.recheck()
             done()
         }
         AppModel.hereHome = home
+        try newMac()
         try put(#"{"state":"waiting","asked":"now"}"#, K.appending(path: "updates/rehome/state.json"))
         try put("mac\n", K.appending(path: "box/kind"))
+        BackgroundWork.boxStartsOnItsOwn = false
         var registered = 0
         BackgroundWork.status = { .notRegistered }
         BackgroundWork.asUsersCopy = true
@@ -490,10 +576,14 @@ import Testing
         BackgroundWork().register()
         #expect(registered == 1, "the keeper's registered as always")
 
-        // On, the box in its home says it's this Mac's: no keeper is registered beside its helper.
+        // On, the box in its home says it's this Mac's as the app opens: no keeper is registered
+        // beside its helper.
         AppModel.movesOwnBox = true
         OwnBoxHome.recheck()
         #expect(OwnBoxMove.forThisMac() != nil)
+        try FileManager.default.removeItem(at: K.appending(path: "updates/rehome/state.json"))
+        #expect(try await keeper(Identity()).makeNew())
+        #expect(BackgroundWork.boxStartsOnItsOwn)
         let work = BackgroundWork()
         #expect(!work.register())
         #expect(registered == 1, "nothing registered once moved")

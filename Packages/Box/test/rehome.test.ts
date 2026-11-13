@@ -567,18 +567,71 @@ test.if(mac)("asked whether a new Mac's box is made: never while a move is under
   expect(rehome(moving, ["--new", "--check"]).said).toEqual({ ready: false, made: true })
 }, 60_000)
 
-test.if(mac)("a new Mac's box whose making was cut short is made again, what it left taken away rather than kept", () => {
+test.if(mac)("a new Mac's box whose making was cut short is made again, what it left set aside in its trash, nothing deleted", () => {
   const w = newMac()
   // Cut short: its files part way, no kind yet.
   put(join(w.K, "updates", "rehome", "new"), "1\n")
   put(join(w.K, "bin", "kuvo-start"), "#!/bin/sh\n")
   put(join(w.K, "engine.new", "2.2.6", "opencode"), "part")
+  put(join(w.K, "box", "work.json"), "{}")
   expect(rehome(w, ["--new", "--check"]).said).toEqual({ ready: true, made: false })
   expect(rehome(w, ["--new", "--release", w.release]).said).toMatchObject({ result: "done" })
   expect(readFileSync(join(w.K, "box", "kind"), "utf8")).toBe("mac\n")
   expect(existsSync(join(w.K, "engine.new"))).toBe(false)
-  expect(existsSync(join(w.K, "trash"))).toBe(false)
+  const [aside] = readdirSync(join(w.K, "trash")).filter(name => name.startsWith("earlier-box-"))
+  expect(readFileSync(join(w.K, "trash", aside, "engine.new", "2.2.6", "opencode"), "utf8")).toBe("part")
+  expect(existsSync(join(w.K, "trash", aside, "box", "work.json"))).toBe(true)
   expect(existsSync(join(w.K, "updates", "rehome", "new"))).toBe(false)
+}, 60_000)
+
+test.if(mac)("a mark a cut-short new box left never wipes the box that moved there later: the move sets it aside, and once a move's been there it says nothing", () => {
+  // A new Mac's making cut short (its mark, part of its files), then the app ran its box in its
+  // folder after all, and that box moved.
+  const w = world(w => {
+    put(join(w.K, "updates", "rehome", "new"), "1\n")
+    put(join(w.K, "bin", "kuvo-start"), "#!/bin/sh\n")
+  })
+  expect(move(w).said).toMatchObject({ result: "done" })
+  expect(existsSync(join(w.K, "updates", "rehome", "new"))).toBe(false)
+  const [aside] = readdirSync(join(w.K, "trash")).filter(name => name.startsWith("earlier-box-"))
+  expect(existsSync(join(w.K, "trash", aside, "new-box-mark"))).toBe(true)
+  // The moved box not running (no card answers for it yet), the app opening: it's made, never made again.
+  const before = snapshot(join(w.K, "box"))
+  expect(rehome(w, ["--new", "--check"]).said).toEqual({ ready: false, made: true })
+  expect(rehome(w, ["--new", "--release", w.release]).said).toMatchObject({ result: "nothing" })
+  expect(snapshot(join(w.K, "box"))).toEqual(before)
+  // A mark found there anyway, after a move (put back by hand, say): still nothing.
+  put(join(w.K, "updates", "rehome", "new"), "1\n")
+  expect(rehome(w, ["--new", "--check"]).said).toEqual({ ready: false, made: true })
+  expect(rehome(w, ["--new", "--release", w.release]).said).toMatchObject({ result: "nothing" })
+  expect(snapshot(join(w.K, "box"))).toEqual(before)
+  expect(existsSync(join(w.K, "bin", "kuvo-start"))).toBe(true)
+}, 60_000)
+
+test.if(mac)("a phone asking this Mac's box what it is hears how its move stands: waiting, gone back and why; nothing before one or once it's done", () => {
+  const w = world()
+  const info = () => {
+    const asked = spawnSync(process.execPath, [MAIN, "box", "route"], {
+      cwd: w.home, encoding: "utf8", timeout: 60_000, input: JSON.stringify({ method: "GET", path: "kuvo/info" }),
+      env: { ...clean, HOME: w.home, TMPDIR: join(w.home, "tmp"), BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", KUVO_HOME: join(w.S, "box"), KUVO_BOX: "mac",
+        KUVO_ENGINE_CONFIG: join(w.S, "opencode", "config"), KUVO_MACHINE_ROOT: ".kuvo-code" },
+    })
+    const answer = JSON.parse(asked.stdout.trim().split("\n").pop()!)
+    expect(answer.status, asked.stderr).toBe(200)
+    return JSON.parse(answer.body)
+  }
+  expect(info().moving).toBeUndefined()
+  rehome(w, ["--failed", "Your Keychain didn't give out phone-link/key."])
+  expect(info()).toMatchObject({ kind: "mac", moving: { state: "failed", step: null, overdue: false, why: "Your Keychain didn't give out phone-link/key." } })
+  expect(move(w).said).toMatchObject({ result: "done" })
+  expect(info().moving).toBeUndefined()
+}, 60_000)
+
+test.if(mac)("a move that goes back puts a cut-short new box's mark back where it was", () => {
+  const w = world(w => put(join(w.K, "updates", "rehome", "new"), "1\n"))
+  expect(move(w, { KUVO_TEST_REHOME_STOP: "after-place" }).signal).toBe("SIGKILL")
+  expect(rehome(w, ["--resume"]).said).toMatchObject({ result: "failed" })
+  expect(readFileSync(join(w.K, "updates", "rehome", "new"), "utf8")).toBe("1\n")
 }, 60_000)
 
 test.if(mac)("a try the keeper gave up on before the move began counts as one: the next waits an hour, three wait for Move Now", async () => {

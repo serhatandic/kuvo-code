@@ -103,14 +103,17 @@ export function installHelperAgent({ load, app }: { load: boolean; app: string }
 /** The helper's launch agent, loaded already, started now if it isn't running (`launchctl kickstart`,
  * which leaves one running as it is): one that found the box moving went, and launchd leaves it so
  * until it's asked. */
-export function startHelperAgent(): { started: boolean; message: string } {
+export function startHelperAgent(): { started: boolean; mac: boolean; message: string } {
+  // (Whether it's a Mac's own box in a home of its own: only then does its helper start it, and
+  // nothing else may.)
+  const mac = process.platform === "darwin" && !APP_FOLDER && recordedKind() === "mac";
   const why = refusal();
-  if (why) return { started: false, message: why };
+  if (why) return { started: false, mac, message: why };
   const tools = launchTools()!;
   const started = spawnSync(tools.launchctl, ["kickstart", `gui/${process.getuid?.() ?? 0}/${LAUNCH_AGENT}`], { encoding: "utf8", timeout: 30_000, stdio: ["ignore", "pipe", "pipe"] });
   return started.status === 0
-    ? { started: true, message: `${HELPER_NAME} runs this Mac's box.` }
-    : { started: false, message: `launchd didn't start ${HELPER_NAME}: ${(started.stderr || "").trim().slice(0, 300) || "it said nothing"}.` };
+    ? { started: true, mac, message: `${HELPER_NAME} runs this Mac's box.` }
+    : { started: false, mac, message: `launchd didn't start ${HELPER_NAME}: ${(started.stderr || "").trim().slice(0, 300) || "it said nothing"}.` };
 }
 
 /** `helper install [--load] [--app <bundle ID>] | start | status`: one JSON line; 0 when done. */

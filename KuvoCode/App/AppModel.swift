@@ -604,20 +604,32 @@ final class AppModel {
                     BackgroundWork.heldBack = couldnt
                     throw MachineFailure(message: why ?? couldnt)
                 case .wait:
-                    // Moving into its home of its own (the keeper does it): nothing starts here meanwhile.
+                    // Moving into its home of its own (the keeper does it): nothing starts here
+                    // meanwhile. The window says it's moving (and why it holds on, where it went
+                    // wrong part way), still starting, and looks again in a moment.
                     detachHere()
                     BackgroundWork.heldBack = "This Mac’s box is moving into its own home."
-                    throw MachineFailure(message: "This Mac’s box is moving into its own home. Try again in a minute.")
-                case .own:
+                    boxMoving = await OwnBoxMove.forThisMac()?.movingNow() ?? ""
+                    Task { [weak self] in
+                        try? await Task.sleep(for: .seconds(5))
+                        guard let self, launch == self.launch, engine == .starting, boxMoving != nil else { return }
+                        engine = .preparing
+                        await start()
+                    }
+                    return
+                case .own, .two:
                     // None here now: the box that was is no longer this Mac's.
                     detachHere()
-                    // Its box made in its home of its own, before it first ran there: never a
-                    // second one in the app's folder.
+                    // Its box in its home of its own (as the box said as it opened): never a second
+                    // one in the app's folder.
                     if BackgroundWork.boxStartsOnItsOwn {
                         BackgroundWork.heldBack = "This Mac’s box starts on its own."
-                        throw MachineFailure(message: "This Mac’s box is starting in its own home. Try again in a moment.")
+                        throw MachineFailure(message: outcome == .two
+                            ? "This Mac has two boxes: Kuvo Code’s own, in its folder, and the one in its own home, ~/.kuvo-code. Kuvo Code starts neither until one of them is removed."
+                            : "This Mac’s box is starting in its own home. Try again in a moment.")
                     }
                 }
+                boxMoving = nil
             }
             guard launch == self.launch else { return }
             followAgents()
@@ -742,6 +754,9 @@ final class AppModel {
     /// is under way (a running session is never stopped for an update): until then the app follows
     /// it, and Settings › General and the menu bar's card say the update waits.
     private(set) var keeperMakesWay = false
+    /// This Mac's box moving into its home of its own (#333): why it holds on, where it went wrong
+    /// part way, "" while it just moves; nil otherwise. The window says so while it starts.
+    private(set) var boxMoving: String?
 
     /// Whether quitting leaves this Mac's work going (the keeper runs it): Quit takes Kuvo Code to
     /// the menu bar (`InBackground`), and Stop Background Work is there.
@@ -898,6 +913,7 @@ final class AppModel {
             follower.onKeeper = { [weak self] in Task { await self?.tellKeeper() } }
             follower.onGone = { [weak self] in self?.keeperGone() }
             follower.onMakingWay = { [weak self] makingWay in self?.keeperMakesWay = makingWay }
+            follower.onMoving = { [weak self] moving in self?.boxMoving = moving }
             host.tellsBox = false
             // Answering again at a new address (its listener failed by itself): the keeper is told.
             host.restarted = { [weak self] in Task { await self?.tellKeeper() } }
