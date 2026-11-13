@@ -35302,6 +35302,7 @@ var RELOADS = new Set(["session.created", "session.updated", "session.renamed", 
 var STARTS = "session.execution.started";
 var ENDS2 = new Set(["session.execution.succeeded", "session.execution.failed", "session.execution.interrupted"]);
 var LOST_GAP = 1e6;
+var STARTED2 = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 var keeping2 = false;
 var latest2 = null;
 var places3 = new Map;
@@ -35397,9 +35398,9 @@ function commit(listed, now = Date.now(), file = LIST_FILE, owner) {
     const list = readList(file) ?? { epoch: `${now.toString(36)}-${process.pid.toString(36)}`, seq: 0, floor: 0, sessions: {}, gone: {}, projects: {} };
     if (owner === undefined && list.owner && list.owner !== process.pid && processRuns(list.owner, "kuvo-link"))
       return list;
-    if (owner !== undefined && list.owner !== owner && list.seq > 0) {
-      list.lost = [list.seq, list.seq + LOST_GAP];
+    if (list.seq > 0 && list.owner !== undefined && (list.owner !== owner || list.started !== STARTED2)) {
       list.seq += LOST_GAP;
+      list.floor = list.seq;
     }
     const { changed, noted } = takeIn(list, listed, now, owner);
     if (changed || noted)
@@ -35422,10 +35423,14 @@ function takeIn(list, listed, now, owner) {
   const next = list.seq + 1;
   let changed = false, telling = false;
   let noted = list.owner !== owner;
-  if (owner === undefined)
+  if (owner === undefined) {
     delete list.owner;
-  else
+    delete list.started;
+  } else {
+    noted ||= list.started !== STARTED2;
     list.owner = owner;
+    list.started = STARTED2;
+  }
   for (const [id, facts] of Object.entries(listed.sessions)) {
     const before = list.sessions[id];
     const place = listed.placeOf?.[id];
@@ -35477,7 +35482,7 @@ function takeIn(list, listed, now, owner) {
 }
 function answerFrom(list, since) {
   const from = parseCursor(since);
-  const whole = !from || from.epoch !== list.epoch || from.seq < list.floor || from.seq > list.seq || list.lost !== undefined && from.seq > list.lost[0] && from.seq <= list.lost[1];
+  const whole = !from || from.epoch !== list.epoch || from.seq < list.floor || from.seq > list.seq;
   const sessions = {};
   for (const [id, entry] of Object.entries(list.sessions))
     if (whole || entry.seq > from.seq)
@@ -35651,6 +35656,8 @@ async function noteListEvent(name, target, event) {
   const id = event.data?.sessionID ?? event.data?.info?.id;
   if (typeof id !== "string" || !id.startsWith("ses"))
     return;
+  if (event.type !== "session.deleted" && event.type !== STARTS && !ENDS2.has(event.type) && !RELOADS.has(event.type))
+    return;
   reading3.get(name)?.add(id);
   asked7.set(`${name} ${id}`, ++eventCount);
   if (event.type === "session.deleted") {
@@ -35670,8 +35677,6 @@ async function noteListEvent(name, target, event) {
     place.running.add(id);
   else if (ENDS2.has(event.type))
     place.running.delete(id);
-  else if (!RELOADS.has(event.type))
-    return;
   scheduleWorkOut();
   await readOne3(name, target, id);
   scheduleWorkOut();
@@ -35723,7 +35728,7 @@ function workOut(now = Date.now()) {
     known2 = null;
   known2 ??= readBoxKnows();
   const listed = withPending(sessions, placeOf, running, pendingPlaces(), latest2 ?? readList(), known2);
-  if (latest2?.owner === process.pid) {
+  if (latest2?.owner === process.pid && latest2.started === STARTED2) {
     const { changed, noted, telling } = takeIn(latest2, listed, now, process.pid);
     if (changed || noted)
       scheduleWrite(telling || noted);
@@ -39847,7 +39852,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "ce6f826632e3";
+var BRIDGE_VERSION = "a4d288875dbe";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";

@@ -214,6 +214,26 @@ test("two reads of one session that answer out of order leave it as the later sa
   }
 })
 
+test("what a session streams while a read for its pin is out doesn't undo that read", async () => {
+  const stop = keepList()
+  try {
+    add("ses_streams", work, 630)
+    await listPlaceHeard("engine", target)
+    sessions.get("ses_streams").metadata = { "kuvo.pinned": true }
+    const read = holdRead("ses_streams")
+    const pinned = noteListEvent("engine", target, { type: "session.metadata.updated", data: { sessionID: "ses_streams" } })
+    await read.asked
+    await noteListEvent("engine", target, { type: "session.text.delta", data: { sessionID: "ses_streams" } })
+    read.letGo()
+    await pinned
+    workOut()
+    expect(keptList()!.sessions.ses_streams!.facts.pinned).toBe(true)
+  } finally {
+    sessions.delete("ses_streams")
+    stop()
+  }
+})
+
 test("kept as events come: a client resumes from where it was, and one from before the box restarted reads it all", async () => {
   const stop = keepList()
   try {
@@ -461,21 +481,37 @@ test("a bot another process makes is listed as a bot's at once", async () => {
   }
 }, 20_000)
 
-// The box's long-running process gone before it wrote its last changes (stopped, crashed): the
-// next one goes on from the file, and a client that saw those changes reads it all again rather
-// than miss what's numbered as they were.
-test("a client that saw changes the last process didn't write reads it all after a restart", async () => {
+// The box's long-running process gone before it wrote its last changes (stopped, crashed): what
+// takes the list over next (it started again, under the same process id too, or a route answering
+// in its place) numbers on past them, and every client from before reads it all once, so nothing
+// told and not written stays with it (a session made and deleted meanwhile, say), however often
+// that happens before it's back.
+test("a list taken over from a process that went is read whole by every client from before", async () => {
   mkdirSync(join(LIST_FILE, ".."), { recursive: true })
+  const went = (owner: number, started?: string) => {
+    const kept = JSON.parse(readFileSync(LIST_FILE, "utf8"))
+    writeFileSync(LIST_FILE, JSON.stringify({ ...kept, owner, started }))
+  }
   writeFileSync(LIST_FILE, JSON.stringify({ epoch: "kept", seq: 10, floor: 0, sessions: {}, gone: {}, projects: {}, owner: 999999 }))
-  const stop = keepList()
   try {
+    // Another process that went: one from before, and one from what it told unwritten.
+    let stop = keepList()
     await listPlaceHeard("engine", target)
-    expect((await ask("kuvo/sessions/list?since=kept.11")).lines[0].full).toBe(true)
-    const resumed = (await ask("kuvo/sessions/list?since=kept.10")).lines[0]
-    expect(resumed.full).toBeUndefined()
-    expect(Object.keys(resumed.sessions).sort()).toEqual(["ses_a", "ses_chat"])
-  } finally {
+    for (const since of ["kept.10", "kept.11"]) expect((await ask(`kuvo/sessions/list?since=${since}`)).lines[0].full).toBe(true)
+    const first = (await ask("kuvo/sessions/list")).lines[0].at
+    expect((await ask(`kuvo/sessions/list?since=${first}`)).lines[0].full).toBeUndefined()
     stop()
+    // This process id again, started anew (the file says another start): taken over too.
+    went(process.pid, "an-earlier-start")
+    stop = keepList()
+    await listPlaceHeard("engine", target)
+    expect((await ask(`kuvo/sessions/list?since=${first}`)).lines[0].full).toBe(true)
+    const second = (await ask("kuvo/sessions/list")).lines[0].at
+    stop()
+    // A route answering in place of one that went (no process keeps it now): the same.
+    went(999999)
+    expect((await ask(`kuvo/sessions/list?since=${second}`)).lines[0].full).toBe(true)
+  } finally {
     rmSync(LIST_FILE, { force: true })
   }
 })

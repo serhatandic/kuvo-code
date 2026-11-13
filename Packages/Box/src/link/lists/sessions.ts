@@ -61,14 +61,15 @@ export interface Kept {
   projects: Record<string, ListedProject>;
   pending?: string[];
   owner?: number;
-  /** The changes a long-running process may have told and not written before it went (`[from,
-   * to]`): a cursor among them is from what's lost, and reads it all. */
-  lost?: [number, number];
+  /** Which start of `owner` it is (the same process id may come again after a restart). */
+  started?: string;
 }
 
-/** How far a long-running process taking the list over moves its count on: past any change the one
- * before told but didn't write (its writes are a moment apart). */
+/** How far the list's count moves on as it's taken over from a long-running process that went:
+ * past any change that one told but didn't write (its writes are a moment apart). */
 const LOST_GAP = 1_000_000;
+/** This process's own start, told apart from an earlier one with the same id. */
+const STARTED = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
 /** What a list is worked out to: each session's facts, the place each is on, the projects, and the
  * places that couldn't be read. */
@@ -206,11 +207,12 @@ export function commit(listed: Listed, now = Date.now(), file = LIST_FILE, owner
     // A route's, while the long-running process keeps it (it started since the route looked): its
     // list stands, mark and all.
     if (owner === undefined && list.owner && list.owner !== process.pid && processRuns(list.owner, "kuvo-link")) return list;
-    // The long-running process taking it over (it started again): the one before may have told
-    // changes it hadn't written yet, numbered on from here; its own are numbered past them.
-    if (owner !== undefined && list.owner !== owner && list.seq > 0) {
-      list.lost = [list.seq, list.seq + LOST_GAP];
+    // Taken over from a long-running process that went (this one started again, or a route
+    // answers in its place): it may have told changes it hadn't written yet. Numbered on past them,
+    // and every cursor from before reads it all (one whole read after a restart).
+    if (list.seq > 0 && list.owner !== undefined && (list.owner !== owner || list.started !== STARTED)) {
       list.seq += LOST_GAP;
+      list.floor = list.seq;
     }
     const { changed, noted } = takeIn(list, listed, now, owner);
     if (changed || noted) try { writePrivate(file, JSON.stringify(list)); } catch {}
@@ -238,8 +240,8 @@ function takeIn(list: Kept, listed: Listed, now: number, owner?: number): { chan
   let changed = false, telling = false;
   // (What only the file says, not the list: written, with no change to tell.)
   let noted = list.owner !== owner;
-  if (owner === undefined) delete list.owner;
-  else list.owner = owner;
+  if (owner === undefined) { delete list.owner; delete list.started; }
+  else { noted ||= list.started !== STARTED; list.owner = owner; list.started = STARTED; }
   for (const [id, facts] of Object.entries(listed.sessions)) {
     const before = list.sessions[id];
     const place = listed.placeOf?.[id];
@@ -284,7 +286,7 @@ function takeIn(list: Kept, listed: Listed, now: number, owner?: number): { chan
  * can still say), else all of it. */
 export function answerFrom(list: Kept, since: string | null): SessionList {
   const from = parseCursor(since);
-  const whole = !from || from.epoch !== list.epoch || from.seq < list.floor || from.seq > list.seq || (list.lost !== undefined && from.seq > list.lost[0] && from.seq <= list.lost[1]);
+  const whole = !from || from.epoch !== list.epoch || from.seq < list.floor || from.seq > list.seq;
   const sessions: Record<string, SessionFacts> = {};
   for (const [id, entry] of Object.entries(list.sessions)) if (whole || entry.seq > from!.seq) sessions[id] = entry.facts;
   const pending = list.pending?.length ? { pending: list.pending } : {};
@@ -460,6 +462,9 @@ export async function noteListEvent(name: string, target: Target, event: { type?
   if (!keeping || typeof event?.type !== "string") return;
   const id = event.data?.sessionID ?? event.data?.info?.id;
   if (typeof id !== "string" || !id.startsWith("ses")) return;
+  // Only those that change what's listed of it count (not what it streams meanwhile: a read for a
+  // pin or a move still out isn't undone by the next word it says).
+  if (event.type !== "session.deleted" && event.type !== STARTS && !ENDS.has(event.type) && !RELOADS.has(event.type)) return;
   // (Read whole now: it's read again once that's in.)
   reading.get(name)?.add(id);
   asked.set(`${name} ${id}`, ++eventCount);
@@ -476,7 +481,6 @@ export async function noteListEvent(name: string, target: Target, event: { type?
   }
   if (event.type === STARTS) place.running.add(id);
   else if (ENDS.has(event.type)) place.running.delete(id);
-  else if (!RELOADS.has(event.type)) return;
   scheduleWorkOut();
   // As it is now: its folder, title, notes and times.
   await readOne(name, target, id);
@@ -531,7 +535,7 @@ export function workOut(now = Date.now()): void {
   if (!watchesWhole()) known = null;
   known ??= readBoxKnows();
   const listed = withPending(sessions, placeOf, running, pendingPlaces(), latest ?? readList(), known);
-  if (latest?.owner === process.pid) {
+  if (latest?.owner === process.pid && latest.started === STARTED) {
     // Its own, as it keeps it: what changed taken in here, the file written a moment after (a few
     // changes at once are one write; one of when sessions last changed alone, more slowly).
     const { changed, noted, telling } = takeIn(latest, listed, now, process.pid);
