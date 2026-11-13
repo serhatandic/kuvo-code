@@ -53,7 +53,6 @@ struct BoxClient: Sendable {
     /// something happened: this Mac's box attached in place is this Mac.
     nonisolated static func isMachine(_ machine: String?) -> Bool { machine.map { !isThisMac($0) } ?? false }
 
-
     /// A machine's box, by the machine's id, through `kuvo-link.js box route` over its SSH connection.
     nonisolated static func machine(_ id: String) -> BoxClient {
         BoxClient(box: id, transport: MachineBoxTransport(connection: SSHConnection(destination: id)))

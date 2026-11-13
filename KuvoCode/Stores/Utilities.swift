@@ -466,9 +466,9 @@ final class Utilities {
     /// A new tab in a machine's browser: it opens a page there once you go somewhere (at
     /// `address` at once, if given).
     func newMachinePage(_ machine: String, address: String? = nil, owner: String? = nil) {
-        Analytics.shared.track("panel_opened", ["tool": "machine_browser"])
         // (The browser of the box attached in place runs on this Mac: counted as this Mac's.)
         let place = BoxClient.isMachine(machine) ? "machine" : "mac"
+        Analytics.shared.track("panel_opened", ["tool": place == "machine" ? "machine_browser" : "browser"])
         Analytics.shared.trackOnce("browser_used", key: "you." + place, ["by": "you", "place": place])
         let tab = Tab(kind: .machinePage(machine, nil), owner: owner ?? panelKey)
         add(tab)
