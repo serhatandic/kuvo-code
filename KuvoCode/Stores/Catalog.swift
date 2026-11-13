@@ -27,6 +27,9 @@ final class Catalog {
             offeredAsked = [:]
             offeredSaid = nil
             startingSaid = [:]
+            offeredRetry?.cancel()
+            offeredRetry = nil
+            offeredRetryWait = nil
         }
     }
 
@@ -305,7 +308,8 @@ final class Catalog {
         }
         // (Not said: as it is, until it is.)
         if startingSaid[key] != said.starting { startingSaid[key] = said.starting }
-        if said.known.engine, said.known.agents { offeredRetryWait = nil } else { askAgain(wanted, key: key) }
+        // (Its agents' side can't be said while its bridge is gone for good: not asked again for that.)
+        if said.known.engine, said.known.agents || agentsGone { offeredRetryWait = nil } else { askAgain(wanted, key: key) }
     }
 
     /// Asks its box again in a moment: its answer failed (a machine's connection, a box busy
@@ -559,7 +563,8 @@ final class Catalog {
     /// says (just after launch, a model just picked, its engine still loading), `wanted` as it is.
     func startingModel(_ wanted: ModelRef?..., scope: ModelScope = .all) -> ModelRef? {
         guard boxDecides else { return reckonedStartingModel(wanted, scope: scope) }
-        let wanted = wanted.compactMap(\.self).first { scope.allows($0.providerID) }
+        // (With its bridge gone for good, not one of the coding agents'.)
+        let wanted = wanted.compactMap(\.self).first { scope.allows($0.providerID) && !(agentsGone && OutsideAgents.runsInBridge($0.providerID)) }
         askOffered(wanted)
         if let said = startingSaid[Self.startKey(wanted)] { return said.flatMap { scope.allows($0.providerID) ? $0 : nil } }
         return wanted ?? defaultModel?.ref
@@ -727,6 +732,7 @@ final class Catalog {
             return
         }
         agentReadShown = order
+        agentsGone = false
         if let listed {
             agentIntegrations = listed
             lastAgentAccounts = listed
@@ -747,9 +753,22 @@ final class Catalog {
         // Gone for good, the sidebar stops naming their accounts too; only while they're on their
         // way back does it keep them.
         if !untilBack { lastAgentAccounts = [] }
+        // Gone for good: nor does what its box said of them before stand (its box can only say it
+        // can't say now, with no bridge running), and a new conversation isn't started on one of theirs.
+        agentsGone = !untilBack
+        if agentsGone, let said = offeredSaid {
+            var none = said
+            none.models.removeAll { OutsideAgents.runsInBridge($0.providerID) }
+            none.listing = []
+            if none != said { offeredSaid = none }
+        }
         merge()
         areAgentsLoaded = !untilBack
     }
+
+    /// Its coding agents' bridge stopped for good (`forgetAgents`): none of theirs runs, whatever its
+    /// box said before.
+    @ObservationIgnored private var agentsGone = false
 
     /// True while the agents are being asked anew.
     private(set) var isRefreshingAgents = false

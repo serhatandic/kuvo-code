@@ -353,6 +353,12 @@ async function makingEngine(ready = ["opencode"], rules = {}, heard = () => {}, 
       if (request.method === "GET" && request.url === "/api/provider") return reply({ data: ready.map(id => ({ id })) });
       if (listed && request.method === "GET" && request.url === "/api/model") return reply({ data: listed.models });
       if (listed && request.method === "GET" && request.url === "/api/model/default") return reply({ data: listed.defaultModel });
+      // Each provider's account, as the engine lists them: signed in where it's ready (so a new
+      // bot's model goes by the box's one rule, work/model-rule.ts).
+      if (listed && request.method === "GET" && request.url === "/api/integration") {
+        const providers = [...new Set(listed.models.map(each => each.providerID))];
+        return reply({ data: providers.map(id => ({ id, name: id, methods: [{ type: "key" }], connections: ready.includes(id) ? [{ type: "credential", method: "key" }] : [] })) });
+      }
       if (request.method === "POST" && request.url === "/api/session") return reply({ data: { id: `ses_made${next++}` } });
       const one = request.url.match(/^\/api\/session\/([^/]+)$/);
       if (one && request.method === "GET") return reply({ data: { id: one[1], permissions: rules[one[1]] ?? [] } });
