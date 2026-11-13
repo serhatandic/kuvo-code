@@ -201,4 +201,10 @@ import Testing
         let place = GitPlace(client: client, path: "/x", machine: nil)
         #expect(await Git.branches(at: place, pause: .zero) == Git.Branches(repository: true, current: "main", branches: ["main", "idea"]))
     }
+
+    /// Commit on a machine whose released box hasn't the route: its own words, never "It said no".
+    @Test func aReleasedBoxsPlainWordsAreWhatItSays() async {
+        let place = GitPlace(client: answering([(403, "That isn't available over the link.")], box: "studio"), path: "/home/ada/site", machine: "studio")
+        #expect(await Git.committing(message: "Work", push: false, at: place, environment: [:]) == "That isn't available over the link.")
+    }
 }

@@ -7205,6 +7205,11 @@
       "message": "string",
       "reason?": "string"
      }
+    },
+    "503": {
+     "object": {
+      "message": "string"
+     }
     }
    }
   },

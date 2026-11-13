@@ -481,6 +481,8 @@ struct ProjectIdentity: View {
                         if let branch {
                             if let directory, !isWorktree {
                                 BranchSwitcher(branch: branch, directory: directory, environment: environment, switched: switched)
+                                    // Another folder's is a menu of its own: a look still under way for this one lands nowhere.
+                                    .id(directory)
                             } else {
                                 BranchLabel(branch: branch)
                                     .help(isWorktree ? "This session's own branch, in its worktree" : "")
@@ -598,12 +600,10 @@ private struct BranchSwitcher: View {
         }
     }
 
-    /// The repository's branches, from the box the folder is on; kept only while it's still the
-    /// folder shown (a look from a hover may finish after another session's).
+    /// The repository's branches, from the box the folder is on.
     private func load() async {
-        let asked = directory
-        let listed = await Git.branches(at: GitPlace.of(asked))?.branches ?? []
-        if directory == asked { branches = listed }
+        guard let listed = await Git.branches(at: GitPlace.of(directory)), !Task.isCancelled else { return }
+        branches = listed.branches
     }
 
     private func run(_ branch: String, created: Bool) {

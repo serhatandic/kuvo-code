@@ -169,7 +169,11 @@ struct BoxRefusal: LocalizedError {
 
     init(status: Int, data: Data) {
         let said = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-        self.init(status: status, message: said?["message"] as? String ?? "It said no (\(status)).", problem: said?["problem"] as? String, reason: said?["reason"] as? String)
+        // Without JSON, its words as they are, when they're a line of text ("That isn't available
+        // over the link.", a released box's), never a page.
+        let words = said == nil ? String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) : nil
+        let plain = words.flatMap { !$0.isEmpty && $0.count <= 300 && !$0.hasPrefix("<") && !$0.contains("\n") ? $0 : nil }
+        self.init(status: status, message: said?["message"] as? String ?? plain ?? "It said no (\(status)).", problem: said?["problem"] as? String, reason: said?["reason"] as? String)
         isOlderBox = Self.olderBox(status: status, data: data)
     }
 }

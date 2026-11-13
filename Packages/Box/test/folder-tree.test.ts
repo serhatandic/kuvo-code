@@ -10,9 +10,11 @@ import { join } from "node:path"
 
 let box: string
 let folders: typeof import("../src/link/areas/folders")
+let gitTools: typeof import("../src/link/git")
 beforeAll(async () => {
   box = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-folder-tree-")))
   folders = await import("../src/link/areas/folders")
+  gitTools = await import("../src/link/git")
 })
 afterAll(() => rmSync(box, { recursive: true, force: true }))
 
@@ -35,3 +37,36 @@ test("a repository with more files than the list takes lists as many of git's, n
   expect(value.files.length).toBe(10)
   expect(value.files.filter(name => name.startsWith("node_modules/"))).toEqual([])
 })
+
+/** A repository whose git waits for good (its index a FIFO no one writes), with a new file a walk
+ * would list. */
+function stuck(name: string) {
+  const top = join(box, name)
+  mkdirSync(top, { recursive: true })
+  git(top, "init", "-q")
+  writeFileSync(join(top, "new.txt"), "new\n")
+  rmSync(join(top, ".git", "index"), { force: true })
+  const made = spawnSync("mkfifo", [join(top, ".git", "index")])
+  expect(made.status, made.error?.message ?? made.stderr?.toString() ?? "").toBe(0)
+  return top
+}
+
+test("git that runs out of time is stopped, and what it gave is the list, never a walk that lists what it ignores", async () => {
+  const top = stuck("slow")
+  const ran = await gitTools.gitNamesLater(top, ["ls-files", "-z", "--cached", "--others"], 10, undefined, 200)
+  expect(ran).toEqual({ names: [], complete: false })
+  const listed = await folders.listTree(`kuvo/folders/tree?path=${encodeURIComponent(top)}`, 10, undefined, 200)
+  expect(listed).toEqual({ status: 200, value: { path: top, files: [], git: true } })
+}, 10_000)
+
+test("a list no one asks for any longer stops git, and walks nothing", async () => {
+  const top = stuck("gone")
+  const asker = new AbortController()
+  const listing = folders.listTree(`kuvo/folders/tree?path=${encodeURIComponent(top)}&dated=1`, 10, asker.signal)
+  asker.abort()
+  expect((await listing).status).toBe(503)
+  const ran = gitTools.gitNamesLater(top, ["ls-files", "-z", "--cached", "--others"], 10, asker.signal)
+  expect(await ran).toBeNull()
+  // Asked already stopped: git never starts.
+  expect(await folders.listTree(`kuvo/folders/tree?path=${encodeURIComponent(top)}`, 10, asker.signal)).toMatchObject({ status: 503 })
+}, 10_000)

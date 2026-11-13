@@ -7307,15 +7307,15 @@ async function gitLater(folder, args) {
     execFile4("git", own, { cwd: folder, encoding: "utf8", env: GIT_ENV, timeout: 60000, maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => resolve(error ? null : String(stdout ?? "").trim()));
   });
 }
-async function gitNamesLater(folder, args, limit, signal) {
+async function gitNamesLater(folder, args, limit, signal, timeout = 600000) {
   const own = await ownArgsLater(args, folder);
-  if (!own)
+  if (!own || signal?.aborted)
     return null;
   return new Promise((resolve) => {
     const names = new Set;
     let rest = "";
     let enough = false;
-    const child = spawn4("git", own, { cwd: folder, env: GIT_ENV, stdio: ["ignore", "pipe", "ignore"], timeout: 600000, ...signal ? { signal } : {} });
+    const child = spawn4("git", own, { cwd: folder, env: GIT_ENV, stdio: ["ignore", "pipe", "ignore"], timeout, ...signal ? { signal } : {} });
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (piece) => {
       if (enough)
@@ -7333,7 +7333,7 @@ async function gitNamesLater(folder, args, limit, signal) {
       }
     });
     child.on("error", () => resolve(null));
-    child.on("close", (code) => resolve(enough || code === 0 || code === null && names.size ? [...names] : null));
+    child.on("close", (code) => resolve(signal?.aborted ? null : enough || code === 0 || code === null ? { names: [...names], complete: code === 0 } : null));
   });
 }
 function sizeLater(folder) {
@@ -38917,7 +38917,7 @@ import fs123 from "node:fs";
 import path126 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "51e9ac9cfc64";
+var BRIDGE_VERSION = "99d703c6f857";
 
 // Packages/Box/src/link/rehome/rewrite.ts
 var NO_REWRITE = {
@@ -41754,7 +41754,7 @@ function askedFolder(query, home) {
 }
 var TREE_LIMIT = 20000;
 var HEAVY = new Set([".git", "node_modules", "build", "DerivedData", ".build", "Pods", "dist", ".next"]);
-async function listTree(requestPath, limit = TREE_LIMIT, signal) {
+async function listTree(requestPath, limit = TREE_LIMIT, signal, timeout) {
   const query = new URLSearchParams(requestPath.split("?")[1] ?? "");
   const home = homeFolder();
   const at = query.get("path")?.trim() ? askedFolder(query, home) : null;
@@ -41765,10 +41765,12 @@ async function listTree(requestPath, limit = TREE_LIMIT, signal) {
   } catch (error) {
     return refusal2(at, error);
   }
-  const named = await gitNamesLater(at, ["-c", "core.quotepath=off", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], limit, signal) ?? [];
+  const listed = await gitNamesLater(at, ["-c", "core.quotepath=off", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], limit, signal, timeout);
+  if (signal?.aborted)
+    return { status: 503, value: { message: "Stopped: no one asks any longer." } };
   const dated = query.get("dated") === "1";
-  if (named.length)
-    return { status: 200, value: await withDates({ path: at, files: named, git: true }, dated) };
+  if (listed && (listed.names.length || !listed.complete))
+    return { status: 200, value: await withDates({ path: at, files: listed.names, git: true }, dated) };
   const asks = at === home ? promptedFolders() : new Set;
   const files = [];
   const walk = async (inside) => {
@@ -41779,7 +41781,7 @@ async function listTree(requestPath, limit = TREE_LIMIT, signal) {
       return;
     }
     for (const entry of entries) {
-      if (files.length >= limit)
+      if (files.length >= limit || signal?.aborted)
         return;
       if (HEAVY.has(entry.name) || !inside && asks.has(entry.name))
         continue;

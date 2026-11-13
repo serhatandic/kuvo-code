@@ -69,7 +69,7 @@ const HEAVY = new Set([".git", "node_modules", "build", "DerivedData", ".build",
  * when each last changed (`modified`, milliseconds since 1970, in the same order; null where it
  * can't be read), for a list that puts the newest first. Refused as `kuvo/folders` refuses a
  * folder it can't read. */
-export async function listTree(requestPath: string, limit = TREE_LIMIT, signal?: AbortSignal): Promise<JSONAnswer<FolderTree | FolderRefused | { message: string }>> {
+export async function listTree(requestPath: string, limit = TREE_LIMIT, signal?: AbortSignal, timeout?: number): Promise<JSONAnswer<FolderTree | FolderRefused | { message: string }>> {
   const query = new URLSearchParams(requestPath.split("?")[1] ?? "");
   const home = homeFolder();
   // (Named, never the home folder by default: a walk of all of it is never what's meant.)
@@ -82,9 +82,12 @@ export async function listTree(requestPath: string, limit = TREE_LIMIT, signal?:
   }
   // Names as they are (git quotes ones with accents, CJK or emoji otherwise), once each (a file in
   // conflict is listed for each side).
-  const named = (await gitNamesLater(at, ["-c", "core.quotepath=off", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], limit, signal)) ?? [];
+  const listed = await gitNamesLater(at, ["-c", "core.quotepath=off", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], limit, signal, timeout);
+  // No one waits any longer (the client went): nothing more is read for it.
+  if (signal?.aborted) return { status: 503, value: { message: "Stopped: no one asks any longer." } };
   const dated = query.get("dated") === "1";
-  if (named.length) return { status: 200, value: await withDates({ path: at, files: named, git: true }, dated) };
+  // git's list, also one cut short (its time ran out); a walk only where git said there's none.
+  if (listed && (listed.names.length || !listed.complete)) return { status: 200, value: await withDates({ path: at, files: listed.names, git: true }, dated) };
   // Platform: on a Mac, looking into these from the home folder would have macOS ask you for them.
   const asks = at === home ? promptedFolders() : new Set<string>();
   const files: string[] = [];
@@ -96,7 +99,7 @@ export async function listTree(requestPath: string, limit = TREE_LIMIT, signal?:
       return;
     }
     for (const entry of entries) {
-      if (files.length >= limit) return;
+      if (files.length >= limit || signal?.aborted) return;
       if (HEAVY.has(entry.name) || (!inside && asks.has(entry.name))) continue;
       const name = inside ? `${inside}/${entry.name}` : entry.name;
       if (entry.isDirectory()) await walk(name);

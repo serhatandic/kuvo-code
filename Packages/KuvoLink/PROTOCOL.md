@@ -3302,13 +3302,15 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   folders, for a project's file filter, "@" and a palette → `{"path", "files", "git"}`, `files`
   by their paths in the folder, 20,000 at most. In a repository, git's list (`git` true): tracked
   files and new ones, without what it ignores, each once, names as they are, the first 20,000 git
-  gives in one with more (read as git writes them; after ten minutes, those it gave by then); otherwise, and where
+  gives in one with more (read as git writes them; after ten minutes, those it gave by then, none
+  perhaps, never a walk); otherwise, and where
   git lists none there (a folder its repository ignores), a walk that skips `.git`,
   `node_modules`, `build`, `DerivedData`, `.build`, `Pods`, `dist` and `.next`, follows no links,
   and on a Mac leaves out the home folder's Desktop, Documents, Downloads, Library, Movies, Music
   and Pictures (macOS would ask for them). With `dated=1`, `modified` too: when each file last
   changed, in milliseconds since 1970, in the same order (null where it can't be read), for a
-  list that puts the newest first. `path` is needed (`~/` starts at the home folder); refused as
+  list that puts the newest first. A request no one waits for any longer stops git and the walk
+  (`503 {"message"}`, which no one reads). `path` is needed (`~/` starts at the home folder); refused as
   `kuvo/folders` refuses, with `reason`.
 - `GET kuvo/programs?name=<program>` (`programs`): whether the box has a program an MCP server's
   command names, found on its PATH as its engine finds it (a name like `npx`, or a path, `~/`
@@ -7144,12 +7146,14 @@ can go three months after 0.8.0 ships.
   one without `into`, 400): the newer app says Merge into… works again once the work under way
   ends. <!-- compat: beta.1 merge-older-box -->
 - Boxes from before #660 have no `kuvo/git/branches`, `kuvo/git/switch`, `kuvo/git/status` or
-  `kuvo/folders/tree`: 404 with nothing said, or, from 0.7 and 0.8.0-beta.1 (which have no
-  `kuvo/git/…` at all), `403` in plain words ("That isn't available over the link."), which the
-  newer app takes the same way for these four, Merge into… and Create Pull Request's confirmation
-  (which say such a machine needs a newer Kuvo Code); Changes' other routes say what the box said. A path is sent as a box writes it (`EngineRoutes.canonical`),
-  so such a box never refuses it as one that isn't what it seems. For a machine's, the newer app runs the machine's
-  git (and, outside a repository, `find`) over SSH, as before. For its keeper's box on this Mac,
+  `kuvo/folders/tree`: 404 with nothing said, or, from 0.8.0-beta.1 (which has no `kuvo/git/…` at
+  all), `403` in plain words ("That isn't available over the link."), which the newer app takes the
+  same way for these four, Merge into… and Create Pull Request's confirmation (which say such a
+  machine needs a newer Kuvo Code); Changes' other routes show those words as the box's answer. A
+  path is sent as a box writes it (`EngineRoutes.canonical`), so such a box never refuses it as one
+  that isn't what it seems. For a beta.1 machine's box, the newer app runs the machine's git (and,
+  outside a repository, `find`) over SSH, as before (a 0.7 machine, whose bridge has no `box
+  route`, isn't reached for any of it until it's updated). For its keeper's box on this Mac,
   running on after an update until the work under way ends, it runs no git of its own: the title
   bar's branch menu lists no branches and Switch says it works again then, the file filter says
   so too, Delete says changes not committed may go with a worktree, and Edit Project leaves out
