@@ -24,13 +24,13 @@ import Testing
         let body: Any
         switch path {
         case "kuvo/bots":
-            body = ["bots": [["id": "bot_pixel00001", "session": "ses_pixel", "name": "Pixel", "look": ["color": "sky", "shape": "round", "face": "calm"], "created": "2026-10-01T09:00:00Z"]]]
+            body = ["bots": [["id": "bot_pixel00001", "session": "ses_goalchip", "name": "Pixel", "look": ["color": "sky", "shape": "round", "face": "calm"], "created": "2026-10-01T09:00:00Z"]]]
         case _ where path.hasPrefix("kuvo/work?bot="):
             body = ["bot": "bot_pixel00001", "answered": [Any](), "today": ["started": 1, "working": 1, "tokens": 0],
-                    "sessions": [["session": "ses_signin", "title": "Sign-in", "folder": "/Users/me/tidepool", "startedBy": "ses_pixel", "depth": 1,
+                    "sessions": [["session": "ses_signin", "title": "Sign-in", "folder": "/Users/me/tidepool", "startedBy": "ses_goalchip", "depth": 1,
                                   "state": "working", "started": now, "tokens": 0]]]
         case "kuvo/work/goals":
-            body = ["goals": [["id": "goal_1", "bot": "bot_pixel00001", "name": "Pixel", "session": "ses_pixel", "goal": "Launch Driftwood.", "state": "done",
+            body = ["goals": [["id": "goal_1", "bot": "bot_pixel00001", "name": "Pixel", "session": "ses_goalchip", "goal": "Launch Driftwood.", "state": "done",
                                "steps": [["id": "s1", "text": "Build the site", "state": "done", "began": now - 600_000, "ended": now - 60_000]],
                                "checks": [Any](), "spend": [Any](), "public": [Any](), "projects": [String](), "wake": false, "digest": "none",
                                "proposed": now - 900_000, "started": now - 600_000, "ended": now - 60_000, "waiting": [Any](), "paused": [Any](), "waited": 0,
@@ -64,12 +64,12 @@ import Testing
         app.goalPlans.boxes = { _ in box }
         app.workspace.api = engine.api
         // The box says Sign-in works, and the app shows it so only while its engine runs it (`AtWork`).
-        engine.list([StubEngine.session("ses_pixel", title: "Pixel", directory: "/tmp/kuvo-tests-goal-work", created: 1),
+        engine.list([StubEngine.session("ses_goalchip", title: "Pixel", directory: "/tmp/kuvo-tests-goal-work", created: 1),
                      StubEngine.session("ses_signin", title: "Sign-in", directory: "/Users/me/tidepool", created: 2)],
                     running: ["ses_signin"])
-        engine.conversation("ses_pixel", [])
+        engine.conversation("ses_goalchip", [])
         await app.workspace.refresh()
-        model = try #require(app.workspace.model(for: "ses_pixel"))
+        model = try #require(app.workspace.model(for: "ses_goalchip"))
         await app.bots.refresh(BoxClient.mac)
         let pixel = try #require(app.bots.bot("bot_pixel00001"))
         await app.botWork.read(pixel)
@@ -113,10 +113,10 @@ import Testing
 
     @Test func theGoalsLineHasTheBotsSessionsAndTheirBarIsBackOnceItsPutAway() async throws {
         defer { done() }
-        try await until { chip != nil || app.goalPlans.plan(for: "ses_pixel") == nil }
+        try await until { chip != nil || app.goalPlans.plan(for: "ses_goalchip") == nil }
         #expect(chip?.label == "A session is at work", "the chip on the goal's line says its session works, among \(elements.compactMap(\.label))")
         #expect(workBar == nil, "no work bar under the goal: its line says it")
-        #expect(app.goalPlans.plan(for: "ses_pixel") != nil)
+        #expect(app.goalPlans.plan(for: "ses_goalchip") != nil)
 
         let close = try #require(elements.first { $0.label == "Close Launch Driftwood." }, "among \(elements.compactMap(\.label))")
         #expect(close.press())

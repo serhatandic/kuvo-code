@@ -132,6 +132,7 @@ import Testing
         window.close()
         // The conversation's own tasks (it follows the vault's asks) end with its views, not with the process.
         window.contentView = nil
+        Drafts.shared.remove("ses_pixel")
         try? FileManager.default.removeItem(at: Bots.file)
         AXElement.reading(false)
     }
@@ -360,11 +361,16 @@ import Testing
             let enter = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
                                                     context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
             field.keyDown(with: enter)
-            try await until { model.draftText.isEmpty && !model.tuck.isOn(among: [.goal, .background]) }
-            try await until { elements.contains { $0.label == "Fold all bars" } }
-            try await keep("sent")
-            // Its send is on its way: waited for before `done()` stops the engine, which would
-            // put the words back in the composer (`Drafts.shared`) for the next test's session.
+            // Its send is on its way: waited for however this ends, before `done()` stops the
+            // engine, which would put the words back in the composer (`Drafts.shared`).
+            do {
+                try await until { model.draftText.isEmpty && !model.tuck.isOn(among: [.goal, .background]) }
+                try await until { elements.contains { $0.label == "Fold all bars" } }
+                try await keep("sent")
+            } catch {
+                await model.messagesSent()
+                throw error
+            }
             await model.messagesSent()
             #expect(model.draftText.isEmpty, "its words didn't come back")
             #expect(model.failure == nil, "\(model.failure ?? "")")
