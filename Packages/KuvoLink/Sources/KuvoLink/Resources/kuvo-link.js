@@ -7328,14 +7328,14 @@ function askedArgs(args, cwd) {
   const { lead, rest } = split(args);
   if (strayCommon(lead, rest, cwd))
     return;
-  const watcher = MAKING.has(rest[0] ?? "") ? [] : watcherIn(String(spawnSync4("git", watcherRead(lead), { cwd, encoding: "utf8", env: { ...process.env, ...GIT_QUIET }, timeout: 30000 }).stdout ?? ""));
+  const watcher = MAKING.has(rest[0] ?? "") || !WATCHER.length ? [] : watcherIn(String(spawnSync4("git", watcherRead(lead), { cwd, encoding: "utf8", env: { ...process.env, ...GIT_QUIET }, timeout: 30000 }).stdout ?? ""));
   return [...lead, ...EVERY, ...watcher, ...withOptions(rest, false) ?? rest];
 }
 async function askedArgsLater(args, cwd) {
   const { lead, rest } = split(args);
   if (await strayCommonLater(lead, rest, cwd))
     return;
-  const watcher = MAKING.has(rest[0] ?? "") ? [] : await new Promise((done) => execFile3("git", watcherRead(lead), { cwd, encoding: "utf8", env: { ...process.env, ...GIT_QUIET }, timeout: 30000 }, (error, out) => done(error ? [] : watcherIn(String(out ?? "")))));
+  const watcher = MAKING.has(rest[0] ?? "") || !WATCHER.length ? [] : await new Promise((done) => execFile3("git", watcherRead(lead), { cwd, encoding: "utf8", env: { ...process.env, ...GIT_QUIET }, timeout: 30000 }, (error, out) => done(error ? [] : watcherIn(String(out ?? "")))));
   return [...lead, ...EVERY, ...watcher, ...withOptions(rest, false) ?? rest];
 }
 
@@ -8347,7 +8347,7 @@ async function* stopShell(id, runners, headers, signal) {
     const asking = { ...headers, authorization: `Basic ${Buffer.from(`opencode:${runner.password}`).toString("base64")}` };
     try {
       const response = await fetch(url, { headers: asking, signal });
-      answered = true;
+      answered ||= response.ok || response.status === 404;
       if (response.ok)
         job = (await response.json()).data;
     } catch {}
@@ -8361,7 +8361,7 @@ async function* stopShell(id, runners, headers, signal) {
   if (!job || job.status !== "running")
     return yield* json(404, {});
   const stopped = await endShellJob(job, url, headers, signal);
-  return stopped ? yield* json(200, { stopped }) : yield* json(422, { message: "It runs on, and couldn’t be stopped." });
+  return stopped ? yield* json(200, { stopped }) : yield* json(422, { message: "It’s still running: neither its signal nor removing it went through." });
 }
 async function endShellJob(job, url, headers, signal) {
   if (Number.isInteger(job.pid) && job.pid > 1) {
@@ -39342,7 +39342,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "acf4d37069bb";
+var BRIDGE_VERSION = "7a9e71219aec";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

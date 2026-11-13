@@ -331,7 +331,7 @@ export async function ownArgsLater(args: string[], cwd?: string): Promise<string
 export function askedArgs(args: string[], cwd?: string): string[] | undefined {
   const { lead, rest } = split(args)
   if (strayCommon(lead, rest, cwd)) return undefined
-  const watcher = MAKING.has(rest[0] ?? "") ? [] : watcherIn(String(spawnSync("git", watcherRead(lead), { cwd, encoding: "utf8", env: { ...process.env, ...GIT_QUIET }, timeout: 30_000 }).stdout ?? ""))
+  const watcher = MAKING.has(rest[0] ?? "") || !WATCHER.length ? [] : watcherIn(String(spawnSync("git", watcherRead(lead), { cwd, encoding: "utf8", env: { ...process.env, ...GIT_QUIET }, timeout: 30_000 }).stdout ?? ""))
   return [...lead, ...EVERY, ...watcher, ...(withOptions(rest, false) ?? rest)]
 }
 
@@ -339,7 +339,7 @@ export function askedArgs(args: string[], cwd?: string): string[] | undefined {
 export async function askedArgsLater(args: string[], cwd?: string): Promise<string[] | undefined> {
   const { lead, rest } = split(args)
   if (await strayCommonLater(lead, rest, cwd)) return undefined
-  const watcher = MAKING.has(rest[0] ?? "") ? [] : await new Promise<string[]>(done =>
+  const watcher = MAKING.has(rest[0] ?? "") || !WATCHER.length ? [] : await new Promise<string[]>(done =>
     execFile("git", watcherRead(lead), { cwd, encoding: "utf8", env: { ...process.env, ...GIT_QUIET }, timeout: 30_000 }, (error, out) => done(error ? [] : watcherIn(String(out ?? "")))))
   return [...lead, ...EVERY, ...watcher, ...(withOptions(rest, false) ?? rest)]
 }

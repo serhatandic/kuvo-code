@@ -68,7 +68,7 @@ test("a command that runs on, and one no runner could be asked about, say so rat
     for await (const part of using({ method: "POST", path: `kuvo/shell/${id}/stop`, headers: {}, body: Buffer.from("{}") }, {}, undefined)) parts.push(part);
     return { status: parts[0].head.status, json: JSON.parse(Buffer.concat(parts.filter(part => part.body).map(part => part.body)).toString() || "{}") };
   };
-  assert.deepEqual(await stop("sh_stuck"), { status: 422, json: { message: "It runs on, and couldn’t be stopped." } });
+  assert.deepEqual(await stop("sh_stuck"), { status: 422, json: { message: "It’s still running: neither its signal nor removing it went through." } });
   const closed = { port: gone.target.port, password: "pw" };
   await new Promise(resolve => gone.server.close(resolve));
   const silent = link.engineHandler(() => closed, {}, () => ({ ...closed, pid: agents }));
