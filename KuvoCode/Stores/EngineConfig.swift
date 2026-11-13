@@ -82,7 +82,7 @@ final class EngineConfig {
 
     /// Settings › Permissions' rules of the computer a session is on (nil: this Mac), from its
     /// own settings: none for one not read yet (this Mac's are read before its engine starts, a
-    /// machine's before its engine is reached), whose sessions wait for them (`knowsRules`).
+    /// machine's before its engine is reached).
     static func rules(on machine: String?) -> [PermissionRule] {
         guard let config = of(machine), config.isLoaded else { return [] }
         return config.permissionRules
@@ -126,7 +126,7 @@ final class EngineConfig {
     /// Changed, wherever from (Settings, a phone, the file edited by hand), once its box says so.
     @ObservationIgnored var onChanged: () -> Void = {}
     /// Settings › Permissions' rules changed, wherever from (Settings, a phone, the file edited
-    /// by hand): open sessions follow (`Workspace.syncPermissions`).
+    /// by hand). (Each box makes its conversations' rules again with them itself.)
     @ObservationIgnored var onRulesChanged: () -> Void = {}
     /// The rules as they were last, to tell when they change.
     @ObservationIgnored private var rules: JSONValue?
