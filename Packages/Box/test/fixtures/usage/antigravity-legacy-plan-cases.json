@@ -1,0 +1,114 @@
+{
+  "legacy": [
+    {
+      "configs": [
+        {
+          "label": "Gemini 3 Pro (High)",
+          "quotaInfo": {
+            "remainingFraction": 0.8
+          }
+        },
+        {
+          "label": "Gemini 3 Flash",
+          "quotaInfo": {
+            "remainingFraction": 0.4
+          }
+        },
+        {
+          "label": "Claude Sonnet",
+          "quotaInfo": {
+            "remainingFraction": 0.9
+          }
+        }
+      ],
+      "expected": [
+        {
+          "label": "Session",
+          "used": 60,
+          "periodMs": 18000000
+        },
+        {
+          "label": "Claude",
+          "used": 10,
+          "periodMs": 18000000
+        }
+      ]
+    },
+    {
+      "configs": [
+        {
+          "label": "Gemini 4 Argon",
+          "modelID": "MODEL_PLACEHOLDER_M421"
+        },
+        {
+          "label": "Hidden",
+          "modelID": "MODEL_CHAT_20706"
+        },
+        {
+          "label": "Claude"
+        }
+      ],
+      "expected": [
+        {
+          "label": "Claude",
+          "used": 100,
+          "periodMs": 18000000
+        }
+      ]
+    },
+    {
+      "configs": [
+        {
+          "label": "Gemini 3 Pro",
+          "quotaInfo": {
+            "remainingFraction": 0.754
+          }
+        },
+        {
+          "label": "GPT-OSS",
+          "quotaInfo": {
+            "remainingFraction": 1.2
+          }
+        }
+      ],
+      "expected": [
+        {
+          "label": "Session",
+          "used": 25,
+          "periodMs": 18000000
+        },
+        {
+          "label": "Claude",
+          "used": 0,
+          "periodMs": 18000000
+        }
+      ]
+    }
+  ],
+  "plans": [
+    {
+      "input": "Google AI Pro",
+      "expected": "Pro"
+    },
+    {
+      "input": "Google AI  Ultra  Lite",
+      "expected": "Ultra Lite"
+    },
+    {
+      "input": "Gemini Code Assist in Google One AI Pro",
+      "expected": "Pro"
+    },
+    {
+      "input": " custom   plan ",
+      "expected": "Custom Plan"
+    },
+    {
+      "input": "   ",
+      "expected": null
+    },
+    {
+      "input": null,
+      "expected": null
+    }
+  ]
+}

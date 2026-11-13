@@ -23,6 +23,7 @@ import { claudeLine, dedupClaude, fromKeptClaude, keptClaude, type KeptClaudeEnt
 import { codexLine, codexSlots, codexState, codexStateFrom, fromKeptCodex, keptCodex, type CodexState, type KeptCodexEvent } from "./codex-log"
 import { engineCodexRows, engineCodexSlots, engineStamp } from "./engine-codex"
 import { dedupGrok, fromKeptGrok, grokLine, grokSlots, keptGrok, type KeptGrokEntry } from "./grok-log"
+import { AntigravityHistory, antigravitySlots } from "./antigravity-history"
 import { cursorReachable, type CursorClient } from "./cursor-api"
 import { CursorHistory, cursorSlots, type CursorDay } from "./cursor-history"
 import { databasesStamp } from "./engine-db"
@@ -36,7 +37,7 @@ import { settingsRoutes, type UsageSettings } from "./settings"
 export { UsageSettings } from "./settings"
 
 /** The services whose usage history a box states, so far (`opencode` only where it knows its engine's folder). */
-export const USAGE_SERVICES: LimitsService[] = ["claude", "codex", "grok", "opencode", "cursor"]
+export const USAGE_SERVICES: LimitsService[] = ["claude", "codex", "grok", "opencode", "cursor", "antigravity"]
 
 const MINUTE = 60_000
 const DAY = 24 * 60 * MINUTE
@@ -1044,4 +1045,29 @@ export function cursorSources(folder: string | undefined, elsewhere: (provider: 
       return [source]
     })
   }
+}
+
+/** Only Kuvo Code's own Antigravity profiles; never an editor's or ~/.gemini. */
+export function antigravitySources(folder?: string, computer = ownComputer, history = new AntigravityHistory(folder ? join(folder, "antigravity-files") : undefined)): (agents: Agent[]) => UsageSource[] {
+  const last = new Map<string, { events: unknown; pricing: Pricing; since: number; slots: Slots }>()
+  return (agents) => agents.flatMap((agent) => {
+    const parsed = parseProvider(agent.providerID)
+    const profile = (agent as Agent & { profile?: string }).profile
+    if (parsed?.kind !== "antigravity" || !profile) return []
+    return [{
+      provider: agent.providerID,
+      service: "antigravity" as const,
+      agent: { kind: "antigravity" as const, account: parsed.id },
+      ...(agent.instance.label ? { label: agent.instance.label } : {}),
+      places: () => [placeOf(computer(), profile)],
+      slots: async (pricing: Pricing, since: number) => {
+        const events = await history.scan(profile, since)
+        const before = last.get(agent.providerID)
+        if (before && before.events === events && before.pricing === pricing && before.since === since) return before.slots
+        const slots = antigravitySlots(events, pricing, since)
+        last.set(agent.providerID, { events, pricing, since, slots })
+        return slots
+      },
+    }]
+  })
 }

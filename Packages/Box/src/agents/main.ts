@@ -60,7 +60,8 @@ import { notesBeside } from "./notes"
 import { agentAccounts, Limits } from "./limits"
 import { LimitsPeers } from "./limits-peers"
 import { PricingStore } from "./usage/pricing"
-import { claudeSources, codexSources, cursorSources, engineCodexSource, engineHostedSources, grokSources, Usage, USAGE_SERVICES, UsageSettings } from "./usage/usage"
+import { antigravitySources, claudeSources, codexSources, cursorSources, engineCodexSource, engineHostedSources, grokSources, Usage, USAGE_SERVICES, UsageSettings } from "./usage/usage"
+import { antigravityTransport } from "./usage/antigravity-plan"
 import { cursorEndpoints } from "./usage/cursor-api"
 import { UsagePeers } from "./usage/usage-peers"
 import { SettingsPeers } from "./usage/settings-peers"
@@ -311,13 +312,15 @@ const engineCodexUsage = engineCodexSource(
   () => (engineAccounts.answered ? engineAccounts.accounts().some((account) => account.provider === "openai") : undefined),
   () => usage.has("openai"),
 )
+const antigravityUsage = antigravitySources(usageFolder)
 const grokUsage = grokSources(usageFolder)
 const engineHostedUsage = engineHostedSources(engineData)
 // Cursor's plan and its usage history, asked of Cursor with Kuvo Code's own Cursor sign-in: only
 // from a real box's bridge, never a test's, whatever sign-in its folder holds.
 cursorEndpoints.live = !noPriceFeeds
+antigravityTransport.live = !noPriceFeeds
 const cursorUsage = cursorSources(usageFolder, (provider, identity) => limits.held(provider) || (identity !== undefined && !!usage.peers?.readsWhole("cursor", identity)))
-const usage = new Usage(() => [...claudeUsage(roster.all()), ...codexUsage(roster.all()), ...grokUsage(roster.all()), ...engineCodexUsage(), ...engineHostedUsage(), ...cursorUsage(roster.all())], new PricingStore(join(usageFolder, "pricing"), noPriceFeeds ? null : undefined), (provider) => limits.identity(provider), join(usageFolder, "usage.json"))
+const usage = new Usage(() => [...claudeUsage(roster.all()), ...codexUsage(roster.all()), ...grokUsage(roster.all()), ...engineCodexUsage(), ...engineHostedUsage(), ...cursorUsage(roster.all()), ...antigravityUsage(roster.all())], new PricingStore(join(usageFolder, "pricing"), noPriceFeeds ? null : undefined), (provider) => limits.identity(provider), join(usageFolder, "usage.json"))
 usage.settings = usageSettings
 // The engine's sign-ins known (a box's first ChatGPT use shows at once, not a round later).
 engineAccounts.onAnswered = () => void usage.tick()
