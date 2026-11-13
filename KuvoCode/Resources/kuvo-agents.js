@@ -20310,10 +20310,15 @@ function signIn(db, folder, sql) {
 // Read-only, as the engine has it open. One whose -wal and -shm are gone (the engine stopped, and
 // SQLite removed them) can't be opened read-only: with nothing in a -wal, all of it is in the file,
 // read as it is (immutable).
+// (A database the engine is recovering or checkpointing is waited for a little, from the first query on.)
+function opened(db) {
+  db.exec("PRAGMA busy_timeout = 2000")
+  return db
+}
 function open(path) {
   let db
   try {
-    db = new Database(path, { readonly: true })
+    db = opened(new Database(path, { readonly: true }))
     db.query("SELECT count(*) FROM sqlite_master").values()
     return db
   } catch (error) {
@@ -20323,8 +20328,7 @@ function open(path) {
       wal = statSync(path + "-wal").size
     } catch {}
     if (wal > 0 || !/unable to open/i.test(error instanceof Error ? error.message : String(error))) throw error
-    db = new Database("file:" + path.replace(/[%?#]/g, (character) => "%" + character.charCodeAt(0).toString(16)) + "?immutable=1", { readonly: true })
-    return db
+    return opened(new Database("file:" + path.replace(/[%?#]/g, (character) => "%" + character.charCodeAt(0).toString(16)) + "?immutable=1", { readonly: true }))
   }
 }
 self.onmessage = (event) => {
@@ -20337,8 +20341,6 @@ self.onmessage = (event) => {
     let db
     try {
       db = open(path)
-      // (The engine may be writing: wait a little for it.)
-      db.exec("PRAGMA busy_timeout = 2000")
       const found = signIn(db, folder, sql)
       if (!found.oauth) continue
       oauth = true
@@ -20444,7 +20446,7 @@ function deduplicated(rows) {
   }
   return [...without, ...byID.values()];
 }
-function engineCodexRows(folder, since) {
+function engineCodexRows(folder, since, partial) {
   const paths = engineDatabases(folder);
   if (!paths.length)
     return Promise.resolve(undefined);
@@ -20455,14 +20457,18 @@ function engineCodexRows(folder, since) {
   let timer;
   return new Promise((resolve, reject) => {
     timer = setTimeout(() => reject(new Error("The engine's database took too long to read.")), READ_FOR);
+    timer.unref?.();
     worker.onmessage = (event) => {
       const { oauth, read, failed, jsons } = event.data;
       if (!read && failed !== undefined)
         reject(new Error(failed));
       else if (!oauth)
         resolve(undefined);
-      else
+      else {
+        if (failed !== undefined)
+          partial?.(failed);
         resolve(jsons.flatMap(parseRows));
+      }
     };
     worker.onerror = (event) => reject(new Error(event.message));
     worker.postMessage({ paths, folder, sql });
@@ -21181,29 +21187,38 @@ class Usage {
     const since = Math.floor((at - KEPT_DAYS * DAY2) / DAY2) * DAY2;
     const sources = this.sources();
     let complete = true;
-    for (const source of sources) {
-      let slots;
-      try {
-        slots = await source.slots(pricing, since);
-      } catch (error) {
-        console.error(`usage of ${source.provider}:`, error);
+    try {
+      for (const source of sources) {
+        let slots;
+        try {
+          slots = await source.slots(pricing, since);
+        } catch (error) {
+          console.error(`usage of ${source.provider}:`, error);
+        }
+        const entry = this.entries.get(source.provider) ?? { slots: noSlots() };
+        if (slots) {
+          entry.slots = slots;
+          entry.scanned = this.now();
+        } else {
+          complete = false;
+          entry.slots = trimmed(entry.slots, at);
+        }
+        this.entries.set(source.provider, entry);
       }
-      const entry = this.entries.get(source.provider) ?? { slots: noSlots() };
-      if (slots) {
-        entry.slots = slots;
-        entry.scanned = this.now();
-      } else {
-        complete = false;
-        entry.slots = trimmed(entry.slots, at);
+      const here = new Set(sources.map((source) => source.provider));
+      for (const provider of [...this.entries.keys()])
+        if (!here.has(provider))
+          this.entries.delete(provider);
+    } catch (error) {
+      complete = false;
+      throw error;
+    } finally {
+      for (const files of new Set(sources.flatMap((source) => source.files ? [source.files] : []))) {
+        try {
+          files.endRound(complete);
+        } catch {}
       }
-      this.entries.set(source.provider, entry);
     }
-    const here = new Set(sources.map((source) => source.provider));
-    for (const provider of [...this.entries.keys()])
-      if (!here.has(provider))
-        this.entries.delete(provider);
-    for (const files of new Set(sources.flatMap((source) => source.files ? [source.files] : [])))
-      files.endRound(complete);
     this.save();
     this.changed(true, fallback);
   }
@@ -21565,6 +21580,7 @@ function codexSources(folder, fallback = () => {
 }
 function engineCodexSource(folder, signedIn, kept, computer = ownComputer) {
   let last;
+  let partly = 0;
   return () => {
     if (!folder || !(signedIn() ?? kept()))
       return [];
@@ -21577,7 +21593,15 @@ function engineCodexSource(folder, signedIn, kept, computer = ownComputer) {
           const stamp = engineStamp(folder);
           if (last && last.stamp === stamp && last.pricing === pricing && last.since === since)
             return last.slots;
-          const rows = await engineCodexRows(folder, since);
+          let failed;
+          const rows = await engineCodexRows(folder, since, (why) => failed = why);
+          if (failed !== undefined) {
+            partly++;
+            if (partly < PARTLY_KNOWN_AFTER)
+              throw new Error(failed);
+            return rows ? engineCodexSlots(rows, pricing, since) : noSlots();
+          }
+          partly = 0;
           const slots = rows ? engineCodexSlots(rows, pricing, since) : noSlots();
           last = { stamp, pricing, since, slots };
           return slots;
@@ -21588,10 +21612,6 @@ function engineCodexSource(folder, signedIn, kept, computer = ownComputer) {
 }
 function ownerOf(grok) {
   const owner = new Map;
-  for (const agent of grok)
-    for (const root of agent.conversationRoots())
-      if (!isLink(root) && !owner.has(realOf(root)))
-        owner.set(realOf(root), agent.providerID);
   for (const agent of grok)
     for (const root of agent.conversationRoots())
       if (!owner.has(realOf(root)))
@@ -21640,12 +21660,13 @@ function grokSources(folder, computer = ownComputer) {
     });
   };
 }
+var PARTLY_KNOWN_AFTER = 3;
 function engineHostedSources(folder, computer = ownComputer, log = (line) => console.error(line), answersOf = hostedAnswers) {
   if (!folder)
     return () => [];
   let full;
   const kept = new Map;
-  const failing = new Set;
+  const failing = new Map;
   const read = async (since) => {
     const stamp = databasesStamp(folder);
     if (full && full.stamp === stamp && full.since === since)
@@ -21660,7 +21681,7 @@ function engineHostedSources(folder, computer = ownComputer, log = (line) => con
     for (const path of [...kept.keys()])
       if (!answers.some((answer) => answer.path === path))
         kept.delete(path);
-    for (const path of [...failing])
+    for (const path of [...failing.keys()])
       if (!answers.some((answer) => answer.path === path && answer.failed !== undefined))
         failing.delete(path);
     const rows = [];
@@ -21672,12 +21693,15 @@ function engineHostedSources(folder, computer = ownComputer, log = (line) => con
       }
       if (!failing.has(answer.path))
         log(`usage: the engine's database ${answer.path} couldn't be read: ${answer.failed}`);
-      failing.add(answer.path);
+      failing.set(answer.path, (failing.get(answer.path) ?? 0) + 1);
       rows.push(...kept.get(answer.path) ?? []);
     }
     const failed = answers.filter((answer) => answer.failed !== undefined);
     if (answers.length && failed.length === answers.length)
       throw new Error(failed[0].failed);
+    const unknown = failed.find((answer) => !kept.has(answer.path) && failing.get(answer.path) < PARTLY_KNOWN_AFTER);
+    if (unknown)
+      throw new Error(unknown.failed);
     full = failed.length ? undefined : { stamp, since, rows };
     return rows;
   };
@@ -32526,4 +32550,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 018b240a8b32c0f194d3349ea95a403e7b6febff1d3d9d99c3416a1f9a9997bc
+// Built from Packages/Box/src/agents dbf70d651362315b8eb5e54ce02ab100fb4d03963b8862a4a66fb67ee5f36319

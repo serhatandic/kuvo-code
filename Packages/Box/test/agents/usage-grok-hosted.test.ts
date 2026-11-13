@@ -17,7 +17,7 @@ import { dedupGrok, grokLine, grokSlots } from "../../src/agents/usage/grok-log"
 import { hostedAnswers, hostedRows, hostedSlots } from "../../src/agents/usage/engine-hosted"
 import { daysIn, summed, type Day } from "../../src/agents/usage/history"
 import { catalogFromCompact, Pricing, supplementFrom, type PricingStore } from "../../src/agents/usage/pricing"
-import { engineHostedSources, grokSources, Usage, usageRoutes } from "../../src/agents/usage/usage"
+import { engineHostedSources, grokSources, PARTLY_KNOWN_AFTER, Usage, usageRoutes } from "../../src/agents/usage/usage"
 
 const base = mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-usage-grok-hosted-test-"))
 afterAll(() => rmSync(base, { recursive: true, force: true }))
@@ -157,6 +157,8 @@ describe("your own Grok on a Mac", () => {
       const view = await route(usage)
       expect(view.rows.map((row: any) => [row.id, row.days.reduce((sum: number, day: Day) => sum + day.tokens, 0) > 0])).toEqual([["grok#1111111111111111", true], ["grok#2222222222222222", false]])
       expectDays(view.totals.grok, fixture("grok-expected.json").days)
+      // (Read once, with the default account, not again for the one linked to it.)
+      expect(readdirSync(join(home, "usage", "grok-files"))).toHaveLength(2)
     } finally {
       if (was === undefined) delete process.env.GROK_HOME
       else process.env.GROK_HOME = was
@@ -235,6 +237,12 @@ describe("the engine's hosted models", () => {
     const folder = engineFolder()
     writeFileSync(join(folder, "opencode-broken.db"), "not a database at all, but long enough to look like one".repeat(100))
     const usage = make(folder)
+    // (Not known while it might be one failing for a moment; once it keeps failing, the rest count.)
+    for (let round = 1; round < PARTLY_KNOWN_AFTER; round++) {
+      await usage.refresh()
+      expect((await route(usage)).rows).toEqual([])
+      at += 5 * 60_000
+    }
     await usage.refresh()
     const first = await route(usage)
     expect(first.rows.map((row: any) => row.provider)).toEqual(["opencode-go", "opencode"])
@@ -295,6 +303,27 @@ describe("the engine's hosted models", () => {
     await usage.refresh()
     expect(total(await route(usage))).toBeCloseTo(whole + 1, 9)
     expect(logged).toHaveLength(1)
+  })
+
+  test("just after a restart, a database that can't be read is not known now: the spend kept from before stays, never less", async () => {
+    if (!asUser) return
+    const folder = engineFolder()
+    const file = join(mkdtempSync(join(base, "box-")), "usage.json")
+    const started = () => new Usage(engineHostedSources(folder, undefined, () => {}), store(grokPricing()), () => undefined, file, () => at)
+    const before = started()
+    await before.refresh()
+    const total = (view: any) => view.totals.opencode.reduce((sum: number, day: Day) => sum + day.cost, 0)
+    expect(total(await route(before))).toBeCloseTo(3.34375, 9)
+    // A restart; the next channel's can't be read for a while.
+    chmodSync(join(folder, "opencode-next.db"), 0)
+    try {
+      const after = started()
+      at += 5 * 60_000
+      await after.refresh()
+      expect(total(await route(after))).toBeCloseTo(3.34375, 9)
+    } finally {
+      chmodSync(join(folder, "opencode-next.db"), 0o644)
+    }
   })
 
   test("both providers' rows come from one read a round, though the engine writes while it's read", async () => {

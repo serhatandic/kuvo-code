@@ -101,10 +101,15 @@ function signIn(db, folder, sql) {
 // Read-only, as the engine has it open. One whose -wal and -shm are gone (the engine stopped, and
 // SQLite removed them) can't be opened read-only: with nothing in a -wal, all of it is in the file,
 // read as it is (immutable).
+// (A database the engine is recovering or checkpointing is waited for a little, from the first query on.)
+function opened(db) {
+  db.exec("PRAGMA busy_timeout = 2000")
+  return db
+}
 function open(path) {
   let db
   try {
-    db = new Database(path, { readonly: true })
+    db = opened(new Database(path, { readonly: true }))
     db.query("SELECT count(*) FROM sqlite_master").values()
     return db
   } catch (error) {
@@ -114,8 +119,7 @@ function open(path) {
       wal = statSync(path + "-wal").size
     } catch {}
     if (wal > 0 || !/unable to open/i.test(error instanceof Error ? error.message : String(error))) throw error
-    db = new Database("file:" + path.replace(/[%?#]/g, (character) => "%" + character.charCodeAt(0).toString(16)) + "?immutable=1", { readonly: true })
-    return db
+    return opened(new Database("file:" + path.replace(/[%?#]/g, (character) => "%" + character.charCodeAt(0).toString(16)) + "?immutable=1", { readonly: true }))
   }
 }
 self.onmessage = (event) => {
@@ -128,8 +132,6 @@ self.onmessage = (event) => {
     let db
     try {
       db = open(path)
-      // (The engine may be writing: wait a little for it.)
-      db.exec("PRAGMA busy_timeout = 2000")
       const found = signIn(db, folder, sql)
       if (!found.oauth) continue
       oauth = true
@@ -249,8 +251,9 @@ export function deduplicated(rows: EngineCodexRow[]): EngineCodexRow[] {
 /**
  * The rows of every database in `folder` whose sign-in is ChatGPT's, from `since` (ms) on (none:
  * no ChatGPT sign-in there), read in a worker; fails when one couldn't be read and none could.
+ * `partial`: one couldn't be read while another could.
  */
-export function engineCodexRows(folder: string, since: number): Promise<EngineCodexRow[] | undefined> {
+export function engineCodexRows(folder: string, since: number, partial?: (failed: string) => void): Promise<EngineCodexRow[] | undefined> {
   const paths = engineDatabases(folder)
   if (!paths.length) return Promise.resolve(undefined)
   const sql = { imported: IMPORTED, signIn: SIGN_IN, tables: TABLES, v1: dataSQL(since, { v1: true, v2: false }), v2: dataSQL(since, { v1: false, v2: true }), both: dataSQL(since, { v1: true, v2: true }) }
@@ -261,13 +264,17 @@ export function engineCodexRows(folder: string, since: number): Promise<EngineCo
   let timer: ReturnType<typeof setTimeout> | undefined
   return new Promise<EngineCodexRow[] | undefined>((resolve, reject) => {
     timer = setTimeout(() => reject(new Error("The engine's database took too long to read.")), READ_FOR)
+    timer.unref?.()
     worker.onmessage = (event: MessageEvent<{ oauth: boolean; read: boolean; failed?: string; jsons: string[] }>) => {
       const { oauth, read, failed, jsons } = event.data
       // One that couldn't be read (its sign-in or its rows), and none that could: not known now, never
       // none (what was read before stays). None signed in with ChatGPT: nothing of it here.
       if (!read && failed !== undefined) reject(new Error(failed))
       else if (!oauth) resolve(undefined)
-      else resolve(jsons.flatMap(parseRows))
+      else {
+        if (failed !== undefined) partial?.(failed)
+        resolve(jsons.flatMap(parseRows))
+      }
     }
     worker.onerror = (event) => reject(new Error(event.message))
     worker.postMessage({ paths, folder, sql })

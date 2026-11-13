@@ -4041,9 +4041,10 @@ doesn't know its engine's folder doesn't state it (`services` without `opencode`
     `session_message` (opencode 2, a compaction too, from when the sign-in was made on), a message
     copied between two databases once (by its ID). Priced as Codex's. Whether the sign-in is OAuth
     is asked of SQLite: its tokens never leave the database. A database that can't be read now
-    (and none that could) leaves what was read before as it was, never none (its box's `scanned`
-    as of when it last was); one in WAL mode whose
-    `-wal` and `-shm` are gone (its engine stopped) is read as it is.
+    leaves what was read before as it was (its box's `scanned` as of when it last was), and such a
+    read is never kept as whole, until that database has failed three reads in a row (one that's
+    always broken doesn't hold up the rest); one in WAL mode whose `-wal` and `-shm` are gone (its
+    engine stopped) is read as it is.
   - Grok's (OpenUsage's rules): a transcript line holding `turn_completed` that parses, a
     `turn_completed` session update (under `params.update`, else `update`) with `usage.modelUsage`
     and a time (`_meta.agentTimestampMs`, under `params`, else the line's own; else the line's
@@ -4058,10 +4059,11 @@ doesn't know its engine's folder doesn't state it (`services` without `opencode`
     (opencode 1) and `session_message` (opencode 2), on the day it was made; its tokens the total it
     says, else its buckets added up; its cost as written, never priced again (a negative one left
     out); a message in both tables, or in two channels' databases, once (by its ID, the first by
-    path). A database without either table says nothing; one that can't be read while another can
-    leaves what was read before as it was, never less (a database that can't be read now and none that
-    could too), until every one is read again; one in WAL mode whose `-wal` and `-shm` are gone is
-    read as it is. A model you reach with a key
+    path). A database without either table says nothing. One that can't be read now gives the rows
+    it gave last, in this bridge's run; one with none of its rows known (as the bridge starts), or
+    every one failing, leaves what this box had as it was (not known now), until it has failed three
+    reads in a row (one that's always broken doesn't hold up the rest). While one fails, they're
+    read every round. One in WAL mode whose `-wal` and `-shm` are gone is read as it is. A model you reach with a key
     of your own is its provider's, never counted here.
 - `PUT kuvo/agents/api/kuvo/usage/pricing[?zone=]` `{"codex": {"fallback": <model> | null}}`: Codex's
   fallback model, whose rates estimate what a Codex model with no known price used (in this box's
@@ -4079,8 +4081,8 @@ doesn't know its engine's folder doesn't state it (`services` without `opencode`
   it was last read as it grows, and again whole when it shrank or was rewritten; what each log held
   is kept in the bridge's folder (`usage/claude-files`, `usage/codex-files` and `usage/grok-files`,
   a file a log, with a Codex log's running total and model so far, rebuilt from the logs when it's
-  lost; the engine's databases are read again whole, only when one or its write-ahead log
-  changed), and each account's use by the quarter hour, UTC (`usage/usage.json`), so a restart
+  lost; the engine's databases are read again whole, when one or its write-ahead log changed, or
+  one failed last time), and each account's use by the quarter hour, UTC (`usage/usage.json`), so a restart
   answers at once, and every zone's days come out whole (India's midnight is on the half hour).
   Kept 35 days.
 - **Across your computers**, as plan limits are ("Plan limits", "Across your computers": the same

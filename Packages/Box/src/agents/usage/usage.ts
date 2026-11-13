@@ -275,28 +275,38 @@ export class Usage {
     const since = Math.floor((at - KEPT_DAYS * DAY) / DAY) * DAY
     const sources = this.sources()
     let complete = true
-    for (const source of sources) {
-      let slots: Slots | undefined
-      try {
-        slots = await source.slots(pricing, since)
-      } catch (error) {
-        console.error(`usage of ${source.provider}:`, error)
+    try {
+      for (const source of sources) {
+        let slots: Slots | undefined
+        try {
+          slots = await source.slots(pricing, since)
+        } catch (error) {
+          console.error(`usage of ${source.provider}:`, error)
+        }
+        const entry = this.entries.get(source.provider) ?? { slots: noSlots() }
+        if (slots) {
+          entry.slots = slots
+          entry.scanned = this.now()
+        } else {
+          complete = false
+          entry.slots = trimmed(entry.slots, at)
+        }
+        this.entries.set(source.provider, entry)
       }
-      const entry = this.entries.get(source.provider) ?? { slots: noSlots() }
-      if (slots) {
-        entry.slots = slots
-        entry.scanned = this.now()
-      } else {
-        complete = false
-        entry.slots = trimmed(entry.slots, at)
+      // Accounts gone since: their records go.
+      const here = new Set(sources.map((source) => source.provider))
+      for (const provider of [...this.entries.keys()]) if (!here.has(provider)) this.entries.delete(provider)
+    } catch (error) {
+      complete = false
+      throw error
+    } finally {
+      // (A round cut short forgets none of the logs it didn't get to; what its sources shared this round goes, whatever happened.)
+      for (const files of new Set(sources.flatMap((source) => (source.files ? [source.files] : [])))) {
+        try {
+          files.endRound(complete)
+        } catch {}
       }
-      this.entries.set(source.provider, entry)
     }
-    // Accounts gone since: their records go.
-    const here = new Set(sources.map((source) => source.provider))
-    for (const provider of [...this.entries.keys()]) if (!here.has(provider)) this.entries.delete(provider)
-    // (A round cut short forgets none of the logs it didn't get to.)
-    for (const files of new Set(sources.flatMap((source) => (source.files ? [source.files] : [])))) files.endRound(complete)
     this.save()
     this.changed(true, fallback)
   }
@@ -756,6 +766,8 @@ export function codexSources(folder?: string, fallback: () => string | undefined
  */
 export function engineCodexSource(folder: string | undefined, signedIn: () => boolean | undefined, kept: () => boolean, computer = ownComputer): () => UsageSource[] {
   let last: { stamp: string; pricing: Pricing; since: number; slots: Slots } | undefined
+  /** Reads in a row with a database that couldn't be read. */
+  let partly = 0
   return () => {
     if (!folder || !(signedIn() ?? kept())) return []
     return [
@@ -766,7 +778,17 @@ export function engineCodexSource(folder: string | undefined, signedIn: () => bo
         slots: async (pricing, since) => {
           const stamp = engineStamp(folder)
           if (last && last.stamp === stamp && last.pricing === pricing && last.since === since) return last.slots
-          const rows = await engineCodexRows(folder, since)
+          let failed: string | undefined
+          const rows = await engineCodexRows(folder, since, (why) => (failed = why))
+          // One database couldn't be read while another could: not known now (what this box had
+          // stays), unless it keeps failing (one that's always broken doesn't hold up the rest);
+          // never kept as a whole read.
+          if (failed !== undefined) {
+            partly++
+            if (partly < PARTLY_KNOWN_AFTER) throw new Error(failed)
+            return rows ? engineCodexSlots(rows, pricing, since) : noSlots()
+          }
+          partly = 0
           const slots = rows ? engineCodexSlots(rows, pricing, since) : noSlots()
           last = { stamp, pricing, since, slots }
           return slots
@@ -777,13 +799,12 @@ export function engineCodexSource(folder: string | undefined, signedIn: () => bo
 }
 
 /**
- * Whose each of the Grok accounts' session folders is (by its real path): the account it's really
- * in, not one that links to it; else the first that names it. A folder two accounts name (your
- * `GROK_HOME` that is an added account's home too) is read with that one only, never twice.
+ * Whose each of the Grok accounts' session folders is (by its real path): the first account that
+ * names it (the default first, your own Grok's). A folder two accounts name (your `GROK_HOME` that
+ * is an added account's home too) is read with that one only, never twice.
  */
 function ownerOf(grok: Agent[]): Map<string, string> {
   const owner = new Map<string, string>()
-  for (const agent of grok) for (const root of agent.conversationRoots!()) if (!isLink(root) && !owner.has(realOf(root))) owner.set(realOf(root), agent.providerID)
   for (const agent of grok) for (const root of agent.conversationRoots!()) if (!owner.has(realOf(root))) owner.set(realOf(root), agent.providerID)
   return owner
 }
@@ -845,13 +866,17 @@ export function grokSources(folder?: string, computer = ownComputer): (agents: A
  * again next round; each newly failing one is logged. Billed by OpenCode, so never priced here. A
  * provider with no use in the window has no row.
  */
+/** Reads in a row a database can't be read, with nothing of it known, before the rest count without it. */
+export const PARTLY_KNOWN_AFTER = 3
+
 export function engineHostedSources(folder: string | undefined, computer = ownComputer, log: (line: string) => void = (line) => console.error(line), answersOf = hostedAnswers): () => UsageSource[] {
   if (!folder) return () => []
   /** The last read in which every database answered, to read them again only when one changed. */
   let full: { stamp: string; since: number; rows: HostedRow[] | undefined } | undefined
   /** Each database's rows as it last answered them, and those failing now (logged once). */
   const kept = new Map<string, HostedRow[]>()
-  const failing = new Set<string>()
+  /** Each database failing now, and how many reads in a row it has (logged as it starts). */
+  const failing = new Map<string, number>()
   const read = async (since: number): Promise<HostedRow[] | undefined> => {
     const stamp = databasesStamp(folder)
     if (full && full.stamp === stamp && full.since === since) return full.rows
@@ -863,7 +888,7 @@ export function engineHostedSources(folder: string | undefined, computer = ownCo
       return undefined
     }
     for (const path of [...kept.keys()]) if (!answers.some((answer) => answer.path === path)) kept.delete(path)
-    for (const path of [...failing]) if (!answers.some((answer) => answer.path === path && answer.failed !== undefined)) failing.delete(path)
+    for (const path of [...failing.keys()]) if (!answers.some((answer) => answer.path === path && answer.failed !== undefined)) failing.delete(path)
     // (In path order, a database's kept rows in its place: a message in two is the first's, as always.)
     const rows: HostedRow[] = []
     for (const answer of answers) {
@@ -873,12 +898,15 @@ export function engineHostedSources(folder: string | undefined, computer = ownCo
         continue
       }
       if (!failing.has(answer.path)) log(`usage: the engine's database ${answer.path} couldn't be read: ${answer.failed}`)
-      failing.add(answer.path)
+      failing.set(answer.path, (failing.get(answer.path) ?? 0) + 1)
       rows.push(...(kept.get(answer.path) ?? []))
     }
     const failed = answers.filter((answer) => answer.failed !== undefined)
-    // None answered: not known now (what this box had stays).
+    // None answered, or one with nothing kept of it (as the bridge starts): not known now (what this
+    // box had stays), unless that one keeps failing (one that's always broken doesn't hold up the rest).
     if (answers.length && failed.length === answers.length) throw new Error(failed[0]!.failed)
+    const unknown = failed.find((answer) => !kept.has(answer.path) && failing.get(answer.path)! < PARTLY_KNOWN_AFTER)
+    if (unknown) throw new Error(unknown.failed)
     full = failed.length ? undefined : { stamp, since, rows }
     return rows
   }
