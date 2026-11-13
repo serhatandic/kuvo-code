@@ -190,3 +190,29 @@ test("one whose program has a name its settings can't switch off isn't read at a
   expect(JSON.stringify(found ?? {})).not.toContain("two, longer")
   expect(ran()).toEqual([])
 })
+
+test("git's own watcher stays on where settings ask for it, for a big repository's sake; one naming a program is still off", async () => {
+  const shared = await import("../src/shared/git")
+  // What git goes by is the last `core.fsmonitor` it's given.
+  const watcher = (args: string[] | undefined) => args?.filter(each => each.startsWith("core.fsmonitor=")).at(-1)
+  const { top, ran } = planted()
+  for (const command of [["diff"], ["status", "--porcelain"]]) {
+    expect(watcher(await shared.ownArgsLater(command, top))).toBe("core.fsmonitor=false")
+    expect(watcher(shared.ownArgs(command, top))).toBe("core.fsmonitor=false")
+  }
+  expect(watcher(await shared.askedArgsLater(["commit", "-m", "x"], top))).toBe("core.fsmonitor=false")
+  expect(watcher(shared.askedArgs(["commit", "-m", "x"], top))).toBe("core.fsmonitor=false")
+  for (const yes of ["true", "yes", "1"]) {
+    git(top, "config", "core.fsmonitor", yes)
+    expect(watcher(await shared.ownArgsLater(["diff"], top))).toBe("core.fsmonitor=true")
+    expect(watcher(shared.ownArgs(["diff"], top))).toBe("core.fsmonitor=true")
+    expect(watcher(await shared.askedArgsLater(["commit", "-m", "x"], top))).toBe("core.fsmonitor=true")
+    expect(watcher(shared.askedArgs(["commit", "-m", "x"], top))).toBe("core.fsmonitor=true")
+  }
+  // Read off, with the program named last again, as a setting another file includes could.
+  git(top, "config", "--add", "core.fsmonitor", join(box, `programs-${made}`, "fsmonitor"))
+  expect(watcher(await shared.ownArgsLater(["diff"], top))).toBe("core.fsmonitor=false")
+  expect(watcher(await shared.askedArgsLater(["commit", "-m", "x"], top))).toBe("core.fsmonitor=false")
+  expect(await changes.changesIn(top, "uncommitted")).toMatchObject({ repository: true })
+  expect(ran()).toEqual([])
+})

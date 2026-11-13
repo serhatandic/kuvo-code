@@ -11,7 +11,8 @@ import path from "node:path";
 import { askedArgsLater, ownArgsLater } from "../../shared/git";
 import { parsed } from "../../shared/json";
 import type { GitChanges, GitChangesCount, PullRequestDraft } from "../../shared/routes/changes";
-import { IS_MAC, K } from "../home";
+import { K } from "../home";
+import { askedEnv, commandEnv } from "../run-command";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import { FILE_LIMIT } from "./file";
 import { commitPrompt, moveGitSettings, pullRequestPrompt } from "./git-words";
@@ -38,12 +39,15 @@ interface Ran {
  * git in `folder`, never asking anything. Reading takes no locks it needn't, starts nothing the
  * repository's own settings name (`../../shared/git`) and is stopped after ten minutes (stuck on
  * a lock or a hung disk); what changes the repository, which you asked for (a commit with its
- * hooks, a push), takes as long as it takes.
+ * hooks, a push), takes as long as it takes; `yours`, what runs your hooks and sign-ins (a commit,
+ * a push, a merge), with your login shell's environment as it is now (`askedEnv`).
  */
-async function git(folder: string, given: string[], changing = false, more: Record<string, string> = {}, program = "git", timeout = 600_000): Promise<Ran> {
+async function git(folder: string, given: string[], changing: boolean | "yours" = false, more: Record<string, string> = {}, program = "git", timeout = 600_000): Promise<Ran> {
   const args = program !== "git" ? given : changing ? await askedArgsLater(given, folder) : await ownArgsLater(given, folder);
   if (!args) return { ok: false, out: Buffer.alloc(0), said: "This repository’s own settings name a program Kuvo Code won’t run for it, or lead git to another repository’s." };
-  const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", ...(changing ? {} : { GIT_OPTIONAL_LOCKS: "0" }), ...more };
+  // Without what only the box's own process should have (Bun's own variables, which would start
+  // a hook's `bun build --compile` tool as plain Bun; Kuvo Code's).
+  const env = { ...(changing === "yours" ? await askedEnv() : commandEnv()), GIT_TERMINAL_PROMPT: "0", ...(changing ? {} : { GIT_OPTIONAL_LOCKS: "0" }), ...more };
   if (!changing) {
     return new Promise(resolve => {
       execFile(program, args, { cwd: folder, env, encoding: "buffer", maxBuffer: 1024 * 1024 * 1024, timeout }, (error, stdout, stderr) =>
@@ -207,12 +211,12 @@ export async function countIn(directory: string, scope: Scope, base?: string): P
   return { repository: true, root, against, files: seen.size + untracked.length, additions, deletions, untracked: untracked.length, uncommitted: await uncommittedIn(root, scope) };
 }
 
-/** To the Trash: on this Mac its own, elsewhere (a machine, whoever's at it or not) Kuvo Code's on
- * this box, where it can still be found (`KUVO_CHANGES_TRASH`, a test's own). */
+/** To the Trash: on a Mac its own (the box beside the app, or one the app attached to in place), on
+ * Linux Kuvo Code's on this box, where it can still be found (`KUVO_CHANGES_TRASH`, a test's own). */
 function trash(file: string) {
   const name = path.basename(file);
   let into: string;
-  if (IS_MAC && process.platform === "darwin" && !process.env.KUVO_CHANGES_TRASH) {
+  if (process.platform === "darwin" && !process.env.KUVO_CHANGES_TRASH) {
     // The Finder’s own way, so Put Back works (macOS 15 and later have it); `file` is a full path, never an option.
     if (fs.existsSync("/usr/bin/trash")) return void execFileSync("/usr/bin/trash", [file], { stdio: "ignore" });
     const bin = path.join(os.homedir(), ".Trash");
@@ -342,7 +346,7 @@ export async function perform(action: "stage" | "unstage" | "discard", root: str
  * when it went, else what git said. */
 /** What git said when it refused, from `root` (with `author`'s settings), or null when it didn't. */
 const refusal = (root: string, author: Record<string, string> = {}) => async (args: string[]) => {
-  const ran = await git(root, args, true, author);
+  const ran = await git(root, args, "yours", author);
   if (ran.ok) return null;
   const words = (ran.out.toString("utf8") + "\n" + ran.said).trim();
   return words || `git ${args[0]} failed.`;
@@ -392,13 +396,26 @@ export function worktreeOf(directory: string) {
   return readWorktrees().find(tree => real === realOr(tree.root) || real.startsWith(realOr(tree.root) + path.sep));
 }
 
+/** The worktree `directory` is in, for Merge into…: this box's record of it, else, as git has it,
+ * a linked worktree's repository's own folder (one made with `git worktree add`, or by the app's
+ * own box on this Mac before it attached to this one, which keeps the record). */
+async function mergedFrom(directory: string): Promise<{ project: string; base?: string } | null> {
+  const tree = worktreeOf(directory);
+  if (tree) return tree;
+  const [own, common] = ((await text(directory, ["rev-parse", "--absolute-git-dir", "--git-common-dir"])) ?? "").trim().split("\n");
+  if (!own || !common) return null;
+  const shared = path.resolve(directory, common);
+  if (realOr(own) === realOr(shared) || path.basename(shared) !== ".git") return null;
+  return { project: path.dirname(shared) };
+}
+
 /** Merge into…: what's committed on a worktree's branch merged into `into`, in the project's
  * folder, which must have `into` checked out. Without `into`, the branch the worktree was made from
  * (its record's `base`), else the one the project's folder has checked out. A merge that conflicts
  * is taken back, so the project's folder is as it was, and names the files. `into`: the branch it
  * went into, or would have. */
 export async function mergeInto(directory: string, given: string | undefined, author: Record<string, string> = {}): Promise<{ status: number; failed: string; conflicts?: string[]; into?: string } | { into: string }> {
-  const tree = worktreeOf(directory);
+  const tree = await mergedFrom(directory);
   if (!tree || !fs.existsSync(tree.project)) return { status: 409, failed: "Only a worktree’s branch is merged here. Create a pull request instead." };
   const branch = await branchOf(directory);
   if (!branch) return { status: 409, failed: "This folder isn’t on a branch." };
