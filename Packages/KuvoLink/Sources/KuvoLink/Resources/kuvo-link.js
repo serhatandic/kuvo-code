@@ -39139,7 +39139,7 @@ import fs123 from "node:fs";
 import path126 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "84e5bd47a6f7";
+var BRIDGE_VERSION = "2b7215280d17";
 
 // Packages/Box/src/link/rehome/rewrite.ts
 var NO_REWRITE = {
@@ -46329,7 +46329,7 @@ async function* typedRoute(context, match) {
     now: Date.now(),
     timeZone: zone2()
   });
-  if (commands === null && (decision.send || decision.sideThread))
+  if (commands === null && !decision.keyword && (decision.send || decision.sideThread))
     return yield* json(503, { message: "The engine didn't answer. Try again in a moment.", restore: { text } });
   let done = {};
   let failure = null;

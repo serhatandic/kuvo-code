@@ -20,6 +20,8 @@ import Testing
 
     private func open() async throws -> (SessionModel, ConversationBox) {
         engine.list([StubEngine.session(id, title: "Shell", directory: "/tmp/kuvo-tests-shell")])
+        // (As the engine has it, for its box to find.)
+        engine.on("GET", "/api/session/\(id)", json: ["data": StubEngine.session(id, title: "Shell", directory: "/tmp/kuvo-tests-shell")])
         engine.conversation(id, [])
         await workspace.refresh()
         let model = try #require(workspace.model(for: id))
@@ -63,5 +65,6 @@ import Testing
         try await until { model.failure != nil }
         #expect(model.draftText == "!git status", "back as you typed it")
         #expect(model.failure != nil)
+        #expect(engine.requests("POST", "/api/session/\(id)/shell").count == 1, "the engine was asked, and said no")
     }
 }

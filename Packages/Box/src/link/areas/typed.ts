@@ -200,7 +200,7 @@ export async function* typedRoute(context: RouteContext, match: RegExpMatchArray
   });
   // The engine's commands unread: a keyword or goal goes on without them; what might have been one
   // of them can't be told from a message, and waits.
-  if (commands === null && (decision.send || decision.sideThread)) return yield* json(503, { message: "The engine didn't answer. Try again in a moment.", restore: { text } });
+  if (commands === null && !decision.keyword && (decision.send || decision.sideThread)) return yield* json(503, { message: "The engine didn't answer. Try again in a moment.", restore: { text } });
   let done: Done = {};
   let failure: { restore: Restore; error: string } | null = null;
   if (decision.box) {

@@ -190,6 +190,7 @@ describe("kuvo/sessions/<id>/typed", () => {
   test("the engine's commands unread: a keyword still runs; what might be one of them waits, saying so", async () => {
     commandsAnswer = { status: 500, body: { message: "Restarting." } }
     expect((await ask("POST", "ses_main", { text: "/plan" })).json).toEqual({ keyword: "plan", plan: "toggle" })
+    expect((await ask("POST", "ses_main", { text: "/plan sketch it" })).json).toEqual({ keyword: "plan", plan: "on", send: { text: "sketch it", typed: "/plan" } })
     const { status, json } = await ask("POST", "ses_main", { text: "/deploy prod" })
     expect(status).toBe(503)
     expect(json.message).toBeString()
