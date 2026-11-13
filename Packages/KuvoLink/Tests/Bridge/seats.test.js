@@ -139,6 +139,8 @@ test("who can be in a chat here from your other computers: each peer, taking a c
   ] });
   link.takeAgents(mac.peer, { at: 2, list: [{ session: "ses_m", name: "Mac bot", kind: "bot", id: "bot_mac", look: { color: "sky" } }] });
   const peers = link.seatPeers(link.readLink());
+  // This box too, as its plan limits' rows name it (PROTOCOL.md, "Plan limits").
+  assert.deepEqual(peers.self, { key: here.pub, name: "devbox" });
   assert.deepEqual(peers.boxes, [{ key: mac.pub, name: "mac", seats: false }, { key: second.pub, name: "second", seats: true }]);
   assert.deepEqual(peers.bots, [
     { id: "bot_mac", name: "Mac bot", job: "", box: mac.pub, session: "ses_m", look: { color: "sky", shape: "round", face: "calm" } },
@@ -341,4 +343,105 @@ test("a bridge that answered and then says nothing for a minute is followed anew
     server.closeAllConnections();
     server.close();
   }
+});
+
+test("plan limits (PROTOCOL.md, \"Plan limits\"): what the bridge tells a computer goes to it now as mail of its own, kept nowhere; what a computer tells comes to the bridge here", async () => {
+  fresh();
+  const sent = [];
+  const host = { send: bytes => sent.push(bytes) };
+  const accounts = [{ provider: "claude-code", service: "claude", identity: "0123456789abcdef", windows: [{ id: "five_hour", used: 0.4, read: 5, source: "usage" }], checked: 5 }];
+  assert.equal(link.carrySeat(host, { id: "sm_limits001", to: second.pub, durable: false, mail: { kind: "limits", at: 5, accounts, ask: true } }, link.readLink()), true);
+  assert.equal(sent.length, 1);
+  const payload = opened(sent[0], second).payload;
+  assert.deepEqual(payload.limits, { at: 5, accounts, ask: true });
+  assert.equal(payload.seat, undefined, "not as a group chat's");
+  assert.equal(payload.seatID, undefined);
+  const sending = path.join(run, "outbox", "sending");
+  assert.deepEqual(fs.existsSync(sending) ? fs.readdirSync(sending) : [], [], "nothing kept to send again");
+
+  // What another computer tells, opened as any mail of theirs, goes to the bridge here.
+  let heard;
+  const posted = new Promise(resolve => { heard = resolve; });
+  const server = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", chunk => { body += chunk; });
+    request.on("end", () => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{}");
+      heard({ method: request.method, url: request.url, body: JSON.parse(body) });
+    });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  fs.writeFileSync(path.join(run, "bridge.json"), JSON.stringify({ port: server.address().port, password: "bridge-pw" }));
+  try {
+    const mail = link.mailFor(here.peer, { limits: { at: 6, accounts }, at: Date.now() }, { key: k(second.key) });
+    link.receiveMail(link.readFrame(mail.subarray(17)).body, host, (sender, given) => link.peerMail(sender, given, host));
+    assert.deepEqual(await posted, { method: "POST", url: "/api/kuvo/peers/mail", body: { from: second.pub, mail: { at: 6, accounts, kind: "limits" } } });
+  } finally {
+    server.close();
+  }
+});
+
+test("plan limits with a box only a peer knows (another Mac's, beside a machine two Macs share): its limits go to it and come from it, and nothing else does", async () => {
+  fresh();
+  const air = box("mac", "air");
+  // The second machine says which boxes it knows: this one, and the Air, which isn't this box's peer.
+  link.takeAgents(second.peer, { at: Date.now(), list: [], boxes: [here.peer, air.peer, { key: "not a key", address: "x", kind: "mac" }] });
+  const peers = link.seatPeers(link.readLink());
+  assert.deepEqual(peers.also, [{ key: air.pub, name: "air" }]);
+  assert.ok(!peers.boxes.some(each => each.key === air.pub), "not in its group chats");
+
+  // What the bridge tells it goes there; nothing else of the bridge's does.
+  const sent = [];
+  const host = { send: bytes => sent.push(bytes) };
+  link.carrySeat(host, { id: "sm_limits002", to: air.pub, durable: false, mail: { kind: "limits", at: 7, accounts: [] } }, link.readLink());
+  assert.equal(sent.length, 1);
+  assert.deepEqual(opened(sent[0], air).payload.limits, { at: 7, accounts: [] });
+  link.carrySeat(host, { id: "sm_turn0002", to: air.pub, durable: false, mail: { kind: "turn", turn: { id: "trn_9" } } }, link.readLink());
+  assert.equal(sent.length, 1, "a group chat's mail isn't sent to it");
+
+  // What it sends: its limits reach the bridge; its agents and letters are dropped.
+  const posted = [];
+  let heard;
+  const got = new Promise(resolve => { heard = resolve; });
+  const server = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", chunk => { body += chunk; });
+    request.on("end", () => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{}");
+      posted.push(JSON.parse(body));
+      heard();
+    });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  fs.writeFileSync(path.join(run, "bridge.json"), JSON.stringify({ port: server.address().port, password: "bridge-pw" }));
+  try {
+    const mail = link.mailFor(here.peer, { limits: { at: 8, accounts: [] }, agents: { at: Date.now(), list: [{ session: "ses_air1", name: "Air's", kind: "session" }] }, letter: { id: "ltr_x" }, at: Date.now() }, { key: k(air.key) });
+    link.receiveMail(link.readFrame(mail.subarray(17)).body, host, (sender, given) => link.peerMail(sender, given, host));
+    await got;
+    assert.deepEqual(posted, [{ from: air.pub, mail: { at: 8, accounts: [], kind: "limits" } }]);
+    assert.equal(link.readPeerAgents()[air.pub], undefined, "its agents aren't taken");
+  } finally {
+    server.close();
+  }
+});
+
+test("a box only a peer knew is forgotten once no peer names it: nothing goes to it, and its mail isn't opened", () => {
+  fresh();
+  const air = box("mac", "air");
+  const at = Date.now();
+  link.takeAgents(second.peer, { at, list: [], boxes: [air.peer] });
+  assert.deepEqual(link.seatPeers(link.readLink()).also, [{ key: air.pub, name: "air" }]);
+  // The second machine no longer names it (the Air's Mac let it go).
+  link.takeAgents(second.peer, { at: at + 1, list: [], boxes: [] });
+  assert.deepEqual(link.seatPeers(link.readLink()).also, []);
+  const sent = [];
+  link.carrySeat({ send: bytes => sent.push(bytes) }, { id: "sm_limits003", to: air.pub, durable: false, mail: { kind: "limits", at: 9, accounts: [] } }, link.readLink());
+  assert.equal(sent.length, 0);
+  const mail = link.mailFor(here.peer, { limits: { at: 9, accounts: [] }, at: Date.now() }, { key: k(air.key) });
+  assert.equal(link.openMail(link.readFrame(mail.subarray(17)).body, link.readLink(), () => link.vouchedOf(link.readLink())), null);
+  // (While it was named, it was opened.)
+  link.takeAgents(second.peer, { at: at + 2, list: [], boxes: [air.peer] });
+  assert.equal(link.openMail(link.readFrame(mail.subarray(17)).body, link.readLink(), () => link.vouchedOf(link.readLink()))?.vouched, true);
 });

@@ -125,6 +125,8 @@ final class Workspace {
     /// The engine a folder's sessions run on: its machine's, or this Mac's.
     func api(forFolder folder: String) -> OpenCodeAPI? {
         if let machine = RemoteFolder.machine(of: folder) { return machineAPI(machine) }
+        // (Attached in place, this Mac's folders are its box's: there's no engine of the app's own.)
+        if BoxClient.thisMac != BoxClient.mac { return machineAPI(BoxClient.thisMac) }
         return api
     }
 
@@ -178,8 +180,14 @@ final class Workspace {
     }
     /// Sessions' own git worktrees, by the folder their sessions run in.
     private(set) var worktrees: [String: Worktree] = Workspace.loadWorktrees() {
-        didSet { projectsChanged() }
+        didSet {
+            worktreesChanged &+= 1
+            projectsChanged()
+        }
     }
+    /// How many times `worktrees` changed: a read of a box's worktrees from before a change since
+    /// isn't taken (`takeWorktrees`).
+    @ObservationIgnored private var worktreesChanged = 0
     /// The projects of worktrees removed since, by the folder their sessions ran in: an archived
     /// session there still belongs to its project, and comes back to it if you restore it.
     private var removedWorktrees: [String: String] = UserDefaults.standard.dictionary(forKey: "removedWorktrees") as? [String: String] ?? [:] {
@@ -570,7 +578,7 @@ final class Workspace {
     /// Sessions whose conversation has `query` (archived ones too), the latest first, with the
     /// words around its first mention: each box searches its own (`kuvo/search`), this Mac's and
     /// each machine that's connected, and only what's listed here is shown.
-    /// `answered`: each box's finds as it answers (by its id, `BoxClient.mac` or a machine's), for
+    /// `answered`: each box's finds as it answers (by its id, `BoxClient.thisMac` or a machine's), for
     /// a sidebar that shows them as they come.
     func searchConversations(_ query: String, limit: Int = 20, answered: ((String, [ConversationFind]) -> Void)? = nil) async -> [ConversationFind] {
         nonisolated struct Found: Decodable, Sendable {
@@ -591,7 +599,7 @@ final class Workspace {
             }
         }
         let path = "kuvo/search?q=\(Self.queryValue(query))&limit=\(limit)"
-        let boxes = searchedBoxes?() ?? [BoxClient.mac] + connectedMachines.sorted()
+        let boxes = searchedBoxes?() ?? Self.thisMacThenMachines(connectedMachines)
         let clients = boxes.compactMap { box in self.boxes?(box).map { (box, $0) } }
         let answers = await withTaskGroup(of: (String, Result<[Found.Hit], UnsearchedFailure>).self) { group in
             for (box, client) in clients { group.addTask { (box, await Found.asked(client, path)) } }
@@ -608,7 +616,7 @@ final class Workspace {
         var unsearched: [String: UnsearchedReason] = [:]
         for machine in machines.subtracting(connectedMachines).subtracting(removedMachines) { unsearched[machine] = .notConnected }
         for (box, answer) in answers {
-            if case .failure(let failure) = answer { unsearched[box == BoxClient.mac ? "This Mac" : box] = failure.reason }
+            if case .failure(let failure) = answer { unsearched[BoxClient.isThisMac(box) ? "This Mac" : box] = failure.reason }
         }
         if unsearched != self.unsearched { self.unsearched = unsearched }
         return answers.values.compactMap { try? $0.get() }.flatMap(\.self)
@@ -711,7 +719,7 @@ final class Workspace {
             guard let self else { return nil }
             // (A subagent's has no row: as its model has it, which moves with its conversation.)
             let now = self.session(id)?.location.directory ?? self.models[id]?.session.location.directory ?? directory
-            return self.boxes?(RemoteFolder.machine(of: now) ?? BoxClient.mac)
+            return self.boxes?(Self.box(of: now))
         }
     }
 
@@ -812,7 +820,8 @@ final class Workspace {
     /// Adds a project folder; the folder as it's kept (see `folderPath`).
     @discardableResult
     func addFolder(_ directory: String) -> String {
-        let directory = folderPath(directory)
+        // (A folder on this Mac is its box's: attached in place, a folder there.)
+        let directory = Self.onThisMac(folderPath(directory))
         // Chats aren't a project, nor is a bot's own folder, nor a project's worktree (a session
         // started in one stays its project's).
         guard !folders.contains(directory), !Self.isChat(directory), !Self.isBotFolder(directory), !isWorktree(directory) else { return directory }
@@ -846,10 +855,10 @@ final class Workspace {
         // Its worktrees as this Mac knows them are its box's too (handed over, if they weren't), so
         // their sessions are archived there with the rest.
         guard await takeWorktrees(from: box) != nil else {
-            throw BoxRefusal(status: 503, message: box == BoxClient.mac ? "Kuvo Code’s background service on this Mac isn’t answering. Try again in a moment." : "\(box) isn’t answering. Try again in a moment.")
+            throw BoxRefusal(status: 503, message: BoxClient.isThisMac(box) ? "Kuvo Code’s background service on this Mac isn’t answering. Try again in a moment." : "\(box) isn’t answering. Try again in a moment.")
         }
         // Its worktrees removed before its box kept them, whose sessions this Mac still shows under it.
-        let removed = removedWorktrees.filter { $0.value == directory && Self.box(of: $0.key) == box }.keys.map(Self.onBox).sorted()
+        let removed = removedWorktrees.filter { $0.value == directory && Self.isOn($0.key, box) }.keys.map(Self.onBox).sorted()
         let body = try JSONSerialization.data(withJSONObject: ["folders": removed])
         let (status, data) = try await client.send("DELETE", "kuvo/projects?directory=" + Self.queryValue(Self.onBox(directory)), body: body)
         switch status {
@@ -962,7 +971,7 @@ final class Workspace {
     func readAutopilotHere(on id: String) async {
         guard autopilotHere[id] == nil, let box = boxes?(id) else { return }
         struct Info: Decodable { var features: [String]? }
-        let has = id == BoxClient.mac ? true : (try? await box.value(Info.self, "GET", "kuvo/info")).map { $0.features?.contains("autopilot") == true }
+        let has = BoxClient.hasEveryFeature(id) ? true : (try? await box.value(Info.self, "GET", "kuvo/info")).map { $0.features?.contains("autopilot") == true }
         if let has { autopilotHere[id] = has }
     }
 
@@ -1098,11 +1107,11 @@ final class Workspace {
     }
 
     /// A new worktree of the project's repository on a branch of its own, made by the box the
-    /// project's on, which keeps it (PROTOCOL.md, "Worktrees"). Returns the folder for the
-    /// session to run in.
+    /// project's on, which keeps it (PROTOCOL.md, "Worktrees"), its branch named with that
+    /// computer's branch prefix (Settings › Git). Returns the folder for the session to run in.
     private func makeWorktree(of directory: String) async throws -> String {
         let box = Self.box(of: directory)
-        let made: BoxWorktree = try await onBox(box, "POST", "kuvo/worktrees", ["project": Self.onBox(directory), "branchPrefix": GitPreferences.branchPrefix])
+        let made: BoxWorktree = try await onBox(box, "POST", "kuvo/worktrees", ["project": Self.onBox(directory)])
         let folder = Self.here(made.folder ?? made.root, on: box)
         worktrees[folder] = Worktree(project: directory, root: Self.here(made.root, on: box), branch: made.branch, base: made.base)
         saveWorktrees()
@@ -1187,7 +1196,7 @@ final class Workspace {
             guard refusal.status == 404 else { throw refusal }
         } catch {
             // Not reached at all: said plainly, not as the connection's own words.
-            throw GitFailure(message: "\(Self.box(of: tree.root) == BoxClient.mac ? "Kuvo Code’s background service on this Mac" : Self.box(of: tree.root)) didn’t answer, so the worktree of \(tree.branch) stays. Try again in a moment.")
+            throw GitFailure(message: "\(BoxClient.isThisMac(Self.box(of: tree.root)) ? "Kuvo Code’s background service on this Mac" : Self.box(of: tree.root)) didn’t answer, so the worktree of \(tree.branch) stays. Try again in a moment.")
         }
         for (folder, removed) in worktrees where removed.root == tree.root { removedWorktrees[folder] = removed.project }
         UserDefaults.standard.set(removedWorktrees, forKey: "removedWorktrees")
@@ -1205,11 +1214,18 @@ final class Workspace {
     /// what this Mac had stays.
     @discardableResult func takeWorktrees(from box: String, details: Bool = false) async -> [String: BoxWorktree]? {
         struct Listed: Decodable { var worktrees: [BoxWorktree]; var restorable: [RestorableWorktree]? }
+        // The box attached in place answers once a read, and isn't told of what changes here: an
+        // answer read before a change here since (a worktree made, removed or restored) would undo
+        // it, so it's left for the next read. What this Mac kept there is handed over until it's
+        // taken once; after that, one it doesn't list was removed there.
+        let attachedHere = box == SSHConnection.thisMac
+        let handsOver = !(attachedHere && worktreesHandedOver.contains(box))
+        let before = worktreesChanged
+        let changedHere = { attachedHere && self.worktreesChanged != before }
         guard let listed: Listed = try? await onBox(box, "GET", details ? "kuvo/worktrees" : "kuvo/worktrees?records=1", nil) else { return nil }
-        if box != BoxClient.mac || !followingWorktrees { takeRestorable(listed.restorable ?? [], from: box) }
+        if box != BoxClient.mac || !followingWorktrees, !changedHere() { takeRestorable(listed.restorable ?? [], from: box) }
         var records = listed.worktrees
-        let onIt = { (folder: String) in Self.box(of: folder) == box }
-        for (folder, tree) in worktrees where onIt(tree.root) {
+        for (folder, tree) in worktrees where handsOver && Self.isOn(tree.root, box) {
             let project = Self.onBox(tree.project), root = Self.onBox(tree.root), path = Self.onBox(folder)
             guard !records.contains(where: { $0.root == root }) else { continue }
             var record: [String: Any] = ["project": project, "root": root, "folder": path, "branch": tree.branch]
@@ -1221,17 +1237,35 @@ final class Workspace {
             } catch let refusal as BoxRefusal where refusal.status == 404 {
                 // Not there any more: it goes here too.
             } catch let refusal as BoxRefusal where refusal.status < 500 {
-                // Not one it takes (as kept here it doesn't make sense there): it stays here, as it was.
+                // Not one it takes (as kept here it doesn't make sense there): it goes here too, as
+                // one it doesn't have.
                 continue
             } catch {
                 // Not asked: kept as it was, for next time.
                 return nil
             }
         }
+        if attachedHere, handsOver { worktreesHandedOver.insert(box) }
         // While this Mac follows its own, only what it's told changes them: an answer read before
         // a change since would undo it.
-        if box != BoxClient.mac || !followingWorktrees { take(records, from: box) }
+        if box != BoxClient.mac || !followingWorktrees, !changedHere() { take(records, from: box) }
         return Dictionary(records.map { (Self.here($0.root, on: box), $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// The boxes attached in place that took what this Mac kept for them (`takeWorktrees`), this
+    /// connection.
+    @ObservationIgnored private var worktreesHandedOver: Set<String> = []
+
+    /// `box` connected (again): what this Mac kept there is handed over once more, as it's read.
+    func connecting(to box: String) {
+        worktreesHandedOver.remove(box)
+    }
+
+    /// Whether `folder` is on `box`, as it's named here. Attached in place, the box here is this
+    /// Mac's, but what the app's own box kept (named as this Mac's own folders) isn't that box's: it's
+    /// never handed to it, nor taken for gone when it doesn't list it.
+    private static func isOn(_ folder: String, _ box: String) -> Bool {
+        box == BoxClient.mac ? Self.box(of: folder) == box : RemoteFolder.machine(of: folder) == box
     }
 
     /// `records` as `box`'s worktrees, here, in place of what was known of them. One that's gone
@@ -1239,10 +1273,10 @@ final class Workspace {
     /// back is still its project's.
     private func take(_ records: [BoxWorktree], from box: String) {
         let roots = Set(records.map { Self.here($0.root, on: box) })
-        let gone = worktrees.filter { Self.box(of: $0.value.root) == box && !roots.contains($0.value.root) }
+        let gone = worktrees.filter { Self.isOn($0.value.root, box) && !roots.contains($0.value.root) }
         for (folder, tree) in gone where sessions.contains(where: { $0.location.directory == folder }) { removedWorktrees[folder] = tree.project }
         if !gone.isEmpty { UserDefaults.standard.set(removedWorktrees, forKey: "removedWorktrees") }
-        var mine = worktrees.filter { Self.box(of: $0.value.root) != box }
+        var mine = worktrees.filter { !Self.isOn($0.value.root, box) }
         for record in records {
             let tree = Worktree(project: Self.here(record.project, on: box), root: Self.here(record.root, on: box), branch: record.branch, base: record.base)
             mine[Self.here(record.folder ?? record.root, on: box)] = tree
@@ -1257,7 +1291,7 @@ final class Workspace {
 
     /// `box`'s worktrees that can come back, here, in place of what was known of them.
     private func takeRestorable(_ entries: [RestorableWorktree], from box: String) {
-        var mine = restorableWorktrees.filter { Self.box(of: $0.value.root) != box }
+        var mine = restorableWorktrees.filter { !Self.isOn($0.value.root, box) }
         for entry in entries {
             var here = entry
             (here.project, here.root, here.folder) = (Self.here(entry.project, on: box), Self.here(entry.root, on: box), Self.here(entry.folder, on: box))
@@ -1309,8 +1343,19 @@ final class Workspace {
     }
 
     /// This Mac's worktrees as its box keeps them, from now on: one made, renamed or removed for a
-    /// phone shows here as it happens.
-    func followWorktrees() async {
+    /// phone shows here as it happens. The box attached in place (`box`), which answers once a
+    /// read, is read again now and then instead, as slowly as a machine's things are.
+    func followWorktrees(on box: String = BoxClient.mac) async {
+        guard BoxClient.streams(box) else {
+            // (Read as it connected, with what this Mac kept handed over then, or now, if it couldn't
+            // be then: only read from then on.)
+            while !Task.isCancelled {
+                try? await Task.sleep(for: BoxClient.readAgainAfter)
+                guard !Task.isCancelled else { return }
+                await takeWorktrees(from: box)
+            }
+            return
+        }
         struct Listed: Decodable { var worktrees: [BoxWorktree]; var restorable: [RestorableWorktree]? }
         while !Task.isCancelled {
             if let client = boxes?(BoxClient.mac), await takeWorktrees(from: BoxClient.mac) != nil {
@@ -1372,7 +1417,7 @@ final class Workspace {
             }
             // The box restarted, or the machine went away: followed again in a moment, at once after a
             // stream that dropped. One from before it told this, only now and then.
-            try? await Task.sleep(for: .seconds(older ? 300 : heard || box == BoxClient.mac ? 2 : 30))
+            try? await Task.sleep(for: .seconds(older ? 300 : heard || BoxClient.streams(box) ? 2 : 30))
         }
         if background[box] != nil { background[box] = nil }
     }
@@ -1427,7 +1472,7 @@ final class Workspace {
     /// A request to `box`'s routes (`boxes`): its answer, or what it said when it said no
     /// (`BoxRefusal`).
     private func onBox<Answer: Decodable>(_ box: String, _ method: String, _ path: String, _ body: [String: Any]?) async throws -> Answer {
-        guard let client = boxes?(box) else { throw BoxRefusal(status: 503, message: box == BoxClient.mac ? "Kuvo Code’s background service on this Mac isn’t running." : "\(box) isn’t connected.") }
+        guard let client = boxes?(box) else { throw BoxRefusal(status: 503, message: BoxClient.isThisMac(box) ? "Kuvo Code’s background service on this Mac isn’t running." : "\(box) isn’t connected.") }
         let (status, data) = try await client.send(method, path, body: try body.map { try JSONSerialization.data(withJSONObject: $0) })
         guard (200..<300).contains(status) else { throw BoxRefusal(status: status, data: data) }
         return try JSONDecoder().decode(Answer.self, from: data)
@@ -1482,8 +1527,29 @@ final class Workspace {
     /// nil from a box from before).
     private struct BoxProjects: Decodable { var projects: [BoxProject]; var worktrees: [String: String]? }
 
-    /// The box a folder's on: a machine's id, or this Mac's.
-    static func box(of directory: String) -> String { RemoteFolder.machine(of: directory) ?? BoxClient.mac }
+    /// The box a folder's on: a machine's id, or this Mac's (`BoxClient.thisMac`: the app's own, or
+    /// the one attached in place).
+    static func box(of directory: String) -> String { RemoteFolder.machine(of: directory) ?? BoxClient.thisMac }
+
+    /// This Mac's box, then `machines` (without it, where it's one of them: attached in place).
+    static func thisMacThenMachines(_ machines: Set<String>) -> [String] {
+        [BoxClient.thisMac] + machines.sorted().filter { $0 != BoxClient.thisMac }
+    }
+
+    /// `path` on this Mac, as its box names it: as it is on the app's own box; on the one attached
+    /// in place, a folder there (as its sessions are kept). One on a machine already stays.
+    static func onThisMac(_ path: String) -> String {
+        guard BoxClient.thisMac != BoxClient.mac, RemoteFolder.machine(of: path) == nil else { return path }
+        return RemoteFolder.folder(path, on: BoxClient.thisMac)
+    }
+
+    /// Where this Mac's chats run: the app's own folder for them, or, attached in place, the box's,
+    /// as it names it (`attachedChats`); nil until it has.
+    var thisMacsChats: String? { BoxClient.thisMac == BoxClient.mac ? Self.chatsFolder : attachedChats }
+
+    /// The chats folder of the box attached in place, as its box names it (`kuvo/info`'s `chats`, a
+    /// folder there), read as the app attaches (`AppModel.readChatsHere`).
+    var attachedChats: String?
     /// A folder as its box names it, and as it's named here.
     private static func onBox(_ directory: String) -> String { RemoteFolder.parse(directory)?.path ?? directory }
     private static func here(_ path: String, on box: String) -> String { box == BoxClient.mac ? path : RemoteFolder.folder(path, on: box) }
@@ -1529,8 +1595,10 @@ final class Workspace {
     /// connected (its connection ends this, and it ends with the machine removed), from half a
     /// minute after it connects (they're read as it does, `refreshOnce`), and again that long
     /// after its stream ends; an older Kuvo Code there, which can't keep them yet, now and then.
-    func followProjects(on box: String = BoxClient.mac) async {
-        let onThisMac = box == BoxClient.mac
+    func followProjects(on box: String = BoxClient.thisMac) async {
+        // (The app's own box streams them; any other, the one attached in place too, answers once a
+        // read, so it's read now and then.)
+        let onThisMac = BoxClient.streams(box)
         var older = false
         while !Task.isCancelled, !isRemoved(box) {
             if !onThisMac {
@@ -2415,7 +2483,8 @@ final class Workspace {
 
     /// A machine you removed, or one of yours that isn't connected now: nothing is asked of it.
     private func isAway(_ box: String) -> Bool {
-        isRemoved(box) || box != BoxClient.mac && machines.contains(box) && !connectedMachines.contains(box)
+        // (This Mac's box, attached in place too, is reached with no connection: never away.)
+        isRemoved(box) || !BoxClient.isThisMac(box) && machines.contains(box) && !connectedMachines.contains(box)
     }
 
     func forget(_ machine: String, forGood: Bool = false) {
@@ -2618,7 +2687,9 @@ final class Workspace {
            let started = try? event.payload(as: EventPayload.ToolInputStarted.self), started.name.hasPrefix("kuvo-browser_browser_") {
             if let machine {
                 onMachineBrowsing?(machine, id)
-                Analytics.shared.trackOnce("browser_used", key: "agent.machine", ["by": "agent", "place": "machine"])
+                // (The box attached in place's browser runs on this Mac: counted as this Mac's.)
+                let place = BoxClient.isMachine(machine) ? "machine" : "mac"
+                Analytics.shared.trackOnce("browser_used", key: "agent." + place, ["by": "agent", "place": place])
             }
             if ["kuvo-browser_browser_sign_in", "kuvo-browser_browser_ask_code", "kuvo-browser_browser_ask_user"].contains(started.name) {
                 onBrowserAsk?(id, machine)
@@ -3059,7 +3130,7 @@ final class Workspace {
     }
 
     private func box(of request: PermissionRequest) -> String {
-        sessionMachines[request.sessionID] ?? session(request.sessionID).map { Self.box(of: $0.location.directory) } ?? BoxClient.mac
+        sessionMachines[request.sessionID] ?? session(request.sessionID).map { Self.box(of: $0.location.directory) } ?? BoxClient.thisMac
     }
 
     /// A permission that's yours: waiting on you, and told.

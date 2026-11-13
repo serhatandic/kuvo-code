@@ -69,6 +69,7 @@ async function engineWith(account, folders) {
       for (const resolve of engine.closing.splice(0)) resolve(closed);
       return response.writeHead(204).end();
     }
+    if (url.pathname === "/api/provider") return send(200, { data: [] });
     if (url.pathname === "/api/integration/github-copilot") return send(200, { data: { id: "github-copilot", connections: [{ id: "cred_copilot", method: "oauth" }] } });
     if (url.pathname.startsWith("/api/integration/")) return send(404, { message: "Integration not found" });
     if (url.pathname === "/api/session/active") return send(200, { data: Object.fromEntries(Object.keys(engine.active).map(id => [id, { type: "running" }])) });

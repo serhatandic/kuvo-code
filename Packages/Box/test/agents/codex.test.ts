@@ -1,7 +1,7 @@
 // Codex's thread against a fake `codex app-server`: what Codex 0.16x sends, shown, not lost.
 
 import "../safety"
-import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { afterAll, afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test"
 import { chmodSync, linkSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
@@ -14,12 +14,19 @@ import { Auto } from "../../src/agents/auto"
 import { watchFolder } from "../../src/shared/watch"
 import { canFence, realFence } from "./support/fence"
 import { callServer, computerServers, KEYS } from "./support/servers"
+import { forgetServers } from "../../src/agents/servers"
 import { subagentEngine } from "./support/subagents"
 import { fencePolicy } from "../../src/link/fence/policy"
 import type { Roster } from "../../src/agents/roster"
 import { Sessions, timing } from "../../src/agents/sessions"
 import { Store } from "../../src/agents/store"
 import type { Message, PermissionRule } from "../../src/agents/wire"
+
+// Each test starts a fake Codex in a Bun process of its own and waits on it: about 0.2–0.8 s on a
+// quiet Mac, and 4.6 s in 32 copies at once on this 12-core Mac; a full box suite at load 23 saw the
+// Approve All test take 12.9 s, past both Bun's 5 s and the wait's 10 s. So a busy machine gets as
+// long as the work takes, not 5 s.
+setDefaultTimeout(30_000)
 
 // By its real place (`/var` is `/private/var` on a Mac): the fake Codex knows the session's own by its folder.
 const base = realpathSync(mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-codex-test-")))
@@ -348,7 +355,10 @@ afterEach(() => {
   codex?.shutdown()
 })
 
-async function until(condition: () => boolean, ms = 10_000) {
+/** What `condition` says, looked at every 10 ms: a busy Mac's fake Codex can take over 10 s to start
+ * and answer (the Approve All test took 12.9 s in a full box suite at load 23). 25 s is under the
+ * test's 30 s, so a wait that gives up says so itself rather than at the test's limit. */
+async function until(condition: () => boolean, ms = 25_000) {
   const start = Date.now()
   while (!condition()) {
     if (Date.now() - start > ms) throw new Error("timed out")
@@ -1679,6 +1689,29 @@ describe("Codex and the computer's MCP servers", () => {
       for (const key of Object.values(KEYS)) expect(text).not.toContain(key)
       expect(await callServer({ url: given.files.url, headers: given.files.http_headers })).toBe(`key:${KEYS.shared}`)
       expect(await callServer({ url: given.tracker.url, headers: given.tracker.http_headers })).toBe(`auth:Bearer ${KEYS.tracker},key:none,at:/tracker`)
+    } finally {
+      servers.stop()
+    }
+  })
+
+  test("one whose sign-in is turned down (taken back) still connects, its call saying to sign in again; signed in again, the thread's next message is given it afresh, and it reaches it", async () => {
+    const servers = computerServers(root)
+    servers.refusing = "start"
+    await servers.serve()
+    try {
+      const id = await run([["item/completed", { item: { type: "agentMessage", id: "m1", text: "Done." } }]])
+      const tracker = (config: Record<string, any>) => ({ url: config["mcp_servers.tracker"].url as string, headers: config["mcp_servers.tracker"].http_headers as Record<string, string> })
+      const first = tracker(sent().find((message) => message.method === "thread/start").params.config)
+      expect(await callServer(first)).toMatch(/^The tracker server turned down its sign-in.*sign in to it again in Kuvo Code \(Settings › Integrations/)
+      servers.signedInAgain = true
+      forgetServers()
+      sessions.prompt(id, { id: "msg_codex_test_141", text: "again", files: [], delivery: "steer" })
+      await until(() => sessions.messages(id).filter((message) => message.type === "idle").length === 2)
+      const resumed = sent().filter((message) => message.method === "thread/resume")
+      expect(resumed).toHaveLength(1)
+      const again = tracker(resumed[0].params.config)
+      expect(again.url).not.toBe(first.url)
+      expect(await callServer(again)).toBe(`auth:Bearer ${KEYS.again},key:none,at:/tracker`)
     } finally {
       servers.stop()
     }

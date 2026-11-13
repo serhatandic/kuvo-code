@@ -1,6 +1,6 @@
 // Who `&` can name in a message here (`kuvo/named`), as a Mac's composer offers them.
 
-import { keepOwn, ownAgents, ownAsLast } from "../peers/agents";
+import { ownAgentsNow, ownAsLast } from "../peers/agents";
 import { readPeerAgents } from "../peers/directory";
 import { movedOf, peersOf } from "../peers/known";
 import { namedAgents } from "../peers/naming";
@@ -15,8 +15,7 @@ export async function* namedRoute(context: RouteContext): AsyncGenerator<AnswerP
   if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
   const link = readLink();
   // Its own as last worked out while its engine can't say (starting), rather than none.
-  const fresh = await ownAgents(readEngine, link?.id).catch(() => null);
-  if (fresh) keepOwn(fresh, link?.id ?? null);
+  const fresh = await ownAgentsNow(readEngine, link?.id ?? null).catch(() => null);
   const own = fresh ?? ownAsLast(link?.id ?? null);
   return yield* json(200, { agents: namedAgents(own, peersOf(link), readPeerAgents(), movedOf(link)) } satisfies Named);
 }

@@ -1095,7 +1095,8 @@ struct ArtifactDetail: View {
                 }
                 // The file: in the panel's Files (a machine's from its box), this Mac's in Finder, a
                 // machine's saved to this Mac. One that's gone opens as the record keeps it.
-                let onMac = things.box.box == BoxClient.mac
+                // (This Mac's box, attached in place too, keeps them on this disk.)
+                let onMac = BoxClient.isThisMac(things.box.box)
                 let known = onMac || app.machines.list.contains { $0.id == things.box.box }
                 let there = artifact.gone == nil && (!onMac || FileManager.default.fileExists(atPath: artifact.path))
                 let kept = version?.kept == true

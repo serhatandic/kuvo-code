@@ -81,13 +81,19 @@ const namespaces = process.platform === "linux" && (() => {
   try { return ownNamespace(own) !== null } finally { rmSync(own, { recursive: true, force: true }) }
 })()
 
-test.skipIf(!canFence || !namespaces)("commands get a namespace of their own on the minute's check once the machine lets them, not before", () => {
+test.skipIf(!canFence || !namespaces)("commands get a namespace of their own on the minute's check once the machine lets them, not before, and keep theirs when a try finds none but it still works", () => {
   const said = inBox(`
     const { spawnSync } = await import("node:child_process");
     // Whether a command runs in a namespace of its own: its user namespace isn't the box's.
     const work = path.join(path.dirname(folder), "..", "..", "work");
     fs.mkdirSync(work, { recursive: true });
     const ownNamespace = () => spawnSync(fence.fenceFiles.launcher, ["-c", "readlink /proc/self/ns/user"], { cwd: work, encoding: "utf8", env: { PATH: "/usr/bin:/bin", HOME: process.env.HOME, KUVO_FENCE_WORK: work } }).stdout.trim() !== fs.readlinkSync("/proc/self/ns/user");
+    // A try that found none while commands have theirs (as one that fails only because the machine
+    // is busy): the check goes through it, finds it still works, and it's kept.
+    fence.setUpFence(null);
+    said.kept = ownNamespace();
+    // Set up without one (the machine didn't let them have one then).
+    fs.writeFileSync(path.join(folder, "namespace"), "-");
     fence.setUpFence(null);
     said.atFirst = ownNamespace();
     for (let each = 0; each < 5; each++) round();
@@ -95,5 +101,5 @@ test.skipIf(!canFence || !namespaces)("commands get a namespace of their own on 
     // The sixth round's check runs while the box goes on: its answer, once it's set up again.
     await round();
     said.after = ownNamespace();`)
-  expect(said).toEqual({ atFirst: false, before: false, after: true })
+  expect(said).toEqual({ kept: true, atFirst: false, before: false, after: true })
 })

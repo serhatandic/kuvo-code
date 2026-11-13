@@ -224,4 +224,14 @@ final class HostLimitsTests: XCTestCase {
         let snapshot = await provider.refresh()
         XCTAssertEqual(snapshot.warning, HostLimits.waitingForClaude)
     }
+
+    /// #210: a row whose computers aren't heard from says "As of …" however recent its reading:
+    /// never shown as live.
+    func testARowWhoseComputersAreAwayIsShownAsOfWhenItWasRead() {
+        let now = Date()
+        var row = HostLimitRow(id: "claude#a7", providerID: "claude", name: "Claude · Athas", meters: [HostLimitRow.Meter(title: "Session", fraction: 0.2)], readAt: now.addingTimeInterval(-120), isLocal: false, place: "hetzner")
+        XCTAssertNil(HostLimitData.staleness(row, now: now))
+        row.isAway = true
+        XCTAssertEqual(HostLimitData.staleness(row, now: now)?.label.hasPrefix("As of "), true)
+    }
 }

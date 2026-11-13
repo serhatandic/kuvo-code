@@ -6,10 +6,12 @@ import os
 
 private let log = Logger(subsystem: "run.kuvo.code", category: "usage")
 
-/// Each box's plan limits, as its agents bridge states them (`api/kuvo/limits`, PROTOCOL.md "Plan
-/// limits"): this Mac's and each machine's, one row per account signed in to Kuvo Code there, drawn
-/// by the menu bar's usage panel in place of its own rows for the services this Mac's box reads
-/// (`HostLimits`). The box reads them; this only follows what it says and names the rows.
+/// Your plans' limits, as this Mac's box lists them (`api/kuvo/limits`'s `rows`, PROTOCOL.md "Plan
+/// limits"): every account signed in to Kuvo Code on any of your computers, one row each, drawn by
+/// the menu bar's usage panel in place of its own rows for the services this Mac's box reads
+/// (`HostLimits`). The boxes read and share them; this only follows what this Mac's box says and
+/// names the rows (KuvoClient's `UsageListing.listing`, which merges each box's own, as before, only
+/// while one is from before every box listed all of them, #210, or isn't heard from by this Mac's).
 @MainActor
 final class BoxPlanLimits {
     /// What each box said last, by machine ("" for this Mac's).
@@ -81,9 +83,20 @@ final class BoxPlanLimits {
         }
     }
 
-    /// Asks every box to read them again now (a bar's Refresh): each reads what its makers allow.
+    /// Every account across your computers, one row each: this Mac's box's list, as it is, when it
+    /// has every computer this Mac reaches (this Mac's first, then each machine's by name).
+    // COMPAT(0.7 limits-merge): each box is still asked, so one from before rows is merged in. Goes 3 months after 0.8.0.
+    private var listing: UsageListing.Listing {
+        let keys = boxes.keys.sorted { a, b in a.isEmpty != b.isEmpty ? a.isEmpty : a.localizedStandardCompare(b) == .orderedAscending }
+        return UsageListing.listing(keys.compactMap { key in boxes[key].map { UsageListing.Answer(key: key, name: key.isEmpty ? nil : key, limits: $0) } })
+    }
+
+    /// Asks the box whose list the panel shows to read them again now (a bar's Refresh), which
+    /// reads what its makers allow and asks the computer each account is on for those it doesn't
+    /// read; every box, while their lists are merged here.
     func refreshAll() {
-        for (key, api) in apis {
+        let lister = listing.lister
+        for (key, api) in apis where lister == nil || key == lister {
             let number = next(key)
             Task { [weak self] in
                 let limits = try? await api.client.send(try api.client.request("POST", BoxLimits.bridgeRefreshPath), as: DataEnvelope<BoxLimits>.self, patience: .seconds(60)).data
@@ -122,12 +135,7 @@ final class BoxPlanLimits {
             }
         }
         let now = Date.now
-        // This Mac's first, then each machine's by name: one row per account across them (KuvoClient's
-        // `UsageListing`), its numbers the newest any of them read.
-        let keys = boxes.keys.sorted { a, b in a.isEmpty != b.isEmpty ? a.isEmpty : a.localizedStandardCompare(b) == .orderedAscending }
-        let listed = UsageListing.accounts(keys.map { key in
-            UsageListing.Box(key: key, name: key.isEmpty ? nil : key, accounts: boxes[key]?.accounts ?? [])
-        })
+        let listed = listing.accounts
         let mine = boxes[""]?.accounts ?? []
         let own = Set(mine.filter { Self.isOwnLogin($0, among: mine) }.map(\.provider))
         let rows = listed.map { listed in
@@ -165,13 +173,14 @@ final class BoxPlanLimits {
             isLocal: listed.sources.contains { $0.box.isEmpty },
             isOwnLogin: own,
             // (The panel adds it beside a bar of its own of that name.)
-            place: listed.sources.contains { $0.box.isEmpty } ? nil : Self.places(listed.sources)
+            place: listed.sources.contains { $0.box.isEmpty } ? nil : Self.places(listed.sources),
+            isAway: account.away
         )
     }
 
     /// The machines a row is from, by name ("hetzner, lokum").
     static func places(_ sources: [UsageListing.Account.Source]) -> String {
         var seen = Set<String>()
-        return sources.map(\.box).filter { seen.insert($0).inserted }.joined(separator: ", ")
+        return sources.map { $0.name ?? $0.box }.filter { seen.insert($0).inserted }.joined(separator: ", ")
     }
 }

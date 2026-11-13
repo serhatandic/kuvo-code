@@ -1,6 +1,6 @@
 // What only this Mac's box answers, through its app (PhoneLink), or by itself while the app is closed:
 // its own features, its machines, the machines your phones reach directly, and the usage panel's
-// numbers. (Its other own routes, `kuvo/mac` and `kuvo/claude-code`, have no scenario asking them yet.)
+// numbers. (Its other own route, `kuvo/mac`, has no scenario asking it yet.)
 
 import { FEATURES, type Feature } from "../features";
 import { any, bool, type Infer, list, literal, NOTHING, object, type RouteShape, string } from "../shape";
@@ -10,7 +10,6 @@ import { any, bool, type Infer, list, literal, NOTHING, object, type RouteShape,
  * as `FEATURES` are. */
 export const MAC_FEATURES = [
   "accounts.ended",
-  "claude-code",
   "hosts",
   "mac",
   "machines",

@@ -10,6 +10,7 @@ import { AcpThread } from "../../src/agents/acp"
 import { AntigravityFollower } from "../../src/agents/agents/antigravity"
 import { model, type Agent, type RunInput, type RunResult, type Thread, type TurnHooks } from "../../src/agents/agent"
 import { Auto } from "../../src/agents/auto"
+import { EngineLink } from "../../src/agents/engine"
 import { subscribe } from "../../src/agents/events"
 import type { Roster } from "../../src/agents/roster"
 import { Sessions, shellProcesses, timing } from "../../src/agents/sessions"
@@ -77,6 +78,8 @@ class FakeAgent implements Agent {
 }
 
 class FakeThread implements Thread {
+  /** Its process started outside the box's sandbox, and still runs. */
+  outside?: boolean
   interrupted = 0
   closed = false
   turnedAway = 0
@@ -421,6 +424,55 @@ describe("permissions", () => {
     send(id, "go")
     await settled(id, 1)
     expect(seen).toEqual([false, "reject", "once"])
+  })
+
+  // The box takes its sandbox away after a failed check only once it has made every conversation's
+  // rules for it being off; a bridge not running then, or started again before its round, still
+  // has a conversation in Auto ask before its commands while the sandbox isn't on.
+  test("a conversation in Auto asks before its commands while the box's sandbox is off, goes on its own once it's on again, and asks while its agent runs outside it", async () => {
+    const fence = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-fence-off-")))
+    const was = process.env.KUVO_FENCE
+    process.env.KUVO_FENCE = fence
+    try {
+      const seen: (boolean | string)[] = []
+      a.script = async (_input, _turn, hooks) => {
+        seen.push(hooks.approvesAll())
+        // (What an agent checks before its own settings decide, as Claude Code's PreToolUse does.)
+        seen.push(hooks.check({ action: "shell", resources: ["ls"] }) ?? "its own")
+        seen.push(await hooks.permission({ action: "shell", resources: ["ls"] }))
+        seen.push(await hooks.permission({ action: "edit", resources: ["notes.md"] }))
+        return { outcome: "succeeded" }
+      }
+      const id = create()
+      sessions.update(id, { metadata: { kuvo: { approval: "auto", applied: "auto" } } })
+      send(id, "go")
+      await until(() => sessions.permissions(id).length === 1)
+      expect(sessions.permissions(id)[0].action).toBe("shell")
+      sessions.replyPermission(id, sessions.permissions(id)[0].id, "once")
+      await settled(id, 1)
+      expect(seen).toEqual([false, "ask", "once", "once"])
+      // On again: it goes on its own.
+      writeFileSync(join(fence, "on"), "on")
+      seen.length = 0
+      send(id, "again")
+      await settled(id, 2)
+      expect(seen).toEqual([true, "its own", "once", "once"])
+      // On, but its agent's process started while it wasn't, and still runs outside it: it asks.
+      a.script = async (_input, _turn, hooks, thread) => {
+        thread.outside = true
+        seen.push(hooks.approvesAll())
+        seen.push(hooks.check({ action: "shell", resources: ["ls"] }) ?? "its own")
+        return { outcome: "succeeded" }
+      }
+      seen.length = 0
+      send(id, "and again")
+      await settled(id, 3)
+      expect(seen).toEqual([false, "ask"])
+    } finally {
+      if (was === undefined) delete process.env.KUVO_FENCE
+      else process.env.KUVO_FENCE = was
+      rmSync(fence, { recursive: true, force: true })
+    }
   })
 
   test("Approve All with a rule of a kind a newer engine set (one this app doesn't know) holds back what it matches, as Don't Allow does", async () => {
@@ -842,6 +894,151 @@ describe("asks and conversations", () => {
       sessions.replyPermission(id, sessions.permissions(id)[0].id, "reject")
       await settled(id, 1)
       expect(seen).toEqual([true, "once", "reject"])
+    }
+  })
+
+  /** A stand-in engine listing `agents` (the box's plugin's rules given to them once `plugins` is
+   * true), whose plugins are set up once it's asked for its providers (they wait for them) when
+   * `setsUp`; with how often each was asked for. */
+  function engineListing(agents: (plugins: boolean) => unknown[], setsUp = true) {
+    let plugins = false
+    const asked = { providers: 0, agents: 0 }
+    const engine = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const path = new URL(request.url).pathname
+        if (path === "/api/provider") {
+          asked.providers++
+          plugins = setsUp
+          return Response.json({ data: [] })
+        }
+        if (path === "/api/agent") {
+          asked.agents++
+          return Response.json({ data: agents(plugins) })
+        }
+        return new Response("not here", { status: 404 })
+      },
+    })
+    const link = new EngineLink()
+    link.configure(`http://127.0.0.1:${engine.port}`, "pw")
+    const agentsHere = new Map([a, b].map((agent) => [agent.providerID, agent]))
+    sessions.closeAll()
+    sessions = new Sessions(store, { find: (provider: string | undefined) => (provider ? agentsHere.get(provider) : undefined) } as unknown as Roster, auto, undefined, async () => [], (name, directory) => link.agent(name, directory))
+    return {
+      link,
+      asked,
+      stop() {
+        link.configure(undefined, undefined)
+        engine.stop(true)
+      },
+    }
+  }
+
+  // The rules the box's plugin gives an agent (engine/defaults.ts): its ask outside the project,
+  // then what's kept for it open.
+  const pluginRules = [
+    { action: "external_directory", resource: "*", effect: "ask" },
+    { action: "external_directory", resource: "/box/attachments/*", effect: "allow" },
+    { action: "external_directory", resource: "/box/data/opencode/tool-output/*", effect: "allow" },
+  ]
+
+  test("an engine that lists its agents before its plugins are set up (2.2.7, in a folder it just opened) doesn't let a coding agent work outside the project without asking", async () => {
+    // Build as the engine lists it before the box's plugin is set up (your rules only: one that
+    // refuses reading a secrets file), and after.
+    const early = [{ action: "*", resource: "*", effect: "allow" }, { action: "read", resource: "/tmp/project/secrets/*", effect: "deny" }]
+    // Its plugins set up once it's asked for its providers, or never.
+    for (const setsUp of [true, false]) {
+      const engine = engineListing((plugins) => [{ id: "build", mode: "primary", permissions: plugins ? [...early, ...pluginRules] : early }], setsUp)
+      try {
+        const seen: unknown[] = []
+        a.script = async (_input, turn, hooks) => {
+          seen.push(await hooks.permission({ action: "read", resources: ["/home/me/.ssh/id_ed25519"] }))
+          seen.push(await hooks.permission({ action: "read", resources: ["/tmp/project/secrets/key"] }))
+          seen.push(await hooks.permission({ action: "read", resources: ["/box/attachments/ses_one/photo.png"] }))
+          turn.startStep()
+          turn.endStep()
+          return { outcome: "succeeded" }
+        }
+        const id = create()
+        send(id, "read the keys")
+        await until(() => sessions.permissions(id).length === 1)
+        expect(sessions.permissions(id)[0]).toMatchObject({ action: "external_directory", resources: ["/home/me/.ssh/id_ed25519"] })
+        sessions.replyPermission(id, sessions.permissions(id)[0].id, "reject")
+        // Your rule holds either way; what's kept for it is open once the plugin's rules are in, and
+        // asked about until then.
+        if (!setsUp) {
+          await until(() => sessions.permissions(id).length === 1 && sessions.permissions(id)[0].resources[0] === "/box/attachments/ses_one/photo.png")
+          sessions.replyPermission(id, sessions.permissions(id)[0].id, "once")
+        }
+        await settled(id, 1)
+        expect(seen).toEqual(["reject", "reject", "once"])
+      } finally {
+        engine.stop()
+      }
+    }
+  })
+
+  test("an engine without the plugin's rules (its plugin failed, or slow to set up) still has your own rules about folders outside win: the ask goes before them", async () => {
+    const shared = { action: "external_directory", resource: "/home/me/shared/*", effect: "allow" }
+    const keptOut = { action: "external_directory", resource: "/home/me/kept-out/*", effect: "deny" }
+    const allowAll = { action: "*", resource: "*", effect: "allow" }
+    // Your Settings › Permissions folders, then your "Work outside the project: Allow".
+    for (const yours of [[shared, keptOut], [{ action: "external_directory", resource: "*", effect: "allow" }]]) {
+      const engine = engineListing(() => [{ id: "build", mode: "primary", permissions: [allowAll, ...yours] }], false)
+      try {
+        const seen: unknown[] = []
+        a.script = async (_input, turn, hooks) => {
+          seen.push(await hooks.permission({ action: "read", resources: ["/home/me/shared/notes.md"] }))
+          seen.push(await hooks.permission({ action: "read", resources: ["/home/me/kept-out/key"] }))
+          seen.push(await hooks.permission({ action: "read", resources: ["/home/me/.ssh/id_ed25519"] }))
+          turn.startStep()
+          turn.endStep()
+          return { outcome: "succeeded" }
+        }
+        const id = create()
+        send(id, "read them")
+        if (yours.length === 2) {
+          // Only what no rule of yours says asks.
+          await until(() => sessions.permissions(id).length === 1)
+          expect(sessions.permissions(id)[0]).toMatchObject({ action: "external_directory", resources: ["/home/me/.ssh/id_ed25519"] })
+          sessions.replyPermission(id, sessions.permissions(id)[0].id, "reject")
+          await settled(id, 1)
+          expect(seen).toEqual(["once", "reject", "reject"])
+        } else {
+          await settled(id, 1)
+          expect(seen).toEqual(["once", "once", "once"])
+          expect(sessions.permissions(id)).toEqual([])
+        }
+      } finally {
+        engine.stop()
+      }
+    }
+  })
+
+  test("once the engine's plugins are set up, your own Allow outside the project and an agent of yours from Settings › Agents work as on the engine, with its agents read once", async () => {
+    const yours = { action: "external_directory", resource: "*", effect: "allow" }
+    const engine = engineListing((plugins) => [
+      // (Your settings' rules come after the plugin's; an agent of yours doesn't get them.)
+      { id: "build", mode: "primary", permissions: [{ action: "*", resource: "*", effect: "allow" }, ...(plugins ? pluginRules : []), yours] },
+      { id: "notes", mode: "primary", permissions: [{ action: "*", resource: "*", effect: "allow" }] },
+    ])
+    try {
+      const seen: unknown[] = []
+      a.script = async (_input, turn, hooks) => {
+        seen.push(await hooks.permission({ action: "read", resources: ["/home/me/notes/today.md"] }))
+        turn.startStep()
+        turn.endStep()
+        return { outcome: "succeeded" }
+      }
+      const id = create()
+      send(id, "read my notes")
+      await settled(id, 1)
+      expect(seen).toEqual(["once"])
+      expect(sessions.permissions(id)).toEqual([])
+      expect((await engine.link.agent("notes", "/tmp/project"))?.permissions).toEqual([{ action: "*", resource: "*", effect: "allow" }])
+      expect(engine.asked).toEqual({ providers: 1, agents: 1 })
+    } finally {
+      engine.stop()
     }
   })
 
