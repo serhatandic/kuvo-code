@@ -14,7 +14,7 @@
 import { randomBytes } from "node:crypto"
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
-import { identityOf, type LimitedAccount, type Limits, type ResetOutcome } from "./limits"
+import type { Limits, ResetOutcome } from "./limits"
 import type { LimitsDirectory } from "./limits-peers"
 import type { LimitRow } from "./limits-rows"
 
@@ -179,8 +179,26 @@ export class LimitResets {
     const before = this.seen.get(provider)
     if (before === live) return
     this.seen.set(provider, live)
-    if (before && this.allowed.get(before)?.on) this.allowed.set(before, { on: false, at: this.now() })
     this.save()
+    // (Decided here, as any decision is: stamped and told your other computers.)
+    if (before && this.allowed.get(before)?.on) this.decideHere(before, false)
+  }
+
+  /**
+   * A decision made here: stamped after any this box knows of (another computer's clock may be
+   * ahead of this one's), so it's always kept here; and told to every computer of yours, as mail
+   * that's kept until it's there.
+   */
+  private decideHere(rowID: string, on: boolean) {
+    const at = Math.max(this.now(), (this.allowed.get(rowID)?.at ?? 0) + 1)
+    this.decide(rowID, on, at)
+    for (const box of this.yours()) this.transport?.send(box.key, { kind: "reset", at, always: { row: rowID, on, at } }, true)
+  }
+
+  /** Your other computers (never a box a peer only vouches for). */
+  private yours() {
+    const own = this.directory?.own()?.key
+    return (this.directory?.peerBoxes() ?? []).filter((box) => box.key && box.key !== own && this.directory?.isPeer?.(box.key) === true)
   }
 
   /**
@@ -197,29 +215,22 @@ export class LimitResets {
   }
 
   /**
-   * Agents may (or may not) use a row's resets without asking: kept with its account on the box
-   * whose sign-in spends them (here, or told to that peer). `provider`: an account here, as
-   * Settings › Accounts names it.
+   * Agents may (or may not) use a row's resets without asking. Kept here as decided now, after any
+   * decision this box knows of, and told to every computer of yours: a computer that has heard it
+   * keeps it unless a later decision comes; one that decided otherwise before hearing this one
+   * keeps whichever is stamped later (their clocks may differ by as much as they're apart).
+   * `provider`: an account here, as Settings › Accounts names it.
    */
-  setAlways(given: { row?: string; provider?: string }, on: boolean, tell = true): ResetRefusal | null {
+  setAlways(given: { row?: string; provider?: string }, on: boolean): ResetRefusal | null {
     const ownProvider = given.provider ?? (given.row ? this.limits.accountOf(given.row)?.provider : undefined)
     // The account, by who it is: never a slot another account may be signed in to later.
     const rowID = given.row ?? (given.provider ? this.limits.accountRow(given.provider) : undefined)
     if (!rowID) return { status: 404, message: "No account of yours by that name has resets." }
     if (!rowID.includes("#")) return { status: 409, message: "This account doesn't say who it is yet, so Always Allow can't be kept for it." }
     const ownCan = ownProvider !== undefined && !!this.limits.account(ownProvider)?.limits.reset && this.limits.liveRow(ownProvider) === rowID
-    // Every other computer of yours keeps it too (told as mail that's kept until it's there): it's
-    // the account's, and one that hears every decision stamps its own after them, whatever its
-    // clock says.
-    const own = this.directory?.own()?.key
-    const others = tell ? (this.directory?.peerBoxes() ?? []).filter((box) => box.key && box.key !== own && this.directory?.isPeer?.(box.key) === true) : []
-    if (!ownCan && !others.length) return { status: 404, message: "No computer of yours has this account's sign-in." }
-    // Kept here as decided now, after any decision this box knows of (another computer's clock may
-    // be ahead of this one's): an older decision told later doesn't undo it. And told.
-    const at = Math.max(this.now(), (this.allowed.get(rowID)?.at ?? 0) + 1)
+    if (!ownCan && !this.yours().length) return { status: 404, message: "No computer of yours has this account's sign-in." }
     if (ownCan) this.saw(ownProvider!, rowID)
-    if (!this.decide(rowID, on, at)) return { status: 409, message: "A later decision for this account is kept: look again." }
-    for (const box of others) this.transport?.send(box.key, { kind: "reset", at, always: { row: rowID, on, at } }, true)
+    this.decideHere(rowID, on)
     return null
   }
 
@@ -302,6 +313,8 @@ export class LimitResets {
   private async attach(id: string, rowID: string, given: { via?: string; provider?: string; by?: string; unasked?: boolean }): Promise<Result> {
     const join = (spend: Spend) => {
       spend.also = [...new Set([...(spend.also ?? []), id])].slice(-20)
+      // Confirmed by the user now: theirs, not only an agent's (the same request, nothing more spent).
+      if (!given.unasked) delete spend.unasked
       this.save()
     }
     const open = this.open(rowID, given.via)
@@ -359,6 +372,11 @@ export class LimitResets {
     const id = `${from}:${ask.id}`
     const known = this.spends.find((each) => each.id === id || each.also?.includes(id))
     const unasked = ask.unasked === true
+    // (Asked again as confirmed by the user, where an agent asked it first: the user's now.)
+    if (known && !unasked && known.unasked) {
+      delete known.unasked
+      this.save()
+    }
     const run = known ? (known.state === "done" ? this.here(known.id, ask.row, known.provider, by) : this.rerun(known, ask.row, { by })) : this.attach(id, ask.row, { by, unasked })
     void run.then((result) => {
       this.transport?.send(from, { kind: "reset", at: this.now(), answer: { id: ask.id, outcome: result.outcome, ...(result.until ? { until: result.until } : {}), ...(result.already ? { already: true as const } : {}), ...(result.open || OPEN.has(result.outcome) ? { open: true as const } : {}), ...(result.message ? { message: result.message.slice(0, 300) } : {}) } }, false)
@@ -452,12 +470,19 @@ export class LimitResets {
     // token's own answer where its maker gives one): another account signed in since never pays for
     // this one's reset, and Always Allow for it goes.
     if (rowID.includes("#")) {
-      const live = await this.spender(account)
+      const live = this.limits.liveRow(account.provider)
       if (live === undefined) return stopped("not-now")
       if (live !== rowID) {
+        // (Signed in to another since: what was allowed for this one isn't any more.)
         this.saw(account.provider, live)
-        if (this.allowed.get(rowID)?.on) this.decide(rowID, false, Math.max(this.now(), (this.allowed.get(rowID)?.at ?? 0) + 1))
         return stopped("no-reset")
+      }
+      // Where the sign-in's own files can lag (Claude's), its maker is asked too. Nothing of what's
+      // allowed changes on that: whichever of the two lags, the newly signed-in account's stays.
+      if (account.limits.spender) {
+        const same = await account.limits.spender().catch(() => undefined)
+        if (same === undefined) return stopped("not-now")
+        if (!same) return stopped("no-reset")
       }
     }
     const kept = spend
@@ -486,13 +511,6 @@ export class LimitResets {
     return result
   }
 
-
-  /** Who the account a reset would be spent from is, right now: as its sign-in's own maker says where it can (`spender`), else as its sign-in says. */
-  private async spender(account: LimitedAccount): Promise<string | undefined> {
-    if (!account.limits.spender) return this.limits.liveRow(account.provider)
-    const raw = await account.limits.spender().catch(() => undefined)
-    return raw ? `${account.service}#${identityOf(raw)}` : undefined
-  }
 
   private keep(spend: Spend) {
     this.spends.push(spend)

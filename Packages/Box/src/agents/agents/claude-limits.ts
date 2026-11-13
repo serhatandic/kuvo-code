@@ -318,10 +318,20 @@ export async function tokenAccount(signIn: ClaudeSignIn, version: string | undef
     const body = (await response.json()) as any
     const account = typeof body?.account?.uuid === "string" ? body.account.uuid.trim().toLowerCase() : ""
     const organization = typeof body?.organization?.uuid === "string" ? body.organization.uuid.trim().toLowerCase() : ""
-    return account && organization ? `anthropic:${account}|${organization}` : undefined
+    return account ? `anthropic:${account}|${organization}` : undefined
   } catch {
     return undefined
   }
+}
+
+/**
+ * Whether two of `claudeIdentity`'s forms are one account: the same account, and the same
+ * organization where both say one (Claude Code's record of a sign-in may leave it out).
+ */
+export function sameClaudeAccount(a: string, b: string): boolean {
+  const [accountA, organizationA = ""] = a.replace(/^anthropic:/, "").split("|")
+  const [accountB, organizationB = ""] = b.replace(/^anthropic:/, "").split("|")
+  return !!accountA && accountA === accountB && (!organizationA || !organizationB || organizationA === organizationB)
 }
 
 /** The organization a sign-in claims against: as Claude Code keeps it beside the sign-in, else as Anthropic's profile says. */

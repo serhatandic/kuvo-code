@@ -10,7 +10,7 @@
 import "../safety"
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ClaudeAgent } from "../../src/agents/agents/claude"
@@ -980,6 +980,119 @@ describe("the fourth review's cases", () => {
       const offer = await post(box.limits, { row: id })
       expect((await post(box.limits, { row: id, confirm: offer.body.data.confirm })).body.data.outcome).toBe("no-reset")
       expect(makers.claims).toEqual([])
+    } finally {
+      box.stop()
+    }
+  })
+})
+
+describe("the fifth review's cases", () => {
+  /** This Mac and hetzner (the same Claude account), on the relay. */
+  async function macAndHetzner(peerWait = 20) {
+    const relay = new Map<string, Box>()
+    const macFolder = mkdtempSync(join(base, "mac-5-"))
+    const claudeMac = macClaude(macFolder)
+    const mac = new Box("key-mac", "MacBook Pro", () => agentAccounts([claudeMac]), macFolder, relay, peerWait)
+    const hetznerFolder = mkdtempSync(join(base, "hetzner-5-"))
+    const claudeLinux = linuxClaude(hetznerFolder)
+    const hetzner = new Box("key-hetzner", "hetzner", () => agentAccounts([claudeLinux]), hetznerFolder, relay)
+    await mac.meet([hetzner])
+    await hetzner.meet([mac])
+    await mac.limits.tick()
+    claudeMac.limits.heard!({ id: "five_hour", used: 0.9, minutes: 300 })
+    await hetzner.limits.tick()
+    const merged = () => mac.limits.rows().find((row) => row.boxes.length === 2)
+    await until(() => !!merged()?.extras?.some((extra) => extra.kind === "resets"))
+    return { mac, hetzner, hetznerFolder, id: merged()!.id, stop: () => (mac.stop(), hetzner.stop()) }
+  }
+
+  test("an agent's reset under Always Allow got no answer, then Always Allow is turned off: the user confirming it is theirs, and it goes through as the same request", async () => {
+    const two = await macAndHetzner()
+    try {
+      await limitsRoutes(two.mac.limits, "PUT", ["reset", "always"], async () => ({ row: two.id, always: true }))
+      await until(() => two.hetzner.resets.agentsMay("claude-code"))
+      makers.claimFailsAfterSpending = true
+      const agent = await post(two.mac.limits, { row: two.id })
+      expect((await post(two.mac.limits, { row: two.id, confirm: agent.body.data.confirm, unasked: true })).body.data.outcome).toBe("unknown")
+      await until(() => makers.claims.length === 1)
+      await limitsRoutes(two.mac.limits, "PUT", ["reset", "always"], async () => ({ row: two.id, always: false }))
+      await until(() => !two.hetzner.resets.agentsMay("claude-code"))
+      // The user, on the Mac's card: Use.
+      const user = await post(two.mac.limits, { row: two.id })
+      const done = await post(two.mac.limits, { row: two.id, confirm: user.body.data.confirm })
+      expect(done.body.data.outcome).toBe("reset")
+      expect(makers.claims.map((each) => each.request)).toEqual([makers.claims[0]!.request, makers.claims[0]!.request])
+      expect(makers.spends).toBe(1)
+    } finally {
+      two.stop()
+    }
+  })
+
+  test("Claude on Linux whose record of the sign-in leaves out its organization: its token's account matches by the account itself, and a reset goes", async () => {
+    const relay = new Map<string, Box>()
+    const folder = mkdtempSync(join(base, "no-org-"))
+    const claude = linuxClaude(folder)
+    writeFileSync(join(folder, "claude", "home", ".claude.json"), JSON.stringify({ oauthAccount: { accountUuid: ACCOUNT } }))
+    const box = new Box("key-l", "hetzner", () => agentAccounts([claude]), folder, relay)
+    try {
+      await box.meet([])
+      await box.limits.tick()
+      const id = box.limits.rows()[0]!.id
+      expect(id).toBe(`claude#${identityOf(`anthropic:${ACCOUNT}|`)}`)
+      const offer = await post(box.limits, { row: id })
+      expect((await post(box.limits, { row: id, confirm: offer.body.data.confirm })).body.data.outcome).toBe("reset")
+      expect(makers.spends).toBe(1)
+    } finally {
+      box.stop()
+    }
+  })
+
+  test("signed in to another account in a slot: Always Allow for the one before goes off here, and on your other computers too", async () => {
+    const relay = new Map<string, Box>()
+    const oneFolder = mkdtempSync(join(base, "one-5-"))
+    const twoFolder = mkdtempSync(join(base, "two-5-"))
+    const claudeOne = linuxClaude(oneFolder)
+    const claudeTwo = linuxClaude(twoFolder)
+    const one = new Box("key-one", "hetzner", () => agentAccounts([claudeOne]), oneFolder, relay)
+    const two = new Box("key-two", "lokum", () => agentAccounts([claudeTwo]), twoFolder, relay)
+    try {
+      await one.meet([two])
+      await two.meet([one])
+      await one.limits.tick()
+      const id = one.limits.rows()[0]!.id
+      await limitsRoutes(one.limits, "PUT", ["reset", "always"], async () => ({ row: id, always: true }))
+      await until(() => (two.resets as any).allowed.get(id)?.on === true)
+      // hetzner's Claude Code signs in to another account.
+      const record = join(oneFolder, "claude", "home", ".claude.json")
+      writeFileSync(record, JSON.stringify({ oauthAccount: { accountUuid: "6f1e0c4a-0000-4000-8000-0000000000ee", organizationUuid: ORG, note: "another" } }))
+      utimesSync(record, new Date(time + 60_000), new Date(time + 60_000))
+      expect(one.resets.agentsMay("claude-code")).toBe(false)
+      await until(() => (two.resets as any).allowed.get(id)?.on === false)
+    } finally {
+      one.stop()
+      two.stop()
+    }
+  })
+
+  test("Claude's token is a newly signed-in account while its record still says the one before: nothing is spent, and the new account's Always Allow stays", async () => {
+    const relay = new Map<string, Box>()
+    const folder = mkdtempSync(join(base, "lag-"))
+    const claude = linuxClaude(folder)
+    const box = new Box("key-l", "hetzner", () => agentAccounts([claude]), folder, relay)
+    try {
+      await box.meet([])
+      await box.limits.tick()
+      const id = box.limits.rows()[0]!.id
+      const next = "6f1e0c4a-0000-4000-8000-0000000000dd"
+      const nextRow = `claude#${identityOf(`anthropic:${next}|${ORG}`)}`
+      ;(box.directory as any).isPeer = () => true
+      box.resets.take("key-mac", { kind: "reset", at: time, always: { row: nextRow, on: true, at: time } })
+      makers.profiles.set("claude-linux", { account: next, organization: ORG })
+      const offer = await post(box.limits, { row: id })
+      expect((await post(box.limits, { row: id, confirm: offer.body.data.confirm })).body.data.outcome).toBe("no-reset")
+      expect(makers.claims).toEqual([])
+      box.resets.agentsMay("claude-code")
+      expect((box.resets as any).allowed.get(nextRow)?.on).toBe(true)
     } finally {
       box.stop()
     }

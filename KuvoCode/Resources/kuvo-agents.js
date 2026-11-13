@@ -9574,9 +9574,19 @@ class LimitResets {
     if (before === live)
       return;
     this.seen.set(provider, live);
-    if (before && this.allowed.get(before)?.on)
-      this.allowed.set(before, { on: false, at: this.now() });
     this.save();
+    if (before && this.allowed.get(before)?.on)
+      this.decideHere(before, false);
+  }
+  decideHere(rowID, on) {
+    const at = Math.max(this.now(), (this.allowed.get(rowID)?.at ?? 0) + 1);
+    this.decide(rowID, on, at);
+    for (const box of this.yours())
+      this.transport?.send(box.key, { kind: "reset", at, always: { row: rowID, on, at } }, true);
+  }
+  yours() {
+    const own = this.directory?.own()?.key;
+    return (this.directory?.peerBoxes() ?? []).filter((box) => box.key && box.key !== own && this.directory?.isPeer?.(box.key) === true);
   }
   decide(rowID, on, at) {
     const kept = this.allowed.get(rowID);
@@ -9587,7 +9597,7 @@ class LimitResets {
     this.limits.ownChanged();
     return true;
   }
-  setAlways(given, on, tell = true) {
+  setAlways(given, on) {
     const ownProvider = given.provider ?? (given.row ? this.limits.accountOf(given.row)?.provider : undefined);
     const rowID = given.row ?? (given.provider ? this.limits.accountRow(given.provider) : undefined);
     if (!rowID)
@@ -9595,17 +9605,11 @@ class LimitResets {
     if (!rowID.includes("#"))
       return { status: 409, message: "This account doesn't say who it is yet, so Always Allow can't be kept for it." };
     const ownCan = ownProvider !== undefined && !!this.limits.account(ownProvider)?.limits.reset && this.limits.liveRow(ownProvider) === rowID;
-    const own = this.directory?.own()?.key;
-    const others = tell ? (this.directory?.peerBoxes() ?? []).filter((box) => box.key && box.key !== own && this.directory?.isPeer?.(box.key) === true) : [];
-    if (!ownCan && !others.length)
+    if (!ownCan && !this.yours().length)
       return { status: 404, message: "No computer of yours has this account's sign-in." };
-    const at = Math.max(this.now(), (this.allowed.get(rowID)?.at ?? 0) + 1);
     if (ownCan)
       this.saw(ownProvider, rowID);
-    if (!this.decide(rowID, on, at))
-      return { status: 409, message: "A later decision for this account is kept: look again." };
-    for (const box of others)
-      this.transport?.send(box.key, { kind: "reset", at, always: { row: rowID, on, at } }, true);
+    this.decideHere(rowID, on);
     return null;
   }
   ask(rowID) {
@@ -9676,6 +9680,8 @@ class LimitResets {
   async attach(id, rowID, given) {
     const join = (spend) => {
       spend.also = [...new Set([...spend.also ?? [], id])].slice(-20);
+      if (!given.unasked)
+        delete spend.unasked;
       this.save();
     };
     const open = this.open(rowID, given.via);
@@ -9728,6 +9734,10 @@ class LimitResets {
     const id = `${from}:${ask.id}`;
     const known = this.spends.find((each) => each.id === id || each.also?.includes(id));
     const unasked = ask.unasked === true;
+    if (known && !unasked && known.unasked) {
+      delete known.unasked;
+      this.save();
+    }
     const run = known ? known.state === "done" ? this.here(known.id, ask.row, known.provider, by) : this.rerun(known, ask.row, { by }) : this.attach(id, ask.row, { by, unasked });
     run.then((result) => {
       this.transport?.send(from, { kind: "reset", at: this.now(), answer: { id: ask.id, outcome: result.outcome, ...result.until ? { until: result.until } : {}, ...result.already ? { already: true } : {}, ...result.open || OPEN.has(result.outcome) ? { open: true } : {}, ...result.message ? { message: result.message.slice(0, 300) } : {} } }, false);
@@ -9805,14 +9815,21 @@ class LimitResets {
       return { outcome };
     };
     if (rowID.includes("#")) {
-      const live = await this.spender(account);
+      const live = this.limits.liveRow(account.provider);
       if (live === undefined)
         return stopped("not-now");
       if (live !== rowID) {
         this.saw(account.provider, live);
-        if (this.allowed.get(rowID)?.on)
-          this.decide(rowID, false, Math.max(this.now(), (this.allowed.get(rowID)?.at ?? 0) + 1));
         return stopped("no-reset");
+      }
+      if (account.limits.spender) {
+        const same = await account.limits.spender().catch(() => {
+          return;
+        });
+        if (same === undefined)
+          return stopped("not-now");
+        if (!same)
+          return stopped("no-reset");
       }
     }
     const kept = spend;
@@ -9838,14 +9855,6 @@ class LimitResets {
       await Promise.race([this.limits.readAgain(account.provider), new Promise((resolve) => setTimeout(resolve, READ_AFTER).unref?.())]);
     }
     return result;
-  }
-  async spender(account) {
-    if (!account.limits.spender)
-      return this.limits.liveRow(account.provider);
-    const raw = await account.limits.spender().catch(() => {
-      return;
-    });
-    return raw ? `${account.service}#${identityOf(raw)}` : undefined;
   }
   keep(spend) {
     this.spends.push(spend);
@@ -13943,10 +13952,15 @@ async function tokenAccount(signIn, version) {
     const body = await response.json();
     const account = typeof body?.account?.uuid === "string" ? body.account.uuid.trim().toLowerCase() : "";
     const organization = typeof body?.organization?.uuid === "string" ? body.organization.uuid.trim().toLowerCase() : "";
-    return account && organization ? `anthropic:${account}|${organization}` : undefined;
+    return account ? `anthropic:${account}|${organization}` : undefined;
   } catch {
     return;
   }
+}
+function sameClaudeAccount(a, b) {
+  const [accountA, organizationA = ""] = a.replace(/^anthropic:/, "").split("|");
+  const [accountB, organizationB = ""] = b.replace(/^anthropic:/, "").split("|");
+  return !!accountA && accountA === accountB && (!organizationA || !organizationB || organizationA === organizationB);
 }
 async function claudeOrganization(configHome, signIn, version) {
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -14520,7 +14534,9 @@ class ClaudeAgent {
     },
     spender: async () => {
       const signIn = this.limitsSignIn();
-      return signIn ? tokenAccount(signIn, await this.programVersion()) : undefined;
+      const recorded = this.instance.home ? claudeIdentity(this.instance.home) : undefined;
+      const token = signIn ? await tokenAccount(signIn, await this.programVersion()) : undefined;
+      return recorded && token ? sameClaudeAccount(recorded, token) : undefined;
     }
   };
   grants;
@@ -35946,4 +35962,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents ac842d79f5bbbba410dd338034c6c4772728bc515a8eb04f3a9aadc7cba05703
+// Built from Packages/Box/src/agents 1f0b8856c8759ad2cbbf15ffb01164b468ec17795a162440fc9bf96d5567d14f

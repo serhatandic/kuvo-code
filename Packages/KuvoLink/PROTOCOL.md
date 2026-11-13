@@ -4283,13 +4283,17 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     one is asked again first, as itself, and the new one is that one only if it was used just now
     or still can't be told, else it goes as its own. Right before a request goes, the account
     signed in there now (its sign-in's own identity, not as last read) must be the row's: if
-    another is, nothing is spent (`no-reset`) and Always Allow for the row is turned off. (Claude on
-    Linux: who its token is for, as Anthropic's profile says right then, since the token carries no
-    claims and Claude Code's own record of the sign-in can lag a new one.) `unasked: true` marks an
-    agent's spend under Always Allow that no one confirmed: refused (`failed`) where the asking
-    box's own decision for the row is off, and again by the box that spends it unless its decision
-    is on. A peer asked to spend one follows these same rules for a new ask (joining within 10
-    minutes, settling an older one first). A client sends the same
+    another is, nothing is spent (`no-reset`), and the slot's earlier account's Always Allow goes
+    off (below). Claude on Linux: its token carries no claims and Claude Code's own record of the
+    sign-in can lag a new one, so Anthropic's profile is asked too, right then; its account must be
+    the record's (and its organization, where both say one), else nothing is spent, and nothing of
+    what's allowed changes on that (whichever of the two lags, the newly signed-in account's
+    stays). `unasked: true` marks an agent's spend under Always Allow that no one confirmed:
+    refused (`failed`) where the asking box's own decision for the row is off, and again by the box
+    that spends it unless its decision is on. A confirmation by the user that joins an open
+    `unasked` spend makes it the user's, here and on the peer it was passed to (the same request:
+    nothing more is spent). A peer asked to spend one follows these same rules for a new ask
+    (joining within 10 minutes, settling an older one first). A client sends the same
     `confirm` again after a lost answer, and after `unknown` or `unconfirmed`; a 404 then (the box no
     longer knows it) asks anew.
   - **On the computer with the sign-in**: a box whose own sign-in can't spend it passes it to
@@ -4310,10 +4314,12 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     Settings › Accounts names it here, or the `row`) and on the others among its row's `boxes`,
     told to every computer of yours as `{"seat": {"kind": "reset", at, always: {row, on, at}}}` mail
     that's kept until it's there; a decision older than the one kept is ignored, and of two stamped
-    the same, an off holds. One made here is stamped after any this box knows of (so a computer
-    whose clock is ahead doesn't outlast it); a decision that isn't kept answers 409. A
-    slot signed in to another account since turns its earlier account's off, so coming back asks
-    again. Stated as
+    the same, an off holds. One made here (by `PUT`, or a slot signed in to another account since,
+    which turns its earlier account's off, so coming back asks again) is stamped after any this box
+    knows of, so it's always kept here, and told. What that leaves: a decision made on a computer
+    that hadn't yet heard an opposite one made elsewhere (the mail on its way, or one of the two
+    off the relay) is ordered by the two computers' clocks, so within as much as their clocks
+    differ, the one stamped later holds, whichever was made later. Stated as
     `agents: true` on its `resets`, and as `agentsReset: true` on the account in this box's own
     `accounts` whether or not it has resets now (so a client can turn it off). Answering a card
     Always while the computer with the sign-in is away keeps it all the same; no reset is used then.
