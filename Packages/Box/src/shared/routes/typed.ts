@@ -1,7 +1,7 @@
 // What a typed message means, and what a conversation's composer offers after "/" (PROTOCOL.md,
 // "What a typed message means").
 
-import { any, bool, type Infer, list, nullable, number, object, type RouteShape, string, words } from "../shape";
+import { any, bool, type Infer, list, nullable, number, object, type RouteShape, string } from "../shape";
 import { SESSION_AUTOPILOT } from "./autopilot";
 
 /** A keyword a conversation offers: its name ("loop", typed "/loop"), its name in a list, what it
@@ -18,7 +18,7 @@ export const TYPED_RESTORE = object({ text: string, "beside?": string });
 
 /** What a typed text meant: what the box did (`goal`, `goalCleared`, `askedBot`, `autopilot`,
  * `wakeUp`, `sideQuestion`, `handoff`, `review`), then what the client does, in this order
- * (`showGoal`, `plan`, `toggleAutopilot`, `compact`, `shell`, `command`, `send`, `sideThread`), and
+ * (`showGoal`, `agent` (the mode to switch to: Plan, or back from it), `toggleAutopilot`, `compact`, `shell`, `command`, `send`, `sideThread`), and
  * what goes back to the composer, saying why (`restore`, `error`). The composer's files go with
  * `send` or `command` (else they stay); its quotes with `send` when `quoted` (else they stay). */
 export const TYPED = object({
@@ -26,7 +26,7 @@ export const TYPED = object({
   "goal?": any, "goalCleared?": bool, "askedBot?": bool, "autopilot?": SESSION_AUTOPILOT,
   "wakeUp?": object({ due: number, every: string, note: string }),
   "sideQuestion?": any, "handoff?": any, "review?": any,
-  "showGoal?": bool, "plan?": words("toggle", "on"), "toggleAutopilot?": bool, "compact?": bool,
+  "showGoal?": bool, "agent?": string, "toggleAutopilot?": bool, "compact?": bool,
   "shell?": string, "command?": object({ name: string, arguments: string }),
   "send?": object({ text: string, "typed?": string, "quoted?": bool, "steer?": bool }),
   "sideThread?": bool,

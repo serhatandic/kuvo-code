@@ -9677,16 +9677,7 @@
       "handoff?": "any",
       "review?": "any",
       "showGoal?": "bool",
-      "plan?": {
-       "oneOf": [
-        {
-         "literal": "toggle"
-        },
-        {
-         "literal": "on"
-        }
-       ]
-      },
+      "agent?": "string",
       "toggleAutopilot?": "bool",
       "compact?": "bool",
       "shell?": "string",

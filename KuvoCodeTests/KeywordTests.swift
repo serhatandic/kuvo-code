@@ -665,25 +665,37 @@ import Testing
         #expect(told == 0)
     }
 
-    /// A "/" text shows at once, as a message waiting to go, until its box has said what it means;
-    /// a message sent meanwhile shows and goes at once, not after it.
-    @Test func aSlashTextShowsAtOnceAndAMessageSentMeanwhileDoesntWait() async throws {
+    /// A "/" or "!" text shows at once where it was sent, until its box has said what it means: in
+    /// the conversation, as a message waiting to go, or, for a side question, in its side thread,
+    /// being answered (it never joins the conversation). A message sent meanwhile shows and goes at
+    /// once, not after it.
+    @Test func aTypedTextShowsAtOnceWhereItWasSentAndAMessageSentMeanwhileDoesntWait() async throws {
         defer { clean() }
         serve(directory: "/tmp", answers: ["In `onBlur`."])
         engine.on("POST", "/api/session/\(id)/prompt", json: ["data": [:]])
+        engine.on("POST", "/api/session/\(id)/shell", json: ["data": [:]])
         let model = try session()
         let bridge = try await start(model)
         defer { bridge.stop() }
+        // (Its side questions read, as an open conversation has them.)
+        await bridge.agents.loadSideQuestions(of: id)
 
+        model.draftText = "!pwd"
+        model.submitDraft(for: nil, queue: false)
+        #expect(model.transcript.pending.map(\.text) == ["!pwd"])
         model.draftText = "/btw where does it pause?"
         model.submitDraft(for: nil, queue: false)
-        #expect(model.transcript.pending.map(\.text) == ["/btw where does it pause?"])
+        #expect(model.transcript.pending.map(\.text) == ["!pwd"], "a side question isn't the conversation's")
+        #expect(model.shownSideThread?.latest.question == "where does it pause?")
+        #expect(model.shownSideThread?.latest.state == .answering)
         model.draftText = "Pause it on blur then."
         model.submitDraft(for: nil, queue: false)
-        #expect(model.transcript.pending.map(\.text) == ["/btw where does it pause?", "Pause it on blur then."], "the message shows at once")
+        #expect(model.transcript.pending.map(\.text) == ["!pwd", "Pause it on blur then."], "the message shows at once")
+
         await model.messagesSent()
-        #expect(!model.transcript.pending.contains { $0.text.hasPrefix("/btw") }, "its row gives way to what it means")
-        try await until { model.sideQuestions.first?.question == "where does it pause?" && told == 1 }
+        #expect(!model.transcript.pending.contains { $0.text == "!pwd" }, "its row gives way to what it means")
+        try await until { model.sideQuestions.map(\.question) == ["where does it pause?"] && model.sideQuestions.first?.state == .answered && told == 1 }
+        #expect(engine.requests("POST", "/api/session/\(id)/shell").count == 1)
     }
 
     /// What you're replying to goes with one message: a "/" text that turns out to be a message

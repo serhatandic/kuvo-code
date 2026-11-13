@@ -91,8 +91,6 @@ public enum Typed {
         public var note: String
     }
 
-    public enum Plan: String, Decodable, Sendable { case toggle, on }
-
     /// The box's answer. `Autopilot` is how the client reads a conversation's Autopilot (as
     /// `kuvo/sessions/<id>/autopilot` answers). In the order a client applies it: what the box did,
     /// then what the client does, then what goes back. The composer's files go with `send` or
@@ -109,7 +107,8 @@ public enum Typed {
         public var handoff: Handoff?
         public var review: Review?
         public var showGoal: Bool?
-        public var plan: Plan?
+        /// The mode to switch to: Plan, or back from it, as its box says.
+        public var agent: String?
         public var toggleAutopilot: Bool?
         public var compact: Bool?
         public var shell: String?

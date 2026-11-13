@@ -39140,7 +39140,7 @@ import fs129 from "node:fs";
 import path133 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "9d889eae67c7";
+var BRIDGE_VERSION = "d925c465203c";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -47752,6 +47752,18 @@ async function engineCommands(engine, folder, signal) {
     return null;
   }
 }
+function startingAgent(agents) {
+  const modes = Array.isArray(agents) ? agents.flatMap((each) => isObject(each) && typeof each.id === "string" && each.mode !== "subagent" && each.hidden !== true ? [each.id] : []) : null;
+  if (!modes)
+    return "build";
+  return modes.length === 0 || modes.includes("build") ? "build" : modes[0];
+}
+async function planAgent(plan, data, engine, folder, signal) {
+  if (plan === "on" || data.agent !== "plan")
+    return "plan";
+  const agents = engine ? await call(engine, "GET", "/api/agent", undefined, within6(signal, 1e4), folder).catch(() => null) : null;
+  return startingAgent(agents);
+}
 async function reviewReaders(engine, folder) {
   if (!engine)
     return [];
@@ -47941,7 +47953,9 @@ async function* typedAnswer(context, match) {
       failure = unavailable ? { restore: writtenBack(text), error: KEYWORD_UNAVAILABLE } : { restore: decision.failed ?? { text }, error: said6(error, "It couldn’t be done. Try again.") };
     }
   }
-  return yield* json(200, answerOf3(decision, done, failure));
+  const agent = !failure && decision.plan ? await planAgent(decision.plan, data, engine, folder, signal) : null;
+  const { plan: _plan, ...answer } = answerOf3(decision, done, failure);
+  return yield* json(200, { ...answer, ...agent ? { agent } : {} });
 }
 
 // Packages/Box/src/link/areas/sandbox.ts

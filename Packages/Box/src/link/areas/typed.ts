@@ -47,6 +47,21 @@ async function engineCommands(engine: Target | null, folder: string | undefined,
   }
 }
 
+/** The mode "/plan" alone goes back to from Plan: Build, or the first mode there is where Build is
+ * turned off (as a new conversation starts in, where none is chosen). */
+export function startingAgent(agents: unknown): string {
+  const modes = Array.isArray(agents) ? agents.flatMap(each => (isObject(each) && typeof each.id === "string" && each.mode !== "subagent" && each.hidden !== true ? [each.id] : [])) : null;
+  if (!modes) return "build";
+  return modes.length === 0 || modes.includes("build") ? "build" : modes[0];
+}
+
+/** The mode to switch to for "/plan": Plan, or, alone in Plan, back to where it starts. */
+async function planAgent(plan: "toggle" | "on", data: Partial<EngineSession>, engine: Target | null, folder: string | undefined, signal?: AbortSignal): Promise<string> {
+  if (plan === "on" || data.agent !== "plan") return "plan";
+  const agents = engine ? await call(engine, "GET", "/api/agent", undefined, within(signal, 10_000), folder).catch(() => null) : null;
+  return startingAgent(agents);
+}
+
 /** The models "/review with …" can name: the engine's you can use now (a review runs beside it). */
 async function reviewReaders(engine: Target | null, folder: string | undefined): Promise<Reader[]> {
   if (!engine) return [];
@@ -249,5 +264,8 @@ async function* typedAnswer(context: RouteContext, match: RegExpMatchArray): Asy
         : { restore: decision.failed ?? { text }, error: said(error, "It couldn’t be done. Try again.") };
     }
   }
-  return yield* json(200, answerOf(decision, done, failure));
+  // Plan on or off: which mode, as this box has the conversation and its modes.
+  const agent = !failure && decision.plan ? await planAgent(decision.plan, data, engine, folder, signal) : null;
+  const { plan: _plan, ...answer } = answerOf(decision, done, failure) as Record<string, unknown>;
+  return yield* json(200, { ...answer, ...(agent ? { agent } : {}) });
 }

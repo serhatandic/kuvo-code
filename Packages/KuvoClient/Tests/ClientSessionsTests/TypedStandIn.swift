@@ -181,7 +181,9 @@ enum TypedStandIn {
 
     /// The answer, as the box gives it once its step is done (`done`: what it did), or failed
     /// (`failure`: why, and whether its agents bridge wasn't there to do it).
-    static func answer(_ decision: Decision, written: String, done: [String: Any] = [:], failure: (message: String, unavailable: Bool)? = nil) -> [String: Any] {
+    /// `sessionAgent`: the conversation's mode now; "/plan" alone in Plan goes back to `starting`.
+    static func answer(_ decision: Decision, written: String, done: [String: Any] = [:], failure: (message: String, unavailable: Bool)? = nil,
+                       sessionAgent: String? = nil, starting: String = "build") -> [String: Any] {
         if let failure {
             var answer: [String: Any] = failure.unavailable ? ["restore": writtenBack(written), "error": keywordUnavailable]
                 : ["restore": decision["failed"] ?? ["text": written], "error": failure.message]
@@ -191,6 +193,10 @@ enum TypedStandIn {
         var answer = decision
         answer["box"] = nil
         answer["failed"] = nil
+        // Plan on or off: the mode to switch to.
+        if let plan = answer.removeValue(forKey: "plan") as? String {
+            answer["agent"] = plan == "on" || sessionAgent != "plan" ? "plan" : starting
+        }
         return answer.merging(done) { _, did in did }
     }
 }

@@ -64,7 +64,7 @@ describe("what a whole text means", () => {
 // ——— The route ———
 
 type Asked = { method: string; path: string; folder: string | null; body: any }
-type Conversation = { id: string; parentID?: string; location: { directory: string }; time: { created: number; updated: number }; metadata?: any }
+type Conversation = { id: string; parentID?: string; agent?: string; location: { directory: string }; time: { created: number; updated: number }; metadata?: any }
 
 let engine: ReturnType<typeof Bun.serve>
 let bridge: ReturnType<typeof Bun.serve>
@@ -201,8 +201,8 @@ describe("kuvo/sessions/<id>/typed", () => {
 
   test("the engine's commands unread: a keyword still runs; what might be one of them waits, saying so", async () => {
     commandsAnswer = { status: 500, body: { message: "Restarting." } }
-    expect((await ask("POST", "ses_main", { text: "/plan" })).json).toEqual({ keyword: "plan", plan: "toggle" })
-    expect((await ask("POST", "ses_main", { text: "/plan sketch it" })).json).toEqual({ keyword: "plan", plan: "on", send: { text: "sketch it", typed: "/plan" } })
+    expect((await ask("POST", "ses_main", { text: "/plan" })).json).toEqual({ keyword: "plan", agent: "plan" })
+    expect((await ask("POST", "ses_main", { text: "/plan sketch it" })).json).toEqual({ keyword: "plan", agent: "plan", send: { text: "sketch it", typed: "/plan" } })
     const { status, json } = await ask("POST", "ses_main", { text: "/deploy prod" })
     expect(status).toBe(503)
     expect(json.message).toBeString()
@@ -299,6 +299,15 @@ describe("kuvo/sessions/<id>/typed", () => {
     bridgeSays = each => ({ status: 200, body: { data: { id: "r1", model: each.body.model } } })
     const { json } = await ask("POST", "ses_main", { text: "/review with DeepSeek V3 the parser" })
     expect(json).toEqual({ keyword: "review", review: { id: "r1", model: { providerID: "deepseek", id: "v3" } } })
+  })
+
+  test("\"/plan\" alone in Plan goes back to Build, or to the first mode there is where Build is off", async () => {
+    conversations.ses_main.agent = "plan"
+    expect((await ask("POST", "ses_main", { text: "/plan" })).json).toEqual({ keyword: "plan", agent: "build" })
+    engineLists = { "/api/agent": [{ id: "explore", mode: "subagent" }, { id: "draft", mode: "primary" }, { id: "plan", mode: "primary" }] }
+    expect((await ask("POST", "ses_main", { text: "/plan" })).json).toEqual({ keyword: "plan", agent: "draft" })
+    // With words, it stays in Plan.
+    expect((await ask("POST", "ses_main", { text: "/plan the next step" })).json).toEqual({ keyword: "plan", agent: "plan", send: { text: "the next step", typed: "/plan" } })
   })
 
   test("a model that can't run: said, all of it kept; a \"!\" command still runs", async () => {

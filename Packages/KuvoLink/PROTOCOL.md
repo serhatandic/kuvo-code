@@ -4856,8 +4856,9 @@ client does with the rest; a client keeps the draft, puts back what it's told to
     /loop's, `due` in seconds), `sideQuestion`, `handoff`, `review` (as the agents bridge answers
     them, "Side questions, handoffs and reviews"). `keyword` names the keyword it ran (not
     "/goal", which is a goal's).
-  - What the client does: `showGoal` (show the goal bar), `plan` (`toggle`: Plan on or back off;
-    `on`), `toggleAutopilot`, `compact`, `shell` (run it in the conversation's folder), `command`
+  - What the client does: `showGoal` (show the goal bar), `agent` (the mode to switch to: `plan`,
+    or, for "/plan" alone in Plan, the one a conversation starts in there: Build, or the first mode
+    there is where Build is off), `toggleAutopilot`, `compact`, `shell` (run it in the conversation's folder), `command`
     (`{name, arguments}`, run with the composer's files), `send` (`{text, typed?, quoted?, steer?}`:
     send it as a message with the composer's files; `typed` is the keyword as typed, "/plan", to
     send it with; `quoted`: what the composer replies to goes with it; `steer`: to the agent now,
@@ -4868,8 +4869,9 @@ client does with the rest; a client keeps the draft, puts back what it's told to
     written since: `text` into an empty composer, else `beside` where it's given (a keyword's words
     alone, which the keyword would otherwise take in; nothing for a goal's pause), else `text`;
     `error` says why, over the composer.
-- **Meanwhile** a client shows the text at once as a message waiting to go, and puts what the box
-  says in its place; "/" and "!" texts are asked one after another, and a message sent meanwhile
+- **Meanwhile** a client shows the text at once where it was sent (as a message waiting to go; a
+  side question, or a follow-up while the side thread's tag shows, in its side thread, being
+  answered: it never joins the conversation), and puts what the box says in its place; "/" and "!" texts are asked one after another, and a message sent meanwhile
   goes at once.
 - **What each keyword does:** "/plan" alone toggles Plan, with words turns it on and sends them
   (with files alone, on); "/autopilot" alone toggles it, with words or files the box turns it on
