@@ -112,11 +112,13 @@ test("helper start: launchd starts the helper loaded already that went (it found
   const where = home("mac");
   const done = helper(where, ["start"]);
   assert.equal(done.status, 0, done.stderr);
-  assert.deepEqual(done.said, { started: true, message: "Kuvo Code Box runs this Mac's box." });
+  assert.deepEqual(done.said, { started: true, mac: true, message: "Kuvo Code Box runs this Mac's box." });
   assert.deepEqual(read(path.join(where.home, "launchctl")).trim().split("\n"), [`kickstart gui/${process.getuid()}/run.kuvo.code.machine`]);
   // Not a Mac's own box: nothing asked.
   const machine = home("machine");
-  assert.equal(helper(machine, ["start"]).status, 1);
+  const refused = helper(machine, ["start"]);
+  assert.equal(refused.status, 1);
+  assert.equal(refused.said.mac, false, "not a Mac's own box: its own start, not the helper's");
   assert.equal(exists(path.join(machine.home, "launchctl")), false);
 });
 
