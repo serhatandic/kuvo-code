@@ -878,7 +878,7 @@ final class WindowTabs {
         } else if let model = workspace.model(for: key) {
             model.focusComposer()
         } else {
-            // No composer to type in (a terminal's tab): the keyboard stays, and so does the card.
+            // No composer available: keep the current keyboard focus.
             return
         }
         focus = worksBeside ? .split : .conversation

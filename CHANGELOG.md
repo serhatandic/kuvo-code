@@ -300,7 +300,6 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - The panel's Files hides .DS_Store and version control folders, and a narrow header shows the file's name whole, with Open as its app's icon, and the full path on hover.
 - Settings pages fade at their top and bottom edges as you scroll; under New Worktrees, the menu names Kuvo Code's own folder and the row under it shows where that is.
 - More of the app's icon buttons read their names in VoiceOver.
-- The two terminal commands say where they open: **New Terminal** (⌃⇧`) as a tab, **New Terminal in Panel** (⌃`) in the side panel.
 - Settings › MCP Servers no longer offers Linear, Notion and Atlassian a second time: they're in Integrations, and a row there says so.
 - The model menu is as tall as what it lists, so a short list like Custom Auto's leaves no empty space under it.
 - In a narrow panel, Files gives an open file the whole width: the tree folds away and comes back from the toolbar.
@@ -355,7 +354,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A widget the agent writes as a whole page is laid out as its page asks: it kept losing its doctype, so it was drawn the old way, as a page without one.
 - A widget made to fill its window (a wrapper as tall as the window, a sheet against its bottom) no longer grows a little more each time something on it changes.
 - A widget whose script or comments mention `<head>` or `<html>` keeps its safeguards: it still can't fetch or send anything on its own.
-- Going back to a session from a new session's, a group chat's or a terminal's tab is about twice as quick, and finds it scrolled where you were reading.
+- Going back to a session from a new session's or a group chat's tab is about twice as quick, and finds it scrolled where you were reading.
 - The side panel slides in sooner, and comes back as you left it: where you'd scrolled, the files you'd folded and a comment you were writing in Changes. While it's hidden it stops checking git and files, and its pages and terminals stop drawing.
 - A coding agent too slow to answer whether it's signed in (on a busy Mac or machine) no longer looks signed out: Claude Code, Codex, Grok and Cursor keep their accounts and models as they last said, so a bot's or a session's model isn't taken away mid-goal. Only the agent saying you're signed out is a sign-out.
 - While this Mac's engine or the coding agents restart, the first launch's subscriptions step keeps showing what you're signed in to, instead of offering every sign-in again.
@@ -596,7 +595,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A machine whose relay connection drops right after it connects (another copy at its address, say) now waits longer between tries, instead of reconnecting every second and each time cutting off your phone and its agents' messages to your other computers.
 - A bot or conversation just made on a computer shows in & names, and to agents on your other computers, at once, instead of sometimes going missing for up to a minute.
 - A machine Kuvo Code finds at two addresses no longer shows a group chat as talking there while it's away, and a chat that starts talking just as it's read again keeps showing so.
-- Each new session you're writing, and each terminal tab of the window, has a side panel of its own: a terminal opened while writing one no longer shows beside another, or goes to whichever session is sent first.
+- Each new session you're writing has a side panel of its own: a terminal opened while writing one no longer shows beside another, or goes to whichever session is sent first.
 - Run again after a new session is sent, or after a conversation moves to the coding agents, restarts the command in the same terminal instead of starting a second copy beside the first.
 - Archiving a session, here or from your phone, ends its terminals in the side panel, and removing a machine ends the terminals on it, in the side panel and the window's tabs, rather than leaving them running out of sight (a dev server holding its port). A conversation moved to the coding agents keeps its terminals.
 - In Changes, the review button on a branch reviews what the branch changed since main, rather than finding nothing to review.
@@ -620,7 +619,6 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A conversation on a machine goes on updating after the machine reconnects, even when the machine is slow to answer at first; and when your Mac wakes, its own conversations no longer wait on a machine that's still reconnecting.
 - A file a bot shows you in a group chat opens in the side panel, instead of "No Project".
 - Reload in the Files tab while you're filtering reads the files again, instead of leaving the filter loading.
-- Add to Message in a terminal tab of the window starts a new session in its folder with what you selected, instead of doing nothing.
 - Showing or hiding the side panel or the sidebar no longer catches at the start of its slide when you have many sessions: the sidebar isn't drawn again for it.
 - Kuvo Code takes about 200 MB less memory for the first seconds after it opens: checking the engine before it starts no longer keeps the whole engine in memory.
 - Switching tabs is smoother, with half the work it took: the sidebar's highlight moves to the open session at once, as a Mac's sidebars do, rather than fading across while the whole sidebar was drawn again for each frame, and only the rows whose highlight moved are worked out again.

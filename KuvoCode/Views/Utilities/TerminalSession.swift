@@ -52,92 +52,6 @@ final class TerminalSession: NSObject {
         if start(typing: command != nil), let command { view.send(txt: command + "\r") }
     }
 
-    /// Watches the shell's process for its end: SwiftTerm stops watching it when the terminal's
-    /// output ends first, and then never says it ended.
-    func watchShell() {
-        let shell = view.process.shellPid
-        guard shell > 0 else { return }
-        exit?.cancel()
-        let source = DispatchSource.makeProcessSource(identifier: shell, eventMask: .exit, queue: .main)
-        source.setEventHandler { [weak self] in
-            MainActor.assumeIsolated {
-                var status: Int32 = 0
-                // Whichever hears it first has the status: SwiftTerm, or this.
-                let reaped = waitpid(shell, &status, WNOHANG) == shell
-                self?.ended(status: reaped ? status : nil)
-            }
-        }
-        source.activate()
-        exit = source
-        // Gone before it was watched (a shell that couldn't start, a command that ended at once).
-        var status: Int32 = 0
-        if waitpid(shell, &status, WNOHANG) == shell { ended(status: status) }
-    }
-
-    /// The shell ended, with its wait status when known.
-    func ended(status: Int32?) {
-        guard isRunning else { return }
-        isRunning = false
-        exit?.cancel()
-        exit = nil
-        guard !closed else { return }
-        // Said in the terminal, rather than it going quiet: typing in it does nothing now.
-        let machine = RemoteFolder.machine(of: directory)
-        // ssh's own failure (the connection lost, or never made) is its exit status 255.
-        let exited = status.map { ($0 & 0x7F) == 0 ? ($0 >> 8) & 0xFF : -1 }
-        let ended = if let machine, exited == 255 {
-            "Connection to \(AgentMail.shared.app?.machines.engine(machine)?.machine.name ?? machine) lost. Press Return to reconnect."
-        } else {
-            "Process completed. Press Return to start a new shell."
-        }
-        view.feed(text: "\r\n" + Self.note(ended) + "\r\n")
-    }
-}
-
-/// Puts a session's terminal in the panel, on the card itself as in Rex: the card's color
-/// edge to edge, with the text inset like the rest of the card. The view outlives the tab
-/// being shown, so the shell keeps its state while you look at something else.
-struct TerminalHost: View {
-    let session: TerminalSession
-    @Environment(\.colorScheme) private var scheme
-    /// The card's focus: the terminal's color follows the card's as focus moves.
-    @Environment(\.cardIsFocused) private var isFocused
-
-    var body: some View {
-        TerminalRepresentable(session: session, dark: scheme == .dark, focused: isFocused)
-            // The right side already has room SwiftTerm keeps for its (hidden) scroll bar.
-            .padding(.leading, 16)
-            .padding(.top, 4)
-            .padding(.bottom, 12)
-            .background(Surface.cardFill(scheme, focused: isFocused))
-    }
-}
-
-private struct TerminalRepresentable: NSViewRepresentable {
-    let session: TerminalSession
-    let dark: Bool
-    let focused: Bool
-
-    func makeNSView(context: Context) -> LocalProcessTerminalView {
-        session.apply(dark: dark, focused: focused)
-        // A new terminal takes the keyboard, and one you go back to in the card you work in; the
-        // panel coming in beside the conversation you type in leaves the keyboard there.
-        if !session.wasShown || focused {
-            DispatchQueue.main.async { session.view.window?.makeFirstResponder(session.view) }
-        }
-        session.wasShown = true
-        context.coordinator.update(session.view, in: context)
-        return session.view
-    }
-
-    func updateNSView(_ view: LocalProcessTerminalView, context: Context) {
-        session.apply(dark: dark, focused: focused)
-        context.coordinator.update(view, in: context)
-    }
-
-    func makeCoordinator() -> PanelVisibility { PanelVisibility() }
-}
-extension TerminalSession {
     /// The program a command runs, by its name: the last of commands run one after another, before
     /// any pipe, past `NAME=value` settings and what only sets up how it runs, without its folder.
     static func program(_ command: String) -> String? {
@@ -425,4 +339,91 @@ extension TerminalSession: @preconcurrency LocalProcessTerminalViewDelegate {
     func processTerminated(source: TerminalView, exitCode: Int32?) {
         ended(status: exitCode)
     }
+}
+
+extension TerminalSession {
+    /// Watches the shell's process for its end: SwiftTerm stops watching it when the terminal's
+    /// output ends first, and then never says it ended.
+    func watchShell() {
+        let shell = view.process.shellPid
+        guard shell > 0 else { return }
+        exit?.cancel()
+        let source = DispatchSource.makeProcessSource(identifier: shell, eventMask: .exit, queue: .main)
+        source.setEventHandler { [weak self] in
+            MainActor.assumeIsolated {
+                var status: Int32 = 0
+                // Whichever hears it first has the status: SwiftTerm, or this.
+                let reaped = waitpid(shell, &status, WNOHANG) == shell
+                self?.ended(status: reaped ? status : nil)
+            }
+        }
+        source.activate()
+        exit = source
+        // Gone before it was watched (a shell that couldn't start, a command that ended at once).
+        var status: Int32 = 0
+        if waitpid(shell, &status, WNOHANG) == shell { ended(status: status) }
+    }
+
+    /// The shell ended, with its wait status when known.
+    func ended(status: Int32?) {
+        guard isRunning else { return }
+        isRunning = false
+        exit?.cancel()
+        exit = nil
+        guard !closed else { return }
+        // Said in the terminal, rather than it going quiet: typing in it does nothing now.
+        let machine = RemoteFolder.machine(of: directory)
+        // ssh's own failure (the connection lost, or never made) is its exit status 255.
+        let exited = status.map { ($0 & 0x7F) == 0 ? ($0 >> 8) & 0xFF : -1 }
+        let ended = if let machine, exited == 255 {
+            "Connection to \(AgentMail.shared.app?.machines.engine(machine)?.machine.name ?? machine) lost. Press Return to reconnect."
+        } else {
+            "Process completed. Press Return to start a new shell."
+        }
+        view.feed(text: "\r\n" + Self.note(ended) + "\r\n")
+    }
+}
+
+/// Puts a session's terminal in the panel, on the card itself as in Rex: the card's color
+/// edge to edge, with the text inset like the rest of the card. The view outlives the tab
+/// being shown, so the shell keeps its state while you look at something else.
+struct TerminalHost: View {
+    let session: TerminalSession
+    @Environment(\.colorScheme) private var scheme
+    /// The card's focus: the terminal's color follows the card's as focus moves.
+    @Environment(\.cardIsFocused) private var isFocused
+
+    var body: some View {
+        TerminalRepresentable(session: session, dark: scheme == .dark, focused: isFocused)
+            // The right side already has room SwiftTerm keeps for its (hidden) scroll bar.
+            .padding(.leading, 16)
+            .padding(.top, 4)
+            .padding(.bottom, 12)
+            .background(Surface.cardFill(scheme, focused: isFocused))
+    }
+}
+
+private struct TerminalRepresentable: NSViewRepresentable {
+    let session: TerminalSession
+    let dark: Bool
+    let focused: Bool
+
+    func makeNSView(context: Context) -> LocalProcessTerminalView {
+        session.apply(dark: dark, focused: focused)
+        // A new terminal takes the keyboard, and one you go back to in the card you work in; the
+        // panel coming in beside the conversation you type in leaves the keyboard there.
+        if !session.wasShown || focused {
+            DispatchQueue.main.async { session.view.window?.makeFirstResponder(session.view) }
+        }
+        session.wasShown = true
+        context.coordinator.update(session.view, in: context)
+        return session.view
+    }
+
+    func updateNSView(_ view: LocalProcessTerminalView, context: Context) {
+        session.apply(dark: dark, focused: focused)
+        context.coordinator.update(view, in: context)
+    }
+
+    func makeCoordinator() -> PanelVisibility { PanelVisibility() }
 }
