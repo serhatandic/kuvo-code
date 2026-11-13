@@ -244,7 +244,92 @@ final class HostLimitsTests: XCTestCase {
             HostLimitRow(id: "openrouter#b", providerID: "openrouter", name: "OpenRouter", meters: [], balance: .init(left: 2, unit: "usd")),
         ], covered: ["cursor", "openrouter"])
         XCTAssertEqual(limits.rowLines(for: "cursor"), ["Credits", "On-demand"])
-        XCTAssertEqual(limits.rowLines(for: "openrouter"), [])
+        // (OpenRouter's credits are the box's too since #631 E: the phone draws them from its row.)
+        XCTAssertEqual(limits.rowLines(for: "openrouter"), ["Balance", "Credits"])
+    }
+
+    /// What a plan has beyond its windows, as the box states it (#631 E), under its bar: a capped
+    /// amount a meter, the rest amounts; credits bought a meter of what's left; its resets and what
+    /// its login can't read are rows of their own, not readings. The card's own lines of the same
+    /// facts (its "Rate Limit Resets", "Extra usage spent", OpenRouter's "Balance") don't show again.
+    func testAPlansExtrasUnderItsBarAsThePanelDrawsItsOwn() {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let store = WidgetDataStore(registry: WidgetRegistry(providers: [], descriptors: []), providers: [], defaults: testDefaults(suiteName: "HostLimitsTests.extras")!)
+        let claude = HostLimitRow(id: "claude#a", providerID: "claude", name: "Claude · Work", meters: [HostLimitRow.Meter(title: "Session", fraction: 0.88)], extras: [
+            .init(id: "extra_usage", name: "Extra Usage", kind: .capped, amount: 12.4, limit: 50, unit: "usd", resetsAt: now.addingTimeInterval(18 * 86_400)),
+            .init(id: "resets", name: "Rate Limit Resets", kind: .resets, count: 2, expiries: [now.addingTimeInterval(86_400)], usable: true, elsewhere: "hetzner"),
+        ])
+        let rows = HostLimitData.rows(claude, store: store, now: now)
+        XCTAssertEqual(rows.map(\.title), ["Session", "Extra Usage"])
+        XCTAssertTrue(rows[1].isBounded)
+        XCTAssertEqual([rows[1].used, rows[1].limit], [12.4, 50])
+        XCTAssertEqual(claude.resets?.elsewhere, "hetzner")
+        XCTAssertTrue(HostLimitData.labels(claude).isSuperset(of: ["Rate Limit Resets", "Extra usage spent"]))
+
+        let codex = HostLimitRow(id: "codex#b", providerID: "codex", name: "Codex", meters: [], extras: [.init(id: "credits", name: "Extra Usage", kind: .left, amount: 1240, unit: "credits")])
+        let credits = HostLimitData.rows(codex, store: store, now: now)
+        XCTAssertEqual(credits.map(\.unboundedDetail), ["1,240 credits"])
+        XCTAssertTrue(HostLimitData.labels(codex).contains("Credits"), "the card's own Credits line isn't shown again")
+
+        let openrouter = HostLimitRow(id: "openrouter#c", providerID: "openrouter", name: "OpenRouter", meters: [], balance: .init(left: 7.7, limit: 50, unit: "usd"), extras: [
+            .init(id: "today", name: "Today", amount: 1.84, unit: "usd", resetsAt: now.addingTimeInterval(3600)),
+            .init(id: "week", name: "This Week", amount: 9.2, unit: "usd", resetsAt: now.addingTimeInterval(-60)),
+        ])
+        let spend = HostLimitData.rows(openrouter, store: store, now: now)
+        // (This week's started over since it was read: not known now.)
+        XCTAssertEqual(spend.map(\.title), ["Credits", "Today"])
+        XCTAssertTrue(spend[0].isBounded)
+        XCTAssertEqual(spend[0].used, 50 - 7.7, accuracy: 0.001)
+        XCTAssertEqual(spend[1].unboundedDetail, "$1.84 spent")
+
+        let mac = HostLimitRow(id: "mac/claude-code", providerID: "claude", name: "Claude", meters: [], extras: [.init(id: "resets", name: "Rate Limit Resets", kind: .unreadable, message: "Can't.")])
+        XCTAssertEqual(HostLimitData.rows(mac, store: store, now: now).count, 0)
+        XCTAssertEqual(mac.unreadable?.message, "Can't.")
+        XCTAssertNil(mac.resets)
+    }
+
+    /// Using a reset from its row: asked of the box, confirmed in place, used once, done; Cancel
+    /// leaves it as it was; what the box says when it doesn't go through shows, and Retry asks again.
+    func testAResetIsAskedConfirmedInPlaceAndUsedOnce() async throws {
+        let limits = HostLimits()
+        var asked: [String] = []
+        var used: [String] = []
+        var answer = HostResetDone(succeeded: true)
+        limits.askReset = { row in
+            asked.append(row)
+            return HostResetOffer(confirm: "rsc_\(asked.count)", question: "Use 1 of 2 resets?", detail: "Your 5-hour window starts over now.")
+        }
+        limits.useReset = { _, confirm in
+            used.append(confirm)
+            return answer
+        }
+        let flow = limits.resetFlow(for: "codex#b")
+        XCTAssertTrue(limits.resetFlow(for: "codex#b") === flow, "the same flow wherever its bar is drawn")
+        flow.doneFor = .zero
+
+        await flow.begin()?.value
+        XCTAssertEqual(flow.phase, .confirming(HostResetOffer(confirm: "rsc_1", question: "Use 1 of 2 resets?", detail: "Your 5-hour window starts over now.")))
+        XCTAssertEqual(used, [], "asking spends nothing")
+        flow.cancel()
+        XCTAssertEqual(flow.phase, .idle)
+
+        await flow.begin()?.value
+        let using = flow.confirm()
+        // A second tap while it's used does nothing.
+        XCTAssertNil(flow.confirm())
+        XCTAssertNil(flow.begin())
+        await using?.value
+        XCTAssertEqual(used, ["rsc_2"])
+        XCTAssertEqual(flow.phase, .idle)
+
+        answer = HostResetDone(succeeded: false, message: "Nothing to reset: this account isn't at a limit. Nothing was used.")
+        await flow.begin()?.value
+        await flow.confirm()?.value
+        XCTAssertEqual(flow.phase, .failed("Nothing to reset: this account isn't at a limit. Nothing was used."))
+        // Retry asks again (a new confirmation).
+        await flow.begin()?.value
+        XCTAssertEqual(asked.count, 4)
+        if case .confirming(let offer) = flow.phase { XCTAssertEqual(offer.confirm, "rsc_4") } else { XCTFail("not confirming") }
     }
 
     /// The credits a row has go on the card only where the card reads nothing of its own (Cursor's):

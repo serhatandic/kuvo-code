@@ -412,11 +412,13 @@ final class HostResetFlow {
 
     var isConfirming: Bool { if case .confirming = phase { true } else { false } }
 
-    /// Use (or Retry): what it would spend is asked, then confirmed in place.
-    func begin() {
-        guard phase == .idle || phase == .done || isFailed, let ask = limits?.askReset else { return }
+    /// Use (or Retry): what it would spend is asked, then confirmed in place. (The work, for a
+    /// test to wait on.)
+    @discardableResult
+    func begin() -> Task<Void, Never>? {
+        guard phase == .idle || phase == .done || isFailed, let ask = limits?.askReset else { return nil }
         phase = .asking
-        Task {
+        return Task {
             do {
                 phase = .confirming(try await ask(row))
             } catch {
@@ -429,11 +431,12 @@ final class HostResetFlow {
         if isConfirming { phase = .idle }
     }
 
-    /// The confirmation's Use: spent, once.
-    func confirm() {
-        guard case .confirming(let offer) = phase, let use = limits?.useReset else { return }
+    /// The confirmation's Use: spent, once (a second tap meanwhile does nothing).
+    @discardableResult
+    func confirm() -> Task<Void, Never>? {
+        guard case .confirming(let offer) = phase, let use = limits?.useReset else { return nil }
         phase = .using
-        Task {
+        return Task {
             do {
                 let done = try await use(row, offer.confirm)
                 guard done.succeeded else {
@@ -523,8 +526,9 @@ enum HostLimitData {
                 data = WidgetData(title: extra.name, icon: .providerMark(row.providerID), kind: dollars ? .dollars : .count, used: extra.amount, limit: nil,
                                   countSuffix: dollars ? nil : extra.unit)
                 if extra.kind == .spent { data.unboundedValueWord = "spent" }
-                // (What's left with no cap reads as itself: "1,240 credits".)
-                else { data.values = [dollars ? MetricValue(number: extra.amount, kind: .dollars) : MetricValue(number: extra.amount, kind: .count, label: extra.unit)] }
+                // (What's left with no cap reads as itself, whole: "1,240 credits".)
+                else if dollars { data.values = [MetricValue(number: extra.amount, kind: .dollars)] }
+                else { data.valueTextOverride = "\(extra.amount.rounded(.down).formatted(.number.precision(.fractionLength(0)).locale(Locale(identifier: "en_US")))) \(extra.unit)" }
             case .resets, .unreadable:
                 continue
             }
@@ -549,8 +553,8 @@ enum HostLimitData {
     static func labels(_ row: HostLimitRow) -> Set<String> {
         var labels = Set(row.extras.map(\.name))
         for extra in row.extras { labels.formUnion(alsoCalled[extra.id] ?? []) }
-        // (Its credits, where the box states them: another card's own, OpenRouter's "Balance" say, as well.)
-        if row.balance != nil { labels.formUnion(["Credits", "Balance"]) }
+        // (Its credits, where the box states them; OpenRouter's card calls one without a total its "Balance".)
+        if row.balance != nil { labels.formUnion(ProviderAccountID.family(of: row.providerID) == "openrouter" ? ["Credits", "Balance"] : ["Credits"]) }
         return labels
     }
 
