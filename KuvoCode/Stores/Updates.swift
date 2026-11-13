@@ -100,6 +100,9 @@ nonisolated private final class UpdateSteps: NSObject, SPUUpdaterDelegate {
         let quit = { @MainActor in
             InBackground.shared.quitsForReal = true
             Analytics.shared.flush()
+            // The keeper doesn't open it for an agent's browser meanwhile (`AppOpener`): Sparkle
+            // opens it once it's installed.
+            FileManager.default.createFile(atPath: AppOpener.updateFile.path, contents: nil, attributes: [.posixPermissions: 0o600])
         }
         if Thread.isMainThread { MainActor.assumeIsolated(quit) } else { Task { @MainActor in quit() } }
     }
