@@ -24,7 +24,7 @@ final class BoxUsageHistory {
     private static let servicesKey = "usage.boxHistoryServices"
     private var zoneObserver: NSObjectProtocol?
     /// The panel's settings, kept by the same box.
-    let settings = BoxUsageSettings()
+    let settings = UsageSettingsOnBox()
 
     init() {
         HostHistory.shared.refresh = { [weak self] in self?.refresh() }
@@ -135,7 +135,7 @@ final class BoxUsageHistory {
         let fallback = usage.services.contains("codex") ? usage.codexFallback : nil
         HostHistory.shared.update(codexFallback: fallback.map { .init(model: $0.model, choices: $0.choices, chosen: $0.chosen) })
         // (The fallback model this Mac chose before its box priced Codex goes to its box with the
-        // panel's other settings, once: `BoxUsageSettings`.)
+        // panel's other settings, once: `UsageSettingsOnBox`.)
     }
 
     private func cover(_ services: Set<String>, days: [String: [HostHistoryDay]]) {

@@ -13,7 +13,7 @@ private let log = Logger(subsystem: "run.kuvo.code", category: "usage")
 /// computers; what this Mac kept before goes to its box once. This only carries them: what's newest
 /// and who gets it is the box's. A box from before them leaves the panel's own, as before.
 @MainActor
-final class BoxUsageSettings {
+final class UsageSettingsOnBox {
     private var api: OpenCodeAPI?
     private let host: HostSettings
     /// One ask of the box at a time, in order: a change made here goes after what was asked before it.
@@ -50,7 +50,7 @@ final class BoxUsageSettings {
         then { await $0.send() }
     }
 
-    private func then(_ step: @escaping @MainActor (BoxUsageSettings) async -> Void) {
+    private func then(_ step: @escaping @MainActor (UsageSettingsOnBox) async -> Void) {
         let before = work
         work = Task { [weak self] in
             await before?.value
