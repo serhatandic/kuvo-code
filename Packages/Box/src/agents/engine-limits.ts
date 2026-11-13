@@ -11,7 +11,8 @@
 // Ollama's isn't read: ollama.com tells its usage only to the Ollama app's own signing key, not to the
 // API key you sign in to Kuvo Code with.
 
-import { chatGPTIdentity, fingerprint, LimitsProblem, retryAt, xaiIdentity, type LimitedAccount, type LimitReading, type LimitsService, type LimitWindow } from "./limits"
+import { codexCredits, codexResets, readCodexResets, spendCodexReset, type ChatGPTSignIn } from "./codex-resets"
+import { chatGPTIdentity, fingerprint, LimitsProblem, retryAt, xaiIdentity, type LimitedAccount, type LimitExtra, type LimitReading, type LimitsService, type LimitWindow } from "./limits"
 
 type Window = Omit<LimitWindow, "read" | "source">
 
@@ -27,6 +28,9 @@ export const engineEndpoints = {
   chatgpt: "https://chatgpt.com/backend-api/wham/usage",
   grok: "https://cli-chat-proxy.grok.com/v1/billing?format=credits",
   copilot: "https://api.github.com/copilot_internal/user",
+  /** Your organizations, and one's billing this month: for a seat its organization pays for. */
+  githubOrgs: "https://api.github.com/user/orgs?per_page=100",
+  githubBilling: "https://api.github.com/orgs",
   openrouterKey: "https://openrouter.ai/api/v1/key",
   openrouterCredits: "https://openrouter.ai/api/v1/credits",
   zai: "https://api.z.ai/api/monitor/usage/quota/limit",
@@ -118,6 +122,16 @@ export class EngineAccounts {
               const value = this.credentials.find((each) => each.integrationID === integration)?.value
               return fingerprint(value?.refresh || value?.key || value?.access)
             },
+            // ChatGPT's reset credits, spent with its sign-in here (codex-resets.ts).
+            ...(integration === "openai"
+              ? {
+                  reset: (attempt, now) => {
+                    const credential = this.credentials.find((each) => each.integrationID === integration)
+                    const lapsed = credential?.value.expires !== undefined && credential.value.expires <= now
+                    return spendCodexReset(lapsed ? undefined : chatGPTSignInOf(credential), attempt, now)
+                  },
+                }
+              : {}),
           },
         }
         this.made.set(integration, account)
@@ -189,7 +203,20 @@ async function readChatGPT(secret: string, credential: Credential, now: number):
     if (name) windows.push(...whamWindows(extra.rate_limit, `${name}.`, name, now))
   }
   const plan = title(body?.plan_type)
-  return { windows, ...(plan ? { plan } : {}) }
+  // Its credits, and its reset credits: their list (with when each expires) where there are any.
+  const signIn = chatGPTSignInOf(credential)
+  const embedded = body?.rate_limit_reset_credits
+  const listed = signIn && Number(embedded?.available_count) > 0 ? await readCodexResets(signIn, now) : undefined
+  const extras = [codexCredits(body?.credits), listed ?? codexResets(undefined, embedded, now)].filter((extra): extra is LimitExtra => !!extra)
+  return { windows, ...(plan ? { plan } : {}), ...(extras.length ? { extras } : {}) }
+}
+
+/** The engine's ChatGPT sign-in, to read and spend its reset credits with. */
+function chatGPTSignInOf(credential: Credential | undefined): ChatGPTSignIn | undefined {
+  const token = credential?.value.access?.trim()
+  if (!token) return undefined
+  const account = credential!.value.metadata?.accountID
+  return { token, ...(typeof account === "string" && account ? { account } : {}) }
 }
 
 function whamWindows(limit: any, prefix: string, model: string | undefined, now: number): Window[] {
@@ -255,7 +282,79 @@ async function readCopilot(secret: string, _credential: Credential, now: number)
   }
   const plan = title(body?.copilot_plan)
   const login = typeof body?.login === "string" && body.login.trim() ? body.login.trim().toLowerCase() : undefined
-  return { windows, ...(plan ? { plan } : {}), ...(login ? { identity: `github:${login}` } : {}) }
+  // A seat its organization pays for by the credit (`token_based_billing`) has no meter of its own:
+  // what the organization used this month, where this sign-in may read its billing.
+  const extras = !windows.length && body?.token_based_billing === true ? await organizationCredits(secret, now) : undefined
+  return { windows, ...(plan ? { plan } : {}), ...(extras?.length ? { extras } : {}), ...(login ? { identity: `github:${login}` } : {}) }
+}
+
+/** The organization whose billing carried Copilot's credits, by sign-in (a fingerprint): asked first. */
+const billingOrgs = new Map<string, { org?: string; none?: number }>()
+/** With none found, organizations are looked through again this often. */
+const ORGS_AGAIN = 6 * 60 * 60_000
+
+const githubHeaders = (secret: string) => ({ Authorization: `token ${secret}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "Kuvo-Code" })
+
+/**
+ * A Copilot organization's credits and spend this month, as its billing summary says them: the
+ * organization last found first, else each of yours in turn. Only an owner or a billing manager
+ * may read it (anyone else is turned away, as expected), so none is usual: nothing then, never a 0.
+ */
+async function organizationCredits(secret: string, now: number): Promise<LimitExtra[] | undefined> {
+  const key = fingerprint(secret)!
+  const known = billingOrgs.get(key)
+  const read = async (org: string): Promise<LimitExtra[] | null | undefined> => {
+    try {
+      const response = await fetch(`${engineEndpoints.githubBilling}/${encodeURIComponent(org)}/settings/billing/usage/summary`, { headers: githubHeaders(secret), signal: AbortSignal.timeout(15_000) })
+      // (Turned away, or not found: not this organization's. A 429 or worse: not now.)
+      if (response.status === 429 || response.status >= 500) return undefined
+      if (!response.ok) return null
+      return billingExtras(await response.json())
+    } catch {
+      return undefined
+    }
+  }
+  if (known?.org) {
+    const extras = await read(known.org)
+    if (extras !== null) return extras ?? undefined
+    billingOrgs.delete(key)
+  } else if (known?.none && now - known.none < ORGS_AGAIN) {
+    return undefined
+  }
+  let orgs: string[]
+  try {
+    const response = await fetch(engineEndpoints.githubOrgs, { headers: githubHeaders(secret), signal: AbortSignal.timeout(15_000) })
+    // (A sign-in without `read:org` is turned away: nothing to look through.)
+    if (!response.ok) {
+      billingOrgs.set(key, { none: now })
+      return undefined
+    }
+    const body = await response.json()
+    orgs = (Array.isArray(body) ? body : []).map((each: any) => (typeof each?.login === "string" ? each.login.trim() : "")).filter(Boolean).slice(0, 30)
+  } catch {
+    return undefined
+  }
+  for (const org of orgs) {
+    const extras = await read(org)
+    if (!extras) continue
+    billingOrgs.set(key, { org })
+    return extras
+  }
+  billingOrgs.set(key, { none: now })
+  return undefined
+}
+
+/** A billing summary's Copilot credits and what they cost beyond those included; null where it has none. */
+export function billingExtras(body: any): LimitExtra[] | null {
+  const items = Array.isArray(body?.usageItems) ? body.usageItems : null
+  if (!items) return null
+  const copilot = items.filter((item: any) => String(item?.product ?? "").trim().toLowerCase() === "copilot" && ["ai-units", "ai-credits"].includes(String(item?.unitType ?? "").trim().toLowerCase()))
+  if (!copilot.length) return null
+  const sum = (field: string) => copilot.reduce((total: number, item: any) => total + Math.max(0, number(item?.[field]) ?? 0), 0)
+  return [
+    { id: "org_credits", name: "Org Credits", kind: "spent", amount: sum("grossQuantity"), unit: "credits" },
+    { id: "org_spend", name: "Org Spend", kind: "spent", amount: sum("netAmount"), unit: "usd" },
+  ]
 }
 
 /** OpenRouter: the key's own cap, if it has one, and the account's credits left. */
@@ -273,13 +372,34 @@ async function readOpenRouter(secret: string, _credential: Credential, now: numb
     const credits = (await fetched(engineEndpoints.openrouterCredits, headers, now, "OpenRouter"))?.data
     const total = number(credits?.total_credits)
     const spent = number(credits?.total_usage)
-    if (total !== undefined && spent !== undefined) balance = { left: Math.max(0, total - spent), unit: "usd" }
+    // (With what was bought, so a client draws what's left of it.)
+    if (total !== undefined && spent !== undefined) balance = { left: Math.max(0, total - spent), ...(total > 0 ? { limit: total } : {}), unit: "usd" }
   } catch (caught) {
     // A key that can't read the account's credits (a provisioned one) still has its own cap.
     if (!windows.length) throw caught
   }
   const plan = key?.is_free_tier === true ? "Free tier" : key?.is_free_tier === false ? "Pay as you go" : undefined
-  return { windows, ...(balance ? { balance } : {}), ...(plan ? { plan } : {}) }
+  // What the key spent today, this week and this month (OpenRouter's days, weeks and months are UTC's).
+  const extras: LimitExtra[] = []
+  for (const [field, id, name, ends] of [["usage_daily", "today", "Today", endOfDay], ["usage_weekly", "week", "This Week", endOfWeek], ["usage_monthly", "month", "This Month", endOfMonth]] as const) {
+    const spent = number(key?.[field])
+    if (spent !== undefined) extras.push({ id, name, kind: "spent", amount: Math.max(0, spent), unit: "usd", resetsAt: ends(now) })
+  }
+  return { windows, ...(balance ? { balance } : {}), ...(plan ? { plan } : {}), ...(extras.length ? { extras } : {}) }
+}
+
+const endOfDay = (now: number) => {
+  const day = new Date(now)
+  return Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate() + 1)
+}
+/** Its weeks start on Monday. */
+const endOfWeek = (now: number) => {
+  const day = new Date(now)
+  return Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate() + 7 - ((day.getUTCDay() + 6) % 7))
+}
+const endOfMonth = (now: number) => {
+  const day = new Date(now)
+  return Date.UTC(day.getUTCFullYear(), day.getUTCMonth() + 1, 1)
 }
 
 /** Z.ai's coding plan: its windows by length, and the month's web searches. */

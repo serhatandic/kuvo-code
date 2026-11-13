@@ -1,7 +1,9 @@
 // What a bot asks you before it does it (PROTOCOL.md, "Work": `kuvo/work/asks`): making a
-// project, or cloning one. Kept in `run/work/asks.json` until you answer, on whichever client you
-// use; what you answer is done here, on the box, and its tool hears of it. "Always" is kept with the
-// bot (`work.allowed` in its bot.json), so it asks once for each kind; Edit Bot takes it back.
+// project, or cloning one; and what any agent asks before it uses one of your plans' resets
+// (`use_limit_reset`). Kept in `run/work/asks.json` until you answer, on whichever client you
+// use; what you answer is done here, on the box, and its tool hears of it. A project's "Always" is
+// kept with the bot (`work.allowed` in its bot.json), so it asks once for each kind; Edit Bot takes
+// it back. A reset's is kept with the account (`limits-resets.ts`); Settings › Accounts takes it back.
 
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -9,7 +11,8 @@ import path from "node:path";
 import { isObject } from "../../shared/json";
 import { pause } from "../../shared/wait";
 import { botHere, changeDescription, noteBotsChanged } from "../bots/here";
-import { asked, peerPlaces } from "../engine/client";
+import { asked, bridgeTarget, peerPlaces } from "../engine/client";
+import { resetAskWords, spendReset, type ResetGiven } from "./plan-reset";
 import { sendInto } from "../engine/queue";
 import { boxNote } from "../../shared/queues";
 import { messageID } from "../engine/sessions";
@@ -27,15 +30,17 @@ import type { WorkAskShape } from "../../shared/routes/work";
 export const WORK_ASKS = path.join(WORK_FOLDER, "asks.json");
 const LOCK = path.join(WORK_FOLDER, ".asks.lock");
 
-/** What may be asked: making a project, or cloning one into a new project. */
-export type WorkAction = "makeProject" | "cloneProject";
-export const WORK_ACTIONS: readonly WorkAction[] = ["makeProject", "cloneProject"];
+/** What may be asked: making a project, or cloning one into a new project; using a plan's reset. */
+export type WorkAction = "makeProject" | "cloneProject" | "resetLimits";
+export const WORK_ACTIONS: readonly WorkAction[] = ["makeProject", "cloneProject", "resetLimits"];
+/** What a bot may be allowed Always (kept with it): a project's; a reset's is the account's. */
+const BOT_ACTIONS = ["makeProject", "cloneProject"] as const;
 
 /** An ask as it's kept: as it's listed, what it was given, and once answered, how it went (and
  * whether its tool had stopped waiting, so its conversation is told instead). */
 export interface KeptAsk extends WorkAskShape {
-  /** What make_project was given, with the folder named for it as a full path (`namedPlace`). */
-  given: { name: string; git?: boolean; clone?: string; folder?: string };
+  /** What make_project was given, with the folder named for it as a full path (`namedPlace`); or the reset asked for. */
+  given: { name: string; git?: boolean; clone?: string; folder?: string; reset?: ResetGiven };
   late?: boolean;
   /** For one answered after its tool stopped waiting: whether its conversation has been told. */
   toldLate?: boolean;
@@ -78,6 +83,8 @@ function changeKept<T>(change: (asks: KeptAsk[]) => T, file = WORK_ASKS): T {
 export function workAsks(file = WORK_ASKS): WorkAskShape[] {
   return readKept(file).filter(each => !each.answered && (!each.bot || botHere(each.bot))).map(kept => {
     const { given: _, late: __, answering: ____, answered: ___, toldLate: _____, ...listed } = kept;
+    // A reset's: the account and what it has, nothing of folders.
+    if (kept.action === "resetLimits") return { ...listed, folder: null };
     // Where it would go, as it stands now: the folder may have been picked since (unless one was
     // named for it).
     const root = projectsFolder();
@@ -95,13 +102,13 @@ export function workAsks(file = WORK_ASKS): WorkAskShape[] {
 export function botAllows(bot: string | undefined, action: WorkAction): boolean {
   if (!bot) return false;
   const work = botHere(bot)?.described.work;
-  return isObject(work) && Array.isArray(work.allowed) && work.allowed.includes(action);
+  return (BOT_ACTIONS as readonly WorkAction[]).includes(action) && isObject(work) && Array.isArray(work.allowed) && work.allowed.includes(action);
 }
 
 /** What you allowed `bot` to do without asking, as it's kept. */
-export function allowedOf(described: Record<string, unknown>): WorkAction[] {
+export function allowedOf(described: Record<string, unknown>): ("makeProject" | "cloneProject")[] {
   const work = described.work;
-  return isObject(work) && Array.isArray(work.allowed) ? WORK_ACTIONS.filter(each => (work.allowed as unknown[]).includes(each)) : [];
+  return isObject(work) && Array.isArray(work.allowed) ? BOT_ACTIONS.filter(each => (work.allowed as unknown[]).includes(each)) : [];
 }
 
 // "Always": `action` kept with the bot, for its next time (with what's in its description now).
@@ -142,8 +149,9 @@ export function askWork(asker: Asker, action: WorkAction, given: KeptAsk["given"
       ...(asker.bot ? { bot: asker.bot } : {}),
       project: given.name,
       ...(given.clone ? { clone: given.clone } : {}),
-      folderName: given.folder ? path.basename(given.folder) : folderName(given.name) ?? given.name,
-      folder: given.folder ?? projectPlace(given.name),
+      ...(action === "resetLimits" && given.reset
+        ? { folderName: "", folder: null, reset: given.reset }
+        : { folderName: given.folder ? path.basename(given.folder) : folderName(given.name) ?? given.name, folder: given.folder ?? projectPlace(given.name) }),
       at: Date.now(),
       given,
     };
@@ -175,8 +183,14 @@ export async function answerOf(id: string, { wait = 10 * 60_000, every = 1000, s
   }, file);
 }
 
-/** What the asked action does, in its maker's words; done now. */
-export async function doWork(action: WorkAction, given: KeptAsk["given"], asker: Asker): Promise<{ text: string; isError: boolean }> {
+/** What the asked action does, in its maker's words; done now. `always`: a reset's Always Allow, kept with the account first. */
+export async function doWork(action: WorkAction, given: KeptAsk["given"], asker: Asker, always = false): Promise<{ text: string; isError: boolean }> {
+  if (action === "resetLimits") {
+    const bridge = bridgeTarget();
+    if (!given.reset) return { text: "There's no reset to use in that ask.", isError: true };
+    if (!bridge) return { text: `The coding agents aren't running on ${HERE} now, so the reset wasn't used.`, isError: true };
+    return spendReset(bridge, given.reset.row, asker.name, { always });
+  }
   const madeBy = asker.bot ? { bot: asker.bot, name: asker.name, at: Date.now() } : null;
   const outcome = await makeProject({ name: given.name, git: given.git, clone: action === "cloneProject" ? given.clone : undefined, folder: given.folder }, madeBy);
   if ("refused" in outcome) return { text: outcome.refused.message, isError: true };
@@ -200,7 +214,7 @@ export async function answerWork(id: string, given: Record<string, unknown>, tar
   // The projects folder, picked with the first: only where none is, and kept once it's claimed (not
   // for one with a folder named for it).
   let picked: string | null = null;
-  if (answer !== "deny" && !projectsFolder() && !ask.given.folder) {
+  if (answer !== "deny" && ask.action !== "resetLimits" && !projectsFolder() && !ask.given.folder) {
     if (given.folder === undefined || given.folder === null) return { refused: { status: 400, message: "Pick the folder new projects go in." } };
     const checked = folderGiven(given.folder);
     if ("refused" in checked) return { refused: { status: 400, message: checked.refused } };
@@ -215,7 +229,7 @@ export async function answerWork(id: string, given: Record<string, unknown>, tar
   }, file);
   if (!claimed) return { refused: { status: 404, message: "That's been answered, or it isn't asked any more." } };
   const asker: Asker = { session: ask.session, name: ask.name, ...(ask.bot ? { bot: ask.bot } : {}) };
-  const what = ask.action === "cloneProject" ? `cloning ${ask.clone} as ${ask.project}` : `making ${ask.project}`;
+  const what = ask.action === "resetLimits" ? `using one of ${ask.project}'s resets` : ask.action === "cloneProject" ? `cloning ${ask.clone} as ${ask.project}` : `making ${ask.project}`;
   let outcome: { text: string; isError: boolean };
   if (answer === "deny" && given.overnight === true) {
     outcome = { text: `No one could answer ${what} overnight, so it's no for now. Go on without it; it waits for the user in the morning report.`, isError: true };
@@ -225,8 +239,8 @@ export async function answerWork(id: string, given: Record<string, unknown>, tar
     // Whatever goes wrong is its answer, so the ask is never left half answered.
     try {
       if (picked && !projectsFolder()) setProjectsFolder(picked);
-      if (answer === "always" && ask.bot) allowAlways(ask.bot, ask.action);
-      outcome = await doWork(ask.action, ask.given, asker);
+      if (answer === "always" && ask.bot && (BOT_ACTIONS as readonly WorkAction[]).includes(ask.action)) allowAlways(ask.bot, ask.action);
+      outcome = await doWork(ask.action, ask.given, asker, answer === "always");
     } catch (error) {
       outcome = { text: `Couldn't do it: ${String((error as Error | null)?.message ?? error)}`, isError: true };
     }
@@ -279,6 +293,7 @@ export async function tellLateAnswers(targets: () => Target[], file = WORK_ASKS,
 
 /** The ask in words for a notification: who asks, and what. */
 export function workAskWords(ask: WorkAskShape): { title: string; body: string } {
+  if (ask.action === "resetLimits" && ask.reset) return resetAskWords(ask.name, ask.reset);
   const where = ask.folder ? ` in ${shownPath(path.dirname(ask.folder))}` : "";
   return ask.action === "cloneProject"
     ? { title: `${ask.name} asks to clone a project`, body: `${ask.clone ?? ""} as ${ask.project}${where}` }

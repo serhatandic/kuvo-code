@@ -11,13 +11,19 @@
 import { createHash } from "node:crypto"
 import { readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
-import { LimitsProblem, retryAt, type LimitReading, type LimitWindow } from "../limits"
+import { LimitsProblem, retryAt, type LimitExtra, type LimitReading, type LimitWindow, type ResetAttempt, type ResetOutcome } from "../limits"
 
 /** Where the reads go: Anthropic's, or a test's stand-in. */
 export const claudeUsage = { url: "https://api.anthropic.com/api/oauth/usage" }
 
 /** Fifteen minutes between two reads of an account. */
 export const CLAUDE_LIMITS_EVERY = 15 * 60_000
+
+/** An hour between two reads of an account's reset grants. */
+export const CLAUDE_GRANTS_EVERY = 60 * 60_000
+
+/** Why a Mac's Claude token shows no extra usage or resets. */
+export const MAC_TOKEN_CANT = "This Mac's Claude sign-in can only run Claude, so its extra usage and resets show only from a computer of yours signed in to Claude Code with the same account."
 
 /** A sign-in to read with: its token, and what Claude Code kept of it beside. */
 export interface ClaudeSignIn {
@@ -215,7 +221,151 @@ export async function readClaudeLimits(signIn: ClaudeSignIn | undefined, version
   } catch {
     throw new LimitsProblem("failed", "Anthropic's answer wasn't what Kuvo Code reads.")
   }
-  return { windows: claudeWindows(body), ...(plan ? { plan } : {}) }
+  const extra = claudeExtraUsage(body?.extra_usage)
+  return { windows: claudeWindows(body), ...(plan ? { plan } : {}), ...(extra ? { extras: [extra] } : {}) }
+}
+
+/**
+ * Claude's extra usage, where it's on (`extra_usage`, in cents): what's used of its monthly cap, or,
+ * without one, what's spent.
+ */
+export function claudeExtraUsage(value: any): LimitExtra | undefined {
+  if (!value || typeof value !== "object" || value.is_enabled !== true) return undefined
+  const used = Number(value.used_credits)
+  if (!Number.isFinite(used)) return undefined
+  const limit = Number(value.monthly_limit)
+  const resets = typeof value.resets_at === "string" ? Date.parse(value.resets_at) : NaN
+  const resetsAt = Number.isFinite(resets) ? { resetsAt: resets } : {}
+  if (Number.isFinite(limit) && limit > 0) return { id: "extra_usage", name: "Extra Usage", kind: "capped", amount: Math.max(0, used) / 100, limit: limit / 100, unit: "usd", ...resetsAt }
+  return { id: "extra_usage", name: "Extra Usage", kind: "spent", amount: Math.max(0, used) / 100, unit: "usd", ...resetsAt }
+}
+
+/** Anthropic's one-off resets of an account's limits (its `cedar_ember` program), as last read. */
+export interface ClaudeGrants {
+  eligible: boolean
+  grants: { id: string; left: number; endsAt?: number; clears: string[] }[]
+  /** The grant a reset spends now, as Anthropic names it. */
+  next?: string
+}
+
+/** The grants Anthropic states (`cedar_ember`); none for a plan outside the program, or one not read whole (never half trusted). */
+export function claudeGrants(value: any): ClaudeGrants | undefined {
+  if (!value || typeof value !== "object") return undefined
+  const grants: ClaudeGrants["grants"] = []
+  for (const grant of Array.isArray(value.grants) ? value.grants : []) {
+    const left = Number(grant?.resets_left)
+    if (typeof grant?.id !== "string" || !grant.id || !Number.isFinite(left)) return undefined
+    const ends = typeof grant.ends_at === "string" ? Date.parse(grant.ends_at) : typeof grant.ends_at === "number" ? grant.ends_at * (grant.ends_at < 1e12 ? 1000 : 1) : NaN
+    grants.push({ id: grant.id, left: Math.max(0, Math.floor(left)), ...(Number.isFinite(ends) ? { endsAt: ends } : {}), clears: Array.isArray(grant.clears) ? grant.clears.filter((each: unknown) => typeof each === "string") : [] })
+  }
+  return { eligible: value.eligible === true, grants, ...(typeof value.next_grant_id === "string" && value.next_grant_id ? { next: value.next_grant_id } : {}) }
+}
+
+/** The grant a reset would spend now: the one Anthropic names next, with a reset left, for an eligible account. */
+export function claimableGrant(grants: ClaudeGrants | undefined, now: number): ClaudeGrants["grants"][number] | undefined {
+  if (!grants?.eligible || !grants.next) return undefined
+  return grants.grants.find((grant) => grant.id === grants.next && grant.left > 0 && (grant.endsAt === undefined || grant.endsAt > now))
+}
+
+/** The grants as a `resets` extra: each reset left of an unexpired grant, for an eligible account. */
+export function grantsExtra(grants: ClaudeGrants, now: number): LimitExtra {
+  let count = 0
+  const expiries: number[] = []
+  if (grants.eligible) {
+    for (const grant of grants.grants) {
+      if (grant.left < 1 || (grant.endsAt !== undefined && grant.endsAt <= now)) continue
+      count += grant.left
+      if (grant.endsAt !== undefined) expiries.push(...Array(Math.min(grant.left, 50)).fill(grant.endsAt))
+    }
+  }
+  const next = claimableGrant(grants, now)
+  return { id: "resets", name: "Rate Limit Resets", kind: "resets", count, ...(expiries.length ? { expiries: expiries.sort((a, b) => a - b).slice(0, 50) } : {}), ...(next?.clears.length ? { refills: next.clears } : {}), usable: !!next }
+}
+
+/** Claude Code's own headers, as it reads its plan with its sign-in. */
+const claudeHeaders = (token: string, version: string | undefined) => ({
+  Authorization: `Bearer ${token.trim()}`,
+  Accept: "application/json",
+  "Content-Type": "application/json",
+  "anthropic-beta": "oauth-2025-04-20",
+  ...(version ? { "User-Agent": `claude-cli/${version} (external, cli)` } : {}),
+})
+
+/**
+ * The account's grants, read now as Claude Code reads them when it checks for a reset to offer
+ * (`cedar_ember=1&skip_spend=1`; Anthropic turns away a client it doesn't take for Claude Code's).
+ * Anthropic limits this read hard: the box asks it at most hourly an account. Throws when it can't.
+ */
+export async function readClaudeGrants(signIn: ClaudeSignIn, version: string | undefined): Promise<ClaudeGrants | undefined> {
+  const url = new URL(claudeUsage.url)
+  url.searchParams.set("cedar_ember", "1")
+  url.searchParams.set("skip_spend", "1")
+  const response = await fetch(url, { headers: claudeHeaders(signIn.token, version), signal: AbortSignal.timeout(15_000) })
+  if (!response.ok) throw new Error(`Anthropic answered ${response.status}.`)
+  return claudeGrants(((await response.json()) as any)?.cedar_ember)
+}
+
+/** The organization a sign-in claims against: as Claude Code keeps it beside the sign-in, else as Anthropic's profile says. */
+export async function claudeOrganization(configHome: string | undefined, signIn: ClaudeSignIn, version: string | undefined): Promise<string | undefined> {
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  const kept = configHome ? claudeIdentity(configHome)?.split("|")[1] : undefined
+  if (kept && uuid.test(kept)) return kept
+  try {
+    const response = await fetch(new URL("profile", claudeUsage.url), { headers: claudeHeaders(signIn.token, version), signal: AbortSignal.timeout(15_000) })
+    if (!response.ok) return undefined
+    const organization = ((await response.json()) as any)?.organization?.uuid
+    return typeof organization === "string" && uuid.test(organization) ? organization : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Spends one reset grant, as Claude Code does (`POST /api/organizations/<org>/reset_rate_limits`,
+ * with the request id the box's journal keeps: asked again, Anthropic answers `already_used`).
+ * `grant`: the one to spend, as last read (`claimableGrant`).
+ */
+export async function claimClaudeGrant(signIn: ClaudeSignIn | undefined, version: string | undefined, organization: string | undefined, grant: string | undefined, attempt: ResetAttempt): Promise<{ outcome: ResetOutcome; until?: number }> {
+  const target = attempt.target ?? grant
+  if (!signIn || !target) return { outcome: "no-reset" }
+  if (!organization || !/^[a-z0-9_-]{1,40}$/.test(target) || !/^[A-Za-z0-9_-]{1,64}$/.test(attempt.request)) return { outcome: "failed" }
+  if (!attempt.target) attempt.keep(target)
+  try {
+    const response = await fetch(new URL(`../organizations/${organization}/reset_rate_limits`, claudeUsage.url.replace(/\/oauth\/usage$/, "/oauth/")), {
+      method: "POST",
+      headers: claudeHeaders(signIn.token, version),
+      body: JSON.stringify({ program: "cedar_ember", grant_id: target, request_id: attempt.request }),
+      signal: AbortSignal.timeout(25_000),
+    })
+    if (!response.ok) return { outcome: "failed" }
+    const body: any = await response.json().catch(() => undefined)
+    const cooldown = typeof body?.cooldown_until === "string" ? Date.parse(body.cooldown_until) : NaN
+    const until = Number.isFinite(cooldown) ? { until: cooldown } : {}
+    const code = body?.result === "unavailable" ? body?.reason : body?.result
+    switch (code) {
+      case "reset":
+      case "already_used":
+        return { outcome: "reset" }
+      case "not_limited":
+        return { outcome: "nothing-to-reset" }
+      case "ineligible":
+      case "no_grant":
+      case "unknown_grant":
+      case "not_next_grant":
+        return { outcome: "no-reset" }
+      case "reset_unconfirmed":
+      case "stamp_indeterminate":
+        return { outcome: "unconfirmed" }
+      case "cooldown":
+      case "paused":
+      case "low_priority_active":
+        return { outcome: "not-now", ...until }
+      default:
+        return { outcome: "failed" }
+    }
+  } catch {
+    return { outcome: "failed" }
+  }
 }
 
 /**

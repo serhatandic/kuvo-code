@@ -11,6 +11,7 @@ import { join } from "node:path"
 import { ClaudeAgent } from "../../src/agents/agents/claude"
 import { claudeUsage } from "../../src/agents/agents/claude-limits"
 import { CodexAgent } from "../../src/agents/agents/codex"
+import { codexResetEndpoints } from "../../src/agents/codex-resets"
 import type { Agent } from "../../src/agents/agent"
 import { subscribe } from "../../src/agents/events"
 import { agentAccounts, Limits, limitsRoutes, type AccountLimits } from "../../src/agents/limits"
@@ -27,6 +28,9 @@ afterEach(() => {
 class Anthropic {
   answers = new Map<string, () => Response>()
   reads: { token: string; agent: string | null; beta: string | null }[] = []
+  /** Each sign-in's reset grants, and every read of them. */
+  grants = new Map<string, () => Response>()
+  grantReads: { token: string; agent: string | null }[] = []
   private waiting: (() => void)[] = []
   /** Once the next read has come. */
   nextRead() {
@@ -37,6 +41,11 @@ class Anthropic {
     port: 0,
     fetch: (request) => {
       const token = (request.headers.get("authorization") ?? "").replace(/^Bearer /, "")
+      // Its reset grants: Claude Code's own read of them, apart (at most hourly an account).
+      if (new URL(request.url).searchParams.get("cedar_ember") === "1") {
+        this.grantReads.push({ token, agent: request.headers.get("user-agent") })
+        return this.grants.get(token)?.() ?? Response.json({ cedar_ember: null })
+      }
       this.reads.push({ token, agent: request.headers.get("user-agent"), beta: request.headers.get("anthropic-beta") })
       for (const resolve of this.waiting.splice(0)) resolve()
       return this.answers.get(token)?.() ?? new Response("{}", { status: 401 })
@@ -197,6 +206,42 @@ describe("Claude on Linux", () => {
     writeFileSync(join(folder, ".credentials.json"), JSON.stringify({ claudeAiOauth: oauth }))
   }
   const signedIn = (folder: string, token: string) => credentials(folder, { accessToken: token, expiresAt: clock.at + 30 * 86_400_000, scopes: ["user:inference", "user:profile"], subscriptionType: "max", rateLimitTier: "default_claude_max_20x" })
+
+  test("its extra usage, and its reset grants read at most hourly: a failed read of them keeps what was read, never none", async () => {
+    const folder = join(home, "claude", "home")
+    signedIn(folder, "token-own")
+    anthropic.answers.set("token-own", usage(30, 50, { extra_usage: { is_enabled: true, used_credits: 1240, monthly_limit: 5000 } }))
+    const grants = (left: number) => () => Response.json({ cedar_ember: { eligible: true, next_grant_id: "promo_one", grants: [{ id: "promo_one", resets_left: left, ends_at: "2026-11-20T00:00:00.000Z", clears: ["five_hour", "seven_day"] }] } })
+    anthropic.grants.set("token-own", grants(2))
+    const claude = new TestClaude(home, { id: "default", home: folder })
+    const limits = new Limits(() => agentAccounts([claude]), undefined, clock.now)
+    await limits.tick()
+    const extras = () => (limits.list()[0]?.extras ?? []).map((extra) => [extra.id, extra.kind, extra.amount ?? extra.count, extra.limit ?? null])
+    expect(extras()).toEqual([["extra_usage", "capped", 12.4, 50], ["resets", "resets", 2, null]])
+    // As Claude Code asks it, with Claude Code's own user agent (Anthropic offers grants to no other).
+    expect(anthropic.grantReads).toEqual([{ token: "token-own", agent: "claude-cli/2.1.300 (external, cli)" }])
+
+    // A read a quarter of an hour on: its windows again, its grants as they were.
+    anthropic.grants.set("token-own", grants(1))
+    clock.pass(15 * 60_000)
+    await limits.tick()
+    expect(anthropic.grantReads).toHaveLength(1)
+    expect(extras()[1]).toEqual(["resets", "resets", 2, null])
+    // An hour after: read again. Then Anthropic turns that read away: what was read stands.
+    clock.pass(45 * 60_000)
+    await limits.tick()
+    expect(anthropic.grantReads).toHaveLength(2)
+    expect(extras()[1]).toEqual(["resets", "resets", 1, null])
+    anthropic.grants.set("token-own", () => new Response("{}", { status: 429 }))
+    clock.pass(60 * 60_000)
+    await limits.tick()
+    expect(anthropic.grantReads).toHaveLength(3)
+    expect(extras()[1]).toEqual(["resets", "resets", 1, null])
+    // (Not asked again on the next read: a failed one counts as the hour's.)
+    clock.pass(15 * 60_000)
+    await limits.tick()
+    expect(anthropic.grantReads).toHaveLength(3)
+  })
 
   /** Two accounts, signed in in Kuvo Code's folders. */
   function two() {
@@ -472,6 +517,47 @@ describe("Codex", () => {
       ["secondary", 0.4, 10_080, undefined, 1_794_200_000_000],
       ["codex_spark.primary", 0.03, 300, "GPT-5.3-Codex-Spark", 1_794_200_000_000],
     ])
+  })
+
+  test("its credits, as Codex reads them, and its reset credits, from ChatGPT with its own sign-in: read again while Codex isn't, and kept when a read of them fails", async () => {
+    const folder = join(home, "codex-homes", "c1")
+    mkdirSync(folder, { recursive: true })
+    const token = `eyJhbGciOiJSUzI1NiJ9.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acct-9" } })).toString("base64url")}.signature`
+    writeFileSync(join(folder, "auth.json"), JSON.stringify({ tokens: { access_token: token, account_id: "acct-9" } }))
+    let credits: unknown[] = [{ id: "c-1", status: "available", expires_at: "2026-11-20T00:00:00Z" }, { id: "c-0", status: "redeemed", expires_at: "2026-11-19T00:00:00Z" }]
+    let failing = false
+    const seen: (string | null)[] = []
+    const chatgpt = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: (request) => {
+      seen.push(request.headers.get("chatgpt-account-id"))
+      return failing ? new Response("{}", { status: 502 }) : Response.json({ available_count: credits.filter((each: any) => each.status === "available").length, credits })
+    } })
+    const real = codexResetEndpoints.list
+    codexResetEndpoints.list = `http://127.0.0.1:${chatgpt.port}/list`
+    try {
+      const window = { usedPercent: 12, windowDurationMins: 300, resetsAt: 1_794_200_000 }
+      const launcher = fakeCodex(home, { type: "chatgpt", planType: "plus" }, { rateLimits: { limitId: "codex", primary: window, credits: { hasCredits: true, unlimited: false, balance: "50.7" } } })
+      codex = new (class extends CodexAgent { override executable() { return launcher } })({ home, temporary: home, deps: {} as any }, { id: "c1", home: folder })
+      const limits = new Limits(() => agentAccounts([codex!]), undefined, clock.now)
+      await limits.tick()
+      const extras = () => (limits.list()[0]?.extras ?? []).map((extra) => [extra.id, extra.kind, extra.amount ?? extra.count, extra.expiries ?? null])
+      expect(extras()).toEqual([["credits", "left", 50, null], ["resets", "resets", 1, [Date.parse("2026-11-20T00:00:00Z")]]])
+      expect(seen).toEqual(["acct-9"])
+      // Codex stops; ten minutes on, its reset credits are read again (spent on the website meanwhile), its windows as they were.
+      codex.shutdown?.()
+      credits = []
+      clock.pass(10 * 60_000)
+      await limits.tick()
+      expect(extras()).toEqual([["credits", "left", 50, null], ["resets", "resets", 0, null]])
+      expect(limits.list()[0]!.windows.map((each) => each.used)).toEqual([0.12])
+      // ChatGPT fails the next read: what was read stands, never none.
+      failing = true
+      clock.pass(10 * 60_000)
+      await limits.tick()
+      expect(extras()).toEqual([["credits", "left", 50, null], ["resets", "resets", 0, null]])
+    } finally {
+      codexResetEndpoints.list = real
+      chatgpt.stop(true)
+    }
   })
 
   test("once read, it's read again only while Codex runs here anyway: a read never starts one", async () => {

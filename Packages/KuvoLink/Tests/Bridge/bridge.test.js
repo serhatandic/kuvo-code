@@ -1596,6 +1596,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "letters-read": ["POST", "kuvo/agent-tools"],
     // (Each account's plan limits, on the coding agents' bridge.)
     limits: ["GET", "kuvo/agents/api/kuvo/limits"],
+    // (Using a plan's resets, and the agents' tool for it: the bridge's `limits/reset`.)
+    "limits.resets": ["POST", "kuvo/agents/api/kuvo/limits/reset"],
     "mcp.catalog": ["GET", "kuvo/mcp/catalog"],
     "models.offered": ["GET", "kuvo/models/offered"],
     moves: ["GET", "kuvo/moves"],

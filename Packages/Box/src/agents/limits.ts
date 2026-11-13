@@ -18,6 +18,7 @@ import { parseProvider } from "./accounts"
 import type { Agent } from "./agent"
 import { emit } from "./events"
 import type { LimitsPeers } from "./limits-peers"
+import { resetRoutes, type LimitResets } from "./limits-resets"
 import { limitRows, type LimitRow } from "./limits-rows"
 
 /** The services whose limits a box states, by the name clients know them by (their marks and colors). */
@@ -52,25 +53,75 @@ export interface LimitWindow {
 }
 
 /**
- * A fact of a plan beyond its windows (PROTOCOL.md, "Plan limits", `extras`). So far only what an
- * account spent with no limit to it (Cursor's on-demand spend without a cap); #631 piece E adds the
- * rest (reset grants, credits to spend, a key's spend by period) as further `kind`s.
+ * A fact of a plan beyond its windows (PROTOCOL.md, "Plan limits", `extras`), by `kind`:
+ * - `spent`: an amount used so far, with no limit to it (`amount`, `unit`): Cursor's on-demand
+ *   spend, Claude's extra usage without a cap, an OpenRouter key's spend today, this week and this
+ *   month, a Copilot organization's credits and spend this month;
+ * - `capped`: an amount used of a limit (`amount` of `limit`, `unit`): Claude's extra usage with a
+ *   monthly cap;
+ * - `left`: an amount left to spend, with no cap to it (`amount`, `unit`): Codex's credits;
+ * - `resets`: resets of the plan's limits the account holds (`count`; each one's expiry, soonest
+ *   first, `expiries`; the windows one refills, where its maker says, `refills`), whether one can be
+ *   used now (`usable`), and, in a row, the computer that would use it (`on`): Claude's reset
+ *   grants, Codex's reset credits;
+ * - `unreadable`: what this sign-in can't read (`message`): a Mac's Claude token, which can only
+ *   run Claude, can't read its extra usage or resets.
+ * A kind a newer box states is passed on as told, its other plain fields kept as they came.
  */
 export interface LimitExtra {
-  /** Its own name for it, the same from every box: `on_demand`. */
+  /** Its own name for it, the same from every box: `on_demand`, `extra_usage`, `resets`, `today`… */
   id: string
-  /** What a client calls it, as its maker's own label ("On-demand"). */
+  /** What a client calls it, as its maker's own label ("On-demand", "Extra Usage", "Rate Limit Resets"). */
   name: string
-  /**
-   * `spent`: an amount used so far, with no limit to it (`amount`, `unit`). A kind a newer box
-   * states (piece E's) is passed on as told, its other fields kept as they came.
-   */
-  kind: "spent" | (string & {})
+  kind: "spent" | "capped" | "left" | "resets" | "unreadable" | (string & {})
   amount?: number
+  /** For `capped`: the most it may come to. */
+  limit?: number
   unit?: "usd" | "credits" | "requests"
   /** When it starts over, in ms since 1970, where its maker says. */
   resetsAt?: number
+  /** For `resets`: how many there are now. */
+  count?: number
+  /** For `resets`: when each expires, soonest first (ms), where its maker says. */
+  expiries?: number[]
+  /** For `resets`: the windows one refills (`five_hour`, `seven_day`), where its maker says. */
+  refills?: string[]
+  /** For `resets`: whether one can be used now, from this sign-in. */
+  usable?: boolean
+  /** For `resets`, in a row: the computer of yours that would use one (this box's first). */
+  on?: { key: string; name: string; here?: true }
+  /** For `resets`: agents may use one without asking (Always Allow, kept with the account that spends them). */
+  agents?: true
+  /** For `unreadable`: why, in words. */
+  message?: string
   [more: string]: unknown
+}
+
+/** How spending a reset went (`LimitsSource.reset`), as its maker answered. */
+export type ResetOutcome =
+  /** Done: the windows it refills started over (or this same ask was done before). */
+  | "reset"
+  /** Its maker took it but couldn't say it went through (Anthropic's `reset_unconfirmed`). */
+  | "unconfirmed"
+  /** Nothing to reset: the account isn't at a limit. Nothing was spent. */
+  | "nothing-to-reset"
+  /** No reset to spend (used, expired, or this account can't). Nothing was spent. */
+  | "no-reset"
+  /** Can't be used just now (a cooldown, its maker holding reads off): `until`, where it says. */
+  | "not-now"
+  /** It didn't go through, or no answer came: asked again with the same request, it can't spend twice. */
+  | "failed"
+
+/**
+ * One reset being spent: the request it goes as (its maker's idempotency key) and what it spends
+ * (`target`: Anthropic's grant, Codex's credit), kept in the box's journal before any request goes,
+ * so a retry (after a crash, a lost answer) is the same request and spends at most once.
+ */
+export interface ResetAttempt {
+  request: string
+  target?: string
+  /** Keeps `target` in the journal: called before the request that spends it. */
+  keep(target: string): void
 }
 
 /** What an agent read of its plan just now. */
@@ -84,6 +135,12 @@ export interface LimitReading {
   balance?: { left: number; limit?: number; unit: "usd" | "credits" }
   /** What the plan has beyond its windows (`LimitExtra`). */
   extras?: LimitExtra[]
+  /**
+   * Only these extras were read now (Codex's reset credits, between reads of its windows): each
+   * takes the place of the one of its `id`, and nothing else of the account changes, nor counts as
+   * read.
+   */
+  extrasOnly?: true
   /** Who the account is, where only its maker's answer says (GitHub's login): as `LimitsSource.identity`. */
   identity?: string
 }
@@ -146,6 +203,19 @@ export interface LimitsSource {
    * (`signIn` where there's none).
    */
   account?(): string | undefined
+  /**
+   * What's always so of it, read or not (a Mac's Claude token can't read its extra usage or
+   * resets: `unreadable`): listed where nothing read says otherwise.
+   */
+  facts?(): LimitExtra[]
+  /**
+   * Spends one of the account's resets (its `resets` extra), with its own sign-in: its maker's
+   * answer, as a `ResetOutcome`. Never throws. `limits.ts`' journal (`limits-resets.ts`) keeps the
+   * attempt before it's called, so a retry is the same request.
+   */
+  reset?(attempt: ResetAttempt, now: number): Promise<{ outcome: ResetOutcome; until?: number }>
+  /** A reset was spent (or may have been): what's kept of its resets is read again, now. */
+  afterReset?(): void
 }
 
 /** An account whose limits are read: a coding agent's, or a sign-in of the engine's. */
@@ -267,6 +337,19 @@ export class Limits {
   /** Your other computers' readings, once the bridge's link is there to carry them (`LimitsPeers`). */
   peers?: LimitsPeers
 
+  /** Spending resets, and whether agents may without asking (`limits-resets.ts`). */
+  resets?: LimitResets
+
+  /** This box's account of this provider, as it's read. */
+  account(provider: string): LimitedAccount | undefined {
+    return this.accounts().find((account) => account.provider === provider)
+  }
+
+  /** Something of this box's own accounts changed besides a reading (Always Allow): told and kept. */
+  ownChanged() {
+    this.changed()
+  }
+
   /** Every account across your computers, one row each (`limits-rows.ts`): this box's first. */
   rows(): LimitRow[] {
     const own = this.list(false)
@@ -336,7 +419,7 @@ export class Limits {
         ...(entry.plan ? { plan: entry.plan } : {}),
         windows: entry.windows,
         ...(entry.balance ? { balance: entry.balance } : {}),
-        ...(entry.extras?.length ? { extras: entry.extras } : {}),
+        ...(extrasOf(entry, account.limits) ? { extras: extrasOf(entry, account.limits, this.resets?.agentsMay(account.provider)) } : {}),
         ...(entry.checked ? { checked: entry.checked } : {}),
         // (One only its turns tell of is never read.)
         ...(account.limits.read ? { next: entry.next } : {}),
@@ -344,6 +427,32 @@ export class Limits {
       })
     }
     return listed
+  }
+
+  /** This box's account a row stands for (its id as `rows` name it), if it's one of this box's. */
+  accountOf(rowID: string): LimitedAccount | undefined {
+    const own = this.peers?.ownKey() ?? ""
+    return this.accounts().find((account) => {
+      const identity = this.entries.get(account.provider)?.identity
+      return (identity ? `${account.service}#${identity}` : `${own}/${account.provider}`) === rowID
+    })
+  }
+
+  /** Accounts to read here at their next round whoever else read them lately (a reset was spent here). */
+  private forced = new Set<string>()
+
+  /**
+   * Reads this account again now, here, as its maker allows (a reset was spent: what it refilled
+   * shows at once), and waits for that round.
+   */
+  readAgain(provider: string): Promise<void> {
+    const entry = this.entries.get(provider)
+    if (!entry) return Promise.resolve()
+    entry.next = 0
+    entry.elsewhere = undefined
+    this.forced.add(provider)
+    // (A round under way may have passed it already: one more after it.)
+    return this.tick().then(() => (this.forced.has(provider) ? this.tick() : undefined))
   }
 
   /** Who an account here is (`identityOf`), as last known: what its usage rows go by too. */
@@ -439,7 +548,7 @@ export class Limits {
       // Read on another of your computers lately: not asked again here, but a little after that
       // computer's next read, should it not have read it by then (PROTOCOL.md, "Plan limits").
       const known = says || (entry.identityAs !== undefined && entry.identityAs === as) ? entry.identity : undefined
-      const elsewhere = known ? this.peers?.fresh(account.service, known) : undefined
+      const elsewhere = known && !this.forced.has(account.provider) ? this.peers?.fresh(account.service, known) : undefined
       if (elsewhere !== undefined && at - elsewhere < source.every) {
         entry.elsewhere = elsewhere
         entry.next = elsewhere + source.every + SHARED_SLACK
@@ -461,6 +570,7 @@ export class Limits {
       // account of its maker at once); taken back when nothing went.
       const before = source.bucket ? this.asked.get(source.bucket) : undefined
       if (source.bucket) this.asked.set(source.bucket, at)
+      this.forced.delete(account.provider)
       const sent = await this.readOne(source, entry)
       if (source.bucket && !sent) {
         if (before === undefined) this.asked.delete(source.bucket)
@@ -488,6 +598,13 @@ export class Limits {
       entry.next = at + source.every
       // Nothing to read now: as it was.
       if (!reading) return false
+      // Only some of its extras, read between its windows: each in place of its own, nothing else.
+      if (reading.extrasOnly) {
+        const given = reading.extras ?? []
+        const kept = (entry.extras ?? []).filter((extra) => !given.some((each) => each.id === extra.id))
+        entry.extras = [...kept, ...given].length ? [...kept, ...given] : undefined
+        return true
+      }
       entry.checked = at
       entry.plan = reading.plan ?? entry.plan
       entry.balance = reading.balance
@@ -689,6 +806,13 @@ export class Limits {
   }
 }
 
+/** What an account has beyond its windows: as read, else what's always so of it (`facts`). */
+function extrasOf(entry: Entry, source: LimitsSource, agentsMay = false): LimitExtra[] | undefined {
+  if (entry.extras?.length) return agentsMay ? entry.extras.map((extra) => (extra.kind === "resets" ? { ...extra, agents: true } : extra)) : entry.extras
+  const facts = source.facts?.()
+  return facts?.length ? facts : undefined
+}
+
 function clamp(used: number) {
   return Number.isFinite(used) ? Math.min(Math.max(used, 0), 1) : 0
 }
@@ -710,8 +834,10 @@ const json = (value: unknown, status = 200) => new Response(JSON.stringify(value
  * api/kuvo/limits/refresh` reads what may be read now, here and, for an account only on another of
  * your computers, there, and answers the same once it's read (PROTOCOL.md, "Plan limits").
  */
-export async function limitsRoutes(limits: Limits | undefined, method: string, rest: string[]): Promise<Response> {
+export async function limitsRoutes(limits: Limits | undefined, method: string, rest: string[], body: () => Promise<any> = async () => undefined): Promise<Response> {
   if (!limits) return json({ message: "Plan limits aren't read on this computer." }, 503)
+  // Spending a reset (limits-resets.ts).
+  if (rest[0] === "reset") return resetRoutes(limits.resets, method, rest.slice(1), body)
   const answer = () => json({ data: { accounts: limits.list(), services: limits.services(), rows: limits.rows() } })
   if (!rest.length && method === "GET") return answer()
   if (rest.length === 1 && rest[0] === "refresh" && method === "POST") {

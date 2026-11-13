@@ -59,6 +59,7 @@ import { HangWatch, isEngine } from "../shared/hang"
 import { notesBeside } from "./notes"
 import { agentAccounts, BOX_ONLY_SERVICES, Limits } from "./limits"
 import { LimitsPeers } from "./limits-peers"
+import { LimitResets } from "./limits-resets"
 import { PricingStore } from "./usage/pricing"
 import { antigravitySources, claudeSources, codexSources, cursorSources, engineCodexSource, engineHostedSources, grokSources, Usage, USAGE_SERVICES, UsageSettings } from "./usage/usage"
 import { antigravityTransport } from "./usage/antigravity-plan"
@@ -294,6 +295,8 @@ const limits = new Limits(() => [...agentAccounts(roster.all()), ...engineAccoun
 limits.alsoServices = [...ENGINE_SERVICES, ...BOX_ONLY_SERVICES]
 // Shared with your other computers' boxes: each account read once across them, and listed on each.
 peers.limits = new LimitsPeers(limits, post, directory, join(home, "limits-peers.json"))
+// Spending their resets, here or on the computer with the sign-in, once each (a journal of each).
+peers.resets = new LimitResets(limits, join(home, "limits-resets.json"), Date.now, post, directory)
 // What each account used, by the quarter hour, from its agent's logs here, priced; shared the same
 // way. Prices come from the web only to a real box's bridge: never in a test, however it started
 // this (the Mac app's tests start it through the app; test-safety.js also says

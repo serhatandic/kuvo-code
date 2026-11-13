@@ -95,6 +95,11 @@ export class LimitsPeers {
     transport.onFollowed?.(() => this.told.clear())
   }
 
+  /** This box's key, as the link names it ("" until it says). */
+  ownKey(): string {
+    return this.directory.own()?.key ?? ""
+  }
+
   /** The newest time a peer read this account from its maker (on this box's clock), if any did. */
   fresh(service: LimitsService, identity: string): number | undefined {
     return this.freshest(service, identity)?.checked
@@ -259,16 +264,32 @@ const time = (value: unknown) => (typeof value === "number" && Number.isFinite(v
 const MOST_EXTRA = 1_000
 
 /**
- * What a peer's account has beyond its windows, as kept: a `spent` one checked; one of a kind this
- * box doesn't know yet (a newer box's, #631 piece E's) passed on as told, but only its plain fields
+ * What a peer's account has beyond its windows, as kept: one of a kind this box knows checked
+ * (`LimitExtra`); one of a kind this box doesn't know yet (a newer box's) passed on as told, but only its plain fields
  * (text, numbers, true or false) and only while it's small, so a newer box's facts survive a hop
  * through this one.
  */
 function takenExtra(extra: any): LimitExtra[] {
   if (!extra || typeof extra !== "object" || Array.isArray(extra) || !text(extra.id) || !text(extra.name, 100) || !text(extra.kind, 40)) return []
-  if (extra.kind === "spent") {
-    if (typeof extra.amount !== "number" || !Number.isFinite(extra.amount) || !["usd", "credits", "requests"].includes(extra.unit)) return []
-    return [{ id: text(extra.id)!, name: text(extra.name, 100)!, kind: "spent", amount: extra.amount, unit: extra.unit, ...(time(extra.resetsAt) ? { resetsAt: extra.resetsAt } : {}) }]
+  const named = { id: text(extra.id)!, name: text(extra.name, 100)! }
+  const amount = (value: unknown) => typeof value === "number" && Number.isFinite(value)
+  const unit = ["usd", "credits", "requests"].includes(extra.unit)
+  const resets = time(extra.resetsAt) ? { resetsAt: extra.resetsAt } : {}
+  switch (extra.kind) {
+    case "spent":
+    case "left":
+      return amount(extra.amount) && unit ? [{ ...named, kind: extra.kind, amount: extra.amount, unit: extra.unit, ...resets }] : []
+    case "capped":
+      return amount(extra.amount) && amount(extra.limit) && extra.limit > 0 && unit ? [{ ...named, kind: "capped", amount: extra.amount, limit: extra.limit, unit: extra.unit, ...resets }] : []
+    case "resets": {
+      if (!amount(extra.count) || extra.count < 0) return []
+      const expiries = (Array.isArray(extra.expiries) ? extra.expiries : []).filter((at: unknown) => time(at) !== undefined).slice(0, 50)
+      const refills = (Array.isArray(extra.refills) ? extra.refills : []).map((each: unknown) => text(each, 40)).filter(Boolean).slice(0, 10)
+      // (Where it's used is worked out by each box from its own rows: never taken as told.)
+      return [{ ...named, kind: "resets", count: Math.floor(extra.count), ...(expiries.length ? { expiries } : {}), ...(refills.length ? { refills } : {}), usable: extra.usable === true, ...(extra.agents === true ? { agents: true as const } : {}) }]
+    }
+    case "unreadable":
+      return text(extra.message, 500) ? [{ ...named, kind: "unreadable", message: text(extra.message, 500)! }] : []
   }
   const plain = Object.fromEntries(
     Object.entries(extra)
