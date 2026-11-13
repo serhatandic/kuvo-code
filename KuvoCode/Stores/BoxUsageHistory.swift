@@ -66,6 +66,8 @@ final class BoxUsageHistory {
     }
 
     private var fallback: Task<Void, Never>?
+    /// This Mac's earlier Codex fallback model is on its way to the box (once).
+    private var broughtFallback = false
 
     /// Has the box read its logs now (the panel's Refresh), and your other computers theirs.
     func refresh() {
@@ -125,10 +127,15 @@ final class BoxUsageHistory {
         cover(Set(usage.services), days: Self.days(usage))
         let fallback = usage.services.contains("codex") ? usage.codexFallback : nil
         HostHistory.shared.update(codexFallback: fallback.map { .init(model: $0.model, choices: $0.choices, chosen: $0.chosen) })
-        // The fallback model this Mac chose before its box priced Codex (Settings › Usage kept it
-        // here), taken to its box once, while the box has none chosen (none counts as chosen).
-        if let fallback, !fallback.chosen, let mine = HostHistory.localCodexFallback, fallback.choices.contains(mine) {
-            Task { [weak self] in _ = await self?.setCodexFallback(mine) }
+        // The fallback model this Mac chose before its box priced Codex (the panel kept it here),
+        // taken to its box once, while the box has none chosen (none counts as chosen). Goes with
+        // the panel's own Codex pricing (#631 piece H), once every Mac's box has taken it.
+        if let fallback, !fallback.chosen, !broughtFallback, let mine = HostHistory.localCodexFallback, fallback.choices.contains(mine) {
+            broughtFallback = true
+            Task { [weak self] in
+                guard let self else { return }
+                if await !self.setCodexFallback(mine) { self.broughtFallback = false }
+            }
         }
     }
 

@@ -1,6 +1,6 @@
 // @bun
 // Packages/Box/src/agents/main.ts
-import { mkdirSync as mkdirSync25, readdirSync as readdirSync19, readFileSync as readFileSync36, rmSync as rmSync17 } from "fs";
+import { mkdirSync as mkdirSync25, readdirSync as readdirSync19, readFileSync as readFileSync35, rmSync as rmSync17 } from "fs";
 import { basename as basename13, dirname as dirname22, join as join37 } from "path";
 
 // Packages/Box/src/agents/accounts.ts
@@ -18555,7 +18555,7 @@ async function branchRoutes(places, method, parts, body) {
 // Packages/Box/src/agents/usage/usage.ts
 import { execFileSync as execFileSync2 } from "child_process";
 import { createHash as createHash11 } from "crypto";
-import { lstatSync as lstatSync8, mkdirSync as mkdirSync20, readFileSync as readFileSync28, realpathSync as realpathSync7, renameSync as renameSync16, writeFileSync as writeFileSync21 } from "fs";
+import { lstatSync as lstatSync8, mkdirSync as mkdirSync20, readFileSync as readFileSync27, realpathSync as realpathSync7, renameSync as renameSync16, writeFileSync as writeFileSync21 } from "fs";
 import { homedir as homedir5, hostname } from "os";
 import { basename as basename11, dirname as dirname16, join as join32 } from "path";
 
@@ -20236,8 +20236,7 @@ function codexStateFrom(value) {
 }
 
 // Packages/Box/src/agents/usage/engine-codex.ts
-import { Database } from "bun:sqlite";
-import { readdirSync as readdirSync16, readFileSync as readFileSync27, statSync as statSync11 } from "fs";
+import { readdirSync as readdirSync16, statSync as statSync11 } from "fs";
 import { join as join30 } from "path";
 function engineDatabases(folder) {
   let names;
@@ -20256,46 +20255,76 @@ var SIGN_IN = `SELECT json_extract(doc,'$.type') = 'oauth' AND (length(trim(COAL
   ORDER BY active DESC, time_updated DESC, id DESC
   LIMIT 1;`;
 var TABLES = "SELECT group_concat(name) FROM sqlite_master WHERE type='table' AND name IN ('message','session_message');";
-var MOST_MS = 1000000000000000;
-var missingTable = (error) => /no such table/i.test(error instanceof Error ? error.message : String(error));
-function signInOf(db, folder) {
-  let imported = false;
+var READER = `
+import { Database } from "bun:sqlite"
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
+const missingTable = (error) => /no such table/i.test(error instanceof Error ? error.message : String(error))
+const numberOf = (value) => (typeof value === "number" && Number.isFinite(value) ? value : typeof value === "string" && /^\\s*[+-]?(\\d+\\.?\\d*|\\.\\d+)([eE][+-]?\\d+)?\\s*$/.test(value) && Number.isFinite(Number(value)) ? Number(value) : undefined)
+const isOAuth = (entry) => !!entry && typeof entry === "object" && entry.type === "oauth" && ["access", "refresh"].some((field) => typeof entry[field] === "string" && entry[field].trim() !== "")
+function signIn(db, folder, sql) {
+  let imported = false
   try {
-    imported = db.query(IMPORTED).values().length > 0;
+    imported = db.query(sql.imported).values().length > 0
   } catch (error) {
-    if (!missingTable(error))
-      throw error;
+    if (!missingTable(error)) throw error
   }
   if (imported) {
     try {
-      const row = db.query(SIGN_IN).values()[0];
-      if (!row)
-        return { oauth: false };
-      const since = row[1] === null ? undefined : numberOf(row[1]);
-      if (row[1] !== null && (since === undefined || since < 0 || since > MOST_MS))
-        throw new Error("credential row is malformed");
-      return { oauth: row[0] === 1, ...since !== undefined ? { since } : {} };
+      const row = db.query(sql.signIn).values()[0]
+      // (Signed out: the row is gone, and the auth.json it was imported from doesn't count.)
+      if (!row) return { oauth: false }
+      // (When it was made, in ms: none bounds nothing.)
+      const since = row[1] === null ? undefined : numberOf(row[1])
+      if (row[1] !== null && (since === undefined || since < 0 || since > 1e15)) throw new Error("credential row is malformed")
+      return { oauth: row[0] === 1, since }
     } catch (error) {
-      if (!missingTable(error))
-        throw error;
+      if (!missingTable(error)) throw error
     }
   }
-  let text;
+  let text
   try {
-    text = readFileSync27(join30(folder, "auth.json"), "utf8");
+    text = readFileSync(join(folder, "auth.json"), "utf8")
   } catch (error) {
-    if (error.code === "ENOENT")
-      return { oauth: false };
-    throw error;
+    if (error && error.code === "ENOENT") return { oauth: false }
+    throw error
   }
-  const entry = JSON.parse(text)?.openai;
-  return { oauth: isOAuth(entry) };
+  return { oauth: isOAuth(JSON.parse(text)?.openai) }
 }
-function isOAuth(entry) {
-  if (!entry || typeof entry !== "object" || entry.type !== "oauth")
-    return false;
-  return ["access", "refresh"].some((field) => typeof entry[field] === "string" && entry[field].trim() !== "");
+self.onmessage = (event) => {
+  const { paths, folder, sql } = event.data
+  const jsons = []
+  let oauth = false
+  let read = false
+  let failed
+  for (const path of paths) {
+    let db
+    try {
+      db = new Database(path, { readonly: true })
+      // (The engine may be writing: wait a little for it.)
+      db.exec("PRAGMA busy_timeout = 2000")
+      const found = signIn(db, folder, sql)
+      if (!found.oauth) continue
+      oauth = true
+      const names = String(db.query(sql.tables).values()[0]?.[0] ?? "").split(",").map((name) => name.trim())
+      const v1 = names.includes("message")
+      const v2 = names.includes("session_message")
+      if (!v1 && !v2) continue
+      const query = db.query(v1 && v2 ? sql.both : v1 ? sql.v1 : sql.v2)
+      const json = (v2 ? query.values({ $oauthSince: found.since ?? 0 }) : query.values())[0]?.[0]
+      if (typeof json === "string") jsons.push(json)
+      read = true
+    } catch (error) {
+      failed = error instanceof Error ? error.message : String(error)
+    } finally {
+      db?.close()
+    }
+  }
+  postMessage({ oauth, read, failed, jsons })
 }
+`;
+var readerURL;
+var READ_FOR = 120000;
 var COMPLETED = "(json_type(data,'$.time.completed') IN ('integer','real') OR json_type(data,'$.finish') = 'text')";
 function rowsSQL(table, role, creationCutoff, extra = "") {
   return `
@@ -20307,14 +20336,14 @@ function rowsSQL(table, role, creationCutoff, extra = "") {
     AND json_extract(data,'$.cost') = 0
     AND ${role}${extra}`;
 }
-function dataSQL(cutoff, tables, oauthSince) {
+function dataSQL(cutoff, tables) {
   const creationCutoff = Math.trunc(cutoff) - 7 * 86400000;
   const bodies = [];
   if (tables.v1)
     bodies.push(rowsSQL("message", `json_extract(data,'$.role') = 'assistant' AND ${COMPLETED}`, creationCutoff));
   if (tables.v2)
-    bodies.push(rowsSQL("session_message", `((type = 'assistant' AND ${COMPLETED}) OR (type = 'compaction' AND json_extract(data,'$.status') = 'completed'))`, creationCutoff, oauthSince !== undefined ? `
-    AND COALESCE(json_extract(data,'$.time.completed'),time_created) >= ${Math.trunc(oauthSince)}` : ""));
+    bodies.push(rowsSQL("session_message", `((type = 'assistant' AND ${COMPLETED}) OR (type = 'compaction' AND json_extract(data,'$.status') = 'completed'))`, creationCutoff, `
+    AND COALESCE(json_extract(data,'$.time.completed'),time_created) >= $oauthSince`));
   return `SELECT json_group_array(json_array(
          COALESCE(json_extract(data,'$.time.completed'),time_created),
          json_extract(data,'$.cost'),
@@ -20380,38 +20409,31 @@ function deduplicated(rows) {
   return [...without, ...byID.values()];
 }
 function engineCodexRows(folder, since) {
-  const rows = [];
-  let oauth = false;
-  let read = false;
-  let failed;
-  for (const path of engineDatabases(folder)) {
-    let db;
-    try {
-      db = new Database(path, { readonly: true });
-      db.exec("PRAGMA busy_timeout = 2000");
-      const signIn = signInOf(db, folder);
-      if (!signIn.oauth)
-        continue;
-      oauth = true;
-      const names = String(db.query(TABLES).values()[0]?.[0] ?? "").split(",").map((name) => name.trim());
-      const tables = { v1: names.includes("message"), v2: names.includes("session_message") };
-      if (!tables.v1 && !tables.v2)
-        continue;
-      const json = db.query(dataSQL(since, tables, signIn.since)).values()[0]?.[0];
-      if (typeof json === "string")
-        rows.push(...parseRows(json));
-      read = true;
-    } catch (error) {
-      failed = error;
-    } finally {
-      db?.close();
-    }
-  }
-  if (!oauth)
-    return;
-  if (!read && failed !== undefined)
-    throw failed;
-  return rows;
+  const paths = engineDatabases(folder);
+  if (!paths.length)
+    return Promise.resolve(undefined);
+  const sql = { imported: IMPORTED, signIn: SIGN_IN, tables: TABLES, v1: dataSQL(since, { v1: true, v2: false }), v2: dataSQL(since, { v1: false, v2: true }), both: dataSQL(since, { v1: true, v2: true }) };
+  readerURL ??= URL.createObjectURL(new Blob([READER], { type: "application/javascript" }));
+  const worker = new Worker(readerURL);
+  worker.unref?.();
+  let timer;
+  return new Promise((resolve, reject) => {
+    timer = setTimeout(() => reject(new Error("The engine's database took too long to read.")), READ_FOR);
+    worker.onmessage = (event) => {
+      const { oauth, read, failed, jsons } = event.data;
+      if (!oauth)
+        resolve(undefined);
+      else if (!read && failed !== undefined)
+        reject(new Error(failed));
+      else
+        resolve(jsons.flatMap(parseRows));
+    };
+    worker.onerror = (event) => reject(new Error(event.message));
+    worker.postMessage({ paths, folder, sql });
+  }).finally(() => {
+    clearTimeout(timer);
+    worker.terminate();
+  });
 }
 function engineCodexSlots(rows, pricing, since) {
   const slots = noSlots();
@@ -20890,13 +20912,12 @@ class Usage {
       ...Object.keys(partial).length ? { partial } : {}
     };
   }
-  async setCodexFallback(model) {
+  setCodexFallback(model) {
     if (!this.settings)
       return false;
     if (model !== null && !this.pricing.current().fallbackOptions("codex").includes(model))
       return false;
     this.settings.setCodexFallback(model);
-    this.refresh();
     return true;
   }
   ownSaid = "";
@@ -20916,7 +20937,7 @@ class Usage {
     if (!this.file)
       return;
     try {
-      const saved = JSON.parse(readFileSync28(this.file, "utf8"));
+      const saved = JSON.parse(readFileSync27(this.file, "utf8"));
       for (const [provider, kept] of Object.entries(saved?.accounts ?? {})) {
         if (!kept || typeof kept !== "object")
           continue;
@@ -20952,7 +20973,7 @@ async function usageRoutes(usage, method, rest, params, body = async () => ({}))
     const model = given && typeof given === "object" ? given.fallback : undefined;
     if (model !== null && typeof model !== "string")
       return json8({ message: "Say {codex: {fallback}}: a model, or null for none." }, 400);
-    if (!await usage.setCodexFallback(model === "" ? null : model))
+    if (!usage.setCodexFallback(model === "" ? null : model))
       return json8({ message: "That model can't estimate Codex's prices here." }, 400);
     await Promise.race([usage.refresh(), new Promise((resolve) => setTimeout(resolve, 5000).unref?.())]);
     return json8({ data: usage.view(zone) });
@@ -20973,7 +20994,7 @@ function placeOf(computer, folder) {
 `).update(computer).update(`
 `).update(real).digest("hex").slice(0, 16);
 }
-function thisComputer(platform = process.platform, read = (path) => readFileSync28(path, "utf8"), macUUID = () => uuidOf(ioreg()), name = hostname) {
+function thisComputer(platform = process.platform, read = (path) => readFileSync27(path, "utf8"), macUUID = () => uuidOf(ioreg()), name = hostname) {
   if (platform === "darwin") {
     const uuid = macUUID();
     if (uuid)
@@ -21066,7 +21087,7 @@ class UsageSettings {
     if (!file)
       return;
     try {
-      const saved = JSON.parse(readFileSync28(file, "utf8"))?.codex;
+      const saved = JSON.parse(readFileSync27(file, "utf8"))?.codex;
       if (saved && typeof saved === "object" && "fallback" in saved) {
         this.chosen = true;
         if (typeof saved.fallback === "string" && saved.fallback && saved.fallback.length <= 200)
@@ -21112,6 +21133,10 @@ function codexSources(folder, fallback = () => {
       for (const root of agent.conversationRoots())
         if (!isLink(root) && !owner.has(realOf(root)))
           owner.set(realOf(root), agent.providerID);
+    for (const agent of codex)
+      for (const root of agent.conversationRoots())
+        if (!owner.has(realOf(root)))
+          owner.set(realOf(root), agent.providerID);
     return codex.map((agent) => {
       const parsed = parseProvider(agent.providerID);
       const roots = () => agent.conversationRoots().filter((root) => (owner.get(realOf(root)) ?? agent.providerID) === agent.providerID);
@@ -21156,7 +21181,7 @@ function codexSources(folder, fallback = () => {
 function engineCodexSource(folder, signedIn, computer = ownComputer) {
   let last;
   return () => {
-    if (!folder || !signedIn())
+    if (!folder || signedIn() === false)
       return [];
     return [
       {
@@ -21167,7 +21192,7 @@ function engineCodexSource(folder, signedIn, computer = ownComputer) {
           const stamp = engineStamp(folder);
           if (last && last.stamp === stamp && last.pricing === pricing && last.since === since)
             return last.slots;
-          const rows = engineCodexRows(folder, since);
+          const rows = await engineCodexRows(folder, since);
           const slots = rows ? engineCodexSlots(rows, pricing, since) : noSlots();
           last = { stamp, pricing, since, slots };
           return slots;
@@ -21295,7 +21320,7 @@ async function updateAll(agents, accounts, noted, known) {
 // Packages/Box/src/agents/sessions.ts
 import { createHash as createHash12 } from "crypto";
 import { spawn as spawnProcess } from "child_process";
-import { readFileSync as readFileSync29, realpathSync as realpathSync8, statSync as statSync12 } from "fs";
+import { readFileSync as readFileSync28, realpathSync as realpathSync8, statSync as statSync12 } from "fs";
 import { homedir as homedir6 } from "os";
 import { dirname as dirname17, join as join33, resolve as resolve8 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
@@ -24629,7 +24654,7 @@ function withTextFiles(text, files) {
     let contents;
     if (!file.mime.startsWith("image/") && file.mime !== "application/pdf") {
       try {
-        const bytes = file.data ? Buffer.from(file.data, "base64") : file.path && statSync12(file.path).isFile() && statSync12(file.path).size <= textFileLimit ? readFileSync29(file.path) : undefined;
+        const bytes = file.data ? Buffer.from(file.data, "base64") : file.path && statSync12(file.path).isFile() && statSync12(file.path).size <= textFileLimit ? readFileSync28(file.path) : undefined;
         if (bytes && !bytes.includes(0))
           contents = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
       } catch {}
@@ -26059,7 +26084,7 @@ function seatRules(folder, askFirst, denies) {
 }
 
 // Packages/Box/src/agents/groups/store.ts
-import { existsSync as existsSync17, mkdirSync as mkdirSync21, readdirSync as readdirSync17, readFileSync as readFileSync30, renameSync as renameSync17, rmSync as rmSync15, writeFileSync as writeFileSync22 } from "fs";
+import { existsSync as existsSync17, mkdirSync as mkdirSync21, readdirSync as readdirSync17, readFileSync as readFileSync29, renameSync as renameSync17, rmSync as rmSync15, writeFileSync as writeFileSync22 } from "fs";
 import { join as join35 } from "path";
 var version2 = 1;
 function isTurning(value) {
@@ -26102,14 +26127,14 @@ function isMessages(value) {
 var forgottenFor = 3 * 86400000;
 var read2 = (file) => {
   try {
-    return JSON.parse(readFileSync30(file, "utf8"));
+    return JSON.parse(readFileSync29(file, "utf8"));
   } catch {
     return;
   }
 };
 var text3 = (file) => {
   try {
-    return readFileSync30(file, "utf8");
+    return readFileSync29(file, "utf8");
   } catch {
     return;
   }
@@ -26314,7 +26339,7 @@ class GroupStore {
 }
 
 // Packages/Box/src/agents/groups/named.ts
-import { readFileSync as readFileSync31 } from "fs";
+import { readFileSync as readFileSync30 } from "fs";
 var start = "<named-agents>";
 var end = "</named-agents>";
 var heading = "Agents the user named with & in this message, by their address. Read one's conversation with read_conversation only when what the user asks needs what it knows or did, and write to it with send_message only to ask it something or hand it work; when the user only mentions one, do neither:";
@@ -26322,7 +26347,7 @@ function readDirectory(file) {
   if (!file)
     return { machine: null, agents: [] };
   try {
-    const value = JSON.parse(readFileSync31(file, "utf8"));
+    const value = JSON.parse(readFileSync30(file, "utf8"));
     const agents = Array.isArray(value?.agents) ? value.agents.filter((agent) => agent && typeof agent.session === "string" && agent.session.startsWith("ses_") && typeof agent.name === "string" && agent.name) : [];
     return { machine: typeof value?.machine === "string" ? value.machine : null, agents };
   } catch {
@@ -26922,14 +26947,14 @@ async function make(runner, store, given, here) {
 }
 
 // Packages/Box/src/agents/groups/post.ts
-import { existsSync as existsSync18, readFileSync as readFileSync33, renameSync as renameSync19, writeFileSync as writeFileSync24 } from "fs";
+import { existsSync as existsSync18, readFileSync as readFileSync32, renameSync as renameSync19, writeFileSync as writeFileSync24 } from "fs";
 
 // Packages/Box/src/shared/seats.ts
 var SEAT_MAIL_KINDS = ["turn", "state", "result", "steer", "stop", "drop", "work", "held", "report", "memory"];
 
 // Packages/Box/src/agents/usage/usage-peers.ts
 import { createHash as createHash14 } from "crypto";
-import { mkdirSync as mkdirSync22, readFileSync as readFileSync32, renameSync as renameSync18, writeFileSync as writeFileSync23 } from "fs";
+import { mkdirSync as mkdirSync22, readFileSync as readFileSync31, renameSync as renameSync18, writeFileSync as writeFileSync23 } from "fs";
 import { dirname as dirname19 } from "path";
 var isUsageMail = (value) => value !== null && typeof value === "object" && value.kind === "usage";
 var MINUTE3 = 60000;
@@ -27135,7 +27160,7 @@ class UsagePeers {
     if (!this.file)
       return;
     try {
-      const saved = JSON.parse(readFileSync32(this.file, "utf8"));
+      const saved = JSON.parse(readFileSync31(this.file, "utf8"));
       for (const [key, kept] of Object.entries(saved.peers ?? {})) {
         if (!kept || typeof kept.heard !== "number" || !Array.isArray(kept.accounts))
           continue;
@@ -30000,7 +30025,7 @@ class PeerPost {
     let kept = [];
     try {
       if (file && existsSync18(file))
-        kept = JSON.parse(readFileSync33(file, "utf8"));
+        kept = JSON.parse(readFileSync32(file, "utf8"));
     } catch {}
     this.kept = Array.isArray(kept) ? kept.filter((line) => line && typeof line.id === "string" && typeof line.to === "string" && isSeatMail(line.mail)) : [];
   }
@@ -31115,7 +31140,7 @@ function updateUnderWay(run) {
 import { spawn as spawn6 } from "child_process";
 
 // Packages/Box/src/agents/store.ts
-import { mkdirSync as mkdirSync23, readdirSync as readdirSync18, readFileSync as readFileSync34, renameSync as renameSync20, rmSync as rmSync16, statSync as statSync14, writeFileSync as writeFileSync25 } from "fs";
+import { mkdirSync as mkdirSync23, readdirSync as readdirSync18, readFileSync as readFileSync33, renameSync as renameSync20, rmSync as rmSync16, statSync as statSync14, writeFileSync as writeFileSync25 } from "fs";
 import { join as join36 } from "path";
 
 class Store {
@@ -31128,14 +31153,14 @@ class Store {
     for (const id of readdirSync18(root)) {
       try {
         const folder = join36(root, id);
-        const session = JSON.parse(readFileSync34(join36(folder, "session.json"), "utf8"));
+        const session = JSON.parse(readFileSync33(join36(folder, "session.json"), "utf8"));
         let messages = [];
         try {
-          messages = JSON.parse(readFileSync34(join36(folder, "messages.json"), "utf8"));
+          messages = JSON.parse(readFileSync33(join36(folder, "messages.json"), "utf8"));
         } catch {}
         let agent = {};
         try {
-          agent = JSON.parse(readFileSync34(join36(folder, "agent.json"), "utf8"));
+          agent = JSON.parse(readFileSync33(join36(folder, "agent.json"), "utf8"));
         } catch {}
         this.records.set(session.id, { session, messages, agent });
       } catch {}
@@ -31381,7 +31406,7 @@ class HangWatch {
 var isEngine = (command) => /\bserve\b/.test(command) && !command.includes("kuvo-link");
 
 // Packages/Box/src/agents/limits-peers.ts
-import { mkdirSync as mkdirSync24, readFileSync as readFileSync35, renameSync as renameSync21, writeFileSync as writeFileSync26 } from "fs";
+import { mkdirSync as mkdirSync24, readFileSync as readFileSync34, renameSync as renameSync21, writeFileSync as writeFileSync26 } from "fs";
 import { dirname as dirname21 } from "path";
 var MINUTE4 = 60000;
 var TELL_AGAIN2 = 10 * MINUTE4;
@@ -31542,7 +31567,7 @@ class LimitsPeers {
     if (!this.file)
       return;
     try {
-      const saved = JSON.parse(readFileSync35(this.file, "utf8"));
+      const saved = JSON.parse(readFileSync34(this.file, "utf8"));
       for (const [key, kept] of Object.entries(saved.peers ?? {})) {
         if (!kept || typeof kept.heard !== "number" || !Array.isArray(kept.accounts))
           continue;
@@ -31779,7 +31804,7 @@ var usageSettings = new UsageSettings(join37(usageFolder, "settings.json"));
 var claudeUsage2 = claudeSources(usageFolder);
 var codexUsage = codexSources(usageFolder, () => usageSettings.codexFallback);
 var engineData = process.env.KUVO_ENGINE_DB_FOLDER || (onMachine && machineHome ? process.env.KUVO_ENGINE_DATA || join37(machineHome, "data", "opencode") : undefined);
-var engineCodexUsage = engineCodexSource(engineData, () => engineAccounts.accounts().some((account) => account.provider === "openai"));
+var engineCodexUsage = engineCodexSource(engineData, () => engineAccounts.answered ? engineAccounts.accounts().some((account) => account.provider === "openai") : undefined);
 var usage = new Usage(() => [...claudeUsage2(roster.all()), ...codexUsage(roster.all()), ...engineCodexUsage()], new PricingStore(join37(usageFolder, "pricing"), noPriceFeeds ? null : undefined), (provider) => limits.identity(provider), join37(usageFolder, "usage.json"));
 usage.settings = usageSettings;
 peers.usage = new UsagePeers(usage, post, directory, join37(usageFolder, "peers.json"));
@@ -31908,7 +31933,7 @@ renewal = onMachine && build ? new Renewal({
       return launchSaid.lets;
     const lets = launchLets(commandLineOf(process.ppid), () => {
       try {
-        return readFileSync36(join37(machineHome, "run", "agents.log"), "utf8");
+        return readFileSync35(join37(machineHome, "run", "agents.log"), "utf8");
       } catch {
         return;
       }
@@ -31955,7 +31980,7 @@ function stop() {
   reviews.stopAll();
   cancelSignIns();
   try {
-    if (record2 && JSON.parse(readFileSync36(record2, "utf8")).pid === process.pid)
+    if (record2 && JSON.parse(readFileSync35(record2, "utf8")).pid === process.pid)
       rmSync17(record2, { force: true });
   } catch {}
   sessions.closeAll();
@@ -31978,4 +32003,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 35a86f300f1b48feae6428521419303b05c23ea4a6c5f66673e5d4fb354d5619
+// Built from Packages/Box/src/agents 34f77df11e39545bc648ec8acd65959ff3542a99d22d8d76b74e9a8ecd788047

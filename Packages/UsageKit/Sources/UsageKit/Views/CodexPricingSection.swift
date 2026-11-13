@@ -14,6 +14,8 @@ struct CodexPricingSection: View {
     @State private var isApplying = false
     @State private var refreshState = CodexFallbackPricingRefreshState()
     @State private var needsRecalculation = false
+    /// The host didn't take the last choice (it didn't answer, or refused it).
+    @State private var applyFailed = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: density.headerToCardSpacing) {
@@ -52,12 +54,21 @@ struct CodexPricingSection: View {
                     .padding(.horizontal, 12)
                     .padding(.bottom, 8)
                 }
-                Text("Estimate costs for models that don't have known pricing.")
+                // (The host's own logs only: each of your machines prices its own, with none for now.)
+                Text(host == nil ? "Estimate costs for models that don't have known pricing." : "Estimate costs for models that don't have known pricing, in this Mac's Codex use. Your machines don't use it yet.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 12)
                     .padding(.bottom, 10)
+                if applyFailed && host != nil {
+                    Text("Couldn't change it: Kuvo Code's background service didn't answer. Try again.")
+                        .font(.caption)
+                        .foregroundStyle(Theme.notice)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 10)
+                }
                 if selectionUnavailable && (host != nil || !isLoading) {
                     Text("This model's pricing is unavailable. Choose another model or None.")
                         .font(.caption)
@@ -108,9 +119,13 @@ struct CodexPricingSection: View {
     private func applyOnHost(_ model: String) {
         guard model != shownModel, !isApplying, let set = HostHistory.shared.setCodexFallback else { return }
         isApplying = true
+        applyFailed = false
         Task {
             defer { isApplying = false }
-            guard await set(model.isEmpty ? nil : model) else { return }
+            guard await set(model.isEmpty ? nil : model) else {
+                applyFailed = true
+                return
+            }
             for providerID in providerIDs {
                 dataStore.clearFailureBackoff(for: providerID)
                 await dataStore.refresh(providerID: providerID, force: true)

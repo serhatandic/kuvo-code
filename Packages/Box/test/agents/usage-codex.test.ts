@@ -227,6 +227,28 @@ describe("one box", () => {
     expect(data.totals.codex[0].tokens).toBe(320)
   })
 
+  test("two accounts that link to a folder neither is in (your ~/.codex while CODEX_HOME names another): it's the first's, and each keeps its own", async () => {
+    const shared = join(root, "dot-codex", "sessions")
+    mkdirSync(shared, { recursive: true })
+    writeFileSync(join(shared, "rollout-shared.jsonl"), turn("2026-11-12T10:00:00Z", 300, 0, "gpt-5"))
+    const other = join(root, "codex", "accounts", "home")
+    for (const home of [added, other]) {
+      rmSync(join(home, "sessions"), { recursive: true, force: true })
+      mkdirSync(home, { recursive: true })
+      symlinkSync(shared, join(home, "sessions"))
+      mkdirSync(join(home, "archived_sessions"), { recursive: true })
+    }
+    writeFileSync(join(added, "archived_sessions", "rollout-a.jsonl"), turn("2026-11-12T09:00:00Z", 20, 0, "gpt-5"))
+    writeFileSync(join(other, "archived_sessions", "rollout-b.jsonl"), turn("2026-11-12T09:00:00Z", 4, 0, "gpt-5"))
+    agents = [new TestCodex(root, { id: "work", home: added }) as unknown as Agent, new TestCodex(root, { id: "home", home: other }) as unknown as Agent]
+    identities["codex-cli@home"] = "1111111111111111"
+    const usage = make()
+    await usage.refresh()
+    const data = await view(usage)
+    expect(Object.fromEntries(data.rows.map((row: any) => [row.provider, row.days[0]?.tokens ?? 0]))).toEqual({ "codex-cli@work": 320, "codex-cli@home": 4 })
+    expect(data.totals.codex[0].tokens).toBe(324)
+  })
+
   test("the fallback model is the box's: chosen through the route, kept through a restart, a model with no price estimated at its rates; one that isn't a choice is refused", async () => {
     writeFileSync(join(added, "sessions", "2026", "11", "12", "rollout-a.jsonl"), context("2026-11-12T10:00:00Z", "gpt-mystery-9") + turn("2026-11-12T10:01:00Z", 1000, 100))
     let usage = make()
@@ -286,7 +308,7 @@ describe("the engine's ChatGPT sign-in", () => {
   const reply = (at: number, input: number, output: number, extra: Record<string, unknown> = {}) => ({ role: "assistant", providerID: "openai", modelID: "gpt-5", cost: 0, time: { completed: at }, tokens: { input, output, reasoning: 0, cache: { read: 0, write: 0 } }, ...extra })
   const v2reply = (at: number, input: number, extra: Record<string, unknown> = {}) => ({ model: { providerID: "openai", id: "gpt-5" }, cost: 0, finish: "text", time: { completed: at }, tokens: { input, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, ...extra })
 
-  test("only a ChatGPT sign-in's rows, priced at nothing, from openai; opencode 2's only from when it signed in; a compaction counts", () => {
+  test("only a ChatGPT sign-in's rows, priced at nothing, from openai; opencode 2's only from when it signed in; a compaction counts", async () => {
     const signedIn = day + 10 * HOUR
     database("opencode.db", {
       signIn: { type: "oauth", access: "secret-access", at: signedIn },
@@ -304,26 +326,32 @@ describe("the engine's ChatGPT sign-in", () => {
         ["s3", day + 12 * HOUR, "compaction", { ...v2reply(day + 12 * HOUR, 7), finish: undefined, time: { completed: day + 12 * HOUR }, status: "completed" }],
       ],
     })
-    const rows = engineCodexRows(data, since)!
+    const rows = (await engineCodexRows(data, since))!
     expect(rows.map((row) => [row.id, row.total]).sort()).toEqual([
       ["m1", 110],
       ["s1", 1000],
       ["s3", 7],
     ])
+    // A sign-in that doesn't say when it was made bounds nothing.
+    rmSync(join(data, "opencode.db"))
+    database("opencode.db", { signIn: { type: "oauth", access: "secret-access", at: null }, v2: [["s2", day + 9 * HOUR, "assistant", v2reply(day + 9 * HOUR, 9999)]] })
+    expect((await engineCodexRows(data, since))!.map((row) => row.id)).toEqual(["s2"])
+    // (Its token never leaves the database: the worker answers only whether it's ChatGPT's.)
+    expect(JSON.stringify(await engineCodexRows(data, since))).not.toContain("secret-access")
   })
 
-  test("an API key's sign-in, or none: nothing of it; before opencode 2 took its sign-ins in, the auth.json beside it says", () => {
+  test("an API key's sign-in, or none: nothing of it; before opencode 2 took its sign-ins in, the auth.json beside it says", async () => {
     database("opencode.db", { signIn: { type: "api", key: "sk-test", at: 0 }, v1: [["m1", day + HOUR, reply(day + HOUR, 100, 10)]] })
-    expect(engineCodexRows(data, since)).toBeUndefined()
+    expect(await engineCodexRows(data, since)).toBeUndefined()
     rmSync(join(data, "opencode.db"))
     database("opencode.db", { imported: false, v1: [["m1", day + HOUR, reply(day + HOUR, 100, 10)]] })
-    expect(engineCodexRows(data, since)).toBeUndefined()
+    expect(await engineCodexRows(data, since)).toBeUndefined()
     writeFileSync(join(data, "auth.json"), JSON.stringify({ openai: { type: "oauth", refresh: "r" } }))
-    expect(engineCodexRows(data, since)!.map((row) => row.total)).toEqual([110])
+    expect((await engineCodexRows(data, since))!.map((row) => row.total)).toEqual([110])
     // A database a channel of its own (`opencode-next.db`) too, its copy of the same message once.
     database("opencode-next.db", { imported: false, v1: [["m1", day + HOUR, reply(day + HOUR, 100, 10)]] })
-    expect(engineCodexRows(data, since)!.length).toBe(2)
-    expect(engineCodexSlots(engineCodexRows(data, since)!, codexPricing(), since).used.size).toBe(1)
+    expect((await engineCodexRows(data, since))!.length).toBe(2)
+    expect(engineCodexSlots((await engineCodexRows(data, since))!, codexPricing(), since).used.size).toBe(1)
   })
 
   test("its row is Codex's: the same ChatGPT account as a Codex account here is one row, both added up; read again only when a database changed", async () => {
@@ -333,7 +361,7 @@ describe("the engine's ChatGPT sign-in", () => {
     writeFileSync(join(home, "sessions", "rollout-a.jsonl"), context("2026-11-12T10:00:00Z", "gpt-5") + turn("2026-11-12T10:01:00Z", 1000, 0))
     database("opencode.db", { signIn: { type: "oauth", access: "a", at: null }, v1: [["m1", day + HOUR, reply(day + HOUR, 100, 10)]] })
     const codex = codexSources(join(root, "usage"))
-    let signedIn = true
+    let signedIn: boolean | undefined = true
     const engine = engineCodexSource(data, () => signedIn)
     const agents = [new TestCodex(root, { id: "work", home }) as unknown as Agent]
     const usage = new Usage(() => [...codex(agents), ...engine()], new PricingStore(undefined, null), () => "0123456789abcdef", undefined, () => Date.parse("2026-11-12T21:00:00Z"))
@@ -347,6 +375,12 @@ describe("the engine's ChatGPT sign-in", () => {
     signedIn = false
     await usage.refresh()
     expect(usage.view("UTC").totals.codex![0]!.tokens).toBe(1000)
+    // As the bridge starts, before the engine has said what it's signed in to: kept, not dropped.
+    signedIn = true
+    await usage.refresh()
+    signedIn = undefined
+    await usage.refresh()
+    expect(usage.view("UTC").totals.codex![0]!.tokens).toBe(1110)
 
     // Nothing changed: what was worked out is the same; a message more: read again.
     const source = engineCodexSource(data, () => true)()[0]!

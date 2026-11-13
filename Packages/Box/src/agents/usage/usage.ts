@@ -350,13 +350,12 @@ export class Usage {
 
   /**
    * Codex's fallback model, for this box's own logs (none: `null`): one of the choices
-   * (`fallbackOptions`), or false when it isn't. Read again at once with it.
+   * (`fallbackOptions`), or false when it isn't. Its caller reads again with it (`refresh`).
    */
-  async setCodexFallback(model: string | null): Promise<boolean> {
+  setCodexFallback(model: string | null): boolean {
     if (!this.settings) return false
     if (model !== null && !this.pricing.current().fallbackOptions("codex").includes(model)) return false
     this.settings.setCodexFallback(model)
-    void this.refresh()
     return true
   }
 
@@ -424,7 +423,7 @@ export async function usageRoutes(usage: Usage | undefined, method: string, rest
     const given = (await body())?.codex
     const model = given && typeof given === "object" ? given.fallback : undefined
     if (model !== null && typeof model !== "string") return json({ message: "Say {codex: {fallback}}: a model, or null for none." }, 400)
-    if (!(await usage.setCodexFallback(model === "" ? null : model))) return json({ message: "That model can't estimate Codex's prices here." }, 400)
+    if (!usage.setCodexFallback(model === "" ? null : model)) return json({ message: "That model can't estimate Codex's prices here." }, 400)
     await Promise.race([usage.refresh(), new Promise((resolve) => setTimeout(resolve, 5_000).unref?.())])
     return json({ data: usage.view(zone) })
   }
@@ -635,9 +634,11 @@ export function codexSources(folder?: string, fallback: () => string | undefined
   const last = new Map<string, { version: number; pricing: Pricing; since: number; listed: string; fallback?: string; slots: Slots }>()
   return (agents) => {
     const codex = agents.filter((agent) => parseProvider(agent.providerID)?.kind === "codex" && agent.conversationRoots)
-    // Whose each folder is: the account it's really in, not one that links to it.
+    // Whose each folder is: the account it's really in, not one that links to it; one only linked
+    // to (your ~/.codex while CODEX_HOME names another), the first that links to it.
     const owner = new Map<string, string>()
     for (const agent of codex) for (const root of agent.conversationRoots!()) if (!isLink(root) && !owner.has(realOf(root))) owner.set(realOf(root), agent.providerID)
+    for (const agent of codex) for (const root of agent.conversationRoots!()) if (!owner.has(realOf(root))) owner.set(realOf(root), agent.providerID)
     return codex.map((agent) => {
       const parsed = parseProvider(agent.providerID)!
       const roots = () => agent.conversationRoots!().filter((root) => (owner.get(realOf(root)) ?? agent.providerID) === agent.providerID)
@@ -680,14 +681,15 @@ export function codexSources(folder?: string, fallback: () => string | undefined
 
 /**
  * Your ChatGPT sign-in's use through the engine's own models (engine-codex.ts), from the engine's
- * databases in its data folder (`folder`), while the engine has one (`signedIn`): Codex's, the same
- * row as a Codex account signed in to the same ChatGPT account. Read again only when a database
- * changed, or the prices did.
+ * databases in its data folder (`folder`), while the engine has one (`signedIn`; undefined until
+ * the engine has said, as the bridge starts: kept meanwhile, never dropped for not knowing yet):
+ * Codex's, the same row as a Codex account signed in to the same ChatGPT account. Read again only
+ * when a database changed, or the prices did.
  */
-export function engineCodexSource(folder: string | undefined, signedIn: () => boolean, computer = ownComputer): () => UsageSource[] {
+export function engineCodexSource(folder: string | undefined, signedIn: () => boolean | undefined, computer = ownComputer): () => UsageSource[] {
   let last: { stamp: string; pricing: Pricing; since: number; slots: Slots } | undefined
   return () => {
-    if (!folder || !signedIn()) return []
+    if (!folder || signedIn() === false) return []
     return [
       {
         provider: "openai",
@@ -696,7 +698,7 @@ export function engineCodexSource(folder: string | undefined, signedIn: () => bo
         slots: async (pricing, since) => {
           const stamp = engineStamp(folder)
           if (last && last.stamp === stamp && last.pricing === pricing && last.since === since) return last.slots
-          const rows = engineCodexRows(folder, since)
+          const rows = await engineCodexRows(folder, since)
           const slots = rows ? engineCodexSlots(rows, pricing, since) : noSlots()
           last = { stamp, pricing, since, slots }
           return slots
