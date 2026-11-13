@@ -44,8 +44,6 @@ struct MainView: View {
     @State private var showsPalette = false
     /// The folder whose Branch Backups are showing, from the Session menu.
     @State private var backupsFolder: String?
-    /// Terminals open as tabs, standing in for a conversation.
-    private var terminals: MainTerminals { app.mainTerminals }
     /// A tab's session being renamed, and the title being typed.
     @State private var renaming: Session?
     /// The session last in the middle card, kept made (out of sight) under another tab's card, a
@@ -293,7 +291,6 @@ struct MainView: View {
                 settings.name = given(settings.name) ?? existing.name
                 settings.folders = existing.folders + settings.folders.filter { !existing.folders.contains($0) }
                 settings.run = given(settings.run) ?? existing.run
-                settings.terminal = given(settings.terminal) ?? existing.terminal
             }
             let primary = workspace.saveProject(primary, settings: settings, shown: Set(tabs.keys.compactMap(\.sessionID)))
             if request.project == nil { tabs.newSession(in: primary) }
@@ -314,8 +311,6 @@ struct MainView: View {
         }
         .onChange(of: workspace.sessions.map(\.id)) { tabs.dropClosed() }
         .onChange(of: groups.list.map(\.id)) { tabs.dropClosed() }
-        // A terminal ended for you (its machine removed): its tab goes.
-        .onChange(of: terminals.entries.count) { tabs.dropClosed() }
         .onChange(of: workspace.isLoaded) {
             // The list arrives just before loading counts as done, so check it again here.
             tabs.dropClosed()
@@ -449,19 +444,15 @@ struct MainView: View {
         switch key {
         case .draft(let directory):
             return TabItem(id: id, title: Workspace.isChat(directory) ? "New Chat" : "New Session", logo: nil, status: .idle)
-        case .terminal:
-            guard let entry = terminals.entry(id) else { return nil }
-            return TabItem(id: id, title: entry.session.title, logo: nil, status: .idle, symbol: "apple.terminal")
         case .group(let group):
             guard let group = groups.group(group) else { return nil }
             let status: TabItem.Status = groups.isDiscussing(group.id) ? .working : groups.isUnread(group) && groupID != group.id ? .unread : .idle
             return TabItem(id: id, title: group.name, logo: nil, group: faces(of: group), status: status)
         case .session(let sessionID):
             if workspace.waitingMachine(for: sessionID) != nil {
-                return TabItem(id: id, title: workspace.remoteTitle(sessionID) ?? "Session", logo: nil, status: .idle)
-            }
-            // A sub-session: its task, with the sign of one.
-            if workspace.session(sessionID) == nil, let sub = workspace.subSession(sessionID) {
+                let waitingTitle = workspace.remoteTitle(sessionID) ?? "Session"
+                return TabItem(id: id, title: waitingTitle, logo: nil, status: .idle)
+            } else if workspace.session(sessionID) == nil, let sub = workspace.subSession(sessionID) {
                 return TabItem(id: id, title: SubagentTask.title(sub.title ?? ""), logo: nil, status: status(of: sub), symbol: "arrow.turn.down.right")
             }
             guard let session = workspace.session(sessionID) else { return nil }
@@ -604,7 +595,6 @@ struct MainView: View {
     /// The group chat in view, unless an editor or a terminal's card is over it.
     private var groupInView: BotGroup? {
         guard tabs.groupEditor == nil, tabs.botEditor == nil else { return nil }
-        if let key = selection, terminals.entry(key.text) != nil { return nil }
         return groupID.flatMap { groups.group($0) }
     }
 
@@ -644,7 +634,6 @@ struct MainView: View {
     /// over it, nor for a terminal's, a group chat's or a subagent's conversation.
     private var sessionInView: SessionModel? {
         guard tabs.groupEditor == nil, tabs.botEditor == nil else { return nil }
-        if let key = selection, terminals.entry(key.text) != nil { return nil }
         if let id = groupID, groups.group(id) != nil { return nil }
         guard let id = sessionID, workspace.session(id) != nil || workspace.parent(of: id) == nil else { return nil }
         return workspace.model(for: id)
@@ -745,16 +734,6 @@ struct MainView: View {
                     }
                 }
                 .id(request.id)
-            } else if let key = selection, let entry = terminals.entry(key.text) {
-                Card(title: entry.session.title, detail: workspace.projectName(entry.directory), isFocused: focus == .conversation) {
-                    Image(systemName: "apple.terminal")
-                } actions: {
-                    Button("Close Tab", systemImage: "xmark") { tabs.close(key) }
-                        .help("Close Tab")
-                } content: {
-                    TerminalHost(session: entry.session)
-                }
-                .id(key)
             } else if let id = sessionID, workspace.session(id) == nil, let parent = workspace.parent(of: id) {
                 // A sub-session: the conversation of a subagent its session's agent started.
                 let root = workspace.session(workspace.root(of: id))
@@ -982,7 +961,6 @@ struct MainView: View {
             canGoBack: tabs.canGoBack,
             goBack: tabs.goBack,
             newSession: { tabs.newSession(in: nil) },
-            newTerminalTab: { tabs.openTerminalTab(command: nil) },
             openFolder: openFolder,
             newProject: { tabs.openProjectEditor(ProjectEditorRequest(project: nil)) },
             newBot: { tabs.openBotEditor(bot: nil) },
@@ -1053,8 +1031,7 @@ struct MainView: View {
         if actions.hasProject {
             add("Run", "play", "⌘R", detail: runCommand, actions.run)
         }
-        add("New Terminal", "apple.terminal", "⌃⇧`", actions.newTerminalTab)
-        add("New Terminal in Panel", "terminal", "⌃`", actions.newTerminal)
+        add("New Terminal", "terminal", "⌃`", actions.newTerminal)
         add("New Browser Tab", "globe", "⌥⌘B", actions.newBrowser)
         add("Show Changes", "plusminus", "⌥⌘I", actions.showChanges)
         add("Show Work Queue", "checklist", "⌥⌘U", actions.showWorkQueue)

@@ -91,8 +91,6 @@ extension AppModel {
             return chats.group(id)?.name ?? "Group Chat"
         case .draft(let folder):
             return Workspace.isChat(folder) ? "New Chat" : "New Session"
-        case .terminal:
-            return mainTerminals.entry(key.text)?.session.title ?? "Terminal"
         }
     }
 }

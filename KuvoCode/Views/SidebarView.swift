@@ -84,8 +84,6 @@ struct SidebarView: View {
         nonmutating set { if let newValue { tabs.choose(TabKey(newValue)) } }
     }
     private func newSession(_ directory: String?) { tabs.newSession(in: directory) }
-    /// A conversation in the project, where its new sessions open a terminal instead.
-    private func newConversation(_ directory: String) { tabs.open(.draft(directory)) }
     private func newProject() { tabs.openProjectEditor(ProjectEditorRequest(project: nil)) }
     private func editProject(_ project: Workspace.Project) { tabs.openProjectEditor(ProjectEditorRequest(project: project)) }
     private func showProviders() { app.openSettings(.accounts) }
@@ -93,8 +91,6 @@ struct SidebarView: View {
     private func editBot(_ bot: Bot) { tabs.openBotEditor(bot: bot) }
     private func newGroup() { tabs.openGroupEditor(group: nil) }
     private func editGroup(_ group: BotGroup) { tabs.openGroupEditor(group: group) }
-    /// Ends a terminal tab.
-    private func closeTerminal(_ key: String) { tabs.close(TabKey(key)) }
 
     /// The selection tag of a project's not-yet-sent new session.
     static func draftTag(_ directory: String) -> String { TabKey.draft(directory).text }
@@ -340,11 +336,6 @@ struct SidebarView: View {
         }
         botsSection(box)
         chatsSection(box)
-        let loose = terminals(in: nil).filter { SidebarBox(directory: $0.entry.directory) == box }
-        if !loose.isEmpty {
-            SectionHeader(title: "Terminals") { EmptyView() }
-            terminalRows(loose, indented: false)
-        }
         let projects = workspace.projects.filter { SidebarBox(directory: $0.directory) == box }
         SectionHeader(title: "Projects", isFolded: folded("projects")) {
             Button(action: newProject) {
@@ -725,10 +716,6 @@ struct SidebarView: View {
         }
         .heldContextMenu {
             HeldRow.button("New Session") { newSession(project.directory) }
-            if workspace.settings[project.directory]?.terminal != nil {
-                // Its sessions open a terminal; this still starts a conversation.
-                HeldRow.button("New Conversation") { newConversation(project.directory) }
-            }
             HeldRow.button("Edit Project…") { editProject(project) }
             if let engine = app.machines.engine(RemoteFolder.machine(of: project.directory)) {
                 if !engine.isReady {
@@ -756,7 +743,6 @@ struct SidebarView: View {
                     Text("New Session")
                 }
             }
-            terminalRows(terminals(in: project.directory), indented: true)
             let all = showsAll.contains(project.directory) || Self.demoShowsAll
             // Branched and handed-off ones show under the conversation they came from.
             let tree = Branches.latestFirst(project.sessions)
@@ -778,28 +764,6 @@ struct SidebarView: View {
                 }
                 .anchorPreference(key: OverseenRows.self, value: .bounds) { [OverseenRows.more: $0] }
             }
-        }
-    }
-
-    /// The terminal tabs of the project at `directory`, or (nil) of no project, each a row that
-    /// shows it, so one is never out of reach with the tab bar hidden.
-    private func terminals(in directory: String?) -> [(key: String, entry: MainTerminals.Entry)] {
-        let known = Set(workspace.projects.map(\.directory))
-        return app.mainTerminals.opened.filter { terminal in
-            let project = workspace.projectDirectory(terminal.entry.directory)
-            return directory.map { project == $0 } ?? !known.contains(project)
-        }
-    }
-
-    @ViewBuilder private func terminalRows(_ terminals: [(key: String, entry: MainTerminals.Entry)], indented: Bool) -> some View {
-        ForEach(terminals, id: \.key) { terminal in
-            TerminalRow(
-                title: terminal.entry.session.title,
-                isSelected: selection == terminal.key,
-                indented: indented,
-                action: { selection = terminal.key },
-                end: { closeTerminal(terminal.key) }
-            )
         }
     }
 
@@ -1586,45 +1550,6 @@ private struct ProjectRow: View {
         .help(project.allFolders.map { folder in
             RemoteFolder.parse(folder).map { "\($0.machine):\($0.path)" } ?? (folder as NSString).abbreviatingWithTildeInPath
         }.joined(separator: "\n"))
-    }
-}
-
-/// A terminal tab in the sidebar: its name, with a way to end it under the pointer.
-private struct TerminalRow: View {
-    let title: String
-    let isSelected: Bool
-    let indented: Bool
-    let action: () -> Void
-    let end: () -> Void
-    @State private var isHovering = false
-
-    var body: some View {
-        SidebarRow(isSelected: isSelected, indented: indented, action: action) {
-            EmptyView()
-        } title: {
-            HStack(spacing: 6) {
-                Image(systemName: "apple.terminal")
-                    .sidebarFont(11)
-                    .foregroundStyle(.secondary)
-                Text(title)
-            }
-        } accessory: {
-            // Room for the End button, so a long name never runs under it.
-            Color.clear.frame(width: 6, height: 1)
-        }
-        .overlay(alignment: .trailing) {
-            Button(action: end) {
-                Image(systemName: "xmark")
-                    .sidebarFont(10, weight: .semibold)
-            }
-            .buttonStyle(IconButtonStyle(width: 22, height: 22))
-            .padding(.trailing, 4)
-            .opacity(isHovering ? 1 : 0)
-            .help("End Terminal")
-            .accessibilityLabel("End Terminal")
-        }
-        .onHover { isHovering = $0 }
-        .heldContextMenu { HeldRow.button("End Terminal", action: end) }
     }
 }
 

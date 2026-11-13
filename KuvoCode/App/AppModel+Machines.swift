@@ -757,7 +757,6 @@ extension AppModel {
         browserAsks.closeAll(on: id)
         utilities.closeMachineBrowser(id)
         utilities.closeTerminals(on: id)
-        mainTerminals.close(on: id)
     }
 
     /// What this Mac keeps of machine `id` (once it's off the list), forgotten: its sessions and

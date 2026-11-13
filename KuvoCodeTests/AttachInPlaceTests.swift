@@ -244,7 +244,7 @@ import Testing
         #expect(model.settingsTabs.page == .accounts && model.settingsTabs.box == .attached)
         // Its chats where its box says they go.
         try await model.readChatsHere()
-        model.tabs.newSession(in: nil, conversation: true)
+        model.tabs.newSession(in: nil)
         let chats = RemoteFolder.folder(home.path(percentEncoded: false) + "/\(RemoteEngineInstaller.root)/box-chats", on: SSHConnection.thisMac)
         #expect(model.tabs.selection == .draft(chats))
         #expect(Workspace.onThisMac("/Users/me/project") == RemoteFolder.folder("/Users/me/project", on: SSHConnection.thisMac))
@@ -282,7 +282,7 @@ import Testing
         try await until { here.isReady && !onTheBoxHere(model.workspace.sessions.map(\.location.directory)).isEmpty }
         model.tabs.open(.session("ses_there"))
         try await model.readChatsHere()
-        model.tabs.newSession(in: nil, conversation: true)
+        model.tabs.newSession(in: nil)
         // Its Mac removed it: its way to start and its engine went, its card stayed. (The app's own
         // engine lists none.)
         engine.list([])

@@ -26,8 +26,6 @@ struct ProjectEditor: View {
     @State private var setupFolder: String?
     @State private var engineProject: String?
     @State private var run: String
-    @State private var terminal: String
-    @FocusState private var isTerminalFocused: Bool
     @FocusState private var isRunFocused: Bool
     @FocusState private var isSetupFocused: Bool
     private let focusesRun: Bool
@@ -49,7 +47,6 @@ struct ProjectEditor: View {
         self.focusesRun = focusesRun
         _name = State(initialValue: project?.settings.name ?? "")
         _run = State(initialValue: project?.settings.run ?? "")
-        _terminal = State(initialValue: project?.settings.terminal ?? "")
         _folders = State(initialValue: project?.allFolders ?? folders)
         _machine = State(initialValue: (project?.allFolders ?? folders).first.flatMap(RemoteFolder.machine(of:)))
     }
@@ -174,37 +171,6 @@ struct ProjectEditor: View {
                 }
             }
 
-            section("Terminal Instead of Chat", note: "New sessions in this project open a terminal running this command, flags and all; leave it empty for the usual chat.") {
-                VStack(alignment: .leading, spacing: 10) {
-                    WellGroup(isFocused: isTerminalFocused) {
-                        WellRow {
-                            Image(systemName: "apple.terminal")
-                                .font(.system(size: 13))
-                        } content: {
-                            TextField("Terminal", text: $terminal, prompt: Text(verbatim: "omp"), axis: .vertical)
-                                .textFieldStyle(.plain)
-                                .font(.system(size: 14, design: .monospaced))
-                                .lineLimit(1...8)
-                                .focused($isTerminalFocused)
-                                .padding(.vertical, 12)
-                        }
-                    }
-                    Flow(spacing: 6) {
-                        ForEach(Self.terminalSuggestions, id: \.self) { command in
-                            Button {
-                                terminal = command
-                            } label: {
-                                Text(verbatim: command)
-                                    .font(.system(size: 12, design: .monospaced))
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 4)
-                            }
-                            .buttonStyle(FilledButtonStyle(shape: .capsule))
-                        }
-                    }
-                }
-            }
-
             if setup != nil {
                 section("Worktree Setup") {
                     WellGroup(isFocused: isSetupFocused) {
@@ -225,12 +191,9 @@ struct ProjectEditor: View {
         }
     }
 
-    /// Terminal coding agents to start from; any command, with its flags, can be typed instead.
-    private static let terminalSuggestions = ["omp", "claude", "codex", "opencode", "pi", "gemini", "aider", "amp"]
-
     private func saveProject() {
         guard let primary = folders.first else { return }
-        save(primary, Workspace.ProjectSettings(name: name, folders: Array(folders.dropFirst()), run: run, terminal: terminal))
+        save(primary, Workspace.ProjectSettings(name: name, folders: Array(folders.dropFirst()), run: run))
         saveSetup()
         close()
     }

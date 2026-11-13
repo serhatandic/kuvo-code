@@ -691,7 +691,6 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 - A sign-in whose page turned it down, or that the service couldn't finish, says so in words, rather than with the code the page sent back (like `access_denied`).
 - **Get beta updates** in Settings › General: turn it on to get new versions to try before they're released, through the same updates. Turned off, you keep the beta you have until the next release.
-- A project can use a terminal instead of the chat: in Edit Project, **Terminal Instead of Chat** takes a command (`omp`, `claude`, `codex`, `opencode`, `pi`…, with any flags: `claude --continue`), with the common ones a click away, and each new session in that project opens a terminal tab in the main area running it. **New Terminal Tab** (⌃⇧`, or ⌘K) opens a plain shell there for any project. The project's terminals are listed under it in the sidebar, and its menu has **New Conversation** to start a conversation anyway. Closing a tab, or the window, ends the shell; terminal tabs aren't kept when the app quits.
 - A change to Settings › Permissions' rules made outside that page, like in the engine's settings file, applies to conversations that are already open, not only to new ones.
 - In a group chat, the bot that's talking shows what it's doing under its name, like the file it's reading or the line it's thinking, so a long turn doesn't look stuck.
 - A conversation no longer goes blank when a long reply comes in; it used to show nothing until you scrolled.
@@ -699,7 +698,6 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - Bots in a group chat answer small talk and quick questions straight away, and look things up (files, the web, other conversations) only when what's asked needs it.
 - An agent you name with & reads that conversation or writes to it only when what you ask needs it; a name that just comes up in your message stays a mention.
 - In a group chat you name a bot with &, as you name agents everywhere else; @ is only for files. Replying to a bot or clicking its face writes &Name.
-- A Markdown file's rendered view in Files draws Mermaid diagrams from `mermaid` code blocks, like flowcharts, Gantt charts and sequence diagrams, in light or dark, offline. A button shows a diagram's code, and one Mermaid can't read shows as code with what's wrong.
 - The context ring of a Cursor session counts the last request Cursor reports, rather than all of a reply's requests added up.
 - The first launch after an update that changes how your things are kept backs up your lists and settings first, then brings them up to date, while the window says Updating. Each bot's name, look and job are now also kept in its own folder, on this Mac or its machine.
 - A remote machine that restarts starts Kuvo Code's engine again by itself, as your Mac last started it, with its bots' wake-ups and your integrations' keys, so it carries on without your Mac. It keeps those keys between starts (only you can read them), and a line in your crontab there does the starting; removing the machine takes it out.
