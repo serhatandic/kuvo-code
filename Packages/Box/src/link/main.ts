@@ -42,6 +42,7 @@ import { finishDeletes, forgetLeftKeys } from "./bots/edit";
 import { keepJobs } from "./bots/jobs";
 import { forgetOldKit, readKit } from "./bots/kit";
 import { adoptBox } from "./compat/adopt-settings";
+import { LaunchLockBusy } from "./compat/launch-lock";
 import { forgetPhones } from "./compat/leave-running";
 import { addressOf, newKey, publicOf } from "./crypto/keys";
 import { IKInitiator, IKResponder, openOneWay, PROLOGUE, sealOneWay } from "./crypto/noise";
@@ -494,7 +495,16 @@ async function box(command: string): Promise<void> {
     case "adopt": {
       let seed: { settings?: unknown; keys?: unknown } | null = null;
       try { seed = JSON.parse((await input()) || "null"); } catch {}
-      const adopted = adoptBox(seed);
+      let adopted: ReturnType<typeof adoptBox>;
+      try {
+        adopted = adoptBox(seed);
+      } catch (error) {
+        // Said as it is, for the Mac to show.
+        if (!(error instanceof LaunchLockBusy)) throw error;
+        console.error(error.message);
+        process.exitCode = 1;
+        return;
+      }
       // Its settings its own now: the branch prefix it kept before, taken into them.
       keepOldBranchPrefix();
       // As its catalogs have them now: a Mac runs this as it connects, having just put newer ones here,
