@@ -553,7 +553,7 @@ export function handler(context: Context) {
       if (area === "kuvo" && a === "reviews") return await reviewRoutes(context.reviews, method, parts.slice(3), body)
       if (area === "kuvo" && a === "voice") return await voiceRoutes(context.voice, method, parts.slice(3))
       if (area === "kuvo" && a === "limits") return await limitsRoutes(context.limits, method, parts.slice(3))
-      if (area === "kuvo" && a === "usage") return await usageRoutes(context.usage, method, parts.slice(3), url.searchParams)
+      if (area === "kuvo" && a === "usage") return await usageRoutes(context.usage, method, parts.slice(3), url.searchParams, body)
       if (area === "kuvo" && a === "groups") return await groupRoutes(context.groups?.runner, context.groups?.store, method, parts.slice(3), body)
       // The same, as a client reads and changes them (`kuvo/groups`, which the box's link passes on).
       if (area === "kuvo" && a === "link" && b === "groups") return await linkRoutes(context.groups?.runner, context.groups?.store, method, parts.slice(4), body, request.signal)

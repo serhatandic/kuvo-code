@@ -1,0 +1,59 @@
+{
+ "rows": "codex-engine-rows.json",
+ "since": "2026-10-01T00:00:00Z",
+ "now": "2026-11-12T12:00:00Z",
+ "days": [
+  {
+   "date": "2026-11-11",
+   "tokens": 304110,
+   "cost": 18.032700000000002,
+   "models": [
+    {
+     "model": "codex-auto-review",
+     "tokens": 3100,
+     "cost": 0
+    },
+    {
+     "model": "gpt-5.4-pro",
+     "tokens": 301010,
+     "cost": 18.032700000000002
+    }
+   ]
+  },
+  {
+   "date": "2026-11-10",
+   "tokens": 5971,
+   "cost": 0.0186,
+   "models": [
+    {
+     "model": "gpt-5.5",
+     "tokens": 1650,
+     "cost": 0.0186
+    },
+    {
+     "model": "gpt-6-astra",
+     "tokens": 4321,
+     "cost": 0
+    }
+   ]
+  },
+  {
+   "date": "2026-10-02",
+   "tokens": 3100,
+   "cost": 0.00069,
+   "models": [
+    {
+     "model": "codex-auto-review",
+     "tokens": 3100,
+     "cost": 0.00069
+    }
+   ]
+  }
+ ],
+ "unknown": {
+  "2026-11-11": [
+   "gpt-mystery-2"
+  ]
+ },
+ "fallback": {}
+}

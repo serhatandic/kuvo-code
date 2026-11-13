@@ -239,6 +239,8 @@ export interface Supplement {
   fastMultipliers: Map<string, number>
   aliases: { pattern: RegExp; canonical: string }[]
   updatedAt?: string
+  /** Public model IDs that may estimate a provider's models with no known price (`fallback_models`, by usage provider: `codex`). */
+  fallbackModels: Map<string, string[]>
 }
 
 /** The supplement's JSON (the snapshot, or its feed); a rule whose pattern doesn't compile is left out. */
@@ -265,7 +267,19 @@ export function supplementFrom(root: unknown): Supplement {
       aliases.push({ pattern: new RegExp(insensitive ? rule.pattern.slice(4) : rule.pattern, insensitive ? "i" : ""), canonical: rule.canonical })
     } catch {}
   }
-  return { pricing, fastMultipliers, aliases, ...(typeof root.updated_at === "string" ? { updatedAt: root.updated_at } : {}) }
+  const fallbackModels = new Map<string, string[]>()
+  if (isObject(root.fallback_models)) {
+    for (const [provider, models] of Object.entries(root.fallback_models)) {
+      if (!Array.isArray(models) || !models.every((model) => typeof model === "string")) throw new Error("The pricing supplement isn't one.")
+      fallbackModels.set(provider, models)
+    }
+  } else if (root.fallback_models !== undefined) throw new Error("The pricing supplement isn't one.")
+  return { pricing, fastMultipliers, aliases, ...(typeof root.updated_at === "string" ? { updatedAt: root.updated_at } : {}), fallbackModels }
+}
+
+/** An older feed has no fallback models: the bundled ones stay until it names its own (an empty list it names stands). */
+export function fillingFallbackModels(supplement: Supplement, from: Supplement): Supplement {
+  return { ...supplement, fallbackModels: new Map([...from.fallbackModels, ...supplement.fallbackModels]) }
 }
 
 function canonicalOf(supplement: Supplement, model: string): string | undefined {
@@ -297,6 +311,7 @@ function fastMultiplierOf(supplement: Supplement, model: string): number | undef
  */
 export class Pricing {
   private memo = new Map<string, ModelRates | null>()
+  private canonical = new Map<string, string>()
 
   constructor(
     readonly supplement: Supplement,
@@ -311,6 +326,32 @@ export class Pricing {
     const found = canonical !== undefined && canonical !== model ? (this.lookup(canonical) ?? this.lookup(model)) : this.lookup(model)
     this.memo.set(model, found ?? null)
     return found
+  }
+
+  /** The supplement's catalog key for `model` (its first alias rule that matches), else `model`. */
+  canonicalName(model: string): string {
+    let known = this.canonical.get(model)
+    if (known === undefined) this.canonical.set(model, (known = canonicalOf(this.supplement, model) ?? model))
+    return known
+  }
+
+  /**
+   * Rates a provider's fallback model (a box setting) estimates its unpriced use with: one of the
+   * supplement's `fallback_models` for it, priced by an exact entry only (an estimate never rests
+   * on a fuzzy guess), with real rates. `PricingFallbackOptions.fallbackRates`.
+   */
+  fallbackRates(model: string, provider: string): ModelRates | undefined {
+    if (!this.supplement.fallbackModels.get(provider)?.includes(model)) return undefined
+    const found = this.supplement.pricing.get(model) ?? this.primary.exact(model)?.[1] ?? this.secondary.exact(model)?.[1]
+    if (!found) return undefined
+    const real = (value: number) => Number.isFinite(value)
+    if (!(real(found.input) && found.input > 0 && real(found.output) && found.output > 0 && real(found.cacheRead) && found.cacheRead >= 0)) return undefined
+    return found
+  }
+
+  /** The fallback models a provider may be given (those with rates), in the supplement's order. */
+  fallbackOptions(provider: string): string[] {
+    return [...new Set(this.supplement.fallbackModels.get(provider) ?? [])].filter((model) => this.fallbackRates(model, provider))
   }
 
   /** What `tokens` of `model` cost, or undefined when it can't be priced. */
@@ -489,6 +530,7 @@ export class PricingStore {
         if (!(bundled.updatedAt !== undefined && (fetched.updatedAt === undefined || bundled.updatedAt > fetched.updatedAt))) supplement = fetched
       } catch {}
     }
+    supplement = fillingFallbackModels(supplement, bundled)
     return new Pricing(supplement, catalog(litellmSnapshot, "litellm"), catalog(modelsDevSnapshot, "models_dev"))
   }
 }

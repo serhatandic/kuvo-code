@@ -305,7 +305,7 @@ export class UsagePeers {
  * together what it was told (each account's fields in one order, its slots as kept: `keptSlots`).
  */
 export function digestOf(accounts: ToldUsage[]): string {
-  const canonical = accounts.map((account) => [account.provider, account.service, account.agent ?? null, account.account ?? null, account.label ?? null, account.identity ?? null, account.cut === true, account.places ?? [], account.slots.models, account.slots.used, account.slots.unknown ?? []])
+  const canonical = accounts.map((account) => [account.provider, account.service, account.agent ?? null, account.account ?? null, account.label ?? null, account.identity ?? null, account.cut === true, account.places ?? [], account.slots.models, account.slots.used, account.slots.unknown ?? [], ...(account.slots.fallback ? [account.slots.fallback] : [])])
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex").slice(0, 32)
 }
 
@@ -314,14 +314,14 @@ const toldOf = ({ slots, ...account }: OwnUsage): ToldUsage => ({ ...account, sl
 
 /** Kept slots from `first` (quarter hours since 1970) on, as a receiver keeps them (its models only those still used). */
 function fromSlot(slots: KeptSlots, first: number): KeptSlots {
-  return keptSlots(slotsFrom({ ...slots, used: slots.used.filter((use) => use[0] >= first), ...(slots.unknown ? { unknown: slots.unknown.filter((each) => each[0] >= first) } : {}) }, Infinity))
+  return keptSlots(slotsFrom({ ...slots, used: slots.used.filter((use) => use[0] >= first), ...(slots.unknown ? { unknown: slots.unknown.filter((each) => each[0] >= first) } : {}), ...(slots.fallback ? { fallback: slots.fallback.filter((each) => each[0] >= first) } : {}) }, Infinity))
 }
 
 /** Each account with only its slots from `from` (quarter hours since 1970) on. */
 function recentOf(accounts: ToldUsage[], from: number): ToldUsage[] {
   return accounts.map((account) => ({
     ...account,
-    slots: { models: account.slots.models, used: account.slots.used.filter((use) => use[0] >= from), ...(account.slots.unknown ? { unknown: account.slots.unknown.filter((each) => each[0] >= from) } : {}) },
+    slots: { models: account.slots.models, used: account.slots.used.filter((use) => use[0] >= from), ...(account.slots.unknown ? { unknown: account.slots.unknown.filter((each) => each[0] >= from) } : {}), ...(account.slots.fallback ? { fallback: account.slots.fallback.filter((each) => each[0] >= from) } : {}) },
   }))
 }
 
@@ -332,8 +332,10 @@ function withOlder(account: OwnUsage, kept: OwnUsage | undefined, since: number)
   const first = (account.whole ?? 0) * SLOT
   for (const [slot, models] of kept?.slots.used ?? []) if (slot < since && slot >= first) slots.used.set(slot, models)
   for (const [slot, models] of kept?.slots.unknown ?? []) if (slot < since && slot >= first) slots.unknown.set(slot, models)
+  for (const [slot, models] of kept?.slots.fallback ?? []) if (slot < since && slot >= first) slots.fallback.set(slot, models)
   for (const [slot, models] of account.slots.used) if (slot >= since) slots.used.set(slot, models)
   for (const [slot, models] of account.slots.unknown) if (slot >= since) slots.unknown.set(slot, models)
+  for (const [slot, models] of account.slots.fallback) if (slot >= since) slots.fallback.set(slot, models)
   return { ...account, slots }
 }
 

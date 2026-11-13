@@ -60,7 +60,7 @@ import { notesBeside } from "./notes"
 import { agentAccounts, Limits } from "./limits"
 import { LimitsPeers } from "./limits-peers"
 import { PricingStore } from "./usage/pricing"
-import { claudeSources, Usage } from "./usage/usage"
+import { claudeSources, codexSources, engineCodexSource, Usage, UsageSettings } from "./usage/usage"
 import { UsagePeers } from "./usage/usage-peers"
 import { ENGINE_SERVICES, EngineAccounts } from "./engine-limits"
 
@@ -297,8 +297,15 @@ peers.limits = new LimitsPeers(limits, post, directory, join(home, "limits-peers
 const noPriceFeeds = process.env.KUVO_TEST_PRICE_FEEDS === "off" || !isRealBridgeFolder(home)
 delete process.env.KUVO_TEST_PRICE_FEEDS
 const usageFolder = join(home, "usage")
+const usageSettings = new UsageSettings(join(usageFolder, "settings.json"))
 const claudeUsage = claudeSources(usageFolder)
-const usage = new Usage(() => claudeUsage(roster.all()), new PricingStore(join(usageFolder, "pricing"), noPriceFeeds ? null : undefined), (provider) => limits.identity(provider), join(usageFolder, "usage.json"))
+const codexUsage = codexSources(usageFolder, () => usageSettings.codexFallback)
+// The engine's own databases: in Kuvo Code's folder on a machine (`data/opencode`), in the app's
+// on a Mac (KUVO_ENGINE_DB_FOLDER, which its keeper gives the bridge).
+const engineData = process.env.KUVO_ENGINE_DB_FOLDER || (onMachine && machineHome ? process.env.KUVO_ENGINE_DATA || join(machineHome, "data", "opencode") : undefined)
+const engineCodexUsage = engineCodexSource(engineData, () => engineAccounts.accounts().some((account) => account.provider === "openai"))
+const usage = new Usage(() => [...claudeUsage(roster.all()), ...codexUsage(roster.all()), ...engineCodexUsage()], new PricingStore(join(usageFolder, "pricing"), noPriceFeeds ? null : undefined), (provider) => limits.identity(provider), join(usageFolder, "usage.json"))
+usage.settings = usageSettings
 peers.usage = new UsagePeers(usage, post, directory, join(usageFolder, "peers.json"))
 
 // What every conversation here makes, recorded as it's made: the engine's and this bridge's own.
