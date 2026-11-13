@@ -14,7 +14,7 @@ import UsageKit
     private static let underTen = "openusage.notifications.underTenPercent"
 
     /// What the stand-in box was sent, and answers.
-    private final class Box: @unchecked Sendable {
+    private nonisolated final class Box: @unchecked Sendable {
         private let lock = NSLock()
         private var _puts: [[String: Any]] = []
         var notifications: [String: Bool] = ["underTenPercent": false, "healthyToClose": false, "closeToRunningOut": false]
