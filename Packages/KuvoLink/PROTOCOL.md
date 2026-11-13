@@ -2888,6 +2888,31 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   box keeps the carries it made in `run/queues-carried.json`). Changing a bot's model to one of the
   agents' (`PATCH kuvo/bots/<id>`) carries its conversation on with them the same way; a Mac takes
   in a machine's bot's new conversation as it next connects.
+- Signing in (`sign-in.methods`): the ways to offer and what to say when a sign-in didn't work are
+  the box's, so every client offers and says the same; the engine (or the coding agents' bridge)
+  still does the signing in, started, completed and given up on through its own routes (above).
+  - `GET kuvo/sign-in/methods?integration=<id>[&agents=1]` → `{"methods": [{type, id?, label,
+    form?, legacy?}], "environment": [<variable>]}`: the account's ways in, from the engine's
+    `api/integration` (`agents=1`: the coding agents' bridge's, for an agent's account), in the
+    order to draw them. An account's sign-in (`oauth`) first, then credentials the computer
+    already has (`external`), then a key, each kind in the engine's order; a way whose label says
+    "legacy" after all the others, with `legacy: true`, which a client offers apart (the Mac,
+    under "Other ways to sign in"). `label` is the button's words: the engine's, else "Use an API
+    key" or "Sign in". Not offered: environment variables (listed in `environment`, as "Or set …
+    in your shell profile"), commands, kinds a client can't start, and the engine's own sign-in
+    to a plan that goes through a coding agent (ChatGPT's through Codex, SuperGrok's through
+    Grok), unless the account's signed in that way already. A client starts each as it comes,
+    with its `type`, `id` and `form`, and draws its own symbol for each kind.
+  - `GET kuvo/sign-in/status?integration=<id>&attempt=<id>[&agents=1]` → the attempt's status as
+    the engine (or the bridge) says it (`status`, `message?`, `url?`, `instructions?`,
+    `userCode?`), with `failure` once it's `failed` or `expired`: what a client shows, the
+    page's OAuth code in words (`access_denied`: turned down on its page) and the engine's own
+    words otherwise. A client asks it as the sign-in goes (each second), in place of the engine's
+    status route. `404` for one the engine doesn't know (it started over), `503 {message}` while
+    the engine or the bridge isn't running, `400` without `integration` (and `attempt`).
+  - Held to `Vectors/sign-in.json` in the box, KuvoClient (`SignInMethods`, `SignInStatus`) and
+    the phone's demo stand-in. A box without `sign-in.methods` needs updating: a client says so
+    rather than offering ways of its own.
 - `POST kuvo/sign-in/return` with `{"url"}`: where a sign-in's page sent the browser back to the
   computer (`http://127.0.0.1:<port>/…?code=…`: a plan's that finishes there, an MCP server's at
   `127.0.0.1:19876`, a coding agent's), which a phone can't load. The computer loads it, as the
@@ -5208,6 +5233,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `setup` | `kuvo/setup`, `…/events`: your setup and its main computer ("Your setup") |
 | `setup.mainOnly` | a member refuses pairing and adding with `409 {message, primary}`, and answers `GET kuvo/hosts` from its setup ("Your setup", Only the main computer adds and pairs) |
 | `shell.stop` | `POST kuvo/shell/<id>/stop` |
+| `sign-in.methods` | `GET kuvo/sign-in/methods` and `GET kuvo/sign-in/status`: the ways to sign in, in the box's order and words, and what to say when a sign-in didn't work ("Signing in") |
 | `sign-in.return` | `POST kuvo/sign-in/return` |
 | `skills` | `kuvo/skills…` and `kuvo/skill-library…` |
 | `skills.trash` | `kuvo/skill-trash…`: Recently Deleted, and restoring from it |

@@ -18,6 +18,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- Signing in to an account now offers the same ways, in the same order and words, on your Mac and your iPhone: each computer decides them. A failed sign-in says why in the same words on both. A machine with an older Kuvo Code says it needs updating before you can sign in to it from here.
 - Each of your computers now says which of its sessions go in which project and which are chats, so your Mac's sidebar and your iPhone list them the same way, and a computer added later will too. The sidebar looks as before; a machine with an older Kuvo Code shows "Sessions Need a Newer Kuvo Code" in place of its sessions until it's updated.
 - What you type in the composer starting with "/" or "!" (`/plan`, `/autopilot`, `/loop`, `/goal`, `/review`, `/btw`, `/handoff`, `/compact`, a project's commands, a shell command) is now read by Kuvo Code's background service on the conversation's computer, so it does the same from your Mac and your iPhone. A `/loop` that waits for a time of day ("every morning at 9") counts it by that computer's clock.
 - The branch menu under a project's name, the file filter in the side panel's Files, @ mentions, the command palette's files, Edit Project's worktree setup and what Delete says about a worktree's uncommitted changes now ask Kuvo Code's background service on the computer the project is on, as Changes does. Listing a project's files or branches on your Mac no longer starts a program the repository's own git settings name.

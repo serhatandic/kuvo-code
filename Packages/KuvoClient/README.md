@@ -43,6 +43,9 @@ model under that agent. Only for a box without `sessions.models` (the old-box pa
 it says so itself (`SessionModelState`). `Integration.offeredSignInMethods` is the ways to sign in both apps'
 Accounts offer: not a ChatGPT or SuperGrok plan's own (they go through Codex and Grok), unless one
 was made before; held, with `PlanSignIns`, to the box's cases (`Vectors/plan-sign-ins.json`).
+`SignInMethods` and `SignInStatus` are the box's answers for a sign-in (`kuvo/sign-in/methods`,
+`kuvo/sign-in/status`): the ways in, in its order and words, legacy ones apart, and what to say
+when one didn't work; held to `Vectors/sign-in.json`. Both apps' sign-in sheets draw them.
 `ProgramUpdate` is how a coding agent's program's update stands as its box keeps it
 (`Integration.programUpdate`: under way, updated, already the newest, or why it failed, by an id
 that tells one outcome from the next), and `isInUpdateAll` whether its box's Update All updates it;
