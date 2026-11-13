@@ -507,7 +507,7 @@ var EVERY = ["-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "log.sh
 var OWN = [...EVERY, "-c", "safe.bareRepository=explicit", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", "-c", "tag.gpgSign=false", "-c", "credential.helper="];
 var GIT_QUIET = { GIT_TERMINAL_PROMPT: "0" };
 var DRIVERS = String.raw`^(filter\..+\.(clean|smudge|process)|diff\..+\.textconv|hook\..+\.command|core\.fsmonitor)$`;
-var WATCHER = ["-c", "core.fsmonitor=true"];
+var WATCHER = process.platform === "darwin" ? ["-c", "core.fsmonitor=true"] : [];
 var watches = (value) => value === undefined || /^(true|yes|on)$/i.test(value.trim()) || /^-?[1-9]\d*$/.test(value.trim());
 var KNOWN = /^"?([^"\s]+)"? (?:filter-process|clean|smudge|diff)(?: --skip| --key-name=[\w-]+| -- %f)*$/;
 var TOOLS = new Set(["git-lfs", "git-crypt"]);
@@ -28939,4 +28939,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents dfa11f8b2ae57dbdfc6f138d4ce9427caaa206e6b020ac0854e78d6c0c8e6300
+// Built from Packages/Box/src/agents 73a9dc70f17424c07a8192be7f28b9f8e61943c40193794e0f1bbdd15f6f4773

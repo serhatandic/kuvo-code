@@ -310,8 +310,8 @@ test("a commit's hooks run with none of the box's own variables, and on a Mac wi
   fs.writeFileSync(path.join(repo, ".git/hooks/pre-commit"), `#!/bin/sh\nenv > "${seen}"\n`, { mode: 0o755 });
   const startup = tty => `export GPG_TTY=${tty}\nexport DYLD_INSERT_LIBRARIES=/nowhere\nexport NODE_OPTIONS=--require=/nowhere\nexport KUVO_HOST_PASSWORD=secret\nexport BUN_BE_BUN=1\n`;
   const ranWith = () => Object.fromEntries(fs.readFileSync(seen, "utf8").split("\n").filter(line => line.includes("=")).map(line => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]));
-  // The box as the engine's Bun runs it.
-  const env = { SHELL: shell, BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" };
+  // The box as the engine's Bun runs it, started with a GPG_TTY of its own (whatever the runner's).
+  const env = { SHELL: shell, BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", GPG_TTY: "/dev/ttys000" };
 
   fs.writeFileSync(profile, startup("/dev/ttys041"));
   write("README.md", "Hello\nWorld\n");
@@ -319,14 +319,14 @@ test("a commit's hooks run with none of the box's own variables, and on a Mac wi
   let vars = ranWith();
   for (const name of ["BUN_BE_BUN", "BUN_RUNTIME_TRANSPILER_CACHE_PATH", "DYLD_INSERT_LIBRARIES", "KUVO_HOST_PASSWORD", "KUVO_HOME", "KUVO_CHANGES_TRASH"]) assert.equal(vars[name], undefined, name);
   assert.notEqual(vars.NODE_OPTIONS, "--require=/nowhere");
-  assert.equal(vars.GPG_TTY, process.platform === "darwin" ? "/dev/ttys041" : undefined);
+  assert.equal(vars.GPG_TTY, process.platform === "darwin" ? "/dev/ttys041" : "/dev/ttys000");
 
   // Your startup file changed since: what the next commit's hooks get, on a Mac.
   fs.writeFileSync(profile, startup("/dev/ttys042"));
   write("README.md", "Hello\nWorld, again\n");
   assert.equal((await route("POST", "kuvo/git/commit", { directory: repo, message: "Again", push: false }, env)).status, 200);
   vars = ranWith();
-  assert.equal(vars.GPG_TTY, process.platform === "darwin" ? "/dev/ttys042" : undefined);
+  assert.equal(vars.GPG_TTY, process.platform === "darwin" ? "/dev/ttys042" : "/dev/ttys000");
   assert.equal(vars.BUN_BE_BUN, undefined);
 });
 

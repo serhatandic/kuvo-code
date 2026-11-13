@@ -40,26 +40,48 @@ const NOT_FROM_LOGIN = /^(DYLD_|BUN_|KUVO_|OPENCODE_)|^(NODE_OPTIONS|PWD|OLDPWD|
 // How long a read of your login shell's environment is gone by: a commit and its push, or a few
 // in a row, read it once.
 const LOGIN_READ_FOR = 60_000;
-let loginRead: { at: number; env: Promise<Record<string, string> | undefined> } | null = null;
+// The last one read (`env`, kept when a later read fails) and when; the read under way.
+let loginRead: { at: number; env?: Record<string, string> } | null = null;
+let loginReading: Promise<void> | null = null;
 
 /**
  * The environment for what you ask for yourself (Commit, Push, Merge into…, whose hooks and
  * sign-ins run as yours): `commandEnv`, and on a Mac your login shell's environment as it is now on
  * top, as a new terminal window has it, so what you've changed in your startup files since the box
- * started (a PATH, `GPG_TTY`) counts; read again once it's a minute old. Not on Linux, where a box
- * is started over SSH or at boot, and where a `.bashrc` that starts an `ssh-agent` would leave one
- * more running with each read (agents/proc.ts's `refreshLoginPath`): there, the environment the box
- * started with, as before. Never what `NOT_FROM_LOGIN` names.
+ * started (a PATH, `GPG_TTY`) counts. Read the first time, and again once it's a minute old,
+ * waiting `wait` for that at most (a slow `.zshrc` is read on, for the next; meanwhile the last
+ * one). Not on Linux, where a box is started over SSH or at boot, and where a `.bashrc` that starts
+ * an `ssh-agent` would leave one more running with each read (agents/proc.ts's `refreshLoginPath`):
+ * there, the environment the box started with, as before. Never what `NOT_FROM_LOGIN` names.
  */
-export async function askedEnv(from: Record<string, string | undefined> = process.env, platform: NodeJS.Platform = process.platform): Promise<Record<string, string>> {
+export async function askedEnv(from: Record<string, string | undefined> = process.env, platform: NodeJS.Platform = process.platform, now = Date.now(), wait = 1_000): Promise<Record<string, string>> {
   const env = commandEnv(from);
   // (Nor without a home to log in at, nor in a test's box that's told not to: its shell would be
   // the one of whoever runs the tests.)
   if (platform !== "darwin" || !from.HOME || from.KUVO_TEST_LOGIN_ENV === "off") return env;
-  if (!loginRead || Date.now() - loginRead.at > LOGIN_READ_FOR) loginRead = { at: Date.now(), env: loginEnvironment(from) };
-  const login = await loginRead.env;
-  for (const [name, value] of Object.entries(login ?? {})) if (!NOT_FROM_LOGIN.test(name)) env[name] = value;
+  if (!loginReading && (!loginRead || now - loginRead.at > LOGIN_READ_FOR)) {
+    const at = now;
+    loginReading = loginEnvironment(from).then(found => {
+      loginRead = { at, env: found ?? loginRead?.env };
+    }, () => {}).finally(() => { loginReading = null; });
+  }
+  if (loginReading) {
+    // The first read, waited for; a later one, for `wait` at most.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await (loginRead ? Promise.race([loginReading, new Promise<void>(resolve => (timer = setTimeout(resolve, wait)))]) : loginReading);
+    clearTimeout(timer);
+  }
+  for (const [name, value] of Object.entries(loginRead?.env ?? {})) if (!NOT_FROM_LOGIN.test(name)) env[name] = value;
   return env;
+}
+
+/** The read of your login shell's environment under way, if one is (for a test to wait for). */
+export const loginEnvRead = (): Promise<void> => loginReading ?? Promise.resolve();
+
+/** What was read of it forgotten (a test's own, which the next test's box process won't share). */
+export async function forgetLoginEnv(): Promise<void> {
+  await loginEnvRead();
+  loginRead = null;
 }
 
 // The commands running now, by a name of each's: stopped when this process ends (a newer box

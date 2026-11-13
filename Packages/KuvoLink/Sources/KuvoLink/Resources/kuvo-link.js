@@ -7071,7 +7071,7 @@ var EVERY = ["-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "log.sh
 var OWN = [...EVERY, "-c", "safe.bareRepository=explicit", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", "-c", "tag.gpgSign=false", "-c", "credential.helper="];
 var GIT_QUIET = { GIT_TERMINAL_PROMPT: "0" };
 var DRIVERS = String.raw`^(filter\..+\.(clean|smudge|process)|diff\..+\.textconv|hook\..+\.command|core\.fsmonitor)$`;
-var WATCHER = ["-c", "core.fsmonitor=true"];
+var WATCHER = process.platform === "darwin" ? ["-c", "core.fsmonitor=true"] : [];
 var watches = (value) => value === undefined || /^(true|yes|on)$/i.test(value.trim()) || /^-?[1-9]\d*$/.test(value.trim());
 var watcherIn = (read) => {
   const last = read.split("\x00").filter(Boolean).at(-1)?.split(/\n(.*)/s);
@@ -8341,11 +8341,13 @@ async function* loadSignInReturn(body, signal) {
 async function* stopShell(id, runners, headers, signal) {
   const json = (status, value) => [{ head: { status, headers: { "content-type": "application/json" } } }, { body: Buffer.from(JSON.stringify(value)) }];
   let job, url;
+  let answered = false;
   for (const runner of runners) {
     url = `http://127.0.0.1:${runner.port}/api/shell/${encodeURIComponent(id)}`;
     const asking = { ...headers, authorization: `Basic ${Buffer.from(`opencode:${runner.password}`).toString("base64")}` };
     try {
       const response = await fetch(url, { headers: asking, signal });
+      answered = true;
       if (response.ok)
         job = (await response.json()).data;
     } catch {}
@@ -8354,10 +8356,12 @@ async function* stopShell(id, runners, headers, signal) {
       break;
     }
   }
+  if (!job && !answered)
+    return yield* json(503, { message: "Its engine didn’t answer. Try again in a moment." });
   if (!job || job.status !== "running")
     return yield* json(404, {});
   const stopped = await endShellJob(job, url, headers, signal);
-  return stopped ? yield* json(200, { stopped }) : yield* json(404, {});
+  return stopped ? yield* json(200, { stopped }) : yield* json(422, { message: "It runs on, and couldn’t be stopped." });
 }
 async function endShellJob(job, url, headers, signal) {
   if (Number.isInteger(job.pid) && job.pid > 1) {
@@ -32701,14 +32705,25 @@ function commandEnv(from = process.env) {
 var NOT_FROM_LOGIN = /^(DYLD_|BUN_|KUVO_|OPENCODE_)|^(NODE_OPTIONS|PWD|OLDPWD|SHLVL|_)$/;
 var LOGIN_READ_FOR = 60000;
 var loginRead = null;
-async function askedEnv(from = process.env, platform = process.platform) {
+var loginReading = null;
+async function askedEnv(from = process.env, platform = process.platform, now = Date.now(), wait = 1000) {
   const env = commandEnv(from);
   if (platform !== "darwin" || !from.HOME || from.KUVO_TEST_LOGIN_ENV === "off")
     return env;
-  if (!loginRead || Date.now() - loginRead.at > LOGIN_READ_FOR)
-    loginRead = { at: Date.now(), env: loginEnvironment(from) };
-  const login = await loginRead.env;
-  for (const [name, value] of Object.entries(login ?? {}))
+  if (!loginReading && (!loginRead || now - loginRead.at > LOGIN_READ_FOR)) {
+    const at = now;
+    loginReading = loginEnvironment(from).then((found) => {
+      loginRead = { at, env: found ?? loginRead?.env };
+    }, () => {}).finally(() => {
+      loginReading = null;
+    });
+  }
+  if (loginReading) {
+    let timer;
+    await (loginRead ? Promise.race([loginReading, new Promise((resolve) => timer = setTimeout(resolve, wait))]) : loginReading);
+    clearTimeout(timer);
+  }
+  for (const [name, value] of Object.entries(loginRead?.env ?? {}))
     if (!NOT_FROM_LOGIN.test(name))
       env[name] = value;
   return env;
@@ -39327,7 +39342,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "a6f84e5d3d01";
+var BRIDGE_VERSION = "acf4d37069bb";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

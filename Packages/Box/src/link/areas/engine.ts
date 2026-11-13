@@ -136,11 +136,14 @@ export interface ShellJob {
 export async function* stopShell(id: string, runners: Target[], headers: Record<string, string>, signal: AbortSignal | undefined): AsyncGenerator<AnswerPiece> {
   const json = (status: number, value: unknown): AnswerPiece[] => [{ head: { status, headers: { "content-type": "application/json" } } }, { body: Buffer.from(JSON.stringify(value)) }];
   let job: ShellJob | undefined, url: string | undefined;
+  // Whether one of them answered at all: none that did is "no such command", as none that didn't isn't.
+  let answered = false;
   for (const runner of runners) {
     url = `http://127.0.0.1:${runner.port}/api/shell/${encodeURIComponent(id)}`;
     const asking = { ...headers, authorization: `Basic ${Buffer.from(`opencode:${runner.password}`).toString("base64")}` };
     try {
       const response = await fetch(url, { headers: asking, signal });
+      answered = true;
       if (response.ok) job = ((await response.json()) as { data?: ShellJob }).data;
     } catch {}
     if (job) {
@@ -148,9 +151,10 @@ export async function* stopShell(id: string, runners: Target[], headers: Record<
       break;
     }
   }
+  if (!job && !answered) return yield* json(503, { message: "Its engine didn’t answer. Try again in a moment." });
   if (!job || job.status !== "running") return yield* json(404, {});
   const stopped = await endShellJob(job, url!, headers, signal);
-  return stopped ? yield* json(200, { stopped }) : yield* json(404, {});
+  return stopped ? yield* json(200, { stopped }) : yield* json(422, { message: "It runs on, and couldn’t be stopped." });
 }
 
 /** A running command ended (`url`: where it's kept, `headers`: how it's reached): its signal, else

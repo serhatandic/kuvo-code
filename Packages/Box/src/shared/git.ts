@@ -1,9 +1,9 @@
 // git as the box runs it in a repository (PROTOCOL.md, "Git"): a repository's own settings (its
 // `.git/config`, and what that includes) never start a program on their own, since whoever could
 // write in the folder (a download, an agent let outside the sandbox) could have put one there.
-// Every git the box runs gets no fsmonitor program, pager, external diff or signature check (git's
-// own watcher, `core.fsmonitor=true`, which starts no program a setting names, stays on where it's
-// set, for a big repository's sake, in all but the plainest reads). What the box
+// Every git the box runs gets no fsmonitor program, pager, external diff or signature check (on a
+// Mac, git's own watcher, `core.fsmonitor=true`, which starts no program a setting names, stays on
+// where it's set, for a big repository's sake, in all but the plainest reads). What the box
 // does by itself (reading the changes, keeping snapshots and backups) also runs no hooks (those in
 // a hooks folder or named in settings), signing or credential helpers, finds no bare repository by
 // sitting in its folder, and switches off the filters and diff converters the repository names,
@@ -32,8 +32,10 @@ export const GIT_QUIET = { GIT_TERMINAL_PROMPT: "0" }
 const DRIVERS = String.raw`^(filter\..+\.(clean|smudge|process)|diff\..+\.textconv|hook\..+\.command|core\.fsmonitor)$`
 
 // git's own watcher, kept on when settings ask for it (`core.fsmonitor` true as git reads a yes:
-// `true`, `yes`, `on`, a number but 0, or the name alone), never when they name a program.
-const WATCHER = ["-c", "core.fsmonitor=true"]
+// `true`, `yes`, `on`, a number but 0, or the name alone), never when they name a program. Only on
+// a Mac: Linux's git has no watcher of its own, and one before 2.36 (Ubuntu 22.04's) reads `true` as
+// a program by that name.
+const WATCHER = process.platform === "darwin" ? ["-c", "core.fsmonitor=true"] : []
 const watches = (value: string | undefined) => value === undefined || /^(true|yes|on)$/i.test(value.trim()) || /^-?[1-9]\d*$/.test(value.trim())
 /** WATCHER when the last `core.fsmonitor` of a `config -z --get-regexp` read (no scopes) says git's own. */
 const watcherIn = (read: string) => {
