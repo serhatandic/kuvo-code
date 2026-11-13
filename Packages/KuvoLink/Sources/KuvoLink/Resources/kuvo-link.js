@@ -2291,6 +2291,7 @@ var FEATURES = [
   "skills.trash",
   "update",
   "usage.history",
+  "usage.settings",
   "vault",
   "wakes",
   "wakes.edit",
@@ -39139,7 +39140,7 @@ import fs129 from "node:fs";
 import path133 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "482557f91344";
+var BRIDGE_VERSION = "aeb8b7743e05";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
