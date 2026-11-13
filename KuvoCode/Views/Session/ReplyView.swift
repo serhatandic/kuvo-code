@@ -795,7 +795,7 @@ final class ReplyCopyButton: ReplyChipButton {
     }
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("Use init()") }
-    deinit { restore?.cancel() }
+    isolated deinit { restore?.cancel() }
     func showCopied() {
         restore?.cancel()
         show(title: "Copied")

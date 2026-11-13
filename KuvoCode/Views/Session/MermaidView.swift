@@ -11,7 +11,7 @@ final class MermaidView: NSView {
     private let messageView = NSTextField(wrappingLabelWithString: "")
     private let modeButton = ReplyChipButton(title: "Code", widest: "Diagram")
     private var content: String = ""
-    private var appearance: ReplyDocument.Style?
+    private var documentStyle: ReplyDocument.Style?
     private var failure: String?
     private var sourceSelected = false
     private var requestedWidth: CGFloat = -1
@@ -31,7 +31,7 @@ final class MermaidView: NSView {
         messageView.textColor = .systemRed
         messageView.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         modeButton.target = self
-        modeButton.action = #selector(changeMode)
+        modeButton.action = #selector(toggleSource)
         [imageView, sourceView, messageView, modeButton].forEach(addSubview)
         refreshVisibility()
     }
@@ -41,15 +41,15 @@ final class MermaidView: NSView {
     deinit { renderTask?.cancel(); resizeWork?.cancel() }
 
     func present(_ source: String, style: ReplyDocument.Style) {
-        guard content != source || appearance != style else { return }
-        let needsImage = content != source || appearance?.dark != style.dark
+        guard content != source || documentStyle != style else { return }
+        let needsImage = content != source || documentStyle?.dark != style.dark
         if content != source {
             sourceSelected = false
             failure = nil
             imageView.image = nil
         }
         content = source
-        appearance = style
+        documentStyle = style
         sourceView.show(code: source, language: "mermaid", marks: [], style: style)
         if needsImage {
             revision = UUID()
@@ -61,8 +61,8 @@ final class MermaidView: NSView {
     }
 
     func measure(at width: CGFloat) -> CGFloat {
-        if let appearance, abs(requestedWidth - width) > 1,
-           let saved = MermaidRenderer.shared.known(content, dark: appearance.dark, width: width) {
+        if let documentStyle, abs(requestedWidth - width) > 1,
+           let saved = MermaidRenderer.shared.known(content, dark: documentStyle.dark, width: width) {
             requestedWidth = width
             renderTask?.cancel()
             switch saved {
@@ -101,7 +101,7 @@ final class MermaidView: NSView {
         onResize()
     }
 
-    @objc private func changeMode() {
+    @objc private func toggleSource() {
         sourceSelected.toggle()
         refreshVisibility()
         invalidateSize()
@@ -116,7 +116,7 @@ final class MermaidView: NSView {
         messageView.frame = NSRect(x: 0, y: 0, width: available, height: max(0, sourceTop - 8))
         sourceView.frame = NSRect(x: 0, y: sourceTop, width: available, height: sourceView.height(for: available))
         imageView.frame = NSRect(x: 0, y: 22, width: available, height: max(0, bounds.height - 22))
-        guard !displaysSource, available > 0, abs(requestedWidth - available) > 1, appearance != nil else { return }
+        guard !displaysSource, available > 0, abs(requestedWidth - available) > 1, documentStyle != nil else { return }
         resizeWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.requestImage() }
         resizeWork = work
@@ -124,12 +124,12 @@ final class MermaidView: NSView {
     }
 
     private func requestImage() {
-        guard let appearance, bounds.width > 0 else { return }
+        guard let documentStyle, bounds.width > 0 else { return }
         requestedWidth = bounds.width
         renderTask?.cancel()
         let source = content, width = requestedWidth, token = revision
         renderTask = Task { [weak self] in
-            let result = await MermaidRenderer.shared.render(source, dark: appearance.dark, width: width)
+            let result = await MermaidRenderer.shared.render(source, dark: documentStyle.dark, width: width)
             guard let self, !Task.isCancelled, token == revision, let result else { return }
             switch result {
             case .drawn(let image): imageView.image = image; failure = nil
@@ -150,6 +150,10 @@ final class MermaidRenderer: NSObject, WKNavigationDelegate {
     private final class Cached: NSObject {
         let value: Outcome
         init(_ value: Outcome) { self.value = value }
+    }
+    private enum ScriptReply {
+        case returned([String: Any]?)
+        case timedOut
     }
     private struct Request {
         let id: UUID
@@ -254,11 +258,11 @@ final class MermaidRenderer: NSObject, WKNavigationDelegate {
         view.setValue(false, forKey: "drawsBackground")
         view.navigationDelegate = self
         page = view
-        let loaded = await withCheckedContinuation { continuation in
+        let loaded = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             let completion = Completion(continuation)
             navigation = completion
             DispatchQueue.main.asyncAfter(deadline: .now() + 10) { completion.finish(false) }
-            view.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+            _ = view.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
         }
         navigation = nil
         if !loaded { discardPage() }
@@ -268,17 +272,28 @@ final class MermaidRenderer: NSObject, WKNavigationDelegate {
     private func snapshot(_ request: Request) async -> Outcome {
         guard await loadPage(), let page else { return .failed("Mermaid didn't load.") }
         page.frame.size = NSSize(width: request.width, height: 400)
-        let response: [String: Any]? = await withCheckedContinuation { continuation in
+        let reply: ScriptReply = await withCheckedContinuation { continuation in
             let completion = Completion(continuation)
             page.callAsyncJavaScript("return await renderDiagram(source, isDark)", arguments: ["source": request.source, "isDark": request.dark], in: nil, in: .page) { result in
-                completion.finish((try? result.get()) as? [String: Any])
+                switch result {
+                case .success(let value): completion.finish(.returned(value as? [String: Any]))
+                case .failure: completion.finish(.returned(nil))
+                }
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 10) { completion.finish(nil) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10) { completion.finish(.timedOut) }
         }
-        guard let response else {
+        let response: [String: Any]
+        switch reply {
+        case .returned(let result):
+            guard let result else {
+                discardPage()
+                return .failed("The page didn't answer.")
+            }
+            response = result
+        case .timedOut:
+            discardPage()
             let failure = Outcome.failed("It took too long to draw.")
             failures.setObject(Cached(failure), forKey: request.source as NSString)
-            discardPage()
             return failure
         }
         if let error = response["error"] as? String {
