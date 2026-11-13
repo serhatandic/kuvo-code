@@ -38,6 +38,7 @@ export const FEATURES = [
   "bots.make",
   "box.ownHome",
   "box.rehome",
+  "box.update",
   "branch",
   "browser",
   "btw",

@@ -52,7 +52,7 @@ import { phoneHere } from "../compat/leave-running";
 import { readBridgeFile, readEngineFile } from "../engine/client";
 import { isMachinesRoute } from "../mac/machines";
 import { linkRoute } from "../mac/routes";
-import { updateRoute } from "../updates/update";
+import { boxUpdateRoute, updateRoute } from "../updates/update";
 import { rehomeRoute } from "../rehome/route";
 import { browserRoute } from "../browser/install";
 import { IS_MAC } from "../home";
@@ -80,6 +80,8 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route === "kuvo/sandbox" || route.startsWith("kuvo/sandbox/"), answer: sandboxRoute },
   { when: route => route === "kuvo/file", answer: ({ request, json }: RouteContext) => fileAt(request.path, json) },
   { when: route => route === "kuvo/update", answer: updateRoute },
+  // A release from a folder here, offered by Kuvo Code (PROTOCOL.md, "Updates").
+  { when: route => route === "kuvo/box/update", answer: boxUpdateRoute },
   // Moving this Mac's box into a home of its own (PROTOCOL.md, "Moving this Mac's box").
   { when: route => route === "kuvo/box/rehome", answer: rehomeRoute },
   // (A machine's: this Mac's agents browse in its app's panel.)

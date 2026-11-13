@@ -6,6 +6,9 @@
 #                   the default "-" signs ad hoc, for local use
 #   FEED_URL        update feed (default: the newest GitHub release); for
 #                   testing updates against a local server
+#   KUVO_BOX_SIGNING_KEY  the box releases' key (PEM): with it, the app carries the box's
+#                   release, signed (scripts/app-box-release.sh); BOX_URL says where its pack
+#                   is published
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -72,5 +75,15 @@ fi
 codesign "$@" "$FRAMEWORK/Versions/B/Autoupdate"
 codesign "$@" "$FRAMEWORK/Versions/B/Updater.app"
 codesign "$@" "$FRAMEWORK"
+# The helpers the app carries (the box's, `Contents/Helpers/<name>.app`), before the app, and before
+# the box's release packs them.
+for helper in "$APP/Contents/Helpers/"*.app; do
+    if [ -d "$helper" ]; then codesign "$@" "$helper"; fi
+done
 codesign "$@" --entitlements KuvoCode/KuvoCode.entitlements "$APP"
+# The box's release in the app, for it to offer this Mac's box as it updates: only with the key a
+# box trusts (a local build has none, and carries none).
+if [ -n "${KUVO_BOX_SIGNING_KEY:-}" ]; then
+    SIGN_IDENTITY="$SIGN_IDENTITY" ./scripts/app-box-release.sh "$APP" "$VERSION"
+fi
 echo "Built $APP $VERSION ($(du -sh "$APP" | cut -f1))"

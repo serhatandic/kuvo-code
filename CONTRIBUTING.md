@@ -81,8 +81,14 @@ A release also carries what remote machines run, for them to update themselves
 with, once the `KUVO_BOX_SIGNING_KEY` secret (an Ed25519 key) is set
 (`scripts/set-box-key.sh` makes it once, keeps it in your login keychain, uploads
 it and prints the public key to pin): the app writes those files
-(`"Kuvo Code" --write-box-files <folder>`), and `scripts/sign-box.mjs` signs
-`boxes.json`, which names them. Machines take only
+(`"Kuvo Code" --write-box-files <folder>`), `scripts/pack-box.sh` packs them with
+the app's helper bundles (`Contents/Helpers/*.app`), and `scripts/sign-box.mjs`
+signs `boxes.json`, which names them. `scripts/app-box-release.sh` puts the
+two files in the app (`Contents/Resources/box-release`) and signs it again,
+before it's notarized: the app offers them to this Mac's box as it updates
+(`kuvo/box/update`), and the release publishes the same files. A local
+`scripts/build-app.sh` does it only with `KUVO_BOX_SIGNING_KEY` set, so a local
+build carries none. Machines take only
 what a key pinned in the box's link (`UPDATE_KEYS`, in `Packages/Box/src`) signed; see
 `Packages/KuvoLink/PROTOCOL.md`, "Updates".
 

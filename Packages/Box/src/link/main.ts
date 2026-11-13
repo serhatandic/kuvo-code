@@ -102,7 +102,7 @@ import { serveBox } from "./server/serve";
 import { macLink, macSign, onLinkWritten, readLink, updateLink } from "./state";
 import { keepKeyFiles } from "./keys";
 import { keepAwakeWhileWorking } from "./work/awake";
-import { agentsWorking, checkDrift, confirmUpdate, isUpdating, noteLauncher, noteOlderMacs, noteUpdate, startUpdate, update, UPDATE_KEYS, updateNight, updatesBlocked, updateState, updateStatus } from "./updates/update";
+import { agentsWorking, checkDrift, confirmUpdate, isUpdating, noteLauncher, noteOlderMacs, noteUpdate, startUpdate, takeOffer, update, UPDATE_KEYS, updateNight, updatesBlocked, updateState, updateStatus } from "./updates/update";
 import { BRIDGE_VERSION } from "./version";
 import type { AddressInfo } from "node:net";
 import type { SignedDoc } from "../shared/documents";
@@ -176,7 +176,7 @@ export { KEEP_FOR, SEEN_FILE, forgetPhones, phoneSeenLately } from "./compat/lea
 export { engineConnect, engineControl, toolRun } from "./areas/engine";
 export { botPersonalities, changePersonalities, mergePersonalities, personalitiesDocument, readPersonalities } from "./personalities/library";
 export { botVariable, keyFilesWait, syncKeyFiles } from "./keys";
-export { UPDATE_KEYS, agentsWorking, boxVersion, checkDrift, confirmUpdate, isUpdating, newerVersion, noteLauncher, noteOlderMacs, startUpdate, update, updateNight, updateStatus, updatesBlocked, verifyBoxes, versionOrder } from "./updates/update";
+export { UPDATE_KEYS, agentsWorking, boxVersion, bundleOf, checkDrift, confirmUpdate, isUpdating, newerVersion, noteLauncher, noteOlderMacs, offerUpdate, offeredVersion, startUpdate, takeOffer, update, updateNight, updateStatus, updatesBlocked, verifyBoxes, versionOrder } from "./updates/update";
 export { FILE_LIMIT } from "./areas/file";
 export { firstMessageOf, jobInMemory, jobLine, keepJobs } from "./bots/jobs";
 export { listBots } from "./bots/list";
@@ -402,12 +402,14 @@ async function run(): Promise<void> {
   let lastWelcomed = Date.now();
   refreshOwn(readEngineFile).catch(() => {});
   // Updates: the new bridge, once one put it here, says it's well (after the relay's welcome, or
-  // three minutes); each night's window, one, when nothing runs (PROTOCOL.md, "Updates").
+  // three minutes); each night's window, one, when nothing runs; a release Kuvo Code here offered,
+  // at the first round nothing runs (PROTOCOL.md, "Updates").
   setTimeout(updateIsWell, 180_000);
   const nightly = () => {
     noteLauncher();
     noteOlderMacs();
     try { checkDrift(); } catch {}
+    takeOffer().catch(() => {});
     const night = updateNight();
     if (!night || updateState().night === night || !UPDATE_KEYS.length) return;
     startUpdate({})?.then(outcome => { if (outcome && outcome.result !== "busy") noteUpdate({ night }); });
@@ -1029,12 +1031,16 @@ if (main) {
     process.stdout.write(found ?? "");
   }
   else if (mode === "update") {
-    // `update [--now]`, and for a test's folder only, `--url <boxes.json> --key <public key>`. Once
-    // it's updated, the running bridge goes, for the keeper to start the new one.
+    // `update [--now] [--from <folder>]` (a release in a folder here, `boxes.json` and its pack), and
+    // for a test's folder only, `--url <boxes.json> --key <public key>` (`--key` alone with
+    // `--from`). Once it's updated, the running bridge goes, for the keeper to start the new one.
     const args = process.argv.slice(3);
     const option = (name: string): string | undefined => (args.indexOf(name) >= 0 ? args[args.indexOf(name) + 1] : undefined);
-    const test = option("--url") && option("--key") && !REAL_BOX;
-    const outcome = await update({ now: args.includes("--now"), step: running => noteUpdate({ running }), ...(test ? { url: option("--url"), keys: [option("--key")!], blocked: null } : {}) });
+    const from = option("--from");
+    const test = (option("--url") || from) && option("--key") && !REAL_BOX;
+    const outcome = from && !path.isAbsolute(from)
+      ? { result: "failed" as const, message: "Say which folder the release is in, as a full path." }
+      : await update({ now: args.includes("--now"), from, step: running => noteUpdate({ running }), ...(test ? { url: option("--url"), keys: [option("--key")!], blocked: null } : {}) });
     noteUpdate({ running: null, ...(outcome.result === "updated" ? {} : { last: { at: Date.now(), ...outcome } }) });
     if (outcome.result === "updated") {
       const pid = runningBridge();

@@ -214,6 +214,23 @@ jobs:
           python3 scripts/whats-new.py
           SIGN_IDENTITY="$MACOS_SIGNING_IDENTITY" ./scripts/build-app.sh
 
+      # What every box runs, for machines to update themselves with (Packages/KuvoLink/PROTOCOL.md,
+      # "Updates"): the files this version puts on every box, with the app's helper bundles, packed,
+      # and boxes.json, a manifest naming the pack and the engine's builds, signed. It goes in the
+      # app (Contents/Resources/box-release), which offers it to this Mac's box as it updates, before
+      # the app's signed again and notarized; "Package the box release" publishes the same files.
+      # Without the key, there's none, and machines update only as a Mac connects.
+      - name: Put the box release in the app
+        if: env.HAS_BOX_SIGNING_KEY == 'true'
+        shell: bash
+        env:
+          KUVO_BOX_SIGNING_KEY: ${{ secrets.KUVO_BOX_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          SIGN_IDENTITY="$MACOS_SIGNING_IDENTITY" \
+            BOX_URL="https://github.com/$GITHUB_REPOSITORY/releases/download/v$VERSION/box-$VERSION.tar.gz" \
+            ./scripts/app-box-release.sh "build/Kuvo Code.app" "$VERSION"
+
       # (CI checked these on every push while it built the app; only releases build it now.)
       - name: Check the app bundle
         shell: bash
@@ -230,6 +247,11 @@ jobs:
           done
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = run.kuvo.code \
             || { echo "Unexpected bundle identifier" >&2; exit 1; }
+          if [[ "$HAS_BOX_SIGNING_KEY" == true ]]; then
+            for file in boxes.json "box-$VERSION.tar.gz"; do
+              test -s "$app/Contents/Resources/box-release/$file" || { echo "Missing box-release/$file in the app bundle" >&2; exit 1; }
+            done
+          fi
           codesign --verify --strict --deep --verbose=2 "$app"
           codesign -d --verbose=2 "$app" 2>&1 | grep -q 'flags=.*runtime' \
             || { echo "The hardened runtime is off" >&2; exit 1; }
@@ -308,22 +330,14 @@ jobs:
           cat dist/appcast.xml
 
       - name: Package the box release
-        # What machines run, for them to update themselves with (Packages/KuvoLink/PROTOCOL.md,
-        # "Updates"): the files this version puts on every machine, packed, and boxes.json, a
-        # manifest naming the pack and the engine's Linux builds, signed. Without the key, there's
-        # none, and machines update only as a Mac connects.
+        # The box's release the app carries ("Put the box release in the app"), the very same
+        # files, for machines to download.
         if: env.HAS_BOX_SIGNING_KEY == 'true'
         shell: bash
-        env:
-          KUVO_BOX_SIGNING_KEY: ${{ secrets.KUVO_BOX_SIGNING_KEY }}
         run: |
           set -euo pipefail
-          "build/Kuvo Code.app/Contents/MacOS/Kuvo Code" --write-box-files "$RUNNER_TEMP/box"
-          test "$(cat "$RUNNER_TEMP/box/bin/box-version")" = "$VERSION"
-          for file in kuvo-link.js kuvo-browser.js kuvo-agents.js kuvo-start kuvo-launch; do test -s "$RUNNER_TEMP/box/bin/$file"; done
-          COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata --uid 0 --gid 0 -czf "dist/box-$VERSION.tar.gz" -C "$RUNNER_TEMP/box" .
-          node scripts/sign-box.mjs "$VERSION" "dist/box-$VERSION.tar.gz" \
-            "https://github.com/$GITHUB_REPOSITORY/releases/download/v$VERSION/box-$VERSION.tar.gz" "$RUNNER_TEMP/box/box.json" > dist/boxes.json
+          cp "build/Kuvo Code.app/Contents/Resources/box-release/boxes.json" \
+            "build/Kuvo Code.app/Contents/Resources/box-release/box-$VERSION.tar.gz" dist/
 
       - name: Upload the dry-run build
         if: github.event_name == 'workflow_dispatch'

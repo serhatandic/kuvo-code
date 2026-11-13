@@ -1542,6 +1542,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "box.ownHome": ["GET", "kuvo/work/settings"],
     // (Moving this Mac's box into a home of its own: how it stands, here nothing.)
     "box.rehome": ["GET", "kuvo/box/rehome"],
+    // (A release from a folder here, which only Kuvo Code offers: a GET is the wrong method.)
+    "box.update": ["GET", "kuvo/box/update"],
     branch: ["POST", "kuvo/agents/api/kuvo/branch/ses_none"],
     // (Its browser, set up by the box itself.)
     browser: ["GET", "kuvo/browser"],

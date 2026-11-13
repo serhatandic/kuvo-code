@@ -5,7 +5,10 @@
 // only while every Mac that started its engine lately leaves a newer box as it is. It checks what
 // it got, tries the new engine and bridge, keeps what it had, swaps its files one by one and
 // starts again; if that doesn't come up well, or the new bridge never says it's well (the keeper
-// waits twenty minutes), it goes back to what it had.
+// waits twenty minutes), it goes back to what it had. A release can come from a folder on this
+// computer too (`kuvo/box/update {from}`: the one an app carries, offered as it updates), checked
+// the same way and taken at the next quiet moment; and it can carry a signed Mac bundle (the
+// box's helper), swapped whole.
 
 import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
@@ -46,6 +49,13 @@ const ED25519_SPKI = Buffer.from("302a300506032b6570032100", "hex");
 const RELEASE_AGE = 3 * 86_400_000;
 const MAC_MEMORY = 30 * 86_400_000;
 const BOX_FILE = /^(bin\/[A-Za-z0-9._-]+|bin\/runtime\/[A-Za-z0-9._-]+|config\/opencode\/plugins\/[A-Za-z0-9._-]+)$/;
+// A Mac bundle a release carries (the box's helper, `bin/Kuvo Code Box.app`), by its files: each
+// named, none a link, and the bundle swapped whole. No part starts with a dot (never `..`).
+const BUNDLE_FILE = /^(bin\/[A-Za-z0-9][A-Za-z0-9._ -]*\.app)\/(?:[A-Za-z0-9_][A-Za-z0-9._+ -]*\/)*[A-Za-z0-9_][A-Za-z0-9._+ -]*$/;
+/** The bundle a release's file is in (`bin/<name>.app`), or null for a file of its own. */
+export const bundleOf = (file: string): string | null => BUNDLE_FILE.exec(file)?.[1] ?? null;
+// A release offered from a folder on this computer (`kuvo/box/update`), kept until it's taken.
+const OFFERED = path.join(UPDATES, "offered");
 const RELEASE_VERSION = /^\d+\.\d+\.\d+(-beta\.\d+)?$/;
 
 // A version as versions are ordered (a beta before its release), or null for one that isn't.
@@ -226,7 +236,7 @@ function takeUpdateLock(): boolean {
 // engine's data (stopped), with `restore.sh`, which puts them back: run by the update when the new
 // version doesn't come up, or by the keeper once the update's trial runs out (not while an update
 // runs). Each step checked: one that fails leaves what was kept, for the next try.
-function keepForRollback(files: string[], withData: boolean): void {
+function keepForRollback(files: string[], withData: boolean, bundles: ReadonlySet<string> = new Set()): void {
   fs.rmSync(ROLLBACK, { recursive: true, force: true });
   fs.mkdirSync(path.join(ROLLBACK, "files"), { recursive: true, mode: 0o700 });
   const lines = [
@@ -238,7 +248,17 @@ function keepForRollback(files: string[], withData: boolean): void {
   ];
   for (const file of files) {
     const from = path.join(K, file);
-    if (fs.existsSync(from)) {
+    if (bundles.has(file)) {
+      // A bundle, whole: the one there put back aside the new, which goes (none there: it goes).
+      const [here, fresh, old] = [`"$K/"${quote(file)}`, `"$K/"${quote(`${file}.new`)}`, `"$K/"${quote(`${file}.old`)}`];
+      if (fs.existsSync(from)) {
+        fs.mkdirSync(path.dirname(path.join(ROLLBACK, "files", file)), { recursive: true, mode: 0o700 });
+        fs.cpSync(from, path.join(ROLLBACK, "files", file), { recursive: true, verbatimSymlinks: true });
+        lines.push(`rm -rf ${fresh} ${old} && cp -Rp "$B/files/"${quote(file)} ${fresh} && { [ ! -e ${here} ] || mv ${here} ${old}; } && mv ${fresh} ${here} && rm -rf ${old} || exit 1`);
+      } else {
+        lines.push(`rm -rf ${here} ${fresh} || exit 1`);
+      }
+    } else if (fs.existsSync(from)) {
       fs.mkdirSync(path.dirname(path.join(ROLLBACK, "files", file)), { recursive: true, mode: 0o700 });
       fs.copyFileSync(from, path.join(ROLLBACK, "files", file));
       fs.chmodSync(path.join(ROLLBACK, "files", file), fs.statSync(from).mode & 0o777);
@@ -310,10 +330,12 @@ const OWN_TOOLS = ["kuvo-agents.js", "kuvo-browser.js", "kuvo-wake", "kuvo-npx"]
 // the keeper's mark last (the keeper starts its new script only once the script is there).
 const installOrder = (files: string[]): string[] => [...files].sort((a, b) => (a === "bin/box-version" ? -1 : b === "bin/box-version" ? 1 : a === "bin/.kuvo-boot" ? 1 : b === "bin/.kuvo-boot" ? -1 : a < b ? -1 : 1));
 
-/** How `update` runs: now (Update Now) or by night, and for a test, its keys, address, block,
- * clock, steps and how long the new version has to come up. */
+/** How `update` runs: now (Update Now) or by night, from a folder on this computer (`from`, with
+ * `boxes.json` and the pack it names) rather than GitHub, and for a test, its keys, address,
+ * block, clock, steps and how long the new version has to come up. */
 export interface UpdateOptions {
   now?: boolean;
+  from?: string;
   keys?: string[];
   url?: string;
   blocked?: string | null;
@@ -332,8 +354,9 @@ interface BoxFiles {
 // Updates the box to the newest release, when it's newer: `now` (Update Now) takes it whatever its
 // age. What happened: `{result: "updated" | "current" | "waiting" | "busy" | "off" | "blocked" |
 // "failed", version?, message?}`; once "updated", the bridge goes for the keeper to start the new
-// one. `keys` and `url`: a test's (a test's folder only).
-export async function update({ now = false, keys = UPDATE_KEYS, url = UPDATE_URL, blocked = updatesBlocked(), clock = Date.now, step = () => {}, upWithin = 120_000 }: UpdateOptions = {}): Promise<UpdateOutcome> {
+// one. `from`: a release in a folder here, taken whatever its age (the Kuvo Code it came with is
+// here already). `keys` and `url`: a test's (a test's folder only).
+export async function update({ now = false, from, keys = UPDATE_KEYS, url = UPDATE_URL, blocked = updatesBlocked(), clock = Date.now, step = () => {}, upWithin = 120_000 }: UpdateOptions = {}): Promise<UpdateOutcome> {
   if (!keys.length) return { result: "off", message: "Updates aren't set up for this machine yet." };
   if (blocked) return { result: "blocked", message: blocked };
   // COMPAT(0.7 engine-stop): no update while an older Mac's Stop holds the engine down. Goes 3 months after 0.8.0.
@@ -345,7 +368,8 @@ export async function update({ now = false, keys = UPDATE_KEYS, url = UPDATE_URL
   try {
     step("checking");
     let released: Buffer;
-    try {
+    if (from) released = readRelease(path.join(from, "boxes.json"), 1_000_000);
+    else try {
       released = await fetched(url, 1_000_000, 30_000);
     } catch (error) {
       // COMPAT(0.7 no-boxes-json): a newest release without `boxes.json` (0.7.2) is "current". Goes once a release with one is the newest.
@@ -354,26 +378,41 @@ export async function update({ now = false, keys = UPDATE_KEYS, url = UPDATE_URL
       throw error;
     }
     const manifest = verifyBoxes(released.toString("utf8"), keys);
-    noteUpdate({ latest: manifest.version, checked: clock() });
+    // (Only GitHub's says what the newest release is.)
+    if (!from) noteUpdate({ latest: manifest.version, checked: clock() });
     if (!newerVersion(manifest.version, before)) return { result: "current", version: before };
-    if (!now && clock() - (Date.parse(manifest.released!) || clock()) < RELEASE_AGE) return { result: "waiting", version: manifest.version, message: "It takes a release a few days after it's out." };
+    if (!now && !from && clock() - (Date.parse(manifest.released!) || clock()) < RELEASE_AGE) return { result: "waiting", version: manifest.version, message: "It takes a release a few days after it's out." };
     if (await boxBusy()) return { result: "busy", message: "Something is running there now." };
 
     step("downloading");
     stage = path.join(UPDATES, manifest.version);
     fs.rmSync(stage, { recursive: true, force: true });
     fs.mkdirSync(path.join(stage, "files"), { recursive: true, mode: 0o700 });
-    const pack = await fetched(manifest.pack.url, 100_000_000, 300_000);
+    const pack = from ? readRelease(path.join(from, packName(manifest)), 100_000_000) : await fetched(manifest.pack.url, 100_000_000, 300_000);
     if (hexSHA256(pack) !== manifest.pack.sha256) throw new Error("The release's files aren't what it says.");
     fs.writeFileSync(path.join(stage, "pack.tgz"), pack, { mode: 0o600 });
     if (ran("tar", ["xzf", path.join(stage, "pack.tgz"), "-C", path.join(stage, "files")]).status !== 0) throw new Error("The release's files couldn't be unpacked.");
     const box: BoxFiles = JSON.parse(fs.readFileSync(path.join(stage, "files", "box.json"), "utf8"));
     if (box?.version !== manifest.version || box.engine !== manifest.engine || !isObject(box.files)) throw new Error("The release's files aren't what it says.");
-    const files = installOrder(Object.keys(box.files));
-    for (const file of files) {
-      if (!BOX_FILE.test(file) || file.split("/").includes("..")) throw new Error("The release names a file outside the box.");
+    const named = installOrder(Object.keys(box.files));
+    for (const file of named) {
+      if (!(BOX_FILE.test(file) || bundleOf(file)) || file.split("/").includes("..")) throw new Error("The release names a file outside the box.");
+      // (A file, never a link to one elsewhere.)
+      if (!fs.lstatSync(path.join(stage, "files", file), { throwIfNoEntry: false })?.isFile()) throw new Error("The release's files aren't what it says.");
       if (hexSHA256(fs.readFileSync(path.join(stage, "files", file))) !== box.files[file]) throw new Error("The release's files aren't what it says.");
     }
+    // Its bundles, each swapped whole, so nothing in one that `box.json` doesn't name. A Mac's
+    // alone: on Linux they're left out (not installed, nor noted as installed).
+    const bundles = [...new Set(named.map(bundleOf).filter((bundle): bundle is string => bundle !== null))];
+    for (const bundle of bundles) {
+      for (const entry of fs.readdirSync(path.join(stage, "files", bundle), { recursive: true, encoding: "utf8" })) {
+        const stat = fs.lstatSync(path.join(stage, "files", bundle, entry));
+        if (!stat.isDirectory() && !(stat.isFile() && box.files[`${bundle}/${entry}`] !== undefined)) throw new Error("The release's files aren't what it says.");
+      }
+    }
+    const installed = process.platform === "darwin" ? box.files : Object.fromEntries(Object.entries(box.files).filter(([file]) => !bundleOf(file)));
+    if (process.platform !== "darwin") bundles.length = 0;
+    const files = named.filter(file => !bundleOf(file));
     if (!files.includes("bin/box-version") || fs.readFileSync(path.join(stage, "files", "bin", "box-version"), "utf8").trim() !== manifest.version) throw new Error("The release's files aren't what it says.");
     // COMPAT(0.7 files): the release's tools kept in `bin/.own`. Goes 3 months after 0.8.0.
     // Its tools kept as the box's own too (and put back with the rest, if it goes back).
@@ -385,7 +424,8 @@ export async function update({ now = false, keys = UPDATE_KEYS, url = UPDATE_URL
       fs.chmodSync(own, fs.statSync(from).mode & 0o777);
       files.push(`bin/.own/${tool}`);
     }
-    files.splice(0, files.length, ...installOrder(files));
+    // Each bundle in among the files, as one (before the keeper's mark, last).
+    files.splice(0, files.length, ...installOrder([...files, ...bundles]));
 
     // Its engine, unless it's here already.
     const engineFolder = path.join(K, "engine", manifest.engine);
@@ -424,7 +464,7 @@ export async function update({ now = false, keys = UPDATE_KEYS, url = UPDATE_URL
     if (otherEngine && !roomForData()) throw new Error("There isn't room on it to keep its data while it updates.");
     // What's there kept, and how to put it back, before the engine stops: a stop the update
     // doesn't get past (the machine going down) is put back too, its engine started again.
-    keepForRollback(files, otherEngine);
+    keepForRollback(files, otherEngine, new Set(bundles));
     noteUpdate({ trial: { from: before, to: manifest.version, at: clock() }, running: null });
     fs.writeFileSync(UPDATE_TRIAL, manifest.version, { mode: 0o600 });
     trial = true;
@@ -440,6 +480,10 @@ export async function update({ now = false, keys = UPDATE_KEYS, url = UPDATE_URL
     for (const file of files) {
       const from = path.join(stage, "files", file), to = path.join(K, file);
       fs.mkdirSync(path.dirname(to), { recursive: true, mode: 0o700 });
+      if (bundles.includes(file)) {
+        swapBundle(from, to);
+        continue;
+      }
       fs.copyFileSync(from, `${to}.new`);
       fs.chmodSync(`${to}.new`, fs.statSync(from).mode & 0o777);
       fs.renameSync(`${to}.new`, to);
@@ -448,7 +492,7 @@ export async function update({ now = false, keys = UPDATE_KEYS, url = UPDATE_URL
     step("starting");
     if (!(await cameUp(manifest.engine, withAgents, upWithin))) throw new Error("The new version didn't come up.");
     // What it put there, for telling later whether an older Mac put its own back (`checkDrift`).
-    writePrivate(path.join(UPDATES, "installed.json"), JSON.stringify({ version: box.version, files: box.files }));
+    writePrivate(path.join(UPDATES, "installed.json"), JSON.stringify({ version: box.version, files: installed }));
     noteUpdate({ trial: { from: before, to: manifest.version, at: clock(), healthy: true } });
     return { result: "updated", version: manifest.version };
   } catch (error) {
@@ -474,11 +518,41 @@ export async function update({ now = false, keys = UPDATE_KEYS, url = UPDATE_URL
   }
 }
 
+// A bundle in place whole, from where it's staged (on the same disk): the new beside the one
+// there, that one put aside, the new renamed in, the old gone. A program running from the old one
+// runs on (its keeper restarts it).
+function swapBundle(from: string, to: string): void {
+  const fresh = `${to}.new`, old = `${to}.old`;
+  fs.rmSync(fresh, { recursive: true, force: true });
+  fs.rmSync(old, { recursive: true, force: true });
+  fs.renameSync(from, fresh);
+  if (fs.existsSync(to)) fs.renameSync(to, old);
+  fs.renameSync(fresh, to);
+  fs.rmSync(old, { recursive: true, force: true });
+}
+
+// A release's file in a folder here: a file, not too big, read whole; or why it can't be.
+function readRelease(file: string, limit: number): Buffer {
+  try {
+    const stat = fs.statSync(file);
+    if (stat.isFile() && stat.size <= limit) return fs.readFileSync(file);
+  } catch {}
+  throw new Error("That release can't be read.");
+}
+
+// The name of a release's pack, as its address ends: in a folder here, it's beside `boxes.json`.
+function packName(manifest: BoxRelease): string {
+  let name = "";
+  try { name = decodeURIComponent(path.posix.basename(new URL(manifest.pack.url).pathname)); } catch {}
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) throw new Error("That isn't a release.");
+  return name;
+}
+
 /** What an update staged in `updates` taken away as it ends, whatever came of it: never what's kept
- * there for good (its rollback, what it installed, and a move of this Mac's box, `rehome`: its
+ * there for good (its rollback, what it installed, a release offered from a folder here, and a move of this Mac's box, `rehome`: its
  * state and kept originals, which `rehome/state.ts` keeps there). */
 export function clearUpdateStaging(folder = UPDATES): void {
-  const kept = new Set(["rollback", "installed.json", "rehome"]);
+  const kept = new Set(["rollback", "installed.json", "rehome", "offered"]);
   for (const name of listOf(folder)) if (!kept.has(name)) fs.rmSync(path.join(folder, name), { recursive: true, force: true });
 }
 
@@ -584,9 +658,11 @@ export function updateNight(date = new Date(), zone: string | undefined = proces
 }
 
 // What `kuvo/update` says: whether updates are set up, this version and the newest heard of, how
-// the last went, whether one runs now, and why not, when it can't.
+// the last went, whether one runs now, why not, when it can't, and a release offered from a folder
+// here that waits for a quiet moment.
 export function updateStatus(): UpdateStatus {
   const state = updateState();
+  const offered = offeredVersion();
   let engine: string | null = null;
   try { engine = readEngineFile()?.version ?? null; } catch {}
   return {
@@ -597,6 +673,7 @@ export function updateStatus(): UpdateStatus {
     last: state.last ?? null,
     updating: isUpdating() ? state.running ?? "checking" : null,
     blocked: updatesBlocked(),
+    ...(offered ? { offered } : {}),
   };
 }
 
@@ -629,4 +706,94 @@ export async function* updateRoute(context: RouteContext): AsyncGenerator<Answer
     return yield* (startUpdate({ now: true }) ? json(202, updateStatus()) : json(409, { message: "It's updating already." }));
   }
   return yield* json(405, {});
+}
+
+// The version of the release offered from a folder here (`updates/offered`), or null: checked as
+// it was offered, and again as it's taken.
+export function offeredVersion(): string | null {
+  try {
+    const given = JSON.parse(fs.readFileSync(path.join(OFFERED, "boxes.json"), "utf8"));
+    const version = JSON.parse(Buffer.from(given.manifest, "base64").toString("utf8"))?.version;
+    return versionOrder(version) ? version : null;
+  } catch { return null; }
+}
+
+const dropOffer = (): void => fs.rmSync(OFFERED, { recursive: true, force: true });
+
+/** What offering a release says: 202 and its version, or why not (400 not asked right, 409 not
+ * now or not newer, 422 not a release this box takes). */
+export interface Offered {
+  status: 202 | 400 | 409 | 422;
+  version?: string;
+  message?: string;
+}
+
+/** A release offered from a folder on this computer (`kuvo/box/update {from}`: the one Kuvo Code
+ * carries, as it updates): `boxes.json` and the pack it names, beside it. Checked as a downloaded
+ * one is (the signature, a newer version, the pack's SHA-256), then kept in `updates/offered` (the
+ * folder may go, the app updated again) for the next quiet moment (`takeOffer`). `keys` and
+ * `blocked`: a test's. */
+export function offerUpdate(from: unknown, { keys = UPDATE_KEYS, blocked = updatesBlocked() }: Pick<UpdateOptions, "keys" | "blocked"> = {}): Offered {
+  if (typeof from !== "string" || !path.isAbsolute(from)) return { status: 400, message: "Say which folder the release is in (from), as a full path." };
+  if (!keys.length) return { status: 409, message: "Updates aren't set up for this machine yet." };
+  if (blocked) return { status: 409, message: blocked };
+  const before = boxVersion();
+  if (!before) return { status: 409, message: "This machine's version isn't known: connect to it from Kuvo Code on your Mac once." };
+  if (updating || isUpdating()) return { status: 409, message: "It's updating already." };
+  let boxes: Buffer, manifest: BoxRelease, name: string;
+  try {
+    boxes = readRelease(path.join(from, "boxes.json"), 1_000_000);
+    manifest = verifyBoxes(boxes.toString("utf8"), keys);
+    name = packName(manifest);
+  } catch (error) {
+    return { status: 422, message: String((error as Error | undefined)?.message ?? error).slice(0, 300) };
+  }
+  if (!newerVersion(manifest.version, before)) return { status: 409, message: `It has ${before} already, and takes only a newer version.` };
+  const offered = offeredVersion();
+  if (offered && newerVersion(offered, manifest.version)) return { status: 409, message: `A newer release (${offered}) waits to be taken already.` };
+  let pack: Buffer;
+  try {
+    pack = readRelease(path.join(from, name), 100_000_000);
+  } catch (error) {
+    return { status: 422, message: String((error as Error | undefined)?.message ?? error) };
+  }
+  if (hexSHA256(pack) !== manifest.pack.sha256) return { status: 422, message: "The release's files aren't what it says." };
+  // Kept whole or not at all.
+  const partial = `${OFFERED}.partial`;
+  fs.rmSync(partial, { recursive: true, force: true });
+  fs.mkdirSync(partial, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(partial, "boxes.json"), boxes, { mode: 0o600 });
+  fs.writeFileSync(path.join(partial, name), pack, { mode: 0o600 });
+  dropOffer();
+  fs.renameSync(partial, OFFERED);
+  return { status: 202, version: manifest.version };
+}
+
+/** The release offered from a folder here, taken at a quiet moment: as it's offered, and each round
+ * of the night's check. Nothing while something runs or an update does. Taken, failed, or no
+ * longer newer than the box, it goes (Kuvo Code offers it again as it next opens); busy or blocked,
+ * it waits. `run`: how it's run (a test's runs it without the bridge going). */
+export async function takeOffer({ run = startUpdate, ...options }: UpdateOptions & { run?: (options: UpdateOptions) => Promise<UpdateOutcome | null> | null } = {}): Promise<UpdateOutcome | null> {
+  if (!fs.existsSync(OFFERED)) return null;
+  const offered = offeredVersion();
+  if (!offered || !newerVersion(offered, boxVersion() ?? "0.0.0")) {
+    dropOffer();
+    return null;
+  }
+  if (updating || isUpdating() || await boxBusy()) return null;
+  const outcome = await run({ ...options, from: OFFERED });
+  if (outcome && outcome.result !== "busy" && outcome.result !== "blocked") dropOffer();
+  return outcome;
+}
+
+// A release from a folder on this computer (PROTOCOL.md, "Updates"): offered by Kuvo Code here
+// (never a phone), checked now, taken at the next quiet moment.
+export async function* boxUpdateRoute({ request, json }: RouteContext): AsyncGenerator<AnswerPiece> {
+  if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
+  if (!request.fromApp && !request.fromMac) return yield* json(403, { message: "Only Kuvo Code offers this box a release." });
+  const given = parsed(request.body);
+  const offered = offerUpdate(isObject(given) ? given.from : undefined);
+  if (offered.status !== 202) return yield* json(offered.status, { message: offered.message });
+  takeOffer().catch(() => {});
+  return yield* json(202, updateStatus());
 }
