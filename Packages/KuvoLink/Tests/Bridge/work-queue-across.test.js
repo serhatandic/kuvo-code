@@ -942,16 +942,15 @@ test("a Mac's request over SSH (`box route`, a process with no relay connection)
   forwardsTold();
   receive(lab, { workQueue: telling([told(500, "ses_far")]) });
   sent.length = 0;
-  // (`box route`: nothing in this process sends; the link, another process, sees what's left.)
-  const left = new Promise(resolve => {
-    fs.mkdirSync(forwards, { recursive: true });
-    const watch = fs.watch(forwards, () => {
-      if (fs.readdirSync(forwards).some(name => /^wqa_.+\.json$/.test(name))) { watch.close(); resolve(); }
-    });
-  });
   // (And one left by something else on this computer.)
   const planted = actID();
   write(path.join(forwards, `${planted}.json`), { to: lab.pub, act: { id: planted, method: "DELETE", item: told(500).id, at: Date.now() } });
+  // (`box route`: nothing in this process sends; the link, another process, sees what's left.)
+  const theRoutes = () => fs.readdirSync(forwards).some(name => /^wqa_.+\.json$/.test(name) && name !== `${planted}.json` && !name.endsWith(".answer.json"));
+  const left = new Promise(resolve => {
+    const watch = fs.watch(forwards, () => { if (theRoutes()) { watch.close(); resolve(); } });
+    if (theRoutes()) { watch.close(); resolve(); }
+  });
   const deleting = route("DELETE", "kuvo/work-queue/items/500");
   await left;
   const { connection } = relay();
