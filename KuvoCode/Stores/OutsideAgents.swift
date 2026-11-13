@@ -636,7 +636,8 @@ final class OutsideAgents {
         onHandoff?(handoff)
     }
 
-    private func keywordEvent(_ event: ServerEvent) {
+    /// What the bridge tells of side questions, reviews and handoffs, as it comes.
+    func keywordEvent(_ event: ServerEvent) {
         switch event.type {
         case "kuvo.btw.updated":
             if let update = try? event.payload(as: SideQuestionUpdate.self) { took(update.question) }

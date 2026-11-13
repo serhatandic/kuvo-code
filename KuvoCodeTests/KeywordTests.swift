@@ -592,6 +592,31 @@ import Testing
         #expect(told == 0)
     }
 
+    /// A handoff's end told before the box's answer to its start (it failed at once) stays, also for
+    /// one asked again that fails the same way: they're told apart by when each was asked for, not
+    /// by what they say.
+    @Test func aHandoffsEndToldBeforeItsStartStaysOneAskedAgainToo() throws {
+        let agents = OutsideAgents()
+        let told = { (handoff: [String: Any]) throws in
+            agents.keywordEvent(try ServerEvent(json: JSONSerialization.data(withJSONObject: ["type": "kuvo.handoff", "data": ["sessionID": "ses_a", "handoff": handoff]])))
+        }
+        let answer = { (started: Double) in Handoff(from: "ses_a", state: .writing, started: started) }
+        let failed: [String: Any] = ["from": "ses_a", "state": "failed", "error": "No room."]
+
+        // The first: its end, then the answer to its start.
+        try told(failed.merging(["started": 1_000.0]) { $1 })
+        agents.startedHandoff(answer(1_000))
+        #expect(agents.handoffs["ses_a"]?.state == .failed)
+        // Asked again, failing the same way, in the same order.
+        try told(failed.merging(["started": 2_000.0]) { $1 })
+        agents.startedHandoff(answer(2_000))
+        #expect(agents.handoffs["ses_a"]?.state == .failed)
+        #expect(agents.handoffs["ses_a"]?.started == 2_000)
+        // The answer first, as usual: writing, until its end is told.
+        agents.startedHandoff(answer(3_000))
+        #expect(agents.handoffs["ses_a"]?.state == .writing)
+    }
+
     /// A handoff asked for again that fails the same way shows its own end, not "writing" for good:
     /// each is told apart by when it was asked for, so the box's answer doesn't take back an end
     /// that came first.

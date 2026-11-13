@@ -186,6 +186,7 @@ function answerOf(decision: Decision, done: Done, failure: { restore: Restore; e
 export const TYPED_SENT = path.join(RUN, "typed-sent.json");
 const KEPT_MS = 60 * 60_000;
 const KEPT_MOST = 1000;
+const KEPT_BYTES = 64 * 1024;
 type KeptAnswer = { at: number; status: number; headers: Record<string, string>; body: string };
 
 function readKept(): Record<string, KeptAnswer> {
@@ -199,21 +200,29 @@ function readKept(): Record<string, KeptAnswer> {
 
 function keptAnswer(key: string): { status: number; headers: Record<string, string>; body: Buffer } | null {
   const kept = readKept()[key];
-  if (!kept || Date.now() - kept.at > KEPT_MS) return null;
+  // (One not as written here is none.)
+  if (!isObject(kept) || typeof kept.at !== "number" || typeof kept.status !== "number" || typeof kept.body !== "string" || !isObject(kept.headers)) return null;
+  if (Date.now() - kept.at > KEPT_MS) return null;
   return { status: kept.status, headers: kept.headers, body: Buffer.from(kept.body, "base64") };
 }
 
 function keepAnswer(key: string, answer: { status: number; headers: Record<string, string>; body: Buffer }) {
+  // (A big one, a long paste sent back to be sent, isn't kept: it's read whole on every send.)
+  if (answer.body.length > KEPT_BYTES) return;
   const now = Date.now();
   const all = Object.entries(readKept()).filter(([, kept]) => now - kept.at <= KEPT_MS);
   all.push([key, { at: now, status: answer.status, headers: answer.headers, body: answer.body.toString("base64") }]);
   const kept = Object.fromEntries(all.slice(-KEPT_MOST));
+  // (Two boxes at once, as one is updated, can each write over the other's latest: rare, and then
+  // that send is only done again if it's resent after a restart.)
+  const temporary = `${TYPED_SENT}.${process.pid}`;
   try {
-    fs.mkdirSync(RUN, { recursive: true });
-    const temporary = `${TYPED_SENT}.${process.pid}`;
-    fs.writeFileSync(temporary, JSON.stringify(kept));
+    fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(temporary, JSON.stringify(kept), { mode: 0o600 });
     fs.renameSync(temporary, TYPED_SENT);
-  } catch {}
+  } catch {
+    fs.rmSync(temporary, { force: true });
+  }
 }
 
 // `kuvo/sessions/<id>/typed`. A send with its own id (in its body, or the link's
@@ -329,9 +338,11 @@ async function* typedAnswer(context: RouteContext, match: RegExpMatchArray): Asy
   // show; one "/plan" after another in each conversation, each reading the mode as it is then.
   const plan = !failure ? decision.plan : undefined;
   const agent = plan ? await inTurn(session, async () => {
+    // (As it is now, after any "/plan" before it: not read, nothing is switched, and it says so.)
     const now = await call(place.target, "GET", `/api/session/${encodeURIComponent(session)}`, undefined, within(signal, 10_000)).catch(() => null) as Partial<EngineSession> | null;
-    const chosen = await planAgent(plan, now ?? data, engine, folder, signal);
-    if (chosen === (now ?? data).agent) return chosen;
+    if (!now) return null;
+    const chosen = await planAgent(plan, now, engine, folder, signal);
+    if (chosen === now.agent) return chosen;
     const switched = await call(place.target, "POST", `/api/session/${encodeURIComponent(session)}/agent`, { agent: chosen }, within(signal, STEP_PATIENCE)).then(() => true, () => false);
     return switched ? chosen : null;
   }) : null;

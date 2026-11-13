@@ -39140,7 +39140,7 @@ import fs129 from "node:fs";
 import path133 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "dafbb9e528a3";
+var BRIDGE_VERSION = "ac871eb009b1";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -47877,6 +47877,7 @@ function answerOf3(decision, done, failure) {
 var TYPED_SENT = path153.join(RUN, "typed-sent.json");
 var KEPT_MS2 = 60 * 60000;
 var KEPT_MOST = 1000;
+var KEPT_BYTES = 64 * 1024;
 function readKept6() {
   try {
     const read = JSON.parse(fs150.readFileSync(TYPED_SENT, "utf8"));
@@ -47887,21 +47888,27 @@ function readKept6() {
 }
 function keptAnswer(key) {
   const kept = readKept6()[key];
-  if (!kept || Date.now() - kept.at > KEPT_MS2)
+  if (!isObject(kept) || typeof kept.at !== "number" || typeof kept.status !== "number" || typeof kept.body !== "string" || !isObject(kept.headers))
+    return null;
+  if (Date.now() - kept.at > KEPT_MS2)
     return null;
   return { status: kept.status, headers: kept.headers, body: Buffer.from(kept.body, "base64") };
 }
 function keepAnswer2(key, answer) {
+  if (answer.body.length > KEPT_BYTES)
+    return;
   const now = Date.now();
   const all = Object.entries(readKept6()).filter(([, kept]) => now - kept.at <= KEPT_MS2);
   all.push([key, { at: now, status: answer.status, headers: answer.headers, body: answer.body.toString("base64") }]);
   const kept = Object.fromEntries(all.slice(-KEPT_MOST));
+  const temporary = `${TYPED_SENT}.${process.pid}`;
   try {
-    fs150.mkdirSync(RUN, { recursive: true });
-    const temporary = `${TYPED_SENT}.${process.pid}`;
-    fs150.writeFileSync(temporary, JSON.stringify(kept));
+    fs150.mkdirSync(RUN, { recursive: true, mode: 448 });
+    fs150.writeFileSync(temporary, JSON.stringify(kept), { mode: 384 });
     fs150.renameSync(temporary, TYPED_SENT);
-  } catch {}
+  } catch {
+    fs150.rmSync(temporary, { force: true });
+  }
 }
 async function* typedRoute(context, match) {
   const { request } = context;
@@ -48010,8 +48017,10 @@ async function* typedAnswer(context, match) {
   const plan = !failure ? decision.plan : undefined;
   const agent = plan ? await inTurn3(session, async () => {
     const now = await call(place.target, "GET", `/api/session/${encodeURIComponent(session)}`, undefined, within6(signal, 1e4)).catch(() => null);
-    const chosen = await planAgent(plan, now ?? data, engine, folder, signal);
-    if (chosen === (now ?? data).agent)
+    if (!now)
+      return null;
+    const chosen = await planAgent(plan, now, engine, folder, signal);
+    if (chosen === now.agent)
       return chosen;
     const switched = await call(place.target, "POST", `/api/session/${encodeURIComponent(session)}/agent`, { agent: chosen }, within6(signal, STEP_PATIENCE)).then(() => true, () => false);
     return switched ? chosen : null;
