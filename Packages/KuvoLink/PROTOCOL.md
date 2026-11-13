@@ -4856,9 +4856,9 @@ client does with the rest; a client keeps the draft, puts back what it's told to
     /loop's, `due` in seconds), `sideQuestion`, `handoff`, `review` (as the agents bridge answers
     them, "Side questions, handoffs and reviews"). `keyword` names the keyword it ran (not
     "/goal", which is a goal's).
-  - What the client does: `showGoal` (show the goal bar), `agent` (the mode to switch to: `plan`,
-    or, for "/plan" alone in Plan, the one a conversation starts in there: Build, or the first mode
-    there is where Build is off), `toggleAutopilot`, `compact`, `shell` (run it in the conversation's folder), `command`
+  - What the client does: `showGoal` (show the goal bar), `agent` (the mode the box switched the
+    conversation to, to show: `plan`, or, for "/plan" alone in Plan, the one a conversation starts in
+    there: Build, or the first mode there is where Build is off), `toggleAutopilot`, `compact`, `shell` (run it in the conversation's folder), `command`
     (`{name, arguments}`, run with the composer's files), `send` (`{text, typed?, quoted?, steer?}`:
     send it as a message with the composer's files; `typed` is the keyword as typed, "/plan", to
     send it with; `quoted`: what the composer replies to goes with it; `steer`: to the agent now,
