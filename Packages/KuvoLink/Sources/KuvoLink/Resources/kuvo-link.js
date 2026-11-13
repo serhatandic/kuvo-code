@@ -2793,35 +2793,57 @@ var ending = (text, block) => (text ? `${text}
 
 ` : "") + block.join(`
 `);
-function composeMessage(fields, naming, kept = {}, phone = false) {
-  let text = fields.widget !== undefined ? [fields.words, "", WIDGET_BLOCK.start, WIDGET_HEADING, oneLine2(fields.widget), WIDGET_BLOCK.end].join(`
-`) : fields.words;
-  text = trimmed(text);
-  if (fields.keyword !== undefined)
+function composeWithParts(fields, naming, kept = {}, phone = false) {
+  let words = null;
+  let text = trimmed(fields.words);
+  const append = (block) => {
+    words ??= trimmed(text);
+    text = ending(text, block);
+  };
+  if (fields.widget !== undefined) {
+    words = trimmed(fields.words);
+    text = trimmed([fields.words, "", WIDGET_BLOCK.start, WIDGET_HEADING, oneLine2(fields.widget), WIDGET_BLOCK.end].join(`
+`));
+  }
+  if (fields.keyword !== undefined) {
+    words ??= text;
     text = [text, "", KEYWORD_BLOCK.start, KEYWORD_HEADING, oneLine2(fields.keyword), KEYWORD_BLOCK.end].join(`
 `);
+  }
   text = NAMED_BLOCK.escaping(text);
   const named = agentsNamed([text], new Set(naming.excluding ? [naming.excluding] : []), naming.agents, new Set(fields.named ?? []));
   if (named.length) {
     const lines = named.map((agent) => `- &${agent.name} (${agent.session}): ${agentIs(agent, naming.here)}${typeof agent.about === "string" && agent.about ? `: ${agent.about}` : ""}`);
-    text = ending(text, [NAMED_BLOCK.start, NAMING_HEADING, ...lines, NAMED_BLOCK.end]);
+    append([NAMED_BLOCK.start, NAMING_HEADING, ...lines, NAMED_BLOCK.end]);
   }
   text = REVIEW_BLOCK.escaping(text);
   if (fields.comments?.length) {
     const lines = [REVIEW_BLOCK.start, REVIEW_INTRO];
     for (const comment of fields.comments)
       lines.push("", `[${location(comment)}]`, `> ${comment.snippet}`, comment.text);
-    text = ending(text, [...lines, REVIEW_BLOCK.end]);
+    append([...lines, REVIEW_BLOCK.end]);
   }
   text = ATTACHED_BLOCK.escaping(text);
   const notes = [...noteLines(fields.notes ?? {}), ...noteLines(kept)];
   if (notes.length)
-    text = ending(text, [ATTACHED_BLOCK.start, ...notes, ATTACHED_BLOCK.end]);
-  if (phone && !text.trimEnd().endsWith("</from-phone>"))
+    append([ATTACHED_BLOCK.start, ...notes, ATTACHED_BLOCK.end]);
+  if (phone && !text.trimEnd().endsWith("</from-phone>")) {
+    words ??= trimmed(text);
     text = `${text}
 
 ${FROM_PHONE}`;
-  return text;
+  }
+  const paths = [...fields.notes?.paths ?? [], ...fields.notes?.unsent ?? [], ...kept.paths ?? []];
+  const parts = {
+    words: words ?? text,
+    ...fields.keyword !== undefined ? { keyword: oneLine2(fields.keyword) } : {},
+    ...fields.widget !== undefined ? { widget: oneLine2(fields.widget) } : {},
+    ...fields.comments?.length ? { comments: fields.comments.map((comment) => ({ ...comment, text: trimmed(comment.text) })) } : {},
+    ...paths.length ? { paths } : {},
+    ...named.length ? { agents: named.map((agent) => ({ name: agent.name, session: agent.session })) } : {},
+    ...phone ? { phone: true } : {}
+  };
+  return { text, parts };
 }
 function composeArguments(words, notes = {}, kept = {}) {
   const text = ATTACHED_BLOCK.escaping(words);
@@ -15490,19 +15512,6 @@ import path85 from "node:path";
 // Packages/Box/src/link/letters/conversation.ts
 var READ_LIMIT = 24000;
 var READ_BY_MAIL = 20000;
-function messageWords(written) {
-  let words = written.trim();
-  for (;; ) {
-    const block = [["<attached-files>", "</attached-files>"], ["<review-comments>", "</review-comments>"], ["<named-agents>", "</named-agents>"]].find(([, end]) => words.endsWith(`
-` + end));
-    const open = block ? words.lastIndexOf(block[0] + `
-`) : -1;
-    if (open < 0 || open > 0 && words[open - 1] !== `
-`)
-      return words;
-    words = words.slice(0, open).trim();
-  }
-}
 function conversationMarkdown(title, messages, agent) {
   const blocks = ["# " + title];
   let speaker = null;
@@ -15522,19 +15531,19 @@ function conversationMarkdown(title, messages, agent) {
   for (const [at, message] of messages.entries()) {
     if (message.type === "user") {
       const written = String(message.text ?? "");
-      const mail = /^\[Message from (.*) · (ses_\S+|unknown)\] \([^\n]*\)\n\n([\s\S]*)$/.exec(written);
+      const parts = keptParts(message.metadata) ?? partsOf(written);
       const work = /^\[Work from (.*) · [^\]\n]+\]\n\n([\s\S]*?)(\n\n---\n[\s\S]*)?$/.exec(written);
       const note = boxNoteOf(written, message.metadata);
       if (note)
         say(note.from, written.trim());
-      else if (mail)
-        say(`Message from ${mail[1]}`, mail[3]);
+      else if (parts.mail)
+        say(`Message from ${parts.mail.name}`, parts.words);
       else if (written.startsWith("[Wake-up] "))
         say("Wake-up", written.slice("[Wake-up] ".length));
       else if (work)
         say(`Work from ${work[1]}`, work[2].trim());
       else {
-        const words = messageWords(written);
+        const words = parts.keyword ? `${parts.keyword} ${parts.words}` : parts.words.trim();
         const files = (message.files ?? []).map((file) => file.name).filter(Boolean);
         if (words || files.length)
           say("User", [words, files.length ? "Attached: " + files.join(", ") : ""].filter(Boolean).join(`
@@ -22912,10 +22921,11 @@ function namingHere(readEngine) {
     return nameAgents(text, { excluding: session, here: everyone.machine, agents: everyone.agents });
   };
 }
-async function everyoneFor(text, readEngine) {
+async function everyoneFor(text, readEngine, picked = []) {
   const everyone = listedAgents();
   const working = refreshOwnShared(readEngine);
-  if (!nameMissing(text, everyone.agents))
+  const listed = new Set(everyone.agents.map((agent) => agent.session));
+  if (!nameMissing(text, everyone.agents) && picked.every((session) => listed.has(session)))
     return everyone;
   await Promise.race([working, new Promise((resolve) => setTimeout(resolve, 2000).unref?.())]);
   return listedAgents();
@@ -40266,7 +40276,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "8043d5439665";
+var BRIDGE_VERSION = "421972cabda7";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -45336,10 +45346,26 @@ async function composed(fields, files, session, target, toAgents, request, readE
   const kept = await keptFiles(files, session, modelInput(base, headers, signal), toAgents);
   if (command)
     return { text: composeArguments(fields.words, fields.notes, kept ?? {}), files: kept?.files ?? files, metadata: {} };
-  const everyone = fields.words.includes("&") ? await everyoneFor(fields.words, readEngine) : listedAgents();
+  const everyone = fields.words.includes("&") ? await everyoneFor(fields.words, readEngine, fields.named ?? []) : listedAgents();
   const phone = request.fromMac !== true && request.fromApp !== true;
-  const text = composeMessage(fields, { excluding: session, here: everyone.machine, agents: everyone.agents }, kept ?? {}, phone);
-  return { text, files: kept?.files ?? files, metadata: withParts(metadata, partsOf(text)) };
+  const listed = new Set(everyone.agents.map((agent) => agent.session));
+  if (fields.words.includes("&") && fields.named?.some((picked) => !listed.has(picked)))
+    throw new NotListed;
+  const { text, parts } = composeWithParts(fields, { excluding: session, here: everyone.machine, agents: everyone.agents }, kept ?? {}, phone);
+  return { text, files: kept?.files ?? files, metadata: withParts(metadata, parts) };
+}
+async function sentAgain(text, files, session, target, toAgents, signal, metadata) {
+  const base = new URL(`http://127.0.0.1:${target.port}/`);
+  const headers = { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` };
+  const kept = await keptFiles(files, session, modelInput(base, headers, signal), toAgents);
+  const written = kept ? withAttachedNote(text, kept.included, kept.paths, true) : text;
+  return { text: written, files: kept?.files ?? files, metadata: withParts(metadata, partsOf(written)) };
+}
+
+class NotListed extends Error {
+  constructor() {
+    super("An agent you named with & isn't known to this computer yet. Try again in a moment.");
+  }
 }
 var isEmpty = (fields, files) => !fields.words.trim() && fields.keyword === undefined && fields.widget === undefined && !fields.comments?.length && !files.length && !fields.notes?.included?.length && !fields.notes?.paths?.length && !fields.notes?.unsent?.length;
 async function* sendRoute(context, match) {
@@ -45385,11 +45411,13 @@ async function* sendRoute(context, match) {
   const at = `http://127.0.0.1:${target.port}/api/session/${encodeURIComponent(session)}/${command ? "command" : "prompt"}`;
   const send = async () => {
     try {
-      const message = fields ? await composed(fields, files, session, target, toAgents, request, readEngine, command ? signal : undefined, undefined, command !== null) : { text: again, files, metadata: withParts(undefined, partsOf(again)) };
+      const message = fields ? await composed(fields, files, session, target, toAgents, request, readEngine, command ? signal : undefined, undefined, command !== null) : await sentAgain(again, files, session, target, toAgents);
       const body = command ? { name: command, text: message.text, ...message.files.length ? { files: message.files } : {}, ...delivery ? { delivery } : {} } : { id: typeof given.id === "string" && given.id ? given.id : messageID(), text: message.text, ...message.files.length ? { files: message.files } : {}, delivery, metadata: message.metadata };
       const response = await fetch(at, { method: "POST", headers, body: JSON.stringify(body), signal: command ? signal : undefined });
       return { status: response.status, headers: answerHeaders(response), body: Buffer.from(await response.arrayBuffer()) };
-    } catch {
+    } catch (error) {
+      if (error instanceof NotListed)
+        return { status: 409, headers: { "content-type": "application/json" }, body: Buffer.from(JSON.stringify({ message: error.message })) };
       if (signal?.aborted && command)
         throw new Error("Stopped.");
       return { status: 503, headers: { "content-type": "application/json" }, body: Buffer.from(JSON.stringify({ message: toAgents ? "The coding agents aren't answering on this computer. Try again in a moment." : "The engine isn't answering. Try again in a moment." })) };
@@ -45487,31 +45515,47 @@ async function* queueRoute(context, match) {
 }
 async function* add2({ request, bridge, readEngine, json, signal }, target, session) {
   const given = parsed(request.body);
-  const fields = isObject(given) && typeof given.text !== "string" && given.kept !== true ? fieldsOf(given) : null;
-  if (fields && isObject(given)) {
-    if (isEmpty(fields, Array.isArray(given.files) ? given.files : []))
+  if (!isObject(given))
+    return yield* json(400, { message: "Send what was written (words)." });
+  const id = typeof given.id === "string" && /^msg_[A-Za-z0-9]{1,80}$/.test(given.id) ? given.id : messageID();
+  const files = Array.isArray(given.files) ? given.files : [];
+  const toAgents = bridge()?.port === target.port;
+  const mark = wakeMarkOf(given.metadata) ?? undefined;
+  const shownAs = (fallback) => typeof given.words === "string" ? given.words : fallback;
+  const fields = typeof given.text !== "string" && given.kept !== true ? fieldsOf(given) : null;
+  if (fields) {
+    if (isEmpty(fields, files))
       return yield* json(400, { message: "There's nothing to send." });
-    const message = await composed(fields, Array.isArray(given.files) ? given.files : [], session, target, bridge()?.port === target.port, request, readEngine, signal, wakeMarkOf(given.metadata) ?? undefined);
-    const id = typeof given.id === "string" && /^msg_[A-Za-z0-9]{1,80}$/.test(given.id) ? given.id : messageID();
+    let message;
+    try {
+      message = await composed(fields, files, session, target, toAgents, request, readEngine, signal, mark);
+    } catch (error) {
+      if (error instanceof NotListed)
+        return yield* json(409, { message: error.message });
+      throw error;
+    }
     return yield* added({ json }, target, session, given, { id, text: message.text, files: message.files, metadata: message.metadata }, fields.words);
   }
-  if (!isObject(given) || typeof given.text !== "string" || !given.text.trim() && !(Array.isArray(given.files) && given.files.length))
-    return yield* json(400, { message: 'Send {"text": …}.' });
-  const id = typeof given.id === "string" && /^msg_[A-Za-z0-9]{1,80}$/.test(given.id) ? given.id : messageID();
+  if (typeof given.text !== "string" || !given.text.trim() && !files.length)
+    return yield* json(400, { message: "Send what was written (words)." });
+  if (given.again === true) {
+    const message = await sentAgain(given.text, files, session, target, toAgents, signal, mark);
+    return yield* added({ json }, target, session, given, { id, text: message.text, files: message.files, metadata: message.metadata }, shownAs(undefined));
+  }
+  if (given.kept === true) {
+    const parts = keptParts(given.metadata);
+    const metadata = parts ? withParts(mark, parts) : withPartsOf(mark, given.text);
+    return yield* added({ json }, target, session, given, { id, text: given.text, files, metadata }, shownAs(undefined));
+  }
   const delivery = given.delivery === "steer" ? "steer" : "queue";
   const base = new URL(`http://127.0.0.1:${target.port}/`);
   const headers = { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` };
-  const toAgents = bridge()?.port === target.port;
-  const mark = wakeMarkOf(given.metadata);
-  const asGiven = Buffer.from(JSON.stringify({ id, text: given.text, ...Array.isArray(given.files) ? { files: given.files } : {}, delivery, ...mark ? { metadata: mark } : {} }));
+  const asGiven = Buffer.from(JSON.stringify({ id, text: given.text, ...files.length ? { files } : {}, delivery, ...mark ? { metadata: mark } : {} }));
   const fromPhoneToo = request.fromMac !== true && request.fromApp !== true;
-  const attached = given.kept === true ? asGiven : await attachedIn(asGiven, session, modelInput(base, headers, signal), request.fromMac === true, !toAgents);
-  const body = given.kept !== true && fromPhoneToo ? fromPhone(await namedIn(attached, session, namingHere(readEngine))) : attached;
+  const attached = await attachedIn(asGiven, session, modelInput(base, headers, signal), request.fromMac === true, !toAgents);
+  const body = fromPhoneToo ? fromPhone(await namedIn(attached, session, namingHere(readEngine))) : attached;
   const message = parsed(body);
-  const words = typeof given.words === "string" ? given.words : given.kept !== true ? given.text : undefined;
-  const parts = given.kept === true ? keptParts(given.metadata) : null;
-  const metadata = parts ? withParts(message.metadata, parts) : withPartsOf(message.metadata, message.text);
-  return yield* added({ json }, target, session, given, { id: message.id, text: message.text, files: message.files, metadata }, words);
+  return yield* added({ json }, target, session, given, { id: message.id, text: message.text, files: message.files, metadata: withPartsOf(message.metadata, message.text) }, shownAs(given.text));
 }
 async function* added({ json }, target, session, given, written, words) {
   const { id } = written;

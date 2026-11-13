@@ -7,7 +7,8 @@ import { MOVING } from "../bots/here";
 import { messageID } from "../engine/sessions";
 import { isRefused, placeOfSessionPatiently } from "../letters/letter";
 import { targetsOf } from "../letters/tools";
-import { composeArguments, composeMessage, fieldsOf, partsOf, withParts } from "../messages/parts";
+import { composeArguments, composeWithParts, fieldsOf, partsOf, withParts } from "../messages/parts";
+import { withAttachedNote } from "../peers/naming";
 import type { MessageFields } from "../messages/parts";
 import { frozen } from "../moves/records";
 import { keptFiles } from "../server/attached";
@@ -44,10 +45,29 @@ export async function composed(fields: MessageFields, files: unknown[], session:
   // A command's arguments: as written, with its files' note alone.
   if (command) return { text: composeArguments(fields.words, fields.notes, kept ?? {}), files: (kept?.files ?? files) as PromptFile[], metadata: {} };
   // (Everyone worked out again only for a message that names someone.)
-  const everyone = fields.words.includes("&") ? await everyoneFor(fields.words, readEngine) : listedAgents();
+  const everyone = fields.words.includes("&") ? await everyoneFor(fields.words, readEngine, fields.named ?? []) : listedAgents();
   const phone = request.fromMac !== true && request.fromApp !== true;
-  const text = composeMessage(fields, { excluding: session, here: everyone.machine, agents: everyone.agents }, kept ?? {}, phone);
-  return { text, files: (kept?.files ?? files) as PromptFile[], metadata: withParts(metadata, partsOf(text)) };
+  // One picked from the "&" list that this box doesn't list (yet): said, never dropped.
+  const listed = new Set(everyone.agents.map(agent => agent.session));
+  if (fields.words.includes("&") && fields.named?.some(picked => !listed.has(picked))) throw new NotListed();
+  const { text, parts } = composeWithParts(fields, { excluding: session, here: everyone.machine, agents: everyone.agents }, kept ?? {}, phone);
+  return { text, files: (kept?.files ?? files) as PromptFile[], metadata: withParts(metadata, parts) };
+}
+
+/** A message sent again as the agent read it (Retry, another agent's letter put back): its text as
+ * it was, the files it carries kept here as `attachedIn` keeps them (a picture for a model that
+ * doesn't see goes as a path, its note joining the one the text has), and its parts read from it. */
+export async function sentAgain(text: string, files: unknown[], session: string, target: Target, toAgents: boolean, signal?: AbortSignal, metadata?: unknown): Promise<Composed> {
+  const base = new URL(`http://127.0.0.1:${target.port}/`);
+  const headers = { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` };
+  const kept = await keptFiles(files, session, modelInput(base, headers, signal), toAgents);
+  const written = kept ? withAttachedNote(text, kept.included, kept.paths, true) : text;
+  return { text: written, files: (kept?.files ?? files) as PromptFile[], metadata: withParts(metadata, partsOf(written)) };
+}
+
+/** A session picked from the "&" list that this box doesn't list, after waiting for its list. */
+export class NotListed extends Error {
+  constructor() { super("An agent you named with & isn't known to this computer yet. Try again in a moment."); }
 }
 
 /** Whether `fields` and `files` make no message: nothing written, and nothing with it. */
@@ -98,13 +118,14 @@ export async function* sendRoute(context: RouteContext, match: RegExpMatchArray)
     try {
       const message = fields
         ? await composed(fields, files, session, target, toAgents, request, readEngine, command ? signal : undefined, undefined, command !== null)
-        : { text: again!, files: files as PromptFile[], metadata: withParts(undefined, partsOf(again!)) };
+        : await sentAgain(again!, files, session, target, toAgents);
       const body = command
         ? { name: command, text: message.text, ...(message.files.length ? { files: message.files } : {}), ...(delivery ? { delivery } : {}) }
         : { id: typeof given.id === "string" && given.id ? given.id : messageID(), text: message.text, ...(message.files.length ? { files: message.files } : {}), delivery, metadata: message.metadata };
       const response = await fetch(at, { method: "POST", headers, body: JSON.stringify(body), signal: command ? signal : undefined });
       return { status: response.status, headers: answerHeaders(response), body: Buffer.from(await response.arrayBuffer()) };
-    } catch {
+    } catch (error) {
+      if (error instanceof NotListed) return { status: 409, headers: { "content-type": "application/json" }, body: Buffer.from(JSON.stringify({ message: error.message })) };
       if (signal?.aborted && command) throw new Error("Stopped.");
       return { status: 503, headers: { "content-type": "application/json" }, body: Buffer.from(JSON.stringify({ message: toAgents ? "The coding agents aren't answering on this computer. Try again in a moment." : "The engine isn't answering. Try again in a moment." })) };
     }

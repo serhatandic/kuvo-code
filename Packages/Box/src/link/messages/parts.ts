@@ -94,26 +94,57 @@ const ending = (text: string, block: string[]): string => (text ? `${text}\n\n` 
  * changes, the note of its files (the client's lines, then `kept`: those this box keeps of the
  * files it carries), and, from a phone, that it's from there. */
 export function composeMessage(fields: MessageFields, naming: Naming, kept: FilesNote = {}, phone = false): string {
-  let text = fields.widget !== undefined ? [fields.words, "", WIDGET_BLOCK.start, WIDGET_HEADING, oneLine(fields.widget), WIDGET_BLOCK.end].join("\n") : fields.words;
-  text = trimmed(text);
-  if (fields.keyword !== undefined) text = [text, "", KEYWORD_BLOCK.start, KEYWORD_HEADING, oneLine(fields.keyword), KEYWORD_BLOCK.end].join("\n");
+  return composeWithParts(fields, naming, kept, phone).text;
+}
+
+/** `composeMessage`'s text, and the message's parts as they are: from the fields, never read back
+ * from the text (words that only look like another agent's message stay yours). */
+export function composeWithParts(fields: MessageFields, naming: Naming, kept: FilesNote = {}, phone = false): { text: string; parts: MessageParts } {
+  // The words as the text has them once something follows (escaped while they ended it).
+  let words: string | null = null;
+  let text = trimmed(fields.words);
+  const append = (block: string[]) => {
+    words ??= trimmed(text);
+    text = ending(text, block);
+  };
+  if (fields.widget !== undefined) {
+    words = trimmed(fields.words);
+    text = trimmed([fields.words, "", WIDGET_BLOCK.start, WIDGET_HEADING, oneLine(fields.widget), WIDGET_BLOCK.end].join("\n"));
+  }
+  if (fields.keyword !== undefined) {
+    words ??= text;
+    text = [text, "", KEYWORD_BLOCK.start, KEYWORD_HEADING, oneLine(fields.keyword), KEYWORD_BLOCK.end].join("\n");
+  }
   text = NAMED_BLOCK.escaping(text);
   const named = agentsNamed([text], new Set(naming.excluding ? [naming.excluding] : []), naming.agents, new Set(fields.named ?? []));
   if (named.length) {
     const lines = named.map(agent => `- &${agent.name} (${agent.session}): ${agentIs(agent, naming.here)}${typeof agent.about === "string" && agent.about ? `: ${agent.about}` : ""}`);
-    text = ending(text, [NAMED_BLOCK.start, NAMING_HEADING, ...lines, NAMED_BLOCK.end]);
+    append([NAMED_BLOCK.start, NAMING_HEADING, ...lines, NAMED_BLOCK.end]);
   }
   text = REVIEW_BLOCK.escaping(text);
   if (fields.comments?.length) {
     const lines = [REVIEW_BLOCK.start, REVIEW_INTRO];
     for (const comment of fields.comments) lines.push("", `[${location(comment)}]`, `> ${comment.snippet}`, comment.text);
-    text = ending(text, [...lines, REVIEW_BLOCK.end]);
+    append([...lines, REVIEW_BLOCK.end]);
   }
   text = ATTACHED_BLOCK.escaping(text);
   const notes = [...noteLines(fields.notes ?? {}), ...noteLines(kept)];
-  if (notes.length) text = ending(text, [ATTACHED_BLOCK.start, ...notes, ATTACHED_BLOCK.end]);
-  if (phone && !text.trimEnd().endsWith("</from-phone>")) text = `${text}\n\n${FROM_PHONE}`;
-  return text;
+  if (notes.length) append([ATTACHED_BLOCK.start, ...notes, ATTACHED_BLOCK.end]);
+  if (phone && !text.trimEnd().endsWith("</from-phone>")) {
+    words ??= trimmed(text);
+    text = `${text}\n\n${FROM_PHONE}`;
+  }
+  const paths = [...(fields.notes?.paths ?? []), ...(fields.notes?.unsent ?? []), ...(kept.paths ?? [])];
+  const parts: MessageParts = {
+    words: words ?? text,
+    ...(fields.keyword !== undefined ? { keyword: oneLine(fields.keyword) } : {}),
+    ...(fields.widget !== undefined ? { widget: oneLine(fields.widget) } : {}),
+    ...(fields.comments?.length ? { comments: fields.comments.map(comment => ({ ...comment, text: trimmed(comment.text) })) } : {}),
+    ...(paths.length ? { paths } : {}),
+    ...(named.length ? { agents: named.map(agent => ({ name: agent.name, session: agent.session })) } : {}),
+    ...(phone ? { phone: true as const } : {}),
+  };
+  return { text, parts };
 }
 
 /** A command's arguments as the engine's command gets them: as written, with only the note of its

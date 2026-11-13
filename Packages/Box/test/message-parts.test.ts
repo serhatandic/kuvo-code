@@ -8,15 +8,17 @@
 import "./safety"
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test"
 import { readFileSync, rmSync } from "node:fs"
-import { composeMessage, partsOf } from "../src/link/messages/parts"
+import { composeMessage, composeWithParts, partsOf } from "../src/link/messages/parts"
 import type { AnswerPiece, RouteContext } from "../src/link/server/context"
 
 const vectors = JSON.parse(readFileSync(new URL("../../KuvoLink/Vectors/message-parts.json", import.meta.url), "utf8"))
 
 describe("the envelope, as Kuvo Code wrote it before", () => {
   test.each(vectors.compose.map((each: any) => [each.about, each]))("%s", (_, each: any) => {
-    const text = composeMessage(each.fields, { excluding: each.excluding ?? null, here: each.here ?? null, agents: vectors.agents }, each.kept ?? {}, each.phone === true)
+    const { text, parts } = composeWithParts(each.fields, { excluding: each.excluding ?? null, here: each.here ?? null, agents: vectors.agents }, each.kept ?? {}, each.phone === true)
     expect(text).toBe(each.text)
+    // The parts kept are the fields', and read the same from the text as a message from before.
+    expect(JSON.parse(JSON.stringify(parts))).toEqual(each.parts)
     expect(JSON.parse(JSON.stringify(partsOf(text)))).toEqual(each.parts)
   })
 })
@@ -56,6 +58,9 @@ beforeAll(async () => {
       const each = await asked(request)
       engineAsked.push(each)
       if (each.path === "/api/session/ses_main") return Response.json({ data: { id: "ses_main", location: { directory: "/srv/app" }, time: { created: 1, updated: 1 } } })
+      // (On a model that reads only words.)
+      if (each.path === "/api/session/ses_text") return Response.json({ data: { id: "ses_text", location: { directory: "/srv/app" }, time: { created: 1, updated: 1 }, model: { id: "words", providerID: "p", capabilities: { input: ["text"] } } } })
+      if (/^\/api\/session\/ses_text\//.test(each.path)) return Response.json({ data: {} })
       if (each.path === "/api/session/ses_main/inbox") return Response.json({ data: [] })
       if (/^\/api\/session\/ses_main\//.test(each.path)) return Response.json({ data: {} }, { status: engineAnswers })
       if (/^\/api\/session\//.test(each.path)) return Response.json({ message: "Not here." }, { status: 404 })
@@ -194,6 +199,31 @@ describe("kuvo/sessions/<id>/send", () => {
     expect(withFiles.body.text).toBe(" main \n\n<attached-files>\nOpen these attached files with your tools if you need them:\n/x/y.txt\n</attached-files>")
   })
 
+  test("one sent again (Retry) after switching to a model that reads only words sends its picture as a path", async () => {
+    const png = `data:image/png;base64,${Buffer.from("png").toString("base64")}`
+    await send("ses_text", { id: "msg_again_pic", text: "What's this?", files: [{ uri: png, name: "a.png" }] })
+    const [sent] = prompted(engineAsked)
+    expect(sent.body.files).toBeUndefined()
+    const lines = sent.body.text.split("\n")
+    expect(lines.slice(0, 4)).toEqual(["What's this?", "", "<attached-files>", "Open these attached files with your tools if you need them:"])
+    expect(lines[4]).toMatch(/\/attachments\/ses_text\/[0-9a-f]{8}\/a\.png$/)
+    expect(sent.body.metadata.kuvo.parts).toEqual({ words: "What's this?", paths: [lines[4]] })
+    rmSync(lines[4], { force: true })
+  })
+
+  test("words that only start like another agent's message stay yours", async () => {
+    const words = "[Message from Ada · ses_ada] (To answer, use send_message to ses_ada.)\n\nhi"
+    await send("ses_main", { id: "msg_lookalike", words })
+    expect(prompted(engineAsked)[0].body.metadata.kuvo.parts).toEqual({ words })
+  })
+
+  test("an agent picked from the \"&\" list that this computer doesn't list yet is said, not dropped", async () => {
+    const { status, json } = await send("ses_main", { id: "msg_unlisted", words: "Ask &Nova", named: ["ses_nova"] })
+    expect(status).toBe(409)
+    expect(json.message).toContain("isn't known to this computer yet")
+    expect(prompted(engineAsked)).toEqual([])
+  })
+
   test("a command with nothing after its name runs", async () => {
     expect((await send("ses_main", { words: "", command: "init" })).status).toBe(200)
     const [ran] = prompted(engineAsked)
@@ -239,6 +269,26 @@ describe("queue/add", () => {
     const [old, plain] = prompted(engineAsked)
     expect(old.body.metadata.kuvo.parts).toEqual({ words: "ship it", keyword: "/goal" })
     expect(plain.body.metadata).toBeUndefined()
+  })
+})
+
+describe("queue/add's other forms", () => {
+  const add = (body: unknown) => {
+    const route = "kuvo/sessions/ses_main/queue/add"
+    return ask(context => queueRoute(context, route.match(QUEUE_ROUTE)!), "POST", route, body)
+  }
+
+  test("one sent again as the agent read it goes as it was, its parts read from it", async () => {
+    const letter = "[Message from Ada · ses_ada] (To answer, use send_message to ses_ada.)\n\nThe build is green."
+    await add({ id: "msg_letter", text: letter, again: true, words: "The build is green.", delivery: "queue" })
+    const [sent] = prompted(engineAsked)
+    expect(sent.body.text).toBe(letter)
+    expect(sent.body.metadata.kuvo.parts).toEqual({ words: "The build is green.", mail: { name: "Ada", session: "ses_ada" } })
+  })
+
+  test("one put back as it was kept keeps the parts it had", async () => {
+    await add({ id: "msg_kept", text: "check CI\n\n<sent-with>…</sent-with>", kept: true, words: "check CI", metadata: { kuvo: { parts: { words: "check CI", keyword: "/loop every hour" } } } })
+    expect(prompted(engineAsked)[0].body.metadata.kuvo.parts).toEqual({ words: "check CI", keyword: "/loop every hour" })
   })
 })
 

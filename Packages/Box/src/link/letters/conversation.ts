@@ -2,6 +2,7 @@
 // What the user and others wrote, its replies and a line for each step, as Kuvo Code's export words
 // it; a long one as its start and its latest part, or with a query, the parts that mention it.
 
+import { keptParts, partsOf } from "../messages/parts";
 import { boxNoteOf } from "../../shared/queues";
 import type { Target } from "../../shared/records";
 import type { EngineSession } from "../engine/sessions";
@@ -36,18 +37,6 @@ interface MessagePage {
   cursor?: { next?: string; previous?: string };
 }
 
-// A message without the blocks Kuvo Code adds to its end (named agents, comments, attached files).
-function messageWords(written: string): string {
-  let words = written.trim();
-  for (;;) {
-    const block = [["<attached-files>", "</attached-files>"], ["<review-comments>", "</review-comments>"], ["<named-agents>", "</named-agents>"]]
-      .find(([, end]) => words.endsWith("\n" + end));
-    const open = block ? words.lastIndexOf(block[0] + "\n") : -1;
-    if (open < 0 || (open > 0 && words[open - 1] !== "\n")) return words;
-    words = words.slice(0, open).trim();
-  }
-}
-
 /** A conversation as Markdown, as Kuvo Code's export words it: a step as its tool and what it
  * worked on. */
 export function conversationMarkdown(title: string, messages: ReadMessage[], agent: string): string {
@@ -67,17 +56,18 @@ export function conversationMarkdown(title: string, messages: ReadMessage[], age
   for (const [at, message] of messages.entries()) {
     if (message.type === "user") {
       const written = String(message.text ?? "");
-      const mail = /^\[Message from (.*) · (ses_\S+|unknown)\] \([^\n]*\)\n\n([\s\S]*)$/.exec(written);
+      // Its parts, as the box keeps them, or reads one from before (messages/parts.ts).
+      const parts = keptParts(message.metadata) ?? partsOf(written);
       const work = /^\[Work from (.*) · [^\]\n]+\]\n\n([\s\S]*?)(\n\n---\n[\s\S]*)?$/.exec(written);
       // What the box told the agent (a goal's word, its sessions' news): never the user's, and
       // whole, as the agent read it (the export shows its line).
       const note = boxNoteOf(written, message.metadata);
       if (note) say(note.from, written.trim());
-      else if (mail) say(`Message from ${mail[1]}`, mail[3]);
+      else if (parts.mail) say(`Message from ${parts.mail.name}`, parts.words);
       else if (written.startsWith("[Wake-up] ")) say("Wake-up", written.slice("[Wake-up] ".length));
       else if (work) say(`Work from ${work[1]}`, work[2].trim());
       else {
-        const words = messageWords(written);
+        const words = parts.keyword ? `${parts.keyword} ${parts.words}` : parts.words.trim();
         const files = (message.files ?? []).map(file => file.name).filter(Boolean);
         if (words || files.length) say("User", [words, files.length ? "Attached: " + files.join(", ") : ""].filter(Boolean).join("\n\n"));
       }
