@@ -20,7 +20,7 @@ import { ENGINE_DATA, homeFolder } from "../home";
 import type { AnswerPiece, JSONAnswer, RouteContext } from "../server/context";
 import { readProjects } from "./projects";
 import { branchPrefixHere } from "./git-words";
-import { readRestorableWorktrees, readWorktrees, updateWorktrees, worktreeFollowers } from "./worktree-records";
+import { readRemovedWorktrees, readRestorableWorktrees, readWorktrees, updateWorktrees, worktreeFollowers } from "./worktree-records";
 import type { RestorableWorktree, WorktreeRecord } from "./worktree-records";
 
 /** Sessions by the folder they run in, and which are at work (their ids). */
@@ -42,6 +42,8 @@ export interface WorktreesBody {
   path?: unknown;
   forget?: unknown;
   discard?: unknown;
+  /** One an older Mac removed before its box kept their records (`kuvo/worktrees/record`). */
+  removed?: unknown;
 }
 
 /** What `kuvo/worktrees…` answers: the list, one just made, `{}` for done (or nothing to say), or
@@ -289,6 +291,14 @@ export async function answerWorktrees(method: string, requestPath: string, body:
   }
   // COMPAT(0.7 worktrees): a machine's worktrees an older Mac kept, given to its box. Goes 3 months after 0.8.0.
   if (route === "kuvo/worktrees/record") {
+    // One a Mac removed before this box kept its records (`removed`): its sessions stay filed under
+    // its project. Not over one this box has.
+    if (body?.removed === true) {
+      const folder = body?.folder, project = body?.project;
+      if (typeof folder !== "string" || !path.isAbsolute(folder) || typeof project !== "string" || !path.isAbsolute(project) || folder === project) return { status: 400, value: message("Send {removed: true, project, folder}.") };
+      if (!list.some(each => (each.folder ?? each.root) === folder || each.root === folder) && !(folder in readRemovedWorktrees())) updateWorktrees(each => each, { project, root: folder, folder, branch: "" } as WorktreeRecord);
+      return { status: 200, value: {} };
+    }
     // One a Mac made here before this box kept them: kept here from now on, if it's still here
     // (one removed since, from a phone, say, doesn't come back).
     const given = { project: body?.project, root: body?.root, folder: typeof body?.folder === "string" ? body.folder : body?.root, branch: body?.branch, ...(typeof body?.base === "string" ? { base: body.base } : {}) };

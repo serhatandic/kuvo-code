@@ -34,8 +34,9 @@ final class Workspace {
     @ObservationIgnored var machineAgents: (String) -> OutsideAgents? = { _ in nil }
 
     /// A conversation's goal, as its computer's agents bridge runs it (where its folder is now), and
-    /// its asks settled with no event for them.
+    /// its asks settled with no event for them; and what its box says it is.
     private func followGoals(of model: SessionModel) {
+        model.listKind = { [weak self, weak model] in model.flatMap { self?.listKind(of: $0.session) } }
         model.goalBridge = { [weak self, weak model] in model.flatMap { self?.agents(forFolder: $0.session.location.directory) } }
         // An ask found settled without a word of it (answered elsewhere first): off the Dock's
         // count and the notifications too.
@@ -315,9 +316,24 @@ final class Workspace {
     /// project, in Chats, or nowhere (a bot's, a seat, one archived, one its box hasn't listed).
     private func listPlace(of session: Session) -> SessionLists.Place? {
         let box = Self.box(of: session.location.directory)
-        let place = SessionLists.place(of: sessionLists[box]?.sessions[session.id], isArchived: Self.isArchived(session))
+        // A machine its box hasn't answered for since this update (away at the first launch with
+        // it): its sessions as last seen, where this Mac filed them before, until its box says.
+        guard let listing = sessionLists[box] else { return lastFiled(session) }
+        let place = SessionLists.place(of: listing.sessions[session.id], isArchived: Self.isArchived(session))
         if case .project(let project) = place { return .project(Self.here(project, on: box)) }
         return place
+    }
+
+    /// Where this Mac filed `session` before its box said (`listPlace`, for a machine away at the
+    /// first launch since this update): the rule it went by then.
+    private func lastFiled(_ session: Session) -> SessionLists.Place? {
+        guard !Self.isArchived(session), !botSessions.contains(session.id), !Self.isBotFolder(session.location.directory), !isHidden(session) else { return nil }
+        return Self.isChat(session) ? .chat : .project(projectDirectory(of: session))
+    }
+
+    /// What `session` is, as its box says; nil for one it hasn't listed.
+    func listKind(of session: Session) -> SessionLists.Kind? {
+        sessionLists[Self.box(of: session.location.directory)]?.sessions[session.id]?.kind
     }
 
     /// Whether `session`'s row is in Chats, as its box says.
@@ -361,6 +377,7 @@ final class Workspace {
     func followSessionList(on box: String = BoxClient.thisMac) async {
         if sessionLists[box] == nil, let kept = SessionCopies.list(of: box) { sessionLists[box] = kept }
         while !Task.isCancelled, !isRemoved(box) {
+            await handOverRemovedWorktrees(on: box)
             var heard = false
             if BoxClient.streams(box), let client = boxes?(box) {
                 do {
@@ -377,6 +394,24 @@ final class Workspace {
                 try? await Task.sleep(for: BoxClient.readAgainAfter)
             }
         }
+    }
+
+    /// COMPAT(0.7 worktrees): worktrees this Mac removed before its boxes kept their records, given to `box` once, so its session lists file their sessions under their projects as this Mac did. Goes 3 months after 0.8.0.
+    private func handOverRemovedWorktrees(on box: String) async {
+        let key = "removedWorktreesHandedOver." + box
+        guard !UserDefaults.standard.bool(forKey: key), boxes?(box) != nil else { return }
+        for (folder, project) in removedWorktrees.filter({ Self.isOn($0.key, box) }).sorted(by: { $0.key < $1.key }) {
+            do {
+                let _: Empty = try await onBox(box, "POST", "kuvo/worktrees/record", ["removed": true, "folder": Self.onBox(folder), "project": Self.onBox(project)])
+            } catch let refusal as BoxRefusal where refusal.status < 500 {
+                // Not one it takes: as it is there.
+                continue
+            } catch {
+                // Not answering: given next time.
+                return
+            }
+        }
+        UserDefaults.standard.set(true, forKey: key)
     }
 
     /// Boxes whose list is being read now, and whether it's to be read once more after.
@@ -1066,15 +1101,13 @@ final class Workspace {
         return settings[directory]?.name ?? (directory as NSString).lastPathComponent
     }
 
-    /// The name of the project a session is filed under: where the sidebar shows it, as its box
-    /// says; one the lists don't show (a bot's, a subagent's) by its folder.
+    /// The name of the project a session is filed under, as its box says (an archived one's too);
+    /// one that's in none (a bot's, a subagent's) by its folder.
     func projectName(of session: Session) -> String {
-        let directory: String
-        switch listPlace(of: session) {
-        case .chat: return "Chats"
-        case .project(let project): directory = project
-        case nil: directory = projectDirectory(of: session)
-        }
+        let box = Self.box(of: session.location.directory)
+        let facts = sessionLists[box]?.sessions[session.id]
+        if facts?.kind == .chat { return "Chats" }
+        let directory = facts?.project.map { Self.here($0, on: box) } ?? session.location.directory
         return settings[directory]?.name ?? (directory as NSString).lastPathComponent
     }
 

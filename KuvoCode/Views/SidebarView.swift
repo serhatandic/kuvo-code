@@ -216,7 +216,7 @@ struct SidebarView: View {
             guard ProcessInfo.processInfo.environment["KUVO_DEMO_RENAME"] == "sidebar" else { return }
             try? await Task.sleep(for: .seconds(2))
             if let selection, let session = workspace.session(selection) {
-                renaming = RenameTarget(id: selection, place: Workspace.isChat(session) ? .chats : .project)
+                renaming = RenameTarget(id: selection, place: workspace.isInChats(session) ? .chats : .project)
             }
         }
         #endif
@@ -1058,7 +1058,7 @@ struct SidebarView: View {
                     .foregroundStyle(.tertiary)
             } else {
                 HStack(spacing: 6) {
-                    if look.isSearching, Workspace.isChat(session), let machine = RemoteFolder.machine(of: session.location.directory) {
+                    if look.isSearching, workspace.isInChats(session), let machine = RemoteFolder.machine(of: session.location.directory) {
                         Image(systemName: "server.rack")
                             .sidebarFont(10)
                             .foregroundStyle(.tertiary)

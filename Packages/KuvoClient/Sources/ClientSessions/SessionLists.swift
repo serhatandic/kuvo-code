@@ -115,6 +115,12 @@ public enum SessionLists {
             self.at = at
         }
 
+        /// A session its box just made, as its box answered the start (`kuvo/sessions`), shown at
+        /// once until its list says (a line naming it, or a whole one without it).
+        public mutating func noteMade(_ id: String, facts: Facts) {
+            if sessions[id] == nil { sessions[id] = facts }
+        }
+
         /// `line` taken in: a whole one in place of what was, else what changed. Whether anything did.
         @discardableResult
         public mutating func take(_ line: Line) -> Bool {

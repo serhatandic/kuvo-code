@@ -3228,7 +3228,8 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     `503` while the engine isn't running. A repository with no commits yet gets an empty first one
     (bridge 0.9.198; what's staged stays staged), as a project the box makes does. `POST kuvo/worktrees/record {project, root, folder?,
     branch, base?}` keeps one a Mac kept before its box did ("For released Macs"; `404` when it
-    isn't there any more).
+    isn't there any more); `{removed: true, project, folder}` keeps one such a Mac removed, so its
+    sessions stay filed under its project (not over one the box has).
   - `GET kuvo/worktrees/where[?directory=<value>]` (`worktrees.where`): where new worktrees go
     with `value` as `worktree.directory` (none: the engine's own), as the engine reads it, so
     Settings shows real folders before and after you choose one → `{"directory", "default", "home",
@@ -7301,7 +7302,8 @@ before connects (the box notes one: `run/attached`).
   its `job` there, so the box writes a job's line there too, beside its record (`job.json`).
   <!-- compat: 0.7 bot-json-job -->
 - **Its worktrees**: it kept a machine's worktrees itself. A Mac that has such records gives them
-  to the machine with `POST kuvo/worktrees/record`.
+  to the machine with `POST kuvo/worktrees/record`, those it removed too (`removed`), so the box's
+  session lists file their sessions as that Mac did.
   <!-- compat: 0.7 worktrees -->
 - **Its agents bridge** installed the agents' programs in `~/.kuvo-code/agents/runtime` on a
   machine, carried the Mac's sign-ins over (`<file>.from-mac`), and kept its downloads in its cache

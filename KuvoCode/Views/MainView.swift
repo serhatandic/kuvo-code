@@ -678,7 +678,7 @@ struct MainView: View {
                 Button("Edit Bot", systemImage: "slider.horizontal.3") { tabs.openBotEditor(bot: bot) }
                     .help("Edit Bot: its look, job, wake-ups and memory")
             }
-            if Workspace.isChat(model.session) {
+            if workspace.isInChats(model.session) {
                 MoveToProjectButton(sessionID: id)
             }
             // Its feed down for now: a quiet mark only, not an outage (that's the bar over the

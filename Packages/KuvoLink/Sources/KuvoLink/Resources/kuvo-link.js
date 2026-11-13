@@ -15797,6 +15797,14 @@ async function answerWorktrees(method, requestPath, body, engine, signal, bridge
     return { status: 200, value: tree };
   }
   if (route === "kuvo/worktrees/record") {
+    if (body?.removed === true) {
+      const folder = body?.folder, project = body?.project;
+      if (typeof folder !== "string" || !path65.isAbsolute(folder) || typeof project !== "string" || !path65.isAbsolute(project) || folder === project)
+        return { status: 400, value: message("Send {removed: true, project, folder}.") };
+      if (!list.some((each) => (each.folder ?? each.root) === folder || each.root === folder) && !(folder in readRemovedWorktrees()))
+        updateWorktrees((each) => each, { project, root: folder, folder, branch: "" });
+      return { status: 200, value: {} };
+    }
     const given = { project: body?.project, root: body?.root, folder: typeof body?.folder === "string" ? body.folder : body?.root, branch: body?.branch, ...typeof body?.base === "string" ? { base: body.base } : {} };
     const absolute = (folder) => typeof folder === "string" && path65.isAbsolute(folder);
     if (!absolute(given.project) || !absolute(given.root) || !absolute(given.folder) || typeof given.branch !== "string" || !given.branch)
@@ -39665,7 +39673,7 @@ import fs124 from "node:fs";
 import path128 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "e0c8cec5bd4a";
+var BRIDGE_VERSION = "397f2c39a545";
 
 // Packages/Box/src/link/rehome/rewrite.ts
 var NO_REWRITE = {

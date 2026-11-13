@@ -326,6 +326,21 @@ test("a stream tells each change as a line of what changed", async () => {
   }
 })
 
+test("a worktree an older Mac removed, handed over, files its sessions under its project", async () => {
+  const gone = join(home, "lists-gone-tree")
+  add("ses_gone_tree", gone, 450)
+  try {
+    expect((await ask("kuvo/sessions/list")).lines[0].sessions.ses_gone_tree.project).toBe(gone)
+    const pieces: any[] = []
+    for await (const piece of handler({ method: "POST", path: "kuvo/worktrees/record", headers: {}, body: Buffer.from(JSON.stringify({ removed: true, folder: gone, project: work })), fromApp: true }, undefined)) pieces.push(piece)
+    expect(pieces[0].head.status).toBe(200)
+    expect((await ask("kuvo/sessions/list")).lines[0].sessions.ses_gone_tree.project).toBe(work)
+  } finally {
+    sessions.delete("ses_gone_tree")
+    rmSync(join(home, "box", "worktrees.json"), { force: true })
+  }
+})
+
 test("only GET", async () => {
   expect((await ask("kuvo/sessions/list")).status).toBe(200)
   const pieces: any[] = []
