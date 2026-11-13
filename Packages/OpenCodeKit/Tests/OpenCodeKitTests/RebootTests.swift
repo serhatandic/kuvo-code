@@ -1181,6 +1181,13 @@ import Testing
         try leftHeld(by: other.processIdentifier, ago: 400)
         #expect(try start("off") == 0)
         #expect(!wasEnded(other, "vim-kuvo-notes"), "not one of the scripts")
+        // The box making its settings its own (`box adopt`) holds it: it starts no engine, and
+        // isn't ended.
+        let adopting = try watched("kuvo-link")
+        defer { adopting.terminate() }
+        try leftHeld(by: adopting.processIdentifier, ago: 400)
+        #expect(try start("off") == 0)
+        #expect(!wasEnded(adopting, "kuvo-link"), "not a start or stop")
         try? FileManager.default.removeItem(at: run.appending(path: ".launching"))
         let holder = try watched("kuvo-start")
         defer { holder.terminate() }

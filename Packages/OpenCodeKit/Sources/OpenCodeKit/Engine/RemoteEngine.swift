@@ -1348,7 +1348,7 @@ public final class RemoteServer: @unchecked Sendable {
         \(boot ? "V=${KUVO_VERSION:-\(OpenCodeEngine.version)}; unset KUVO_VERSION" : "V=\(OpenCodeEngine.version)")
         \(RemoteEngineInstaller.folders)
         R="$K/run"; mkdir -p "$R"; chmod 700 "$R"
-        \(boot ? "" : "# When a Mac's start began: an `off` after it (the machine removed meanwhile) is newer.\nbegan=\"$R/.starting.$$\"; : >\"$began\"")
+        \(boot ? "began=" : "# When a Mac's start began: an `off` after it (the machine removed meanwhile) is newer.\nbegan=\"$R/.starting.$$\"; : >\"$began\"")
         \(RemoteProcess.check)
         \(RemoteProcess.session)
         # One launch at a time; one whose holder is gone goes (`launchLock`: a launch takes three
@@ -1358,7 +1358,7 @@ public final class RemoteServer: @unchecked Sendable {
         # nothing else would know to stop that one; one that won't end is ended, as `halt` does.
         # (Whole: a second TERM, `off` ending its keeper and it, doesn't cut it short.)
         # (Its own, never a `pid` its environment brought.)
-        unset pid noted
+        unset pid noted unsaid
         trap 'trap "" HUP INT TERM PIPE; [ -z "${began-}" ] || rm -f "$began"; [ -z "${pid-}" ] || [ -n "${noted-}" ] || { kill "$pid" 2>/dev/null; n=0; while kuvo_runs "$pid" "$K/engine/" && [ $n -lt 100 ]; do sleep 0.1; n=$((n + 1)); done; kuvo_runs "$pid" "$K/engine/" && kill -9 "$pid" 2>/dev/null; }; unlock' EXIT
         \(boot ? "trap 'exit 1' HUP INT TERM PIPE" : "# Ended by an `off` since it began (the machine removed as it started): it says so.\ntrap '[ -n \"$(find \"$R/off\" -newer \"$began\" 2>/dev/null)\" ] && { echo \"It was removed from Kuvo Code meanwhile.\" >&2; exit 7; }; exit 1' HUP INT TERM PIPE")
         take_lock 2400 || \(boot ? "exit 0" : "{ echo \"Another start of the engine is under way there.\" >&2; exit 4; }")
