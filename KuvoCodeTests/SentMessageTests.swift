@@ -85,6 +85,22 @@ import Testing
         #expect(model.sentMessages == ["Check the build"])
     }
 
+    /// A conversation kept to show while its computer is away keeps the parts its box read: shown
+    /// from the copy, a message from before is a bubble, not the blocks written for the agent.
+    @Test func aSavedCopyKeepsWhatItsBoxRead() async throws {
+        defer {
+            done()
+            SessionCopies.remove(id)
+        }
+        let before = "Check the build\n\n<sent-with>\nThe user sent this with a Kuvo Code keyword, which Kuvo Code has already done (switched to Plan, or set the message to repeat), so there's nothing for you to do about it:\n/plan\n</sent-with>"
+        let model = try await open([["id": "msg_01", "type": "user", "time": ["created": 1], "text": before]])
+        model.apply(try engine.event("session.execution.succeeded", session: id))
+        await SessionCopies.written()
+        let copy = try #require(SessionCopies.load(id))
+        guard case .user(let user)? = copy.messages.first else { return Issue.record("no message in the copy") }
+        #expect(MessageParts.kept(in: user.metadata) == MessageParts(words: "Check the build", keyword: "/plan"))
+    }
+
     /// Another agent's message from before shows as its message, from its box's reading of it.
     @Test func anotherAgentsMessageFromBeforeShowsAsTheirs() async throws {
         defer { done() }
