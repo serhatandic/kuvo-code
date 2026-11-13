@@ -598,7 +598,7 @@ import Testing
     @Test func aHandoffsEndToldBeforeItsStartStaysOneAskedAgainToo() throws {
         let agents = OutsideAgents()
         let told = { (handoff: [String: Any]) throws in
-            agents.keywordEvent(try ServerEvent(json: JSONSerialization.data(withJSONObject: ["type": "kuvo.handoff", "data": ["sessionID": "ses_a", "handoff": handoff]])))
+            agents.keywordEvent(try ServerEvent(json: JSONSerialization.data(withJSONObject: ["id": "evt_\(UUID().uuidString)", "type": "kuvo.handoff", "data": ["sessionID": "ses_a", "handoff": handoff]])))
         }
         let answer = { (started: Double) in Handoff(from: "ses_a", state: .writing, started: started) }
         let failed: [String: Any] = ["from": "ses_a", "state": "failed", "error": "No room."]
