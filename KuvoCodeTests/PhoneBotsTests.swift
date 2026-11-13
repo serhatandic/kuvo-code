@@ -27,8 +27,10 @@ import Testing
         engine.on("PUT", "/api/experimental/session/*", json: [:])
         engine.on("POST", "/api/session/*", json: [:])
         // The sessions it made, as the engine keeps them: the box reads one just before it marks it.
+        // (Each answered on the stand-in's own queue: `@Sendable`, or it would be this main-actor
+        // suite's, and Swift stops the run when one of those runs off the main actor.)
         let made = Guarded([String: [String: Any]]())
-        engine.on("POST", "/api/session") { request in
+        engine.on("POST", "/api/session") { @Sendable request in
             let session = made.withLock { made in
                 var session = StubEngine.session("ses_bot\(made.count + 1)", title: request.body["title"] as? String ?? "",
                                                  directory: (request.body["location"] as? [String: Any])?["directory"] as? String ?? "")
@@ -38,14 +40,14 @@ import Testing
             }
             return StubWeb.json(["data": session])
         }
-        engine.on("GET", "/api/session/*") { request in
+        engine.on("GET", "/api/session/*") { @Sendable request in
             let parts = request.path.split(separator: "/").map(String.init)
             guard parts.count == 3 else { return StubWeb.json(["message": "Not found."], status: 404) }
             if parts[2] == "active" { return StubWeb.json(["data": [String: Any]()]) }
             return made.withLock { $0[parts[2]] }.map { StubWeb.json(["data": $0]) } ?? StubWeb.json(["message": "No such session."], status: 404)
         }
         // What's changed, kept (each field given in place of its own); one deleted, gone.
-        engine.on("PATCH", "/api/session/*") { request in
+        engine.on("PATCH", "/api/session/*") { @Sendable request in
             let id = String(request.path.split(separator: "/").last ?? "")
             let changed = made.withLock { made -> [String: Any] in
                 guard var session = made[id] else { return [:] }
@@ -55,7 +57,7 @@ import Testing
             }
             return StubWeb.json(["data": changed])
         }
-        engine.on("DELETE", "/api/session/*") { request in
+        engine.on("DELETE", "/api/session/*") { @Sendable request in
             _ = made.withLock { $0.removeValue(forKey: String(request.path.split(separator: "/").last ?? "")) }
             return StubWeb.json([:])
         }

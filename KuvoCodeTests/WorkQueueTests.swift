@@ -25,8 +25,8 @@ import Textual
 
     @Test func chipVisibilityAndTypingStayInTheirConversation() throws {
         let store = app.workQueues
-        let first = try JSONDecoder().decode(WorkItem.self, from: JSONSerialization.data(withJSONObject: Self.item(1, "First", order: 0)))
-        let second = try JSONDecoder().decode(WorkItem.self, from: JSONSerialization.data(withJSONObject: Self.item(2, "Second", order: 1)))
+        let first = try Self.listed(1, "First", order: 0, in: "ses_ours")
+        let second = try Self.listed(2, "Second", order: 1, in: "ses_ours")
         store.standIn(WorkQueueView(owner: "ses_ours", items: [first, second]), for: .init(box: BoxClient.mac, owner: "ses_ours"))
         store.standIn(WorkQueueView(owner: "ses_other"), for: .init(box: BoxClient.mac, owner: "ses_other"))
         #expect(store.refs(in: "see #1", box: BoxClient.mac, owner: "ses_ours")["1"] != nil)
@@ -39,7 +39,7 @@ import Textual
 
     @Test func aDraftCanChipQualifiedRefsWithoutAQueue() throws {
         let store = app.workQueues
-        var item = try JSONDecoder().decode(WorkItem.self, from: JSONSerialization.data(withJSONObject: Self.item(243, "Issue", order: 0)))
+        var item = try Self.listed(243, "Issue", order: 0, in: "ses_ours")
         item.source = WorkSource(kind: "github", ref: "gh:owner/repo#12")
         store.standIn(WorkQueueView(owner: "ses_ours", items: [item]), for: .init(box: BoxClient.mac, owner: "ses_ours"))
         #expect(store.refs(in: "#243 gh:owner/repo#12", box: BoxClient.mac).keys.sorted() == ["gh:owner/repo#12"])
@@ -48,7 +48,7 @@ import Textual
 
     @Test func unrelatedQueueUpdatesDoNotInvalidateNumericChips() throws {
         let store = app.workQueues
-        let item = try JSONDecoder().decode(WorkItem.self, from: JSONSerialization.data(withJSONObject: Self.item(243, "Ours", order: 0)))
+        let item = try Self.listed(243, "Ours", order: 0, in: "ses_ours")
         let key = WorkQueues.Key(box: "lab", owner: "ses_ours")
         store.standIn(WorkQueueView(owner: key.owner, items: [item]), for: key)
         @MainActor final class Changes { var called = false }
@@ -92,6 +92,13 @@ import Textual
         if let note { item["progress"] = ["note": note] }
         if let handedBy { item["handedBy"] = handedBy }
         return item
+    }
+
+    /// An item as its box lists it in `owner`'s queue: whose it is, and counts in place of its notes,
+    /// files and links.
+    private static func listed(_ number: Int, _ title: String, order: Double, in owner: String) throws -> WorkItem {
+        let listed = item(number, title, order: order).merging(["owner": owner, "inProgress": false, "noteCount": 0, "fileCount": 0, "linkCount": 0]) { $1 }
+        return try JSONDecoder().decode(WorkItem.self, from: JSONSerialization.data(withJSONObject: listed))
     }
 
     /// An owner's queue as its agents' tools leave it (`run/work-queue/queues/<owner>.json`).

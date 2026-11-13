@@ -50,6 +50,13 @@ import Testing
         return workspace
     }
 
+    /// The sessions the engine lists, each also read by its id as the engine answers it (the box
+    /// reads one just before it archives it).
+    private func list(_ sessions: [[String: Any]]) {
+        engine.list(sessions)
+        for session in sessions { engine.on("GET", "/api/session/\(session["id"] as? String ?? "")", json: ["data": session]) }
+    }
+
     /// What the box keeps, read as another client (a phone) reads it.
     private func onBox(_ workspace: Workspace) async throws -> [Workspace.BoxProject] {
         struct Listed: Decodable { var projects: [Workspace.BoxProject] }
@@ -225,7 +232,7 @@ import Testing
         defer { done() }
         let tree = work.appending(path: "trees/long-gone").path
         UserDefaults.standard.set([tree: shop], forKey: "removedWorktrees")
-        engine.list([StubEngine.session("ses_shop", directory: shop, created: 20), StubEngine.session("ses_tree", directory: tree, created: 10)])
+        list([StubEngine.session("ses_shop", directory: shop, created: 20), StubEngine.session("ses_tree", directory: tree, created: 10)])
         let workspace = workspace()
         await workspace.refresh()
         await workspace.loadProjects(on: BoxClient.mac)
@@ -326,7 +333,7 @@ import Testing
         let tree = work.appending(path: "trees/brave-otter").path
         try FileManager.default.createDirectory(atPath: tree, withIntermediateDirectories: true)
         UserDefaults.standard.set(try JSONEncoder().encode([tree: Workspace.Worktree(project: shop, root: tree, branch: "kuvo/brave-otter", base: "main")]), forKey: "worktrees")
-        engine.list([StubEngine.session("ses_shop", directory: shop, created: 20), StubEngine.session("ses_tree", directory: tree, created: 10)])
+        list([StubEngine.session("ses_shop", directory: shop, created: 20), StubEngine.session("ses_tree", directory: tree, created: 10)])
         let workspace = workspace()
         await workspace.refresh()
         await workspace.loadProjects(on: BoxClient.mac)
@@ -346,7 +353,7 @@ import Testing
 
     @Test func removeProjectArchivesItsSessionsThereAndKeepsItsSettings() async throws {
         defer { done() }
-        engine.list([
+        list([
             StubEngine.session("ses_new", directory: shop, created: 20),
             StubEngine.session("ses_old", directory: shop, created: 10),
             StubEngine.session("ses_blog", directory: blog, created: 5),
