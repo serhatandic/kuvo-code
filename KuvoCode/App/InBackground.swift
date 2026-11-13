@@ -30,14 +30,24 @@ final class InBackground {
     /// When an update installing on Quit was started (`installWaitingUpdate`): the relaunch after
     /// it goes straight to the background, as Kuvo Code was.
     static let relaunchKey = "backgroundWork.relaunchInBackground"
-    /// This launch is the relaunch after an update installed from the background (read once, as
-    /// it starts, and forgotten: a launch after it opens as usual).
+    /// What this Mac's keeper opens Kuvo Code with when an agent needs its browser while it's
+    /// closed (`AppOpener`, hidden and not activated): straight to the background, quietly.
+    nonisolated static let launchArgument = "--in-background"
+    /// This launch is the keeper's, for an agent's browser: in the background with nothing shown,
+    /// not even the note (you didn't quit it; it opened by itself).
+    @ObservationIgnored private(set) lazy var openedQuietly: Bool = CommandLine.arguments.contains(Self.launchArgument)
+    /// This launch goes straight to the background: the relaunch after an update installed from
+    /// the background (read once, as it starts, and forgotten: a launch after it opens as usual),
+    /// or the keeper's (`openedQuietly`).
     @ObservationIgnored private(set) lazy var relaunchesInBackground: Bool = {
         let defaults = UserDefaults.standard
-        guard let started = defaults.object(forKey: Self.relaunchKey) as? Date else { return false }
-        defaults.removeObject(forKey: Self.relaunchKey)
-        // An install that never relaunched leaves it behind: a launch much later is one of yours.
-        return abs(started.timeIntervalSinceNow) < 10 * 60
+        var updated = false
+        if let started = defaults.object(forKey: Self.relaunchKey) as? Date {
+            defaults.removeObject(forKey: Self.relaunchKey)
+            // An install that never relaunched leaves it behind: a launch much later is one of yours.
+            updated = abs(started.timeIntervalSinceNow) < 10 * 60
+        }
+        return updated || openedQuietly
     }()
     /// An update Sparkle downloaded to install on Quit (`UpdateSteps`): Quit no longer quits while
     /// the work goes on, so it's installed as Kuvo Code goes to the background.
@@ -58,8 +68,9 @@ final class InBackground {
 
     /// Quit taken as going to the background: the windows close, the Dock icon goes, and the usage
     /// item shows the work (the first time, with a note that says so). `usageStarting`: the usage
-    /// item is on its way (at launch, before it's up), so no item of its own.
-    func enter(_ app: AppModel, usageStarting: Bool = false) {
+    /// item is on its way (at launch, before it's up), so no item of its own. `quietly`: nothing
+    /// opens to show the note, and Kuvo Code doesn't take focus.
+    func enter(_ app: AppModel, usageStarting: Bool = false, quietly: Bool = false) {
         self.app = app
         watchWindows()
         // Minimized ones too. Not the menu bar's own windows, popovers or panels.
@@ -74,7 +85,7 @@ final class InBackground {
             guard let app else { return }
             Task { await InBackground.shared.stop(app) }
         }
-        let opensNote = !noteSeen && !noteOpened
+        let opensNote = !quietly && !noteSeen && !noteOpened
         let usage = UsageMenuBar.shared
         if (usage.isRunning || usageStarting), !usage.isWaitingForFirstLaunch {
             if opensNote, usage.isRunning {
@@ -102,11 +113,12 @@ final class InBackground {
         installWaitingUpdate()
     }
 
-    /// Relaunched after an update installed from the background: there again at once, the window
-    /// SwiftUI opens with the app closed as it shows.
+    /// Relaunched after an update installed from the background, or opened by the keeper for an
+    /// agent's browser: there again at once, the window SwiftUI opens with the app closed as it
+    /// shows.
     func enterAtLaunch(_ app: AppModel, usageStarting: Bool) {
         launching = true
-        enter(app, usageStarting: usageStarting)
+        enter(app, usageStarting: usageStarting, quietly: openedQuietly)
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.launching = false }
     }
 
@@ -119,6 +131,8 @@ final class InBackground {
         HostCard.shared.quitItem = nil
         item?.hide()
         NSApp.setActivationPolicy(.regular)
+        // Opened hidden by the keeper (`AppOpener`): shown again.
+        if NSApp.isHidden { NSApp.unhide(nil) }
         app?.openMainWindow?()
         NSApp.activate()
     }

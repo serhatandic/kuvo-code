@@ -11,7 +11,9 @@ nonisolated private let log = Logger(subsystem: "run.kuvo.code", category: "keep
 /// still listed (as the app last listed them), and the box answers what a machine's box answers
 /// without any app (`KeeperBoxTools`): agents writing to each other and running their sessions,
 /// wake-ups, a bot's job, the vault, the sandbox's way out, and a file or widget shown in the
-/// conversation. Only the browser and the side panel need the app: a call to them says so.
+/// conversation. Only the browser and the side panel need the app: a browser call opens it in the
+/// background (`AppOpener`) and goes to it once it has said where its tools answer; the panel says
+/// it isn't open (nobody is looking at a window it opened by itself).
 @MainActor
 final class KeeperTools {
     private lazy var server = LoopbackServer { [weak self] request in await self?.respond(to: request) ?? .init(status: 503) }
@@ -23,15 +25,23 @@ final class KeeperTools {
     /// Tool calls under way without the app, by client and request: one the client cancels stops
     /// (a message that waits for its answer stops waiting).
     private var calls: [String: Task<CallResult, Never>] = [:]
+    /// Browser calls waiting for the app to open, by client and request: whether the client gave up.
+    private var waitingForApp: [String: Bool] = [:]
     private struct CallResult: @unchecked Sendable { let value: [String: Any] }
 
-    /// `record`: where the box's processes answer, by their records in `run` (a test's own).
-    init(record: @escaping @MainActor (String) -> ServerEndpoint? = { KeeperFollower.record($0) }) {
+    /// Opens the app for a browser call while it's closed.
+    let opener: AppOpener
+
+    /// `record`: where the box's processes answer, by their records in `run` (a test's own);
+    /// `opener`: how the app is opened for its browser (a test's never opens one).
+    init(record: @escaping @MainActor (String) -> ServerEndpoint? = { KeeperFollower.record($0) }, opener: AppOpener = AppOpener()) {
         boxTools = KeeperBoxTools(record: record)
+        self.opener = opener
+        opener.isReady = { [weak self] in self?.app != nil }
     }
 
-    /// What a browser call says while the app isn't open.
-    static let needsApp = "The browser needs Kuvo Code open on this Mac, and it isn't open now. Ask the user to open Kuvo Code, then try again."
+    /// What a call the app answers says while it isn't open (and it isn't one the app is opened for).
+    static let needsApp = "This tool needs Kuvo Code open on this Mac, and it isn't open now. Ask the user to open Kuvo Code, then try again."
     /// What show_in_panel says while the app isn't open.
     static let panelNeedsApp = "Kuvo Code isn't open on this Mac, so its side panel can't show anything now. To show the user a file, use show_file: it's in the conversation, on their Mac and their phone."
     /// The tools as the app last listed them, for while it isn't open.
@@ -58,6 +68,7 @@ final class KeeperTools {
     func use(_ given: [String: Any]) {
         if let url = (given["url"] as? String).flatMap(URL.init(string:)), let token = given["token"] as? String {
             app = (url, token)
+            opener.ready()
         } else {
             app = nil
         }
@@ -72,7 +83,28 @@ final class KeeperTools {
         guard let authorization = request.headers["authorization"], authorization.hasPrefix("Bearer "),
               samePassword(String(authorization.dropFirst(7)), token) else { return .init(status: 401) }
         if let app, let answer = await forward(request, to: app) { return answer }
+        // A browser call with the app closed: the app opened in the background, and the call
+        // goes to it once it's there; what went wrong otherwise.
+        if app == nil, let id = Self.browserCall(request) {
+            // One the client gives up on meanwhile isn't carried out once the app is there.
+            let key = Self.key(id, client: request.headers["mcp-session-id"])
+            waitingForApp[key] = false
+            let failed = await opener.open()
+            let stopped = waitingForApp.removeValue(forKey: key) == true
+            if stopped { return await answerWithoutApp(request, failed: "The call was stopped.") }
+            if let failed { return await answerWithoutApp(request, failed: failed) }
+            if let app, let answer = await forward(request, to: app) { return answer }
+        }
         return await answerWithoutApp(request)
+    }
+
+    /// The id of `request`'s call to one of the browser's tools, which the app is opened for.
+    private static func browserCall(_ request: HTTPRequest) -> Any? {
+        guard request.method == "POST",
+              let message = try? JSONSerialization.jsonObject(with: request.body) as? [String: Any],
+              message["method"] as? String == "tools/call", let id = message["id"],
+              let name = (message["params"] as? [String: Any])?["name"] as? String, BrowserTools.isBrowser(name) else { return nil }
+        return id
     }
 
     /// The call, to the open app's tools, as it came: nil when the app doesn't answer (it quit
@@ -128,7 +160,11 @@ final class KeeperTools {
         let client = request.headers["mcp-session-id"]
         // A notification has nothing to answer; a call the client gave up on stops.
         guard let id = message["id"] else {
-            if method == "notifications/cancelled", let asked = params["requestId"] { calls[Self.key(asked, client: client)]?.cancel() }
+            if method == "notifications/cancelled", let asked = params["requestId"] {
+                let key = Self.key(asked, client: client)
+                calls[key]?.cancel()
+                if waitingForApp[key] != nil { waitingForApp[key] = true }
+            }
             return .init(status: 202)
         }
         let result: [String: Any]

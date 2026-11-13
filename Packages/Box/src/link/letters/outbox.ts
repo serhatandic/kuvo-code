@@ -15,6 +15,7 @@ import { listOf, writePrivate } from "../files";
 import { HERE, IS_MAC, RUN } from "../home";
 import { frozen } from "../moves/records";
 import { announce, toldPeers } from "../peers/agents";
+import { computerName } from "../peers/computer-name";
 import { isPutAway, peerOf, readPeerAgents } from "../peers/directory";
 import { KEY, mailFor, movedOf, ownKey, ownListed, peersOf, removedBoxes } from "../peers/known";
 import { bridgeAsk, giveUpSeat, ONLINE_STEP, SEAT_LETTER_LIFE, seatAge, seatRounds, sendSeatLetter } from "../peers/seats";
@@ -33,7 +34,7 @@ import type { BridgeAsk, SeatLetter } from "../peers/seats";
 import type { LinkHost } from "../relay/host";
 import type { LinkState } from "../state";
 import type { OutboxCall } from "./calls";
-import { answerResumed, boxName, callLife, callRefused, sendCall } from "./calls";
+import { answerResumed, callLife, callRefused, sendCall } from "./calls";
 
 /** A letter as it goes by mail (`{"letter": …}`): its id, from and for which conversations, its
  * words, whether its sender waits for the answer, when it was left (ms), and the letter it answers. */
@@ -319,7 +320,7 @@ function failLetter(id: string, file: string, letter: InSending, { why, on, said
     const nameIn = (key: string) => { const list = told[key]?.list; return Array.isArray(list) ? list.find(each => each?.session === letter.to)?.name : undefined; };
     const listed = [...(on ? [on] : []), ...Object.keys(told)].map(nameIn).find(name => typeof name === "string");
     const name = plainName(title ?? listed ?? ownListed().find(each => each.session === letter.to)?.name ?? "") || "that chat";
-    const computer = on && on === mine ? HERE : peer ? boxName(peer) : "another computer";
+    const computer = on && on === mine ? HERE : peer ? computerName(peer) : "another computer";
     const line = `Your message to ${name} on ${computer} wasn't delivered`;
     const text = `[Not delivered] ${line}${!why ? "." : said ? `: ${computer} said "${why}"` : `. ${why}`}`;
     writePrivate(path.join(SENDING, `${noticeID(id)}.json`), JSON.stringify({ to: letter.from, text, ...(mine ? { peer: mine } : {}), wait: false, at: now,

@@ -19,6 +19,7 @@ import { listOf, writePrivate } from "../files";
 import { HERE, IS_MAC } from "../home";
 import { macSendOutbox } from "../mac/peers";
 import { frozen, switchedTo } from "../moves/records";
+import { computerName } from "../peers/computer-name";
 import { peerOf, readPeerAgents } from "../peers/directory";
 import { mailFor, movedOf, ownKey, peersOf, removedBoxes } from "../peers/known";
 import { awaySince } from "../peers/reach";
@@ -29,7 +30,7 @@ import { homesOf, noteHomes } from "../work/homes";
 import { rowsBox, rowsOf, startedOn } from "../work/elsewhere";
 import { ALLOW_LIFE, answerAskTool, compactSessionTool, liveRows, stopSessionTool } from "../work/tools";
 import { otherComputersAllowed } from "../work/approval";
-import { AWAY_WORDS, computerName, keepJournal, noteLineHomes, START_FIELDS, OPEN_TOOLS, readHere, readJournal, START_FEATURE, startAsOfMail, startsRunning, stopLineWork, takeStart } from "./start-call";
+import { AWAY_WORDS, keepJournal, noteLineHomes, START_FIELDS, OPEN_TOOLS, readHere, readJournal, START_FEATURE, startAsOfMail, startsRunning, stopLineWork, takeStart } from "./start-call";
 import type { StartAs, StartJournal } from "./start-call";
 import { ownName, takesNoWork } from "./start";
 import { deliverNote } from "./note";
@@ -112,11 +113,6 @@ export function callLife(call: Pick<OutboxCall["call"], "tool" | "args">): numbe
   return NOTE_MEMORY;
 }
 
-/** What a box is called here: a machine by its name, a Mac by its own or "the Mac". */
-export const boxName = computerName;
-
-/** This box's own name, as it calls itself to others. */
-
 // What a call's words say a tool did: "stop", "summarize", "answer", "list".
 const verbOf = (tool: CallTool) => (tool === "stop_session" || tool === "stop_work" ? "stop" : tool === "compact_session" ? "summary" : tool === "answer_ask" ? "answer" : tool === "start_session" ? "start" : "list");
 const isOpenTool = (tool: unknown): tool is (typeof OPEN_TOOLS)[number] => OPEN_TOOLS.includes(tool as (typeof OPEN_TOOLS)[number]);
@@ -145,7 +141,7 @@ export function sendCall(host: Pick<LinkHost, "send">, id: string, file: string,
     letterTries.delete(id);
     if (call.quiet || waitedFor(call.call.tool)) return;
     const peer = peers.find(each => each.key === call.peer);
-    return tellLead(call.from, `[Not done] Your ${call.call.tool} for ${String(call.call.args.session ?? "")} on ${peer ? boxName(peer) : "another computer"} wasn't done: that computer wasn't back in time.${call.call.tool === "answer_ask" && call.call.args.decision === "allow" ? " An allow waits a day at most, as what it was for may have changed. Look at what it asks with list_sessions once it's back." : ""}`).catch(() => {});
+    return tellLead(call.from, `[Not done] Your ${call.call.tool} for ${String(call.call.args.session ?? "")} on ${peer ? computerName(peer) : "another computer"} wasn't done: that computer wasn't back in time.${call.call.tool === "answer_ask" && call.call.args.decision === "allow" ? " An allow waits a day at most, as what it was for may have changed. Look at what it asks with list_sessions once it's back." : ""}`).catch(() => {});
   }
   // Its lead lives on another computer now (it moved on since): that box doesn't take it from
   // here, so it ends, and the lead hears it to ask again from where it lives.
@@ -239,7 +235,7 @@ export async function tellLead(session: string, text: string, targets: Target[] 
 export function callRefused(call: OutboxCall, why: string, sender: Pick<Peer, "key">): void {
   if (call.quiet || call.wait === true || !isObject(call.call) || waitedFor(call.call.tool)) return;
   const peer = peersOf(readLink()).find(each => each.key === sender.key);
-  tellLead(call.from, `[Not done] Your ${call.call.tool} for ${String(call.call.args.session ?? "")} on ${peer ? boxName(peer) : "another computer"}: ${why}`).catch(() => {});
+  tellLead(call.from, `[Not done] Your ${call.call.tool} for ${String(call.call.args.session ?? "")} on ${peer ? computerName(peer) : "another computer"}: ${why}`).catch(() => {});
 }
 
 // ---- The caller's side ----
@@ -254,8 +250,6 @@ export type CallOutcome =
   | { older: true }
   | { offline: true; kept: boolean };
 
-const AWAY = AWAY_WORDS;
-
 /** `tool` for `lead` on the box `peer`, waiting `most` ms at most for its answer, less once the
  * relay says that box isn't there. With `keep`, one that can't be answered now is kept for when
  * it's back. */
@@ -268,7 +262,7 @@ export async function callPeer(peer: Peer, tool: CallTool, args: Record<string, 
   }
   if (awaySince(peer.key) !== null) {
     if (keep) leaveCall(peer.key, lead.session, call, { wait: false, quiet });
-    return { away: AWAY, kept: keep };
+    return { away: AWAY_WORDS, kept: keep };
   }
   const sent = Date.now();
   const id = leaveCall(peer.key, lead.session, call, { wait: true, quiet });
@@ -302,7 +296,7 @@ export async function callPeer(peer: Peer, tool: CallTool, args: Record<string, 
   if (answer && "text" in answer && typeof answer.text === "string") return { answer: { text: answer.text, isError: answer.isError === true } };
   // (`sent`: it may have got there. One the relay said it dropped, to a box that isn't there,
   // didn't: nothing was started.)
-  return { away: unreachable ? AWAY : "it didn't answer in time", kept: keep && !place.signal?.aborted, sent: had || (went && !dropped) || !unreachable };
+  return { away: unreachable ? AWAY_WORDS : "it didn't answer in time", kept: keep && !place.signal?.aborted, sent: had || (went && !dropped) || !unreachable };
 }
 
 /** The answer to letter or call `id`, sent to box `peer` at `sent`: waited for until it comes, the
@@ -362,7 +356,7 @@ export async function elsewhereTool(tool: Exclude<CallTool, "list_sessions">, le
   const offline = `Your other computers can't be reached through the relay now: your ${verb} goes once ${HERE}'s back on it, and you'll hear how it went as a message.`;
   if (known) {
     const outcome = await callPeer(known, tool, { ...args, session }, lead, place, { keep: true });
-    const name = boxName(known);
+    const name = computerName(known);
     if ("answer" in outcome) return outcome.answer;
     if ("failed" in outcome) return { text: `On ${name}: ${outcome.failed}`, isError: true };
     if ("older" in outcome) return { text: `"${session}" is on ${name}, which runs an older Kuvo Code: its sessions can't be reached from here until it's updated. Ask the user.`, isError: true };
@@ -377,8 +371,8 @@ export async function elsewhereTool(tool: Exclude<CallTool, "list_sessions">, le
   const answered = outcomes.find(each => "answer" in each.outcome);
   if (answered && "answer" in answered.outcome) return answered.outcome.answer;
   if (outcomes.some(each => "offline" in each.outcome)) return { text: offline, isError: false };
-  const away = outcomes.filter(each => "away" in each.outcome).map(each => boxName(each.peer));
-  if (away.length) return { text: `There's no session ${session} here, or on your other computers that answered. ${away.join(" and ")} ${away.length > 1 ? "aren't" : "isn't"} answering (${AWAY}): your ${verb} is kept for ${away.length > 1 ? "them" : "it"}, in case it's there, and you'll hear if it was.`, isError: false };
+  const away = outcomes.filter(each => "away" in each.outcome).map(each => computerName(each.peer));
+  if (away.length) return { text: `There's no session ${session} here, or on your other computers that answered. ${away.join(" and ")} ${away.length > 1 ? "aren't" : "isn't"} answering (${AWAY_WORDS}): your ${verb} is kept for ${away.length > 1 ? "them" : "it"}, in case it's there, and you'll hear if it was.`, isError: false };
   return { text: `There's no session ${session} here or on your other computers. Use list_sessions to see yours.`, isError: true };
 }
 
@@ -392,7 +386,7 @@ export async function rowsEverywhere(lead: Lead, place: Pick<ToolPlace, "signal"
   const started = new Set(startedOn(lead.session));
   const asked = peersOf(readLink()).filter(peer => (kept.has(peer.key) || started.has(peer.key)) && (told[peer.key]?.features ?? []).includes(CALLS_FEATURE));
   return (await Promise.all(asked.map(async (peer): Promise<RowsThere | null> => {
-    const name = boxName(peer);
+    const name = computerName(peer);
     const before = kept.get(peer.key);
     const outcome = await callPeer(peer, "list_sessions", {}, lead, place, { keep: false, most });
     let whole = false;
@@ -405,7 +399,7 @@ export async function rowsEverywhere(lead: Lead, place: Pick<ToolPlace, "signal"
       if (whole) return { name, rows: rows.filter(row => isObject(row) && typeof row.session === "string") };
     }
     if (!before) return null;
-    return { name, rows: before.rows, asOf: before.at, away: "away" in outcome ? outcome.away : "offline" in outcome ? "this computer is off the relay" : "answer" in outcome ? "its answer didn't come whole" : AWAY };
+    return { name, rows: before.rows, asOf: before.at, away: "away" in outcome ? outcome.away : "offline" in outcome ? "this computer is off the relay" : "answer" in outcome ? "its answer didn't come whole" : AWAY_WORDS };
   }))).filter((each): each is RowsThere => each !== null);
 }
 
@@ -498,7 +492,7 @@ export async function takeCall(sender: LetterSender & { name?: string }, given: 
       }
       const peer = peersOf(readLink()).find(each => each.key === sender.key);
       const kept = readJournal(id);
-      const journal = kept ?? { id, from, sender: sender.key, computer: peer ? boxName(peer) : plainName(sender.name) || "another computer", name: as.name, given: startGiven(args), start: as.start!, made, at: now };
+      const journal = kept ?? { id, from, sender: sender.key, computer: peer ? computerName(peer) : plainName(sender.name) || "another computer", name: as.name, given: startGiven(args), start: as.start!, made, at: now };
       // Kept, then said to be had, before anything's made: the lead's box tells "it may have
       // started" from "it never got there" by that.
       if (!kept) keepJournal(journal);
