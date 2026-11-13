@@ -31275,35 +31275,17 @@ async function repairRules(target, here, sessionID) {
 // Packages/Box/src/link/areas/projects.ts
 var PROJECTS_FILE = path104.join(K, "box", "projects.json");
 var PROJECTS_LOCK = PROJECTS_FILE + ".lock";
-function readProjects(file = PROJECTS_FILE, migrate = true) {
-  const read = () => {
-    const saved = JSON.parse(fs102.readFileSync(file, "utf8"));
-    let changed = false;
-    if (!Array.isArray(saved.projects))
-      return { saved, projects: [], changed };
-    for (const project of saved.projects) {
-      if (isObject(project) && "terminal" in project) {
-        delete project.terminal;
-        changed = true;
-      }
-    }
-    const projects = saved.projects.filter((each) => typeof each?.directory === "string" && path104.isAbsolute(each.directory)).map((each) => ({ ...each, folders: Array.isArray(each.folders) ? each.folders.filter((folder) => typeof folder === "string") : [] }));
-    return { saved, projects, changed };
-  };
+function readProjects(file = PROJECTS_FILE) {
   try {
-    const first = read();
-    if (!first.changed || !migrate)
-      return first.projects;
-    try {
-      return locked(file + ".lock", () => {
-        const latest = read();
-        if (latest.changed)
-          writePrivate(file, JSON.stringify(latest.saved, null, 2));
-        return latest.projects;
-      });
-    } catch {
-      return first.projects;
-    }
+    const list = JSON.parse(fs102.readFileSync(file, "utf8")).projects;
+    if (!Array.isArray(list))
+      return [];
+    return list.filter((each) => typeof each?.directory === "string" && path104.isAbsolute(each.directory)).map((each) => {
+      const project = { ...each };
+      delete project.terminal;
+      project.folders = Array.isArray(each.folders) ? each.folders.filter((folder) => typeof folder === "string") : [];
+      return project;
+    });
   } catch {
     return [];
   }
@@ -31447,7 +31429,7 @@ function boxProjects(kit, file = PROJECTS_FILE) {
 }
 function changeProjects(change, file = PROJECTS_FILE, lock = PROJECTS_LOCK) {
   const projects = locked(lock, () => {
-    const projects = change(readProjects(file, false));
+    const projects = change(readProjects(file));
     writePrivate(file, JSON.stringify({ version: 1, projects }, null, 2));
     return projects;
   });
@@ -39875,7 +39857,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "8ce845b7cbf2";
+var BRIDGE_VERSION = "389a58444eb8";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";

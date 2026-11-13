@@ -45,7 +45,8 @@ HEADER
         "KuvoCode/Resources/prism-bundle.js, with its language definitions, as bundled by Textual's Scripts/bundle-prism.sh." \
         Licenses/Prism.txt
     section Mermaid 12.3.0 https://github.com/mermaid-js/mermaid \
-        "The upstream npm bundle is kept unchanged at KuvoCode/Resources/mermaid.min.js. Its bundled dependencies carry their own MIT or similar licenses." Licenses/mermaid.txt
+        "KuvoCode/Resources/mermaid.min.js, unchanged, as published on npm; the libraries it bundles are under their own licenses, MIT or similar." \
+        Licenses/mermaid.txt
     section browser-use 0.4.2 https://github.com/browser-use/browser-use \
         "KuvoCode/Resources/buildDomTree.js, unchanged." \
         Licenses/browser-use.txt

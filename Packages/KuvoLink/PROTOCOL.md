@@ -5888,8 +5888,8 @@ while a box is away goes there when it's back.
   and the list never names a subfolder: one whose folder the list doesn't name, still running in the
   folder its `kuvo.filed` names, is filed under that project (#311).
 - `PUT kuvo/projects?directory=<folder>` with any of `{name, folders, run, removed}`
-  ignores the retired `terminal` setting; saved copies lose that setting when read, keeping
-  every project and its other settings. It adds the project or changes what's given (an empty
+  ignores the retired `terminal` setting when reading projects, keeping every project and its
+  other settings. Reads never write; the next project edit removes the saved field. It adds the project or changes what's given (an empty
   string is none), and brings a removed one
   back unless `removed` is true (a client's copy of one it removed, with its settings); one with
   `folders` takes away `addedByBox`: `200 {project}`; 400 for a folder that isn't a whole path. The folder is kept as it's named,

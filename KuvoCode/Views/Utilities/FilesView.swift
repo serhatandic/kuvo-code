@@ -665,7 +665,17 @@ struct FileViewer: View {
                         switch content {
                         case .text(let text) where isMarkdown && !showsSource:
                             ScrollView {
-                                markdownPreview(text)
+                                // Drawn as replies are (TextKit), so a long file opens at once. Its own
+                                // pictures, beside it; none from the web (a README's badges and tracking
+                                // pixels would reach their hosts as you open it).
+                                ReplyView(markdown: text, parser: MathMarkdownParser(), images: url.deletingLastPathComponent(), diagrams: true) { link in
+                                    // Another file of the project's, here; web links in the browser. A
+                                    // link to a heading in the file opens nothing else.
+                                    if link.scheme == nil, link.path.isEmpty { return true }
+                                    guard let file = Self.linked(link, from: url, root: root) else { return false }
+                                    app.utilities.show(file)
+                                    return true
+                                }
                                 .transcriptFont()
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(20)
@@ -717,17 +727,6 @@ struct FileViewer: View {
                 }
             }
         }
-    }
-
-    /// File images resolve beside the document; diagrams use the same renderer as replies.
-    private func markdownPreview(_ markdown: String) -> some View {
-        ReplyView(markdown: markdown, parser: MathMarkdownParser(),
-                  images: url.deletingLastPathComponent(), diagrams: true, openURL: { destination in
-            if destination.scheme == nil && destination.path.isEmpty { return true }
-            guard let target = Self.linked(destination, from: url, root: root) else { return false }
-            app.utilities.show(target)
-            return true
-        })
     }
 
     /// The picture before or after this one among the conversation's, opened here in its place.

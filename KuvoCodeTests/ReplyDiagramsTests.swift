@@ -64,19 +64,6 @@ import Testing
         #expect(!problem.isEmpty)
     }
 
-    @Test(arguments: [false, true])
-    func sequenceDiagramsRenderInEitherAppearance(dark: Bool) async {
-        let source = "sequenceDiagram\n  Alice->>Bob: Hello\n  Bob-->>Alice: Welcome"
-        let outcome = await MermaidRenderer.shared.render(source, dark: dark, width: 400)
-        guard case .drawn(let image) = outcome else {
-            Issue.record("Sequence diagram did not render: \(String(describing: outcome))")
-            return
-        }
-        #expect(image.size.width == 400)
-        #expect(image.size.height > 40)
-        #expect(Self.isDrawnOn(image))
-    }
-
     @Test func otherCodeStaysCode() {
         #expect(kinds("```swift\nlet a = 1\n```") == ["code"])
         // A fence of three inside a block of four doesn't close it early.

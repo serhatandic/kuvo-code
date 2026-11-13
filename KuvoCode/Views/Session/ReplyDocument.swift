@@ -15,11 +15,9 @@ struct ReplyDocument {
         case code(code: String, language: String?, marks: [ReplyCodeMark])
         /// A formula on its own line (`$$…$$`).
         case math(latex: String)
-        /// Source for a rendered document diagram.
-        case diagram(source: MermaidSource)
+        /// A Mermaid diagram (` ```mermaid `), where the document is asked to draw them.
+        case diagram(source: String)
     }
-
-    typealias MermaidSource = String
 
     var segments: [Segment] = []
     /// The space above each segment (the first's is 0).
@@ -211,24 +209,12 @@ struct ReplyDocument {
         }
     }
 
-    private static func fencedSegment(_ source: String, language: String?, marks: [ReplyCodeMark], diagrams: Bool) -> Segment {
-        switch language?.lowercased() {
-        case "math", MathText.blockLanguage:
-            return .math(latex: source.trimmingCharacters(in: .whitespacesAndNewlines))
-        case "mermaid" where diagrams && marks.isEmpty:
-            return .diagram(source: source)
-        default:
-            return .code(code: source, language: language, marks: marks)
-        }
-    }
-
     /// `images`: the folder a file's own pictures are looked for in (a Markdown file's); none from
     /// the web (a README's badges and tracking pixels would reach their hosts as it opens).
     /// `diagrams`: ` ```mermaid ` blocks are drawn as diagrams (a reply's, a file's preview), not
     /// shown as code; one a reply is still writing has its language marked (`CodeLanguage.writing`),
     /// so it shows as code till it's done, and one Find has places in shows as code, with them.
-    init(markdown: String, parser: some MarkupParser, style: Style,
-         images: URL? = nil, diagrams: Bool = false) {
+    init(markdown: String, parser: some MarkupParser, style: Style, images: URL? = nil, diagrams: Bool = false) {
         let parsed = (try? parser.attributedString(for: markdown)) ?? AttributedString(markdown)
         let findsMarks = (parser as? FileLinkingParser).map { $0.highlight != nil } ?? false
         let context = Context()
@@ -257,8 +243,19 @@ struct ReplyDocument {
                 flushText()
                 var code = String(content.characters)
                 if code.hasSuffix("\n") { code.removeLast() }
-                let highlighted = findsMarks ? Self.marks(in: content) : []
-                segments.append(Self.fencedSegment(code, language: language, marks: highlighted, diagrams: diagrams))
+                if language == MathText.blockLanguage || language?.lowercased() == "math" {
+                    segments.append(.math(latex: code.trimmingCharacters(in: .whitespacesAndNewlines)))
+                } else {
+                    // Find's marks only while Find has some: looking through every run of a
+                    // code block for them was a good part of reading one.
+                    let marks = findsMarks ? Self.marks(in: content) : []
+                    // A diagram, unless Find has places in it, which show in its code.
+                    if diagrams, language?.lowercased() == "mermaid", marks.isEmpty {
+                        segments.append(.diagram(source: code))
+                    } else {
+                        segments.append(.code(code: code, language: language, marks: marks))
+                    }
+                }
                 gaps.append(segments.count == 1 ? 0 : gap)
                 last = (Spacing(top: 0, bottom: 16), nil, nil, nil)
                 continue
@@ -700,7 +697,7 @@ enum PartsCheck {
                     return "text gap \(gap): \(text.string.debugDescription) | \(paragraphs.joined(separator: ", ")) | \(fonts.joined(separator: ", "))"
                 case .code(let code, let language, _): return "code gap \(gap) \(language ?? "-"): \(code.count)"
                 case .math(let latex): return "math gap \(gap): \(latex)"
-                case .diagram(source: let code): return "diagram gap \(gap): \(code.count)"
+                case .diagram(let source): return "diagram gap \(gap): \(source.count)"
                 }
             }
         }
