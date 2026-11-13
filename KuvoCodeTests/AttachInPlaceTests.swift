@@ -259,7 +259,9 @@ import Testing
         let release = FileManager.default.temporaryDirectory.appending(path: "box-release-\(UUID().uuidString)")
         let (boxRelease, lookAgain, now) = (MachineEngine.boxRelease, MachineEngine.updateLookAgain, MachineEngine.now)
         let looks = Looks()
+        var asks: DispatchSourceFileSystemObject?
         defer {
+            asks?.cancel()
             cleanUp(app)
             MachineEngine.boxRelease = boxRelease
             MachineEngine.updateLookAgain = lookAgain
@@ -278,9 +280,10 @@ import Testing
             try boxHereAnswers(["kuvo/info": older, "kuvo/update": ["offered": "0.9.0"]])
         }
         let model = try #require(app)
+        asks = followAsks()
         let id = SSHConnection.thisMac
+        try await until { asked("POST kuvo/box/update") == 1 }
         try await until { model.machines.gates.state(of: id) == .updating(detail: BoxGate.Words.thisMacTaking) }
-        #expect(asked("POST kuvo/box/update") == 1)
 
         // Blocked: why, in its words.
         let blocked = "It doesn’t update itself while a Mac with Kuvo Code 0.7 connected in the last 30 days."
