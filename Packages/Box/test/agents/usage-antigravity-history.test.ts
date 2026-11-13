@@ -4,14 +4,14 @@ import type { Agent } from "../../src/agents/agent"
 import { antigravitySources, placeOf, Usage } from "../../src/agents/usage/usage"
 import type { PricingStore } from "../../src/agents/usage/pricing"
 import { Database } from "bun:sqlite"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { AntigravityHistory, antigravityDatabases, antigravitySlots, generationEvent, MAXIMUM_BLOB_BYTES, modelCandidates } from "../../src/agents/usage/antigravity-history"
+import { AntigravityHistory, antigravityDatabases, antigravitySlots, generationEvent, MAXIMUM_BLOB_BYTES, modelCandidates, readAntigravityDatabase } from "../../src/agents/usage/antigravity-history"
 import { daysIn } from "../../src/agents/usage/history"
 import { Catalog, Pricing, supplementFrom } from "../../src/agents/usage/pricing"
 
-const base = mkdtempSync(join(tmpdir(), "antigravity-history-test-"))
+const base = realpathSync(mkdtempSync(join(tmpdir(), "antigravity-history-test-")))
 afterAll(() => rmSync(base, { recursive: true, force: true }))
 const fixture = JSON.parse(readFileSync(join(import.meta.dir, "../fixtures/usage/antigravity-blobs.json"), "utf8"))
 const data = (hex: string) => Buffer.from(hex, "hex")
@@ -80,7 +80,7 @@ describe("Antigravity's bounded local history", () => {
       expect(await history.scan(home, 0)).toEqual([modern.expected])
     } finally { db.close() }
   })
-  test("a partial/unreadable or oversized database rejects the round and is retried after repair", async () => {
+  test("oversized blobs are skipped, while an unreadable new database rejects the round", async () => {
     const { home, db, path } = store()
     insert(db, 0)
     db.close()
@@ -89,7 +89,7 @@ describe("Antigravity's bounded local history", () => {
     const writable = new Database(path)
     writable.query("INSERT INTO gen_metadata VALUES (?,?)").run(1, new Uint8Array(MAXIMUM_BLOB_BYTES + 1))
     writable.close()
-    await expect(history.scan(home, 0)).rejects.toThrow("1 MiB")
+    expect(await history.scan(home, 0)).toHaveLength(1)
     const repair = new Database(path)
     repair.exec("DELETE FROM gen_metadata WHERE idx=1")
     repair.close()
@@ -97,14 +97,14 @@ describe("Antigravity's bounded local history", () => {
     writeFileSync(join(home, "antigravity", "conversations", "broken.db"), "not SQLite")
     await expect(history.scan(home, 0)).rejects.toThrow()
   })
-  test("missing stores are unavailable and symlinked stores count only once", async () => {
+  test("missing stores are empty and symlinked stores count only once", async () => {
     const { home, db } = store()
     insert(db, 0)
     db.close()
     symlinkSync(join(home, "antigravity"), join(home, "antigravity-2"))
     expect(antigravityDatabases(home)).toHaveLength(1)
     expect(await new AntigravityHistory().scan(home, 0)).toHaveLength(1)
-    await expect(new AntigravityHistory().scan(join(base, "absent"), 0)).rejects.toThrow("missing")
+    expect(await new AntigravityHistory().scan(join(base, "absent"), 0)).toEqual([])
   })
 })
 
@@ -138,10 +138,10 @@ test("own profiles alone, machine-hashed places, and a failed partial read retai
   expect(usage.own()[0]!.scanned).toBe(Date.parse(fixture.now))
   rmSync(join(own.folder, "partial.db"))
   rmSync(own.path)
-  await expect(source.slots(pricing, 0)).rejects.toThrow("missing")
+  expect(await source.slots(pricing, 0)).toEqual({ used: new Map(), unknown: new Map(), fallback: new Map() })
 })
 
- test("a restarted box retains persisted spend when any database disappears", async () => {
+ test("deleted databases leave the total after restart and do not block the remaining stores", async () => {
   const own = store()
   insert(own.db, 0); own.db.close()
   const second = join(own.folder, "second.db")
@@ -157,9 +157,68 @@ test("own profiles alone, machine-hashed places, and a failed partial read retai
   const totals = first.view("UTC").totals
   rmSync(second)
   const restarted = make(); await restarted.refresh()
-  expect(restarted.view("UTC").totals.antigravity![0]!.tokens).toEqual(totals.antigravity![0]!.tokens)
-  expect(restarted.view("UTC").totals.antigravity![0]!.cost).toBeCloseTo(totals.antigravity![0]!.cost, 12)
+  expect(restarted.view("UTC").totals.antigravity![0]!.tokens).toEqual(totals.antigravity![0]!.tokens / 2)
+  expect(restarted.view("UTC").totals.antigravity![0]!.cost).toBeCloseTo(totals.antigravity![0]!.cost / 2, 12)
   rmSync(own.path)
   const absent = make(); await absent.refresh()
-  expect(absent.view("UTC").totals).toEqual(restarted.view("UTC").totals)
+  expect(absent.view("UTC").totals.antigravity).toEqual([])
+})
+
+
+test("per-database cache reads only changed stores, ages out idle ones, and keeps changing/unreadable stores' last events", async () => {
+  const own = store()
+  insert(own.db, 0); own.db.close()
+  const second = join(own.folder, "second.db")
+  writeFileSync(second, readFileSync(own.path))
+  const reads: string[] = []
+  let changing = false
+  const history = new AntigravityHistory(undefined, async (path) => {
+    reads.push(path)
+    const events = await readAntigravityDatabase(path)
+    if (changing && path === own.path) utimesSync(path, new Date(), new Date(Date.now() + 5000))
+    return events
+  })
+  expect(await history.scan(own.home, 0)).toHaveLength(2)
+  expect(reads).toEqual([own.path, second])
+  const append = (path: string, index: number) => {
+    const db = new Database(path); insert(db, index); db.close()
+  }
+  append(second, 1)
+  expect(await history.scan(own.home, 0)).toHaveLength(3)
+  expect(reads).toEqual([own.path, second, second])
+  changing = true
+  append(own.path, 1)
+  append(second, 2)
+  // The changing store keeps one, the other advances from two to three.
+  expect(await history.scan(own.home, 0)).toHaveLength(4)
+  changing = false
+  expect(await history.scan(own.home, 0)).toHaveLength(5)
+  writeFileSync(own.path, "unreadable SQLite")
+  append(second, 3)
+  expect(await history.scan(own.home, 0)).toHaveLength(6)
+  rmSync(own.path)
+  append(second, 4)
+  expect(await history.scan(own.home, 0)).toHaveLength(5)
+  utimesSync(second, new Date(1000), new Date(1000))
+  const count = reads.length
+  expect(await history.scan(own.home, 2000)).toEqual([])
+  expect(reads).toHaveLength(count)
+})
+
+test("blob bounds match Swift: skip oversized generations and absent step timing, retain embedded timing and the inclusive cap", async () => {
+  const { home, db } = store()
+  for (const [index, row] of fixture.bounded.rows.entries()) {
+    const each = fixture.cases[row.case]
+    let blob = data(each.hex)
+    if (row.dataBytes) { const padded = Buffer.alloc(row.dataBytes); blob.copy(padded); blob = padded }
+    db.query("INSERT INTO gen_metadata VALUES (?,?)").run(index, blob)
+    if (row.stepBytes) db.query("INSERT INTO steps VALUES (?,?)").run(index, Buffer.alloc(row.stepBytes))
+    else if (each.stepHex) db.query("INSERT INTO steps VALUES (?,?)").run(index, data(each.stepHex))
+  }
+  db.close()
+  const events = await new AntigravityHistory().scan(home, 0)
+  expect(events).toHaveLength(fixture.bounded.events)
+  const day = daysIn(antigravitySlots(events, pricing, 0), "UTC", Date.parse(fixture.now))[0]!
+  expect(day.tokens).toBe(fixture.bounded.tokens)
+  expect(day.cost).toBeCloseTo(fixture.bounded.cost, 10)
 })

@@ -26,6 +26,18 @@ final class UsageBoxParityAntigravityTests: XCTestCase {
             var model: String
             var unknown: [String]?
         }
+        struct Bounded: Decodable {
+            struct Row: Decodable {
+                var `case`: Int
+                var dataBytes: Int?
+                var stepBytes: Int?
+            }
+            var rows: [Row]
+            var events: Int
+            var tokens: Int
+            var cost: Double
+        }
+        var bounded: Bounded
         var now: String
         var cases: [Case]
         var days: [Day]
@@ -75,4 +87,31 @@ final class UsageBoxParityAntigravityTests: XCTestCase {
             XCTAssertEqual(scan.unknownModelsByDay[day.date]?.sorted(), expected.unknown, expected.date)
         }
     }
+    func testBlobCapAndOversizedStepTimingMatchTheBox() async throws {
+        let fixture = try fixture()
+        let directory = try makeAntigravityDatabaseDirectory(for: self)
+        let path = try XCTUnwrap(directory.paths.first)
+        let sqlite = SQLiteCLIAccessor()
+        var sql = "CREATE TABLE gen_metadata(idx INTEGER PRIMARY KEY, data BLOB); CREATE TABLE steps(idx INTEGER PRIMARY KEY, metadata BLOB);"
+        for (index, row) in fixture.bounded.rows.enumerated() {
+            let each = fixture.cases[row.case]
+            let blob: String
+            if let count = row.dataBytes {
+                blob = "CAST(X'\(each.hex)' || zeroblob(\(count - each.hex.count / 2)) AS BLOB)"
+            } else { blob = "X'\(each.hex)'" }
+            sql += "INSERT INTO gen_metadata VALUES (\(index),\(blob));"
+            if let count = row.stepBytes {
+                sql += "INSERT INTO steps VALUES (\(index),zeroblob(\(count)));"
+            } else if let step = each.stepHex {
+                sql += "INSERT INTO steps VALUES (\(index),X'\(step)');"
+            }
+        }
+        try sqlite.execute(path: path, sql: sql)
+        let scanner = AntigravityDbUsageScanner(sqlite: sqlite, conversationsDirectories: { [directory.url.path] })
+        let result = await scanner.scan(now: try XCTUnwrap(OpenUsageISO8601.date(from: fixture.now)), pricing: antigravityPricing)
+        let scan = try XCTUnwrap(result)
+        XCTAssertEqual(scan.series.daily.first?.totalTokens, fixture.bounded.tokens)
+        XCTAssertEqual(scan.series.daily.first?.costUSD ?? -1, fixture.bounded.cost, accuracy: 1e-9)
+    }
+
 }

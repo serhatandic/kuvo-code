@@ -147,5 +147,31 @@
       "cost": 9e-05,
       "model": "gemini-3.6-flash"
     }
-  ]
+  ],
+  "bounded": {
+    "rows": [
+      {
+        "case": 0,
+        "dataBytes": 1048577
+      },
+      {
+        "case": 1,
+        "stepBytes": 1048577
+      },
+      {
+        "case": 0,
+        "stepBytes": 1048577
+      },
+      {
+        "case": 0,
+        "dataBytes": 1048576
+      },
+      {
+        "case": 0
+      }
+    ],
+    "events": 3,
+    "tokens": 4050,
+    "cost": 0.0057375
+  }
 }

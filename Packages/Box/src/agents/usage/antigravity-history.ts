@@ -1,8 +1,7 @@
 // Antigravity's conversation accounting, as UsageKit's AntigravityDbUsageScanner and protobuf
 // decoder. Only the caller's own agent home is inspected. SQLite stays in a read-only worker;
-// a failed/partial read rejects the round so the account keeps its last complete answer.
-import { createHash } from "node:crypto"
-import { mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs"
+// an unreadable database keeps its own last answer while the other databases keep advancing.
+import { readdirSync, realpathSync, statSync } from "node:fs"
 import { join } from "node:path"
 import { add, addUnknown, noSlots, slotOf, type Slots } from "./history"
 import type { Pricing } from "./pricing"
@@ -131,13 +130,24 @@ export function antigravityDatabases(geminiHome: string): string[] {
   }))].sort()
 }
 
-export function antigravityStamp(geminiHome: string): string {
-  return antigravityDatabases(geminiHome).flatMap((path) => [path, path + "-wal"]).map((path) => {
-    try { const s = statSync(path); return `${path}:${s.ino}:${s.size}:${s.mtimeMs}:${s.ctimeMs}` } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT" && path.endsWith("-wal")) return `${path}:-`
+/** Both the database and WAL participate, including inode replacement and WAL-only writes. */
+function fingerprint(path: string): { stamp: string; latest: number } {
+  let latest = -Infinity
+  const stamp = [path, path + "-wal"].map((file) => {
+    try {
+      const info = statSync(file)
+      latest = Math.max(latest, info.mtimeMs)
+      return `${file}:${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT" && file.endsWith("-wal")) return `${file}:-`
       throw error
     }
   }).join("\n")
+  return { stamp, latest }
+}
+
+export function antigravityStamp(geminiHome: string): string {
+  return antigravityDatabases(geminiHome).map((path) => fingerprint(path).stamp).join("\n")
 }
 
 // Decode each bounded batch in the worker, passing only the small accounting events back.
@@ -177,7 +187,9 @@ self.onmessage = ({ data: { paths } }) => {
           for (const row of rows) {
             if (!Number.isSafeInteger(row.idx) || row.idx <= index) throw new Error("Invalid Antigravity generation index")
             index = row.idx
-            if (row.data === null || row.stepLength > 1048576) throw new Error("Antigravity generation exceeds the 1 MiB limit")
+            // Swift skips an oversized generation; oversized step metadata is absent, so
+            // embedded timing can still date an otherwise valid generation.
+            if (row.data === null) continue
             const event = generationEvent(row.data, row.step ?? undefined)
             if (event) events.push(event)
           }
@@ -191,62 +203,62 @@ self.onmessage = ({ data: { paths } }) => {
 `
 let readerURL: string | undefined
 
-/** A full successful scan is cached; failures never replace it and are retried next round. */
-export class AntigravityHistory {
-  constructor(private readonly folder?: string) {}
-  private manifest(home: string): string | undefined {
-    return this.folder ? join(this.folder, createHash("sha256").update(home).digest("hex") + ".json") : undefined
-  }
-  private knownPaths(home: string): string[] {
-    const file = this.manifest(home)
-    if (!file) return []
-    try {
-      const paths = JSON.parse(readFileSync(file, "utf8"))
-      if (!Array.isArray(paths) || !paths.every(p => typeof p === "string")) throw new Error("Invalid Antigravity database list")
-      return paths
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return []
-      throw error
-    }
-  }
+interface CachedDatabase {
+  stamp: string
+  events: AntigravityEvent[]
+}
 
-  private cached = new Map<string, { stamp: string; paths: string[]; events: AntigravityEvent[]; since: number; filtered: AntigravityEvent[] }>()
+/** Each database is independently cached. Removed stores stop contributing, as Swift's do. */
+export class AntigravityHistory {
+  // The legacy folder argument is accepted by usage.ts; no manifest should keep removed paths alive.
+  constructor(_folder?: string, private readonly read = readAntigravityDatabase) {}
+  private databases = new Map<string, Map<string, CachedDatabase>>()
+  private combined = new Map<string, { since: number; parts: AntigravityEvent[][]; events: AntigravityEvent[] }>()
   async scan(geminiHome: string, since: number): Promise<AntigravityEvent[]> {
-    const stamp = antigravityStamp(geminiHome)
-    const before = this.cached.get(geminiHome)
     const paths = antigravityDatabases(geminiHome)
-    if (!paths.length || (before?.paths ?? this.knownPaths(geminiHome)).some((path) => !paths.includes(path))) throw new Error("An Antigravity database is missing; keeping the last complete reading")
-    if (before?.stamp === stamp) {
-      if (before.since !== since) {
-        before.since = since
-        before.filtered = before.events.filter((event) => event.timestampSeconds * 1000 >= since)
+    let cached = this.databases.get(geminiHome)
+    if (!cached) this.databases.set(geminiHome, cached = new Map())
+    for (const path of cached.keys()) if (!paths.includes(path)) cached.delete(path)
+    const parts: AntigravityEvent[][] = []
+    let failure: unknown
+    for (const path of paths) {
+      const before = cached.get(path)
+      try {
+        const stamp = fingerprint(path)
+        // A store untouched since the window began cannot contain use in the window.
+        if (stamp.latest < since) { cached.delete(path); continue }
+        if (before?.stamp === stamp.stamp) { parts.push(before.events); continue }
+        const events = await this.read(path)
+        if (fingerprint(path).stamp !== stamp.stamp) throw new Error("Antigravity database changed during the read")
+        cached.set(path, { stamp: stamp.stamp, events })
+        parts.push(events)
+      } catch (error) {
+        // Never let an unreadable/actively changing database replace its previous complete answer.
+        // Leave its old stamp too, so it is retried next round while the others keep advancing.
+        if (before) parts.push(before.events)
+        else failure ??= error
       }
-      return before.filtered
     }
-    const events = await this.read(paths)
-    // Files changing during a read may describe only part of a round: retry without caching it.
-    if (antigravityStamp(geminiHome) !== stamp) throw new Error("Antigravity databases changed during the read")
-    const filtered = events.filter((event) => event.timestampSeconds * 1000 >= since)
-    const manifest = this.manifest(geminiHome)
-    if (manifest) {
-      mkdirSync(this.folder!, { recursive: true })
-      writeFileSync(manifest + ".new", JSON.stringify(paths), { mode: 0o600 })
-      renameSync(manifest + ".new", manifest)
-    }
-    this.cached.set(geminiHome, { stamp, paths, events, since, filtered })
-    return filtered
+    // An unreadable store with no prior result is unknown, not an empty contribution.
+    if (failure) throw failure
+    const previous = this.combined.get(geminiHome)
+    if (previous?.since === since && previous.parts.length === parts.length && previous.parts.every((part, index) => part === parts[index])) return previous.events
+    const events = parts.flatMap((part) => part.filter((event) => event.timestampSeconds * 1000 >= since))
+    this.combined.set(geminiHome, { since, parts, events })
+    return events
   }
-  private read(paths: string[]): Promise<AntigravityEvent[]> {
-    readerURL ??= URL.createObjectURL(new Blob([READER], { type: "application/javascript" }))
-    const worker = new Worker(readerURL)
-    worker.unref?.()
-    let timer: ReturnType<typeof setTimeout>
-    return new Promise<AntigravityEvent[]>((resolve, reject) => {
-      timer = setTimeout(() => reject(new Error("Antigravity databases took too long to read")), 120_000)
-      timer.unref?.()
-      worker.onmessage = ({ data }) => data.failed ? reject(new Error(data.failed)) : resolve(data.events)
-      worker.onerror = (event) => reject(new Error(event.message))
-      worker.postMessage({ paths })
-    }).finally(() => { clearTimeout(timer); worker.terminate() })
-  }
+}
+
+export function readAntigravityDatabase(path: string): Promise<AntigravityEvent[]> {
+  readerURL ??= URL.createObjectURL(new Blob([READER], { type: "application/javascript" }))
+  const worker = new Worker(readerURL)
+  worker.unref?.()
+  let timer: ReturnType<typeof setTimeout>
+  return new Promise<AntigravityEvent[]>((resolve, reject) => {
+    timer = setTimeout(() => reject(new Error("Antigravity databases took too long to read")), 120_000)
+    timer.unref?.()
+    worker.onmessage = ({ data }) => data.failed ? reject(new Error(data.failed)) : resolve(data.events)
+    worker.onerror = (event) => reject(new Error(event.message))
+    worker.postMessage({ paths: [path] })
+  }).finally(() => { clearTimeout(timer); worker.terminate() })
 }
