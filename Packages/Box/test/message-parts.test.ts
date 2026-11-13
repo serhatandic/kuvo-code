@@ -212,10 +212,14 @@ describe("queue/add", () => {
     expect(sent.body.metadata.kuvo.parts).toEqual({ words: "After this", widget: "Plans" })
   })
 
-  test("one a client wrote itself, the way before, keeps the parts of its text", async () => {
+  test("one a client wrote itself, the way before, keeps the parts of its text where there's more to them; a plain one keeps none", async () => {
     const route = "kuvo/sessions/ses_main/queue/add"
-    await ask(context => queueRoute(context, route.match(QUEUE_ROUTE)!), "POST", route, { id: "msg_old", text: "[Goal] ship it", words: "ship it", delivery: "queue" })
-    expect(prompted(engineAsked)[0].body.metadata.kuvo.parts).toEqual({ words: "[Goal] ship it" })
+    const goal = "[Goal] ship it\n\n(The user asked for this as a goal: plan it, check what it needs, and put it to them with propose_goal before doing any of the work.)"
+    await ask(context => queueRoute(context, route.match(QUEUE_ROUTE)!), "POST", route, { id: "msg_old", text: goal, words: "ship it", delivery: "queue" })
+    await ask(context => queueRoute(context, route.match(QUEUE_ROUTE)!), "POST", route, { id: "msg_plain", text: "[Goal] ship it", delivery: "queue" })
+    const [old, plain] = prompted(engineAsked)
+    expect(old.body.metadata.kuvo.parts).toEqual({ words: "ship it", keyword: "/goal" })
+    expect(plain.body.metadata).toBeUndefined()
   })
 })
 

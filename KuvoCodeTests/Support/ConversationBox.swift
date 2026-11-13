@@ -52,15 +52,9 @@ final class ConversationBox {
 
     /// `model`'s box is this one, and what "/" offers there is read.
     func serves(_ model: SessionModel) async {
-        let client = machine.appClient
+        let client = machine.client
         model.box = { client }
         await model.readKeywords()
-    }
-
-    /// Every session of `workspace` is on this box (as on this Mac's own): messages go through it.
-    func serves(_ workspace: Workspace) {
-        let client = machine.appClient
-        workspace.boxes = { _ in client }
     }
 
     func stop() {

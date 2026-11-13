@@ -51,7 +51,7 @@ import Testing
 
     private func conversation(on machine: MachineTestBox) throws -> SessionModel {
         let model = SessionModel(session: try JSONDecoder().decode(Session.self, from: JSONSerialization.data(withJSONObject: session)), api: engine.api)
-        model.box = { machine.appClient }
+        model.box = { machine.client }
         return model
     }
 

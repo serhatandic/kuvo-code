@@ -12,7 +12,7 @@ import { inTurnOn } from "../engine/notes";
 import { NOTES_STEP } from "../../shared/session-notes";
 import { pause } from "../../shared/wait";
 import { stopIfWaiting } from "../work/answers";
-import { FROM_PHONE, partsOf, withParts } from "../messages/parts";
+import { FROM_PHONE, withPartsOf } from "../messages/parts";
 import { attachedIn } from "./attached";
 import type { ModelInput } from "./attached";
 import { namedIn, namingHere } from "./naming";
@@ -30,13 +30,17 @@ export const AGENTS = "kuvo/agents/";
 // iPhone, where a file is shown with show_file. Never shown.
 export { FROM_PHONE };
 
-// A prompt's body with the parts of its text kept with it (`metadata.kuvo.parts`), for clients to
-// draw it by: one a client wrote the blocks of itself, the way before `kuvo/sessions/<id>/send`.
+// A prompt's body with the parts of its text kept with it (`metadata.kuvo.parts`, `withPartsOf`),
+// for clients to draw it by: one a client wrote the blocks of itself, the way before
+// `kuvo/sessions/<id>/send`.
 function withPartsIn(body: Buffer | undefined): Buffer | undefined {
   let prompt: { text?: unknown; metadata?: unknown } | null;
   try { prompt = JSON.parse(Buffer.from(body ?? "").toString()); } catch { return body; }
   if (typeof prompt?.text !== "string") return body;
-  return Buffer.from(JSON.stringify({ ...prompt, metadata: withParts(prompt.metadata, partsOf(prompt.text)) }));
+  const given = prompt.metadata && typeof prompt.metadata === "object" && !Array.isArray(prompt.metadata) ? prompt.metadata as Record<string, unknown> : undefined;
+  const metadata = withPartsOf(given, prompt.text);
+  if (metadata === given) return body;
+  return Buffer.from(JSON.stringify({ ...prompt, metadata }));
 }
 
 // A prompt's body with the block at the end of its text, once; any other body as it is.

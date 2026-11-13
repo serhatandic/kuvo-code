@@ -257,6 +257,14 @@ export function withParts(metadata: unknown, parts: MessageParts): Record<string
   return { ...given, kuvo: { ...kuvo, parts } };
 }
 
+/** `metadata` with the parts of `text` kept in it where there's more to them than the text (a
+ * message from another agent, one with blocks), as a box keeps them with a message a client wrote
+ * itself the way before; else as it was (a client asks about a plain one once). */
+export function withPartsOf<M extends Record<string, unknown> | undefined>(metadata: M, text: string): M | Record<string, unknown> {
+  const parts = partsOf(text);
+  return parts.mail !== undefined || parts.words !== text ? withParts(metadata, parts) : metadata;
+}
+
 /** The parts kept in `metadata` (a message's), or null for none. */
 export function keptParts(metadata: unknown): MessageParts | null {
   const parts = isObject(metadata) && isObject(metadata.kuvo) ? metadata.kuvo.parts : null;

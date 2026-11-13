@@ -2714,6 +2714,10 @@ function withParts(metadata, parts) {
   const kuvo = isObject(given.kuvo) ? given.kuvo : {};
   return { ...given, kuvo: { ...kuvo, parts } };
 }
+function withPartsOf(metadata, text) {
+  const parts = partsOf(text);
+  return parts.mail !== undefined || parts.words !== text ? withParts(metadata, parts) : metadata;
+}
 function keptParts(metadata) {
   const parts = isObject(metadata) && isObject(metadata.kuvo) ? metadata.kuvo.parts : null;
   return isObject(parts) && typeof parts.words === "string" ? parts : null;
@@ -3054,8 +3058,8 @@ async function keepWaitingBefore(target, session, message, shown, before) {
   return keepWaiting2(session, message, shown, placedBefore(inbox, before));
 }
 async function sendInto(target, session, message, shown = {}) {
-  const parts = isBoxNote(message.metadata) ? null : partsOf(message.text);
-  const whole = { ...message, id: message.id ?? messageID(), ...parts ? { metadata: withParts(message.metadata, parts) } : {} };
+  const metadata = isBoxNote(message.metadata) ? message.metadata : withPartsOf(message.metadata, message.text);
+  const whole = { ...message, id: message.id ?? messageID(), ...metadata !== undefined ? { metadata } : {} };
   if (keepWaiting2(session, whole, shown))
     return "waits";
   await asked(target, "POST", `api/session/${address(session)}/prompt`, whole);
@@ -40099,7 +40103,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "4e92a5160daf";
+var BRIDGE_VERSION = "e38ab4b4fdc6";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -44111,7 +44115,11 @@ function withPartsIn(body) {
   }
   if (typeof prompt?.text !== "string")
     return body;
-  return Buffer.from(JSON.stringify({ ...prompt, metadata: withParts(prompt.metadata, partsOf(prompt.text)) }));
+  const given = prompt.metadata && typeof prompt.metadata === "object" && !Array.isArray(prompt.metadata) ? prompt.metadata : undefined;
+  const metadata = withPartsOf(given, prompt.text);
+  if (metadata === given)
+    return body;
+  return Buffer.from(JSON.stringify({ ...prompt, metadata }));
 }
 function fromPhone(body) {
   let prompt;
@@ -45337,14 +45345,14 @@ async function* add2({ request, bridge, readEngine, json, signal }, target, sess
   const message = parsed(body);
   const words = typeof given.words === "string" ? given.words : given.kept !== true ? given.text : undefined;
   const parts = given.kept === true ? keptParts(given.metadata) : null;
-  const metadata = withParts(message.metadata, parts ?? partsOf(message.text));
+  const metadata = parts ? withParts(message.metadata, parts) : withPartsOf(message.metadata, message.text);
   return yield* added({ json }, target, session, given, { id: message.id, text: message.text, files: message.files, metadata }, words);
 }
 async function* added({ json }, target, session, given, written, words) {
   const { id } = written;
   const delivery = given.delivery === "steer" ? "steer" : "queue";
   const from = typeof given.from === "string" && given.from.trim() ? given.from.trim().slice(0, 80) : undefined;
-  const message = { id, text: written.text, ...written.files?.length ? { files: written.files } : {}, delivery, metadata: written.metadata };
+  const message = { id, text: written.text, ...written.files?.length ? { files: written.files } : {}, delivery, ...written.metadata ? { metadata: written.metadata } : {} };
   const before = typeof given.before === "string" && /^[A-Za-z0-9_]{1,100}$/.test(given.before) ? given.before : undefined;
   if (await keepWaitingBefore(target, session, message, { from, words }, before))
     return yield* json(200, { ...shownQueue(queueOf(session)), waits: true });

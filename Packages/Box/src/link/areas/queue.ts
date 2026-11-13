@@ -15,7 +15,7 @@ import { forgetStopped } from "../work/background";
 import { stopConversation } from "../work/stopping";
 import { messageID } from "../engine/sessions";
 import { attachedIn } from "../server/attached";
-import { fieldsOf, keptParts, partsOf, withParts } from "../messages/parts";
+import { fieldsOf, keptParts, withParts, withPartsOf } from "../messages/parts";
 import { composed, isEmpty } from "./messages";
 import { fromPhone, modelInput } from "../server/forward";
 import { namedIn, namingHere } from "../server/naming";
@@ -141,17 +141,17 @@ async function* add({ request, bridge, readEngine, json, signal }: RouteContext,
   // or, put back, as it was shown; its parts kept with it, put back as they were.
   const words = typeof given.words === "string" ? given.words : given.kept !== true ? given.text : undefined;
   const parts = given.kept === true ? keptParts(given.metadata) : null;
-  const metadata = withParts(message.metadata, parts ?? partsOf(message.text));
+  const metadata = parts ? withParts(message.metadata, parts) : withPartsOf(message.metadata, message.text);
   return yield* added({ json }, target, session, given, { id: message.id, text: message.text, files: message.files, metadata }, words);
 }
 
 // What `add` adds, its text written: waiting on the box while the queue is paused, else to the
 // engine, as `given` asked (its id, delivery, `from` and `before`); `words`, how it's shown.
-async function* added({ json }: Pick<RouteContext, "json">, target: Target, session: string, given: Record<string, unknown>, written: { id: string; text: string; files?: unknown[]; metadata: Record<string, unknown> }, words: string | undefined): AsyncGenerator<AnswerPiece> {
+async function* added({ json }: Pick<RouteContext, "json">, target: Target, session: string, given: Record<string, unknown>, written: { id: string; text: string; files?: unknown[]; metadata?: Record<string, unknown> }, words: string | undefined): AsyncGenerator<AnswerPiece> {
   const { id } = written;
   const delivery = given.delivery === "steer" ? "steer" : "queue";
   const from = typeof given.from === "string" && given.from.trim() ? given.from.trim().slice(0, 80) : undefined;
-  const message = { id, text: written.text, ...(written.files?.length ? { files: written.files } : {}), delivery, metadata: written.metadata } as { id: string; text: string; files?: unknown[]; delivery: "steer" | "queue"; metadata?: Record<string, unknown> };
+  const message = { id, text: written.text, ...(written.files?.length ? { files: written.files } : {}), delivery, ...(written.metadata ? { metadata: written.metadata } : {}) } as { id: string; text: string; files?: unknown[]; delivery: "steer" | "queue"; metadata?: Record<string, unknown> };
   const before = typeof given.before === "string" && /^[A-Za-z0-9_]{1,100}$/.test(given.before) ? given.before : undefined;
   if (await keepWaitingBefore(target, session, message, { from, words }, before)) return yield* json(200, { ...shownQueue(queueOf(session)), waits: true });
   // (A busy engine takes the message late, and has it then: waited for, not given up on at the

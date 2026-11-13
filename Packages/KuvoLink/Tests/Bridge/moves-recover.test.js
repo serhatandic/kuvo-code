@@ -838,7 +838,8 @@ test("the box's own word for a conversation that moved here, as it comes from th
   const [, , plain] = engine.prompts.filter(each => each.session === "ses_note1");
   assert.match(plain.text, /^\[Message from an agent on lab · unknown\]/);
   assert.equal(plain.delivery, "steer");
-  assert.equal(plain.metadata, undefined);
+  // (Not the box's own note: its parts, as a letter's, say who wrote it.)
+  assert.deepEqual(plain.metadata, { kuvo: { parts: { words: "[The user answered] Yes.", mail: { name: "an agent on lab", session: "unknown" } } } });
 });
 
 test("the box's own word for a conversation that has since moved back here is delivered here as the box's own, not as a letter", async () => {

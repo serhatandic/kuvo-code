@@ -28,10 +28,13 @@ import Testing
         let one = StubWeb.json(["data": session])
         StubWeb.route(Self.engine + "/api/session/\(id)") { _ in one }
         workspace.api = OpenCodeAPI(endpoint: ServerEndpoint(url: URL(string: Self.engine)!, password: "test"))
-        // This Mac's box, which messages go through, reaching the stand-in engine where it listens.
-        try? await StubWeb.listen(port: 47994)
-        try? await box.start(engine: Self.engine, for: workspace)
         await workspace.refresh()
+    }
+
+    /// This Mac's box, which messages go through, reaching the stand-in engine where it listens.
+    private func withBox() async throws {
+        try await StubWeb.listen(port: 47994)
+        try await box.start(engine: Self.engine, for: workspace)
     }
 
     private func done() {
@@ -43,6 +46,7 @@ import Testing
 
     @Test func aMessageTheEngineDidntTakeComesBackWhole() async throws {
         defer { done() }
+        try await withBox()
         StubWeb.handle(Self.engine + "/api/session/\(id)/prompt") { _, _ in StubWeb.json(["message": "Model is overloaded"], status: 400) }
         let model = try #require(workspace.model(for: id))
         model.reviewComments = [ReviewComment(file: "a.swift", line: 2, side: .new, snippet: "x", text: "Rename x")]
@@ -62,6 +66,7 @@ import Testing
             done()
             Drafts.shared.saveNow()
         }
+        try await withBox()
         let held = Gate()
         StubWeb.handle(Self.engine + "/api/session/\(id)/prompt") { _, _ in
             held.wait()
@@ -77,6 +82,7 @@ import Testing
         Drafts.shared.saveNow()
         held.open()
         await model.messagesSent()
+        #expect(model.failure == nil, "\(model.failure ?? "")")
         #expect(Drafts(defaults: .standard)[id].isEmpty, "once it's gone, it isn't put back")
     }
 
@@ -89,6 +95,7 @@ import Testing
             Drafts.shared.remove(draft)
             Drafts.shared.saveNow()
         }
+        try await withBox()
         let held = Gate()
         StubWeb.handle(Self.engine + "/api/session/\(id)/prompt") { _, _ in
             held.wait()
@@ -113,6 +120,7 @@ import Testing
     /// and leaves your review comments for your own message.
     @Test func aWidgetsAnswerThatDidntGoComesBackAsItsWords() async throws {
         defer { done() }
+        try await withBox()
         StubWeb.handle(Self.engine + "/api/session/\(id)/prompt") { _, _ in StubWeb.json(["message": "Model is overloaded"], status: 400) }
         let model = try #require(workspace.model(for: id))
         model.reviewComments = [ReviewComment(file: "a.swift", line: 2, side: .new, snippet: "x", text: "Rename x")]
@@ -127,6 +135,7 @@ import Testing
     /// word); your message stays to send once you've signed in or picked another model.
     @Test func aModelYouSignedOutOfSaysSoAndKeepsYourMessage() async throws {
         defer { done() }
+        try await withBox()
         StubWeb.handle(Self.engine + "/api/session/\(id)/prompt") { _, _ in StubWeb.json([:]) }
         let location = ["directory": "/"]
         let model: [String: Any] = ["id": "luna", "modelID": "luna", "providerID": "openai", "name": "Luna",
@@ -156,12 +165,8 @@ import Testing
         #expect(said.contains("Luna") && said.contains("ChatGPT plan") && said.contains("Settings › Accounts"), "\(said)")
         #expect(!StubWeb.asked.contains { $0.hasSuffix("/prompt") }, "nothing sent into the void")
         // A "!" command needs no model, and runs (its box says so, as the app's does).
-        let box = try await ConversationBox(stubWeb: Self.engine)
-        defer { box.stop() }
-        let shown = StubWeb.json(["data": ["id": id, "title": "Composer", "time": ["created": 1, "updated": 2], "location": ["directory": "/tmp/kuvo-tests-composer"]]])
-        StubWeb.route(Self.engine + "/api/session/\(id)") { _ in shown }
         StubWeb.handle(Self.engine + "/api/session/\(id)/shell") { _, _ in StubWeb.json([:]) }
-        await box.serves(conversation)
+        await conversation.readKeywords()
         conversation.draftText = "!ls"
         conversation.submitDraft(for: nil, queue: false, unavailable: catalog.unavailable(luna))
         #expect(conversation.failure == nil)
@@ -171,6 +176,7 @@ import Testing
 
     @Test func undoPutsItBackAndRedoTakesItOut() async throws {
         defer { done() }
+        try await withBox()
         let sent: [String: Any] = ["id": "msg_sent", "type": "user", "time": ["created": 1], "text": "Refactor the parser"]
         let page = StubWeb.json(["data": [sent]])
         StubWeb.route(Self.engine + "/api/session/\(id)/message") { _ in page }
@@ -192,6 +198,7 @@ import Testing
     /// Sent while the agent works, with Queue: it waits its turn. With nothing running: now.
     @Test func whileItWorksAMessageWaitsItsTurn() async throws {
         defer { done() }
+        try await withBox()
         let bodies = Bodies()
         StubWeb.handle(Self.engine + "/api/session/\(id)/prompt") { _, body in
             bodies.add((try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["delivery"] as? String ?? "")
@@ -222,6 +229,7 @@ import Testing
     /// notification too) goes to the engine, and the ask goes once the engine has it.
     @Test func aPermissionAskedAndAnswered() async throws {
         defer { done() }
+        try await withBox()
         let bodies = Bodies()
         StubWeb.handle(Self.engine + "/api/session/\(id)/permission/") { request, body in
             bodies.add((try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["decision"] as? String ?? "")
