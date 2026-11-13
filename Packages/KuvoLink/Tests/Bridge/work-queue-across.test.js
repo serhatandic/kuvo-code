@@ -949,14 +949,16 @@ test("a Mac's request over SSH (`box route`, a process with no relay connection)
   // (And one left by something else on this computer.)
   const planted = actID();
   write(path.join(forwards, `${planted}.json`), { to: lab.pub, act: { id: planted, method: "DELETE", item: told(500).id, at: Date.now() } });
-  // (`box route`: nothing in this process sends; the link, another process, sees what's left.)
+  // (`box route`: nothing in this process sends; the link, another process, finds what's left. Its
+  // leaving is waited for as the route says so, not by a watch of the folder, which on macOS never
+  // tells a change as it starts: a stall under load. And never past the route's own answer.)
   const theRoutes = () => fs.readdirSync(forwards).some(name => /^wqa_.+\.json$/.test(name) && name !== `${planted}.json` && !name.endsWith(".answer.json"));
-  const left = new Promise(resolve => {
-    const watch = fs.watch(forwards, () => { if (theRoutes()) { watch.close(); resolve(); } });
-    if (theRoutes()) { watch.close(); resolve(); }
-  });
+  const left = new Promise(resolve => { link.queueForwardsSoon.send = resolve; });
   const deleting = route("DELETE", "kuvo/work-queue/items/500");
-  await left;
+  const first = await Promise.race([left.then(() => "left"), deleting.then(() => "answered", () => "answered")]);
+  link.queueForwardsSoon.send = () => {};
+  assert.equal(first, "left", "the route leaves its ask for the link before it answers");
+  assert.ok(theRoutes(), "its ask is in the folder, for the link");
   const { connection } = relay();
   // This Mac's box, whose routes run where it sends, sends only what they left: what anything else
   // on the Mac leaves there never goes out as you.
@@ -984,7 +986,11 @@ test("a Mac's request over SSH (`box route`, a process with no relay connection)
   // What's kept of it is seen nowhere else (a chip, an agent's tools): only by a client's Undo and read.
   assert.equal((await route("GET", "kuvo/work-queue/refs?refs=500")).body.refs["500"], null);
   assert.match((await tool("queue_show", { item: 500 }, "ses_lead")).text, /no item|isn't|There's no/i);
+  // (Lab doesn't answer the read: as it last told it, without waiting out a real wait.)
+  const wait = link.queueForwardTiming.wait;
+  link.queueForwardTiming.wait = 0;
   assert.equal((await route("GET", "kuvo/work-queue/items/500")).body.item.told, true);
+  link.queueForwardTiming.wait = wait;
   // Told again by lab (brought back there some other way): forgotten here.
   const deletedThere = path.join(queues, "deleted-there.json");
   const keptForUndo = fs.readFileSync(deletedThere, "utf8");
