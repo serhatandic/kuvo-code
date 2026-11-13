@@ -170,7 +170,9 @@ struct UsageBarsView: View {
     /// The meter a host row's bar shows, as the panel's own pick it.
     private func hostReading(_ row: HostLimitRow) -> WidgetData? {
         let rows = HostLimitData.rows(row, store: dataStore)
-        let meters = rows.filter(\.isBounded)
+        // The plan's limits, not what it has beyond them (Claude's extra usage cap), where it has any.
+        let limits = rows.filter { data in data.isBounded && row.meters.contains { $0.title == data.title } }
+        let meters = limits.isEmpty ? rows.filter(\.isBounded) : limits
         switch barMetric {
         case .first: return meters.first ?? rows.first
         case .tightest: return meters.min { $0.remainingFraction < $1.remainingFraction } ?? rows.first

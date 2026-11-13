@@ -400,7 +400,8 @@ final class HostResetFlow {
     }
 
     let row: String
-    private(set) var phase: Phase = .idle
+    /// (Set only by this flow, and by pictures of its states.)
+    var phase: Phase = .idle
     @ObservationIgnored private weak var limits: HostLimits?
     /// How long "done" shows before the row is as it was.
     @ObservationIgnored var doneFor: Duration = .seconds(3)
