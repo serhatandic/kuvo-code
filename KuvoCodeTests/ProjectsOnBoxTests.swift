@@ -19,6 +19,8 @@ import Testing
     let work: URL
     let shop: String
     let blog: String
+    /// The sessions `list` gave the engine, as it keeps them: what's written to one changes it.
+    let listed = Guarded([String: [String: Any]]())
 
     init() async throws {
         // By its real path (/private/var/…), as the box keeps a folder.
@@ -29,7 +31,19 @@ import Testing
         for folder in [shop, blog] { try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true) }
         for key in ["projectFolders", "projectSettings", "projectsOnBox.mac", "projectsOnBox.lab", "projectsUnsent", "worktrees", "removedWorktrees", "removedWorktreesHandedOver.mac"] { UserDefaults.standard.removeObject(forKey: key) }
         try? FileManager.default.removeItem(at: BoxProcess.home)
-        engine.on("PATCH", "/api/session/*", json: ["data": [:]])
+        // A change written to a listed session is kept, and listed so (its box's list goes by it).
+        let listed = listed, engine = engine
+        engine.on("PATCH", "/api/session/*") { request in
+            let id = String(request.path.split(separator: "/").last ?? "")
+            let changed = listed.withLock { listed -> [String: Any]? in
+                guard var session = listed[id] else { return nil }
+                for (key, value) in request.body { session[key] = value }
+                listed[id] = session
+                return session
+            }
+            if let changed { engine.lists(changed) }
+            return StubWeb.json(["data": changed ?? [:]])
+        }
         box = try await TestBox(engine: engine.url)
     }
 
@@ -52,11 +66,18 @@ import Testing
         return workspace
     }
 
-    /// The sessions the engine lists, each also read by its id as the engine answers it (the box
-    /// reads one just before it archives it).
+    /// The sessions the engine lists, each also read by its id as it is then (the box reads one just
+    /// before it archives it).
     private func list(_ sessions: [[String: Any]]) {
+        listed.withLock { listed in
+            for session in sessions { listed[session["id"] as? String ?? ""] = session }
+        }
         engine.list(sessions)
-        for session in sessions { engine.on("GET", "/api/session/\(session["id"] as? String ?? "")", json: ["data": session]) }
+        let listed = listed
+        for session in sessions {
+            let id = session["id"] as? String ?? ""
+            engine.on("GET", "/api/session/\(id)") { _ in StubWeb.json(["data": listed.withLock { $0[id] } ?? [:]]) }
+        }
     }
 
     /// What the box keeps, read as another client (a phone) reads it.
@@ -353,7 +374,9 @@ import Testing
             ((request.body["metadata"] as? [String: Any])?["kuvo.archived"] as? Bool) == true ? String(request.path.split(separator: "/").last ?? "") : nil
         })
         #expect(patched == ["ses_shop", "ses_tree"])
-        #expect(!workspace.projects.contains { $0.directory == shop })
+        // Off the list once its box's list says the worktree's session is archived too, as it does
+        // for one archived anywhere.
+        try await until { !workspace.projects.contains { $0.directory == shop } }
         // Its box keeps the worktree now.
         struct Listed: Decodable { var worktrees: [Workspace.BoxWorktree] }
         let kept = try await #require(workspace.boxes?(BoxClient.mac)).value(Listed.self, "GET", "kuvo/worktrees?records=1")

@@ -130,6 +130,12 @@ public enum SessionLists {
             if sessions[id] == nil { sessions[id] = facts }
         }
 
+        /// A session this client just archived (or brought back), shown so at once until its box's
+        /// next line about it says.
+        public mutating func noteArchived(_ id: String, _ archived: Bool) {
+            sessions[id]?.archived = archived ? true : nil
+        }
+
         /// `line` taken in: a whole one in place of what was, else what changed. Whether anything did.
         @discardableResult
         public mutating func take(_ line: Line) -> Bool {
@@ -157,10 +163,10 @@ public enum SessionLists {
     }
 
     /// Where `facts`' session shows: a project's session under its project, a chat in Chats, unless
-    /// it's archived (`isArchived`: as the client knows it, which shows what it just changed at
-    /// once); any other kind, or one its box hasn't listed (nil), nowhere.
-    public static func place(of facts: Facts?, isArchived: Bool) -> Place? {
-        guard let facts, !isArchived else { return nil }
+    /// its box says it's archived (or this client just archived it: `Listing.noteArchived`); any
+    /// other kind, or one its box hasn't listed (nil), nowhere.
+    public static func place(of facts: Facts?) -> Place? {
+        guard let facts, facts.archived != true else { return nil }
         switch facts.kind {
         case .project: return .project(facts.project ?? facts.directory)
         case .chat: return .chat

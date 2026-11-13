@@ -344,7 +344,7 @@ final class Workspace {
         // A machine its box hasn't answered for since this update (away at the first launch with
         // it): its sessions as last seen, where this Mac filed them before, until its box says.
         guard let listing = sessionLists[box] else { return lastFiled(session) }
-        let place = SessionLists.place(of: listing.facts(of: session.id), isArchived: Self.isArchived(session))
+        let place = SessionLists.place(of: listing.facts(of: session.id))
         if case .project(let project) = place { return .project(Self.here(project, on: box)) }
         return place
     }
@@ -728,10 +728,33 @@ final class Workspace {
     /// there). Whether the engine took it.
     @discardableResult
     func setArchived(_ id: String, _ archived: Bool, carriedTo: String? = nil) async -> Bool {
+        // Its box's list shows it so at once (until its next line says), and as it was if the
+        // engine doesn't take it.
+        let was = listedArchived(id)
+        noteListed(id, archived: archived)
         // Not archived if the engine didn't take it: its wake-ups aren't held for it.
-        guard await setFlag(Self.archivedKey, archived, of: id, also: carriedTo.map { ["kuvo.carriedTo": .string($0)] } ?? [:]) else { return false }
+        guard await setFlag(Self.archivedKey, archived, of: id, also: carriedTo.map { ["kuvo.carriedTo": .string($0)] } ?? [:]) else {
+            if let was, listedArchived(id) == archived { noteListed(id, archived: was) }
+            return false
+        }
         onArchived?(id, archived, nil)
         return true
+    }
+
+    /// Whether `id`'s box lists it as archived (or as this Mac just changed it); nil for one it hasn't listed.
+    private func listedArchived(_ id: String) -> Bool? {
+        guard let session = session(id) else { return nil }
+        return sessionLists[Self.box(of: session.location.directory)]?.sessions[id].map { $0.archived == true }
+    }
+
+    /// `id` archived or brought back here, noted in its box's list as this Mac shows it until the box's
+    /// next line about it says.
+    private func noteListed(_ id: String, archived: Bool) {
+        guard let session = session(id) else { return }
+        let box = Self.box(of: session.location.directory)
+        guard var listing = sessionLists[box], listing.sessions[id] != nil else { return }
+        listing.noteArchived(id, archived)
+        if listing != sessionLists[box] { sessionLists[box] = listing }
     }
 
     /// A session was archived, or brought back. The app sets it. `carriedTo`: archived as its box
@@ -1157,6 +1180,7 @@ final class Workspace {
 
     /// A session its box archived: so here, and told, as one archived here is.
     private func noteArchivedThere(_ id: String) {
+        noteListed(id, archived: true)
         guard let index = sessions.firstIndex(where: { $0.id == id }), !Self.isArchived(sessions[index]) else { return }
         var metadata = sessions[index].metadata?.object ?? [:]
         metadata[Self.archivedKey] = .bool(true)
