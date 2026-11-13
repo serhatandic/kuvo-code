@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import fixtures from "../fixtures/usage/antigravity-plan-cases.json"
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs"
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { AntigravityPlan, antigravitySummary, antigravityLegacy, antigravityProcPorts, discoverAntigravity, antigravityMacOwns } from "../../src/agents/usage/antigravity-plan"
@@ -127,6 +127,92 @@ describe("Antigravity own-account stand-in service", () => {
       expect(limits.list()[0]?.identity).toBe(before.identity)
       expect(limits.list()[0]?.windows).toEqual(before.windows)
       ;(plan as any).raw = raw
+    } finally { server.stop(true); rmSync(root, { recursive: true, force: true }) }
+  })
+  test("access refusal persists through failed refresh and restart without resending old bearer", async () => {
+    const root = temp()
+    credential(root)
+    writeFileSync(join(root, "antigravity-acp/acp_token.json"), JSON.stringify({ access_token: "old-fixture", refresh_token: "refresh-fixture" }))
+    let oldCalls = 0, refreshes = 0, failRefresh = true
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(req) {
+      if (new URL(req.url).pathname === "/oauth") { refreshes++; return failRefresh ? new Response("{}", { status: 503 }) : Response.json({ access_token: "renewed-fixture", expires_in: 3600 }) }
+      if (req.headers.get("Authorization") === "Bearer old-fixture") { oldCalls++; return new Response("{}", { status: 401 }) }
+      return Response.json(new URL(req.url).pathname.includes("loadCodeAssist") ? {} : summary())
+    } })
+    const start = () => new AntigravityPlan(() => root, undefined, async () => [], [server.url.origin], server.url.origin + "/oauth")
+    try {
+      await expect(start().limits.read!(1000)).rejects.toMatchObject({ kind: "failed" })
+      expect(oldCalls).toBe(1); expect(refreshes).toBe(1)
+      failRefresh = false
+      expect((await start().limits.read!(2000))?.windows.length).toBe(4)
+      expect(oldCalls).toBe(1); expect(refreshes).toBe(2)
+    } finally { server.stop(true); rmSync(root, { recursive: true, force: true }) }
+  })
+  test("unwritable or unreadable refusal journal stops further sends", async () => {
+    const root = temp(); credential(root)
+    let calls = 0
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch() { calls++; return new Response("{}", { status: 401 }) } })
+    const start = () => new AntigravityPlan(() => root, undefined, async () => [], [server.url.origin])
+    try {
+      const plan = start()
+      mkdirSync(join(root, "kuvo-usage-refusals.json.new"))
+      await expect(plan.limits.read!(1000)).rejects.toMatchObject({ kind: "failed" })
+      await expect(plan.limits.read!(2000)).rejects.toMatchObject({ kind: "failed", sent: false })
+      expect(calls).toBe(1)
+      rmSync(join(root, "kuvo-usage-refusals.json.new"), { recursive: true })
+      await expect(plan.limits.read!(3000)).rejects.toMatchObject({ kind: "failed" })
+      expect(readFileSync(join(root, "kuvo-usage-refusals.json"), "utf8")).not.toContain("fixture-token")
+      writeFileSync(join(root, "kuvo-usage-refusals.json"), "{broken")
+      await expect(start().limits.read!(4000)).rejects.toMatchObject({ kind: "failed", sent: false })
+      expect(calls).toBe(1)
+    } finally { server.stop(true); rmSync(root, { recursive: true, force: true }) }
+  })
+  test("restart never sends a refused token returned unchanged by refresh", async () => {
+    const root = temp(); credential(root)
+    writeFileSync(join(root, "antigravity-acp/acp_token.json"), JSON.stringify({ access_token: "old-fixture", refresh_token: "refresh-fixture" }))
+    let oldCalls = 0, refreshCalls = 0, returnOld = false
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(req) {
+      if (new URL(req.url).pathname === "/oauth") { refreshCalls++; return returnOld ? Response.json({ access_token: "old-fixture", expires_in: 3600 }) : new Response("{}", { status: 503 }) }
+      oldCalls++; return new Response("{}", { status: 401 })
+    } })
+    const start = () => new AntigravityPlan(() => root, undefined, async () => [], [server.url.origin], server.url.origin + "/oauth")
+    try {
+      await expect(start().limits.read!(1000)).rejects.toMatchObject({ kind: "failed" })
+      returnOld = true
+      await expect(start().limits.read!(2000)).rejects.toMatchObject({ kind: "expired", sent: false })
+      expect(oldCalls).toBe(1); expect(refreshCalls).toBe(2)
+    } finally { server.stop(true); rmSync(root, { recursive: true, force: true }) }
+  })
+  test("refused refresh is not retried after access disappears or changes", async () => {
+    const root = temp(); credential(root)
+    let refreshCalls = 0
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(req) {
+      if (new URL(req.url).pathname === "/oauth") { refreshCalls++; return new Response("{}", { status: 400 }) }
+      return new Response("{}", { status: 401 })
+    } })
+    const start = () => new AntigravityPlan(() => root, undefined, async () => [], [server.url.origin], server.url.origin + "/oauth")
+    try {
+      writeFileSync(join(root, "antigravity-acp/acp_token.json"), JSON.stringify({ access_token: "old-fixture", refresh_token: "refresh-fixture" }))
+      await expect(start().limits.read!(1000)).rejects.toMatchObject({ kind: "expired" })
+      for (const access_token of [undefined, "new-fixture"]) {
+        writeFileSync(join(root, "antigravity-acp/acp_token.json"), JSON.stringify({ access_token, refresh_token: "refresh-fixture" }))
+        await expect(start().limits.read!(2000)).rejects.toMatchObject({ kind: "expired" })
+      }
+      expect(refreshCalls).toBe(1)
+    } finally { server.stop(true); rmSync(root, { recursive: true, force: true }) }
+  })
+  test("local CSRF refusal survives restart", async () => {
+    const root = temp(); credential(root)
+    let localCalls = 0
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(req) {
+      if (new URL(req.url).pathname.includes("LanguageServerService")) { localCalls++; return new Response("{}", { status: 403 }) }
+      return Response.json(new URL(req.url).pathname.includes("loadCodeAssist") ? {} : summary())
+    } })
+    const start = () => new AntigravityPlan(() => root, undefined, async () => [{ scheme: "http", port: server.port!, csrf: "refused-fixture-csrf" }], [server.url.origin])
+    try {
+      expect((await start().limits.read!(1000))?.windows.length).toBe(4)
+      expect((await start().limits.read!(2000))?.windows.length).toBe(4)
+      expect(localCalls).toBe(1)
     } finally { server.stop(true); rmSync(root, { recursive: true, force: true }) }
   })
   test("persisted refusal survives restart and metadata-only credential rewrites", async () => {
