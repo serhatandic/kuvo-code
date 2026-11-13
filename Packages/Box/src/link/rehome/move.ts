@@ -718,7 +718,9 @@ function newRefusal({ appFolder, home }: Folders, { release, engineData }: { rel
   if (located(home) === located(path.join(accountHome(), ".kuvo-code")) && path.basename(appFolder) !== "run.kuvo.code") return "Only Kuvo Code itself makes its box in ~/.kuvo-code: a copy makes it in a home of its own.";
   // (What a making cut short left isn't a box there: it's made again.)
   const there = makingCutShort(home) ? "gone" : runsAt(home);
-  if (there !== "gone" && (there === "running" || foundAt(home, false) !== null)) return "There's a box in this Mac's ~/.kuvo-code already: both keep running as they are.";
+  // (Someone's box, card or not yet: a machine's, or one with keys of its own.)
+  const someones = foundAt(home, false) !== null || recordedKind(path.join(home, "box", "kind")) === "machine" || exists(path.join(home, "box", "keys"));
+  if (there !== "gone" && (there === "running" || someones)) return "There's a box in this Mac's ~/.kuvo-code already: both keep running as they are.";
   if (runningIn(path.join(home, "run")).length) return "Something is running in this Mac's ~/.kuvo-code: it's made there once that's stopped.";
   if (!listOf(path.join(appFolder, "engine")).length) return "The engine isn't downloaded yet: this Mac's box is made once it is.";
   return null;
@@ -733,7 +735,11 @@ function newMarker(home: string): string { return path.join(rehomeFolder(home), 
 function makingCutShort(home: string): boolean {
   if (!exists(newMarker(home))) return false;
   if (exists(path.join(rehomeFolder(home), "journal.json"))) return false;
-  return readRecord(home).state == null;
+  if (readRecord(home).state != null) return false;
+  // Nor once a box of anyone's has been there since: a machine's (another Mac set this one up),
+  // one with keys of its own, or one with a card. Never set aside for a making cut short.
+  if (recordedKind(path.join(home, "box", "kind")) === "machine" || exists(path.join(home, "box", "keys")) || foundAt(home, false) !== null) return false;
+  return true;
 }
 
 /** `rehome --new --check`: whether a new Mac's box is made in `home` already (`made`: its kind says
@@ -774,6 +780,17 @@ export async function rehomeNew(folders: Folders, options: MoveOptions & { engin
     // isn't a box (one its Mac removed, or what a making cut short left) is set aside in its
     // trash, nothing deleted; but a making's own scratch copies, which are only ever its own.
     writePrivate(newMarker(home), `${now}\n`);
+    // (All of it under the move's lock, held to the end. One that fails part way takes its mark
+    // away again: what it left has no card, so the next making sets it aside all the same.)
+    try {
+      return making(now);
+    } catch (error) {
+      if (recordedKind(path.join(home, "box", "kind")) !== "mac") fs.rmSync(newMarker(home), { force: true });
+      throw error;
+    }
+  });
+
+  function making(now: number): RehomeOutcome {
     for (const scratch of ["bin.new", "engine.new"]) fs.rmSync(path.join(home, scratch), { recursive: true, force: true });
     const aside = path.join(home, "trash", `earlier-box-${stamp(now)}`);
     const there = listOf(home).filter(name => name !== "updates" && name !== "trash").map(name => path.join(home, name))
@@ -802,7 +819,7 @@ export async function rehomeNew(folders: Folders, options: MoveOptions & { engin
     writePrivate(path.join(box, "kind"), "mac\n");
     fs.rmSync(newMarker(home), { force: true });
     return { result: "done", status: rehomeStatus(home) };
-  });
+  }
 }
 
 /** `rehome --failed <why>`: a try the keeper gave up on before the box's move began (the Keychain's
@@ -905,7 +922,14 @@ export async function rehomeReady(home: string, appFolder: string | null, { appV
 export function clearKept(home: string, now = Date.now()): void {
   const record = readRecord(home);
   if (!record.keptUntil || record.keptUntil > now || !record.kept?.length) return;
-  for (const folder of record.kept) if (inside(folder, rehomeFolder(home))) fs.rmSync(folder, { recursive: true, force: true });
+  // (Each where it really is, `..` and links followed: only ever a kept copy in the move's own
+  // `kept`, whatever a damaged record names.)
+  const real = (file: string) => { try { return fs.realpathSync(file); } catch { return path.resolve(file); } };
+  const keptFolder = real(path.join(rehomeFolder(home), "kept"));
+  for (const folder of record.kept) {
+    if (typeof folder !== "string" || !path.isAbsolute(folder)) continue;
+    if (inside(real(folder), keptFolder)) fs.rmSync(real(folder), { recursive: true, force: true });
+  }
   noteRecord(home, { kept: [], keptUntil: null });
 }
 

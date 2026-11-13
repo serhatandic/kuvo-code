@@ -1145,7 +1145,7 @@ if (main) {
     process.exitCode = uninstallCommand(process.argv.slice(3));
   }
   // This Mac's box's helper, Kuvo Code Box, started at login (PROTOCOL.md, "This Mac's box: its
-  // helper"): `helper install [--load] [--app <bundle ID>] | helper start | helper status`.
+  // helper"): `helper install [--load] [--app <bundle ID>] | helper start [--if-missing] [--app <bundle ID>] | helper status`.
   else if (mode === "helper") {
     process.exitCode = helperCommand(process.argv.slice(3));
   }

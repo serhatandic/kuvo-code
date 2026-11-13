@@ -80,6 +80,10 @@ final class OwnBoxMove {
     /// Tests: the keeper stopped at one of its own steps, as a kill would: nothing after it done,
     /// nothing undone.
     nonisolated(unsafe) static var stopsAt: Step?
+    /// Tests: a short pause between tries, as they have it.
+    nonisolated(unsafe) static var pause: (Int) async -> Void = { seconds in try? await Task.sleep(for: .seconds(seconds)) }
+    #else
+    private static let pause: (Int) async -> Void = { seconds in try? await Task.sleep(for: .seconds(seconds)) }
     #endif
 
     /// The keeper's own steps in a move, for a test to stop it at.
@@ -233,8 +237,14 @@ final class OwnBoxMove {
         // A new Mac's box made there, with nothing moved, as the box says: its helper starts it,
         // never this keeper (switched off in Login Items, its helper stays off).
         if state == nil {
-            // (One that can't say: nothing started meanwhile, rather than a second box.)
-            guard let made = await rehome(["--new", "--check"])?.answer["made"] as? Bool else { return .wait }
+            // (One that can't say: asked again in a moment, then nothing started meanwhile, rather
+            // than a second box.)
+            var made = await rehome(["--new", "--check"])?.answer["made"] as? Bool
+            for _ in 0..<2 where made == nil {
+                await Self.pause(2)
+                made = await rehome(["--new", "--check"])?.answer["made"] as? Bool
+            }
+            guard let made else { return .wait }
             if made { return await finish(owed: [], helperOnlyIfMissing: true) }
         }
         return await wentBack()
@@ -357,19 +367,8 @@ final class OwnBoxMove {
     /// at each login: whether it is. One loaded already is left running; `onlyIfMissing`, one in
     /// place at all is left as it is (switched off in Login Items, it stays off).
     private func helperRuns(onlyIfMissing: Bool = false) async -> Bool {
-        if let status = await box(["helper", "status"], ofHome: true), status.answer["agent"] as? Bool == true {
-            if onlyIfMissing { return true }
-            // Loaded already: started if it isn't running (one that found the box moving went, and
-            // launchd leaves it so), left as it is if it is.
-            if status.answer["loaded"] as? Bool == true {
-                guard let said = await box(["helper", "start"], ofHome: true), said.status == 0 else {
-                    log.error("Kuvo Code Box wasn't started for this Mac's box: tried again later")
-                    return false
-                }
-                return true
-            }
-        }
-        guard let said = await box(["helper", "install", "--load", "--app", appID], ofHome: true), said.status == 0 else {
+        // (The box does it all: in place, loaded and started as each needs, or left as it is.)
+        guard let said = await box(["helper", "start", "--app", appID] + (onlyIfMissing ? ["--if-missing"] : []), ofHome: true), said.status == 0 else {
             log.error("Kuvo Code Box wasn't started for this Mac's box: tried again later")
             return false
         }

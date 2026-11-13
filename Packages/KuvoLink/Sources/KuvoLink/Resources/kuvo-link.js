@@ -39859,7 +39859,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "94f6a06d5909";
+var BRIDGE_VERSION = "040efb34c694";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -42103,7 +42103,8 @@ function newRefusal({ appFolder, home }, { release, engineData }) {
   if (located(home) === located(path135.join(accountHome(), ".kuvo-code")) && path135.basename(appFolder) !== "run.kuvo.code")
     return "Only Kuvo Code itself makes its box in ~/.kuvo-code: a copy makes it in a home of its own.";
   const there = makingCutShort(home) ? "gone" : runsAt(home);
-  if (there !== "gone" && (there === "running" || foundAt2(home, false) !== null))
+  const someones = foundAt2(home, false) !== null || recordedKind(path135.join(home, "box", "kind")) === "machine" || exists4(path135.join(home, "box", "keys"));
+  if (there !== "gone" && (there === "running" || someones))
     return "There's a box in this Mac's ~/.kuvo-code already: both keep running as they are.";
   if (runningIn(path135.join(home, "run")).length)
     return "Something is running in this Mac's ~/.kuvo-code: it's made there once that's stopped.";
@@ -42119,7 +42120,11 @@ function makingCutShort(home) {
     return false;
   if (exists4(path135.join(rehomeFolder(home), "journal.json")))
     return false;
-  return readRecord(home).state == null;
+  if (readRecord(home).state != null)
+    return false;
+  if (recordedKind(path135.join(home, "box", "kind")) === "machine" || exists4(path135.join(home, "box", "keys")) || foundAt2(home, false) !== null)
+    return false;
+  return true;
 }
 function newReadiness(folders, { engineData } = {}) {
   if (process.platform !== "darwin")
@@ -42154,6 +42159,15 @@ async function rehomeNew(folders, options = {}) {
     const now = Date.now();
     writePrivate(newMarker(home), `${now}
 `);
+    try {
+      return making(now);
+    } catch (error) {
+      if (recordedKind(path135.join(home, "box", "kind")) !== "mac")
+        fs130.rmSync(newMarker(home), { force: true });
+      throw error;
+    }
+  });
+  function making(now) {
     for (const scratch of ["bin.new", "engine.new"])
       fs130.rmSync(path135.join(home, scratch), { recursive: true, force: true });
     const aside = path135.join(home, "trash", `earlier-box-${stamp4(now)}`);
@@ -42181,7 +42195,7 @@ async function rehomeNew(folders, options = {}) {
 `);
     fs130.rmSync(newMarker(home), { force: true });
     return { result: "done", status: rehomeStatus(home) };
-  });
+  }
 }
 function keeperFailed(home, message, now = Date.now()) {
   const record = readRecord(home);
@@ -42281,9 +42295,20 @@ function clearKept(home, now = Date.now()) {
   const record = readRecord(home);
   if (!record.keptUntil || record.keptUntil > now || !record.kept?.length)
     return;
-  for (const folder of record.kept)
-    if (inside5(folder, rehomeFolder(home)))
-      fs130.rmSync(folder, { recursive: true, force: true });
+  const real = (file) => {
+    try {
+      return fs130.realpathSync(file);
+    } catch {
+      return path135.resolve(file);
+    }
+  };
+  const keptFolder = real(path135.join(rehomeFolder(home), "kept"));
+  for (const folder of record.kept) {
+    if (typeof folder !== "string" || !path135.isAbsolute(folder))
+      continue;
+    if (inside5(real(folder), keptFolder))
+      fs130.rmSync(real(folder), { recursive: true, force: true });
+  }
   noteRecord(home, { kept: [], keptUntil: null });
 }
 function askRehome(home, ask) {
@@ -50777,13 +50802,27 @@ function installHelperAgent({ load, app }) {
     message: loaded ? `${HELPER_NAME} runs this Mac's box now, and at login.` : `${HELPER_NAME} starts this Mac's box at login, but launchd didn't start it now: ${(started.stderr || "").trim().slice(0, 300) || "it said nothing"}.`
   };
 }
-function startHelperAgent() {
+function startHelperAgent({ app, ifMissing = false }) {
   const mac = process.platform === "darwin" && !APP_FOLDER && recordedKind() === "mac";
   const why = refusal3();
   if (why)
     return { started: false, mac, message: why };
+  const status = helperStatus();
+  if (!status.agent) {
+    const done = installHelperAgent({ load: true, app });
+    return { started: done.loaded, mac, message: done.message };
+  }
+  if (ifMissing)
+    return { started: false, mac, left: true, message: `${HELPER_NAME}'s launch agent is in place: it's left as it is.` };
   const tools = launchTools();
-  const started = spawnSync12(tools.launchctl, ["kickstart", `gui/${process.getuid?.() ?? 0}/${LAUNCH_AGENT}`], { encoding: "utf8", timeout: 30000, stdio: ["ignore", "pipe", "pipe"] });
+  const domain = `gui/${process.getuid?.() ?? 0}`;
+  const run = (args) => spawnSync12(tools.launchctl, args, { encoding: "utf8", timeout: 30000, stdio: ["ignore", "pipe", "pipe"] });
+  if (status.loaded === false) {
+    const loaded = run(["bootstrap", domain, path162.join(tools.agents, `${LAUNCH_AGENT}.plist`)]);
+    if (loaded.status !== 0)
+      return { started: false, mac, message: `launchd didn't load ${HELPER_NAME}: ${(loaded.stderr || "").trim().slice(0, 300) || "it said nothing"}.` };
+  }
+  const started = run(["kickstart", `${domain}/${LAUNCH_AGENT}`]);
   return started.status === 0 ? { started: true, mac, message: `${HELPER_NAME} runs this Mac's box.` } : { started: false, mac, message: `launchd didn't start ${HELPER_NAME}: ${(started.stderr || "").trim().slice(0, 300) || "it said nothing"}.` };
 }
 function helperCommand(args) {
@@ -50792,19 +50831,20 @@ function helperCommand(args) {
     console.log(JSON.stringify(helperStatus()));
     return 0;
   }
-  if (what === "start" && rest.length === 0) {
-    const done = startHelperAgent();
-    console.log(JSON.stringify(done));
-    if (!done.started)
-      console.error(done.message);
-    return done.started ? 0 : 1;
-  }
   const appAt = rest.indexOf("--app");
   const app = appAt >= 0 ? rest[appAt + 1] : "run.kuvo.code";
-  const known = rest.every((arg, index) => arg === "--load" || arg === "--app" || index === appAt + 1 && appAt >= 0);
-  if (what !== "install" || !known || !app || !/^[A-Za-z0-9][A-Za-z0-9.-]*$/.test(app)) {
-    console.error("Usage: kuvo-link.js helper install [--load] [--app <bundle ID>] | helper start | helper status");
+  const flags = what === "start" ? ["--if-missing"] : ["--load"];
+  const known = rest.every((arg, index) => flags.includes(arg) || arg === "--app" || index === appAt + 1 && appAt >= 0);
+  if (what !== "install" && what !== "start" || !known || !app || !/^[A-Za-z0-9][A-Za-z0-9.-]*$/.test(app)) {
+    console.error("Usage: kuvo-link.js helper install [--load] [--app <bundle ID>] | helper start [--if-missing] [--app <bundle ID>] | helper status");
     return 2;
+  }
+  if (what === "start") {
+    const done = startHelperAgent({ app, ifMissing: rest.includes("--if-missing") });
+    console.log(JSON.stringify(done));
+    if (!done.started && !done.left)
+      console.error(done.message);
+    return done.started || done.left ? 0 : 1;
   }
   const done = installHelperAgent({ load: rest.includes("--load"), app });
   console.log(JSON.stringify(done));

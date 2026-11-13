@@ -629,6 +629,50 @@ test.if(mac)("a phone asking this Mac's box what it is hears how its move stands
   expect(info().moving).toBeUndefined()
 }, 60_000)
 
+test.if(mac)("a mark a cut-short new box left never sets aside a box someone made there since: a machine's, one with keys, one with a card", () => {
+  const theirs: [string, (w: World) => void][] = [
+    ["a machine's (another Mac set this one up)", w => { put(join(w.K, "box", "kind"), "machine\n"); put(join(w.K, "bin", "kuvo-start"), "#!/bin/sh\n") }],
+    ["one with keys of its own", w => { put(join(w.K, "box", "keys", "KUVO_KEY_X"), "k"); put(join(w.K, "bin", "kuvo-start"), "#!/bin/sh\n") }],
+    ["one with a card", w => { put(join(w.K, "run", "setup-card.json"), JSON.stringify({ self: { key: "m", name: "Mini", kind: "machine" } })); put(join(w.K, "bin", "kuvo-start"), "#!/bin/sh\n") }],
+  ]
+  for (const [what, made] of theirs) {
+    const w = newMac(w => { put(join(w.K, "updates", "rehome", "new"), "1\n"); made(w) })
+    const before = snapshot(w.K)
+    expect(rehome(w, ["--new", "--check"]).said, what).toMatchObject({ ready: false, made: false, why: "There's a box in this Mac's ~/.kuvo-code already: both keep running as they are." })
+    expect(rehome(w, ["--new", "--release", w.release]).said, what).toMatchObject({ result: "refused" })
+    expect(snapshot(w.K), what).toEqual(before)
+  }
+}, 60_000)
+
+test.if(mac)("a new Mac's box whose making fails part way takes its mark away again, under its lock to the end", () => {
+  // Its release can't be copied whole (a link to nowhere among its files).
+  const w = newMac(w => symlinkSync(join(w.home, "nowhere"), join(w.release, "bin", "broken")))
+  const failed = rehome(w, ["--new", "--release", w.release])
+  expect(failed.status).toBe(1)
+  expect(failed.said).toMatchObject({ result: "failed" })
+  expect(existsSync(join(w.K, "updates", "rehome", "new"))).toBe(false)
+  expect(existsSync(join(w.K, "updates", "rehome", "lock"))).toBe(false)
+  expect(existsSync(join(w.K, "box", "kind"))).toBe(false)
+  // Fixed, it's made: what the try left set aside.
+  rmSync(join(w.release, "bin", "broken"))
+  expect(rehome(w, ["--new", "--release", w.release]).said).toMatchObject({ result: "done" })
+}, 60_000)
+
+test.if(mac)("kept copies are deleted only from the move's own kept folder, whatever a damaged record names", async () => {
+  const w = world()
+  expect(move(w).said).toMatchObject({ result: "done" })
+  const state = join(w.K, "updates", "rehome", "state.json")
+  const record = JSON.parse(readFileSync(state, "utf8"))
+  const kept = record.kept[0]
+  // A record naming the box itself through the kept folder, and a link in it to the box.
+  symlinkSync(join(w.K, "box"), join(w.K, "updates", "rehome", "kept", "to-box"))
+  writeFileSync(state, JSON.stringify({ ...record, keptUntil: 1, kept: [join(w.K, "updates", "rehome", "kept", "..", "..", "..", "box"), join(w.K, "updates", "rehome", "kept", "to-box"), kept] }))
+  rehome(w, ["--ready"])
+  expect(existsSync(join(w.K, "box", "kind"))).toBe(true)
+  expect(existsSync(kept)).toBe(false)
+  expect(JSON.parse(readFileSync(state, "utf8"))).toMatchObject({ kept: [], keptUntil: null })
+}, 60_000)
+
 test.if(mac)("a move that goes back puts a cut-short new box's mark back where it was", () => {
   const w = world(w => put(join(w.K, "updates", "rehome", "new"), "1\n"))
   expect(move(w, { KUVO_TEST_REHOME_STOP: "after-place" }).signal).toBe("SIGKILL")

@@ -100,41 +100,56 @@ export function installHelperAgent({ load, app }: { load: boolean; app: string }
   };
 }
 
-/** The helper's launch agent, loaded already, started now if it isn't running (`launchctl kickstart`,
- * which leaves one running as it is): one that found the box moving went, and launchd leaves it so
- * until it's asked. */
-export function startHelperAgent(): { started: boolean; mac: boolean; message: string } {
-  // (Whether it's a Mac's own box in a home of its own: only then does its helper start it, and
-  // nothing else may.)
+/** This Mac's box started through its helper, the whole of it (`helper start`): its launch agent
+ * put in place and loaded where it isn't there (`install --load`), loaded where it's there but not
+ * loaded, and started where it's loaded but not running (`launchctl kickstart`, which leaves one
+ * running as it is: one that found the box moving went, and launchd leaves it so until it's
+ * asked). `ifMissing`: one in place is left as it is, loaded or not (switched off in Login Items, it
+ * stays off). `mac`: whether it's a Mac's own box in a home of its own, which only its helper starts. */
+export function startHelperAgent({ app, ifMissing = false }: { app: string; ifMissing?: boolean }): { started: boolean; mac: boolean; left?: boolean; message: string } {
   const mac = process.platform === "darwin" && !APP_FOLDER && recordedKind() === "mac";
   const why = refusal();
   if (why) return { started: false, mac, message: why };
+  const status = helperStatus();
+  if (!status.agent) {
+    const done = installHelperAgent({ load: true, app });
+    return { started: done.loaded, mac, message: done.message };
+  }
+  if (ifMissing) return { started: false, mac, left: true, message: `${HELPER_NAME}'s launch agent is in place: it's left as it is.` };
   const tools = launchTools()!;
-  const started = spawnSync(tools.launchctl, ["kickstart", `gui/${process.getuid?.() ?? 0}/${LAUNCH_AGENT}`], { encoding: "utf8", timeout: 30_000, stdio: ["ignore", "pipe", "pipe"] });
+  const domain = `gui/${process.getuid?.() ?? 0}`;
+  const run = (args: string[]) => spawnSync(tools.launchctl, args, { encoding: "utf8", timeout: 30_000, stdio: ["ignore", "pipe", "pipe"] });
+  if (status.loaded === false) {
+    const loaded = run(["bootstrap", domain, path.join(tools.agents, `${LAUNCH_AGENT}.plist`)]);
+    if (loaded.status !== 0) return { started: false, mac, message: `launchd didn't load ${HELPER_NAME}: ${(loaded.stderr || "").trim().slice(0, 300) || "it said nothing"}.` };
+  }
+  const started = run(["kickstart", `${domain}/${LAUNCH_AGENT}`]);
   return started.status === 0
     ? { started: true, mac, message: `${HELPER_NAME} runs this Mac's box.` }
     : { started: false, mac, message: `launchd didn't start ${HELPER_NAME}: ${(started.stderr || "").trim().slice(0, 300) || "it said nothing"}.` };
 }
 
-/** `helper install [--load] [--app <bundle ID>] | start | status`: one JSON line; 0 when done. */
+/** `helper install [--load] [--app <bundle ID>] | start [--if-missing] [--app <bundle ID>] | status`:
+ * one JSON line; 0 when done. */
 export function helperCommand(args: string[]): number {
   const [what, ...rest] = args;
   if (what === "status" && rest.length === 0) {
     console.log(JSON.stringify(helperStatus()));
     return 0;
   }
-  if (what === "start" && rest.length === 0) {
-    const done = startHelperAgent();
-    console.log(JSON.stringify(done));
-    if (!done.started) console.error(done.message);
-    return done.started ? 0 : 1;
-  }
   const appAt = rest.indexOf("--app");
   const app = appAt >= 0 ? rest[appAt + 1] : "run.kuvo.code";
-  const known = rest.every((arg, index) => arg === "--load" || arg === "--app" || (index === appAt + 1 && appAt >= 0));
-  if (what !== "install" || !known || !app || !/^[A-Za-z0-9][A-Za-z0-9.-]*$/.test(app)) {
-    console.error("Usage: kuvo-link.js helper install [--load] [--app <bundle ID>] | helper start | helper status");
+  const flags = what === "start" ? ["--if-missing"] : ["--load"];
+  const known = rest.every((arg, index) => flags.includes(arg) || arg === "--app" || (index === appAt + 1 && appAt >= 0));
+  if ((what !== "install" && what !== "start") || !known || !app || !/^[A-Za-z0-9][A-Za-z0-9.-]*$/.test(app)) {
+    console.error("Usage: kuvo-link.js helper install [--load] [--app <bundle ID>] | helper start [--if-missing] [--app <bundle ID>] | helper status");
     return 2;
+  }
+  if (what === "start") {
+    const done = startHelperAgent({ app, ifMissing: rest.includes("--if-missing") });
+    console.log(JSON.stringify(done));
+    if (!done.started && !done.left) console.error(done.message);
+    return done.started || done.left ? 0 : 1;
   }
   const done = installHelperAgent({ load: rest.includes("--load"), app });
   console.log(JSON.stringify(done));

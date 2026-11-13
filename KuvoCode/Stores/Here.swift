@@ -205,14 +205,24 @@ nonisolated struct Here: Decodable, Equatable, Sendable {
             let line = result.outputText.split(separator: "\n").last.map(String.init) ?? ""
             return (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any]
         }
-        // (Only where the box says it isn't a Mac's: one that couldn't say starts nothing.)
-        guard let said = await helper(["start"]) else { return true }
+        // (Only where the box says it isn't a Mac's: one that couldn't say starts nothing.) The box
+        // does it all: its launch agent in place, loaded and started as each needs.
+        startTrouble = nil
+        guard let said = await helper(["start", "--app", AppInfo.bundleID]) else {
+            startTrouble = "Kuvo Code couldn’t ask this Mac’s box how to start it."
+            return true
+        }
         guard said["mac"] as? Bool == true else { return false }
-        if said["started"] as? Bool != true, let installed = await helper(["install", "--load", "--app", AppInfo.bundleID]), installed["loaded"] as? Bool != true {
-            log.error("This Mac's box in its own home didn't start: \(installed["message"] as? String ?? "", privacy: .public)")
+        if said["started"] as? Bool != true {
+            startTrouble = said["message"] as? String
+            log.error("This Mac's box in its own home didn't start: \(said["message"] as? String ?? "", privacy: .public)")
         }
         return true
     }
+
+    /// Why this Mac's box in its own home didn't start, as its box said it, the last time the app
+    /// started it (`startedByHelper`): nil when it did, or it isn't one.
+    nonisolated(unsafe) static var startTrouble: String?
 
     /// What the box CLI says here: the app's own script, run as the box runs it (`engine`, the
     /// engine's Bun), with `KUVO_HOME` the app's own box's folder and `KUVO_ENGINE_DATA` its engine's

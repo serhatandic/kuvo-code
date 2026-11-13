@@ -5572,7 +5572,8 @@ refused anything but `--status` on the real `~/.kuvo-code`.
      say, or its list of machines), it goes back first: nothing is left only in the kept copy. So the app writes nothing
      there during a move. From here it only goes forward. The originals, the app's `box` and `opencode`
      folders whole and each other, are renamed into `updates/rehome/kept/<date>/`, so nothing in
-     the app's folder says a box ran there (`here`). Kept 30 days (`keptUntil`), then deleted, by
+     the app's folder says a box ran there (`here`). Kept 30 days (`keptUntil`), then deleted (only ever what's in the move's own `kept`, where it
+     really is, `..` and links followed, whatever `state.json` names), by
      `serve` as it starts and by `--ready`.
   9. **Done.** `state.json` says `done`, with what the app's executable still owes (`owed`:
      `keychain`, the Keychain's originals deleted, and `agent`, its own launch agent
@@ -5614,7 +5615,8 @@ refused anything but `--status` on the real `~/.kuvo-code`.
   the start, with nothing to move (the app, as it first opens): refused, saying why and changing
   nothing (not even making `~/.kuvo-code`), where a box of the app's own ran in its folder or its
   engine kept your sessions (`here`'s, with `KUVO_ENGINE_DATA`: that one moves instead), where a box
-  is in `~/.kuvo-code` (as a move is), for a copy of the app into the real `~/.kuvo-code`, without
+  is in `~/.kuvo-code` (as a move is, and also one with no card yet that says it's a machine's in
+  `box/kind` or has keys of its own in `box/keys`), for a copy of the app into the real `~/.kuvo-code`, without
   the release's files, or before the engine is in the app's folder. Under the move's lock: what's
   there that isn't a box set aside into `trash/earlier-box-<date>` (as the move's install step
   does), the release's `bin` put in place whole, the app's `engine` cloned beside it (copied where
@@ -5623,8 +5625,10 @@ refused anything but `--status` on the real `~/.kuvo-code`.
   anything's set aside): one cut short is made again from the start, what it left set aside in the
   trash like the rest, nothing deleted (but its own scratch copies, `bin.new` and `engine.new`).
   The mark counts only where no move has been (no
-  `state.json` state, no journal); a move's install step sets it aside, journaled, so a box moved
-  there later is never taken for a making cut short. `done` (exit 0); made already,
+  `state.json` state, no journal) and no box of anyone's has been there since (a machine's kind,
+  keys of its own, a card); a move's install step sets it aside, journaled, so a box moved there
+  later is never taken for a making cut short. All of it holds the move's lock to the end; one that
+  fails part way (not cut short) takes its mark away again. `done` (exit 0); made already,
   `nothing`. No `state.json`: nothing moved, so there's nothing to move back. **`--new --check`**,
   changing nothing: `{ready, made, why?}`, `made` once its kind says so with no move under way (a
   move writes it before it's done: never `made` then), `ready` where it would be made now (the
@@ -5867,10 +5871,14 @@ place, which is what macOS keeps your permissions and its Keychain items by.
   message}`, exiting 0 once done, 1 when refused (not a Mac, not a Mac's own box in a home of its
   own, not the real `~/.kuvo-code`, or no helper in `bin`) or launchd didn't start it, 2 for what it
   doesn't know. `helper status` says `{helper, agent, loaded}` (`loaded` null where launchd couldn't
-  be asked). `helper start` has launchd start the one loaded already if it isn't running
-  (`launchctl kickstart`, leaving one running as it is): `{started, mac, message}`, `mac` whether
-  it's a Mac's own box in a home of its own (only then does its helper start it, and nothing else
-  may), exit 0 once it has, 1 when refused as `install` is or launchd didn't. As `uninstall` does, it touches launchd only for the real `~/.kuvo-code`, or a test's
+  be asked). `helper start [--if-missing] [--app <bundle ID>]` is the whole start through the helper: its
+  launch agent put in place and loaded where it isn't there (as `install --load`), loaded where it's
+  there but not loaded, and started where it isn't running (`launchctl kickstart`, leaving one
+  running as it is); with `--if-missing`, one in place is left as it is, loaded or not (switched
+  off in Login Items, it stays off: `left: true`). It says `{started, mac, left?, message}`, `mac`
+  whether it's a Mac's own box in a home of its own (only then does its helper start it, and
+  nothing else may), `message` why not where it didn't; exit 0 once it has (or left it), 1 when
+  refused as `install` is or launchd didn't. As `uninstall` does, it touches launchd only for the real `~/.kuvo-code`, or a test's
   stand-ins (`KUVO_TEST_UNINSTALL_TOOLS`). `uninstall` takes it away. With Login Items off for it,
   the app opens it once (`open -g -j -n <bundle> --args keep --home <box>`), checked first: there,
   its signature whole, its ID the app's with `.box`, signed by the app's team (an ad hoc build: the

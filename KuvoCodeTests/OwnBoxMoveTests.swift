@@ -511,6 +511,7 @@ import Testing
         let saved = (AppModel.hereHome, Here.environmentForTests)
         defer {
             (AppModel.hereHome, Here.environmentForTests) = saved
+            Here.startTrouble = nil
             done()
         }
         try newMac()
@@ -526,6 +527,13 @@ import Testing
         _ = await Here.started(engine: bun, script: try #require(BoxProcess.script), appBox: move.appBox, engineData: move.engineData, home: home)
         #expect(launchctlAsked.last?.hasPrefix("kickstart gui/") == true, "launchd asked to start its helper")
         #expect(!exists(ran), "never its keeper from the app")
+        #expect(Here.startTrouble == nil)
+        // Its helper gone from its bin: nothing started, and the app can say why, as the box does.
+        try FileManager.default.moveItem(at: BoxHelperBundle.installed(in: K), to: world.appending(path: "helper-aside.app"))
+        _ = await Here.started(engine: bun, script: try #require(BoxProcess.script), appBox: move.appBox, engineData: move.engineData, home: home)
+        #expect(Here.startTrouble?.contains("isn't in this box's bin") == true)
+        #expect(!exists(ran))
+        try FileManager.default.moveItem(at: world.appending(path: "helper-aside.app"), to: BoxHelperBundle.installed(in: K))
         // A machine's box there (one you set up): as before, its own start.
         try put("machine\n", K.appending(path: "box/kind"))
         _ = await Here.started(engine: bun, script: try #require(BoxProcess.script), appBox: move.appBox, engineData: move.engineData, home: home)

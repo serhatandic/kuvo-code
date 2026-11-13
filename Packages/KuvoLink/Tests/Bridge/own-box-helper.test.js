@@ -108,17 +108,40 @@ test("helper install: a path with characters XML reserves is written as launchd 
   assert.equal(listed.stdout.trim(), where.K);
 });
 
-test("helper start: launchd starts the helper loaded already that went (it found the box moving), and leaves one running as it is", { skip: process.platform !== "darwin" && "only a Mac's box has the helper" }, () => {
+test("helper start: the whole start through the helper, its launch agent put in place, loaded and started as each needs, one running left as it is", { skip: process.platform !== "darwin" && "only a Mac's box has the helper" }, () => {
   const where = home("mac");
-  const done = helper(where, ["start"]);
-  assert.equal(done.status, 0, done.stderr);
-  assert.deepEqual(done.said, { started: true, mac: true, message: "Kuvo Code Box runs this Mac's box." });
-  assert.deepEqual(read(path.join(where.home, "launchctl")).trim().split("\n"), [`kickstart gui/${process.getuid()}/run.kuvo.code.machine`]);
-  // Not a Mac's own box: nothing asked.
-  const machine = home("machine");
-  const refused = helper(machine, ["start"]);
+  const uid = process.getuid();
+  const asked = () => { const said = exists(path.join(where.home, "launchctl")) ? read(path.join(where.home, "launchctl")).trim().split("\n") : []; fs.rmSync(path.join(where.home, "launchctl"), { force: true }); return said; };
+  // Not in place: written and loaded.
+  const first = helper(where, ["start", "--app", "run.kuvo.code.trial5"]);
+  assert.equal(first.status, 0, first.stderr);
+  assert.deepEqual(first.said, { started: true, mac: true, message: "Kuvo Code Box runs this Mac's box now, and at login." });
+  assert.match(read(plistOf(where)), /<string>run\.kuvo\.code\.trial5<\/string>/);
+  assert.equal(asked().filter(line => line.startsWith("bootstrap")).length, 1);
+  // Loaded: started if it isn't running (kickstart leaves one running as it is).
+  assert.deepEqual(helper(where, ["start"]).said, { started: true, mac: true, message: "Kuvo Code Box runs this Mac's box." });
+  assert.deepEqual(asked(), [`print gui/${uid}/run.kuvo.code.machine`, `kickstart gui/${uid}/run.kuvo.code.machine`]);
+  // In place but not loaded: loaded, then started.
+  fs.rmSync(path.join(where.home, "loaded"));
+  assert.equal(helper(where, ["start"]).said.started, true);
+  assert.deepEqual(asked().map(line => line.split(" ")[0]), ["print", "bootstrap", "kickstart"]);
+  // --if-missing: one in place is left as it is (switched off in Login Items, it stays off).
+  fs.rmSync(path.join(where.home, "loaded"));
+  const left = helper(where, ["start", "--if-missing"]);
+  assert.equal(left.status, 0);
+  assert.equal(left.said.left, true);
+  assert.deepEqual(asked().filter(line => !line.startsWith("print")), []);
+  // A Mac's box with no helper in its bin: says why, which the app shows.
+  const bare = home("mac", { helper: false });
+  const refused = helper(bare, ["start"]);
   assert.equal(refused.status, 1);
-  assert.equal(refused.said.mac, false, "not a Mac's own box: its own start, not the helper's");
+  assert.equal(refused.said.mac, true);
+  assert.match(refused.said.message, /isn't in this box's bin/);
+  // Not a Mac's own box: nothing asked, and it says so.
+  const machine = home("machine");
+  const other = helper(machine, ["start"]);
+  assert.equal(other.status, 1);
+  assert.equal(other.said.mac, false, "not a Mac's own box: its own start, not the helper's");
   assert.equal(exists(path.join(machine.home, "launchctl")), false);
 });
 
