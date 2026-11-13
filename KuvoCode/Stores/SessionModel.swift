@@ -1255,11 +1255,7 @@ final class SessionModel {
             editTranscript { $0.addLocal(id: shown, text: text, delivery: .steer) }
         }
         let shownBefore = shownSideQuestion
-        // At once where its thread's list is read (else once it is, below).
-        if let onSide, let bridge = goalBridge(), bridge.sideQuestions[id] != nil {
-            bridge.took(onSide)
-            shownSideQuestion = onSide.id
-        }
+        if let onSide, goalBridge()?.showAsking(onSide) == true { shownSideQuestion = onSide.id }
         let ask = Typed.Ask(id: shown, text: text, files: !files.isEmpty, side: side, refusal: refusal, reviewer: Catalog.lastReviewer)
         let route = Typed.route(id)
         // ("/" and "!" texts in the order they were sent.)
@@ -1272,7 +1268,6 @@ final class SessionModel {
                 typedRows.remove(shown)
                 dropSideShown(shown, before: shownBefore)
             }
-            if let onSide, goalBridge()?.sideQuestions[id]?.contains(where: { $0.id == shown }) != true { await showOnSide(onSide) }
             // A computer whose Kuvo Code is from before: it can't say, and nothing goes.
             guard await boxHas(Typed.feature) else {
                 restore(text: text, files: files)
@@ -1316,23 +1311,17 @@ final class SessionModel {
         } else {
             return nil
         }
+        // (Where its side questions are read already: else in the conversation.)
+        guard goalBridge()?.sideQuestions[id] != nil else { return nil }
         let asked: [String: Any] = ["id": shown, "session": id, "thread": thread, "question": question, "state": "answering", "asked": Date.now.timeIntervalSince1970 * 1000]
         return (try? JSONSerialization.data(withJSONObject: asked)).flatMap { try? JSONDecoder().decode(SideQuestion.self, from: $0) }
-    }
-
-    /// `question` in its side thread, shown (its list read first, where it isn't yet).
-    private func showOnSide(_ question: SideQuestion) async {
-        guard let bridge = goalBridge() else { return }
-        if bridge.sideQuestions[id] == nil { await bridge.loadSideQuestions(of: id) }
-        bridge.took(question)
-        shownSideQuestion = question.id
     }
 
     /// The side question shown for a "/" text, gone now its box has said: the one showing before
     /// it shows again, unless another took its place.
     private func dropSideShown(_ shown: String, before: String?) {
         guard let bridge = goalBridge(), bridge.sideQuestions[id]?.contains(where: { $0.id == shown }) == true else { return }
-        bridge.dropSideQuestion(shown, of: id)
+        bridge.dropAsking(shown, of: id)
         if shownSideQuestion == shown { shownSideQuestion = before }
     }
 
@@ -1383,7 +1372,8 @@ final class SessionModel {
             return
         }
         if answer.showGoal == true { hidesGoal = false }
-        if let agent = answer.agent { selectAgent(agent) }
+        // Switched by its box: shown here.
+        if let agent = answer.agent { session.agent = agent }
         if answer.toggleAutopilot == true { setAutopilot(!isAutopilot) }
         if answer.compact == true { compact() }
         if let command = answer.shell { runShell(command, written: written) }

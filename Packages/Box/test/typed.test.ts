@@ -122,6 +122,12 @@ beforeAll(async () => {
         if (each.method === "PATCH") Object.assign(conversation, each.body)
         return Response.json({ data: conversation })
       }
+      const switched = /^\/api\/session\/([^/]+)\/agent$/.exec(each.path)
+      if (switched && each.method === "POST") {
+        const conversation = conversations[decodeURIComponent(switched[1])]
+        if (conversation) conversation.agent = each.body.agent
+        return Response.json({ data: {} })
+      }
       if (each.path === "/api/command") return Response.json(commandsAnswer.body, { status: commandsAnswer.status })
       const listed = engineLists[each.path]
       if (listed !== undefined) return Response.json({ data: listed })
@@ -302,8 +308,11 @@ describe("kuvo/sessions/<id>/typed", () => {
   })
 
   test("\"/plan\" alone in Plan goes back to Build, or to the first mode there is where Build is off", async () => {
-    conversations.ses_main.agent = "plan"
+    expect((await ask("POST", "ses_main", { text: "/plan" })).json).toEqual({ keyword: "plan", agent: "plan" })
+    // Switched by the box, so the next "/plan" reads it, whatever the client has sent since.
+    expect(engineAsked.filter(each => each.method === "POST" && each.path === "/api/session/ses_main/agent").map(each => each.body.agent)).toEqual(["plan"])
     expect((await ask("POST", "ses_main", { text: "/plan" })).json).toEqual({ keyword: "plan", agent: "build" })
+    conversations.ses_main.agent = "plan"
     engineLists = { "/api/agent": [{ id: "explore", mode: "subagent" }, { id: "draft", mode: "primary" }, { id: "plan", mode: "primary" }] }
     expect((await ask("POST", "ses_main", { text: "/plan" })).json).toEqual({ keyword: "plan", agent: "draft" })
     // With words, it stays in Plan.

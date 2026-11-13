@@ -579,6 +579,22 @@ final class OutsideAgents {
         sideQuestionCounts[question.session] = list.count
     }
 
+    /// A side question shown while its box says what the text sent means (`SessionModel.submit`):
+    /// in a list read already, and counted nowhere. Whether it shows.
+    @discardableResult
+    func showAsking(_ question: SideQuestion) -> Bool {
+        guard var list = sideQuestions[question.session] else { return false }
+        list.append(question)
+        sideQuestions[question.session] = list
+        return true
+    }
+
+    /// That one gone, once its box has said.
+    func dropAsking(_ id: String, of session: String) {
+        guard let list = sideQuestions[session], list.contains(where: { $0.id == id }) else { return }
+        sideQuestions[session] = list.filter { $0.id != id }
+    }
+
     func dropSideQuestion(_ id: String?, of session: String) {
         guard let id else {
             sideQuestions[session] = sideQuestions[session].map { _ in [] }

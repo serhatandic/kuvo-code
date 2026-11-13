@@ -66,8 +66,12 @@ import Testing
     nonisolated final class Answers: @unchecked Sendable {
         private let lock = NSLock()
         private var left: [String]
+        private var last: String?
         init(_ answers: [String]) { left = answers }
         func next() -> String { lock.withLock { left.isEmpty ? "" : left.removeFirst() } }
+        /// One value, kept (a mode the engine was switched to).
+        func set(_ value: String) { lock.withLock { last = value } }
+        var now: String? { lock.withLock { last } }
     }
 
     private func session(directory: String = "/tmp") throws -> SessionModel {
@@ -617,7 +621,15 @@ import Testing
     @Test func planAloneTurnsPlanOnAndOff() async throws {
         defer { clean() }
         serve(directory: "/tmp", answers: [])
-        engine.on("POST", "/api/session/\(id)/agent", json: ["data": [:]])
+        // The engine keeps the mode it's switched to, as its box reads it.
+        let mode = Answers([])
+        engine.on("POST", "/api/session/\(id)/agent") { request in
+            mode.set(request.body["agent"] as? String ?? "")
+            return StubWeb.json(["data": [:]])
+        }
+        engine.on("GET", "/api/session/\(id)") { _ in
+            StubWeb.json(["data": StubEngine.session(self.id, title: "Pause on blur", directory: "/tmp", extra: ["model": ["id": "m", "providerID": "p"], "agent": mode.now ?? "build"])])
+        }
         engine.on("POST", "/api/session/\(id)/prompt", json: ["data": [:]])
         let model = try session()
         let bridge = try await start(model)
@@ -626,16 +638,20 @@ import Testing
 
         model.draftText = "/plan"
         model.submitDraft(for: nil, queue: false)
+        await model.messagesSent()
         try await until { picked() == ["plan"] }
         #expect(model.session.agent == "plan")
         #expect(model.draftText.isEmpty)
 
         model.draftText = "/plan"
         model.submitDraft(for: nil, queue: false)
+        await model.messagesSent()
         try await until { picked() == ["plan", "build"] }
         #expect(model.session.agent == "build")
 
         model.togglePlan()
+        // (Once its engine has it, as the box reads it.)
+        try await until { picked() == ["plan", "build", "plan"] }
         model.draftText = "/plan the next step"
         model.submitDraft(for: nil, queue: false)
         try await until { !engine.requests("POST", "/api/session/\(id)/prompt").isEmpty }
@@ -683,14 +699,14 @@ import Testing
         model.draftText = "!pwd"
         model.submitDraft(for: nil, queue: false)
         #expect(model.transcript.pending.map(\.text) == ["!pwd"])
-        model.draftText = "/btw where does it pause?"
-        model.submitDraft(for: nil, queue: false)
-        #expect(model.transcript.pending.map(\.text) == ["!pwd"], "a side question isn't the conversation's")
-        #expect(model.shownSideThread?.latest.question == "where does it pause?")
-        #expect(model.shownSideThread?.latest.state == .answering)
         model.draftText = "Pause it on blur then."
         model.submitDraft(for: nil, queue: false)
         #expect(model.transcript.pending.map(\.text) == ["!pwd", "Pause it on blur then."], "the message shows at once")
+        model.draftText = "/btw where does it pause?"
+        model.submitDraft(for: nil, queue: false)
+        #expect(model.transcript.pending.map(\.text) == ["!pwd", "Pause it on blur then."], "a side question isn't the conversation's")
+        #expect(model.shownSideThread?.latest.question == "where does it pause?")
+        #expect(model.shownSideThread?.latest.state == .answering)
 
         await model.messagesSent()
         #expect(!model.transcript.pending.contains { $0.text == "!pwd" }, "its row gives way to what it means")

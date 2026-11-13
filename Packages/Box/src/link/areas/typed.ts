@@ -264,8 +264,13 @@ async function* typedAnswer(context: RouteContext, match: RegExpMatchArray): Asy
         : { restore: decision.failed ?? { text }, error: said(error, "It couldn’t be done. Try again.") };
     }
   }
-  // Plan on or off: which mode, as this box has the conversation and its modes.
+  // Plan on or off: which mode, as this box has the conversation and its modes, switched to here
+  // (where it reads it: two "/plan" in a row don't race a client's own switch), for the client to show.
   const agent = !failure && decision.plan ? await planAgent(decision.plan, data, engine, folder, signal) : null;
+  if (agent && agent !== data.agent) {
+    const switched = await call(place.target, "POST", `/api/session/${encodeURIComponent(session)}/agent`, { agent }, within(signal, STEP_PATIENCE)).then(() => true, () => false);
+    if (!switched) return yield* json(200, { ...(decision.keyword ? { keyword: decision.keyword } : {}), restore: writtenBack(text), error: "The mode couldn’t be changed: its engine didn’t take it. Try again." });
+  }
   const { plan: _plan, ...answer } = answerOf(decision, done, failure) as Record<string, unknown>;
   return yield* json(200, { ...answer, ...(agent ? { agent } : {}) });
 }

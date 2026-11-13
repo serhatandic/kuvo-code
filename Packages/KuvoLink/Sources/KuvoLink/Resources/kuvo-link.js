@@ -39140,7 +39140,7 @@ import fs129 from "node:fs";
 import path133 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "d925c465203c";
+var BRIDGE_VERSION = "b8eff78b4b7a";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -47954,6 +47954,11 @@ async function* typedAnswer(context, match) {
     }
   }
   const agent = !failure && decision.plan ? await planAgent(decision.plan, data, engine, folder, signal) : null;
+  if (agent && agent !== data.agent) {
+    const switched = await call(place.target, "POST", `/api/session/${encodeURIComponent(session)}/agent`, { agent }, within6(signal, STEP_PATIENCE)).then(() => true, () => false);
+    if (!switched)
+      return yield* json(200, { ...decision.keyword ? { keyword: decision.keyword } : {}, restore: writtenBack(text), error: "The mode couldn’t be changed: its engine didn’t take it. Try again." });
+  }
   const { plan: _plan, ...answer } = answerOf3(decision, done, failure);
   return yield* json(200, { ...answer, ...agent ? { agent } : {} });
 }
