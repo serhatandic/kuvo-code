@@ -649,14 +649,21 @@ import Testing
         try await until { picked() == ["plan", "build"] }
         #expect(model.session.agent == "build")
 
-        model.togglePlan()
-        // (Once its engine has it, as the box reads it.)
-        try await until { picked() == ["plan", "build", "plan"] }
+        // The Plan Mode menu item and ⌥⌘2 go by the box too.
+        await model.togglePlan()?.value
+        #expect(picked() == ["plan", "build", "plan"])
+        #expect(model.session.agent == "plan")
         model.draftText = "/plan the next step"
         model.submitDraft(for: nil, queue: false)
         try await until { !engine.requests("POST", "/api/session/\(id)/prompt").isEmpty }
         #expect(model.session.agent == "plan")
         #expect(picked() == ["plan", "build", "plan"], "already in Plan: it stays, and sends")
+        #expect(engine.requests("POST", "/api/session/\(id)/prompt").count == 1)
+        // And off again, back to Build, as its box says.
+        await model.togglePlan()?.value
+        #expect(picked() == ["plan", "build", "plan", "build"])
+        #expect(model.session.agent == "build")
+        #expect(model.transcript.pending.isEmpty, "a menu's switch shows no message")
         #expect(engine.requests("POST", "/api/session/\(id)/prompt").count == 1)
     }
 

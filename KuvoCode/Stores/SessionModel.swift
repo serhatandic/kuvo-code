@@ -2635,9 +2635,23 @@ final class SessionModel {
         }
     }
 
-    /// Plan on, or off again: back to the agent a new session starts with (Build).
-    func togglePlan() {
-        selectAgent(session.agent == "plan" ? catalog()?.startingAgent(chosen: nil) ?? "build" : "plan")
+    /// Plan on, or off again (the Plan Mode menu item, ⌥⌘2), as "/plan" alone is: its box switches
+    /// the mode, back to where a conversation starts there, and says to which, shown here.
+    @discardableResult
+    func togglePlan() -> Task<Void, Never>? {
+        guard canReach, let box = box() else { return nil }
+        let ask = Typed.Ask(id: Identifier.message(), text: "/plan", files: false)
+        let route = Typed.route(id)
+        return Task {
+            do {
+                let (status, body) = try await box.send("POST", route, body: try JSONEncoder().encode(ask))
+                let answer = status == 200 ? try JSONDecoder().decode(Typed.Answer<AutopilotShown>.self, from: body)
+                    : Typed.Answer<AutopilotShown>(refused: body, status: status, written: "/plan")
+                if let agent = answer.agent { session.agent = agent } else if let error = answer.error { failure = error }
+            } catch {
+                fail(error)
+            }
+        }
     }
 
     func selectAgent(_ agent: String) {
