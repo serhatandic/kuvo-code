@@ -325,12 +325,34 @@ final class Workspace {
         listPlace(of: session) == .chat
     }
 
-    /// `box`'s line taken in, and kept for the next launch.
+    /// `box`'s line taken in, and kept for the next launch (a moment after, so a few lines at once
+    /// are one write); not one for a machine removed meanwhile.
     private func take(_ line: SessionLists.Line, on box: String) {
+        guard !isRemoved(box) else { return }
         var listing = sessionLists[box] ?? .init()
-        listing.take(line)
+        let changed = listing.take(line)
+        // (Where it's at changes with every line: kept, unobserved, for the next read.)
+        guard changed || sessionLists[box] == nil else {
+            listCursors[box] = listing.at
+            return
+        }
         sessionLists[box] = listing
-        SessionCopies.saveList(listing, of: box)
+        listCursors[box] = nil
+        sessionListSaves[box]?.cancel()
+        sessionListSaves[box] = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled, let self, !isRemoved(box), let listing = sessionLists[box] else { return }
+            SessionCopies.saveList(listing, of: box, at: listCursors[box])
+        }
+    }
+
+    /// Where each box's list is at, past its last change (`SessionLists.Listing.at`).
+    @ObservationIgnored private var listCursors: [String: String] = [:]
+    @ObservationIgnored private var sessionListSaves: [String: Task<Void, Never>] = [:]
+
+    /// Where `box`'s list goes on from: its last line's.
+    private func listCursor(_ box: String) -> String? {
+        listCursors[box] ?? sessionLists[box]?.at
     }
 
     /// `box`'s session list, followed while it's there: this Mac's box streams it; any other answers
@@ -342,7 +364,7 @@ final class Workspace {
             var heard = false
             if BoxClient.streams(box), let client = boxes?(box) {
                 do {
-                    for try await data in client.follow(SessionLists.eventsRoute(since: sessionLists[box]?.at)) {
+                    for try await data in client.follow(SessionLists.eventsRoute(since: listCursor(box))) {
                         guard let line = try? JSONDecoder().decode(SessionLists.Line.self, from: data) else { continue }
                         heard = true
                         take(line, on: box)
@@ -369,7 +391,7 @@ final class Workspace {
         repeat {
             listReads[box] = false
             guard !isAway(box), let client = boxes?(box) else { return }
-            if let line = try? await client.value(SessionLists.Line.self, "GET", SessionLists.route(since: sessionLists[box]?.at)) { take(line, on: box) }
+            if let line = try? await client.value(SessionLists.Line.self, "GET", SessionLists.route(since: listCursor(box))) { take(line, on: box) }
         } while listReads[box] == true
     }
 
@@ -388,11 +410,13 @@ final class Workspace {
     @ObservationIgnored private var listNudges: [String: Task<Void, Never>] = [:]
 
     /// A session's events after which what its box says of it may have changed.
-    private static let listEvents: Set<String> = ["session.created", "session.updated", "session.moved", "session.metadata.updated", "session.deleted"]
+    private static let listEvents: Set<String> = ["session.created", "session.moved", "session.metadata.updated", "session.deleted"]
 
     /// A machine gone for good, or found to be another: its list goes with it.
     private func forgetSessionList(of box: String) {
         listNudges.removeValue(forKey: box)?.cancel()
+        sessionListSaves.removeValue(forKey: box)?.cancel()
+        listCursors[box] = nil
         sessionLists[box] = nil
         SessionCopies.removeList(of: box)
     }
@@ -1042,10 +1066,15 @@ final class Workspace {
         return settings[directory]?.name ?? (directory as NSString).lastPathComponent
     }
 
-    /// The name of the project a session is filed under.
+    /// The name of the project a session is filed under: where the sidebar shows it, as its box
+    /// says; one the lists don't show (a bot's, a subagent's) by its folder.
     func projectName(of session: Session) -> String {
-        if Self.isChat(session) { return "Chats" }
-        let directory = projectDirectory(of: session)
+        let directory: String
+        switch listPlace(of: session) {
+        case .chat: return "Chats"
+        case .project(let project): directory = project
+        case nil: directory = projectDirectory(of: session)
+        }
         return settings[directory]?.name ?? (directory as NSString).lastPathComponent
     }
 

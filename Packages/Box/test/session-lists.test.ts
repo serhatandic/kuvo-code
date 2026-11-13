@@ -64,9 +64,12 @@ const sessions = new Map<string, any>()
 const active = new Set<string>()
 const add = (id: string, directory: string, updated: number, extra: Record<string, unknown> = {}) => sessions.set(id, { id, location: { directory }, time: { created: updated, updated }, ...extra })
 let listReads = 0
+// Held: the list's next page waits until the test lets it go, as a slow engine's.
+let held: Promise<void> | null = null
+let heldAsked: () => void = () => {}
 const engine = Bun.serve({
   port: 0,
-  fetch(request) {
+  async fetch(request) {
     const url = new URL(request.url)
     if (url.pathname === "/api/session") {
       listReads += 1
@@ -75,6 +78,8 @@ const engine = Bun.serve({
       const from = Number(url.searchParams.get("cursor") ?? 0)
       const limit = Number(url.searchParams.get("limit"))
       const page = all.slice(from, from + Math.min(limit, 2))
+      // (As it was when asked.)
+      if (held) { heldAsked(); await held }
       return Response.json({ data: page, cursor: { next: String(from + page.length) } })
     }
     if (url.pathname === "/api/session/active") return Response.json({ data: Object.fromEntries([...active].map(id => [id, { type: "busy" }])) })
@@ -103,7 +108,7 @@ async function ask(path: string): Promise<{ status: number; lines: any[] }> {
   return { status, lines: text.trim().split("\n").filter(Boolean).map(line => JSON.parse(line)) }
 }
 
-test("a route answered alone reads the engine itself, whole", async () => {
+test("a route answered in a process of its own reads the engine itself, and resumes from the list kept", async () => {
   add("ses_a", work, 100)
   add("ses_chat", chats, 50, { metadata: { kuvo: { chat: chats } } })
   const { status, lines } = await ask("kuvo/sessions/list")
@@ -112,12 +117,47 @@ test("a route answered alone reads the engine itself, whole", async () => {
   expect(lines[0].sessions.ses_a).toEqual({ kind: "project", project: work, directory: work, created: 100, updated: 100 })
   expect(lines[0].sessions.ses_chat.kind).toBe("chat")
   expect(lines[0].projects).toEqual({ [work]: { name: "Work", updated: 100 } })
-  // (No list kept for `since` here: whole again.)
-  expect((await ask(`kuvo/sessions/list?since=${lines[0].at}`)).lines[0].full).toBe(true)
+  // Kept for the next read, whichever process makes it: nothing changed since.
+  const again = (await ask(`kuvo/sessions/list?since=${lines[0].at}`)).lines[0]
+  expect(again).toEqual({ at: lines[0].at, sessions: {}, projects: lines[0].projects })
+})
+
+test("just started, it reads its places before it answers, rather than say there's nothing", async () => {
+  const stop = keepList()
+  try {
+    const { status, lines } = await ask("kuvo/sessions/list/events")
+    expect(status).toBe(200)
+    expect(Object.keys(lines[0].sessions).sort()).toEqual(["ses_a", "ses_chat"])
+  } finally {
+    stop()
+  }
+})
+
+test("a session deleted while its place is read whole stays gone", async () => {
+  const stop = keepList()
+  try {
+    await listPlaceHeard("engine", target)
+    add("ses_short", work, 600)
+    let letGo: () => void = () => {}
+    held = new Promise(done => { letGo = done })
+    const asked = new Promise<void>(done => { heldAsked = done })
+    const reading = listPlaceHeard("engine", target)
+    // (The page it's reading has it; the event says it's gone meanwhile.)
+    await asked
+    sessions.delete("ses_short")
+    await noteListEvent("engine", target, { type: "session.deleted", data: { sessionID: "ses_short" } })
+    held = null
+    letGo()
+    await reading
+    expect(Object.keys((await ask("kuvo/sessions/list")).lines[0].sessions)).not.toContain("ses_short")
+  } finally {
+    held = null
+    stop()
+  }
 })
 
 test("kept as events come: a client resumes from where it was, and one from before the box restarted reads it all", async () => {
-  const stop = keepList(1)
+  const stop = keepList()
   try {
     active.add("ses_a")
     await listPlaceHeard("engine", target)
@@ -153,7 +193,7 @@ test("kept as events come: a client resumes from where it was, and one from befo
     // Kept for a route answered in a process of its own.
     expect(JSON.parse(readFileSync(LIST_FILE, "utf8")).seq).toBe(Number(after.at.split(".")[1]))
 
-    // A cursor of another epoch (the box restarted), or from ahead of it: all of it, said so.
+    // A cursor of another list's (its file went), or from ahead of it: all of it, said so.
     for (const since of ["zz-1.3", `${after.at.split(".")[0]}.999`, "nonsense"]) {
       const whole = (await ask(`kuvo/sessions/list?since=${since}`)).lines[0]
       expect(whole.full).toBe(true)
@@ -170,7 +210,7 @@ test("kept as events come: a client resumes from where it was, and one from befo
 })
 
 test("its projects changing changes what's filed where, with no engine read", async () => {
-  const stop = keepList(2)
+  const stop = keepList()
   try {
     const tree = join(home, "lists-tree")
     add("ses_tree", tree, 400)
@@ -192,7 +232,7 @@ test("its projects changing changes what's filed where, with no engine read", as
 })
 
 test("a stream tells each change as a line of what changed", async () => {
-  const stop = keepList(3)
+  const stop = keepList()
   const reading = new AbortController()
   try {
     await listPlaceHeard("engine", target)

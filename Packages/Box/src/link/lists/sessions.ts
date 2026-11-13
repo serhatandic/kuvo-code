@@ -1,18 +1,20 @@
 // Every client's session lists, from the box (PROTOCOL.md, "Session lists"): `GET kuvo/sessions/list`
 // and `…/events`, each session's facts (what it is, its project, its flags, whether it runs and
-// asks you) and the projects the lists show, then what changes. The box's long-running process keeps
-// the list as its engine's and its coding agents' events come (`noteListEvent`), read whole as each
-// place is heard (`listPlaceHeard`) and every five minutes, and keeps it in `run/lists/sessions.json`
-// for a route answered in a process of its own (`box route`). Each entry carries the change it came
-// with (`seq`), and those gone are kept a while, so a client that lost its stream resumes from where
-// it was (`since`) rather than read everything again.
+// asks you) and the projects the lists show, then what changes. The list is kept in
+// `run/lists/sessions.json`, one for the box whichever process works it out, under its lock: each
+// entry with the change it came with (`seq`), and those gone kept a while, so a client that lost its
+// stream resumes from where it was (`since`), across the box's restarts too, rather than read
+// everything again. The box's long-running process works it out as its engine's and its coding
+// agents' events come (`noteListEvent`), from each place read whole as it's heard
+// (`listPlaceHeard`) and every five minutes; a route answered in a process of its own (`box route`,
+// a machine reached over SSH) reads the places itself.
 
 import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
-import { listOf, writePrivate } from "../files";
+import { listOf, locked, writePrivate } from "../files";
 import { BOTS, RUN } from "../home";
-import { call, engineGet } from "../engine/client";
+import { bridgeTarget, call, engineGet } from "../engine/client";
 import { isChatsFolder } from "../engine/chats";
 import { filedProjects, projectFollowers, readProjects } from "../areas/projects";
 import { botFollowers, botHere } from "../bots/here";
@@ -46,18 +48,19 @@ interface Place {
 
 /** The list as it's kept: where it's at, each session's facts with the change it came with, those
  * gone since (with theirs), the oldest change `since` can resume from, and its projects. */
-interface Kept {
+export interface Kept {
   epoch: string;
   seq: number;
   floor: number;
-  pid: number;
   sessions: Record<string, { seq: number; facts: SessionFacts }>;
   gone: Record<string, { seq: number; at: number }>;
   projects: Record<string, ListedProject>;
 }
 
-// The long-running process's own list: null in any other (a route answered alone reads the file).
-let kept: Kept | null = null;
+// Whether this process is the box's long-running one, which keeps its places as their events come.
+let keeping = false;
+/** The list as this process last worked it out. */
+let latest: Kept | null = null;
 const places = new Map<string, Place>();
 /** Told as the list changes (each `…/events` stream). */
 export const listFollowers = new Set<() => void>();
@@ -128,160 +131,55 @@ export async function readRunning(target: Target, signal?: AbortSignal): Promise
   }
 }
 
-// MARK: The long-running process's list
+// MARK: The list, kept
 
-/** Starts keeping the list here (the box's long-running process): from what's kept from before
- * under a fresh epoch, and worked out again as its projects, bots, moves or asks change. How to stop. */
-export function keepList(now = Date.now()): () => void {
-  kept = { epoch: `${now.toString(36)}-${process.pid.toString(36)}`, seq: 0, floor: 0, pid: process.pid, sessions: {}, gone: {}, projects: {} };
-  places.clear();
-  const again = () => scheduleWorkOut();
-  const followers = [projectFollowers, botFollowers, moveFollowers, askFollowers];
-  for (const each of followers) each.add(again);
-  const whole = setInterval(() => { for (const [name, place] of placeTargets) readPlace(name, place).catch(() => {}); }, READ_EVERY);
-  whole.unref?.();
-  return () => {
-    for (const each of followers) each.delete(again);
-    clearInterval(whole);
-    clearTimeout(workOutTimer);
-    kept = null;
-    places.clear();
-    placeTargets.clear();
-  };
-}
-
-/** Whether this process keeps the list. */
-export const keepsList = () => kept !== null;
-
-// Each place as it was last heard, to read it whole again now and then.
-const placeTargets = new Map<string, Target>();
-
-/** A place heard (it started, or its events came back after they couldn't be): read whole now, as
- * what it did meanwhile went by unheard. */
-export function listPlaceHeard(name: string, target: Target): Promise<void> {
-  if (!kept) return Promise.resolve();
-  placeTargets.set(name, target);
-  return readPlace(name, target);
-}
-
-async function readPlace(name: string, target: Target): Promise<void> {
-  const [sessions, running] = await Promise.all([readSessions(target), readRunning(target)]);
-  if (!kept || !sessions) return;
-  places.set(name, { sessions: new Map(sessions.map(each => [each.id, each])), running: running ?? places.get(name)?.running ?? new Set() });
-  workOut();
-}
-
-/** Takes in an event from `name` (the engine, or the bridge, at `target`): a session read again as
- * it's made or changes, its run starting or ending; dropped as it's deleted. Settled once what it
- * read is in the list (a test waits on it). */
-export async function noteListEvent(name: string, target: Target, event: { type?: string; data?: { sessionID?: unknown; info?: { id?: unknown } } }): Promise<void> {
-  if (!kept || typeof event?.type !== "string") return;
-  const id = event.data?.sessionID ?? event.data?.info?.id;
-  if (typeof id !== "string" || !id.startsWith("ses")) return;
-  const place = places.get(name) ?? { sessions: new Map(), running: new Set() };
-  places.set(name, place);
-  if (event.type === "session.deleted") {
-    place.sessions.delete(id);
-    place.running.delete(id);
-    return scheduleWorkOut();
-  }
-  if (event.type === STARTS) place.running.add(id);
-  else if (ENDS.has(event.type)) place.running.delete(id);
-  else if (!RELOADS.has(event.type)) return;
-  scheduleWorkOut();
-  // As it is now: its folder, title, notes and times.
+/** The list in its file; null where there's none yet (or it can't be read). */
+export function readList(file = LIST_FILE): Kept | null {
   try {
-    const session = await call(target, "GET", `/api/session/${encodeURIComponent(id)}`, undefined, AbortSignal.timeout(10_000));
-    if (isObject(session) && session.id === id && places.get(name) === place) {
-      place.sessions.set(id, session as unknown as EngineSession);
-      workOut();
-    }
-  } catch (error) {
-    if ((error as { status?: number }).status === 404 && places.get(name) === place) {
-      place.sessions.delete(id);
-      workOut();
-    }
-  }
-}
-
-let workOutTimer: ReturnType<typeof setTimeout> | undefined;
-/** Worked out again in a moment: a few changes at once are one. */
-function scheduleWorkOut(): void {
-  if (!kept || workOutTimer) return;
-  workOutTimer = setTimeout(() => { workOutTimer = undefined; workOut(); }, 50);
-  workOutTimer.unref?.();
-}
-
-/** Every session's facts worked out again from what's kept of its places; what changed gets the
- * next change's number, and followers are told. */
-export function workOut(now = Date.now()): void {
-  if (!kept) return;
-  clearTimeout(workOutTimer);
-  workOutTimer = undefined;
-  const sessions: EngineSession[] = [];
-  const running = new Set<string>();
-  for (const place of places.values()) {
-    for (const session of place.sessions.values()) sessions.push(session);
-    for (const id of place.running) running.add(id);
-  }
-  const listed = listOfSessions(sessions, placeNow(running, sessions));
-  const next = kept.seq + 1;
-  let changed = false;
-  for (const [id, facts] of Object.entries(listed.sessions)) {
-    const before = kept.sessions[id];
-    if (before && JSON.stringify(before.facts) === JSON.stringify(facts)) continue;
-    kept.sessions[id] = { seq: next, facts };
-    delete kept.gone[id];
-    changed = true;
-  }
-  for (const id of Object.keys(kept.sessions)) {
-    if (id in listed.sessions) continue;
-    delete kept.sessions[id];
-    kept.gone[id] = { seq: next, at: now };
-    changed = true;
-  }
-  if (JSON.stringify(kept.projects) !== JSON.stringify(listed.projects)) {
-    kept.projects = listed.projects;
-    changed = true;
-  }
-  if (!changed) return;
-  kept.seq = next;
-  // Those gone kept a day, the latest 2000: `since` from before the oldest let go reads it all.
-  const gone = Object.entries(kept.gone).sort((a, b) => b[1].seq - a[1].seq);
-  for (const [index, [id, { seq, at }]] of gone.entries()) {
-    if (index < GONE_KEPT && now - at < GONE_FOR) continue;
-    delete kept.gone[id];
-    kept.floor = Math.max(kept.floor, seq);
-  }
-  keepFile();
-  for (const tell of [...listFollowers]) try { tell(); } catch {}
-}
-
-/** The list in its file, for a route answered in a process of its own; not over another live
- * process's (one box, one list). */
-function keepFile(): void {
-  if (!kept) return;
-  const there = readFile();
-  if (there && there.pid !== process.pid && processRuns(there.pid)) return;
-  try { writePrivate(LIST_FILE, JSON.stringify(kept)); } catch {}
-}
-
-function processRuns(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as { code?: string }).code === "EPERM";
-  }
-}
-
-function readFile(): Kept | null {
-  try {
-    const read = JSON.parse(fs.readFileSync(LIST_FILE, "utf8"));
-    return isObject(read) && typeof read.epoch === "string" && typeof read.seq === "number" && isObject(read.sessions) ? read as unknown as Kept : null;
+    const read = JSON.parse(fs.readFileSync(file, "utf8"));
+    return isObject(read) && typeof read.epoch === "string" && typeof read.seq === "number" && typeof read.floor === "number" && isObject(read.sessions) && isObject(read.gone) && isObject(read.projects)
+      ? read as unknown as Kept : null;
   } catch {
     return null;
   }
+}
+
+/** The list with `listed` taken in, as it is now, under its lock: each session whose facts changed
+ * with the next change's number, each one no longer there kept as gone (a day, the latest 2000; a
+ * `since` from before the oldest let go reads it all). A list that isn't there starts a new epoch. */
+export function commit(listed: { sessions: Record<string, SessionFacts>; projects: Record<string, ListedProject> }, now = Date.now(), file = LIST_FILE): Kept {
+  return locked(file + ".lock", () => {
+    const list: Kept = readList(file) ?? { epoch: `${now.toString(36)}-${process.pid.toString(36)}`, seq: 0, floor: 0, sessions: {}, gone: {}, projects: {} };
+    const next = list.seq + 1;
+    let changed = false;
+    for (const [id, facts] of Object.entries(listed.sessions)) {
+      const before = list.sessions[id];
+      if (before && JSON.stringify(before.facts) === JSON.stringify(facts)) continue;
+      list.sessions[id] = { seq: next, facts };
+      delete list.gone[id];
+      changed = true;
+    }
+    for (const id of Object.keys(list.sessions)) {
+      if (id in listed.sessions) continue;
+      delete list.sessions[id];
+      list.gone[id] = { seq: next, at: now };
+      changed = true;
+    }
+    if (JSON.stringify(list.projects) !== JSON.stringify(listed.projects)) {
+      list.projects = listed.projects;
+      changed = true;
+    }
+    if (!changed) return list;
+    list.seq = next;
+    const gone = Object.entries(list.gone).sort((a, b) => b[1].seq - a[1].seq);
+    for (const [index, [id, { seq, at }]] of gone.entries()) {
+      if (index < GONE_KEPT && now - at < GONE_FOR) continue;
+      delete list.gone[id];
+      list.floor = Math.max(list.floor, seq);
+    }
+    try { writePrivate(file, JSON.stringify(list)); } catch {}
+    return list;
+  });
 }
 
 /** The list from `list`: what changed after `since` (in its epoch, not before the oldest change it
@@ -296,32 +194,167 @@ export function answerFrom(list: Kept, since: string | null): SessionList {
   return { at: cursorOf(list), sessions, ...(gone.length ? { gone } : {}), projects: list.projects };
 }
 
-/** The list now, for a route: this process's own, else the long-running process's file while it
- * runs, else read from the places here at once (whole, under an epoch of its own). Null when no
- * place could be read. */
-async function listNow(context: Pick<RouteContext, "readEngine" | "bridge">, signal?: AbortSignal): Promise<Kept | null> {
-  if (kept) return kept;
-  const file = readFile();
-  if (file && processRuns(file.pid)) return file;
-  const targets = targetsOf(context);
-  let read = false;
+// MARK: The long-running process's list
+
+/** Starts keeping the list here (the box's long-running process), worked out again as its
+ * projects, bots, moves or asks change. How to stop. */
+export function keepList(): () => void {
+  keeping = true;
+  latest = null;
+  places.clear();
+  const again = () => scheduleWorkOut();
+  const followers = [projectFollowers, botFollowers, moveFollowers, askFollowers];
+  for (const each of followers) each.add(again);
+  const whole = setInterval(() => { for (const [name, place] of placeTargets) readPlace(name, place).catch(() => {}); }, READ_EVERY);
+  whole.unref?.();
+  return () => {
+    for (const each of followers) each.delete(again);
+    clearInterval(whole);
+    clearTimeout(workOutTimer);
+    workOutTimer = undefined;
+    keeping = false;
+    latest = null;
+    places.clear();
+    placeTargets.clear();
+    reading.clear();
+  };
+}
+
+// Each place as it was last heard, to read it whole again now and then.
+const placeTargets = new Map<string, Target>();
+// The sessions each place's events named while it was read whole, to read again once it's in.
+const reading = new Map<string, Set<string>>();
+
+/** Whether every place that runs has been read whole: until then a list would leave sessions out. */
+function ready(): boolean {
+  return places.has("engine") && (places.has("bridge") || bridgeTarget() === null);
+}
+
+/** A place heard (it started, or its events came back after they couldn't be): read whole now, as
+ * what it did meanwhile went by unheard. */
+export function listPlaceHeard(name: string, target: Target): Promise<void> {
+  if (!keeping) return Promise.resolve();
+  placeTargets.set(name, target);
+  return readPlace(name, target);
+}
+
+async function readPlace(name: string, target: Target): Promise<void> {
+  const touched = new Set<string>();
+  reading.set(name, touched);
+  let sessions: EngineSession[] | null = null;
+  let running: Set<string> | null = null;
+  try {
+    [sessions, running] = await Promise.all([readSessions(target), readRunning(target)]);
+  } finally {
+    if (reading.get(name) === touched) reading.delete(name);
+  }
+  if (!keeping || !sessions) return;
+  const place = places.get(name) ?? { sessions: new Map(), running: new Set() };
+  place.sessions = new Map(sessions.map(each => [each.id, each]));
+  if (running) place.running = running;
+  places.set(name, place);
+  // What its events said meanwhile may be newer than what was read: read those again.
+  if (touched.size) {
+    await Promise.all([...touched].map(id => readOne(name, target, id)));
+    const now = await readRunning(target);
+    if (now) place.running = now;
+  }
+  workOut();
+}
+
+/** One session of `name`'s read again: as it is now, or gone. */
+async function readOne(name: string, target: Target, id: string): Promise<void> {
+  try {
+    const session = await call(target, "GET", `/api/session/${encodeURIComponent(id)}`, undefined, AbortSignal.timeout(10_000));
+    if (isObject(session) && session.id === id) places.get(name)?.sessions.set(id, session as unknown as EngineSession);
+  } catch (error) {
+    if ((error as { status?: number }).status === 404) places.get(name)?.sessions.delete(id);
+  }
+}
+
+/** Takes in an event from `name` (the engine, or the bridge, at `target`): a session read again as
+ * it's made or changes, its run starting or ending; dropped as it's deleted. Settled once what it
+ * read is in the list (a test waits on it). */
+export async function noteListEvent(name: string, target: Target, event: { type?: string; data?: { sessionID?: unknown; info?: { id?: unknown } } }): Promise<void> {
+  if (!keeping || typeof event?.type !== "string") return;
+  const id = event.data?.sessionID ?? event.data?.info?.id;
+  if (typeof id !== "string" || !id.startsWith("ses")) return;
+  if (!places.has(name)) places.set(name, { sessions: new Map(), running: new Set() });
+  const place = places.get(name)!;
+  // (Read whole now: it's read again once that's in.)
+  reading.get(name)?.add(id);
+  if (event.type === "session.deleted") {
+    place.sessions.delete(id);
+    place.running.delete(id);
+    return scheduleWorkOut();
+  }
+  if (event.type === STARTS) place.running.add(id);
+  else if (ENDS.has(event.type)) place.running.delete(id);
+  else if (!RELOADS.has(event.type)) return;
+  scheduleWorkOut();
+  // As it is now: its folder, title, notes and times.
+  await readOne(name, target, id);
+  workOut();
+}
+
+let workOutTimer: ReturnType<typeof setTimeout> | undefined;
+/** Worked out again in a moment: a few changes at once are one. */
+function scheduleWorkOut(): void {
+  if (!keeping || workOutTimer) return;
+  workOutTimer = setTimeout(() => { workOutTimer = undefined; workOut(); }, 50);
+  workOutTimer.unref?.();
+}
+
+/** Every session's facts worked out again from what's kept of its places, once each place that
+ * runs has been read, and kept; followers told of a change. */
+export function workOut(now = Date.now()): void {
+  if (!keeping) return;
+  clearTimeout(workOutTimer);
+  workOutTimer = undefined;
+  if (!ready()) return;
   const sessions: EngineSession[] = [];
   const running = new Set<string>();
-  for (const target of targets) {
+  for (const place of places.values()) {
+    for (const session of place.sessions.values()) sessions.push(session);
+    for (const id of place.running) running.add(id);
+  }
+  const before = latest;
+  latest = commit(listOfSessions(sessions, placeNow(running, sessions)), now);
+  if (before && before.epoch === latest.epoch && before.seq === latest.seq) return;
+  for (const tell of [...listFollowers]) try { tell(); } catch {}
+}
+
+/** The places of `context` read whole, each that answers, where this process keeps them. */
+async function readPlaces(context: Pick<RouteContext, "readEngine" | "bridge">): Promise<void> {
+  let engine: Target | null = null;
+  try { engine = context.readEngine(); } catch {}
+  const bridge = context.bridge();
+  await Promise.all([engine ? readPlace("engine", engine) : null, bridge ? readPlace("bridge", bridge) : null]);
+}
+
+/** The list now, for a route; null when no place could be read. In the long-running process: as it
+ * keeps it, its places read first where they haven't been (it just started), worked out again with
+ * the box's files as they are now (a project another process changed). In any other: its places
+ * read now. */
+async function listNow(context: Pick<RouteContext, "readEngine" | "bridge">, signal?: AbortSignal): Promise<Kept | null> {
+  if (keeping) {
+    if (!ready()) await readPlaces(context);
+    if (!ready()) return null;
+    workOut();
+    return latest;
+  }
+  const sessions: EngineSession[] = [];
+  const running = new Set<string>();
+  let read = false;
+  for (const target of targetsOf(context)) {
     const [listed, active] = await Promise.all([readSessions(target, signal), readRunning(target, signal)]);
-    if (!listed) continue;
+    // (A place that runs but doesn't answer: none of it rather than a list without its sessions.)
+    if (!listed) return null;
     read = true;
     sessions.push(...listed);
     for (const id of active ?? []) running.add(id);
   }
-  if (!read) return null;
-  const listed = listOfSessions(sessions, placeNow(running, sessions));
-  // (Never resumed from: what it said is whole every time, `floor` past it.)
-  return {
-    epoch: `once-${Date.now().toString(36)}`, seq: 1, floor: 2, pid: 0,
-    sessions: Object.fromEntries(Object.entries(listed.sessions).map(([id, facts]) => [id, { seq: 1, facts }])),
-    gone: {}, projects: listed.projects,
-  };
+  return read ? commit(listOfSessions(sessions, placeNow(running, sessions))) : null;
 }
 
 export async function* listRoute(context: RouteContext, match: RegExpMatchArray): AsyncGenerator<AnswerPiece> {
@@ -330,13 +363,10 @@ export async function* listRoute(context: RouteContext, match: RegExpMatchArray)
   const since = new URLSearchParams(request.path.split("?")[1] ?? "").get("since");
   const list = await listNow(context, signal ?? undefined);
   if (!list) return yield* json(503, { message: "The engine isn’t running." });
-  if (!match[1] || !kept) {
-    // (Streamed only where it's kept: elsewhere its first line, as `box route` answers.)
-    if (!match[1]) return yield* json(200, answerFrom(list, since));
-    yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
-    return yield { body: Buffer.from(JSON.stringify(answerFrom(list, since)) + "\n") };
-  }
+  if (!match[1]) return yield* json(200, answerFrom(list, since));
   yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
+  // (Streamed only where it's kept: elsewhere its first line, as `box route` answers.)
+  if (!keeping) return yield { body: Buffer.from(JSON.stringify(answerFrom(list, since)) + "\n") };
   let wake: (() => void) | null = null;
   let dirty = false;
   const told = () => { dirty = true; wake?.(); };
@@ -347,20 +377,21 @@ export async function* listRoute(context: RouteContext, match: RegExpMatchArray)
     let first = true;
     while (!signal?.aborted) {
       dirty = false;
-      const now = kept;
-      if (!now) return;
+      const now = latest;
+      if (!keeping || !now) return;
       const answer = answerFrom(now, at);
-      // (Nothing changed since: no line, but the first. Its projects changed alone: a line.)
+      // (Nothing changed since: no line, but the first.)
       if (first || answer.full || at !== answer.at) yield { body: Buffer.from(JSON.stringify(answer) + "\n") };
       first = false;
       at = answer.at;
       if (dirty) continue;
-      // A minute at most between looks: what changes is told at once.
-      await new Promise<void>(done => {
-        const timer = setTimeout(done, 60_000);
-        wake = () => { clearTimeout(timer); done(); };
+      // A minute at most between looks: worked out again then, with the box's files as they are.
+      const woke = await new Promise<boolean>(done => {
+        const timer = setTimeout(() => done(false), 60_000);
+        wake = () => { clearTimeout(timer); done(true); };
       });
       wake = null;
+      if (!woke) workOut();
     }
   } finally {
     listFollowers.delete(told);

@@ -109,6 +109,12 @@ public enum SessionLists {
         /// Whether its box has said it yet.
         public var isRead: Bool { at != nil }
 
+        /// Where it's at moved on with nothing else changed (a line that changed nothing, kept apart
+        /// so taking it in isn't a change to what's drawn).
+        public mutating func move(to at: String) {
+            self.at = at
+        }
+
         /// `line` taken in: a whole one in place of what was, else what changed. Whether anything did.
         @discardableResult
         public mutating func take(_ line: Line) -> Bool {

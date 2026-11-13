@@ -122,7 +122,10 @@ nonisolated enum SessionCopies {
         folder.appending(path: "lists").appending(path: safe(box) + ".json")
     }
 
-    static func saveList(_ listing: SessionLists.Listing, of box: String) {
+    /// `at`: where it's at past its last change, kept with it.
+    static func saveList(_ listing: SessionLists.Listing, of box: String, at: String? = nil) {
+        var listing = listing
+        if let at { listing.move(to: at) }
         write {
             guard let data = try? JSONEncoder().encode(listing) else { return }
             try? FileManager.default.createDirectory(at: sessionList(box).deletingLastPathComponent(), withIntermediateDirectories: true)

@@ -35272,7 +35272,8 @@ var READ_EVERY = 5 * 60000;
 var RELOADS = new Set(["session.created", "session.updated", "session.renamed", "session.moved", "session.metadata.updated", "session.revert.staged", "session.revert.cleared", "session.revert.committed"]);
 var STARTS = "session.execution.started";
 var ENDS2 = new Set(["session.execution.succeeded", "session.execution.failed", "session.execution.interrupted"]);
-var kept4 = null;
+var keeping2 = false;
+var latest2 = null;
 var places3 = new Map;
 var listFollowers = new Set;
 var cursorOf = (list) => `${list.epoch}.${list.seq}`;
@@ -35338,8 +35339,69 @@ async function readRunning(target, signal) {
     return null;
   }
 }
-function keepList(now = Date.now()) {
-  kept4 = { epoch: `${now.toString(36)}-${process.pid.toString(36)}`, seq: 0, floor: 0, pid: process.pid, sessions: {}, gone: {}, projects: {} };
+function readList(file = LIST_FILE) {
+  try {
+    const read = JSON.parse(fs118.readFileSync(file, "utf8"));
+    return isObject(read) && typeof read.epoch === "string" && typeof read.seq === "number" && typeof read.floor === "number" && isObject(read.sessions) && isObject(read.gone) && isObject(read.projects) ? read : null;
+  } catch {
+    return null;
+  }
+}
+function commit(listed, now = Date.now(), file = LIST_FILE) {
+  return locked(file + ".lock", () => {
+    const list = readList(file) ?? { epoch: `${now.toString(36)}-${process.pid.toString(36)}`, seq: 0, floor: 0, sessions: {}, gone: {}, projects: {} };
+    const next = list.seq + 1;
+    let changed = false;
+    for (const [id, facts] of Object.entries(listed.sessions)) {
+      const before = list.sessions[id];
+      if (before && JSON.stringify(before.facts) === JSON.stringify(facts))
+        continue;
+      list.sessions[id] = { seq: next, facts };
+      delete list.gone[id];
+      changed = true;
+    }
+    for (const id of Object.keys(list.sessions)) {
+      if (id in listed.sessions)
+        continue;
+      delete list.sessions[id];
+      list.gone[id] = { seq: next, at: now };
+      changed = true;
+    }
+    if (JSON.stringify(list.projects) !== JSON.stringify(listed.projects)) {
+      list.projects = listed.projects;
+      changed = true;
+    }
+    if (!changed)
+      return list;
+    list.seq = next;
+    const gone = Object.entries(list.gone).sort((a, b) => b[1].seq - a[1].seq);
+    for (const [index, [id, { seq, at }]] of gone.entries()) {
+      if (index < GONE_KEPT && now - at < GONE_FOR2)
+        continue;
+      delete list.gone[id];
+      list.floor = Math.max(list.floor, seq);
+    }
+    try {
+      writePrivate(file, JSON.stringify(list));
+    } catch {}
+    return list;
+  });
+}
+function answerFrom(list, since) {
+  const from = parseCursor(since);
+  const whole = !from || from.epoch !== list.epoch || from.seq < list.floor || from.seq > list.seq;
+  const sessions = {};
+  for (const [id, entry] of Object.entries(list.sessions))
+    if (whole || entry.seq > from.seq)
+      sessions[id] = entry.facts;
+  if (whole)
+    return { at: cursorOf(list), full: true, sessions, projects: list.projects };
+  const gone = Object.entries(list.gone).filter(([, entry]) => entry.seq > from.seq).map(([id]) => id).sort();
+  return { at: cursorOf(list), sessions, ...gone.length ? { gone } : {}, projects: list.projects };
+}
+function keepList() {
+  keeping2 = true;
+  latest2 = null;
   places3.clear();
   const again = () => scheduleWorkOut();
   const followers = [projectFollowers, botFollowers, moveFollowers, askFollowers2];
@@ -35355,33 +35417,71 @@ function keepList(now = Date.now()) {
       each.delete(again);
     clearInterval(whole);
     clearTimeout(workOutTimer);
-    kept4 = null;
+    workOutTimer = undefined;
+    keeping2 = false;
+    latest2 = null;
     places3.clear();
     placeTargets.clear();
+    reading3.clear();
   };
 }
 var placeTargets = new Map;
+var reading3 = new Map;
+function ready2() {
+  return places3.has("engine") && (places3.has("bridge") || bridgeTarget() === null);
+}
 function listPlaceHeard(name, target) {
-  if (!kept4)
+  if (!keeping2)
     return Promise.resolve();
   placeTargets.set(name, target);
   return readPlace(name, target);
 }
 async function readPlace(name, target) {
-  const [sessions, running] = await Promise.all([readSessions(target), readRunning(target)]);
-  if (!kept4 || !sessions)
+  const touched = new Set;
+  reading3.set(name, touched);
+  let sessions = null;
+  let running = null;
+  try {
+    [sessions, running] = await Promise.all([readSessions(target), readRunning(target)]);
+  } finally {
+    if (reading3.get(name) === touched)
+      reading3.delete(name);
+  }
+  if (!keeping2 || !sessions)
     return;
-  places3.set(name, { sessions: new Map(sessions.map((each) => [each.id, each])), running: running ?? places3.get(name)?.running ?? new Set });
+  const place = places3.get(name) ?? { sessions: new Map, running: new Set };
+  place.sessions = new Map(sessions.map((each) => [each.id, each]));
+  if (running)
+    place.running = running;
+  places3.set(name, place);
+  if (touched.size) {
+    await Promise.all([...touched].map((id) => readOne3(name, target, id)));
+    const now = await readRunning(target);
+    if (now)
+      place.running = now;
+  }
   workOut();
 }
+async function readOne3(name, target, id) {
+  try {
+    const session = await call(target, "GET", `/api/session/${encodeURIComponent(id)}`, undefined, AbortSignal.timeout(1e4));
+    if (isObject(session) && session.id === id)
+      places3.get(name)?.sessions.set(id, session);
+  } catch (error) {
+    if (error.status === 404)
+      places3.get(name)?.sessions.delete(id);
+  }
+}
 async function noteListEvent(name, target, event) {
-  if (!kept4 || typeof event?.type !== "string")
+  if (!keeping2 || typeof event?.type !== "string")
     return;
   const id = event.data?.sessionID ?? event.data?.info?.id;
   if (typeof id !== "string" || !id.startsWith("ses"))
     return;
-  const place = places3.get(name) ?? { sessions: new Map, running: new Set };
-  places3.set(name, place);
+  if (!places3.has(name))
+    places3.set(name, { sessions: new Map, running: new Set });
+  const place = places3.get(name);
+  reading3.get(name)?.add(id);
   if (event.type === "session.deleted") {
     place.sessions.delete(id);
     place.running.delete(id);
@@ -35394,22 +35494,12 @@ async function noteListEvent(name, target, event) {
   else if (!RELOADS.has(event.type))
     return;
   scheduleWorkOut();
-  try {
-    const session = await call(target, "GET", `/api/session/${encodeURIComponent(id)}`, undefined, AbortSignal.timeout(1e4));
-    if (isObject(session) && session.id === id && places3.get(name) === place) {
-      place.sessions.set(id, session);
-      workOut();
-    }
-  } catch (error) {
-    if (error.status === 404 && places3.get(name) === place) {
-      place.sessions.delete(id);
-      workOut();
-    }
-  }
+  await readOne3(name, target, id);
+  workOut();
 }
 var workOutTimer;
 function scheduleWorkOut() {
-  if (!kept4 || workOutTimer)
+  if (!keeping2 || workOutTimer)
     return;
   workOutTimer = setTimeout(() => {
     workOutTimer = undefined;
@@ -35418,10 +35508,12 @@ function scheduleWorkOut() {
   workOutTimer.unref?.();
 }
 function workOut(now = Date.now()) {
-  if (!kept4)
+  if (!keeping2)
     return;
   clearTimeout(workOutTimer);
   workOutTimer = undefined;
+  if (!ready2())
+    return;
   const sessions = [];
   const running = new Set;
   for (const place of places3.values()) {
@@ -35430,113 +35522,45 @@ function workOut(now = Date.now()) {
     for (const id of place.running)
       running.add(id);
   }
-  const listed = listOfSessions(sessions, placeNow(running, sessions));
-  const next = kept4.seq + 1;
-  let changed = false;
-  for (const [id, facts] of Object.entries(listed.sessions)) {
-    const before = kept4.sessions[id];
-    if (before && JSON.stringify(before.facts) === JSON.stringify(facts))
-      continue;
-    kept4.sessions[id] = { seq: next, facts };
-    delete kept4.gone[id];
-    changed = true;
-  }
-  for (const id of Object.keys(kept4.sessions)) {
-    if (id in listed.sessions)
-      continue;
-    delete kept4.sessions[id];
-    kept4.gone[id] = { seq: next, at: now };
-    changed = true;
-  }
-  if (JSON.stringify(kept4.projects) !== JSON.stringify(listed.projects)) {
-    kept4.projects = listed.projects;
-    changed = true;
-  }
-  if (!changed)
+  const before = latest2;
+  latest2 = commit(listOfSessions(sessions, placeNow(running, sessions)), now);
+  if (before && before.epoch === latest2.epoch && before.seq === latest2.seq)
     return;
-  kept4.seq = next;
-  const gone = Object.entries(kept4.gone).sort((a, b) => b[1].seq - a[1].seq);
-  for (const [index, [id, { seq, at }]] of gone.entries()) {
-    if (index < GONE_KEPT && now - at < GONE_FOR2)
-      continue;
-    delete kept4.gone[id];
-    kept4.floor = Math.max(kept4.floor, seq);
-  }
-  keepFile();
   for (const tell of [...listFollowers])
     try {
       tell();
     } catch {}
 }
-function keepFile() {
-  if (!kept4)
-    return;
-  const there = readFile();
-  if (there && there.pid !== process.pid && processRuns2(there.pid))
-    return;
+async function readPlaces(context) {
+  let engine = null;
   try {
-    writePrivate(LIST_FILE, JSON.stringify(kept4));
+    engine = context.readEngine();
   } catch {}
-}
-function processRuns2(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error.code === "EPERM";
-  }
-}
-function readFile() {
-  try {
-    const read = JSON.parse(fs118.readFileSync(LIST_FILE, "utf8"));
-    return isObject(read) && typeof read.epoch === "string" && typeof read.seq === "number" && isObject(read.sessions) ? read : null;
-  } catch {
-    return null;
-  }
-}
-function answerFrom(list, since) {
-  const from = parseCursor(since);
-  const whole = !from || from.epoch !== list.epoch || from.seq < list.floor || from.seq > list.seq;
-  const sessions = {};
-  for (const [id, entry] of Object.entries(list.sessions))
-    if (whole || entry.seq > from.seq)
-      sessions[id] = entry.facts;
-  if (whole)
-    return { at: cursorOf(list), full: true, sessions, projects: list.projects };
-  const gone = Object.entries(list.gone).filter(([, entry]) => entry.seq > from.seq).map(([id]) => id).sort();
-  return { at: cursorOf(list), sessions, ...gone.length ? { gone } : {}, projects: list.projects };
+  const bridge = context.bridge();
+  await Promise.all([engine ? readPlace("engine", engine) : null, bridge ? readPlace("bridge", bridge) : null]);
 }
 async function listNow(context, signal) {
-  if (kept4)
-    return kept4;
-  const file = readFile();
-  if (file && processRuns2(file.pid))
-    return file;
-  const targets = targetsOf(context);
-  let read = false;
+  if (keeping2) {
+    if (!ready2())
+      await readPlaces(context);
+    if (!ready2())
+      return null;
+    workOut();
+    return latest2;
+  }
   const sessions = [];
   const running = new Set;
-  for (const target of targets) {
+  let read = false;
+  for (const target of targetsOf(context)) {
     const [listed, active] = await Promise.all([readSessions(target, signal), readRunning(target, signal)]);
     if (!listed)
-      continue;
+      return null;
     read = true;
     sessions.push(...listed);
     for (const id of active ?? [])
       running.add(id);
   }
-  if (!read)
-    return null;
-  const listed = listOfSessions(sessions, placeNow(running, sessions));
-  return {
-    epoch: `once-${Date.now().toString(36)}`,
-    seq: 1,
-    floor: 2,
-    pid: 0,
-    sessions: Object.fromEntries(Object.entries(listed.sessions).map(([id, facts]) => [id, { seq: 1, facts }])),
-    gone: {},
-    projects: listed.projects
-  };
+  return read ? commit(listOfSessions(sessions, placeNow(running, sessions))) : null;
 }
 async function* listRoute(context, match) {
   const { request, signal, json } = context;
@@ -35546,14 +35570,12 @@ async function* listRoute(context, match) {
   const list = await listNow(context, signal ?? undefined);
   if (!list)
     return yield* json(503, { message: "The engine isn’t running." });
-  if (!match[1] || !kept4) {
-    if (!match[1])
-      return yield* json(200, answerFrom(list, since));
-    yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
+  if (!match[1])
+    return yield* json(200, answerFrom(list, since));
+  yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
+  if (!keeping2)
     return yield { body: Buffer.from(JSON.stringify(answerFrom(list, since)) + `
 `) };
-  }
-  yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
   let wake = null;
   let dirty = false;
   const told = () => {
@@ -35567,8 +35589,8 @@ async function* listRoute(context, match) {
     let first = true;
     while (!signal?.aborted) {
       dirty = false;
-      const now = kept4;
-      if (!now)
+      const now = latest2;
+      if (!keeping2 || !now)
         return;
       const answer = answerFrom(now, at);
       if (first || answer.full || at !== answer.at)
@@ -35578,14 +35600,16 @@ async function* listRoute(context, match) {
       at = answer.at;
       if (dirty)
         continue;
-      await new Promise((done) => {
-        const timer = setTimeout(done, 60000);
+      const woke = await new Promise((done) => {
+        const timer = setTimeout(() => done(false), 60000);
         wake = () => {
           clearTimeout(timer);
-          done();
+          done(true);
         };
       });
       wake = null;
+      if (!woke)
+        workOut();
     }
   } finally {
     listFollowers.delete(told);
@@ -35923,7 +35947,7 @@ async function pushFrom(root, said = refusal(root)) {
   const pushed = await said(["push"]);
   return pushed?.includes("no upstream branch") ? said(["push", "-u", "origin", "HEAD"]) : pushed;
 }
-async function commit(directory, message, push, author) {
+async function commit2(directory, message, push, author) {
   const root = (await text4(directory, ["rev-parse", "--show-toplevel"]))?.trim();
   if (!root)
     return { failed: "Not a git repository.", committed: false };
@@ -36283,7 +36307,7 @@ async function* changesRoute(context) {
     const message = typeof body.message === "string" ? body.message : "";
     if (!message.trim())
       return yield* json(400, { message: "Write a commit message." });
-    const done = await commit(directory, message, body.push === true, authorOf(body));
+    const done = await commit2(directory, message, body.push === true, authorOf(body));
     return yield* done ? json(422, { message: done.failed, ...done.committed ? { committed: true, pushed: false } : {} }) : json(200, {});
   }
   if (route === "kuvo/git/pull-request/draft") {
@@ -39557,7 +39581,7 @@ import fs124 from "node:fs";
 import path128 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "49db47bfd1d6";
+var BRIDGE_VERSION = "a2e5b4b2edf5";
 
 // Packages/Box/src/link/rehome/rewrite.ts
 var NO_REWRITE = {
@@ -41443,7 +41467,7 @@ var MOST_TEXT = 400000;
 var MOST_OUTPUT2 = 2000;
 var TEXT_VERSION = 2;
 var texts = new Map;
-var reading3 = new Map;
+var reading4 = new Map;
 async function* searchRoute(context) {
   const { request, readEngine, bridge, json } = context;
   if (request.method.toUpperCase() !== "GET")
@@ -41535,7 +41559,7 @@ function textOf3(place, target, session) {
   const known = texts.get(name) ?? fromDisk(name);
   if (known?.updated === updated)
     return Promise.resolve(known);
-  const already = reading3.get(name);
+  const already = reading4.get(name);
   if (already)
     return already;
   const read = conversationOf3(target, session.id).then((messages) => {
@@ -41545,8 +41569,8 @@ function textOf3(place, target, session) {
     texts.set(name, { updated, folded: kept.folded });
     toDisk(name, kept);
     return kept;
-  }, () => null).finally(() => reading3.delete(name));
-  reading3.set(name, read);
+  }, () => null).finally(() => reading4.delete(name));
+  reading4.set(name, read);
   return read;
 }
 function fromDisk(name) {
