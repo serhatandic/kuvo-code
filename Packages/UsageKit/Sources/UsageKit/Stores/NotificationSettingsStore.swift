@@ -6,7 +6,7 @@ import Observation
 /// first time a trigger is turned on, so a fresh install stays quiet until the user opts in.
 ///
 /// Persisted in `UserDefaults` (each key independently, with an unset key defaulting to `false`).
-/// `@Observable` lets the Settings toggles and `WidgetDataStore` evaluation read live values.
+/// `@Observable` lets the Settings toggles read live values; the box decides notices.
 @MainActor
 @Observable
 final class NotificationSettingsStore {
@@ -51,15 +51,6 @@ final class NotificationSettingsStore {
 
     /// The stored keys, for the host's shared settings (`HostSettings`).
     static let storageKeys = (underTen: underTenKey, healthyToClose: healthyToCloseKey, closeToRunningOut: closeToRunningOutKey)
-
-    /// The per-milestone toggles as the pure logic consumes them.
-    var toggles: PaceNotificationToggles {
-        PaceNotificationToggles(
-            underTenPercent: underTenPercent,
-            healthyToClose: healthyToClose,
-            closeToRunningOut: closeToRunningOut
-        )
-    }
 
     /// True when at least one trigger is on — used to decide whether to request authorization (when the
     /// first trigger is turned on) and whether the Settings permission notice should show. Turning all

@@ -64,4 +64,26 @@ import Testing
         #expect(told.notices.map(\.id) == ["ntc_ok"])
         #expect(told.telling == true)
     }
+    @Test func usageIsDeliveredFromFirstReadOnceAcrossBoxesAndRelaunch() async throws {
+        let name = "BoxNoticesTests." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let data = Data(#"{"notices":[{"id":"ntc_transport","notice":{"category":"usage","title":"Almost Out","body":"Under 10% usage remaining for this window.","data":{"notice":"usage_stable","row":"claude#hash"}}}]}"#.utf8)
+        let answer = try JSONDecoder().decode(BoxNotices.Told.self, from: data)
+        let notices = BoxNotices()
+        notices.usageDelivery = .init(defaults: defaults)
+        var shown: [String] = []
+        notices.showUsage = { _, id in shown.append(id); return true }
+        let first = notices.take(answer, from: "one")
+        let second = notices.take(answer, from: "two")
+        await first.value
+        await second.value
+        #expect(shown == ["usage_stable"])
+        let restarted = BoxNotices()
+        restarted.usageDelivery = .init(defaults: defaults)
+        restarted.showUsage = { _, id in shown.append(id); return true }
+        await restarted.take(answer, from: "one").value
+        #expect(shown == ["usage_stable"])
+    }
+
 }

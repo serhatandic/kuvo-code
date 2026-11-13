@@ -242,6 +242,22 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
+    /// A box's usage verdict, with a stable OS identifier. It has no conversation or Reply action.
+    @MainActor
+    func usage(id: String, title: String, subtitle: String?, body: String) async -> Bool {
+        guard NSClassFromString("XCTestCase") == nil, Self.isEnabled, await authorize() else { return false }
+        let content = UNMutableNotificationContent()
+        content.title = Self.masked(title)
+        content.subtitle = subtitle.map(Self.masked) ?? ""
+        content.body = Self.masked(body)
+        content.threadIdentifier = "usage"
+        if Self.playsSound { content.sound = .default }
+        do {
+            try await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "usage-" + id, content: content, trigger: nil))
+            return true
+        } catch { return false }
+    }
+
     private func send(_ push: Push, session: String, title: String, subtitle: String?, body: String) {
         guard let toPhones, push.ask != nil, push.machine == nil else { return }
         var data = push.group.map { ["group": $0] } ?? (session.isEmpty ? [:] : ["session": session])
@@ -342,6 +358,11 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         let granted = (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])) ?? false
         isAuthorized = granted
         return granted
+    }
+
+    /// Quota alerts remain visible while the usage panel is open, as they were in UsageKit.
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        notification.request.content.threadIdentifier == "usage" ? [.banner, .sound] : []
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
