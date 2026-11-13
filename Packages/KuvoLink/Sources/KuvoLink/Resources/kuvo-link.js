@@ -35297,6 +35297,7 @@ var READ_EVERY = 5 * 60000;
 var RELOADS = new Set(["session.created", "session.updated", "session.renamed", "session.moved", "session.metadata.updated", "session.revert.staged", "session.revert.cleared", "session.revert.committed"]);
 var STARTS = "session.execution.started";
 var ENDS2 = new Set(["session.execution.succeeded", "session.execution.failed", "session.execution.interrupted"]);
+var LOST_GAP = 1e6;
 var keeping2 = false;
 var latest2 = null;
 var places3 = new Map;
@@ -35392,6 +35393,10 @@ function commit(listed, now = Date.now(), file = LIST_FILE, owner) {
     const list = readList(file) ?? { epoch: `${now.toString(36)}-${process.pid.toString(36)}`, seq: 0, floor: 0, sessions: {}, gone: {}, projects: {} };
     if (owner === undefined && list.owner && list.owner !== process.pid && processRuns(list.owner, "kuvo-link"))
       return list;
+    if (owner !== undefined && list.owner !== owner && list.seq > 0) {
+      list.lost = [list.seq, list.seq + LOST_GAP];
+      list.seq += LOST_GAP;
+    }
     const { changed, noted } = takeIn(list, listed, now, owner);
     if (changed || noted)
       try {
@@ -35468,7 +35473,7 @@ function takeIn(list, listed, now, owner) {
 }
 function answerFrom(list, since) {
   const from = parseCursor(since);
-  const whole = !from || from.epoch !== list.epoch || from.seq < list.floor || from.seq > list.seq;
+  const whole = !from || from.epoch !== list.epoch || from.seq < list.floor || from.seq > list.seq || list.lost !== undefined && from.seq > list.lost[0] && from.seq <= list.lost[1];
   const sessions = {};
   for (const [id, entry] of Object.entries(list.sessions))
     if (whole || entry.seq > from.seq)
@@ -35528,6 +35533,7 @@ function keepList() {
     again();
   }, { recursive: false });
   watchBots();
+  watchesWhole = () => box.whole && moves.whole && bots.whole;
   const whole = setInterval(() => {
     for (const [name, place] of placeTargets)
       readPlace(name, place).catch(() => {});
@@ -35547,6 +35553,7 @@ function keepList() {
     keeping2 = false;
     latest2 = null;
     known2 = null;
+    watchesWhole = () => true;
     asked7.clear();
     deleted.clear();
     places3.clear();
@@ -35708,6 +35715,8 @@ function workOut(now = Date.now()) {
       running.add(id);
   }
   const was = latest2 ? cursorOf(latest2) : null;
+  if (!watchesWhole())
+    known2 = null;
   known2 ??= readBoxKnows();
   const listed = withPending(sessions, placeOf, running, pendingPlaces(), latest2 ?? readList(), known2);
   if (latest2?.owner === process.pid) {
@@ -35725,7 +35734,12 @@ function workOut(now = Date.now()) {
       tell();
     } catch {}
 }
+process.once("exit", () => {
+  if (writeTimer)
+    writeNow();
+});
 var known2 = null;
+var watchesWhole = () => true;
 var WRITE_EVERY = 1000;
 var QUIET_WRITE_EVERY = 1e4;
 var lastWrite = -Infinity;
@@ -35772,6 +35786,7 @@ async function listNow(context, signal) {
       await readPlaces(context);
     if (!places3.has("engine"))
       return null;
+    known2 = null;
     workOut();
     return latest2;
   }
@@ -39828,7 +39843,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "a362262fa3ea";
+var BRIDGE_VERSION = "8b6f84447b42";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";

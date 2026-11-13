@@ -61,7 +61,14 @@ export interface Kept {
   projects: Record<string, ListedProject>;
   pending?: string[];
   owner?: number;
+  /** The changes a long-running process may have told and not written before it went (`[from,
+   * to]`): a cursor among them is from what's lost, and reads it all. */
+  lost?: [number, number];
 }
+
+/** How far a long-running process taking the list over moves its count on: past any change the one
+ * before told but didn't write (its writes are a moment apart). */
+const LOST_GAP = 1_000_000;
 
 /** What a list is worked out to: each session's facts, the place each is on, the projects, and the
  * places that couldn't be read. */
@@ -89,7 +96,9 @@ function parseCursor(given: string | null): { epoch: string; seq: number } | nul
 }
 
 /** What the box knows beside its sessions, read from its files: kept by the long-running process
- * until one of them changes (`keepList`), so a run's every step reads none of them. */
+ * until one of them changes (`keepList`), so a run's every step reads none of them. (A project's
+ * git worktree made outside Kuvo Code, `linkedTrees`, is seen as it's read again: at the next
+ * whole read, a route's ask or a stream's minute.) */
 export interface BoxKnows {
   projects: ReturnType<typeof readProjects>;
   filed: Record<string, string>;
@@ -197,6 +206,12 @@ export function commit(listed: Listed, now = Date.now(), file = LIST_FILE, owner
     // A route's, while the long-running process keeps it (it started since the route looked): its
     // list stands, mark and all.
     if (owner === undefined && list.owner && list.owner !== process.pid && processRuns(list.owner, "kuvo-link")) return list;
+    // The long-running process taking it over (it started again): the one before may have told
+    // changes it hadn't written yet, numbered on from here; its own are numbered past them.
+    if (owner !== undefined && list.owner !== owner && list.seq > 0) {
+      list.lost = [list.seq, list.seq + LOST_GAP];
+      list.seq += LOST_GAP;
+    }
     const { changed, noted } = takeIn(list, listed, now, owner);
     if (changed || noted) try { writePrivate(file, JSON.stringify(list)); } catch {}
     return list;
@@ -269,7 +284,7 @@ function takeIn(list: Kept, listed: Listed, now: number, owner?: number): { chan
  * can still say), else all of it. */
 export function answerFrom(list: Kept, since: string | null): SessionList {
   const from = parseCursor(since);
-  const whole = !from || from.epoch !== list.epoch || from.seq < list.floor || from.seq > list.seq;
+  const whole = !from || from.epoch !== list.epoch || from.seq < list.floor || from.seq > list.seq || (list.lost !== undefined && from.seq > list.lost[0] && from.seq <= list.lost[1]);
   const sessions: Record<string, SessionFacts> = {};
   for (const [id, entry] of Object.entries(list.sessions)) if (whole || entry.seq > from!.seq) sessions[id] = entry.facts;
   const pending = list.pending?.length ? { pending: list.pending } : {};
@@ -319,6 +334,8 @@ export function keepList(): () => void {
   };
   const bots = watchFolders([BOTS], () => { watchBots(); again(); }, { recursive: false });
   watchBots();
+  // (A watch the system couldn't keep: what the box knows read each time instead.)
+  watchesWhole = () => box.whole && moves.whole && bots.whole;
   const whole = setInterval(() => { for (const [name, place] of placeTargets) readPlace(name, place).catch(() => {}); }, READ_EVERY);
   whole.unref?.();
   return () => {
@@ -333,6 +350,7 @@ export function keepList(): () => void {
     keeping = false;
     latest = null;
     known = null;
+    watchesWhole = () => true;
     asked.clear();
     deleted.clear();
     places.clear();
@@ -510,6 +528,7 @@ export function workOut(now = Date.now()): void {
     for (const id of place.running) running.add(id);
   }
   const was = latest ? cursorOf(latest) : null;
+  if (!watchesWhole()) known = null;
   known ??= readBoxKnows();
   const listed = withPending(sessions, placeOf, running, pendingPlaces(), latest ?? readList(), known);
   if (latest?.owner === process.pid) {
@@ -525,11 +544,15 @@ export function workOut(now = Date.now()): void {
   for (const tell of [...listFollowers]) try { tell(); } catch {}
 }
 
+// What's not written yet, written as the process ends (it's stopped: the keeper, an update).
+process.once("exit", () => { if (writeTimer) writeNow(); });
+
 /** The list as this process keeps it (the long-running one's), else as its file has it. */
 export const keptList = (): Kept | null => latest ?? readList();
 
 // What the box knows beside its sessions, as last read (`readBoxKnows`): null to read again.
 let known: BoxKnows | null = null;
+let watchesWhole = (): boolean => true;
 
 /** How often the file is written at most: once a second, or every ten while only when sessions
  * last changed did (a run's every step). */
@@ -579,6 +602,8 @@ async function listNow(context: Pick<RouteContext, "readEngine" | "bridge">, sig
   if (keeping) {
     if (!places.has("engine") || (context.bridge() && !places.has("bridge"))) await readPlaces(context);
     if (!places.has("engine")) return null;
+    // (With the box's files as they are now: a watch the system couldn't keep misses changes.)
+    known = null;
     workOut();
     return latest;
   }

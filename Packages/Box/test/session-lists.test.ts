@@ -461,6 +461,25 @@ test("a bot another process makes is listed as a bot's at once", async () => {
   }
 }, 20_000)
 
+// The box's long-running process gone before it wrote its last changes (stopped, crashed): the
+// next one goes on from the file, and a client that saw those changes reads it all again rather
+// than miss what's numbered as they were.
+test("a client that saw changes the last process didn't write reads it all after a restart", async () => {
+  mkdirSync(join(LIST_FILE, ".."), { recursive: true })
+  writeFileSync(LIST_FILE, JSON.stringify({ epoch: "kept", seq: 10, floor: 0, sessions: {}, gone: {}, projects: {}, owner: 999999 }))
+  const stop = keepList()
+  try {
+    await listPlaceHeard("engine", target)
+    expect((await ask("kuvo/sessions/list?since=kept.11")).lines[0].full).toBe(true)
+    const resumed = (await ask("kuvo/sessions/list?since=kept.10")).lines[0]
+    expect(resumed.full).toBeUndefined()
+    expect(Object.keys(resumed.sessions).sort()).toEqual(["ses_a", "ses_chat"])
+  } finally {
+    stop()
+    rmSync(LIST_FILE, { force: true })
+  }
+})
+
 test("a route never writes over the list the long-running process keeps, nor takes away its mark", async () => {
   // (A process named as the long-running one is: it started as the route read the engine.)
   const link = Bun.spawn(["/bin/sh", "-c", "while :; do sleep 1; done", "kuvo-link"], { stdin: "ignore", stdout: "ignore", stderr: "ignore" })

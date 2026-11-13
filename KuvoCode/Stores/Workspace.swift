@@ -486,7 +486,9 @@ final class Workspace {
             do {
                 take(try await client.value(SessionLists.Line.self, "GET", SessionLists.route(since: listCursor(box))), on: box)
             } catch let refusal as BoxRefusal where refusal.status == 404 {
-                // Not served: as it says of itself (its features), noted; else read again later.
+                // Not served: as it says of itself now (its features asked again), noted; else
+                // read again later.
+                featuresHere[box] = nil
                 _ = await checkLists(on: box)
             } catch {}
         } while listReads[box] == true
