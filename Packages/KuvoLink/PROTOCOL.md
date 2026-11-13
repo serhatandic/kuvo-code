@@ -4924,6 +4924,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `bots.keys` | `kuvo/bots/<id>/keys…` |
 | `bots.make` | `kuvo/bots/templates` and `POST kuvo/bots` |
 | `box.app` | `kuvo/box/app` and `kuvo/box/app/open`: this Mac's app registering with a Mac's box in a home of its own, and opened by it for its agents' browser ("This Mac's box: this Mac's app") |
+| `box.helper` | `kuvo-link.js helper install [--load] [--app <bundle ID>] \| status`: the launch agent that starts Kuvo Code Box, a Mac's box's helper, at login ("This Mac's box: its helper"); `kuvo-start serve`; `serve` saying where it answers in `run/serve.json` |
 | `box.ownHome` | a Mac's box can run in a home of its own, laid out as a machine's (`box/kind`, "This Mac's box: a home of its own"); there, `keepsAwake` and `awakeNow` in `kuvo/work/settings` |
 | `box.rehome` | `kuvo/box/rehome`: moving this Mac's box into a home of its own, and back ("This Mac's box: moving this Mac's box"); `kuvo-link.js rehome`, and `here`'s `moving` |
 | `box.serve` | `kuvo/box/serve`: the box's server kept running for clients ("Kept for clients"); `kuvo-link.js serve --kept` |
@@ -5230,7 +5231,8 @@ as above.
 #### Moving this Mac's box
 
 `box.rehome`. The box moves itself out of the app's folder into `~/.kuvo-code`, laid out as above,
-with `kuvo-link.js rehome` (#333 piece 2a). The box decides and does each step; the keeper only
+with `kuvo-link.js rehome` (#333 pieces 2a and 2b), run by the engine's Bun (it opens the engine's
+database with `bun:sqlite`). The box decides and does each step; the keeper only
 stops the old box first and starts what's there after, and a client only shows it. Only on a Mac:
 on Linux every command but `--status`, `--ready` and `--resume` refuses, saying there's nothing to
 move (`--settled` works anywhere). Everything it keeps is in `~/.kuvo-code/updates/rehome`, made
@@ -5267,8 +5269,11 @@ refused anything but `--status` on the real `~/.kuvo-code`.
      not `gone`: both keep running as they are), when the app's folder and `~/.kuvo-code` aren't
      on one APFS disk, without room for the engine's database and its journal, × 1.1, plus
      200 MB, for a copy of the app (a demo's, a test's: its folder isn't `run.kuvo.code`) moving
-     into the real `~/.kuvo-code`, and, until the paths its sessions name are rewritten (#333
-     piece 2b), for the real app's box at all: only a test's moves yet. A refusal counts as a try.
+     into the real `~/.kuvo-code`, when it isn't run by Bun, and while an engine database
+     (`opencode*.db`) is of a schema the rewrite wasn't tried with: its migrations, counted and
+     the last (`SELECT count(*), max(id) FROM migration`), must be one it knows (`59
+     20261030054400_job`, the pinned engine 2.2.6's); one never used (no tables) is no refusal. A
+     refusal counts as a try.
   2. **Install.** What's in `~/.kuvo-code` that isn't a box (one its Mac removed, or what was
      left) is set aside into `trash/earlier-box-<date>`, nothing deleted.
   3. **Clone.** Each folder cloned (`cp -c`, for up to six hours: APFS clones, links as links,
@@ -5279,11 +5284,80 @@ refused anything but `--status` on the real `~/.kuvo-code`.
      `state`, `cache` and `workspace` to the same names, `engine`, `integrations`, `bots`,
      `wakes`, `groups`, `Chats` (to `chats`), `agents`, `phone-link.json`, the app's
      `Attachments` (into `attachments`), and the box's files. The app's folder isn't changed.
-  4. **Rewrite** and 5. **check**: the paths that name the old place (piece 2b; nothing yet).
+  4. **Rewrite.** In staging, by one path map (each placement's old folder to its new one, the
+     longest first; a move back's the same map turned around). A path is rewritten where it's a
+     path, whole: a value equal to an old folder or starting with it and `/`, a `file://` URL to
+     one (kept as it was written, plainly or with `%20`; where both read the same, as in
+     `~/.kuvo-code`, encoded), or an engine setting's `{file:…}`. Never a path among other words.
+     - **The engine's database**, in one transaction (`BEGIN IMMEDIATE`, its foreign keys checked
+       before it's kept, its log checkpointed after): `project.worktree`, `session_v2.directory`,
+       `worktree.directory`, `project_directory.directory` and `permission.resource`; every path
+       in the JSON of `project.sandboxes`, `session_v2.revert`, `summary_diffs`, `permission`,
+       `metadata` and `workspace.binding`; and only the files sent (`files[*].source.uri` and
+       `uri`) in `session_message.data` and `session_inbox.payload`. A project outside git, whose
+       ID is its folder's (`sha1("directory:" + path)`), gets its new folder's, with every column
+       naming it (`session_v2.project_id`, `permission`, `worktree`, `project_directory`,
+       `event_sequence.aggregate_id`, `event.aggregate_id`) and its `shell/<id>` folder. Each
+       worktree's snapshots (`snapshot/<project>/<sha1(path)>`) are renamed for its new path, and
+       each snapshot's `config` (its worktree), `opencode.gitconfig` and `objects/info/alternates`
+       rewritten.
+     - **The box's own files**: every `.json`, `.jsonl` and `.ndjson` of the box's and its bridge's
+       (keys too, as lists kept by folder are), the one-path `wakes/<session>/directory` and
+       `bots/<bot>/directory`, a bot's `workspace/.opencode/opencode.json`, the engine's
+       `config/opencode/opencode.json` and `updates/rollback/restore.sh`; an artifact's ID with its
+       path (`art_` and its hash), and what's kept by a path's hash renamed: the bridge's
+       `snapshots/<sha1(top)[:20]>`, `box/branch-backups/<sha1(top)[:20]>`, and usage's place in a
+       log (`agents/usage/*-files/<sha256(log)[:32]>.json`). Never what's yours or an agent's own
+       (chats' and bots' folders, sent files, the agents' settings folders, the trash, the vault),
+       nor what the box makes anew as it starts (`run/fence`, the engine's plugins).
+     - **Sent files merged beside one of the same name** (`<name> 2`, as placing does it): what
+       names them names the new name.
+     - **The coding agents' own, in the bridge's folder**: Kuvo Code's own Console sign-in's and
+       an added Claude Code account's history of each folder (`projects/<slug>`, its slug as Claude Code makes it: each character but a
+       letter or digit a `-`, one over 200 cut there with `-` and its 32-bit string hash in base
+       36), an added Grok account's sessions (`sessions/<URL-encoded path>`), and Cursor's records
+       of its agents' folders (`agents.ndjson`'s `cwd`). Codex needs nothing; Antigravity keeps
+       its conversations by their IDs (whether it keeps anything else by a folder isn't known).
+  5. **Check.** It goes back, saying why, if any of the box's own files still names the old place
+     as a path, whole, if the database still does where it rewrites (a path column, a path whole
+     in its JSON, a file sent), if the engine's database holds other counts of sessions or
+     projects than its copy did before the rewrite, or if the engine (the version the box's keeper
+     names, else the newest) started on a copy of the staged database (no schedules, jobs,
+     accounts, keys or queued messages; nothing busy or suspended; settings, home and cache of its
+     own; no network, through a proxy that's nowhere; at a port of its own, stopped as its stdin
+     closes) doesn't list every session (page by page, and the archived), or has one of the newest 25 in
+     another folder than the database says, or a moved one's folder isn't staged though it was
+     there. Where the old place is still named but isn't the box's to change (people's and
+     agents' words in the database and in files that moved, a diff's text, a command in a kept
+     rule, a command's saved output), it's
+     noted in `state.json`'s `leftovers` for support, never a failure.
   6. **Place.** Each staged folder renamed into place, merged entry by entry where one's there
      (a name in both keeps both: the one there keeps its name, the other is `<name> 2`); then
      `box/kind` (`mac`), last.
-  7. **Fix.** What outside the box names its folders (piece 2b; nothing yet).
+  7. **Fix.** What outside the box names its folders, each change journaled first, so going back
+     puts it back: every worktree link between what was placed and a repository anywhere,
+     repaired from the repository (`git worktree repair <worktree>` in its common folder; a link
+     relative to where its end was, `worktree.useRelativePaths`, read from there), with what git
+     writes outside what was placed, all of it before any repair, (the repository's `worktrees/<name>/gitdir`, or a
+     worktree's `.git` outside the box) journaled as it was (`{act: "wrote", path, was}`; the old
+     place is still there, so nothing prunes the link before); your own Claude Code's history of
+     each folder that moved (`$CLAUDE_CONFIG_DIR` or `~/.claude`, `projects/<slug>`) and your
+     own Grok's sessions (`$GROK_HOME` or `~/.grok`, `sessions/<URL-encoded path>`; one too long
+     for a name stays) renamed, with Grok's index for searching them
+     (`sessions/session_search.sqlite`, a cache naming each session's folder, which Grok makes anew
+     when it's missing) set aside as `<name>.before-kuvo-move` and deleted once the old place is
+     cleared (an added Grok account's, in the bridge's folder, is dropped from the staged copy);
+     and each added Claude Code account's sign-in, the Keychain item
+     named by its folder (`Claude Code-credentials-<sha256(NFC folder)[0:8]>`), copied under its
+     new folder's name with `/usr/bin/security` as Claude Code writes it (`-U`, the value in hex),
+     which the item trusts, so nothing's asked, written on its stdin (never a command line), read
+     back to check (`{act: "keychain", service, account, aside?}`: going back deletes the copy; no
+     secret is journaled: one there already under the new name with another value, an earlier
+     box's, is kept aside as `<service>.before-kuvo-move` and put back from there going back, and
+     deleted once the old place is cleared). A moved worktree's own `.git` is pointed at its record's
+     new place before any repair (relative where it was), so no git links it back to the copy.
+     The originals are deleted once the old place is cleared. Kuvo Code's own Anthropic Console
+     sign-in (`agents/claude/console`) goes the same way as an added account's.
   8. **Clear.** Should something have started in the old box meanwhile, or anything changed, or
      been made, in what it clears since it cloned (the engine's `opencode` folder aside, which only
      the engine writes, and in `run` its processes' records: a file the app kept as you sent it,
@@ -5329,6 +5403,10 @@ refused anything but `--status` on the real `~/.kuvo-code`.
   meanwhile) is `overdue`.
 - **`--status`**: `kuvo/box/rehome`'s answer. **`--settled keychain|agent`**: one of `owed`, done
   (`{settled, status}`).
+
+A Mac's box in a home of its own starts its bridge as a machine's (`KUVO_AGENTS_REMOTE`), but the
+coding agents' default accounts stay yours, in your home (`~/.claude`, `~/.codex`, `~/.grok`), as
+the app's box keeps them: only on a machine are they in the bridge's folder (`<agent>/home`).
 
 `kuvo/box/rehome`: `GET` answers `{state, way, step, tries, nextTry, waitingSince, overdue,
 failed, movedAt, keptUntil, owed, asked, from, to}`. `state`: null before anything, `waiting`,
@@ -5445,6 +5523,113 @@ Names are `KUVO_KEY_*` only (`^KUVO_KEY_[A-Z0-9_]+$`): the box never asks for an
 answers no other. The app keeps the files the engine reads (`KUVO_KEYS`) in step as it
 changes them. Anything else it answers is an error the box's route answers `503 {"message"}`
 with. Without these, as on a machine, the box keeps its keys in files only you can read.
+
+#### This Mac's box: its helper
+
+`box.helper`, #333 piece 4, behind the app's `movesOwnBox` (off): nothing uses it until the move
+does. Once this Mac's box lives in a home of its own (`~/.kuvo-code`, `box/kind` says `mac`), it
+runs under **Kuvo Code Box**, a small signed program of Kuvo Code's own with no box logic: the
+app carries it (`Contents/Helpers/Kuvo Code Box.app`, built by `scripts/build-box-helper.sh` and
+signed with the app's identity, the hardened runtime and its own entitlements, before the app is),
+the box's release brings it into `bin/Kuvo Code Box.app`, and it runs from there. Its bundle ID is
+the app's with `.box` after it (`run.kuvo.code.box`); an update keeps that, its signer and its
+place, which is what macOS keeps your permissions and its Keychain items by.
+
+- **Started** by the launch agent `run.kuvo.code.machine` (one per computer, a machine's runs
+  `kuvo-start` with `/bin/sh`): `kuvo-link.js helper install [--load] [--app <bundle ID>]` writes
+  `~/Library/LaunchAgents/run.kuvo.code.machine.plist` (`ProgramArguments`: the helper, `keep
+  --home <box>`; `RunAtLoad`; `KeepAlive {SuccessfulExit: false}`; `AbandonProcessGroup`;
+  `AssociatedBundleIdentifiers: [<the app's ID>]`, by default `run.kuvo.code`), and with `--load`
+  lets go of whatever had the label, waits (ten seconds at most) until launchd has, and bootstraps
+  it (`gui/<uid>`), three more times a second apart while launchd refuses. It prints `{written, loaded,
+  message}`, exiting 0 once done, 1 when refused (not a Mac, not a Mac's own box in a home of its
+  own, not the real `~/.kuvo-code`, or no helper in `bin`) or launchd didn't start it, 2 for what it
+  doesn't know. `helper status` says `{helper, agent, loaded}` (`loaded` null where launchd couldn't
+  be asked). As `uninstall` does, it touches launchd only for the real `~/.kuvo-code`, or a test's
+  stand-ins (`KUVO_TEST_UNINSTALL_TOOLS`). `uninstall` takes it away. With Login Items off for it,
+  the app opens it once (`open -g -j -n <bundle> --args keep --home <box>`), checked first: there,
+  its signature whole, its ID the app's with `.box`, signed by the app's team (an ad hoc build: the
+  very helper the app carries; who signed the app can't be told, none). Never as the app's child,
+  which would make the app what macOS asks about.
+- **Runs**: only your account's `~/.kuvo-code` (from its home folder as the system has it, not
+  `$HOME`; `--home` may name only that), kept only from the bundle installed there
+  (`bin/Kuvo Code Box.app`), the box and its `bin` yours alone to change: a copy of the helper
+  elsewhere, or a folder of anyone's making, would otherwise be handed the vault's secrets and serve
+  your keys (the tests' own build takes the box it's given). One per box (`run/helper.lock`; a
+  second goes at once, exit 0). What it won't run, it says on stderr and exits 0. It checks first that
+  its bundle on disk is the very one it was started from (its code directory's hash, as the app
+  checks itself); changed, it starts nothing, writes why in `run/helper-trouble`, and exits 0 so
+  launchd doesn't start it again. Nor does it start anything (the same note, exit 0) while a move
+  of the box is under way (`updates/rehome/journal.json` not `done`), while its keys are being moved
+  (the Keychain journal below `copying` or `returning`), or are copied for a move that hasn't
+  finished (`copied` or `settling` without `state.json` saying the move's `done`): the old box may
+  run then, with the same keys. Nor when its keeper (`bin/kuvo-start`, `K="$HOME/<name>"`) names
+  another folder than its box's: its children get `HOME` the folder around its box. Then it starts
+  its host interface (below), `kuvo-start serve`, and `kuvo-start keep` in a session of its own,
+  each its own child, so macOS takes it for the
+  responsible process of everything the box runs (the engine, the bridge, every agent's command):
+  folders, Screen Recording and the rest are asked for Kuvo Code Box. Either child that ends is
+  started again: a second after one that ran ten minutes or more, else after a wait that grows each
+  time in a row (2 s, 5 s, 15 s… up to ten minutes). Every ten seconds it notes macOS asking you something (`run/.system-asking`), as the
+  keeper did. SIGTERM (launchd, logging out) closes `serve`'s stdin, sends the keeper SIGTERM (the
+  engine, link and bridge are detached and go on, for the next keeper to take over), takes its
+  `host.json` away and exits 0; what hasn't ended three seconds on gets SIGTERM, a second after
+  that SIGKILL. The box turned off (`run/off`, `kuvo-start off`) with its keeper
+  gone, it does the same.
+- **`serve`**: `kuvo-start serve`, on a Mac's own box only (else exit 3; `run/off`, exit 0), runs
+  `kuvo-link.js serve` in the foreground with the engine's Bun, as the box's other processes are
+  started, its output in `run/serve.log`. The helper gives it, on its stdin's first line,
+  `{"password", "hostVaultSecret", "vaultFileKey"?}` and keeps the pipe open: it goes when that
+  closes. On a Mac's box in a home of its own, `serve` says where it answers itself, in
+  `run/serve.json` (`{pid, port, password, kept: false}`, `0600`), and takes it away as it leaves.
+  Started while the Keychain couldn't give the vault's file key (locked), it's started again once
+  it can; one that's missing for good isn't asked for again.
+- **Host interface**: the same calls, proofs and answers as the keeper's ("Host interface",
+  `HostProof` shared by both), from its own Keychain items, named by its bundle ID
+  (`<helper ID>.phone-link`, `.integrations`, `.vault`), never asking you anything (a locked
+  Keychain answers `503 {"message"}`). `app/open` opens any copy of Kuvo Code the box names (the
+  one that registered with it) that's signed by the helper's team (an ad hoc build: one carrying
+  this very helper), and leaves one already running as it is (`{}`); `trash` takes only what's in
+  the box's `trash`. `sites/signed-in` and
+  `link/route`, what only the open app answers, say `503 {"message": "Kuvo Code isn't open on this
+  Mac."}`: the open app reaches a box in a home of its own itself.
+- **Keys it never makes twice.** It makes the link's keys the first time the box asks
+  (`link/identity`) and the vault's file key the first time it starts `serve`, and notes them in `box/keychain.json` (`{"has": ["phone-link/key",
+  "phone-link/secret", "phone-link/sign", "vault/files"]}`). One the box has had (noted there, or
+  copied by the move) and that's gone from the Keychain is never made again: `link/identity`
+  answers `503` saying the keys are missing, and `serve` starts without the vault's file key. A new
+  key would make this Mac another box to every phone, machine and peer.
+- **The Keychain's move** (legacy keychain items, as they've always been; never by changing an
+  item's list of programs, which macOS asks about once per item). Only a program an item names may
+  read it or take it away; copies of the app's items name only the helper. The journal is
+  `updates/rehome/keychain.json` (`{v, state: copying | copied | settled | returning, app, helper,
+  items: [{service, account, label?}]}`; `settling` too), written to disk before what it says is
+  done.
+  - the app's keeper copies each of the app's items under the helper's names, made trusting the
+    helper the app carries (its signature, which the copy in `bin` shares), listing every one in
+    the journal first (`copying`, then `copied`). It never takes an item already under the
+    helper's names for a copy (it can't read one to tell): any there (left by an earlier box)
+    refuses the copy, and so does a journal an earlier try left (`copying` or `copied`) until
+    `uncopy` has taken its copies away: a copy starts afresh, never resumed;
+  - `Kuvo Code Box keys check --home <box>` (the move's check, a short run of the helper's own)
+    prints `{"unreadable": [...]}`, exiting 0 when it reads every copy, 1 when it doesn't;
+  - `keys uncopy` (the move went back before it cleared the old place) takes the journaled copies
+    away, then the journal; the app's own are never touched (one gone meanwhile was taken away on
+    purpose, as the box ran in the app's folder again: its copy goes too), and a Keychain that can't
+    say what's there (locked) changes nothing; once `state.json` says the move's `done`, the copies
+    are the box's keys and it refuses;
+  - `keys clear` (no journal, and no `box/keychain.json`): items under the helper's names left by
+    an earlier box, taken away where the app has its own of each; `{"kept": [...]}` says those it
+    kept;
+  - once the move can't go back, the keeper takes the app's own away (each once its copy is
+    there): `settling` first, which `uncopy` refuses, then `settled`;
+  - `keys back --app <Kuvo Code.app>` (moving back, before the helper goes): every item the helper
+    has, those made since too, made again under the app's names trusting the app, then its own
+    taken away, and the journal. It refuses (exit 2) while the app's own are still there.
+  Each of these prints JSON and exits 0 once done (`check`: 1 for a copy it can't read), 2 with why
+  on stderr. All but `check` take the box's `run/helper.lock`, refusing while the helper keeps the
+  box (its host interface may be changing those keys). `back` takes only Kuvo Code itself for `--app`, signed by the helper's team: a helper
+  signed ad hoc (a local build) refuses, as anything can be signed so (the tests' own build aside).
 
 #### The relay, on this Mac's box
 

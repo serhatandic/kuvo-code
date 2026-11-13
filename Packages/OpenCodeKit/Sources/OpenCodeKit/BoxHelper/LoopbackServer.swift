@@ -1,27 +1,29 @@
+#if os(macOS)
 import Foundation
 import Network
 import os
 
-/// HTTP on a free loopback port, for the app's own helpers to call: the agent's browser tools
-/// (`BrowserToolServer`), and this Mac's box asking for what only the app can do (`HostInterface`).
-/// Each checks who's asking itself (a password in the request).
+/// HTTP on a free loopback port, for Kuvo Code's own helpers to call: the agent's browser tools
+/// (`BrowserToolServer`), and this Mac's box asking for what only its app or its helper can do (the
+/// app's `HostInterface`, the helper's `BoxHelperHost`). Each checks who's asking itself (a password
+/// in the request).
 @MainActor
-final class LoopbackServer {
+public final class LoopbackServer {
     private let respond: (HTTPRequest) async -> HTTPResponse
     private var listener: NWListener?
     private var connections: [ObjectIdentifier: HTTPConnection] = [:]
-    private(set) var port: UInt16?
+    public private(set) var port: UInt16?
     /// Told when it stops listening by itself, once it was (not after `stop()`).
-    var failed: (() -> Void)?
+    public var failed: (() -> Void)?
     /// The start under way: one listener at a time, whoever else asks meanwhile waits for it.
     private var starting: Task<UInt16, Error>?
 
-    init(respond: @escaping (HTTPRequest) async -> HTTPResponse) {
+    public init(respond: @escaping (HTTPRequest) async -> HTTPResponse) {
         self.respond = respond
     }
 
     /// Starts listening (once), and says where.
-    func start() async throws -> UInt16 {
+    public func start() async throws -> UInt16 {
         if let port { return port }
         if let starting { return try await starting.value }
         let starting = Task { try await listen() }
@@ -81,7 +83,7 @@ final class LoopbackServer {
     }
 
     /// Stops listening, and closes what's open.
-    func stop() {
+    public func stop() {
         starting = nil
         listener?.cancel()
         listener = nil
@@ -103,7 +105,7 @@ final class LoopbackServer {
 
 /// Whether two passwords are the same, taking as long whichever character differs: how long a
 /// wrong guess takes says nothing of the right one.
-nonisolated func samePassword(_ given: String, _ expected: String) -> Bool {
+public func samePassword(_ given: String, _ expected: String) -> Bool {
     let a = Array(given.utf8), b = Array(expected.utf8)
     var difference = UInt8(a.count == b.count ? 0 : 1)
     for index in 0..<b.count { difference |= (index < a.count ? a[index] : 0) ^ b[index] }
@@ -112,23 +114,37 @@ nonisolated func samePassword(_ given: String, _ expected: String) -> Bool {
 
 // MARK: - A minimal HTTP/1.1 server connection
 
-struct HTTPRequest {
-    var method: String
-    var path: String
-    var headers: [String: String]
-    var body: Data
+public struct HTTPRequest: Sendable {
+    public var method: String
+    public var path: String
+    public var headers: [String: String]
+    public var body: Data
+
+    public init(method: String, path: String, headers: [String: String], body: Data) {
+        self.method = method
+        self.path = path
+        self.headers = headers
+        self.body = body
+    }
 }
 
-struct HTTPResponse {
-    var status: Int
-    var headers: [String: String] = [:]
-    var body = Data()
+public struct HTTPResponse: Sendable {
+    public var status: Int
+    public var headers: [String: String] = [:]
+    public var body = Data()
     /// A body that comes as it's made (a route that follows something), sent as it comes, in chunks:
     /// one that ends with an error is cut off without its last chunk, so the client knows it isn't
     /// whole (the connection closes then; one that ends whole leaves it for the next request).
-    var stream: AsyncThrowingStream<Data, Error>?
+    public var stream: AsyncThrowingStream<Data, Error>?
 
-    static func json(_ object: Any) -> HTTPResponse {
+    public init(status: Int, headers: [String: String] = [:], body: Data = Data(), stream: AsyncThrowingStream<Data, Error>? = nil) {
+        self.status = status
+        self.headers = headers
+        self.body = body
+        self.stream = stream
+    }
+
+    public static func json(_ object: Any) -> HTTPResponse {
         // Sorted, so the tools' list reads the same at every launch, and a conversation picked up
         // after one keeps the provider's prompt cache.
         let data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data()
@@ -327,7 +343,7 @@ final class HTTPConnection {
 }
 
 /// Whether a connection's gone, from any thread.
-nonisolated final class Gone: Sendable {
+final class Gone: Sendable {
     private let flag = OSAllocatedUnfairLock(initialState: false)
     var value: Bool { flag.withLock { $0 } }
     func set() { flag.withLock { $0 = true } }
@@ -336,7 +352,7 @@ nonisolated final class Gone: Sendable {
 /// What's been handed to a connection and not sent yet: up to `most` bytes go without waiting (the
 /// connection says each one's sent on its own queue, the main one), then the next waits for room.
 /// Known: what comes before this (the engine's answer, `EngineRoutes.forward`) isn't bounded yet.
-nonisolated final class InFlight: Sendable {
+final class InFlight: Sendable {
     private let most = 1 << 20
     private let state = OSAllocatedUnfairLock<(bytes: Int, waiting: [CheckedContinuation<Void, Never>])>(initialState: (0, []))
 
@@ -363,3 +379,4 @@ nonisolated final class InFlight: Sendable {
         }
     }
 }
+#endif

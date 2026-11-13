@@ -29,8 +29,9 @@ export const LAUNCH_AGENT = "run.kuvo.code.machine";
 export const REBOOT_TAG = "# kuvo-code: starts its engine again after a restart";
 
 /** Where `launchctl` and `crontab` are, and the folder the launch agent's file is in: the real ones
- * for the real `~/.kuvo-code` alone, a test's stand-ins for a test's home, else none. */
-function outside(): { launchctl: string; crontab: string; agents: string } | null {
+ * for the real `~/.kuvo-code` alone, a test's stand-ins for a test's home, else none. (The helper's
+ * launch agent is put in place with the same, helper.ts.) */
+export function launchTools(): { launchctl: string; crontab: string; agents: string } | null {
   if (REAL_BOX && located(K) === located(path.join(accountHome(), ".kuvo-code"))) {
     return { launchctl: "/bin/launchctl", crontab: "crontab", agents: path.join(accountHome(), "Library", "LaunchAgents") };
   }
@@ -53,7 +54,7 @@ function crontab(tools: { crontab: string }): string | null {
 
 /** What starts the box from outside its folder: the launch agent's file, and its crontab line. */
 function starts() {
-  const tools = outside();
+  const tools = launchTools();
   if (!tools) return { launchAgent: false, crontab: false, checked: false };
   const table = crontab(tools);
   return {
@@ -130,7 +131,7 @@ export interface Uninstalled {
 
 /** Removes what starts and runs the box. */
 export function uninstall(): Uninstalled {
-  const tools = outside();
+  const tools = launchTools();
   let launchAgent = false;
   let crontabLine = false;
   const startsAgain: string[] = [];

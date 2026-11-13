@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import OpenCodeKit
 
 /// The panel's browser, offered to the agent as MCP tools (Streamable HTTP, JSON
 /// responses) on 127.0.0.1. The engine is told about it at launch, with a token that

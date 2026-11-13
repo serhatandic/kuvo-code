@@ -2,15 +2,16 @@ import Foundation
 import Testing
 @testable import OpenCodeKit
 
-/// What belongs to the account whatever `$HOME` says: its crontab, and the machine's login agent in
-/// launchd. A script run in a home of a test's own still reaches them, unless stand-ins come first
+/// What belongs to the account whatever `$HOME` says: its crontab, the machine's login agent in
+/// launchd, and its keychains' search list and default (a test's keychain is never left in either). A script run in a home of a test's own still reaches them, unless stand-ins come first
 /// on its PATH.
 struct AccountState: Equatable {
     var crontab: String
     var agentLoaded: Bool
     var agentFile: Bool
+    var keychains: String
 
-    static func now(crontab: String = "/usr/bin/crontab", launchctl: String = "/bin/launchctl", home: String = NSHomeDirectory()) -> AccountState {
+    static func now(crontab: String = "/usr/bin/crontab", launchctl: String = "/bin/launchctl", security: String = "/usr/bin/security", home: String = NSHomeDirectory()) -> AccountState {
         func run(_ program: String, _ arguments: [String]) -> (output: String, status: Int32) {
             guard FileManager.default.isExecutableFile(atPath: program) else { return ("", -1) }
             let process = Process()
@@ -28,7 +29,9 @@ struct AccountState: Equatable {
         return AccountState(
             crontab: run(crontab, ["-l"]).output,
             agentLoaded: run(launchctl, ["print", "gui/\(getuid())/\(RemoteServer.launchAgent)"]).status == 0,
-            agentFile: FileManager.default.fileExists(atPath: home + "/Library/LaunchAgents/\(RemoteServer.launchAgent).plist")
+            agentFile: FileManager.default.fileExists(atPath: home + "/Library/LaunchAgents/\(RemoteServer.launchAgent).plist"),
+            // (Which keychains are searched, and which is the default: their names, nothing in them.)
+            keychains: run(security, ["list-keychains", "-d", "user"]).output + run(security, ["default-keychain", "-d", "user"]).output
         )
     }
 }
@@ -39,7 +42,7 @@ struct AccountUntouched: SuiteTrait, TestScoping {
         let before = AccountState.now()
         try await function()
         let after = AccountState.now()
-        if after != before { Issue.record("This run changed the account's real crontab or login agent: \(before) became \(after)") }
+        if after != before { Issue.record("This run changed the account's real crontab, login agent or keychain list: \(before) became \(after)") }
     }
 }
 
