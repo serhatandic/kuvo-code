@@ -28,6 +28,7 @@ import { noteWorkChanged } from "../work/changes";
 import { noteOversight } from "../work/oversight";
 import { botLimits, limitsFrom, pastLimit } from "../work/limits";
 import { describeModels, modelNamed, pickModel, usableModels } from "../work/models";
+import { listedOf, listsHere, onAgents, startingModel } from "../work/model-rule";
 import { failedOn, holdOf, holdWords, turnError, unansweringNow } from "../work/unanswering";
 import { approvalOf, approvalRules, defaultApproval, effectiveApproval, isApproval, lowerOf, otherComputersAllowed, rememberApproval, unavailable } from "../work/approval";
 import { holdsBack } from "../bots/tell";
@@ -431,16 +432,37 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     // (An engine that doesn't answer isn't one with no accounts.)
     const answering = engine ? await call(engine, "GET", "/api/provider", undefined, place.signal).then(() => true, () => false) : false;
     if (!answering && !bridge) return no(503, `The engine on ${HERE} isn't running.`);
-    const models = (await usableModels(engine, bridge, place.signal)).filter(each => !each.retiring);
-    if (!models.length) return no(400, describeModels([]));
-    const own = modelNamed(model, models);
-    if (own) {
-      target = own.target;
-      free = own.free;
+    // Which, by the one rule a new session here starts by (work/model-rule.ts), as every client's
+    // new conversation does: its own where it runs here (one its agent keeps out of its picker,
+    // Codex's hidden ones, too), else the default, else the first model that runs.
+    const lists = await listsHere(engine, bridge, folder ?? undefined);
+    const starting = startingModel([model], lists);
+    if (starting === null) return no(400, describeModels([]));
+    if (starting) {
+      const chosen = starting.model;
+      if (starting.why !== "wanted" && model) {
+        modelNote = starting.why === "default"
+          ? `It runs on the default model there: yours (${model.providerID}/${model.id}) has no account on that computer.`
+          : `It runs on ${chosen.providerID}/${chosen.id} there: yours (${model.providerID}/${model.id}) has no account on that computer, nor does its default model.`;
+      }
+      // Its own as it names it (Claude Code's `default` stays that); on the default, a session
+      // with none of its own, as one started there is.
+      if (starting.why !== "wanted") model = starting.why === "default" ? null : chosen;
+      target = onAgents(chosen) ? bridge : engine;
+      free = listedOf(chosen, lists)?.free;
     } else {
-      if (model) modelNote = `It runs on the default model there: yours (${model.providerID}/${model.id}) has no account on that computer.`;
-      model = null;
-      target = engine;
+      // The engine can't say what it lists now: as before the rule, by what it lists at all.
+      const models = (await usableModels(engine, bridge, place.signal)).filter(each => !each.retiring);
+      if (!models.length) return no(400, describeModels([]));
+      const own = modelNamed(model, models);
+      if (own) {
+        target = own.target;
+        free = own.free;
+      } else {
+        if (model) modelNote = `It runs on the default model there: yours (${model.providerID}/${model.id}) has no account on that computer.`;
+        model = null;
+        target = engine;
+      }
     }
   }
   if (given.mode === "plan") picked.push("Plan");

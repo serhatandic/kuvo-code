@@ -318,3 +318,64 @@ test("none named is refused, and it's only read", async () => {
   assert.equal((await answer("GET", "kuvo/sessions/models")).status, 400);
   assert.equal((await answer("POST", "kuvo/sessions/models?sessions=ses_fine")).status, 405);
 });
+
+// The models a session can use here, and the one a new session starts on (PROTOCOL.md, "The models
+// offered"), by the same rule: what every client's picker offers, and its new conversation's model.
+const offeredOn = async (on, query = "") => {
+  const { status, json } = await answer("GET", `kuvo/models/offered${query}`, on);
+  assert.equal(status, 200);
+  return json;
+};
+const refs = models => models.map(each => `${each.providerID}/${each.id}${each.retiring ? " (retiring)" : ""}`);
+
+test("the models offered: every one that runs, the engine's in its picker's order, then the coding agents' (not those an agent hides), then Custom Auto's lists with models", async () => {
+  const offered = await offeredOn(handle);
+  assert.deepEqual(refs(offered.models), [
+    // Signed in, a free one of OpenCode Zen's, and providers with nothing to sign in to; not the
+    // signed-out ones, those only a key would run, nor one only the plan's agent runs.
+    "anthropic/claude-opus-5-5", "anthropic/claude-sonnet-5 (retiring)", "opencode/big-pickle", "lmstudio/qwen-3", "ollama/llama-4",
+    "codex-cli@work/gpt-5.5", "codex-cli@old/gpt-5.5", "claude-code/claude-opus-5-5", "claude-code/claude-sonnet-5", "claude-code@new/opus", "claude-code@new/sonnet",
+    "auto/auto",
+  ]);
+  assert.equal(offered.models[0].name, "Claude Opus 5.5");
+  assert.deepEqual(offered.known, { engine: true, agents: true });
+  // None wanted: the engine's default, which runs.
+  assert.deepEqual(offered.starting, { providerID: "anthropic", id: "claude-opus-5-5" });
+});
+
+test("a new session starts on the model picked last where it runs, by the id its place lists it, else on the default", async () => {
+  const startsOn = async query => (await offeredOn(handle, query)).starting;
+  // Claude Code's `default`, as the model it stands for, its effort kept.
+  assert.deepEqual(await startsOn("?provider=claude-code&model=default&variant=high"), { providerID: "claude-code", id: "claude-opus-5-5", variant: "high" });
+  // One Codex keeps out of its picker runs all the same.
+  assert.deepEqual(await startsOn("?provider=codex-cli%40work&model=gpt-5.1-codex-mini"), { providerID: "codex-cli@work", id: "gpt-5.1-codex-mini" });
+  // A coding agent's still being listed: as it is.
+  assert.deepEqual(await startsOn("?provider=claude-code%40new&model=opusplan"), { providerID: "claude-code@new", id: "opusplan" });
+  const fallback = { providerID: "anthropic", id: "claude-opus-5-5" };
+  // Signed out of, only a key would run it, being retired, gone, or with no account here at all.
+  for (const query of ["?provider=github-copilot&model=gpt-5.5", "?provider=deepseek&model=deepseek-chat", "?provider=anthropic&model=claude-sonnet-5",
+    "?provider=anthropic&model=claude-3-opus", "?provider=nowhere&model=x", "?provider=claude-code%40work&model=claude-opus-5-5", "?provider=cursor&model=composer-2"]) {
+    assert.deepEqual(await startsOn(query), fallback, query);
+  }
+});
+
+test("a default that can't run, or none: the first model that runs; nothing that runs: none", async () => {
+  const signedOutDefault = handlerOn(await engineWith({ "/api/model/default": { providerID: "github-copilot", id: "gpt-5.5" } }));
+  assert.deepEqual((await offeredOn(signedOutDefault)).starting, { providerID: "anthropic", id: "claude-opus-5-5" });
+  const noDefault = handlerOn(await engineWith({ "/api/model/default": null, "/api/provider": [{ id: "opencode" }], "/api/integration": engineLists["/api/integration"].map(each => (each.id === "anthropic" ? { ...each, connections: [] } : each)) }));
+  assert.deepEqual((await offeredOn(noDefault)).starting, { providerID: "opencode", id: "big-pickle" });
+  // Nothing of the engine's runs, and no coding agents here: none.
+  const nothing = await engineWith({ "/api/model": [model("github-copilot", "gpt-5.5", "GPT-5.5")] });
+  const alone = link.engineHandler(() => ({ pid: process.pid, ...nothing, version: "2.0.32" }), { name: "Studio" }, () => null);
+  const none = await offeredOn(alone);
+  assert.deepEqual([none.models, none.starting, none.known], [[], null, { engine: true, agents: true }]);
+});
+
+test("the models offered while the engine can't say: its models not known, and no model to start on said, rather than a coding agent's", async () => {
+  const unloaded = handlerOn(await engineWith({ "/api/provider": [], "/api/model": [] }));
+  const offered = await offeredOn(unloaded);
+  assert.deepEqual(offered.known, { engine: false, agents: true });
+  assert.ok(offered.models.every(each => !["anthropic", "opencode"].includes(each.providerID)));
+  assert.equal("starting" in offered, false);
+  assert.equal((await answer("POST", "kuvo/models/offered")).status, 405);
+});

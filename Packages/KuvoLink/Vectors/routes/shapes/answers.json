@@ -3176,6 +3176,9 @@
             "literal": "mcp.catalog"
            },
            {
+            "literal": "models.offered"
+           },
+           {
             "literal": "moves"
            },
            {
@@ -3566,6 +3569,9 @@
            },
            {
             "literal": "mcp.catalog"
+           },
+           {
+            "literal": "models.offered"
            },
            {
             "literal": "moves"
@@ -7974,6 +7980,48 @@
     "400": {
      "object": {
       "message": "string"
+     }
+    },
+    "503": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/models/offered",
+   "answers": {
+    "200": {
+     "object": {
+      "models": {
+       "list": {
+        "object": {
+         "providerID": "string",
+         "id": "string",
+         "name": "string",
+         "retiring?": "bool"
+        }
+       }
+      },
+      "known": {
+       "object": {
+        "engine": "bool",
+        "agents": "bool"
+       }
+      },
+      "starting?": {
+       "oneOf": [
+        {
+         "object": {
+          "providerID": "string",
+          "id": "string",
+          "variant?": "string"
+         }
+        },
+        "null"
+       ]
+      }
      }
     },
     "503": {

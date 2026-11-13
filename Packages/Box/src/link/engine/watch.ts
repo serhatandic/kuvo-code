@@ -24,7 +24,7 @@ import { markConversation, noteFullAccess, noteFullAccessAtWork } from "../work/
 import { queueWatcher, scanQueues, writtenByYou, type ScanFound } from "./queue";
 import { adoptConversation } from "../areas/approval";
 import { followAsks, forgetAsksOn, noteAskEvent } from "../glance/asked";
-import { forgetModelLists, noteModelsEvent } from "../areas/session-models";
+import { forgetModelLists, noteModelsEvent } from "../work/model-rule";
 import { pullCatcher } from "../glance/pulls";
 import type { Target } from "../../shared/records";
 import type { SignInEvent } from "../areas/accounts";
