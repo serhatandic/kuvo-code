@@ -1647,6 +1647,7 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "skills.trash": ["GET", "kuvo/skill-trash"],
     update: ["GET", "kuvo/update"],
     "usage.history": ["GET", "kuvo/agents/api/kuvo/usage"],
+    "usage.settings": ["GET", "kuvo/agents/api/kuvo/usage/settings"],
     vault: ["GET", "kuvo/vault/tools"],
     wakes: ["GET", "kuvo/wakes"],
     "wakes.edit": ["POST", "kuvo/wakes/ses_none/pause"],
