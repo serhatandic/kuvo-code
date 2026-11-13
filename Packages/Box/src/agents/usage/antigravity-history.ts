@@ -251,9 +251,11 @@ export class AntigravityHistory {
         const events = await this.read(path)
         if (fingerprint(path).stamp !== stamp.stamp) {
           // Written to as it was read (its WAL changes with every write): one read before keeps
-          // that answer. With none, what was read (one transaction's snapshot) counts this round
-          // but isn't kept under the stamp from before the read, so the next round reads it again.
+          // that answer. With none, what was read (one read transaction's snapshot, except for the
+          // rare immutable open of a database without its WAL) counts this round but isn't kept
+          // under the stamp from before the read, so the next round reads it again.
           if (before) throw new Error("Antigravity database changed during the read")
+          failing.delete(path)
           parts.push(events)
           continue
         }

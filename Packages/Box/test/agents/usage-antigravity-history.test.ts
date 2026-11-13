@@ -324,13 +324,16 @@ test("a new database written to while it's read counts what was read, is read ag
     // (As a restart finds it, before reading anything.)
     const saved = new Usage(() => sources([agent]), { current: () => pricing } as unknown as PricingStore, () => "0123456789abcdef", file, () => Date.parse(fixture.now))
     expect(saved.view("UTC").totals.antigravity?.[0]?.tokens).toBe(1350)
-    // Not kept under the stamp from before the read: the next round reads it again, and sees the write.
-    writing = false
+    // Not kept under the stamp from before the read: the next round, written to again as it's
+    // read, reads it again and counts what it sees, never the first round's answer.
     await usage.refresh()
     expect(reads).toEqual([realpathSync(own.path), realpathSync(own.path)])
     expect(usage.view("UTC").totals.antigravity![0]!.tokens).toBe(2700)
-    // Unchanged since: kept, not read again.
+    // Quiet now: read once more and kept, then not read again while unchanged.
+    writing = false
     await usage.refresh()
-    expect(reads).toHaveLength(2)
+    expect(usage.view("UTC").totals.antigravity![0]!.tokens).toBe(4050)
+    await usage.refresh()
+    expect(reads).toHaveLength(3)
   } finally { own.db.close() }
 })

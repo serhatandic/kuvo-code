@@ -22146,6 +22146,7 @@ class AntigravityHistory {
         if (fingerprint2(path).stamp !== stamp.stamp) {
           if (before)
             throw new Error("Antigravity database changed during the read");
+          failing.delete(path);
           parts.push(events);
           continue;
         }
@@ -34548,4 +34549,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 31b026a6add511ee1923a9caf487a36aba8dbf65e7437861e55caa5d372dfa2d
+// Built from Packages/Box/src/agents f32c80ee76280326a8395e4abf7465555e7eb7ff9dbe1783816863fe23884d7a
