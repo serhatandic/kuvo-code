@@ -492,3 +492,46 @@ test("a box only a peer knew is forgotten once no peer names it: nothing goes to
   link.takeAgents(second.peer, { at: at + 2, list: [], boxes: [air.peer] });
   assert.equal(link.openMail(link.readFrame(mail.subarray(17)).body, link.readLink(), () => link.vouchedOf(link.readLink()))?.vouched, true);
 });
+
+test("the usage panel's settings (PROTOCOL.md, \"Usage settings\") go between your own computers only: to a peer as a seat's mail, never to a box only a peer knows, and from it never to the bridge", async () => {
+  fresh();
+  const air = box("mac", "air");
+  link.takeAgents(second.peer, { at: Date.now(), list: [], boxes: [here.peer, air.peer] });
+  const sent = [];
+  const host = { send: bytes => sent.push(bytes) };
+  const mail = { kind: "settings", at: 7, digest: "d", usage: { notifications: { value: { underTenPercent: true, healthyToClose: false, closeToRunningOut: false }, stamp: { v: 7, by: here.pub } } } };
+  // To one of your computers: as a seat's, kept nowhere.
+  assert.equal(link.carrySeat(host, { id: "sm_settings01", to: second.pub, durable: false, mail }, link.readLink()), true);
+  assert.equal(sent.length, 1);
+  assert.deepEqual(opened(sent[0], second).payload.seat, mail);
+  // To a box only a peer knows (another person's Mac): nothing goes.
+  link.carrySeat(host, { id: "sm_settings02", to: air.pub, durable: false, mail }, link.readLink());
+  assert.equal(sent.length, 1, "nothing to a box a peer vouches for");
+
+  const posted = [];
+  let heard;
+  const got = new Promise(resolve => { heard = resolve; });
+  const server = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", chunk => { body += chunk; });
+    request.on("end", () => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{}");
+      posted.push(JSON.parse(body));
+      heard();
+    });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  fs.writeFileSync(path.join(run, "bridge.json"), JSON.stringify({ port: server.address().port, password: "bridge-pw" }));
+  try {
+    // The Air's settings first: dropped. Then the second machine's: to the bridge.
+    const fromAir = link.mailFor(here.peer, { seat: { ...mail, digest: "air" }, at: Date.now() }, { key: k(air.key) });
+    link.receiveMail(link.readFrame(fromAir.subarray(17)).body, host, (sender, given) => link.peerMail(sender, given, host));
+    const fromSecond = link.mailFor(here.peer, { seat: { ...mail, digest: "second" }, at: Date.now() }, { key: k(second.key) });
+    link.receiveMail(link.readFrame(fromSecond.subarray(17)).body, host, (sender, given) => link.peerMail(sender, given, host));
+    await got;
+    assert.deepEqual(posted, [{ from: second.pub, mail: { ...mail, digest: "second" } }]);
+  } finally {
+    server.close();
+  }
+});

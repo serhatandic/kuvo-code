@@ -63,6 +63,7 @@ import { PricingStore } from "./usage/pricing"
 import { claudeSources, codexSources, cursorSources, engineCodexSource, engineHostedSources, grokSources, Usage, USAGE_SERVICES, UsageSettings } from "./usage/usage"
 import { cursorEndpoints } from "./usage/cursor-api"
 import { UsagePeers } from "./usage/usage-peers"
+import { SettingsPeers } from "./usage/settings-peers"
 import { ENGINE_SERVICES, EngineAccounts } from "./engine-limits"
 
 const version = "1"
@@ -323,6 +324,10 @@ engineAccounts.onAnswered = () => void usage.tick()
 // (OpenCode's hosted spend only where this box knows its engine's folder: else a client reads it as before.)
 if (!engineData) usage.services = USAGE_SERVICES.filter((service) => service !== "opencode")
 peers.usage = new UsagePeers(usage, post, directory, join(usageFolder, "peers.json"))
+// The usage panel's settings, the same on your own computers: told as they change, and each minute
+// looked at to say every ten minutes what they are.
+peers.settings = new SettingsPeers(usageSettings, post, directory)
+setInterval(() => peers.settings?.tell(), 60_000).unref?.()
 
 // What every conversation here makes, recorded as it's made: the engine's and this bridge's own.
 // One that fails to start leaves the rest of the bridge as it is.

@@ -3329,6 +3329,9 @@
             "literal": "usage.history"
            },
            {
+            "literal": "usage.settings"
+           },
+           {
             "literal": "vault"
            },
            {
@@ -3758,6 +3761,9 @@
            },
            {
             "literal": "usage.history"
+           },
+           {
+            "literal": "usage.settings"
            },
            {
             "literal": "vault"

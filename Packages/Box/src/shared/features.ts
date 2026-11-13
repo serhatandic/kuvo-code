@@ -121,6 +121,7 @@ export const FEATURES = [
   "skills.trash",
   "update",
   "usage.history",
+  "usage.settings",
   "vault",
   "wakes",
   "wakes.edit",

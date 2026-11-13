@@ -35,9 +35,11 @@ import type { MailSender, Peer } from "./known";
 /** A mail between two computers' bridges: its kind, and for what a bot remembers of a chat
  * (`memory`), whose and which chat's. The rest goes as it is. `limits`: the bridge's plan limits
  * (PROTOCOL.md, "Plan limits"), which go as `{"limits": …}`, not as a seat's; `usage`: what its
- * accounts used (PROTOCOL.md, "Usage history"), which goes as a seat's, in parts when it's big. */
+ * accounts used (PROTOCOL.md, "Usage history"), which goes as a seat's, in parts when it's big;
+ * `settings`: the usage panel's settings (PROTOCOL.md, "Usage settings"), as a seat's, only
+ * between your own computers (never to or from a box a peer vouches for). */
 export interface SeatMail {
-  kind: SeatMailKind | "limits" | "usage";
+  kind: SeatMailKind | "limits" | "usage" | "settings";
   memory?: { bot: string; chat: string; [field: string]: unknown };
   [field: string]: unknown;
 }
