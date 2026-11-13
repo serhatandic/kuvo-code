@@ -1,6 +1,8 @@
 import ClientSessions
 import Foundation
+import KuvoLink
 import OpenCodeKit
+import os
 import Testing
 @testable import KuvoCode
 
@@ -94,6 +96,9 @@ import Testing
         MachineEngine.standIn = nil
         BoxClient.thisMac = BoxClient.mac
         BoxClient.readAgainAfter = .seconds(30)
+        OwnBoxHome.servesAsMac.withLock { $0 = false }
+        // (The app's host interface, answering this Mac's own box, stops with it.)
+        app?.leaveOwnBox()
         unsetenv("KUVO_OPENCODE_BINARY")
         try? FileManager.default.removeItem(at: folder)
         engine.stop()
@@ -926,6 +931,211 @@ import Testing
         #expect(Here.machinesRoot(bundleID: "run.kuvo.code.demo", hostingTests: false, given: ".kuvo-code-demo") == ".kuvo-code-demo")
         #expect(Here.machinesRoot(bundleID: "Run.Kuvo.Code", hostingTests: false, given: ".kuvo-code") == ".kuvo-code")
         #expect(Here.machinesRoot(bundleID: "run.kuvo.code.tests", hostingTests: true, given: ".kuvo-code") == ".kuvo-code", "the tests' home is their own")
+    }
+
+    // MARK: Streams, and the app's own box moved into a home of its own (#333 piece 6b)
+
+    /// A machine's box here (one MacBook set up) asks nothing of this Mac's keys: attached to it, a
+    /// machine answering (its Macs read) makes none in your Keychain, and this Mac has no key of its
+    /// own to give your machines while it uses another Mac's box (#689).
+    @Test func attachedToAMachinesBoxTheAppMakesNoKeysOfItsOwn() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        connectsReady()
+        Keychain.delete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: PhoneLink.keychainService])
+        app = try await started { try memberOfMacBooks() }
+        let model = try #require(app)
+        let here = try #require(model.machines.engine(SSHConnection.thisMac))
+        try await until { here.isReady }
+        // A machine answering, as each does when it connects.
+        await model.readAlsoUsedBy(here)
+        #expect(model.phoneLink.macKey == nil)
+        #expect(Machines.linkKey() == nil)
+        var found: CFTypeRef?
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: PhoneLink.keychainService,
+                                    kSecMatchLimit as String: kSecMatchLimitAll, kSecReturnAttributes as String: true]
+        #expect(Keychain.copyMatching(query, &found) == errSecItemNotFound, "no key made in your Keychain")
+    }
+
+    /// A machine's box here keeps its server running for the app while it's attached (`kuvo/box/serve`),
+    /// and once its server's up the app reaches it there, as Kuvo Code on its computer (as its CLI
+    /// does: `x-kuvo-from: mac`), so what follows it streams; what only its own Macs' apps do (its
+    /// link) it still refuses there, and the app doesn't ask.
+    @Test func aMachinesBoxHereIsReachedOverItsServerOnceItKeepsOne() async throws {
+        var app: AppModel?
+        var server: StandInBox?
+        defer {
+            server?.stop()
+            cleanUp(app)
+        }
+        connectsReady()
+        // (What's read now and then on a box that doesn't stream, soon: its wake-ups.)
+        BoxClient.readAgainAfter = .milliseconds(100)
+        app = try await started {
+            try memberOfMacBooks()
+            try boxHereAnswers(["kuvo/info": ["features": BoxGate.required + ["box.serve", "box.serve.mac"], "chats": home.appending(path: "\(RemoteEngineInstaller.root)/box-chats").path(percentEncoded: false)]])
+        }
+        let model = try #require(app)
+        let here = try #require(model.machines.engine(SSHConnection.thisMac))
+        let watch = followAsks()
+        defer { watch.cancel() }
+        try await until { here.isReady && asked("POST kuvo/box/serve") == 1 }
+        #expect(OwnBoxHome.servesAsMac.withLock { $0 }, "it said it takes Kuvo Code there")
+        #expect(!BoxClient.streams(SSHConnection.thisMac), "no server yet: its CLI, a request at a time")
+        // Its keeper started its server, as it was asked.
+        server = try await StandInBox.start(at: home.appending(path: RemoteEngineInstaller.root)) { _ in .json(["needed": true, "serving": true]) }
+        #expect(BoxClient.streams(SSHConnection.thisMac))
+        // (A route nothing else here asks, so what else reads it meanwhile doesn't count.)
+        let (status, _) = try await model.box(SSHConnection.thisMac).send("GET", "kuvo/box/serve")
+        #expect(status == 200)
+        #expect(server?.asked.contains { $0.path == "/kuvo/box/serve" && $0.from == "mac" } == true, "over its server, as Kuvo Code on its computer")
+        #expect(asked("GET kuvo/box/serve") == 0, "not through its CLI")
+        // Its wake-ups, followed as they change: over its server, as a stream.
+        try await until { (server?.count("GET", "/kuvo/wakes/events") ?? 0) > 0 }
+        #expect(server?.asked.allSatisfy { $0.from == "mac" } == true)
+        // Its link isn't this Mac's to tell: never asked, there or through its CLI.
+        await model.phoneLink.beginPairing()
+        #expect(model.phoneLink.pairingProblem == PhoneLink.keptByTheBoxHere)
+        #expect(server?.asked.contains { $0.path.hasPrefix("/kuvo/link/") || $0.path.hasPrefix("/kuvo/phones/") } == false)
+        // Its server gone: its CLI again, read now and then.
+        server?.stop()
+        server = nil
+        #expect(!BoxClient.streams(SSHConnection.thisMac))
+    }
+
+    /// A machine's box from before it took Kuvo Code on its computer over its server: reached through
+    /// its CLI, a request at a time, its server or not (nothing goes to it in a way it doesn't know).
+    @Test func aMachinesBoxFromBeforeIsReachedThroughItsCLI() async throws {
+        var app: AppModel?
+        var server: StandInBox?
+        defer {
+            server?.stop()
+            cleanUp(app)
+        }
+        connectsReady()
+        app = try await started {
+            try memberOfMacBooks()
+            try boxHereAnswers(["kuvo/info": ["features": BoxGate.required + ["box.serve"], "chats": home.appending(path: "\(RemoteEngineInstaller.root)/box-chats").path(percentEncoded: false)]])
+        }
+        let model = try #require(app)
+        let here = try #require(model.machines.engine(SSHConnection.thisMac))
+        let watch = followAsks()
+        defer { watch.cancel() }
+        try await until { here.isReady && asked("POST kuvo/box/serve") == 1 }
+        server = try await StandInBox.start(at: home.appending(path: RemoteEngineInstaller.root)) { _ in .json([:]) }
+        #expect(!BoxClient.streams(SSHConnection.thisMac))
+        _ = try await model.box(SSHConnection.thisMac).send("GET", "kuvo/bots")
+        #expect(asked("GET kuvo/bots") >= 1 && server?.asked.isEmpty == true)
+    }
+
+    /// This Mac's own box, moved into its home (`box/kind` says `mac`, its card a Mac's), running, with
+    /// the move turned on. (Its server, which its helper keeps up, a test starts: `StandInBox`.)
+    private func thisMacsOwnBox() throws {
+        try memberOfMacBooks()
+        let box = home.appending(path: RemoteEngineInstaller.root)
+        try FileManager.default.createDirectory(at: box.appending(path: "box"), withIntermediateDirectories: true)
+        try Data("mac\n".utf8).write(to: box.appending(path: "box/kind"))
+        try write(["self": ["key": String(repeating: "S", count: 43), "name": "Studio", "kind": "mac"], "app": true, "macs": [],
+                   "computers": 1, "items": 3, "heldBy": []], to: "\(RemoteEngineInstaller.root)/run/setup-card.json")
+        AppModel.movesOwnBox = true
+        OwnBoxHome.recheck()
+    }
+
+    /// Attached to this Mac's own box, moved, the app does for it what it did for its box in its
+    /// folder, over its server as its own app (#333 piece 6b): it registers its browser's tools, where
+    /// it's installed and where its own host answers (only what only the open app can: a phone's ask
+    /// of this Mac's own routes, never its keys); it offers the release it carries, once; it follows
+    /// its link and tells it your machines (the peers document the box signs); a phone pairs from
+    /// Settings › Phone; what follows it streams; and quitting, it says so. Its server comes up after
+    /// the app attached (its helper starting it at login): none of that goes through its CLI
+    /// meanwhile, which refuses it; it all goes once the server's there.
+    @Test func thisMacsOwnBoxMovedGetsWhatItsAppDidForItOverItsServer() async throws {
+        let release = folder.appending(path: "box-release")
+        let saved = MachineEngine.boxRelease
+        MachineEngine.boxRelease = { release }
+        var app: AppModel?
+        var server: StandInBox?
+        defer {
+            MachineEngine.boxRelease = saved
+            server?.stop()
+            cleanUp(app)
+            AppModel.movesOwnBox = false
+            OwnBoxHome.recheck()
+        }
+        connectsReady()
+        try FileManager.default.createDirectory(at: release, withIntermediateDirectories: true)
+        let address = try #require(LinkAddress(bytes: Data(repeating: 7, count: LinkAddress.length)))
+        let pairingLink = PairingLink(relay: try #require(URL(string: "wss://relay.test")), host: address, key: Data(repeating: 9, count: 32), name: "Studio").url.absoluteString
+        app = try await started { try thisMacsOwnBox() }
+        let model = try #require(app)
+        #expect(model.attachedIsOwnBox && model.attached?.box?.kind == "mac")
+        let here = try #require(model.machines.engine(SSHConnection.thisMac))
+        try await until { here.isReady }
+        #expect(!BoxClient.streams(SSHConnection.thisMac))
+        await model.phoneLink.beginPairing()
+        #expect(model.phoneLink.pairingProblem?.contains("isn’t running") == true, "no server to ask yet")
+        server = try await StandInBox.start(at: home.appending(path: RemoteEngineInstaller.root)) { request in
+            switch (request.method, request.path) {
+            case ("GET", "/kuvo/info"): return .json(["kind": "mac", "features": BoxGate.required + ["box.app", "box.app.host", "box.update"], "chats": "/Users/me/.kuvo-code/chats"])
+            case ("POST", "/kuvo/box/update"): return HTTPResponse(status: 202, headers: ["Content-Type": "application/json"], body: Data("{}".utf8))
+            case ("POST", "/kuvo/phones/pair"): return .json(["link": pairingLink, "ends": Date.now.timeIntervalSince1970 + 600])
+            default: return .json([:])
+            }
+        }
+        try await until { (server?.count("POST", "/kuvo/box/app") ?? 0) > 0 }
+        let stand = try #require(server)
+        // Registered: its tools, its place, and its own host, proved to be the app.
+        let registered = try #require(stand.asked.last { $0.path == "/kuvo/box/app" })
+        let body = try #require(try JSONSerialization.jsonObject(with: registered.body) as? [String: Any])
+        #expect((body["tools"] as? [String: Any])?["url"] != nil)
+        #expect(body["bundle"] as? String == Bundle.main.bundleURL.path(percentEncoded: false))
+        let host = try #require(body["host"] as? [String: String])
+        let hostURL = try #require(host["url"].flatMap(URL.init(string:)))
+        let password = try #require(host["password"])
+        StubWeb.letThrough(port: hostURL.port ?? 0)
+        let nonce = UUID().uuidString
+        var hello = URLRequest(url: hostURL.appending(path: "hello"))
+        hello.httpMethod = "POST"
+        hello.httpBody = try JSONSerialization.data(withJSONObject: ["nonce": nonce])
+        let (proved, _) = try await URLSession.shared.data(for: hello)
+        let said = try JSONSerialization.jsonObject(with: proved) as? [String: Any]
+        let proof = said?["proof"] as? String
+        #expect(proof == HostInterface.proof(of: nonce, at: "127.0.0.1:\(hostURL.port ?? 0)", password: password))
+        // Never this Mac's keys: they're the box's helper's.
+        var keys = URLRequest(url: hostURL.appending(path: "keys/names"))
+        keys.httpMethod = "POST"
+        keys.setValue("Bearer \(password)", forHTTPHeaderField: "Authorization")
+        keys.httpBody = Data("{}".utf8)
+        let (_, refused) = try await URLSession.shared.data(for: keys)
+        #expect((refused as? HTTPURLResponse)?.statusCode == 404)
+        // The release it carries, offered once.
+        let offered = try #require(stand.asked.first { $0.path == "/kuvo/box/update" })
+        let offer = try JSONSerialization.jsonObject(with: offered.body) as? [String: String]
+        #expect(offer?["from"] == release.path(percentEncoded: false))
+        await model.registerWithOwnBox()
+        #expect(stand.count("POST", "/kuvo/box/update") == 1)
+        // Its link, told what's wanted and followed; your machines, as peers.
+        try await until { stand.count("PUT", "/kuvo/link/config") > 0 }
+        model.phoneLink.hasMachines = { true }
+        model.phoneLink.peersChanged()
+        try await until { stand.count("PUT", "/kuvo/link/peers") > 0 }
+        // A phone paired from Settings › Phone: its link.
+        await model.phoneLink.beginPairing()
+        #expect(model.phoneLink.pairingProblem == nil && model.phoneLink.pairing != nil)
+        #expect(stand.count("POST", "/kuvo/phones/pair") == 1)
+        // What follows it streams, over its server.
+        #expect(BoxClient.streams(SSHConnection.thisMac))
+        try await until { stand.count("GET", "/kuvo/bots/events") > 0 }
+        #expect(stand.asked.allSatisfy { $0.fromApp }, "as its own app, every time")
+        #expect(!askedOfTheBoxHere.contains { $0.contains("kuvo/link/") || $0.contains("kuvo/box/app") }, "none of it through its CLI")
+        // Quitting: it says so. (Off the main actor: the box's server is another process, never the
+        // app's own, which waits on it as it quits.)
+        let registrations = stand.count("POST", "/kuvo/box/app")
+        await Task.detached { AppModel.tellOwnBoxQuitting(updating: false) }.value
+        try await until { stand.count("POST", "/kuvo/box/app") > registrations }
+        let quit = try #require(stand.asked.last { $0.path == "/kuvo/box/app" })
+        let quitting = try JSONSerialization.jsonObject(with: quit.body) as? [String: Any]
+        #expect(quitting?["tools"] is NSNull)
     }
 
     /// The files the app counts as its own box having run, when the box can't be asked, are the box's

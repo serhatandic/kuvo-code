@@ -26,11 +26,12 @@ struct BoxClient: Sendable {
     /// removed like a machine.
     nonisolated static func isThisMac(_ id: String) -> Bool { id == mac || id == SSHConnection.thisMac }
 
-    /// Whether its routes stream (`follow` keeps sending as things change): the app's own box,
-    /// answered in this process. Every other box, the one attached in place too, answers each
-    /// request once (a process run for it, over SSH or not), so what follows it reads it again on
-    /// a timer, as slowly as a machine.
-    nonisolated static func streams(_ id: String) -> Bool { id == mac }
+    /// Whether its routes stream now (`follow` keeps sending as things change): the app's own box,
+    /// answered in this process; and the box attached in place while the app reaches it over its own
+    /// server (`OwnBoxHome.streamsNow`, #333). Every other box (that one too, while its server isn't
+    /// up) answers each request once (a process run for it, over SSH or not), so what follows it
+    /// reads it again on a timer, as slowly as a machine. Asked again each round, as it can change.
+    nonisolated static func streams(_ id: String) -> Bool { id == mac || (id == SSHConnection.thisMac && OwnBoxHome.streamsNow) }
 
     /// How long what follows a box that doesn't stream waits before it reads the box again: as long
     /// as a machine's bots wait (`Bots.machineFollowPause`), so the one attached in place, whose
