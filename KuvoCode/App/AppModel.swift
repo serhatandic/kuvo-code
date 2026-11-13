@@ -50,11 +50,9 @@ final class AppModel {
         return BrowserToolServer(agent: BrowserAgent(utilities: utilities, asks: browserAsks))
     }()
     let workspace = Workspace()
-    /// What each box says it has (`kuvo/info`'s `features`): the app's one reader of them, which
-    /// tells the update gate what each says. This Mac's own box, of this version, has them all.
-    @ObservationIgnored private(set) lazy var boxFeatures = BoxFeatures(hasEverything: BoxClient.hasEveryFeature) { [unowned self] id in
-        try await self.box(id).send("GET", "kuvo/info")
-    }
+    /// What each box says it has (`kuvo/info`'s `features`): the app's one reader of them
+    /// (`Workspace.features`), which tells the update gate what each says.
+    var boxFeatures: BoxFeatures { workspace.features }
     /// The main window's tabs; one window, so one set. Stores open tabs in it, also while the
     /// window is closed.
     @ObservationIgnored private(set) lazy var tabs = WindowTabs(app: self)
@@ -357,16 +355,10 @@ final class AppModel {
         workspace.boxes = { [weak self] id in self?.box(id) }
         // The update gate (#679): a box found older than this app needs, as it says what it has,
         // is held; let go, it's read again.
-        workspace.features = boxFeatures
         usageHistory.settings.features = boxFeatures
         boxFeatures.onSaid = { [weak self] box, features in
             guard let self else { return }
-            let said = Array(features)
-            if BoxGate.isCurrent(said) {
-                machines.gates.foundCurrent(box, features: said)
-            } else {
-                machines.gates.foundOlder(box, features: said, name: BoxClient.isThisMac(box) ? "this Mac" : machines.engine(box)?.machine.name ?? box)
-            }
+            machines.gates.said(box, features: features, name: BoxClient.isThisMac(box) ? "this Mac" : machines.engine(box)?.machine.name ?? box)
         }
         workspace.isHeld = { [weak self] box in self?.machines.gates.state(of: box) != nil }
         machines.gates.onLetGo = { [weak self] box in

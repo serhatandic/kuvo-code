@@ -316,9 +316,13 @@ final class Workspace {
     /// which the sidebar says). Asked again now and then, as it may be updated meanwhile.
     private(set) var outdatedLists: Set<String> = []
 
-    /// What each box says it has (`kuvo/info`'s `features`): the app's one reader of them, which
-    /// tells the update gate what each says (`AppModel.wireStores`).
-    @ObservationIgnored var features: BoxFeatures?
+    /// What each box says it has (`kuvo/info`'s `features`), read through `boxes`: the app's one
+    /// reader of them (`AppModel.boxFeatures`), which tells the update gate what each says
+    /// (`AppModel.wireStores`). This Mac's own box, of this version, has them all.
+    @ObservationIgnored private(set) lazy var features = BoxFeatures(hasEverything: BoxClient.hasEveryFeature) { [weak self] id in
+        guard let box = self?.boxes?(id) else { throw CancellationError() }
+        return try await box.send("GET", "kuvo/info")
+    }
 
     /// Whether `box` is held for its update now (`BoxGates`): what it has is asked again each time.
     @ObservationIgnored var isHeld: (String) -> Bool = { _ in false }
@@ -328,7 +332,7 @@ final class Workspace {
     /// the app needs (`BoxGate.required`), not only its lists. `again`: asked again whatever it said.
     private func checkLists(on box: String, again: Bool = false) async -> Bool? {
         if BoxClient.hasEveryFeature(box) { return true }
-        guard boxes?(box) != nil, let features else { return false }
+        guard boxes?(box) != nil else { return false }
         let said: Set<String>?
         // (One that said it didn't, or is held, asked again: it may have been updated since.)
         if again || outdatedLists.contains(box) || isHeld(box) {
@@ -345,7 +349,7 @@ final class Workspace {
     /// `box` is up to date now (the update gate let it go): what it has is asked again, and its
     /// list read at once.
     func boxUpdated(_ box: String) {
-        features?.forget(box)
+        features.forget(box)
         outdatedLists.remove(box)
         if !BoxClient.streams(box), !isRemoved(box) { Task { await readSessionList(on: box) } }
     }
