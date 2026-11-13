@@ -337,7 +337,9 @@ export async function claimClaudeGrant(signIn: ClaudeSignIn | undefined, version
       body: JSON.stringify({ program: "cedar_ember", grant_id: target, request_id: attempt.request }),
       signal: AbortSignal.timeout(25_000),
     })
-    if (!response.ok) return { outcome: "failed" }
+    // Turned away as asked: nothing spent. Turned away for its sign-in or for now, or failing:
+    // whether an earlier try went through isn't said.
+    if (!response.ok) return { outcome: response.status >= 500 || [401, 403, 429].includes(response.status) ? "unknown" : "failed" }
     const body: any = await response.json().catch(() => undefined)
     const cooldown = typeof body?.cooldown_until === "string" ? Date.parse(body.cooldown_until) : NaN
     const until = Number.isFinite(cooldown) ? { until: cooldown } : {}
@@ -361,10 +363,10 @@ export async function claimClaudeGrant(signIn: ClaudeSignIn | undefined, version
       case "low_priority_active":
         return { outcome: "not-now", ...until }
       default:
-        return { outcome: "failed" }
+        return { outcome: "unknown" }
     }
   } catch {
-    return { outcome: "failed" }
+    return { outcome: "unknown" }
   }
 }
 

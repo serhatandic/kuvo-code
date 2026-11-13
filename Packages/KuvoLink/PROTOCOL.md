@@ -3998,7 +3998,8 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
       how many; `expiries`, each one's, soonest first (ms, 50 at most); `usable`, one can be used now
       with this sign-in; `agents: true`, agents may use them without asking (Always Allow, below).
       In a row, `usable` and `on` `{key, name, here?}` say which of your computers would use one:
-      the first of its `boxes` (this box first, one heard from before one that's away) whose own
+      the first of its `boxes` (this box first, one heard from before one that's away, never one a
+      peer only vouches for) whose own
       `resets` say `usable`; none can, `usable: false` and no `on`. `agents` is that computer's.
     - `unreadable` `{message}`: what this sign-in can't read: a Mac's Claude token can only run
       Claude, so its extra usage and resets show only from a computer of yours signed in to Claude
@@ -4159,8 +4160,10 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     once. `outcome` `reset` (done: the windows it refills start over; the account is read again at
     once, and `row` is as it is then), `unconfirmed` (its maker took it but couldn't say it went
     through), `nothing-to-reset` (not at a limit), `no-reset` (none to spend), `not-now` (a
-    cooldown, `until` where it says) or `failed`; `message` says it in words where it isn't
-    `reset`. The same `confirm` again answers how it went, and never spends twice; one never given,
+    cooldown, `until` where it says), `failed` (turned away, or nothing sent: nothing used) or
+    `unknown` (no answer came: a timeout, its maker failing, its sign-in turned away for now, the
+    computer with the sign-in not answering within 45 seconds; it may have been used); `message`
+    says it in words where it isn't `reset`. The same `confirm` again answers how it went, and never spends twice; one never given,
     for another row, or older than 10 minutes is 404. `by`: who asked (an agent's name), for the
     log.
   - **Once**: a spend is written to the box's journal (`limits-resets.json` in the bridge's
@@ -4170,7 +4173,8 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     before the request. Asked again after a crash, a lost answer or a failure, it goes as the same
     request with the same grant or credit, and its maker answers that it's done (`already_used`,
     `already_redeemed`) rather than spending another; a new ask of an account whose last spend
-    never settled reuses that one's request too. Only an answer that says how it went settles it.
+    never settled (within a day) reuses that one's request too, here or, for one passed to a peer,
+    that one's id there (a client's Retry asks anew). Every outcome but `unknown` settles it.
   - **On the computer with the sign-in**: a box whose own sign-in can't spend it passes it to
     `on`, a peer of yours (never a box a peer vouches for), as `{"seat": {"kind": "reset", at, ask:
     {id, row, by?}}}`, and answers when that one does (`{"seat": {"kind": "reset", at, answer: {id,
@@ -4179,8 +4183,9 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     reset's mail only from your own computers; its link drops it from a box a peer vouches for.
   - **Always Allow**: `PUT kuvo/agents/api/kuvo/limits/reset/always {provider | row, always}`:
     agents may (or may not) use an account's resets without asking, kept in the journal with the
-    account on the box whose sign-in spends them (`provider`, as Settings › Accounts names it there;
-    or a `row`, passed to its `on` as `{"seat": {"kind": "reset", at, always: {row, on}}}`). Stated
+    account on every computer of yours with its sign-in: here (`provider`, as Settings › Accounts
+    names it here, or the `row`), and told to the others among its row's `boxes` as `{"seat":
+    {"kind": "reset", at, always: {row, on}}}`, which keep it for their own account of it. Stated
     as `agents: true` on its `resets`.
   - **The agents' tool** `use_limit_reset {account}` (an account's row `id`, or its name as
     `plan_limits` says it): asks the user first, every time, on the permission card in the calling

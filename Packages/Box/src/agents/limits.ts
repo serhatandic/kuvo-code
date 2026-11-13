@@ -109,8 +109,10 @@ export type ResetOutcome =
   | "no-reset"
   /** Can't be used just now (a cooldown, its maker holding reads off): `until`, where it says. */
   | "not-now"
-  /** It didn't go through, or no answer came: asked again with the same request, it can't spend twice. */
+  /** Its maker turned it away (or nothing was sent): nothing was spent. */
   | "failed"
+  /** No answer came (a timeout, the network, its maker failing): it may have been spent; asked again, it goes as the same request, so it can't spend twice. */
+  | "unknown"
 
 /**
  * One reset being spent: the request it goes as (its maker's idempotency key) and what it spends
@@ -210,7 +212,8 @@ export interface LimitsSource {
   facts?(): LimitExtra[]
   /**
    * Spends one of the account's resets (its `resets` extra), with its own sign-in: its maker's
-   * answer, as a `ResetOutcome`. Never throws. `limits.ts`' journal (`limits-resets.ts`) keeps the
+   * answer, as a `ResetOutcome` (`unknown` where the request may have gone and no answer said how
+   * it went). Never throws. `limits.ts`' journal (`limits-resets.ts`) keeps the
    * attempt before it's called, so a retry is the same request.
    */
   reset?(attempt: ResetAttempt, now: number): Promise<{ outcome: ResetOutcome; until?: number }>

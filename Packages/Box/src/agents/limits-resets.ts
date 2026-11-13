@@ -143,20 +143,21 @@ export class LimitResets {
    * whose sign-in spends them (here, or told to that peer). `provider`: an account here, as
    * Settings › Accounts names it.
    */
-  setAlways(given: { row?: string; provider?: string }, on: boolean): ResetRefusal | null {
-    const here = given.provider ? this.limits.list(false).find((account) => account.provider === given.provider) : given.row ? this.limits.accountOf(given.row) : undefined
-    if (here && (given.provider || this.limits.accountOf(given.row!)?.limits.reset)) {
-      if (on) this.always.add(here.provider)
-      else this.always.delete(here.provider)
+  setAlways(given: { row?: string; provider?: string }, on: boolean, tell = true): ResetRefusal | null {
+    const ownProvider = given.provider ?? (given.row ? this.limits.accountOf(given.row)?.provider : undefined)
+    const rowID = given.row ?? (given.provider ? this.limits.rows().find((each) => each.boxes.some((box) => box.here && box.provider === given.provider))?.id : undefined)
+    const row = rowID ? this.limits.rows().find((each) => each.id === rowID) : undefined
+    // Every other computer of yours with the account's sign-in keeps it too: it's the account's.
+    const others = tell ? (row?.boxes ?? []).filter((box) => !box.here && box.key && this.reaches(box.key)) : []
+    const ownCan = ownProvider !== undefined && !!this.limits.account(ownProvider)?.limits.reset
+    if (!ownCan && !others.length) return { status: row ? 503 : 404, message: row ? "None of your computers with this account's sign-in can be reached now." : "No account of yours by that name has resets." }
+    if (ownCan) {
+      if (on) this.always.add(ownProvider!)
+      else this.always.delete(ownProvider!)
       this.save()
       this.limits.ownChanged()
-      return null
     }
-    const row = given.row ? this.limits.rows().find((each) => each.id === given.row) : undefined
-    const on_ = row?.extras?.find((extra) => extra.kind === "resets")?.on
-    if (!row || !on_) return { status: 404, message: "No account of yours by that name has resets." }
-    if (!this.reaches(on_.key)) return { status: 503, message: `${on_.name || "The computer with its sign-in"} can't be reached now.` }
-    this.transport!.send(on_.key, { kind: "reset", at: this.now(), always: { row: row.id, on } }, true)
+    for (const box of others) this.transport!.send(box.key, { kind: "reset", at: this.now(), always: { row: row!.id, on } }, true)
     return null
   }
 
@@ -216,8 +217,11 @@ export class LimitResets {
       // (Spent once: the id goes now, whatever comes of it; its journal entry answers it after.)
       this.confirms.delete(confirm)
       if (asked.via) {
-        const spend: Spend = { id: confirm, row: rowID, via: asked.via, request: confirm, at: this.now(), state: "sending", ...(by ? { by } : {}) }
-        this.keep(spend)
+        // One of this row's passed there lately that never heard back (Retry, with a new
+        // confirmation): asked again under its id, so a reset it used isn't used again.
+        const unsettled = this.spends.find((each) => each.via === asked.via && each.row === rowID && each.state === "sending" && this.now() - each.at < UNSETTLED_FOR)
+        const spend: Spend = unsettled ?? { id: confirm, row: rowID, via: asked.via, request: confirm, at: this.now(), state: "sending", ...(by ? { by } : {}) }
+        if (!unsettled) this.keep(spend)
         result = await this.passed(spend)
       } else {
         result = await this.here(confirm, rowID, asked.provider, by)
@@ -236,7 +240,7 @@ export class LimitResets {
     }
     if (mail.always && typeof mail.always.row === "string" && typeof mail.always.on === "boolean") {
       const account = this.limits.accountOf(mail.always.row)
-      if (account?.limits.reset) this.setAlways({ provider: account.provider }, mail.always.on)
+      if (account?.limits.reset) this.setAlways({ provider: account.provider }, mail.always.on, false)
       return
     }
     const ask = mail.ask
@@ -252,8 +256,20 @@ export class LimitResets {
     return !!this.transport?.followed && this.directory?.isPeer?.(key) === true
   }
 
+  /** Asks passed to a peer and waiting for its answer, by id: asked again meanwhile, the same wait. */
+  private passing = new Map<string, Promise<{ outcome: ResetOutcome; until?: number }>>()
+
   /** One passed to the peer with the sign-in: asked (again) there, under the same id. */
-  private async passed(spend: Spend): Promise<{ outcome: ResetOutcome; until?: number }> {
+  private passed(spend: Spend): Promise<{ outcome: ResetOutcome; until?: number }> {
+    const waiting = this.passing.get(spend.id)
+    if (waiting) return waiting
+    const run = this.pass(spend).finally(() => this.passing.delete(spend.id))
+    this.passing.set(spend.id, run)
+    return run
+  }
+
+  private async pass(spend: Spend): Promise<{ outcome: ResetOutcome; until?: number }> {
+    // (Not sent: nothing spent this time; asked again, it's asked there under the same id.)
     if (!this.reaches(spend.via!)) return { outcome: "failed" }
     const answer = await new Promise<NonNullable<ResetMail["answer"]> | null>((resolve) => {
       const timer = setTimeout(() => resolve(null), this.peerWait)
@@ -265,10 +281,11 @@ export class LimitResets {
       this.transport!.send(spend.via!, { kind: "reset", at: this.now(), ask: { id: spend.id, row: spend.row, ...(spend.by ? { by: spend.by } : {}) } }, false)
     })
     this.waiting.delete(spend.id)
-    if (!answer) return { outcome: "failed" }
-    const outcome = OUTCOMES.has(answer.outcome) ? answer.outcome : "failed"
+    // No answer in time: it may have been used there.
+    if (!answer) return { outcome: "unknown" }
+    const outcome = OUTCOMES.has(answer.outcome) ? answer.outcome : "unknown"
     // (Not settled there either: asked again, it's asked again there, under the same id.)
-    if (outcome !== "failed") {
+    if (outcome !== "unknown") {
       spend.state = "done"
       spend.outcome = outcome
       if (typeof answer.until === "number") spend.until = answer.until
@@ -295,7 +312,7 @@ export class LimitResets {
     if (!spend) {
       // One of this account's never settled (its box stopped as it went): the same request, so
       // what it may have spent isn't spent again.
-      const unsettled = this.spends.find((each) => each.provider === account.provider && each.state === "sending" && !each.via)
+      const unsettled = this.spends.find((each) => each.provider === account.provider && each.state === "sending" && !each.via && this.now() - each.at < UNSETTLED_FOR)
       spend = { id, row: rowID, provider: account.provider, request: unsettled?.request ?? requestID(), ...(unsettled?.target ? { target: unsettled.target } : {}), at: this.now(), state: "sending", ...(by ? { by } : {}) }
       if (unsettled) {
         unsettled.state = "done"
@@ -312,17 +329,18 @@ export class LimitResets {
         this.save()
       } }, this.now())
     } catch {
-      result = { outcome: "failed" }
+      result = { outcome: "unknown" }
     }
     console.error(`limits: a reset of ${account.provider} ${result.outcome === "reset" ? "was used" : `didn't go through (${result.outcome})`}${kept.by ? `, asked by ${kept.by}` : ""}.`)
-    // An answer that says how it went settles it; a failure is tried again as the same request.
-    if (result.outcome !== "failed") {
+    // An answer that says how it went settles it (a refusal too: nothing was spent); with none, it's
+    // tried again as the same request.
+    if (result.outcome !== "unknown") {
       kept.state = "done"
       kept.outcome = result.outcome
       if (result.until) kept.until = result.until
       this.save()
     }
-    if (result.outcome === "reset" || result.outcome === "unconfirmed" || result.outcome === "no-reset") {
+    if (result.outcome === "reset" || result.outcome === "unconfirmed" || result.outcome === "no-reset" || result.outcome === "unknown") {
       account.limits.afterReset?.()
       await Promise.race([this.limits.readAgain(account.provider), new Promise((resolve) => setTimeout(resolve, READ_AFTER).unref?.())])
     }
@@ -364,7 +382,9 @@ export class LimitResets {
   }
 }
 
-const OUTCOMES = new Set<ResetOutcome>(["reset", "unconfirmed", "nothing-to-reset", "no-reset", "not-now", "failed"])
+const OUTCOMES = new Set<ResetOutcome>(["reset", "unconfirmed", "nothing-to-reset", "no-reset", "not-now", "failed", "unknown"])
+/** A spend never settled is asked again as the same request for this long (its grant or credit may be gone after). */
+const UNSETTLED_FOR = 24 * 60 * MINUTE
 
 /** A request id as makers take them (letters, digits, `-`, `_`). */
 const requestID = () => randomBytes(16).toString("hex")
@@ -384,6 +404,8 @@ export function words(outcome: ResetOutcome): string | undefined {
       return "Resets can't be used right now. Nothing was used."
     case "failed":
       return "Didn't go through. Nothing was used."
+    case "unknown":
+      return "No answer came, so it may have been used. Asking again won't use another."
   }
 }
 

@@ -14,6 +14,8 @@ export interface LimitsBox {
   here: boolean
   /** A peer not heard from for a while: what it said is as of then. */
   away: boolean
+  /** A box a peer of yours vouches for, not one of yours: it never uses your resets. */
+  vouched?: boolean
   accounts: AccountLimits[]
 }
 
@@ -89,7 +91,7 @@ export function limitRows(boxes: LimitsBox[]): LimitRow[] {
 function withResetsOn(row: LimitRow, members: { box: LimitsBox; account: AccountLimits }[]) {
   const index = row.extras?.findIndex((extra) => extra.kind === "resets") ?? -1
   if (index < 0) return
-  const can = (member: { account: AccountLimits }) => member.account.extras?.some((extra) => extra.kind === "resets" && extra.usable === true)
+  const can = (member: { box: LimitsBox; account: AccountLimits }) => !member.box.vouched && member.account.extras?.some((extra) => extra.kind === "resets" && extra.usable === true)
   const holder = members.find((member) => can(member) && !member.box.away) ?? members.find(can)
   const extras = [...row.extras!]
   const { on: _, ...resets } = extras[index]!

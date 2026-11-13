@@ -288,8 +288,11 @@ async function readCopilot(secret: string, _credential: Credential, now: number)
   return { windows, ...(plan ? { plan } : {}), ...(extras?.length ? { extras } : {}), ...(login ? { identity: `github:${login}` } : {}) }
 }
 
-/** The organization whose billing carried Copilot's credits, by sign-in (a fingerprint): asked first. */
-const billingOrgs = new Map<string, { org?: string; none?: number }>()
+/**
+ * The organization whose billing carried Copilot's credits, by sign-in (a fingerprint): asked
+ * first; and what was last read of it, kept while a read of it fails.
+ */
+const billingOrgs = new Map<string, { org?: string; none?: number; extras?: LimitExtra[] }>()
 /** With none found, organizations are looked through again this often. */
 const ORGS_AGAIN = 6 * 60 * 60_000
 
@@ -316,7 +319,12 @@ async function organizationCredits(secret: string, now: number): Promise<LimitEx
   }
   if (known?.org) {
     const extras = await read(known.org)
-    if (extras !== null) return extras ?? undefined
+    // (Not now: as last read, never none.)
+    if (extras === undefined) return known.extras
+    if (extras) {
+      billingOrgs.set(key, { org: known.org, extras })
+      return extras
+    }
     billingOrgs.delete(key)
   } else if (known?.none && now - known.none < ORGS_AGAIN) {
     return undefined
@@ -336,8 +344,10 @@ async function organizationCredits(secret: string, now: number): Promise<LimitEx
   }
   for (const org of orgs) {
     const extras = await read(org)
+    // GitHub says not now (a 429, a failure): looked through again at the next read, from here on.
+    if (extras === undefined) return undefined
     if (!extras) continue
-    billingOrgs.set(key, { org })
+    billingOrgs.set(key, { org, extras })
     return extras
   }
   billingOrgs.set(key, { none: now })

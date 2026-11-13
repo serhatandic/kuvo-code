@@ -121,6 +121,11 @@ test("a Copilot seat its organization pays for by the credit: the organization's
   ])
   expect(reads.find((read) => read.path === "/githubOrgs")!.headers.get("authorization")).toBe("token gho_admin")
 
+  // GitHub failing the organization's billing for now: what was read stays, never none.
+  answers["/githubBilling/acme/settings/billing/usage/summary"] = () => new Response("{}", { status: 503 })
+  const [kept] = (await stated([credential("github-copilot", { type: "oauth", access: "short", refresh: "gho_admin", expires: NOW - 1 })])).accounts
+  expect(kept!.extras?.map((extra) => [extra.id, extra.amount])).toEqual([["org_credits", 1500], ["org_spend", 15]])
+
   // A member who can't read any organization's billing: the plan alone.
   answers["/githubBilling/acme/settings/billing/usage/summary"] = () => Response.json({ message: "Must have admin rights" }, { status: 403 })
   const [member] = (await stated([credential("github-copilot", { type: "oauth", access: "short", refresh: "gho_member", expires: NOW - 1 })])).accounts

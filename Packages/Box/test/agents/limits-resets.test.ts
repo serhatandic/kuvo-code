@@ -70,6 +70,10 @@ class Makers {
   /** Held at: the credits' list, or a consume after it's spent (its answer lost). */
   holdList?: Gate
   holdAnswer?: Gate
+  /** The next consume: spent, then answered with a failure (its answer lost). */
+  failAfterSpending = false
+  /** Credits it refuses outright (expired since they were listed): a 400. */
+  refuses = new Set<string>()
   fiveHour = 92
 
   private server = Bun.serve({
@@ -110,6 +114,7 @@ class Makers {
       if (url.pathname === "/wham/rate-limit-reset-credits/consume" && request.method === "POST") {
         const body: any = await request.json()
         this.consumes.push({ credit: body.credit_id, request: body.redeem_request_id, account: request.headers.get("chatgpt-account-id") })
+        if (this.refuses.has(body.credit_id)) return Response.json({ error: "credit_expired" }, { status: 400 })
         let code = "already_redeemed"
         if (!this.spent.has(body.redeem_request_id)) {
           const credit = this.credits.find((each) => each.id === body.credit_id && each.status === "available")
@@ -120,6 +125,10 @@ class Makers {
           code = "reset"
         }
         await this.holdAnswer?.pass()
+        if (this.failAfterSpending) {
+          this.failAfterSpending = false
+          return new Response("{}", { status: 502 })
+        }
         return Response.json({ code })
       }
       return new Response("{}", { status: 404 })
@@ -272,6 +281,45 @@ describe("a reset, asked and then confirmed", () => {
     expect((await post(second.limits, { row: row!.id, confirm: next.body.data.confirm })).body.data.outcome).toBe("reset")
     expect(makers.spends).toBe(2)
     held.release()
+  })
+
+  test("no answer came (its maker failed after spending it): the box says it may have been used, and Retry, with a new confirmation, goes as the same request and uses nothing more", async () => {
+    const { limits } = await chatGPTBox(mkdtempSync(join(base, "unknown-")))
+    const [row] = limits.rows()
+    makers.failAfterSpending = true
+    const first = await post(limits, { row: row!.id })
+    const lost = await post(limits, { row: row!.id, confirm: first.body.data.confirm })
+    expect(lost.body.data.outcome).toBe("unknown")
+    expect(lost.body.data.message).toBe("No answer came, so it may have been used. Asking again won't use another.")
+    expect(makers.spends).toBe(1)
+    // Retry, as the apps do it: asked again, confirmed again.
+    const again = await post(limits, { row: row!.id })
+    const done = await post(limits, { row: row!.id, confirm: again.body.data.confirm })
+    expect(done.body.data.outcome).toBe("reset")
+    expect(makers.consumes.map((each) => each.request)).toEqual([makers.consumes[0]!.request, makers.consumes[0]!.request])
+    expect(makers.spends).toBe(1)
+    // Settled: the next is a reset of its own.
+    const next = await post(limits, { row: row!.id })
+    await post(limits, { row: row!.id, confirm: next.body.data.confirm })
+    expect(makers.spends).toBe(2)
+    expect(new Set(makers.consumes.map((each) => each.request)).size).toBe(2)
+  })
+
+  test("its maker turns the chosen credit away (expired since): nothing was used, it says so, and the next ask isn't held to that credit", async () => {
+    const { limits } = await chatGPTBox(mkdtempSync(join(base, "refused-")))
+    const [row] = limits.rows()
+    makers.refuses.add("credit_soon")
+    const first = await post(limits, { row: row!.id })
+    const refused = await post(limits, { row: row!.id, confirm: first.body.data.confirm })
+    expect(refused.body.data.outcome).toBe("failed")
+    expect(refused.body.data.message).toBe("Didn't go through. Nothing was used.")
+    expect(makers.spends).toBe(0)
+    // ChatGPT says it's gone: the list no longer has it, and the next ask uses another.
+    makers.credits = makers.credits.filter((each) => each.id !== "credit_soon")
+    const again = await post(limits, { row: row!.id })
+    expect((await post(limits, { row: row!.id, confirm: again.body.data.confirm })).body.data.outcome).toBe("reset")
+    expect(makers.consumes.map((each) => each.credit)).toEqual(["credit_soon", "credit_late"])
+    expect(makers.consumes[0]!.request).not.toBe(makers.consumes[1]!.request)
   })
 
   test("an account with no resets left, or none at all, is refused before anything is offered", async () => {

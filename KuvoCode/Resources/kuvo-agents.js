@@ -9560,24 +9560,24 @@ class LimitResets {
   agentsMay(provider) {
     return this.always.has(provider);
   }
-  setAlways(given, on) {
-    const here = given.provider ? this.limits.list(false).find((account) => account.provider === given.provider) : given.row ? this.limits.accountOf(given.row) : undefined;
-    if (here && (given.provider || this.limits.accountOf(given.row)?.limits.reset)) {
+  setAlways(given, on, tell = true) {
+    const ownProvider = given.provider ?? (given.row ? this.limits.accountOf(given.row)?.provider : undefined);
+    const rowID = given.row ?? (given.provider ? this.limits.rows().find((each) => each.boxes.some((box) => box.here && box.provider === given.provider))?.id : undefined);
+    const row = rowID ? this.limits.rows().find((each) => each.id === rowID) : undefined;
+    const others = tell ? (row?.boxes ?? []).filter((box) => !box.here && box.key && this.reaches(box.key)) : [];
+    const ownCan = ownProvider !== undefined && !!this.limits.account(ownProvider)?.limits.reset;
+    if (!ownCan && !others.length)
+      return { status: row ? 503 : 404, message: row ? "None of your computers with this account's sign-in can be reached now." : "No account of yours by that name has resets." };
+    if (ownCan) {
       if (on)
-        this.always.add(here.provider);
+        this.always.add(ownProvider);
       else
-        this.always.delete(here.provider);
+        this.always.delete(ownProvider);
       this.save();
       this.limits.ownChanged();
-      return null;
     }
-    const row = given.row ? this.limits.rows().find((each) => each.id === given.row) : undefined;
-    const on_ = row?.extras?.find((extra) => extra.kind === "resets")?.on;
-    if (!row || !on_)
-      return { status: 404, message: "No account of yours by that name has resets." };
-    if (!this.reaches(on_.key))
-      return { status: 503, message: `${on_.name || "The computer with its sign-in"} can't be reached now.` };
-    this.transport.send(on_.key, { kind: "reset", at: this.now(), always: { row: row.id, on } }, true);
+    for (const box of others)
+      this.transport.send(box.key, { kind: "reset", at: this.now(), always: { row: row.id, on } }, true);
     return null;
   }
   ask(rowID) {
@@ -9636,8 +9636,10 @@ class LimitResets {
         return { refused: { status: 404, message: "That confirmation has expired: ask again." } };
       this.confirms.delete(confirm);
       if (asked.via) {
-        const spend = { id: confirm, row: rowID, via: asked.via, request: confirm, at: this.now(), state: "sending", ...by ? { by } : {} };
-        this.keep(spend);
+        const unsettled = this.spends.find((each) => each.via === asked.via && each.row === rowID && each.state === "sending" && this.now() - each.at < UNSETTLED_FOR);
+        const spend = unsettled ?? { id: confirm, row: rowID, via: asked.via, request: confirm, at: this.now(), state: "sending", ...by ? { by } : {} };
+        if (!unsettled)
+          this.keep(spend);
         result = await this.passed(spend);
       } else {
         result = await this.here(confirm, rowID, asked.provider, by);
@@ -9657,7 +9659,7 @@ class LimitResets {
     if (mail.always && typeof mail.always.row === "string" && typeof mail.always.on === "boolean") {
       const account = this.limits.accountOf(mail.always.row);
       if (account?.limits.reset)
-        this.setAlways({ provider: account.provider }, mail.always.on);
+        this.setAlways({ provider: account.provider }, mail.always.on, false);
       return;
     }
     const ask = mail.ask;
@@ -9671,7 +9673,16 @@ class LimitResets {
   reaches(key) {
     return !!this.transport?.followed && this.directory?.isPeer?.(key) === true;
   }
-  async passed(spend) {
+  passing = new Map;
+  passed(spend) {
+    const waiting = this.passing.get(spend.id);
+    if (waiting)
+      return waiting;
+    const run = this.pass(spend).finally(() => this.passing.delete(spend.id));
+    this.passing.set(spend.id, run);
+    return run;
+  }
+  async pass(spend) {
     if (!this.reaches(spend.via))
       return { outcome: "failed" };
     const answer = await new Promise((resolve) => {
@@ -9685,9 +9696,9 @@ class LimitResets {
     });
     this.waiting.delete(spend.id);
     if (!answer)
-      return { outcome: "failed" };
-    const outcome = OUTCOMES.has(answer.outcome) ? answer.outcome : "failed";
-    if (outcome !== "failed") {
+      return { outcome: "unknown" };
+    const outcome = OUTCOMES.has(answer.outcome) ? answer.outcome : "unknown";
+    if (outcome !== "unknown") {
       spend.state = "done";
       spend.outcome = outcome;
       if (typeof answer.until === "number")
@@ -9714,7 +9725,7 @@ class LimitResets {
     if (this.limits.held(account.provider))
       return this.settle(spend, id, rowID, "not-now");
     if (!spend) {
-      const unsettled = this.spends.find((each) => each.provider === account.provider && each.state === "sending" && !each.via);
+      const unsettled = this.spends.find((each) => each.provider === account.provider && each.state === "sending" && !each.via && this.now() - each.at < UNSETTLED_FOR);
       spend = { id, row: rowID, provider: account.provider, request: unsettled?.request ?? requestID(), ...unsettled?.target ? { target: unsettled.target } : {}, at: this.now(), state: "sending", ...by ? { by } : {} };
       if (unsettled) {
         unsettled.state = "done";
@@ -9730,17 +9741,17 @@ class LimitResets {
         this.save();
       } }, this.now());
     } catch {
-      result = { outcome: "failed" };
+      result = { outcome: "unknown" };
     }
     console.error(`limits: a reset of ${account.provider} ${result.outcome === "reset" ? "was used" : `didn't go through (${result.outcome})`}${kept.by ? `, asked by ${kept.by}` : ""}.`);
-    if (result.outcome !== "failed") {
+    if (result.outcome !== "unknown") {
       kept.state = "done";
       kept.outcome = result.outcome;
       if (result.until)
         kept.until = result.until;
       this.save();
     }
-    if (result.outcome === "reset" || result.outcome === "unconfirmed" || result.outcome === "no-reset") {
+    if (result.outcome === "reset" || result.outcome === "unconfirmed" || result.outcome === "no-reset" || result.outcome === "unknown") {
       account.limits.afterReset?.();
       await Promise.race([this.limits.readAgain(account.provider), new Promise((resolve) => setTimeout(resolve, READ_AFTER).unref?.())]);
     }
@@ -9779,7 +9790,8 @@ class LimitResets {
     renameSync8(this.file + ".new", this.file);
   }
 }
-var OUTCOMES = new Set(["reset", "unconfirmed", "nothing-to-reset", "no-reset", "not-now", "failed"]);
+var OUTCOMES = new Set(["reset", "unconfirmed", "nothing-to-reset", "no-reset", "not-now", "failed", "unknown"]);
+var UNSETTLED_FOR = 24 * 60 * MINUTE;
 var requestID = () => randomBytes5(16).toString("hex");
 function words2(outcome) {
   switch (outcome) {
@@ -9795,6 +9807,8 @@ function words2(outcome) {
       return "Resets can't be used right now. Nothing was used.";
     case "failed":
       return "Didn't go through. Nothing was used.";
+    case "unknown":
+      return "No answer came, so it may have been used. Asking again won't use another.";
   }
 }
 var json6 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
@@ -9867,7 +9881,7 @@ function withResetsOn(row, members) {
   const index = row.extras?.findIndex((extra) => extra.kind === "resets") ?? -1;
   if (index < 0)
     return;
-  const can = (member) => member.account.extras?.some((extra) => extra.kind === "resets" && extra.usable === true);
+  const can = (member) => !member.box.vouched && member.account.extras?.some((extra) => extra.kind === "resets" && extra.usable === true);
   const holder = members.find((member) => can(member) && !member.box.away) ?? members.find(can);
   const extras = [...row.extras];
   const { on: _, ...resets } = extras[index];
@@ -13852,7 +13866,7 @@ async function claimClaudeGrant(signIn, version, organization, grant, attempt) {
       signal: AbortSignal.timeout(25000)
     });
     if (!response.ok)
-      return { outcome: "failed" };
+      return { outcome: response.status >= 500 || [401, 403, 429].includes(response.status) ? "unknown" : "failed" };
     const body = await response.json().catch(() => {
       return;
     });
@@ -13878,10 +13892,10 @@ async function claimClaudeGrant(signIn, version, organization, grant, attempt) {
       case "low_priority_active":
         return { outcome: "not-now", ...until };
       default:
-        return { outcome: "failed" };
+        return { outcome: "unknown" };
     }
   } catch {
-    return { outcome: "failed" };
+    return { outcome: "unknown" };
   }
 }
 function heardWindows(info) {
@@ -14378,6 +14392,8 @@ class ClaudeAgent {
     reset: async (attempt, now) => {
       const signIn = this.limitsSignIn();
       const version = signIn ? await this.programVersion() : undefined;
+      if (signIn && !(this.grants && this.grants.as === fingerprint(signIn.token)))
+        await this.grantsExtra(signIn, version, now);
       const grants = this.grants && this.grants.as === fingerprint(signIn?.token) ? this.grants.status : undefined;
       const grant = claimableGrant(grants, now)?.id;
       if (!signIn || !grant && !attempt.target)
@@ -16351,8 +16367,8 @@ async function spendCodexReset(signIn, attempt, now = Date.now()) {
   if (!signIn)
     return { outcome: "no-reset" };
   let credit = attempt.target;
-  try {
-    if (!credit) {
+  if (!credit) {
+    try {
       const response = await fetch(codexResetEndpoints.list, { headers: headers(signIn), signal: AbortSignal.timeout(15000) });
       if (!response.ok)
         return { outcome: "failed" };
@@ -16367,7 +16383,11 @@ async function spendCodexReset(signIn, attempt, now = Date.now()) {
       if (!/^[A-Za-z0-9_-]{1,100}$/.test(credit))
         return { outcome: "failed" };
       attempt.keep(credit);
+    } catch {
+      return { outcome: "failed" };
     }
+  }
+  try {
     const response = await fetch(codexResetEndpoints.consume, {
       method: "POST",
       headers: headers(signIn),
@@ -16375,7 +16395,7 @@ async function spendCodexReset(signIn, attempt, now = Date.now()) {
       signal: AbortSignal.timeout(25000)
     });
     if (!response.ok)
-      return { outcome: "failed" };
+      return { outcome: response.status >= 500 || [401, 403, 429].includes(response.status) ? "unknown" : "failed" };
     const code = (await response.json().catch(() => {
       return;
     }))?.code;
@@ -16385,9 +16405,9 @@ async function spendCodexReset(signIn, attempt, now = Date.now()) {
       return { outcome: "nothing-to-reset" };
     if (code === "no_credit")
       return { outcome: "no-reset" };
-    return { outcome: "failed" };
+    return { outcome: "unknown" };
   } catch {
-    return { outcome: "failed" };
+    return { outcome: "unknown" };
   }
 }
 
@@ -20009,8 +20029,12 @@ async function organizationCredits(secret, now) {
   };
   if (known?.org) {
     const extras = await read(known.org);
-    if (extras !== null)
-      return extras ?? undefined;
+    if (extras === undefined)
+      return known.extras;
+    if (extras) {
+      billingOrgs.set(key, { org: known.org, extras });
+      return extras;
+    }
     billingOrgs.delete(key);
   } else if (known?.none && now - known.none < ORGS_AGAIN) {
     return;
@@ -20029,9 +20053,11 @@ async function organizationCredits(secret, now) {
   }
   for (const org of orgs) {
     const extras = await read(org);
+    if (extras === undefined)
+      return;
     if (!extras)
       continue;
-    billingOrgs.set(key, { org });
+    billingOrgs.set(key, { org, extras });
     return extras;
   }
   billingOrgs.set(key, { none: now });
@@ -35194,7 +35220,7 @@ class LimitsPeers {
     const boxes = [{ key: self?.key ?? "", name: self?.name ?? "", here: true, away: false, accounts: own }];
     const peers = [...this.peers.entries()].sort(([, a], [, b]) => a.name.localeCompare(b.name));
     for (const [key, kept] of peers)
-      boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY2, accounts: kept.accounts });
+      boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY2, ...this.directory.isPeer?.(key) === false ? { vouched: true } : {}, accounts: kept.accounts });
     return limitRows(boxes);
   }
   tell(urgent = false) {
@@ -35781,4 +35807,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 0565706ddeee63a60d0fb598a2cd12a9cb335c0befe5bb9cfd0f034be024d7ab
+// Built from Packages/Box/src/agents 00457eb79b2fa2312df2dc584ef4301a78513ae9bd330c547f62d66238b15135

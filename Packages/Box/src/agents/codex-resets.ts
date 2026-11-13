@@ -82,8 +82,9 @@ export async function readCodexResets(signIn: ChatGPTSignIn, now = Date.now()): 
 export async function spendCodexReset(signIn: ChatGPTSignIn | undefined, attempt: ResetAttempt, now = Date.now()): Promise<{ outcome: ResetOutcome }> {
   if (!signIn) return { outcome: "no-reset" }
   let credit = attempt.target
-  try {
-    if (!credit) {
+  // (Nothing is spent before the credit is chosen and kept: a failure until then is only that.)
+  if (!credit) {
+    try {
       const response = await fetch(codexResetEndpoints.list, { headers: headers(signIn), signal: AbortSignal.timeout(15_000) })
       if (!response.ok) return { outcome: "failed" }
       const body: any = await response.json().catch(() => undefined)
@@ -93,20 +94,26 @@ export async function spendCodexReset(signIn: ChatGPTSignIn | undefined, attempt
       credit = String(credits[0].id)
       if (!/^[A-Za-z0-9_-]{1,100}$/.test(credit)) return { outcome: "failed" }
       attempt.keep(credit)
+    } catch {
+      return { outcome: "failed" }
     }
+  }
+  try {
     const response = await fetch(codexResetEndpoints.consume, {
       method: "POST",
       headers: headers(signIn),
       body: JSON.stringify({ redeem_request_id: attempt.request, credit_id: credit }),
       signal: AbortSignal.timeout(25_000),
     })
-    if (!response.ok) return { outcome: "failed" }
+    // Turned away as asked (its credit gone, a request it won't take): nothing spent. Turned away
+    // for its sign-in or for now, or failing: whether an earlier try went through isn't said.
+    if (!response.ok) return { outcome: response.status >= 500 || [401, 403, 429].includes(response.status) ? "unknown" : "failed" }
     const code = ((await response.json().catch(() => undefined)) as any)?.code
     if (code === "reset" || code === "already_redeemed") return { outcome: "reset" }
     if (code === "nothing_to_reset") return { outcome: "nothing-to-reset" }
     if (code === "no_credit") return { outcome: "no-reset" }
-    return { outcome: "failed" }
+    return { outcome: "unknown" }
   } catch {
-    return { outcome: "failed" }
+    return { outcome: "unknown" }
   }
 }

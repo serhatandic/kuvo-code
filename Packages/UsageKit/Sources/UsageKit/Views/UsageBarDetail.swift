@@ -451,7 +451,8 @@ struct BarResetConfirmation: View {
     }
 }
 
-/// What a host row's login can't read (a Mac's Claude token: its extra usage and resets), with why on hover.
+/// What a host row's login can't read (a Mac's Claude token: its extra usage and resets), with the
+/// box's why on hover (the row may be another Mac's, so it doesn't say which computer).
 struct BarUnreadableRow: View {
     let extra: HostLimitRow.Extra
 
@@ -459,7 +460,7 @@ struct BarUnreadableRow: View {
         HStack(alignment: .firstTextBaseline) {
             BarDetailText(extra.name, style: .label)
             Spacer(minLength: 8)
-            BarDetailText("Not on this Mac", style: .note)
+            BarDetailText("Can't be read", style: .note)
         }
         .accessibilityElement(children: .combine)
         .hoverTooltip(extra.message)

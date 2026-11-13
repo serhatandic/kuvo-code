@@ -449,6 +449,9 @@ export class ClaudeAgent implements Agent {
         reset: async (attempt, now) => {
           const signIn = this.limitsSignIn()
           const version = signIn ? await this.programVersion() : undefined
+          // None read since the box started (a restart since its row said it has them): read now,
+          // as the hourly read would.
+          if (signIn && !(this.grants && this.grants.as === fingerprint(signIn.token))) await this.grantsExtra(signIn, version, now)
           const grants = this.grants && this.grants.as === fingerprint(signIn?.token) ? this.grants.status : undefined
           const grant = claimableGrant(grants, now)?.id
           if (!signIn || (!grant && !attempt.target)) return { outcome: "no-reset" }

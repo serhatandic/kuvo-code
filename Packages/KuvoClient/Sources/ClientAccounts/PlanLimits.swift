@@ -731,7 +731,8 @@ public struct ResetOffer: Decodable, Hashable, Sendable {
 /// How using a reset went (`POST …/limits/reset {row, confirm}`): `reset` when it did; else why
 /// not, in the box's words (`message`), and nothing was used unless it says it may still go through.
 public struct ResetDone: Decodable, Hashable, Sendable {
-    /// `reset`, `unconfirmed`, `nothing-to-reset`, `no-reset`, `not-now` or `failed`.
+    /// `reset`, `unconfirmed`, `nothing-to-reset`, `no-reset`, `not-now`, `failed` (turned away:
+    /// nothing used) or `unknown` (no answer: it may have been used; asking again won't use another).
     public var outcome: String
     public var until: Date?
     public var message: String?
