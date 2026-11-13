@@ -299,6 +299,23 @@ import Testing
         #expect(engine.requests("POST", "/prompt").count == 1, "one run at a time")
     }
 
+    /// Another agent's letter waiting in the engine's queue, removed and put back with Undo: it goes
+    /// back as the agent read it, still theirs to answer, never as words of yours.
+    @Test func anotherAgentsLetterPutBackStaysTheirs() async throws {
+        let letter = "[Message from Ada · ses_ada] (To answer, use send_message to ses_ada.)\n\nThe build is green."
+        let (model, box, _) = try await open(running: true, inbox: [queued("msg_02", letter)])
+        defer { box.stop(); engine.stop() }
+        let item = try #require(model.waiting.first)
+        // Read by its box: from Ada.
+        #expect(SentMessage.parts(item).mail?.name == "Ada")
+        model.cancelPending(item)
+        try await until { !engine.requests("DELETE", "/inbox/msg_02").isEmpty }
+        model.apply(try engine.event("session.inbox.cancelled", session: id, ["inboxID": "msg_02"]))
+        model.requeue(item, for: nil, paused: false)
+        try await until { !engine.requests("POST", "/prompt").isEmpty }
+        #expect(engine.requests("POST", "/prompt").last?.body["text"] as? String == letter)
+    }
+
     /// Stopped from another client a moment ago, before this Mac heard: a message sent for after
     /// this run still waits on the box, which decides, rather than reaching the engine, which would
     /// run all it holds.
