@@ -14,9 +14,9 @@ export type SentAnswer = { status: number; headers: Record<string, string>; body
 // it isn't down, and it can be sent again in a moment (#443).
 export const BUSY = "This computer is busy: its engine didn't answer in time. Try again in a moment.";
 
-// How long a message may take to reach its conversation, as the engine takes it: a busy engine has
-// it late, and has it then (#443); one that never answers is given up on, so a repeat tries again.
-// (An object, for tests to make it shorter.)
+// How long a message added to what waits (`queue/add`) may take to reach its conversation, as the
+// engine takes it: a busy engine has it late, and has it then (#443). (An object, for tests to make
+// it shorter.)
 export const SENDING_PATIENCE = { ms: 120_000 };
 
 // A route's answer, whole (a message's is small).

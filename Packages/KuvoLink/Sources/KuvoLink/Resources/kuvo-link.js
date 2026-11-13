@@ -39266,7 +39266,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "dda77ee7ac5f";
+var BRIDGE_VERSION = "ff7d5a8d0918";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -39631,11 +39631,9 @@ async function* forward(target, path, request, signal, allows, naming = null, do
   if (once) {
     const answer = await sentOnce(once, async () => {
       try {
-        const response = await fetch(url, { method, headers, body: await outgoing(), signal: AbortSignal.timeout(SENDING_PATIENCE.ms) });
+        const response = await fetch(url, { method, headers, body: await outgoing() });
         return { status: response.status, headers: answerHeaders(response), body: Buffer.from(await response.arrayBuffer()) };
-      } catch (error) {
-        if (error?.name === "TimeoutError")
-          return { status: 504, headers: { "content-type": "application/json" }, body: Buffer.from(JSON.stringify({ message: BUSY, busy: true })) };
+      } catch {
         return notAnswering();
       }
     });

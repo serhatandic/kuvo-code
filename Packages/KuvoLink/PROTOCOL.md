@@ -91,6 +91,12 @@ has handed its WebSocket since the last ping that was answered, a minute more at
 out behind those, and a picture on a slow connection holds its pong up as long as it takes to send
 (#144), while a path gone dead behind a big body is still noticed within about 70 s.
 
+The relay counts a device as there while it answers its pings or sends anything: a phone sending a
+picture on a slow connection has its pong behind it, later than the relay's next ping (#144).
+**Deploy order:** that relay goes out with or before the phone build that sends messages again.
+Behind a relay from before it, a big picture on a slow connection is still cut off there, and goes
+again from the start each time, until its two minutes are up.
+
 An APNs push carries `{"aps": {"alert": {"title": "Kuvo Code", "body": "New activity"},
 "mutable-content": 1}, "f": "<sender's address>", "k": "<payload, base64>"}`. The phone's
 notification extension decrypts `k` with the key of the host at `f`, and replaces the text,
@@ -2284,20 +2290,28 @@ are in one line, in the order they were first sent: the first goes at once, then
 8 s (8 s from then on), or as soon as a relay connection is made, or another is sent to that
 computer, whichever comes first; none goes before one sent ahead of it, and one sent while any
 waits goes behind them. A computer that isn't connected to the relay (asleep, offline), turns the
-phone away, or can't talk with it isn't tried again: that's said at once, as before.
+phone away, or can't talk with it isn't tried again: that's said at once, as before. Once a try has
+gone and dropped, though, a computer not on the relay is tried again like a dropped link (the relay
+started again, and it's still connecting), as it may have the message already. A try whose wait ends
+after its two minutes (the app was suspended meanwhile) fails then, rather than going late.
 
 Stopping a request (the client stops reading, or cancels it) ends it at once: one waiting to go
 again never goes. The phone's Stop waits up to 3 s for messages still on their way, then takes back
-any still waiting to go again (their words go back to the composer, with no error) before it asks
-the box to stop, so none starts a run after it. A Stop pressed on another computer can't take back
-the phone's: one waiting may still arrive after it, at most two minutes after it first failed.
+those waiting to go again that never reached the computer (`LinkClient.takeBack`, by their ids:
+none of them was put on a session yet), before it asks the box to stop: their words go back to the
+composer, together and in the order they were sent, with no error, and none starts a run after it.
+One that may have reached the computer (its link dropped as or after it went) isn't taken back,
+since it may be in the conversation already: it goes again and is taken once, and like one still
+on its way it can arrive after Stop. A Stop pressed on another computer can't take back the
+phone's: one waiting may still arrive after it, at most two minutes after it first failed.
 
 A box takes a message sent again under the same id once (`Packages/Box/src/link/server/sent-once.ts`,
 by where it goes, its conversation and its id): one still on its way to the conversation waits for
 it and answers as it did; one that went answers as it did then, for an hour, without the
 conversation (or the files it brought) asked again; one the engine refused, or that didn't reach
-it, is tried again. A message's way to the engine is given up on after 120 s (`504 {message, busy:
-true}`) and not kept, so a repeat tries again. One taken away (`DELETE …/queue/<item>`, or out of
+it, is tried again. A message's way to the engine is waited for however long a busy engine takes,
+as one without an id is, and a repeat meanwhile waits with it; one the engine doesn't answer at all
+(it started again) is tried again. One taken away (`DELETE …/queue/<item>`, or out of
 the engine's inbox) is forgotten, so Undo puts it back under the same id. After a box starts again,
 or from a phone to a box from before this, the engine and the coding agents' bridge, which each take
 a message once by its id, catch a repeat; its files may then be kept on the box twice (a copy

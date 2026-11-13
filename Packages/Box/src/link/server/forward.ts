@@ -15,7 +15,7 @@ import { stopIfWaiting } from "../work/answers";
 import { attachedIn } from "./attached";
 import type { ModelInput } from "./attached";
 import { namedIn, namingHere } from "./naming";
-import { BUSY, forgetSent, SENDING_PATIENCE, sentKey, sentOnce } from "./sent-once";
+import { forgetSent, sentKey, sentOnce } from "./sent-once";
 import type { SentAnswer } from "./sent-once";
 import { agentsAllowed, allowed, canonicalPath, REQUEST_HEADERS, RESPONSE_HEADERS } from "./paths";
 import type { EngineRecord, Target } from "../../shared/records";
@@ -129,16 +129,17 @@ export async function* forward(target: Target, path: string, request: LinkReques
   // Not answering (starting again, say).
   const notAnswering = (): SentAnswer => ({ status: 503, headers: { "content-type": "application/json" }, body: Buffer.from(JSON.stringify({ message: down() })) });
   // A message under an id it was sent with already (its phone's link dropped before the answer
-  // came, #144): taken once, every send answered as the one that went (`sentOnce`).
+  // came, #144): taken once, every send answered as the one that went (`sentOnce`). However long
+  // a busy engine takes to answer, it's waited for, as one without an id is: a repeat meanwhile
+  // waits with it, rather than a "busy" sending its words back to be sent again under a new id
+  // the engine would take twice. Not answering (the engine started again), a repeat tries again.
   const once = sending && sending[2] === "prompt" ? sentKey(toAgents ? "agents" : "engine", decodeURIComponent(sending[1]!), request.body) : null;
   if (once) {
     const answer = await sentOnce(once, async () => {
       try {
-        const response = await fetch(url, { method, headers, body: await outgoing(), signal: AbortSignal.timeout(SENDING_PATIENCE.ms) });
+        const response = await fetch(url, { method, headers, body: await outgoing() });
         return { status: response.status, headers: answerHeaders(response), body: Buffer.from(await response.arrayBuffer()) };
-      } catch (error) {
-        // Running but never answering: said busy, and not kept, so a repeat tries again.
-        if ((error as Error | null)?.name === "TimeoutError") return { status: 504, headers: { "content-type": "application/json" }, body: Buffer.from(JSON.stringify({ message: BUSY, busy: true })) };
+      } catch {
         return notAnswering();
       }
     });

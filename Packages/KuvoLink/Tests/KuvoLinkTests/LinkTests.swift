@@ -1126,6 +1126,99 @@ private func collect(_ stream: LinkResponse) async throws -> (status: Int, heade
         #expect(seen.value == ["msg_after"])
     }
 
+    /// Stop takes back a message waiting to go again that never reached its computer: it ends,
+    /// cancelled, and never goes, even once the link's back (#144).
+    @Test(.timeLimit(.minutes(1))) func stopTakesBackAMessageThatNeverReachedItsComputer() async throws {
+        let seen = Locked<[String]>([])
+        let (client, paired, clock, offline, _) = try await offlinePhone(seen: seen)
+        let sending = Task { try await collect(client.send(safeToRepeat("msg_never"), to: paired)) }
+        try #require(await waitsToGoAgain(sending, clock, within: Link.repeatWait(try: 2)), "it failed at once")
+        #expect(await client.takeBack(["msg_never", "msg_elsewhere"], from: paired) == ["msg_never"])
+        await #expect(throws: CancellationError.self) { try await sending.value }
+        offline.value = false
+        let after = try await collect(client.send(safeToRepeat("msg_after"), to: paired))
+        #expect(after.status == 200)
+        #expect(seen.value == ["msg_after"])
+    }
+
+    /// One whose link dropped as or after it went may be on its computer already: Stop doesn't
+    /// take it back (its words would be in the composer and in the conversation); it goes again,
+    /// to be taken once (#144).
+    @Test(.timeLimit(.minutes(1))) func stopLeavesAMessageThatMayHaveReachedItsComputer() async throws {
+        let relay = MemoryRelay()
+        let clock = ManualClock()
+        let seen = Locked<[String]>([])
+        let host = TestHost(relay: relay) { request, phone in
+            if request.method == "POST" { seen.value.append(String(decoding: request.body, as: UTF8.self)) }
+            return echo(request, phone)
+        }
+        let offline = Locked(false)
+        let first = Locked<GatedConnection?>(nil)
+        let client = LinkClient(relay: URL(string: "wss://relay.test")!, key: LinkKey(), secret: RelaySecret(), name: "Test iPhone", app: "0.0.1") { _, secret in
+            if offline.value { throw LinkError.relayUnavailable }
+            let connection = GatedConnection(relay.connect(secret))
+            if first.value == nil { first.value = connection }
+            return connection
+        }
+        await client.setClockForTesting(clock.link)
+        let paired = try await client.pair(host.link)
+        first.value?.hold()
+        let sending = Task { try await collect(client.send(safeToRepeat("msg_went"), to: paired)) }
+        // (Gone out, its answer waited for; then the link's lost, and stays away a moment.)
+        await clock.sleepers(1, dueWithin: Link.answerWithin)
+        offline.value = true
+        first.value?.lose()
+        try #require(await waitsToGoAgain(sending, clock, within: Link.repeatWait(try: 2)), "it failed at once")
+        #expect(await client.takeBack(["msg_went"], from: paired).isEmpty)
+        offline.value = false
+        await clock.advance(by: Link.repeatWait(try: 2))
+        let answered = try await sending.value
+        #expect(answered.status == 200 && answered.body == Data("msg_went".utf8))
+        #expect(seen.value == ["msg_went"])
+    }
+
+    /// Its computer not on the relay yet as a try goes again (the relay started again, and the
+    /// computer's still connecting): the message it may have had waits for it rather than failing,
+    /// and goes once it's back (#144).
+    @Test(.timeLimit(.minutes(1))) func aMessageGoingAgainWaitsForAComputerStillConnecting() async throws {
+        let relay = MemoryRelay()
+        let clock = ManualClock()
+        let host = TestHost(relay: relay, handle: echo)
+        let offline = Locked(false)
+        let client = LinkClient(relay: URL(string: "wss://relay.test")!, key: LinkKey(), secret: RelaySecret(), name: "Test iPhone", app: "0.0.1") { _, secret in
+            if offline.value { throw LinkError.relayUnavailable }
+            return relay.connect(secret)
+        }
+        await client.setClockForTesting(clock.link)
+        let paired = try await client.pair(host.link)
+        offline.value = true
+        client.relayMayBeGone()
+        host.connection.close()
+        let sending = Task { try await collect(client.send(safeToRepeat("msg_back"), to: paired)) }
+        try #require(await waitsToGoAgain(sending, clock, within: Link.repeatWait(try: 2)), "it failed at once")
+        // The relay's back before the computer is.
+        offline.value = false
+        await clock.advance(by: Link.repeatWait(try: 2))
+        try #require(await waitsToGoAgain(sending, clock, within: Link.repeatWait(try: 3)), "it failed with its computer still connecting")
+        host.startedAgain(on: relay, handle: echo)
+        await clock.advance(by: Link.repeatWait(try: 3))
+        let answered = try await sending.value
+        #expect(answered.status == 200 && answered.body == Data("msg_back".utf8))
+    }
+
+    /// Its time up while it waited (the app suspended, its timer late): it fails as it would have,
+    /// rather than going minutes after it was sent, though the link's back by then (#144).
+    @Test(.timeLimit(.minutes(1))) func aMessageWhoseTimeRanOutWhileItWaitedDoesntGoLate() async throws {
+        let seen = Locked<[String]>([])
+        let (client, paired, clock, offline, _) = try await offlinePhone(seen: seen)
+        let sending = Task { try await collect(client.send(safeToRepeat("msg_late"), to: paired)) }
+        try #require(await waitsToGoAgain(sending, clock, within: Link.repeatWait(try: 2)), "it failed at once")
+        offline.value = false
+        await clock.advance(by: Link.repeatFor + .seconds(600))
+        await #expect(throws: LinkError.relayUnavailable) { try await sending.value }
+        #expect(seen.value.isEmpty)
+    }
+
     /// Several waiting to go again, and one sent once the link's back: the host has them in the
     /// order they were sent, however each try went (#144).
     @Test(.timeLimit(.minutes(1))) func messagesWaitingToGoAgainArriveInTheOrderTheyWereSent() async throws {
