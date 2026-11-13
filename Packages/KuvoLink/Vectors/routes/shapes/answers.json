@@ -3320,6 +3320,9 @@
             "literal": "shell.stop"
            },
            {
+            "literal": "sign-in.methods"
+           },
+           {
             "literal": "sign-in.return"
            },
            {
@@ -3792,6 +3795,9 @@
            },
            {
             "literal": "shell.stop"
+           },
+           {
+            "literal": "sign-in.methods"
            },
            {
             "literal": "sign-in.return"
@@ -7571,6 +7577,46 @@
     "200": {
      "object": {
       "status": "number"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/sign-in/methods",
+   "answers": {
+    "200": {
+     "object": {
+      "methods": {
+       "list": {
+        "object": {
+         "type": "string",
+         "id?": "string",
+         "label": "string",
+         "form?": {
+          "list": "any"
+         },
+         "legacy?": "bool"
+        }
+       }
+      },
+      "environment": {
+       "list": "string"
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/sign-in/status",
+   "answers": {
+    "200": {
+     "object": {
+      "status": "string",
+      "message?": "string",
+      "url?": "string",
+      "instructions?": "string",
+      "userCode?": "string",
+      "failure?": "string"
      }
     }
    }

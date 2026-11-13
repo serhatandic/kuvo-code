@@ -44,6 +44,10 @@ const PLANS: Record<string, { name: string; agent: string; provider: string; hid
   xai: { name: "SuperGrok", agent: "Grok", provider: "grok-cli", hidden: method => method === "device" },
 };
 
+/** Whether the engine's sign-in `method` (an oauth way's id) for `provider` is a plan's that goes
+ * through a coding agent instead, which Accounts doesn't offer for the engine's (areas/sign-in.ts). */
+export const planHides = (provider: string, method: string): boolean => PLANS[provider]?.hidden(method) ?? false;
+
 /** The engine's providers a picker lists first, in this order; the rest after, by id. A new session
  * with no model it can start on otherwise starts on the newest of the first of them that runs. */
 export const FEATURED = ["openai", "github-copilot", "anthropic", "google", "xai", "openrouter", "opencode", "deepseek", "mistral", "groq"];
@@ -54,7 +58,7 @@ export const FEATURED = ["openai", "github-copilot", "anthropic", "google", "xai
  * (`oauth:<id>`, `key`, `external:<id>`). */
 export function signInNeed(providerID: string, methods: string[][]): { missing: "key" | "signIn"; offered: string[]; plan?: { name: string; agent: string; provider: string } } {
   const plan = PLANS[providerID];
-  const offered = methods.filter(([type, id]) => ["oauth", "key", "external"].includes(type!) && !(type === "oauth" && plan?.hidden(id ?? "")));
+  const offered = methods.filter(([type, id]) => ["oauth", "key", "external"].includes(type!) && !(type === "oauth" && planHides(providerID, id ?? "")));
   const key = offered.length > 0 && offered.every(([type]) => type === "key");
   return {
     missing: key ? "key" : "signIn",

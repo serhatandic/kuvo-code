@@ -1,0 +1,68 @@
+{
+  "why": "How every client offers the ways to sign in to an account and says why a sign-in didn't work, as the box decides them (Packages/Box/src/link/areas/sign-in.ts: kuvo/sign-in/methods and kuvo/sign-in/status's failure). Signing in with an account comes first, then credentials the computer already has (external), then a key, each kind in the engine's order; a way whose label says legacy comes after all the others, marked legacy; a plan that goes through a coding agent (ChatGPT's, SuperGrok's) isn't offered for the engine's provider unless it's signed in that way already. Clients draw `offered` as it is, and show `failure` as it is. Methods shaped as engine 2.2.5 lists them (api/integration): openai, xai, deepseek and github-copilot as it lists them; the others made up to hold each rule.",
+  "methods": [
+    {
+      "provider": "anthropic",
+      "methods": [{ "type": "key", "label": "Manually enter API Key" }, { "type": "env", "names": ["ANTHROPIC_API_KEY"] }, { "type": "oauth", "id": "max", "label": "Claude Pro/Max" }, { "type": "oauth", "id": "console", "label": "Create an API Key" }],
+      "offered": {
+        "methods": [{ "type": "oauth", "id": "max", "label": "Claude Pro/Max" }, { "type": "oauth", "id": "console", "label": "Create an API Key" }, { "type": "key", "label": "Manually enter API Key" }],
+        "environment": ["ANTHROPIC_API_KEY"]
+      }
+    },
+    {
+      "provider": "openai",
+      "methods": [{ "type": "key" }, { "type": "env", "names": ["OPENAI_API_KEY"] }, { "type": "oauth", "id": "chatgpt-token-sharing", "label": "Sign in with ChatGPT" }, { "type": "oauth", "id": "chatgpt-browser", "label": "Codex browser (legacy)" }, { "type": "oauth", "id": "chatgpt-headless", "label": "Codex device code (legacy)" }],
+      "offered": { "methods": [{ "type": "key", "label": "Use an API key" }], "environment": ["OPENAI_API_KEY"] }
+    },
+    {
+      "provider": "openai",
+      "connections": [{ "type": "credential", "id": "cred_1", "method": "oauth", "label": "ChatGPT" }],
+      "methods": [{ "type": "key" }, { "type": "env", "names": ["OPENAI_API_KEY"] }, { "type": "oauth", "id": "chatgpt-browser", "label": "Codex browser (legacy)" }, { "type": "oauth", "id": "chatgpt-token-sharing", "label": "Sign in with ChatGPT" }, { "type": "oauth", "id": "chatgpt-headless", "label": "Codex device code (legacy)" }],
+      "offered": {
+        "methods": [{ "type": "oauth", "id": "chatgpt-token-sharing", "label": "Sign in with ChatGPT" }, { "type": "key", "label": "Use an API key" }, { "type": "oauth", "id": "chatgpt-browser", "label": "Codex browser (legacy)", "legacy": true }, { "type": "oauth", "id": "chatgpt-headless", "label": "Codex device code (legacy)", "legacy": true }],
+        "environment": ["OPENAI_API_KEY"]
+      }
+    },
+    {
+      "provider": "xai",
+      "methods": [{ "type": "key", "label": "Manually enter API Key" }, { "type": "env", "names": ["XAI_API_KEY"] }, { "type": "oauth", "id": "device", "label": "SuperGrok Subscription" }],
+      "offered": { "methods": [{ "type": "key", "label": "Manually enter API Key" }], "environment": ["XAI_API_KEY"] }
+    },
+    {
+      "provider": "amazon-bedrock",
+      "methods": [{ "type": "key", "label": "Bedrock API key", "form": [{ "key": "region", "type": "text", "label": "Region", "default": "us-east-1" }] }, { "type": "env", "names": ["AWS_ACCESS_KEY_ID", "AWS_PROFILE"] }, { "type": "external", "id": "aws", "label": "AWS credentials on this computer", "form": [{ "key": "region", "type": "text", "label": "Region", "default": "us-east-1" }] }],
+      "offered": {
+        "methods": [{ "type": "external", "id": "aws", "label": "AWS credentials on this computer", "form": [{ "key": "region", "type": "text", "label": "Region", "default": "us-east-1" }] }, { "type": "key", "label": "Bedrock API key", "form": [{ "key": "region", "type": "text", "label": "Region", "default": "us-east-1" }] }],
+        "environment": ["AWS_ACCESS_KEY_ID", "AWS_PROFILE"]
+      }
+    },
+    {
+      "provider": "github-copilot",
+      "methods": [{ "type": "oauth", "id": "device", "label": "Sign in with GitHub" }],
+      "offered": { "methods": [{ "type": "oauth", "id": "device", "label": "Sign in with GitHub" }], "environment": [] }
+    },
+    {
+      "provider": "claude-code",
+      "methods": [{ "type": "key", "label": "" }, { "type": "command", "id": "setup", "label": "Run setup" }, { "type": "oauth", "id": "subscription", "label": "  " }, { "type": "mystery" }],
+      "offered": { "methods": [{ "type": "oauth", "id": "subscription", "label": "Sign in" }, { "type": "key", "label": "Use an API key" }], "environment": [] }
+    },
+    {
+      "provider": "deepseek",
+      "methods": [{ "type": "key" }, { "type": "env", "names": ["DEEPSEEK_API_KEY"] }],
+      "offered": { "methods": [{ "type": "key", "label": "Use an API key" }], "environment": ["DEEPSEEK_API_KEY"] }
+    }
+  ],
+  "failures": [
+    { "status": "expired", "failure": "The sign-in timed out. Try again." },
+    { "status": "expired", "message": "access_denied", "failure": "The sign-in timed out. Try again." },
+    { "status": "failed", "failure": "Signing in didn’t work." },
+    { "status": "failed", "message": "  ", "failure": "Signing in didn’t work." },
+    { "status": "failed", "message": "access_denied", "failure": "The sign-in was turned down on its page. Try again to sign in." },
+    { "status": "failed", "message": "OAuth error: access_denied (user cancelled)", "failure": "The sign-in was turned down on its page. Try again to sign in." },
+    { "status": "failed", "message": "server_error", "failure": "The service couldn’t sign you in just now. Try again in a moment." },
+    { "status": "failed", "message": "temporarily_unavailable", "failure": "The service couldn’t sign you in just now. Try again in a moment." },
+    { "status": "failed", "message": "OAuth state mismatch", "failure": "That page was from an earlier sign-in. Try again to sign in." },
+    { "status": "failed", "message": "invalid_grant", "failure": "Signing in didn’t work (invalid grant)." },
+    { "status": "failed", "message": "Claude Code's sign-in ended before it finished.", "failure": "Claude Code's sign-in ended before it finished." }
+  ]
+}

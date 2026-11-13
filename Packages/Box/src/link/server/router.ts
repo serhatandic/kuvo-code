@@ -43,6 +43,7 @@ import { autopilotRoute, SESSION_AUTOPILOT_ROUTE } from "../areas/autopilot";
 import { TYPED_ROUTE, typedRoute } from "../areas/typed";
 import { sandboxRoute } from "../areas/sandbox";
 import { providerModelsRoute } from "../areas/providers";
+import { SIGN_IN_METHODS_ROUTE, SIGN_IN_STATUS_ROUTE, signInRoute } from "../areas/sign-in";
 import { answerProjects } from "../areas/projects";
 import { settingsRoute } from "../areas/settings";
 import { skillsRoute } from "../areas/skills";
@@ -145,6 +146,7 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route.match(/^kuvo\/asks\/([^/]+)$/), answer: askAnswerRoute },
   { when: route => route.match(/^kuvo\/engine\/(start|restart)$/), answer: engineControlRoute },
   { when: route => route === "kuvo/sign-in/return", answer: signInReturnRoute },
+  { when: route => route === SIGN_IN_METHODS_ROUTE || route === SIGN_IN_STATUS_ROUTE, answer: signInRoute },
   { when: route => route === "kuvo/claude-code", answer: claudeCodeRoute },
   { when: (route, request) => request.path.startsWith(AGENTS), answer: agentsRoute },
   { when: route => route === "kuvo/accounts/ended" || route === "kuvo/accounts/refreshable" || /^kuvo\/accounts\/[^/]+\/(forget|refresh)$/.test(route), answer: accountsRoute },

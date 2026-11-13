@@ -1,8 +1,9 @@
 // A box's folders to choose one from (PROTOCOL.md, `kuvo/folders`), every file under one
 // (`kuvo/folders/tree`), npm's plugins its engine can
 // load (`kuvo/plugins/search`), an MCP server's program (`kuvo/programs`), a provider of your
-// own's models (`kuvo/providers/models`), and a sign-in's return loaded on the computer it's for
-// (`kuvo/sign-in/return`).
+// own's models (`kuvo/providers/models`), a sign-in's return loaded on the computer it's for
+// (`kuvo/sign-in/return`), and the ways to sign in to an account and how a sign-in is going, in the
+// box's words (`kuvo/sign-in/methods`, `kuvo/sign-in/status`).
 
 import { any, bool, type Infer, list, nullable, number, object, type RouteShape, string } from "../shape";
 
@@ -44,6 +45,25 @@ export const PROVIDER_MODELS = object({ reached: bool, "models?": list(string), 
 /** The status the computer's own address answered a sign-in's return with (2xx or 3xx: it took it). */
 export const SIGN_IN_RETURNED = object({ status: number });
 
+/** The ways to sign in to an account, in the order a client offers them: each the engine's (`type`,
+ * `id`, `form`) with the box's `label`, `legacy` for one offered apart, after the others; and the
+ * environment variables that sign in to it too. */
+export const SIGN_IN_METHODS = object({
+  methods: list(object({ type: string, "id?": string, label: string, "form?": list(any), "legacy?": bool })),
+  environment: list(string),
+});
+
+/** How a started sign-in is going, as the engine (or the coding agents' bridge) says, with, once it
+ * ended without signing in (`failed`, `expired`), what a client says of it (`failure`). */
+export const SIGN_IN_STATUS = object({
+  status: string,
+  "message?": string,
+  "url?": string,
+  "instructions?": string,
+  "userCode?": string,
+  "failure?": string,
+});
+
 export type FolderList = Infer<typeof FOLDER_LIST>;
 export type FolderMade = Infer<typeof FOLDER_MADE>;
 export type FolderRefused = Infer<typeof FOLDER_REFUSED>;
@@ -51,6 +71,8 @@ export type PluginSearch = Infer<typeof PLUGIN_SEARCH>;
 export type ProgramFound = Infer<typeof PROGRAM_FOUND>;
 export type ProviderModels = Infer<typeof PROVIDER_MODELS>;
 export type SignInReturned = Infer<typeof SIGN_IN_RETURNED>;
+export type SignInMethods = Infer<typeof SIGN_IN_METHODS>;
+export type SignInStatus = Infer<typeof SIGN_IN_STATUS>;
 
 /** Sessions whose conversation has what a search asked for, the latest first (`kuvo/search`):
  * each one's ID, the words around the first mention, and the session as the engine lists it
@@ -69,5 +91,7 @@ export const MISC_ROUTES: RouteShape[] = [
   { route: "GET kuvo/programs", answers: { 200: PROGRAM_FOUND } },
   { route: "POST kuvo/providers/models", answers: { 200: PROVIDER_MODELS } },
   { route: "POST kuvo/sign-in/return", answers: { 200: SIGN_IN_RETURNED } },
+  { route: "GET kuvo/sign-in/methods", answers: { 200: SIGN_IN_METHODS } },
+  { route: "GET kuvo/sign-in/status", answers: { 200: SIGN_IN_STATUS } },
   { route: "GET kuvo/search", answers: { 200: SEARCH_FOUND } },
 ];
