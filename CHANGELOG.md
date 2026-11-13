@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- Each of your computers now says which of its sessions go in which project and which are chats, so your Mac's sidebar and your iPhone list them the same way, and a computer added later will too. The sidebar looks as before.
 - The branch menu under a project's name, the file filter in the side panel's Files, @ mentions, the command palette's files, Edit Project's worktree setup and what Delete says about a worktree's uncommitted changes now ask Kuvo Code's background service on the computer the project is on, as Changes does. Listing a project's files or branches on your Mac no longer starts a program the repository's own git settings name.
 - When an agent lists the models it can start a session on, or starts one on a model it names, it now goes by the same models your model menu offers: it can start a session on a Codex model that Codex keeps out of its own menu, or on one of your Custom Auto lists, and a model whose account needs signing in, a key or its coding agent installed is refused saying which, so the agent asks you for the right thing.
 - With Kuvo Code closed on your Mac, your agents there (a bot at night, say) can now keep their Work Queue: adding, updating, handing on and listing items works as it does with the app open, where before they were told to ask you to open Kuvo Code.
