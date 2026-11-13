@@ -126,6 +126,9 @@ import Testing
         try write(root.appending(path: "box/global-adopted"), "")
         let own = root.appending(path: "config/opencode/opencode.json")
         try write(own, #"{"model":"this Mac's"}"#)
+        // And an older Mac's private settings, which nothing reads here.
+        let older = root.appending(path: "keys/settings.json")
+        try write(older, #"{"model":"an older Mac's"}"#)
         let start = try started([root.appending(path: "bin/kuvo-start").path, "engine"])
         processes.append(start)
         until { FileManager.default.fileExists(atPath: home.appending(path: "engine.env").path) && FileManager.default.fileExists(atPath: run.appending(path: "engine.json").path) }
@@ -134,5 +137,6 @@ import Testing
         #expect(!environment.isEmpty)
         #expect(!environment.contains("OPENCODE_CONFIG="), "nothing read before them")
         #expect(environment.contains("XDG_CONFIG_HOME=\(root.path)/config"))
+        #expect(!FileManager.default.fileExists(atPath: older.path), "an older Mac's settings, gone")
     }
 }

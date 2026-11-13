@@ -6863,8 +6863,8 @@ function holdForWork(on, hold = WORK_HOLD) {
 var UNTOLD_FOR = 5 * 60000;
 var untoldSince = null;
 async function lookAtWork(busy, hold = WORK_HOLD, setting = keepsAwakeSetting, now = Date.now()) {
-  const working = setting() ? await busy().catch(() => null) : false;
-  if (working === null) {
+  const busyNow = setting() ? await busy().catch(() => null) : false;
+  if (busyNow === null) {
     untoldSince ??= now;
     if (now - untoldSince < UNTOLD_FOR) {
       noteHold();
@@ -6873,7 +6873,7 @@ async function lookAtWork(busy, hold = WORK_HOLD, setting = keepsAwakeSetting, n
   } else {
     untoldSince = null;
   }
-  holdForWork(working === true && setting(), hold);
+  holdForWork(busyNow === true && setting(), hold);
   return holding2();
 }
 var looking = null;
@@ -9307,7 +9307,7 @@ async function proveHost(host, signal) {
 }
 async function proveVaultHost(host) {
   if (!HOST_VAULT_SECRET) {
-    throw new KeysUnavailable(OWN_HOME_MAC ? "This Mac's vault answers only through its box's service, which isn't what was asked." : "Kuvo Code on this Mac didn't give its vault its secret. Quit Kuvo Code and open it again.");
+    throw new KeysUnavailable(OWN_HOME_MAC ? "This Mac's vault can only be reached by its running box, not by a one-off command." : "Kuvo Code on this Mac didn't give its vault its secret. Quit Kuvo Code and open it again.");
   }
   if (vaultProvenBy === host.said)
     return;
@@ -20771,7 +20771,7 @@ var within4 = (file, folder) => file === folder || file.startsWith(folder.endsWi
 function inMacApp(file) {
   if (!OWN_HOME_MAC || process.platform !== "darwin")
     return false;
-  if (new RegExp(APP_TEMPORARY_PATTERN).test(file))
+  if (new RegExp(APP_TEMPORARY_PATTERN, "i").test(file))
     return true;
   return [...new Set([homeFolder(), accountHome()].map((each) => real2(each) ?? each))].some((home) => within4(file, path76.join(home, "Library")) && /^run\.kuvo\.code/i.test(path76.relative(path76.join(home, "Library"), file).split(path76.sep)[1] ?? ""));
 }
@@ -21886,12 +21886,14 @@ async function syncKeyFiles() {
   return all;
 }
 var keeping = null;
+var keyFilesWait = (failed, every = 12 * 3600000, retry = 60000) => failed ? Math.min(every, retry * 2 ** (failed - 1)) : every;
 function keepKeyFiles(every = 12 * 3600000, retry = 60000) {
   if (!writesKeyFiles() || keeping)
     return;
+  let failed = 0;
   const round = async () => {
-    const done = await syncKeyFiles().catch(() => false);
-    keeping = setTimeout(() => void round(), done ? every : retry);
+    failed = await syncKeyFiles().catch(() => false) ? 0 : failed + 1;
+    keeping = setTimeout(() => void round(), keyFilesWait(failed, every, retry));
     keeping.unref?.();
   };
   keeping = setTimeout(() => void round(), 0);
@@ -39460,7 +39462,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "e98864b61c52";
+var BRIDGE_VERSION = "ab18146d6543";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -44767,6 +44769,7 @@ export {
   SHOWN_WITHIN,
   SKILL_REPOSITORIES,
   STEER_AFTER,
+  UNTOLD_FOR,
   UPDATE_KEYS,
   Unreached,
   WAITING_LOOK,
@@ -44901,6 +44904,7 @@ export {
   keepWorkRead,
   keptAwake,
   keptFeatures,
+  keyFilesWait,
   keysNamedHere,
   leadsNow,
   learnCompatibility,

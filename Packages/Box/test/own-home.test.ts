@@ -108,6 +108,15 @@ test("the app's box in its own folder keeps what it kept: beside it, where its a
   if (mac) expect(places.sshAgents).toStartWith("/private/tmp/kuvo-ssh-")
 })
 
+test("the app's box started in a home of its own is refused, rather than take your home for the app's folder", () => {
+  const home = join(root, "misdirected")
+  mkdirSync(home, { recursive: true })
+  const clean = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("KUVO_"))) as Record<string, string>
+  const ran = Bun.spawnSync([process.execPath, "-e", `await import(${JSON.stringify(join(LINK, "places"))})`], { cwd: home, env: { ...clean, HOME: home, BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", KUVO_HOME: join(home, ".kuvo-code"), KUVO_BOX: "mac", KUVO_ENGINE_CONFIG: join(home, "config") } })
+  expect(ran.exitCode).not.toBe(0)
+  expect(ran.stderr.toString()).toContain("its folder around it is your home, not the app's")
+})
+
 test("a machine's box keeps what it kept", () => {
   const home = join(root, "machine")
   const K = join(home, ".kuvo-code")

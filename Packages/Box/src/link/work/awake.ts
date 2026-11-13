@@ -142,8 +142,8 @@ let untoldSince: number | null = null;
  * five minutes at most (`UNTOLD_FOR`). The setting's read again once `busy` answers, so one turned
  * off meanwhile is never undone. */
 export async function lookAtWork(busy: () => Promise<boolean | null>, hold: WorkHold = WORK_HOLD, setting = keepsAwakeSetting, now = Date.now()): Promise<boolean> {
-  const working = setting() ? await busy().catch(() => null) : false;
-  if (working === null) {
+  const busyNow = setting() ? await busy().catch(() => null) : false;
+  if (busyNow === null) {
     untoldSince ??= now;
     if (now - untoldSince < UNTOLD_FOR) {
       noteHold();
@@ -152,7 +152,7 @@ export async function lookAtWork(busy: () => Promise<boolean | null>, hold: Work
   } else {
     untoldSince = null;
   }
-  holdForWork(working === true && setting(), hold);
+  holdForWork(busyNow === true && setting(), hold);
   return holding();
 }
 

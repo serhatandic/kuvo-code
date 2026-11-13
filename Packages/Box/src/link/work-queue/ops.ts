@@ -75,7 +75,7 @@ const within = (file: string, folder: string) => file === folder || file.startsW
  * sandbox keeps them (fence/policy.ts, `kuvoPatterns`). */
 function inMacApp(file: string): boolean {
   if (!OWN_HOME_MAC || process.platform !== "darwin") return false;
-  if (new RegExp(APP_TEMPORARY_PATTERN).test(file)) return true;
+  if (new RegExp(APP_TEMPORARY_PATTERN, "i").test(file)) return true;
   return [...new Set([homeFolder(), accountHome()].map(each => real(each) ?? each))]
     .some(home => within(file, path.join(home, "Library")) && /^run\.kuvo\.code/i.test(path.relative(path.join(home, "Library"), file).split(path.sep)[1] ?? ""));
 }

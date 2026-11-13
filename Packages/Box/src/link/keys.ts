@@ -148,14 +148,21 @@ export async function syncKeyFiles(): Promise<boolean> {
 }
 
 let keeping: ReturnType<typeof setTimeout> | null = null;
-/** The keys' files kept as its host keeps them, while this box runs (`serve`): now, a minute later
- * while its host can't list them or give one it lists, and twice a day after, for a key changed in the Keychain without
- * the box (an older client's Settings), as this Mac's app kept its own files. */
+/** How long until the next look at the keys' files after `failed` looks in a row that couldn't be
+ * finished: a minute after the first, twice as long after each one more (a Keychain prompt turned
+ * down isn't asked again every minute), twice a day at most, and twice a day once one is. */
+export const keyFilesWait = (failed: number, every = 12 * 3_600_000, retry = 60_000): number => failed ? Math.min(every, retry * 2 ** (failed - 1)) : every;
+
+/** The keys' files kept as its host keeps them, while this box runs (`serve`): now, again soon while
+ * its host can't list them or give one it lists (`keyFilesWait`), and twice a day after, for a key
+ * changed in the Keychain without the box (an older client's Settings), as this Mac's app kept its
+ * own files. */
 export function keepKeyFiles(every = 12 * 3_600_000, retry = 60_000): void {
   if (!writesKeyFiles() || keeping) return;
+  let failed = 0;
   const round = async () => {
-    const done = await syncKeyFiles().catch(() => false);
-    keeping = setTimeout(() => void round(), done ? every : retry);
+    failed = await syncKeyFiles().catch(() => false) ? 0 : failed + 1;
+    keeping = setTimeout(() => void round(), keyFilesWait(failed, every, retry));
     keeping.unref?.();
   };
   keeping = setTimeout(() => void round(), 0);

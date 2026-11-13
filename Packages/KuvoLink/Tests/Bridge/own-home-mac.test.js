@@ -8,7 +8,7 @@
 import "./test-safety.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -96,14 +96,25 @@ test("a key its host lists but can't give now (its Keychain locked): its file st
   host.keys.set("KUVO_KEY_LOCKED_TOKEN", "kept");
   assert.equal(await link.syncKeyFiles(), true);
   assert.equal(read(fileOf("KUVO_KEY_LOCKED_TOKEN")), "kept");
-  // Listed, but its value answers as none (a prompt turned down).
+  // Listed, but its value answers as none (a prompt turned down: the app answers 404).
+  host.unreadable = new Set(["KUVO_KEY_LOCKED_TOKEN"]);
+  try {
+    assert.equal(await link.syncKeyFiles(), false, "not done: tried again");
+  } finally {
+    host.unreadable = null;
+  }
+  assert.equal(read(fileOf("KUVO_KEY_LOCKED_TOKEN")), "kept", "still there for its engine");
+  // Or its host not answering for it at all.
   host.failing = new Set(["/keys/get"]);
   try {
-    assert.equal(await link.syncKeyFiles(), false, "not done: tried again soon");
+    assert.equal(await link.syncKeyFiles(), false);
   } finally {
     host.failing = null;
   }
-  assert.equal(read(fileOf("KUVO_KEY_LOCKED_TOKEN")), "kept", "still there for its engine");
+  assert.equal(read(fileOf("KUVO_KEY_LOCKED_TOKEN")), "kept");
+  // Tried again a minute later, then less and less often, never more often than twice a day after.
+  assert.deepEqual([1, 2, 3, 20].map(failed => link.keyFilesWait(failed) / 60_000), [1, 2, 4, 720]);
+  assert.equal(link.keyFilesWait(0), 12 * 3_600_000);
   host.keys.delete("KUVO_KEY_LOCKED_TOKEN");
   assert.equal(await link.syncKeyFiles(), true);
   assert.equal(fs.existsSync(fileOf("KUVO_KEY_LOCKED_TOKEN")), false, "gone once its host no longer keeps it");
@@ -264,8 +275,22 @@ test("where its engine is recorded but doesn't answer, whether anything works ca
   atEnd(() => { engine.closeAllConnections(); engine.close(); });
   assert.equal(await link.agentsWorking(() => ({ port: engine.address().port, password: "p" }), none), true);
 
-  await link.lookAtWork(async () => true, hold, () => true);
-  await link.lookAtWork(() => link.agentsWorking(() => ({ port, password: "p" }), none), hold, () => true);
+  // A record whose process is gone (killed, its record left): nothing works there.
+  const gone = spawnSync(process.execPath, ["-e", "process.exit(0)"]).pid;
+  assert.equal(await link.agentsWorking(() => ({ pid: gone, port, password: "p" }), none), false);
+  // Nor one whose number another program has now.
+  assert.equal(await link.agentsWorking(() => ({ pid: process.pid, port: engine.address().port, password: "p" }), none), false);
+
+  const untold = () => link.agentsWorking(() => ({ port, password: "p" }), none);
+  const start = Date.now();
+  await link.lookAtWork(async () => true, hold, () => true, start);
+  await link.lookAtWork(untold, hold, () => true, start);
   assert.equal(link.awakeForWork(), true, "still held");
+  await link.lookAtWork(untold, hold, () => true, start + link.UNTOLD_FOR - 1);
+  assert.equal(link.awakeForWork(), true, "for five minutes");
+  await link.lookAtWork(untold, hold, () => true, start + link.UNTOLD_FOR);
+  assert.equal(link.awakeForWork(), false, "then let go");
+  await link.lookAtWork(async () => true, hold, () => true, start + link.UNTOLD_FOR + 1);
+  assert.equal(link.awakeForWork(), true, "and held again once something's seen working");
   link.holdForWork(false, hold);
 });
