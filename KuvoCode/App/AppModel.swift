@@ -357,7 +357,12 @@ final class AppModel {
         }
         workspace.onCurrentBox = { [weak self] box, features in self?.machines.gates.foundCurrent(box, features: features) }
         workspace.isHeld = { [weak self] box in self?.machines.gates.state(of: box) != nil }
-        machines.gates.onLetGo = { [weak self] box in self?.workspace.boxUpdated(box) }
+        machines.gates.onLetGo = { [weak self] box in
+            self?.workspace.boxUpdated(box)
+            // This Mac's own box, up to date now: the app registers there (again), as it held off
+            // while the box couldn't say what it has.
+            if box == SSHConnection.thisMac, self?.attachedIsOwnBox == true { Task { await self?.registerWithOwnBox() } }
+        }
         BoxClient.routes = { [weak self] id in self?.box(id) ?? .unwired(id) }
         // Your personalities, one library on every computer, kept by this Mac's box. However one
         // changed there (here, from a phone, taken from a machine's copy), the machines take it,
@@ -413,11 +418,15 @@ final class AppModel {
         phoneLink.readyMachines = { [weak self] in self?.machines.engines.values.filter(\.isReady) ?? [] }
         // With machines, this Mac meets them at the relay, phone or not.
         phoneLink.hasMachines = { [weak self] in self.map { !$0.machines.list.isEmpty || $0.machines.fileDidntRead } ?? false }
-        // (Attached in place, the app has no link of its own (the box here keeps its own), so it's
-        // on no machine's bridge to leave.)
-        Machines.linkKey = { [weak self] in self?.attached == nil ? self?.phoneLink.macKey : nil }
+        // (Attached in place to a machine's box, the app has no link of its own (the box here keeps
+        // its own), so it's on no machine's bridge to leave; to this Mac's own box, moved, its key is
+        // that box's.)
+        Machines.linkKey = { [weak self] in self.flatMap { $0.attached == nil || $0.attachedIsOwnBox ? $0.phoneLink.macKey : nil } }
         // This Mac's box, moved into a home of its own: its key, as it says (its keys are its own).
         phoneLink.boxKey = { [weak self] in self?.attached?.box.flatMap { $0.kind == "mac" ? $0.key : nil } }
+        // Attached in place to any box, the app reads none of this Mac's keys and makes none (#689):
+        // they're that box's, or (a machine's set up here) none of the app's to use there.
+        phoneLink.keysOnBox = { [weak self] in self?.attached != nil || OwnBoxHome.hasMoved }
         phoneLink.bots = bots
         phoneLink.browserAsks = browserAsks
         phoneLink.workspace = workspace
@@ -429,11 +438,18 @@ final class AppModel {
         AgentMail.shared.box = { [weak self] in self?.box(BoxClient.thisMac) }
         // COMPAT(beta.1 mac-letters): letters an earlier Kuvo Code kept, handed to the box. Goes 3 months after 0.8.0.
         phoneLink.handOver = { await AgentMail.shared.handOver(to: $0) }
-        // This Mac's link is its box's: the app tells it what's wanted, and answers what it asks.
-        // Attached in place, the box there keeps its own link (a machine's, set up by the Mac that
+        // This Mac's link is its box's: the app tells it what's wanted, and answers what it asks; this
+        // Mac's own box moved into a home of its own too, attached in place (#333 piece 6b). Attached
+        // to a machine's box (the Mini's), the box there keeps its own link (set up by the Mac that
         // added it), which only its own Macs change: the app has none to tell (`noBox`).
-        phoneLink.box = { [weak self] in self?.attached == nil ? self?.box(BoxClient.mac) : nil }
-        phoneLink.noBox = { [weak self] in self?.attached == nil ? nil : PhoneLink.keptByTheBoxHere }
+        // (This Mac's own box takes its link's words from its app over its server alone: while it
+        // isn't up, there's none to tell, and the link waits, rather than ask its CLI, which refuses.)
+        phoneLink.box = { [weak self] in
+            guard let self else { return nil }
+            if attached == nil { return box(BoxClient.mac) }
+            return attachedIsOwnBox && OwnBoxHome.streamsNow ? box(SSHConnection.thisMac) : nil
+        }
+        phoneLink.noBox = { [weak self] in self.flatMap { $0.attached == nil || $0.attachedIsOwnBox ? nil : PhoneLink.keptByTheBoxHere } }
         host.phoneLink = phoneLink
         phoneLink.restartEngine = { [weak self] in Task { await self?.restartThisMacsEngine() } }
     }
@@ -877,8 +893,18 @@ final class AppModel {
             usage.follow(here.catalog)
         }
         Task { await usage.sync() }
-        // Its browser's tools for this Mac's own box, there (only with `movesOwnBox` on).
-        Task { await registerWithOwnBox() }
+        if attachedIsOwnBox {
+            // This Mac's own box, moved (#333 piece 6b): its link is followed and told what's wanted,
+            // as the app's own box's was (what a phone asks of the Mac's own routes comes to the app
+            // through its host); and the app registers there: its browser's tools, where it answers,
+            // the release it carries.
+            if let endpoint = here.api?.client.endpoint { phoneLink.start(endpoint: endpoint) }
+            Task { await registerWithOwnBox() }
+        } else {
+            // A machine's box (one you set up on this Mac): its server kept for the app while it's
+            // attached, so what follows it streams (`OwnBoxHome.client`).
+            Task { await askForServer() }
+        }
         Analytics.shared.catalog = here.catalog
         if let started = attachStarted {
             Analytics.shared.trackOnce("engine_ready", ["seconds": Int((SuspendingClock.now - started.began).components.seconds),
@@ -888,6 +914,10 @@ final class AppModel {
 
     /// The box attached in place's catalog, once the usage panel follows its coding agents.
     @ObservationIgnored private weak var usageFollows: Catalog?
+    /// This Mac's own box was offered the release the app carries, this launch (`registerWithOwnBox`).
+    @ObservationIgnored var offeredOwnBoxRelease = false
+    /// The app registering with this Mac's own box now (`registerWithOwnBox`): one at a time.
+    @ObservationIgnored var ownBoxRegistering: Task<Void, Never>?
 
     /// No longer attached to a box here (none now, or it can't be told): it's no longer listed or
     /// followed, and what has no computer of its own is the app's own box's again.
@@ -895,6 +925,10 @@ final class AppModel {
     /// run there.
     private func detachHere() {
         let id = SSHConnection.thisMac
+        // This Mac's own box's link, followed while attached, and what answers it for the app.
+        if attachedIsOwnBox { phoneLink.stop() }
+        leaveOwnBox()
+        OwnBoxHome.servesAsMac.withLock { $0 = false }
         attached = nil
         workspace.attachedChats = nil
         guard machines.engine(id) != nil else { return }

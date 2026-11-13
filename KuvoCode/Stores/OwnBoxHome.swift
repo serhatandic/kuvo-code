@@ -47,21 +47,37 @@ nonisolated enum OwnBoxHome {
         return AppInfo.supportDirectory.appending(path: inSupport)
     }
 
-    /// This Mac's box, moved, as its own app reaches its routes: over the box's own server, where
-    /// `run/serve.json` says it answers (its helper keeps it up, PROTOCOL.md "Kept for clients"), as
-    /// Kuvo Code on this Mac (`x-kuvo-from: app`): what only its app may ask (its keys' proofs, the
-    /// keys kept for a machine's bots, its vault's values to show) is the app's there. Read again for
-    /// each request, so a server started again is found; while there's none, as any box attached in
-    /// place (`box route`), which answers those as it would anyone on this Mac: refused.
+    /// The box attached in place (`SSHConnection.thisMac`), as the app reaches its routes (#333): over
+    /// the box's own server, where `run/serve.json` says it answers, so what follows it streams
+    /// (`streamsNow`); else one request at a time through its CLI (`box route`), as a machine's over
+    /// SSH. Read again for each request, so a server started again (or gone) is found.
+    /// - This Mac's own box, moved (`hasMoved`): its helper keeps its server up, and the app is its own
+    ///   client there (`x-kuvo-from: app`): what only its app may ask (its keys' proofs, the keys kept
+    ///   for a machine's bots, its vault's values to show, its link) is the app's there.
+    /// - A machine's box attached in place (one you set up on this Mac, the Mini's): its server is kept
+    ///   while the app asks for it (`kuvo/box/serve`, `askForServer`), and the app reaches it as Kuvo
+    ///   Code on this computer (`x-kuvo-from: mac`), taken as its CLI is (what only its own Macs' apps
+    ///   do, it refuses there as there), once it says it can (`box.serve.mac`, `servesAsMac`).
     static var client: BoxClient {
         let folder = folder
         return BoxClient(box: SSHConnection.thisMac, transport: LocalBox { request in
-            guard let folder, let served = served(in: folder) else {
+            guard let folder, let from = speaksAs, let served = served(in: folder) else {
+                // This Mac's own box refuses its CLI what only its app may ask (its link, its keys'
+                // proofs): until its server's up (starting, at login say), that's said as it is.
+                let own = hasMoved
                 // (`box route`'s transport is the main actor's.)
                 return AsyncThrowingStream { answer in
                     let task = Task { @MainActor in
                         do {
-                            for try await part in MachineBoxTransport(connection: SSHConnection(destination: SSHConnection.thisMac)).send(request) { answer.yield(part) }
+                            var startingNow = false
+                            for try await part in MachineBoxTransport(connection: SSHConnection(destination: SSHConnection.thisMac)).send(request) {
+                                if own, case .head(403, _) = part {
+                                    startingNow = true
+                                    answer.yield(.head(status: 503, headers: ["content-type": "application/json"]))
+                                    answer.yield(.body((try? JSONSerialization.data(withJSONObject: ["message": stillStarting])) ?? Data()))
+                                }
+                                if !startingNow { answer.yield(part) }
+                            }
                             answer.finish()
                         } catch {
                             answer.finish(throwing: error)
@@ -70,9 +86,36 @@ nonisolated enum OwnBoxHome {
                     answer.onTermination = { _ in task.cancel() }
                 }
             }
-            return EngineRoutes.forward(request, to: served.base, password: served.password, session: PhoneLink.boxSession, adding: ["x-kuvo-from": "app"],
+            // (As its CLI takes them: a request's proof to its vault, which covers its body as sent.)
+            var adding = ["x-kuvo-from": from]
+            if from == "mac", let proof = request.headers.first(where: { $0.key.lowercased() == "x-kuvo-vault-proof" })?.value { adding["x-kuvo-vault-proof"] = proof }
+            return EngineRoutes.forward(request, to: served.base, password: served.password, session: PhoneLink.boxSession, adding: adding,
                                         allowing: { path, _ in path.hasPrefix("kuvo/") })
         })
+    }
+
+    /// What this Mac's own box, moved, says of what only its app may ask while its server isn't up yet.
+    static let stillStarting = "This Mac’s box is still starting. Try again in a moment."
+
+    /// Who the app is to the box attached in place, over its server: its own app (`app`, this Mac's
+    /// own box, moved), Kuvo Code on its computer (`mac`, a machine's box that says it takes that
+    /// there), or nil while it reaches it only through its CLI.
+    static var speaksAs: String? {
+        if hasMoved { return "app" }
+        return servesAsMac.withLock { $0 } ? "mac" : nil
+    }
+
+    /// Whether the machine's box attached in place takes Kuvo Code on its computer over its server
+    /// (`box.serve.mac`, as its `kuvo/info` said as it connected): set by the app, false again as it
+    /// lets go of it.
+    static let servesAsMac = OSAllocatedUnfairLock(initialState: false)
+
+    /// Whether the box attached in place streams now: its server is up, and the app reaches it there.
+    /// What follows it is read again a moment after a stream ends, as on the app's own box; while it
+    /// isn't, now and then, as a machine's (`BoxClient.streams`).
+    static var streamsNow: Bool {
+        guard let folder, speaksAs != nil else { return false }
+        return served(in: folder) != nil
     }
 
     /// Where the box's server answers, as `run/serve.json` says: on this Mac, with its password. Only

@@ -1756,31 +1756,30 @@ final class Workspace {
     }
 
     /// This Mac's worktrees as its box keeps them, from now on: one made, renamed or removed for a
-    /// phone shows here as it happens. The box attached in place (`box`), which answers once a
-    /// read, is read again now and then instead, as slowly as a machine's things are.
+    /// phone shows here as it happens. The box attached in place (`box`) streams them too while
+    /// it's reached over its server; while it isn't, it answers once a read, and is read again now
+    /// and then instead, as slowly as a machine's things are.
     func followWorktrees(on box: String = BoxClient.mac) async {
-        guard BoxClient.streams(box) else {
-            // (Read as it connected, with what this Mac kept handed over then, or now, if it couldn't
-            // be then: only read from then on.)
-            while !Task.isCancelled {
+        struct Listed: Decodable { var worktrees: [BoxWorktree]; var restorable: [RestorableWorktree]? }
+        while !Task.isCancelled {
+            guard BoxClient.streams(box) else {
+                // (Read as it connected, with what this Mac kept handed over then, or now, if it
+                // couldn't be then: only read from then on.)
                 try? await Task.sleep(for: BoxClient.readAgainAfter)
                 guard !Task.isCancelled else { return }
                 await takeWorktrees(from: box)
+                continue
             }
-            return
-        }
-        struct Listed: Decodable { var worktrees: [BoxWorktree]; var restorable: [RestorableWorktree]? }
-        while !Task.isCancelled {
-            if let client = boxes?(BoxClient.mac), await takeWorktrees(from: BoxClient.mac) != nil {
+            if let client = boxes?(box), await takeWorktrees(from: box) != nil {
                 do {
                     for try await line in client.follow("kuvo/worktrees/events") {
                         guard let listed = try? JSONDecoder().decode(Listed.self, from: line) else { continue }
-                        followingWorktrees = true
-                        take(listed.worktrees, from: BoxClient.mac)
-                        takeRestorable(listed.restorable ?? [], from: BoxClient.mac)
+                        if box == BoxClient.mac { followingWorktrees = true }
+                        take(listed.worktrees, from: box)
+                        takeRestorable(listed.restorable ?? [], from: box)
                     }
                 } catch {}
-                followingWorktrees = false
+                if box == BoxClient.mac { followingWorktrees = false }
             }
             // The box restarted, or isn't up yet: followed again in a moment.
             try? await Task.sleep(for: .seconds(2))
@@ -2008,9 +2007,10 @@ final class Workspace {
     /// minute after it connects (they're read as it does, `refreshOnce`), and again that long
     /// after its stream ends; an older Kuvo Code there, which can't keep them yet, now and then.
     func followProjects(on box: String = BoxClient.thisMac) async {
-        // (The app's own box streams them; any other, the one attached in place too, answers once a
-        // read, so it's read now and then.)
-        let onThisMac = BoxClient.streams(box)
+        // (A box that streams has them followed (the app's own, and the one attached in place while
+        // it's reached over its server: asked each round); any other answers once a read, so it's
+        // read now and then.)
+        var onThisMac: Bool { BoxClient.streams(box) }
         var older = false
         while !Task.isCancelled, !isRemoved(box) {
             if !onThisMac {

@@ -2,6 +2,7 @@ import "./safety"
 import { afterEach, expect, test } from "bun:test"
 import { existsSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
+import { kuvoPorts } from "../src/link/fence/state"
 import { RUN } from "../src/link/home"
 import { APP_FILE, GONE, NEEDS_APP, NOT_READY, REST, UPDATING_FILE, WAIT, appStatus, couldntOpen, noteUpdating, openApp, readApp, registerApp } from "../src/link/mac/app"
 import type { OpenWays } from "../src/link/mac/app"
@@ -172,4 +173,12 @@ test("the app's registration: where its tools answer only on this Mac, and its p
   expect(readApp()?.tools).toBeNull()
   writeFileSync(APP_FILE(), JSON.stringify({ bundle: "Kuvo Code.app", tools: null, at: 1 }))
   expect(readApp()?.bundle).toBeNull()
+})
+
+test("agents' commands in the sandbox are refused the app's tools and its own host, as it registered them", () => {
+  registerApp({ tools: { url: "http://127.0.0.1:41001/mcp", token: "t".repeat(32) }, host: { url: "http://127.0.0.1:41002", password: "p".repeat(32) } })
+  expect(kuvoPorts()).toEqual(expect.arrayContaining([41001, 41002]))
+  // Quit: neither is the app's any more.
+  registerApp({ tools: null })
+  expect(kuvoPorts()).not.toContain(41002)
 })

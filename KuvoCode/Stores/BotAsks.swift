@@ -55,9 +55,10 @@ final class BotAsks {
     func follow(_ box: String) async {
         let me = UUID()
         following[box] = me
-        // (Followed as it changes on the app's own box, which streams; read now and then on any
-        // other, the one attached in place too, which answers once a read.)
-        let onThisMac = BoxClient.streams(box)
+        // (Followed as it changes on a box that streams (the app's own, and the one attached in place
+        // while it's reached over its server: asked each round); read now and then on any other, which
+        // answers once a read.)
+        var onThisMac: Bool { BoxClient.streams(box) }
         var older = false
         while !Task.isCancelled {
             if !onThisMac {

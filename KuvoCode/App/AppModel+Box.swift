@@ -6,8 +6,9 @@ extension AppModel {
     /// A box's routes, for the app's stores, as a phone reaches them: this Mac's (`BoxClient.mac`),
     /// or a machine's by its id.
     func box(_ id: String) -> BoxClient {
-        // This Mac's own box, moved into a home of its own: its app is its own client there.
-        if id == SSHConnection.thisMac, OwnBoxHome.hasMoved { return OwnBoxHome.client }
+        // The box attached in place (this Mac's own, moved into a home of its own, or a machine's
+        // set up here): over its server where it can be, else its CLI (`OwnBoxHome.client`).
+        if id == SSHConnection.thisMac { return OwnBoxHome.client }
         guard id == BoxClient.mac else { return .machine(id) }
         // While the engine's down, the box's own routes still answer; the engine's say it's down.
         let endpoint = api?.client.endpoint ?? ServerEndpoint(url: URL(string: "http://127.0.0.1:9/")!, password: nil)
