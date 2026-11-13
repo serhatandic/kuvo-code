@@ -484,6 +484,68 @@ test.if(mac)("a box its Mac removed from ~/.kuvo-code is set aside first, and pu
   expect(existsSync(join(w.K, "trash", "t1", "f"))).toBe(true)
 }, 60_000)
 
+/** A new Mac: Kuvo Code just installed, its engine downloaded into its folder and the few files the
+ * app writes there with no box (its machines' list), no box of its own ever started. */
+function newMac(given: (w: World) => void = () => {}): World {
+  const home = join(root, `w${String(worlds++).padStart(3, "0")}`)
+  const S = join(home, "App Support")
+  mkdirSync(join(home, "tmp"), { recursive: true })
+  const w = { home, S, K: join(home, ".kuvo-code"), release: join(home, "release"), repository: "", worktree: "", rootCommit: "" }
+  put(join(S, "engine", "2.2.6", "opencode"), "#!/bin/sh\n")
+  chmodSync(join(S, "engine", "2.2.6", "opencode"), 0o755)
+  put(join(S, "box", "machines.json"), "[]")
+  put(join(S, "Browser", "x"), "browser")
+  put(join(w.release, "bin", "kuvo-start"), "#!/bin/sh\n")
+  put(join(w.release, "bin", "kuvo-link.js"), "// the link")
+  put(join(w.release, "bin", "Kuvo Code Box.app", "Contents", "MacOS", "Kuvo Code Box"), "the helper")
+  given(w)
+  return w
+}
+
+test.if(mac)("a new Mac's box is made in its home of its own from the start, with nothing moved and the app's folder as it was", () => {
+  const w = newMac(w => {
+    // A box its Mac removed there once, set aside.
+    put(join(w.K, "run", "off"), "")
+    put(join(w.K, "run", "link.json"), "{\"name\":\"Old\"}")
+  })
+  const before = snapshot(w.S)
+  const made = rehome(w, ["--new", "--release", w.release, "--keeps-awake", "off"])
+  expect(made.status, made.errors).toBe(0)
+  expect(made.said).toMatchObject({ result: "done", status: { state: null } })
+  expect(readFileSync(join(w.K, "box", "kind"), "utf8")).toBe("mac\n")
+  expect(readFileSync(join(w.K, "bin", "kuvo-start"), "utf8")).toBe("#!/bin/sh\n")
+  expect(readFileSync(join(w.K, "bin", "Kuvo Code Box.app", "Contents", "MacOS", "Kuvo Code Box"), "utf8")).toBe("the helper")
+  expect(existsSync(join(w.K, "engine", "2.2.6", "opencode"))).toBe(true)
+  expect(JSON.parse(readFileSync(join(w.K, "box", "work.json"), "utf8"))).toMatchObject({ keepsAwake: false })
+  const [aside] = readdirSync(join(w.K, "trash")).filter(name => name.startsWith("earlier-box-"))
+  expect(readFileSync(join(w.K, "trash", aside, "run", "link.json"), "utf8")).toContain("Old")
+  expect(existsSync(join(w.K, "run"))).toBe(false)
+  expect(snapshot(w.S)).toEqual(before)
+  // Made already: nothing more, and `here` takes it for this Mac's box before it has first run (no
+  // card yet), never for none.
+  expect(rehome(w, ["--new", "--release", w.release]).said).toMatchObject({ result: "nothing" })
+  expect(here(w)).toMatchObject({ use: "attach", runs: "stopped", box: { folder: ".kuvo-code" } })
+}, 60_000)
+
+test.if(mac)("a Mac whose app's box ran in its folder, or a box already in ~/.kuvo-code, gets no new box: it moves, or both stay", () => {
+  // Its own box ran (its card), or only its engine kept your sessions (a 0.7 Mac).
+  for (const ran of [(w: World) => put(join(w.S, "box", "run", "setup-card.json"), "{}"), (w: World) => put(join(w.S, "opencode", "data", "opencode", "opencode.db"), "")]) {
+    const w = newMac(ran)
+    const refused = rehome(w, ["--new", "--release", w.release])
+    expect(refused.status).toBe(1)
+    expect(refused.said).toMatchObject({ result: "refused", message: "Kuvo Code's own box is in its folder: it moves into its home instead." })
+    // (Asking made no home.)
+    expect(existsSync(w.K)).toBe(false)
+  }
+  const there = newMac(w => put(join(w.K, "run", "setup-card.json"), JSON.stringify({ self: { key: "k", name: "Mini", kind: "machine" } })))
+  put(join(there.K, "bin", "kuvo-start"), "#!/bin/sh\n")
+  expect(rehome(there, ["--new", "--release", there.release]).said).toMatchObject({ result: "refused", message: "There's a box in this Mac's ~/.kuvo-code already: both keep running as they are." })
+  expect(existsSync(join(there.K, "box", "kind"))).toBe(false)
+  const noEngine = newMac(w => rmSync(join(w.S, "engine"), { recursive: true }))
+  expect(rehome(noEngine, ["--new", "--release", noEngine.release]).said).toMatchObject({ result: "refused" })
+  expect(existsSync(noEngine.K)).toBe(false)
+}, 60_000)
+
 test.if(mac)("a second resume waits for the lock the first holds, then finishes the move itself: back, as it stopped before clearing", async () => {
   const w = world()
   expect(move(w, { KUVO_TEST_REHOME_STOP: "in-place" }).signal).toBe("SIGKILL")
@@ -639,7 +701,7 @@ test.if(!mac)("a machine's box is in its home already: rehome refuses, saying so
     cwd: home, encoding: "utf8", timeout: 60_000,
     env: { ...clean, HOME: home, TMPDIR: tmpdir(), BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", KUVO_HOME: join(home, ".kuvo-code") },
   })
-  for (const args of [[], ["--back"]]) {
+  for (const args of [[], ["--back"], ["--new", "--release", home]]) {
     const refused = run(args)
     expect(refused.status).toBe(1)
     expect(JSON.parse(refused.stdout.trim())).toMatchObject({ result: "refused", message: "This machine's box is in its own home already: there's nothing to move." })

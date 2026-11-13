@@ -15,8 +15,8 @@ import { processRuns } from "../../shared/platform";
 import type { RehomeStatus, RehomeStep } from "../../shared/routes/box";
 import { readAsks } from "../areas/asks";
 import { listOf, writePrivate } from "../files";
-import { IN_TEST_FOLDER, accountHome, homeFolder, located } from "../home";
-import { foundAt, runsAt } from "../setup/judge";
+import { IN_TEST_FOLDER, accountHome, homeFolder, located, recordedKind } from "../home";
+import { appBoxRan, foundAt, runsAt } from "../setup/judge";
 import { agentsWorking } from "../updates/update";
 import { BRIDGE_VERSION } from "../version";
 import { setKeepsAwake } from "../work/settings";
@@ -686,6 +686,74 @@ export async function rehome(folders: Folders, options: MoveOptions = {}): Promi
       ...planMove(folders, release!), kept: path.join(rehomeFolder(home), "kept", stamp(now)),
       ...(options.keepsAwakeOff ? { keepsAwakeOff: true } : {}),
     }, rewriter);
+  });
+}
+
+/** Why a new Mac's box can't be made in `home` from the start, or null: its release's files, the
+ * engine the app downloaded, no box of the app's own ever in its folder (that one moves instead), and
+ * none in `home` (one its Mac removed is set aside). */
+function newRefusal({ appFolder, home }: Folders, { release, engineData }: { release: string | null; engineData: string | undefined }): string | null {
+  const fileAt = (file: string) => { try { return fs.statSync(file).isFile(); } catch { return false; } };
+  if (!release || !fileAt(path.join(release, "bin", "kuvo-start")) || !fileAt(path.join(release, "bin", "kuvo-link.js"))) return "The box's own files to put in its new home weren't given.";
+  if (appBoxRan(path.join(appFolder, "box"), engineData ?? path.join(appFolder, "opencode", "data", "opencode"))) return "Kuvo Code's own box is in its folder: it moves into its home instead.";
+  if (located(home) === located(path.join(accountHome(), ".kuvo-code")) && path.basename(appFolder) !== "run.kuvo.code") return "Only Kuvo Code itself makes its box in ~/.kuvo-code: a copy makes it in a home of its own.";
+  const there = runsAt(home);
+  if (there !== "gone" && (there === "running" || foundAt(home, false) !== null)) return "There's a box in this Mac's ~/.kuvo-code already: both keep running as they are.";
+  if (runningIn(path.join(home, "run")).length) return "Something is running in this Mac's ~/.kuvo-code: it's made there once that's stopped.";
+  if (!listOf(path.join(appFolder, "engine")).length) return "The engine isn't downloaded yet: this Mac's box is made once it is.";
+  return null;
+}
+
+/** `rehome --new`: a new Mac's box, made in its home of its own from the start (#333 §3.7, §4.2), with
+ * nothing to move: what's in `home` that isn't a box set aside in its trash (nothing deleted), the
+ * release's files put in `bin`, the engine the app downloaded cloned beside them, Keep This Mac Awake
+ * as the app has it, and `box/kind` last (until it's there, it's made again from the start). The
+ * app's folder isn't changed. Made already, `nothing`. */
+export async function rehomeNew(folders: Folders, options: MoveOptions & { engineData?: string } = {}): Promise<RehomeOutcome> {
+  const { appFolder, home } = folders;
+  if (process.platform !== "darwin") return { result: "refused", message: NOTHING_TO_MOVE, status: rehomeStatus(home) };
+  const release = options.release ? path.resolve(options.release) : null;
+  // (Asked first without its lock, which makes its home: a Mac whose box moves instead gets none from asking.)
+  const why = (): RehomeOutcome | null => {
+    if (moveUnderWay(home)) return { result: "refused", message: "A move of this Mac's box is under way: it's finished first.", status: rehomeStatus(home) };
+    if (recordedKind(path.join(home, "box", "kind")) === "mac") return { result: "nothing", status: rehomeStatus(home) };
+    const refusal = newRefusal(folders, { release, engineData: options.engineData });
+    return refusal ? { result: "refused", message: refusal, status: rehomeStatus(home) } : null;
+  };
+  const before = why();
+  if (before) return before;
+  return locked(home, options.waiting ?? (() => {}), async () => {
+    // (Again, holding it: another may have made it meanwhile.)
+    const refused = why();
+    if (refused) return refused;
+    const now = Date.now();
+    // What's there that isn't a box (one its Mac removed, or what a try cut short left), aside.
+    const aside = path.join(home, "trash", `earlier-box-${stamp(now)}`);
+    const there = listOf(home).filter(name => name !== "updates" && name !== "trash").map(name => path.join(home, name))
+      .concat(listOf(path.join(home, "updates")).filter(name => name !== "rehome").map(name => path.join(home, "updates", name)))
+      .concat(listOf(path.join(home, "trash")).filter(name => !name.startsWith("earlier-box-")).map(name => path.join(home, "trash", name)));
+    for (const file of there.sort()) {
+      fs.mkdirSync(path.dirname(path.join(aside, path.relative(home, file))), { recursive: true, mode: 0o700 });
+      fs.renameSync(file, path.join(aside, path.relative(home, file)));
+    }
+    // Its files, whole (links followed: from the app, wherever it is), then in place.
+    const bin = path.join(home, "bin");
+    fs.rmSync(`${bin}.new`, { recursive: true, force: true });
+    clone(path.join(release!, "bin"), `${bin}.new`, true);
+    fs.renameSync(`${bin}.new`, bin);
+    // The engine: cloned (moments, almost no room), copied where the disk can't clone.
+    const engine = path.join(home, "engine");
+    fs.rmSync(`${engine}.new`, { recursive: true, force: true });
+    if (ran("/bin/cp", ["-cRPp", path.join(appFolder, "engine"), `${engine}.new`], CLONE_LIMIT).status !== 0) {
+      fs.rmSync(`${engine}.new`, { recursive: true, force: true });
+      clone(path.join(appFolder, "engine"), `${engine}.new`, true);
+    }
+    fs.renameSync(`${engine}.new`, engine);
+    const box = path.join(home, "box");
+    fs.mkdirSync(box, { recursive: true, mode: 0o700 });
+    if (options.keepsAwakeOff) setKeepsAwake(false, path.join(box, "work.json"));
+    writePrivate(path.join(box, "kind"), "mac\n");
+    return { result: "done", status: rehomeStatus(home) };
   });
 }
 

@@ -553,12 +553,24 @@ final class AppModel {
             // A box already on this Mac (one you set up as a machine): the app attaches to it in
             // place, and starts, claims and registers nothing of its own, so there's never a second.
             // (One that couldn't tell, with a box here, starts nothing: its own would be a second, for good.)
-            if Self.attachesInPlace, keeperBox == nil, !ownBoxStarted {
+            if Self.attachesInPlace || Self.movesOwnBox, keeperBox == nil, !ownBoxStarted {
                 // (Attached already, it stays so while it's looked at again: this Mac doesn't show
                 // up twice, nor do Settings' tabs move, as it starts again.)
                 BackgroundWork.heldBack = nil
-                let outcome = await Here.gate(engine: binary, script: BoxProcess.script, appBox: BoxProcess.home, engineData: engineFolders.dataDirectory,
+                // A new Mac (no box of the app's ever ran in its folder): its box made in its home of
+                // its own from the start, by the box, and started there by its helper (#333).
+                if Self.movesOwnBox, let move = OwnBoxMove.forThisMac(), await move.makeNew() {
+                    OwnBoxHome.recheck()
+                }
+                guard launch == self.launch else { return }
+                var outcome = await Here.gate(engine: binary, script: BoxProcess.script, appBox: BoxProcess.home, engineData: engineFolders.dataDirectory,
                                               home: Self.hereHome, checked: Self.engineOverride == nil)
+                // (Its home's box just made, its helper starting it: a moment for it to be there.)
+                for _ in 0..<5 where Self.movesOwnBox && outcome == .own && OwnBoxHome.keysAreTheBoxs {
+                    try? await Task.sleep(for: .seconds(1))
+                    outcome = await Here.gate(engine: binary, script: BoxProcess.script, appBox: BoxProcess.home, engineData: engineFolders.dataDirectory,
+                                              home: Self.hereHome, checked: false)
+                }
                 guard launch == self.launch else { return }
                 switch outcome {
                 case .attach(var here):
@@ -591,9 +603,20 @@ final class AppModel {
                     let couldnt = "Kuvo Code couldn’t check the box already on this Mac, so it didn’t start one of its own."
                     BackgroundWork.heldBack = couldnt
                     throw MachineFailure(message: why ?? couldnt)
+                case .wait:
+                    // Moving into its home of its own (the keeper does it): nothing starts here meanwhile.
+                    detachHere()
+                    BackgroundWork.heldBack = "This Mac’s box is moving into its own home."
+                    throw MachineFailure(message: "This Mac’s box is moving into its own home. Try again in a minute.")
                 case .own:
                     // None here now: the box that was is no longer this Mac's.
                     detachHere()
+                    // Its box in its home of its own (or moving there): never a second one in the
+                    // app's folder.
+                    if Self.movesOwnBox, OwnBoxHome.keysAreTheBoxs {
+                        BackgroundWork.heldBack = "This Mac’s box starts on its own."
+                        throw MachineFailure(message: "This Mac’s box is starting in its own home. Try again in a moment.")
+                    }
                 }
             }
             guard launch == self.launch else { return }

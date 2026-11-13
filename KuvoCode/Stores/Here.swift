@@ -11,7 +11,9 @@ nonisolated private let log = Logger(subsystem: "run.kuvo.code", category: "here
 /// place, never making a second. The box decides (told where the app's own box and its engine's data
 /// are); the app does what it says.
 nonisolated struct Here: Decodable, Equatable, Sendable {
-    enum Use: String, Decodable, Sendable { case own, attach }
+    /// `wait`: a move of this Mac's box into its home of its own is under way (or stopped part way):
+    /// no box starts until it's finished (`rehome --resume`, the keeper's).
+    enum Use: String, Decodable, Sendable { case own, attach, wait }
 
     /// A box found here, as the box says it.
     struct Box: Decodable, Equatable, Sendable {
@@ -49,6 +51,8 @@ nonisolated struct Here: Decodable, Equatable, Sendable {
     enum Outcome: Equatable, Sendable {
         case own
         case attach(Here)
+        /// This Mac's box is moving into its home of its own: nothing starts until it's moved.
+        case wait
         case unknown(String?)
     }
 
@@ -91,7 +95,11 @@ nonisolated struct Here: Decodable, Equatable, Sendable {
         }
         for _ in 0..<2 {
             if let here = await ask(engine: engine, script: script, appBox: appBox, engineData: engineData, home: home, root: root) {
-                return here.use == .attach ? .attach(here) : .own
+                switch here.use {
+                case .attach: return .attach(here)
+                case .wait: return .wait
+                case .own: return .own
+                }
             }
         }
         return cantAsk(nil)

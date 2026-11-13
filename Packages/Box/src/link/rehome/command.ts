@@ -6,12 +6,13 @@
 //   rehome <root> --ready [--release <folder>]                  whether to move (or finish one) now
 //   rehome <root> --resume                                      one that stopped part way, finished
 //   rehome <root> --back                                        moved back into the app's folder
+//   rehome <root> --new --release <folder> [--keeps-awake on|off]  a new Mac's box made there (no move)
 //   rehome <root> --status                                      how it stands (`kuvo/box/rehome`)
 //   rehome <root> --settled keychain|agent                      what the app owed it, done
 
 import path from "node:path";
 import { accountHome, located } from "../home";
-import { appFolderOf, homeOfRoot, NOTHING_TO_MOVE, rehome, rehomeBack, rehomeReady, rehomeResume, settled, type RehomeOutcome } from "./move";
+import { appFolderOf, homeOfRoot, NOTHING_TO_MOVE, rehome, rehomeBack, rehomeNew, rehomeReady, rehomeResume, settled, type RehomeOutcome } from "./move";
 import { moveUnderWay, rehomeStatus } from "./state";
 
 /** Each result's exit status: 0, start what's there; 1, it didn't move, start the box where it was;
@@ -19,7 +20,7 @@ import { moveUnderWay, rehomeStatus } from "./state";
  * lock, start nothing. */
 const EXIT: Record<RehomeOutcome["result"], number> = { done: 0, back: 0, nothing: 0, refused: 1, failed: 1, stuck: 3, waits: 4 };
 
-const USAGE = "Usage: kuvo-link.js rehome <root> [--release <folder>] [--keeps-awake on|off] | --ready | --resume | --back | --status | --settled keychain|agent";
+const USAGE = "Usage: kuvo-link.js rehome <root> [--new] [--release <folder>] [--keeps-awake on|off] | --ready | --resume | --back | --status | --settled keychain|agent";
 
 export async function rehomeCommand(root: string | undefined, args: string[]): Promise<number> {
   // (Whether something runs is told by its process, never taken from a pid alone, as `KUVO_BOX=mac`
@@ -71,6 +72,7 @@ export async function rehomeCommand(root: string | undefined, args: string[]): P
     }
     const outcome = args.includes("--resume") ? await rehomeResume(home, { waiting })
       : args.includes("--back") ? await rehomeBack(home, { waiting })
+      : args.includes("--new") ? await rehomeNew(folders(), { release: option("--release") ?? null, keepsAwakeOff: option("--keeps-awake") === "off", engineData: process.env.KUVO_ENGINE_DATA || undefined, waiting })
       : await rehome(folders(), { appVersion: process.env.KUVO_APP_VERSION || null, release: option("--release") ?? null, keepsAwakeOff: option("--keeps-awake") === "off", waiting });
     say(outcome);
     return EXIT[outcome.result];

@@ -30,9 +30,11 @@ final class BackgroundWork {
     var didntStart = false
 
     #if DEBUG
-    /// Tests: what macOS says of the agent, and whether this copy registers as a user's does.
+    /// Tests: what macOS says of the agent, and whether this copy registers as a user's does; and
+    /// what registering it does (never launchd's, in a test).
     static var status: (() -> SMAppService.Status)?
     static var asUsersCopy = false
+    static var registering: (() throws -> Void)?
     #endif
 
     /// The launch agent in the app (`Contents/Library/LaunchAgents`), which a build phase names
@@ -70,13 +72,26 @@ final class BackgroundWork {
     /// it's this Mac's. A keeper beside it would start a second box.
     nonisolated(unsafe) static var heldBack: String?
 
+    /// Whether this Mac's box lives in its home of its own (`movesOwnBox`, its home's box says it's
+    /// this Mac's): its helper starts it at login there, so no keeper of the app's is registered (two
+    /// would start at login). The keeper registered before retires itself once the move's done.
+    static var boxStartsOnItsOwn: Bool {
+        guard AppModel.movesOwnBox, let folder = OwnBoxHome.folder else { return false }
+        return OwnBoxHome.kind(in: folder) == "mac"
+    }
+
     /// Registered with macOS, once (the first time Kuvo Code opens, and again if it went): launchd
-    /// starts the keeper now, and at each login. Whether it's on.
+    /// starts the keeper now, and at each login. Whether it's on. Never once this Mac's box lives
+    /// in its home of its own.
     @discardableResult
     func register() -> Bool {
         refresh()
         if let heldBack = Self.heldBack {
             failure = heldBack
+            return false
+        }
+        if Self.boxStartsOnItsOwn {
+            failure = "This Mac’s box starts on its own, with Kuvo Code Box."
             return false
         }
         // A demo, test or measurement copy runs its work itself, also when its bundle ID was
@@ -92,7 +107,11 @@ final class BackgroundWork {
             return false
         }
         do {
+            #if DEBUG
+            if let registering = Self.registering { try registering() } else { try service.register() }
+            #else
             try service.register()
+            #endif
             failure = nil
         } catch {
             Logger(subsystem: "run.kuvo.code", category: "keeper").error("Background work wasn't registered: \(error.localizedDescription, privacy: .public)")

@@ -14594,15 +14594,18 @@ function engineKept(engineData) {
     return false;
   }
 }
+function appBoxRan(appBox, engineData) {
+  return engineKept(engineData) || OWN_BOX_RAN.some((file) => fs56.existsSync(path58.join(appBox, "run", file)));
+}
 function hereNow(root, appBox = process.env.KUVO_HOME, home = homeFolder(), engineData = process.env.KUVO_ENGINE_DATA) {
   const machine = path58.join(home, root || "");
   if (!root || !appBox || path58.resolve(appBox) === path58.resolve(machine))
     throw new Error("kuvo-link.js here needs KUVO_HOME, the app's own box's folder, and the machines' folder's name: here <root>.");
   if (moveUnderWay(machine))
     return { verdict: "moving", use: "wait", opens: "main", runs: null, box: null, own: null };
-  const ownRan = engineKept(engineData) || OWN_BOX_RAN.some((file) => fs56.existsSync(path58.join(appBox, "run", file)));
+  const ownRan = appBoxRan(appBox, engineData);
   const own = ownRan ? foundAt2(appBox, true, home) ?? { folder: shownFolder(appBox, home), app: true } : null;
-  const there = foundAt2(machine, false, home);
+  const there = foundAt2(machine, false, home) ?? (recordedKind(path58.join(machine, "box", "kind")) === "mac" ? { folder: shownFolder(machine, home), app: false } : null);
   return judgeHere(own, there, there ? runsAt(machine) : null);
 }
 var ATTACHED_FILE = "app-attached.json";
@@ -39852,7 +39855,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "d7d6d21d407d";
+var BRIDGE_VERSION = "79bb842f15dd";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -42071,6 +42074,76 @@ async function rehome(folders, options = {}) {
     }, rewriter);
   });
 }
+function newRefusal({ appFolder, home }, { release, engineData }) {
+  const fileAt = (file) => {
+    try {
+      return fs130.statSync(file).isFile();
+    } catch {
+      return false;
+    }
+  };
+  if (!release || !fileAt(path135.join(release, "bin", "kuvo-start")) || !fileAt(path135.join(release, "bin", "kuvo-link.js")))
+    return "The box's own files to put in its new home weren't given.";
+  if (appBoxRan(path135.join(appFolder, "box"), engineData ?? path135.join(appFolder, "opencode", "data", "opencode")))
+    return "Kuvo Code's own box is in its folder: it moves into its home instead.";
+  if (located(home) === located(path135.join(accountHome(), ".kuvo-code")) && path135.basename(appFolder) !== "run.kuvo.code")
+    return "Only Kuvo Code itself makes its box in ~/.kuvo-code: a copy makes it in a home of its own.";
+  const there = runsAt(home);
+  if (there !== "gone" && (there === "running" || foundAt2(home, false) !== null))
+    return "There's a box in this Mac's ~/.kuvo-code already: both keep running as they are.";
+  if (runningIn(path135.join(home, "run")).length)
+    return "Something is running in this Mac's ~/.kuvo-code: it's made there once that's stopped.";
+  if (!listOf(path135.join(appFolder, "engine")).length)
+    return "The engine isn't downloaded yet: this Mac's box is made once it is.";
+  return null;
+}
+async function rehomeNew(folders, options = {}) {
+  const { appFolder, home } = folders;
+  if (process.platform !== "darwin")
+    return { result: "refused", message: NOTHING_TO_MOVE, status: rehomeStatus(home) };
+  const release = options.release ? path135.resolve(options.release) : null;
+  const why = () => {
+    if (moveUnderWay(home))
+      return { result: "refused", message: "A move of this Mac's box is under way: it's finished first.", status: rehomeStatus(home) };
+    if (recordedKind(path135.join(home, "box", "kind")) === "mac")
+      return { result: "nothing", status: rehomeStatus(home) };
+    const refusal = newRefusal(folders, { release, engineData: options.engineData });
+    return refusal ? { result: "refused", message: refusal, status: rehomeStatus(home) } : null;
+  };
+  const before = why();
+  if (before)
+    return before;
+  return locked2(home, options.waiting ?? (() => {}), async () => {
+    const refused = why();
+    if (refused)
+      return refused;
+    const now = Date.now();
+    const aside = path135.join(home, "trash", `earlier-box-${stamp4(now)}`);
+    const there = listOf(home).filter((name) => name !== "updates" && name !== "trash").map((name) => path135.join(home, name)).concat(listOf(path135.join(home, "updates")).filter((name) => name !== "rehome").map((name) => path135.join(home, "updates", name))).concat(listOf(path135.join(home, "trash")).filter((name) => !name.startsWith("earlier-box-")).map((name) => path135.join(home, "trash", name)));
+    for (const file of there.sort()) {
+      fs130.mkdirSync(path135.dirname(path135.join(aside, path135.relative(home, file))), { recursive: true, mode: 448 });
+      fs130.renameSync(file, path135.join(aside, path135.relative(home, file)));
+    }
+    const bin = path135.join(home, "bin");
+    fs130.rmSync(`${bin}.new`, { recursive: true, force: true });
+    clone(path135.join(release, "bin"), `${bin}.new`, true);
+    fs130.renameSync(`${bin}.new`, bin);
+    const engine = path135.join(home, "engine");
+    fs130.rmSync(`${engine}.new`, { recursive: true, force: true });
+    if (ran2("/bin/cp", ["-cRPp", path135.join(appFolder, "engine"), `${engine}.new`], CLONE_LIMIT).status !== 0) {
+      fs130.rmSync(`${engine}.new`, { recursive: true, force: true });
+      clone(path135.join(appFolder, "engine"), `${engine}.new`, true);
+    }
+    fs130.renameSync(`${engine}.new`, engine);
+    const box = path135.join(home, "box");
+    fs130.mkdirSync(box, { recursive: true, mode: 448 });
+    if (options.keepsAwakeOff)
+      setKeepsAwake(false, path135.join(box, "work.json"));
+    writePrivate(path135.join(box, "kind"), `mac
+`);
+    return { result: "done", status: rehomeStatus(home) };
+  });
+}
 async function rehomeBack(home, options = {}) {
   const rewriter = options.rewriter ?? PATH_REWRITER;
   return locked2(home, options.waiting ?? (() => {}), async () => {
@@ -42199,7 +42272,7 @@ function appFolderOf(appBox, home) {
 
 // Packages/Box/src/link/rehome/command.ts
 var EXIT = { done: 0, back: 0, nothing: 0, refused: 1, failed: 1, stuck: 3, waits: 4 };
-var USAGE = "Usage: kuvo-link.js rehome <root> [--release <folder>] [--keeps-awake on|off] | --ready | --resume | --back | --status | --settled keychain|agent";
+var USAGE = "Usage: kuvo-link.js rehome <root> [--new] [--release <folder>] [--keeps-awake on|off] | --ready | --resume | --back | --status | --settled keychain|agent";
 async function rehomeCommand(root, args) {
   delete process.env.KUVO_BOX;
   const option = (name) => args.indexOf(name) >= 0 ? args[args.indexOf(name) + 1] : undefined;
@@ -42248,7 +42321,7 @@ async function rehomeCommand(root, args) {
       say({ result: "refused", message: NOTHING_TO_MOVE, status: rehomeStatus(home) });
       return 1;
     }
-    const outcome = args.includes("--resume") ? await rehomeResume(home, { waiting }) : args.includes("--back") ? await rehomeBack(home, { waiting }) : await rehome(folders(), { appVersion: process.env.KUVO_APP_VERSION || null, release: option("--release") ?? null, keepsAwakeOff: option("--keeps-awake") === "off", waiting });
+    const outcome = args.includes("--resume") ? await rehomeResume(home, { waiting }) : args.includes("--back") ? await rehomeBack(home, { waiting }) : args.includes("--new") ? await rehomeNew(folders(), { release: option("--release") ?? null, keepsAwakeOff: option("--keeps-awake") === "off", engineData: process.env.KUVO_ENGINE_DATA || undefined, waiting }) : await rehome(folders(), { appVersion: process.env.KUVO_APP_VERSION || null, release: option("--release") ?? null, keepsAwakeOff: option("--keeps-awake") === "off", waiting });
     say(outcome);
     return EXIT[outcome.result];
   } catch (error) {
