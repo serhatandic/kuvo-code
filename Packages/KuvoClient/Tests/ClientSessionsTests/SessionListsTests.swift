@@ -95,10 +95,17 @@ struct SessionListsTests {
         #expect(SessionLists.place(of: listing.facts(of: "ses_c")) == .chat)
         listing.take(try line(#"{"at":"e.8","sessions":{"ses_c":{"kind":"chat","directory":"/c","created":1,"updated":10}},"projects":{}}"#))
         #expect(listing.noted.isEmpty && SessionLists.place(of: listing.facts(of: "ses_c")) == .chat)
-        // Remove Project's answer names what it archived: those, at once.
-        listing.noteArchived(byRemoving: Data(#"{"archived":1,"sessions":["ses_c"]}"#.utf8))
+        // Remove Project's answer names what it archived: those at once, and only those (one in its
+        // folder its box didn't archive, a subagent's or one it kept, stays as its box says).
+        listing.take(try line(#"{"at":"e.9","sessions":{"ses_d":{"kind":"chat","directory":"/c","created":1,"updated":11}},"projects":{}}"#))
+        listing.noteArchived(byRemoving: Data(#"{"archived":1,"kept":1,"sessions":["ses_c"]}"#.utf8))
         #expect(SessionLists.place(of: listing.facts(of: "ses_c")) == nil)
-        listing.noteArchived(byRemoving: Data(#"{"archived":1}"#.utf8))
+        #expect(SessionLists.place(of: listing.facts(of: "ses_d")) == .chat && listing.noted["ses_d"] == nil)
+        // A box from before it named them: nothing noted.
+        var older = SessionLists.Listing()
+        older.take(try line(#"{"at":"e.1","full":true,"sessions":{"ses_a":{"kind":"chat","directory":"/c","created":1,"updated":2}},"projects":{}}"#))
+        older.noteArchived(byRemoving: Data(#"{"archived":1}"#.utf8))
+        #expect(older.noted.isEmpty)
         // One its box hasn't listed isn't noted.
         listing.noteArchived("ses_new", true)
         #expect(listing.facts(of: "ses_new") == nil && listing.noted["ses_new"] == nil)

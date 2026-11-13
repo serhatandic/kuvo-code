@@ -151,8 +151,7 @@ public enum SessionLists {
         /// The sessions its box's Remove Project answer names (`DELETE kuvo/projects`: those it
         /// archived), noted archived, as above: out of the lists at once.
         public mutating func noteArchived(byRemoving answer: Data) {
-            struct Answer: Decodable { var sessions: [String]? }
-            for id in (try? JSONDecoder().decode(Answer.self, from: answer))?.sessions ?? [] { noteArchived(id, true) }
+            for id in SessionLists.archived(byRemoving: answer) { noteArchived(id, true) }
         }
 
         /// The note `noteArchived(id, archived)` made let go of, if it's still that one: the write it
@@ -189,6 +188,13 @@ public enum SessionLists {
     public enum Place: Hashable, Sendable {
         case project(String)
         case chat
+    }
+
+    /// The sessions a box's Remove Project answer (`DELETE kuvo/projects`, 200 or 409) says it
+    /// archived; none from a box from before it said.
+    public static func archived(byRemoving answer: Data) -> [String] {
+        struct Answer: Decodable { var sessions: [String]? }
+        return (try? JSONDecoder().decode(Answer.self, from: answer))?.sessions ?? []
     }
 
     /// Where `facts`' session shows: a project's session under its project, a chat in Chats, unless

@@ -752,8 +752,10 @@ final class Workspace {
         if listing != sessionLists[box] { sessionLists[box] = listing }
     }
 
-    /// The sessions `box`'s Remove Project `answer` names as archived, out of its lists at once.
+    /// The sessions `box`'s Remove Project `answer` names as archived: so here (their terminals
+    /// closed, their wake-ups held), and out of its lists at once.
     private func noteArchived(on box: String, byRemoving answer: Data) {
+        for id in SessionLists.archived(byRemoving: answer) { noteArchivedThere(id) }
         guard var listing = sessionLists[box] else { return }
         listing.noteArchived(byRemoving: answer)
         if listing != sessionLists[box] { sessionLists[box] = listing }
@@ -1146,9 +1148,8 @@ final class Workspace {
         let (status, data) = try await client.send("DELETE", "kuvo/projects?directory=" + Self.queryValue(Self.onBox(directory)), body: body)
         switch status {
         case 200:
-            // All of them, there: so here too, as the engine has them now, and it's off the list.
-            for session in sessions { noteArchivedThere(session.id) }
-            // Every one its box archived, its worktrees' among them, as its box names them.
+            // Those its box archived, its worktrees' among them, as it names them: so here too, and
+            // it's off the list.
             noteArchived(on: box, byRemoving: data)
             folders.removeAll { $0 == directory }
             UserDefaults.standard.set(folders, forKey: "projectFolders")
