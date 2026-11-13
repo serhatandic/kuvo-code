@@ -83,7 +83,8 @@ import Testing
         await first.app.workspace.refresh()
         let firstFollows = try await engine.listing.follow(first.app.workspace)
         defer { firstFollows.cancel() }
-        try await until { first.app.tabs.selection != nil }
+        // (The latest open first, as the launch opens it once its box has listed them.)
+        try await until { first.app.tabs.selection == .session(lamp) }
         first.app.tabs.choose(.session(harbor))
         // Kept by the window as it changes, as in the app.
         let kept = UserDefaults(suiteName: suite)
