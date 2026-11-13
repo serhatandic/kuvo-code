@@ -3335,6 +3335,9 @@
             "literal": "vault"
            },
            {
+            "literal": "vault.same"
+           },
+           {
             "literal": "wakes"
            },
            {
@@ -3767,6 +3770,9 @@
            },
            {
             "literal": "vault"
+           },
+           {
+            "literal": "vault.same"
            },
            {
             "literal": "wakes"
