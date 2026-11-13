@@ -290,6 +290,12 @@ import Testing
         #expect(app.wakeUps.wakes[session.id]?.isEmpty != false)
     }
 
+    /// A machine's box's `kuvo/info` over SSH, as one of this version answers it: all the app needs.
+    private static let currentInfo: String = {
+        let body = String(decoding: try! JSONSerialization.data(withJSONObject: ["kind": "machine", "features": BoxGate.required]), as: UTF8.self)
+        return String(decoding: try! JSONSerialization.data(withJSONObject: ["status": 200, "body": body]), as: UTF8.self)
+    }()
+
     /// A machine's sessions with wake-ups, looked at each minute while it's connected: one call
     /// there for all of them, not one more for each session.
     @Test func aMachinesWakeUpsAreReadInOneCall() async throws {
@@ -310,6 +316,8 @@ import Testing
                 routed.withLock { $0.append(path) }
                 // (Its session list, read as the sidebar follows it: not this one's to answer.)
                 if path.hasPrefix("kuvo/sessions/list") { return #"{"status":503,"body":"{}"}"# }
+                // (What it has, as a box of this version says it.)
+                if path == "kuvo/info" { return Self.currentInfo }
             }
             return answer.routed
         }
@@ -323,7 +331,7 @@ import Testing
         await app.wakeUps.share(with: engine)
 
         #expect(app.wakeUps.wakes[session.id]?.map(\.note) == ["Check the deploy"])
-        let asked = routed.withLock { Array($0.dropFirst(before)) }.filter { !$0.hasPrefix("kuvo/sessions/list") }
+        let asked = routed.withLock { Array($0.dropFirst(before)) }.filter { !$0.hasPrefix("kuvo/sessions/list") && $0 != "kuvo/info" }
         #expect(asked.count == 1 && asked.allSatisfy { $0.hasPrefix("kuvo/wakes") }, "one read of them all: \(asked)")
     }
 
@@ -1033,8 +1041,9 @@ import Testing
         try await until { app.workspace.session("ses_mwait") != nil }
         machine.on("POST", "/api/session", json: ["data": StubEngine.session("ses_mnone", title: "New", directory: "/home/tests/app")])
         machine.on("POST", "/api/session/ses_mwait/move", json: [:])
-        await #expect(throws: BoxRefusal.self) { _ = try await app.workspace.createSession(in: prefix + "/home/tests/app", model: nil, agent: nil) }
-        await #expect(throws: BoxRefusal.self) { try await app.workspace.move("ses_mwait", toProject: prefix + "/home/tests/app") }
+        // (As any route of a box out of reach: its connection's words.)
+        await #expect(throws: RemoteEngineError.self) { _ = try await app.workspace.createSession(in: prefix + "/home/tests/app", model: nil, agent: nil) }
+        await #expect(throws: RemoteEngineError.self) { try await app.workspace.move("ses_mwait", toProject: prefix + "/home/tests/app") }
         #expect(machine.requests("POST", "/api/session").isEmpty)
         #expect(machine.requests("POST", "/api/session/ses_mwait/move").isEmpty)
     }
