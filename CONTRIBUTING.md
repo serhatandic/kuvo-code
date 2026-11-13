@@ -773,10 +773,10 @@ Metal toolchain to build. Textual is a copy in `Packages/Textual`, changed so
 replies are laid out in one pass (its README says what's different and how to
 bring in upstream's changes).
 
-If you add or update a package, or change code copied from another project
-(`prism-bundle.js`, `mermaid.min.js`, `buildDomTree.js`, UsageKit, Textual), run
-`./scripts/third-party-licenses.sh` and commit the updated
-`THIRD_PARTY_LICENSES.txt`; CI checks that it's current.
+For dependency updates or changes to bundled upstream code, regenerate the notices
+with `./scripts/third-party-licenses.sh` and commit `THIRD_PARTY_LICENSES.txt`.
+This covers UsageKit, Textual, and the bundled Prism, Mermaid and buildDomTree
+scripts. CI verifies the generated notices.
 
 ## Workflow
 
