@@ -217,6 +217,17 @@ describe("queue/add", () => {
     expect(sent.body.metadata.kuvo.parts).toEqual({ words: "After this", widget: "Plans" })
   })
 
+  test("one waiting on the box while the queue's paused shows the keyword it was sent with", async () => {
+    const stop = "kuvo/sessions/ses_main/stop"
+    expect((await ask(context => queueRoute(context, stop.match(QUEUE_ROUTE)!), "POST", stop, {})).status).toBe(200)
+    const route = "kuvo/sessions/ses_main/queue/add"
+    const { json } = await ask(context => queueRoute(context, route.match(QUEUE_ROUTE)!), "POST", route, { id: "msg_held", words: "check CI", keyword: "/loop every hour", delivery: "queue" })
+    expect(json.waits).toBe(true)
+    expect(json.waiting.find((each: any) => each.id === "msg_held")).toMatchObject({ text: "check CI", keyword: "/loop every hour" })
+    const resume = "kuvo/sessions/ses_main/queue/resume"
+    await ask(context => queueRoute(context, resume.match(QUEUE_ROUTE)!), "POST", resume, {})
+  })
+
   test("one a client wrote itself, the way before, keeps the parts of its text where there's more to them; a plain one keeps none", async () => {
     const route = "kuvo/sessions/ses_main/queue/add"
     const goal = "[Goal] ship it\n\n(The user asked for this as a goal: plan it, check what it needs, and put it to them with propose_goal before doing any of the work.)"

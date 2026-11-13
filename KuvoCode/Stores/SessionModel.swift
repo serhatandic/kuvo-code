@@ -614,7 +614,10 @@ final class SessionModel {
         onBox.filter { item in !transcript.pending.contains { $0.id == item.id } }.map { item in
             let yours = yoursOnBox[item.id]
             let files = item.files ?? []
-            return Transcript.Pending(id: item.id, text: yours?.text ?? (item.text.isEmpty ? files.joined(separator: ", ") : item.text), delivery: .queue, isLocal: false, files: yours?.files ?? [])
+            let text = yours?.text ?? (item.text.isEmpty ? files.joined(separator: ", ") : item.text)
+            var pending = Transcript.Pending(id: item.id, text: text, delivery: .queue, isLocal: false, files: yours?.files ?? [])
+            pending.metadata = MessageParts.keeping(MessageParts(words: text, keyword: item.keyword))
+            return pending
         }
     }
 
@@ -1879,6 +1882,8 @@ final class SessionModel {
             var from: String?
             var text: String
             var files: [String]?
+            /// The keyword it was sent with, as typed, which its row shows in front of its words.
+            var keyword: String?
         }
 
         /// One taken away from what waits on the box, whole, to add back as it was (`kept`), where

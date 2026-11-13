@@ -2919,7 +2919,7 @@ var keptWaiting = (value) => (Array.isArray(value) ? value : []).flatMap((item) 
   if (!isObject(item) || typeof item.id !== "string" || !WAITING_ID.test(item.id) || typeof item.text !== "string")
     return [];
   const files = Array.isArray(item.files) ? item.files.filter((name) => typeof name === "string") : [];
-  return [{ id: item.id, ...typeof item.from === "string" ? { from: item.from } : {}, text: item.text, ...files.length ? { files } : {}, at: typeof item.at === "number" ? item.at : 0 }];
+  return [{ id: item.id, ...typeof item.from === "string" ? { from: item.from } : {}, text: item.text, ...files.length ? { files } : {}, ...typeof item.keyword === "string" ? { keyword: item.keyword } : {}, at: typeof item.at === "number" ? item.at : 0 }];
 });
 var keptState = (value) => {
   const waiting = keptWaiting(isObject(value) ? value.waiting : undefined);
@@ -2983,7 +2983,9 @@ function keepWaiting(files, session, message, { from, words, kept: keptText } = 
     writePrivate(waitingFile(files, message.id), JSON.stringify(keptText === undefined ? message : { ...message, text: keptText }));
     kept = true;
     const names = fileNames(message.files);
-    const waiting = { id: message.id, ...from ? { from } : {}, text: words ?? message.text, ...names.length ? { files: names } : {}, at: Date.now() };
+    const parts = isObject(message.metadata) && isObject(message.metadata.kuvo) && isObject(message.metadata.kuvo.parts) ? message.metadata.kuvo.parts : null;
+    const keyword = typeof parts?.keyword === "string" ? parts.keyword : undefined;
+    const waiting = { id: message.id, ...from ? { from } : {}, text: words ?? message.text, ...names.length ? { files: names } : {}, ...keyword ? { keyword } : {}, at: Date.now() };
     return place({ ...state, waiting: (state.waiting ?? []).filter((each) => each.id !== message.id) }, waiting);
   }, changed);
   return kept;
@@ -40103,7 +40105,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "13c0ed98e63f";
+var BRIDGE_VERSION = "22ff223ddf97";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";

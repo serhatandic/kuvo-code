@@ -30373,7 +30373,7 @@ var keptWaiting = (value) => (Array.isArray(value) ? value : []).flatMap((item) 
   if (!isObject(item) || typeof item.id !== "string" || !WAITING_ID.test(item.id) || typeof item.text !== "string")
     return [];
   const files = Array.isArray(item.files) ? item.files.filter((name) => typeof name === "string") : [];
-  return [{ id: item.id, ...typeof item.from === "string" ? { from: item.from } : {}, text: item.text, ...files.length ? { files } : {}, at: typeof item.at === "number" ? item.at : 0 }];
+  return [{ id: item.id, ...typeof item.from === "string" ? { from: item.from } : {}, text: item.text, ...files.length ? { files } : {}, ...typeof item.keyword === "string" ? { keyword: item.keyword } : {}, at: typeof item.at === "number" ? item.at : 0 }];
 });
 var keptState = (value) => {
   const waiting = keptWaiting(isObject(value) ? value.waiting : undefined);
@@ -30437,7 +30437,9 @@ function keepWaiting(files, session, message, { from, words, kept: keptText } = 
     writePrivate(waitingFile(files, message.id), JSON.stringify(keptText === undefined ? message : { ...message, text: keptText }));
     kept = true;
     const names = fileNames(message.files);
-    const waiting = { id: message.id, ...from ? { from } : {}, text: words ?? message.text, ...names.length ? { files: names } : {}, at: Date.now() };
+    const parts = isObject(message.metadata) && isObject(message.metadata.kuvo) && isObject(message.metadata.kuvo.parts) ? message.metadata.kuvo.parts : null;
+    const keyword = typeof parts?.keyword === "string" ? parts.keyword : undefined;
+    const waiting = { id: message.id, ...from ? { from } : {}, text: words ?? message.text, ...names.length ? { files: names } : {}, ...keyword ? { keyword } : {}, at: Date.now() };
     return place({ ...state, waiting: (state.waiting ?? []).filter((each) => each.id !== message.id) }, waiting);
   }, changed);
   return kept;
@@ -35017,4 +35019,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 0af2a6074d467d2946fb1393179c2f6f4651948cc222f8f7c0521ed2a03cf756
+// Built from Packages/Box/src/agents 4507a1f0472117970f0a67f9a2539f997a481e58e8d17881946666a4e153f281

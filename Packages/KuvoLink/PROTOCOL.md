@@ -5219,6 +5219,8 @@ the box sends keeps its parts, which clients draw it by. No client writes or rea
   keeps which messages ran one (`CommandMessages`).
 - Both directions: `Vectors/message-parts.json` (written from the apps' Swift before this), which
   the box (`test/message-parts.test.ts`) and KuvoClient (`MessagePartsTests`) are held to.
+- One waiting on the box (`waiting` in a queue) says the keyword it was sent with (`keyword`), for
+  its row to show in front of its words.
 - A group chat's message still carries the widget it answers as its own block (`WidgetAnswer`).
 
 ### Features
