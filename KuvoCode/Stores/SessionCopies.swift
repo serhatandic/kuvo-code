@@ -124,8 +124,9 @@ nonisolated enum SessionCopies {
 
     /// `at`: where it's at past its last change, kept with it.
     static func saveList(_ listing: SessionLists.Listing, of box: String, at: String? = nil) {
-        var listing = listing
-        if let at { listing.move(to: at) }
+        var moved = listing
+        if let at { moved.move(to: at) }
+        let listing = moved
         write {
             guard let data = try? JSONEncoder().encode(listing) else { return }
             try? FileManager.default.createDirectory(at: sessionList(box).deletingLastPathComponent(), withIntermediateDirectories: true)
