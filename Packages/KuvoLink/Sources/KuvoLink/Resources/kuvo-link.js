@@ -2288,6 +2288,7 @@ var FEATURES = [
   "sign-in.return",
   "skills",
   "skills.trash",
+  "typed",
   "update",
   "usage.history",
   "vault",
@@ -39138,7 +39139,7 @@ import fs123 from "node:fs";
 import path126 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "d0015c0718f9";
+var BRIDGE_VERSION = "28d1ba618f7f";
 
 // Packages/Box/src/link/rehome/rewrite.ts
 var NO_REWRITE = {
@@ -45620,6 +45621,725 @@ async function* autopilotRoute(context) {
   return yield* json(200, shown3(at.data));
 }
 
+// Packages/Box/src/link/typed/words.ts
+var SPACE = "\\t\\n\\u000b\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000";
+var SPACE_ONE = new RegExp(`^[${SPACE}]$`);
+var SPACE_ENDS = new RegExp(`^[${SPACE}]+|[${SPACE}]+$`, "g");
+var BLANK = "\\t \\u00a0\\u1680\\u2000-\\u200a\\u202f\\u205f\\u3000";
+var BLANK_ENDS = new RegExp(`^[${BLANK}]+|[${BLANK}]+$`, "g");
+var isSpace = (character) => character !== undefined && SPACE_ONE.test(character);
+var trim = (text) => text.replace(SPACE_ENDS, "");
+var trimBlanks = (text) => text.replace(BLANK_ENDS, "");
+var nextWord = (text, from) => {
+  let at = from;
+  while (at < text.length && isSpace(text[at]))
+    at++;
+  return at;
+};
+var wordEnd = (text, from) => {
+  let at = from;
+  while (at < text.length && !isSpace(text[at]))
+    at++;
+  return at;
+};
+var words4 = (text) => text.split(new RegExp(`[${SPACE}]+`)).filter(Boolean);
+var KEYWORDS = ["goal", "loop", "plan", "autopilot", "review", "btw", "handoff", "compact"];
+var KEYWORD_WORDS = {
+  goal: { title: "Goal", summary: "Keep working until a condition is met", argument: "what should be true when it’s done, like “all tests pass”" },
+  loop: { title: "Loop", summary: "Repeat a message on a schedule", argument: "what to do each time" },
+  plan: { title: "Plan", summary: "Explore and plan first, without changing files", argument: "what to plan (or nothing, to turn Plan on or off)" },
+  autopilot: { title: "Autopilot", summary: "Decide for itself; stop only for what needs you", argument: "what to do (or nothing, to turn Autopilot on or off)" },
+  review: { title: "Review", summary: "A second model reviews your uncommitted changes", argument: null },
+  btw: { title: "Side Question", summary: "A side question, kept out of this conversation", argument: "your question" },
+  handoff: { title: "Handoff", summary: "Go on in a fresh conversation from a summary", argument: "what to do next (or nothing)" },
+  compact: { title: "Compact", summary: "Summarize the conversation to free up context", argument: null }
+};
+var QUICK_REVIEW = "review-quick";
+function commandsOffered(own, keywords) {
+  return own.flatMap((command) => {
+    if (command.name === "goal")
+      return [];
+    if (!keywords.some((keyword) => keyword === command.name))
+      return [command];
+    return command.name === "review" ? [{ name: QUICK_REVIEW, description: "The engine’s own review, in this conversation" }] : [];
+  });
+}
+function parseKeyword(text) {
+  const trimmed = trim(text);
+  if (!trimmed.startsWith("/"))
+    return null;
+  const name = trimmed.slice(1, wordEnd(trimmed, 1));
+  const keyword = KEYWORDS.find((each) => each === name.toLowerCase());
+  if (!keyword)
+    return null;
+  return { keyword, rest: trim(trimmed.slice(1 + name.length)) };
+}
+function shellCommand(text) {
+  if (!text.startsWith("!"))
+    return null;
+  const command = trim(text.slice(1));
+  return command ? command : null;
+}
+function splitCommand(text) {
+  const trimmed = trim(text);
+  if (!trimmed.startsWith("/"))
+    return null;
+  const name = trimmed.slice(1, wordEnd(trimmed, 1));
+  if (!name)
+    return null;
+  return { name, arguments: trim(trimmed.slice(1 + name.length)) };
+}
+function parseCommand(text, commands) {
+  const split = splitCommand(text);
+  return split && commands.some((command) => command.name === split.name) ? split : null;
+}
+var CLEARING = new Set(["clear", "stop", "off", "reset", "none", "cancel"]);
+function parseGoal(text) {
+  const trimmed = trim(text);
+  if (!trimmed.toLowerCase().startsWith("/goal"))
+    return null;
+  const after = trimmed.slice("/goal".length);
+  if (after && !isSpace(after[0]))
+    return null;
+  const rest = trim(after);
+  const lower = rest.toLowerCase();
+  if (!lower)
+    return { kind: "show" };
+  if (lower === "pause")
+    return { kind: "pause" };
+  if (lower === "resume")
+    return { kind: "resume" };
+  if (CLEARING.has(lower))
+    return { kind: "clear" };
+  return { kind: "set", words: rest };
+}
+function parseRepeat(text) {
+  if (text === "weekdays")
+    return { unit: "weekdays" };
+  const match = /^([1-9][0-9]{0,5})([mhdw])$/.exec(text);
+  if (!match)
+    return null;
+  const count = Number(match[1]), unit = match[2];
+  const most = { m: 525600, h: 8760, d: 366, w: 52 }[unit];
+  if (count > most || unit === "m" && count < 5)
+    return null;
+  return { unit, count };
+}
+var repeatText2 = (every) => every.unit === "weekdays" ? "weekdays" : `${every.count}${every.unit}`;
+var keepsTimeOfDay = (every) => every.unit !== "m" && every.unit !== "h";
+var MINUTE_UNITS = ["m", "min", "mins", "minute", "minutes"];
+var HOUR_UNITS = ["h", "hr", "hrs", "hour", "hours"];
+var same3 = (a, b) => a.length === b.length && a.every((word, at) => word === b[at]);
+function clock(text) {
+  let said = text;
+  const half = said.endsWith("am") ? "am" : said.endsWith("pm") ? "pm" : null;
+  if (half)
+    said = said.slice(0, -2);
+  const parts = said.split(":").filter((part) => part !== "");
+  const int = (part) => part !== undefined && /^[+-]?[0-9]+$/.test(part) ? Number(part) : null;
+  const hour = int(parts[0]);
+  if (hour === null || parts.length > 2)
+    return null;
+  const minute = parts.length === 2 ? int(parts[1]) : 0;
+  if (minute === null || minute < 0 || minute >= 60 || hour < 0 || hour > 23 || half !== null && (hour < 1 || hour > 12))
+    return null;
+  if (half === "am")
+    return [hour === 12 ? 0 : hour, minute];
+  if (half === "pm")
+    return [hour === 12 ? 12 : hour + 12, minute];
+  return [hour, minute];
+}
+function scheduleOf(said) {
+  const is = (...each) => each.some((words) => same3(said, words));
+  if (is(["hourly"], ["every", "hour"]))
+    return { every: { unit: "h", count: 1 } };
+  if (is(["daily"], ["every", "day"], ["every", "morning"]))
+    return { every: { unit: "d", count: 1 }, hour: 9, minute: 0 };
+  if (is(["weekdays"], ["every", "weekday"]))
+    return { every: { unit: "weekdays" }, hour: 9, minute: 0 };
+  if (is(["weekly"], ["every", "week"]))
+    return { every: { unit: "w", count: 1 }, hour: 9, minute: 0 };
+  const spoken = said[0] === "every" ? said.slice(1) : said;
+  if (spoken.length === 1) {
+    const every = parseRepeat(spoken[0]);
+    if (every)
+      return keepsTimeOfDay(every) ? { every, hour: 9, minute: 0 } : { every };
+  }
+  if (spoken.length === 2 && /^[+]?[0-9]+$/.test(spoken[0]) && Number(spoken[0]) > 0) {
+    const n = Number(spoken[0]), unit = spoken[1];
+    if (MINUTE_UNITS.includes(unit)) {
+      const every = parseRepeat(`${n}m`);
+      if (every)
+        return { every };
+    }
+    if (HOUR_UNITS.includes(unit)) {
+      const every = parseRepeat(`${n}h`);
+      if (every)
+        return { every };
+    }
+  }
+  const at = said.indexOf("at");
+  if (at < 0 || at + 1 !== said.length - 1)
+    return null;
+  const time = clock(said[at + 1]);
+  if (!time)
+    return null;
+  const [hour, minute] = time;
+  const days = said.slice(0, at);
+  const are = (...each) => each.some((words) => same3(days, words));
+  if (are(["every", "morning"], ["mornings"], ["every", "day"], ["daily"]))
+    return { every: { unit: "d", count: 1 }, hour, minute };
+  if (are(["weekdays"], ["every", "weekday"], ["on", "weekdays"]))
+    return { every: { unit: "weekdays" }, hour, minute };
+  if (are(["every", "week"], ["weekly"]))
+    return { every: { unit: "w", count: 1 }, hour, minute };
+  if (days.length === 3 && days[0] === "every" && ["days", "day", "weeks", "week"].includes(days[2])) {
+    if (!/^[+-]?[0-9]+$/.test(days[1]))
+      return null;
+    const every = parseRepeat(`${Number(days[1])}${days[2].startsWith("day") ? "d" : "w"}`);
+    return every ? { every, hour, minute } : null;
+  }
+  return null;
+}
+function parseLoop(rest) {
+  const said = words4(rest);
+  for (let count = Math.min(said.length, 6);count >= 1; count--) {
+    if (count < said.length && said[count].toLowerCase() === "at")
+      continue;
+    const schedule = scheduleOf(said.slice(0, count).map((word) => word.toLowerCase()));
+    if (!schedule)
+      continue;
+    let index = 0;
+    for (let each = 0;each < count; each++)
+      index = wordEnd(rest, nextWord(rest, index));
+    return { schedule, message: trim(rest.slice(index)), scheduleLength: index, scheduleText: trim(rest.slice(0, index)) };
+  }
+  return { schedule: null, message: trim(rest), scheduleLength: 0, scheduleText: "" };
+}
+var DAY6 = 86400000;
+var isWeekend = (at, timeZone) => {
+  const { year, month, day } = wall(at, timeZone);
+  const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+  return weekday === 0 || weekday === 6;
+};
+function timeOfDay(today, days, hour, minute, timeZone) {
+  let at = instant(today.year, today.month, today.day + days, hour, minute, timeZone);
+  const asked = hour * 60 + minute;
+  const minutes = (moment) => {
+    const seen = wall(moment, timeZone);
+    return seen.hour * 60 + seen.minute;
+  };
+  if (minutes(at) !== asked)
+    while (minutes(at - 60000) > asked && minutes(at - 60000) < minutes(at))
+      at -= 60000;
+  return at;
+}
+function firstRun(schedule, now, timeZone = zone2()) {
+  if (!keepsTimeOfDay(schedule.every) || schedule.hour === undefined)
+    return now;
+  const today = wall(now, timeZone);
+  let days = 0;
+  let next = timeOfDay(today, days, schedule.hour, schedule.minute ?? 0, timeZone);
+  while (next <= now || schedule.every.unit === "weekdays" && isWeekend(next, timeZone)) {
+    days++;
+    next = timeOfDay(today, days, schedule.hour, schedule.minute ?? 0, timeZone);
+    if (days > 14)
+      return now + DAY6;
+  }
+  return next;
+}
+function firstWake(schedule, now, timeZone = zone2()) {
+  if (keepsTimeOfDay(schedule.every))
+    return firstRun(schedule, now, timeZone);
+  const every = schedule.every;
+  return now + every.count * (every.unit === "h" ? 3600000 : 60000);
+}
+var PRESETS = ["security", "performance", "accessibility"];
+var UNCOMMITTED = "changes not committed yet";
+var BRANCH = "this branch";
+var PROJECT2 = "the whole project";
+var WHAT_WORDS = [UNCOMMITTED, "uncommitted", BRANCH, "branch", "since ", "commits", "folder ", "a folder", PROJECT2, "whole project", "project", "something else"];
+var LOOK_FOR_WORDS = [...PRESETS.flatMap((preset) => [`for ${preset}`, preset]), "anything wrong", "something else"];
+function isWord(word, text, at = 0) {
+  if (text.length - at < word.length || text.slice(at, at + word.length).toLowerCase() !== word)
+    return false;
+  return at + word.length === text.length || isSpace(text[at + word.length]);
+}
+var isQuote = (character) => character === '"' || character === "“" || character === "”";
+function isRef(ref) {
+  if (ref.length < 1 || ref.length > 200 || ref.startsWith("-") || ref.includes(".."))
+    return false;
+  return /^[A-Za-z0-9._/~^@{}+-]+$/.test(ref);
+}
+var sameRef = (a, b) => !!a && !!b && a.id === b.id && a.providerID === b.providerID;
+function scopeAt(text, start) {
+  const phrases = [
+    [UNCOMMITTED, { kind: "uncommitted" }],
+    ["uncommitted", { kind: "uncommitted" }],
+    [BRANCH, { kind: "branch" }],
+    ["branch", { kind: "branch" }],
+    [PROJECT2, { kind: "project" }],
+    ["whole project", { kind: "project" }],
+    ["project", { kind: "project" }]
+  ];
+  for (const [phrase, scope] of phrases)
+    if (isWord(phrase, text, start))
+      return { scope, end: start + phrase.length, asking: null };
+  if (isWord("since", text, start)) {
+    const after = start + 5;
+    const at = nextWord(text, after);
+    if (at === text.length)
+      return { scope: null, end: text.length, asking: { list: "commit", typed: "" } };
+    const end = wordEnd(text, at);
+    const ref = text.slice(at, end);
+    if (!isRef(ref))
+      return null;
+    return { scope: { kind: "commits", from: ref + "^" }, end, asking: end === text.length ? { list: "commit", typed: ref } : null };
+  }
+  if (isWord("folder", text, start)) {
+    const at = nextWord(text, start + 6);
+    if (at === text.length)
+      return { scope: null, end: text.length, asking: { list: "folder", typed: "" } };
+    if (isQuote(text[at])) {
+      const inside = at + 1;
+      let close = inside;
+      while (close < text.length && !isQuote(text[close]))
+        close++;
+      if (close === text.length) {
+        const path = text.slice(inside);
+        return { scope: path ? { kind: "folder", path } : null, end: text.length, asking: { list: "folder", typed: path } };
+      }
+      return { scope: { kind: "folder", path: text.slice(inside, close) }, end: close + 1, asking: null };
+    }
+    const end = wordEnd(text, at);
+    const path = text.slice(at, end);
+    return { scope: { kind: "folder", path }, end, asking: end === text.length ? { list: "folder", typed: path } : null };
+  }
+  return null;
+}
+function presetAt(text, start) {
+  if (!isWord("for", text, start))
+    return null;
+  const after = nextWord(text, start + 3);
+  for (const preset of PRESETS)
+    if (isWord(preset, text, after))
+      return { preset, end: after + preset.length };
+  return null;
+}
+function searchReaders(query, readers) {
+  const wanted = words4(query.toLowerCase());
+  return readers.filter((reader) => {
+    const said = `${reader.name} ${reader.provider}`.toLowerCase();
+    return wanted.every((word) => said.includes(word));
+  });
+}
+function readerAtEnd(text, readers, preferred) {
+  const lower = text.toLowerCase();
+  const named = readers.filter((reader) => lower.endsWith(" with " + reader.name.toLowerCase()));
+  if (!named.length)
+    return null;
+  const longest = Math.max(...named.map((reader) => reader.name.length));
+  const candidates = named.filter((reader) => reader.name.length === longest);
+  const reader = candidates.find((each) => sameRef(each.ref, preferred)) ?? candidates[0];
+  return { reader, before: trimBlanks(text.slice(0, text.length - longest - " with ".length)) };
+}
+function parseReview(rest, readers, preferred = null) {
+  const read = { scope: null, described: null, preset: null, reader: null, focus: "", readerLength: 0, searching: null, asking: null, head: "", readerTyped: null };
+  let at = 0;
+  let drawn = 0;
+  let open = null;
+  let scopeRead = false;
+  while (true) {
+    const start = nextWord(rest, at);
+    if (start >= rest.length)
+      break;
+    const scope = scopeRead ? null : scopeAt(rest, start);
+    if (scope) {
+      scopeRead = true;
+      read.scope = scope.scope;
+      at = drawn = scope.end;
+      if (scope.asking) {
+        read.asking = scope.asking;
+        open = start;
+      }
+      continue;
+    }
+    const preset = read.preset ? null : presetAt(rest, start);
+    if (preset) {
+      read.preset = preset.preset;
+      at = drawn = preset.end;
+      continue;
+    }
+    if (!read.reader && read.searching === null && isWord("with", rest, start)) {
+      const from = nextWord(rest, start + 4);
+      const name = rest.slice(from);
+      const named = readers.filter((reader) => {
+        const length = reader.name.length;
+        if (!length || name.length < length || name.slice(0, length).toLowerCase() !== reader.name.toLowerCase())
+          return false;
+        return length === name.length || isSpace(name[length]);
+      });
+      if (named.length) {
+        const longest = Math.max(...named.map((reader) => reader.name.length));
+        const candidates = named.filter((reader) => reader.name.length === longest);
+        read.reader = candidates.find((each) => sameRef(each.ref, preferred)) ?? candidates[0];
+        const end = from + longest;
+        if (end === rest.length)
+          read.readerTyped = name.slice(0, longest);
+        at = drawn = end;
+        continue;
+      }
+      const query = trim(name);
+      if (readers.length && (!query || searchReaders(query, readers).length)) {
+        read.searching = query;
+        read.readerLength = drawn;
+        read.head = rest.slice(0, start);
+        read.asking = null;
+        return read;
+      }
+    }
+    break;
+  }
+  read.readerLength = drawn;
+  if (open !== null) {
+    read.head = rest.slice(0, open);
+    return read;
+  }
+  const tailStart = nextWord(rest, at);
+  const typed = rest.slice(tailStart);
+  read.head = rest.slice(0, tailStart);
+  if (read.head && !isSpace(read.head[read.head.length - 1]))
+    read.head += " ";
+  let written = trim(typed);
+  if (!read.reader) {
+    const named = readerAtEnd(written, readers, preferred);
+    if (named) {
+      read.reader = named.reader;
+      written = named.before;
+    }
+  }
+  const ownFocus = isWord("for", written);
+  read.focus = ownFocus ? trimBlanks(written.slice(3)) : written;
+  if (!read.scope && !read.preset && !read.reader && !ownFocus && written)
+    read.described = written;
+  const lower = typed.toLowerCase();
+  const ownWords = lower.startsWith("for ") && [...lower.slice(4)].every(isSpace);
+  if (!read.scope && WHAT_WORDS.some((word) => word.startsWith(lower)))
+    read.asking = { list: "what", typed };
+  else if (!read.preset && !ownWords && (!lower || LOOK_FOR_WORDS.some((word) => word.startsWith(lower))))
+    read.asking = { list: "lookFor", typed };
+  return read;
+}
+var scopeAsked = (command) => command.scope ?? (command.described !== null ? { kind: "described", words: command.described } : null);
+function focusAsked(command) {
+  const focus = command.described === null ? command.focus : "";
+  if (!command.preset)
+    return focus ? focus : null;
+  return focus ? `${command.preset}: ${focus}` : command.preset;
+}
+function reviewUnfinished(command) {
+  if (command.scope)
+    return null;
+  if (command.asking?.list === "commit" && command.asking.typed === "")
+    return "Write the commit to start with after “since”.";
+  if (command.asking?.list === "folder" && command.asking.typed === "")
+    return "Write the folder to review after “folder”.";
+  return null;
+}
+
+// Packages/Box/src/link/typed/decide.ts
+var SUBAGENT_GOAL = "A subagent’s conversation can’t have a goal of its own. Set it in the conversation it works for.";
+var GOALS_NOT_RUNNING = "Goals run in the agents bridge beside the engine on this conversation’s computer, and it isn’t running now. Try again in a moment.";
+var KEYWORD_UNAVAILABLE = "This runs in the agents bridge beside the engine on this conversation’s computer, and it isn’t running now. Try again in a moment.";
+var LOOP_NO_SCHEDULE = "Can’t tell how often from that. Start with one like “every 30 min” or “weekdays at 9”, or pick one from the list after /loop.";
+var LOOP_NO_MESSAGE = "Write what to do each time after how often, like “/loop every morning at 9 sum up the new issues”.";
+var REVIEW_PICK = "Pick who reads it from the list, or write a model’s name after “with”.";
+var REVIEW_FINISH = "Finish the model’s name, or pick it from the list.";
+function writtenBack(written) {
+  const typed = parseKeyword(written);
+  if (!typed)
+    return { text: written };
+  const goal = parseGoal(written);
+  return { text: written, beside: !goal || goal.kind === "set" ? typed.rest : "" };
+}
+function typedKeyword(text, keywords) {
+  const typed = parseKeyword(text);
+  return typed && typed.keyword !== "goal" && keywords.includes(typed.keyword) ? typed : null;
+}
+function runsAsTyped(text, commands, keywords) {
+  if (shellCommand(text) !== null || parseCommand(text, commands) !== null || parseGoal(text) !== null)
+    return true;
+  return typedKeyword(text, keywords) !== null;
+}
+function needsModel(text) {
+  if (shellCommand(text) !== null)
+    return false;
+  const goal = parseGoal(text);
+  return !goal || goal.kind === "set";
+}
+function decide2(text, facts) {
+  if (facts.refusal && needsModel(text))
+    return { restore: { text }, error: facts.refusal };
+  const commands = commandsOffered(facts.commands, facts.keywords);
+  if (facts.side && !runsAsTyped(text, commands, facts.keywords))
+    return { sideThread: true };
+  const goal = parseGoal(text);
+  if (goal)
+    return decideGoal(text, goal, facts);
+  const typed = typedKeyword(text, facts.keywords);
+  if (typed)
+    return { keyword: typed.keyword, ...decideKeyword(typed.keyword, typed.rest, text, facts) };
+  const split = splitCommand(text);
+  if (split && split.name === QUICK_REVIEW && commands.some((command) => command.name === QUICK_REVIEW))
+    return { command: { name: "review", arguments: split.arguments } };
+  const shell = shellCommand(text);
+  if (shell !== null)
+    return { shell };
+  const command = parseCommand(text, commands);
+  if (command)
+    return { command };
+  return { send: { text, quoted: true } };
+}
+function decideGoal(written, goal, facts) {
+  if (goal.kind === "show")
+    return { showGoal: true, ...facts.hasGoal ? {} : { restore: { text: "/goal " } } };
+  if (goal.kind === "set" && facts.botChat)
+    return { box: { do: "askBot", words: goal.words }, failed: writtenBack(written) };
+  if (facts.subagent)
+    return { restore: writtenBack(written), error: SUBAGENT_GOAL };
+  if (!facts.bridge)
+    return { restore: writtenBack(written), error: GOALS_NOT_RUNNING };
+  return { box: { do: "goal", command: goal }, failed: writtenBack(written) };
+}
+function decideKeyword(keyword, rest, written, facts) {
+  switch (keyword) {
+    case "goal":
+      return {};
+    case "plan":
+      if (!rest && !facts.files)
+        return { plan: "toggle" };
+      return { plan: "on", ...rest ? { send: { text: rest, typed: "/plan" } } : {} };
+    case "autopilot":
+      if (!rest && !facts.files)
+        return { toggleAutopilot: true };
+      return { box: { do: "autopilot" }, failed: { text: written }, ...rest ? { send: { text: rest, typed: "/autopilot" } } : {} };
+    case "compact":
+      return { compact: true };
+    case "loop": {
+      const loop = parseLoop(rest);
+      if (!loop.schedule)
+        return { restore: { text: written }, error: LOOP_NO_SCHEDULE };
+      if (!loop.message)
+        return { restore: { text: written }, error: LOOP_NO_MESSAGE };
+      const due = Math.floor(firstWake(loop.schedule, facts.now, facts.timeZone) / 1000);
+      return {
+        box: { do: "wake", due, every: repeatText2(loop.schedule.every), note: loop.message },
+        failed: writtenBack(written),
+        ...keepsTimeOfDay(loop.schedule.every) ? {} : { send: { text: loop.message, typed: `/loop ${loop.scheduleText}` } }
+      };
+    }
+    case "btw":
+      if (!rest)
+        return { restore: { text: "/btw " } };
+      if (!facts.bridge)
+        return { restore: { text: written }, error: KEYWORD_UNAVAILABLE };
+      return { box: { do: "btw", question: rest }, failed: writtenBack(written) };
+    case "handoff":
+      if (!facts.bridge)
+        return { restore: { text: written }, error: KEYWORD_UNAVAILABLE };
+      return { box: { do: "handoff", next: rest || null }, failed: writtenBack(written) };
+    case "review": {
+      const review = parseReview(rest, facts.readers, facts.reviewer);
+      if (review.searching !== null)
+        return { restore: { text: written }, error: review.searching ? REVIEW_FINISH : REVIEW_PICK };
+      const unfinished = reviewUnfinished(review);
+      if (unfinished)
+        return { restore: { text: written }, error: unfinished };
+      if (!facts.bridge)
+        return { restore: { text: written }, error: KEYWORD_UNAVAILABLE };
+      const scope = scopeAsked(review);
+      return { box: { do: "review", model: review.reader?.ref ?? null, focus: focusAsked(review), scope: scope?.kind === "uncommitted" ? null : scope }, failed: writtenBack(written) };
+    }
+  }
+}
+
+// Packages/Box/src/link/areas/typed.ts
+var TYPED_ROUTE = /^kuvo\/sessions\/([^/]+)\/typed$/;
+function keywordsOffered(session, bridge) {
+  if (session.parentID)
+    return [];
+  return KEYWORDS.filter((keyword) => keyword === "goal" || keyword === "review" || keyword === "btw" || keyword === "handoff" ? bridge : true);
+}
+async function engineCommands(engine, folder, signal) {
+  if (!engine)
+    return [];
+  try {
+    const listed = await call(engine, "GET", "/api/command", undefined, signal ?? AbortSignal.timeout(1e4), folder);
+    return Array.isArray(listed) ? listed.flatMap((each) => isObject(each) && typeof each.name === "string" ? [{ name: each.name, ...typeof each.description === "string" ? { description: each.description } : {} }] : []) : [];
+  } catch {
+    return null;
+  }
+}
+async function reviewReaders(engine, folder) {
+  if (!engine)
+    return [];
+  const lists = await listsHere(engine, null, folder).catch(() => null);
+  if (!lists?.engine)
+    return [];
+  const accounts = lists.engine.accounts;
+  return offeredHere(lists).filter((model) => !model.agents && !model.retiring).map((model) => ({
+    name: model.name,
+    ref: { providerID: model.providerID, id: model.id },
+    provider: model.providerID === "opencode" ? "OpenCode Zen" : accounts.get(model.providerID)?.name ?? model.providerID
+  }));
+}
+var refOf2 = (value) => isObject(value) && typeof value.providerID === "string" && typeof value.id === "string" ? { providerID: value.providerID, id: value.id } : null;
+var said6 = (error, otherwise) => error instanceof Error && error.message ? error.message : otherwise;
+async function routeAnswer(pieces) {
+  const answer = await collected(pieces);
+  const value = parsed(answer.body);
+  return { status: answer.status, value: isObject(value) ? value : {} };
+}
+async function doStep(step, session, place, context) {
+  const { request, readEngine, bridge, signal } = context;
+  const agents = bridge();
+  const at = (path) => `/api/kuvo/${path}/${encodeURIComponent(session)}`;
+  switch (step.do) {
+    case "goal": {
+      if (!agents)
+        throw new Error("Goals run in the agents bridge beside the engine on this conversation’s computer, and it isn’t running now. Try again in a moment.");
+      const { command } = step;
+      if (command.kind === "set")
+        return { goal: await call(agents, "PUT", at("goals"), { condition: command.words }, signal) };
+      if (command.kind === "pause")
+        return { goal: await call(agents, "POST", `${at("goals")}/pause`, undefined, signal) };
+      if (command.kind === "resume")
+        return { goal: await call(agents, "POST", `${at("goals")}/resume`, undefined, signal) };
+      await call(agents, "DELETE", at("goals"), undefined, signal);
+      return { goalCleared: true };
+    }
+    case "askBot": {
+      const outcome = await askGoal(session, step.words, () => targetsOf({ readEngine, bridge }));
+      if ("refused" in outcome)
+        throw new Error(outcome.refused.message);
+      return { askedBot: true };
+    }
+    case "autopilot": {
+      if (isAutopilot(place.data))
+        return {};
+      const route = `kuvo/sessions/${encodeURIComponent(session)}/autopilot`;
+      const answer = await routeAnswer(autopilotRoute({ ...context, route, request: { ...request, method: "PUT", path: route, body: Buffer.from(JSON.stringify({ autopilot: true })) } }));
+      if (answer.status !== 200)
+        throw new Error(typeof answer.value.message === "string" ? answer.value.message : "Autopilot couldn’t be turned on. Try again.");
+      return { autopilot: answer.value };
+    }
+    case "wake": {
+      const route = `kuvo/wakes/${encodeURIComponent(session)}`;
+      const body = { due: step.due, every: step.every, note: step.note };
+      const answer = await routeAnswer(answerWakes(session, undefined, { ...request, method: "POST", path: route, body: Buffer.from(JSON.stringify(body)) }, readEngine, bridge, signal));
+      if (answer.status !== 200)
+        throw new Error(typeof answer.value.message === "string" ? answer.value.message : "The wake-up couldn’t be saved. Try again.");
+      return { wakeUp: body };
+    }
+    case "btw":
+    case "handoff":
+    case "review": {
+      if (!agents)
+        throw Object.assign(new Error("unavailable"), { unavailable: true });
+      if (step.do === "btw")
+        return { sideQuestion: await call(agents, "POST", at("btw"), { question: step.question }, signal) };
+      if (step.do === "handoff")
+        return { handoff: await call(agents, "POST", at("handoff"), { next: step.next ?? undefined }, signal) };
+      return { review: await call(agents, "POST", at("reviews"), { ...step.model ? { model: step.model } : {}, ...step.focus ? { focus: step.focus } : {}, ...step.scope ? { scope: step.scope } : {} }, signal) };
+    }
+  }
+}
+function answerOf3(decision, done, failure) {
+  const { box: _box, failed: _failed, restore, error, send, command, ...steps } = decision;
+  if (failure)
+    return { ...decision.keyword ? { keyword: decision.keyword } : {}, restore: failure.restore, error: failure.error };
+  return { ...steps, ...done, ...command ? { command } : {}, ...send ? { send } : {}, ...restore ? { restore } : {}, ...error ? { error } : {} };
+}
+async function* typedRoute(context, match) {
+  const { request, readEngine, bridge, signal, json } = context;
+  const method = request.method.toUpperCase();
+  if (method !== "GET" && method !== "POST")
+    return yield* json(405, { message: "Read what it offers with GET, or send what was typed with POST." });
+  let session = "";
+  try {
+    session = decodeURIComponent(match[1]);
+  } catch {}
+  if (!session)
+    return yield* json(404, { message: "There's no such conversation here." });
+  const given = parsed(request.body);
+  const body = isObject(given) ? given : {};
+  if (method === "POST" && typeof body.text !== "string")
+    return yield* json(400, { message: "Send what was typed (text)." });
+  const targets = targetsOf({ readEngine, bridge });
+  if (!targets.length)
+    return yield* json(503, { message: "The engine isn't running." });
+  let place;
+  try {
+    place = await placeOfSession(session, targets);
+  } catch (error) {
+    return yield* json(503, { message: isRefused(error) ? "The engine isn't running." : "The engine didn't answer. Try again in a moment." });
+  }
+  if (!place)
+    return yield* json(404, { message: "There's no such conversation here." });
+  let engine = null;
+  try {
+    engine = readEngine();
+  } catch {}
+  if (!engine?.port)
+    engine = null;
+  const agents = bridge();
+  const data = place.data;
+  const folder = data.location?.directory ?? data.directory;
+  const keywords = keywordsOffered(data, agents !== null);
+  if (method === "GET") {
+    const commands = await engineCommands(engine, folder, signal);
+    return yield* json(200, {
+      keywords: keywords.map((name) => ({ name, ...KEYWORD_WORDS[name] })),
+      commands: commandsOffered(commands ?? [], keywords)
+    });
+  }
+  const text = body.text;
+  const slash = splitCommand(text) !== null;
+  const commands = slash ? await engineCommands(engine, folder, signal) : [];
+  if (commands === null)
+    return yield* json(503, { message: "The engine didn't answer. Try again in a moment." });
+  const typed = parseKeyword(text);
+  const onAgents = agents !== null && place.target.port === agents.port;
+  const readers = typed?.keyword === "review" && !onAgents ? await reviewReaders(engine, folder) : [];
+  const hasGoal = parseGoal(text)?.kind === "show" && agents ? await call(agents, "GET", `/api/kuvo/goals/${encodeURIComponent(session)}`, undefined, signal).then(() => true, () => false) : false;
+  const decision = decide2(text, {
+    keywords,
+    commands,
+    files: body.files === true,
+    side: body.side === true,
+    refusal: typeof body.refusal === "string" && body.refusal.trim() ? body.refusal : null,
+    readers,
+    reviewer: refOf2(body.reviewer),
+    subagent: Boolean(data.parentID),
+    hasGoal,
+    botChat: botOfConversation(session) !== null,
+    bridge: agents !== null,
+    now: Date.now(),
+    timeZone: zone2()
+  });
+  let done = {};
+  let failure = null;
+  if (decision.box) {
+    try {
+      done = await doStep(decision.box, session, place, context);
+    } catch (error) {
+      const unavailable = isObject(error) && error.unavailable === true;
+      failure = unavailable ? { restore: { text }, error: "This runs in the agents bridge beside the engine on this conversation’s computer, and it isn’t running now. Try again in a moment." } : { restore: decision.failed ?? { text }, error: said6(error, "It couldn’t be done. Try again.") };
+    }
+  }
+  return yield* json(200, answerOf3(decision, done, failure));
+}
+
 // Packages/Box/src/link/areas/sandbox.ts
 var NOT_OPEN2 = "This computer's box isn't running its own process: try again in a moment.";
 var NOT_CALLING2 = "Only a conversation's own tool call can ask, and this one isn't running in it.";
@@ -46893,6 +47613,7 @@ var ROUTES = [
   { when: (route) => SESSION_FOLDERS_ROUTE.test(route), answer: sessionFoldersRoute },
   { when: (route) => route === "kuvo/approval" || SESSION_APPROVAL_ROUTE.test(route) || SESSION_DECISIONS_ROUTE.test(route), answer: approvalRoute },
   { when: (route) => SESSION_AUTOPILOT_ROUTE.test(route), answer: autopilotRoute },
+  { when: (route) => route.match(TYPED_ROUTE), answer: typedRoute },
   { when: (route) => route.match(QUEUE_ROUTE), answer: queueRoute },
   { when: (route) => route.match(GLANCE_ROUTE), answer: glanceRoute },
   { when: (route) => route === SESSION_MODELS_ROUTE, answer: sessionModelsRoute },

@@ -39,6 +39,7 @@ import { programsRoute } from "../areas/programs";
 import { backupsRoute } from "../areas/backups";
 import { approvalRoute, SESSION_APPROVAL_ROUTE, SESSION_DECISIONS_ROUTE } from "../areas/approval";
 import { autopilotRoute, SESSION_AUTOPILOT_ROUTE } from "../areas/autopilot";
+import { TYPED_ROUTE, typedRoute } from "../areas/typed";
 import { sandboxRoute } from "../areas/sandbox";
 import { providerModelsRoute } from "../areas/providers";
 import { answerProjects } from "../areas/projects";
@@ -118,6 +119,8 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => SESSION_FOLDERS_ROUTE.test(route), answer: sessionFoldersRoute },
   { when: route => route === "kuvo/approval" || SESSION_APPROVAL_ROUTE.test(route) || SESSION_DECISIONS_ROUTE.test(route), answer: approvalRoute },
   { when: route => SESSION_AUTOPILOT_ROUTE.test(route), answer: autopilotRoute },
+  // What a typed message means, and what "/" offers (PROTOCOL.md, "What a typed message means").
+  { when: route => route.match(TYPED_ROUTE), answer: typedRoute },
   { when: route => route.match(QUEUE_ROUTE), answer: queueRoute },
   // A session at a glance: its row's and card's (PROTOCOL.md, "A session at a glance").
   { when: route => route.match(GLANCE_ROUTE), answer: glanceRoute },

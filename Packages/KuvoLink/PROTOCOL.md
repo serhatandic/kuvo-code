@@ -4818,6 +4818,61 @@ with and without its extension), then its other folders and files. Never anythin
 files, nor long hex or random-looking strings. `404` for a conversation that isn't there, `409`
 for one with no folder.
 
+### What a typed message means
+
+What a conversation's composer sends is its box's to read: `kuvo/sessions/<session>/typed` on the
+box the conversation lives on. A client needs a box whose `features` has `typed`: there's no other
+way, and Kuvo Code updates a box before it uses it. The box decides what the text means, does what's its own, and says what the
+client does with the rest; a client keeps the draft, puts back what it's told to, and draws.
+
+- **The order a text is tried in:** a goal ("/goal …"), a keyword this conversation offers, the
+  engine's own review ("/review-quick …"), a "!" command ("!" first, then words), one of the
+  engine's commands in the conversation's folder ("/name arguments"), else a message. A text whose
+  first character that isn't a space is neither "/" nor "!" is always a message: a client sends it
+  without asking (with a model that can't run, it says why and keeps it, as the box would).
+- `GET` → what "/" offers there: `{keywords: [{name, title, summary, argument}], commands:
+  [{name, description?}]}`. `keywords` in the order to list them, `argument` what's written in grey
+  after one until something is (null: it takes nothing). None in a subagent's conversation; `goal`,
+  `review`, `btw` and `handoff` while the box's agents bridge runs; `loop`, `plan`, `autopilot` and
+  `compact` always. `commands` is the engine's and yours as "/" lists them: never its `goal`, and
+  its `review` as `review-quick` while the keyword has the name. Read it again when the conversation
+  opens and as its agents bridge comes or goes.
+- `POST` with `{"text", "files"?, "side"?, "refusal"?, "reviewer"?}`: the text as typed; whether
+  pictures or files are attached; whether the side thread's tag is on the composer; why the
+  conversation's model can't run, as the client says it; the model picked last in "Who reads it"
+  (`{providerID, id}`, which wins a tie between two of the same name). It answers `200` with what it
+  meant, `400` without `text`, `404` for a conversation that isn't there, `503` when the engine
+  can't be asked; on any of those the client puts it all back, saying why.
+- **The answer**, every field left out where it doesn't apply, applied in this order:
+  - What the box did, to show at once, before its events come: `goal` (as set, paused or resumed),
+    `goalCleared`, `askedBot` (a bot's chat: the bot was asked to plan it, "Work › Goals"),
+    `autopilot` (on, as `kuvo/sessions/<id>/autopilot` answers), `wakeUp` (`{due, every, note}`, a
+    /loop's, `due` in seconds), `sideQuestion`, `handoff`, `review` (as the agents bridge answers
+    them, "Side questions, handoffs and reviews"). `keyword` names the keyword it ran.
+  - What the client does: `showGoal` (show the goal bar), `plan` (`toggle`: Plan on or back off;
+    `on`), `toggleAutopilot`, `compact`, `shell` (run it in the conversation's folder), `command`
+    (`{name, arguments}`, run with the composer's files), `send` (`{text, typed?, quoted?}`: send it
+    as a message with the composer's files; `typed` is the keyword as typed, "/plan", to send it
+    with; `quoted`: what the composer replies to goes with it), `sideThread` (a follow-up in the side
+    thread that shows, as one without "/" is: one at a time, and none with files attached).
+  - What goes back: the composer's files stay unless `send` or `command` took them, and what it
+    replies to unless `send.quoted` did; `restore` `{text, beside?}` goes back ahead of anything
+    written since: `text` into an empty composer, else `beside` where it's given (a keyword's words
+    alone, nothing for a goal's pause), else `text`; `error` says why, over the composer.
+- **What each keyword does:** "/plan" alone toggles Plan, with words turns it on and sends them
+  (with files alone, on); "/autopilot" alone toggles it, with words or files the box turns it on
+  first; "/loop <how often> <what to do>" adds a wake-up that sends the words again, first due by the
+  box's clock (`KUVO_TZ`), and sends them now unless it keeps a time of day ("every morning at 9"
+  waits for it); "/btw", "/handoff" and "/review …" start one; "/goal" alone shows the goal (with
+  none, "/goal " comes back to finish), "/goal pause|resume|clear" changes it, "/goal <words>" sets
+  it, or in a bot's chat asks the bot to plan it.
+- How the words read ("every 30 min", "weekdays at 8:30", "since abc1234", "with GPT-5 Mini"), so a
+  client draws a keyword as it's typed the way the box reads it once sent, and what the box decides
+  for each kind of text: `Vectors/typed.json`, which the box (`test/typed.test.ts`) and KuvoClient
+  (`TypedVectorsTests`) are held to.
+- Kept in clients, as drawing: which keyword or command a text starts with as it's typed (to draw
+  it), the side thread's tag following what runs as typed, and whether Send needs a model.
+
 ### Features
 
 `kuvo/info`'s `features` names the routes the box has, so a client checks a name, never a version
@@ -4944,6 +4999,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `sign-in.return` | `POST kuvo/sign-in/return` |
 | `skills` | `kuvo/skills…` and `kuvo/skill-library…` |
 | `skills.trash` | `kuvo/skill-trash…`: Recently Deleted, and restoring from it |
+| `typed` | `kuvo/sessions/<id>/typed`: what "/" offers, and what a typed text means ("What a typed message means") |
 | `update` | a machine only: `kuvo/update` |
 | `usage` | a Mac only for now: `kuvo/usage…`, from its app while it's open (`404` without the usage panel, `503` with the app closed), spend and what the box doesn't state of a plan yet (a machine's box can't do this yet, on Linux or a Mac). Before #191 step 2 a Mac named it only while its usage panel was there |
 | `wakes` | `kuvo/wakes`, a session's, and cancelling one or sending it now |
