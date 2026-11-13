@@ -249,7 +249,8 @@ fn a_conversation_streams_its_words_and_is_read_again_as_steps_end() {
         }
         words.extend(last_words(&update));
     }
-    assert_eq!(words, vec!["", "", "Hel", "Hello"]);
+    // (Only the latest is handed on: some of these may have gone by unseen, never out of order.)
+    assert!(words.windows(2).all(|pair| pair[1].starts_with(&pair[0])), "{words:?}");
 
     // The step ends: what the engine kept is read again, whole.
     *stored.lock().unwrap() = json!([user("msg_1", "Hi", 1.0), assistant("msg_2", "Hello there.", 2.0)]);
@@ -327,7 +328,9 @@ fn a_composer_sends_messages_and_asks_the_box_what_a_typed_text_means() {
     let [.., typed, sent] = &seen[..] else { panic!() };
     assert_eq!(typed.body.as_ref().unwrap(), &json!({ "id": "msg_p", "text": "/plan sketch it", "files": false, "side": false }));
     assert_eq!(sent.route(), "api/session/ses_1/prompt");
-    assert_eq!(sent.body.as_ref().unwrap()["text"], json!("sketch it"));
+    // With the keyword it was sent with, as both apps send it.
+    assert_eq!(sent.body.as_ref().unwrap()["text"], json!(kuvo_box::typed::sent_with("sketch it", "/plan")));
+    assert!(sent.body.as_ref().unwrap()["text"].as_str().unwrap().starts_with("sketch it\n\n<sent-with>\n"));
 
     // "!ls": the client's to run; nothing's sent.
     let before = stand_in.seen().len();
@@ -356,4 +359,111 @@ fn the_work_and_ask_counts() {
     assert_eq!(client.work_counts().unwrap(), kuvo_box::WorkCounts { open: 2, all: 3 });
     assert_eq!(client.asks_count().unwrap(), 1);
     assert!(stand_in.seen().iter().any(|seen| seen.path == "kuvo/work-queue?owner=all&glance=1"));
+}
+
+#[test]
+fn a_box_whose_server_started_again_is_found_at_its_new_place_and_read_again() {
+    let first = StandInBox::start(|_| Answer::json(200, mac_info(current_features())));
+    let (home, first_serve, client) = this_mac(&first);
+    client.connect().unwrap();
+    assert_eq!(client.gate(), Gate::Open);
+
+    // It starts again (an update, say): a new process, port and password, and it's an older one.
+    let again = StandInBox::start(|seen| match seen.route() {
+        "kuvo/info" => Answer::json(200, mac_info(json!(["sessions.list"]))),
+        _ => Answer::json(200, json!({ "at": "1", "sessions": {}, "projects": {} })),
+    });
+    let second_serve = ServeProcess::start();
+    write_record(&app_box(home.path()), second_serve.pid(), again.port, &again.password);
+    drop(first_serve);
+
+    // What it is is read again there before anything else is asked.
+    assert!(matches!(client.session_list(None), Err(Error::NeedsUpdating { .. })));
+    assert_eq!(again.seen_routes(), vec!["GET kuvo/info"]);
+    assert_eq!(first.seen().len(), 1);
+
+    // Its record left behind by a server that's gone: the port it names is never sent anything.
+    drop(second_serve);
+    assert!(matches!(client.connect(), Err(Error::NotRunning(_))));
+    assert_eq!(again.seen().len(), 1);
+}
+
+#[test]
+fn a_read_landing_mid_reply_keeps_the_words_streamed_so_far() {
+    // The second read waits until the test lets it go, so it lands while words stream.
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    let held = std::sync::Mutex::new(held);
+    let reads = std::sync::atomic::AtomicUsize::new(0);
+    let stand_in = StandInBox::start(move |seen| match seen.route() {
+        "kuvo/info" => Answer::json(200, mac_info(current_features())),
+        "api/session/ses_1" => Answer::json(200, json!({ "data": { "id": "ses_1" } })),
+        "api/session/active" => Answer::json(200, json!({ "data": { "ses_1": {} } })),
+        "api/session/ses_1/message" => {
+            if reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                return Answer::json(200, json!({ "data": [user("msg_1", "Hi", 1.0)] }));
+            }
+            held.lock().unwrap().recv().unwrap();
+            // As the engine keeps a step mid-reply: its block, with none of its words yet.
+            let step = json!({ "type": "assistant", "id": "msg_2", "time": { "created": 2 }, "agent": "build", "model": {}, "content": [{ "type": "text", "text": "" }] });
+            Answer::json(200, json!({ "data": [step, user("msg_1", "Hi", 1.0), user("msg_0", "Before", 0.5)] }))
+        }
+        _ => Answer::json(404, json!({})),
+    });
+    let events = stand_in.stream_for("api/event");
+    let (_home, _serve, client) = this_mac(&stand_in);
+    let follow = client.follow_conversation("ses_1", at_once());
+    let ConversationUpdate::Conversation(read) = follow.next_blocking().unwrap() else { panic!() };
+    assert!(read.running, "the box says a run is under way");
+
+    events.send(event("session.step.started", "ses_1", json!({ "assistantMessageID": "msg_2" }))).unwrap();
+    events.send(event("session.text.started", "ses_1", json!({ "assistantMessageID": "msg_2", "ordinal": 0 }))).unwrap();
+    events.send(event("session.text.delta", "ses_1", json!({ "assistantMessageID": "msg_2", "ordinal": 0, "delta": "Hel" }))).unwrap();
+    // A message delivered asks for a read, which the stand-in holds.
+    events.send(event("session.inbox.delivered", "ses_1", json!({ "inboxID": "msg_x" }))).unwrap();
+    events.send(event("session.text.delta", "ses_1", json!({ "assistantMessageID": "msg_2", "ordinal": 0, "delta": "lo" }))).unwrap();
+    while follow.next_blocking().and_then(|update| last_words(&update)).as_deref() != Some("Hello") {}
+
+    // The read comes back with none of the words: those shown stay, and nothing is doubled.
+    release.send(()).unwrap();
+    let after = loop {
+        if let Some(ConversationUpdate::Conversation(conversation)) = follow.next_blocking()
+            && conversation.messages.len() == 3
+        {
+            break conversation;
+        }
+    };
+    assert_eq!(last_words(&ConversationUpdate::Conversation(after)).as_deref(), Some("Hello"));
+    events.send(event("session.text.delta", "ses_1", json!({ "assistantMessageID": "msg_2", "ordinal": 0, "delta": "!" }))).unwrap();
+    while follow.next_blocking().and_then(|update| last_words(&update)).as_deref() != Some("Hello!") {}
+    // Only the two reads were made: streamed words ask for none.
+    let reads: Vec<_> = stand_in.seen().into_iter().filter(|seen| seen.route() == "api/session/ses_1/message").collect();
+    assert_eq!(reads.len(), 2);
+}
+
+#[test]
+fn a_conversation_that_isnt_there_ends_its_follow_saying_so() {
+    let stand_in = StandInBox::start(|seen| match seen.route() {
+        "kuvo/info" => Answer::json(200, mac_info(current_features())),
+        _ => Answer::json(404, json!({})),
+    });
+    let (_home, _serve, client) = this_mac(&stand_in);
+    let follow = client.follow_conversation("ses_gone", at_once());
+    match follow.next_blocking() {
+        Some(ConversationUpdate::Gone(refusal)) => assert_eq!(refusal.message, "This conversation isn’t on this Mac any more."),
+        other => panic!("gone, not {other:?}"),
+    }
+    assert!(follow.next_blocking().is_none(), "the follow ended");
+}
+
+#[test]
+fn a_password_the_box_doesnt_take_is_said_plainly() {
+    let stand_in = StandInBox::start(|_| Answer::json(200, mac_info(current_features())));
+    let home = home();
+    let serve = ServeProcess::start();
+    write_record(&app_box(home.path()), serve.pid(), stand_in.port, "not-its-password");
+    match BoxClient::this_mac(home.path()).unwrap().connect() {
+        Err(Error::NotRunning(why)) => assert!(why.contains("password"), "{why}"),
+        other => panic!("not taken, not {other:?}"),
+    }
+    assert!(stand_in.seen().is_empty());
 }

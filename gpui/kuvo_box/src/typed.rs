@@ -37,6 +37,21 @@ pub fn keyword(text: &str) -> Option<(&'static str, String)> {
     Some((keyword, rest[name.len()..].trim().to_owned()))
 }
 
+/// What the agent reads of a message sent with a keyword ("/plan sketch it" → "sketch it"): the words,
+/// then a block saying the keyword was done already, so the agent doesn't act on it again (and a
+/// client draws the keyword as a token in front of the words). Both apps send it so
+/// (KuvoClient's `SentWithKeyword.message`); a rule to move into the box, which knows the keyword
+/// it answered `send` for.
+pub fn sent_with(text: &str, typed: &str) -> String {
+    // One line, and naming no agents: an "&" in it would read as one named.
+    let newline = |c: char| matches!(c, '\n' | '\r' | '\u{0B}' | '\u{0C}' | '\u{85}' | '\u{2028}' | '\u{2029}');
+    let typed = typed.split(newline).filter(|line| !line.is_empty()).collect::<Vec<_>>().join(" ").trim().replace('&', "＆");
+    [text, "", "<sent-with>", SENT_WITH_HEADING, &typed, "</sent-with>"].join("\n")
+}
+
+/// The block's heading, in KuvoClient's words.
+pub const SENT_WITH_HEADING: &str = "The user sent this with a Kuvo Code keyword, which Kuvo Code has already done (switched to Plan, or set the message to repeat), so there's nothing for you to do about it:";
+
 /// What's sent: the text as typed, whether pictures or files are attached, whether the side
 /// thread's tag is on the composer, why the conversation's model can't run (as the client says
 /// it), and the model picked last in "Who reads it".

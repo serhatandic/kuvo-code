@@ -12,7 +12,7 @@ use crate::info::BoxInfo;
 use crate::messages::{self, Message, Page, Where};
 use crate::sessions::{self, Line};
 use crate::ssh::SshBox;
-use crate::transport::{Request, Response, Stream, Transport};
+use crate::transport::{Closer, Request, Response, Stream, Transport};
 use crate::typed::{self, Answer, Ask, Offers};
 use crate::{ids, place, paths};
 
@@ -20,7 +20,8 @@ use crate::{ids, place, paths};
 #[derive(Clone)]
 pub struct BoxClient {
     transport: Arc<dyn Transport>,
-    gate: Arc<Mutex<Gate>>,
+    /// The gate, and which of the box's servers it was read from ([`Transport::refresh`]).
+    gate: Arc<Mutex<(Gate, u64)>>,
 }
 
 /// How a message goes to the agent.
@@ -56,7 +57,7 @@ pub struct WorkCounts {
 impl BoxClient {
     /// A box reached through `transport`.
     pub fn new(transport: impl Transport + 'static) -> BoxClient {
-        BoxClient { transport: Arc::new(transport), gate: Arc::new(Mutex::new(Gate::Unknown)) }
+        BoxClient { transport: Arc::new(transport), gate: Arc::new(Mutex::new((Gate::Unknown, 0))) }
     }
 
     /// This Mac's own box, as found under `home` (the user's home folder): its server, by its record.
@@ -77,25 +78,38 @@ impl BoxClient {
         self.transport.streams()
     }
 
+    /// Where the box stands with this client, as last read.
     pub fn gate(&self) -> Gate {
-        self.gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
+        self.gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).0.clone()
     }
 
-    fn set_gate(&self, gate: Gate) {
-        *self.gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = gate;
+    fn set_gate(&self, gate: Gate, server: u64) {
+        *self.gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = (gate, server);
+    }
+
+    /// The gate for the box's server now: not known yet for one that started again since it was
+    /// read (another version's, maybe), which is read again before it's asked anything else.
+    fn current_gate(&self) -> Gate {
+        let server = self.transport.refresh();
+        let mut gate = self.gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if gate.1 != server {
+            *gate = (Gate::Unknown, server);
+        }
+        gate.0.clone()
     }
 
     /// Reads `kuvo/info` and applies the update gate: a box lacking a name in [`gate::REQUIRED`]
     /// (or answering no `kuvo/info`, `404` or `405`) is held. Read again to let a held box go once
     /// it has updated.
     pub fn connect(&self) -> Result<BoxInfo> {
+        let server = self.transport.refresh();
         let response = self.transport.send(&Request::get("kuvo/info"))?;
         if response.status == 404 || response.status == 405 {
-            self.set_gate(Gate::for_features::<String>(None));
+            self.set_gate(Gate::for_features::<String>(None), server);
             return Err(Error::NeedsUpdating { missing: gate::REQUIRED.iter().map(|name| (*name).to_owned()).collect() });
         }
         let info: BoxInfo = decode(&response)?;
-        self.set_gate(Gate::for_features(Some(&info.features)));
+        self.set_gate(Gate::for_features(Some(&info.features)), server);
         Ok(info)
     }
 
@@ -104,7 +118,7 @@ impl BoxClient {
         if gate::is_allowed(path) {
             return Ok(());
         }
-        if self.gate() == Gate::Unknown {
+        if self.current_gate() == Gate::Unknown {
             match self.connect() {
                 Ok(_) | Err(Error::NeedsUpdating { .. }) => {}
                 Err(error) => return Err(error),
@@ -122,10 +136,11 @@ impl BoxClient {
         self.transport.send(request)
     }
 
-    /// Opens a followed route (behind the gate).
-    pub fn open(&self, request: &Request) -> Result<Stream> {
+    /// Opens a followed route (behind the gate). `hold` gets what closes it, before its answer
+    /// comes (see [`Transport::open`]).
+    pub fn open(&self, request: &Request, hold: &dyn Fn(Closer) -> bool) -> Result<Stream> {
         self.check_gate(&request.path)?;
-        self.transport.open(request)
+        self.transport.open(request, hold)
     }
 
     /// Its answer, read as `T`; what the box refuses, as it said it.
@@ -146,22 +161,25 @@ impl BoxClient {
 
     // MARK: A conversation
 
-    /// Where `session` lives on this box: its engine, else its coding agents' bridge.
+    /// Where `session` lives on this box: its engine, else its coding agents' bridge. Neither has
+    /// it: a `404` refusal saying so.
     pub fn where_is(&self, session: &str) -> Result<Where> {
-        let mut last = None;
         for place in [Where::Engine, Where::Agents] {
             let response = self.send(&Request::get(place.session_route(session, "")))?;
             if response.is_success() {
                 return Ok(place);
             }
-            let refusal = Refusal::from_answer(response.status, &response.body);
             // The agents bridge not running (503) is "not known", not "not there".
             if response.status != 404 {
-                return Err(Error::Refused(refusal));
+                return Err(Error::Refused(Refusal::from_answer(response.status, &response.body)));
             }
-            last = Some(refusal);
         }
-        Err(Error::Refused(last.unwrap_or_else(|| Refusal::from_answer(404, b"{}"))))
+        Err(Error::Refused(self.not_here()))
+    }
+
+    /// A conversation that isn't on this box (any more).
+    pub(crate) fn not_here(&self) -> Refusal {
+        Refusal { status: 404, message: format!("This conversation isn’t on {} any more.", self.describe()), reason: None, older_box: false }
     }
 
     /// The conversation's newest `limit` messages, oldest first.
@@ -216,7 +234,12 @@ impl BoxClient {
         let message = match &answer.send {
             Some(send) => {
                 let delivery = if send.steer == Some(true) { Delivery::Now } else { delivery };
-                self.message(session, place, id, &send.text, delivery)?;
+                // Sent with the keyword it was typed with, as both apps send it.
+                let words = match &send.typed {
+                    Some(keyword) => typed::sent_with(&send.text, keyword),
+                    None => send.text.clone(),
+                };
+                self.message(session, place, id, &words, delivery)?;
                 Some(id.to_owned())
             }
             None => None,

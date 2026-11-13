@@ -244,12 +244,6 @@ impl Conversation {
         Conversation { session: session.into(), place, messages: Vec::new(), running: false }
     }
 
-    /// A read's messages (newest first, as asked) in place of what was shown.
-    pub fn take_read(&mut self, mut newest_first: Vec<Message>) {
-        newest_first.reverse();
-        self.messages = newest_first;
-    }
-
     /// One of the engine's events (`{id, type, data}`) applied: the words a step streams, as they
     /// come; anything else this conversation's is left to a read.
     pub fn apply(&mut self, event: &Value) -> Applied {
@@ -304,22 +298,29 @@ impl Conversation {
                 let delta = data.get("delta").and_then(Value::as_str).unwrap_or("");
                 let at = data.get("at").and_then(Value::as_u64).map(|at| at as usize);
                 match self.block(&step, ordinal, text) {
-                    Some(Content::Text(words)) | Some(Content::Reasoning { text: words, done: false }) => {
-                        if let Some(new) = new_part(delta, at, words) {
+                    Some(Content::Text(words)) | Some(Content::Reasoning { text: words, done: false }) => match new_part(delta, at, words) {
+                        Some(new) => {
                             words.push_str(&new);
+                            Applied::Changed
                         }
-                        Applied::Changed
-                    }
-                    Some(_) => Applied::Nothing,
-                    None => Applied::ReadAgain,
+                        None => Applied::Nothing,
+                    },
+                    // Its start was missed: its end brings the words whole.
+                    _ => Applied::Nothing,
                 }
             }
             "session.text.ended" | "session.reasoning.ended" => {
                 let text = kind == "session.text.ended";
                 let whole = data.get("text").and_then(Value::as_str).unwrap_or("").to_owned();
-                match self.block(&step, ordinal, text) {
-                    Some(block) => {
-                        *block = if text { Content::Text(whole) } else { Content::Reasoning { text: whole, done: true } };
+                let ended = if text { Content::Text(whole) } else { Content::Reasoning { text: whole, done: true } };
+                if let Some(block) = self.block(&step, ordinal, text) {
+                    *block = ended;
+                    return Applied::Changed;
+                }
+                // Its start was missed: the words show now, and the step's read puts them in place.
+                match self.step(&step) {
+                    Some(found) => {
+                        found.content.push(ended);
                         Applied::Changed
                     }
                     None => Applied::ReadAgain,
@@ -333,8 +334,101 @@ impl Conversation {
                 }
                 Applied::ReadAgain
             }
-            // Every other event of this conversation's: what it changed is read whole.
-            _ => Applied::ReadAgain,
+            // What adds or changes a message: read whole.
+            "session.tool.called"
+            | "session.tool.success"
+            | "session.tool.failed"
+            | "session.retry.scheduled"
+            | "session.inbox.delivered"
+            | "session.synthetic"
+            | "session.shell.started"
+            | "session.shell.ended"
+            | "session.compaction.ended"
+            | "session.revert.committed"
+            | "session.instructions.updated"
+            | "session.agent.selected"
+            | "session.model.selected" => Applied::ReadAgain,
+            // The rest (a tool's input or progress as it streams, a step's first output, a look at
+            // the conversation, an ask) leave its messages as they are.
+            _ => Applied::Nothing,
+        }
+    }
+
+    /// A read's messages (newest first, as asked) in place of what was shown, then `during`, the
+    /// events that came while it was on its way. A block of a step still being written keeps the
+    /// words shown for it where they go on from the read's: the engine keeps a block's words only
+    /// once it ends, and the coding agents' bridge keeps some of them, so a read mid-reply has
+    /// fewer than what streamed. Pieces for such a block that came meanwhile are in the shown words
+    /// already, and are left out. `running`: whether the box says a run is under way, where it said.
+    pub fn catch_up(&mut self, mut newest_first: Vec<Message>, during: &[Value], running: Option<bool>) {
+        newest_first.reverse();
+        let shown = std::mem::replace(&mut self.messages, newest_first);
+        let mut kept: Vec<(String, bool, usize)> = Vec::new();
+        for message in self.messages.iter_mut().rev() {
+            let Message::Assistant(step) = message else { continue };
+            if step.time.completed.is_some() {
+                break;
+            }
+            let Some(before) = shown.iter().rev().find_map(|message| match message {
+                Message::Assistant(before) if before.id == step.id => Some(before),
+                _ => None,
+            }) else {
+                continue;
+            };
+            for text in [true, false] {
+                let words_of = |content: &Content| match content {
+                    Content::Text(words) if text => Some(words.clone()),
+                    Content::Reasoning { text: words, done: false } if !text => Some(words.clone()),
+                    _ => None,
+                };
+                let is_kind = |content: &Content| if text { content.is_text() } else { content.is_reasoning() };
+                let shown_blocks: Vec<Option<String>> = before.content.iter().filter(|c| is_kind(c)).map(words_of).collect();
+                let read_count = step.content.iter().filter(|c| is_kind(c)).count();
+                for (ordinal, shown_words) in shown_blocks.into_iter().enumerate() {
+                    let Some(shown_words) = shown_words else { continue };
+                    if ordinal < read_count {
+                        let Some(block) = step.content.iter_mut().filter(|c| is_kind(c)).nth(ordinal) else { continue };
+                        let Some(read_words) = words_of(block) else { continue };
+                        if !shown_words.starts_with(&read_words) {
+                            continue;
+                        }
+                        if shown_words.len() > read_words.len() {
+                            *block = if text { Content::Text(shown_words) } else { Content::Reasoning { text: shown_words, done: false } };
+                        }
+                    } else {
+                        // Not in the read at all yet.
+                        step.content.push(if text { Content::Text(shown_words) } else { Content::Reasoning { text: shown_words, done: false } });
+                    }
+                    kept.push((step.id.clone(), text, ordinal));
+                }
+            }
+        }
+        if let Some(running) = running {
+            self.running = running;
+        }
+        for event in during {
+            let kind = event.get("type").and_then(Value::as_str).unwrap_or("");
+            let text = match kind {
+                "session.text.delta" => true,
+                "session.reasoning.delta" => false,
+                _ => {
+                    self.apply(event);
+                    continue;
+                }
+            };
+            let data = event.get("data").cloned().unwrap_or(Value::Null);
+            let step = data.get("assistantMessageID").and_then(Value::as_str).unwrap_or("");
+            let ordinal = data.get("ordinal").and_then(Value::as_u64).map(|n| n as usize).or_else(|| {
+                let found = self.messages.iter().rev().find_map(|message| match message {
+                    Message::Assistant(found) if found.id == step => Some(found),
+                    _ => None,
+                })?;
+                found.content.iter().filter(|c| if text { c.is_text() } else { c.is_reasoning() }).count().checked_sub(1)
+            });
+            if ordinal.is_some_and(|ordinal| kept.iter().any(|(id, kind, at)| id == step && *kind == text && *at == ordinal)) {
+                continue;
+            }
+            self.apply(event);
         }
     }
 

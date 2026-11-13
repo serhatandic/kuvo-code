@@ -159,7 +159,7 @@ impl Listing {
     /// `line` taken in: a whole one in place of what was, else what changed. Whether anything did.
     pub fn take(&mut self, line: Line) -> bool {
         let was_read = self.at.is_some();
-        let before = (self.sessions.clone(), self.projects.clone());
+        let before = (self.sessions.clone(), self.projects.clone(), std::mem::take(&mut self.pending));
         self.at = Some(line.at);
         if line.full == Some(true) {
             for (id, facts) in self.sessions.drain() {
@@ -186,7 +186,7 @@ impl Listing {
         }
         self.projects = line.projects;
         self.pending = line.pending.unwrap_or_default();
-        !was_read || before.0 != self.sessions || before.1 != self.projects
+        !was_read || before.0 != self.sessions || before.1 != self.projects || before.2 != self.pending
     }
 
     /// The sidebar a client draws from it ([`sidebar`]).

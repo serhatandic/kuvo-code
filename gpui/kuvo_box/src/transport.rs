@@ -86,8 +86,16 @@ pub trait Transport: Send + Sync {
     fn send(&self, request: &Request) -> Result<Response>;
 
     /// Opens a route that follows something. A transport that doesn't stream answers it once (a
-    /// followed route's first line) and ends.
-    fn open(&self, request: &Request) -> Result<Stream>;
+    /// followed route's first line) and ends. `hold` is handed what closes it as soon as there's
+    /// something to close, before the answer's head comes (a box holds some requests a while), so
+    /// what opened it can end it meanwhile; `hold` saying no (it's ended already) ends it there.
+    fn open(&self, request: &Request, hold: &dyn Fn(Closer) -> bool) -> Result<Stream>;
+
+    /// Looks again where the box is, and says which time it's found it somewhere new: a client
+    /// reads a box's `kuvo/info` again once its server started again (another version's, maybe).
+    fn refresh(&self) -> u64 {
+        0
+    }
 
     /// Whether what [`Transport::open`] gives keeps coming as things change. One that doesn't is
     /// read again on a timer by what follows it.

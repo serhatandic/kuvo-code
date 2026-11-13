@@ -1,7 +1,9 @@
 //! Following a box as it changes: its session lists, and one conversation. Each follow runs on a
 //! thread of its own and hands what it sees to an [`async_channel`] receiver, which a GPUI view
-//! awaits on its executor and a command-line tool reads with `recv_blocking`. Dropping the
-//! [`Follow`] (or calling [`Follow::stop`]) ends it, closing what it has open.
+//! awaits on its executor and a command-line tool reads with `next_blocking`. Only the latest is
+//! kept: a view that reads late gets the state now, never a backlog. Dropping the [`Follow`] (or
+//! calling [`Follow::stop`]) ends it, closing what it has open, a request still waiting for its
+//! answer too.
 //!
 //! Over a box's own server, what's followed streams. Over SSH, a box answers each request once,
 //! so it's read again on a timer ([`Timing`]).
@@ -16,9 +18,9 @@ use serde_json::Value;
 use crate::client::BoxClient;
 use crate::error::{Error, Refusal};
 use crate::lines;
-use crate::messages::{self, Applied, Conversation, Page};
+use crate::messages::{self, Applied, Conversation, Page, Where};
 use crate::sessions::{self, Line, Listing};
-use crate::transport::{Closer, Request};
+use crate::transport::{Closer, Request, Stream};
 
 /// How long a follow waits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,7 +56,8 @@ pub enum ListUpdate {
     Listing(Listing),
     /// The box can't read its engine yet (`503`): its lists wait ("Loading sessions"), saying why.
     Waiting(String),
-    /// The box is older than this client needs, and waits for its update.
+    /// The box is older than this client needs, and waits for its update. It's asked again now
+    /// and then, and the list follows once it has updated.
     Held { missing: Vec<String> },
     /// Reading it failed; it's tried again.
     Failed(Error),
@@ -65,8 +68,10 @@ pub enum ListUpdate {
 pub enum ConversationUpdate {
     /// The conversation as it is now.
     Conversation(Conversation),
-    /// Reading it failed; it's tried again (a conversation that isn't there ends the follow).
+    /// Reading it failed; it's tried again.
     Failed(Error),
+    /// It isn't on the box (any more): the follow ends.
+    Gone(Refusal),
 }
 
 /// Something followed. Ends when dropped.
@@ -76,7 +81,7 @@ pub struct Follow<T> {
 }
 
 impl<T> Follow<T> {
-    /// What it sees, as it sees it.
+    /// What it sees, the latest of it.
     pub fn updates(&self) -> &async_channel::Receiver<T> {
         &self.updates
     }
@@ -129,15 +134,15 @@ impl Stop {
         state.0
     }
 
-    /// Keeps `closer` to close on stop; false (closing it) when it's stopped already.
-    fn hold(&self, closer: &Closer) -> bool {
+    /// Keeps `closer` to close on stop; false (and closed) when it's stopped already.
+    fn hold(&self, closer: Closer) -> bool {
         let mut state = self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if state.0 {
             drop(state);
             closer.close();
             return false;
         }
-        state.1.push(closer.clone());
+        state.1.push(closer);
         true
     }
 
@@ -167,13 +172,53 @@ impl Backoff {
     }
 }
 
-fn spawn<T: Send + 'static>(name: &str, run: impl FnOnce(async_channel::Sender<T>, Arc<Stop>) + Send + 'static) -> Follow<T> {
-    let (sender, updates) = async_channel::unbounded();
+/// Hands on the latest update, in place of one not taken yet.
+struct Latest<T> {
+    sender: async_channel::Sender<T>,
+    taken: async_channel::Receiver<T>,
+}
+
+impl<T> Latest<T> {
+    fn put(&self, update: T) {
+        let mut update = update;
+        loop {
+            match self.sender.try_send(update) {
+                Ok(()) | Err(async_channel::TrySendError::Closed(_)) => return,
+                Err(async_channel::TrySendError::Full(back)) => {
+                    let _ = self.taken.try_recv();
+                    update = back;
+                }
+            }
+        }
+    }
+
+    /// Ends the channel, so a reader waiting on it hears so (its own copy of the receiver would
+    /// keep it open).
+    fn close(&self) {
+        self.sender.close();
+    }
+}
+
+fn spawn<T: Send + 'static>(name: &str, run: impl FnOnce(&Latest<T>, Arc<Stop>) + Send + 'static) -> Follow<T> {
+    let (sender, updates) = async_channel::bounded(1);
+    let latest = Latest { sender, taken: updates.clone() };
     let stop = Arc::new(Stop::default());
     let theirs = stop.clone();
-    // (A thread that can't start is a follow that ends at once: its receiver says so.)
-    let _ = thread::Builder::new().name(name.into()).spawn(move || run(sender, theirs));
+    let started = thread::Builder::new().name(name.into()).spawn(move || {
+        run(&latest, theirs);
+        latest.close();
+    });
+    if started.is_err() {
+        updates.close();
+    }
     Follow { updates, stop }
+}
+
+/// The rest of an answer, for what it says when it's a refusal.
+fn refusal(stream: &mut Stream) -> Refusal {
+    let mut body = Vec::new();
+    let _ = std::io::Read::read_to_end(&mut stream.reader, &mut body);
+    Refusal::from_answer(stream.status, &body)
 }
 
 impl BoxClient {
@@ -181,7 +226,7 @@ impl BoxClient {
     /// events`, resumed from where it was after a drop; over SSH, read again every half minute).
     pub fn follow_sessions(&self, timing: Timing) -> Follow<ListUpdate> {
         let client = self.clone();
-        spawn("kuvo-box sessions", move |sender, stop| follow_sessions(client, timing, sender, stop))
+        spawn("kuvo-box sessions", move |latest, stop| follow_sessions(client, timing, latest, stop))
     }
 
     /// Follows one conversation: its messages now, the words it streams as they come, and its
@@ -190,22 +235,21 @@ impl BoxClient {
     pub fn follow_conversation(&self, session: &str, timing: Timing) -> Follow<ConversationUpdate> {
         let client = self.clone();
         let session = session.to_owned();
-        spawn("kuvo-box conversation", move |sender, stop| follow_conversation(client, session, timing, sender, stop))
+        spawn("kuvo-box conversation", move |latest, stop| follow_conversation(client, session, timing, latest, stop))
     }
 }
 
-fn follow_sessions(client: BoxClient, timing: Timing, sender: async_channel::Sender<ListUpdate>, stop: Arc<Stop>) {
+fn follow_sessions(client: BoxClient, timing: Timing, latest: &Latest<ListUpdate>, stop: Arc<Stop>) {
     let mut listing = Listing::new();
     let mut backoff = Backoff::new(timing);
-    let send = |update: ListUpdate| sender.send_blocking(update).is_ok();
     while !stop.is_stopped() {
         let streams = client.streams();
         let path = if streams { sessions::events_route(listing.at()) } else { sessions::route(listing.at()) };
-        let opened = client.open(&Request::get(path));
-        let mut stream = match opened {
+        let mut stream = match client.open(&Request::get(path), &|closer| stop.hold(closer)) {
             Ok(stream) => stream,
             Err(Error::NeedsUpdating { missing }) => {
-                if !send(ListUpdate::Held { missing }) || stop.wait(timing.held_again) {
+                latest.put(ListUpdate::Held { missing });
+                if stop.wait(timing.held_again) {
                     return;
                 }
                 // Asked again whether it has updated.
@@ -213,52 +257,47 @@ fn follow_sessions(client: BoxClient, timing: Timing, sender: async_channel::Sen
                 continue;
             }
             Err(error) => {
-                if !send(ListUpdate::Failed(error)) || backoff.wait(&stop) {
+                stop.release();
+                if stop.is_stopped() {
+                    return;
+                }
+                latest.put(ListUpdate::Failed(error));
+                if backoff.wait(&stop) {
                     return;
                 }
                 continue;
             }
         };
         if !(200..300).contains(&stream.status) {
-            let mut body = Vec::new();
-            let _ = std::io::Read::read_to_end(&mut stream.reader, &mut body);
-            let refusal = Refusal::from_answer(stream.status, &body);
-            let update = if stream.status == 503 { ListUpdate::Waiting(refusal.message) } else { ListUpdate::Failed(Error::Refused(refusal)) };
-            if !send(update) || backoff.wait(&stop) {
+            let refusal = refusal(&mut stream);
+            stop.release();
+            latest.put(if stream.status == 503 { ListUpdate::Waiting(refusal.message) } else { ListUpdate::Failed(Error::Refused(refusal)) });
+            if backoff.wait(&stop) {
                 return;
             }
             continue;
-        }
-        if !stop.hold(&stream.closer) {
-            return;
         }
         loop {
             match lines::next_line(&mut *stream.reader) {
                 Ok(Some(text)) => match serde_json::from_str::<Line>(&text) {
                     Ok(line) => {
                         backoff.reset();
-                        if listing.take(line) && !send(ListUpdate::Listing(listing.clone())) {
-                            stop.stop();
-                            return;
+                        if listing.take(line) {
+                            latest.put(ListUpdate::Listing(listing.clone()));
                         }
                     }
-                    Err(error) => {
-                        let _ = send(ListUpdate::Failed(Error::BadAnswer(format!("A line of the session list couldn't be read: {error}"))));
-                    }
+                    Err(error) => latest.put(ListUpdate::Failed(Error::BadAnswer(format!("A line of the session list couldn't be read: {error}")))),
                 },
                 Ok(None) => break,
                 Err(error) => {
                     if !stop.is_stopped() {
-                        let _ = send(ListUpdate::Failed(Error::Unreachable(format!("The session list stopped coming ({}).", error.kind()))));
+                        latest.put(ListUpdate::Failed(Error::Unreachable(format!("The session list stopped coming ({}).", error.kind()))));
                     }
                     break;
                 }
             }
         }
         stop.release();
-        if stop.is_stopped() {
-            return;
-        }
         // A stream that ended is opened again from where it was; a box that answers once is read
         // again in a while.
         let stopped = if streams { backoff.wait(&stop) } else { stop.wait(timing.lists_again) };
@@ -268,82 +307,128 @@ fn follow_sessions(client: BoxClient, timing: Timing, sender: async_channel::Sen
     }
 }
 
-fn follow_conversation(client: BoxClient, session: String, timing: Timing, sender: async_channel::Sender<ConversationUpdate>, stop: Arc<Stop>) {
+/// A followed conversation: what's shown, and while a read is on its way, the events that came
+/// meanwhile (to apply again on top of it).
+struct Shown {
+    conversation: Conversation,
+    during: Option<Vec<Value>>,
+}
+
+/// How many of a conversation's newest messages a follow reads.
+const READ: usize = 100;
+
+/// Reads the conversation, and shows it with what came meanwhile: under the lock, so no older
+/// copy is ever handed on after a newer one. False once it's gone, which ends the follow.
+fn read(client: &BoxClient, shown: &Mutex<Shown>, latest: &Latest<ConversationUpdate>) -> bool {
+    let (session, place) = {
+        let mut now = shown.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        now.during = Some(Vec::new());
+        (now.conversation.session.clone(), now.conversation.place)
+    };
+    let read: Result<Page, Error> = client.get(&messages::newest_route(place, &session, READ));
+    let running = if read.is_ok() { is_running(client, place, &session) } else { None };
+    let mut now = shown.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let during = now.during.take().unwrap_or_default();
+    match read {
+        Ok(page) => {
+            now.conversation.catch_up(page.data, &during, running);
+            latest.put(ConversationUpdate::Conversation(now.conversation.clone()));
+            true
+        }
+        Err(Error::Refused(refusal)) if refusal.status == 404 => {
+            latest.put(ConversationUpdate::Gone(client.not_here()));
+            false
+        }
+        Err(error) => {
+            latest.put(ConversationUpdate::Failed(error));
+            true
+        }
+    }
+}
+
+/// Whether a run is under way in it, as its engine (or bridge) says (`api/session/active`); none
+/// when it couldn't say.
+fn is_running(client: &BoxClient, place: Where, session: &str) -> Option<bool> {
+    let active: Value = client.get(&format!("{}api/session/active", place.prefix())).ok()?;
+    Some(active.get("data")?.as_object()?.contains_key(session))
+}
+
+fn follow_conversation(client: BoxClient, session: String, timing: Timing, latest: &Latest<ConversationUpdate>, stop: Arc<Stop>) {
     let mut backoff = Backoff::new(timing);
-    let send = |update: ConversationUpdate| sender.send_blocking(update).is_ok();
     // Where it lives, once.
     let place = loop {
         match client.where_is(&session) {
             Ok(place) => break place,
             Err(Error::Refused(refusal)) if refusal.status == 404 => {
-                let _ = send(ConversationUpdate::Failed(Error::Refused(refusal)));
+                latest.put(ConversationUpdate::Gone(refusal));
                 return;
             }
             Err(error) => {
-                if !send(ConversationUpdate::Failed(error)) || backoff.wait(&stop) {
+                latest.put(ConversationUpdate::Failed(error));
+                if backoff.wait(&stop) {
                     return;
                 }
             }
         }
     };
-    let shown = Arc::new(Mutex::new(Conversation::new(session.clone(), place)));
+    let shown = Arc::new(Mutex::new(Shown { conversation: Conversation::new(session, place), during: None }));
 
     if !client.streams() {
         while !stop.is_stopped() {
-            let update = match read_conversation(&client, &shown) {
-                Ok(conversation) => ConversationUpdate::Conversation(conversation),
-                Err(error) => ConversationUpdate::Failed(error),
-            };
-            if !send(update) || stop.wait(timing.conversation_again) {
+            if !read(&client, &shown, latest) || stop.wait(timing.conversation_again) {
                 return;
             }
         }
         return;
     }
 
-    // Reads asked for while one is under way come together as one more.
+    // Reads asked for while one is under way come together as one more, made here on a thread
+    // of their own so the events keep coming meanwhile; it ends with this one.
     let (again, asked) = mpsc::sync_channel::<()>(1);
-    let reader = {
-        let shown = shown.clone();
-        let sender = sender.clone();
-        let client = client.clone();
-        thread::Builder::new().name("kuvo-box conversation reads".into()).spawn(move || {
-            while asked.recv().is_ok() {
-                let update = match read_conversation(&client, &shown) {
-                    Ok(conversation) => ConversationUpdate::Conversation(conversation),
-                    Err(error) => ConversationUpdate::Failed(error),
-                };
-                if sender.send_blocking(update).is_err() {
+    thread::scope(|scope| {
+        let (client, shown, stop) = (&client, &*shown, &*stop);
+        let reader = thread::Builder::new().name("kuvo-box conversation reads".into()).spawn_scoped(scope, move || {
+            while asked.recv().is_ok() && !stop.is_stopped() {
+                if !read(client, shown, latest) {
+                    stop.stop();
                     return;
                 }
             }
-        })
-    };
-    if reader.is_err() {
-        return;
-    }
+        });
+        if reader.is_ok() {
+            follow_events(client, place, timing, latest, stop, shown, &again);
+        }
+        // (Its asks end with this, and so does the reader.)
+        drop(again);
+    });
+}
 
+fn follow_events(client: &BoxClient, place: Where, timing: Timing, latest: &Latest<ConversationUpdate>, stop: &Stop, shown: &Mutex<Shown>, again: &mpsc::SyncSender<()>) {
+    let mut backoff = Backoff::new(timing);
     while !stop.is_stopped() {
-        let mut stream = match client.open(&Request::get(place.events_route())) {
+        let mut stream = match client.open(&Request::get(place.events_route()), &|closer| stop.hold(closer)) {
             Ok(stream) if (200..300).contains(&stream.status) => stream,
             Ok(mut stream) => {
-                let mut body = Vec::new();
-                let _ = std::io::Read::read_to_end(&mut stream.reader, &mut body);
-                if !send(ConversationUpdate::Failed(Error::Refused(Refusal::from_answer(stream.status, &body)))) || backoff.wait(&stop) {
+                let refusal = refusal(&mut stream);
+                stop.release();
+                latest.put(ConversationUpdate::Failed(Error::Refused(refusal)));
+                if backoff.wait(stop) {
                     return;
                 }
                 continue;
             }
             Err(error) => {
-                if !send(ConversationUpdate::Failed(error)) || backoff.wait(&stop) {
+                stop.release();
+                if stop.is_stopped() {
+                    return;
+                }
+                latest.put(ConversationUpdate::Failed(error));
+                if backoff.wait(stop) {
                     return;
                 }
                 continue;
             }
         };
-        if !stop.hold(&stream.closer) {
-            return;
-        }
         // Read once it's listening, so nothing from before is missed.
         let _ = again.try_send(());
         loop {
@@ -351,17 +436,19 @@ fn follow_conversation(client: BoxClient, session: String, timing: Timing, sende
                 Ok(Some(data)) => {
                     let Ok(event) = serde_json::from_str::<Value>(&data) else { continue };
                     backoff.reset();
-                    let (applied, now) = {
-                        let mut conversation = shown.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-                        let applied = conversation.apply(&event);
-                        (applied, (applied == Applied::Changed).then(|| conversation.clone()))
+                    let applied = {
+                        let mut now = shown.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                        let applied = now.conversation.apply(&event);
+                        if applied != Applied::Nothing
+                            && let Some(during) = now.during.as_mut()
+                        {
+                            during.push(event);
+                        }
+                        if applied == Applied::Changed {
+                            latest.put(ConversationUpdate::Conversation(now.conversation.clone()));
+                        }
+                        applied
                     };
-                    if let Some(now) = now
-                        && !send(ConversationUpdate::Conversation(now))
-                    {
-                        stop.stop();
-                        return;
-                    }
                     if applied == Applied::ReadAgain {
                         let _ = again.try_send(());
                     }
@@ -369,30 +456,15 @@ fn follow_conversation(client: BoxClient, session: String, timing: Timing, sende
                 Ok(None) => break,
                 Err(error) => {
                     if !stop.is_stopped() {
-                        let _ = send(ConversationUpdate::Failed(Error::Unreachable(format!("The conversation stopped coming ({}).", error.kind()))));
+                        latest.put(ConversationUpdate::Failed(Error::Unreachable(format!("The conversation stopped coming ({}).", error.kind()))));
                     }
                     break;
                 }
             }
         }
         stop.release();
-        if stop.is_stopped() || backoff.wait(&stop) {
+        if stop.is_stopped() || backoff.wait(stop) {
             return;
         }
     }
 }
-
-/// The conversation's newest messages read, in place of what's shown.
-fn read_conversation(client: &BoxClient, shown: &Mutex<Conversation>) -> Result<Conversation, Error> {
-    let (session, place) = {
-        let conversation = shown.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        (conversation.session.clone(), conversation.place)
-    };
-    let page: Page = client.get(&messages::newest_route(place, &session, READ))?;
-    let mut conversation = shown.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    conversation.take_read(page.data);
-    Ok(conversation.clone())
-}
-
-/// How many of a conversation's newest messages a follow reads.
-const READ: usize = 100;

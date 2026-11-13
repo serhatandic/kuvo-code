@@ -9,6 +9,7 @@
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 
 use base64::Engine as _;
 use serde::Deserialize;
@@ -26,13 +27,15 @@ pub struct SshBox {
     root: String,
     /// A folder of this user's alone where connections are shared (`ControlPath`), so each request
     /// costs a round trip rather than a login: the app's own `/tmp/kuvo-ssh-<uid>` (the one place
-    /// outside its folders Kuvo Code keeps anything, docs/footprint.md). None: one login each.
+    /// outside its folders Kuvo Code keeps anything, docs/footprint.md), made only once a request
+    /// goes. None: one login each.
     sharing: Option<PathBuf>,
 }
 
 impl SshBox {
+    /// Connections to it are shared, as the Mac app shares them ([`app_sharing_folder`]).
     pub fn new(destination: impl Into<String>) -> SshBox {
-        SshBox { destination: destination.into(), program: PathBuf::from("ssh"), root: ".kuvo-code".into(), sharing: None }
+        SshBox { destination: destination.into(), program: PathBuf::from("ssh"), root: ".kuvo-code".into(), sharing: app_sharing_folder() }
     }
 
     /// Runs `program` in place of `ssh` (a test's stand-in, or an `ssh` at a path of its own).
@@ -41,11 +44,10 @@ impl SshBox {
         self
     }
 
-    /// Shares one connection per machine through sockets in `folder`, as the Mac app does
-    /// (`/tmp/kuvo-ssh-<uid>`). Taken only while it's this user's alone; otherwise each request
-    /// logs in on its own.
-    pub fn sharing_connections_in(mut self, folder: impl Into<PathBuf>) -> SshBox {
-        self.sharing = Some(folder.into());
+    /// Shares one connection per machine through sockets in `folder` (none: each request logs in on
+    /// its own). Taken only while it's this user's alone.
+    pub fn sharing_connections_in(mut self, folder: Option<PathBuf>) -> SshBox {
+        self.sharing = folder;
         self
     }
 
@@ -100,9 +102,10 @@ exec "$K/engine/$E/opencode" --config=/dev/null --no-env-file "$K/bin/kuvo-link.
         format!("exec sh -c 'kuvo_script=$(printf %s {encoded} | base64 -d) || exit 127; eval \"$kuvo_script\"'")
     }
 
-    fn run(&self, input: &[u8]) -> Result<String> {
+    fn run(&self, input: &[u8], hold: &dyn Fn(Closer) -> bool) -> Result<String> {
         let mut command = Command::new(&self.program);
-        command.args(self.options()).arg(&self.destination).arg(Self::command_line(&self.script()));
+        // (`--`: a machine's name is never read as an option.)
+        command.args(self.options()).arg("--").arg(&self.destination).arg(Self::command_line(&self.script()));
         // Nothing of a Kuvo Code process's own goes along (ssh sends a machine only `LANG` and
         // `LC_*`, but a stand-in runs here).
         for (name, _) in std::env::vars_os() {
@@ -114,11 +117,26 @@ exec "$K/engine/$E/opencode" --config=/dev/null --no-env-file "$K/bin/kuvo-link.
         let mut child = command
             .spawn()
             .map_err(|error| Error::Unreachable(format!("Couldn't start ssh to reach {} ({}).", self.destination, error.kind())))?;
+        // What ends it from another thread: `ssh` itself, this one we started, by its process id,
+        // let go of as soon as it's been waited for.
+        let running = Arc::new(Mutex::new(Some(child.id())));
+        let ender = running.clone();
+        if !hold(Closer::new(move || {
+            if let Some(pid) = *ender.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) {
+                end(pid);
+            }
+        })) {
+            end(child.id());
+        }
         if let Some(mut stdin) = child.stdin.take() {
             // (A machine that doesn't read it all has failed, which its status says.)
             let _ = stdin.write_all(input);
         }
-        let output = child.wait_with_output().map_err(|error| Error::Unreachable(format!("Couldn't reach {} ({}).", self.destination, error.kind())))?;
+        let output = {
+            let result = child.wait_with_output();
+            *running.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+            result.map_err(|error| Error::Unreachable(format!("Couldn't reach {} ({}).", self.destination, error.kind())))?
+        };
         if !output.status.success() {
             let said = String::from_utf8_lossy(&output.stderr);
             let said = said.lines().map(str::trim).rfind(|line| !line.is_empty()).unwrap_or("").chars().take(300).collect::<String>();
@@ -143,8 +161,8 @@ struct Routed {
     content_type: Option<String>,
 }
 
-impl Transport for SshBox {
-    fn send(&self, request: &Request) -> Result<Response> {
+impl SshBox {
+    fn route(&self, request: &Request, hold: &dyn Fn(Closer) -> bool) -> Result<Response> {
         let mut asked = serde_json::json!({ "method": request.method.to_ascii_uppercase(), "path": request.path.trim_start_matches('/') });
         if let Some(body) = &request.body {
             asked["body"] = body.clone();
@@ -160,7 +178,7 @@ impl Transport for SshBox {
         if !headers.is_empty() {
             asked["headers"] = serde_json::Value::Object(headers);
         }
-        let output = self.run(&serde_json::to_vec(&asked).unwrap_or_default())?;
+        let output = self.run(&serde_json::to_vec(&asked).unwrap_or_default(), hold)?;
         let last = output.lines().map(str::trim).rfind(|line| !line.is_empty()).unwrap_or("");
         let routed: Routed = serde_json::from_str(last)
             .map_err(|_| Error::BadAnswer(format!("Kuvo Code on {} didn't answer as it should: {}", self.destination, last.chars().take(200).collect::<String>())))?;
@@ -174,8 +192,15 @@ impl Transport for SshBox {
         Ok(Response { status: routed.status, content_type: routed.content_type.or_else(|| Some("application/json".into())), body })
     }
 
-    fn open(&self, request: &Request) -> Result<Stream> {
-        let response = self.send(request)?;
+}
+
+impl Transport for SshBox {
+    fn send(&self, request: &Request) -> Result<Response> {
+        self.route(request, &|_| true)
+    }
+
+    fn open(&self, request: &Request, hold: &dyn Fn(Closer) -> bool) -> Result<Stream> {
+        let response = self.route(request, hold)?;
         Ok(Stream { status: response.status, content_type: response.content_type, reader: Box::new(Cursor::new(response.body)), closer: Closer::nothing() })
     }
 
@@ -208,7 +233,24 @@ fn is_own_private_folder(_folder: &Path) -> bool {
 
 /// The Mac app's folder for shared SSH connections, `/tmp/kuvo-ssh-<uid>`.
 #[cfg(unix)]
-pub fn app_sharing_folder() -> PathBuf {
+pub fn app_sharing_folder() -> Option<PathBuf> {
     // SAFETY: getuid has no preconditions.
-    PathBuf::from(format!("/tmp/kuvo-ssh-{}", unsafe { libc::getuid() }))
+    Some(PathBuf::from(format!("/tmp/kuvo-ssh-{}", unsafe { libc::getuid() })))
 }
+
+#[cfg(not(unix))]
+pub fn app_sharing_folder() -> Option<PathBuf> {
+    None
+}
+
+/// Asks process `pid` (an `ssh` this client started, still running) to end.
+#[cfg(unix)]
+fn end(pid: u32) {
+    if let Ok(pid) = libc::pid_t::try_from(pid) {
+        // SAFETY: a signal to a child of ours not yet waited for.
+        unsafe { libc::kill(pid, libc::SIGTERM) };
+    }
+}
+
+#[cfg(not(unix))]
+fn end(_pid: u32) {}

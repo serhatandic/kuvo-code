@@ -84,10 +84,11 @@ pub fn serve_record(folder: &Path, runs_serve: impl Fn(i64) -> bool) -> Result<S
     Ok(record)
 }
 
-/// The server `place` records, for a client to reach.
+/// The server `place` records, for a client to reach: as its record says at each request. Checked
+/// now too, so a box that isn't running is said at once.
 pub fn server(place: &HomeFolder, label: &str) -> Result<LocalServer> {
-    let record = serve_record(&place.folder, runs_serve)?;
-    Ok(LocalServer::new(record.port as u16, record.password, place.speaker, label))
+    serve_record(&place.folder, runs_serve)?;
+    Ok(LocalServer::recorded(place.folder.clone(), place.speaker, label))
 }
 
 /// Whether process `pid` runs as a box's server: its command line has `kuvo-link.js serve` (as
@@ -112,6 +113,12 @@ pub fn is_serve_command(line: &str) -> bool {
 /// The arguments process `pid` was started with, where this computer can say.
 #[cfg(target_os = "linux")]
 pub fn arguments_of(pid: i64) -> Option<Vec<String>> {
+    use std::os::unix::fs::MetadataExt;
+    // Only this user's: another's command line can be read here too, and isn't this user's box.
+    // SAFETY: getuid has no preconditions.
+    if fs::metadata(format!("/proc/{pid}")).ok()?.uid() != unsafe { libc::getuid() } {
+        return None;
+    }
     let bytes = fs::read(format!("/proc/{pid}/cmdline")).ok()?;
     let arguments: Vec<String> = bytes.split(|byte| *byte == 0).filter(|part| !part.is_empty()).map(|part| String::from_utf8_lossy(part).into_owned()).collect();
     (!arguments.is_empty()).then_some(arguments)

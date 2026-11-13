@@ -91,7 +91,7 @@ while let Some(update) = lists.next_blocking() {       // a GPUI view awaits lis
     }
 }
 
-// One conversation, live: its messages, and the words it streams as they come.
+// One conversation, live: its messages, the words it streams as they come, and whether it runs.
 let conversation = client.follow_conversation("ses_…", Timing::default());
 
 // What the composer sends: a message to the agent, or "/…" and "!…" to the box first.
@@ -102,11 +102,21 @@ client.send_text("ses_…", place, &BoxClient::new_id(), "/plan sketch it", Deli
 What it uses of the box: `kuvo/info`; `kuvo/sessions/list` and `…/events` (with `since`);
 `api/session/<id>`, `…/message` and `api/event` on the engine, and the same under
 `kuvo/agents/` for a coding agent's conversation; `kuvo/sessions/<id>/typed` (`GET` and `POST`);
-`api/session/<id>/prompt` and `kuvo/sessions/<id>/queue/add`; `kuvo/work-queue?owner=all&glance=1`
-and `kuvo/asks` for the counts.
+`api/session/active` (whether a run is under way); `api/session/<id>/prompt` and
+`kuvo/sessions/<id>/queue/add`; `kuvo/work-queue?owner=all&glance=1` and `kuvo/asks` for the counts.
 
-Over a box's own server, what's followed streams. A machine over SSH answers each request once,
-so its lists are read again every half minute and an open conversation every few seconds.
+Over a box's own server, what's followed streams. Its record is read again for each request, so
+a server that started again (a new port and password each time) is found, its `kuvo/info` read
+again, and a port a stopped server left is never sent anything. A machine over SSH answers each
+request once, so its lists are read again every half minute and an open conversation every few
+seconds, over one shared connection (`/tmp/kuvo-ssh-<uid>`, as the Mac app shares it). A follow
+hands on only the latest of what it sees, so a view that reads late gets the state now.
+
+Not done yet, for phase 2: following a machine's conversation as it streams (an SSH tunnel to its
+engine, as the Mac app makes); a message's parts (#668 item 3, not merged yet); one event stream
+shared by every conversation followed on a box; a machine's box attached in place on this Mac
+(`x-kuvo-from: mac`); and the words a message sent with a keyword carries (`<sent-with>`), which
+the box should write rather than each client.
 
 To see it list sessions without touching a real box:
 

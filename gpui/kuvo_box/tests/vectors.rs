@@ -176,3 +176,13 @@ fn a_held_box_is_asked_only_what_keeps_work_going() {
         assert!(!gate::is_allowed(held), "{held}");
     }
 }
+
+/// The gate holds the same boxes as the Swift apps': the names in KuvoClient's `BoxGate.required`.
+#[test]
+fn the_gate_needs_what_the_swift_clients_need() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../Packages/KuvoClient/Sources/ClientSessions/BoxGate.swift");
+    let swift = std::fs::read_to_string(path).unwrap();
+    let list = swift.split("public static let required: [String] = [").nth(1).and_then(|rest| rest.split(']').next()).expect("BoxGate.required");
+    let names: Vec<&str> = list.split(',').map(|name| name.trim().trim_matches('"')).filter(|name| !name.is_empty()).collect();
+    assert_eq!(names, gate::REQUIRED);
+}

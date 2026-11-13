@@ -40,7 +40,7 @@ impl Machine {
     }
 
     fn client(&self) -> BoxClient {
-        BoxClient::machine(SshBox::new("me@devbox.invalid").program(self.path().join("ssh")))
+        BoxClient::machine(SshBox::new("me@devbox.invalid").program(self.path().join("ssh")).sharing_connections_in(None))
     }
 
     /// What `box route` prints for a route.
@@ -128,7 +128,10 @@ fn a_machines_box_answers_through_box_route_over_ssh() {
     for option in ["BatchMode=yes", "RequestTTY=no", "RemoteCommand=none"] {
         assert!(arguments.lines().any(|line| line == option), "{option}");
     }
-    assert!(arguments.lines().any(|line| line == "me@devbox.invalid"));
+    // Its name after `--`, never read as an option.
+    let lines: Vec<&str> = arguments.lines().collect();
+    let at = lines.iter().position(|line| *line == "me@devbox.invalid").expect("the machine");
+    assert_eq!(lines[at - 1], "--");
 }
 
 #[test]
