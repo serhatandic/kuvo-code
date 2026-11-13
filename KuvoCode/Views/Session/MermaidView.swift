@@ -38,7 +38,7 @@ final class MermaidView: NSView {
 
     required init?(coder: NSCoder) { return nil }
 
-    deinit { renderTask?.cancel(); resizeWork?.cancel() }
+    isolated deinit { renderTask?.cancel(); resizeWork?.cancel() }
 
     func present(_ source: String, style: ReplyDocument.Style) {
         guard content != source || documentStyle != style else { return }
@@ -166,7 +166,7 @@ final class MermaidRenderer: NSObject, WKNavigationDelegate {
     private final class Completion<Value> {
         private var continuation: CheckedContinuation<Value, Never>?
         init(_ continuation: CheckedContinuation<Value, Never>) { self.continuation = continuation }
-        func finish(_ value: Value) {
+        func finish(_ value: sending Value) {
             let pending = continuation
             continuation = nil
             pending?.resume(returning: value)
