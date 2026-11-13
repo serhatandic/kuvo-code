@@ -25013,7 +25013,7 @@ function seatPeers(link = readLink(), told = readPeerAgents()) {
     also: vouchedOf(link, told).map((box) => ({ key: box.key, name: plainName(box.name) || "another computer" })),
     boxes: peers.map((peer) => ({ key: peer.key, name: plainName(peer.name) || "another computer", seats: (told[peer.key]?.features ?? []).includes("groups.seats") })),
     bots: peers.flatMap((peer) => (told[peer.key]?.list ?? []).filter((agent) => agent.kind === "bot" && agent.id).map((agent) => ({ id: agent.id, name: agent.name, job: agent.about ?? "", box: peer.key, session: agent.session, ...agent.look ? { look: agent.look } : {} }))),
-    ...setup ? { setup: setup.id } : {}
+    ...setup ? { setup: setup.id } : link?.setup && !link.setup.aside ? { setupUnknown: true } : {}
   };
 }
 var toldSeatPeers = "";
@@ -39855,7 +39855,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "1a59ec9dffee";
+var BRIDGE_VERSION = "65c0f685a7f4";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";

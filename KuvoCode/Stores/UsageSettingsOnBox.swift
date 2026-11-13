@@ -74,7 +74,8 @@ final class UsageSettingsOnBox {
     func connected(api: OpenCodeAPI?, box: String) {
         guard let api else { return }
         self.api = api
-        if self.box != box { kept = nil }
+        // (Asked again each time: a box updated in place under the same id may keep them now.)
+        kept = nil
         self.box = box
         then { await $0.read() }
     }
@@ -135,15 +136,20 @@ final class UsageSettingsOnBox {
         var body = parts
         body["based"] = .object(based.filter { parts[$0.key] != nil })
         if let knows { body["knows"] = knows }
-        let done = { [self] in
-            for (name, value) in parts where unsent[name] == value {
-                unsent[name] = nil
-                based[name] = nil
+        let done = { [self] (answer: BoxUsageSettings?) in
+            for (name, value) in parts {
+                if unsent[name] == value {
+                    unsent[name] = nil
+                    based[name] = nil
+                } else if let answer, !answer.stale.contains(name) {
+                    // Changed again while this went: the next goes from the version the box has now.
+                    based[name] = answer.versions[name].map(JSONValue.string) ?? .null
+                }
             }
         }
         do {
             let answer = try await api.client.send(try api.client.request("PUT", BoxUsageSettings.bridgePath, body: JSONValue.object(body)), as: DataEnvelope<BoxUsageSettings>.self).data
-            done()
+            done(answer)
             if !answer.stale.isEmpty {
                 log.info("usage settings changed on another computer meanwhile: \(answer.stale.joined(separator: ", "), privacy: .public)")
                 host.forget(Set(answer.stale))
@@ -152,7 +158,7 @@ final class UsageSettingsOnBox {
         } catch let error as ServerError where ![502, 503, 504].contains(error.status) {
             // Not a change it takes: the box's stay, and show again.
             log.info("usage settings refused: \(String(describing: error), privacy: .public)")
-            done()
+            done(nil)
             host.forget(Set(parts.keys))
             await read()
         } catch {

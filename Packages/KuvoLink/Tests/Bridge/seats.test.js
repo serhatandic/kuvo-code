@@ -504,6 +504,12 @@ test("the usage panel's settings (PROTOCOL.md, \"Usage settings\") go between yo
   const withSetup = { ...link.readLink(), setup: { id: "set_AAAAAAAAAAAAAAAAAAAAAA", epoch: 1, primary: mac.pub, sign: mac.pub, role: "member" } };
   assert.equal(link.seatPeers(withSetup).setup, "set_AAAAAAAAAAAAAAAAAAAAAA");
   assert.equal(link.seatPeers({ ...withSetup, setup: { ...withSetup.setup, aside: true } }).setup, undefined, "set aside: none");
+  assert.equal(link.seatPeers({ ...withSetup, setup: { ...withSetup.setup, aside: true } }).setupUnknown, undefined, "set aside: none, not unknown");
+  // A main computer whose keys aren't its record's (not read yet as its link starts): one it can't say yet, not none.
+  const unread = link.seatPeers({ ...withSetup, setup: { ...withSetup.setup, role: "primary", primary: second.pub } });
+  assert.equal(unread.setup, undefined);
+  assert.equal(unread.setupUnknown, true);
+  assert.equal(link.seatPeers(link.readLink()).setupUnknown, undefined, "no setup at all: none");
   const mail = { kind: "settings", at: 7, digest: "d", setup: "set_AAAAAAAAAAAAAAAAAAAAAA", usage: { notifications: { value: { underTenPercent: true, healthyToClose: false, closeToRunningOut: false }, stamp: { v: 7, by: here.pub } } } };
   // To one of your computers: as a seat's, kept nowhere.
   assert.equal(link.carrySeat(host, { id: "sm_settings01", to: second.pub, durable: false, mail }, link.readLink()), true);

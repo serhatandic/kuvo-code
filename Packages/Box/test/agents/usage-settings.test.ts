@@ -108,8 +108,8 @@ class Box {
    * The link says who your computers are (`others`), which boxes only a peer knows (`also`), and the
    * setup this box follows (`setup`: none for a machine two people's Macs share).
    */
-  async meet(others: Box[], also: Box[] = [], setup: string | null = "set_yours") {
-    await peerRoutes(this.parts, "PUT", [], async () => ({ self: { key: this.key, name: this.name }, boxes: others.map((box) => ({ key: box.key, name: box.name, seats: true })), also: also.map((box) => ({ key: box.key, name: box.name })), bots: [], ...(setup ? { setup } : {}) }))
+  async meet(others: Box[], also: Box[] = [], setup: string | null = "set_yours", setupUnknown = false) {
+    await peerRoutes(this.parts, "PUT", [], async () => ({ self: { key: this.key, name: this.name }, boxes: others.map((box) => ({ key: box.key, name: box.name, seats: true })), also: also.map((box) => ({ key: box.key, name: box.name })), bots: [], ...(setup ? { setup } : {}), ...(setupUnknown ? { setupUnknown: true } : {}) }))
   }
 
   async route(method: string, rest: string[] = [], given?: unknown) {
@@ -502,5 +502,24 @@ describe("across your own computers", () => {
     await relay.settled()
     expect((await machine.read()).settings).toEqual({})
     expect((await bob.read()).settings).toEqual({})
+  })
+
+  test("a setup's main Mac whose link can't say its setup yet (its keys not read) keeps its settings: nothing's recorded as no setup, nothing goes, and the setup it names next is taken as theirs", async () => {
+    const home = mkdtempSync(join(base, "main-mac-"))
+    mkdirSync(join(home, "usage"), { recursive: true })
+    // As a box from before kept Codex's fallback model, and a Mac's import came in.
+    writeFileSync(join(home, "usage", "settings.json"), JSON.stringify({ codex: { fallback: null } }))
+    const mac = make("mac-key", "MacBook", home)
+    await mac.route("POST", ["import"], { notifications: alerts(true) })
+    const dev = make("dev-key", "devbox")
+    await mac.meet([dev], [], null, true)
+    await relay.settled()
+    expect(relay.sent.filter((each) => each.mail.kind === "settings")).toEqual([])
+    await mac.meet([dev], [], "set_yours")
+    await dev.meet([mac])
+    await relay.settled()
+    expect((await mac.read()).settings).toEqual({ notifications: alerts(true), codexFallback: null })
+    expect((await mac.read()).imported).toBe(true)
+    expect((await dev.read()).settings).toEqual({ notifications: alerts(true), codexFallback: null })
   })
 })

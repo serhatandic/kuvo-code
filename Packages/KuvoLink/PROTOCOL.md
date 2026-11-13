@@ -4380,7 +4380,9 @@ is opened stay each app's own. A client reaches them as `kuvo/agents/api/kuvo/us
   ones you made on another), and at the same `v` the `by` that sorts last.
 - **Across your own computers** only: between the boxes of one setup ("Your setup"), whose
   boxes are all yours. The link tells the bridge the setup it follows now (`setup` in `PUT
-  /api/kuvo/peers`, its id; none while it follows none, or is set aside), and a box sends and takes
+  /api/kuvo/peers`, its id; none while it follows none, or is set aside; `setupUnknown: true`
+  while it has one it can't say yet, a main computer's keys not read as its link starts, which the
+  bridge takes as neither: it records nothing and shares nothing until the link says), and a box sends and takes
   them only while it follows one, only with its peers (the setup's boxes), and only mail naming the
   same setup. So never to or from a box a peer vouches for, and never through a machine more than
   one Mac set up (it follows no setup, so it neither passes them on nor takes them): until setups
@@ -4410,7 +4412,8 @@ is opened stay each app's own. A client reaches them as `kuvo/agents/api/kuvo/us
   the app); with the usage item off, it brings the layout as kept, once its meters were.
   It reads whether its box keeps them from `features` (`usage.settings`; its own box of the same
   version does). A change made while the box doesn't answer, before its first answer since a
-  restart too, goes once it's back: the app keeps what the box last said, and what's still to go,
+  restart too, goes once it's back; one made again while the last is on its way goes from the
+  version the box answered with: the app keeps what the box last said, and what's still to go,
   through a restart. Its panel's
   stores keep their own copy, so they start at once and work while the box doesn't answer; a change
   made meanwhile goes once it's back, and an answer that comes while one is on its way leaves that
