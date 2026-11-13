@@ -480,8 +480,15 @@ public struct OpenCodeAPI: Sendable {
     public func prompt(session: String, id: String, text: String, files: [PromptFile] = [], delivery: InboxItem.Delivery = .steer) async throws {
         struct Body: Encodable { var id: String; var text: String; var files: [PromptFile]?; var delivery: InboxItem.Delivery }
         let body = Body(id: id, text: text, files: files.isEmpty ? nil : files, delivery: delivery)
-        try await send("POST", "api/session/\(session.pathEscaped)/prompt", body: body, as: Empty.self)
+        var request = try request("POST", "api/session/\(session.pathEscaped)/prompt", query: [:], directory: nil, body: body)
+        // Taken once by its id however often it comes, so a phone's link sends it again if it
+        // drops before the answer comes (KuvoLink's `LinkRequest.repeatableHeader`).
+        request.setValue(id, forHTTPHeaderField: Self.repeatableHeader)
+        _ = try await client.send(request, as: Empty.self)
     }
+
+    /// The header that says a request is safe to send again (KuvoLink's `LinkRequest.repeatableHeader`).
+    public static let repeatableHeader = "Idempotency-Key"
 
     /// Words from the app rather than from you, which the engine keeps apart from your messages, as
     /// it does its own notes to the model; the agent then takes a turn on them.

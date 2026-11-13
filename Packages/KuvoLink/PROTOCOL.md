@@ -85,6 +85,18 @@ Older phones keep checking quiet sessions, and skip `gone`.
 IP address (4005). A device a little too fast, or sending faster than the one it sends to
 takes in, is held back: the relay stops reading from it for a moment.
 
+The phone pings the relay over its WebSocket every 25 s, and counts the connection as gone (closes
+it, and connects again) when the pong doesn't come back in 10 s and a second more for each 64 KB it
+has handed its WebSocket since the last ping that was answered, a minute more at most: the ping goes
+out behind those, and a picture on a slow connection holds its pong up as long as it takes to send
+(#144), while a path gone dead behind a big body is still noticed within about 70 s.
+
+The relay counts a device as there while it answers its pings or sends anything: a phone sending a
+picture on a slow connection has its pong behind it, later than the relay's next ping (#144).
+**Deploy order:** that relay goes out with or before the phone build that sends messages again.
+Behind a relay from before it, a big picture on a slow connection is still cut off there, and goes
+again from the start each time, until its two minutes are up.
+
 An APNs push carries `{"aps": {"alert": {"title": "Kuvo Code", "body": "New activity"},
 "mutable-content": 1}, "f": "<sender's address>", "k": "<payload, base64>"}`. The phone's
 notification extension decrypts `k` with the key of the host at `f`, and replaces the text,
@@ -2267,6 +2279,46 @@ like HTTP:
 | `{"t": "cancel", "id": 7}` | Either side stops request 7. |
 | `{"t": "ping"}`, `{"t": "pong"}` | Is the other end still there? The relay's own pings only reach the relay. The phone pings while a request waits with nothing from the host, once its own frames have gone out: a host whose connection died without closing takes frames until the relay notices, and never answers. No answer ends the session, after 15 s (a host under a heavy load can take that long to read its connection, and is still there) and a second more for each 64 KB the phone sent that no host has answered yet (by answering a request sent after it, or a ping): frames the phone's connection says it sent may still be in the system's buffers, on a slow network or at the relay, ahead of the ping. So a host whose connection died is found out that much later after a big body (a 10 MB one: about 2.5 minutes). A host that started again or left is told by the relay (`gone`), so a quiet session isn't checked. Answer at once. |
 
+**Sending again** (#144). A request with `idempotency-key` in `h` (a message's own id, as
+`POST api/session/<id>/prompt` and `kuvo/agents/api/…/prompt` carry it, and `…/queue/add` to a box
+with `queue.once`) is safe to send twice: when its session ends before the answer's head comes
+(closed, timed out, or the relay connection lost: on LTE, or as the app comes back from the
+background), the phone sends it again, whole, on a new session, for up to two minutes from when it
+first failed; past that it fails as it did at first. Meanwhile a client shows it waiting, not
+failed: with no network at all, that's two minutes before it says it couldn't send. Each computer's
+are in one line, in the order they were first sent: the first goes at once, then after 1, 2, 4 and
+8 s (8 s from then on), or as soon as a relay connection is made, or another is sent to that
+computer, whichever comes first; none goes before one sent ahead of it, and one sent while any
+waits goes behind them. A computer that isn't connected to the relay (asleep, offline), turns the
+phone away, or can't talk with it isn't tried again: that's said at once, as before. Once a try has
+gone (it was put on a session, so the computer may have it), though, a computer not on the relay is
+tried again like a dropped link (the relay or its link started again, and it's still connecting).
+One that never went still says offline at once, as its computer can't have it. A try whose wait
+ends after its two minutes (the app was suspended meanwhile) fails then, rather than going late.
+
+Stopping a request (the client stops reading, or cancels it) ends it at once: one waiting to go
+again never goes. The phone's Stop waits up to 3 s for messages still on their way, then takes back
+those waiting to go again that never reached the computer (`LinkClient.takeBack`, by their ids:
+none of them was put on a session yet), before it asks the box to stop: their words go back to the
+composer, together and in the order they were sent, with no error, and none starts a run after it.
+One that may have reached the computer (its link dropped as or after it went) isn't taken back,
+since it may be in the conversation already: it goes again and is taken once, and like one still
+on its way it can arrive after Stop. A Stop pressed on another computer can't take back the
+phone's: one waiting may still arrive after it, at most two minutes after it first failed.
+
+A box takes a message sent again under the same id once (`Packages/Box/src/link/server/sent-once.ts`,
+by where it goes, its conversation and its id): one still on its way to the conversation waits for
+it and answers as it did; one that went answers as it did then, for an hour, without the
+conversation (or the files it brought) asked again; one the engine refused, or that didn't reach
+it, is tried again. A message's way to the engine is waited for however long a busy engine takes,
+as one without an id is, and a repeat meanwhile waits with it; one the engine doesn't answer at all
+(it started again) is tried again. One taken away (`DELETE …/queue/<item>`, or out of
+the engine's inbox) is forgotten, so Undo puts it back under the same id. After a box starts again,
+or from a phone to a box from before this, the engine and the coding agents' bridge, which each take
+a message once by its id, catch a repeat; its files may then be kept on the box twice (a copy
+nothing shows, which goes with the rest when its conversation does), never a second message. The
+header is never passed to the engine.
+
 `h` holds `x-opencode-directory` and `content-type`; the host adds the engine's password
 itself. Which route answers is told by its path before any `?`: a query string never changes it,
 and a method is read in any case. Both are held to the same route scenarios (`Vectors/routes`), and
@@ -4339,6 +4391,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `programs` | `kuvo/programs` |
 | `providers.models` | `POST kuvo/providers/models` |
 | `queue` | `kuvo/sessions/<id>/queue…`, `…/stop` and `kuvo/sessions/queues/events`: the box carries the queue (bridge 0.9.100) |
+| `queue.once` | `…/queue/add` sent again under its `id` adds it once ("Sending again"): a phone sends it with `idempotency-key` only to a box that says this (#144) |
 | `queue.waits` | A Stop holds the conversation: what arrives waits on the box (`waiting`), `…/queue/add` and `DELETE …/queue/<item>` (bridge 0.9.128) |
 | `reviews` | `kuvo/agents/api/kuvo/reviews…`: reviews with fresh eyes |
 | `reviews.parts` | a review's `parts`, each on the engine read in a `session` a client can open (bridge 0.9.102) |
