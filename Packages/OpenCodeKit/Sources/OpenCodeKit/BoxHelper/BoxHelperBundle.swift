@@ -90,9 +90,12 @@ public enum BoxHelperBundle {
     }
 
     /// Kuvo Code itself at `url`, as the helper running now trusts it: signed by its team, or, for an
-    /// ad hoc build, one carrying this very helper.
-    public static func isKuvoCode(_ url: URL, identifier: String) -> Bool {
-        isGenuine(url, identifier: identifier, adHocMatch: CodeSeal.isSealed(bundled(in: url)))
+    /// ad hoc build where `adHoc` allows one, an app carrying this very helper (which anything could
+    /// copy into an app of its own: an ad hoc build has no identity to go by).
+    public static func isKuvoCode(_ url: URL, identifier: String, adHoc: Bool = true) -> Bool {
+        let signer = Signer.ofThisProgram
+        guard signer != .adHoc || adHoc else { return false }
+        return isGenuine(url, identifier: identifier, signer: signer, adHocMatch: signer == .adHoc && CodeSeal.isSealed(bundled(in: url)))
     }
 
     /// The code directory's hash of the code at `url` (what a `cdhash` requirement names).

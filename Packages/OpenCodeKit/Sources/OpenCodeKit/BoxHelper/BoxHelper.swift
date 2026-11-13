@@ -96,8 +96,15 @@ public final class BoxHelper {
                 case "uncopy":
                     try move.uncopy()
                 case "back":
-                    guard let appBundle, appBundle.hasPrefix("/"), BoxHelperBundle.isKuvoCode(URL(filePath: appBundle), identifier: app) else {
-                        fail("Moving back needs Kuvo Code itself: --app <its bundle>.")
+                    // Kuvo Code itself is given every key: never one signed ad hoc (anything could be),
+                    // but in the tests' own build.
+                    #if DEBUG
+                    let adHoc = true
+                    #else
+                    let adHoc = false
+                    #endif
+                    guard let appBundle, appBundle.hasPrefix("/"), BoxHelperBundle.isKuvoCode(URL(filePath: appBundle), identifier: app, adHoc: adHoc) else {
+                        fail("Moving back needs Kuvo Code itself, signed by its team: --app <its bundle>.")
                     }
                     try move.back(trusting: URL(filePath: appBundle))
                 default:
@@ -428,7 +435,7 @@ final class Child {
                 guard waitpid(child.pid, &status, WNOHANG) == child.pid else { return }
                 child.status = status
                 child.isRunning = false
-            child.endedAt = .now
+                child.endedAt = .now
                 child.closeInput()
                 child.source?.cancel()
                 child.source = nil

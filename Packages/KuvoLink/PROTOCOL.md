@@ -5464,9 +5464,9 @@ place, which is what macOS keeps your permissions and its Keychain items by.
   - the app's keeper copies each of the app's items under the helper's names, made trusting the
     helper the app carries (its signature, which the copy in `bin` shares), listing every one in
     the journal first (`copying`, then `copied`). It never takes an item already under the
-    helper's names for a copy (it can't read one to tell): with no journal, any there (left by an
-    earlier box) refuses the copy; a journal left `copied` (a move that went back, its copies not
-    taken away) refuses it until `uncopy`; only a `copying` one resumes, taking what it listed;
+    helper's names for a copy (it can't read one to tell): any there (left by an earlier box)
+    refuses the copy, and so does a journal an earlier try left (`copying` or `copied`) until
+    `uncopy` has taken its copies away: a copy starts afresh, never resumed;
   - `Kuvo Code Box keys check --home <box>` (the move's check, a short run of the helper's own)
     prints `{"unreadable": [...]}`, exiting 0 when it reads every copy, 1 when it doesn't;
   - `keys uncopy` (the move went back before it cleared the old place) takes the journaled copies
@@ -5478,8 +5478,8 @@ place, which is what macOS keeps your permissions and its Keychain items by.
     has, those made since too, made again under the app's names trusting the app, then its own
     taken away, and the journal. It refuses (exit 2) while the app's own are still there.
   Each of these prints JSON and exits 0 once done (`check`: 1 for a copy it can't read), 2 with why
-  on stderr. `back` takes only Kuvo Code itself for `--app` (signed by the helper's team; an ad hoc
-  build, one carrying this very helper).
+  on stderr. `back` takes only Kuvo Code itself for `--app`, signed by the helper's team: a helper
+  signed ad hoc (a local build) refuses, as anything can be signed so (the tests' own build aside).
 
 #### The relay, on this Mac's box
 

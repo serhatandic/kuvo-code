@@ -236,9 +236,11 @@ import Testing
         try move.write(journal)
         #expect(throws: KeychainMove.Failure.self) { try move.deleteOriginals() }
         #expect(keychain.exists("\(Self.app).phone-link", "key") == true, "the originals stay while the copies may not all be there")
-        // Resumed, it makes what's missing, taking only what it listed for made.
+        // Never taken up again as it was (its copies may be older than the app's keys are now): its
+        // copies taken away first, then copied afresh.
+        #expect(throws: KeychainMove.Failure.self) { try move.copy(trusting: helperInApp) }
+        #expect(try helper(["keys", "uncopy"]).status == 0)
         #expect(try move.copy(trusting: helperInApp) == 6)
-        #expect(try move.journal()?.state == .copied)
         #expect(try helper(["keys", "uncopy"]).status == 0)
         #expect(keychain.items("\(Self.helperID).phone-link") == [])
         #expect(keychain.exists("\(Self.app).phone-link", "key") == true)

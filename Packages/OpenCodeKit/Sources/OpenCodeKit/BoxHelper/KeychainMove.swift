@@ -129,19 +129,19 @@ public struct KeychainMove: Sendable {
 
     /// The app's keeper's: every original copied under the helper's names, trusting only the helper
     /// (`trusting`: the helper's bundle the app carries; the copy installed in the box's `bin` has
-    /// the same signature, which is what the list goes by). Journaled before any is made. Run again
-    /// after it stopped part way (the journal says `copying`), it makes what's missing. It never
-    /// takes an item already under the helper's names for a copy of what the app has now (the
-    /// keeper can't read one to tell): one left by an earlier box, or by a move that went back
-    /// without its copies taken away (`copied`: `uncopy` first), refuses it. Says how many there are.
+    /// the same signature, which is what the list goes by). Journaled before any is made. It never
+    /// takes an item already under the helper's names for a copy of what the app has now (it can't
+    /// read one to tell): one left by an earlier box refuses it, and so does any journal left by an
+    /// earlier try, however far it got (`copying` or `copied`: the helper's `uncopy` first, then
+    /// copy afresh). Says how many there are.
     @discardableResult
     public func copy(trusting helperBundle: URL) throws -> Int {
         let earlier = try journal()
         switch earlier?.state {
         case .settled?, .settling?: return earlier?.items.count ?? 0
-        case .copied?: throw Failure.journal("An earlier move’s copies of the app’s keys are still there: they’re taken away first.")
+        case .copying?, .copied?: throw Failure.journal("An earlier try’s copies of the app’s keys are still there: they’re taken away first.")
         case .returning?: throw Failure.journal("The box is moving back: its keys aren’t copied again until that’s done.")
-        case .copying?, nil: break
+        case nil: break
         }
         // (Locked, it would ask you to unlock it: the move waits instead.)
         guard !keychain.isLocked else { throw Failure.refused(app, errSecInteractionNotAllowed) }
@@ -149,16 +149,11 @@ public struct KeychainMove: Sendable {
         for service in Self.services {
             guard let items = keychain.items("\(app).\(service)") else { throw Failure.refused("\(app).\(service)", errSecInteractionNotAllowed) }
             entries += items.map { Entry(service: service, account: $0.account, label: $0.label) }
-        }
-        // What's there under the helper's names already: only what this move listed, as it resumes.
-        let listed = Set((earlier?.items ?? []).map(\.name))
-        for service in Self.services {
-            guard let items = keychain.items("\(helper).\(service)") else { throw Failure.refused("\(helper).\(service)", errSecInteractionNotAllowed) }
-            if let stray = items.first(where: { !listed.contains("\(service)/\($0.account)") }) { throw Failure.leftovers("\(service)/\(stray.account)") }
+            guard let there = keychain.items("\(helper).\(service)") else { throw Failure.refused("\(helper).\(service)", errSecInteractionNotAllowed) }
+            if let stray = there.first { throw Failure.leftovers("\(service)/\(stray.account)") }
         }
         // Each one it will make, listed before any is: whatever stops part way takes them all away.
-        let all = (earlier?.items ?? []) + entries.filter { entry in !listed.contains(entry.name) }
-        try write(Journal(state: .copying, app: app, helper: helper, items: all))
+        try write(Journal(state: .copying, app: app, helper: helper, items: entries))
         for entry in entries {
             let data: Data
             switch keychain.read("\(app).\(entry.service)", entry.account) {
@@ -168,14 +163,10 @@ public struct KeychainMove: Sendable {
             case .refused(let status): throw Failure.refused(entry.name, status)
             }
             let status = keychain.add("\(helper).\(entry.service)", entry.account, data, label: entry.label, trusting: [helperBundle])
-            // (One this move made before it stopped part way, listed then: the same value, from the
-            // same original, the box stopped meanwhile.)
-            guard status == errSecSuccess || (status == errSecDuplicateItem && listed.contains(entry.name)) else {
-                throw status == errSecDuplicateItem ? Failure.leftovers(entry.name) : Failure.unchanged(entry.name, status)
-            }
+            guard status == errSecSuccess else { throw status == errSecDuplicateItem ? Failure.leftovers(entry.name) : Failure.unchanged(entry.name, status) }
         }
-        try write(Journal(state: .copied, app: app, helper: helper, items: all))
-        return all.count
+        try write(Journal(state: .copied, app: app, helper: helper, items: entries))
+        return entries.count
     }
 
     /// The helper's (the copies trust it alone, and only a program an item trusts may delete it):
@@ -189,7 +180,11 @@ public struct KeychainMove: Sendable {
         }
         for entry in journal.items {
             guard keychain.exists("\(helper).\(entry.service)", entry.account) == true else { continue }
-            guard keychain.exists("\(app).\(entry.service)", entry.account) == true else { throw Failure.copyMissing("the app’s own \(entry.name)") }
+            switch keychain.exists("\(app).\(entry.service)", entry.account) {
+            case true?: break
+            case false?: throw Failure.journal("Kuvo Code’s own \(entry.name) is gone from your Keychain, so the box’s copy, now its only one, stays.")
+            case nil: throw Failure.refused(entry.name, errSecInteractionNotAllowed)
+            }
             let status = keychain.delete("\(helper).\(entry.service)", entry.account)
             guard status == errSecSuccess || status == errSecItemNotFound else { throw Failure.unchanged(entry.name, status) }
         }
