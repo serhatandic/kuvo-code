@@ -123,6 +123,8 @@ struct ConnectView: View {
         }
         .task {
             await readMethods()
+            // (Closed meanwhile: nothing starts.)
+            guard !left, !Task.isCancelled else { return }
             chooseOnlyMethod()
         }
         .onDisappear {
@@ -542,14 +544,21 @@ struct ConnectView: View {
             }
         }
         let path = SignInMethods.path(integration: integrationID, agents: OutsideAgents.isAgent(integrationID))
+        // Its box still starting is asked again each second, for half a minute at most.
+        var tries = 0
         while !Task.isCancelled, !left {
+            tries += 1
             do {
                 offered = try await box.value(SignInMethods.self, "GET", path)
                 offeredFailure = nil
                 return
-            } catch let refusal as BoxRefusal where refusal.reason == "starting" {
+            } catch let refusal as BoxRefusal where refusal.reason == "starting" && tries < 30 {
                 // Its box still starting (with the app, or after an update): asked again in a moment.
                 try? await Task.sleep(for: .seconds(1))
+            } catch let refusal as BoxRefusal where refusal.reason == "starting" {
+                // Starting for too long: as when it can't be reached.
+                offeredFailure = unreachable
+                return
             } catch {
                 offeredFailure = error.localizedDescription
                 return

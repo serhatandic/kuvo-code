@@ -615,14 +615,30 @@ final class Catalog {
         return "Sign in to \(signInName(id))\(machine.map { " on \($0): its sign-ins are its own" } ?? "")"
     }
 
-    /// It has a way to sign in that the sign-in sheet offers (a key, a sign-in page, or its own).
+    /// Each account's ways in, as its box says them (`kuvo/sign-in/accounts`): the engine's and
+    /// the coding agents'. Empty from a box before it, which needs updating to sign in from here.
+    private(set) var engineSignIns = SignInAccounts.none
+    private(set) var agentSignIns = SignInAccounts.none
+
+    /// It has a way in the sign-in sheet offers, as its box says.
     func offersSignIn(_ id: String) -> Bool {
-        integrations.first { $0.id == id }?.offeredSignInMethods.contains { method in
-            switch method {
-            case .oauth, .key, .external: true
-            default: false
-            }
-        } ?? false
+        engineSignIns.offersSignIn(id) || agentSignIns.offersSignIn(id)
+    }
+
+    /// The way in its card names under its name ("Sign in with ChatGPT", "API key"), as its box
+    /// says; nil where it hasn't.
+    func signInHint(_ id: String) -> String? {
+        (engineSignIns.accounts[id] ?? agentSignIns.accounts[id])?.hint
+    }
+
+    /// Reads each account's ways in again, the engine's or the coding agents'.
+    private func readSignIns(agents: Bool) async {
+        guard let box, let read = try? await box.value(SignInAccounts.self, "GET", SignInAccounts.path(agents: agents)) else { return }
+        if agents {
+            if read != agentSignIns { agentSignIns = read }
+        } else if read != engineSignIns {
+            engineSignIns = read
+        }
     }
 
     static func planName(_ id: String) -> String? {
@@ -695,6 +711,7 @@ final class Catalog {
             isSlow = false
         }
         await readEndedSignIns()
+        await readSignIns(agents: false)
         await readUnanswering()
         for directory in commandFolders { await loadCommands(in: directory) }
         merge()
@@ -752,7 +769,10 @@ final class Catalog {
         }
         if let models { agentModels = models }
         merge()
-        if listed != nil { areAgentsLoaded = true }
+        if listed != nil {
+            areAgentsLoaded = true
+            await readSignIns(agents: true)
+        }
     }
 
     /// The agents bridge stopped for good, or isn't there (a machine's engine started without

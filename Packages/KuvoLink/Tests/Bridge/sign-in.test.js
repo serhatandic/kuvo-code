@@ -78,7 +78,7 @@ test("an engine provider's ways in: an account's sign-in first, then a key, lega
   // OpenAI's ChatGPT plan goes through Codex: only the key, and its variable.
   const openai = await answer("GET", "kuvo/sign-in/methods?integration=openai");
   assert.equal(openai.status, 200);
-  assert.deepEqual(openai.json, { methods: [{ type: "key", label: "Use an API key" }], environment: ["OPENAI_API_KEY"] });
+  assert.deepEqual(openai.json, { methods: [{ type: "key", label: "Use an API key" }], environment: ["OPENAI_API_KEY"], hint: "API key" });
 
   const bedrock = await answer("GET", "kuvo/sign-in/methods?integration=amazon-bedrock");
   assert.deepEqual(bedrock.json, {
@@ -87,6 +87,7 @@ test("an engine provider's ways in: an account's sign-in first, then a key, lega
       { type: "key", label: "Bedrock API key" },
     ],
     environment: ["AWS_PROFILE"],
+    hint: "API key",
   });
 
   // A way no client can start (a command) isn't offered.
@@ -97,9 +98,23 @@ test("an engine provider's ways in: an account's sign-in first, then a key, lega
 test("a coding agent's account: its ways from the agents' bridge", async () => {
   const claude = await answer("GET", "kuvo/sign-in/methods?integration=claude-code&agents=1");
   assert.equal(claude.status, 200);
-  assert.deepEqual(claude.json, { methods: [{ type: "oauth", id: "subscription", label: "Claude Pro or Max" }, { type: "key", label: "Anthropic API key" }], environment: [] });
+  assert.deepEqual(claude.json, { methods: [{ type: "oauth", id: "subscription", label: "Claude Pro or Max" }, { type: "key", label: "Anthropic API key" }], environment: [], hint: "Claude Pro or Max" });
   // The engine doesn't have it.
   assert.equal((await answer("GET", "kuvo/sign-in/methods?integration=claude-code")).status, 404);
+});
+
+test("every account's ways in, for Accounts' Sign In buttons and the way in each card names", async () => {
+  const engine = await answer("GET", "kuvo/sign-in/accounts");
+  assert.equal(engine.status, 200);
+  assert.deepEqual(engine.json.accounts.map(({ id, hint, methods }) => ({ id, hint, ways: methods.length })), [
+    // OpenAI offers only its key here: its plan goes through Codex.
+    { id: "openai", hint: "API key", ways: 1 },
+    { id: "amazon-bedrock", hint: "API key", ways: 2 },
+    { id: "github-copilot", hint: "Sign in with GitHub", ways: 1 },
+  ]);
+  const agents = await answer("GET", "kuvo/sign-in/accounts?agents=1");
+  assert.deepEqual(agents.json.accounts.map(({ id, hint }) => ({ id, hint })), [{ id: "claude-code", hint: "Claude Pro or Max" }]);
+  assert.equal((await answer("GET", "kuvo/sign-in/accounts?agents=1", handlerOn(() => null))).status, 503);
 });
 
 test("how a sign-in is going, as the engine says, with what to say once it ended without signing in", async () => {

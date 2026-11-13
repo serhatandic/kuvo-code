@@ -7601,6 +7601,40 @@
       },
       "environment": {
        "list": "string"
+      },
+      "hint": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/sign-in/accounts",
+   "answers": {
+    "200": {
+     "object": {
+      "accounts": {
+       "list": {
+        "object": {
+         "id": "string",
+         "methods": {
+          "list": {
+           "object": {
+            "type": "string",
+            "id?": "string",
+            "label": "string",
+            "form?": {
+             "list": "any"
+            },
+            "legacy?": "bool"
+           }
+          }
+         },
+         "environment": {
+          "list": "string"
+         },
+         "hint": "string"
+        }
+       }
       }
      }
     }

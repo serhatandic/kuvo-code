@@ -10,7 +10,7 @@ import { failureWords, signInMethods } from "../src/link/areas/sign-in"
 const vectors = JSON.parse(readFileSync(new URL("../../KuvoLink/Vectors/sign-in.json", import.meta.url), "utf8"))
 
 test.each(vectors.methods.map((each: any, at: number) => [`${each.provider} #${at}`, each]))("%s: the ways offered, in order, with their words", (_, each: any) => {
-  expect(signInMethods({ id: each.provider, methods: each.methods, connections: each.connections ?? [] })).toEqual(each.offered)
+  expect(signInMethods({ id: each.provider, name: each.name, methods: each.methods, connections: each.connections ?? [] })).toEqual(each.offered)
 })
 
 test.each(vectors.failures.map((each: any) => [`${each.status} ${JSON.stringify(each.message ?? null)}`, each]))("%s: what a client says", (_, each: any) => {

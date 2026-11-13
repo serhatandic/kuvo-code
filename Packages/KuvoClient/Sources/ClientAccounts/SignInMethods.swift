@@ -28,6 +28,8 @@ public struct SignInMethods: Decodable, Sendable, Equatable {
     public let methods: [Offered]
     /// The environment variables that sign in to it too, set in the computer's shell.
     public let environment: [String]
+    /// The way in its card names under its name ("Sign in with ChatGPT", "API key", "Connect").
+    public let hint: String
 
     /// The ways to offer first, in order.
     public var primary: [Offered] { methods.filter { !$0.legacy } }
@@ -42,6 +44,48 @@ public struct SignInMethods: Decodable, Sendable, Equatable {
     /// agents' bridge, else the engine's.
     public static func path(integration: String, agents: Bool) -> String {
         route + "?" + SignInQuery.encoded([("integration", integration)] + (agents ? [("agents", "1")] : []))
+    }
+}
+
+/// Every account a computer's engine (or its coding agents' bridge) lists, with its ways in, as its
+/// box says them (`kuvo/sign-in/accounts`): what Accounts' Sign In buttons and each card's hint go by.
+public struct SignInAccounts: Decodable, Sendable, Equatable {
+    /// By account.
+    public let accounts: [String: SignInMethods]
+
+    private struct Entry: Decodable {
+        let id: String
+        let ways: SignInMethods
+        private enum CodingKeys: String, CodingKey { case id }
+        init(from decoder: Decoder) throws {
+            id = try decoder.container(keyedBy: CodingKeys.self).decode(String.self, forKey: .id)
+            ways = try SignInMethods(from: decoder)
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey { case accounts }
+
+    /// None said yet.
+    public static let none = SignInAccounts(accounts: [:])
+
+    public init(accounts: [String: SignInMethods]) {
+        self.accounts = accounts
+    }
+
+    public init(from decoder: Decoder) throws {
+        let entries = try decoder.container(keyedBy: CodingKeys.self).decode([Entry].self, forKey: .accounts)
+        accounts = Dictionary(entries.map { ($0.id, $0.ways) }) { first, _ in first }
+    }
+
+    /// Whether `id` has a way in a client can offer; false where its box hasn't said.
+    public func offersSignIn(_ id: String) -> Bool {
+        accounts[id].map { !$0.methods.isEmpty } ?? false
+    }
+
+    public static let route = "kuvo/sign-in/accounts"
+
+    public static func path(agents: Bool) -> String {
+        agents ? route + "?agents=1" : route
     }
 }
 

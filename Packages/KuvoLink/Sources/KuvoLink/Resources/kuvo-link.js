@@ -39865,7 +39865,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "c4d54ba80812";
+var BRIDGE_VERSION = "85585df581e4";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -49218,6 +49218,7 @@ async function* providerModelsRoute(context) {
 // Packages/Box/src/link/areas/sign-in.ts
 var SIGN_IN_METHODS_ROUTE = "kuvo/sign-in/methods";
 var SIGN_IN_STATUS_ROUTE = "kuvo/sign-in/status";
+var SIGN_IN_ACCOUNTS_ROUTE = "kuvo/sign-in/accounts";
 var ORDER = { oauth: 0, external: 1, key: 2 };
 var KEY_LABEL = "Use an API key";
 var SIGN_IN_LABEL = "Sign in";
@@ -49248,7 +49249,13 @@ function signInMethods(account) {
   }
   const methods = offered.map((method, at) => ({ method, at })).sort((a, b) => Number(!!a.method.legacy) - Number(!!b.method.legacy) || ORDER[a.method.type] - ORDER[b.method.type] || a.at - b.at).map((each) => each.method);
   const environment = listed.filter((method) => method.type === "env" && Array.isArray(method.names)).flatMap((method) => method.names.filter((name) => typeof name === "string" && name !== ""));
-  return { methods, environment };
+  return { methods, environment, hint: hintOf(methods, typeof account.name === "string" ? account.name : provider) };
+}
+function hintOf(methods, name) {
+  const signIn = methods.find((method) => method.type === "oauth" && !method.legacy);
+  if (signIn)
+    return name && signIn.label.toLowerCase().includes(name.toLowerCase()) ? "Sign in" : signIn.label.replaceAll("Login with", "Sign in with");
+  return methods.some((method) => method.type === "key") ? "API key" : "Connect";
 }
 function failureWords(status, message) {
   if (status === "expired")
@@ -49263,8 +49270,8 @@ function failureWords(status, message) {
     return "The service couldn’t sign you in just now. Try again in a moment.";
   if (lower.includes("state mismatch") || lower.includes("state_mismatch"))
     return "That page was from an earlier sign-in. Try again to sign in.";
-  if (/^[a-z]+(_[a-z]+)+$/.test(said))
-    return `Signing in didn’t work (${said.replaceAll("_", " ")}).`;
+  if (/^[a-z]+(_[a-z]+)+$/i.test(said))
+    return `Signing in didn’t work (${lower.replaceAll("_", " ")}).`;
   return said;
 }
 function placeOf(query, context) {
@@ -49279,11 +49286,30 @@ function placeOf(query, context) {
   }
 }
 var MOST_WAIT = 25;
+async function* accountsRoute2(context, query) {
+  const { signal, json } = context;
+  const place = placeOf(query, context);
+  if ("down" in place)
+    return yield* json(503, { message: place.down });
+  const deadline = AbortSignal.timeout(15000);
+  try {
+    const listed = await call(place.target, "GET", "/api/integration", undefined, signal ? AbortSignal.any([signal, deadline]) : deadline);
+    const accounts = (Array.isArray(listed) ? listed : []).filter((each) => typeof each?.id === "string");
+    return yield* json(200, { accounts: accounts.map((account) => ({ id: account.id, ...signInMethods(account) })) });
+  } catch (error) {
+    if (deadline.aborted)
+      return yield* json(504, { message: "It didn't answer in time. Try again." });
+    const status = error?.status;
+    return yield* json(typeof status === "number" && status >= 400 ? status : 502, { message: error instanceof Error && error.message ? error.message : "It didn't answer." });
+  }
+}
 async function* signInRoute(context) {
   const { request, route, signal, json } = context;
   if (request.method.toUpperCase() !== "GET")
     return yield* json(405, {});
   const query = new URLSearchParams(request.path.split("?")[1] ?? "");
+  if (route === SIGN_IN_ACCOUNTS_ROUTE)
+    return yield* accountsRoute2(context, query);
   const integration = query.get("integration")?.trim() ?? "";
   const attempt = route === SIGN_IN_STATUS_ROUTE ? query.get("attempt")?.trim() ?? "" : null;
   if (!integration || attempt === "")
@@ -50438,7 +50464,7 @@ var ROUTES = [
   { when: (route) => route.match(/^kuvo\/asks\/([^/]+)$/), answer: askAnswerRoute },
   { when: (route) => route.match(/^kuvo\/engine\/(start|restart)$/), answer: engineControlRoute },
   { when: (route) => route === "kuvo/sign-in/return", answer: signInReturnRoute },
-  { when: (route) => route === SIGN_IN_METHODS_ROUTE || route === SIGN_IN_STATUS_ROUTE, answer: signInRoute },
+  { when: (route) => route === SIGN_IN_METHODS_ROUTE || route === SIGN_IN_STATUS_ROUTE || route === SIGN_IN_ACCOUNTS_ROUTE, answer: signInRoute },
   { when: (route) => route === "kuvo/claude-code", answer: claudeCodeRoute },
   { when: (route, request) => request.path.startsWith(AGENTS), answer: agentsRoute },
   { when: (route) => route === "kuvo/accounts/ended" || route === "kuvo/accounts/refreshable" || /^kuvo\/accounts\/[^/]+\/(forget|refresh)$/.test(route), answer: accountsRoute },

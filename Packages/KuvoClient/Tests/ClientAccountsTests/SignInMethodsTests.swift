@@ -22,6 +22,7 @@ struct SignInMethodsTests {
             #expect(methods.methods.map(\.label) == said.map { $0["label"] as? String }, "\(each["provider"]!)")
             #expect(methods.methods.map(\.legacy) == said.map { $0["legacy"] as? Bool ?? false })
             #expect(methods.environment == offered["environment"] as? [String])
+            #expect(methods.hint == offered["hint"] as? String)
             // Each one a client starts as the engine lists it: its kind, its id, its questions.
             for (method, box) in zip(methods.methods, said) {
                 switch method.method {
@@ -35,6 +36,20 @@ struct SignInMethodsTests {
             // Legacy ones come after the others.
             #expect(methods.primary + methods.legacy == methods.methods)
         }
+    }
+
+    /// Every account's ways in, by account: what Accounts' Sign In buttons and card hints go by.
+    @Test func everyAccountsWaysInAreReadByAccount() throws {
+        let cases = try #require(try Self.vectors()["methods"] as? [[String: Any]])
+        // The box's answer for a list: each account with its own.
+        let listed = Array(cases.prefix(3)).map { each in (each["offered"] as! [String: Any]).merging(["id": each["provider"]!]) { $1 } }
+        let read = try JSONDecoder().decode(SignInAccounts.self, from: JSONSerialization.data(withJSONObject: ["accounts": listed + [["id": "nothing", "methods": [Any](), "environment": [Any](), "hint": "Connect"]]]))
+        #expect(read.accounts["anthropic"]?.hint == "Claude Pro/Max")
+        #expect(read.offersSignIn("anthropic"))
+        // One with no way in, and one its box didn't name: no Sign In.
+        #expect(!read.offersSignIn("nothing"))
+        #expect(!read.offersSignIn("mistral"))
+        #expect(SignInAccounts.path(agents: true) == "kuvo/sign-in/accounts?agents=1")
     }
 
     @Test func aFailedSignInsWordsComeWithItsStatus() throws {

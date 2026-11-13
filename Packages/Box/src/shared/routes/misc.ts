@@ -48,10 +48,15 @@ export const SIGN_IN_RETURNED = object({ status: number });
 /** The ways to sign in to an account, in the order a client offers them: each the engine's (`type`,
  * `id`, `form`) with the box's `label`, `legacy` for one offered apart, after the others; and the
  * environment variables that sign in to it too. */
-export const SIGN_IN_METHODS = object({
+const SIGN_IN_WAYS = {
   methods: list(object({ type: string, "id?": string, label: string, "form?": list(any), "legacy?": bool })),
   environment: list(string),
-});
+  hint: string,
+} as const;
+/** (`hint`: the way in an account's card names under its name: "Sign in with ChatGPT", "API key".) */
+export const SIGN_IN_METHODS = object(SIGN_IN_WAYS);
+/** Every account the engine (or the coding agents' bridge) lists, each with its ways in. */
+export const SIGN_IN_ACCOUNTS = object({ accounts: list(object({ id: string, ...SIGN_IN_WAYS })) });
 
 /** How a started sign-in is going, as the engine (or the coding agents' bridge) says, with, once it
  * ended without signing in (`failed`, `expired`), what a client says of it (`failure`). */
@@ -72,6 +77,7 @@ export type ProgramFound = Infer<typeof PROGRAM_FOUND>;
 export type ProviderModels = Infer<typeof PROVIDER_MODELS>;
 export type SignInReturned = Infer<typeof SIGN_IN_RETURNED>;
 export type SignInMethods = Infer<typeof SIGN_IN_METHODS>;
+export type SignInAccounts = Infer<typeof SIGN_IN_ACCOUNTS>;
 export type SignInStatus = Infer<typeof SIGN_IN_STATUS>;
 
 /** Sessions whose conversation has what a search asked for, the latest first (`kuvo/search`):
@@ -92,6 +98,7 @@ export const MISC_ROUTES: RouteShape[] = [
   { route: "POST kuvo/providers/models", answers: { 200: PROVIDER_MODELS } },
   { route: "POST kuvo/sign-in/return", answers: { 200: SIGN_IN_RETURNED } },
   { route: "GET kuvo/sign-in/methods", answers: { 200: SIGN_IN_METHODS } },
+  { route: "GET kuvo/sign-in/accounts", answers: { 200: SIGN_IN_ACCOUNTS } },
   { route: "GET kuvo/sign-in/status", answers: { 200: SIGN_IN_STATUS } },
   { route: "GET kuvo/search", answers: { 200: SEARCH_FOUND } },
 ];

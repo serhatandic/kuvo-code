@@ -1,5 +1,6 @@
 // Signing in to an account (PROTOCOL.md, "Signing in"): the ways a client offers, in the box's order
-// and words (`kuvo/sign-in/methods`), and how a started sign-in is going, with what to say when it
+// and words, for one account (`kuvo/sign-in/methods`) or every one listed (`kuvo/sign-in/accounts`,
+// what Accounts' Sign In buttons and hints go by), and how a started sign-in is going, with what to say when it
 // didn't work (`kuvo/sign-in/status`), so every client offers and says the same. The engine (or
 // the coding agents' bridge, for an agent's account) does the signing in; the box only orders and
 // words what it offers. Held to Packages/KuvoLink/Vectors/sign-in.json.
@@ -14,6 +15,7 @@ import type { AnswerPiece, RouteContext } from "../server/context";
 
 export const SIGN_IN_METHODS_ROUTE = "kuvo/sign-in/methods";
 export const SIGN_IN_STATUS_ROUTE = "kuvo/sign-in/status";
+export const SIGN_IN_ACCOUNTS_ROUTE = "kuvo/sign-in/accounts";
 
 /** A way to sign in as the engine (or the bridge) lists it (`api/integration`'s `methods`). */
 interface ListedMethod {
@@ -27,6 +29,7 @@ interface ListedMethod {
 /** An account as the engine (or the bridge) lists it: its ways in, and how it's signed in now. */
 export interface ListedAccount {
   id?: unknown;
+  name?: unknown;
   methods?: unknown;
   connections?: unknown;
 }
@@ -50,11 +53,19 @@ export const KEY_LABEL = "Use an API key";
 /** What a sign-in's button says when the engine gives it no words of its own. */
 export const SIGN_IN_LABEL = "Sign in";
 
+/** An account's ways in, as a client offers them, and `hint`, the way in its card names under its
+ * name ("Sign in with ChatGPT", "API key"; "Connect" for another way, or none). */
+export interface OfferedMethods {
+  methods: OfferedMethod[];
+  environment: string[];
+  hint: string;
+}
+
 /** The ways a client offers to sign in to `account`, in order (each kind by `ORDER`, the engine's
  * order within a kind, legacy ones last), and the environment variables that sign in to it too. A
  * plan whose sign-in goes through a coding agent (ChatGPT's through Codex, SuperGrok's through Grok)
  * isn't offered for the engine's provider, unless it's signed in that way already (it can be again). */
-export function signInMethods(account: ListedAccount): { methods: OfferedMethod[]; environment: string[] } {
+export function signInMethods(account: ListedAccount): OfferedMethods {
   const provider = typeof account.id === "string" ? account.id : "";
   const listed = (Array.isArray(account.methods) ? account.methods : []).filter((method): method is ListedMethod => !!method && typeof method === "object");
   const connections = Array.isArray(account.connections) ? account.connections : [];
@@ -85,7 +96,16 @@ export function signInMethods(account: ListedAccount): { methods: OfferedMethod[
   const environment = listed
     .filter(method => method.type === "env" && Array.isArray(method.names))
     .flatMap(method => (method.names as unknown[]).filter((name): name is string => typeof name === "string" && name !== ""));
-  return { methods, environment };
+  return { methods, environment, hint: hintOf(methods, typeof account.name === "string" ? account.name : provider) };
+}
+
+/** The way in a card names: its first sign-in that isn't legacy, in one wording ("Login with" is the
+ * engine's for some), or plain "Sign in" where its words only name the account again ("OpenCode
+ * Console account" under OpenCode Console); else "API key" for a key, else "Connect". */
+function hintOf(methods: OfferedMethod[], name: string): string {
+  const signIn = methods.find(method => method.type === "oauth" && !method.legacy);
+  if (signIn) return name && signIn.label.toLowerCase().includes(name.toLowerCase()) ? "Sign in" : signIn.label.replaceAll("Login with", "Sign in with");
+  return methods.some(method => method.type === "key") ? "API key" : "Connect";
 }
 
 /** What a client says of a sign-in that ended without signing in: `expired`, or `failed` with the
@@ -101,7 +121,7 @@ export function failureWords(status: "failed" | "expired", message?: unknown): s
   // The page's answer was for another try: an address pasted from an earlier sign-in.
   if (lower.includes("state mismatch") || lower.includes("state_mismatch")) return "That page was from an earlier sign-in. Try again to sign in.";
   // Another OAuth code, on its own: in words.
-  if (/^[a-z]+(_[a-z]+)+$/.test(said)) return `Signing in didn’t work (${said.replaceAll("_", " ")}).`;
+  if (/^[a-z]+(_[a-z]+)+$/i.test(said)) return `Signing in didn’t work (${lower.replaceAll("_", " ")}).`;
   return said;
 }
 
@@ -122,6 +142,24 @@ function placeOf(query: URLSearchParams, context: RouteContext): { target: Targe
 /** The longest a status ask waits for a change (`wait`), in seconds. */
 const MOST_WAIT = 25;
 
+/** `GET kuvo/sign-in/accounts[?agents=1]`: every account the engine (or the bridge) lists, with its
+ * ways in. */
+async function* accountsRoute(context: RouteContext, query: URLSearchParams): AsyncGenerator<AnswerPiece> {
+  const { signal, json } = context;
+  const place = placeOf(query, context);
+  if ("down" in place) return yield* json(503, { message: place.down });
+  const deadline = AbortSignal.timeout(15_000);
+  try {
+    const listed = await call(place.target, "GET", "/api/integration", undefined, signal ? AbortSignal.any([signal, deadline]) : deadline);
+    const accounts = (Array.isArray(listed) ? listed : []).filter((each): each is ListedAccount => typeof (each as ListedAccount | null)?.id === "string");
+    return yield* json(200, { accounts: accounts.map(account => ({ id: account.id as string, ...signInMethods(account) })) });
+  } catch (error) {
+    if (deadline.aborted) return yield* json(504, { message: "It didn't answer in time. Try again." });
+    const status = (error as { status?: unknown } | null)?.status;
+    return yield* json(typeof status === "number" && status >= 400 ? status : 502, { message: error instanceof Error && error.message ? error.message : "It didn't answer." });
+  }
+}
+
 /** `GET kuvo/sign-in/methods?integration=<id>[&agents=1]` and `GET kuvo/sign-in/status?integration=<id>&attempt=<id>[&agents=1][&wait=<seconds>]`:
  * with `wait`, a sign-in still going is asked again each second, answered as soon as what it says
  * changes or it ends, else once that long has passed (for a client that asks through a process run
@@ -130,6 +168,7 @@ export async function* signInRoute(context: RouteContext): AsyncGenerator<Answer
   const { request, route, signal, json } = context;
   if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
   const query = new URLSearchParams(request.path.split("?")[1] ?? "");
+  if (route === SIGN_IN_ACCOUNTS_ROUTE) return yield* accountsRoute(context, query);
   const integration = query.get("integration")?.trim() ?? "";
   const attempt = route === SIGN_IN_STATUS_ROUTE ? query.get("attempt")?.trim() ?? "" : null;
   if (!integration || attempt === "") return yield* json(400, { message: attempt === "" ? "Say which sign-in (integration, attempt)." : "Say which account (integration)." });

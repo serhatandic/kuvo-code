@@ -2892,7 +2892,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   the box's, so every client offers and says the same; the engine (or the coding agents' bridge)
   still does the signing in, started, completed and given up on through its own routes (above).
   - `GET kuvo/sign-in/methods?integration=<id>[&agents=1]` → `{"methods": [{type, id?, label,
-    form?, legacy?}], "environment": [<variable>]}`: the account's ways in, from the engine's
+    form?, legacy?}], "environment": [<variable>], "hint"}`: the account's ways in, from the engine's
     `api/integration` (`agents=1`: the coding agents' bridge's, for an agent's account), in the
     order to draw them. An account's sign-in (`oauth`) first, then credentials the computer
     already has (`external`), then a key, each kind in the engine's order; a way whose label says
@@ -2902,7 +2902,14 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     in your shell profile"), commands, kinds a client can't start, and the engine's own sign-in
     to a plan that goes through a coding agent (ChatGPT's through Codex, SuperGrok's through
     Grok), unless the account's signed in that way already. A client starts each as it comes,
-    with its `type`, `id` and `form`, and draws its own symbol for each kind.
+    with its `type`, `id` and `form`, and draws its own symbol for each kind. `hint` is the way in
+    the account's card names under its name: its first sign-in that isn't legacy (the engine's
+    "Login with" said "Sign in with"; plain "Sign in" where its words only name the account
+    again), else "API key" for a key, else "Connect".
+  - `GET kuvo/sign-in/accounts[?agents=1]` → `{"accounts": [{id, methods, environment, hint}]}`:
+    every account the engine (or the bridge) lists, each with the same answer. Accounts goes by it
+    on both apps: an account has Sign In (and Sign In Again, Add Another) only where `methods`
+    isn't empty, and a card's line under its name is `hint`. A box from before it offers none.
   - `GET kuvo/sign-in/status?integration=<id>&attempt=<id>[&agents=1][&wait=<seconds>]` → the
     attempt's status as the engine (or the bridge) says it (`status`, `message?`, `url?`,
     `instructions?`, `userCode?`), with `failure` once it's `failed` or `expired`: what a client
@@ -2916,8 +2923,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     started over: a client counts it as not heard, and gives up after a while); `503` while the
     engine or the bridge isn't running; `504` when it didn't answer in time; the engine's own
     status and words for another refusal, `502` for an answer that isn't one.
-  - Held to `Vectors/sign-in.json` in the box, KuvoClient (`SignInMethods`, `SignInStatus`) and
-    the phone's demo stand-in. A box without `sign-in.methods` needs updating: a client says so
+  - Held to `Vectors/sign-in.json` in the box and KuvoClient (`SignInMethods`, `SignInAccounts`,
+    `SignInStatus`); the phone's sample Mac and tests' computers serve its recorded answers as they
+    are. A box without `sign-in.methods` needs updating: a client says so
     rather than offering ways of its own.
 - `POST kuvo/sign-in/return` with `{"url"}`: where a sign-in's page sent the browser back to the
   computer (`http://127.0.0.1:<port>/…?code=…`: a plan's that finishes there, an MCP server's at
@@ -5239,7 +5247,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `setup` | `kuvo/setup`, `…/events`: your setup and its main computer ("Your setup") |
 | `setup.mainOnly` | a member refuses pairing and adding with `409 {message, primary}`, and answers `GET kuvo/hosts` from its setup ("Your setup", Only the main computer adds and pairs) |
 | `shell.stop` | `POST kuvo/shell/<id>/stop` |
-| `sign-in.methods` | `GET kuvo/sign-in/methods` and `GET kuvo/sign-in/status`: the ways to sign in, in the box's order and words, and what to say when a sign-in didn't work ("Signing in") |
+| `sign-in.methods` | `GET kuvo/sign-in/methods`, `GET kuvo/sign-in/accounts` and `GET kuvo/sign-in/status`: the ways to sign in, in the box's order and words, and what to say when a sign-in didn't work ("Signing in") |
 | `sign-in.return` | `POST kuvo/sign-in/return` |
 | `skills` | `kuvo/skills…` and `kuvo/skill-library…` |
 | `skills.trash` | `kuvo/skill-trash…`: Recently Deleted, and restoring from it |
