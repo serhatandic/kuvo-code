@@ -22,7 +22,8 @@ import { newID } from "../ids"
 import { onMachine, ownFoldersConfig, yourHomes } from "../machine"
 import { install, maintenance, update, type MaintenanceDefinition } from "../maintenance"
 import { which } from "../proc"
-import { chatGPTIdentity, LimitsProblem, type LimitReading, type LimitsSource, type LimitWindow } from "../limits"
+import { chatGPTIdentity, LimitsProblem, type LimitExtra, type LimitReading, type LimitsSource, type LimitWindow } from "../limits"
+import { codexCredits, readCodexResets, spendCodexReset, type ChatGPTSignIn } from "../codex-resets"
 import { RPC, RPCError } from "../rpc"
 import { CodexCitations, plainCitations, type Said } from "./codex-citations"
 import { engineSkills, skillsFolder, skillsFor, skillsRoot, turnedOff, upward, within } from "../skills"
@@ -156,8 +157,21 @@ export class CodexAgent implements Agent {
    */
   readonly limits: LimitsSource = {
     every: 10 * 60_000,
-    read: () => this.readLimits(),
+    read: (now) => this.readLimits(now),
     identity: () => this.chatGPTAccount(),
+    // (Its reset credits are read again with every read: what was read stands while that fails.)
+    reset: (attempt, now) => spendCodexReset(this.chatGPTSignIn(), attempt, now),
+  }
+
+  /** Its ChatGPT sign-in, as its home's `auth.json` keeps it (none in the Keychain): to read and spend its reset credits. */
+  private chatGPTSignIn(): ChatGPTSignIn | undefined {
+    try {
+      const tokens = JSON.parse(readFileSync(join(this.home, "auth.json"), "utf8"))?.tokens
+      const token = typeof tokens?.access_token === "string" && tokens.access_token ? tokens.access_token : undefined
+      return token ? { token, ...(typeof tokens.account_id === "string" && tokens.account_id ? { account: tokens.account_id } : {}) } : undefined
+    } catch {
+      return undefined
+    }
   }
 
   /** Who its ChatGPT sign-in is, as its token in its home says (never sent anywhere); none in the Keychain. */
@@ -170,6 +184,22 @@ export class CodexAgent implements Agent {
     }
   }
 
+  /** Its reset credits as last read from ChatGPT, and with which sign-in: kept while a read fails. */
+  private resetsRead?: { as: string | undefined; extra: LimitExtra }
+
+  /**
+   * Its reset credits, read with its own sign-in each time its limits are (they change outside its
+   * turns: another computer, the website); as last read where this read fails; none where none was.
+   */
+  private async readResets(now: number): Promise<LimitExtra | undefined> {
+    const signIn = this.chatGPTSignIn()
+    const as = this.chatGPTAccount()
+    if (!signIn) return undefined
+    const read = await readCodexResets(signIn, now)
+    if (read) this.resetsRead = { as, extra: read }
+    return this.resetsRead && this.resetsRead.as === as ? this.resetsRead.extra : undefined
+  }
+
   /** Its limits were read since the box started, and with which sign-in (`chatGPTAccount`). */
   private limitsRead?: { as: string | undefined }
   /** Who each app-server is signed in as: it reads its sign-in as it starts, and keeps it. */
@@ -180,20 +210,23 @@ export class CodexAgent implements Agent {
    * one already running for its sessions, never marked as used: a read never keeps one running, nor
    * starts one again for an account nobody uses. Between, what its turns hear keeps them current.
    */
-  private async readLimits(): Promise<LimitReading | null> {
+  private async readLimits(at: number): Promise<LimitReading | null> {
     if (!this.executable()) throw new LimitsProblem("none", "Codex isn't installed here.")
     // Only through a Codex signed in as its home is now: one started before you signed in to
     // another account still reads the one before, whose limits aren't this one's.
     const now = this.chatGPTAccount()
     const current = (server: RPC | undefined): server is RPC => !!server && !server.isClosed && this.signedInAs.get(server) === now
     const running = [...this.slots.values()].map((slot) => slot.server).find(current)
+    // Its reset credits, from ChatGPT, whether or not Codex is asked now.
+    const resets = await this.readResets(at)
+    const onlyResets = (): LimitReading | null => (resets ? { windows: [], extras: [resets], extrasOnly: true } : null)
     // (Signed in to another account since it was read: read once more, as at the box's start.)
-    if (this.limitsRead && this.limitsRead.as === now && !running) return null
+    if (this.limitsRead && this.limitsRead.as === now && !running) return onlyResets()
     let rpc: RPC
     let account: any
     try {
       rpc = running ?? (await this.rpc())
-      if (!current(rpc)) return null
+      if (!current(rpc)) return onlyResets()
       account = (await rpc.request("account/read", {}, 20_000))?.account
     } catch (caught) {
       throw new LimitsProblem("failed", `Codex couldn't say: ${caught instanceof Error ? caught.message : String(caught)}`)
@@ -214,7 +247,10 @@ export class CodexAgent implements Agent {
     const snapshots: any[] = result?.rateLimitsByLimitId ? Object.values(result.rateLimitsByLimitId) : result?.rateLimits ? [result.rateLimits] : []
     const windows = snapshots.flatMap((snapshot) => codexWindows(snapshot))
     const type = account.planType ?? snapshots.find((snapshot) => snapshot?.planType)?.planType
-    return { windows, ...(typeof type === "string" && type !== "unknown" ? { plan: codexPlan(type) } : {}) }
+    // Its credits (the plan's own snapshot's), and its reset credits.
+    const credits = codexCredits(snapshots.find((snapshot) => snapshot?.credits)?.credits)
+    const extras = [credits, resets].filter((extra): extra is LimitExtra => !!extra)
+    return { windows, ...(typeof type === "string" && type !== "unknown" ? { plan: codexPlan(type) } : {}), ...(extras.length ? { extras } : {}) }
   }
 
   /** Its own sign-in on a machine: Kuvo Code's, in its folder there, so signed out here. */

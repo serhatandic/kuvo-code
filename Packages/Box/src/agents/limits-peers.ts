@@ -95,6 +95,11 @@ export class LimitsPeers {
     transport.onFollowed?.(() => this.told.clear())
   }
 
+  /** This box's key, as the link names it ("" until it says). */
+  ownKey(): string {
+    return this.directory.own()?.key ?? ""
+  }
+
   /** The newest time a peer read this account from its maker (on this box's clock), if any did. */
   fresh(service: LimitsService, identity: string): number | undefined {
     return this.freshest(service, identity)?.checked
@@ -118,7 +123,7 @@ export class LimitsPeers {
     const self = this.directory.own()
     const boxes: LimitsBox[] = [{ key: self?.key ?? "", name: self?.name ?? "", here: true, away: false, accounts: own }]
     const peers = [...this.peers.entries()].sort(([, a], [, b]) => a.name.localeCompare(b.name))
-    for (const [key, kept] of peers) boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY, accounts: kept.accounts })
+    for (const [key, kept] of peers) boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY, ...(this.directory.isPeer?.(key) === false ? { vouched: true } : {}), accounts: kept.accounts })
     return limitRows(boxes)
   }
 
@@ -131,9 +136,11 @@ export class LimitsPeers {
   tell(urgent = false) {
     if (!this.transport.followed || !this.directory.told) return
     const now = this.now()
-    const accounts = this.shared()
-    const json = JSON.stringify(accounts)
+    const mine = this.shared()
+    const theirs = forVouched(mine)
     for (const { key } of this.directory.peerBoxes()) {
+      const accounts = this.ours(key) ? mine : theirs
+      const json = JSON.stringify(accounts)
       const last = this.told.get(key)
       const due = !last || now - last.at >= TELL_AGAIN || (last.json !== json && (urgent || now - last.at >= HEARD_EVERY))
       if (!due) continue
@@ -186,8 +193,8 @@ export class LimitsPeers {
       asks.set(box.key, [...(asks.get(box.key) ?? []), row.id])
     }
     const now = this.now()
-    const accounts = this.shared()
-    for (const [key, refresh] of asks) this.transport.send(key, { kind: "limits", at: now, accounts, refresh }, false)
+    const mine = this.shared()
+    for (const [key, refresh] of asks) this.transport.send(key, { kind: "limits", at: now, accounts: this.ours(key) ? mine : forVouched(mine), refresh }, false)
   }
 
   /** An account of this box's, as rows name it. */
@@ -201,9 +208,14 @@ export class LimitsPeers {
     const now = this.now()
     if (now - (this.answered.get(key) ?? -Infinity) < HEARD_EVERY) return
     this.answered.set(key, now)
-    const accounts = this.shared()
+    const accounts = this.ours(key) ? this.shared() : forVouched(this.shared())
     this.transport.send(key, { kind: "limits", at: now, accounts }, false)
     this.told.set(key, { json: JSON.stringify(accounts), at: now })
+  }
+
+  /** Whether a box is one of your own computers (not one a peer of yours only vouches for). */
+  private ours(key: string) {
+    return this.directory.isPeer?.(key) === true
   }
 
   /** This box's own accounts, as many as fit in one mail (with up to 200 rows' ids asked of it besides). */
@@ -252,6 +264,20 @@ export class LimitsPeers {
   }
 }
 
+/**
+ * What a box a peer only vouches for is told of your accounts: their limits, but not what you spend
+ * or have to spend beyond them (`spent`, `capped`, `left`, credits left), nor whether agents may
+ * use their resets.
+ */
+function forVouched(accounts: AccountLimits[]): AccountLimits[] {
+  return accounts.map((account) => {
+    const { agentsReset: _, balance: ___, ...told } = account
+    const extras = (account.extras ?? []).filter((extra) => extra.kind === "resets" || extra.kind === "unreadable").map(({ agents: __, ...extra }) => extra)
+    delete told.extras
+    return extras.length ? { ...told, extras } : told
+  })
+}
+
 const text = (value: unknown, most = 200) => (typeof value === "string" && value ? value.slice(0, most) : undefined)
 const time = (value: unknown) => (typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined)
 
@@ -259,16 +285,32 @@ const time = (value: unknown) => (typeof value === "number" && Number.isFinite(v
 const MOST_EXTRA = 1_000
 
 /**
- * What a peer's account has beyond its windows, as kept: a `spent` one checked; one of a kind this
- * box doesn't know yet (a newer box's, #631 piece E's) passed on as told, but only its plain fields
+ * What a peer's account has beyond its windows, as kept: one of a kind this box knows checked
+ * (`LimitExtra`); one of a kind this box doesn't know yet (a newer box's) passed on as told, but only its plain fields
  * (text, numbers, true or false) and only while it's small, so a newer box's facts survive a hop
  * through this one.
  */
 function takenExtra(extra: any): LimitExtra[] {
   if (!extra || typeof extra !== "object" || Array.isArray(extra) || !text(extra.id) || !text(extra.name, 100) || !text(extra.kind, 40)) return []
-  if (extra.kind === "spent") {
-    if (typeof extra.amount !== "number" || !Number.isFinite(extra.amount) || !["usd", "credits", "requests"].includes(extra.unit)) return []
-    return [{ id: text(extra.id)!, name: text(extra.name, 100)!, kind: "spent", amount: extra.amount, unit: extra.unit, ...(time(extra.resetsAt) ? { resetsAt: extra.resetsAt } : {}) }]
+  const named = { id: text(extra.id)!, name: text(extra.name, 100)! }
+  const amount = (value: unknown) => typeof value === "number" && Number.isFinite(value)
+  const unit = ["usd", "credits", "requests"].includes(extra.unit)
+  const resets = time(extra.resetsAt) ? { resetsAt: extra.resetsAt } : {}
+  switch (extra.kind) {
+    case "spent":
+    case "left":
+      return amount(extra.amount) && unit ? [{ ...named, kind: extra.kind, amount: extra.amount, unit: extra.unit, ...resets }] : []
+    case "capped":
+      return amount(extra.amount) && amount(extra.limit) && extra.limit > 0 && unit ? [{ ...named, kind: "capped", amount: extra.amount, limit: extra.limit, unit: extra.unit, ...resets }] : []
+    case "resets": {
+      if (!amount(extra.count) || extra.count < 0) return []
+      const expiries = (Array.isArray(extra.expiries) ? extra.expiries : []).filter((at: unknown) => time(at) !== undefined).slice(0, 50)
+      const refills = (Array.isArray(extra.refills) ? extra.refills : []).map((each: unknown) => text(each, 40)).filter(Boolean).slice(0, 10)
+      // (Where it's used is worked out by each box from its own rows: never taken as told.)
+      return [{ ...named, kind: "resets", count: Math.floor(extra.count), ...(expiries.length ? { expiries } : {}), ...(refills.length ? { refills } : {}), usable: extra.usable === true, ...(extra.agents === true ? { agents: true as const } : {}) }]
+    }
+    case "unreadable":
+      return text(extra.message, 500) ? [{ ...named, kind: "unreadable", message: text(extra.message, 500)! }] : []
   }
   const plain = Object.fromEntries(
     Object.entries(extra)
@@ -326,6 +368,7 @@ function takenAccount(given: unknown, off: number, now: number): AccountLimits |
     windows,
     ...(balance && typeof balance === "object" && typeof balance.left === "number" && (balance.unit === "usd" || balance.unit === "credits") ? { balance: { left: balance.left, ...(typeof balance.limit === "number" ? { limit: balance.limit } : {}), unit: balance.unit } } : {}),
     ...(extras.length ? { extras } : {}),
+    ...(account.agentsReset === true ? { agentsReset: true as const } : {}),
     ...(checked ? { checked } : {}),
     ...(next ? { next } : {}),
     ...(problem && typeof problem === "object" && PROBLEMS.has(problem.kind) && text(problem.message, 500) ? { problem: { kind: problem.kind, message: text(problem.message, 500)!, ...(time(problem.until) ? { until: problem.until + off } : {}) } } : {}),

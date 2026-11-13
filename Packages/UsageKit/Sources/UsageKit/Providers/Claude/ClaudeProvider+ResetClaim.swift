@@ -167,7 +167,8 @@ final class ClaudeResetClaimService: ResetClaimService {
         self.refreshAfterClaim = refreshAfterClaim
     }
 
-    var isClaimable: Bool { provider.resetGrantsCheck?.status?.claimableGrantID != nil }
+    /// Never from here (#631 E, fork addition): Claude's resets are used through the host's box.
+    var isClaimable: Bool { false }
     var confirmDetail: String? { provider.resetGrantsCheck?.status?.confirmDetail }
 
     /// Claude always spends `next_grant_id`, so the picked node's expiry is ignored.

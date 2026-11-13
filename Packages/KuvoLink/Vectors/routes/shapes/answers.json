@@ -3209,6 +3209,9 @@
             "literal": "limits"
            },
            {
+            "literal": "limits.resets"
+           },
+           {
             "literal": "mcp.catalog"
            },
            {
@@ -3690,6 +3693,9 @@
            },
            {
             "literal": "limits"
+           },
+           {
+            "literal": "limits.resets"
            },
            {
             "literal": "mcp.catalog"
@@ -10877,6 +10883,9 @@
            },
            {
             "literal": "cloneProject"
+           },
+           {
+            "literal": "resetLimits"
            }
           ]
          },
@@ -10893,6 +10902,24 @@
           ]
          },
          "suggested?": "string",
+         "reset?": {
+          "object": {
+           "row": "string",
+           "account": "string",
+           "service": "string",
+           "count": "number",
+           "refills?": {
+            "list": "string"
+           },
+           "on?": "string"
+          }
+         },
+         "words?": {
+          "object": {
+           "title": "string",
+           "body": "string"
+          }
+         },
          "at": "number"
         }
        }
@@ -11105,6 +11132,9 @@
            },
            {
             "literal": "cloneProject"
+           },
+           {
+            "literal": "resetLimits"
            }
           ]
          },
@@ -11121,6 +11151,24 @@
           ]
          },
          "suggested?": "string",
+         "reset?": {
+          "object": {
+           "row": "string",
+           "account": "string",
+           "service": "string",
+           "count": "number",
+           "refills?": {
+            "list": "string"
+           },
+           "on?": "string"
+          }
+         },
+         "words?": {
+          "object": {
+           "title": "string",
+           "body": "string"
+          }
+         },
          "at": "number"
         }
        }
@@ -11145,6 +11193,9 @@
            },
            {
             "literal": "cloneProject"
+           },
+           {
+            "literal": "resetLimits"
            }
           ]
          },
@@ -11161,6 +11212,24 @@
           ]
          },
          "suggested?": "string",
+         "reset?": {
+          "object": {
+           "row": "string",
+           "account": "string",
+           "service": "string",
+           "count": "number",
+           "refills?": {
+            "list": "string"
+           },
+           "on?": "string"
+          }
+         },
+         "words?": {
+          "object": {
+           "title": "string",
+           "body": "string"
+          }
+         },
          "at": "number"
         }
        }

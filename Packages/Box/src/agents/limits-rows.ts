@@ -14,6 +14,8 @@ export interface LimitsBox {
   here: boolean
   /** A peer not heard from for a while: what it said is as of then. */
   away: boolean
+  /** A box a peer of yours vouches for, not one of yours: it never uses your resets. */
+  vouched?: boolean
   accounts: AccountLimits[]
 }
 
@@ -76,8 +78,28 @@ export function limitRows(boxes: LimitsBox[]): LimitRow[] {
       })),
     }
     if (members.every((member) => member.box.away)) row.away = true
+    withResetsOn(row, members)
     return row
   })
+}
+
+/**
+ * The computer that would use one of a row's resets: the first of its boxes (this box's first)
+ * whose own sign-in can (its `resets` extra says `usable`), one that's heard from before one that's
+ * away. None where none can: the row's resets are only counted.
+ */
+function withResetsOn(row: LimitRow, members: { box: LimitsBox; account: AccountLimits }[]) {
+  const index = row.extras?.findIndex((extra) => extra.kind === "resets") ?? -1
+  if (index < 0) return
+  const can = (member: { box: LimitsBox; account: AccountLimits }) => !member.box.vouched && member.account.extras?.some((extra) => extra.kind === "resets" && extra.usable === true)
+  const holder = members.find((member) => can(member) && !member.box.away) ?? members.find(can)
+  const extras = [...row.extras!]
+  const { on: _, ...resets } = extras[index]!
+  // (Whether agents may use them without asking is the holder's account's, kept on its box.)
+  const agents = holder?.account.extras?.some((extra) => extra.kind === "resets" && extra.agents === true)
+  delete resets.agents
+  extras[index] = holder ? { ...resets, usable: true, ...(agents ? { agents: true } : {}), on: { key: holder.box.key, name: holder.box.name, ...(holder.box.here ? { here: true as const } : {}) } } : { ...resets, usable: false }
+  row.extras = extras
 }
 
 /** When an account was last heard of: its maker's last answer, else its newest window. */
@@ -108,8 +130,10 @@ function merged(members: AccountLimits[]): AccountLimits {
   const newest = [...members].sort((a, b) => newestOf(b) - newestOf(a))
   const plan = newest.find((member) => member.plan)?.plan
   const balance = newest.find((member) => member.balance)?.balance
-  // (A reading without them says there are none now: the newest that read without a problem.)
-  const extras = newest.find((member) => member.checked && !member.problem)?.extras
+  // (A reading without them says there are none now: the newest that read without a problem;
+  // else, while none could read lately, what was last read, before what a sign-in can't read.)
+  const read = newest.find((member) => member.checked && !member.problem)
+  const extras = read ? read.extras : (newest.find((member) => member.extras?.some((extra) => extra.kind !== "unreadable")) ?? newest.find((member) => member.extras?.length))?.extras
   const checked = Math.max(0, ...members.map((member) => member.checked ?? 0))
   const next = Math.min(...members.map((member) => member.next ?? Infinity))
   for (const key of ["plan", "balance", "extras", "checked", "next", "problem"] as const) delete account[key]

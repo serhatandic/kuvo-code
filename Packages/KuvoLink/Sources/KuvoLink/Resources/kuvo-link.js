@@ -1145,6 +1145,249 @@ function changeDescription(folder, change) {
   });
 }
 
+// Packages/Box/src/shared/limits.ts
+function resetsIn(text, now = Date.now()) {
+  const found = text?.match(/(?:resets?|try again|available again)\s+in\s+((?:\d+(?:\.\d+)?\s*(?:days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)(?![a-z])[\s,]*(?:and\s+)?)+)/i);
+  if (!found)
+    return;
+  const units = { d: 86400000, h: 3600000, m: 60000, s: 1000 };
+  let total = 0;
+  for (const part of found[1].matchAll(/(\d+(?:\.\d+)?)\s*([dhms])/gi))
+    total += Number(part[1]) * (units[part[2].toLowerCase()] ?? 0);
+  return total > 0 ? now + Math.min(total, 31 * 86400000) : undefined;
+}
+function zone() {
+  const name = process.env.KUVO_TZ;
+  if (!name)
+    return;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: name });
+    return name;
+  } catch {
+    return;
+  }
+}
+function resetTime(at) {
+  const timeZone = zone();
+  const day = (date) => date.toLocaleDateString("en-US", { timeZone });
+  const date = new Date(at);
+  const time = date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone });
+  if (day(date) === day(new Date))
+    return time;
+  return `${date.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone })}, ${time}`;
+}
+function isLimit(text) {
+  return Boolean(text && /\b429\b|rate.?limit|usage limit|limit (?:was |has been )?reached|reached (?:its|your|the) (?:usage )?limit|quota|too many requests|resets? in|try again in|overloaded|capacity/i.test(text));
+}
+
+// Packages/Box/src/link/work/plan-limits.ts
+var AGENT_NAMES = { claude: "Claude Code", codex: "Codex", cursor: "Cursor", grok: "Grok", antigravity: "Antigravity" };
+var ENGINE_NAMES = { codex: "ChatGPT", grok: "SuperGrok", copilot: "GitHub Copilot", openrouter: "OpenRouter", zai: "Z.ai", ollama: "Ollama", opencode: "OpenCode Go" };
+function amount(value, unit) {
+  return unit === "usd" ? `$${value.toFixed(2)}` : `${Math.round(value)} ${unit === "requests" ? "requests" : "credits"}`;
+}
+function until(at, now) {
+  const minutes = Math.max(1, Math.round((at - now) / 60000));
+  if (minutes < 60)
+    return `in ${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48)
+    return `in ${hours}h${minutes % 60 ? ` ${minutes % 60}m` : ""}`;
+  return `in ${Math.round(hours / 24)} days`;
+}
+function since(at, now) {
+  const minutes = Math.max(0, Math.round((now - at) / 60000));
+  if (minutes < 1)
+    return "just now";
+  if (minutes < 60)
+    return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  return hours < 48 ? `${hours}h ago` : `${Math.round(hours / 24)} days ago`;
+}
+function windowName(window) {
+  const minutes = typeof window.minutes === "number" ? window.minutes : undefined;
+  const length = minutes === 300 ? "5-hour window" : minutes === 10080 ? "weekly limit" : minutes && minutes >= 40000 && minutes <= 45000 ? "monthly limit" : minutes ? `${minutes >= 1440 ? `${Math.round(minutes / 1440)}-day` : `${Math.round(minutes / 60)}-hour`} window` : "limit";
+  if (typeof window.name === "string" && window.name)
+    return window.name;
+  return typeof window.model === "string" && window.model ? `${window.model} ${length}` : length;
+}
+function rowTitle(account) {
+  const service = typeof account.agent === "string" ? AGENT_NAMES[account.agent] ?? account.agent : ENGINE_NAMES[String(account.service)] ?? String(account.service);
+  return `${service}${typeof account.label === "string" && account.label ? ` (${account.label})` : ""}`;
+}
+function extraLines(account, now) {
+  const lines = [];
+  for (const extra of Array.isArray(account.extras) ? account.extras.filter(isObject) : []) {
+    const name = typeof extra.name === "string" ? extra.name : String(extra.id);
+    if (typeof extra.resetsAt === "number" && extra.resetsAt <= now)
+      continue;
+    const resets = typeof extra.resetsAt === "number" ? `, starts over ${until(extra.resetsAt, now)}` : "";
+    if (extra.kind === "spent" && typeof extra.amount === "number")
+      lines.push(`  - ${name}: ${amount(extra.amount, extra.unit)} spent${resets}`);
+    else if (extra.kind === "capped" && typeof extra.amount === "number" && typeof extra.limit === "number")
+      lines.push(`  - ${name}: ${amount(extra.amount, extra.unit)} of ${amount(extra.limit, extra.unit)} used${resets}`);
+    else if (extra.kind === "left" && typeof extra.amount === "number")
+      lines.push(`  - ${name}: ${amount(extra.amount, extra.unit)} left`);
+    else if (extra.kind === "resets") {
+      const count = Number(extra.count) || 0;
+      const where = isObject(extra.on) && extra.on.here !== true && typeof extra.on.name === "string" ? ` (used on ${extra.on.name}, which has its sign-in)` : "";
+      const use = count > 0 && extra.usable === true ? `; use_limit_reset with account "${String(account.id ?? account.provider)}" uses one${where}${extra.agents === true ? " (the user allows it without asking)" : " (the user approves each)"}` : count > 0 ? "; none can be used from your computers now" : "";
+      lines.push(`  - rate-limit resets: ${count} available${use}`);
+    } else if (extra.kind === "unreadable" && typeof extra.message === "string")
+      lines.push(`  - ${extra.message}`);
+  }
+  return lines;
+}
+function describePlanLimits(data, now = Date.now()) {
+  const rows = isObject(data) && Array.isArray(data.rows) ? data.rows.filter(isObject) : null;
+  const accounts = rows ?? (isObject(data) && Array.isArray(data.accounts) ? data.accounts.filter(isObject) : []);
+  if (!accounts.length)
+    return `No plan limits are known on ${HERE}: no coding agent here is signed in to a plan whose limits can be read.`;
+  const lines = [rows ? `Plan limits of your accounts (signed in on ${HERE} unless it says where; used is how much of the window is gone):` : `Plan limits on ${HERE} (each account's own; used is how much of the window is gone):`];
+  for (const account of accounts) {
+    const service = typeof account.agent === "string" ? AGENT_NAMES[account.agent] ?? account.agent : ENGINE_NAMES[String(account.service)] ?? String(account.service);
+    const boxes = Array.isArray(account.boxes) ? account.boxes.filter(isObject) : [];
+    const elsewhere = rows && !boxes.some((box) => box.here === true) ? boxes.map((box) => String(box.name || "another computer")) : [];
+    const where = elsewhere.length ? `, signed in on ${elsewhere.join(", ")}${account.away === true ? " (not heard from lately: as last told)" : ""}` : "";
+    const provider = rows ? boxes.find((box) => box.here === true)?.provider ?? account.provider : account.provider;
+    const name = `${service}${typeof account.label === "string" && account.label ? ` (${account.label})` : ""}${typeof account.plan === "string" && account.plan ? `, ${account.plan}` : ""}${elsewhere.length ? "" : `, provider ${String(provider)}`}${where}`;
+    lines.push(`- ${name}:`);
+    const windows = Array.isArray(account.windows) ? account.windows.filter(isObject) : [];
+    for (const window of windows) {
+      const resetsAt = typeof window.resetsAt === "number" ? window.resetsAt : undefined;
+      if (resetsAt && resetsAt <= now) {
+        lines.push(`  - ${windowName(window)}: started over at ${resetTime(resetsAt)}, not read since`);
+        continue;
+      }
+      const used = Math.round(Number(window.used) * 100);
+      const read = typeof window.read === "number" ? `, as of ${since(window.read, now)}` : "";
+      const counted = isObject(window.amount) ? ` (${amount(Number(window.amount.used), window.amount.unit)} of ${amount(Number(window.amount.limit), window.amount.unit)})` : "";
+      lines.push(`  - ${windowName(window)}: ${used}% used${counted}${resetsAt ? `, resets ${until(resetsAt, now)} (${resetTime(resetsAt)})` : ""}${read}`);
+    }
+    const balance = isObject(account.balance) ? account.balance : undefined;
+    if (balance)
+      lines.push(`  - credits: ${amount(Number(balance.left), balance.unit)} left${typeof balance.limit === "number" ? ` of ${amount(balance.limit, balance.unit)}` : ""}`);
+    lines.push(...extraLines(account, now));
+    if (!windows.length && !balance && !Array.isArray(account.extras))
+      lines.push("  - none read yet");
+    const problem = isObject(account.problem) ? account.problem : undefined;
+    if (problem && typeof problem.message === "string") {
+      const next = typeof problem.until === "number" && problem.until > now ? ` Read again ${until(problem.until, now)}.` : "";
+      lines.push(`  - Not read just now: ${problem.message}${next}`);
+    }
+  }
+  return lines.join(`
+`);
+}
+async function planLimitsTool(bridge, signal) {
+  if (!bridge)
+    return { text: `The coding agents aren't running on ${HERE} now, so their plan limits can't be read. Try again in a moment.`, isError: true };
+  try {
+    return { text: describePlanLimits(await call(bridge, "GET", "/api/kuvo/limits", undefined, signal)), isError: false };
+  } catch (error) {
+    return { text: `Couldn't read the plan limits on ${HERE}: ${String(error?.message ?? error)}`, isError: true };
+  }
+}
+
+// Packages/Box/src/link/work/plan-reset.ts
+var said = (text) => ({ text, isError: false });
+var refused = (text) => ({ text, isError: true });
+var why = (error) => String(error?.message ?? error);
+async function rowsOf(bridge, signal) {
+  const data = await call(bridge, "GET", "/api/kuvo/limits", undefined, signal);
+  return isObject(data) && Array.isArray(data.rows) ? data.rows.filter(isObject) : [];
+}
+var resetsOf = (row) => (Array.isArray(row.extras) ? row.extras.filter(isObject) : []).find((extra) => extra.kind === "resets");
+async function resetRow(bridge, wanted, signal) {
+  const rows = await rowsOf(bridge, signal);
+  const name = wanted.trim().toLowerCase();
+  const withResets = rows.filter((row) => resetsOf(row));
+  const found = rows.find((row) => row.id === wanted.trim()) ?? withResets.filter((row) => rowTitle(row).toLowerCase() === name || rowTitle(row).toLowerCase().startsWith(name + " ")).at(0);
+  if (!found) {
+    const listed = withResets.map((row) => `- ${rowTitle(row)}: account "${String(row.id)}"`).join(`
+`);
+    return { refused: listed ? `No account of the user's is called ${wanted}. Those with resets:
+${listed}` : "None of the user's accounts has rate-limit resets." };
+  }
+  return { row: found };
+}
+function resetGiven(row, offer) {
+  const on = isObject(offer.on) && offer.on.here !== true && typeof offer.on.name === "string" && offer.on.name ? offer.on.name : undefined;
+  return {
+    row: String(row.id),
+    account: rowTitle(row),
+    service: String(row.service ?? ""),
+    count: Number(offer.count) || 0,
+    ...Array.isArray(offer.refills) && offer.refills.length ? { refills: offer.refills.filter((each) => typeof each === "string").slice(0, 10) } : {},
+    ...on ? { on } : {}
+  };
+}
+async function spendReset(bridge, row, by, { always = false, unasked = false, signal } = {}) {
+  try {
+    if (always)
+      await call(bridge, "PUT", "/api/kuvo/limits/reset/always", { row, always: true }, signal);
+    let offer;
+    try {
+      offer = await call(bridge, "POST", "/api/kuvo/limits/reset", { row }, signal);
+    } catch (error) {
+      if (always && error?.status === 503)
+        return refused(`Always Allow is kept for this account. ${why(error)} So no reset was used now: ask again once it's back.`);
+      throw error;
+    }
+    if (!isObject(offer) || typeof offer.confirm !== "string")
+      return refused("The reset couldn't be asked for.");
+    const done = await call(bridge, "POST", "/api/kuvo/limits/reset", { row, confirm: offer.confirm, by, ...unasked ? { unasked: true } : {} }, signal);
+    if (!isObject(done))
+      return refused("The reset's answer didn't come.");
+    const limits = isObject(done.row) ? `
+
+${describePlanLimits({ rows: [done.row] })}` : "";
+    const name = isObject(done.row) ? rowTitle(done.row) : "the account";
+    switch (done.outcome) {
+      case "reset":
+        console.error(`kuvo-link: ${by} used a reset of ${name}.`);
+        return said(`Used one of ${name}'s rate-limit resets: its limits started over.${limits}`);
+      case "unconfirmed":
+        return said(`The reset of ${name} may still be going through: read plan_limits again in a minute.${limits}`);
+      default:
+        return refused(`${typeof done.message === "string" ? done.message : "The reset didn't go through. Nothing was used."}${limits}`);
+    }
+  } catch (error) {
+    return refused(`The reset didn't go through: ${why(error)}`);
+  }
+}
+function resetAskWords(name, given) {
+  return { title: `${name} asks to use a reset`, body: `${given.account}: 1 of ${given.count}${given.on ? `, on ${given.on}` : ""}` };
+}
+async function useResetTool(bridge, args, asker, ask, signal) {
+  if (!bridge)
+    return refused(`The coding agents aren't running on ${HERE} now, so no reset can be used. Try again in a moment.`);
+  if (!asker)
+    return refused("Only a conversation on this computer can use a reset from here.");
+  const wanted = typeof args.account === "string" ? args.account.trim() : "";
+  if (!wanted)
+    return refused("Say which account (account), as plan_limits lists it.");
+  try {
+    const found = await resetRow(bridge, wanted, signal);
+    if ("refused" in found)
+      return refused(found.refused);
+    const id = String(found.row.id);
+    let offer;
+    try {
+      offer = await call(bridge, "POST", "/api/kuvo/limits/reset", { row: id }, signal);
+    } catch (error) {
+      return refused(`${rowTitle(found.row)}'s resets can't be used now: ${why(error)}`);
+    }
+    if (!isObject(offer))
+      return refused("The reset couldn't be asked for.");
+    if (offer.always === true)
+      return spendReset(bridge, id, asker.name, { unasked: true, signal });
+    return ask(resetGiven(found.row, offer));
+  } catch (error) {
+    return refused(`Couldn't read the plan limits on ${HERE}: ${why(error)}`);
+  }
+}
+
 // Packages/Box/src/link/engine/queue.ts
 import crypto5 from "node:crypto";
 import fs11 from "node:fs";
@@ -2251,6 +2494,7 @@ var FEATURES = [
   "keys",
   "letters-read",
   "limits",
+  "limits.resets",
   "mcp.catalog",
   "models.offered",
   "moves",
@@ -6368,41 +6612,6 @@ import path100 from "node:path";
 import crypto38 from "node:crypto";
 import fs98 from "node:fs";
 import path99 from "node:path";
-
-// Packages/Box/src/shared/limits.ts
-function resetsIn(text, now = Date.now()) {
-  const found = text?.match(/(?:resets?|try again|available again)\s+in\s+((?:\d+(?:\.\d+)?\s*(?:days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)(?![a-z])[\s,]*(?:and\s+)?)+)/i);
-  if (!found)
-    return;
-  const units = { d: 86400000, h: 3600000, m: 60000, s: 1000 };
-  let total = 0;
-  for (const part of found[1].matchAll(/(\d+(?:\.\d+)?)\s*([dhms])/gi))
-    total += Number(part[1]) * (units[part[2].toLowerCase()] ?? 0);
-  return total > 0 ? now + Math.min(total, 31 * 86400000) : undefined;
-}
-function zone() {
-  const name = process.env.KUVO_TZ;
-  if (!name)
-    return;
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: name });
-    return name;
-  } catch {
-    return;
-  }
-}
-function resetTime(at) {
-  const timeZone = zone();
-  const day = (date) => date.toLocaleDateString("en-US", { timeZone });
-  const date = new Date(at);
-  const time = date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone });
-  if (day(date) === day(new Date))
-    return time;
-  return `${date.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone })}, ${time}`;
-}
-function isLimit(text) {
-  return Boolean(text && /\b429\b|rate.?limit|usage limit|limit (?:was |has been )?reached|reached (?:its|your|the) (?:usage )?limit|quota|too many requests|resets? in|try again in|overloaded|capacity/i.test(text));
-}
 
 // Packages/Box/src/shared/goals.ts
 var PAUSED_BY_YOU = "You paused it.";
@@ -10729,7 +10938,7 @@ var WORK_SESSION = object({
 });
 var WORK_ASK = object({
   id: string,
-  action: words("makeProject", "cloneProject"),
+  action: words("makeProject", "cloneProject", "resetLimits"),
   session: string,
   name: string,
   "bot?": string,
@@ -10738,6 +10947,8 @@ var WORK_ASK = object({
   folderName: string,
   folder: nullable(string),
   "suggested?": string,
+  "reset?": object({ row: string, account: string, service: string, count: number, "refills?": list(string), "on?": string }),
+  "words?": object({ title: string, body: string }),
   at: number
 });
 var WORK_ASKS = object({ asks: list(WORK_ASK) });
@@ -12256,7 +12467,7 @@ function readRows(key) {
     return null;
   }
 }
-function rowsOf(lead) {
+function rowsOf2(lead) {
   const found = [];
   for (const name of listOf(ELSEWHERE)) {
     if (!name.endsWith(".json"))
@@ -19935,87 +20146,6 @@ function notifyUserTool(caller, args, now = Date.now(), telling = tellingNow) {
   return { text: `Sent to the user: “${sentence}”`, isError: false };
 }
 
-// Packages/Box/src/link/work/plan-limits.ts
-var AGENT_NAMES = { claude: "Claude Code", codex: "Codex", cursor: "Cursor", grok: "Grok", antigravity: "Antigravity" };
-var ENGINE_NAMES = { codex: "ChatGPT", grok: "SuperGrok", copilot: "GitHub Copilot", openrouter: "OpenRouter", zai: "Z.ai", ollama: "Ollama", opencode: "OpenCode Go" };
-function amount(value, unit) {
-  return unit === "usd" ? `$${value.toFixed(2)}` : `${Math.round(value)} ${unit === "requests" ? "requests" : "credits"}`;
-}
-function until(at, now) {
-  const minutes = Math.max(1, Math.round((at - now) / 60000));
-  if (minutes < 60)
-    return `in ${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 48)
-    return `in ${hours}h${minutes % 60 ? ` ${minutes % 60}m` : ""}`;
-  return `in ${Math.round(hours / 24)} days`;
-}
-function since(at, now) {
-  const minutes = Math.max(0, Math.round((now - at) / 60000));
-  if (minutes < 1)
-    return "just now";
-  if (minutes < 60)
-    return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  return hours < 48 ? `${hours}h ago` : `${Math.round(hours / 24)} days ago`;
-}
-function windowName(window) {
-  const minutes = typeof window.minutes === "number" ? window.minutes : undefined;
-  const length = minutes === 300 ? "5-hour window" : minutes === 10080 ? "weekly limit" : minutes && minutes >= 40000 && minutes <= 45000 ? "monthly limit" : minutes ? `${minutes >= 1440 ? `${Math.round(minutes / 1440)}-day` : `${Math.round(minutes / 60)}-hour`} window` : "limit";
-  if (typeof window.name === "string" && window.name)
-    return window.name;
-  return typeof window.model === "string" && window.model ? `${window.model} ${length}` : length;
-}
-function describePlanLimits(data, now = Date.now()) {
-  const rows = isObject(data) && Array.isArray(data.rows) ? data.rows.filter(isObject) : null;
-  const accounts = rows ?? (isObject(data) && Array.isArray(data.accounts) ? data.accounts.filter(isObject) : []);
-  if (!accounts.length)
-    return `No plan limits are known on ${HERE}: no coding agent here is signed in to a plan whose limits can be read.`;
-  const lines = [rows ? `Plan limits of your accounts (signed in on ${HERE} unless it says where; used is how much of the window is gone):` : `Plan limits on ${HERE} (each account's own; used is how much of the window is gone):`];
-  for (const account of accounts) {
-    const service = typeof account.agent === "string" ? AGENT_NAMES[account.agent] ?? account.agent : ENGINE_NAMES[String(account.service)] ?? String(account.service);
-    const boxes = Array.isArray(account.boxes) ? account.boxes.filter(isObject) : [];
-    const elsewhere = rows && !boxes.some((box) => box.here === true) ? boxes.map((box) => String(box.name || "another computer")) : [];
-    const where = elsewhere.length ? `, signed in on ${elsewhere.join(", ")}${account.away === true ? " (not heard from lately: as last told)" : ""}` : "";
-    const provider = rows ? boxes.find((box) => box.here === true)?.provider ?? account.provider : account.provider;
-    const name = `${service}${typeof account.label === "string" && account.label ? ` (${account.label})` : ""}${typeof account.plan === "string" && account.plan ? `, ${account.plan}` : ""}${elsewhere.length ? "" : `, provider ${String(provider)}`}${where}`;
-    lines.push(`- ${name}:`);
-    const windows = Array.isArray(account.windows) ? account.windows.filter(isObject) : [];
-    for (const window of windows) {
-      const resetsAt = typeof window.resetsAt === "number" ? window.resetsAt : undefined;
-      if (resetsAt && resetsAt <= now) {
-        lines.push(`  - ${windowName(window)}: started over at ${resetTime(resetsAt)}, not read since`);
-        continue;
-      }
-      const used = Math.round(Number(window.used) * 100);
-      const read = typeof window.read === "number" ? `, as of ${since(window.read, now)}` : "";
-      const counted = isObject(window.amount) ? ` (${amount(Number(window.amount.used), window.amount.unit)} of ${amount(Number(window.amount.limit), window.amount.unit)})` : "";
-      lines.push(`  - ${windowName(window)}: ${used}% used${counted}${resetsAt ? `, resets ${until(resetsAt, now)} (${resetTime(resetsAt)})` : ""}${read}`);
-    }
-    const balance = isObject(account.balance) ? account.balance : undefined;
-    if (balance)
-      lines.push(`  - credits: ${amount(Number(balance.left), balance.unit)} left${typeof balance.limit === "number" ? ` of ${amount(balance.limit, balance.unit)}` : ""}`);
-    if (!windows.length && !balance)
-      lines.push("  - none read yet");
-    const problem = isObject(account.problem) ? account.problem : undefined;
-    if (problem && typeof problem.message === "string") {
-      const next = typeof problem.until === "number" && problem.until > now ? ` Read again ${until(problem.until, now)}.` : "";
-      lines.push(`  - Not read just now: ${problem.message}${next}`);
-    }
-  }
-  return lines.join(`
-`);
-}
-async function planLimitsTool(bridge, signal) {
-  if (!bridge)
-    return { text: `The coding agents aren't running on ${HERE} now, so their plan limits can't be read. Try again in a moment.`, isError: true };
-  try {
-    return { text: describePlanLimits(await call(bridge, "GET", "/api/kuvo/limits", undefined, signal)), isError: false };
-  } catch (error) {
-    return { text: `Couldn't read the plan limits on ${HERE}: ${String(error?.message ?? error)}`, isError: true };
-  }
-}
-
 // Packages/Box/src/link/vault/who.ts
 import path72 from "node:path";
 async function sessionAt(targets, id) {
@@ -20185,10 +20315,10 @@ var ago = (at, now = Date.now()) => {
     return `${hours} hours ago`;
   return `${Math.round(hours / 24)} days ago`;
 };
-var said = (text) => ({ text, isError: false });
+var said2 = (text) => ({ text, isError: false });
 var ALLOW_LIFE = 86400000;
-var refused = (text) => ({ text, isError: true });
-var why = (error) => String(error?.message ?? error);
+var refused2 = (text) => ({ text, isError: true });
+var why2 = (error) => String(error?.message ?? error);
 var changed = (data, did) => {
   const bot = worksFor(data)?.bot;
   if (!bot)
@@ -20200,7 +20330,7 @@ var changed = (data, did) => {
 var mine = async (lead, targets, signal) => under(lead, await workSessions(targets, signal));
 async function oneOfMine(caller, session, targets, doing, signal) {
   if (typeof session !== "string" || !session.trim())
-    return { error: refused("Say which session (session), by its address from list_sessions.") };
+    return { error: refused2("Say which session (session), by its address from list_sessions.") };
   const listed = (await mine(caller.session, targets, signal)).find((each) => each.data.id === session.trim());
   if (listed)
     return { listed };
@@ -20216,13 +20346,13 @@ async function oneOfMine(caller, session, targets, doing, signal) {
     }
   }
   if (title === null)
-    return { error: refused(`There's no session ${session.trim()} here. Use list_sessions to see yours.`) };
-  return { error: refused(doing === "answer" ? `"${title}" isn't one of your sessions: only the user answers what it asks.` : `"${title}" isn't yours to ${doing}: ask the user.`) };
+    return { error: refused2(`There's no session ${session.trim()} here. Use list_sessions to see yours.`) };
+  return { error: refused2(doing === "answer" ? `"${title}" isn't one of your sessions: only the user answers what it asks.` : `"${title}" isn't yours to ${doing}: ask the user.`) };
 }
 function describeList(rows, there, now = Date.now()) {
   const others = there.filter((each) => each.rows.length);
   if (!rows.length && !others.length)
-    return said("You haven't started any sessions (or they're archived). Start one with start_session.");
+    return said2("You haven't started any sessions (or they're archived). Start one with start_session.");
   const parts = [];
   if (rows.length)
     parts.push(`Your sessions${others.length ? ` on ${HERE}` : ""}, the latest first:
@@ -20234,7 +20364,7 @@ ${rows.map(rowLine).join(`
 ${each.rows.map(rowLine).join(`
 `)}`);
   }
-  return said(parts.join(`
+  return said2(parts.join(`
 
 `));
 }
@@ -20246,7 +20376,7 @@ async function stopSessionTool(caller, args, targets, signal) {
   try {
     await stopWork(target, data.id);
   } catch (error) {
-    return refused(`Couldn't stop "${data.title || "New Session"}": ${why(error)}`);
+    return refused2(`Couldn't stop "${data.title || "New Session"}": ${why2(error)}`);
   }
   changed(data, { kind: "stopped", by: caller });
   if (args.archive === true) {
@@ -20254,9 +20384,9 @@ async function stopSessionTool(caller, args, targets, signal) {
       metadata["kuvo.archived"] = true;
       return kuvo;
     }).then(() => holdArchived(data.id, true)).catch(() => {});
-    return said(`Stopped and archived "${data.title || "New Session"}".`);
+    return said2(`Stopped and archived "${data.title || "New Session"}".`);
   }
-  return said(`Stopped "${data.title || "New Session"}".`);
+  return said2(`Stopped "${data.title || "New Session"}".`);
 }
 async function compactSessionTool(caller, args, targets, signal) {
   const found = await oneOfMine(caller, args.session, targets, "compact", signal);
@@ -20269,15 +20399,15 @@ async function compactSessionTool(caller, args, targets, signal) {
   try {
     answer = await call(target, "POST", `/api/session/${encodeURIComponent(data.id)}/compact`, {}, signal);
   } catch (error) {
-    return refused(`Couldn't summarize "${title}": ${why(error)}`);
+    return refused2(`Couldn't summarize "${title}": ${why2(error)}`);
   }
   changed(data);
   const state = isObject(answer) ? answer.state : undefined;
   if (state === "waiting")
-    return said(`"${title}" will be summarized when its turn ends.`);
+    return said2(`"${title}" will be summarized when its turn ends.`);
   if (working && state !== "compacting")
-    return said(`"${title}" will be summarized at its next step.`);
-  return said(`Summarizing "${title}" now. list_sessions shows its context size again after its next step.`);
+    return said2(`"${title}" will be summarized at its next step.`);
+  return said2(`Summarizing "${title}" now. list_sessions shows its context size again after its next step.`);
 }
 function commandsInSandbox(target, permission) {
   let engine = false;
@@ -20296,79 +20426,79 @@ async function answerAskTool(caller, args, targets, signal, { made } = {}) {
   const { target, data } = found.listed;
   const title = data.title || "New Session";
   if (typeof args.ask !== "string" || !args.ask.trim())
-    return refused("Say which ask (ask), by its id from the [Session asks] message or list_sessions.");
+    return refused2("Say which ask (ask), by its id from the [Session asks] message or list_sessions.");
   const reason = typeof args.reason === "string" ? args.reason.trim() : "";
   if (!reason)
-    return refused("Say why, in a line (reason): the user sees it with your answer.");
+    return refused2("Say why, in a line (reason): the user sees it with your answer.");
   const ask = await pendingAsk(target, data.id, args.ask.trim(), signal);
   if (!ask)
-    return refused(`"${title}" doesn't ask ${args.ask.trim()} now: it was answered, or it moved on.`);
+    return refused2(`"${title}" doesn't ask ${args.ask.trim()} now: it was answered, or it moved on.`);
   const by = caller.bot ?? { name: caller.name };
   if ("question" in ask) {
     const answer = typeof args.answer === "string" ? args.answer.trim() : "";
     if (!answer)
-      return refused(`"${title}" asks: ${ask.question.text} Answer it in words (answer).`);
+      return refused2(`"${title}" asks: ${ask.question.text} Answer it in words (answer).`);
     if (!ask.question.key)
-      return refused(`"${title}"'s question has more than one part: tell the user, who answers it in the session.`);
+      return refused2(`"${title}"'s question has more than one part: tell the user, who answers it in the session.`);
     try {
       await call(target, "POST", `/api/session/${encodeURIComponent(ask.question.asker)}/form/${encodeURIComponent(ask.question.id)}/reply`, { answer: { [ask.question.key]: answer } }, signal);
     } catch (error) {
-      return refused(`Couldn't answer it: ${why(error)}`);
+      return refused2(`Couldn't answer it: ${why2(error)}`);
     }
     await keepAnswer(target, data.id, { ask: ask.question.id, what: `Asks: ${ask.question.text}`, decision: "answer", reason: `${answer}${reason ? ` (${reason})` : ""}`, by, at: Date.now() }).catch(() => {});
     changed(data, { kind: "answered", by: caller });
-    return said(`Answered "${title}".`);
+    return said2(`Answered "${title}".`);
   }
   const { permission } = ask;
   const what = permissionWords(permission);
   const shown = permission.resources.filter((each) => each !== "*").join(", ") || permission.action;
   if (args.decision !== "allow" && args.decision !== "deny")
-    return refused("Say allow or deny (decision).");
+    return refused2("Say allow or deny (decision).");
   if (args.decision === "allow") {
     const mode = approvalOf(data, { agents: onBridge(target), bot: Boolean(botOfConversation(data.id) ?? worksFor(data)) });
     if (mode.effective === "askFirst") {
       const state = mode.held ? `"${title}" asks first for now (${mode.held.why.replace(/\.$/, "")})` : `"${title}" is in Ask First`;
-      return refused(`You can't allow that: ${state}, so the user answers every ask it makes, whatever mode you're in. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed if it matters, and carry on with the rest. You can still deny it.`);
+      return refused2(`You can't allow that: ${state}, so the user answers every ask it makes, whatever mode you're in. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed if it matters, and carry on with the rest. You can still deny it.`);
     }
     if (made !== undefined && Date.now() - made > ALLOW_LIFE)
-      return refused(`Your allow for "${title}" wasn't given: this computer was away for over a day after you gave it, so it's out of date. Look at what it asks now (list_sessions), and answer again if it still should go ahead.`);
+      return refused2(`Your allow for "${title}" wasn't given: this computer was away for over a day after you gave it, so it's out of date. Look at what it asks now (list_sessions), and answer again if it still should go ahead.`);
     const folder = data.location?.directory ?? data.directory ?? "";
     const seen = await callOf(target, permission, signal);
     const sandboxed = commandsInSandbox(target, permission);
     const judged = (rules) => allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor, seen, { sandboxed, free: caller.free });
     const why = judged(withDefaults(caller.rules)) ?? (caller.from ? judged(rulesOf([])) : null);
     if (why)
-      return refused(`You can't allow that: you'd have to ask the user about it yourself. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`);
+      return refused2(`You can't allow that: you'd have to ask the user about it yourself. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`);
   }
   try {
     await call(target, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, args.decision === "allow" ? { decision: "once" } : { decision: "reject", message: `${by.name}: ${reason}` }, signal);
   } catch (error) {
-    return refused(`Couldn't answer it: ${why(error)}`);
+    return refused2(`Couldn't answer it: ${why2(error)}`);
   }
   await keepAnswer(target, data.id, { ask: permission.id, ...permission.call ? { call: permission.call } : {}, what, decision: args.decision, reason, by, at: Date.now() }).catch(() => {});
   changed(data, { kind: "answered", by: caller });
-  return said(args.decision === "allow" ? `Allowed: ${shown}.` : `Denied: ${shown}. "${title}" is told why.`);
+  return said2(args.decision === "allow" ? `Allowed: ${shown}.` : `Denied: ${shown}. "${title}" is told why.`);
 }
 async function listModelsTool(engine, bridge, signal, where = HERE) {
   const here = await modelsHere(engine, bridge, undefined, where, signal);
-  return said(describeModels(here.models, undefined, where, here));
+  return said2(describeModels(here.models, undefined, where, here));
 }
 async function makeProjectTool(caller, args, { signal, wait, every } = {}) {
   const name = typeof args.name === "string" ? args.name.trim() : "";
   if (!name)
-    return refused("Say what it's called (name).");
+    return refused2("Say what it's called (name).");
   if (!folderName(name))
-    return refused(`${name} can't be a folder's name: use letters or numbers.`);
+    return refused2(`${name} can't be a folder's name: use letters or numbers.`);
   const clone = typeof args.clone === "string" && args.clone.trim() ? args.clone.trim() : undefined;
   if (clone && !cloneable(clone))
-    return refused(`${clone} isn't a repository address git can clone: give an https or ssh one.`);
+    return refused2(`${clone} isn't a repository address git can clone: give an https or ssh one.`);
   const bot = botOfConversation(caller.session);
   const inPlan = bot ? (runningGoal(bot.bot)?.projects ?? []).map(goalProject) : [];
   let named;
   if (typeof args.folder === "string" && args.folder.trim()) {
     const checked = namedPlace(args.folder);
     if ("refused" in checked)
-      return refused(checked.refused);
+      return refused2(checked.refused);
     named = checked.folder;
   } else {
     named = inPlan.find((each) => each.folder && folderName(each.name) === folderName(name))?.folder;
@@ -20377,56 +20507,66 @@ async function makeProjectTool(caller, args, { signal, wait, every } = {}) {
   const place = named ?? projectPlace(name);
   const listed = place ? readProjects().find((each) => each.directory === place && !each.removed) : null;
   if (listed)
-    return refused(`There's a project at ${shownPath(place)} already: ${listed.name ?? path73.basename(place)}. Start sessions in it with start_session.`);
+    return refused2(`There's a project at ${shownPath(place)} already: ${listed.name ?? path73.basename(place)}. Start sessions in it with start_session.`);
   if (place && fs72.existsSync(place) && !isEmptyFolder(place))
-    return refused(`There's a folder at ${shownPath(place)} already, with files in it. ${named ? `To work on what's there, start sessions in it with start_session (folder: "${shownPath(place)}").` : "Pick another name."}`);
+    return refused2(`There's a folder at ${shownPath(place)} already, with files in it. ${named ? `To work on what's there, start sessions in it with start_session (folder: "${shownPath(place)}").` : "Pick another name."}`);
   const asker = { session: caller.session, name: bot?.name ?? caller.name, ...bot ? { bot: bot.bot } : {} };
   const action = clone ? "cloneProject" : "makeProject";
   const given = { name, ...args.git === false ? { git: false } : {}, ...clone ? { clone } : {}, ...named ? { folder: named } : {} };
   if (bot && (planned || botAllows(bot.bot, action)) && (named || projectsFolder())) {
     try {
       const done = await doWork(action, given, asker);
-      return done.isError ? refused(done.text) : said(done.text);
+      return done.isError ? refused2(done.text) : said2(done.text);
     } catch (error) {
-      return refused(`Couldn't make it: ${why(error)}`);
+      return refused2(`Couldn't make it: ${why2(error)}`);
     }
   }
   const ask = askWork(asker, action, given);
   const away = (await callerOf(caller.session, readEngineFile, readBridgeFile)).autopilot === true;
   const { value: answer } = await untilOnAutopilot(away ? undefined : caller.session, signal, (stops) => answerOf(ask.id, { wait: away ? 0 : wait ?? (Number(process.env.KUVO_WORK_ASK_WAIT) || undefined), every, signal: stops }));
   if (!answer)
-    return said(`The user hasn't answered yet: it stays asked on ${HERE}, and you'll hear when they answer. Carry on with what you can meanwhile.`);
-  return answer.isError ? refused(answer.text) : said(answer.text);
+    return said2(`The user hasn't answered yet: it stays asked on ${HERE}, and you'll hear when they answer. Carry on with what you can meanwhile.`);
+  return answer.isError ? refused2(answer.text) : said2(answer.text);
+}
+async function askReset(caller, given, { signal, wait, every } = {}) {
+  const bot = botOfConversation(caller.session);
+  const asker = { session: caller.session, name: bot?.name ?? caller.name, ...bot ? { bot: bot.bot } : {} };
+  const ask = askWork(asker, "resetLimits", { name: given.account, reset: given });
+  const away = (await callerOf(caller.session, readEngineFile, readBridgeFile)).autopilot === true;
+  const { value: answer } = await untilOnAutopilot(away ? undefined : caller.session, signal, (stops) => answerOf(ask.id, { wait: away ? 0 : wait ?? (Number(process.env.KUVO_WORK_ASK_WAIT) || undefined), every, signal: stops }));
+  if (!answer)
+    return said2(`The user hasn't answered yet: it stays asked on ${HERE}, and you'll hear when they answer. Carry on with what you can meanwhile.`);
+  return answer.isError ? refused2(answer.text) : said2(answer.text);
 }
 function listProjectsTool(where = HERE) {
   const projects = readProjects().filter((each) => !each.removed);
   const root = projectsFolder();
   const folder = root ? ` New ones go in ${shownPath(root)}.` : " No projects folder is picked yet: the user picks one the first time you make a project.";
   if (!projects.length)
-    return said(`There are no projects on ${where} yet.${folder}`);
+    return said2(`There are no projects on ${where} yet.${folder}`);
   const lines = projects.slice(0, 60).map((each) => {
     const git = gitIn(each.directory, ["rev-parse", "--is-inside-work-tree"]) === "true" ? "git" : "not git";
     return `- ${each.name ?? path73.basename(each.directory)}: ${shownPath(each.directory)} (${git})${each.madeBy ? `, made by ${each.madeBy.name}` : ""}`;
   });
-  return said(`Projects on ${where}:
+  return said2(`Projects on ${where}:
 ${lines.join(`
 `)}
 ${folder.trim()}`);
 }
 var goalBot = (caller) => botOfConversation(caller.session);
 var ONLY_BOTS = "Only a bot takes a goal with a plan: ask the user to give it to one of their bots.";
-var answered2 = (outcome) => ("said" in outcome) ? said(outcome.said) : refused(outcome.refused);
+var answered2 = (outcome) => ("said" in outcome) ? said2(outcome.said) : refused2(outcome.refused);
 async function proposeGoalTool(caller, args) {
   const bot = goalBot(caller);
   if (!bot)
-    return refused(ONLY_BOTS);
+    return refused2(ONLY_BOTS);
   const wrong = proposalRefused(bot.bot, args);
   if (wrong)
-    return refused(wrong);
+    return refused2(wrong);
   await findApps(appsNamed(args)).catch(() => {});
   const outcome = proposeGoal({ ...bot, session: caller.session }, args);
   if ("refused" in outcome)
-    return refused(outcome.refused);
+    return refused2(outcome.refused);
   const { goal, yours: set } = outcome;
   const yours = goal.checks.filter((check) => check.state === "needs").map((check) => check.text);
   const theirs = (Array.isArray(args.spend) ? args.spend.slice(0, 10) : []).map((each) => isObject(each) && typeof each.what === "string" ? each.what.trim() : "").filter((what) => what && !goal.spend.some((line) => line.what.toLowerCase() === what.slice(0, 200).toLowerCase()));
@@ -20434,25 +20574,25 @@ async function proposeGoalTool(caller, args) {
   const alone = goal.alone ? "" : ` ${HERE[0].toUpperCase()}${HERE.slice(1)} can't work on it alone yet, so once it starts, what your sessions ask waits for the user rather than for you.`;
   const names = set ? set.projects.map((each) => `"${each}"`).join(", ") : "";
   const projects = !set ? "" : set.kept ? ` The user set its projects on the card: ${names}. They're kept: call them that.` : ` The user had set its projects on the card to ${names}; the ones you gave replace them. If they didn't ask you to change those, propose it again with theirs.`;
-  return said(`The card is up on ${HERE}: the user starts the goal from it, or says not now.${projects} ${yours.length ? `What's theirs to do first: ${yours.join("; ")}. ` : ""}Don't start the work until you hear [Goal started].${paid} If they change something, propose it again as it is now.${alone}`);
+  return said2(`The card is up on ${HERE}: the user starts the goal from it, or says not now.${projects} ${yours.length ? `What's theirs to do first: ${yours.join("; ")}. ` : ""}Don't start the work until you hear [Goal started].${paid} If they change something, propose it again as it is now.${alone}`);
 }
 async function goalProgressTool(caller, args) {
   const bot = goalBot(caller);
   if (!bot)
-    return refused(ONLY_BOTS);
+    return refused2(ONLY_BOTS);
   const wrong = progressRefused(bot.bot, args);
   if (wrong)
-    return refused(wrong);
+    return refused2(wrong);
   await findApps(appsNamed(args)).catch(() => {});
   return answered2(goalProgress(bot.bot, args));
 }
 function maySpendTool(caller, args) {
   const bot = goalBot(caller);
-  return bot ? answered2(maySpend(bot.bot, args)) : refused(ONLY_BOTS);
+  return bot ? answered2(maySpend(bot.bot, args)) : refused2(ONLY_BOTS);
 }
 async function finishGoalTool(caller, args, targets) {
   const bot = goalBot(caller);
-  return bot ? answered2(await finishGoal(bot.bot, args, () => targets)) : refused(ONLY_BOTS);
+  return bot ? answered2(await finishGoal(bot.bot, args, () => targets)) : refused2(ONLY_BOTS);
 }
 
 // Packages/Box/src/link/letters/start-call.ts
@@ -23271,8 +23411,8 @@ async function deleteBot(id, readEngine, readBridge) {
 }
 
 // Packages/Box/src/link/letters/own-tools.ts
-var said2 = (text) => ({ text, isError: false });
-var refused2 = (text) => ({ text, isError: true });
+var said3 = (text) => ({ text, isError: false });
+var refused3 = (text) => ({ text, isError: true });
 var isSeat = (place) => {
   const seat = place?.data.metadata?.kuvo?.seat;
   return seat !== undefined && seat !== null;
@@ -23296,13 +23436,13 @@ function watchWentUnasked(rules, agents) {
 async function wakeTool(name, args, calling, bridge) {
   const { session, own, root } = calling;
   if (!session)
-    return refused2("This needs a conversation of its own.");
+    return refused3("This needs a conversation of its own.");
   if (isSeat(own) || isSeat(root?.place))
-    return refused2("Not from a group chat: a chat can meet on a schedule instead (its editor's Meets on a Schedule).");
+    return refused3("Not from a group chat: a chat can meet on a schedule instead (its editor's Meets on a Schedule).");
   const owner = root?.session ?? session;
   const bot = botOf2(owner);
   if (!bot && !root)
-    return refused2("Kuvo Code doesn't know this conversation yet. Try again in a moment.");
+    return refused3("Kuvo Code doesn't know this conversation yet. Try again in a moment.");
   const viaBridge = onBridge2(root?.place, bridge);
   const given = (key) => typeof args[key] === "string" && args[key].trim() ? args[key].trim() : null;
   let verb;
@@ -23310,19 +23450,19 @@ async function wakeTool(name, args, calling, bridge) {
     case "schedule_wake_up": {
       const when = given("when"), note = given("note"), every = given("every"), summary = given("summary");
       if (!when)
-        return refused2("Say when (when): +20m, +2h, +1d, or a time like 2026-10-21T09:00.");
+        return refused3("Say when (when): +20m, +2h, +1d, or a time like 2026-10-21T09:00.");
       if (!note)
-        return refused2("Add a note for yourself (note): what to do when you wake up.");
+        return refused3("Add a note for yourself (note): what to do when you wake up.");
       verb = ["add", when, ...every ? ["--every", every] : [], ...summary ? ["--summary", summary] : [], note];
       break;
     }
     case "watch_for_change": {
       const found = own ?? root?.place ?? null;
       if (watchWentUnasked(found?.data.permissions, found ? onBridge2(found, bridge) : viaBridge))
-        return refused2(WATCH_AS_COMMAND);
+        return refused3(WATCH_AS_COMMAND);
       const every = given("every"), check = given("check"), note = given("note"), summary = given("summary");
       if (!every || !check || !note)
-        return refused2("Give how often (every), the check (a shell command) and a note for when it changes.");
+        return refused3("Give how often (every), the check (a shell command) and a note for when it changes.");
       verb = ["watch", every, check, ...summary ? ["--summary", summary] : [], note];
       break;
     }
@@ -23332,7 +23472,7 @@ async function wakeTool(name, args, calling, bridge) {
     case "cancel_wake_up": {
       const id = given("id");
       if (!id)
-        return refused2("Say which one (id), from list_wake_ups.");
+        return refused3("Say which one (id), from list_wake_ups.");
       verb = ["cancel", id];
       break;
     }
@@ -23340,9 +23480,9 @@ async function wakeTool(name, args, calling, bridge) {
   const folder = bot?.folder ?? path84.join(SESSION_WAKES, owner);
   const exists = fs84.existsSync(path84.join(folder, bot ? "bot.json" : "session"));
   if (!exists && name === "cancel_wake_up")
-    return refused2(`No wake-up "${given("id")}". See list_wake_ups.`);
+    return refused3(`No wake-up "${given("id")}". See list_wake_ups.`);
   if (exists && isMoving(folder))
-    return refused2(MOVING);
+    return refused3(MOVING);
   const directory = root?.place.data.location?.directory ?? root?.place.data.directory;
   const cwd = directory && fs84.existsSync(directory) ? directory : os10.homedir();
   const env = { ...process.env, PWD: cwd, KUVO_BOTS: BOTS, KUVO_WAKES: SESSION_WAKES, KUVO_WAKE_TOOL: "1" };
@@ -23355,7 +23495,7 @@ async function wakeTool(name, args, calling, bridge) {
   const answer = await new Promise((resolve) => {
     execFile9(WAKE_COMMAND, [bot?.folder ?? owner, ...verb], { cwd, env, encoding: "utf8", timeout: 30000 }, (error, out, errors) => {
       if (error?.code === "ENOENT")
-        return resolve(refused2(`Couldn't run kuvo-wake here: there's none at ${WAKE_COMMAND}.`));
+        return resolve(refused3(`Couldn't run kuvo-wake here: there's none at ${WAKE_COMMAND}.`));
       const text = (String(out ?? "") + String(errors ?? "")).trim();
       resolve({ text: text || (error ? "That didn't work." : "Done."), isError: Boolean(error) });
     });
@@ -23366,22 +23506,22 @@ async function wakeTool(name, args, calling, bridge) {
 }
 async function setJobTool(args, calling, readEngine, bridge) {
   if (!calling.session)
-    return refused2("This needs a conversation of its own.");
+    return refused3("This needs a conversation of its own.");
   const bot = botOf2(calling.root?.session ?? calling.session);
   if (!bot)
-    return refused2("Only a bot keeps a job, and this conversation isn't one.");
+    return refused3("Only a bot keeps a job, and this conversation isn't one.");
   const clear = args.clear === true;
   const line = args.summary ?? args.job;
   if (!clear && (typeof line !== "string" || !line.trim() || typeof args.details !== "string"))
-    return refused2("Provide a non-empty summary and details, or clear: true to clear your job.");
+    return refused3("Provide a non-empty summary and details, or clear: true to clear your job.");
   const job = clear ? { line: "", details: "" } : { line, details: args.details };
   const { status, value } = await changeBot(bot.id, { job }, readEngine, bridge);
   if (status !== 200)
-    return refused2("message" in value && value.message ? value.message : `Couldn't keep it (${status}).`);
+    return refused3("message" in value && value.message ? value.message : `Couldn't keep it (${status}).`);
   const kept = "bot" in value ? value.bot?.job : undefined;
   if (typeof kept !== "string")
-    return refused2("The box returned an unreadable job response. Check the job before trying again.");
-  return said2(kept ? `Kept. Kuvo Code shows "${kept}" under your name.` : "Kept: you have no job now.");
+    return refused3("The box returned an unreadable job response. Check the job before trying again.");
+  return said3(kept ? `Kept. Kuvo Code shows "${kept}" under your name.` : "Kept: you have no job now.");
 }
 var isFullPath = (given) => given.startsWith("/") && !given.split("/").some((part) => part === "." || part === "..");
 var home2 = (given) => given.replace(/^~(?=$|\/)/, os10.homedir());
@@ -23405,41 +23545,41 @@ function showTool(name, args, calling, inView) {
   switch (name) {
     case "show_widget":
       if (typeof args.html !== "string" || !args.html.trim())
-        return refused2("Missing html.");
-      return said2("Shown in the conversation, live. The user sees it now; what they click in it that calls kuvo.send comes to you as their message.");
+        return refused3("Missing html.");
+      return said3("Shown in the conversation, live. The user sees it now; what they click in it that calls kuvo.send comes to you as their message.");
     case "show_in_panel": {
       if (!raw)
-        return refused2("Missing path.");
+        return refused3("Missing path.");
       const trimmed = (given) => given.replace(/\/+$/, "") || "/";
       const expanded = trimmed(home2(raw));
       const place = calling.own ?? calling.root?.place;
       const base = place?.data.location?.directory ?? place?.data.directory ?? os10.homedir();
       const full = isFullPath(expanded) ? expanded : path84.resolve(base, expanded);
       if (full !== trimmed(raw))
-        return refused2(`Give the full path: ${full}`);
+        return refused3(`Give the full path: ${full}`);
       const found = kind(full);
       if (!found)
-        return refused2(`There's nothing at ${full}.`);
-      return said2(shownWords(full, found === "folder", inView));
+        return refused3(`There's nothing at ${full}.`);
+      return said3(shownWords(full, found === "folder", inView));
     }
     case "show_file": {
       if (!raw)
-        return refused2("Missing path.");
+        return refused3("Missing path.");
       if (!isFullPath(raw))
-        return refused2("Give the file's full path" + (raw.startsWith("~") ? `: ${home2(raw)}` : "."));
+        return refused3("Give the file's full path" + (raw.startsWith("~") ? `: ${home2(raw)}` : "."));
       const found = kind(raw);
       if (!found)
-        return refused2(`There's nothing at ${raw}.`);
+        return refused3(`There's nothing at ${raw}.`);
       if (found === "folder")
-        return refused2(`${raw} is a folder: show a file in it, or the folder with show_in_panel.`);
-      return said2(`Shown in the conversation: the file ${raw}. The user sees it there, on their Mac and their phone.`);
+        return refused3(`${raw} is a folder: show a file in it, or the folder with show_in_panel.`);
+      return said3(`Shown in the conversation: the file ${raw}. The user sees it there, on their Mac and their phone.`);
     }
     case "mark_final":
       if (!raw || !isFullPath(raw))
-        return refused2("Give the file's full path.");
+        return refused3("Give the file's full path.");
       if (kind(raw) !== "file")
-        return refused2(`There's no file at ${raw}.`);
-      return said2(`Marked final: ${raw}. It's kept at the top of what you made, for the user.`);
+        return refused3(`There's no file at ${raw}.`);
+      return said3(`Marked final: ${raw}. It's kept at the top of what you made, for the user.`);
   }
 }
 
@@ -23448,11 +23588,11 @@ var WAKE_TOOLS = ["schedule_wake_up", "watch_for_change", "list_wake_ups", "canc
 var SHOW_TOOLS = ["show_in_panel", "show_file", "mark_final", "show_widget"];
 
 // Packages/Box/src/link/letters/tools.ts
-var AGENT_TOOLS = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "compact_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal", "notify_user", "plan_limits", ...WAKE_TOOLS, "set_job", ...SHOW_TOOLS];
+var AGENT_TOOLS = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "compact_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal", "notify_user", "plan_limits", "use_limit_reset", ...WAKE_TOOLS, "set_job", ...SHOW_TOOLS];
 var isAgentTool = (name) => AGENT_TOOLS.includes(name);
-var said3 = (text) => ({ text, isError: false });
-var refused3 = (text) => ({ text, isError: true });
-var why2 = (error) => String(error?.message ?? error);
+var said4 = (text) => ({ text, isError: false });
+var refused4 = (text) => ({ text, isError: true });
+var why3 = (error) => String(error?.message ?? error);
 function targetsOf(place) {
   const targets = [];
   try {
@@ -23529,10 +23669,10 @@ async function findAgent(wanted, caller, { agents, here }, targets, archivedOwn 
     const close = agents.filter((agent) => folded(agent.name).includes(folded(name))).slice(0, 8);
     const hint = close.length ? `Did you mean one of these?
 ` + describeAgents(close, caller, here) : "Use list_agents to see who there is.";
-    return { error: refused3(`There's no agent called ${name}. ` + hint) };
+    return { error: refused4(`There's no agent called ${name}. ` + hint) };
   }
   if (matches.length > 1)
-    return { error: refused3(`More than one agent is called ${name}: use one's address.
+    return { error: refused4(`More than one agent is called ${name}: use one's address.
 ` + describeAgents(matches, caller, here)) };
   return { agent: matches[0] };
 }
@@ -23544,9 +23684,9 @@ function peerFor(session) {
 }
 async function sendMessage(args, caller, all, targets, place) {
   if (typeof args.to !== "string" || !args.to.trim())
-    return refused3("Say who to write to (to).");
+    return refused4("Say who to write to (to).");
   if (typeof args.text !== "string" || !args.text.trim())
-    return refused3("Say what to write (text).");
+    return refused4("Say what to write (text).");
   const { text } = args;
   const waits = args.wait === true;
   const found = await findAgent(args.to, caller, all, targets);
@@ -23554,16 +23694,16 @@ async function sendMessage(args, caller, all, targets, place) {
     return found.error;
   const target = found.agent;
   if (target.session === caller)
-    return refused3("That's you.");
+    return refused4("That's you.");
   if (frozen().has(target.session))
-    return refused3(`${target.name} is moving to another computer. Try again in a minute.`);
+    return refused4(`${target.name} is moving to another computer. Try again in a minute.`);
   const key = caller ?? "outside";
   const counted = allowed2("messages", key);
   if (counted === null)
-    return refused3("You've sent a lot of messages in the last few minutes. Wait a while, or ask the user how to go on.");
+    return refused4("You've sent a lot of messages in the last few minutes. Wait a while, or ask the user how to go on.");
   const failed = (words) => {
     takeBack("messages", key, counted);
-    return refused3(words);
+    return refused4(words);
   };
   const sender = nameOf3(caller, all);
   const here = await placeOfSession(target.session, targets).catch(() => null);
@@ -23573,15 +23713,15 @@ async function sendMessage(args, caller, all, targets, place) {
     try {
       went = await sendInto(here.target, target.session, { id, text: composeLetter(sender, caller ?? "unknown", text, waits), delivery: "steer" }, { from: sender, words: text, kept: composeLetter(sender, caller ?? "unknown", text, false) });
     } catch (error) {
-      return failed(`It didn't reach ${target.name}: ${why2(error)}`);
+      return failed(`It didn't reach ${target.name}: ${why3(error)}`);
     }
     noteOversightBy(caller, { ...here.data, id: target.session }, "told");
     if (went === "waits")
-      return said3(pausedNote(target.name));
+      return said4(pausedNote(target.name));
     if (!waits)
-      return said3(`Sent to ${target.name}. Its answer, if it writes one, comes to you as a message.`);
+      return said4(`Sent to ${target.name}. Its answer, if it writes one, comes to you as a message.`);
     const answer = await answerTo(here.target, target.session, id, { wait: place.step, signal: place.signal, by: caller });
-    return said3(answer ? `${target.name} answered:
+    return said4(answer ? `${target.name} answered:
 
 ${answer}` : `${target.name} hasn't answered yet. It may still write back with send_message.`);
   }
@@ -23597,27 +23737,27 @@ ${answer}` : `${target.name} hasn't answered yet. It may still write back with s
     return failed(`It didn't reach ${target.name}.`);
   }
   if (!wait)
-    return said3(waits && caller && offline ? offlineNote() : `On its way to ${target.name}${target.machine ? ` on ${target.machine}` : ""}. Its answer, if it writes one, comes to you as a message.`);
+    return said4(waits && caller && offline ? offlineNote() : `On its way to ${target.name}${target.machine ? ` on ${target.machine}` : ""}. Its answer, if it writes one, comes to you as a message.`);
   const answer = await letterAnswer(id, place.signal, { step: place.step });
   if (answer && "failed" in answer)
     return failed(`It didn't reach ${target.name}: ${answer.failed}`);
   if (answer && "note" in answer)
-    return said3(answer.note);
-  return said3(answer?.text ? `${target.name} answered:
+    return said4(answer.note);
+  return said4(answer?.text ? `${target.name} answered:
 
 ${answer.text}` : `${target.name} hasn't answered yet. It may still write back with send_message.`);
 }
 async function readOne2(args, caller, all, targets, place) {
   const of = typeof args.of === "string" ? args.of.trim() : "";
   if (!of)
-    return refused3("Say whose conversation to read (of).");
+    return refused4("Say whose conversation to read (of).");
   const query = typeof args.query === "string" && args.query.trim() ? args.query.trim() : null;
   const found = await findAgent(of, caller, all, targets, true);
   if ("error" in found)
     return found.error;
   const target = found.agent;
   if (target.session === caller)
-    return refused3("That's this conversation: you have it already.");
+    return refused4("That's this conversation: you have it already.");
   const intro = `${target.name}'s conversation (${whatAgent(target, all.here)}, address ${target.session}), oldest first. What's under **User** is the user's; under **${target.name}**, its agent's.
 
 `;
@@ -23626,33 +23766,33 @@ async function readOne2(args, caller, all, targets, place) {
     try {
       const read = excerpt(await readConversation(here.target, target.session, here.data, target.name, place.signal), query, READ_LIMIT);
       noteOversightBy(caller, { ...here.data, id: target.session }, "read");
-      return said3(intro + read);
+      return said4(intro + read);
     } catch (error) {
-      return refused3(`Couldn't read ${target.name}'s conversation: ${why2(error)}`);
+      return refused4(`Couldn't read ${target.name}'s conversation: ${why3(error)}`);
     }
   }
   const later = `${target.name}'s conversation can't be read now. Try again later, or write to it with send_message.`;
   const away = peerFor(target.session);
   if (!away || !caller || offRelay())
-    return refused3(later);
+    return refused4(later);
   if (!away.features.includes("letters-read"))
-    return refused3(`${target.name}'s computer doesn't share its conversations yet (it runs an older Kuvo Code). Ask it what you need with send_message.`);
+    return refused4(`${target.name}'s computer doesn't share its conversations yet (it runs an older Kuvo Code). Ask it what you need with send_message.`);
   const asleep = `${computerName(away.peer)} isn't answering (it may be asleep, off or offline), so ${target.name}'s conversation can't be read now. Try again later.`;
   if (awaySince(away.peer.key) !== null)
-    return refused3(asleep);
+    return refused4(asleep);
   let id;
   const sent = Date.now();
   try {
     id = leaveLetter({ from: caller, to: target.session, text: query ?? "read", peer: away.peer.key, wait: true, read: query ? { query } : {} });
   } catch {
-    return refused3(later);
+    return refused4(later);
   }
   const { answer, unreachable } = await awaitAnswer(id, away.peer.key, sent, place, { cut: READ_BY_MAIL, every: 1000 });
   if (answer && "text" in answer)
-    return said3(intro + answer.text);
+    return said4(intro + answer.text);
   if (answer && "failed" in answer)
-    return refused3(`Couldn't read ${target.name}'s conversation: ${answer.failed}`);
-  return refused3(unreachable ? asleep : later);
+    return refused4(`Couldn't read ${target.name}'s conversation: ${answer.failed}`);
+  return refused4(unreachable ? asleep : later);
 }
 async function agentTool(name, args, session, place) {
   const targets = targetsOf(place);
@@ -23661,7 +23801,7 @@ async function agentTool(name, args, session, place) {
   const root = await rootOf(session, targets);
   const caller = root?.session ?? session;
   if (root?.place.data.metadata?.kuvo?.seat && (name === "send_message" || name === "start_session"))
-    return refused3(seatRefusal().message);
+    return refused4(seatRefusal().message);
   switch (name) {
     case "schedule_wake_up":
     case "watch_for_change":
@@ -23681,7 +23821,7 @@ async function agentTool(name, args, session, place) {
   const all = await everyone(place);
   switch (name) {
     case "list_agents":
-      return said3(describeAgents(all.agents, caller, all.here));
+      return said4(describeAgents(all.agents, caller, all.here));
     case "send_message":
       return sendMessage(args, caller, all, targets, place);
     case "read_conversation":
@@ -23689,10 +23829,10 @@ async function agentTool(name, args, session, place) {
     case "start_session": {
       const where = computerOf(args.computer);
       if ("refused" in where)
-        return refused3(where.refused);
+        return refused4(where.refused);
       if ("peer" in where) {
         if (!root)
-          return refused3("Only a conversation on this computer can start work on another.");
+          return refused4("Only a conversation on this computer can start work on another.");
         const caller = { ...root, name: nameOf3(root.session, all) };
         return startElsewhere(where.peer, args, caller, leadOf(caller), place, callPeer);
       }
@@ -23705,10 +23845,10 @@ async function agentTool(name, args, session, place) {
     case "list_projects": {
       const where = computerOf(args.computer);
       if ("refused" in where)
-        return refused3(where.refused);
+        return refused4(where.refused);
       if ("peer" in where) {
         if (!root)
-          return refused3("Only a conversation on this computer can look at another.");
+          return refused4("Only a conversation on this computer can look at another.");
         return readElsewhere(name, where.peer, leadOf({ ...root, name: nameOf3(root.session, all) }), place, callPeer);
       }
       if (name === "list_projects")
@@ -23721,21 +23861,25 @@ async function agentTool(name, args, session, place) {
     }
     case "plan_limits":
       return planLimitsTool(place.bridge(), place.signal);
+    case "use_limit_reset": {
+      const caller = root ? { ...root, name: nameOf3(root.session, all) } : null;
+      return useResetTool(place.bridge(), args, caller, (given) => askReset(caller, given, { signal: place.signal, ...place.step ? { every: place.step } : {} }), place.signal);
+    }
     case "make_project": {
       if (!root)
-        return refused3("Only a conversation on this computer makes projects here.");
+        return refused4("Only a conversation on this computer makes projects here.");
       return makeProjectTool({ ...root, name: nameOf3(root.session, all) }, args, { signal: place.signal, ...place.step ? { every: place.step } : {} });
     }
     case "notify_user":
       if (!root)
-        return refused3("Only a conversation on this computer can notify the user from here.");
+        return refused4("Only a conversation on this computer can notify the user from here.");
       return notifyUserTool({ session: root.session, data: root.place.data, name: all.agents.find((agent) => agent.session === root.session)?.name ?? null }, args);
     case "propose_goal":
     case "goal_progress":
     case "may_spend":
     case "finish_goal": {
       if (!root)
-        return refused3("Only a bot on this computer takes a goal here.");
+        return refused4("Only a bot on this computer takes a goal here.");
       const caller = { ...root, name: nameOf3(root.session, all) };
       if (name === "propose_goal")
         return proposeGoalTool(caller, args);
@@ -23750,7 +23894,7 @@ async function agentTool(name, args, session, place) {
     case "compact_session":
     case "answer_ask": {
       if (!root)
-        return refused3("Only a conversation on this computer has sessions of its own.");
+        return refused4("Only a conversation on this computer has sessions of its own.");
       const caller = { ...root, name: nameOf3(root.session, all) };
       if (name === "list_sessions") {
         const rows = await liveRows(caller.session, targets, place.signal);
@@ -24651,7 +24795,7 @@ function itemsElsewhere(owner, link = readLink(), here, deleted, { asTold = fals
     here ??= new Set(all.filter((item) => !item.removed).map((item) => item.id));
     deleted ??= new Set(all.filter((item) => item.removed).map((item) => item.id));
   }
-  const overseen = owner === "all" ? null : new Set(rowsOf(owner).flatMap((each) => each.rows.map((row) => row.session)));
+  const overseen = owner === "all" ? null : new Set(rowsOf2(owner).flatMap((each) => each.rows.map((row) => row.session)));
   const owners = new Map;
   const custom = new Map;
   const computers = [];
@@ -28335,7 +28479,7 @@ async function elsewhereTool(tool, lead, args, session, place) {
 }
 async function rowsEverywhere(lead, place, most = CALL_WAIT) {
   const told = readPeerAgents();
-  const kept = new Map(rowsOf(lead.session).map((each) => [each.key, each]));
+  const kept = new Map(rowsOf2(lead.session).map((each) => [each.key, each]));
   const started = new Set(startedOn(lead.session));
   const asked = peersOf(readLink()).filter((peer) => (kept.has(peer.key) || started.has(peer.key)) && (told[peer.key]?.features ?? []).includes(CALLS_FEATURE));
   return (await Promise.all(asked.map(async (peer) => {
@@ -30320,7 +30464,7 @@ var beganWith = (message) => {
     return note.from === "Your answer" || note.from === "Autopilot" ? "you" : note.from === "Its sessions" ? "follow" : "own";
   return writtenByYou(text, message.metadata) ? "you" : "own";
 };
-var rowsOf2 = (messages) => (Array.isArray(messages) ? messages : []).filter((row) => typeof row?.type === "string");
+var rowsOf3 = (messages) => (Array.isArray(messages) ? messages : []).filter((row) => typeof row?.type === "string");
 var ofTurn2 = (row) => row.type === "user" || row.type === "synthetic" || row.type === "assistant";
 function turnIn2(rows) {
   const lastEnd = rows.findIndex((row) => row.type === "idle");
@@ -30332,7 +30476,7 @@ async function latestTurn(session, get) {
   let query = `limit=${TURN_PAGE}&order=desc`;
   for (let pages = 0;pages < TURN_PAGES; pages++) {
     const page = await get(`api/session/${encodeURIComponent(session)}/message?${query}`).catch(() => null);
-    const rows = rowsOf2(page?.data);
+    const rows = rowsOf3(page?.data);
     data.push(...rows);
     const next = page?.cursor?.next ?? page?.cursor?.previous;
     if (!rows.length || !next)
@@ -30344,7 +30488,7 @@ async function latestTurn(session, get) {
   return { data, whole: false };
 }
 function turnFor(messages, whole = true) {
-  const rows = rowsOf2(messages);
+  const rows = rowsOf3(messages);
   const { from, end } = turnIn2(rows);
   const kinds = rows.slice(from, end < 0 ? undefined : end).filter((row) => row.type === "user" || row.type === "synthetic").map(beganWith);
   if (kinds.includes("you"))
@@ -32278,7 +32422,8 @@ function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0, ask 
 // Packages/Box/src/link/work/asks.ts
 var WORK_ASKS2 = path107.join(WORK_FOLDER, "asks.json");
 var LOCK14 = path107.join(WORK_FOLDER, ".asks.lock");
-var WORK_ACTIONS = ["makeProject", "cloneProject"];
+var WORK_ACTIONS = ["makeProject", "cloneProject", "resetLimits"];
+var BOT_ACTIONS = ["makeProject", "cloneProject"];
 var askFollowers = new Set;
 var readKept5 = (file = WORK_ASKS2) => {
   try {
@@ -32304,6 +32449,8 @@ function changeKept2(change, file = WORK_ASKS2) {
 function workAsks(file = WORK_ASKS2) {
   return readKept5(file).filter((each) => !each.answered && (!each.bot || botHere(each.bot))).map((kept) => {
     const { given: _, late: __, answering: ____, answered: ___, toldLate: _____, ...listed } = kept;
+    if (kept.action === "resetLimits")
+      return { ...listed, folder: null, ...kept.reset ? { words: resetAskWords(kept.name, kept.reset) } : {} };
     const root = projectsFolder();
     const named = kept.given?.folder;
     const folder = named ?? projectPlace(listed.project, root);
@@ -32319,11 +32466,11 @@ function botAllows(bot, action) {
   if (!bot)
     return false;
   const work = botHere(bot)?.described.work;
-  return isObject(work) && Array.isArray(work.allowed) && work.allowed.includes(action);
+  return BOT_ACTIONS.includes(action) && isObject(work) && Array.isArray(work.allowed) && work.allowed.includes(action);
 }
 function allowedOf(described) {
   const work = described.work;
-  return isObject(work) && Array.isArray(work.allowed) ? WORK_ACTIONS.filter((each) => work.allowed.includes(each)) : [];
+  return isObject(work) && Array.isArray(work.allowed) ? BOT_ACTIONS.filter((each) => work.allowed.includes(each)) : [];
 }
 function allowAlways(bot, action) {
   const here = botHere(bot);
@@ -32340,7 +32487,7 @@ function allowAlways(bot, action) {
 }
 function askWork(asker, action, given, file = WORK_ASKS2) {
   const ask = changeKept2((asks) => {
-    const same = asks.find((each) => !each.answered && each.session === asker.session && each.action === action && each.project.toLowerCase() === given.name.toLowerCase());
+    const same = asks.find((each) => !each.answered && each.session === asker.session && each.action === action && (action === "resetLimits" ? each.given?.reset?.row === given.reset?.row : each.project.toLowerCase() === given.name.toLowerCase()));
     if (same) {
       delete same.late;
       return same;
@@ -32353,8 +32500,7 @@ function askWork(asker, action, given, file = WORK_ASKS2) {
       ...asker.bot ? { bot: asker.bot } : {},
       project: given.name,
       ...given.clone ? { clone: given.clone } : {},
-      folderName: given.folder ? path107.basename(given.folder) : folderName(given.name) ?? given.name,
-      folder: given.folder ?? projectPlace(given.name),
+      ...action === "resetLimits" && given.reset ? { folderName: "", folder: null, reset: given.reset } : { folderName: given.folder ? path107.basename(given.folder) : folderName(given.name) ?? given.name, folder: given.folder ?? projectPlace(given.name) },
       at: Date.now(),
       given
     };
@@ -32386,7 +32532,15 @@ async function answerOf(id, { wait = 10 * 60000, every = 1000, signal, file = WO
     return null;
   }, file);
 }
-async function doWork(action, given, asker) {
+async function doWork(action, given, asker, always = false) {
+  if (action === "resetLimits") {
+    const bridge = bridgeTarget();
+    if (!given.reset)
+      return { text: "There's no reset to use in that ask.", isError: true };
+    if (!bridge)
+      return { text: `The coding agents aren't running on ${HERE} now, so the reset wasn't used.`, isError: true };
+    return spendReset(bridge, given.reset.row, asker.name, { always });
+  }
   const madeBy = asker.bot ? { bot: asker.bot, name: asker.name, at: Date.now() } : null;
   const outcome = await makeProject({ name: given.name, git: given.git, clone: action === "cloneProject" ? given.clone : undefined, folder: given.folder }, madeBy);
   if ("refused" in outcome)
@@ -32403,7 +32557,7 @@ async function answerWork(id, given, targets, file = WORK_ASKS2) {
   if (answer !== "allow" && answer !== "always" && answer !== "deny")
     return { refused: { status: 400, message: "Answer allow, always or deny." } };
   let picked = null;
-  if (answer !== "deny" && !projectsFolder() && !ask.given.folder) {
+  if (answer !== "deny" && ask.action !== "resetLimits" && !projectsFolder() && !ask.given.folder) {
     if (given.folder === undefined || given.folder === null)
       return { refused: { status: 400, message: "Pick the folder new projects go in." } };
     const checked = folderGiven(given.folder);
@@ -32421,7 +32575,7 @@ async function answerWork(id, given, targets, file = WORK_ASKS2) {
   if (!claimed)
     return { refused: { status: 404, message: "That's been answered, or it isn't asked any more." } };
   const asker = { session: ask.session, name: ask.name, ...ask.bot ? { bot: ask.bot } : {} };
-  const what = ask.action === "cloneProject" ? `cloning ${ask.clone} as ${ask.project}` : `making ${ask.project}`;
+  const what = ask.action === "resetLimits" ? `using one of ${ask.project}'s resets` : ask.action === "cloneProject" ? `cloning ${ask.clone} as ${ask.project}` : `making ${ask.project}`;
   let outcome;
   if (answer === "deny" && given.overnight === true) {
     outcome = { text: `No one could answer ${what} overnight, so it's no for now. Go on without it; it waits for the user in the morning report.`, isError: true };
@@ -32431,9 +32585,9 @@ async function answerWork(id, given, targets, file = WORK_ASKS2) {
     try {
       if (picked && !projectsFolder())
         setProjectsFolder(picked);
-      if (answer === "always" && ask.bot)
+      if (answer === "always" && ask.bot && BOT_ACTIONS.includes(ask.action))
         allowAlways(ask.bot, ask.action);
-      outcome = await doWork(ask.action, ask.given, asker);
+      outcome = await doWork(ask.action, ask.given, asker, answer === "always");
     } catch (error) {
       outcome = { text: `Couldn't do it: ${String(error?.message ?? error)}`, isError: true };
     }
@@ -32483,6 +32637,8 @@ async function tellLateAnswers(targets, file = WORK_ASKS2, bridgeRuns) {
     await tellLate(ask.id, targets, file, bridgeRuns);
 }
 function workAskWords(ask) {
+  if (ask.action === "resetLimits" && ask.reset)
+    return resetAskWords(ask.name, ask.reset);
   const where = ask.folder ? ` in ${shownPath(path107.dirname(ask.folder))}` : "";
   return ask.action === "cloneProject" ? { title: `${ask.name} asks to clone a project`, body: `${ask.clone ?? ""} as ${ask.project}${where}` } : { title: `${ask.name} asks to make a project`, body: `${ask.project}${where}` };
 }
@@ -33056,7 +33212,7 @@ var SCRIPTS = /kuvo-start|kuvo-launch|kuvo_script|kuvo-link/;
 
 class LaunchLockBusy extends Error {
 }
-var said4 = (file) => textOf(file)?.trim() ?? "";
+var said5 = (file) => textOf(file)?.trim() ?? "";
 var changed3 = (file) => {
   try {
     return fs108.statSync(file, { bigint: true }).mtimeNs;
@@ -33080,7 +33236,7 @@ function holding3(pid) {
   }
 }
 function goneHolder() {
-  const holder = said4(SAID);
+  const holder = said5(SAID);
   const lock = changed3(LOCK15);
   const saying = changed3(SAID);
   return holder && lock !== null && saying !== null && lock <= saying && !holding3(holder) ? holder : "";
@@ -33089,7 +33245,7 @@ function unheld(stale) {
   if (!goneHolder() && !olderThan(LOCK15, stale))
     return;
   try {
-    const taker = said4(TAKER);
+    const taker = said5(TAKER);
     if (taker && !holding3(taker) || !taker && olderThan(BREAKING, 60000)) {
       let gone = taker;
       if (!gone)
@@ -33113,7 +33269,7 @@ function unheld(stale) {
       const aside = `${BREAKING}.${process.pid}`;
       try {
         fs108.renameSync(BREAKING, aside);
-        if (said4(path111.join(aside, "pid")) !== taker) {
+        if (said5(path111.join(aside, "pid")) !== taker) {
           if (!fs108.existsSync(BREAKING))
             fs108.renameSync(aside, BREAKING);
           return;
@@ -33133,7 +33289,7 @@ function unheld(stale) {
       if (holder) {
         const aside = `${SAID}.${process.pid}`;
         fs108.renameSync(SAID, aside);
-        if (said4(aside) === holder) {
+        if (said5(aside) === holder) {
           const lock = changed3(LOCK15);
           const saying = changed3(aside);
           if (lock !== null && saying !== null && lock <= saying)
@@ -33153,7 +33309,7 @@ function unheld(stale) {
         } catch {}
       }
     } finally {
-      if (said4(TAKER) === String(process.pid))
+      if (said5(TAKER) === String(process.pid))
         fs108.rmSync(BREAKING, { recursive: true, force: true });
     }
   } catch {}
@@ -33183,7 +33339,7 @@ function launchLocked(work, { stale = 300000, wait = 330000 } = {}) {
   try {
     return work();
   } finally {
-    if (held && (!saying || said4(SAID) === String(process.pid))) {
+    if (held && (!saying || said5(SAID) === String(process.pid))) {
       try {
         fs108.rmSync(SAID, { force: true });
       } catch {}
@@ -39048,7 +39204,7 @@ import zlib2 from "node:zlib";
 
 class ZipError extends Error {
 }
-var refused4 = (why) => {
+var refused5 = (why) => {
   throw new ZipError(`The browser's download can't be unpacked (${why}).`);
 };
 var S_IFMT2 = 61440;
@@ -39061,7 +39217,7 @@ function read3(fd, at, length) {
   while (done < length) {
     const got = fs122.readSync(fd, buffer, done, length - done, at + done);
     if (got === 0)
-      refused4("it ends early");
+      refused5("it ends early");
     done += got;
   }
   return buffer;
@@ -39077,30 +39233,30 @@ function entries(fd, fileSize) {
     }
   }
   if (end < 0)
-    refused4("it isn't a zip");
+    refused5("it isn't a zip");
   let count = tail.readUInt16LE(end + 10), directorySize = tail.readUInt32LE(end + 12), directoryAt = tail.readUInt32LE(end + 16);
   if (count === 65535 || directorySize === 4294967295 || directoryAt === 4294967295) {
     const locatorAt = fileSize - tailSize + end - 20;
     if (locatorAt < 0)
-      refused4("its zip64 records");
+      refused5("its zip64 records");
     const locator = read3(fd, locatorAt, 20);
     if (locator.readUInt32LE(0) !== 117853008)
-      refused4("its zip64 records");
+      refused5("its zip64 records");
     const record = read3(fd, Number(locator.readBigUInt64LE(8)), 56);
     if (record.readUInt32LE(0) !== 101075792)
-      refused4("its zip64 records");
+      refused5("its zip64 records");
     count = Number(record.readBigUInt64LE(32));
     directorySize = Number(record.readBigUInt64LE(40));
     directoryAt = Number(record.readBigUInt64LE(48));
   }
   if (directoryAt + directorySize > fileSize || count > 200000)
-    refused4("its directory");
+    refused5("its directory");
   const directory = read3(fd, directoryAt, directorySize);
   const found = [];
   let at = 0;
   for (let i = 0;i < count; i++) {
     if (at + 46 > directory.length || directory.readUInt32LE(at) !== 33639248)
-      refused4("its directory");
+      refused5("its directory");
     const madeBy = directory.readUInt16LE(at + 4) >>> 8;
     const flags = directory.readUInt16LE(at + 8), method = directory.readUInt16LE(at + 10);
     let compressed = directory.readUInt32LE(at + 20), size = directory.readUInt32LE(at + 24);
@@ -39108,11 +39264,11 @@ function entries(fd, fileSize) {
     const attributes = directory.readUInt32LE(at + 38);
     let offset = directory.readUInt32LE(at + 42);
     if (at + 46 + nameLength + extraLength + commentLength > directory.length)
-      refused4("its directory");
+      refused5("its directory");
     const nameBytes = directory.subarray(at + 46, at + 46 + nameLength);
     const name = nameBytes.toString("utf8");
     if (flags & 1)
-      refused4("it's encrypted");
+      refused5("it's encrypted");
     let extra = at + 46 + nameLength;
     const extraEnd = extra + extraLength;
     while (extra + 4 <= extraEnd) {
@@ -39121,7 +39277,7 @@ function entries(fd, fileSize) {
         let p = extra + 4;
         const next = () => {
           if (p + 8 > extra + 4 + length)
-            refused4("its zip64 records");
+            refused5("its zip64 records");
           const value = Number(directory.readBigUInt64LE(p));
           p += 8;
           return value;
@@ -39145,10 +39301,10 @@ function entries(fd, fileSize) {
 }
 function parts(name) {
   if (!name || name.includes("\x00") || name.includes("\\") || name.startsWith("/"))
-    refused4(`a name, ${JSON.stringify(name)}`);
+    refused5(`a name, ${JSON.stringify(name)}`);
   const each = name.replace(/\/$/, "").split("/");
   if (each.some((part) => !part || part === "." || part === ".."))
-    refused4(`a name, ${JSON.stringify(name)}`);
+    refused5(`a name, ${JSON.stringify(name)}`);
   return each;
 }
 function folderFor(root, given) {
@@ -39162,7 +39318,7 @@ function folderFor(root, given) {
     if (!stat)
       fs122.mkdirSync(folder, { mode: 493 });
     else if (!stat.isDirectory())
-      refused4(`a name goes through ${JSON.stringify(part)}, which isn't a folder`);
+      refused5(`a name goes through ${JSON.stringify(part)}, which isn't a folder`);
   }
   return folder;
 }
@@ -39193,12 +39349,12 @@ async function unzip(file, root) {
         continue;
       }
       if (type !== S_IFREG2)
-        refused4(`${JSON.stringify(entry.name)} isn't a file`);
+        refused5(`${JSON.stringify(entry.name)} isn't a file`);
       if (entry.method !== 0 && entry.method !== 8)
-        refused4(`${JSON.stringify(entry.name)} is compressed in a way it doesn't know`);
+        refused5(`${JSON.stringify(entry.name)} is compressed in a way it doesn't know`);
       const local = read3(fd, entry.offset, 30);
       if (local.readUInt32LE(0) !== 67324752)
-        refused4("a file's header");
+        refused5("a file's header");
       const start = entry.offset + 30 + local.readUInt16LE(26) + local.readUInt16LE(28);
       const target = path126.join(folderFor(root, given.slice(0, -1)), given[given.length - 1]);
       const out = fs122.openSync(target, fs122.constants.O_WRONLY | fs122.constants.O_CREAT | fs122.constants.O_EXCL | (fs122.constants.O_NOFOLLOW ?? 0), 384);
@@ -39216,22 +39372,22 @@ async function unzip(file, root) {
         fs122.closeSync(out);
       }
       if (seen.bytes !== entry.size)
-        refused4(`${JSON.stringify(entry.name)} isn't the size it says`);
+        refused5(`${JSON.stringify(entry.name)} isn't the size it says`);
       fs122.chmodSync(target, entry.mode & 493 | 384);
     }
     for (const entry of links) {
       const given = parts(entry.name);
       if (entry.method !== 0 || entry.size > 4096 || entry.compressed !== entry.size)
-        refused4(`the link ${JSON.stringify(entry.name)}`);
+        refused5(`the link ${JSON.stringify(entry.name)}`);
       const local = read3(fd, entry.offset, 30);
       if (local.readUInt32LE(0) !== 67324752)
-        refused4("a file's header");
+        refused5("a file's header");
       const pointsTo = read3(fd, entry.offset + 30 + local.readUInt16LE(26) + local.readUInt16LE(28), entry.size).toString("utf8");
       if (!pointsTo || pointsTo.includes("\x00") || pointsTo.startsWith("/"))
-        refused4(`the link ${JSON.stringify(entry.name)}`);
+        refused5(`the link ${JSON.stringify(entry.name)}`);
       const resolved = path126.posix.normalize(path126.posix.join(...given.slice(0, -1), pointsTo));
       if (resolved === ".." || resolved.startsWith("../"))
-        refused4(`the link ${JSON.stringify(entry.name)} points outside it`);
+        refused5(`the link ${JSON.stringify(entry.name)} points outside it`);
       const folder = folderFor(root, given.slice(0, -1));
       fs122.symlinkSync(pointsTo, path126.join(folder, given[given.length - 1]));
     }
@@ -39242,7 +39398,7 @@ async function unzip(file, root) {
         leads = fs122.realpathSync(path126.join(root, ...parts(entry.name)));
       } catch {}
       if (!leads.startsWith(real + path126.sep))
-        refused4(`the link ${JSON.stringify(entry.name)} points outside it`);
+        refused5(`the link ${JSON.stringify(entry.name)} points outside it`);
     }
   } finally {
     fs122.closeSync(fd);
@@ -39885,7 +40041,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "b339a6318a05";
+var BRIDGE_VERSION = "9156d7e75bf0";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -45553,7 +45709,7 @@ function tripwire(item, caller, site) {
 var noteUse = (item, caller, use, how) => note3({ what: "used", ...itemOf2(item), ...whoOf3(caller), ...use.site ? { site: use.site } : {}, ...use.program ? { program: use.program } : {}, ...use.why ? { why: use.why } : {}, how });
 
 // Packages/Box/src/link/vault/fill.ts
-var refused5 = (status, message) => ({ status, value: { message } });
+var refused6 = (status, message) => ({ status, value: { message } });
 function pageSite(origin) {
   if (typeof origin !== "string")
     return null;
@@ -45570,41 +45726,41 @@ async function fill(given, caller, signal) {
   const body = isObject(given) ? given : {};
   const site = pageSite(body.origin);
   if (!site)
-    return refused5(400, "Kuvo Code fills only on a secure page (https).");
+    return refused6(400, "Kuvo Code fills only on a secure page (https).");
   const purpose = body.purpose === "field" ? "field" : "sign-in";
   const why = typeof body.why === "string" ? oneLine(body.why, 300) : undefined;
   let item;
   if (body.item !== undefined && body.item !== null && body.item !== "") {
     item = itemNamed(body.item);
     if (!item)
-      return refused5(404, `There's no item “${oneLine(body.item, 80)}” in the vault.`);
+      return refused6(404, `There's no item “${oneLine(body.item, 80)}” in the vault.`);
     if (!usableOn(item, site))
-      return refused5(403, tripwire(item, caller, site));
+      return refused6(403, tripwire(item, caller, site));
   } else {
     if (purpose === "field")
-      return refused5(400, "Name the item to fill from.");
+      return refused6(400, "Name the item to fill from.");
     const own = readItems().filter((each) => each.kind === "login" && usableOn(each, site) && (grantFor(each, { ...caller, seat: false }) === "own" || hasOnce(caller, each.id)));
     if (own.length !== 1)
-      return refused5(404, own.length ? "More than one sign-in fits this site." : "No sign-in in the vault is yours to use on this site.");
+      return refused6(404, own.length ? "More than one sign-in fits this site." : "No sign-in in the vault is yours to use on this site.");
     item = own[0];
   }
   if (purpose === "field" && item.signInOnly)
-    return refused5(403, `“${item.name}” is only for signing in: use browser_sign_in.`);
+    return refused6(403, `“${item.name}” is only for signing in: use browser_sign_in.`);
   const may = await mayUse(item, caller, { site, ...why ? { why } : {}, askWithout: true, signal });
   if (!may.ok)
-    return refused5(403, may.message);
+    return refused6(403, may.message);
   const values = await valuesOf(item.id);
   let filled;
   if (purpose === "sign-in") {
     if (item.kind !== "login")
-      return refused5(400, `“${item.name}” isn't a sign-in: fill one of its fields with browser_fill.`);
+      return refused6(400, `“${item.name}” isn't a sign-in: fill one of its fields with browser_fill.`);
     filled = values.password !== undefined ? { password: values.password } : {};
   } else {
     const field = typeof body.field === "string" && body.field ? body.field.trim().toLowerCase() : item.kind === "login" ? "password" : item.fields.length === 1 ? item.fields[0] : "";
     if (field === "username" && item.username)
       filled = { username: item.username };
     else if (!field || values[field] === undefined)
-      return refused5(400, `Say which of “${item.name}”'s fields to fill: ${["username", ...item.fields].filter((each) => each !== "username" || item.username).join(", ")}.`);
+      return refused6(400, `Say which of “${item.name}”'s fields to fill: ${["username", ...item.fields].filter((each) => each !== "username" || item.username).join(", ")}.`);
     else
       filled = { [field]: values[field] };
   }
@@ -47189,8 +47345,8 @@ function importWords(outcome, skipped, names) {
 }
 
 // Packages/Box/src/link/work-queue/tools.ts
-var said5 = (text) => ({ text, isError: false });
-var refused6 = (text) => ({ text, isError: true });
+var said6 = (text) => ({ text, isError: false });
+var refused7 = (text) => ({ text, isError: true });
 var ITEM = { type: ["string", "integer"], description: "Like #243 or gh:owner/repo#12." };
 var ISSUE = { type: "string", description: "gh:owner/repo#12 or its URL." };
 var TOP = { type: "boolean", description: "At the top of its category." };
@@ -47289,7 +47445,7 @@ var QUEUE_TOOLS = [
 ];
 var QUEUE_TOOL_NAMES = QUEUE_TOOLS.map((tool) => tool.name);
 var QUEUE_INSTRUCTIONS = " Keep work items in your Work Queue (queue_*), not a file: what the user asks for, what's left to do, and GitHub issues or PRs you work on (queue_add issue:, Done once closed). Refer to them as #243 (GitHub ones as gh:owner/repo#12), never a bare #243 in commits, branches or PRs. On one: working: true, progress_note, then category: done.";
-var why3 = (error) => String(error?.message ?? error);
+var why4 = (error) => String(error?.message ?? error);
 var placesOf2 = (folder) => ({ own: folder ?? null, others: folder ? readProjects().find((each) => each.directory === folder)?.folders ?? [] : [] });
 async function groupLivesHere(group, readBridge) {
   try {
@@ -47341,18 +47497,18 @@ function itemFor(items, given, caller, overseen) {
 var deletedWords = (item) => byUser(item.removed.by) ? `The user deleted ${nameOf2(item)}: only they bring it back. Ask them if it's still needed.` : `${nameOf2(item)} was deleted by ${whoWords(item.removed.by)}: queue_remove with undo brings it back.`;
 async function callQueueTool(name, args, session, readEngine, readBridge, targets, signal) {
   if (typeof name !== "string" || !QUEUE_TOOL_NAMES.includes(name))
-    return refused6(`There's no tool ${String(name)}.`);
+    return refused7(`There's no tool ${String(name)}.`);
   if (typeof session !== "string" || !await isCalling(session, [name], args, readEngine, readBridge))
-    return refused6("Only a conversation's own tool call can change its Work Queue, and this one isn't running in it.");
+    return refused7("Only a conversation's own tool call can change its Work Queue, and this one isn't running in it.");
   const found = await queueCaller(await callerOf(session, readEngine, readBridge), readBridge);
   if ("refused" in found)
-    return refused6(found.refused);
+    return refused7(found.refused);
   try {
     return await run4(name, args, found, targets, signal);
   } catch (error) {
     if (error instanceof Refusal)
-      return refused6(error.message);
-    return refused6(`The Work Queue couldn't do that: ${why3(error)}`);
+      return refused7(error.message);
+    return refused7(`The Work Queue couldn't do that: ${why4(error)}`);
   }
 }
 var change4 = (work) => {
@@ -47370,18 +47526,18 @@ async function run4(name, args, caller, targets, signal) {
   const overseen = overseenBy(caller.owner, facts.all);
   switch (name) {
     case "queue_list":
-      return said5(await listWords(caller, args, facts, overseen, targets));
+      return said6(await listWords(caller, args, facts, overseen, targets));
     case "queue_show": {
       const ref = refOf(args.item);
       const here = allItems();
       const far = ref && !matching2(here, ref).some((item) => !item.removed) ? itemElsewhere(ref) : null;
       if (far) {
         if (!itemsElsewhere(caller.owner).items.some((item) => item.id === far.id))
-          return refused6(`${nameOf2(far)} is on ${far.computer.name}, and isn't in your Work Queue, nor in a session's you oversee: ask the conversation it belongs to, or the user.`);
-        return said5(farWords(far, caller));
+          return refused7(`${nameOf2(far)} is on ${far.computer.name}, and isn't in your Work Queue, nor in a session's you oversee: ask the conversation it belongs to, or the user.`);
+        return said6(farWords(far, caller));
       }
       const item = itemFor(here, args.item, caller, overseen);
-      return said5(await showWords(item, facts, targets, caller));
+      return said6(await showWords(item, facts, targets, caller));
     }
     case "queue_add": {
       refuseMoving([caller.owner]);
@@ -47401,9 +47557,9 @@ async function run4(name, args, caller, targets, signal) {
       const where = categories().find((each) => each.id === item.category)?.name ?? item.category;
       if (issue) {
         const ignored = [args.title !== undefined ? "title" : "", args.body !== undefined ? "body" : ""].filter(Boolean);
-        return said5(`Added ${nameOf2(item)} (${seenWords(issue.read.state)} on GitHub) to ${where}${args.working === true && !caller.seat ? ", linked to you: it shows In progress while you work" : ""}. Refer to it as ${item.source.ref}. Its title and description are GitHub's, and it's Done once it's closed there${issue.read.kind === "github-pr" ? " or merged" : ""}.${ignored.length ? ` (The ${ignored.join(" and ")} you gave ${ignored.length === 1 ? "isn't" : "aren't"} used.)` : ""}`);
+        return said6(`Added ${nameOf2(item)} (${seenWords(issue.read.state)} on GitHub) to ${where}${args.working === true && !caller.seat ? ", linked to you: it shows In progress while you work" : ""}. Refer to it as ${item.source.ref}. Its title and description are GitHub's, and it's Done once it's closed there${issue.read.kind === "github-pr" ? " or merged" : ""}.${ignored.length ? ` (The ${ignored.join(" and ")} you gave ${ignored.length === 1 ? "isn't" : "aren't"} used.)` : ""}`);
       }
-      return said5(item.number !== undefined ? `Added #${item.number} "${item.title}" to ${where}${args.working === true ? ", linked to you: it shows In progress while you work" : ""}. Refer to it as #${item.number}.` : `Added "${item.title}" to ${where}. It has no number yet: ${HERE} gets one from the user's primary computer, which isn't answering now. Name it as ${item.id} meanwhile.`);
+      return said6(item.number !== undefined ? `Added #${item.number} "${item.title}" to ${where}${args.working === true ? ", linked to you: it shows In progress while you work" : ""}. Refer to it as #${item.number}.` : `Added "${item.title}" to ${where}. It has no number yet: ${HERE} gets one from the user's primary computer, which isn't answering now. Name it as ${item.id} meanwhile.`);
     }
     case "queue_update": {
       let issue = null;
@@ -47444,13 +47600,13 @@ async function run4(name, args, caller, targets, signal) {
       }));
       const where = categories().find((each) => each.id === item.category)?.name ?? item.category;
       if (issue)
-        return said5(`${linkedFrom.number !== undefined ? `#${linkedFrom.number}` : "It"} is ${nameOf2(item)} now (${seenWords(issue.read.state)} on GitHub), in ${where}: refer to it as ${item.source.ref}${linkedFrom.number !== undefined ? ` (#${linkedFrom.number} still finds it)` : ""}. Its title and description are GitHub's (what it said before is kept as a note), and it's Done once it's closed there.`);
-      return said5(item.category === "done" ? `Marked ${nameOf2(item)} done.` : `Changed ${nameOf2(item)} (${where}${item.sessions.length ? `, ${item.sessions.length} session${item.sessions.length === 1 ? "" : "s"} linked` : ""}).`);
+        return said6(`${linkedFrom.number !== undefined ? `#${linkedFrom.number}` : "It"} is ${nameOf2(item)} now (${seenWords(issue.read.state)} on GitHub), in ${where}: refer to it as ${item.source.ref}${linkedFrom.number !== undefined ? ` (#${linkedFrom.number} still finds it)` : ""}. Its title and description are GitHub's (what it said before is kept as a note), and it's Done once it's closed there.`);
+      return said6(item.category === "done" ? `Marked ${nameOf2(item)} done.` : `Changed ${nameOf2(item)} (${where}${item.sessions.length ? `, ${item.sessions.length} session${item.sessions.length === 1 ? "" : "s"} linked` : ""}).`);
     }
     case "queue_hand": {
       const to = await handTarget(args.to, caller, targets);
       if ("refused" in to)
-        return refused6(to.refused);
+        return refused7(to.refused);
       const item = change4((book) => {
         const item = itemFor(book.items(), args.item, caller, overseen);
         if (item.removed)
@@ -47467,8 +47623,8 @@ async function run4(name, args, caller, targets, signal) {
         return item;
       });
       if (to.peer)
-        return said5(`Handing ${nameOf2(item)} to ${to.name} on ${computerName(to.peer)}: it goes into its queue there, linked to it, as soon as that computer has it${awaySince(to.peer.key) !== null ? " (it isn't answering now: it goes once it's back)" : ""}, and stays in your view. Until then it's unchanged here.`);
-      return said5(`Handed ${nameOf2(item)} to ${to.name}: it's in its queue now${to.owner.startsWith("ses_") ? ", linked to it, so it shows In progress while it works" : ""}, and stays in your view.`);
+        return said6(`Handing ${nameOf2(item)} to ${to.name} on ${computerName(to.peer)}: it goes into its queue there, linked to it, as soon as that computer has it${awaySince(to.peer.key) !== null ? " (it isn't answering now: it goes once it's back)" : ""}, and stays in your view. Until then it's unchanged here.`);
+      return said6(`Handed ${nameOf2(item)} to ${to.name}: it's in its queue now${to.owner.startsWith("ses_") ? ", linked to it, so it shows In progress while it works" : ""}, and stays in your view.`);
     }
     case "queue_remove": {
       const item = change4((book) => {
@@ -47490,27 +47646,27 @@ async function run4(name, args, caller, targets, signal) {
         }
         return item;
       });
-      return said5(args.undo === true ? `Brought back ${nameOf2(item)}.` : `Deleted ${nameOf2(item)}. The user can bring it back for 30 days.`);
+      return said6(args.undo === true ? `Brought back ${nameOf2(item)}.` : `Deleted ${nameOf2(item)}. The user can bring it back for 30 days.`);
     }
     case "queue_categories": {
       if (typeof args.add === "string" && args.add.trim()) {
         const outcome = addCategory(args.add, args.after);
         if ("refused" in outcome)
-          return refused6(outcome.refused);
-        return said5(`Added the category ${outcome.done.name}. Categories now: ${categories().map((each) => each.name).join(", ")}.`);
+          return refused7(outcome.refused);
+        return said6(`Added the category ${outcome.done.name}. Categories now: ${categories().map((each) => each.name).join(", ")}.`);
       }
-      return said5(`Categories (one set for every queue): ${categories().map((each) => each.name).join(", ")}. In progress isn't one you set: an item shows In progress while a session linked to it is at work.`);
+      return said6(`Categories (one set for every queue): ${categories().map((each) => each.name).join(", ")}. In progress isn't one you set: an item shows In progress while a session linked to it is at work.`);
     }
     case "queue_import": {
       const given = givenItems(args.items);
       if ("refused" in given)
-        return refused6(given.refused);
+        return refused7(given.refused);
       refuseMoving([caller.owner]);
       const outcome = change4((book) => importItems(book, caller.owner, given.items, caller.who, primaryOf(), now));
-      return said5(importWords(outcome, given.skipped, (id) => categoryNamed(id)?.name ?? id));
+      return said6(importWords(outcome, given.skipped, (id) => categoryNamed(id)?.name ?? id));
     }
   }
-  return refused6(`There's no tool ${name}.`);
+  return refused7(`There's no tool ${name}.`);
 }
 function githubText(body, ref) {
   const fence = "`".repeat(Math.max(3, ...(body.match(/`+/g) ?? []).map((run) => run.length + 1)));
@@ -48789,7 +48945,7 @@ async function inTime2(work, ms) {
     clearTimeout(timer);
   }
 }
-var said6 = (error, otherwise) => error instanceof Error && error.message ? error.message : otherwise;
+var said7 = (error, otherwise) => error instanceof Error && error.message ? error.message : otherwise;
 async function routeAnswer(pieces) {
   const answer = await collected(pieces);
   const value = parsed(answer.body);
@@ -48993,7 +49149,7 @@ async function* typedAnswer(context, match) {
       const unavailable = isObject(error) && error.unavailable === true || (step === "btw" || step === "handoff" || step === "review") && unreached;
       if (step === "goal" && unreached)
         error = new Error(GOALS_NOT_RUNNING);
-      failure = unavailable ? { restore: writtenBack(text), error: KEYWORD_UNAVAILABLE } : { restore: decision.failed ?? { text }, error: said6(error, "It couldn’t be done. Try again.") };
+      failure = unavailable ? { restore: writtenBack(text), error: KEYWORD_UNAVAILABLE } : { restore: decision.failed ?? { text }, error: said7(error, "It couldn’t be done. Try again.") };
     }
   }
   const plan = !failure ? decision.plan : undefined;

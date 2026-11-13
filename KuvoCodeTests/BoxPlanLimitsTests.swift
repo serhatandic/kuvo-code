@@ -1,3 +1,4 @@
+import ClientAccounts
 import Foundation
 import OpenCodeKit
 import Testing
@@ -152,6 +153,62 @@ import UsageKit
         #expect(!StubWeb.asked.contains(hetzner + "/api/kuvo/limits/refresh"))
     }
 
+    /// #631 E: what a plan has beyond its windows, as this Mac's box states it, drawn under its row;
+    /// its resets used through this Mac's box (which asks hetzner, with the sign-in), confirmed with
+    /// the box's one-time id, the confirmation's words from what the box offered; Always Allow kept
+    /// on the box whose page shows the account.
+    @Test func aPlansExtrasAndItsResetsGoThroughThisMacsBox() async throws {
+        defer { StubWeb.stop(); HostLimits.shared.update(rows: [], covered: []); UserDefaults.standard.removeObject(forKey: "usage.boxServices") }
+        var claude = Self.account("claude-code", "claude", agent: "claude", identity: "c1a0dec1a0dec1a0", used: 0.88)
+        claude["extras"] = [
+            ["id": "extra_usage", "name": "Extra Usage", "kind": "capped", "amount": 12.4, "limit": 50, "unit": "usd"],
+            ["id": "resets", "name": "Rate Limit Resets", "kind": "resets", "count": 2, "expiries": [Date().timeIntervalSince1970 * 1000 + 3_600_000], "refills": ["five_hour", "seven_day"], "usable": true, "on": ["key": "key-hetzner", "name": "hetzner"]],
+        ]
+        var codex = Self.account("codex-cli", "codex", agent: "codex", identity: "c0dec0dec0dec0de", used: 0.5)
+        codex["extras"] = [["id": "resets", "name": "Rate Limit Resets", "kind": "resets", "count": 1, "usable": true, "agents": true, "on": ["key": "", "name": "", "here": true]]]
+        try StubWeb.answer(Self.mac + "/api/kuvo/limits", json: Self.limits([claude, codex]))
+        let sent = Sent()
+        StubWeb.route(Self.mac + "/api/kuvo/limits/reset", sent: { request, body in
+            let given = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
+            sent.add("\(request.httpMethod ?? "") \(given["row"] ?? "") \(given["confirm"] ?? "-")")
+            if given["confirm"] == nil {
+                return StubWeb.json(["data": ["confirm": "rsc_1", "row": given["row"] ?? "", "service": "claude", "count": 2, "refills": ["five_hour", "seven_day"],
+                                              "on": ["key": "key-hetzner", "name": "hetzner"], "always": false, "expires": Date().timeIntervalSince1970 * 1000 + 600_000]])
+            }
+            return StubWeb.json(["data": ["outcome": "reset"]])
+        })
+        StubWeb.route(Self.mac + "/api/kuvo/limits/reset/always", sent: { _, body in
+            sent.add("always " + (String(data: body, encoding: .utf8) ?? ""))
+            return StubWeb.json(["data": [String: Any]()])
+        })
+        let planLimits = BoxPlanLimits()
+        planLimits.connected(nil, api: api(Self.mac))
+        try await until { HostLimits.shared.rows.count == 2 }
+
+        let row = try #require(HostLimits.shared.rows.first { $0.providerID == "claude" })
+        #expect(row.extras.map(\.kind) == [.capped, .resets])
+        let resets = try #require(row.resets)
+        // Used on hetzner, which has the sign-in: its name is the row's control.
+        #expect(resets.count == 2 && resets.usable && resets.elsewhere == "hetzner")
+        // (Its soonest expires within the hour: red, by both apps' one rule.)
+        #expect(resets.soonest == .critical)
+        #expect(HostLimits.shared.rows.first { $0.providerID == "codex" }?.resets?.elsewhere == nil)
+
+        let offer = try await planLimits.askReset(row.id)
+        #expect(offer.question == "Use 1 of 2 resets?")
+        #expect(offer.detail == "Your 5-hour and weekly limits start over now. Used on hetzner, which has this account's sign-in.")
+        let done = try await planLimits.useReset(row.id, confirm: offer.confirm)
+        #expect(done.succeeded)
+        #expect(sent.all == ["POST claude#c1a0dec1a0dec1a0 -", "POST claude#c1a0dec1a0dec1a0 rsc_1"])
+
+        // Settings › Accounts: Codex's resets are agents' without asking; turned off there, on this Mac's box.
+        #expect(planLimits.resets(of: "codex-cli", on: nil)?.agents == true)
+        #expect(planLimits.resets(of: "claude-code", on: nil)?.agents == false)
+        try await planLimits.setAgentsUseResets(false, provider: "codex-cli", machine: nil)
+        #expect(sent.all.last?.contains(#""provider":"codex-cli""#) == true)
+        #expect(sent.all.last?.contains(#""always":false"#) == true)
+    }
+
     @Test func aBoxFromBeforeThemCoversNothing() async throws {
         defer { StubWeb.stop(); HostLimits.shared.update(rows: [], covered: []); UserDefaults.standard.removeObject(forKey: "usage.boxServices") }
         try StubWeb.answer(Self.mac + "/api/kuvo/limits", json: Self.limits([Self.account("claude-code", "claude", agent: "claude", used: 0.42)]))
@@ -165,4 +222,12 @@ import UsageKit
         try await until { HostLimits.shared.covered.isEmpty }
         #expect(HostLimits.shared.rows.isEmpty)
     }
+}
+
+/// What a stand-in was sent, in order.
+nonisolated final class Sent: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [String] = []
+    func add(_ item: String) { lock.withLock { items.append(item) } }
+    var all: [String] { lock.withLock { items } }
 }

@@ -23,6 +23,9 @@ final class CodexResetClaimService: ResetClaimService {
     /// would misread the retry as "no longer available" instead of replaying the POST and letting the
     /// server answer `already_redeemed`. Session-lived, keyed by the popover's per-credit UUIDs.
     private var matchedCreditIDs: [String: String] = [:]
+    /// Never from here (#631 E, fork addition): Codex's resets are used through the host's box, once,
+    /// from every app; its boxes are brought up to date before the app.
+    var isClaimable: Bool { false }
 
     /// Test seam: injected credential candidates and refresh hook, the same `usageClient` the requests
     /// go through. Candidates are tried in order until one authenticates (see `claim`).

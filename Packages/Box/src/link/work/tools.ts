@@ -24,6 +24,7 @@ import { readProjects } from "../areas/projects";
 import { gitIn } from "../git";
 import { HERE } from "../home";
 import { answerOf, askWork, botAllows, doWork } from "./asks";
+import type { ResetGiven } from "./plan-reset";
 import { cloneable, folderName, isEmptyFolder, namedPlace, projectPlace, shownPath } from "./projects";
 import { projectsFolder } from "./settings";
 import { describeModels, modelsHere } from "./models";
@@ -342,6 +343,21 @@ export async function makeProjectTool(caller: Caller, args: Record<string, unkno
   }
   const ask = askWork(asker, action, given);
   // On Autopilot it doesn't wait for you: it stays asked, for when you're back.
+  const away = (await callerOf(caller.session, readEngineFile, readBridgeFile)).autopilot === true;
+  const { value: answer } = await untilOnAutopilot(away ? undefined : caller.session, signal, stops =>
+    answerOf(ask.id, { wait: away ? 0 : wait ?? (Number(process.env.KUVO_WORK_ASK_WAIT) || undefined), every, signal: stops }));
+  if (!answer) return said(`The user hasn't answered yet: it stays asked on ${HERE}, and you'll hear when they answer. Carry on with what you can meanwhile.`);
+  return answer.isError ? refused(answer.text) : said(answer.text);
+}
+
+/**
+ * use_limit_reset's card (`plan-reset.ts`): asked of the user in the conversation, and its answer
+ * once they give it (the reset used, or why not); on Autopilot it stays asked, for when they're back.
+ */
+export async function askReset(caller: Caller, given: ResetGiven, { signal, wait, every }: { signal?: AbortSignal; wait?: number; every?: number } = {}): Promise<ToolAnswer> {
+  const bot = botOfConversation(caller.session);
+  const asker = { session: caller.session, name: bot?.name ?? caller.name, ...(bot ? { bot: bot.bot } : {}) };
+  const ask = askWork(asker, "resetLimits", { name: given.account, reset: given });
   const away = (await callerOf(caller.session, readEngineFile, readBridgeFile)).autopilot === true;
   const { value: answer } = await untilOnAutopilot(away ? undefined : caller.session, signal, stops =>
     answerOf(ask.id, { wait: away ? 0 : wait ?? (Number(process.env.KUVO_WORK_ASK_WAIT) || undefined), every, signal: stops }));
