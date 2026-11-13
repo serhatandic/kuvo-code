@@ -61,7 +61,7 @@ final class OwnBoxMove {
     let engineData: URL
     var folder: URL { home.appending(path: root, directoryHint: .isDirectory) }
     /// The engine whose Bun runs the box's CLI: the app's, or once it has moved, the box's.
-    let engine: () -> URL?
+    let engine: () async -> URL?
     /// The box's CLI this app brings (`kuvo-link.js`).
     let script: URL?
     /// The app's bundle ID and version, as the box's served record says them.
@@ -87,7 +87,7 @@ final class OwnBoxMove {
         case stopped, copied, checked, moved, helperLoaded, originalsDeleted
     }
 
-    init(root: String, home: URL, appBox: URL, engineData: URL, engine: @escaping () -> URL?, script: URL?, appID: String, appVersion: String,
+    init(root: String, home: URL, appBox: URL, engineData: URL, engine: @escaping () async -> URL?, script: URL?, appID: String, appVersion: String,
          keepsAwakeOff: @escaping () -> Bool, identity: Identity, release: @escaping () throws -> URL) {
         self.root = root
         self.home = home
@@ -113,10 +113,13 @@ final class OwnBoxMove {
             root: root, home: home, appBox: BoxProcess.home, engineData: AppModel.engineFolders.dataDirectory,
             engine: {
                 if let override = AppModel.engineOverride { return URL(filePath: override) }
-                if let installed = EngineInstaller(root: support.appending(path: "engine")).installed() { return installed }
-                // (Moved, the engine went with the box.)
-                let moved = folder.appending(path: "engine/\(OpenCodeEngine.version)/opencode")
-                return FileManager.default.isExecutableFile(atPath: moved.path(percentEncoded: false)) ? moved : nil
+                // (Checking its signature reads all of it, a second or so: off the main thread.)
+                return await Task.detached {
+                    if let installed = EngineInstaller(root: support.appending(path: "engine")).installed() { return installed }
+                    // (Moved, the engine went with the box: still the build Kuvo Code pins.)
+                    let moved = folder.appending(path: "engine/\(OpenCodeEngine.version)/opencode")
+                    return EngineInstaller.isPinnedBuild(moved) ? moved : nil
+                }.value
             },
             script: BoxProcess.script, appID: AppInfo.bundleID, appVersion: AppInfo.version,
             keepsAwakeOff: { !Awake.isOn }, identity: .live(folder: folder), release: { try OwnBoxMove.makeRelease(root: root) })
@@ -137,7 +140,7 @@ final class OwnBoxMove {
     /// `kuvo-link.js <arguments>`, this app's own, by the engine's Bun, as `here` is asked: with
     /// `KUVO_HOME` the app's own box's folder, or (`ofHome`) the box's home.
     func box(_ arguments: [String], ofHome: Bool = false, limit: Duration = .seconds(120)) async -> Said? {
-        guard let engine = engine(), let script else {
+        guard let engine = await engine(), let script else {
             log.error("The box's CLI can't run: \(self.script == nil ? "its script is missing" : "no engine", privacy: .public)")
             return nil
         }

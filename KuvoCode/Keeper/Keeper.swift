@@ -353,8 +353,9 @@ final class Keeper {
     private func moveBox(_ move: OwnBoxMove) async -> Bool {
         moving = true
         awake.agentsWork(false)
+        // (Its tools stay up: nothing calls them with the engine stopped, and the app isn't told
+        // anything meanwhile, so nothing is written where the box moves from.)
         box.stop(keepingClaim: true)
-        tools.stop()
         var next = await move.move()
         while next == .wait {
             // (Stuck part way, or what's owed can't be done yet: nothing runs meanwhile.)
@@ -368,11 +369,6 @@ final class Keeper {
             return false
         }
         log.notice("This Mac's box stays in the app's folder: started again")
-        do {
-            box.tools = try await tools.start()
-        } catch {
-            log.error("The browser's tools didn't start: \(error.localizedDescription, privacy: .public)")
-        }
         await box.start()
         // (The bridge, stopped with it, isn't started by the box's start once it has been.)
         await box.agents.startAgain()
