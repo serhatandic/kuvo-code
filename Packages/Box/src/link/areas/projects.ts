@@ -38,8 +38,10 @@ interface SessionPage {
   cursor?: { next?: string };
 }
 
-/** Ignore the retired terminal setting while reading. The next project edit saves the cleaned
- * records; reads never lock or write, including on a read-only disk. */
+/** The box's projects: `{directory, name?, folders, run?, removed?, madeBy?, addedByBox?}` each.
+ * Remove Project keeps its settings for when one of its sessions is brought back.
+ * Ignore the retired terminal setting while reading; the next project edit saves cleaned records.
+ * Reads never lock or write, including on a read-only disk. */
 export function readProjects(file = PROJECTS_FILE): Project[] {
   try {
     const list = JSON.parse(fs.readFileSync(file, "utf8")).projects;

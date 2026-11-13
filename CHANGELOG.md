@@ -691,6 +691,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 ## 0.7.0
 
 - A sign-in whose page turned it down, or that the service couldn't finish, says so in words, rather than with the code the page sent back (like `access_denied`).
+- A project can use a terminal instead of the chat: in Edit Project, **Terminal Instead of Chat** takes a command (`omp`, `claude`, `codex`, `opencode`, `pi`…, with any flags: `claude --continue`), with the common ones a click away, and each new session in that project opens a terminal tab in the main area running it. **New Terminal Tab** (⌃⇧`, or ⌘K) opens a plain shell there for any project. The project's terminals are listed under it in the sidebar, and its menu has **New Conversation** to start a conversation anyway. Closing a tab, or the window, ends the shell; terminal tabs aren't kept when the app quits.
 - **Get beta updates** in Settings › General: turn it on to get new versions to try before they're released, through the same updates. Turned off, you keep the beta you have until the next release.
 - A change to Settings › Permissions' rules made outside that page, like in the engine's settings file, applies to conversations that are already open, not only to new ones.
 - In a group chat, the bot that's talking shows what it's doing under its name, like the file it's reading or the line it's thinking, so a long turn doesn't look stuck.
