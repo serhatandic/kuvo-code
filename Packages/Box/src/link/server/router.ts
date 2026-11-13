@@ -31,6 +31,7 @@ import { pairingRoute, phonesRemoveRoute, phonesRoute } from "../areas/phones";
 import { QUEUE_ROUTE, queueRoute } from "../areas/queue";
 import { GLANCE_ROUTE, glanceRoute } from "../areas/glance";
 import { SESSION_MODELS_ROUTE, sessionModelsRoute } from "../areas/session-models";
+import { MODELS_OFFERED_ROUTE, modelsOfferedRoute } from "../areas/models-offered";
 import { READ_ALL_ROUTE, readAllRoute } from "../areas/read-all";
 import { WORK_QUEUE_ROUTE, workQueueRoute } from "../areas/work-queue";
 import { pluginSearchRoute } from "../areas/plugins";
@@ -109,6 +110,8 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route.match(GLANCE_ROUTE), answer: glanceRoute },
   // What a session's model button shows, and whether its model can run (PROTOCOL.md, "A session's model").
   { when: route => route === SESSION_MODELS_ROUTE, answer: sessionModelsRoute },
+  // The models a session can use here, and the one a new session starts on (PROTOCOL.md, "The models offered").
+  { when: route => route === MODELS_OFFERED_ROUTE, answer: modelsOfferedRoute },
   // Mark All as Read (PROTOCOL.md, "What's been read").
   { when: route => route === READ_ALL_ROUTE, answer: readAllRoute },
   // The Work Queue (PROTOCOL.md, "The Work Queue"), before a bot's work, whose routes it starts like.

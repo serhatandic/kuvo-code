@@ -29,6 +29,7 @@ import { noteWorkChanged } from "../work/changes";
 import { noteOversight } from "../work/oversight";
 import { botLimits, limitsFrom, pastLimit } from "../work/limits";
 import { describeModels, modelNamed, pickModel, usableModels } from "../work/models";
+import { listedOf, listsHere, onAgents, startingModel, stateOf } from "../work/model-rule";
 import { failedOn, holdOf, holdWords, turnError, unansweringNow } from "../work/unanswering";
 import { approvalOf, approvalRules, defaultApproval, effectiveApproval, isApproval, lowerOf, otherComputersAllowed, rememberApproval, unavailable } from "../work/approval";
 import { holdsBack } from "../bots/tell";
@@ -440,16 +441,45 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     // (An engine that doesn't answer isn't one with no accounts.)
     const answering = engine ? await call(engine, "GET", "/api/provider", undefined, place.signal).then(() => true, () => false) : false;
     if (!answering && !bridge) return no(503, `The engine on ${HERE} isn't running.`);
-    const models = (await usableModels(engine, bridge, place.signal)).filter(each => !each.retiring);
-    if (!models.length) return no(400, describeModels([]));
-    const own = modelNamed(model, models);
-    if (own) {
-      target = own.target;
-      free = own.free;
+    // Which, by the one rule a new session here starts by (work/model-rule.ts), as every client's
+    // new conversation does: its own where it runs here (one its agent keeps out of its picker,
+    // Codex's hidden ones, too), else the default, else the first model that runs.
+    // (No coding agents' bridge running: none of theirs can run a session started now.)
+    const lists = await listsHere(engine, bridge, folder ?? undefined, true);
+    const starting = startingModel([model], lists);
+    if (starting === null) return no(400, describeModels([]));
+    if (starting) {
+      const chosen = starting.model;
+      if (starting.why !== "wanted" && model) {
+        // Why yours can't: retiring there, gone from its provider's list, its account there needing
+        // something, or no account for it there at all.
+        const said = stateOf(model, lists);
+        const why = said?.runs ? "is being retired on that computer"
+          // (Gone from an account there; an agent's account not there at all is no account.)
+          : said?.missing === "gone" && (said.account || !onAgents(model)) ? "is no longer among its provider's models on that computer"
+          : said?.missing && said.missing !== "gone" ? "can't run on that computer now (its account there needs a sign-in, a key or its agent installed)"
+          : "has no account on that computer";
+        const yours = `yours (${model.providerID}/${model.id}) ${why}`;
+        modelNote = starting.why === "default" ? `It runs on the default model there: ${yours}.` : `It runs on ${chosen.providerID}/${chosen.id} there: ${yours}, nor can its default model run.`;
+      }
+      // Its own as it names it (Claude Code's `default` stays that); on the default, a session
+      // with none of its own, as one started there is.
+      if (starting.why !== "wanted") model = starting.why === "default" ? null : chosen;
+      target = onAgents(chosen) ? bridge : engine;
+      free = listedOf(chosen, lists)?.free;
     } else {
-      if (model) modelNote = `It runs on the default model there: yours (${model.providerID}/${model.id}) has no account on that computer.`;
-      model = null;
-      target = engine;
+      // The engine can't say what it lists now: as before the rule, by what it lists at all.
+      const models = (await usableModels(engine, bridge, place.signal)).filter(each => !each.retiring);
+      if (!models.length) return no(400, describeModels([]));
+      const own = modelNamed(model, models);
+      if (own) {
+        target = own.target;
+        free = own.free;
+      } else {
+        if (model) modelNote = `It runs on the default model there: yours (${model.providerID}/${model.id}) has no account on that computer.`;
+        model = null;
+        target = engine;
+      }
     }
   }
   if (given.mode === "plan") picked.push("Plan");

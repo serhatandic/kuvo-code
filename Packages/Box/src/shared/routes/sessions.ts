@@ -90,6 +90,20 @@ export const SESSION_MODELS = object({ sessions: map(SESSION_MODEL) });
 
 export type SessionModel = Infer<typeof SESSION_MODEL>;
 
+/** The models a session can use here (`kuvo/models/offered`), as a picker offers them: every one
+ * that runs now (`retiring`: its provider is retiring it; `hidden`: its agent keeps it out of its
+ * picker; a picker leaves either out, though a conversation on it carries on); whether the engine's and the coding agents' could be said
+ * (`known`); the coding agents' accounts still listing theirs (`listing`: one of theirs not
+ * listed may still run); and the model a new session starts on, for the one wanted (`starting`: null for none
+ * that runs; left out while the engine can't say). */
+const MODEL_REF = object({ providerID: string, id: string, "variant?": string });
+export const MODELS_OFFERED = object({
+  models: list(object({ providerID: string, id: string, name: string, "retiring?": bool, "hidden?": bool })),
+  known: object({ engine: bool, agents: bool }),
+  "listing?": list(string),
+  "starting?": nullable(MODEL_REF),
+});
+
 export type Glance = Infer<typeof GLANCE>;
 export type GlancePull = Infer<typeof GLANCE_PULL>;
 export type GlanceChecks = Infer<typeof GLANCE_CHECKS>;
@@ -105,6 +119,7 @@ export const SESSION_ROUTES: RouteShape[] = [
   { route: "POST kuvo/sessions/read", answers: { 200: object({ read: number }), 503: REFUSED } },
   { route: "GET kuvo/sessions/glance/events", answers: { 200: GLANCES, 400: REFUSED, 503: REFUSED } },
   { route: "GET kuvo/sessions/models", answers: { 200: SESSION_MODELS, 400: REFUSED, 503: REFUSED } },
+  { route: "GET kuvo/models/offered", answers: { 200: MODELS_OFFERED, 503: REFUSED } },
   { route: "GET kuvo/sessions/:id/queue", answers: { 200: QUEUE } },
   { route: "POST kuvo/sessions/:id/stop", answers: { 200: QUEUE, 404: REFUSED, 502: REFUSED, 503: REFUSED } },
   { route: "POST kuvo/sessions/:id/queue/hold", answers: { 200: QUEUE, 404: REFUSED, 502: REFUSED, 503: REFUSED } },

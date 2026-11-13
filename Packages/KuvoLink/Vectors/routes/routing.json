@@ -155,6 +155,17 @@
       ]
     },
     {
+      "name": "the models offered: what can't be said yet isn't taken for none, and it's only read",
+      "steps": [
+        {
+          "send": "GET kuvo/models/offered?provider=anthropic&model=claude-opus-5-5",
+          "why": "Which models run on a box and what a new session starts on, as every client's picker draws it: an engine that lists no provider ready yet can't say, so none of its models are offered and no starting model is said (a client keeps the one named as it is).",
+          "expect": { "status": 200, "json": { "models": "<array>", "known": { "engine": false, "agents": "<bool>" }, "starting": "<absent>" } }
+        },
+        { "send": "POST kuvo/models/offered", "expect": { "status": 405 } }
+      ]
+    },
+    {
       "name": "stopping a command no agent left running",
       "steps": [
         { "send": "POST kuvo/shell/sh_nothing/stop", "body": {}, "expect": { "status": 404 } }
