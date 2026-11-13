@@ -570,6 +570,7 @@ import Testing
         let real = account.appending(path: ".kuvo-code")
         let installed = BoxHelperBundle.installed(in: real)
         try FileManager.default.createDirectory(at: installed, withIntermediateDirectories: true)
+        try write(real.appending(path: "bin/kuvo-start"), "#!/bin/sh\n", executable: true)
         func box(_ given: String?, bundle: URL, keeping: Bool = true) -> Result<URL, BoxHelper.Refused> {
             BoxHelper.box(given: given, bundle: bundle, accountHome: account, pinned: true, keeping: keeping)
         }
@@ -584,7 +585,11 @@ import Testing
         // The keys' short runs from the app's copy, for your box alone.
         #expect(try box(nil, bundle: helperInApp, keeping: false).get() == real)
         #expect(throws: BoxHelper.Refused.self) { try box(elsewhere.path, bundle: helperInApp, keeping: false).get() }
-        // A box others could change: not run.
+        // A box others could change, or its keeper: not run.
+        try FileManager.default.setAttributes([.posixPermissions: 0o777], ofItemAtPath: real.appending(path: "bin/kuvo-start").path)
+        #expect(throws: BoxHelper.Refused.self) { try box(nil, bundle: installed).get() }
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: real.appending(path: "bin/kuvo-start").path)
+        #expect(try box(nil, bundle: installed).get() == real)
         try FileManager.default.setAttributes([.posixPermissions: 0o777], ofItemAtPath: real.appending(path: "bin").path)
         #expect(throws: BoxHelper.Refused.self) { try box(nil, bundle: installed).get() }
     }
