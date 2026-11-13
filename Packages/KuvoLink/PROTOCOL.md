@@ -3827,9 +3827,11 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   show of it), `400 {"message"}` for an address that isn't `file://`. Each box answers for its own files, a machine's with the Mac closed too.
 - On a Mac, `kuvo/usage`: the menu bar's usage panel as its Bars view lists it, for what the box
   doesn't state yet (a plan's limits are every box's own, in "Plan limits"). A provider whose
-  place the boxes' rows take there says so (`covers`, its service), with its limit lines left out:
-  one this Mac's box states rows for (`services`, with an account listed), and Claude, whose bar
-  has no limits of its own, wherever any of the Mac's computers states a Claude account. Its
+  place the boxes' rows take there says so (`covers`, its service), with its limit lines left out,
+  and for Claude and Cursor, whose bars have no limits of their own, the lines the card has from
+  the rows too (Cursor's `Credits` and its `extras`, `On-demand`), which a client draws from each
+  row under its own account: one this Mac's box states rows for (`services`, with an account
+  listed), and Claude and Cursor wherever any of the Mac's computers states an account of them. Its
   spend shows under the first of those rows. A client lists these in their order, the box's rows
   in the place of each that `covers`: each provider's name, plan, brand color, mark as a PNG
   to tint, notice, whether it's outdated, and its lines as UsageKit writes them; whether a refresh is under way and when the last one ended;
@@ -3933,7 +3935,9 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     Mac, whose token doesn't say who it's for, as Anthropic says in the signed policy record Claude
     Code fetches with that token and keeps in its settings folder, once it has run with it there),
     ChatGPT's account and workspace member, xAI's user, GitHub's login (from Copilot's
-    answer), and an API key for OpenRouter, Z.ai and OpenCode Go. Absent where it isn't known, and
+    answer), Cursor's user (from the access token Cursor exchanges its key for, known once Cursor
+    has answered the exchange, whether or not its plan could be read), and an API key
+    for OpenRouter, Z.ai and OpenCode Go. Absent where it isn't known, and
     from a box from before it: list that row as its box's own. Where it changes (signed in
     as another account there), the box drops what it kept of the one before, and the row says so
     (`problem`, `failed`) until the new one is read; Codex is read only through a Codex signed in
@@ -3949,6 +3953,16 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     window whose `resetsAt` has passed has started over since: show it as not read yet, not as
     used.
   - `balance` `{left, limit?, unit}`: credits left to spend, where the account has them.
+  - `extras`: what the plan has beyond its windows, each `{id, name, kind, …}`. So far one `kind`,
+    `spent` `{amount, unit, resetsAt?}`: an amount used so far with no limit to it (`unit` `usd`,
+    `credits` or `requests`; `name` its maker's own label), Cursor's on-demand spend without a cap
+    (`on_demand`, "On-demand", its `resetsAt` the billing cycle's end where Cursor says it). #631
+    piece E grows this list with more kinds (Claude's extra usage and reset grants, Codex's credits,
+    OpenRouter's key spend by period): a client leaves out a kind it doesn't know, and one whose
+    `resetsAt` has passed (not known now, as a window), and a box from before this keeps none from a
+    peer's mail (one from now on passes a kind it doesn't know on as told, only its plain fields,
+    1 KB at most). Absent when there's none. A row's are its newest reading's that had no problem: a
+    reading without them says there are none now.
   - `checked`, when its maker last answered (with its limits or a problem; absent for an account
     only its turns tell of); `next`, when it's read again (absent for one that's never read).
   - `problem` `{kind, message, until?}` when the last read didn't work, with `windows` as last
@@ -3976,7 +3990,7 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   - Each box's bridge tells each limits peer what it read of its own accounts, through its link:
     `{"limits": {at, accounts, ask?, refresh?}}`, `accounts` as its `GET` lists them, but its own
     numbers only (each account's hashed `identity`, its windows with when each was read, `checked`,
-    `next`, its plan, credits and problem; never a sign-in, a token or an ID), as many as fit in 28
+    `next`, its plan, credits, `extras` and problem; never a sign-in, a token or an ID), as many as fit in 28
     KB; `at`, the sender's clock. It's sent at once after a read, at most once a minute for what
     turns hear, again every ten minutes though nothing changed (the relay keeps nothing), and at once
     to a peer it hasn't told since its bridge started, or since its link started carrying its mail
@@ -4044,9 +4058,19 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   box starts, then only while Codex runs there anyway, with its turns' events between. Grok's pool,
   with the sign-in in its home; of the engine's, ChatGPT's (`openai`, signed in: Codex's windows),
   SuperGrok's (`xai`, signed in), GitHub Copilot's (the month's premium requests), OpenRouter's (a
-  key's cap and the credits left), Z.ai's coding plan and OpenCode Go's. Not yet: Cursor's and
-  Antigravity's (the usage panel still shows them on a Mac), nor Ollama's, which ollama.com tells
-  only the Ollama app's own signing key.
+  key's cap and the credits left), Z.ai's coding plan and OpenCode Go's. Cursor's, with the Cursor
+  agent's own sign-in in Kuvo Code's folder (`cursor/auth.json`, the key its sign-in made, or
+  `CURSOR_API_KEY` for your own account), never the Cursor app's login: the key exchanged for a
+  short-lived access token, kept in memory only, and Cursor's own answers as UsageKit read them
+  (OpenUsage's rules): `total` ("Total usage": the plan's share used, or a team seat's dollars, or
+  a request-based plan's requests), `auto` ("Cursor Models") and `api` ("Other Models"), the
+  model pools, over the billing cycle; `on_demand` ("On-demand", dollars against its cap, `amount`
+  in `usd`; a spend with no cap is no window but `extras`, `spent` in `usd`); `grok_bot` ("Grok Bot usage", its own week);
+  `requests` (a request-based plan's, where its total isn't already them); the credits left
+  (grants and prepaid balance) as `balance` in `usd`. Each window's `name` is that label. A sign-in
+  file that can't be read just now (being rewritten) is a `failed` read, not a sign-out: what was
+  read stays. Only a real box's bridge asks Cursor, never a test's. Not yet: Antigravity's (the usage panel still shows it on a
+  Mac), nor Ollama's, which ollama.com tells only the Ollama app's own signing key.
 - How often: Claude's each 15 minutes, the rest each 10. Anthropic limits these reads for the whole
   computer, not a sign-in, and holds a reader off longer each time it asks too soon: Claude's
   accounts are read one a minute (counted before the request goes, through a restart too), and a
@@ -4090,7 +4114,15 @@ what it cost (Claude Code's `costUSD`, Grok's own costs). And what the engine's 
 cost (OpenCode Go, `opencode-go`, and OpenCode Zen, `opencode`), as OpenCode billed it, read (only
 read) from the engine's databases on that computer (each `opencode*.db` in its data folder: on a
 Mac the app's, on a machine `~/.kuvo-code/data/opencode`), never your own opencode's: a box that
-doesn't know its engine's folder doesn't state it (`services` without `opencode`). A client reaches them as
+doesn't know its engine's folder doesn't state it (`services` without `opencode`). And Cursor's,
+from Cursor's own record of each Cursor account signed in to Kuvo Code (its dashboard's usage
+events, asked with the sign-in its plan limits are read with: "Plan limits"), which is the whole
+account's, wherever it ran: so a row of it is its newest box's, never a sum (below), and one of
+your own computers asks Cursor for it at a time, however its plan limits' read went: of those
+that read it whole lately (each tells when it last did, `fresh`, below; a read where part failed,
+or that a hold stopped, isn't one), the one whose link key comes first; one that hasn't for 25
+minutes, or is away, is taken over. Nothing is asked of
+Cursor while its plan's sign-in was turned away as it is now, or while Cursor holds reads off. A client reaches them as
 `kuvo/agents/api/kuvo/usage…` (the Mac app at `api/kuvo/usage…` on the bridge itself), where
 `features` has `usage.history`.
 
@@ -4098,36 +4130,40 @@ doesn't know its engine's folder doesn't state it (`services` without `opencode`
   [row], totals: {<service>: [day]}, partial?: {<service>: {away?, cut?}}}}`. The box works out the days in `zone` (the client's, so a
   Mac in Istanbul reading a machine in UTC gets its own days); one it doesn't know is its own,
   `zone` says which. `services`: what this box states the usage of (`claude`, `codex`,
-  `grok`, `opencode`): a client shows those from here, and reads the rest as it did. `scanned`: when this box last read its logs.
+  `grok`, `opencode`, `cursor`): a client shows those from here, and reads the rest as it did. `scanned`: when this box last read its logs.
   `pricing: {codex: {fallback, chosen, choices}}`: Codex's fallback model, this box's setting
   (below), `null` for none; `chosen`, whether it was ever chosen on this box (none counts);
   `choices`, the models it may be, in order.
   - A `row` is one account across your computers, with the same `id` as its plan limits row
     (`<service>#<identity>`, or `<box key>/<provider>` for one that can't say who it is), so a
     client puts an account's limits and its usage side by side: `{id, service, provider, agent?,
-    account?, label?, identity?, scanned?, boxes, away?, cut?, vouched?, estimated?, days}`:
-    `estimated: false` where its dollars are what its maker billed (OpenCode's hosted models'), not
-    an estimate; `boxes` as limits' rows have them (`{key, name, provider, agent?, account?, label?, scanned?, here?, away?,
+    account?, label?, identity?, scanned?, boxes, away?, cut?, vouched?, estimated?, accountWide?,
+    days}`: `estimated: false` where its dollars are what its maker billed (OpenCode's hosted
+    models'), not an estimate; `accountWide: true` where its use is its maker's account of the whole
+    account (Cursor's): its days are its newest box's (`scanned`; of your own computers', for
+    `totals`), never a sum; `boxes` as limits' rows have them (`{key, name, provider, agent?, account?, label?, scanned?, here?, away?,
     vouched?, same?}`): `vouched`, a box a peer vouches for (another Mac beside a machine you
     share), not one of your computers, and the row `vouched` when all of them are; `same`, a box
     that reads a folder another of them already does (two boxes on one computer), not added again.
     Its `days` are the **sum** of every box's own (each box reads only its own logs), each folder
-    once. OpenCode's: a row for Go (the same row as its plan limits') and one for Zen, each only
+    once; an `accountWide` row's, its newest box's alone. OpenCode's: a row for Go (the same row as its plan limits') and one for Zen, each only
     while it has use in the window. A conversation moved to another
     computer (`kuvo/moves`) is copied there, and the one it left keeps its copy for a while: its
     past use counts on both meanwhile.
   - `totals`: each service's days, the accounts on your own computers added up (this box and its
     peers, not a box a peer vouches for, whose accounts may be another person's: their rows show,
-    in no total), each folder once: what the Mac's Claude, Codex, Grok and OpenCode cards show. `partial`: a service whose
+    in no total), each folder once (an `accountWide` row's newest box of yours): what the Mac's Claude, Codex, Grok, OpenCode and Cursor cards show. `partial`: a service whose
     totals are short, `away` (one of your computers isn't answering: its share is as of then) or
     `cut` (one told less than all: its oldest days).
-  - A `day`: `{date, tokens, cost, models: [{model, tokens, cost}], unknown?, fallback?}`, newest first, for
+  - A `day`: `{date, tokens, cost, models: [{model, tokens, cost, family?}], unknown?, fallback?}`, newest first, for
     today and the 30 days before it in `zone`; `date` is `yyyy-MM-dd`, `cost` US dollars,
     `models` by name; `unknown`, models used that day that couldn't be priced, which count
     nowhere (a day with only those has no tokens and no models), unless a fallback model estimated
     them: `fallback`, the models whose rates did (their dollars and tokens are then in `models`
     under the model's own name, and it's still in `unknown`). A model with no name but a cost of
-    its own is `Unattributed`.
+    its own is `Unattributed`. `family`, Cursor's only: the row a model shows under where that isn't
+    its own name (its catalog key with `-fast` dropped: `gpt-6-high-fast` under `gpt-6`), as
+    UsageKit grouped Cursor's effort and speed variants.
   - What counts (OpenUsage's rules, from ccusage): a log line with `"usage":{` that parses, with a
     valid time and version and no `null` where Claude Code never writes one; once per
     `(message.id, requestId)`, a subagent's line replaying its parent's message under another
@@ -4183,6 +4219,22 @@ doesn't know its engine's folder doesn't state it (`services` without `opencode`
     reads in a row (one that's always broken doesn't hold up the rest). While one fails, they're
     read every round. One in WAL mode whose `-wal` and `-shm` are gone is read as it is. A model you reach with a key
     of your own is its provider's, never counted here.
+  - Cursor's (OpenUsage's `CursorSpendHistoryFetcher` and `CursorUsageEvents`): Cursor's usage
+    events (`/api/dashboard/get-filtered-usage-events` with the access token's session), a UTC day
+    at a time, today and the 31 days before, a thousand to a page, four days at once, for 20 seconds
+    a round at most (no page is asked after that; the days that came are kept, the rest asked next
+    round). A whole read stands for a minute: a refresh or a peer's within it asks Cursor nothing. A day is whole when
+    every page came with one total, as many events as it says, each inside the day; otherwise it's
+    as it was known before. Today and yesterday are asked every round, an older day until Cursor
+    answered it after it ended. An event with no `tokenUsage` used none; one whose time, model or
+    token counts (whole numbers, not negative) aren't readable counts nowhere. Priced without
+    long-context rates (an event isn't a request's whole prompt). A key Cursor turned away isn't
+    sent again until the sign-in changes; a 429 (the exchange's or the events') stops the read and
+    holds every read of the account for as long as its `Retry-After` says (15 minutes without
+    one, while its plan's own wait doubles as other makers' do); a token turned away midway is exchanged again once. One exchange at a time per key. What came is kept per Cursor user
+    (`usage/cursor-history/<a hash of the user>.json`, never the user's ID); a read with a day still
+    not known leaves what this box had as it was, never a day of nothing, as does a sign-in file
+    that can't be read just now (being rewritten); signed out, the account's use from this box goes.
 - `PUT kuvo/agents/api/kuvo/usage/pricing[?zone=]` `{"codex": {"fallback": <model> | null}}`: Codex's
   fallback model, whose rates estimate what a Codex model with no known price used (in this box's
   own Codex logs, not the engine's ChatGPT slice: each box prices its own with its own); one of `choices` (the supplement's
@@ -4205,7 +4257,7 @@ doesn't know its engine's folder doesn't state it (`services` without `opencode`
   Kept 35 days.
 - **Across your computers**, as plan limits are ("Plan limits", "Across your computers": the same
   boxes, no hub, each working with the others off): each box tells each of them its own accounts'
-  use, `{"seat": {"kind": "usage", at, digest, accounts?, from?, ask?, refresh?}}` through its link
+  use, `{"seat": {"kind": "usage", at, digest, accounts?, from?, ask?, refresh?, fresh?}}` through its link
   (in parts when it's big, as a group chat's mail is; to and from a box a peer vouches for too,
   which sends nothing else that's taken): all of it (`accounts`) with `ask` to one it hasn't told
   since its bridge or link started, and to one that asks; after a read that changed what they used
@@ -4215,11 +4267,14 @@ doesn't know its engine's folder doesn't state it (`services` without `opencode`
   fallback model is chosen (which model estimated what isn't in `digest`). `digest` is a hash of all of it (each account's
   `provider`, `service`, `agent`, `account`, `label`, `identity`, `cut` and slots as kept); a
   receiver whose own, put together, isn't that asks for all of it (`ask`, at most once a minute),
-  and is answered at once. Each account is `{provider, service, agent?, account?, label?,
+  and is answered at once. `fresh`, in every mail: when the sender last read each of its
+  `accountWide` accounts, by provider (its clock), so your computers know which reads it though
+  what it read didn't change (a box from before ignores it). Each account is `{provider, service, agent?, account?, label?,
   identity?, scanned?, cut?, whole, places?, slots: {models, used: [[slot, model, tokens,
-  dollars]], unknown?: [[slot, model]], fallback?: [[slot, model]]}, estimated?: false}` (`fallback`, a model whose
-  rates estimated that slot's use of one with no price; `estimated`, as a row's; neither in
-  `digest`, which a box from before works out without them): `places`, the folders its logs are
+  dollars]], unknown?: [[slot, model]], fallback?: [[slot, model]]}, estimated?: false,
+  accountWide?: true}` (`fallback`, a model whose rates estimated that slot's use of one with no
+  price; `estimated` and `accountWide`, as a row's; none of them in `digest`, which a box from
+  before works out without them; a box from before adds an `accountWide` account up as any other): `places`, the folders its logs are
   in (for the engine's hosted models, its data folder with the provider), each 16 hex
   characters of a hash of its computer (on Linux its machine ID, `/etc/machine-id` or D-Bus's, with
   its name; on a Mac its hardware UUID; else its name) and the folder's real path (never either); `slot`, quarter hours since 1970 (UTC), `model`, an index into
@@ -7264,6 +7319,11 @@ before connects (the box notes one: `run/attached`).
   covers a computer the first box doesn't hear from now (the relay down); removing the fallback
   needs an answer for that first.
   <!-- compat: 0.7 limits-merge -->
+- **Cursor's usage from before the box read it** (#631 piece D1): a Mac whose own box doesn't list
+  `cursor` in its limits' `services` (one from before, still running as the Mac updates) has its
+  usage panel read Cursor's plan and spend itself, with the Cursor agent's key in this Mac's box
+  folder, as before. Never the Cursor app's login.
+  <!-- compat: 0.7 cursor-box -->
 - **Updating an agent's program**: such a Mac asks `POST kuvo/agents/api/integration/<provider>/update`
   and waits for its answer, `{data: {updated, version?, message?}}`, so the agents bridge still
   answers that once the update is done (the same update every client sees, "Installing and

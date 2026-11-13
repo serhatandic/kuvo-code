@@ -336,6 +336,17 @@ export class Pricing {
   }
 
   /**
+   * The family a raw model name shows under (`ModelPricing.familyName`): its catalog key with the
+   * first of `suffixes` it ends in dropped (`-fast` for Cursor), so its effort and speed variants
+   * share a row. A name no alias rule knows keeps its own.
+   */
+  familyName(model: string, suffixes: string[]): string {
+    const canonical = this.canonicalName(model)
+    for (const suffix of suffixes) if (canonical.endsWith(suffix) && canonical.length > suffix.length) return canonical.slice(0, -suffix.length)
+    return canonical
+  }
+
+  /**
    * Rates a provider's fallback model (a box setting) estimates its unpriced use with: one of the
    * supplement's `fallback_models` for it, priced by an exact entry only (an estimate never rests
    * on a fuzzy guess), with real rates. `PricingFallbackOptions.fallbackRates`.

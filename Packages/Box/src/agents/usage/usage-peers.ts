@@ -39,6 +39,12 @@ export interface UsageMail {
   ask?: true
   /** Read yours now and tell it (a client pulled to refresh there). */
   refresh?: true
+  /**
+   * When the sender last read each of its accounts its maker states whole (`accountWide`:
+   * Cursor's), by provider, by its clock: in every mail, so one of your computers reads each at a
+   * time (`readsWhole`) though what it read didn't change.
+   */
+  fresh?: Record<string, number>
 }
 
 export const isUsageMail = (value: any): value is UsageMail => value !== null && typeof value === "object" && value.kind === "usage"
@@ -71,6 +77,8 @@ const MOST_BYTES = 400_000
 const RECENT = 2 * 24 * 60 * MINUTE
 
 const SERVICE = /^[a-z0-9][a-z0-9-]{0,39}$/
+/** An account its maker states whole that a peer read this lately is read there, not here. */
+const WHOLE_FRESH = 25 * MINUTE
 const text = (value: unknown, most = 200) => (typeof value === "string" && value ? value.slice(0, most) : undefined)
 
 export class UsagePeers {
@@ -99,6 +107,34 @@ export class UsagePeers {
     usage.peers = this
     directory.listen(() => this.directorySaid())
     transport.onFollowed?.(() => this.told.clear())
+  }
+
+  private freshAt?: { at: number; fresh: Record<string, number> }
+
+  /** A mail to a peer, with when this box last read each account its maker states whole (`fresh`). */
+  private send(to: string, mail: UsageMail, durable: boolean) {
+    // (Worked out once for the mails of one moment: each peer's is the same.)
+    if (this.freshAt?.at !== mail.at) this.freshAt = { at: mail.at, fresh: Object.fromEntries(this.usage.own().flatMap((account) => (account.accountWide && account.scanned ? [[account.provider, account.scanned]] : []))) }
+    const fresh = this.freshAt.fresh
+    this.transport.send(to, Object.keys(fresh).length ? { ...mail, fresh } : mail, durable)
+  }
+
+  /**
+   * Whether another of your own computers reads this account its maker states whole (`service`,
+   * `identity`: Cursor's) in this box's place: of those that read it lately (25 minutes, as they
+   * said: one that stopped, or that's away, is taken over), the one whose key comes first does,
+   * this box included. However its plan's limits went (a problem, a hold, a box a peer vouches for
+   * reading them), one of your computers asks its maker for its history at a time.
+   */
+  readsWhole(service: LimitsService, identity: string): boolean {
+    const self = this.directory.own()?.key
+    if (!self || !this.directory.told) return false
+    const now = this.now()
+    for (const [key, kept] of this.peers) {
+      if (key >= self || this.vouched(key) || now - kept.heard > PEER_AWAY) continue
+      if (kept.accounts.some((account) => account.accountWide && account.service === service && account.identity === identity && account.scanned !== undefined && now - account.scanned < WHOLE_FRESH)) return true
+    }
+    return false
   }
 
   /** Every computer's accounts, this box's first, then each peer's by name. */
@@ -133,9 +169,9 @@ export class UsagePeers {
     const recent = () => recentOf(accounts, from)
     for (const { key } of this.directory.peerBoxes()) {
       const last = this.told.get(key)
-      if (!last) this.transport.send(key, { kind: "usage", at: now, accounts, digest, ask: true }, false)
-      else if (last.digest !== digest && (changed || now - last.at >= TELL_AGAIN)) this.transport.send(key, { kind: "usage", at: now, accounts: recent(), from, digest }, false)
-      else if (now - last.at >= TELL_AGAIN) this.transport.send(key, { kind: "usage", at: now, digest }, false)
+      if (!last) this.send(key, { kind: "usage", at: now, accounts, digest, ask: true }, false)
+      else if (last.digest !== digest && (changed || now - last.at >= TELL_AGAIN)) this.send(key, { kind: "usage", at: now, accounts: recent(), from, digest }, false)
+      else if (now - last.at >= TELL_AGAIN) this.send(key, { kind: "usage", at: now, digest }, false)
       else continue
       this.told.set(key, { digest, at: now })
     }
@@ -155,7 +191,7 @@ export class UsagePeers {
     const { accounts, digest } = this.shared()
     // (Not asking for theirs, which didn't change: but from one not told since the link started.)
     for (const { key } of this.directory.peerBoxes()) {
-      this.transport.send(key, { kind: "usage", at: now, accounts, digest, ...(this.told.has(key) ? {} : { ask: true }) }, false)
+      this.send(key, { kind: "usage", at: now, accounts, digest, ...(this.told.has(key) ? {} : { ask: true }) }, false)
       this.told.set(key, { digest, at: now })
     }
   }
@@ -168,7 +204,7 @@ export class UsagePeers {
     this.refreshedElsewhere = now
     // (A refresh only asks: what it says of this box is as last told.)
     const digest = this.lastDigest ?? this.shared().digest
-    for (const { key } of this.directory.peerBoxes()) this.transport.send(key, { kind: "usage", at: now, digest, refresh: true }, false)
+    for (const { key } of this.directory.peerBoxes()) this.send(key, { kind: "usage", at: now, digest, refresh: true }, false)
   }
 
   /** What a peer told (`from`, its key: the link opens only your computers' mail). */
@@ -180,6 +216,7 @@ export class UsagePeers {
     const name = this.directory.peerBoxes().find((box) => box.key === from)?.name ?? before?.name ?? "another computer"
     const digest = text(mail.digest, 64)
     const wasAway = !!before && now - before.heard > PEER_AWAY
+    const skew = typeof mail.at === "number" && Number.isFinite(mail.at) && Math.abs(now - mail.at) >= SKEW ? now - mail.at : 0
     let whole = !!before && !!digest && before.digest === digest
     if (Array.isArray(mail.accounts)) {
       const off = typeof mail.at === "number" && Number.isFinite(mail.at) && Math.abs(now - mail.at) >= SKEW ? now - mail.at : 0
@@ -202,11 +239,22 @@ export class UsagePeers {
       before.name = name
       if (wasAway) this.usage.peersChanged()
     }
+    // When it last read each account its maker states whole, though what it read is as it was.
+    const fresh = mail.fresh && typeof mail.fresh === "object" ? (mail.fresh as Record<string, unknown>) : undefined
+    const kept = this.peers.get(from)
+    if (fresh && kept) {
+      for (const account of kept.accounts) {
+        const at = fresh[account.provider]
+        if (!account.accountWide || typeof at !== "number" || !Number.isFinite(at)) continue
+        const moved = Math.min(at + skew, now)
+        if (moved > (account.scanned ?? 0)) account.scanned = moved
+      }
+    }
     // What this box has of it isn't what it says it told (it missed some): asked for all of it.
     if (!whole && digest && mail.ask !== true && now - (this.askedBack.get(from) ?? -Infinity) >= MINUTE) {
       this.askedBack.set(from, now)
       const mine = this.shared()
-      this.transport.send(from, { kind: "usage", at: now, ...mine, ask: true }, false)
+      this.send(from, { kind: "usage", at: now, ...mine, ask: true }, false)
       this.told.set(from, { digest: mine.digest, at: now })
     }
     // (Asked: answered whatever was told lately, as the asker asks at most once a minute.)
@@ -231,7 +279,7 @@ export class UsagePeers {
     if (!urgent && now - (this.answered.get(key) ?? -Infinity) < MINUTE) return
     this.answered.set(key, now)
     const mine = this.shared()
-    this.transport.send(key, { kind: "usage", at: now, ...mine }, false)
+    this.send(key, { kind: "usage", at: now, ...mine }, false)
     this.told.set(key, { digest: mine.digest, at: now })
   }
 
@@ -324,8 +372,8 @@ export class UsagePeers {
  * together what it was told (each account's fields in one order, its slots as kept: `keptSlots`).
  * Not which fallback model estimated what (`slots.fallback`): a box from before keeps none of it,
  * and would never find its own the same. Its peers are told all of it when that changes (`tellAll`).
- * Nor whether it's billed (`estimated`), which never changes for an account, and which a box from
- * before doesn't keep either.
+ * Nor whether it's billed (`estimated`) or stated whole by its maker (`accountWide`), which never
+ * change for an account, and which a box from before doesn't keep either.
  */
 export function digestOf(accounts: ToldUsage[]): string {
   const canonical = accounts.map((account) => [account.provider, account.service, account.agent ?? null, account.account ?? null, account.label ?? null, account.identity ?? null, account.cut === true, account.places ?? [], account.slots.models, account.slots.used, account.slots.unknown ?? []])
@@ -381,5 +429,6 @@ function takenAccount(given: unknown, off: number, now: number): OwnUsage | null
     ...(Number.isSafeInteger(account.whole) && account.whole > 0 ? { whole: account.whole } : {}),
     ...(Array.isArray(account.places) && account.places.length ? { places: account.places.filter((place: unknown): place is string => typeof place === "string" && /^[0-9a-f]{16}$/.test(place)).slice(0, 20) } : {}),
     ...(account.estimated === false ? { estimated: false as const } : {}),
+    ...(account.accountWide === true ? { accountWide: true as const } : {}),
   }
 }

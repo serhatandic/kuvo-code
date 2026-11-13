@@ -189,7 +189,7 @@ final class CursorUsageSummaryMapperTests: XCTestCase {
 
 @MainActor
 final class CursorEnterpriseProviderTests: XCTestCase {
-    func testPrimaryPoolPathUsesLocalEnterpriseMembershipAndUsageSummaryOnDemand() async throws {
+    func testPrimaryPoolPathUsesUsageSummaryMembershipAndOnDemand() async throws {
         let accessToken = makeCursorJWT(sub: "google-oauth2|enterprise-user")
         let http = RoutingHTTPClient { request in
             switch request.url {
@@ -237,14 +237,8 @@ final class CursorEnterpriseProviderTests: XCTestCase {
             }
         }
         let provider = CursorProvider(
-            authStore: CursorAuthStore(
-                sqlite: KeyValueSQLite(values: [
-                    CursorAuthStore.accessTokenKey: accessToken,
-                    CursorAuthStore.membershipTypeKey: "enterprise"
-                ]),
-                keychain: FakeKeychain()
-            ),
-            usageClient: CursorUsageClient(http: http),
+            authStore: cursorAgentStore(),
+            usageClient: CursorUsageClient(http: RoutingHTTPClient(handler: cursorExchanging(accessToken, { try await http.send($0) }))),
             now: { Date(timeIntervalSince1970: 1_800_000_000) },
             pricing: { TestPricing.bundled },
             usageHistoryStore: CursorUsageHistoryStore(directory: FileManager.default.temporaryDirectory
@@ -345,11 +339,8 @@ final class CursorEnterpriseProviderTests: XCTestCase {
             return HTTPResponse(statusCode: 404, headers: [:], body: Data())
         }
         let provider = CursorProvider(
-            authStore: CursorAuthStore(
-                sqlite: KeyValueSQLite(values: [CursorAuthStore.accessTokenKey: accessToken]),
-                keychain: FakeKeychain()
-            ),
-            usageClient: CursorUsageClient(http: http),
+            authStore: cursorAgentStore(),
+            usageClient: CursorUsageClient(http: RoutingHTTPClient(handler: cursorExchanging(accessToken, { try await http.send($0) }))),
             now: { now },
             pricing: { TestPricing.bundled },
             usageHistoryStore: CursorUsageHistoryStore(directory: historyDirectory)

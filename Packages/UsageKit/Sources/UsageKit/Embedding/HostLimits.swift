@@ -18,6 +18,9 @@ public struct HostLimitRow: Sendable, Hashable, Identifiable {
     public var meters: [Meter]
     /// Credits left, where the account has them (OpenRouter's).
     public var balance: Balance?
+    /// What the plan has beyond its meters: an amount spent with no limit (Cursor's on-demand
+    /// spend without a cap).
+    public var extras: [Extra]
     /// Why it couldn't be read just now, in words to show.
     public var notice: String?
     /// When the oldest of its meters was read: shown as "As of …" once that's long ago
@@ -66,6 +69,26 @@ public struct HostLimitRow: Sendable, Hashable, Identifiable {
         }
     }
 
+    public struct Extra: Sendable, Hashable {
+        /// The box's own name for it (`on_demand`).
+        public var id: String
+        /// Its maker's own label ("On-demand").
+        public var name: String
+        public var amount: Double
+        /// `usd`, `credits` or `requests`.
+        public var unit: String
+        /// When it starts over (its billing cycle's end), where its maker says.
+        public var resetsAt: Date?
+
+        public init(id: String, name: String, amount: Double, unit: String, resetsAt: Date? = nil) {
+            self.id = id
+            self.name = name
+            self.amount = amount
+            self.unit = unit
+            self.resetsAt = resetsAt
+        }
+    }
+
     public struct Balance: Sendable, Hashable {
         public var left: Double
         /// `usd` or `credits`.
@@ -77,7 +100,8 @@ public struct HostLimitRow: Sendable, Hashable, Identifiable {
         }
     }
 
-    public init(id: String, providerID: String, name: String, plan: String? = nil, meters: [Meter], balance: Balance? = nil, notice: String? = nil, readAt: Date? = nil, isLocal: Bool = true, isOwnLogin: Bool = false, place: String? = nil, isAway: Bool = false) {
+    public init(id: String, providerID: String, name: String, plan: String? = nil, meters: [Meter], balance: Balance? = nil, extras: [Extra] = [], notice: String? = nil, readAt: Date? = nil, isLocal: Bool = true, isOwnLogin: Bool = false, place: String? = nil, isAway: Bool = false) {
+        self.extras = extras
         self.isLocal = isLocal
         self.isAway = isAway
         self.place = place
@@ -135,11 +159,14 @@ public final class HostLimits {
     }
 
     /// A covered provider's limits as the panel's own lines, from this Mac's own login's row; nil
-    /// with none, or none read in the last half hour.
+    /// with none, or none read in the last half hour. For a card that reads nothing of its own
+    /// (`limitsOnlyFromHost`: Cursor's), its credits left too, as its `Credits` line, and what it
+    /// spent with no limit, as a line of its name (Cursor's `On-demand`, "Extra Usage … spent");
+    /// another card's are its own (OpenRouter's credits are a meter of what's used).
     func lines(for providerID: String, now: Date = .now) -> (lines: [MetricLine], plan: String?, readAt: Date?, notice: String?)? {
         guard let row = ownRow(for: providerID) else { return nil }
         if let readAt = row.readAt, now.timeIntervalSince(readAt) > Self.outdated { return nil }
-        let lines: [MetricLine] = row.meters.compactMap { meter in
+        var lines: [MetricLine] = row.meters.compactMap { meter in
             if let resetsAt = meter.resetsAt, resetsAt <= now { return nil }
             if let count = meter.count, count.limit > 0 {
                 return .progress(label: meter.title, used: count.used, limit: count.limit,
@@ -147,6 +174,15 @@ public final class HostLimits {
             }
             return .progress(label: meter.title, used: ProviderParse.clampPercent(meter.fraction * 100), limit: 100, format: .percent,
                              resetsAt: meter.resetsAt, periodDurationMs: meter.periodMinutes.map { $0 * 60_000 })
+        }
+        if Self.limitsOnlyFromHost.contains(ProviderAccountID.family(of: providerID)) {
+            if let balance = row.balance, balance.unit == "usd" {
+                lines.append(.values(label: "Credits", values: [MetricValue(number: balance.left, kind: .dollars)]))
+            }
+            // (One that started over since it was read isn't known now, as a meter.)
+            for extra in row.extras where (extra.resetsAt ?? .distantFuture) > now {
+                lines.append(.values(label: extra.name, values: [extra.unit == "usd" ? MetricValue(number: extra.amount, kind: .dollars) : MetricValue(number: extra.amount, kind: .count, label: extra.unit)]))
+            }
         }
         return (lines, row.plan, row.readAt, row.notice)
     }
@@ -217,10 +253,11 @@ public final class HostLimits {
     }
 
     /// The panel's providers whose own bar reads no limits while the host covers them, so it's only
-    /// the provider's spend: Claude's (`ClaudeProvider` leaves them to this Mac's box, by this).
+    /// the provider's spend: Claude's and Cursor's (`ClaudeProvider` and `CursorProvider` leave them
+    /// to this Mac's box, by this).
     /// Every other provider's bar reads its own limits (yours, outside Kuvo Code) until this Mac's
     /// box has a row of it.
-    static let limitsOnlyFromHost: Set<String> = ["claude"]
+    static let limitsOnlyFromHost: Set<String> = ["claude", "cursor"]
 
     /// The rows that take the place of the panel's own bar of a covered provider: this Mac's own
     /// logins; with none yet, where its bar has no limits of its own, the other computers' (one row
@@ -229,6 +266,12 @@ public final class HostLimits {
         let mine = rows.filter { ProviderAccountID.family(of: $0.providerID) == family }
         let local = mine.filter(\.isLocal)
         return local.isEmpty && Self.limitsOnlyFromHost.contains(family) ? mine : local
+    }
+
+    /// The lines a covered provider's card has from the host's rows rather than of its own (Cursor's
+    /// `Credits` and `On-demand`): a phone draws them from the rows themselves, under each account.
+    func rowLines(for family: String) -> Set<String> {
+        rows.filter { ProviderAccountID.family(of: $0.providerID) == family }.reduce(into: Set<String>()) { $0.formUnion(HostLimitData.labels($1)) }
     }
 
     /// The panel's own bars a phone gets (`kuvo/usage`), in the Bars view's order: those whose
@@ -296,7 +339,24 @@ enum HostLimitData {
             data.unboundedValueWord = "left"
             rows.append(data)
         }
+        // What it spent with no limit, as the card shows it ("On-demand $12.34 spent").
+        for extra in row.extras where (extra.resetsAt ?? .distantFuture) > now {
+            let dollars = extra.unit == "usd"
+            var data = WidgetData(title: extra.name, icon: .providerMark(row.providerID), kind: dollars ? .dollars : .count, used: extra.amount, limit: nil,
+                                  countSuffix: dollars ? nil : extra.unit)
+            data.unboundedValueWord = "spent"
+            rows.append(data)
+        }
         return rows
+    }
+
+    /// The lines a row's own rows stand for beyond its meters (`Credits`, each extra's name), which
+    /// the card's widgets of the same lines mustn't show again beside them: only for a card that
+    /// reads nothing of its own (Cursor's), whose lines of those names are the row's (another's,
+    /// OpenRouter's "Credits", say, is its own, and stays).
+    static func labels(_ row: HostLimitRow) -> Set<String> {
+        guard HostLimits.limitsOnlyFromHost.contains(ProviderAccountID.family(of: row.providerID)) else { return [] }
+        return Set((row.balance == nil ? [] : ["Credits"]) + row.extras.map(\.name))
     }
 
     /// "As of …" once what it shows was read longer ago than that, or its computers aren't heard from.

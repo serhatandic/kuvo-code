@@ -396,11 +396,8 @@ final class CursorUsageHistoryTests: XCTestCase {
         budget: TimeInterval = 20
     ) -> CursorProvider {
         CursorProvider(
-            authStore: CursorAuthStore(
-                sqlite: KeyValueSQLite(values: [CursorAuthStore.accessTokenKey: token]),
-                keychain: FakeKeychain()
-            ),
-            usageClient: CursorUsageClient(http: http),
+            authStore: cursorAgentStore(),
+            usageClient: CursorUsageClient(http: RoutingHTTPClient(handler: cursorExchanging(token, { try await http.send($0) }))),
             now: { now },
             pricing: { TestPricing.bundled },
             spendHistoryBudget: budget,

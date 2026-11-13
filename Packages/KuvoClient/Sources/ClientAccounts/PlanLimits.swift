@@ -67,6 +67,9 @@ public struct LimitsAccount: Decodable, Hashable, Sendable, Identifiable {
     public var plan: String?
     public var windows: [LimitsWindow]
     public var balance: Balance?
+    /// What the plan has beyond its windows (Cursor's on-demand spend with no cap); #631 piece E
+    /// adds more kinds, which this copy leaves out until it knows them.
+    public var extras: [Extra] = []
     public var checked: Date?
     public var next: Date?
     public var problem: Problem?
@@ -134,6 +137,41 @@ public struct LimitsAccount: Decodable, Hashable, Sendable, Identifiable {
         }
     }
 
+    /// A fact of the plan beyond its windows: so far, an amount spent with no limit to it (`spent`).
+    public struct Extra: Decodable, Hashable, Sendable {
+        public var id: String
+        /// Its maker's own label ("On-demand").
+        public var name: String
+        public var kind: String
+        public var amount: Double
+        /// `usd`, `credits` or `requests`.
+        public var unit: String
+        public var resetsAt: Date?
+
+        public init(id: String, name: String, kind: String = "spent", amount: Double, unit: String, resetsAt: Date? = nil) {
+            self.id = id
+            self.name = name
+            self.kind = kind
+            self.amount = amount
+            self.unit = unit
+            self.resetsAt = resetsAt
+        }
+
+        private enum CodingKeys: String, CodingKey { case id, name, kind, amount, unit, resetsAt }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(String.self, forKey: .id)
+            name = try container.decode(String.self, forKey: .name)
+            kind = try container.decode(String.self, forKey: .kind)
+            // (A kind this copy doesn't know is left out of the list: `Readable`.)
+            guard kind == "spent" else { throw DecodingError.dataCorruptedError(forKey: .kind, in: container, debugDescription: "an extra this copy doesn't know") }
+            amount = try container.decode(Double.self, forKey: .amount)
+            unit = try container.decode(String.self, forKey: .unit)
+            resetsAt = try container.decodeIfPresent(Double.self, forKey: .resetsAt).map(Date.init(milliseconds:))
+        }
+    }
+
     public struct Problem: Decodable, Hashable, Sendable {
         /// `rate-limited`, `expired`, `unreadable` or `failed`.
         public var kind: String
@@ -171,7 +209,7 @@ public struct LimitsAccount: Decodable, Hashable, Sendable, Identifiable {
         self.problem = problem
     }
 
-    private enum CodingKeys: String, CodingKey { case provider, service, agent, account, label, identity, plan, windows, balance, checked, next, problem, id, boxes, away }
+    private enum CodingKeys: String, CodingKey { case provider, service, agent, account, label, identity, plan, windows, balance, extras, checked, next, problem, id, boxes, away }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -185,6 +223,7 @@ public struct LimitsAccount: Decodable, Hashable, Sendable, Identifiable {
         plan = try container.decodeIfPresent(String.self, forKey: .plan)
         windows = try container.decodeIfPresent(Readable<LimitsWindow>.self, forKey: .windows)?.items ?? []
         balance = try? container.decodeIfPresent(Balance.self, forKey: .balance)
+        extras = (try? container.decodeIfPresent(Readable<Extra>.self, forKey: .extras))?.items ?? []
         checked = try container.decodeIfPresent(Double.self, forKey: .checked).map(Date.init(milliseconds:))
         next = try container.decodeIfPresent(Double.self, forKey: .next).map(Date.init(milliseconds:))
         problem = try? container.decodeIfPresent(Problem.self, forKey: .problem)
@@ -558,6 +597,8 @@ extension UsageListing {
         let newest = members.sorted { ($0.checked ?? $0.windows.map(\.read).max() ?? .distantPast) > ($1.checked ?? $1.windows.map(\.read).max() ?? .distantPast) }
         account.plan = newest.lazy.compactMap(\.plan).first
         account.balance = newest.lazy.compactMap(\.balance).first
+        // (As the box does: the newest reading without a problem's; one without any says there are none now.)
+        account.extras = newest.first { $0.checked != nil && $0.problem == nil }?.extras ?? []
         account.checked = members.compactMap(\.checked).max()
         account.next = members.compactMap(\.next).min()
         account.problem = members.allSatisfy { $0.problem != nil } ? newest.first?.problem : nil
