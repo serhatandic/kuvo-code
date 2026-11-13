@@ -401,7 +401,7 @@ extension Message {
 
         /// A command's call as the engine recorded it: `shell`, as the engine has named the tool
         /// since the rename, and `bash` in a conversation it recorded before (or a call by that
-        /// name, which 2.2.5 runs as `shell`). Every row reads it as `shell`.
+        /// name, which 2.2.6 runs as `shell`). Every row reads it as `shell`.
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             id = try c.decode(String.self, forKey: .id)

@@ -3,11 +3,11 @@
 // (`opencode.jsonc`, which opencode reads with `opencode.json` and reads again as either changes),
 // so what the box learns applies at once, to the engine running now, with no restart. (The engine
 // reads OPENCODE_CONFIG_CONTENT only as it starts, a reload of its folders cuts their terminals and
-// commands, and on a machine OPENCODE_CONFIG is your settings: anomalyco/opencode 2.2.5.)
+// commands, and on a machine OPENCODE_CONFIG is your settings: anomalyco/opencode 2.2.6.)
 //
 // GitHub Copilot's Claude models reject the `thinking.block_binding` the engine adds to requests for
 // Claude 5.1 and later ("thinking.adaptive.block_binding: Extra inputs are not permitted"). opencode
-// (2.2.5 still) leaves it out only for models named in its settings, one by one
+// (2.2.6 still) leaves it out only for models named in its settings, one by one
 // (anomalyco/opencode#55160). A model named there that the provider doesn't have shows up in its
 // list as a model of its own, so the names come from Copilot's list as this box's engine last gave
 // it. And only while there's a Copilot account: named in its settings with none, Copilot counts as

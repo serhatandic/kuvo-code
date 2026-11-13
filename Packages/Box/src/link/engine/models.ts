@@ -1,13 +1,22 @@
 // A provider's models asked of again (PROTOCOL.md, `kuvo/accounts/<provider>/refresh`): the
 // engine's lists made afresh without a restart, and what providers need learned again at once.
 //
-// The engine reads some providers' lists from your account as it opens a folder (GitHub Copilot's,
-// with the models your plan has), and again only when the account in use changes. opencode (2.2.5)
-// has no way to ask again but to close the folder (`DELETE api/debug/location`): its next use opens
-// it afresh. Closing one stops its terminals and its commands, and drops a question waiting on
-// you, so only a folder where nothing's going on is closed now; one at work is noted here
-// (`run/models-due.json`, for the engine it was asked of) and closed once its work is done
-// (`settleDueModels`, as the box hears its events).
+// The engine reads some providers' lists from your account, and has no way to be asked again but
+// to close the folders it has open (`DELETE api/debug/location`), which it opens afresh as they're
+// next used. Closing one stops its terminals and its commands, and drops a question waiting on
+// you, so a folder where something's going on is never closed now. opencode (2.2.6) keeps two
+// kinds of list:
+//
+// - GitLab Duo's, each folder's own, read as it opens and again only when the account in use
+//   changes: each quiet folder is closed now, one at work is noted here (`run/models-due.json`, for
+//   the engine it was asked of) and closed once its work is done (`settleDueModels`, as the box hears
+//   its events).
+// - GitHub Copilot's, DigitalOcean's, Modal's and OpenCode's, one for the whole engine, kept as long
+//   as any folder is open (re-activating the account in use doesn't read it again either), and read
+//   again by itself every ten minutes (OpenCode's every minute). Closing some folders brings nothing:
+//   only with every folder quiet are they all closed, and none is opened again until the engine has
+//   none open, which is when it lets its list go. Otherwise the client is told they come by
+//   themselves.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -20,10 +29,17 @@ import { learnCompatibility } from "./compatibility";
 
 export const MODELS_DUE_FILE = path.join(RUN, "models-due.json");
 
-/** The providers whose models opencode (2.2.5) reads from your account as it opens a folder, and
- * again only when the account in use changes: those a refresh brings new models to. (The rest come
- * from models.dev's catalog, which the engine reads again by itself every few minutes.) */
+/** The providers whose models opencode (2.2.6) reads from your account, and again only as said
+ * above: those a refresh brings new models to. (The rest come from models.dev's catalog, which the
+ * engine reads again by itself every few minutes.) */
 export const REFRESHABLE = ["digitalocean", "github-copilot", "gitlab", "modal", "opencode"];
+
+/** Of those, the ones whose list is the whole engine's, with how long it takes at most to read
+ * them again by itself (its timer for each folder, and a list read just before it came due). */
+const ENGINE_WIDE: Record<string, string> = { digitalocean: "twenty minutes", "github-copilot": "twenty minutes", modal: "twenty minutes", opencode: "two minutes" };
+
+/** How long a refresh waits for the engine to have no folder open, closing those opened meanwhile. */
+const CLOSING_WAIT = 10_000;
 
 /** The engine's events after which a folder that was at work may be done: the box looks again. */
 export const WORK_ENDS = new Set([
@@ -153,6 +169,14 @@ export async function refreshModels(engine: EngineRecord, provider: string, file
   if (!known?.ok) return unreachable;
   let folders: string[];
   try { folders = await openFolders(engine); } catch { return unreachable; }
+  if (provider in ENGINE_WIDE) {
+    try {
+      return await refreshEngineWide(engine, provider, folders);
+    } catch (error) {
+      if (error instanceof CantClose) return { status: 503, message: "This engine can't ask for its models again without restarting. Restart it in Settings › Engine." };
+      throw error;
+    }
+  }
   let waiting: string[];
   try {
     waiting = await closeQuiet(engine, folders);
@@ -166,6 +190,29 @@ export async function refreshModels(engine: EngineRecord, provider: string, file
   // (The folder it opens first, its own, opens afresh for it.)
   await learnCompatibility(engine).catch(() => {});
   return { status: 200, waiting };
+}
+
+/** A list the whole engine keeps (`ENGINE_WIDE`) asked of again: every folder closed, only when
+ * nothing's going on in any (each looked at again just before it's closed), and none opened again
+ * until the engine has none open, closing those opened meanwhile; then what providers need learned
+ * from it. Otherwise nothing more is closed, and the client is told when they come by themselves. */
+async function refreshEngineWide(engine: EngineRecord, provider: string, folders: string[]): Promise<ModelsRefresh> {
+  const later = { status: 409 as const, message: `Something's going on in a project on this computer (a run, a terminal, a command or a question waiting on you), and its engine asks for these models again only once every project is closed: they show by themselves within ${ENGINE_WIDE[provider]}.` };
+  const end = Date.now() + CLOSING_WAIT;
+  let open = folders;
+  while (open.length) {
+    if ((await atWork(engine, open)).size) return later;
+    if ((await closeQuiet(engine, open)).length) return later;
+    try { open = await openFolders(engine); } catch { return { status: 503, message: "The engine isn't answering. Try again in a moment." }; }
+    if (!open.length) break;
+    if (Date.now() >= end) return { status: 409, message: `A project on this computer kept opening again as its engine closed them, so it couldn't ask for these models again now: try again in a moment, or they show by themselves within ${ENGINE_WIDE[provider]}.` };
+    // One opened again is usually about to be used (a message on its way, a wake-up's tools): given
+    // a moment for that to show before it's looked at and closed.
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+  // (The folder it opens first, its own, reads the list afresh.)
+  await learnCompatibility(engine).catch(() => {});
+  return { status: 200, waiting: [] };
 }
 
 // One look at a time in this process; one asked for meanwhile goes after it.

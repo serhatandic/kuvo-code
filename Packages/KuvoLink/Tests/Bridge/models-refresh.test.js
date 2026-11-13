@@ -1,10 +1,12 @@
 // Refresh Models (PROTOCOL.md, `kuvo/accounts/<provider>/refresh`): a provider's models asked of
 // again on a box, without restarting its engine, from Settings › Accounts on a Mac or a phone. The
-// engine reads an account's models (GitHub Copilot's) as it opens a folder, so the box closes the
+// engine (opencode 2.2.6) reads GitLab Duo's models as each folder opens, so the box closes the
 // folders it has open, for each to open afresh as it's next used: at once where nothing's going on,
 // and only once its work is done where something is (a run, a terminal, a command, a question for
-// you), which closing would cut. What providers need from the engine is learned again from the list
-// as it is now. The engine is a stand-in that answers as the real one does;
+// you), which closing would cut. GitHub Copilot's it keeps for the whole engine, read again only once
+// it has no folder open: the box closes every folder when nothing's going on in any, and otherwise
+// closes none and says when they come by themselves. What providers need from the engine is learned
+// again from the list as it is now. The engine is a stand-in that answers as the real one does;
 // `compatibility-live.test.js` does it on the real one.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/models-refresh.test.js`.
@@ -25,12 +27,17 @@ const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
 const OWN = "/w/engine";
 
-// An engine with a Copilot account whose models are `account` (what Copilot gives it now), and
-// folders open, each with the list it read as it opened and what's going on there.
-async function engineWith(account, folders) {
+// An engine with an account of `kind` (GitLab Duo's, or GitHub Copilot's) whose models are `account`
+// (what it gives it now), and folders open, each with what's going on there: GitLab's list each
+// folder's own, read as it opened; Copilot's the whole engine's, read again as a folder opens only
+// when none was open (`reopen`: a folder something opens again as the last one closes).
+async function engineWith(account, folders, kind = "gitlab") {
   const engine = {
     pid: 4242,
+    kind,
     account,
+    shared: [...account],
+    reopen: null,
     // Each open folder: the models it read as it opened, and what's going on there.
     open: new Map([[OWN, {}], ...Object.entries(folders)].map(([folder, going]) => [folder, { models: [...account], ...going }])),
     active: {},
@@ -44,7 +51,10 @@ async function engineWith(account, folders) {
   engine.nextClose = () => new Promise(resolve => engine.closing.push(resolve));
   // A folder used: opened afresh if it was closed, reading the account's models as they are now.
   const use = folder => {
-    if (!engine.open.has(folder)) engine.open.set(folder, { models: [...engine.account] });
+    if (!engine.open.has(folder)) {
+      if (!engine.open.size) engine.shared = [...engine.account];
+      engine.open.set(folder, { models: [...engine.account] });
+    }
     return engine.open.get(folder);
   };
   const server = http.createServer((request, response) => {
@@ -66,11 +76,13 @@ async function engineWith(account, folders) {
       const closed = url.searchParams.get("location[directory]");
       engine.open.delete(closed);
       engine.closed.push(closed);
+      if (!engine.open.size && engine.reopen) { const again = engine.reopen; engine.reopen = null; again(use); }
       for (const resolve of engine.closing.splice(0)) resolve(closed);
       return response.writeHead(204).end();
     }
     if (url.pathname === "/api/provider") return send(200, { data: [] });
     if (url.pathname === "/api/integration/github-copilot") return send(200, { data: { id: "github-copilot", connections: [{ id: "cred_copilot", method: "oauth" }] } });
+    if (url.pathname === `/api/integration/${engine.kind}`) return send(200, { data: { id: engine.kind, connections: [{ id: "cred_1", method: "oauth" }] } });
     if (url.pathname.startsWith("/api/integration/")) return send(404, { message: "Integration not found" });
     if (url.pathname === "/api/session/active") return send(200, { data: Object.fromEntries(Object.keys(engine.active).map(id => [id, { type: "running" }])) });
     if (url.pathname.startsWith("/api/session/")) {
@@ -78,7 +90,7 @@ async function engineWith(account, folders) {
       return engine.active[id] ? send(200, { data: { id, location: { directory: engine.active[id] } } }) : send(404, {});
     }
     const there = use(folder);
-    if (url.pathname === "/api/model") return send(200, { location: { directory: folder }, data: there.models.map(id => ({ providerID: "github-copilot", id, family: id.replace(/-[\d.]+$/, "") })) });
+    if (url.pathname === "/api/model") return send(200, { location: { directory: folder }, data: (engine.kind === "gitlab" ? there.models : engine.shared).map(id => ({ providerID: engine.kind, id, family: id.replace(/-[\d.]+$/, "") })) });
     if (url.pathname === "/api/form") return send(200, { data: there.forms ?? [] });
     if (url.pathname === "/api/permission/request") return send(200, { data: there.permissions ?? [] });
     if (url.pathname === "/api/pty") return send(200, { data: there.terminal ? [{ id: "pty_1", status: there.terminal }] : [] });
@@ -110,7 +122,7 @@ function engineReads() {
   return Object.keys(JSON.parse(text.split("\n").filter(line => !line.startsWith("//")).join("\n")).providers?.["github-copilot"]?.models ?? {}).sort();
 }
 
-test("Refresh Models opens the engine's folders afresh where nothing's going on, and each one at work once its work is done; what the account has now is learned", async t => {
+test("Refresh Models for a list each folder reads itself (GitLab Duo's) opens the engine's folders afresh where nothing's going on, and each one at work once its work is done", async t => {
   const engine = await engineWith(["claude-opus-5.6"], {
     "/w/quiet": {},
     "/w/terminal": { terminal: "running" },
@@ -128,16 +140,16 @@ test("Refresh Models opens the engine's folders afresh where nothing's going on,
   await followed;
   const ask = asker(engine);
 
-  // Copilot gives the account another model: the engine doesn't know until it reads its list again.
+  // GitLab gives the account another model: the engine doesn't know until it reads its list again.
   engine.account = ["claude-opus-5.6", "claude-sonnet-5.6"];
-  const answer = await ask("POST", "kuvo/accounts/github-copilot/refresh");
+  const answer = await ask("POST", "kuvo/accounts/gitlab/refresh");
   assert.equal(answer.status, 200);
   assert.deepEqual(answer.json.waiting.sort(), ["/w/asks", "/w/command", "/w/permission", "/w/run", "/w/terminal"]);
   // Nothing at work was cut.
   assert.deepEqual(engine.closed.sort(), [OWN, "/w/quiet"].sort());
-  // The engine's own folder, which the model pickers read, has it; and the box learned it.
-  assert.deepEqual(engine.open.get(OWN).models, ["claude-opus-5.6", "claude-sonnet-5.6"]);
-  assert.deepEqual(engineReads(), ["claude-opus-5.6", "claude-sonnet-5.6"]);
+  // The engine's own folder, which the model pickers read, has it as it's next used.
+  const own = await fetch(`http://127.0.0.1:${engine.source.port}/api/model`).then(response => response.json());
+  assert.deepEqual(own.data.map(model => model.id), ["claude-opus-5.6", "claude-sonnet-5.6"]);
   assert.deepEqual(engine.open.get("/w/terminal").models, ["claude-opus-5.6"]);
 
   // Its terminal closed: that folder goes now, the rest stay.
@@ -172,7 +184,7 @@ test("Refresh Models opens the engine's folders afresh where nothing's going on,
 
 test("folders left at work by a refresh aren't closed on an engine started since, which opened them afresh anyway", async () => {
   const engine = await engineWith(["claude-opus-5.6"], { "/w/terminal": { terminal: "running" } });
-  const answer = await asker(engine)("POST", "kuvo/accounts/github-copilot/refresh");
+  const answer = await asker(engine)("POST", "kuvo/accounts/gitlab/refresh");
   assert.deepEqual(answer.json.waiting, ["/w/terminal"]);
   // Restarted (another process), its terminal gone with it; the box looks as it finds it.
   engine.source.pid = 4343;
@@ -182,8 +194,40 @@ test("folders left at work by a refresh aren't closed on an engine started since
   assert.equal(fs.existsSync(path.join(home, "run", "models-due.json")), false);
 });
 
+test("Refresh Models for a list the whole engine keeps (GitHub Copilot's) closes every folder, only with nothing going on in any, and opens none until the engine has none open; otherwise it closes none and says when they come", async () => {
+  const engine = await engineWith(["claude-opus-5.6"], { "/w/quiet": {}, "/w/terminal": { terminal: "running" } }, "github-copilot");
+  const ask = asker(engine);
+  engine.account = ["claude-opus-5.6", "claude-sonnet-5.6"];
+  // A terminal running in one project: closing the rest would bring nothing, and that one can't be.
+  let answer = await ask("POST", "kuvo/accounts/github-copilot/refresh");
+  assert.equal(answer.status, 409);
+  assert.match(answer.json.message, /they show by themselves within twenty minutes/);
+  assert.deepEqual(engine.closed, []);
+  assert.equal(fs.existsSync(path.join(home, "run", "models-due.json")), false);
+  // A run that starts in one as the others close: the rest stay as they are, and it says so.
+  engine.open.get("/w/terminal").terminal = "exited";
+  const closing = engine.nextClose();
+  closing.then(() => { engine.active.ses_2 = "/w/terminal"; });
+  answer = await ask("POST", "kuvo/accounts/github-copilot/refresh");
+  assert.equal(answer.status, 409);
+  assert.ok(engine.open.has("/w/terminal"), "A folder where a run started meanwhile was closed");
+  assert.deepEqual(engine.shared, ["claude-opus-5.6"]);
+  delete engine.active.ses_2;
+  // All quiet, and one opened again as the last closes (a client reading it): that one's closed too,
+  // and only then is any opened again, so the engine reads the list afresh; the box learns it.
+  engine.closed = [];
+  engine.reopen = use => use("/w/late");
+  answer = await ask("POST", "kuvo/accounts/github-copilot/refresh");
+  assert.equal(answer.status, 200);
+  assert.deepEqual(answer.json.waiting, []);
+  assert.ok(engine.closed.includes("/w/late"), "A folder opened again meanwhile kept the engine's list from before");
+  assert.deepEqual(engine.shared, ["claude-opus-5.6", "claude-sonnet-5.6"]);
+  assert.deepEqual(engineReads(), ["claude-opus-5.6", "claude-sonnet-5.6"]);
+  assert.equal(fs.existsSync(path.join(home, "run", "models-due.json")), false);
+});
+
 test("Refresh Models for a provider whose models don't come from your account, one the engine doesn't have, on an engine that can't close a folder, or with the engine down, says so; nothing is closed", async () => {
-  const engine = await engineWith(["claude-opus-5.6"], { "/w/quiet": {} });
+  const engine = await engineWith(["claude-opus-5.6"], { "/w/quiet": {} }, "github-copilot");
   const ask = asker(engine);
   // A client offers it for the providers whose models come from your account alone.
   const offered = await ask("GET", "kuvo/accounts/refreshable");
@@ -193,7 +237,7 @@ test("Refresh Models for a provider whose models don't come from your account, o
   assert.equal(catalog.status, 409);
   assert.match(catalog.json.message, /by itself/);
   // One the engine doesn't have (removed meanwhile): said in words.
-  const unknown = await ask("POST", "kuvo/accounts/gitlab/refresh");
+  const unknown = await ask("POST", "kuvo/accounts/modal/refresh");
   assert.equal(unknown.status, 404);
   assert.match(unknown.json.message, /isn't on this computer's engine/);
   assert.equal((await ask("GET", "kuvo/accounts/github-copilot/refresh")).status, 405);

@@ -2621,24 +2621,31 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     (`accounts.ended`); a Mac before answered them itself.
   - `POST kuvo/accounts/<provider>/refresh` is Refresh Models: the engine's lists of models made
     afresh without a restart, and what providers need from it learned again from them and applied
-    ("Settings per box"), at once. opencode reads an account's models (GitHub Copilot's, with the
-    models your plan has) as it opens a folder, and again only when the account in use changes, so
-    the box closes each folder the engine has open (`DELETE api/debug/location`), which it opens
-    afresh as it's next used: at once where nothing's going on, and once its work is done where
-    something is (a run, a question or a permission waiting on you, a terminal, a running command),
-    which closing would cut: those are kept in `run/models-due.json` for that engine and closed as
-    its events say their work ended (a run's end, a terminal's or a command's, a question
-    answered). It answers `200 {waiting: [folder]}`, the folders still to get them; the engine's
-    own folder, whose list the model pickers read, is among them only while something goes on
-    there, and a client says the rest get them once their work is done. Each folder is looked at
-    again just before it's closed, so a run started meanwhile keeps it open. Those left are closed
-    as the box follows its engine's events (on a machine, while its bridge runs; otherwise by the
-    next refresh, which looks at every open folder). Clients' pickers follow the engine's
-    `model.updated`. It helps only the providers whose lists opencode reads from your account as a
-    folder opens, and again only when the account in use changes: `GET kuvo/accounts/refreshable`
-    → `{providers: [id]}` (GitHub Copilot, GitLab Duo, Modal, DigitalOcean, OpenCode), which a
-    client offers it for, on the account in use. The rest come from models.dev's catalog, which
-    the engine reads again by itself: `409 {message}` for those. `404 {message}` for one the engine
+    ("Settings per box"), at once. opencode (2.2.6) can't be asked to read an account's models again
+    but by closing the folders it has open (`DELETE api/debug/location`), which it opens afresh as
+    they're next used; closing one cuts what goes on there (a run, a question or a permission
+    waiting on you, a terminal, a running command), so a folder at work is never closed now. Each
+    folder is looked at again just before it's closed, so a run started meanwhile keeps it open.
+    GitLab Duo's list is each folder's own, read as it opens and again only when the account in use
+    changes: the box closes each folder at once where nothing's going on, and keeps those at work in
+    `run/models-due.json` for that engine, closing each as its events say its work ended (a run's
+    end, a terminal's or a command's, a question answered), on a machine while its bridge runs,
+    otherwise by the next refresh. It answers `200 {waiting: [folder]}`, the folders still to get
+    them; the engine's own folder, whose list the model pickers read, is among them only while
+    something goes on there, and a client says the rest get them once their work is done. GitHub
+    Copilot's, DigitalOcean's, Modal's and OpenCode's lists are the whole engine's, kept while any
+    folder is open (activating the account in use again doesn't read them either) and read again by
+    itself every ten minutes (OpenCode's every minute): closing some folders brings nothing. So the
+    box closes every folder only when nothing goes on in any, opens none again until `GET
+    api/debug/location` lists none (closing those something opened meanwhile, each given half a
+    second to show it's in use first, for ten seconds at most), and answers `200 {waiting: []}`;
+    otherwise it closes nothing more and answers `409 {message}`, saying they show by themselves
+    within twenty minutes (OpenCode's within two), as a rule, or to try again when a folder kept
+    opening again; a client shows it as it shows why a refresh couldn't go. Clients' pickers follow the engine's
+    `model.updated`. It helps only the providers whose lists opencode reads from your account: `GET
+    kuvo/accounts/refreshable` → `{providers: [id]}` (GitHub Copilot, GitLab Duo, Modal,
+    DigitalOcean, OpenCode), which a client offers it for, on the account in use. The rest come from
+    models.dev's catalog, which the engine reads again by itself: `409 {message}` for those too. `404 {message}` for one the engine
     doesn't have; `503 {message}` while it can't be asked, or when it has no way to close a folder,
     which only a restart does then. Every box with `accounts.refresh`.
   - `GET kuvo/accounts/found` → `{agents, opencode, shell, connected}`: what the computer already has, for
@@ -5055,7 +5062,7 @@ again as its event comes, `kuvo/search`'s `info`, a session a move brought), not
 mark naming another folder than the session's own is no mark: one moved out of the chats while no
 box could take its mark off is never kept a chat by it.
 
-The engine (2.2.5) and the coding agents' bridge make a session the newest for any write, its
+The engine (2.2.6) and the coding agents' bridge make a session the newest for any write, its
 metadata alone too, so a mark is written only as a session is made, moved or has its metadata
 written (each of which made it the newest already), never on a session from before:
 
@@ -5253,7 +5260,7 @@ settings file of the box's own beside yours in its engine's settings folder (`op
 under the engine's `XDG_CONFIG_HOME`: a machine's `~/.kuvo-code/config`, this Mac's
 `KUVO_ENGINE_CONFIG`), never in your settings. opencode reads it with `opencode.json` and reads it
 again as it changes, so what the box learns applies to the engine running now, with no restart: a
-conversation going on uses it from its next message. (opencode 2.2.5 reads `OPENCODE_CONFIG_CONTENT`
+conversation going on uses it from its next message. (opencode 2.2.6 reads `OPENCODE_CONFIG_CONTENT`
 only as it starts, `POST api/location/reload` stops every terminal and command and drops the
 questions waiting on you, `PATCH api/experimental/config` takes only `shell`, and a machine's
 `OPENCODE_CONFIG` is your settings.) The file's first line starts `// Kept by Kuvo Code`; one there
@@ -5520,7 +5527,7 @@ and as a box starts.
 ### Working outside the project
 
 Settings › Permissions shows "Work outside the project: Ask" as the default, and every box keeps
-to it, sandbox or not: opencode 2.2.5's agents allow `external_directory` on their own, so each box
+to it, sandbox or not: opencode 2.2.6's agents allow `external_directory` on their own, so each box
 writes the engine a plugin, `kuvo-defaults.js` in its settings' `opencode/plugins` (as it starts,
 and back each minute if it's gone or changed), that gives the engine's agents
 `{external_directory, "*", ask}`. The engine sets up plugins before it adds the rules in your
