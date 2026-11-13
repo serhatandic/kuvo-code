@@ -2079,13 +2079,17 @@ final class SessionModel {
         guard let box = box() else { return nil }
         if BoxClient.hasEveryFeature(box.box) { return ["queue", "queue.waits"] }
         struct Info: Decodable { var features: [String]? }
-        // (One that answers without `kuvo/info` is from before: none. One whose link is away, 502
-        // or 503, or that couldn't be asked: can't tell.)
+        // (One that answers it hasn't `kuvo/info`, 404 or 405, is from before: none. Any other
+        // answer but its features, or none: can't tell, and asked again next time.)
         guard let answer = try? await box.send("GET", "kuvo/info") else { return nil }
         let (status, data) = answer
-        let info = (200..<300).contains(status) ? try? JSONDecoder().decode(Info.self, from: data) : nil
-        if info == nil, status == 502 || status == 503 { return nil }
-        readFeatures = Set(info?.features ?? [])
+        if status == 404 || status == 405 {
+            readFeatures = []
+        } else if (200..<300).contains(status), let info = try? JSONDecoder().decode(Info.self, from: data) {
+            readFeatures = Set(info.features ?? [])
+        } else {
+            return nil
+        }
         return readFeatures
     }
 

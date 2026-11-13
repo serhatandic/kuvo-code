@@ -1036,11 +1036,13 @@ final class Workspace {
         let bridge = agents(forFolder: directory)
         if isAgents, bridge?.api == nil { throw OutsideAgents.Failure.notRunning(bridge?.failure) }
         guard let api = isAgents ? bridge?.api : api(forFolder: directory) else { throw CancellationError() }
-        let directory = addFolder(directory)
         // Its box makes it (PROTOCOL.md, `kuvo/sessions`): its worktree, its project's folders, its
-        // approval and Autopilot, all there.
+        // approval and Autopilot, all there. (Told before the folder's added, as one that can't be
+        // told adds nothing.)
         let boxID = Self.box(of: directory)
-        if let box = boxes?(boxID), try await goesThroughBox(SessionStart.feature, on: boxID) {
+        let throughBox = boxes?(boxID) != nil ? try await goesThroughBox(SessionStart.feature, on: boxID) : false
+        let directory = addFolder(directory)
+        if throughBox, let box = boxes?(boxID) {
             let asked = SessionStart.Asked(folder: Self.onBox(directory), chat: !worktree && Self.isChat(directory), worktree: worktree, agent: agent, model: model, approval: approval?.rawValue, autopilot: autopilot)
             let started = try await box.value(SessionStart.Started.self, "POST", SessionStart.route, body: asked)
             let session: Session
@@ -1126,7 +1128,8 @@ final class Workspace {
     @ObservationIgnored private var featuresHere: [String: Set<String>] = [:]
 
     /// Whether the box `id` has `feature`: the app's own always, a machine's as it says (one that
-    /// answers without `kuvo/info` is from before: none). Nil where it couldn't be asked just now.
+    /// answers it hasn't `kuvo/info`, 404 or 405, is from before: none). Nil where that can't be told
+    /// just now (it couldn't be asked, or didn't answer as either).
     func boxSays(_ feature: String, on id: String) async -> Bool? {
         if BoxClient.hasEveryFeature(id) { return true }
         if let known = featuresHere[id] { return known.contains(feature) }
@@ -1135,10 +1138,13 @@ final class Workspace {
         let features: Set<String>
         do {
             let (status, data) = try await box.send("GET", "kuvo/info")
-            let info = (200..<300).contains(status) ? try? JSONDecoder().decode(Info.self, from: data) : nil
-            // (A box's link that's away answers 502 or 503 for it: can't tell.)
-            if info == nil, status == 502 || status == 503 { return nil }
-            features = Set(info?.features ?? [])
+            if status == 404 || status == 405 {
+                features = []
+            } else if (200..<300).contains(status), let info = try? JSONDecoder().decode(Info.self, from: data) {
+                features = Set(info.features ?? [])
+            } else {
+                return nil
+            }
         } catch {
             return nil
         }

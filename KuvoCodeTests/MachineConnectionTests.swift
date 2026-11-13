@@ -1011,6 +1011,24 @@ import Testing
         #expect(tried.first?.contains(RemoteServer.stopCommand) == true, "what waits for it stops its engine first")
     }
 
+    /// A new session or a move on a machine whose box can't be asked what it does just now (its
+    /// link doesn't answer): refused, saying so, and nothing made or moved there by this Mac, whose
+    /// own rules wouldn't be its box's.
+    @Test func aStartOrMoveOnAMachineWhoseBoxCantBeAskedIsRefused() async throws {
+        defer { done() }
+        let id = Self.name()
+        let prefix = RemoteFolder.prefix(for: id)
+        machine.list([StubEngine.session("ses_mwait", title: "Question", directory: "/home/tests/.kuvo-code/chats")])
+        await app.connect(add(id, at: machine)).value
+        try await until { app.workspace.session("ses_mwait") != nil }
+        machine.on("POST", "/api/session", json: ["data": StubEngine.session("ses_mnone", title: "New", directory: "/home/tests/app")])
+        machine.on("POST", "/api/session/ses_mwait/move", json: [:])
+        await #expect(throws: BoxRefusal.self) { _ = try await app.workspace.createSession(in: prefix + "/home/tests/app", model: nil, agent: nil) }
+        await #expect(throws: BoxRefusal.self) { try await app.workspace.move("ses_mwait", toProject: prefix + "/home/tests/app") }
+        #expect(machine.requests("POST", "/api/session").isEmpty)
+        #expect(machine.requests("POST", "/api/session/ses_mwait/move").isEmpty)
+    }
+
     /// A new session in a machine's project that has other folders works in them there from its
     /// start: its rules and what its agent is told name the machine's own paths.
     @Test func aNewSessionInAMachinesProjectWorksInItsOtherFoldersThere() async throws {

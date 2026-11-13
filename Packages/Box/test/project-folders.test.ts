@@ -162,10 +162,11 @@ test("a folder Settings › Permissions names stays allowed when a session's pro
   const settings = join(home, "box", "opencode.json")
   writeFileSync(settings, JSON.stringify({ permissions: [{ action: "external_directory", resource: join(outside, "*"), effect: "ask" }] }))
   const allowsOutside = { action: "external_directory", resource: join(outside, "*"), effect: "allow" }
-  sessions.ses_auto = { id: "ses_auto", location: { directory: shop }, permissions: [asks, allowsOutside], metadata: {} }
+  // (In Auto: no ask before commands.)
+  sessions.ses_auto = { id: "ses_auto", location: { directory: shop }, permissions: [allowsOutside], metadata: {} }
   try {
     expect(await giveFolders(target, "ses_auto", { whenChanged: true })).toBe(true)
-    expect(sessions.ses_auto!.permissions).toEqual([asks, allowsOutside, docsRule])
+    expect(sessions.ses_auto!.permissions).toEqual([allowsOutside, docsRule])
   } finally {
     rmSync(settings, { force: true })
   }
@@ -175,14 +176,37 @@ test("a project's folder Settings › Permissions also asks about is allowed onc
   const { giveFolders } = await import("../src/link/areas/projects")
   const settings = join(home, "box", "opencode.json")
   writeFileSync(settings, JSON.stringify({ permissions: [{ action: "external_directory", resource: join(docs, "*"), effect: "ask" }] }))
-  sessions.ses_twice = { id: "ses_twice", location: { directory: shop }, permissions: [asks, docsRule], metadata: {} }
+  sessions.ses_twice = { id: "ses_twice", location: { directory: shop }, permissions: [docsRule], metadata: {} }
+  // (In Ask First it asks, as Settings says: an allow from before doesn't let it past.)
+  sessions.ses_asks = { id: "ses_asks", location: { directory: shop }, permissions: [asks, docsRule], metadata: {} }
   try {
     written.length = 0
     for (let times = 0; times < 3; times++) expect(await giveFolders(target, "ses_twice", { whenChanged: true })).toBe(true)
-    expect(sessions.ses_twice!.permissions).toEqual([asks, docsRule])
+    expect(sessions.ses_twice!.permissions).toEqual([docsRule])
     expect(written).toEqual([])
+    expect(await giveFolders(target, "ses_asks", { whenChanged: true })).toBe(true)
+    expect(sessions.ses_asks!.permissions).toEqual([asks])
   } finally {
     rmSync(settings, { force: true })
+  }
+})
+
+test("a Don't Allow in Settings on a project's folder holds where it really is too: neither it nor where its link leads is allowed", async () => {
+  const { giveFolders } = await import("../src/link/areas/projects")
+  const settings = join(home, "box", "opencode.json")
+  const docsLink = join(home, "docs-link")
+  symlinkSync(docs, docsLink)
+  const denied = { action: "external_directory", resource: join(docs, "*"), effect: "deny" }
+  writeFileSync(settings, JSON.stringify({ permissions: [denied] }))
+  keep([docsLink])
+  sessions.ses_twin = { id: "ses_twin", location: { directory: shop }, permissions: [asks, denied], metadata: {} }
+  try {
+    expect(await giveFolders(target, "ses_twin", { whenChanged: true })).toBe(true)
+    expect(sessions.ses_twin!.permissions).toEqual([asks, denied])
+  } finally {
+    rmSync(settings, { force: true })
+    rmSync(docsLink, { force: true })
+    keep([docs])
   }
 })
 
@@ -219,6 +243,9 @@ test("a project the box added itself as a session started there keeps the folder
     expect(await giveFolders(target, "ses_added", { whenChanged: true })).toBe(true)
     expect(written).toEqual([])
     expect(sessions.ses_added!.permissions).toEqual([asks, assets])
+    // Moved there by a client, it's that project's from then on: none of another's.
+    expect(await giveFolders(target, "ses_added", { folder: shop })).toBe(true)
+    expect(sessions.ses_added!.permissions).toEqual([asks])
   } finally {
     keep([docs])
   }

@@ -7466,7 +7466,7 @@ async function makeProject(given, madeBy, root = projectsFolder()) {
   let project;
   changeProjects((projects) => {
     const before = projects.find((each) => each.directory === folder);
-    project = { ...before, directory: folder, folders: before?.folders ?? [], ...path32.basename(folder) !== name ? { name } : {}, ...madeBy ? { madeBy } : {} };
+    project = { ...before, directory: folder, folders: before?.folders ?? [], ...before ? {} : { addedByBox: true }, ...path32.basename(folder) !== name ? { name } : {}, ...madeBy ? { madeBy } : {} };
     delete project.removed;
     return [project, ...projects.filter((each) => each !== before)];
   });
@@ -30417,12 +30417,12 @@ When the user mentions one of these folders by name, they mean that folder.`;
 function foldersFor(folder, projects = readProjects()) {
   return listedFolders(folder, projects) ?? [];
 }
-var setFolders = (project) => project && !project.addedByBox ? project.folders : null;
-function listedFolders(folder, projects = readProjects()) {
+var setFolders = (project, added = false) => project && (added || !project.addedByBox) ? project.folders : null;
+function listedFolders(folder, projects = readProjects(), added = false) {
   const directory = worktreeProjects()[folder] ?? folder;
   const own = projects.find((each) => each.directory === directory);
   if (own) {
-    const folders = setFolders(own);
+    const folders = setFolders(own, added);
     return folders && (folders.includes(folder) ? [] : folders);
   }
   return projects.some((each) => setFolders(each)?.includes(directory)) ? [] : null;
@@ -30443,19 +30443,26 @@ function folderRules(folders) {
 var isFolderRule = (rule) => rule.action === "external_directory" && rule.effect === "allow" && rule.resource.endsWith("/*");
 function withFolders(rules, folders, held = []) {
   const same = (one, other) => one.action === other.action && one.resource === other.resource;
-  const named = (permissionsHere() ?? rules.filter(holdsBack)).filter((rule) => rule.action === "external_directory");
-  const adding = folderRules(folders).filter((rule) => !named.some((each) => same(each, rule)));
+  const named = settingsFolderRules(rules);
+  const namedAt = (rule) => {
+    const at = folderNamed(rule.resource);
+    return named.filter((each) => folderNamed(each.resource) === at);
+  };
+  const adding = folderRules(folders).filter((rule) => !namedAt(rule).length);
   const last = rules.filter((rule) => held.some((each) => same(each, rule) && each.effect === rule.effect));
-  const asked = (rule) => named.findLast((each) => each.resource === rule.resource)?.effect === "ask";
+  const asksFirst = rules.some((rule) => rule.action === "shell" && rule.resource === "*" && rule.effect === "ask");
+  const asked = (rule) => !asksFirst && namedAt(rule).at(-1)?.effect === "ask";
   const kept = rules.filter((rule) => !last.includes(rule) && !(rule.effect === "allow" && adding.some((each) => same(each, rule))) && (!isFolderRule(rule) || rule.resource.includes("/bots/bot_") || asked(rule)));
   return [...kept, ...adding, ...last];
 }
-function foldersOf(session, at) {
+var settingsFolderRules = (rules) => (permissionsHere() ?? rules.filter(holdsBack)).filter((rule) => rule.action === "external_directory");
+var folderNamed = (resource) => resource.endsWith("/*") ? realish(resource.slice(0, -2)) : resource;
+function foldersOf(session, at, added = false) {
   const filed = session.metadata?.kuvo?.filed;
   const project = isObject(filed) && filed.folder === at && typeof filed.project === "string" ? filed.project : null;
   if (!project || project === at || realish(project) !== realish(at))
-    return listedFolders(at);
-  const folders = setFolders(readProjects().find((each) => each.directory === project));
+    return listedFolders(at, readProjects(), added);
+  const folders = setFolders(readProjects().find((each) => each.directory === project), added);
   if (!folders)
     return null;
   return folders.includes(at) ? [] : folders;
@@ -30480,10 +30487,13 @@ async function giveFolders(target, session, { signal, folder, whenChanged = fals
     return true;
   const where = (now) => folder ?? now.location?.directory ?? now.directory ?? null;
   const first = where(before);
-  const asked = first ? foldersOf(before, first) : null;
+  const added = folder !== undefined;
+  const asked = first ? foldersOf(before, first, added) : null;
   if (!asked)
     return true;
-  await askedAbout(asked);
+  const rules = before.permissions ?? [];
+  const named = [...settingsFolderRules(rules), ...rules].filter((rule) => rule.action === "external_directory" && rule.resource.endsWith("/*")).map((rule) => rule.resource.slice(0, -2));
+  await askedAbout([...asked, ...named]);
   for (let tries = 0;tries < 3; tries++) {
     let at = null;
     let folders = null;
@@ -30493,7 +30503,7 @@ async function giveFolders(target, session, { signal, folder, whenChanged = fals
       const done = await rewriteOn(target, session, (now) => {
         seen = now;
         at = where(now);
-        folders = at ? foldersOf(now, at) : null;
+        folders = at ? foldersOf(now, at, added) : null;
         if (!folders)
           return null;
         const current = now.permissions ?? [];
@@ -30509,7 +30519,7 @@ async function giveFolders(target, session, { signal, folder, whenChanged = fals
     if (!folders)
       return true;
     const given = folders;
-    if (JSON.stringify(foldersOf(seen, at)) !== JSON.stringify(given))
+    if (JSON.stringify(foldersOf(seen, at, added)) !== JSON.stringify(given))
       continue;
     const entry = `/api/experimental/session/${address}/instructions/entries/${PROJECT_FOLDERS_ENTRY}`;
     const note = given.length ? projectFoldersNote(at, given) : null;
@@ -40819,7 +40829,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "ebe60ea4aded";
+var BRIDGE_VERSION = "8354c4641999";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

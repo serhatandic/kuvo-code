@@ -64,19 +64,20 @@ export function foldersFor(folder: string, projects: Project[] = readProjects())
   return listedFolders(folder, projects) ?? [];
 }
 
-/** The folders of a project the box lists as a client set them; null for one it added itself as a
- * session started there, which no client has set yet (`addedByBox`). */
-const setFolders = (project: Project | undefined): readonly string[] | null => (project && !project.addedByBox ? project.folders : null);
+/** The folders of a project the box lists as a client set them; null for one it added itself
+ * (`addedByBox`: as a session started there, or `make_project`), which no client has set yet,
+ * unless `added` (a session moved there: its folders, none yet, are the box's to say). */
+const setFolders = (project: Project | undefined, added = false): readonly string[] | null => (project && (added || !project.addedByBox) ? project.folders : null);
 
 /** As `foldersFor`, but null where the box doesn't list the project `folder` is in (or a worktree
  * of), or no client has set its folders yet (`addedByBox`): one it doesn't know (a Mac from before
  * keeps its projects itself, or hasn't handed them over yet), whose folders aren't the box's to
  * say. */
-function listedFolders(folder: string, projects: Project[] = readProjects()): readonly string[] | null {
+function listedFolders(folder: string, projects: Project[] = readProjects(), added = false): readonly string[] | null {
   const directory = worktreeProjects()[folder] ?? folder;
   const own = projects.find(each => each.directory === directory);
   if (own) {
-    const folders = setFolders(own);
+    const folders = setFolders(own, added);
     return folders && (folders.includes(folder) ? [] : folders);
   }
   // (One of a listed project's other folders, or a worktree of one: it works there alone.)
@@ -106,25 +107,40 @@ export const isFolderRule = (rule: KitRule): boolean => rule.action === "externa
  * so no folder allowed here lets it past them. */
 export function withFolders(rules: readonly KitRule[], folders: readonly string[], held: readonly KitRule[] = []): KitRule[] {
   const same = (one: KitRule, other: KitRule) => one.action === other.action && one.resource === other.resource;
-  const named = (permissionsHere() ?? rules.filter(holdsBack)).filter(rule => rule.action === "external_directory");
-  const adding = folderRules(folders).filter(rule => !named.some(each => same(each, rule)));
+  const named = settingsFolderRules(rules);
+  // (Settings' rules for the folder a rule names, by where it really is: a link and where it leads
+  // are one folder, and `folderRules` allows both.)
+  const namedAt = (rule: KitRule) => {
+    const at = folderNamed(rule.resource);
+    return named.filter(each => folderNamed(each.resource) === at);
+  };
+  const adding = folderRules(folders).filter(rule => !namedAt(rule).length);
   const last = rules.filter(rule => held.some(each => same(each, rule) && each.effect === rule.effect));
-  // (A folder allowed because Settings asks about it: Auto and Full Access allow what it asks
-  // about. Not one Settings doesn't allow (now), which an allow from before would let past it.)
-  const asked = (rule: KitRule) => named.findLast(each => each.resource === rule.resource)?.effect === "ask";
+  // (A folder allowed because Settings asks about it, in Auto and Full Access, which allow what it
+  // asks about; never in an approval that asks first, nor one Settings doesn't allow now, which an
+  // allow from before would let past it.)
+  const asksFirst = rules.some(rule => rule.action === "shell" && rule.resource === "*" && rule.effect === "ask");
+  const asked = (rule: KitRule) => !asksFirst && namedAt(rule).at(-1)?.effect === "ask";
   const kept = rules.filter(rule => !last.includes(rule) && !(rule.effect === "allow" && adding.some(each => same(each, rule)))
     && (!isFolderRule(rule) || rule.resource.includes("/bots/bot_") || asked(rule)));
   return [...kept, ...adding, ...last];
 }
 
+/** Settings › Permissions' rules for folders outside (or, where its Settings are its Mac's, the
+ * Don't Allows a session's `rules` carry from them). */
+const settingsFolderRules = (rules: readonly KitRule[]): KitRule[] => (permissionsHere() ?? rules.filter(holdsBack)).filter(rule => rule.action === "external_directory");
+
+/** The folder a rule names (`<folder>/*`), where it really is; any other resource as it is. */
+const folderNamed = (resource: string): string => (resource.endsWith("/*") ? realish(resource.slice(0, -2)) : resource);
+
 /** The other folders a session in `at` gets: as `foldersFor`, or, filed under a project that's the
  * same place by another name (`kuvo.filed`: a link, as its start found it), that project's. Null
  * where the box doesn't list its project: nothing it has is taken away. */
-function foldersOf(session: EngineSession, at: string): readonly string[] | null {
+function foldersOf(session: EngineSession, at: string, added = false): readonly string[] | null {
   const filed = session.metadata?.kuvo?.filed;
   const project = isObject(filed) && filed.folder === at && typeof filed.project === "string" ? filed.project : null;
-  if (!project || project === at || realish(project) !== realish(at)) return listedFolders(at);
-  const folders = setFolders(readProjects().find(each => each.directory === project));
+  if (!project || project === at || realish(project) !== realish(at)) return listedFolders(at, readProjects(), added);
+  const folders = setFolders(readProjects().find(each => each.directory === project), added);
   if (!folders) return null;
   return folders.includes(at) ? [] : folders;
 }
@@ -159,10 +175,15 @@ export async function giveFolders(target: Target, session: string, { signal, fol
   if (before.parentID || isHiddenRun(before)) return true;
   const where = (now: EngineSession) => folder ?? now.location?.directory ?? now.directory ?? null;
   const first = where(before);
+  // (Moved into one the box added itself: a project of its own from then on.)
+  const added = folder !== undefined;
   // (A project the box doesn't list: its folders are its Mac's to give, so what it has stays.)
-  const asked = first ? foldersOf(before, first) : null;
+  const asked = first ? foldersOf(before, first, added) : null;
   if (!asked) return true;
-  await askedAbout(asked);
+  // (And the folders its rules and Settings name, which are looked at where they really are.)
+  const rules = (before.permissions ?? []) as KitRule[];
+  const named = [...settingsFolderRules(rules), ...rules].filter(rule => rule.action === "external_directory" && rule.resource.endsWith("/*")).map(rule => rule.resource.slice(0, -2));
+  await askedAbout([...asked, ...named]);
   // (Folders changed again while they were given: given again, so its rules and its note agree.)
   for (let tries = 0; tries < 3; tries++) {
     let at: string | null = null;
@@ -173,7 +194,7 @@ export async function giveFolders(target: Target, session: string, { signal, fol
       const done = await rewriteOn(target, session, now => {
         seen = now;
         at = where(now);
-        folders = at ? foldersOf(now, at) : null;
+        folders = at ? foldersOf(now, at, added) : null;
         if (!folders) return null;
         const current = (now.permissions ?? []) as KitRule[];
         const permissions = withFolders(current, folders, heldOf(now));
@@ -186,7 +207,7 @@ export async function giveFolders(target: Target, session: string, { signal, fol
     }
     if (!folders) return true;
     const given: readonly string[] = folders;
-    if (JSON.stringify(foldersOf(seen, at)) !== JSON.stringify(given)) continue;
+    if (JSON.stringify(foldersOf(seen, at, added)) !== JSON.stringify(given)) continue;
     const entry = `/api/experimental/session/${address}/instructions/entries/${PROJECT_FOLDERS_ENTRY}`;
     const note = given.length ? projectFoldersNote(at, given) : null;
     // (Its note as it should be, or one an earlier write lost: only then written, as a write makes
