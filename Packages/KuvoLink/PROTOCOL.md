@@ -5076,8 +5076,9 @@ app's panel through it, with no Chromium of its own. A machine's box answers `40
   `POST kuvo/box/app/open` (from Kuvo Code's own processes; `{gone: <token>}` says the app
   registered with that token didn't answer, so it's taken for closed). The box decides:
   - one opening at a time, across all its processes (`run/app-opening.json`, `{at, by}`): a call
-    while one's under way waits for it, and hears how it ended; one whose process is gone, or that
-    ran past its time, is taken over;
+    while one's under way waits for it, and hears how it ended; one whose process is gone (a call
+    stopped is told to stop once, and sees its opening through; one cut off anyway), or that ran
+    past its time, is taken over;
   - the app is opened where it last registered, by what runs as the app (its host interface's
     `app/open`, below), and waited for: 30 seconds from the opening's start, for it to register;
   - while an update of the app installs (`{updating: true}` in the last two minutes,
@@ -6892,11 +6893,13 @@ phone), which starts the
 keeper too if it isn't running; `{needed: false}` lets it go), the keeper keeps `kuvo-link.js serve
 --kept` running, as it keeps the link, starting it again within a round (15 s) when it ends. It
 answers clients' routes as `serve` does, streams included, at `127.0.0.1`, with a password of its
-own, where `run/serve.json` says (`{pid, port, password, kept: true}`, `0600`); its port is refused
-to agents' commands in the sandbox, as the box's other servers are. It does nothing else: what the
+own, where `run/serve.json` says (`{pid, port, password, kept: true}`, `0600`); on a Mac its port
+is refused to agents' commands in the sandbox, as the box's other servers are, from the sandbox's
+next look (ten seconds at most). It does nothing else: what the
 box does in the background stays with its link and its keeper. It goes once `run/serve.needed` is
 gone (it looks every 30 s) or another took its place, after an update (the keeper starts the new
-one), and with `kuvo-start off`, which takes `run/serve.needed` away too. One at a time: one
+one), and with `kuvo-start off`, which takes `run/serve.needed` away too (and stops only a server
+its record says it keeps, `kept`). One at a time: one
 started while another runs leaves. `GET kuvo/box/serve` answers `{needed, serving}`. Not on a Mac's
 own box (`409`): its server is Kuvo Code's to run.
 

@@ -38776,7 +38776,7 @@ import fs123 from "node:fs";
 import path126 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "a822c8c85e9e";
+var BRIDGE_VERSION = "b0285c328c75";
 
 // Packages/Box/src/link/rehome/rewrite.ts
 var NO_REWRITE = {
@@ -46185,6 +46185,14 @@ function registerApp(given, now = Date.now()) {
   }
   return record;
 }
+function forgetTools(token, now = Date.now()) {
+  const app = readApp();
+  if (!app?.tools || app.tools.token !== token)
+    return;
+  const record = { ...app, tools: null, at: now };
+  if (readApp()?.tools?.token === token)
+    writePrivate(APP_FILE(), JSON.stringify(record));
+}
 function noteUpdating(now = Date.now()) {
   registerApp({ tools: null }, now);
   writePrivate(UPDATING_FILE(), String(now));
@@ -46227,22 +46235,25 @@ async function openApp(signal, ways = OPEN_WAYS) {
       try {
         fs148.mkdirSync(RUN, { recursive: true, mode: 448 });
         fs148.writeFileSync(OPENING_FILE(), JSON.stringify(mine), { flag: "wx", mode: 384 });
-      } catch {
-        continue;
+      } catch (error) {
+        if (error?.code === "EEXIST")
+          continue;
+        return couldntOpen(`its box couldn't note the opening: ${error?.message ?? error}`);
       }
       return await openAndWait(mine, ways);
     }
     const theirs = opening;
     const still = () => JSON.stringify(readOpening()) === JSON.stringify(theirs);
-    await ways.until(() => isOpen() || !still(), theirs.at + WAIT, signal);
+    const cutOff = () => theirs.by !== process.pid && !alive(theirs.by);
+    await ways.until(() => isOpen() || !still() || cutOff(), theirs.at + WAIT + OPEN_WITHIN, signal);
     if (isOpen())
       return null;
     if (signal?.aborted)
       return "The call was stopped.";
-    if (still())
+    if (still() && !cutOff())
       return NOT_READY;
     const failed = readFailed();
-    if (failed && failed.at >= theirs.at)
+    if (!cutOff() && failed && failed.at >= theirs.at)
       return failed.message;
   }
   return NOT_READY;
@@ -46363,9 +46374,8 @@ async function* appOpenRoute({ request, json, signal }) {
   if (!OWN_HOME_MAC)
     return yield* json(409, { message: ONLY_MAC });
   const given = parsed(request.body);
-  const app = readApp();
-  if (isObject(given) && typeof given.gone === "string" && app?.tools && app.tools.token === given.gone)
-    registerApp({ tools: null });
+  if (isObject(given) && typeof given.gone === "string")
+    forgetTools(given.gone);
   const said = await openApp(signal);
   return yield* said === null ? json(200, appStatus()) : json(503, { message: said });
 }
@@ -46706,7 +46716,7 @@ import path152 from "node:path";
 var LAUNCH_AGENT = "run.kuvo.code.machine";
 var REBOOT_TAG = "# kuvo-code: starts its engine again after a restart";
 function outside() {
-  if (REAL_BOX && !APP_FOLDER) {
+  if (REAL_BOX && located(K) === located(path152.join(accountHome(), ".kuvo-code"))) {
     return { launchctl: "/bin/launchctl", crontab: "crontab", agents: path152.join(accountHome(), "Library", "LaunchAgents") };
   }
   const tools = IN_TEST_FOLDER ? process.env.KUVO_TEST_UNINSTALL_TOOLS : undefined;
@@ -46832,7 +46842,7 @@ function uninstallCommand(args) {
     console.error("Usage: kuvo-link.js uninstall [--check]");
     return 2;
   }
-  if (APP_FOLDER) {
+  if (APP_FOLDER || path152.basename(path152.dirname(path152.resolve(K))).toLowerCase().startsWith("run.kuvo.code")) {
     const message = "This Mac's box runs in Kuvo Code's own folder: remove Kuvo Code itself (its background work goes with it).";
     console.log(JSON.stringify({ result: "refused", message }));
     console.error(message);

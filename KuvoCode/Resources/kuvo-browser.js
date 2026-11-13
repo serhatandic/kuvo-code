@@ -2193,8 +2193,10 @@ async function onAutopilot(id) {
 }
 
 /// A route of this machine's box, answered once: `{status, body}`, or null when its script didn't
-/// answer (in `timeout` ms). Its call `cancelled`, it's told to stop (and answers at once).
-function boxRoute(request, { timeout = 30_000, cancelled = () => false } = {}) {
+/// answer (in `timeout` ms). Its call `cancelled`, it's told to stop (and answers at once): told
+/// again and again (a route that doesn't stop is ended), or with `once`, told once, for a route that
+/// sees what it began through for others (opening the app) and then ends by itself.
+function boxRoute(request, { timeout = 30_000, cancelled = () => false, once = false } = {}) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [...OWN_RUNTIME, path.join(K, "bin", "kuvo-link.js"), "box", "route"], {
       cwd: K,
@@ -2204,8 +2206,11 @@ function boxRoute(request, { timeout = 30_000, cancelled = () => false } = {}) {
     let output = "";
     child.stdout.on("data", (chunk) => (output += chunk));
     const stop = setTimeout(() => child.kill("SIGTERM"), timeout);
+    let told = false;
     const watch = setInterval(() => {
-      if (cancelled()) child.kill("SIGTERM");
+      if (!cancelled() || (once && told)) return;
+      told = true;
+      child.kill("SIGTERM");
     }, 500);
     child.on("error", () => {
       clearTimeout(stop);
@@ -2293,7 +2298,7 @@ async function appBrowser(call, reply) {
   for (let tries = 0; tries < 2; tries++) {
     let tools = gone ? null : registeredApp();
     if (!tools) {
-      const answer = await boxRoute({ method: "POST", path: "kuvo/box/app/open", body: gone ? { gone } : {} }, { timeout: 120_000, cancelled: () => call.cancelled });
+      const answer = await boxRoute({ method: "POST", path: "kuvo/box/app/open", body: gone ? { gone } : {} }, { timeout: 120_000, cancelled: () => call.cancelled, once: true });
       if (call.cancelled) return reply(text("The call was stopped.", true));
       if (answer?.status !== 200) {
         let said = null;

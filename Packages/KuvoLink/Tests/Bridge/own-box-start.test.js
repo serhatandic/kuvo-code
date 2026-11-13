@@ -201,6 +201,20 @@ test("uninstall refuses this Mac's box in its app's folder, which only the app r
   assert.equal(exists(path.join(K, "run", "off")), false);
 });
 
+test("uninstall refuses an app's box named by its folder alone, without the keeper's word for it", async () => {
+  const folder = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-own-box-named-")));
+  removeAtEnd(folder);
+  const K = path.join(folder, "run.kuvo.code.tests", "box");
+  fs.mkdirSync(path.join(K, "run"), { recursive: true });
+  const tools = standIns({ home: folder, K }, `@reboot sh x ${TAG}\n`);
+  const done = await uninstall({ home: folder, K }, [], { KUVO_TEST_UNINSTALL_TOOLS: tools });
+  assert.equal(done.status, 1);
+  assert.equal(JSON.parse(done.stdout).result, "refused");
+  assert.equal(exists(path.join(folder, "kuvo-start")), false, "nothing stopped");
+  assert.equal(exists(path.join(folder, "launchctl")), false);
+  assert.equal(read(path.join(folder, "crontab")), `@reboot sh x ${TAG}\n`);
+});
+
 test("uninstall says what it doesn't know", async () => {
   const where = home();
   assert.equal((await uninstall(where, ["--all"])).status, 2);

@@ -192,6 +192,44 @@ test("an opening that fails: the agent hears why, and the app isn't opened again
   assert.equal(said(await server.call("browser_snapshot", {}, "ses_a")), "the panel did browser_snapshot {}");
 });
 
+test("an opening whose process is cut off partway is taken over by a call waiting on it", async () => {
+  await route("POST", "kuvo/box/app", { tools: null });
+  for (const file of ["app-open-failed.json", "app-opening.json"]) fs.rmSync(path.join(run, file), { force: true });
+  opened.length = 0;
+  // The first opening hangs at the host, until the test lets it go.
+  let letGo;
+  const hanging = new Promise(resolve => { letGo = resolve; });
+  let asked;
+  const firstAsked = new Promise(resolve => { asked = resolve; });
+  opens = async () => {
+    if (opened.length === 1) {
+      asked();
+      await hanging;
+      return [502, { message: "too late" }];
+    }
+    await route("POST", "kuvo/box/app", { tools, bundle: BUNDLE });
+    return [200, {}];
+  };
+  atEnd(() => letGo());
+  const ask = () => {
+    const child = spawn(process.execPath, [script, "box", "route"], { env, stdio: ["pipe", "pipe", "inherit"] });
+    let out = "";
+    child.stdout.on("data", chunk => { out += chunk; });
+    const done = new Promise(resolve => child.on("close", () => resolve(out.trim() ? JSON.parse(out.trim().split("\n").pop()) : null)));
+    child.stdin.end(JSON.stringify({ method: "POST", path: "kuvo/box/app/open", body: {} }));
+    return { child, done };
+  };
+  const first = ask();
+  await firstAsked;
+  const second = ask();
+  first.child.kill("SIGKILL");
+  assert.equal(await first.done, null, "the first was cut off");
+  const answer = await second.done;
+  assert.equal(answer.status, 200, answer.body);
+  assert.deepEqual(opened, [BUNDLE, BUNDLE], "opened again by the call that waited");
+  letGo();
+});
+
 test("a machine's box has no app registering with it", async () => {
   const machine = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-own-box-machine-")));
   removeAtEnd(machine);

@@ -1228,7 +1228,7 @@ public final class RemoteServer: @unchecked Sendable {
             # The box's server for clients (`serve --kept`, which says where it answers in
             # run/serve.json), while one wants it here (run/serve.needed): not on a Mac's own box,
             # whose server Kuvo Code runs itself.
-            if [ -f "$R/serve.needed" ] && [ -f "$K/bin/kuvo-link.js" ] && [ -n "$V" ] && [ "$(tr -d ' \t\r\n' 2>/dev/null <"$K/box/kind")" != mac ] && ! is "$(sed -n 's/^{"pid":\([0-9]*\),.*/\1/p' "$R/serve.json" 2>/dev/null)" kuvo-link; then
+            if [ -f "$R/serve.needed" ] && [ -f "$K/bin/kuvo-link.js" ] && [ -n "$V" ] && [ "$(tr -d ' \t\r\n' 2>/dev/null <"$K/box/kind")" != mac ] && ! is "$(sed -n 's/.*"pid":\([0-9]*\).*/\1/p' "$R/serve.json" 2>/dev/null)" kuvo-link; then
               (environment; cd "$K/workspace" 2>/dev/null || cd "$K"; KUVO_HOME="$K" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$S" "$K/engine/$V/opencode" --config=/dev/null --no-env-file "$K/bin/kuvo-link.js" serve --kept >"$R/serve.log" 2>&1 </dev/null &)
             fi
             # Wake-ups that are due, each minute, while the engine's up, as the engine was started:
@@ -1305,7 +1305,8 @@ public final class RemoteServer: @unchecked Sendable {
           touch "$R/off" "$R/stopped"
           rm -f "$R/link.needed" "$R/serve.needed"
           l=$(cat "$R/link.pid" 2>/dev/null); is "$l" kuvo-link && kill "$l" 2>/dev/null
-          l=$(sed -n 's/^{"pid":\([0-9]*\),.*/\1/p' "$R/serve.json" 2>/dev/null); is "$l" kuvo-link && kill "$l" 2>/dev/null
+          # The server it keeps for clients (only one it keeps: `"kept":true`; a Mac's own box's is its app's).
+          if grep -q '"kept":true' "$R/serve.json" 2>/dev/null; then l=$(sed -n 's/.*"pid":\([0-9]*\).*/\1/p' "$R/serve.json"); is "$l" kuvo-link && kill "$l" 2>/dev/null; fi
           # The keeper with the start it's at (its engine's tries and their launch, in its session),
           # which would go on after it.
           b=$(cat "$R/box.pid" 2>/dev/null); if is "$b" kuvo-start; then kill -- "-$b" 2>/dev/null || kill "$b" 2>/dev/null; fi; rm -f "$R/box.pid"

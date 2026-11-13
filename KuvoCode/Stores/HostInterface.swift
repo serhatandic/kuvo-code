@@ -2,6 +2,7 @@ import AppKit
 import CryptoKit
 import Foundation
 import KuvoLink
+import Security
 
 /// What this Mac's box asks its app for, that only the app can do (KuvoLink's PROTOCOL.md, "Host
 /// interface"): Kuvo Code's own keys in your Keychain, by name, which a machine's box keeps in its
@@ -403,8 +404,10 @@ extension HostInterface {
 
     /// Kuvo Code at `bundle`, opened in the background as the keeper opens it for an agent's browser
     /// (`AppOpener.openQuietly`: no window, out of the Dock, not taking focus; one running already
-    /// is left as it is). Only Kuvo Code itself, by its own bundle ID: never another app. 410 when
-    /// it isn't there any more, 502 with why it couldn't be opened.
+    /// is left as it is). Only Kuvo Code itself: an app its Info.plist says is (its bundle ID), and
+    /// whose signature meets this one's own designated requirement (the same identifier and team;
+    /// a development build's, this very build), never another app a file names. 410 when it isn't
+    /// there any more, 403 for another app, 502 with why it couldn't be opened.
     static func openApp(at bundle: URL) async -> HTTPResponse {
         func said(_ status: Int, _ message: String) -> HTTPResponse {
             var answer = HTTPResponse.json(["message": message])
@@ -412,13 +415,28 @@ extension HostInterface {
             return answer
         }
         guard FileManager.default.fileExists(atPath: bundle.path(percentEncoded: false)) else { return said(410, "It isn’t there any more.") }
-        guard let id = Bundle(url: bundle)?.bundleIdentifier, id == Bundle.main.bundleIdentifier else { return said(403, "That isn’t Kuvo Code.") }
+        guard let id = Bundle(url: bundle)?.bundleIdentifier, id == Bundle.main.bundleIdentifier,
+              await Task.detached(operation: { isSignedAsThis(bundle) }).value else { return said(403, "That isn’t Kuvo Code.") }
         do {
             try await AppOpener.openQuietly(bundle)
             return .json([:])
         } catch {
             return said(502, error.localizedDescription)
         }
+    }
+
+    /// Whether the app at `bundle` is signed as this running one is: its signature valid, meeting
+    /// this process's own designated requirement.
+    nonisolated static func isSignedAsThis(_ bundle: URL) -> Bool {
+        var running: SecCode?
+        var own: SecStaticCode?
+        var requirement: SecRequirement?
+        var given: SecStaticCode?
+        guard SecCodeCopySelf([], &running) == errSecSuccess, let running,
+              SecCodeCopyStaticCode(running, [], &own) == errSecSuccess, let own,
+              SecCodeCopyDesignatedRequirement(own, [], &requirement) == errSecSuccess, let requirement,
+              SecStaticCodeCreateWithPath(bundle as CFURL, [], &given) == errSecSuccess, let given else { return false }
+        return SecStaticCodeCheckValidity(given, SecCSFlags(rawValue: kSecCSCheckAllArchitectures), requirement) == errSecSuccess
     }
 
     /// What only the open app answers, asked while it isn't.

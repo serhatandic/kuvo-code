@@ -116,6 +116,15 @@ export function registerApp(given: { tools: AppRecord["tools"]; bundle?: string 
   return record;
 }
 
+/** The app registered with `token` didn't answer (it quit without saying): taken for closed, but
+ * only while that's still its registration (read again just before: one it made since stays). */
+export function forgetTools(token: string, now = Date.now()) {
+  const app = readApp();
+  if (!app?.tools || app.tools.token !== token) return;
+  const record: AppRecord = { ...app, tools: null, at: now };
+  if (readApp()?.tools?.token === token) writePrivate(APP_FILE(), JSON.stringify(record));
+}
+
 /** The app said it quits to install an update: it isn't opened over it, and Sparkle opens it. */
 export function noteUpdating(now = Date.now()) {
   registerApp({ tools: null }, now);
@@ -154,8 +163,9 @@ export interface OpenWays {
 
 /** The app opened for a browser call, if it isn't open: null once it's registered, or what the
  * agent is told instead. One opening at a time across the box's processes: a call while one is
- * under way waits for it, and is told what it ended with. `signal` stops a call's wait; the one
- * that asked for an opening sees it through, so every call waiting on it hears how it went. */
+ * under way waits for it, and is told what it ended with; one whose process went is taken over.
+ * `signal` stops a call's wait; the one that asked for an opening sees it through, so every call
+ * waiting on it hears how it went (its caller sends it one SIGTERM, which `box route` takes as that). */
 export async function openApp(signal?: AbortSignal, ways: OpenWays = OPEN_WAYS): Promise<string | null> {
   if (isOpen()) return null;
   for (let tries = 0; tries < 3; tries++) {
@@ -173,22 +183,25 @@ export async function openApp(signal?: AbortSignal, ways: OpenWays = OPEN_WAYS):
       try {
         fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
         fs.writeFileSync(OPENING_FILE(), JSON.stringify(mine), { flag: "wx", mode: 0o600 });
-      } catch {
-        // Another took it at the same moment: waited on.
-        continue;
+      } catch (error) {
+        // Another took it at the same moment: waited on. Anything else is said.
+        if ((error as NodeJS.ErrnoException)?.code === "EEXIST") continue;
+        return couldntOpen(`its box couldn't note the opening: ${(error as Error)?.message ?? error}`);
       }
       return await openAndWait(mine, ways);
     }
-    // One under way: waited for, until the app registers or that opening ends.
+    // One under way: waited for, until the app registers, that opening ends, or its process goes
+    // (cut off, it never says how it went: the next try takes it on). Long enough for the opener's
+    // own ask of the host to come back after its wait, with why it failed.
     const theirs = opening;
     const still = () => JSON.stringify(readOpening()) === JSON.stringify(theirs);
-    await ways.until(() => isOpen() || !still(), theirs.at + WAIT, signal);
+    const cutOff = () => theirs.by !== process.pid && !alive(theirs.by);
+    await ways.until(() => isOpen() || !still() || cutOff(), theirs.at + WAIT + OPEN_WITHIN, signal);
     if (isOpen()) return null;
     if (signal?.aborted) return "The call was stopped.";
-    if (still()) return NOT_READY;
+    if (still() && !cutOff()) return NOT_READY;
     const failed = readFailed();
-    if (failed && failed.at >= theirs.at) return failed.message;
-    // It ended without a word (its process went): the next try takes it on.
+    if (!cutOff() && failed && failed.at >= theirs.at) return failed.message;
   }
   return NOT_READY;
 }
@@ -298,8 +311,7 @@ export async function* appOpenRoute({ request, json, signal }: RouteContext): As
   if (!request.fromApp && !request.fromMac) return yield* json(403, { message: "Only Kuvo Code on this Mac opens its app." });
   if (!OWN_HOME_MAC) return yield* json(409, { message: ONLY_MAC });
   const given = parsed(request.body);
-  const app = readApp();
-  if (isObject(given) && typeof given.gone === "string" && app?.tools && app.tools.token === given.gone) registerApp({ tools: null });
+  if (isObject(given) && typeof given.gone === "string") forgetTools(given.gone);
   const said = await openApp(signal);
   return yield* (said === null ? json(200, appStatus()) : json(503, { message: said }));
 }

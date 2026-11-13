@@ -17,7 +17,7 @@ import path from "node:path";
 import { processRuns } from "../shared/platform";
 import { allWakes } from "./areas/wakes";
 import { listBots } from "./bots/list";
-import { APP_FOLDER, IN_TEST_FOLDER, K, REAL_BOX, RUN, accountHome, homeFolder, recordedKind } from "./home";
+import { APP_FOLDER, IN_TEST_FOLDER, K, REAL_BOX, RUN, accountHome, homeFolder, located, recordedKind } from "./home";
 import { peersOf } from "./peers/known";
 import { readLink } from "./state";
 
@@ -30,7 +30,7 @@ export const REBOOT_TAG = "# kuvo-code: starts its engine again after a restart"
 /** Where `launchctl` and `crontab` are, and the folder the launch agent's file is in: the real ones
  * for the real `~/.kuvo-code` alone, a test's stand-ins for a test's home, else none. */
 function outside(): { launchctl: string; crontab: string; agents: string } | null {
-  if (REAL_BOX && !APP_FOLDER) {
+  if (REAL_BOX && located(K) === located(path.join(accountHome(), ".kuvo-code"))) {
     return { launchctl: "/bin/launchctl", crontab: "crontab", agents: path.join(accountHome(), "Library", "LaunchAgents") };
   }
   const tools = IN_TEST_FOLDER ? process.env.KUVO_TEST_UNINSTALL_TOOLS : undefined;
@@ -154,8 +154,9 @@ export function uninstallCommand(args: string[]): number {
     console.error("Usage: kuvo-link.js uninstall [--check]");
     return 2;
   }
-  // This Mac's box in its app's folder: the app's own keeper runs it, which only the app removes.
-  if (APP_FOLDER) {
+  // This Mac's box in its app's folder (however it was started): the app's own keeper runs it,
+  // which only the app removes.
+  if (APP_FOLDER || path.basename(path.dirname(path.resolve(K))).toLowerCase().startsWith("run.kuvo.code")) {
     const message = "This Mac's box runs in Kuvo Code's own folder: remove Kuvo Code itself (its background work goes with it).";
     console.log(JSON.stringify({ result: "refused", message }));
     console.error(message);
