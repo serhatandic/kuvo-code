@@ -303,8 +303,12 @@ const codexUsage = codexSources(usageFolder, () => usageSettings.codexFallback)
 // The engine's own databases: in Kuvo Code's folder on a machine (`data/opencode`), in the app's
 // on a Mac (KUVO_ENGINE_DB_FOLDER, which its keeper gives the bridge).
 const engineData = process.env.KUVO_ENGINE_DB_FOLDER || (onMachine && machineHome ? process.env.KUVO_ENGINE_DATA || join(machineHome, "data", "opencode") : undefined)
-// (Until the engine has listed its sign-ins, as the bridge starts, not known gone: kept.)
-const engineCodexUsage = engineCodexSource(engineData, () => (engineAccounts.answered ? engineAccounts.accounts().some((account) => account.provider === "openai") : undefined))
+// (Until the engine has listed its sign-ins, as the bridge starts: as this box kept it before.)
+const engineCodexUsage = engineCodexSource(
+  engineData,
+  () => (engineAccounts.answered ? engineAccounts.accounts().some((account) => account.provider === "openai") : undefined),
+  () => usage.has("openai"),
+)
 const usage = new Usage(() => [...claudeUsage(roster.all()), ...codexUsage(roster.all()), ...engineCodexUsage()], new PricingStore(join(usageFolder, "pricing"), noPriceFeeds ? null : undefined), (provider) => limits.identity(provider), join(usageFolder, "usage.json"))
 usage.settings = usageSettings
 peers.usage = new UsagePeers(usage, post, directory, join(usageFolder, "peers.json"))

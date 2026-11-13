@@ -303,9 +303,11 @@ export class UsagePeers {
 /**
  * What a box's accounts used, hashed, as told: the same on both sides once the receiver has put
  * together what it was told (each account's fields in one order, its slots as kept: `keptSlots`).
+ * Not which fallback model estimated what (`slots.fallback`): a box from before keeps none of it,
+ * and would never find its own the same. (A fallback that changes changes the dollars too.)
  */
 export function digestOf(accounts: ToldUsage[]): string {
-  const canonical = accounts.map((account) => [account.provider, account.service, account.agent ?? null, account.account ?? null, account.label ?? null, account.identity ?? null, account.cut === true, account.places ?? [], account.slots.models, account.slots.used, account.slots.unknown ?? [], ...(account.slots.fallback ? [account.slots.fallback] : [])])
+  const canonical = accounts.map((account) => [account.provider, account.service, account.agent ?? null, account.account ?? null, account.label ?? null, account.identity ?? null, account.cut === true, account.places ?? [], account.slots.models, account.slots.used, account.slots.unknown ?? []])
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex").slice(0, 32)
 }
 

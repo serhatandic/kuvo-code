@@ -249,6 +249,20 @@ describe("one box", () => {
     expect(data.totals.codex[0].tokens).toBe(324)
   })
 
+  test("your own Codex reads each home a comma-separated CODEX_HOME names, as UsageKit did; a home with neither sessions nor archived sessions is read itself", async () => {
+    const second = join(root, "second-codex")
+    mkdirSync(second, { recursive: true })
+    writeFileSync(join(own, "sessions", "2026", "11", "12", "rollout-a.jsonl"), turn("2026-11-12T10:00:00Z", 300, 0, "gpt-5"))
+    // No sessions folder: its logs where they are.
+    writeFileSync(join(second, "rollout-b.jsonl"), turn("2026-11-12T11:00:00Z", 40, 0, "gpt-5"))
+    process.env.CODEX_HOME = ` ${own} ,${second},`
+    agents = [new TestCodex(root) as unknown as Agent]
+    identities["codex-cli"] = "fedcba9876543210"
+    const usage = make()
+    await usage.refresh()
+    expect((await view(usage)).rows.map((row: any) => [row.provider, row.days[0]?.tokens])).toEqual([["codex-cli", 340]])
+  })
+
   test("the fallback model is the box's: chosen through the route, kept through a restart, a model with no price estimated at its rates; one that isn't a choice is refused", async () => {
     writeFileSync(join(added, "sessions", "2026", "11", "12", "rollout-a.jsonl"), context("2026-11-12T10:00:00Z", "gpt-mystery-9") + turn("2026-11-12T10:01:00Z", 1000, 100))
     let usage = make()
@@ -340,6 +354,21 @@ describe("the engine's ChatGPT sign-in", () => {
     expect(JSON.stringify(await engineCodexRows(data, since))).not.toContain("secret-access")
   })
 
+  test("a database that can't be read, and none that could: not known now (never none); one the engine left without its -wal and -shm is read as it is", async () => {
+    writeFileSync(join(data, "opencode.db"), "not a database " + "x".repeat(200))
+    await expect(engineCodexRows(data, since)).rejects.toThrow()
+    rmSync(join(data, "opencode.db"))
+    // An engine that stopped: its database in WAL mode, its -wal and -shm gone, which a read-only open can't take.
+    database("opencode.db", { signIn: { type: "oauth", access: "a", at: null }, v1: [["m1", day + HOUR, reply(day + HOUR, 100, 10)]] })
+    const db = new Database(join(data, "opencode.db"))
+    db.exec("PRAGMA journal_mode=WAL")
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE)")
+    db.close()
+    rmSync(join(data, "opencode.db-wal"), { force: true })
+    rmSync(join(data, "opencode.db-shm"), { force: true })
+    expect((await engineCodexRows(data, since))!.map((row) => row.total)).toEqual([110])
+  })
+
   test("an API key's sign-in, or none: nothing of it; before opencode 2 took its sign-ins in, the auth.json beside it says", async () => {
     database("opencode.db", { signIn: { type: "api", key: "sk-test", at: 0 }, v1: [["m1", day + HOUR, reply(day + HOUR, 100, 10)]] })
     expect(await engineCodexRows(data, since)).toBeUndefined()
@@ -362,9 +391,10 @@ describe("the engine's ChatGPT sign-in", () => {
     database("opencode.db", { signIn: { type: "oauth", access: "a", at: null }, v1: [["m1", day + HOUR, reply(day + HOUR, 100, 10)]] })
     const codex = codexSources(join(root, "usage"))
     let signedIn: boolean | undefined = true
-    const engine = engineCodexSource(data, () => signedIn)
+    let usage: Usage
+    const engine = engineCodexSource(data, () => signedIn, () => usage.has("openai"))
     const agents = [new TestCodex(root, { id: "work", home }) as unknown as Agent]
-    const usage = new Usage(() => [...codex(agents), ...engine()], new PricingStore(undefined, null), () => "0123456789abcdef", undefined, () => Date.parse("2026-11-12T21:00:00Z"))
+    usage = new Usage(() => [...codex(agents), ...engine()], new PricingStore(undefined, null), () => "0123456789abcdef", undefined, () => Date.parse("2026-11-12T21:00:00Z"))
     await usage.refresh()
     const view = usage.view("UTC")
     expect(view.rows).toHaveLength(1)
@@ -381,9 +411,23 @@ describe("the engine's ChatGPT sign-in", () => {
     signedIn = undefined
     await usage.refresh()
     expect(usage.view("UTC").totals.codex![0]!.tokens).toBe(1110)
+    // A box that never had it, before the engine has said: no empty row of it (to show, or tell your other computers).
+    let fresh: Usage
+    const unknown = engineCodexSource(join(base, "no-engine-here"), () => undefined, () => fresh.has("openai"))
+    fresh = new Usage(() => unknown(), new PricingStore(undefined, null), () => undefined, undefined, () => Date.parse("2026-11-12T21:00:00Z"))
+    await fresh.refresh()
+    expect(fresh.view("UTC").rows).toEqual([])
+
+    // A database that can't be read now: what was read before stays, never none.
+    signedIn = true
+    const good = readFileSync(join(data, "opencode.db"))
+    writeFileSync(join(data, "opencode.db"), "not a database, as far as SQLite can tell, " + "x".repeat(200))
+    await usage.refresh()
+    expect(usage.view("UTC").totals.codex![0]!.tokens).toBe(1110)
+    writeFileSync(join(data, "opencode.db"), good)
 
     // Nothing changed: what was worked out is the same; a message more: read again.
-    const source = engineCodexSource(data, () => true)()[0]!
+    const source = engineCodexSource(data, () => true, () => true)()[0]!
     const pricing = new PricingStore(undefined, null).current()
     const first = await source.slots(pricing, since)
     expect(await source.slots(pricing, since)).toBe(first)

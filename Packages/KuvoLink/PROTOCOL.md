@@ -3941,8 +3941,9 @@ Code's conversations there count whoever ran them, your Terminal or Claude's des
 another tool's folders (Cowork's, claude-swap's, Pi's); and Codex's, each Codex account's home's
 `sessions` and `archived_sessions` (an account you added: its own home, whose history on a Mac is
 your Codex's, which it links to, so counted once, with your own Codex's; a Mac's own sign-in: your
-`~/.codex`, or `CODEX_HOME`, where Codex runs with it, its conversations there counted whoever ran
-them; a machine: Kuvo Code's), never Pi's, another `CODEX_HOME`'s or another tool's. And what your
+`~/.codex`, or each of a comma-separated `CODEX_HOME`, where Codex runs with it, its conversations
+there counted whoever ran them; a machine: Kuvo Code's; a home with neither folder is read itself,
+as OpenUsage did), never Pi's or another tool's. And what your
 ChatGPT sign-in in Kuvo Code (the engine's `openai`, Settings › Accounts) used through the engine's
 own models, read (only read) from the engine's databases on that computer (each `opencode*.db` in
 its data folder: on a Mac the app's, on a machine `~/.kuvo-code/data/opencode`), Codex's, the same
@@ -4015,10 +4016,12 @@ a machine's `~/.kuvo-code`, never a test's): estimates, not your bill. A client 
     (Codex's sign-in prices every model at $0; a key's cost more), from `message` (opencode 1) and
     `session_message` (opencode 2, a compaction too, from when the sign-in was made on), a message
     copied between two databases once (by its ID). Priced as Codex's. Whether the sign-in is OAuth
-    is asked of SQLite: its tokens never leave the database.
+    is asked of SQLite: its tokens never leave the database. A database that can't be read now
+    (and none that could) leaves what was read before as it was, never none; one in WAL mode whose
+    `-wal` and `-shm` are gone (its engine stopped) is read as it is.
 - `PUT kuvo/agents/api/kuvo/usage/pricing[?zone=]` `{"codex": {"fallback": <model> | null}}`: Codex's
-  fallback model, whose rates estimate what a Codex model with no known price used (on this box's
-  own logs: each box prices its own with its own); one of `choices` (the supplement's
+  fallback model, whose rates estimate what a Codex model with no known price used (in this box's
+  own Codex logs, not the engine's ChatGPT slice: each box prices its own with its own); one of `choices` (the supplement's
   `fallback_models.codex` priced exactly by a catalog), or `null` for none (`400 {message}` for
   anything else). Kept in the bridge's `usage/settings.json`, through a restart; read again with it
   at once, answered as `GET`.
@@ -4048,8 +4051,8 @@ a machine's `~/.kuvo-code`, never a test's): estimates, not your bill. A client 
   and is answered at once. Each account is `{provider, service, agent?, account?, label?,
   identity?, scanned?, cut?, whole, places?, slots: {models, used: [[slot, model, tokens,
   dollars]], unknown?: [[slot, model]], fallback?: [[slot, model]]}}` (`fallback`, a model whose
-  rates estimated that slot's use of one with no price; in `digest` after the rest, when there's
-  any): `places`, the folders its logs are in, each 16 hex
+  rates estimated that slot's use of one with no price; not in `digest`, which a box from before
+  it works out without it): `places`, the folders its logs are in, each 16 hex
   characters of a hash of its computer (on Linux its machine ID, `/etc/machine-id` or D-Bus's, with
   its name; on a Mac its hardware UUID; else its name) and the folder's real path (never either); `slot`, quarter hours since 1970 (UTC), `model`, an index into
   `models`, `tokens` a whole number; `whole`, the first slot the sender has all of (a UTC midnight

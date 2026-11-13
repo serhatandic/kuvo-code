@@ -10,7 +10,7 @@
 
 import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
-import { lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs"
+import { lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs"
 import { homedir, hostname } from "node:os"
 import { basename, dirname, join } from "node:path"
 import type { AgentKind } from "../accounts"
@@ -282,6 +282,11 @@ export class Usage {
     for (const files of new Set(sources.flatMap((source) => (source.files ? [source.files] : [])))) files.endRound(complete)
     this.save()
     this.changed(true)
+  }
+
+  /** Whether this box keeps an account's usage (read before, or kept from before a restart). */
+  has(provider: string): boolean {
+    return this.entries.has(provider)
   }
 
   /** This box's own accounts, as it keeps them and tells its peers. */
@@ -615,8 +620,34 @@ function isLink(path: string): boolean {
 }
 
 /**
- * The Codex accounts whose usage is read here, from their homes' `sessions` and `archived_sessions`
- * (`conversationRoots`): an added account's own, your own Codex's `~/.codex` (or `CODEX_HOME`). A
+ * Each home a Codex account's logs are in, with the folders read in it, as UsageKit (and ccusage)
+ * read them: an added account's own home; your own Codex's each of a comma-separated `CODEX_HOME`,
+ * else `~/.codex`. In each, `sessions` and `archived_sessions`, or the home itself when it has neither.
+ */
+export function codexHomes(agent: Agent, env: NodeJS.ProcessEnv = process.env, home = homedir()): string[][] {
+  const configured = env.CODEX_HOME?.trim()
+  const homes = agent.instance.home
+    ? [agent.instance.home]
+    : configured
+      ? configured.split(",").map((part) => part.trim()).filter(Boolean).map((part) => (part.startsWith("~/") ? join(home, part.slice(2)) : part))
+      : [join(home, ".codex")]
+  return [...new Set(homes)].map((each) => {
+    const folders = ["sessions", "archived_sessions"].map((name) => join(each, name)).filter(isFolder)
+    return folders.length ? folders : [each]
+  })
+}
+
+function isFolder(path: string): boolean {
+  try {
+    return statSync(path).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The Codex accounts whose usage is read here, from their homes (`codexHomes`): an added
+ * account's own, your own Codex's `~/.codex` (or each of `CODEX_HOME`). A
  * folder an added account links to another's here (on a Mac, its history is your Codex's) is read
  * with that one only, never twice. `fallback`: the model whose rates estimate one with no price
  * (`UsageSettings`). A round that read nothing new, with the same prices, works nothing out again.
@@ -633,15 +664,18 @@ export function codexSources(folder?: string, fallback: () => string | undefined
   )
   const last = new Map<string, { version: number; pricing: Pricing; since: number; listed: string; fallback?: string; slots: Slots }>()
   return (agents) => {
-    const codex = agents.filter((agent) => parseProvider(agent.providerID)?.kind === "codex" && agent.conversationRoots)
+    const codex = agents.filter((agent) => parseProvider(agent.providerID)?.kind === "codex")
+    const homes = new Map(codex.map((agent) => [agent.providerID, codexHomes(agent)]))
     // Whose each folder is: the account it's really in, not one that links to it; one only linked
     // to (your ~/.codex while CODEX_HOME names another), the first that links to it.
     const owner = new Map<string, string>()
-    for (const agent of codex) for (const root of agent.conversationRoots!()) if (!isLink(root) && !owner.has(realOf(root))) owner.set(realOf(root), agent.providerID)
-    for (const agent of codex) for (const root of agent.conversationRoots!()) if (!owner.has(realOf(root))) owner.set(realOf(root), agent.providerID)
+    for (const agent of codex) for (const root of homes.get(agent.providerID)!.flat()) if (!isLink(root) && !owner.has(realOf(root))) owner.set(realOf(root), agent.providerID)
+    for (const agent of codex) for (const root of homes.get(agent.providerID)!.flat()) if (!owner.has(realOf(root))) owner.set(realOf(root), agent.providerID)
     return codex.map((agent) => {
       const parsed = parseProvider(agent.providerID)!
-      const roots = () => agent.conversationRoots!().filter((root) => (owner.get(realOf(root)) ?? agent.providerID) === agent.providerID)
+      const mine = (root: string) => (owner.get(realOf(root)) ?? agent.providerID) === agent.providerID
+      const groups = () => homes.get(agent.providerID)!.map((folders) => folders.filter(mine))
+      const roots = () => groups().flat()
       const source: UsageSource = {
         provider: agent.providerID,
         service: "codex",
@@ -652,15 +686,17 @@ export function codexSources(folder?: string, fallback: () => string | undefined
           return roots().map((root) => placeOf(here, root))
         },
         slots: async (pricing, since) => {
-          // `sessions` before `archived_sessions`: a log in both (by where it is in each) is the first's.
+          // `sessions` before `archived_sessions`: a log in both of one home (by where it is in each) is the first's.
           const found: Awaited<ReturnType<typeof jsonlFiles>> = []
-          const seen = new Set<string>()
-          for (const root of roots()) {
-            for (const file of await jsonlFiles(root)) {
-              const inside = file.path.slice(root.length)
-              if (seen.has(inside)) continue
-              seen.add(inside)
-              found.push(file)
+          for (const folders of groups()) {
+            const seen = new Set<string>()
+            for (const root of folders) {
+              for (const file of await jsonlFiles(root)) {
+                const inside = file.path.slice(root.length)
+                if (seen.has(inside)) continue
+                seen.add(inside)
+                found.push(file)
+              }
             }
           }
           await files.refresh(found, since)
@@ -682,14 +718,15 @@ export function codexSources(folder?: string, fallback: () => string | undefined
 /**
  * Your ChatGPT sign-in's use through the engine's own models (engine-codex.ts), from the engine's
  * databases in its data folder (`folder`), while the engine has one (`signedIn`; undefined until
- * the engine has said, as the bridge starts: kept meanwhile, never dropped for not knowing yet):
+ * the engine has said, as the bridge starts: then only while this box kept it from before, so a
+ * restart neither drops it nor shows an empty one where there's none):
  * Codex's, the same row as a Codex account signed in to the same ChatGPT account. Read again only
  * when a database changed, or the prices did.
  */
-export function engineCodexSource(folder: string | undefined, signedIn: () => boolean | undefined, computer = ownComputer): () => UsageSource[] {
+export function engineCodexSource(folder: string | undefined, signedIn: () => boolean | undefined, kept: () => boolean, computer = ownComputer): () => UsageSource[] {
   let last: { stamp: string; pricing: Pricing; since: number; slots: Slots } | undefined
   return () => {
-    if (!folder || signedIn() === false) return []
+    if (!folder || !(signedIn() ?? kept())) return []
     return [
       {
         provider: "openai",

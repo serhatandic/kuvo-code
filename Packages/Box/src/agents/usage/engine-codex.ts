@@ -30,13 +30,14 @@ export interface EngineCodexRow {
   total: number
 }
 
-/** Every channel's database in the engine's data folder, path-sorted; none when there's none. */
+/** Every channel's database in the engine's data folder, path-sorted; none when there's none (throws when it can't be read). */
 export function engineDatabases(folder: string): string[] {
   let names: string[]
   try {
     names = readdirSync(folder)
-  } catch {
-    return []
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return []
+    throw error
   }
   return names
     .filter((name) => name.startsWith("opencode") && name.endsWith(".db"))
@@ -63,7 +64,7 @@ const TABLES = "SELECT group_concat(name) FROM sqlite_master WHERE type='table' 
  */
 const READER = `
 import { Database } from "bun:sqlite"
-import { readFileSync } from "node:fs"
+import { readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
 const missingTable = (error) => /no such table/i.test(error instanceof Error ? error.message : String(error))
 const numberOf = (value) => (typeof value === "number" && Number.isFinite(value) ? value : typeof value === "string" && /^\\s*[+-]?(\\d+\\.?\\d*|\\.\\d+)([eE][+-]?\\d+)?\\s*$/.test(value) && Number.isFinite(Number(value)) ? Number(value) : undefined)
@@ -97,6 +98,26 @@ function signIn(db, folder, sql) {
   }
   return { oauth: isOAuth(JSON.parse(text)?.openai) }
 }
+// Read-only, as the engine has it open. One whose -wal and -shm are gone (the engine stopped, and
+// SQLite removed them) can't be opened read-only: with nothing in a -wal, all of it is in the file,
+// read as it is (immutable).
+function open(path) {
+  let db
+  try {
+    db = new Database(path, { readonly: true })
+    db.query("SELECT count(*) FROM sqlite_master").values()
+    return db
+  } catch (error) {
+    db?.close()
+    let wal = 0
+    try {
+      wal = statSync(path + "-wal").size
+    } catch {}
+    if (wal > 0 || !/unable to open/i.test(error instanceof Error ? error.message : String(error))) throw error
+    db = new Database("file:" + path.replace(/[%?#]/g, (character) => "%" + character.charCodeAt(0).toString(16)) + "?immutable=1", { readonly: true })
+    return db
+  }
+}
 self.onmessage = (event) => {
   const { paths, folder, sql } = event.data
   const jsons = []
@@ -106,7 +127,7 @@ self.onmessage = (event) => {
   for (const path of paths) {
     let db
     try {
-      db = new Database(path, { readonly: true })
+      db = open(path)
       // (The engine may be writing: wait a little for it.)
       db.exec("PRAGMA busy_timeout = 2000")
       const found = signIn(db, folder, sql)
@@ -242,9 +263,10 @@ export function engineCodexRows(folder: string, since: number): Promise<EngineCo
     timer = setTimeout(() => reject(new Error("The engine's database took too long to read.")), READ_FOR)
     worker.onmessage = (event: MessageEvent<{ oauth: boolean; read: boolean; failed?: string; jsons: string[] }>) => {
       const { oauth, read, failed, jsons } = event.data
-      // None signed in with ChatGPT: nothing of it here. One that couldn't be read, and none that could: not known now.
-      if (!oauth) resolve(undefined)
-      else if (!read && failed !== undefined) reject(new Error(failed))
+      // One that couldn't be read (its sign-in or its rows), and none that could: not known now, never
+      // none (what was read before stays). None signed in with ChatGPT: nothing of it here.
+      if (!read && failed !== undefined) reject(new Error(failed))
+      else if (!oauth) resolve(undefined)
       else resolve(jsons.flatMap(parseRows))
     }
     worker.onerror = (event) => reject(new Error(event.message))

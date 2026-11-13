@@ -10,6 +10,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSy
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ClaudeAgent } from "../../src/agents/agents/claude"
+import { CodexAgent } from "../../src/agents/agents/codex"
 import type { Agent } from "../../src/agents/agent"
 import { subscribe } from "../../src/agents/events"
 import { LinkDirectory, PeerPost, peerRoutes, type PeerParts } from "../../src/agents/groups/post"
@@ -17,9 +18,9 @@ import type { Clock } from "../../src/agents/groups/peer"
 import { claudeLine, dedupClaude } from "../../src/agents/usage/claude-log"
 import { claudeSlots, daysIn } from "../../src/agents/usage/history"
 import { bundledPricing, catalogFromCompact, Pricing, PricingStore, supplementFrom, type PricingFetch } from "../../src/agents/usage/pricing"
-import { claudeSources, thisComputer, Usage, usageRoutes, uuidOf } from "../../src/agents/usage/usage"
+import { claudeSources, codexSources, thisComputer, Usage, usageRoutes, uuidOf } from "../../src/agents/usage/usage"
 import { isRealBridgeFolder } from "../../src/shared/account"
-import { UsagePeers, type UsageMail } from "../../src/agents/usage/usage-peers"
+import { digestOf, UsagePeers, type UsageMail } from "../../src/agents/usage/usage-peers"
 
 const base = mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-usage-test-"))
 afterAll(() => rmSync(base, { recursive: true, force: true }))
@@ -327,13 +328,15 @@ class PeerBox {
   parts: PeerParts
   private following = new AbortController()
   agents: Agent[]
+  /** Codex's fallback model here (`UsageSettings`). */
+  fallback?: string
 
   constructor(
     readonly key: string,
     readonly name: string,
     relay: Relay,
     readonly home: string,
-    agents: TestClaude[],
+    agents: (TestClaude | CodexAgent)[],
     identity: (provider: string) => string | undefined,
     now: () => number,
     most?: number,
@@ -344,7 +347,8 @@ class PeerBox {
     this.post = new Post(() => relay.posted++)
     this.directory = new LinkDirectory(this.post, still)
     const sources = claudeSources(join(home, "usage"), computer === undefined ? undefined : () => computer)
-    this.usage = new Usage(() => sources(this.agents), new PricingStore(undefined, null), identity, join(home, "usage", "usage.json"), now)
+    const codex = codexSources(join(home, "usage"), () => this.fallback, computer === undefined ? undefined : () => computer)
+    this.usage = new Usage(() => [...sources(this.agents), ...codex(this.agents)], new PricingStore(undefined, null), identity, join(home, "usage", "usage.json"), now)
     this.peers = new UsagePeers(this.usage, this.post, this.directory, join(home, "usage", "peers.json"), now, most)
     this.parts = { post: this.post, directory: this.directory, usage: this.peers }
     relay.boxes.set(key, this)
@@ -471,6 +475,40 @@ describe("across your computers", () => {
     // Removed from your computers: what it said goes.
     await mac.meet([])
     expect(mac.usage.view("UTC").rows.map((row) => [row.id, row.days[0]!.tokens])).toEqual([["claude#aaaaaaaaaaaaaaaa", 1009]])
+    mac.stop()
+    dev.stop()
+  })
+
+  test("Codex's use estimated with a fallback model goes to the others saying so; a box from before, which keeps none of that, finds the same digest and asks nothing again", async () => {
+    const macHome = mkdtempSync(join(base, "mac-"))
+    const devHome = mkdtempSync(join(base, "devbox-"))
+    const codexHome = join(devHome, "codex", "accounts", "work")
+    mkdirSync(join(codexHome, "sessions"), { recursive: true })
+    writeFileSync(join(codexHome, "sessions", "rollout-a.jsonl"), JSON.stringify({ timestamp: "2026-11-12T10:00:00Z", type: "turn_context", payload: { model: "gpt-mystery-9" } }) + "\n" + JSON.stringify({ timestamp: "2026-11-12T10:01:00Z", type: "event_msg", payload: { type: "token_count", info: { last_token_usage: { input_tokens: 1000, output_tokens: 100, total_tokens: 1100 } } } }) + "\n")
+    const mac = new PeerBox("mac-key", "MacBook", relay, macHome, [], () => undefined, now)
+    const dev = new PeerBox("dev-key", "devbox", relay, devHome, [new CodexAgent({ home: devHome, temporary: devHome, deps: {} as any }, { id: "work", home: codexHome })], () => "cccccccccccccccc", now)
+    const choice = new PricingStore(undefined, null).current().fallbackOptions("codex")[0]!
+    dev.fallback = choice
+    await mac.meet([dev])
+    await dev.meet([mac])
+    await dev.usage.refresh()
+    await mac.usage.refresh()
+    await relay.settled()
+    const day = mac.usage.view("UTC").totals.codex![0]!
+    expect(day).toMatchObject({ date: "2026-11-12", tokens: 1100, unknown: ["gpt-mystery-9"], fallback: [choice] })
+    expect(day.cost).toBeGreaterThan(0)
+
+    // What a box from before keeps of it (no `fallback`) hashes the same as what was told.
+    const told = relay.sent.filter((each) => each.from === "dev-key" && each.mail.accounts).at(-1)!.mail.accounts!
+    expect(JSON.stringify(told)).toContain('"fallback"')
+    const before = told.map((account) => ({ ...account, slots: { ...account.slots, fallback: undefined } }))
+    expect(digestOf(before)).toBe(digestOf(told))
+    // Ten minutes on, its digest alone: the Mac asks nothing again.
+    const sent = relay.sent.length
+    at += 11 * MINUTE
+    await dev.usage.refresh()
+    await relay.settled()
+    expect(relay.sent.slice(sent).map((each) => [each.from, each.mail.accounts === undefined, each.mail.ask ?? false])).toEqual([["dev-key", true, false]])
     mac.stop()
     dev.stop()
   })

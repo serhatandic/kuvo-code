@@ -18555,7 +18555,7 @@ async function branchRoutes(places, method, parts, body) {
 // Packages/Box/src/agents/usage/usage.ts
 import { execFileSync as execFileSync2 } from "child_process";
 import { createHash as createHash11 } from "crypto";
-import { lstatSync as lstatSync8, mkdirSync as mkdirSync20, readFileSync as readFileSync27, realpathSync as realpathSync7, renameSync as renameSync16, writeFileSync as writeFileSync21 } from "fs";
+import { lstatSync as lstatSync8, mkdirSync as mkdirSync20, readFileSync as readFileSync27, realpathSync as realpathSync7, renameSync as renameSync16, statSync as statSync12, writeFileSync as writeFileSync21 } from "fs";
 import { homedir as homedir5, hostname } from "os";
 import { basename as basename11, dirname as dirname16, join as join32 } from "path";
 
@@ -20032,7 +20032,7 @@ var minus = (a, b) => ({
   reasoning: Math.max(0, a.reasoning - (b?.reasoning ?? 0)),
   total: Math.max(0, a.total - (b?.total ?? 0))
 });
-var trimmed2 = (text) => text.replace(/^[ \t\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]+|[ \t\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]+$/g, "");
+var trimmed2 = (text) => text.replace(/^[ \t\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]+|[ \t\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]+$/g, "");
 function textOf(value) {
   if (typeof value !== "string")
     return;
@@ -20242,8 +20242,10 @@ function engineDatabases(folder) {
   let names;
   try {
     names = readdirSync16(folder);
-  } catch {
-    return [];
+  } catch (error) {
+    if (error.code === "ENOENT")
+      return [];
+    throw error;
   }
   return names.filter((name) => name.startsWith("opencode") && name.endsWith(".db")).sort().map((name) => join30(folder, name));
 }
@@ -20257,7 +20259,7 @@ var SIGN_IN = `SELECT json_extract(doc,'$.type') = 'oauth' AND (length(trim(COAL
 var TABLES = "SELECT group_concat(name) FROM sqlite_master WHERE type='table' AND name IN ('message','session_message');";
 var READER = `
 import { Database } from "bun:sqlite"
-import { readFileSync } from "node:fs"
+import { readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
 const missingTable = (error) => /no such table/i.test(error instanceof Error ? error.message : String(error))
 const numberOf = (value) => (typeof value === "number" && Number.isFinite(value) ? value : typeof value === "string" && /^\\s*[+-]?(\\d+\\.?\\d*|\\.\\d+)([eE][+-]?\\d+)?\\s*$/.test(value) && Number.isFinite(Number(value)) ? Number(value) : undefined)
@@ -20291,6 +20293,26 @@ function signIn(db, folder, sql) {
   }
   return { oauth: isOAuth(JSON.parse(text)?.openai) }
 }
+// Read-only, as the engine has it open. One whose -wal and -shm are gone (the engine stopped, and
+// SQLite removed them) can't be opened read-only: with nothing in a -wal, all of it is in the file,
+// read as it is (immutable).
+function open(path) {
+  let db
+  try {
+    db = new Database(path, { readonly: true })
+    db.query("SELECT count(*) FROM sqlite_master").values()
+    return db
+  } catch (error) {
+    db?.close()
+    let wal = 0
+    try {
+      wal = statSync(path + "-wal").size
+    } catch {}
+    if (wal > 0 || !/unable to open/i.test(error instanceof Error ? error.message : String(error))) throw error
+    db = new Database("file:" + path.replace(/[%?#]/g, (character) => "%" + character.charCodeAt(0).toString(16)) + "?immutable=1", { readonly: true })
+    return db
+  }
+}
 self.onmessage = (event) => {
   const { paths, folder, sql } = event.data
   const jsons = []
@@ -20300,7 +20322,7 @@ self.onmessage = (event) => {
   for (const path of paths) {
     let db
     try {
-      db = new Database(path, { readonly: true })
+      db = open(path)
       // (The engine may be writing: wait a little for it.)
       db.exec("PRAGMA busy_timeout = 2000")
       const found = signIn(db, folder, sql)
@@ -20421,10 +20443,10 @@ function engineCodexRows(folder, since) {
     timer = setTimeout(() => reject(new Error("The engine's database took too long to read.")), READ_FOR);
     worker.onmessage = (event) => {
       const { oauth, read, failed, jsons } = event.data;
-      if (!oauth)
-        resolve(undefined);
-      else if (!read && failed !== undefined)
+      if (!read && failed !== undefined)
         reject(new Error(failed));
+      else if (!oauth)
+        resolve(undefined);
       else
         resolve(jsons.flatMap(parseRows));
     };
@@ -20858,6 +20880,9 @@ class Usage {
     this.save();
     this.changed(true);
   }
+  has(provider) {
+    return this.entries.has(provider);
+  }
   own() {
     return this.sources().flatMap((source) => {
       const entry = this.entries.get(source.provider);
@@ -21121,25 +21146,43 @@ function isLink(path) {
     return false;
   }
 }
+function codexHomes(agent, env = process.env, home = homedir5()) {
+  const configured = env.CODEX_HOME?.trim();
+  const homes = agent.instance.home ? [agent.instance.home] : configured ? configured.split(",").map((part) => part.trim()).filter(Boolean).map((part) => part.startsWith("~/") ? join32(home, part.slice(2)) : part) : [join32(home, ".codex")];
+  return [...new Set(homes)].map((each) => {
+    const folders = ["sessions", "archived_sessions"].map((name) => join32(each, name)).filter(isFolder);
+    return folders.length ? folders : [each];
+  });
+}
+function isFolder(path) {
+  try {
+    return statSync12(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
 function codexSources(folder, fallback = () => {
   return;
 }, computer = ownComputer) {
   const files = new JSONLFiles((line, state) => codexLine(line, state).map(keptCodex), (entry) => entry[0], folder ? join32(folder, "codex-files") : undefined, 1, (entry) => JSON.stringify(entry.slice(0, 8)), { initial: codexState, from: codexStateFrom });
   const last = new Map;
   return (agents) => {
-    const codex = agents.filter((agent) => parseProvider(agent.providerID)?.kind === "codex" && agent.conversationRoots);
+    const codex = agents.filter((agent) => parseProvider(agent.providerID)?.kind === "codex");
+    const homes = new Map(codex.map((agent) => [agent.providerID, codexHomes(agent)]));
     const owner = new Map;
     for (const agent of codex)
-      for (const root of agent.conversationRoots())
+      for (const root of homes.get(agent.providerID).flat())
         if (!isLink(root) && !owner.has(realOf(root)))
           owner.set(realOf(root), agent.providerID);
     for (const agent of codex)
-      for (const root of agent.conversationRoots())
+      for (const root of homes.get(agent.providerID).flat())
         if (!owner.has(realOf(root)))
           owner.set(realOf(root), agent.providerID);
     return codex.map((agent) => {
       const parsed = parseProvider(agent.providerID);
-      const roots = () => agent.conversationRoots().filter((root) => (owner.get(realOf(root)) ?? agent.providerID) === agent.providerID);
+      const mine = (root) => (owner.get(realOf(root)) ?? agent.providerID) === agent.providerID;
+      const groups = () => homes.get(agent.providerID).map((folders) => folders.filter(mine));
+      const roots = () => groups().flat();
       const source = {
         provider: agent.providerID,
         service: "codex",
@@ -21151,14 +21194,16 @@ function codexSources(folder, fallback = () => {
         },
         slots: async (pricing, since) => {
           const found = [];
-          const seen = new Set;
-          for (const root of roots()) {
-            for (const file of await jsonlFiles(root)) {
-              const inside = file.path.slice(root.length);
-              if (seen.has(inside))
-                continue;
-              seen.add(inside);
-              found.push(file);
+          for (const folders of groups()) {
+            const seen = new Set;
+            for (const root of folders) {
+              for (const file of await jsonlFiles(root)) {
+                const inside = file.path.slice(root.length);
+                if (seen.has(inside))
+                  continue;
+                seen.add(inside);
+                found.push(file);
+              }
             }
           }
           await files.refresh(found, since);
@@ -21178,10 +21223,10 @@ function codexSources(folder, fallback = () => {
     });
   };
 }
-function engineCodexSource(folder, signedIn, computer = ownComputer) {
+function engineCodexSource(folder, signedIn, kept, computer = ownComputer) {
   let last;
   return () => {
-    if (!folder || signedIn() === false)
+    if (!folder || !(signedIn() ?? kept()))
       return [];
     return [
       {
@@ -21320,7 +21365,7 @@ async function updateAll(agents, accounts, noted, known) {
 // Packages/Box/src/agents/sessions.ts
 import { createHash as createHash12 } from "crypto";
 import { spawn as spawnProcess } from "child_process";
-import { readFileSync as readFileSync28, realpathSync as realpathSync8, statSync as statSync12 } from "fs";
+import { readFileSync as readFileSync28, realpathSync as realpathSync8, statSync as statSync13 } from "fs";
 import { homedir as homedir6 } from "os";
 import { dirname as dirname17, join as join33, resolve as resolve8 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
@@ -22385,14 +22430,14 @@ function realFolder(folder) {
   }
 }
 function outsideFolders(ask, paths) {
-  return [...new Set(paths.map((path) => join33(isFolder(path, ask.action) ? path : dirname17(path), "*")))];
+  return [...new Set(paths.map((path) => join33(isFolder2(path, ask.action) ? path : dirname17(path), "*")))];
 }
 function outsideRefusable(ask, paths, folders) {
-  return [...paths.filter((path) => !isFolder(path, ask.action)), ...folders];
+  return [...paths.filter((path) => !isFolder2(path, ask.action)), ...folders];
 }
-function isFolder(path, action) {
+function isFolder2(path, action) {
   try {
-    return statSync12(path).isDirectory();
+    return statSync13(path).isDirectory();
   } catch {
     return action === "list" || action === "glob";
   }
@@ -24654,7 +24699,7 @@ function withTextFiles(text, files) {
     let contents;
     if (!file.mime.startsWith("image/") && file.mime !== "application/pdf") {
       try {
-        const bytes = file.data ? Buffer.from(file.data, "base64") : file.path && statSync12(file.path).isFile() && statSync12(file.path).size <= textFileLimit ? readFileSync28(file.path) : undefined;
+        const bytes = file.data ? Buffer.from(file.data, "base64") : file.path && statSync13(file.path).isFile() && statSync13(file.path).size <= textFileLimit ? readFileSync28(file.path) : undefined;
         if (bytes && !bytes.includes(0))
           contents = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
       } catch {}
@@ -27181,7 +27226,7 @@ class UsagePeers {
   }
 }
 function digestOf2(accounts) {
-  const canonical = accounts.map((account) => [account.provider, account.service, account.agent ?? null, account.account ?? null, account.label ?? null, account.identity ?? null, account.cut === true, account.places ?? [], account.slots.models, account.slots.used, account.slots.unknown ?? [], ...account.slots.fallback ? [account.slots.fallback] : []]);
+  const canonical = accounts.map((account) => [account.provider, account.service, account.agent ?? null, account.account ?? null, account.label ?? null, account.identity ?? null, account.cut === true, account.places ?? [], account.slots.models, account.slots.used, account.slots.unknown ?? []]);
   return createHash14("sha256").update(JSON.stringify(canonical)).digest("hex").slice(0, 32);
 }
 var toldOf2 = ({ slots, ...account }) => ({ ...account, slots: keptSlots(slots) });
@@ -30822,7 +30867,7 @@ ${all}`;
 }
 
 // Packages/Box/src/agents/renewal.ts
-import { statSync as statSync13 } from "fs";
+import { statSync as statSync14 } from "fs";
 import { dirname as dirname20 } from "path";
 
 // Packages/Box/src/shared/bundle.ts
@@ -31017,7 +31062,7 @@ class Renewal {
   newerInPlace() {
     let stat;
     try {
-      stat = statSync13(this.options.script);
+      stat = statSync14(this.options.script);
     } catch {
       return this.newer;
     }
@@ -31140,7 +31185,7 @@ function updateUnderWay(run) {
 import { spawn as spawn6 } from "child_process";
 
 // Packages/Box/src/agents/store.ts
-import { mkdirSync as mkdirSync23, readdirSync as readdirSync18, readFileSync as readFileSync33, renameSync as renameSync20, rmSync as rmSync16, statSync as statSync14, writeFileSync as writeFileSync25 } from "fs";
+import { mkdirSync as mkdirSync23, readdirSync as readdirSync18, readFileSync as readFileSync33, renameSync as renameSync20, rmSync as rmSync16, statSync as statSync15, writeFileSync as writeFileSync25 } from "fs";
 import { join as join36 } from "path";
 
 class Store {
@@ -31181,7 +31226,7 @@ class Store {
   }
   writtenAt(id) {
     try {
-      return statSync14(join36(this.root, id, "messages.json")).mtimeMs;
+      return statSync15(join36(this.root, id, "messages.json")).mtimeMs;
     } catch {
       return;
     }
@@ -31804,7 +31849,7 @@ var usageSettings = new UsageSettings(join37(usageFolder, "settings.json"));
 var claudeUsage2 = claudeSources(usageFolder);
 var codexUsage = codexSources(usageFolder, () => usageSettings.codexFallback);
 var engineData = process.env.KUVO_ENGINE_DB_FOLDER || (onMachine && machineHome ? process.env.KUVO_ENGINE_DATA || join37(machineHome, "data", "opencode") : undefined);
-var engineCodexUsage = engineCodexSource(engineData, () => engineAccounts.answered ? engineAccounts.accounts().some((account) => account.provider === "openai") : undefined);
+var engineCodexUsage = engineCodexSource(engineData, () => engineAccounts.answered ? engineAccounts.accounts().some((account) => account.provider === "openai") : undefined, () => usage.has("openai"));
 var usage = new Usage(() => [...claudeUsage2(roster.all()), ...codexUsage(roster.all()), ...engineCodexUsage()], new PricingStore(join37(usageFolder, "pricing"), noPriceFeeds ? null : undefined), (provider) => limits.identity(provider), join37(usageFolder, "usage.json"));
 usage.settings = usageSettings;
 peers.usage = new UsagePeers(usage, post, directory, join37(usageFolder, "peers.json"));
@@ -32003,4 +32048,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents e084a7f874ceb05f5b481ddce73bb1b5ac512e2354627a2a3b181a4c4bf91b6c
+// Built from Packages/Box/src/agents c3e16e8d7a2bc010a47916013ae597678fb9ef6e4c1c7987983eb8304a384066

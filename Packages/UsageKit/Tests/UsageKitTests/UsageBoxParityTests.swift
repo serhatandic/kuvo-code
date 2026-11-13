@@ -248,5 +248,38 @@ final class UsageBoxParityTests: XCTestCase {
         XCTAssertNil(snapshot.warning)
         XCTAssertEqual(history.scan(for: "codex@1a2b3c4d")??.series.daily, [], "another login's card: none")
     }
+
+    /// Codex only on another computer (or a lapsed sign-in here): this Mac can't read Codex's limits,
+    /// and its card still shows the host's spend, with why the limits didn't come as its notice.
+    @MainActor
+    func testTheHostsCodexSpendShowsWithoutThisMacsLimits() async throws {
+        let history = HostHistory.shared
+        defer {
+            history.update(days: [:], covered: [])
+            history.setAway(false)
+        }
+        let now = try XCTUnwrap(OpenUsageISO8601.date(from: "2026-11-12T12:00:00Z"))
+        let provider = CodexProvider.isolated(
+            localHistoryWait: .seconds(1),
+            authStore: CodexAuthStore(
+                environment: FakeEnvironment(["CODEX_HOME": "/nonexistent/codex-fixture"]),
+                files: FakeFiles([:]),
+                keychain: FakeKeychain()
+            ),
+            now: { now },
+            pricing: { ModelPricing.empty }
+        )
+        let signedOut = await provider.refresh()
+        XCTAssertTrue(signedOut.lines.allSatisfy(\.isError), "not covered: the error, as before")
+        XCTAssertNil(signedOut.usageHistory)
+
+        let date = DailyUsageAccumulator.dayKey(from: now)
+        history.update(days: ["codex": [HostHistoryDay(date: date, models: [.init(name: "gpt-5.5", tokens: 300, cost: 0.002)])]], covered: ["codex"])
+        let snapshot = await provider.refresh()
+        XCTAssertFalse(snapshot.lines.allSatisfy(\.isError), "a refresh that shows the host's spend")
+        XCTAssertEqual(snapshot.usageHistory?.series.daily.map(\.totalTokens), [300])
+        XCTAssertNotNil(snapshot.warning, "why the limits didn't come")
+        XCTAssertNil(snapshot.errorCategory)
+    }
 }
 

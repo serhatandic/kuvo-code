@@ -95,7 +95,7 @@ const minus = (a: RawUsage, b: RawUsage | null): RawUsage => ({
 })
 
 /** Swift's `.whitespaces`: spaces and tabs, not line breaks. */
-const trimmed = (text: string) => text.replace(/^[ \t   -   　]+|[ \t   -   　]+$/g, "")
+const trimmed = (text: string) => text.replace(/^[ \t\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]+|[ \t\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]+$/g, "")
 
 function textOf(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined

@@ -59,8 +59,17 @@ public final class HostHistory {
     /// Codex's fallback model as the host prices its Codex logs with it (nil: none), the models it
     /// may be, and whether it was ever chosen there. Only while the host covers Codex.
     public private(set) var codexFallback: CodexFallback?
-    /// Has the host price with another fallback model (nil: none), and says whether it took it.
-    @ObservationIgnored public var setCodexFallback: ((String?) async -> Bool)?
+    /// Has the host price with another fallback model (nil: none), and says what came of it.
+    @ObservationIgnored public var setCodexFallback: ((String?) async -> CodexFallbackOutcome)?
+
+    /// What came of asking the host for another fallback model.
+    public enum CodexFallbackOutcome: Sendable {
+        case applied
+        /// It answered, and can't price Codex with that model now.
+        case refused
+        /// It didn't answer.
+        case unreachable
+    }
 
     public struct CodexFallback: Sendable, Hashable {
         public var model: String?

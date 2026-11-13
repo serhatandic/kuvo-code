@@ -14,8 +14,8 @@ struct CodexPricingSection: View {
     @State private var isApplying = false
     @State private var refreshState = CodexFallbackPricingRefreshState()
     @State private var needsRecalculation = false
-    /// The host didn't take the last choice (it didn't answer, or refused it).
-    @State private var applyFailed = false
+    /// Why the host didn't take the last choice.
+    @State private var applyFailed: HostHistory.CodexFallbackOutcome?
 
     var body: some View {
         VStack(alignment: .leading, spacing: density.headerToCardSpacing) {
@@ -61,8 +61,10 @@ struct CodexPricingSection: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 12)
                     .padding(.bottom, 10)
-                if applyFailed && host != nil {
-                    Text("Couldn't change it: Kuvo Code's background service didn't answer. Try again.")
+                if let applyFailed, host != nil {
+                    Text(applyFailed == .refused
+                         ? "Couldn't use this model: its prices aren't available now. Choose another model or None."
+                         : "Couldn't change it: Kuvo Code's background service didn't answer. Try again.")
                         .font(.caption)
                         .foregroundStyle(Theme.notice)
                         .fixedSize(horizontal: false, vertical: true)
@@ -119,11 +121,12 @@ struct CodexPricingSection: View {
     private func applyOnHost(_ model: String) {
         guard model != shownModel, !isApplying, let set = HostHistory.shared.setCodexFallback else { return }
         isApplying = true
-        applyFailed = false
+        applyFailed = nil
         Task {
             defer { isApplying = false }
-            guard await set(model.isEmpty ? nil : model) else {
-                applyFailed = true
+            let outcome = await set(model.isEmpty ? nil : model)
+            guard outcome == .applied else {
+                applyFailed = outcome
                 return
             }
             for providerID in providerIDs {

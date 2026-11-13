@@ -97,6 +97,20 @@ final class CodexProvider: ProviderRuntime {
     }
 
     func refresh() async -> ProviderSnapshot {
+        let read = await refreshLimits()
+        // The host states Codex's spend itself (`HostHistory`, fork addition), every computer's: it
+        // shows whether or not this Mac can read Codex's limits now (signed in only on a machine, a
+        // lapsed sign-in here), with why the limits didn't come as the card's notice.
+        guard provider.id == ProviderAccountID.family(of: provider.id),
+              HostHistory.shared.scan(for: provider.id) != nil,
+              !read.lines.isEmpty, read.lines.allSatisfy(\.isError)
+        else { return read }
+        let message: String
+        if case .badge(_, let text, _, _) = read.lines[0] { message = text } else { message = "Couldn't read Codex's limits." }
+        return await snapshot(mapped: CodexMappedUsage(plan: nil, lines: []), limitsProblem: message)
+    }
+
+    private func refreshLimits() async -> ProviderSnapshot {
         if let host = authStore.hostCandidate() { return await refreshHost(host) }
         if authStore.expectedIdentity != nil { return await refreshAccount() }
         let fileCandidates = authStore.loadAuthCandidates()
@@ -210,7 +224,8 @@ final class CodexProvider: ProviderRuntime {
         return await snapshot(mapped: mapped)
     }
 
-    func snapshot(mapped initial: CodexMappedUsage) async -> ProviderSnapshot {
+    /// `limitsProblem`: why this Mac's limits read didn't come (only the spend is shown then).
+    func snapshot(mapped initial: CodexMappedUsage, limitsProblem: String? = nil) async -> ProviderSnapshot {
         var mapped = initial
         // pi logs name a provider family, not an account card.
         let piCardID = ProviderAccountID.family(of: provider.id)
@@ -253,8 +268,8 @@ final class CodexProvider: ProviderRuntime {
                 fallbackPricingModelsByDay: usage.fallbackPricingModelsByDay
             )
         }
-        let warning = history == nil ? "Local token history is still updating." : nil
-        if warning != nil {
+        let warning = limitsProblem ?? (history == nil ? "Local token history is still updating." : nil)
+        if history == nil {
             AppLog.warn(LogTag.plugin("codex"), "local history scan deferred; publishing live quota")
         }
         // Pending history is not evidence of no usage. The store may restore last-good spend rows.

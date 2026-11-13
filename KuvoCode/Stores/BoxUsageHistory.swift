@@ -26,7 +26,7 @@ final class BoxUsageHistory {
 
     init() {
         HostHistory.shared.refresh = { [weak self] in self?.refresh() }
-        HostHistory.shared.setCodexFallback = { [weak self] model in await self?.setCodexFallback(model) ?? false }
+        HostHistory.shared.setCodexFallback = { [weak self] model in await self?.setCodexFallback(model) ?? .unreachable }
         HostHistory.shared.update(days: HostHistory.shared.days, covered: services, answered: false)
         // Another time zone: other days.
         zoneObserver = NotificationCenter.default.addObserver(forName: .NSSystemTimeZoneDidChange, object: nil, queue: .main) { [weak self] _ in
@@ -74,19 +74,23 @@ final class BoxUsageHistory {
         read(BoxUsage.bridgeRefreshPath, method: "POST")
     }
 
-    /// Has the box price Codex's logs with another fallback model (nil: none); whether it took it.
-    func setCodexFallback(_ model: String?) async -> Bool {
-        guard let api else { return false }
+    /// Has the box price Codex's logs with another fallback model (nil: none); what came of it.
+    func setCodexFallback(_ model: String?) async -> HostHistory.CodexFallbackOutcome {
+        guard let api else { return .unreachable }
         asked += 1
         let number = asked
         do {
             let body = JSONValue.object(["codex": .object(["fallback": model.map(JSONValue.string) ?? .null])])
             let usage = try await api.client.send(try api.client.request("PUT", BoxUsage.bridgePricingPath, query: ["zone": TimeZone.current.identifier], body: body), as: DataEnvelope<BoxUsage>.self, patience: .seconds(60)).data
             keep(usage, number: number)
-            return true
+            return .applied
+        } catch let error as ServerError where error.status == 400 {
+            // (Not one of the models it can price with now.)
+            log.info("usage pricing refused: \(String(describing: error), privacy: .public)")
+            return .refused
         } catch {
             log.info("usage pricing: \(String(describing: error), privacy: .public)")
-            return false
+            return .unreachable
         }
     }
 
@@ -134,7 +138,8 @@ final class BoxUsageHistory {
             broughtFallback = true
             Task { [weak self] in
                 guard let self else { return }
-                if await !self.setCodexFallback(mine) { self.broughtFallback = false }
+                // (Not answered: tried again with the next answer. Refused: not one it can take, left.)
+                if await self.setCodexFallback(mine) == .unreachable { self.broughtFallback = false }
             }
         }
     }
