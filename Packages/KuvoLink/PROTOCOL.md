@@ -5072,7 +5072,8 @@ as above.
 #### Moving this Mac's box
 
 `box.rehome`. The box moves itself out of the app's folder into `~/.kuvo-code`, laid out as above,
-with `kuvo-link.js rehome` (#333 piece 2a). The box decides and does each step; the keeper only
+with `kuvo-link.js rehome` (#333 pieces 2a and 2b), run by the engine's Bun (it opens the engine's
+database with `bun:sqlite`). The box decides and does each step; the keeper only
 stops the old box first and starts what's there after, and a client only shows it. Only on a Mac:
 on Linux every command but `--status`, `--ready` and `--resume` refuses, saying there's nothing to
 move (`--settled` works anywhere). Everything it keeps is in `~/.kuvo-code/updates/rehome`, made
@@ -5109,8 +5110,11 @@ refused anything but `--status` on the real `~/.kuvo-code`.
      not `gone`: both keep running as they are), when the app's folder and `~/.kuvo-code` aren't
      on one APFS disk, without room for the engine's database and its journal, × 1.1, plus
      200 MB, for a copy of the app (a demo's, a test's: its folder isn't `run.kuvo.code`) moving
-     into the real `~/.kuvo-code`, and, until the paths its sessions name are rewritten (#333
-     piece 2b), for the real app's box at all: only a test's moves yet. A refusal counts as a try.
+     into the real `~/.kuvo-code`, when it isn't run by Bun, and while an engine database
+     (`opencode*.db`) is of a schema the rewrite wasn't tried with: its migrations, counted and
+     the last (`SELECT count(*), max(id) FROM migration`), must be one it knows (`59
+     20261030054400_job`, the pinned engine 2.2.6's); one never used (no tables) is no refusal. A
+     refusal counts as a try.
   2. **Install.** What's in `~/.kuvo-code` that isn't a box (one its Mac removed, or what was
      left) is set aside into `trash/earlier-box-<date>`, nothing deleted.
   3. **Clone.** Each folder cloned (`cp -c`, for up to six hours: APFS clones, links as links,
@@ -5121,11 +5125,64 @@ refused anything but `--status` on the real `~/.kuvo-code`.
      `state`, `cache` and `workspace` to the same names, `engine`, `integrations`, `bots`,
      `wakes`, `groups`, `Chats` (to `chats`), `agents`, `phone-link.json`, the app's
      `Attachments` (into `attachments`), and the box's files. The app's folder isn't changed.
-  4. **Rewrite** and 5. **check**: the paths that name the old place (piece 2b; nothing yet).
+  4. **Rewrite.** In staging, by one path map (each placement's old folder to its new one, the
+     longest first; a move back's the same map turned around). A path is rewritten where it's a
+     path, whole: a value equal to an old folder or starting with it and `/`, a `file://` URL to
+     one (kept as it was written, plainly or with `%20`; where both read the same, as in
+     `~/.kuvo-code`, encoded), or an engine setting's `{file:…}`. Never a path among other words.
+     - **The engine's database**, in one transaction (`BEGIN IMMEDIATE`, its foreign keys checked
+       before it's kept, its log checkpointed after): `project.worktree`, `session_v2.directory`,
+       `worktree.directory`, `project_directory.directory` and `permission.resource`; every path
+       in the JSON of `project.sandboxes`, `session_v2.revert`, `summary_diffs`, `permission`,
+       `metadata` and `workspace.binding`; and only the files sent (`files[*].source.uri` and
+       `uri`) in `session_message.data` and `session_inbox.payload`. A project outside git, whose
+       ID is its folder's (`sha1("directory:" + path)`), gets its new folder's, with every column
+       naming it (`session_v2.project_id`, `permission`, `worktree`, `project_directory`,
+       `event_sequence.aggregate_id`, `event.aggregate_id`) and its `shell/<id>` folder. Each
+       worktree's snapshots (`snapshot/<project>/<sha1(path)>`) are renamed for its new path, and
+       each snapshot's `config` (its worktree), `opencode.gitconfig` and `objects/info/alternates`
+       rewritten.
+     - **The box's own files**: every `.json`, `.jsonl` and `.ndjson` of the box's and its bridge's
+       (keys too, as lists kept by folder are), the one-path `wakes/<session>/directory` and
+       `bots/<bot>/directory`, a bot's `workspace/.opencode/opencode.json`, the engine's
+       `config/opencode/opencode.json` and `updates/rollback/restore.sh`; an artifact's ID with its
+       path (`art_` and its hash), and what's kept by a path's hash renamed: the bridge's
+       `snapshots/<sha1(top)[:20]>`, `box/branch-backups/<sha1(top)[:20]>`, and usage's place in a
+       log (`agents/usage/*-files/<sha256(log)[:32]>.json`). Never what's yours or an agent's own
+       (chats' and bots' folders, sent files, the agents' settings folders, the trash, the vault),
+       nor what the box makes anew as it starts (`run/fence`, the engine's plugins).
+     - **The coding agents' own, in the bridge's folder**: an added Claude Code account's history
+       of each folder (`projects/<slug>`, its slug as Claude Code makes it: each character but a
+       letter or digit a `-`, one over 200 cut there with `-` and its 32-bit string hash in base
+       36), an added Grok account's sessions (`sessions/<URL-encoded path>`), and Cursor's records
+       of its agents' folders (`agents.ndjson`'s `cwd`). Codex needs nothing.
+  5. **Check.** It goes back, saying why, if any of the box's own files still names the old place
+     as a path, if a column it rewrites still does, if the engine's database holds other counts of
+     sessions or projects than before, or if the engine (the version the box's keeper names, else
+     the newest) started on a copy of the staged database (no schedules, jobs, accounts, keys or
+     queued messages; nothing busy; settings, home and cache of its own; at a port of its own,
+     stopped as its stdin closes) doesn't list every session, or has one of the newest 25 in
+     another folder than the database says, or a moved one's folder isn't staged though it was
+     there. Where the old place is still named but isn't the box's to change (people's and
+     agents' words in the database and in files that moved, a command's saved output), it's
+     noted in `state.json`'s `leftovers` for support, never a failure.
   6. **Place.** Each staged folder renamed into place, merged entry by entry where one's there
      (a name in both keeps both: the one there keeps its name, the other is `<name> 2`); then
      `box/kind` (`mac`), last.
-  7. **Fix.** What outside the box names its folders (piece 2b; nothing yet).
+  7. **Fix.** What outside the box names its folders, each change journaled first, so going back
+     puts it back: every worktree link between what was placed and a repository anywhere,
+     repaired from the repository (`git worktree repair <worktree>` in its common folder), with
+     what git writes outside what was placed (the repository's `worktrees/<name>/gitdir`, or a
+     worktree's `.git` outside the box) journaled as it was (`{act: "wrote", path, was}`; the old
+     place is still there, so nothing prunes the link before); your own Claude Code's history of
+     each folder that moved (`$CLAUDE_CONFIG_DIR` or `~/.claude`, `projects/<slug>`) and your
+     own Grok's sessions (`$GROK_HOME` or `~/.grok`, `sessions/<URL-encoded path>`; one too long
+     for a name stays) renamed; and each added Claude Code account's sign-in, the Keychain item
+     named by its folder (`Claude Code-credentials-<sha256(NFC folder)[0:8]>`), copied under its
+     new folder's name with `/usr/bin/security` as Claude Code writes it (`-U`, the value in hex),
+     which the item trusts, so nothing's asked (`{act: "keychain", service, account, was?}`: going
+     back deletes the copy, or puts back what was there). The originals are deleted once the old
+     place is cleared.
   8. **Clear.** Should something have started in the old box meanwhile, or anything changed, or
      been made, in what it clears since it cloned (the engine's `opencode` folder aside, which only
      the engine writes, and in `run` its processes' records: a file the app kept as you sent it,
@@ -5171,6 +5228,10 @@ refused anything but `--status` on the real `~/.kuvo-code`.
   meanwhile) is `overdue`.
 - **`--status`**: `kuvo/box/rehome`'s answer. **`--settled keychain|agent`**: one of `owed`, done
   (`{settled, status}`).
+
+A Mac's box in a home of its own starts its bridge as a machine's (`KUVO_AGENTS_REMOTE`), but the
+coding agents' default accounts stay yours, in your home (`~/.claude`, `~/.codex`, `~/.grok`), as
+the app's box keeps them: only on a machine are they in the bridge's folder (`<agent>/home`).
 
 `kuvo/box/rehome`: `GET` answers `{state, way, step, tries, nextTry, waitingSince, overdue,
 failed, movedAt, keptUntil, owed, asked, from, to}`. `state`: null before anything, `waiting`,

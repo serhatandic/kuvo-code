@@ -20,7 +20,8 @@ import { foundAt, runsAt } from "../setup/judge";
 import { agentsWorking } from "../updates/update";
 import { BRIDGE_VERSION } from "../version";
 import { setKeepsAwake } from "../work/settings";
-import { NO_REWRITE, pathMap, type Rewriter } from "./rewrite";
+import { undoKeychain } from "./outside";
+import { PATH_REWRITER, pathMap, type MoveContext, type Rewriter } from "./rewrite";
 import {
   AFTER_A_FAILURE, KEPT_FOR, MOST_TRIES, forgetJournal, forwardOnly, giveLock, holdsLock, journalAct, noteRecord, readActs, readJournal,
   moveUnderWay, readRecord, rehomeFolder, rehomeStatus, stepIndex, takeLock, writeJournal, type Act, type Journal, type Placement,
@@ -187,7 +188,7 @@ export function planBack({ appFolder, home }: Folders, merged: { source: string;
 }
 
 /** Why the move can't go ahead now, or null: checked as it's planned, before anything changes. */
-export function moveRefusal({ appFolder, home }: Folders, { appVersion, release, bridgeVersion = BRIDGE_VERSION, rewriter = NO_REWRITE, running: checkRunning = true }: { appVersion: string | null; release: string | null | undefined; bridgeVersion?: string; rewriter?: Rewriter; running?: boolean }): string | null {
+export function moveRefusal({ appFolder, home }: Folders, { appVersion, release, bridgeVersion = BRIDGE_VERSION, rewriter = PATH_REWRITER, running: checkRunning = true }: { appVersion: string | null; release: string | null | undefined; bridgeVersion?: string; rewriter?: Rewriter; running?: boolean }): string | null {
   if (process.platform !== "darwin") return NOTHING_TO_MOVE;
   const box = path.join(appFolder, "box");
   const state = readRecord(home);
@@ -223,7 +224,7 @@ export function moveRefusal({ appFolder, home }: Folders, { appVersion, release,
   const free = freeBytes(target);
   if (free !== null && free < needed) return `There isn't room to move this Mac's box: it needs ${Math.ceil(needed / 1_000_000)} MB free.`;
   const plan = planMove({ appFolder, home }, release ?? path.join(home, "bin"));
-  return rewriter.refuses(plan.placements, pathMap(plan.placements));
+  return rewriter.refuses({ way: "move", home, appFolder, placements: plan.placements, map: pathMap(plan.placements), work: path.join(staging(home), "work") });
 }
 
 /** Why a move back can't go ahead now, or null. */
@@ -387,6 +388,11 @@ function undo(journal: Journal): void {
         fs.renameSync(act.to, act.from);
         if (++undone === 1) stopPoint("in-undo");
       }
+    } else if (act.act === "wrote") {
+      // (A file outside the box, as it was: git's link to a worktree.)
+      try { if (fs.readFileSync(act.path, "utf8") !== act.was) fs.writeFileSync(act.path, act.was); } catch {}
+    } else if (act.act === "keychain") {
+      undoKeychain(act);
     } else if (act.folder) {
       try { fs.rmdirSync(act.path); } catch {}
     } else {
@@ -409,12 +415,17 @@ function stepTo(journal: Journal, step: RehomeStep): void {
   journal.step = step;
 }
 
+/** What the rewriter's told of a move, by its journal. */
+const contextOf = (journal: Journal): MoveContext => ({
+  way: journal.way, ...foldersOf(journal), placements: journal.placements, map: pathMap(journal.placements), work: path.join(staging(homeOf(journal)), "work"),
+});
+
 /** Its steps from where the journal is, to the end (a failure before `clear` throws, for the move to
  * go back). */
-function carryOn(journal: Journal, rewriter: Rewriter): void {
+async function carryOn(journal: Journal, rewriter: Rewriter): Promise<void> {
   // (The journal's acts are always in the box's home, `home`; renames go between both folders.)
   const home = homeOf(journal);
-  const map = pathMap(journal.placements);
+  const move = contextOf(journal);
   const from = stepIndex(journal.step);
   const at = (step: RehomeStep) => stepIndex(step) >= from;
   if (at("install")) {
@@ -448,7 +459,7 @@ function carryOn(journal: Journal, rewriter: Rewriter): void {
   }
   if (at("rewrite")) {
     stepTo(journal, "rewrite");
-    rewriter.rewrite(journal.placements, map);
+    rewriter.rewrite(move);
     stopPoint("after-rewrite");
   }
   if (at("check")) {
@@ -457,7 +468,8 @@ function carryOn(journal: Journal, rewriter: Rewriter): void {
       if (exists(placement.from) && !exists(placement.staged)) throw new Error(`${placement.from} wasn't staged.`);
     }
     if (journal.way === "move" && !exists(path.join(journal.placements.find(each => each.installed)!.staged, "kuvo-start"))) throw new Error("The box's own files weren't staged.");
-    rewriter.check(journal.placements, map);
+    const leftovers = await rewriter.check(move);
+    noteRecord(home, { leftovers });
     stopPoint("after-check");
   }
   if (at("place")) {
@@ -485,7 +497,7 @@ function carryOn(journal: Journal, rewriter: Rewriter): void {
   }
   if (at("fix")) {
     stepTo(journal, "fix");
-    rewriter.outside(map, undo => journalAct(home, undo));
+    rewriter.outside(move, act => journalAct(home, act));
     stopPoint("after-fix");
   }
   // From here it only goes forward: nothing may have started meanwhile in what it clears (it would
@@ -518,6 +530,11 @@ function carryOn(journal: Journal, rewriter: Rewriter): void {
     // (Its trash, emptied going back, goes too: one that still holds an earlier box stays.)
     if (journal.way === "back") try { fs.rmdirSync(path.join(home, "trash")); } catch {}
     stopPoint("after-clear");
+  }
+  // What it owes once the old place is gone (the sign-ins' originals): done again on a resume, and
+  // never what holds the move back once it's moved.
+  try { rewriter.cleared(move); } catch (error) {
+    noteRecord(home, { leftovers: [...(readRecord(home).leftovers ?? []), `not cleared: ${(error as Error).message}`] });
   }
   finish(journal);
 }
@@ -597,10 +614,10 @@ class LockLost extends Error {}
 
 const WAITS = "Another move is under way.";
 
-async function locked(home: string, waiting: () => void, work: () => RehomeOutcome): Promise<RehomeOutcome> {
+async function locked(home: string, waiting: () => void, work: () => Promise<RehomeOutcome>): Promise<RehomeOutcome> {
   if (!(await takeLock(home, { waiting }))) return { result: "waits", message: WAITS, status: rehomeStatus(home) };
   try {
-    return work();
+    return await work();
   } finally {
     giveLock(home);
   }
@@ -608,10 +625,10 @@ async function locked(home: string, waiting: () => void, work: () => RehomeOutco
 
 /** Its steps carried on from where the journal is: what a failure comes to. Before the old place is
  * cleared, it goes back; from then on, it says it's stuck (and why, in `state.json`), for `--resume`. */
-function carried(journal: Journal, rewriter: Rewriter): RehomeOutcome {
+async function carried(journal: Journal, rewriter: Rewriter): Promise<RehomeOutcome> {
   const home = homeOf(journal);
   try {
-    carryOn(journal, rewriter);
+    await carryOn(journal, rewriter);
   } catch (error) {
     if (error instanceof LockLost) return { result: "waits", message: WAITS, status: rehomeStatus(home) };
     if (!forwardOnly(journal.step)) return { result: "failed", message: failed(journal, error), status: rehomeStatus(home) };
@@ -623,7 +640,7 @@ function carried(journal: Journal, rewriter: Rewriter): RehomeOutcome {
 }
 
 /** One that stopped part way, finished: back before it cleared the old place, forward after. */
-function resumed(home: string, rewriter: Rewriter): RehomeOutcome | null {
+async function resumed(home: string, rewriter: Rewriter): Promise<RehomeOutcome | null> {
   let journal: Journal | null;
   try { journal = readJournal(home); } catch (error) {
     return { result: "stuck", message: (error as Error).message, status: rehomeStatus(home) };
@@ -639,10 +656,10 @@ function resumed(home: string, rewriter: Rewriter): RehomeOutcome | null {
 /** `rehome`: this Mac's box moved into `home`, from the app's folder around `appBox`. */
 export async function rehome(folders: Folders, options: MoveOptions = {}): Promise<RehomeOutcome> {
   const { home } = folders;
-  const rewriter = options.rewriter ?? NO_REWRITE;
+  const rewriter = options.rewriter ?? PATH_REWRITER;
   if (process.platform !== "darwin") return { result: "refused", message: NOTHING_TO_MOVE, status: rehomeStatus(home) };
-  return locked(home, options.waiting ?? (() => {}), () => {
-    const earlier = resumed(home, rewriter);
+  return locked(home, options.waiting ?? (() => {}), async () => {
+    const earlier = await resumed(home, rewriter);
     if (earlier) return earlier;
     const release = options.release ? path.resolve(options.release) : null;
     const refusal = moveRefusal(folders, { appVersion: options.appVersion ?? null, release, rewriter });
@@ -662,9 +679,9 @@ export async function rehome(folders: Folders, options: MoveOptions = {}): Promi
 
 /** `rehome --back`: the box in `home` moved back into the app's folder it came from. */
 export async function rehomeBack(home: string, options: MoveOptions = {}): Promise<RehomeOutcome> {
-  const rewriter = options.rewriter ?? NO_REWRITE;
-  return locked(home, options.waiting ?? (() => {}), () => {
-    const earlier = resumed(home, rewriter);
+  const rewriter = options.rewriter ?? PATH_REWRITER;
+  return locked(home, options.waiting ?? (() => {}), async () => {
+    const earlier = await resumed(home, rewriter);
     if (earlier) return earlier;
     const record = readRecord(home);
     const appFolder = typeof record.from === "string" ? record.from : null;
@@ -683,7 +700,7 @@ export async function rehomeBack(home: string, options: MoveOptions = {}): Promi
   });
 }
 
-function run(journal: Journal, rewriter: Rewriter): RehomeOutcome {
+function run(journal: Journal, rewriter: Rewriter): Promise<RehomeOutcome> {
   const home = homeOf(journal);
   // (Anything left from a move that ended before it began.)
   forgetJournal(home);
@@ -697,7 +714,7 @@ function run(journal: Journal, rewriter: Rewriter): RehomeOutcome {
  * and nothing made for it). */
 export async function rehomeResume(home: string, options: MoveOptions = {}): Promise<RehomeOutcome> {
   if (!moveUnderWay(home)) return { result: "nothing", status: rehomeStatus(home) };
-  return locked(home, options.waiting ?? (() => {}), () => resumed(home, options.rewriter ?? NO_REWRITE) ?? { result: "nothing", status: rehomeStatus(home) });
+  return locked(home, options.waiting ?? (() => {}), async () => (await resumed(home, options.rewriter ?? PATH_REWRITER)) ?? { result: "nothing", status: rehomeStatus(home) });
 }
 
 /** What `rehome --ready` says: whether to move (or move back, or finish one) now, and why not. */

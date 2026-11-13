@@ -19,7 +19,7 @@ import { computerServers } from "../servers"
 import { pictureData, pictureFile, withPictures } from "../pictures"
 import { elicitationField } from "../forms"
 import { newID } from "../ids"
-import { onMachine, ownFoldersConfig } from "../machine"
+import { onMachine, ownFoldersConfig, yourHomes } from "../machine"
 import { install, maintenance, update, type MaintenanceDefinition } from "../maintenance"
 import { which } from "../proc"
 import { chatGPTIdentity, LimitsProblem, type LimitReading, type LimitsSource, type LimitWindow } from "../limits"
@@ -394,7 +394,7 @@ export class CodexAgent implements Agent {
     // And the files of your subagents' instructions (only read).
     const subagents = subagentsRoot()
     if (subagents) mkdirSync(subagents, { recursive: true, mode: 0o700 })
-    const homes = [this.home, ...(this.instance.home && !onMachine ? [this.yourCodex] : [])]
+    const homes = [this.home, ...(this.instance.home && yourHomes ? [this.yourCodex] : [])]
     // The files you attach in the session, copied where only the box writes (`fenceCopy`).
     const attached = sessionID ? fenceAttachments(directory) : undefined
     return fenceAgent(this.executable()!, directory, {
@@ -412,8 +412,8 @@ export class CodexAgent implements Agent {
     const executable = this.executable()
     if (!executable) throw new Error(`Install Codex first: ${this.install}`)
     // An added account's own CODEX_HOME, with your Codex settings in it: only its sign-in is its
-    // own. (On a machine, nothing of the machine's own Codex.)
-    if (this.instance.home && !onMachine) shadowHome(this.instance.home, this.yourCodex)
+    // own. (On a machine, nothing of the machine's own Codex; a Mac's box in a home of its own is yours.)
+    if (this.instance.home && yourHomes) shadowHome(this.instance.home, this.yourCodex)
     // While the box's sandbox is on, Codex runs whole in it: a session's in its folder, your
     // account's in its home.
     const directory = key === ACCOUNT ? this.accountFolder() : (thread?.session.location.directory ?? this.home)
