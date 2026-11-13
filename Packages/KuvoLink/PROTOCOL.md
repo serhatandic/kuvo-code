@@ -7103,6 +7103,11 @@ before connects (the box notes one: `run/attached`).
   covers a computer the first box doesn't hear from now (the relay down); removing the fallback
   needs an answer for that first.
   <!-- compat: 0.7 limits-merge -->
+- **Cursor's usage from before the box read it** (#631 piece D1): a Mac whose own box doesn't list
+  `cursor` in its limits' `services` (one from before, still running as the Mac updates) has its
+  usage panel read Cursor's plan and spend itself, with the Cursor agent's key in this Mac's box
+  folder, as before. Never the Cursor app's login.
+  <!-- compat: 0.7 cursor-box -->
 - **Updating an agent's program**: such a Mac asks `POST kuvo/agents/api/integration/<provider>/update`
   and waits for its answer, `{data: {updated, version?, message?}}`, so the agents bridge still
   answers that once the update is done (the same update every client sees, "Installing and

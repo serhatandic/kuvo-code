@@ -105,9 +105,9 @@ final class UsageAccounts {
 
     /// Cursor's sign-in for the coding agents (the agents bridge's, yours or the first account
     /// you added), for the panel to read Cursor's usage with. Read where the bridge keeps it, while
-    /// it's good. COMPAT(0.8 cursor-box): only while this Mac's box doesn't read Cursor's plan and
-    /// history itself (it does from #631 piece D1: `HostLimits.covers("cursor")`); goes 3 months
-    /// after 0.8.0, with the panel's own Cursor reads (#631 piece H1).
+    /// it's good, only while this Mac's box doesn't read Cursor's plan and history itself (it does
+    /// from #631 piece D1: `HostLimits.covers("cursor")`), with the panel's own Cursor reads.
+    /// COMPAT(0.7 cursor-box): the key for a box from before. Goes 3 months after 0.8.0.
     static func cursorAgentKey(in home: URL = OutsideAgents.home, now: Date = .now) -> HostCredential? {
         struct Saved: Decodable { var apiKey: String?; var apiKeyExpiresAtMs: Double? }
         let accounts = home.appending(path: "cursor/accounts")

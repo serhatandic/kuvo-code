@@ -3,7 +3,7 @@ import Foundation
 /// Kuvo Code's own Cursor sign-in (fork addition): the coding agent's API key, which the host
 /// hands over (`HostAccounts`), exchanged for an access token as it's needed and never written
 /// anywhere. The Cursor app's own login (its state database, its Keychain items) is an outside
-/// login, and isn't read (#631 piece D1). COMPAT(0.8 cursor-box): only for a host whose box doesn't
+/// login, and isn't read (#631 piece D1). COMPAT(0.7 cursor-box): only for a host whose box doesn't
 /// state Cursor's usage yet (`HostLimits.covers("cursor")`); goes with the panel's own Cursor reads
 /// (#631 piece H1), 3 months after 0.8.0.
 struct CursorAuthState: Hashable, Sendable {
