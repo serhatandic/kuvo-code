@@ -915,3 +915,20 @@ test.if(mac && !!ENGINE && existsSync(ENGINE))("with the engine itself, a box of
   const db = rows(join(w.K, "data", "opencode", "opencode.db"))
   expect(db.session_v2.length).toBe(255)
 }, 120_000)
+
+test.if(mac)("a sign-in already under an account's new name (an earlier box's) is kept aside: put back if the move goes back, gone once it's done", () => {
+  const earlier = (w: World) => spawnSync("/usr/bin/security", ["add-generic-password", "-U", "-a", "you", "-s", claudeItem(join(w.K, "agents", "claude", "console")), "-X", Buffer.from("{\"earlier\":true}").toString("hex"), KEYCHAIN])
+  const console_ = (w: World) => claudeItem(join(w.K, "agents", "claude", "console"))
+  const back = world(earlier)
+  expect(move(back, { KUVO_TEST_REHOME_STOP: "after-fix" }).signal).toBe("SIGKILL")
+  expect(keychainItem(console_(back))).toBe("{\"console\":true}")
+  expect(rehome(back, ["--resume"]).said).toMatchObject({ result: "failed" })
+  expect(keychainItem(console_(back))).toBe("{\"earlier\":true}")
+  expect(keychainItem(console_(back) + ".before-kuvo-move")).toBeNull()
+  expect(keychainItem(claudeItem(join(back.S, "agents", "claude", "console")))).toBe("{\"console\":true}")
+
+  const done = world(earlier)
+  expect(move(done).said).toMatchObject({ result: "done" })
+  expect(keychainItem(console_(done))).toBe("{\"console\":true}")
+  expect(keychainItem(console_(done) + ".before-kuvo-move")).toBeNull()
+}, 60_000)

@@ -19,6 +19,9 @@ import path from "node:path";
 import type { Act } from "./state";
 import { claudeKeychainService, claudeSlug, grokSessionsName, mapJSON, mapped, moves, type PathMap } from "./paths";
 
+/** What a move sets aside what was there as (Grok's index, a sign-in under a new name already), till
+ * it's done (then deleted). */
+const ASIDE = ".before-kuvo-move";
 const exists = (file: string): boolean => { try { fs.lstatSync(file); return true; } catch { return false; } };
 const listOf = (folder: string): string[] => { try { return fs.readdirSync(folder); } catch { return []; } };
 const isFolder = (file: string): boolean => { try { return fs.lstatSync(file).isDirectory(); } catch { return false; } };
@@ -125,6 +128,19 @@ export function repairWorktrees(placed: readonly string[], map: PathMap, journal
       try { keep(path.resolve(each, fs.readFileSync(path.join(each, "gitdir"), "utf8").trim())); } catch {}
     }
   }
+  // A worktree that moved names its record where it is now, before any repair (in what was placed:
+  // nothing to journal), relative where it was: so no git, however old, links it back to the copy
+  // still where it was.
+  for (const { worktree, record } of there) {
+    const file = path.join(worktree, ".git");
+    if (!isPlaced(file)) continue;
+    let link = "";
+    try { link = fs.readFileSync(file, "utf8"); } catch { continue; }
+    const named = /^gitdir:\s*(.+?)\s*$/m.exec(link)?.[1];
+    if (!named) continue;
+    const now = path.isAbsolute(named) ? record : path.relative(worktree, record);
+    if (now !== named) fs.writeFileSync(file, link.replace(named, () => now));
+  }
   for (const { worktree, record } of there) {
     // (Linked as the repository's own settings say: by relative paths, `worktree.useRelativePaths`, or whole.)
     const result = git(["-C", commonOf(record), "worktree", "repair", worktree]);
@@ -178,12 +194,16 @@ export function copyClaudeSignIns(accounts: readonly string[], map: PathMap, jou
     if (from === to) continue;
     const item = readItem(from);
     if (!item) continue;
-    // (One there already under the new name: the same, nothing to do; another, never written over,
-    // since going back couldn't put it back without keeping its secret in the journal.)
+    // (One there already under the new name: the same, nothing to do; another, an earlier box's,
+    // kept aside under a name of its own, never in the journal, to put back going back.)
     const there = readItem(to);
     if (there?.value === item.value) continue;
-    if (there) throw new Error(`Claude Code has another sign-in under ${path.basename(folder)}'s new name already (${to}).`);
-    journal({ act: "keychain", service: to, account: item.account });
+    if (there) {
+      journal({ act: "keychain", service: to, account: there.account, aside: to + ASIDE });
+      writeItem(to + ASIDE, there.account, there.value);
+    } else {
+      journal({ act: "keychain", service: to, account: item.account });
+    }
     writeItem(to, item.account, item.value);
     const back = readItem(to);
     if (back?.value !== item.value) throw new Error(`Claude Code's sign-in for ${path.basename(folder)} didn't read back as it was written.`);
@@ -198,12 +218,17 @@ export function clearClaudeSignIns(accounts: readonly string[], map: PathMap): v
   for (const folder of accounts) {
     const from = claudeKeychainService(folder), to = claudeKeychainService(mapped(folder, map));
     if (from !== to && readItem(to)) deleteItem(from);
+    deleteItem(to + ASIDE);
   }
 }
 
-/** A copy's undoing: the item deleted (none was there before it). */
-export function undoKeychain(act: { service: string }): void {
-  deleteItem(act.service);
+/** A copy's undoing: the item deleted, or the one that was there put back from where it was kept
+ * aside. */
+export function undoKeychain(act: { service: string; aside?: string }): void {
+  if (!act.aside) return deleteItem(act.service);
+  const kept = readItem(act.aside);
+  if (kept) writeItem(act.service, kept.account, kept.value);
+  deleteItem(act.aside);
 }
 
 /** Each folder's history in a Claude Code settings folder (`projects/<slug>`) renamed to its new
@@ -245,8 +270,6 @@ export function renameGrokSessions(home: string, map: PathMap, rename: (from: st
  * that names each session's folder (`session_docs.cwd`), which Grok makes anew from its sessions'
  * folders when it isn't there. */
 const GROK_INDEX = ["session_search.sqlite", "session_search.sqlite-wal", "session_search.sqlite-shm"];
-/** What a move sets Grok's index aside as, in your own Grok's home, till it's done (then deleted). */
-const ASIDE = ".before-kuvo-move";
 
 /** Grok's index set aside where sessions were renamed (each `rename` journaled), for Grok to make
  * it anew with their new folders. */

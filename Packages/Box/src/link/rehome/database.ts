@@ -177,8 +177,11 @@ export function rewriteDatabase(file: string, map: PathMap): DatabaseRewrite {
       }
       const rewriteJSON = (table: string, column: string, how: (value: unknown) => number) => {
         if (!has(table)) return;
+        // (Each row read and written alone: a large database is never held whole.)
         const { where, values } = naming(column, map);
-        for (const row of db.query(`SELECT rowid AS r, "${column}" AS v FROM "${table}" WHERE ${where}`).all(...values)) {
+        const read = db.query(`SELECT "${column}" AS v FROM "${table}" WHERE rowid = ?`);
+        for (const { r } of db.query(`SELECT rowid AS r FROM "${table}" WHERE ${where}`).all(...values)) {
+          const row = { r, v: read.get(r)?.v };
           if (typeof row.v !== "string" || !namesOld(row.v, map)) continue;
           let value: unknown;
           try { value = JSON.parse(row.v); } catch { continue; }

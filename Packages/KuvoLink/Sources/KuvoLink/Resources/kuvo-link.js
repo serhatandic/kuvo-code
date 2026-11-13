@@ -38941,7 +38941,7 @@ import fs129 from "node:fs";
 import path133 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "475a1802ebac";
+var BRIDGE_VERSION = "a95fcfcf3355";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -39074,6 +39074,7 @@ var claudeKeychainService = (folder) => `Claude Code-credentials-${createHash2("
 var grokSessionsName = (folder) => encodeURIComponent(folder);
 
 // Packages/Box/src/link/rehome/outside.ts
+var ASIDE = ".before-kuvo-move";
 var exists2 = (file) => {
   try {
     fs123.lstatSync(file);
@@ -39194,6 +39195,23 @@ function repairWorktrees(placed, map, journal) {
     }
   }
   for (const { worktree, record } of there) {
+    const file = path127.join(worktree, ".git");
+    if (!isPlaced(file))
+      continue;
+    let link = "";
+    try {
+      link = fs123.readFileSync(file, "utf8");
+    } catch {
+      continue;
+    }
+    const named = /^gitdir:\s*(.+?)\s*$/m.exec(link)?.[1];
+    if (!named)
+      continue;
+    const now = path127.isAbsolute(named) ? record : path127.relative(worktree, record);
+    if (now !== named)
+      fs123.writeFileSync(file, link.replace(named, () => now));
+  }
+  for (const { worktree, record } of there) {
     const result = git3(["-C", commonOf(record), "worktree", "repair", worktree]);
     if (result.status !== 0)
       throw new Error(`The worktree ${worktree} couldn't be linked again: ${`${result.stderr}`.trim().slice(0, 300)}`);
@@ -39242,9 +39260,12 @@ function copyClaudeSignIns(accounts, map, journal) {
     const there = readItem(to);
     if (there?.value === item.value)
       continue;
-    if (there)
-      throw new Error(`Claude Code has another sign-in under ${path127.basename(folder)}'s new name already (${to}).`);
-    journal({ act: "keychain", service: to, account: item.account });
+    if (there) {
+      journal({ act: "keychain", service: to, account: there.account, aside: to + ASIDE });
+      writeItem(to + ASIDE, there.account, there.value);
+    } else {
+      journal({ act: "keychain", service: to, account: item.account });
+    }
     writeItem(to, item.account, item.value);
     const back = readItem(to);
     if (back?.value !== item.value)
@@ -39260,10 +39281,16 @@ function clearClaudeSignIns(accounts, map) {
     const from = claudeKeychainService(folder), to = claudeKeychainService(mapped(folder, map));
     if (from !== to && readItem(to))
       deleteItem(from);
+    deleteItem(to + ASIDE);
   }
 }
 function undoKeychain(act) {
-  deleteItem(act.service);
+  if (!act.aside)
+    return deleteItem(act.service);
+  const kept = readItem(act.aside);
+  if (kept)
+    writeItem(act.service, kept.account, kept.value);
+  deleteItem(act.aside);
 }
 function renameClaudeHistory(settings, folders, map, rename) {
   const projects = path127.join(settings, "projects");
@@ -39304,7 +39331,6 @@ function renameGrokSessions(home, map, rename) {
   return renamed;
 }
 var GROK_INDEX = ["session_search.sqlite", "session_search.sqlite-wal", "session_search.sqlite-shm"];
-var ASIDE = ".before-kuvo-move";
 function setAsideGrokIndex(home, rename) {
   for (const name of GROK_INDEX) {
     const file = path127.join(home, "sessions", name);
@@ -39576,7 +39602,9 @@ function rewriteDatabase(file, map) {
         if (!has(table))
           return;
         const { where, values } = naming(column, map);
-        for (const row of db.query(`SELECT rowid AS r, "${column}" AS v FROM "${table}" WHERE ${where}`).all(...values)) {
+        const read = db.query(`SELECT "${column}" AS v FROM "${table}" WHERE rowid = ?`);
+        for (const { r } of db.query(`SELECT rowid AS r FROM "${table}" WHERE ${where}`).all(...values)) {
+          const row = { r, v: read.get(r)?.v };
           if (typeof row.v !== "string" || !namesOld(row.v, map))
             continue;
           let value;

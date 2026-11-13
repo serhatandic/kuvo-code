@@ -5192,8 +5192,11 @@ refused anything but `--status` on the real `~/.kuvo-code`.
      named by its folder (`Claude Code-credentials-<sha256(NFC folder)[0:8]>`), copied under its
      new folder's name with `/usr/bin/security` as Claude Code writes it (`-U`, the value in hex),
      which the item trusts, so nothing's asked, written on its stdin (never a command line), read
-     back to check (`{act: "keychain", service, account}`: going back deletes the copy; no secret
-     is journaled, so one there already under the new name with another value refuses the move).
+     back to check (`{act: "keychain", service, account, aside?}`: going back deletes the copy; no
+     secret is journaled: one there already under the new name with another value, an earlier
+     box's, is kept aside as `<service>.before-kuvo-move` and put back from there going back, and
+     deleted once the old place is cleared). A moved worktree's own `.git` is pointed at its record's
+     new place before any repair (relative where it was), so no git links it back to the copy.
      The originals are deleted once the old place is cleared. Kuvo Code's own Anthropic Console
      sign-in (`agents/claude/console`) goes the same way as an added account's.
   8. **Clear.** Should something have started in the old box meanwhile, or anything changed, or
