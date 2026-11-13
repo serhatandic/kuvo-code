@@ -18,6 +18,29 @@ public struct BoxUsage: Decodable, Hashable, Sendable {
     /// A service whose totals are short: one of your computers is away (its share as of then), or
     /// told less than all of it (`cut`: its oldest days).
     public var partial: [String: Partial]
+    /// How this box prices what has no known price: Codex's fallback model (nil from a box from before).
+    public var codexFallback: Fallback?
+
+    /// A fallback model: the one this box prices its own logs with (nil: none), those it may be
+    /// (`choices`, in order), and whether it was ever chosen on this box (none counts).
+    public struct Fallback: Decodable, Hashable, Sendable {
+        public var model: String?
+        public var choices: [String]
+        public var chosen: Bool
+
+        private enum CodingKeys: String, CodingKey { case fallback, choices, chosen }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            model = (try? container.decodeIfPresent(String.self, forKey: .fallback)).flatMap { $0.isEmpty ? nil : $0 }
+            choices = (try? container.decodeIfPresent([String].self, forKey: .choices)) ?? []
+            chosen = (try? container.decodeIfPresent(Bool.self, forKey: .chosen)) ?? false
+        }
+    }
+
+    private struct Pricing: Decodable {
+        var codex: Fallback?
+    }
 
     public struct Partial: Decodable, Hashable, Sendable {
         public var away: Bool
@@ -41,16 +64,19 @@ public struct BoxUsage: Decodable, Hashable, Sendable {
         public var models: [Model]
         /// Models used that day that couldn't be priced (counted nowhere).
         public var unknown: [String]
+        /// The models whose rates estimated some of that day's cost for models with no known price.
+        public var fallback: [String]
 
-        public init(date: String, tokens: Int, cost: Double, models: [Model], unknown: [String] = []) {
+        public init(date: String, tokens: Int, cost: Double, models: [Model], unknown: [String] = [], fallback: [String] = []) {
             self.date = date
             self.tokens = tokens
             self.cost = cost
             self.models = models
             self.unknown = unknown
+            self.fallback = fallback
         }
 
-        private enum CodingKeys: String, CodingKey { case date, tokens, cost, models, unknown }
+        private enum CodingKeys: String, CodingKey { case date, tokens, cost, models, unknown, fallback }
 
         public init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -59,6 +85,7 @@ public struct BoxUsage: Decodable, Hashable, Sendable {
             cost = try container.decode(Double.self, forKey: .cost)
             models = (try? container.decode(Readable<Model>.self, forKey: .models).items) ?? []
             unknown = (try? container.decodeIfPresent([String].self, forKey: .unknown)) ?? []
+            fallback = (try? container.decodeIfPresent([String].self, forKey: .fallback)) ?? []
         }
     }
 
@@ -100,7 +127,7 @@ public struct BoxUsage: Decodable, Hashable, Sendable {
         }
     }
 
-    private enum CodingKeys: String, CodingKey { case zone, services, scanned, rows, totals, partial }
+    private enum CodingKeys: String, CodingKey { case zone, services, scanned, rows, totals, partial, pricing }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -114,11 +141,14 @@ public struct BoxUsage: Decodable, Hashable, Sendable {
         }
         self.totals = totals
         partial = (try? container.decodeIfPresent([String: Partial].self, forKey: .partial)) ?? [:]
+        codexFallback = (try? container.decodeIfPresent(Pricing.self, forKey: .pricing))?.codex
     }
 
     /// Where a box's bridge answers it (with `zone`, the client's time zone, as a query), and reads it again.
     public static let bridgePath = "api/kuvo/usage"
     public static let bridgeRefreshPath = "api/kuvo/usage/refresh"
+    /// `PUT` `{"codex": {"fallback": <model> | null}}`: Codex's fallback model, this box's; answers as `bridgePath` does.
+    public static let bridgePricingPath = "api/kuvo/usage/pricing"
 
     /// The event that says it changed, on the bridge's events: ask again.
     public static let event = "kuvo.usage.updated"

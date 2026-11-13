@@ -1,6 +1,8 @@
 import SwiftUI
 
-/// A local estimation preference, separate from the model used by the coding client.
+/// A local estimation preference, separate from the model used by the coding client. While the
+/// host prices Codex's history itself (`HostHistory`, fork addition), it's the host's setting: the
+/// picker shows and changes the host's choice, from the models the host offers.
 struct CodexPricingSection: View {
     let providerIDs: [String]
 
@@ -23,12 +25,12 @@ struct CodexPricingSection: View {
                 HStack(spacing: 10) {
                     Text("Fallback Model")
                     Spacer(minLength: 8)
-                    Picker("Fallback Model", selection: $selectedModel) {
+                    Picker("Fallback Model", selection: selection) {
                         Text("None").tag(CodexFallbackModelSetting.none)
                         if selectionUnavailable {
-                            Text("Unavailable Model").tag(selectedModel)
+                            Text("Unavailable Model").tag(shownModel)
                         }
-                        ForEach(options) { option in
+                        ForEach(shownOptions) { option in
                             Text(option.title).tag(option.id)
                         }
                     }
@@ -56,7 +58,7 @@ struct CodexPricingSection: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 12)
                     .padding(.bottom, 10)
-                if selectionUnavailable && !isLoading {
+                if selectionUnavailable && (host != nil || !isLoading) {
                     Text("This model's pricing is unavailable. Choose another model or None.")
                         .font(.caption)
                         .foregroundStyle(Theme.notice)
@@ -77,12 +79,48 @@ struct CodexPricingSection: View {
             recalculateIfNeeded()
         }
         .onChange(of: selectedModel) {
-            guard !isLoading else { return }
+            guard !isLoading, host == nil else { return }
             recalculateIfNeeded()
         }
     }
 
+    /// The host's setting, while it prices Codex's history.
+    private var host: HostHistory.CodexFallback? { HostHistory.shared.codexFallback }
+
+    private var shownModel: String { host.map { $0.model ?? CodexFallbackModelSetting.none } ?? selectedModel }
+
+    private var shownOptions: [PricingFallbackOption] {
+        guard let host else { return options }
+        return host.choices.map { PricingFallbackOption(id: $0, title: PricingFallbackOption.title(for: $0)) }
+    }
+
+    private var selection: Binding<String> {
+        Binding(get: { shownModel }, set: { model in
+            guard host != nil else {
+                selectedModel = model
+                return
+            }
+            applyOnHost(model)
+        })
+    }
+
+    /// The host prices with it, then the cards take what it worked out.
+    private func applyOnHost(_ model: String) {
+        guard model != shownModel, !isApplying, let set = HostHistory.shared.setCodexFallback else { return }
+        isApplying = true
+        Task {
+            defer { isApplying = false }
+            guard await set(model.isEmpty ? nil : model) else { return }
+            for providerID in providerIDs {
+                dataStore.clearFailureBackoff(for: providerID)
+                await dataStore.refresh(providerID: providerID, force: true)
+            }
+        }
+    }
+
     private func recalculateIfNeeded() {
+        // (The host's choice: it works its estimates out itself.)
+        guard host == nil else { return }
         guard refreshState.update(model: selectedModel, options: options) else { return }
         needsRecalculation = true
         guard !isApplying else { return }
@@ -106,11 +144,11 @@ struct CodexPricingSection: View {
     }
 
     private var selectionUnavailable: Bool {
-        !selectedModel.isEmpty && !options.contains { $0.id == selectedModel }
+        !shownModel.isEmpty && !shownOptions.contains { $0.id == shownModel }
     }
 
     private var activityLabel: String? {
-        if isLoading { return "Loading Models…" }
+        if isLoading && host == nil { return "Loading Models…" }
         if isApplying { return "Recalculating Estimates…" }
         return nil
     }

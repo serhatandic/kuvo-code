@@ -26,6 +26,7 @@ final class BoxUsageHistory {
 
     init() {
         HostHistory.shared.refresh = { [weak self] in self?.refresh() }
+        HostHistory.shared.setCodexFallback = { [weak self] model in await self?.setCodexFallback(model) ?? false }
         HostHistory.shared.update(days: HostHistory.shared.days, covered: services, answered: false)
         // Another time zone: other days.
         zoneObserver = NotificationCenter.default.addObserver(forName: .NSSystemTimeZoneDidChange, object: nil, queue: .main) { [weak self] _ in
@@ -71,6 +72,22 @@ final class BoxUsageHistory {
         read(BoxUsage.bridgeRefreshPath, method: "POST")
     }
 
+    /// Has the box price Codex's logs with another fallback model (nil: none); whether it took it.
+    func setCodexFallback(_ model: String?) async -> Bool {
+        guard let api else { return false }
+        asked += 1
+        let number = asked
+        do {
+            let body = JSONValue.object(["codex": .object(["fallback": model.map(JSONValue.string) ?? .null])])
+            let usage = try await api.client.send(try api.client.request("PUT", BoxUsage.bridgePricingPath, query: ["zone": TimeZone.current.identifier], body: body), as: DataEnvelope<BoxUsage>.self, patience: .seconds(60)).data
+            keep(usage, number: number)
+            return true
+        } catch {
+            log.info("usage pricing: \(String(describing: error), privacy: .public)")
+            return false
+        }
+    }
+
     private func read(_ path: String = BoxUsage.bridgePath, method: String = "GET", tries: Int = 3) {
         guard let api else { return }
         reading?.cancel()
@@ -106,6 +123,13 @@ final class BoxUsageHistory {
         guard number > answered else { return }
         answered = number
         cover(Set(usage.services), days: Self.days(usage))
+        let fallback = usage.services.contains("codex") ? usage.codexFallback : nil
+        HostHistory.shared.update(codexFallback: fallback.map { .init(model: $0.model, choices: $0.choices, chosen: $0.chosen) })
+        // The fallback model this Mac chose before its box priced Codex (Settings › Usage kept it
+        // here), taken to its box once, while the box has none chosen (none counts as chosen).
+        if let fallback, !fallback.chosen, let mine = HostHistory.localCodexFallback, fallback.choices.contains(mine) {
+            Task { [weak self] in _ = await self?.setCodexFallback(mine) }
+        }
     }
 
     private func cover(_ services: Set<String>, days: [String: [HostHistoryDay]]) {
@@ -114,13 +138,14 @@ final class BoxUsageHistory {
             UserDefaults.standard.set(services.sorted(), forKey: Self.servicesKey)
         }
         HostHistory.shared.update(days: days, covered: services)
+        if !services.contains("codex") { HostHistory.shared.update(codexFallback: nil) }
     }
 
     /// Each service's days, every account added up, as the panel's providers of the same names take them.
     static func days(_ usage: BoxUsage) -> [String: [HostHistoryDay]] {
         usage.totals.mapValues { days in
             days.map { day in
-                HostHistoryDay(date: day.date, models: day.models.map { .init(name: $0.model, tokens: $0.tokens, cost: $0.cost) }, unknown: day.unknown)
+                HostHistoryDay(date: day.date, models: day.models.map { .init(name: $0.model, tokens: $0.tokens, cost: $0.cost) }, unknown: day.unknown, fallback: day.fallback)
             }
         }
     }

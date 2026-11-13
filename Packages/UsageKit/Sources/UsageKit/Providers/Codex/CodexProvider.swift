@@ -214,15 +214,31 @@ final class CodexProvider: ProviderRuntime {
         var mapped = initial
         // pi logs name a provider family, not an account card.
         let piCardID = ProviderAccountID.family(of: provider.id)
-        let history = await localHistory.value(wait: localHistoryWait) {
-            [pricing, fallbackModel, historyScope, authStore, logUsageScanner, piUsageScanner,
-             openCodeUsageScanner, now] in
-            let claims = await Self.historyClaims(scope: historyScope, authStore: authStore,
-                                                  logUsageScanner: logUsageScanner)
-            return await Self.scanLocalHistory(
-                claims: claims, claimsPiUsage: historyScope.claimsPiUsage, piCardID: piCardID, pricing: pricing, fallbackModel: fallbackModel, logUsageScanner: logUsageScanner,
-                piUsageScanner: piUsageScanner, openCodeUsageScanner: openCodeUsageScanner, now: now
-            )
+        let history: CodexLocalHistory?
+        if let hosted = HostHistory.shared.scan(for: provider.id) {
+            // The host's boxes state Codex's history themselves (`HostHistory`, fork addition): every
+            // Codex account Kuvo Code runs and its ChatGPT sign-in, on every computer of yours, priced
+            // there (its fallback model too); nothing is read here then. Not answered yet: pending.
+            history = hosted.map { scan in
+                var note = "From your Codex usage history (estimated)"
+                if let asOf = HostHistory.shared.asOfNote(for: provider.id) { note += ", \(asOf)" }
+                return CodexLocalHistory(sourceNote: note, usageHistory: ProviderUsageHistory(
+                    series: scan.series, modelUsage: scan.modelUsage,
+                    unknownModelsByDay: scan.unknownModelsByDay,
+                    fallbackPricingModelsByDay: scan.fallbackPricingModelsByDay
+                ))
+            }
+        } else {
+            history = await localHistory.value(wait: localHistoryWait) {
+                [pricing, fallbackModel, historyScope, authStore, logUsageScanner, piUsageScanner,
+                 openCodeUsageScanner, now] in
+                let claims = await Self.historyClaims(scope: historyScope, authStore: authStore,
+                                                      logUsageScanner: logUsageScanner)
+                return await Self.scanLocalHistory(
+                    claims: claims, claimsPiUsage: historyScope.claimsPiUsage, piCardID: piCardID, pricing: pricing, fallbackModel: fallbackModel, logUsageScanner: logUsageScanner,
+                    piUsageScanner: piUsageScanner, openCodeUsageScanner: openCodeUsageScanner, now: now
+                )
+            }
         }
         if let history, let usage = history.usageHistory {
             // A retained scan may be collected on a later day; project Today/Yesterday at collection.

@@ -10,6 +10,9 @@ public struct HostHistoryDay: Sendable, Hashable {
     public var models: [Model]
     /// Models used that day that couldn't be priced (counted nowhere).
     public var unknown: [String]
+    /// The models whose rates estimated some of that day's cost for models with no known price
+    /// (Codex's fallback model, a setting of the host's).
+    public var fallback: [String]
 
     public struct Model: Sendable, Hashable {
         public var name: String
@@ -23,15 +26,16 @@ public struct HostHistoryDay: Sendable, Hashable {
         }
     }
 
-    public init(date: String, models: [Model], unknown: [String] = []) {
+    public init(date: String, models: [Model], unknown: [String] = [], fallback: [String] = []) {
         self.date = date
         self.models = models
         self.unknown = unknown
+        self.fallback = fallback
     }
 }
 
 /// The usage history the host states itself (fork addition): for each provider family it covers
-/// (`claude`), its days take the place of what the provider would read from the logs on this Mac,
+/// (`claude`, `codex`), its days take the place of what the provider would read from the logs on this Mac,
 /// so the spend tiles, the trend and the model breakdown show the host's (every account it runs,
 /// on every computer of yours), and nothing is read twice. A provider it doesn't cover reads its
 /// logs as before.
@@ -51,6 +55,33 @@ public final class HostHistory {
     public private(set) var away = false
     /// Has the host's boxes read their logs again now (the panel's Refresh).
     @ObservationIgnored public var refresh: (() -> Void)?
+
+    /// Codex's fallback model as the host prices its Codex logs with it (nil: none), the models it
+    /// may be, and whether it was ever chosen there. Only while the host covers Codex.
+    public private(set) var codexFallback: CodexFallback?
+    /// Has the host price with another fallback model (nil: none), and says whether it took it.
+    @ObservationIgnored public var setCodexFallback: ((String?) async -> Bool)?
+
+    public struct CodexFallback: Sendable, Hashable {
+        public var model: String?
+        public var choices: [String]
+        public var chosen: Bool
+
+        public init(model: String?, choices: [String], chosen: Bool) {
+            self.model = model
+            self.choices = choices
+            self.chosen = chosen
+        }
+    }
+
+    /// What the host says of Codex's fallback model (nil: it doesn't say).
+    public func update(codexFallback: CodexFallback?) {
+        guard codexFallback != self.codexFallback else { return }
+        self.codexFallback = codexFallback
+    }
+
+    /// This Mac's choice from before the host priced Codex (Settings › Usage kept it here).
+    public static var localCodexFallback: String? { CodexFallbackModelSetting.current() }
 
     /// `answered`: what the host said (else what it last said, kept from before, while it starts).
     public func update(days: [String: [HostHistoryDay]], covered: Set<String>, answered: Bool = true, now: Date = .now) {
@@ -103,6 +134,9 @@ public final class HostHistory {
             }
             for model in day.unknown {
                 accumulator.addUnknownModel(day: day.date, model: model)
+            }
+            for model in day.fallback {
+                accumulator.addFallbackPricingModel(day: day.date, model: model)
             }
         }
         return accumulator.build()

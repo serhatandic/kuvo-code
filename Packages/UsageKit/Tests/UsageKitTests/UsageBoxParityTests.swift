@@ -147,4 +147,106 @@ final class UsageBoxParityTests: XCTestCase {
             XCTAssertEqual(try Data(contentsOf: box.appendingPathComponent("\(name).json")), mine, name)
         }
     }
+
+    // MARK: Codex (#631 piece B)
+
+    private func codexPricing() throws -> ModelPricing {
+        ModelPricing(
+            supplement: try PricingSupplement.decode(from: fixture("pricing-codex-supplement.json")),
+            primary: try PricingCatalogCodecs.catalogFromCompact(fixture("pricing-codex-litellm.json")),
+            secondary: try PricingCatalogCodecs.catalogFromCompact(fixture("pricing-codex-models-dev.json"))
+        )
+    }
+
+    /// The scan's priced days, unknown models and fallback estimates, as the expected file keeps them.
+    private func assertScan(_ scan: LogUsageScan, matches want: [String: Any], file: StaticString = #filePath, line: UInt = #line) throws {
+        let days = try XCTUnwrap(want["days"] as? [[String: Any]])
+        XCTAssertEqual(scan.series.daily.map(\.date), days.map { $0["date"] as? String }, file: file, line: line)
+        for (day, wanted) in zip(scan.series.daily, days) {
+            XCTAssertEqual(day.totalTokens, wanted["tokens"] as? Int, day.date, file: file, line: line)
+            XCTAssertEqual(day.costUSD ?? -1, try XCTUnwrap(wanted["cost"] as? Double), accuracy: 1e-9, day.date, file: file, line: line)
+            let models = try XCTUnwrap(wanted["models"] as? [[String: Any]])
+            let mine = (scan.modelUsage?.daily.first { $0.date == day.date }?.models ?? []).sorted { $0.model < $1.model }
+            XCTAssertEqual(mine.map(\.model), models.map { $0["model"] as? String }, day.date, file: file, line: line)
+            XCTAssertEqual(mine.map(\.totalTokens), models.map { $0["tokens"] as? Int }, day.date, file: file, line: line)
+            for (model, wantedModel) in zip(mine, models) {
+                XCTAssertEqual(model.costUSD ?? -1, try XCTUnwrap(wantedModel["cost"] as? Double), accuracy: 1e-9, model.model, file: file, line: line)
+            }
+        }
+        XCTAssertEqual(scan.unknownModelsByDay.mapValues { $0.sorted() }, try XCTUnwrap(want["unknown"] as? [String: [String]]), file: file, line: line)
+        XCTAssertEqual((scan.fallbackPricingModelsByDay ?? [:]).mapValues { $0.sorted() }, (want["fallback"] as? [String: [String]]) ?? [:], file: file, line: line)
+    }
+
+    /// Codex's logs count, take turns apart and price as the box's `codex-log.ts` does: running totals,
+    /// child replays, repeated snapshots, tiers, long context, auto-review by date, reserve, aliases.
+    func testCodexLogsCountAndPriceAsTheBoxDoes() throws {
+        let expected = try json("codex-expected.json")
+        let pricing = try codexPricing()
+        let files = try XCTUnwrap(expected["files"] as? [String])
+        let events = try files.flatMap { CodexLogUsageScanner.parseFile(try fixture($0)) }
+        let since = try XCTUnwrap(OpenUsageISO8601.date(from: try XCTUnwrap(expected["since"] as? String)))
+        try assertScan(CodexLogUsageScanner.aggregate(events: events, since: since, pricing: pricing), matches: try XCTUnwrap(expected["plain"] as? [String: Any]))
+        // With the fallback model the box offers and prices with.
+        XCTAssertEqual(pricing.fallbackOptions(for: "codex").map(\.id), expected["fallbackChoices"] as? [String])
+        let fallback = try XCTUnwrap(expected["fallback"] as? [String: Any])
+        let scan = CodexLogUsageScanner.aggregate(events: events, since: since, pricing: pricing, fallbackModel: try XCTUnwrap(fallback["model"] as? String))
+        try assertScan(scan, matches: fallback)
+    }
+
+    /// The engine's ChatGPT slice counts and prices as the box's `engine-codex.ts` does, from the rows
+    /// its query answers (the same SQL on both sides).
+    func testTheEnginesCodexRowsCountAndPriceAsTheBoxDoes() async throws {
+        let expected = try json("codex-engine-expected.json")
+        let rows = String(decoding: try fixture(try XCTUnwrap(expected["rows"] as? String)), as: UTF8.self)
+        let scanner = OpenCodeCodexUsageScanner(
+            authStore: openCodeAuthStore(files: FakeFiles(["/oc/auth.json": #"{"openai":{"type":"oauth","access":"token"}}"#])),
+            sqlite: OpenCodeFakeSQLite(data: ["/oc/opencode.db": rows]),
+            databasePaths: { ["/oc/opencode.db"] }
+        )
+        let now = try XCTUnwrap(OpenUsageISO8601.date(from: try XCTUnwrap(expected["now"] as? String)))
+        let pricing = try codexPricing()
+        let scanned = await scanner.scan(now: now, daysBack: 60, pricing: pricing)
+        let scan = try XCTUnwrap(scanned)
+        try assertScan(scan, matches: expected)
+    }
+
+    /// While the host covers Codex the Codex card reads nothing here: it shows the host's days, its
+    /// fallback estimates said as they are, and while the host hasn't answered, what it showed stays.
+    @MainActor
+    func testWhileTheHostCoversCodexTheCardShowsItsDaysAndReadsNoLogs() async throws {
+        let history = HostHistory.shared
+        defer {
+            history.update(days: [:], covered: [])
+            history.setAway(false)
+        }
+        let now = try XCTUnwrap(OpenUsageISO8601.date(from: "2026-11-12T12:00:00Z"))
+        let home = try CodexLogFixture.makeHome(files: [
+            "sessions/rollout-local.jsonl": [
+                CodexLogFixture.turnContext(timestamp: "2026-11-12T10:00:00Z", model: "gpt-5.2"),
+                CodexLogFixture.tokenCount(timestamp: "2026-11-12T10:01:00Z", last: CodexLogFixture.usage(input: 999, output: 1))
+            ].joined(separator: "\n")
+        ])
+        defer { try? FileManager.default.removeItem(at: home) }
+        let provider = CodexProvider.isolated(
+            localHistoryWait: .seconds(1),
+            logUsageScanner: CodexLogFixture.scanner(home: home),
+            now: { now },
+            pricing: { ModelPricing.empty }
+        )
+        let date = DailyUsageAccumulator.dayKey(from: now)
+        history.update(days: [:], covered: ["codex"], answered: false)
+        let pending = await provider.snapshot(mapped: CodexMappedUsage(plan: nil, lines: []))
+        XCTAssertNil(pending.usageHistory, "nothing yet: what the card showed stays")
+
+        let day = HostHistoryDay(date: date, models: [.init(name: "gpt-mystery-9", tokens: 1100, cost: 0.0085)], unknown: ["gpt-mystery-9"], fallback: ["gpt-5.5"])
+        history.update(days: ["codex": [day]], covered: ["codex"])
+        let snapshot = await provider.snapshot(mapped: CodexMappedUsage(plan: nil, lines: []))
+        let usage = try XCTUnwrap(snapshot.usageHistory)
+        XCTAssertEqual(usage.series.daily.map(\.totalTokens), [1100], "the host's, not the 1000 tokens in the log here")
+        XCTAssertEqual(usage.fallbackPricingModelsByDay, [date: ["gpt-5.5"]])
+        XCTAssertEqual(usage.unknownModelsByDay, [date: ["gpt-mystery-9"]])
+        XCTAssertNil(snapshot.warning)
+        XCTAssertEqual(history.scan(for: "codex@1a2b3c4d")??.series.daily, [], "another login's card: none")
+    }
 }
+
