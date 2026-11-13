@@ -3089,6 +3089,9 @@
             "literal": "box.uninstall"
            },
            {
+            "literal": "box.update"
+           },
+           {
             "literal": "branch"
            },
            {
@@ -3512,6 +3515,9 @@
            },
            {
             "literal": "box.uninstall"
+           },
+           {
+            "literal": "box.update"
            },
            {
             "literal": "branch"
@@ -4018,7 +4024,8 @@
         "string",
         "null"
        ]
-      }
+      },
+      "offered?": "string"
      }
     }
    }
@@ -4118,7 +4125,109 @@
         "string",
         "null"
        ]
-      }
+      },
+      "offered?": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/box/update",
+   "answers": {
+    "202": {
+     "object": {
+      "setUp": "bool",
+      "version": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "engine": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "latest": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "last": {
+       "oneOf": [
+        {
+         "object": {
+          "at": "number",
+          "result": {
+           "oneOf": [
+            {
+             "literal": "updated"
+            },
+            {
+             "literal": "current"
+            },
+            {
+             "literal": "waiting"
+            },
+            {
+             "literal": "busy"
+            },
+            {
+             "literal": "off"
+            },
+            {
+             "literal": "blocked"
+            },
+            {
+             "literal": "failed"
+            }
+           ]
+          },
+          "version?": "string",
+          "message?": "string",
+          "from?": "string",
+          "to?": "string"
+         }
+        },
+        "null"
+       ]
+      },
+      "updating": {
+       "oneOf": [
+        {
+         "oneOf": [
+          {
+           "literal": "checking"
+          },
+          {
+           "literal": "downloading"
+          },
+          {
+           "literal": "downloading the engine"
+          },
+          {
+           "literal": "checking it"
+          },
+          {
+           "literal": "installing"
+          },
+          {
+           "literal": "starting"
+          }
+         ]
+        },
+        "null"
+       ]
+      },
+      "blocked": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "offered?": "string"
      }
     }
    }

@@ -1548,6 +1548,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "box.serve": ["GET", "kuvo/box/serve"],
     // (A command, `kuvo-link.js uninstall`, not a route: kuvo/info names it.)
     "box.uninstall": ["GET", "kuvo/info"],
+    // (A release from a folder here, which only Kuvo Code offers: a GET is the wrong method.)
+    "box.update": ["GET", "kuvo/box/update"],
     branch: ["POST", "kuvo/agents/api/kuvo/branch/ses_none"],
     // (Its browser, set up by the box itself.)
     browser: ["GET", "kuvo/browser"],

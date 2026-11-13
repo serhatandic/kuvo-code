@@ -2016,7 +2016,39 @@ did: the box keeps working as itself ("For released Macs").
   pack: {url, sha256, size}}`: a box takes the engine for its own system and kind. The signature is
   Ed25519 over `"kuvo-box v1\n"` and the manifest's bytes, by a pinned key
   (`scripts/sign-box.mjs`). The pack holds `box.json` (each file's SHA-256) and the files, laid
-  out as `~/.kuvo-code`.
+  out as `~/.kuvo-code`: `files`, `bin/<name>`, `bin/runtime/<name>` and
+  `config/opencode/plugins/<name>`; and `bundles`, Mac bundles (the box's helper, signed), each
+  `{"bin/<name>.app": {<path in it>: <SHA-256>}}`. A box from before bundles passes `bundles` over,
+  so a release with one still updates it. A bundle holds only folders and the files `bundles` names
+  (no links, no part starting with a dot), or the release isn't taken. `scripts/pack-box.sh` packs
+  it from a built app.
+- **From a folder here** (`box.update`): Kuvo Code carries its version's release
+  (`Contents/Resources/box-release`: `boxes.json` and `box-<version>.tar.gz`, put there by
+  `scripts/app-box-release.sh` when the release is built), for it to offer the box on its computer
+  as it updates. The app doesn't offer it yet: that comes with this Mac's box in a home of its own
+  (a Mac's box in the app's folder is refused anyway, as it doesn't update itself).
+  - `POST kuvo/box/update {from: "<folder>"}`, from Kuvo Code only (this Mac's app, or a Mac's
+    `box route`; a phone gets 403): `from` is a full path to a folder with `boxes.json` and the pack
+    its `pack.url` ends in, beside it. The box checks it as it would a download: a pinned key's
+    signature, a version newer than its own, the pack's SHA-256. Then it keeps both in
+    `updates/offered` (the folder may go, the app updated again; a newer one offered replaces it)
+    and answers 202 with `kuvo/update`'s status.
+  - Refused: 400 without a full path; 409 when it isn't set up, is blocked (as below), its version
+    isn't known, it's updating already, or the release isn't newer than the box or than what's
+    offered already; 422 when it can't be read, isn't a release, isn't signed with a pinned key, or
+    its pack isn't what it says. Other methods answer 405.
+  - It's taken the update way, in a process of its own (`kuvo-link.js update --offered`, as Update
+    Now's), at once if nothing runs, else at the first round (every ten minutes) nothing does,
+    whatever its age and the hour (the Kuvo Code it came with is there already). It waits, untouched,
+    while the box is blocked, its engine is stopped on purpose, an update runs or is on trial, or
+    something runs. Taken, or no longer newer than the box, the offer goes. One that fails goes too,
+    and its version rests a day (`offerFailed` in `run/update.json`; offered again sooner, it's
+    refused with 409), as it does when the keeper took an update to it back (its new bridge never
+    said it was well), so a release that never comes up isn't tried at every offer. One that failed
+    before anything changed (its engine's download, offline) stays, and is tried again an hour on,
+    then a day after each next failure (`offerFailed.tries`); offered again meanwhile, it's there
+    already (202).
+  - Its engine, when the box doesn't have it yet, still comes from the manifest's URL.
 - **When**: the night's window, 02:00 to 05:00 in `KUVO_TZ`, once a night, always (there's no
   switch: a machine keeps up with the Macs and phones that use it), for a release at least three
   days old. Or now (Update Now), whatever its age.
@@ -2044,7 +2076,12 @@ did: the box keeps working as itself ("For released Macs").
      - It moves the database back (same disk, no room needed), without the new engine's journal,
        and only once it was kept.
   4. It swaps file by file: `bin/box-version` first, `bin/.kuvo-boot` last, with copies of the
-     release's tools in `bin/.own` (kept for a rollback as the rest is). Then it starts again.
+     release's tools in `bin/.own` (kept for a rollback as the rest is). A bundle goes whole, in
+     among them: the new one staged beside it (`<name>.app.new`), the old one put aside
+     (`<name>.app.old`), the new renamed in, the old removed. The box doesn't restart a program
+     running from the old one: what keeps it running does. `restore.sh` puts a kept bundle back the
+     same way, and takes one away that wasn't there before. On Linux a release's bundles are left
+     out. Then it starts again.
      One update runs at a time, by its process (`run/.updating/pid`, the link's). While it runs,
      `setup` doesn't restart the bridge, and the keeper doesn't run `restore.sh`.
   5. Once the engine answers as the new version (and the coding agents' bridge, if it ran), the
@@ -2054,24 +2091,28 @@ did: the box keeps working as itself ("For released Macs").
      it too when `run/update-trial` is twenty minutes old, five minutes apart (`run/update-restore`).
      After six failed tries it gives up and starts what's there. Without a bridge to start again
      (no phones, no peers), `kuvo-link.js update` confirms it itself.
-  7. It notes what it installed (`updates/installed.json`). Each night it checks the files against
-     that note. A Mac notes `run/mac-installing` while it puts its files in place, and marking the
+  7. It notes what it installed (`updates/installed.json`, its `files`, never its bundles). Each
+     night it checks the files against that note. A Mac notes `run/mac-installing` while it puts its files in place, and marking the
      box clears it. Drift seen on two checks, and not while a Mac is installing, means a Mac with an
      older Kuvo Code put its own files back. The box then keeps its version mark, so no other such
      Mac takes it further back, says why, and doesn't update itself for 30 days.
   - What the new engine did during a trial that's rolled back is lost with it.
   - The coding agents' own data (`agents`) isn't kept for a rollback.
 - **State**: `run/update.json` holds `{latest, checked, last: {at, result, message?, from?, to?},
-  running?, trial?, night?}`.
+  running?, trial?, night?, offerFailed?: {version, at}}`.
 - `kuvo/update`:
   - `GET` answers `{setUp, version, engine, latest, last, updating, blocked}`.
     `updating` is the step under way (`checking`, `downloading`, `downloading the engine`,
     `checking it`, `installing`, `starting`) or null. `blocked` is why it can't update, or null.
+    `offered` is the version of a release offered from a folder here that waits to be taken, and
+    only there while one does.
   - `POST {now: true}` starts one: 202 with the status, or 409 `{message}` when it's not set up,
     is blocked, or is updating already. Other methods answer 405: there's nothing to turn off.
   - A Mac does the same over SSH with `kuvo-link.js box update-status` and `update-now`.
-- `kuvo-link.js update [--now]` updates from a shell. Only in a test's folder, it also takes
-  `--url <boxes.json> --key <public key>`.
+- `kuvo-link.js update [--now] [--from <folder>]` updates from a shell, `--from` from a release in a
+  folder there (a full path), taken at once, whatever its age. `update --offered` takes the release
+  offered with `kuvo/box/update` when it's due, and does nothing otherwise. Only in a test's folder,
+  it also takes `--url <boxes.json> --key <public key>`, or `--key` with `--from` or `--offered`.
 
 #### A new version while it works
 
@@ -4772,6 +4813,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `box.rehome` | `kuvo/box/rehome`: moving this Mac's box into a home of its own, and back ("This Mac's box: moving this Mac's box"); `kuvo-link.js rehome`, and `here`'s `moving` |
 | `box.serve` | `kuvo/box/serve`: the box's server kept running for clients ("Kept for clients"); `kuvo-link.js serve --kept` |
 | `box.uninstall` | `kuvo-link.js uninstall [--check]`: removing Kuvo Code from this computer ("Uninstalling") |
+| `box.update` | `POST kuvo/box/update {from}`: a release from a folder on the box's computer, the one Kuvo Code carries, taken at the next quiet moment ("Updates"); a release's Mac bundles, swapped whole; `kuvo/update`'s `offered` |
 | `branch` | `kuvo/agents/api/kuvo/branch/<session>`: Branch from here, marked |
 | `browser` | a machine only: `kuvo/browser`, its browser set up by the box itself ("The browser on a machine") |
 | `btw` | `kuvo/agents/api/kuvo/btw…`: side questions ("Side questions, handoffs and reviews") |
