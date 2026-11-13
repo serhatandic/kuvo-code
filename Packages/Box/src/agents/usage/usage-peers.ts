@@ -153,9 +153,9 @@ export class UsagePeers {
     }
     const now = this.now()
     const { accounts, digest } = this.shared()
-    // (Not asking for theirs: nothing of theirs changed.)
+    // (Not asking for theirs, which didn't change: but from one not told since the link started.)
     for (const { key } of this.directory.peerBoxes()) {
-      this.transport.send(key, { kind: "usage", at: now, accounts, digest }, false)
+      this.transport.send(key, { kind: "usage", at: now, accounts, digest, ...(this.told.has(key) ? {} : { ask: true }) }, false)
       this.told.set(key, { digest, at: now })
     }
   }

@@ -20853,6 +20853,7 @@ class Usage {
   }
   async round() {
     const pricing = this.pricing.current();
+    const fallback = this.settings?.codexFallback ?? null;
     const at = this.now();
     const since = Math.floor((at - KEPT_DAYS * DAY2) / DAY2) * DAY2;
     const sources = this.sources();
@@ -20881,7 +20882,7 @@ class Usage {
     for (const files of new Set(sources.flatMap((source) => source.files ? [source.files] : [])))
       files.endRound(complete);
     this.save();
-    this.changed(true);
+    this.changed(true, fallback);
   }
   has(provider) {
     return this.entries.has(provider);
@@ -20950,10 +20951,9 @@ class Usage {
   }
   ownFallback;
   ownSaid = "";
-  changed(own) {
+  changed(own, fallback = null) {
     if (own) {
       const mine = JSON.stringify(this.own().map(({ scanned: _, slots, ...account }) => ({ ...account, slots: keptSlots(slots) })));
-      const fallback = this.settings?.codexFallback ?? null;
       if (this.ownFallback !== undefined && fallback !== this.ownFallback)
         this.peers?.tellAll();
       else
@@ -27092,7 +27092,7 @@ class UsagePeers {
     const now = this.now();
     const { accounts, digest } = this.shared();
     for (const { key } of this.directory.peerBoxes()) {
-      this.transport.send(key, { kind: "usage", at: now, accounts, digest }, false);
+      this.transport.send(key, { kind: "usage", at: now, accounts, digest, ...this.told.has(key) ? {} : { ask: true } }, false);
       this.told.set(key, { digest, at: now });
     }
   }
@@ -32071,4 +32071,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents bcca291e4359f5dda3df50d09ed98ee01b062e6f9e3dc7df2acff5a828c6fbc9
+// Built from Packages/Box/src/agents 91791f4fbd717885d51b61e33aca2a67dc84f85a419c1dcfc4a1d201ad3be7b5

@@ -253,6 +253,8 @@ export class Usage {
 
   private async round() {
     const pricing = this.pricing.current()
+    // (The fallback model as the round starts: one chosen during it is told all again after the next.)
+    const fallback = this.settings?.codexFallback ?? null
     const at = this.now()
     // (From a UTC midnight: what ages out goes once a day, not a little each round.)
     const since = Math.floor((at - KEPT_DAYS * DAY) / DAY) * DAY
@@ -281,7 +283,7 @@ export class Usage {
     // (A round cut short forgets none of the logs it didn't get to.)
     for (const files of new Set(sources.flatMap((source) => (source.files ? [source.files] : [])))) files.endRound(complete)
     this.save()
-    this.changed(true)
+    this.changed(true, fallback)
   }
 
   /** Whether this box keeps an account's usage (read before, or kept from before a restart). */
@@ -375,12 +377,11 @@ export class Usage {
    * used, and the clients that the rows changed, only when what they used did (when each was read
    * isn't news).
    */
-  private changed(own: boolean) {
+  private changed(own: boolean, fallback: string | null = null) {
     if (own) {
       const mine = JSON.stringify(this.own().map(({ scanned: _, slots, ...account }) => ({ ...account, slots: keptSlots(slots) })))
       // Another fallback model chosen: which one estimated what isn't in the digest, and the older
       // days your other computers keep say the one they were told, so all of it goes again.
-      const fallback = this.settings?.codexFallback ?? null
       // (A round is minutes from the last: what changed goes at once; else, now and then, that nothing did.)
       if (this.ownFallback !== undefined && fallback !== this.ownFallback) this.peers?.tellAll()
       else this.peers?.tell(mine !== this.ownSaid)
