@@ -390,7 +390,9 @@ computer. Changing the main computer and joining two setups come later: #183.)
     (`kuvo-start off` leaves `run/off`, which only a Mac's start there takes away, and then its way
     to start, `bin/kuvo-start`, goes with its keys, leaving its link.json and card: no
     `bin/kuvo-start`, or `run/off`, whatever still runs), else `running` (its keeper,
-    `run/box.pid`, runs `kuvo-start` now) or `stopped`; null with none there. A `gone` box is no
+    `run/box.pid`, runs `kuvo-start` now) or `stopped`; null with none there. A Mac's own box made
+    there before it first ran (`box/kind` says `mac`, no card or link.json yet) is a box there too,
+    with its verdict `free` and no name: never taken for none. A `gone` box is no
     box: as with none (`box` null), and the probe leaves it out too. `opens`: `window` where the box it uses is a member
     of a setup another computer is main of (a Mac mini another Mac set up, one that can't say yet,
     the old main computer after a handover, a Mac that joined: never main by itself, only by Make
@@ -2639,7 +2641,11 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `features`; after bridge 0.9.211, `bridge` is a hash of the link as built, which changes with
   every change, rather than a number), `features` (below), whether its coding agents' bridge is up (`agents`), and
   `started`, when the engine running now came up, in seconds since 1970 (null while none runs): a
-  restart changes it, so a phone tells the new engine from the old. Both name the folder of chats
+  restart changes it, so a phone tells the new engine from the old. A Mac's says how its box's move
+  into its home of its own stands while one waits, is under way or went back ("Moving this Mac's
+  box"): `moving: {state: waiting|moving|clearing|failed, step, overdue, why?}`, `why` the reason
+  it last didn't move; left out before one and once it's done. While the box is stopped for the
+  move itself (seconds to a minute) nothing answers for the Mac, as while its engine restarts. Both name the folder of chats
   (`chats`: conversations of no project, made if it isn't there yet, so a phone can start the first
   one there through the engine, as for a project; new chats' sessions are marked chats, "Chats"). A machine's bridge also says whether its engine
   is `running`, and whether it's `stopped` on purpose (it stays down until it's started, from a Mac
@@ -3931,8 +3937,9 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   `rows`: every account across your computers (below, "Across your computers"), what a client
   lists. `services`: what
   this box reads the limits of (`claude`, `codex`, `grok`, `cursor`, `antigravity`, `copilot`,
-  `openrouter`, `zai`, `ollama`, `opencode`), whether or not one is signed in now: a client shows
-  those from here, and anything else from where it had them before. An account is listed once it's
+  `openrouter`, `zai`, `ollama`, `opencode`), whether or not one is signed in now (Antigravity's
+  always, since only boxes read it): a client shows those from here, and anything else from where
+  it had them before; a client never adds to it. An account is listed once it's
   been read (or a turn told of it, or a peer's reading stood for a read here); one with no plan
   limits to read (signed out, an API key) isn't.
   Each `account`:
@@ -4160,8 +4167,8 @@ Cursor while its plan's sign-in was turned away as it is now, or while Cursor ho
   Mac in Istanbul reading a machine in UTC gets its own days); one it doesn't know is its own,
   `zone` says which. `services`: what this box states the usage of (`claude`, `codex`,
   `grok`, `opencode`, `cursor`, `antigravity`): a client shows those from here, and reads the rest as it did. `scanned`: when this box last read its logs.
-  `pricing: {codex: {fallback, chosen, choices}}`: Codex's fallback model, this box's setting
-  (below), `null` for none; `chosen`, whether it was ever chosen on this box (none counts);
+  `pricing: {codex: {fallback, chosen, choices}}`: Codex's fallback model, a usage setting
+  (below), `null` for none; `chosen`, whether it was ever chosen (none counts);
   `choices`, the models it may be, in order.
   - A `row` is one account across your computers, with the same `id` as its plan limits row
     (`<service>#<identity>`, or `<box key>/<provider>` for one that can't say who it is), so a
@@ -4266,10 +4273,12 @@ Cursor while its plan's sign-in was turned away as it is now, or while Cursor ho
     that can't be read just now (being rewritten); signed out, the account's use from this box goes.
 - `PUT kuvo/agents/api/kuvo/usage/pricing[?zone=]` `{"codex": {"fallback": <model> | null}}`: Codex's
   fallback model, whose rates estimate what a Codex model with no known price used (in this box's
-  own Codex logs, not the engine's ChatGPT slice: each box prices its own with its own); one of `choices` (the supplement's
+  own Codex logs, not the engine's ChatGPT slice: each box prices its own with it); one of `choices` (the supplement's
   `fallback_models.codex` priced exactly by a catalog), or `null` for none (`400 {message}` for
-  anything else, its `message` a client shows as it is). Kept in the bridge's `usage/settings.json`, through a restart; read again with it
-  at once, answered as `GET`.
+  anything else, its `message` a client shows as it is). One of the usage settings, the same on
+  your own computers ("Usage settings": `codexFallback`), kept in the bridge's `usage/settings.json`
+  through a restart; read again with it at once, here and on each computer it reaches, answered as
+  `GET`. `chosen`: whether it was set on any of them (none counts).
 - `POST kuvo/agents/api/kuvo/usage/refresh[?zone=]` reads the logs now, asks your other computers
   to read theirs and tell (below), and answers as `GET` once it's read here (or after five
   seconds, the rest coming as the event).
@@ -4317,6 +4326,119 @@ Cursor while its plan's sign-in was turned away as it is now, or while Cursor ho
   `away` when every box of theirs is), what it said kept, and whether it was one a peer vouches
   for, which holds after a restart until the link says again; a computer you removed goes, with
   what it said.
+
+### Usage settings
+
+The usage panel's settings (#631 piece F) are the same on every app, whichever box it asks: each
+box keeps them, and your own computers' boxes share them. They're what the panel shows and counts,
+not how it looks: density, theme, transparency, animation, the menu bar's style and how each card
+is opened stay each app's own. A client reaches them as `kuvo/agents/api/kuvo/usage/settings…`
+(the Mac app at `api/kuvo/usage/settings…` on its box's bridge), where `features` has
+`usage.settings`. A box from before them answers 404, and a client keeps its own settings there.
+
+- They're in parts, each changed and shared whole:
+  - `layout`: `{placed, providerOrder, metricOrder, pinned, expanded, expandOnEnable, seeded}`.
+    `placed` holds the meters shown, by id (`<provider>.<metric>`, as the Mac's panel names them),
+    in order. `providerOrder` is the cards' order, and `metricOrder` each card's meters' order
+    (`{<provider>: [id]}`), shown or not. `pinned` holds the meters pinned to the menu bar.
+    `expanded` holds the meters shown only when their card is opened, and `expandOnEnable` the ones
+    that go there when they're turned on. `seeded` holds the default meters already offered, so one
+    you turned off isn't turned on again.
+  - `providers`: `{enabled, known}`. `enabled` holds the cards turned on, and `known` every card
+    offered, so a new one is offered once.
+  - `totalSpend`: `{show, period?, metric?}`, the total spend card: whether it shows, its period
+    and what it counts, as the panel names them.
+  - `codexFallback`: Codex's fallback model ("Usage history"), `null` for none.
+  - `notifications`: `{underTenPercent, healthyToClose, closeToRunningOut}`, which of the
+    panel's notifications are on. They're delivered by each app, where it reads them.
+  A part never set is absent: the panel's own default. Lists hold at most 1,000 ids of up to 200
+  characters each, `metricOrder` at most 200 cards, and `period` and `metric` up to 40 characters.
+- `GET kuvo/agents/api/kuvo/usage/settings` → `{data: {settings: {<part>: value}, versions:
+  {<part>: version}, imported}}`. `versions`: each part's version as a client names it (below).
+  `imported` says whether what a client kept before has come in on this box (below).
+- `PUT kuvo/agents/api/kuvo/usage/settings` with the parts changed (`{layout?, …}`, each whole)
+  answers as `GET`. With `knows: {cards, meters}`, the card and meter ids the client's app knows
+  (all of them), `layout` and `providers` are whole for those alone: the ids the part held of the
+  others (a newer app's) are kept, each after the nearest one before it that's still there (first
+  when none is), so they keep their places. Without it, a part's ids are taken as sent. Fields of a
+  part the box doesn't know (a newer box's) are kept whatever a client sends. With `based:
+  {<part>: version | null}`, the version each part was changed from (`null`: the client had none),
+  a part that has changed since (another computer's change came meanwhile) isn't changed: the
+  answer names it in `stale`, and the client shows the box's. The Mac app sends both. The answer is `400 {message}` for a part that isn't one or isn't what it should
+  be, and for a `codexFallback` that isn't one of `choices` ("Usage history"); nothing changes then.
+  A part sent as it already is isn't a change.
+- `POST kuvo/agents/api/kuvo/usage/settings/import` with what a client kept before (its own
+  settings from before the box kept them, `codexFallback` among them) answers as `GET` with `took`,
+  the parts that came in. It happens once per box: each part no box has set yet comes in, here or
+  from another of your computers, and the rest stay as they are. A `codexFallback` the box can't
+  price with now is left out. After the first time, it takes nothing. The Mac app does this the
+  first time its box says `imported: false`, with only the parts you changed on it (a Mac still on
+  its first-run settings brings none, so it never puts them over the ones you made on another,
+  whichever comes first), never `providers` (each Mac turned on the cards for the tools it found:
+  they're shared from the first time you turn one on or off).
+- The bridge's events carry `kuvo.usage.settings` `{units}` when parts change (through these
+  routes, from another of your computers, or as the box starts over in another setup): ask again.
+- Each part carries the version of its last change, `{v, by, imported?}`. `v` counts on from every
+  version the box has seen: milliseconds since 1970, or one past the highest seen when its clock is
+  behind. `by` is the box that made it (its link key). `imported` marks what came in by import, at
+  `v` its time by the importing box's own clock (an import isn't counted on from what was seen, as
+  a change is). So between two imports on two computers whose clocks are off, the one whose clock
+  said earlier wins, which may not be the one made first; once either is changed anywhere, the
+  change wins. A client names a version as `<v>/<by>`, with `/i` after an import's
+  (`versions`, `based`). The newest wins: a change over an import, the higher `v` between two changes, the
+  lower `v` between two imports (so a Mac set up later never puts its first-run settings over the
+  ones you made on another), and at the same `v` the `by` that sorts last.
+- **Across your own computers** only: between the boxes of one setup ("Your setup"), whose
+  boxes are all yours. The link tells the bridge the setup it follows now (`setup` in `PUT
+  /api/kuvo/peers`, its id; `null` once it's settled that it follows none: a machine more than one
+  Mac set up, or a setup set aside; not said while it can't say one: none made yet, as a box from
+  before setups updates, or one it can't follow yet, its keys not read as its link starts or made
+  anew. A link from before this, met for a moment as a box updates, doesn't say it either. The
+  bridge takes not said as neither: it records nothing and shares nothing until the link says), and a box sends and takes
+  them only while it follows one, only with its peers (the setup's boxes), and only mail naming the
+  same setup. So never to or from a box a peer vouches for, and never through a machine more than
+  one Mac set up (it follows no setup, so it neither passes them on nor takes them): until setups
+  can be joined (#183), Macs that share a machine each keep their own, as their boxes keep them.
+  The settings belong to the setup they were shared in (`setup` in `settings.json`; `null` while
+  the box followed none; a box from before this takes the first the link names): a box the link
+  names in another setup (it left yours, and joined someone else's), or in one after following
+  none, starts over, every part and `imported` gone, so none of them reaches the new setup's
+  computers, and its own Mac's settings come in again.
+  Nothing goes before the link has said. Each box tells the others `{"seat": {"kind": "settings",
+  at, digest, setup, usage?, ask?}}` through its link, which carries this kind only between your
+  own computers (never to or from a box a peer vouches for), whole or in parts as a group chat's
+  mail is. `usage` is the parts with their versions (`{<part>: {value, stamp: {v, by,
+  imported?}}}`), and `digest` a hash of all of them. A box sends all of them, with `ask`, to one
+  it hasn't told since its bridge or link started. It sends all of them as they change, here or
+  from another computer (not back to the box whose mail it just took, when it now holds the same). Every ten minutes otherwise it sends `digest` alone. A box takes the parts
+  newer than its own. One whose `digest` then isn't the sender's sends all of its own (at most once a
+  minute), asking for the other's when the mail held only a `digest`. `ask` is answered with all of
+  them at once. A part a box doesn't know (a newer box's) is kept as it came, and passed on, and so
+  are a part's fields it doesn't know (`digest` is of their JSON with every object's keys in one
+  order), so two boxes of different versions agree (while what a part holds that a box doesn't know
+  is at most 16 KB: past that the older box drops it, and the two tell each other all of it every
+  ten minutes, at most once a minute each). Nothing is kept per computer: what's newer is
+  taken into the box's own, kept in `usage/settings.json` (`{"kuvo": 1, units, imported?, setup?}`, `setup` an id or `null`, with `codex: {fallback}` where a box from
+  before reads Codex's fallback model), through a restart. A box from before kept only that
+  fallback model there: what it held counts as imported.
+- A Mac app shows the box's parts in its panel and sends a part it changed, whole, with `knows`
+  and `based`. Its import waits until its panel has read its layout (the usage item starts with
+  the app); with the usage item off, it brings the layout as kept, once its meters were.
+  It reads whether its box keeps them from `features` (`usage.settings`; its own box of the same
+  version does). A change made while the box doesn't answer, before its first answer since a
+  restart too, goes once it's back; one made again while the last is on its way goes from the
+  version the box answered with, unless the box turned that one away (another computer's came
+  first: the box's shows); one turned away though the box holds this Mac's own last (the answer to
+  it was lost, and the box hasn't held another value of that part since, as this Mac last read
+  it) goes again from the box's version: the app keeps what the box last said, and what's still to go,
+  through a restart. Its panel's
+  stores keep their own copy, so they start at once and work while the box doesn't answer; a change
+  made meanwhile goes once it's back, and an answer that comes while one is on its way leaves that
+  part as it is here. A part the box says again as it said it before isn't put in again. A card or
+  meter a Mac doesn't know (a newer app's) is left out of its panel, and kept by the box (`knows`).
+  The layout comes over in the import only when it isn't a fresh panel's (after Reset, or a change
+  put back, it is). The phone shows the Mac's panel until it reads
+  boxes itself (#631 piece H).
 
 ### The Work Queue
 
@@ -4780,7 +4902,8 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
   `kuvo.handoffTo`; the rest of it kept): show the link in each.
   - `POST …/kuvo/handoff/<session>` with `{"next"?}` → `{data: handoff}`, `state` `writing`: the
     note takes a while. A handoff: `{from, state: "writing" | "done" | "failed", to?, title?,
-    error?}`. `409` for a subagent's, one with no model yet, one being handed off, or one whose
+    error?, started?}`, `started` when it was asked for (ms since 1970): which handoff it is, so an
+    end told before the answer to its start isn't taken for an earlier one's. `409` for a subagent's, one with no model yet, one being handed off, or one whose
     agent is working (wait for its turn to end); one whose agent starts while the note is written
     fails, and makes no new conversation.
   - `GET …/kuvo/handoff/<session>` → `{data: handoff}`, its latest while the box runs.
@@ -4889,6 +5012,78 @@ the names said in the conversation's newest messages, its packages', the files c
 with and without its extension), then its other folders and files. Never anything of `.env`
 files, nor long hex or random-looking strings. `404` for a conversation that isn't there, `409`
 for one with no folder.
+
+### What a typed message means
+
+What a conversation's composer sends is its box's to read: `kuvo/sessions/<session>/typed` on the
+box the conversation lives on. A client needs a box whose `features` has `typed`, and has no other
+way: with one from before, it keeps what was written and says that computer needs a newer Kuvo
+Code (a Mac updates its machines before it uses them; a phone can meet a Mac not updated yet). The box decides what the text means, does what's its own, and says what the
+client does with the rest; a client keeps the draft, puts back what it's told to, and draws.
+
+- **The order a text is tried in:** a goal ("/goal …"), a keyword this conversation offers, the
+  engine's own review ("/review-quick …"), a "!" command ("!" first, then words), one of the
+  engine's commands in the conversation's folder ("/name arguments"), else a message. With the
+  engine's commands unread, a goal or keyword still goes; anything else answers `503`. A text whose
+  first character that isn't a space is neither "/" nor "!" is always a message: a client sends it
+  without asking (with a model that can't run, it says why and keeps it, as the box would).
+- `GET` → what "/" offers there: `{keywords: [{name, title, summary, argument}], commands:
+  [{name, description?}]}`. `keywords` in the order to list them, `argument` what's written in grey
+  after one until something is (null: it takes nothing). None in a subagent's conversation; `goal`,
+  `review`, `btw` and `handoff` while the box's agents bridge runs; `loop`, `plan`, `autopilot` and
+  `compact` always. `commands` is the engine's and yours as "/" lists them: never its `goal`, and
+  its `review` as `review-quick` while the keyword has the name. Read it again when the conversation
+  opens and as its agents bridge comes or goes.
+- `POST` with `{"id"?, "text", "files"?, "side"?, "refusal"?, "reviewer"?}`: the send's own id
+  (or `idempotency-key`, with which the phone's link sends it again after its session drops: "Sending
+  again"), under which the box answers the same send again as it did, never doing it twice,
+  whatever became of the first request: an answer that went is kept on disk an hour (the latest
+  1000), so it holds after the box starts again too; one that didn't go (refused, the engine not
+  there) is tried again; one cut off as its step was done (the box stopped meanwhile) may be done
+  again; the text as typed; whether
+  pictures or files are attached; whether the side thread's tag is on the composer; why the
+  conversation's model can't run, as the client says it; the model picked last in "Who reads it"
+  (`{providerID, id}`, which wins a tie between two of the same name). It answers `200` with what it
+  meant, `400` without `text`, `404` for a conversation that isn't there, `503` when the engine
+  can't be asked; on any of those the client puts it all back, saying why.
+- **The answer**, every field left out where it doesn't apply, applied in this order:
+  - What the box did, to show at once, before its events come: `goal` (as set, paused or resumed),
+    `goalCleared`, `askedBot` (a bot's chat: the bot was asked to plan it, "Work › Goals"),
+    `autopilot` (on, as `kuvo/sessions/<id>/autopilot` answers), `wakeUp` (`{due, every, note}`, a
+    /loop's, `due` in seconds), `sideQuestion`, `handoff`, `review` (as the agents bridge answers
+    them, "Side questions, handoffs and reviews"). `keyword` names the keyword it ran (not
+    "/goal", which is a goal's).
+  - What the client does: `showGoal` (show the goal bar), `agent` (the mode the box switched the
+    conversation to, to show: `plan`, or, for "/plan" alone in Plan, the one a conversation starts in
+    there: Build, or the first mode there is where Build is off), `toggleAutopilot`, `compact`, `shell` (run it in the conversation's folder), `command`
+    (`{name, arguments}`, run with the composer's files), `send` (`{text, typed?, quoted?, steer?}`:
+    send it as a message with the composer's files; `typed` is the keyword as typed, "/plan", to
+    send it with; `quoted`: what the composer replies to goes with it; `steer`: to the agent now,
+    never to wait in the queue, whatever Send asked: a /loop's first), `sideThread` (a follow-up in the side
+    thread that shows, as one without "/" is: one at a time, and none with files attached).
+  - What goes back: the composer's files stay unless `send` or `command` took them, and what it
+    replies to unless `send.quoted` did; `restore` `{text, beside?}` goes back ahead of anything
+    written since: `text` into an empty composer, else `beside` where it's given (a keyword's words
+    alone, which the keyword would otherwise take in; nothing for a goal's pause), else `text`;
+    `error` says why, over the composer.
+- **Meanwhile** a client shows the text at once where it was sent (as a message waiting to go; a
+  side question, or a follow-up while the side thread's tag shows, in its side thread, being
+  answered: it never joins the conversation), and puts what the box says in its place; "/" and "!" texts are asked one after another, and a message sent meanwhile
+  goes at once.
+- **What each keyword does:** "/plan" alone toggles Plan (one "/plan" after another in each
+  conversation, each from the mode the one before left; the Mac's Plan Mode item goes this way too), with words turns it on and sends them
+  (with files alone, on); "/autopilot" alone toggles it, with words or files the box turns it on
+  first; "/loop <how often> <what to do>" adds a wake-up that sends the words again, first due by the
+  box's clock (`KUVO_TZ`), and sends them now unless it keeps a time of day ("every morning at 9"
+  waits for it); "/btw", "/handoff" and "/review …" start one; "/goal" alone shows the goal (with
+  none, "/goal " comes back to finish), "/goal pause|resume|clear" changes it, "/goal <words>" sets
+  it, or in a bot's chat asks the bot to plan it.
+- How the words read ("every 30 min", "weekdays at 8:30", "since abc1234", "with GPT-5 Mini"), so a
+  client draws a keyword as it's typed the way the box reads it once sent, and what the box decides
+  for each kind of text: `Vectors/typed.json`, which the box (`test/typed.test.ts`) and KuvoClient
+  (`TypedVectorsTests`) are held to.
+- Kept in clients, as drawing: which keyword or command a text starts with as it's typed (to draw
+  it), the side thread's tag following what runs as typed, and whether Send needs a model.
 
 ### Features
 
@@ -5019,6 +5214,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `sign-in.return` | `POST kuvo/sign-in/return` |
 | `skills` | `kuvo/skills…` and `kuvo/skill-library…` |
 | `skills.trash` | `kuvo/skill-trash…`: Recently Deleted, and restoring from it |
+| `typed` | `kuvo/sessions/<id>/typed`: what "/" offers, and what a typed text means ("What a typed message means") |
 | `update` | a machine only: `kuvo/update` |
 | `usage` | a Mac only for now: `kuvo/usage…`, from its app while it's open (`404` without the usage panel, `503` with the app closed), spend and what the box doesn't state of a plan yet (a machine's box can't do this yet, on Linux or a Mac). Before #191 step 2 a Mac named it only while its usage panel was there |
 | `wakes` | `kuvo/wakes`, a session's, and cancelling one or sending it now |
@@ -5106,8 +5302,9 @@ writes (only you can read them) as they start and removes as they stop.
 This Mac's box keeps running whether or not the app is open, as a machine's does with its Mac
 closed: its keeper is Kuvo Code's own executable run with `--box`, which launchd starts from the
 launch agent in the app (`Contents/Library/LaunchAgents/<bundle id>.box.plist`, registered with
-`SMAppService` the first time the app opens), at each login and again if it stops by itself. It has
-no window. It runs the engine, the box and the coding agents' bridge, starts each again when it
+`SMAppService` the first time the app opens; never once this Mac's box lives in its home of its
+own, with `movesOwnBox` on, where its helper starts it: "Moving this Mac's box"), at each login and
+again if it stops by itself. It has no window. It runs the engine, the box and the coding agents' bridge, starts each again when it
 stops (at once, up to three times in five minutes), and tries each again when it couldn't start or
 keeps stopping (after 15 s, 30 s, 1, 2 and 5 minutes, then every 10 minutes for good, as a machine's
 keeper waits, starting over once it ran for ten minutes; not when another try can't help: a program
@@ -5237,9 +5434,10 @@ own keeps:
   that `serve` runs, its `kuvo-start` holds nothing for it and lets go of a hold it had; until then
   it holds the Mac awake on power as a machine's does.
 
-Only the move below records `box/kind` (`mac`), and nothing runs it yet: the keeper that runs it
-and what the app does for a box there come later (#333), so this Mac's box runs in the app's folder
-as above.
+Only the move below records `box/kind` (`mac`), or a new Mac's box made there from the start
+(`rehome --new`). The keeper runs the move and the app makes a new Mac's box only with its
+`movesOwnBox` on (off: #333, until what the app does for a box there is built), so this Mac's box
+runs in the app's folder as above.
 
 #### Moving this Mac's box
 
@@ -5377,7 +5575,9 @@ refused anything but `--status` on the real `~/.kuvo-code`.
      say, or its list of machines), it goes back first: nothing is left only in the kept copy. So the app writes nothing
      there during a move. From here it only goes forward. The originals, the app's `box` and `opencode`
      folders whole and each other, are renamed into `updates/rehome/kept/<date>/`, so nothing in
-     the app's folder says a box ran there (`here`). Kept 30 days (`keptUntil`), then deleted, by
+     the app's folder says a box ran there (`here`). Kept 30 days (`keptUntil`), then deleted (only ever what's in the move's own `kept`, where it
+     really is, `..` and links followed, whatever `state.json` names; nothing where `kept` itself
+     isn't a folder of its own), by
      `serve` as it starts and by `--ready`.
   9. **Done.** `state.json` says `done`, with what the app's executable still owes (`owed`:
      `keychain`, the Keychain's originals deleted, and `agent`, its own launch agent
@@ -5389,8 +5589,7 @@ refused anything but `--status` on the real `~/.kuvo-code`.
 - **`--resume`**: a move (or move back) that stopped part way, finished: back before step 8,
   forward from it. Going back is done again from the start if it's cut short itself. While one is
   unfinished, `here` says `{verdict: "moving", use: "wait"}`: a keeper and app that know it start
-  no box (today's app doesn't know `wait`, and never runs a move: the keeper that does comes with
-  it). Gone back, `failed`; finished, `done` or `back`; nothing to finish, `nothing`, making nothing.
+  no box (an app from before #333 piece 5 doesn't know `wait`, and never runs a move). Gone back, `failed`; finished, `done` or `back`; nothing to finish, `nothing`, making nothing.
 - **`--back`**: Move Back, with the box in `~/.kuvo-code` stopped: the same steps the other way, on
   the data as it is now (what was made since goes back too), into the app's folder it came from
   (`state.json`'s `from`). What the move merged goes back where it came from; each other entry of
@@ -5416,6 +5615,87 @@ refused anything but `--status` on the real `~/.kuvo-code`.
   meanwhile) is `overdue`.
 - **`--status`**: `kuvo/box/rehome`'s answer. **`--settled keychain|agent`**: one of `owed`, done
   (`{settled, status}`).
+- **`--new --release <folder> [--keeps-awake off]`**: a new Mac's box, made in `~/.kuvo-code` from
+  the start, with nothing to move (the app, as it first opens): refused, saying why and changing
+  nothing (not even making `~/.kuvo-code`), where a box of the app's own ran in its folder or its
+  engine kept your sessions (`here`'s, with `KUVO_ENGINE_DATA`: that one moves instead), where a box
+  is in `~/.kuvo-code` (as a move is, and also one with no card yet that says it's a machine's in
+  `box/kind` or has keys of its own in `box/keys`), for a copy of the app into the real `~/.kuvo-code`, without
+  the release's files, or before the engine is in the app's folder. Under the move's lock: what's
+  there that isn't a box set aside into `trash/earlier-box-<date>` (as the move's install step
+  does), the release's `bin` put in place whole, the app's `engine` cloned beside it (copied where
+  the disk can't clone; the app's stays), Keep This Mac Awake off where it's off in the app, then
+  `box/kind` (`mac`), last, saying it's being made meanwhile (`updates/rehome/new`, written before
+  anything's set aside): one cut short is made again from the start, what it left set aside in the
+  trash like the rest, nothing deleted (but its own scratch copies, `bin.new` and `engine.new`).
+  The mark counts only where no move has been (no
+  `state.json` state, no journal) and no box of anyone's has been there since (a machine's kind,
+  keys of its own, a card); a move's install step sets it aside, journaled, so a box moved there
+  later is never taken for a making cut short. All of it holds the move's lock to the end; one that
+  fails part way (not cut short) takes its mark away again. `done` (exit 0); made already,
+  `nothing`. No `state.json`: nothing moved, so there's nothing to move back. **`--new --check`**,
+  changing nothing: `{ready, made, why?}`, `made` once its kind says so with no move under way (a
+  move writes it before it's done: never `made` then), `ready` where it would be made now (the
+  release aside).
+- **`--failed <why>`**: a try the keeper gave up on before the move began (the Keychain's copies, the
+  release), counted as a refusal is (`tries`, `nextTry` an hour on, `failed`), so `--ready` waits
+  for the next: `{noted, status}`, `noted` false once a move's under way or done.
+- A release (`--release`, to move or make one) must bring the helper,
+  `bin/Kuvo Code Box.app/Contents/MacOS/Kuvo Code Box`: without it nothing would start the box in
+  its home, so it's refused, saying so.
+
+**What the keeper does** (#333 piece 5, with the app's `movesOwnBox` on; off, nothing here happens
+and the keeper is as "The keeper" says). Everything above it asks of the box with this app's own
+`kuvo-link.js`, by the engine's Bun (the box's, once the app's moved with it):
+
+- **As it starts**, holding a lock of its own in the app's caches (`keeper-move.lock`: a second
+  keeper goes), before it writes anything in the app's folder (its records there would say a box of
+  the app's ran there again): `--status`. A move under way (`moving`, `clearing`, or a
+  journal not `done`) is finished first (`--resume`); one that's `done` is finished off (below), and
+  the keeper retires without starting anything (so does one that finds a new Mac's box there, its
+  helper's launch agent left as it is); otherwise copies of the app's Keychain items a try
+  left (their journal `copying` or `copied`) are taken away by the helper (`keys uncopy`), and the
+  box starts in the app's folder as always. While a move holds on (`stuck`, `waits`, or what's owed
+  can't be done yet), it starts nothing, and looks again every ten minutes.
+- **Running**, at its first look and every ten minutes after, and at once when `state.json`
+  changes (Move Now asked), unless an update waits for it or something's under way: `--ready`. Ready
+  (`move` or `resume`), it makes the box's release (`--write-box-files`' files, with the helper the
+  app carries) and asks `--ready --release` with it, the box still running; still ready, it stops
+  the engine, the bridge and `serve` (holding `run/box.lock`, so the
+  app starts none meanwhile, and answering every control but `status` `503` with a `message`,
+  Stop Background Work too, its `status` saying `moving: true`, and `movingWhy` while the move holds
+  on, stuck part way say, as the box said it; the app's window says it's moving, with why, in its
+  starting text, not as a failure), copies the app's Keychain items for the helper
+  (`KeychainMove`; an earlier try's copies taken away first, items an earlier box left cleared once
+  with `keys clear`) and has the helper read them back (`keys check`), then runs `--release`, with
+  `--keeps-awake off` where it's off in the app. What it gives up on before `--release` (the release
+  not made, the copies) it says with `--failed`, so the box's tries count it.
+- **Moved** (`done`), and whenever it finds the box moved: the helper's launch agent put in place
+  and loaded (`helper install --load --app <its bundle ID>`, run with `KUVO_HOME` the box's home;
+  one loaded already is started if it isn't running, `helper start`, as one that found the box
+  moving went), so the box runs from its home at once; the Keychain's originals deleted
+  (`deleteOriginals`), then `--settled keychain`; `--settled agent`, then its own launch agent
+  unregistered, and it exits as Stop Background Work does. Each only once the one before is done
+  (the box said it's settled), else tried again. Where the Keychain won't
+  change (locked), it stays registered and running nothing, looking again every ten minutes; the box
+  runs meanwhile, from the helper's copies.
+- **Not moved** (`refused`, `failed`, a copy the helper couldn't read; moved back, `back`): the
+  helper takes the copies away, and the box starts in the app's folder again (the bridge too).
+- **Stopped** meanwhile (SIGTERM, as you log out): it starts nothing again as it goes; the next
+  keeper finishes what the move left, as above.
+- **The app**, with `movesOwnBox` on, asks `here` before it starts a box (the keeper too, with either
+  flag on). While `here` says `moving` it starts nothing and says so in its starting text (why it
+  holds on, from `--status`'s `failed`, which a move under way has only once it's stuck), asking
+  `here` again, less often as it goes on (5 seconds, up to a minute); a copy that attaches in place
+  but doesn't move boxes says so once, as a failure. On a new Mac it asks `--new --check`, makes the box with `--new` where it's `ready`,
+  and has its helper load; where the box says it's `made`, it registers no keeper of its own
+  (`BackgroundWork`). Finding this Mac's box in its home stopped, it starts it through its helper
+  (`helper start`, else `helper install --load`), never by running its `kuvo-start` (where the box
+  can't say whether it's a Mac's, nothing).
+- **What piece 8 adds** (drafts first): the move's own view (waiting, moving, done, didn't finish,
+  Move Now…), Settings' "This Mac's box" (starts at login, where it is, Move Back, Uninstall…),
+  permissions for the helper, the `two` state, and the phone drawing `moving` (and the Mac away
+  for the move itself as moving, not offline).
 
 A Mac's box in a home of its own starts its bridge as a machine's (`KUVO_AGENTS_REMOTE`), but the
 coding agents' default accounts stay yours, in your home (`~/.claude`, `~/.codex`, `~/.grok`), as
@@ -5424,7 +5704,7 @@ the app's box keeps them: only on a machine are they in the bridge's folder (`<a
 `kuvo/box/rehome`: `GET` answers `{state, way, step, tries, nextTry, waitingSince, overdue,
 failed, movedAt, keptUntil, owed, asked, from, to}`. `state`: null before anything, `waiting`,
 `moving` or `clearing` (under way, at `step`, or a journal that can't be read: `plan`, `install`, `clone`, `rewrite`, `check`,
-`place`, `fix`, `clear`, `done`), `done`, `failed` (gone back; `failed` says `{at, step,
+`place`, `fix`, `clear`, `done`), `done`, `failed` (gone back; `failed` (cleared as a move begins: while one's under way, why it's stuck) says `{at, step,
 message}`), or `back`; `way`, `move` or `back`; `nextTry`, `waitingSince`, `movedAt` and
 `keptUntil` in ms; `asked`, `now` or `back`, until it's acted on. The app's box in its folder
 answers for the `~/.kuvo-code` it moves to (the real app's folder alone, `run.kuvo.code`; a copy,
@@ -5595,7 +5875,16 @@ place, which is what macOS keeps your permissions and its Keychain items by.
   message}`, exiting 0 once done, 1 when refused (not a Mac, not a Mac's own box in a home of its
   own, not the real `~/.kuvo-code`, or no helper in `bin`) or launchd didn't start it, 2 for what it
   doesn't know. `helper status` says `{helper, agent, loaded}` (`loaded` null where launchd couldn't
-  be asked). As `uninstall` does, it touches launchd only for the real `~/.kuvo-code`, or a test's
+  be asked). `helper start [--if-missing] [--app <bundle ID>]` is the whole start through the helper: its
+  launch agent put in place and loaded where it isn't there (as `install --load`), loaded where it's
+  there but not loaded, and started where it isn't running (`launchctl kickstart`, leaving one
+  running as it is); with `--if-missing`, one in place is left as it is, loaded or not (switched
+  off in Login Items, it stays off: `left: true`). It says `{started, mac, left?, disabled?,
+  message}` (`disabled` where launchd won't because it's switched off in Login Items, which
+  `message` then says plainly), `mac`
+  whether it's a Mac's own box in a home of its own (only then does its helper start it, and
+  nothing else may), `message` why not where it didn't; exit 0 once it has (or left it), 1 when
+  refused as `install` is or launchd didn't. As `uninstall` does, it touches launchd only for the real `~/.kuvo-code`, or a test's
   stand-ins (`KUVO_TEST_UNINSTALL_TOOLS`). `uninstall` takes it away. With Login Items off for it,
   the app opens it once (`open -g -j -n <bundle> --args keep --home <box>`), checked first: there,
   its signature whole, its ID the app's with `.box`, signed by the app's team (an ad hoc build: the
@@ -5791,8 +6080,9 @@ names it (a `/` can't be in a part of the path). A Mac answers from its box; a m
 there, with the settings of those it removed, the first time the machine answers; what it changes
 while a box is away goes there when it's back.
 
-- `GET kuvo/projects`: `{projects: [{directory, name?, folders, run?, terminal?, removed?, madeBy?,
-  addedByBox?}]}`, newest first. `name` only when it isn't the folder's own; `folders`, the
+- `GET kuvo/projects`: `{projects: [{directory, name?, folders, run?, removed?, madeBy?,
+  addedByBox?}]}`, newest first. It never lists the retired `terminal` field. Reads do not write
+  the saved file; the next project edit drops that field. `name` only when it isn't the folder's own; `folders`, the
   project's other folders; `removed`, one Remove Project took off the list, kept with its settings
   for when one of its sessions is brought back (a client shows it then, and not before); `madeBy`,
   the bot that made it ("Work"); `addedByBox`, one the box added itself (a session started in a
@@ -5815,9 +6105,9 @@ while a box is away goes there when it's back.
   itself). A client may hear of the session from its engine before this list names a new worktree,
   and the list never names a subfolder: one whose folder the list doesn't name, still running in the
   folder its `kuvo.filed` names, is filed under that project (#311).
-- `PUT kuvo/projects?directory=<folder>` with any of `{name, folders, run, terminal, removed}`
-  adds the project or changes what's given (an empty string is none), and brings a removed one
-  back unless `removed` is true (a client's copy of one it removed, with its settings); one with
+- `PUT kuvo/projects?directory=<folder>` with any of `{name, folders, run, removed}` adds the
+  project or changes what's given (an empty string is none). A supplied `terminal` field is
+  ignored. It brings a removed one back unless `removed` is true (a client's copy of one it removed, with its settings); one with
   `folders` takes away `addedByBox`: `200 {project}`; 400 for a folder that isn't a whole path. The folder is kept as it's named,
   as its sessions run there (a link isn't followed), and whether it's there now or not (a drive
   that's away).
@@ -7580,6 +7870,11 @@ before connects (the box notes one: `run/attached`).
   usage panel read Cursor's plan and spend itself, with the Cursor agent's key in this Mac's box
   folder, as before. Never the Cursor app's login.
   <!-- compat: 0.7 cursor-box -->
+- **Usage settings from before the box kept them** (#631 piece F): a Mac whose own box doesn't list
+  `usage.settings` in its features (one from before, still running as the Mac updates) keeps its
+  panel's settings in its own stores, as before, and shares none, until #679 updates its box
+  ("Usage settings").
+  <!-- compat: 0.7 usage-settings-box -->
 - **Updating an agent's program**: such a Mac asks `POST kuvo/agents/api/integration/<provider>/update`
   and waits for its answer, `{data: {updated, version?, message?}}`, so the agents bridge still
   answers that once the update is done (the same update every client sees, "Installing and

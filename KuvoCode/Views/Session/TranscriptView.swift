@@ -162,7 +162,7 @@ struct TranscriptView: View {
         .overlay {
             if model.isLoaded && rows.isEmpty {
                 EmptyConversationView(directory: model.session.location.directory) { text in
-                    model.submit(text, files: [], for: nil, queue: false, commands: [])
+                    model.submit(text, files: [], for: nil, queue: false)
                 }
             }
         }

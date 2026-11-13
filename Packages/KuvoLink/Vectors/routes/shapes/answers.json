@@ -3329,10 +3329,16 @@
             "literal": "skills.trash"
            },
            {
+            "literal": "typed"
+           },
+           {
             "literal": "update"
            },
            {
             "literal": "usage.history"
+           },
+           {
+            "literal": "usage.settings"
            },
            {
             "literal": "vault"
@@ -3419,6 +3425,34 @@
         "chats": "string",
         "integrations": {
          "map": "string"
+        },
+        "moving?": {
+         "object": {
+          "state": {
+           "oneOf": [
+            {
+             "literal": "waiting"
+            },
+            {
+             "literal": "moving"
+            },
+            {
+             "literal": "clearing"
+            },
+            {
+             "literal": "failed"
+            }
+           ]
+          },
+          "step": {
+           "oneOf": [
+            "string",
+            "null"
+           ]
+          },
+          "overdue": "bool",
+          "why?": "string"
+         }
         }
        }
       },
@@ -3769,10 +3803,16 @@
             "literal": "skills.trash"
            },
            {
+            "literal": "typed"
+           },
+           {
             "literal": "update"
            },
            {
             "literal": "usage.history"
+           },
+           {
+            "literal": "usage.settings"
            },
            {
             "literal": "vault"
@@ -7667,7 +7707,6 @@
           "list": "string"
          },
          "run?": "string",
-         "terminal?": "string",
          "removed?": "bool",
          "madeBy?": {
           "object": {
@@ -7700,7 +7739,6 @@
          "list": "string"
         },
         "run?": "string",
-        "terminal?": "string",
         "removed?": "bool",
         "madeBy?": {
          "object": {
@@ -9748,6 +9786,153 @@
    }
   },
   {
+   "route": "GET kuvo/sessions/:id/typed",
+   "answers": {
+    "200": {
+     "object": {
+      "keywords": {
+       "list": {
+        "object": {
+         "name": "string",
+         "title": "string",
+         "summary": "string",
+         "argument": {
+          "oneOf": [
+           "string",
+           "null"
+          ]
+         }
+        }
+       }
+      },
+      "commands": {
+       "list": {
+        "object": {
+         "name": "string",
+         "description?": "string"
+        }
+       }
+      }
+     }
+    },
+    "404": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "503": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/sessions/:id/typed",
+   "answers": {
+    "200": {
+     "object": {
+      "keyword?": "string",
+      "goal?": "any",
+      "goalCleared?": "bool",
+      "askedBot?": "bool",
+      "autopilot?": {
+       "object": {
+        "autopilot": "bool",
+        "decided": {
+         "list": {
+          "object": {
+           "id": "string",
+           "text": "string",
+           "choice": "string",
+           "why?": "string",
+           "options?": {
+            "list": "string"
+           },
+           "multiple?": "bool",
+           "session?": "string",
+           "call?": "string",
+           "at": "number",
+           "yours?": {
+            "object": {
+             "choice": "string",
+             "at": "number"
+            }
+           }
+          }
+         }
+        }
+       }
+      },
+      "wakeUp?": {
+       "object": {
+        "due": "number",
+        "every": "string",
+        "note": "string"
+       }
+      },
+      "sideQuestion?": "any",
+      "handoff?": "any",
+      "review?": "any",
+      "showGoal?": "bool",
+      "agent?": "string",
+      "toggleAutopilot?": "bool",
+      "compact?": "bool",
+      "shell?": "string",
+      "command?": {
+       "object": {
+        "name": "string",
+        "arguments": "string"
+       }
+      },
+      "send?": {
+       "object": {
+        "text": "string",
+        "typed?": "string",
+        "quoted?": "bool",
+        "steer?": "bool"
+       }
+      },
+      "sideThread?": "bool",
+      "restore?": {
+       "object": {
+        "text": "string",
+        "beside?": "string"
+       }
+      },
+      "error?": "string"
+     }
+    },
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "404": {
+     "object": {
+      "message": "string",
+      "restore?": {
+       "object": {
+        "text": "string",
+        "beside?": "string"
+       }
+      }
+     }
+    },
+    "503": {
+     "object": {
+      "message": "string",
+      "restore?": {
+       "object": {
+        "text": "string",
+        "beside?": "string"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
    "route": "GET kuvo/wakes",
    "answers": {
     "200": {
@@ -10599,7 +10784,6 @@
           "list": "string"
          },
          "run?": "string",
-         "terminal?": "string",
          "removed?": "bool",
          "madeBy?": {
           "object": {
@@ -11973,7 +12157,6 @@
          "list": "string"
         },
         "run?": "string",
-        "terminal?": "string",
         "removed?": "bool",
         "madeBy?": {
          "object": {

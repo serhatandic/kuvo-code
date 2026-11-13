@@ -11,7 +11,9 @@ nonisolated private let log = Logger(subsystem: "run.kuvo.code", category: "here
 /// place, never making a second. The box decides (told where the app's own box and its engine's data
 /// are); the app does what it says.
 nonisolated struct Here: Decodable, Equatable, Sendable {
-    enum Use: String, Decodable, Sendable { case own, attach }
+    /// `wait`: a move of this Mac's box into its home of its own is under way (or stopped part way):
+    /// no box starts until it's finished (`rehome --resume`, the keeper's).
+    enum Use: String, Decodable, Sendable { case own, attach, wait }
 
     /// A box found here, as the box says it.
     struct Box: Decodable, Equatable, Sendable {
@@ -48,7 +50,12 @@ nonisolated struct Here: Decodable, Equatable, Sendable {
     /// there's something to do about it (the engine to download again).
     enum Outcome: Equatable, Sendable {
         case own
+        /// Its own, with another box in the machines' folder beside it (`two`): as `own`, unless
+        /// that one is this Mac's in its home of its own (`movesOwnBox`).
+        case two
         case attach(Here)
+        /// This Mac's box is moving into its home of its own: nothing starts until it's moved.
+        case wait
         case unknown(String?)
     }
 
@@ -91,7 +98,11 @@ nonisolated struct Here: Decodable, Equatable, Sendable {
         }
         for _ in 0..<2 {
             if let here = await ask(engine: engine, script: script, appBox: appBox, engineData: engineData, home: home, root: root) {
-                return here.use == .attach ? .attach(here) : .own
+                switch here.use {
+                case .attach: return .attach(here)
+                case .wait: return .wait
+                case .own: return here.verdict == "two" ? .two : .own
+                }
             }
         }
         return cantAsk(nil)
@@ -151,8 +162,14 @@ nonisolated struct Here: Decodable, Equatable, Sendable {
     static func started(engine: URL, script: URL, appBox: URL, engineData: URL, home: URL) async -> Here? {
         guard let root else { return nil }
         let box = home.appending(path: root)
-        let env = ["HOME": home.path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": FileManager.default.temporaryDirectory.path]
-        for command in startCommands(home: home, root: root) {
+        var env = ["HOME": home.path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": FileManager.default.temporaryDirectory.path]
+        #if DEBUG
+        env.merge(environmentForTests) { $1 }
+        #endif
+        // A Mac's own box in its home of its own (#333) runs under its helper, which macOS asks
+        // about and which reaches its keys: started by launchd through it, never by the app.
+        let commands = await startedByHelper(engine: engine, script: script, box: box, environment: env) ? [] : startCommands(home: home, root: root)
+        for command in commands {
             do {
                 let result = try await ChildProcess.run(command.path, command.arguments, environment: env, directory: box, limit: .seconds(20))
                 if result.succeeded { break }
@@ -169,6 +186,44 @@ nonisolated struct Here: Decodable, Equatable, Sendable {
         }
         return here
     }
+
+    #if DEBUG
+    /// Tests: what the box's CLI runs with besides (their stand-ins for launchctl).
+    nonisolated(unsafe) static var environmentForTests: [String: String] = [:]
+    #endif
+
+    /// The box in `box` started through its helper's launch agent, where the box says it's a Mac's
+    /// own in its home of its own (`helper start`, which puts it in place, loads and starts it as
+    /// each needs), by this app's own
+    /// script with the box's home: whether it's such a box, so nothing else starts it (never
+    /// `kuvo-start` from the app, which would make the app what macOS asks about, with no keys).
+    static func startedByHelper(engine: URL, script: URL, box: URL, environment: [String: String]) async -> Bool {
+        var env = environment
+        env.merge(["BUN_BE_BUN": "1", "BUN_RUNTIME_TRANSPILER_CACHE_PATH": "0", "KUVO_HOME": box.path(percentEncoded: false)]) { $1 }
+        func helper(_ arguments: [String]) async -> [String: Any]? {
+            guard let result = try? await ChildProcess.run(engine.path(percentEncoded: false), ["run", "--config=/dev/null", "--no-env-file", script.path(percentEncoded: false), "helper"] + arguments,
+                                                           environment: env, directory: box, limit: .seconds(60)) else { return nil }
+            let line = result.outputText.split(separator: "\n").last.map(String.init) ?? ""
+            return (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any]
+        }
+        // (Only where the box says it isn't a Mac's: one that couldn't say starts nothing.) The box
+        // does it all: its launch agent in place, loaded and started as each needs.
+        startTrouble = nil
+        guard let said = await helper(["start", "--app", AppInfo.bundleID]) else {
+            startTrouble = "Kuvo Code couldn’t ask this Mac’s box how to start it."
+            return true
+        }
+        guard said["mac"] as? Bool == true else { return false }
+        if said["started"] as? Bool != true {
+            startTrouble = said["message"] as? String
+            log.error("This Mac's box in its own home didn't start: \(said["message"] as? String ?? "", privacy: .public)")
+        }
+        return true
+    }
+
+    /// Why this Mac's box in its own home didn't start, as its box said it, the last time the app
+    /// started it (`startedByHelper`): nil when it did, or it isn't one.
+    nonisolated(unsafe) static var startTrouble: String?
 
     /// What the box CLI says here: the app's own script, run as the box runs it (`engine`, the
     /// engine's Bun), with `KUVO_HOME` the app's own box's folder and `KUVO_ENGINE_DATA` its engine's

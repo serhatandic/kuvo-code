@@ -272,9 +272,6 @@ final class Workspace {
         var folders: [String] = []
         /// What Run (⌘R) runs in a terminal: a dev server, say.
         var run: String?
-        /// A command that stands in for the chat: a new session in the project opens a terminal
-        /// running it (an agent's own interface, like `omp` or `opencode`) instead of a conversation.
-        var terminal: String?
     }
 
     /// A copy of a project for sessions to work in apart from the rest: a git worktree of its
@@ -1237,8 +1234,6 @@ final class Workspace {
         if project.name?.isEmpty == true || project.name == (directory as NSString).lastPathComponent { project.name = nil }
         project.folders = project.folders.filter { $0 != directory }
         project.run = project.run?.trimmingCharacters(in: .whitespacesAndNewlines)
-        project.terminal = project.terminal?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if project.terminal?.isEmpty == true { project.terminal = nil }
         if project.run?.isEmpty == true { project.run = nil }
         settings[directory] = project == ProjectSettings() ? nil : project
         saveSettings()
@@ -1891,7 +1886,6 @@ final class Workspace {
         var name: String?
         var folders: [String]?
         var run: String?
-        var terminal: String?
         var removed: Bool?
         /// The bot that made it, for one a bot made.
         var madeBy: MadeBy?
@@ -2066,7 +2060,7 @@ final class Workspace {
         }
         var updated = settings.filter { Self.box(of: $0.key) != box || unsent.contains($0.key) }
         for project in listed where !unsent.contains(Self.here(project.directory, on: box)) {
-            let kept = ProjectSettings(name: project.name, folders: (project.folders ?? []).map { Self.here($0, on: box) }, run: project.run, terminal: project.terminal)
+            let kept = ProjectSettings(name: project.name, folders: (project.folders ?? []).map { Self.here($0, on: box) }, run: project.run)
             if kept != ProjectSettings() { updated[Self.here(project.directory, on: box)] = kept }
         }
         if updated != settings {
@@ -2080,8 +2074,8 @@ final class Workspace {
     /// whether they changed while they went (without, one sent was sometimes kept to send again,
     /// and undid what a phone changed next).
     private static func boxBody(_ project: ProjectSettings, removed: Bool) -> Data? {
-        struct Body: Encodable { var name: String; var folders: [String]; var run: String; var terminal: String; var removed: Bool }
-        let body = Body(name: project.name ?? "", folders: project.folders.map(onBox), run: project.run ?? "", terminal: project.terminal ?? "", removed: removed)
+        struct Body: Encodable { var name: String; var folders: [String]; var run: String; var removed: Bool }
+        let body = Body(name: project.name ?? "", folders: project.folders.map(onBox), run: project.run ?? "", removed: removed)
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
         return try? encoder.encode(body)
@@ -2128,9 +2122,10 @@ final class Workspace {
         UserDefaults.standard.set(try? JSONEncoder().encode(worktrees), forKey: "worktrees")
     }
 
-    private static func loadSettings() -> [String: ProjectSettings] {
-        guard let data = UserDefaults.standard.data(forKey: "projectSettings") else { return [:] }
-        return (try? JSONDecoder().decode([String: ProjectSettings].self, from: data)) ?? [:]
+    static func loadSettings(defaults: UserDefaults = .standard) -> [String: ProjectSettings] {
+        guard let data = defaults.data(forKey: "projectSettings"),
+              let settings = try? JSONDecoder().decode([String: ProjectSettings].self, from: data) else { return [:] }
+        return settings
     }
 
     private func saveSettings() {

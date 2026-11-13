@@ -18,6 +18,8 @@ import { macLink, readLink } from "../state";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import { newerVersion } from "../updates/update";
 import { BRIDGE_VERSION } from "../version";
+import { rehomeHome } from "../rehome/route";
+import { rehomeStatus } from "../rehome/state";
 import { integrationCatalog } from "./integrations";
 
 export async function* infoRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
@@ -42,8 +44,20 @@ export async function* infoRoute(context: RouteContext): AsyncGenerator<AnswerPi
 function macInfo(engine: Partial<EngineRecord>, started: number | null, chats: string, agents: boolean): BoxInfo {
   const config = macLink.config;
   const integrations = Object.fromEntries(integrationCatalog().filter(each => typeof each.title === "string").map(each => [each.id, each.title]));
+  const moving = movingNow();
   return { kind: "mac", name: config?.name || os.hostname(), app: config?.app || MAC_APP_VERSION || "", engine: engine.version ?? MAC_ENGINE_VERSION ?? "",
-    features: macFeatures() as BoxInfo["features"], agents, started, chats, integrations };
+    features: macFeatures() as BoxInfo["features"], agents, started, chats, integrations, ...(moving ? { moving } : {}) };
+}
+
+/** How this Mac's box's move into its home of its own stands, for a phone: while one waits, is under
+ * way, or went back (with why); nothing before one, once it's done, or moved back. */
+function movingNow(): Extract<BoxInfo, { kind: "mac" }>["moving"] | null {
+  const home = rehomeHome();
+  if (!home) return null;
+  let status: ReturnType<typeof rehomeStatus>;
+  try { status = rehomeStatus(home); } catch { return null; }
+  if (status.state !== "waiting" && status.state !== "moving" && status.state !== "clearing" && status.state !== "failed") return null;
+  return { state: status.state, step: status.step, overdue: status.overdue, ...(status.failed?.message ? { why: status.failed.message } : {}) };
 }
 
 function machineInfo(engine: Partial<EngineRecord>, started: number | null, chats: string, agents: boolean, info: RouteContext["info"]): MachineInfo {

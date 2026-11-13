@@ -157,10 +157,4 @@ final class GoalPlans {
         }
     }
 
-    /// "/goal <words>" in a bot's chat: its box has the bot plan it and put it to you.
-    func ask(_ words: String, of session: String, on box: String) async throws {
-        guard let client = client(box) else { throw BoxRefusal(status: 503, message: "Its computer can’t be reached now.") }
-        struct Said: Decodable { var text: String }
-        _ = try await client.value(Said.self, "POST", "kuvo/work/goals/ask", body: GoalPlanWords.Ask(session: session, goal: words))
-    }
 }

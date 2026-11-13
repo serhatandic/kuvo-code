@@ -12,7 +12,7 @@ import path from "node:path";
 import { isObject } from "../../shared/json";
 import { processRuns } from "../../shared/platform";
 import { plainName } from "../../shared/text";
-import { homeFolder } from "../home";
+import { homeFolder, recordedKind } from "../home";
 import { KEY, macsOf, ownKey, peersOf } from "../peers/known";
 import { moveUnderWay } from "../rehome/state";
 import { followedSetup } from "./record";
@@ -300,6 +300,12 @@ function engineKept(engineData: string | undefined): boolean {
   try { return fs.readdirSync(engineData).some(file => /^opencode.*\.db$/.test(file)); } catch { return false; }
 }
 
+/** Whether a box of the app's own ran in its folder (`appBox`), or its own engine kept your sessions
+ * (`engineData`): what `here` keeps using, and what a new Mac's box in a home of its own never is. */
+export function appBoxRan(appBox: string, engineData: string | undefined): boolean {
+  return engineKept(engineData) || OWN_BOX_RAN.some(file => fs.existsSync(path.join(appBox, "run", file)));
+}
+
 /** `here` on this Mac now: the app's own box in its folder (`appBox`, this process's `KUVO_HOME`),
  * once a box ran there or its own engine kept your sessions (`engineData`, `KUVO_ENGINE_DATA`), and
  * the box in `~/<root>` (`.kuvo-code`, or a test's or a demo copy's own folder). Both box folders
@@ -310,9 +316,11 @@ export function hereNow(root: string, appBox: string | undefined = process.env.K
   // A move of this Mac's box into that home, under way (or stopped part way): no box starts until
   // it's finished, back or forward (`rehome --resume`), whatever its folders say meanwhile.
   if (moveUnderWay(machine)) return { verdict: "moving", use: "wait", opens: "main", runs: null, box: null, own: null };
-  const ownRan = engineKept(engineData) || OWN_BOX_RAN.some(file => fs.existsSync(path.join(appBox, "run", file)));
+  const ownRan = appBoxRan(appBox, engineData);
   const own = ownRan ? foundAt(appBox, true, home) ?? { folder: shownFolder(appBox, home), app: true } : null;
-  const there = foundAt(machine, false, home);
+  // (A Mac's own box made there before it first ran, with no card yet, is a box there all the same:
+  // never taken for none, which would have the app start a second in its folder.)
+  const there = foundAt(machine, false, home) ?? (recordedKind(path.join(machine, "box", "kind")) === "mac" ? { folder: shownFolder(machine, home), app: false } : null);
   return judgeHere(own, there, there ? runsAt(machine) : null);
 }
 

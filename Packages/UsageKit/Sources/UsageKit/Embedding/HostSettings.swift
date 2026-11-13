@@ -1,0 +1,287 @@
+import Foundation
+
+/// The panel's settings the host keeps for every computer of yours (fork addition, #631 piece F):
+/// which cards and meters show and in what order, what's pinned to the menu bar, the total spend
+/// card's settings and which notifications are on. The host's boxes keep them and share them, the
+/// newest change winning (PROTOCOL.md, "Usage settings"); the panel keeps its own copy where it always
+/// did, so it starts at once and works while the host can't answer. This only turns that copy into
+/// the box's parts and back: what's newest, and what's shared with whom, is the box's.
+///
+/// How the panel looks (density, theme, transparency, animation, the menu bar's style) and how each
+/// card is opened stay this Mac's own, never here.
+///
+/// Parts are JSON objects as the box words them (`{layout?, providers?, totalSpend?, notifications?,
+/// codexFallback?}`): Codex's fallback model goes only with the import, as the host changes it
+/// through its own route (`HostHistory.setCodexFallback`).
+@MainActor
+public final class HostSettings {
+    public static let shared = HostSettings()
+
+    /// Told the parts the panel changed here (each whole, as JSON, with `knows`: the cards and
+    /// meters this panel knows, whose ids it sends), once the host has said its own (`apply`), this
+    /// launch or before: never for what the host put here.
+    public var onChange: ((Data) -> Void)?
+
+    private let defaults: UserDefaults
+    private let layout: LayoutPersistence
+    /// Each part as the panel had it when the host last said its own, or when a change went: what a
+    /// change is a change from. Kept through a restart, so a change made before the host answers
+    /// (it's starting, or not answering) is one too.
+    private var said: [String: Data]? {
+        didSet { defaults.set(said, forKey: Self.saidKey) }
+    }
+    /// Each part as the host last said it: one said again as it was isn't put in the panel again
+    /// (which would end a drag and Undo).
+    private var heard: [String: Data] = [:]
+    /// The panel's keys as they were last looked at: a change of anything else isn't looked into.
+    private var watched: NSDictionary = [:]
+    private var observer: NSObjectProtocol?
+    private var checking = false
+    /// Takes what was put in the stored copy into the panel's stores (the parts put there, by name).
+    var reload: (Set<String>) -> Void
+    /// The panel's layout as it shows it, while it runs (it keeps a fresh one's meters only once they change).
+    var liveLayout: () -> LayoutStore?
+    /// Whether the panel is starting (its layout not read yet).
+    var panelStarting: () -> Bool
+    /// Told as the panel starts: what waited for its layout (the import) goes on.
+    public var onPanelStarted: (() -> Void)?
+
+    static let layoutStorageKey = "openusage.layout.v1"
+    static let saidKey = "usage.hostSettings.said"
+    private static let names = ["layout", "providers", "totalSpend", "notifications"]
+
+    /// The panel's settings kept in `defaults` (the app's own: `shared`).
+    public convenience init(defaults: UserDefaults) {
+        self.init(defaults: defaults, liveLayout: nil)
+    }
+
+    init(defaults: UserDefaults = .standard, liveLayout: (() -> LayoutStore?)? = nil, panelStarting: (() -> Bool)? = nil, reload: ((Set<String>) -> Void)? = nil) {
+        self.defaults = defaults
+        layout = LayoutPersistence(defaults: defaults, storageKey: Self.layoutStorageKey)
+        self.liveLayout = liveLayout ?? { UsageMenuBar.shared.container?.layout }
+        self.panelStarting = panelStarting ?? { UsageMenuBar.shared.isStarting }
+        self.reload = reload ?? { parts in UsageMenuBar.shared.container?.reloadShared(parts) }
+        said = defaults.dictionary(forKey: Self.saidKey) as? [String: Data]
+        watched = watchedNow()
+        observer = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.changedSoon() }
+        }
+    }
+
+    /// Whether what this Mac kept can be brought in now: not while the panel starts, whose layout
+    /// isn't read yet (it's brought in once, so it waits: `onPanelStarted`).
+    public var canImport: Bool { liveLayout() != nil || !panelStarting() }
+
+    /// What was set on this Mac before its host kept these, as the box's parts, to bring in once:
+    /// only the parts changed here (a Mac still on its first-run settings brings none, so it never
+    /// puts them over the ones you made on another), and Codex's fallback model when one was
+    /// chosen. The layout as the panel shows it, when it isn't a fresh panel's (after Reset, or put
+    /// back as it was, it is); with the usage item off, as kept, once its meters were. Which
+    /// cards are on isn't brought: each Mac turned on those for the tools it found, so they're
+    /// shared from the first time you turn one on or off.
+    public func toImport() -> Data {
+        var parts = self.parts()
+        parts["providers"] = nil
+        if let live = liveLayout() {
+            if live.isDefaultArrangement() { parts["layout"] = nil }
+        } else if !layout.hasArrangement {
+            parts["layout"] = nil
+        }
+        let set = { [defaults] (keys: [String]) in keys.contains { defaults.object(forKey: $0) != nil } }
+        if !set([TotalSpendSetting.key, TotalSpendSetting.periodKey, TotalSpendSetting.metricKey]) { parts["totalSpend"] = nil }
+        let keys = NotificationSettingsStore.storageKeys
+        if !set([keys.underTen, keys.healthyToClose, keys.closeToRunningOut]) { parts["notifications"] = nil }
+        if let model = CodexFallbackModelSetting.current(defaults: defaults) { parts["codexFallback"] = model }
+        return Self.json(parts)
+    }
+
+    /// The host's parts (JSON, as the box words them): each one given goes in the panel's place and
+    /// shows, unless it's as the host said it before, or what the panel shows of it already; one not
+    /// given stays as the panel has it, and so does one in `except` (a change made here, on its way
+    /// to the host). From now on, the panel's own changes go to `onChange`.
+    public func apply(_ settings: Data, except: Set<String> = []) {
+        let given = (try? JSONSerialization.jsonObject(with: settings)) as? [String: Any] ?? [:]
+        let mine = self.parts()
+        var put = Set<String>()
+        for name in Self.names where !except.contains(name) {
+            guard let value = given[name] as? [String: Any] else { continue }
+            let theirs = Self.json(Self.sorted(name, value))
+            let before = heard[name]
+            heard[name] = theirs
+            // (As it said before; or as the panel shows it, what this Mac can't show of it left aside.)
+            if before == theirs || mine[name].map({ Self.json(shown(name, $0 as? [String: Any] ?? [:])) }) == Self.json(shown(name, value)) { continue }
+            write(name, value)
+            put.insert(name)
+        }
+        if !put.isEmpty { reload(put) }
+        // (What the stores made of it, checked against this Mac's providers, is what a change is from.)
+        said = partsJSON()
+        watched = watchedNow()
+    }
+
+    /// The host turned these parts down: the next it says of them goes in, as it was.
+    public func forget(_ parts: Set<String>) {
+        for name in parts { heard[name] = nil }
+    }
+
+    /// The panel started (its layout read and checked against this Mac's providers): what it shows
+    /// is where a layout change starts from (an app updated since may show the same layout otherwise).
+    public func panelStarted() {
+        defer { onPanelStarted?() }
+        guard var said, let shown = partsJSON()["layout"] else { return }
+        said["layout"] = shown
+        self.said = said
+        watched = watchedNow()
+    }
+
+    /// Looks at the panel's keys now, not on the next turn (the app is quitting: a change just made
+    /// isn't left behind).
+    public func flush() {
+        guard said != nil else { return }
+        watched = watchedNow()
+        check()
+    }
+
+    /// The panel's own change: looked into once the stores have all written theirs, and only when one
+    /// of its keys changed.
+    private func changedSoon() {
+        guard said != nil, !checking else { return }
+        let now = watchedNow()
+        guard now != watched else { return }
+        watched = now
+        checking = true
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.checking = false
+                self.check()
+            }
+        }
+    }
+
+    /// The parts that aren't as last said, to the host, with the cards and meters this panel knows.
+    func check() {
+        guard let said else { return }
+        let now = partsJSON()
+        let changed = now.filter { said[$0.key] != $0.value }
+        guard !changed.isEmpty else { return }
+        self.said = now
+        var parts = self.parts().filter { changed[$0.key] != nil }
+        if let registry = liveLayout()?.registry {
+            parts["knows"] = ["cards": registry.providers.map(\.id), "meters": registry.descriptors.map(\.id)]
+        }
+        onChange?(Self.json(parts))
+    }
+
+    /// A part as this Mac's panel can show it: what it doesn't know (a newer app's cards and meters,
+    /// which the host keeps) left out.
+    private func shown(_ name: String, _ value: [String: Any]) -> [String: Any] {
+        guard let registry = liveLayout()?.registry else { return Self.sorted(name, value) }
+        let meter = { (id: String) in registry.descriptor(id: id) != nil }
+        let card = { (id: String) in registry.provider(id: id) != nil }
+        var out = value
+        switch name {
+        case "layout":
+            for key in ["placed", "pinned", "expanded", "expandOnEnable", "seeded"] { out[key] = (value[key] as? [String] ?? []).filter(meter) }
+            out["providerOrder"] = (value["providerOrder"] as? [String] ?? []).filter(card)
+            out["metricOrder"] = (value["metricOrder"] as? [String: [String]] ?? [:]).filter { card($0.key) }.mapValues { $0.filter(meter) }
+        case "providers":
+            for key in ["enabled", "known"] { out[key] = (value[key] as? [String] ?? []).filter(card) }
+        default:
+            break
+        }
+        return Self.sorted(name, out)
+    }
+
+    /// The panel's own keys, as they're stored now.
+    private func watchedNow() -> NSDictionary {
+        let keys = NotificationSettingsStore.storageKeys
+        let names = layout.sharedKeys + [ProviderEnablementStore.enabledStorageKey, ProviderEnablementStore.knownStorageKey, TotalSpendSetting.key, TotalSpendSetting.periodKey, TotalSpendSetting.metricKey, keys.underTen, keys.healthyToClose, keys.closeToRunningOut]
+        return NSDictionary(dictionary: Dictionary(uniqueKeysWithValues: names.compactMap { name in defaults.object(forKey: name).map { (name, $0) } }))
+    }
+
+    // MARK: - The stored copy, as parts
+
+    private func parts() -> [String: Any] {
+        var parts: [String: Any] = [:]
+        if let live = liveLayout() {
+            parts["layout"] = Self.sorted("layout", live.sharedLayout())
+        } else if let placed = layout.loadPlaced() {
+            parts["layout"] = Self.sorted("layout", [
+                "placed": placed.map(\.descriptorID),
+                "providerOrder": layout.loadProviderOrder() ?? [],
+                "metricOrder": layout.loadMetricOrder() ?? [:],
+                "pinned": layout.loadPins() ?? [],
+                "expanded": layout.loadExpandedMetrics() ?? [],
+                "expandOnEnable": layout.loadExpandOnEnable() ?? [],
+                "seeded": layout.loadSeededDefaults() ?? [],
+            ])
+        }
+        // (Only once it keeps the cards turned on, not those turned off as before its settings v2.)
+        if let enabled = defaults.stringArray(forKey: ProviderEnablementStore.enabledStorageKey) {
+            parts["providers"] = Self.sorted("providers", ["enabled": enabled, "known": defaults.stringArray(forKey: ProviderEnablementStore.knownStorageKey) ?? []])
+        }
+        var spend: [String: Any] = ["show": defaults.object(forKey: TotalSpendSetting.key) as? Bool ?? true]
+        if let period = defaults.string(forKey: TotalSpendSetting.periodKey) { spend["period"] = period }
+        if let metric = defaults.string(forKey: TotalSpendSetting.metricKey) { spend["metric"] = metric }
+        parts["totalSpend"] = spend
+        let keys = NotificationSettingsStore.storageKeys
+        parts["notifications"] = [
+            "underTenPercent": defaults.bool(forKey: keys.underTen, default: false),
+            "healthyToClose": defaults.bool(forKey: keys.healthyToClose, default: false),
+            "closeToRunningOut": defaults.bool(forKey: keys.closeToRunningOut, default: false),
+        ]
+        return parts
+    }
+
+    private func partsJSON() -> [String: Data] {
+        parts().mapValues { Self.json($0) }
+    }
+
+    private func write(_ name: String, _ value: [String: Any]) {
+        let strings = { (key: String) in (value[key] as? [String]) ?? [] }
+        switch name {
+        case "layout":
+            // The meters already shown keep who they are: only those new here are new.
+            let had = Dictionary((liveLayout()?.placed ?? layout.loadPlaced() ?? []).map { ($0.descriptorID, $0.id) }, uniquingKeysWith: { first, _ in first })
+            layout.savePlaced(strings("placed").map { PlacedWidget(id: had[$0] ?? UUID(), descriptorID: $0) })
+            layout.saveProviderOrder(strings("providerOrder"))
+            layout.saveMetricOrder((value["metricOrder"] as? [String: [String]]) ?? [:])
+            layout.savePins(Set(strings("pinned")))
+            layout.saveExpandedMetrics(Set(strings("expanded")))
+            layout.saveExpandOnEnable(Set(strings("expandOnEnable")))
+            layout.saveSeededDefaults(Set(strings("seeded")))
+        case "providers":
+            defaults.set(strings("enabled"), forKey: ProviderEnablementStore.enabledStorageKey)
+            defaults.set(strings("known"), forKey: ProviderEnablementStore.knownStorageKey)
+        case "totalSpend":
+            defaults.set(value["show"] as? Bool ?? true, forKey: TotalSpendSetting.key)
+            for (field, key) in [("period", TotalSpendSetting.periodKey), ("metric", TotalSpendSetting.metricKey)] {
+                if let word = value[field] as? String { defaults.set(word, forKey: key) } else { defaults.removeObject(forKey: key) }
+            }
+        case "notifications":
+            let keys = NotificationSettingsStore.storageKeys
+            defaults.set(value["underTenPercent"] as? Bool ?? false, forKey: keys.underTen)
+            defaults.set(value["healthyToClose"] as? Bool ?? false, forKey: keys.healthyToClose)
+            defaults.set(value["closeToRunningOut"] as? Bool ?? false, forKey: keys.closeToRunningOut)
+        default:
+            break
+        }
+    }
+
+    /// A part with its sets in one order (the panel keeps them in any), so the same part reads the same.
+    private static func sorted(_ name: String, _ value: [String: Any]) -> [String: Any] {
+        let sets: [String] = switch name {
+        case "layout": ["pinned", "expanded", "expandOnEnable", "seeded"]
+        case "providers": ["enabled", "known"]
+        default: []
+        }
+        var value = value
+        for key in sets { if let list = value[key] as? [String] { value[key] = Array(Set(list)).sorted() } }
+        return value
+    }
+
+    private static func json(_ value: Any) -> Data {
+        (try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])) ?? Data()
+    }
+}

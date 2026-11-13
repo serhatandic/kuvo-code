@@ -178,6 +178,15 @@ final class AppContainer {
         FirstRunSeeder.reseed(providers: providers, enablement: enablement)
     }
 
+    /// The host put the settings your computers share in the stored copy (fork addition,
+    /// `HostSettings`): the stores that keep those parts take them again. The total spend card's
+    /// settings show by themselves (`@AppStorage`).
+    func reloadShared(_ parts: Set<String>) {
+        if parts.contains("layout") { layout.reloadShared() }
+        if parts.contains("providers") { enablement.reload() }
+        if parts.contains("notifications") { notificationSettings.reload() }
+    }
+
     /// The Settings "Reset All Settings" action: restores every user preference the container owns to
     /// its default. Composes the Customize reset (`resetToDefault` + provider reseed) with the
     /// Settings-only preferences. Deliberately untouched: provider credentials and cached usage

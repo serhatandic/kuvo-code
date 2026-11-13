@@ -137,7 +137,7 @@ enum DemoDirector {
                 // On the model a new chat from the UI starts on.
                 guard let session = try? await workspace.createSession(in: Workspace.chatsFolder, model: app.catalog.startingModel(LastModel.current), agent: nil) else { return }
                 app.tabs.open(.session(session.id))
-                workspace.model(for: session.id)?.submit(message, files: [], for: nil, queue: false, commands: [])
+                workspace.model(for: session.id)?.submit(message, files: [], for: nil, queue: false)
             }
         }
         if let folder = environment["KUVO_DEMO_MOVE_CHAT"] {
@@ -163,7 +163,7 @@ enum DemoDirector {
                 guard let last = model.transcript.messages.last(where: { if case .user = $0 { true } else { false } }), case .user(let user) = last else { return }
                 model.undo(from: user)
                 await DemoWait.pause(.asked(wait))
-                model.submit(model.draftText, files: model.draftFiles, for: nil, queue: false, commands: [])
+                model.submit(model.draftText, files: model.draftFiles, for: nil, queue: false)
                 model.draftText = ""
                 model.draftFiles = []
             }
@@ -476,7 +476,7 @@ enum DemoDirector {
         if let reply = environment["KUVO_DEMO_REPLY"] { await workspace.send(reply, to: bot.sessionID) }
         if let prompt = environment["KUVO_DEMO_BOT_PROMPT"], let model = workspace.model(for: bot.sessionID) {
             await DemoWait.pause(.beat)
-            model.submit(prompt, files: [], for: nil, queue: false, commands: [])
+            model.submit(prompt, files: [], for: nil, queue: false)
         }
         // KUVO_DEMO_MOVE_BOT=<machine, or nothing for this Mac>: once it's done, it moves there.
         if let place = environment["KUVO_DEMO_MOVE_BOT"] {
@@ -669,15 +669,14 @@ enum DemoDirector {
         // KUVO_DEMO_FILES: comma-separated paths to attach.
         let files = environment["KUVO_DEMO_FILES"]?.split(separator: ",").map { URL(filePath: String($0)) } ?? []
         // As the composer sends it: "/" runs a command, "!" a shell command.
-        workspace.model(for: session.id)?.submit(prompt, files: files, for: catalog.model(session.model), queue: false, commands: catalog.commands(in: folder))
+        workspace.model(for: session.id)?.submit(prompt, files: files, for: catalog.model(session.model), queue: false)
         // KUVO_DEMO_THEN: messages separated by "|", each sent once the turn before it ended (a
         // keyword too, "/btw what changed?"); KUVO_DEMO_THEN_DRAFT: then left in the composer.
         if environment["KUVO_DEMO_THEN"] != nil || environment["KUVO_DEMO_THEN_DRAFT"] != nil, let model = workspace.model(for: session.id) {
-            let commands = Keyword.commands(catalog.commands(in: folder), keywords: model.keywords)
             for message in (environment["KUVO_DEMO_THEN"] ?? "").split(separator: "|") {
                 await DemoWait.until("the agent to start (KUVO_DEMO_THEN)", limit: .seconds(20)) { model.isRunning }
                 await DemoWait.until("its turn to end (KUVO_DEMO_THEN)", limit: .seconds(180)) { !model.isRunning }
-                model.submit(String(message), files: [], for: catalog.model(session.model), queue: false, commands: commands)
+                model.submit(String(message), files: [], for: catalog.model(session.model), queue: false)
             }
             if let draft = environment["KUVO_DEMO_THEN_DRAFT"] {
                 await DemoWait.until("its turn to end (KUVO_DEMO_THEN_DRAFT)", limit: .seconds(180)) { !model.isRunning }
@@ -726,7 +725,7 @@ enum DemoDirector {
         guard let queue = environment["KUVO_DEMO_QUEUE"], let running = workspace.model(for: session.id) else { return }
         await DemoWait.until("the agent to start (KUVO_DEMO_QUEUE)", limit: .seconds(10)) { running.isRunning }
         for message in queue.split(separator: "|") {
-            running.submit(String(message), files: [], for: catalog.model(session.model), queue: true, commands: catalog.commands(in: folder))
+            running.submit(String(message), files: [], for: catalog.model(session.model), queue: true)
         }
     }
 }

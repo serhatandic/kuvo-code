@@ -348,10 +348,8 @@ struct AppCommands: Commands {
                 Button("Run") { actions?.run() }
                     .keyboardShortcut("r")
                     .disabled(actions?.hasProject != true)
-                Button("New Terminal in Panel") { actions?.newTerminal() }
+                Button("New Terminal") { actions?.newTerminal() }
                     .keyboardShortcut("`", modifiers: .control)
-                Button("New Terminal") { actions?.newTerminalTab() }
-                    .keyboardShortcut("`", modifiers: [.control, .shift])
                 Button("New Browser Tab") { actions?.newBrowser() }
                     .keyboardShortcut("b", modifiers: [.command, .option])
                 Divider()
@@ -422,8 +420,6 @@ struct SessionActions {
     var canGoBack: Bool
     var goBack: () -> Void
     var newSession: () -> Void
-    /// A terminal in a tab of its own, in place of a conversation.
-    var newTerminalTab: () -> Void
     var openFolder: () -> Void
     var newProject: () -> Void
     var newBot: () -> Void

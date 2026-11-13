@@ -46,6 +46,12 @@ here.
   provider the host says it covers, its main card's spend tiles, trend and model breakdown take the
   host's days in place of its own scan of the logs here (and Pi's), so nothing is read twice. Its
   other cards, and the providers the host doesn't cover yet, scan as before.
+- **The host's settings for the panel** (`Embedding/HostSettings.swift`): which cards and meters
+  show, their order, the stars, the Total Spend card's settings and the notification toggles are
+  kept by Kuvo Code's boxes, the same on all your computers. The panel keeps its own copy in
+  UserDefaults as before, shows the host's parts in place of it (the stores take them again), and
+  hands the host each part it changes; the first time, the host takes what the panel had. Density,
+  theme, transparency, animation, the menu bar's style and which cards are open stay the panel's.
 - **The host's plan limits, one row per account** (`Embedding/HostLimits.swift`): Kuvo Code's boxes
   read each account's limits with their own sign-ins, and the Bars view draws a bar for each
   account however many boxes have it (named "Claude · Work"; the host names them) in place of the

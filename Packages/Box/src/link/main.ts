@@ -1145,7 +1145,7 @@ if (main) {
     process.exitCode = uninstallCommand(process.argv.slice(3));
   }
   // This Mac's box's helper, Kuvo Code Box, started at login (PROTOCOL.md, "This Mac's box: its
-  // helper"): `helper install [--load] [--app <bundle ID>] | helper status`.
+  // helper"): `helper install [--load] [--app <bundle ID>] | helper start [--if-missing] [--app <bundle ID>] | helper status`.
   else if (mode === "helper") {
     process.exitCode = helperCommand(process.argv.slice(3));
   }
@@ -1154,7 +1154,7 @@ if (main) {
     console.log(ok ? "ok" : "failed");
     process.exit(ok ? 0 : 1);
   } else {
-    console.error("Usage: kuvo-link.js run | serve [--kept] | setup | pair [relay] | box <command> | leave <mac> | here <root> | rehome <root> | uninstall [--check] | helper install|status | engine-config | login-path | update [--now] | browser install|start|status | selftest");
+    console.error("Usage: kuvo-link.js run | serve [--kept] | setup | pair [relay] | box <command> | leave <mac> | here <root> | rehome <root> | uninstall [--check] | helper install|start|status | engine-config | login-path | update [--now] | browser install|start|status | selftest");
     process.exit(2);
   }
 }

@@ -106,8 +106,7 @@ final class Utilities {
         /// The bots on this Mac whose conversation is in view (one, or a group chat's): their tabs
         /// show beside yours.
         var bots: Set<String> = []
-        /// The window's tab in view when it's no conversation's (a new session's draft, a
-        /// terminal), by its key (`draft:<folder>`, `terminal:<id>`): its panel is its own.
+        /// A new session's draft in view, by its key (`draft:<folder>`): its panel is its own.
         var draft: String?
         /// Whose panel the session you work in has, as far as the app knows now (see `panelOf`).
         /// It's part of what's in view so the panel hears when that changes, with the session
@@ -409,7 +408,7 @@ final class Utilities {
             return
         }
         let tab = Tab(kind: .terminal, owner: panelKey)
-        let terminal = TerminalSession(directory: directory, environment: environment, command: command, label: MainTerminals.program(command))
+        let terminal = TerminalSession(directory: directory, environment: environment, command: command, label: TerminalSession.program(command))
         terminal.addToMessage = { [weak self] text in self?.addToMessage?(text) }
         terminals[tab.id] = terminal
         runs[run] = tab.id

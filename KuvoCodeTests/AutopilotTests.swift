@@ -66,6 +66,7 @@ import Testing
         defer { done(machine) }
         let model = try conversation(on: machine)
         await model.readAutopilot()
+        await model.readKeywords()
         #expect(model.autopilotChoice == AutopilotChoice(on: false), "offered in the Mode menu, off")
         #expect(model.keywords.contains(.autopilot))
 
@@ -92,7 +93,7 @@ import Testing
         await model.readAutopilot()
 
         model.draftText = "/autopilot pick a palette and build the menu page"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { !engine.requests("POST", "/api/session/ses_one/prompt").isEmpty }
         #expect(model.isAutopilot)
         let order = engine.asked.filter { $0 == "PUT \(Self.entry)" || $0 == "POST /api/session/ses_one/prompt" }
@@ -102,12 +103,12 @@ import Testing
         #expect(SentMessage.keyword(of: text) == "/autopilot")
 
         model.draftText = "/autopilot"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { keptOn == false }
         #expect(!model.isAutopilot)
         #expect(model.draftText.isEmpty)
         model.draftText = "/autopilot"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { keptOn == true }
         #expect(engine.requests("POST", "/api/session/ses_one/prompt").count == 1, "alone, it sends nothing")
     }

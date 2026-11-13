@@ -709,6 +709,20 @@ import Testing
 
     // MARK: Keeping them
 
+    @Test func retiredTerminalTabsAreNotRestored() {
+        defer { done() }
+        let saved = WindowTabs.Saved(tabs: [.session("terminal:old"), .session("ses_a")], selection: .session("terminal:old"),
+                                     pairs: [.init(tab: .session("ses_a"), beside: "terminal:beside")]).text
+        tabs.restore(saved, older: .init())
+        #expect(tabs.keys == [.session("ses_a")])
+        #expect(tabs.selection == .session("ses_a"))
+        #expect(tabs.pairs.isEmpty)
+        let older = AppModel()
+        older.tabs.restore("", older: .init(tabs: "terminal:old\nses_a", selection: "terminal:old"))
+        #expect(older.tabs.keys == [.session("ses_a")])
+        #expect(older.tabs.selection == .session("ses_a"))
+    }
+
     @Test func theTabsComeBackAtTheNextLaunch() async {
         defer { done() }
         await sessions(["ses_a", "ses_b", "ses_c"])
@@ -792,51 +806,23 @@ import Testing
         #expect(tabs.projectEditor?.id == next.id, "closed, the next one opens")
     }
 
-    /// Two new sessions written at once, and a terminal tab: what you open in the panel beside
-    /// one stays beside it, and a terminal tab's panel closes with the tab.
-    @Test func eachNewSessionAndTerminalTabHasAPanelOfItsOwn() throws {
+    /// Each new session keeps its own panel files.
+    @Test func eachNewSessionHasAPanelOfItsOwn() throws {
         let folder = FileManager.default.temporaryDirectory.appending(path: "KuvoCodeTests-panels-\(UUID().uuidString)").path
         try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
         defer { done(); try? FileManager.default.removeItem(atPath: folder) }
-        let notes = URL(filePath: folder + "/a/notes.md"), log = URL(filePath: folder + "/build.log")
-        tabs.newSession(in: folder + "/a", conversation: true)
+        let notes = URL(filePath: folder + "/a/notes.md")
+        tabs.newSession(in: folder + "/a")
         panelFollows()
         app.utilities.open(notes)
-        tabs.newSession(in: folder + "/b", conversation: true)
+        tabs.newSession(in: folder + "/b")
         panelFollows()
         #expect(!app.utilities.visibleTabs.contains { $0.kind == .file(notes) }, "the other new session's file stays beside it")
-        tabs.openTerminalTab(command: nil, in: folder)
-        let terminal = try #require(tabs.selection)
-        panelFollows()
-        #expect(!app.utilities.visibleTabs.contains { $0.kind == .file(notes) })
-        app.utilities.open(log)
-        tabs.close(terminal)
-        panelFollows()
-        #expect(!app.utilities.tabs.contains { $0.kind == .file(log) }, "its panel closed with it")
         tabs.open(.draft(folder + "/a"))
         panelFollows()
         #expect(app.utilities.visibleTabs.contains { $0.kind == .file(notes) }, "back to the first, its file is there")
     }
 
-    /// Text selected in a terminal tab of the window, Add to Message from its right-click menu: a
-    /// new session in the terminal's folder, with the text in its message.
-    @Test func addToMessageInATerminalTabStartsASessionWithTheSelection() throws {
-        let folder = FileManager.default.temporaryDirectory.appending(path: "KuvoCodeTests-terminal-\(UUID().uuidString)").path
-        try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
-        tabs.openTerminalTab(command: nil, in: folder)
-        let terminalTab = try #require(tabs.selection)
-        defer { tabs.close(terminalTab); done(); try? FileManager.default.removeItem(atPath: folder) }
-        let terminal = try #require(app.mainTerminals.entry(terminalTab.text)?.session)
-        terminal.view.feed(text: "make: *** [build] Error 1")
-        terminal.view.selectAll(nil)
-        let menu = try #require(terminal.view.menu)
-        terminal.menuNeedsUpdate(menu)
-        menu.performActionForItem(at: menu.indexOfItem(withTitle: "Add to Message"))
-        let draft = try #require(tabs.selection)
-        #expect(draft != terminalTab, "a session to write it in")
-        #expect(Drafts.shared[draft.text].text.contains("make: *** [build] Error 1"))
-        Drafts.shared[draft.text] = Drafts.Draft()
-    }
 }
 
 /// Whether an observed value told of a change.
