@@ -3983,7 +3983,16 @@ account you added: its own folder; a machine: Kuvo Code's, not your `~/.claude` 
 sign-in: your Claude Code settings folders, where Claude Code runs with it, as OpenUsage read them,
 each of a comma-separated `CLAUDE_CONFIG_DIR`, else `~/.config/claude` and `~/.claude`: Claude
 Code's conversations there count whoever ran them, your Terminal or Claude's desktop app), never
-another tool's folders (Cowork's, claude-swap's, Pi's). It prices them as OpenUsage does (its supplement,
+another tool's folders (Cowork's, claude-swap's, Pi's); and Codex's, each Codex account's home's
+`sessions` and `archived_sessions` (an account you added: its own home, whose history on a Mac is
+your Codex's, which it links to, so counted once, with your own Codex's; a Mac's own sign-in: your
+`~/.codex`, or each of a comma-separated `CODEX_HOME`, where Codex runs with it, its conversations
+there counted whoever ran them; a machine: Kuvo Code's; a home with neither folder is read itself,
+as OpenUsage did), never Pi's or another tool's. And what your
+ChatGPT sign-in in Kuvo Code (the engine's `openai`, Settings › Accounts) used through the engine's
+own models, read (only read) from the engine's databases on that computer (each `opencode*.db` in
+its data folder: on a Mac the app's, on a machine `~/.kuvo-code/data/opencode`), Codex's, the same
+row as a Codex account signed in to the same ChatGPT account; never your own opencode's. It prices them as OpenUsage does (its supplement,
 LiteLLM's catalog, models.dev's; snapshots ship with the bridge, and each feed is fetched again
 hourly, kept in the bridge's `usage/pricing`, only by a real box's bridge, in a Mac app's folder or
 a machine's `~/.kuvo-code`, never a test's): estimates, not your bill. A client reaches them as
@@ -3993,8 +4002,11 @@ a machine's `~/.kuvo-code`, never a test's): estimates, not your bill. A client 
 - `GET kuvo/agents/api/kuvo/usage?zone=<IANA time zone>` → `{data: {zone, services, scanned?, rows:
   [row], totals: {<service>: [day]}, partial?: {<service>: {away?, cut?}}}}`. The box works out the days in `zone` (the client's, so a
   Mac in Istanbul reading a machine in UTC gets its own days); one it doesn't know is its own,
-  `zone` says which. `services`: what this box states the usage of (`claude`): a client shows those
-  from here, and reads the rest as it did. `scanned`: when this box last read its logs.
+  `zone` says which. `services`: what this box states the usage of (`claude`, `codex`): a client
+  shows those from here, and reads the rest as it did. `scanned`: when this box last read its logs.
+  `pricing: {codex: {fallback, chosen, choices}}`: Codex's fallback model, this box's setting
+  (below), `null` for none; `chosen`, whether it was ever chosen on this box (none counts);
+  `choices`, the models it may be, in order.
   - A `row` is one account across your computers, with the same `id` as its plan limits row
     (`<service>#<identity>`, or `<box key>/<provider>` for one that can't say who it is), so a
     client puts an account's limits and its usage side by side: `{id, service, provider, agent?,
@@ -4009,14 +4021,16 @@ a machine's `~/.kuvo-code`, never a test's): estimates, not your bill. A client 
     past use counts on both meanwhile.
   - `totals`: each service's days, the accounts on your own computers added up (this box and its
     peers, not a box a peer vouches for, whose accounts may be another person's: their rows show,
-    in no total), each folder once: what the Mac's Claude card shows. `partial`: a service whose
+    in no total), each folder once: what the Mac's Claude and Codex cards show. `partial`: a service whose
     totals are short, `away` (one of your computers isn't answering: its share is as of then) or
     `cut` (one told less than all: its oldest days).
-  - A `day`: `{date, tokens, cost, models: [{model, tokens, cost}], unknown?}`, newest first, for
+  - A `day`: `{date, tokens, cost, models: [{model, tokens, cost}], unknown?, fallback?}`, newest first, for
     today and the 30 days before it in `zone`; `date` is `yyyy-MM-dd`, `cost` US dollars,
     `models` by name; `unknown`, models used that day that couldn't be priced, which count
-    nowhere (a day with only those has no tokens and no models). A model with no name but a cost
-    of its own is `Unattributed`.
+    nowhere (a day with only those has no tokens and no models), unless a fallback model estimated
+    them: `fallback`, the models whose rates did (their dollars and tokens are then in `models`
+    under the model's own name, and it's still in `unknown`). A model with no name but a cost of
+    its own is `Unattributed`.
   - What counts (OpenUsage's rules, from ccusage): a log line with `"usage":{` that parses, with a
     valid time and version and no `null` where Claude Code never writes one; once per
     `(message.id, requestId)`, a subagent's line replaying its parent's message under another
@@ -4024,6 +4038,39 @@ a machine's `~/.kuvo-code`, never a test's): estimates, not your bill. A client 
     where it has one, else its tokens at its model's rates (1-hour cache writes at twice the input
     rate, a request whose prompt passes the model's long-context threshold at those rates
     throughout, a fast request at its model's fast multiplier).
+  - Codex's (OpenUsage's rules, from ccusage): an `event_msg` `token_count` line (written as Codex
+    writes JSON, without spaces) is a turn: its `last_token_usage`, else what its running
+    `total_token_usage` grew by since the line before; a running total the same as the last is a
+    snapshot said again, not a turn; a turn with nothing in it isn't one. `turn_context` (or a
+    model on the line itself) names the model from then on, `gpt-5` for a session that never
+    named one; `thread_settings_applied` the service tier (`fast` or `priority`, `ultrafast`). A
+    child session's log (a subagent's, a fork's: `forked_from_id`, `parent_thread_id`,
+    `thread_source: "subagent"`, `source.subagent`) replays its parent's turns first: none of those
+    counts, until a `task_started` at or after the session's own start (its first `session_meta`'s
+    time, else that line's own). A turn the same as another (time, model, tokens), in its log or
+    another, counts once; a log in both `sessions` and `archived_sessions` (by where it is in each)
+    is the first's. Priced with Codex's rules over the catalogs: cached input apart from the rest
+    (at the full input rate where a model has no cache discount or the catalog didn't say one),
+    the newer GPT models' higher rates for a whole request past 272k prompt tokens, the priority
+    tier's multiplier (and GPT-6 Astra's Ultrafast 6x), a `-fast` alias off its base once;
+    `codex-auto-review` at the model it ran on by its date, free from 2026-10-06 (UTC);
+    `gpt-reserve` at `gpt-5.6-luna`'s rates.
+  - The engine's ChatGPT slice (OpenUsage's `OpenCodeCodexUsageScanner`): a database counts only
+    while its own `openai` sign-in is a ChatGPT one (OAuth; before opencode 2 took its sign-ins in,
+    the `auth.json` beside it says), only its assistant messages from `openai` priced at nothing
+    (Codex's sign-in prices every model at $0; a key's cost more), from `message` (opencode 1) and
+    `session_message` (opencode 2, a compaction too, from when the sign-in was made on), a message
+    copied between two databases once (by its ID). Priced as Codex's. Whether the sign-in is OAuth
+    is asked of SQLite: its tokens never leave the database. A database that can't be read now
+    (and none that could) leaves what was read before as it was, never none (its box's `scanned`
+    as of when it last was); one in WAL mode whose
+    `-wal` and `-shm` are gone (its engine stopped) is read as it is.
+- `PUT kuvo/agents/api/kuvo/usage/pricing[?zone=]` `{"codex": {"fallback": <model> | null}}`: Codex's
+  fallback model, whose rates estimate what a Codex model with no known price used (in this box's
+  own Codex logs, not the engine's ChatGPT slice: each box prices its own with its own); one of `choices` (the supplement's
+  `fallback_models.codex` priced exactly by a catalog), or `null` for none (`400 {message}` for
+  anything else, its `message` a client shows as it is). Kept in the bridge's `usage/settings.json`, through a restart; read again with it
+  at once, answered as `GET`.
 - `POST kuvo/agents/api/kuvo/usage/refresh[?zone=]` reads the logs now, asks your other computers
   to read theirs and tell (below), and answers as `GET` once it's read here (or after five
   seconds, the rest coming as the event).
@@ -4032,8 +4079,8 @@ a machine's `~/.kuvo-code`, never a test's): estimates, not your bill. A client 
 - How often: every five minutes, and when asked; one round at a time. The event, and the mail
   below, only when what was used changed. A log is read on from where
   it was last read as it grows, and again whole when it shrank or was rewritten; what each log held
-  is kept in the bridge's folder (`usage/claude-files`, a file a log, rebuilt from the logs when
-  it's lost), and each account's use by the quarter hour, UTC (`usage/usage.json`), so a restart
+  is kept in the bridge's folder (`usage/claude-files` and `usage/codex-files`, a file a log, with
+  a Codex log's running total and model so far, rebuilt from the logs when it's lost), and each account's use by the quarter hour, UTC (`usage/usage.json`), so a restart
   answers at once, and every zone's days come out whole (India's midnight is on the half hour).
   Kept 35 days.
 - **Across your computers**, as plan limits are ("Plan limits", "Across your computers": the same
@@ -4044,12 +4091,15 @@ a machine's `~/.kuvo-code`, never a test's): estimates, not your bill. A client 
   since its bridge or link started, and to one that asks; after a read that changed what they used
   (not only when they were read), only the last two days' slots, `from` the first slot they're
   from, the receiver keeping its older ones as told before; every ten minutes otherwise, `digest`
-  alone, saying what it told is as it was. `digest` is a hash of all of it (each account's
+  alone, saying what it told is as it was; all of it again, without `ask`, when another Codex
+  fallback model is chosen (which model estimated what isn't in `digest`). `digest` is a hash of all of it (each account's
   `provider`, `service`, `agent`, `account`, `label`, `identity`, `cut` and slots as kept); a
   receiver whose own, put together, isn't that asks for all of it (`ask`, at most once a minute),
   and is answered at once. Each account is `{provider, service, agent?, account?, label?,
   identity?, scanned?, cut?, whole, places?, slots: {models, used: [[slot, model, tokens,
-  dollars]], unknown?: [[slot, model]]}}`: `places`, the folders its logs are in, each 16 hex
+  dollars]], unknown?: [[slot, model]], fallback?: [[slot, model]]}}` (`fallback`, a model whose
+  rates estimated that slot's use of one with no price; not in `digest`, which a box from before
+  it works out without it): `places`, the folders its logs are in, each 16 hex
   characters of a hash of its computer (on Linux its machine ID, `/etc/machine-id` or D-Bus's, with
   its name; on a Mac its hardware UUID; else its name) and the folder's real path (never either); `slot`, quarter hours since 1970 (UTC), `model`, an index into
   `models`, `tokens` a whole number; `whole`, the first slot the sender has all of (a UTC midnight

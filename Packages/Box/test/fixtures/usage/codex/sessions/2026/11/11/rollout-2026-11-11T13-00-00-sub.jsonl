@@ -1,0 +1,6 @@
+{"type":"session_meta","payload":{"id":"d","thread_source":"subagent"}}
+{"timestamp":"2026-11-11T13:00:00.000Z","type":"turn_context","payload":{"model":"gpt-5","cwd":"/work"}}
+{"timestamp":"2026-11-11T13:00:01.000Z","type":"event_msg","payload":{"type":"task_started","started_at":1794301200}}
+{"timestamp":"2026-11-11T13:00:01.500Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":777,"cached_input_tokens":0,"output_tokens":77,"reasoning_output_tokens":0,"total_tokens":854}}}}
+{"timestamp":"2026-11-11T13:00:02.000Z","type":"event_msg","payload":{"type":"task_started","started_at":1794402002}}
+{"timestamp":"2026-11-11T13:00:30.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"cached_input_tokens":0,"output_tokens":10,"reasoning_output_tokens":0,"total_tokens":20}}}}

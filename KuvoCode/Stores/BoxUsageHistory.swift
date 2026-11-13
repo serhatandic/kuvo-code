@@ -26,6 +26,7 @@ final class BoxUsageHistory {
 
     init() {
         HostHistory.shared.refresh = { [weak self] in self?.refresh() }
+        HostHistory.shared.setCodexFallback = { [weak self] model in await self?.setCodexFallback(model) ?? .unreachable }
         HostHistory.shared.update(days: HostHistory.shared.days, covered: services, answered: false)
         // Another time zone: other days.
         zoneObserver = NotificationCenter.default.addObserver(forName: .NSSystemTimeZoneDidChange, object: nil, queue: .main) { [weak self] _ in
@@ -65,10 +66,32 @@ final class BoxUsageHistory {
     }
 
     private var fallback: Task<Void, Never>?
+    /// This Mac's earlier Codex fallback model is on its way to the box (once).
+    private var broughtFallback = false
 
     /// Has the box read its logs now (the panel's Refresh), and your other computers theirs.
     func refresh() {
         read(BoxUsage.bridgeRefreshPath, method: "POST")
+    }
+
+    /// Has the box price Codex's logs with another fallback model (nil: none); what came of it.
+    func setCodexFallback(_ model: String?) async -> HostHistory.CodexFallbackOutcome {
+        guard let api else { return .unreachable }
+        asked += 1
+        let number = asked
+        do {
+            let body = JSONValue.object(["codex": .object(["fallback": model.map(JSONValue.string) ?? .null])])
+            let usage = try await api.client.send(try api.client.request("PUT", BoxUsage.bridgePricingPath, query: ["zone": TimeZone.current.identifier], body: body), as: DataEnvelope<BoxUsage>.self, patience: .seconds(60)).data
+            keep(usage, number: number)
+            return .applied
+        } catch let error as ServerError where error.status == 400 {
+            // (Not one of the models it can price with now.)
+            log.info("usage pricing refused: \(String(describing: error), privacy: .public)")
+            return .refused(error.message)
+        } catch {
+            log.info("usage pricing: \(String(describing: error), privacy: .public)")
+            return .unreachable
+        }
     }
 
     private func read(_ path: String = BoxUsage.bridgePath, method: String = "GET", tries: Int = 3) {
@@ -106,6 +129,19 @@ final class BoxUsageHistory {
         guard number > answered else { return }
         answered = number
         cover(Set(usage.services), days: Self.days(usage))
+        let fallback = usage.services.contains("codex") ? usage.codexFallback : nil
+        HostHistory.shared.update(codexFallback: fallback.map { .init(model: $0.model, choices: $0.choices, chosen: $0.chosen) })
+        // The fallback model this Mac chose before its box priced Codex (the panel kept it here),
+        // taken to its box once, while the box has none chosen (none counts as chosen). Goes with
+        // the panel's own Codex pricing (#631 piece H), once every Mac's box has taken it.
+        if let fallback, !fallback.chosen, !broughtFallback, let mine = HostHistory.localCodexFallback, fallback.choices.contains(mine) {
+            broughtFallback = true
+            Task { [weak self] in
+                guard let self else { return }
+                // (Not answered: tried again with the next answer. Refused: not one it can take, left.)
+                if await self.setCodexFallback(mine) == .unreachable { self.broughtFallback = false }
+            }
+        }
     }
 
     private func cover(_ services: Set<String>, days: [String: [HostHistoryDay]]) {
@@ -114,13 +150,14 @@ final class BoxUsageHistory {
             UserDefaults.standard.set(services.sorted(), forKey: Self.servicesKey)
         }
         HostHistory.shared.update(days: days, covered: services)
+        if !services.contains("codex") { HostHistory.shared.update(codexFallback: nil) }
     }
 
     /// Each service's days, every account added up, as the panel's providers of the same names take them.
     static func days(_ usage: BoxUsage) -> [String: [HostHistoryDay]] {
         usage.totals.mapValues { days in
             days.map { day in
-                HostHistoryDay(date: day.date, models: day.models.map { .init(name: $0.model, tokens: $0.tokens, cost: $0.cost) }, unknown: day.unknown)
+                HostHistoryDay(date: day.date, models: day.models.map { .init(name: $0.model, tokens: $0.tokens, cost: $0.cost) }, unknown: day.unknown, fallback: day.fallback)
             }
         }
     }

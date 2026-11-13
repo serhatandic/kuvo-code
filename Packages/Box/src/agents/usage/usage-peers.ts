@@ -141,6 +141,25 @@ export class UsagePeers {
     }
   }
 
+  /**
+   * What this box's accounts used, all of it, to each of them, now: another fallback model was
+   * chosen, which the digest doesn't hold (`digestOf`) and their older slots keep as told.
+   */
+  tellAll() {
+    if (!this.transport.followed || !this.directory.told) {
+      // (Told all of it as soon as it can be.)
+      this.told.clear()
+      return
+    }
+    const now = this.now()
+    const { accounts, digest } = this.shared()
+    // (Not asking for theirs, which didn't change: but from one not told since the link started.)
+    for (const { key } of this.directory.peerBoxes()) {
+      this.transport.send(key, { kind: "usage", at: now, accounts, digest, ...(this.told.has(key) ? {} : { ask: true }) }, false)
+      this.told.set(key, { digest, at: now })
+    }
+  }
+
   /** A client pulled to refresh here: each peer reads its own now, and tells (at most once a minute). */
   refreshElsewhere() {
     if (!this.transport.followed || !this.directory.told) return
@@ -303,6 +322,8 @@ export class UsagePeers {
 /**
  * What a box's accounts used, hashed, as told: the same on both sides once the receiver has put
  * together what it was told (each account's fields in one order, its slots as kept: `keptSlots`).
+ * Not which fallback model estimated what (`slots.fallback`): a box from before keeps none of it,
+ * and would never find its own the same. Its peers are told all of it when that changes (`tellAll`).
  */
 export function digestOf(accounts: ToldUsage[]): string {
   const canonical = accounts.map((account) => [account.provider, account.service, account.agent ?? null, account.account ?? null, account.label ?? null, account.identity ?? null, account.cut === true, account.places ?? [], account.slots.models, account.slots.used, account.slots.unknown ?? []])
@@ -314,14 +335,14 @@ const toldOf = ({ slots, ...account }: OwnUsage): ToldUsage => ({ ...account, sl
 
 /** Kept slots from `first` (quarter hours since 1970) on, as a receiver keeps them (its models only those still used). */
 function fromSlot(slots: KeptSlots, first: number): KeptSlots {
-  return keptSlots(slotsFrom({ ...slots, used: slots.used.filter((use) => use[0] >= first), ...(slots.unknown ? { unknown: slots.unknown.filter((each) => each[0] >= first) } : {}) }, Infinity))
+  return keptSlots(slotsFrom({ ...slots, used: slots.used.filter((use) => use[0] >= first), ...(slots.unknown ? { unknown: slots.unknown.filter((each) => each[0] >= first) } : {}), ...(slots.fallback ? { fallback: slots.fallback.filter((each) => each[0] >= first) } : {}) }, Infinity))
 }
 
 /** Each account with only its slots from `from` (quarter hours since 1970) on. */
 function recentOf(accounts: ToldUsage[], from: number): ToldUsage[] {
   return accounts.map((account) => ({
     ...account,
-    slots: { models: account.slots.models, used: account.slots.used.filter((use) => use[0] >= from), ...(account.slots.unknown ? { unknown: account.slots.unknown.filter((each) => each[0] >= from) } : {}) },
+    slots: { models: account.slots.models, used: account.slots.used.filter((use) => use[0] >= from), ...(account.slots.unknown ? { unknown: account.slots.unknown.filter((each) => each[0] >= from) } : {}), ...(account.slots.fallback ? { fallback: account.slots.fallback.filter((each) => each[0] >= from) } : {}) },
   }))
 }
 
@@ -332,8 +353,10 @@ function withOlder(account: OwnUsage, kept: OwnUsage | undefined, since: number)
   const first = (account.whole ?? 0) * SLOT
   for (const [slot, models] of kept?.slots.used ?? []) if (slot < since && slot >= first) slots.used.set(slot, models)
   for (const [slot, models] of kept?.slots.unknown ?? []) if (slot < since && slot >= first) slots.unknown.set(slot, models)
+  for (const [slot, models] of kept?.slots.fallback ?? []) if (slot < since && slot >= first) slots.fallback.set(slot, models)
   for (const [slot, models] of account.slots.used) if (slot >= since) slots.used.set(slot, models)
   for (const [slot, models] of account.slots.unknown) if (slot >= since) slots.unknown.set(slot, models)
+  for (const [slot, models] of account.slots.fallback) if (slot >= since) slots.fallback.set(slot, models)
   return { ...account, slots }
 }
 

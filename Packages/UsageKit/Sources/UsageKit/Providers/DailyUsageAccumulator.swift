@@ -33,6 +33,12 @@ struct DailyUsageAccumulator {
         if let fallbackPricingModel { fallbackPricingModelsByDay[day, default: []].insert(fallbackPricingModel) }
     }
 
+    /// Note that `model`'s rates estimated some of `day`'s cost for a model with no known price
+    /// (fork addition: a host's days say so apart from the use they priced).
+    mutating func addFallbackPricingModel(day: String, model: String) {
+        fallbackPricingModelsByDay[day, default: []].insert(model)
+    }
+
     /// Merge already-built scans (a provider's native log scan plus its pi slice) into one, by replaying
     /// each scan's per-model daily usage through a fresh accumulator so the combined `series`,
     /// `modelUsage`, and unknown-model set stay consistent. Every input must be accumulator-built (its

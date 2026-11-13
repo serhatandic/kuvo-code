@@ -1,0 +1,195 @@
+{
+ "files": [
+  "codex/sessions/2026/11/10/rollout-2026-11-10T10-00-00-root.jsonl",
+  "codex/sessions/2026/11/11/rollout-2026-11-11T12-00-05-child.jsonl",
+  "codex/sessions/2026/11/11/rollout-2026-11-11T13-00-00-sub.jsonl",
+  "codex/archived_sessions/rollout-2026-10-02T12-00-00-old.jsonl"
+ ],
+ "since": "2026-10-01T00:00:00Z",
+ "now": "2026-11-12T12:00:00Z",
+ "fallbackChoices": [
+  "gpt-5.5"
+ ],
+ "plain": {
+  "days": [
+   {
+    "date": "2026-11-11",
+    "tokens": 630,
+    "cost": 0.0056124999999999994,
+    "models": [
+     {
+      "model": "gpt-5",
+      "tokens": 20,
+      "cost": 0.00011250000000000001
+     },
+     {
+      "model": "gpt-5.5",
+      "tokens": 610,
+      "cost": 0.0055
+     }
+    ]
+   },
+   {
+    "date": "2026-11-10",
+    "tokens": 314640,
+    "cost": 25.743767000000002,
+    "models": [
+     {
+      "model": "codex-auto-review",
+      "tokens": 5200,
+      "cost": 0
+     },
+     {
+      "model": "gpt-4.1",
+      "tokens": 2100,
+      "cost": 0.0048000000000000004
+     },
+     {
+      "model": "gpt-5.4-pro-2026-03-05",
+      "tokens": 1010,
+      "cost": 0.031799999999999995
+     },
+     {
+      "model": "gpt-5.5",
+      "tokens": 4000,
+      "cost": 0.037099999999999994
+     },
+     {
+      "model": "gpt-5.5-turbo",
+      "tokens": 1100,
+      "cost": 0.02
+     },
+     {
+      "model": "gpt-6-astra",
+      "tokens": 301000,
+      "cost": 25.650000000000002
+     },
+     {
+      "model": "gpt-reserve",
+      "tokens": 230,
+      "cost": 0.000067
+     }
+    ]
+   },
+   {
+    "date": "2026-10-02",
+    "tokens": 12600,
+    "cost": 0.00815,
+    "models": [
+     {
+      "model": "codex-auto-review",
+      "tokens": 10100,
+      "cost": 0.00065
+     },
+     {
+      "model": "gpt-5",
+      "tokens": 2500,
+      "cost": 0.0075
+     }
+    ]
+   }
+  ],
+  "unknown": {
+   "2026-11-10": [
+    "gpt-mystery-1"
+   ]
+  },
+  "fallback": {}
+ },
+ "fallback": {
+  "model": "gpt-5.5",
+  "days": [
+   {
+    "date": "2026-11-11",
+    "tokens": 630,
+    "cost": 0.0056124999999999994,
+    "models": [
+     {
+      "model": "gpt-5",
+      "tokens": 20,
+      "cost": 0.00011250000000000001
+     },
+     {
+      "model": "gpt-5.5",
+      "tokens": 610,
+      "cost": 0.0055
+     }
+    ]
+   },
+   {
+    "date": "2026-11-10",
+    "tokens": 314695,
+    "cost": 25.744167,
+    "models": [
+     {
+      "model": "codex-auto-review",
+      "tokens": 5200,
+      "cost": 0
+     },
+     {
+      "model": "gpt-4.1",
+      "tokens": 2100,
+      "cost": 0.0048000000000000004
+     },
+     {
+      "model": "gpt-5.4-pro-2026-03-05",
+      "tokens": 1010,
+      "cost": 0.031799999999999995
+     },
+     {
+      "model": "gpt-5.5",
+      "tokens": 4000,
+      "cost": 0.037099999999999994
+     },
+     {
+      "model": "gpt-5.5-turbo",
+      "tokens": 1100,
+      "cost": 0.02
+     },
+     {
+      "model": "gpt-6-astra",
+      "tokens": 301000,
+      "cost": 25.650000000000002
+     },
+     {
+      "model": "gpt-mystery-1",
+      "tokens": 55,
+      "cost": 0.00039999999999999996
+     },
+     {
+      "model": "gpt-reserve",
+      "tokens": 230,
+      "cost": 0.000067
+     }
+    ]
+   },
+   {
+    "date": "2026-10-02",
+    "tokens": 12600,
+    "cost": 0.00815,
+    "models": [
+     {
+      "model": "codex-auto-review",
+      "tokens": 10100,
+      "cost": 0.00065
+     },
+     {
+      "model": "gpt-5",
+      "tokens": 2500,
+      "cost": 0.0075
+     }
+    ]
+   }
+  ],
+  "unknown": {
+   "2026-11-10": [
+    "gpt-mystery-1"
+   ]
+  },
+  "fallback": {
+   "2026-11-10": [
+    "gpt-5.5"
+   ]
+  }
+ }
+}
