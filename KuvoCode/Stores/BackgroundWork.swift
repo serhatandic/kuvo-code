@@ -102,16 +102,20 @@ final class BackgroundWork {
             return false
         }
         guard state == .off else { return isOn() }
+        #if DEBUG
+        // (A test's stand-in: never launchd's, and never a prompt.)
+        if let registering = Self.registering {
+            try? registering()
+            refresh()
+            return isOn()
+        }
+        #endif
         guard AppInfo.mayPrompt("Background work (macOS adds a background item and tells you)") else {
             failure = "This copy never asks macOS (KUVO_DEMO_NO_PROMPTS)."
             return false
         }
         do {
-            #if DEBUG
-            if let registering = Self.registering { try registering() } else { try service.register() }
-            #else
             try service.register()
-            #endif
             failure = nil
         } catch {
             Logger(subsystem: "run.kuvo.code", category: "keeper").error("Background work wasn't registered: \(error.localizedDescription, privacy: .public)")
