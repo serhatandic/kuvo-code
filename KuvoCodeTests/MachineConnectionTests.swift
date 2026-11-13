@@ -351,7 +351,7 @@ import Testing
         let engine = add(id, at: machine)
 
         await app.connect(engine).value
-        let words = "Kuvo Code on \(engine.machine.name) couldn’t be updated. Its files didn’t take this Mac’s version. Try again, or update it with the Kuvo Code that set it up."
+        let words = "Kuvo Code on \(engine.machine.name) couldn’t be updated. Its files didn’t take this Mac’s version. Try again."
         #expect(engine.connection == .failed)
         #expect(engine.failure == words)
         #expect(!engine.failureMayPass, "not tried again by itself: trying changes nothing")
