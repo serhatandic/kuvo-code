@@ -206,7 +206,8 @@ final class UsageSettingsOnBox {
         versions = answer.versions
         // What this Mac sent of a part the box now holds otherwise is no longer its own last: a
         // change turned away against it later isn't this Mac's own (another computer's came since).
-        for (name, value) in sent where answer.settings[name] != value { sent[name] = nil }
+        let still = sent.filter { answer.settings[$0.key] == $0.value }
+        if still.count != sent.count { sent = still }
         guard let settings = try? JSONEncoder().encode(answer.settings) else { return }
         host.apply(settings, except: Set(unsent.keys))
         answered += 1

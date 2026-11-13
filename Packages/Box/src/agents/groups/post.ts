@@ -246,7 +246,7 @@ export class LinkDirectory implements PeerDirectory, LimitsDirectory {
   private listeners: (() => void)[] = []
   /** Whether the link has said who your computers are since this started. */
   told = false
-  /** The setup this box follows, as the link last said (none: it follows none). */
+  /** The setup this box follows, as the link last said: none when it said none (`inNoSetup`), or didn't say. */
   setup?: string
   /** Whether the link has said this box follows no setup, settled (`setup: null`): not said, it
    * can't say yet, or it's a link from before this. */
