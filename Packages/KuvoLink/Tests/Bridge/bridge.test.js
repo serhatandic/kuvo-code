@@ -1540,6 +1540,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "bots.make": ["GET", "kuvo/bots/templates"],
     // (This Mac's app, registered with a Mac's box in a home of its own: a machine says it has none.)
     "box.app": ["GET", "kuvo/box/app"],
+    // (A command, `kuvo-link.js helper`, not a route: kuvo/info names it.)
+    "box.helper": ["GET", "kuvo/info"],
     // (A box in a home of its own: on a Mac's, kuvo/work/settings's keepsAwake.)
     "box.ownHome": ["GET", "kuvo/work/settings"],
     // (Moving this Mac's box into a home of its own: how it stands, here nothing.)

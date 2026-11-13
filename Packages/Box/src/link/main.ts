@@ -58,7 +58,7 @@ import { watchBox } from "./engine/watch";
 import { watchMoves } from "./moves/move";
 import { writePrivate } from "./files";
 import { browserStatus, installBrowser, startBrowserInstall } from "./browser/install";
-import { APP_FOLDER, BRIDGE_FILE, IS_MAC, K, MAC_APP_VERSION, NEEDED_FILE, OWN_RUNTIME, PID_FILE, REAL_BOX, RUN, scriptIs, socketKey, takeVaultSecrets, VERSION_FILE } from "./home";
+import { APP_FOLDER, BRIDGE_FILE, IS_MAC, K, MAC_APP_VERSION, NEEDED_FILE, OWN_HOME_MAC, OWN_RUNTIME, PID_FILE, REAL_BOX, RUN, scriptIs, socketKey, takeVaultSecrets, VERSION_FILE } from "./home";
 import { rehomeCommand } from "./rehome/command";
 import { clearKept, SERVED_FILE } from "./rehome/move";
 import { isBridge, keepKeeper, needed, noLongerNeeded, runningBridge, startBridge } from "./keeper";
@@ -104,6 +104,7 @@ import { keepKeyFiles } from "./keys";
 import { keepAwakeWhileWorking } from "./work/awake";
 import { runningServe, SERVE_FILE, SERVE_NEEDED, stopKeptServe } from "./serve-kept";
 import { uninstallCommand } from "./uninstall";
+import { helperCommand } from "./helper";
 import { agentsWorking, checkDrift, confirmUpdate, isUpdating, noteLauncher, noteOlderMacs, noteUpdate, startUpdate, update, UPDATE_KEYS, updateNight, updatesBlocked, updateState, updateStatus } from "./updates/update";
 import { BRIDGE_VERSION } from "./version";
 import type { AddressInfo } from "node:net";
@@ -750,7 +751,12 @@ async function serve(): Promise<void> {
   // to your phones through this Mac's link: listening before it says where it is, so what reaches
   // the vault from then on finds it open.
   holdVault(engineHandler(readEngineFile, { name: os.hostname() }, readBridgeFile));
-  console.log(JSON.stringify({ url: `http://127.0.0.1:${(server.address() as AddressInfo).port}` }));
+  const port = (server.address() as AddressInfo).port;
+  console.log(JSON.stringify({ url: `http://127.0.0.1:${port}` }));
+  // A Mac's box in a home of its own says where it answers itself, for its clients (`run/serve.json`,
+  // as one kept for them does): its helper started it, and no app writes it (PROTOCOL.md, "This
+  // Mac's box: its helper"). Taken away as it leaves.
+  if (OWN_HOME_MAC) writePrivate(SERVE_FILE(), JSON.stringify({ pid: process.pid, port, password, kept: false }));
   // This Mac's vault's newest generations, from its app, before agents use it (vault/store.ts).
   if (IS_MAC) void (async () => {
     for (let tries = 0; tries < 120; tries++) {
@@ -817,6 +823,7 @@ async function serve(): Promise<void> {
     for (let tries = 0; tries < 30 && (macLink.host?.unsent?.() ?? 0) > 0; tries++) await sleep(50);
     // What didn't get out in time isn't lost without a word.
     if ((macLink.host?.unsent?.() ?? 0) > 0) console.error("Kuvo Code quit before what its link had for your phones and machines went out.");
+    try { if (OWN_HOME_MAC && JSON.parse(fs.readFileSync(SERVE_FILE(), "utf8"))?.pid === process.pid) fs.rmSync(SERVE_FILE(), { force: true }); } catch {}
     process.exit(0);
   };
   process.stdin.on("end", leave);
@@ -1124,12 +1131,17 @@ if (main) {
   else if (mode === "uninstall") {
     process.exitCode = uninstallCommand(process.argv.slice(3));
   }
+  // This Mac's box's helper, Kuvo Code Box, started at login (PROTOCOL.md, "This Mac's box: its
+  // helper"): `helper install [--load] [--app <bundle ID>] | helper status`.
+  else if (mode === "helper") {
+    process.exitCode = helperCommand(process.argv.slice(3));
+  }
   else if (mode === "selftest") {
     const ok = selftest();
     console.log(ok ? "ok" : "failed");
     process.exit(ok ? 0 : 1);
   } else {
-    console.error("Usage: kuvo-link.js run | serve [--kept] | setup | pair [relay] | box <command> | leave <mac> | here <root> | rehome <root> | uninstall [--check] | engine-config | login-path | update [--now] | browser install|start|status | selftest");
+    console.error("Usage: kuvo-link.js run | serve [--kept] | setup | pair [relay] | box <command> | leave <mac> | here <root> | rehome <root> | uninstall [--check] | helper install|status | engine-config | login-path | update [--now] | browser install|start|status | selftest");
     process.exit(2);
   }
 }

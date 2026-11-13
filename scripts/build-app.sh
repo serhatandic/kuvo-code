@@ -72,5 +72,9 @@ fi
 codesign "$@" "$FRAMEWORK/Versions/B/Autoupdate"
 codesign "$@" "$FRAMEWORK/Versions/B/Updater.app"
 codesign "$@" "$FRAMEWORK"
+# Kuvo Code Box, the helper this Mac's box runs under in ~/.kuvo-code (Contents/Helpers), built and
+# signed with the same identity, its own entitlements and the hardened runtime, before the app that
+# seals it: notarized with the app, and packed into the box's release from it.
+SIGN_IDENTITY="$SIGN_IDENTITY" ./scripts/build-box-helper.sh "$APP"
 codesign "$@" --entitlements KuvoCode/KuvoCode.entitlements "$APP"
 echo "Built $APP $VERSION ($(du -sh "$APP" | cut -f1))"

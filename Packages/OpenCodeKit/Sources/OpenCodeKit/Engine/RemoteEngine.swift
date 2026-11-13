@@ -1274,6 +1274,17 @@ public final class RemoteServer: @unchecked Sendable {
           done
           exit 1
           ;;
+        serve)
+          # A Mac's own box's server (`box/kind` says `mac`), for its helper, Kuvo Code Box, which
+          # starts it and keeps it running, its password and the vault's secrets on its stdin: here,
+          # in the foreground, as the helper's own child (it goes when its stdin closes).
+          [ "$(tr -d ' \t\r\n' 2>/dev/null <"$K/box/kind")" = mac ] || { echo "Only a Mac's own box's helper runs its server so." >&2; exit 3; }
+          [ -f "$R/off" ] && exit 0
+          [ -f "$K/bin/kuvo-link.js" ] && [ -n "$V" ] || exit 1
+          environment; cd "$K/workspace" 2>/dev/null || cd "$K"
+          export KUVO_HOME="$K" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0
+          exec "$K/engine/$V/opencode" --config=/dev/null --no-env-file "$K/bin/kuvo-link.js" serve >"$R/serve.log" 2>&1
+          ;;
         start)
           rm -f "$R/stopped"
           sh "$K/bin/kuvo-start" engine

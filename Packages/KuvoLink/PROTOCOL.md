@@ -4768,6 +4768,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `bots.keys` | `kuvo/bots/<id>/keys…` |
 | `bots.make` | `kuvo/bots/templates` and `POST kuvo/bots` |
 | `box.app` | `kuvo/box/app` and `kuvo/box/app/open`: this Mac's app registering with a Mac's box in a home of its own, and opened by it for its agents' browser ("This Mac's box: this Mac's app") |
+| `box.helper` | `kuvo-link.js helper install [--load] [--app <bundle ID>] \| status`: the launch agent that starts Kuvo Code Box, a Mac's box's helper, at login ("This Mac's box: its helper"); `kuvo-start serve`; `serve` saying where it answers in `run/serve.json` |
 | `box.ownHome` | a Mac's box can run in a home of its own, laid out as a machine's (`box/kind`, "This Mac's box: a home of its own"); there, `keepsAwake` and `awakeNow` in `kuvo/work/settings` |
 | `box.rehome` | `kuvo/box/rehome`: moving this Mac's box into a home of its own, and back ("This Mac's box: moving this Mac's box"); `kuvo-link.js rehome`, and `here`'s `moving` |
 | `box.serve` | `kuvo/box/serve`: the box's server kept running for clients ("Kept for clients"); `kuvo-link.js serve --kept` |
@@ -5287,6 +5288,83 @@ Names are `KUVO_KEY_*` only (`^KUVO_KEY_[A-Z0-9_]+$`): the box never asks for an
 answers no other. The app keeps the files the engine reads (`KUVO_KEYS`) in step as it
 changes them. Anything else it answers is an error the box's route answers `503 {"message"}`
 with. Without these, as on a machine, the box keeps its keys in files only you can read.
+
+#### This Mac's box: its helper
+
+`box.helper`, #333 piece 4, behind the app's `movesOwnBox` (off): nothing uses it until the move
+does. Once this Mac's box lives in a home of its own (`~/.kuvo-code`, `box/kind` says `mac`), it
+runs under **Kuvo Code Box**, a small signed program of Kuvo Code's own with no box logic: the
+app carries it (`Contents/Helpers/Kuvo Code Box.app`, built by `scripts/build-box-helper.sh` and
+signed with the app's identity, the hardened runtime and its own entitlements, before the app is),
+the box's release brings it into `bin/Kuvo Code Box.app`, and it runs from there. Its bundle ID is
+the app's with `.box` after it (`run.kuvo.code.box`); an update keeps that, its signer and its
+place, which is what macOS keeps your permissions and its Keychain items by.
+
+- **Started** by the launch agent `run.kuvo.code.machine` (one per computer, a machine's runs
+  `kuvo-start` with `/bin/sh`): `kuvo-link.js helper install [--load] [--app <bundle ID>]` writes
+  `~/Library/LaunchAgents/run.kuvo.code.machine.plist` (`ProgramArguments`: the helper, `keep
+  --home <box>`; `RunAtLoad`; `KeepAlive {SuccessfulExit: false}`; `AbandonProcessGroup`;
+  `AssociatedBundleIdentifiers: [<the app's ID>]`, by default `run.kuvo.code`), and with `--load`
+  lets go of whatever had the label and bootstraps it (`gui/<uid>`). It prints `{written, loaded,
+  message}`, exiting 0 once done, 1 when refused (not a Mac, not a Mac's own box in a home of its
+  own, not the real `~/.kuvo-code`, or no helper in `bin`) or launchd didn't start it, 2 for what it
+  doesn't know. `helper status` says `{helper, agent, loaded}` (`loaded` null where launchd couldn't
+  be asked). As `uninstall` does, it touches launchd only for the real `~/.kuvo-code`, or a test's
+  stand-ins (`KUVO_TEST_UNINSTALL_TOOLS`). `uninstall` takes it away. With Login Items off for it,
+  the app opens it once (`open -g -j -n <bundle> --args keep --home <box>`), checked first: there,
+  its signature whole, its ID the app's with `.box`, signed by the app's team. Never as the app's
+  child, which would make the app what macOS asks about.
+- **Runs**: one per box (`run/helper.lock`; a second goes at once, exit 0). It checks first that
+  its bundle on disk is the very one it was started from (its code directory's hash, as the app
+  checks itself); changed, it starts nothing, writes why in `run/helper-trouble`, and exits 0 so
+  launchd doesn't start it again. Then it starts its host interface (below), `kuvo-start serve`, and
+  `kuvo-start keep` in a session of its own, each its own child, so macOS takes it for the
+  responsible process of everything the box runs (the engine, the bridge, every agent's command):
+  folders, Screen Recording and the rest are asked for Kuvo Code Box. Either child that ends is
+  started again, after a wait that grows while it keeps ending within ten minutes (1 s up to ten
+  minutes). Every ten seconds it notes macOS asking you something (`run/.system-asking`), as the
+  keeper did. SIGTERM (launchd, logging out) closes `serve`'s stdin, sends the keeper SIGTERM (the
+  engine, link and bridge are detached and go on, for the next keeper to take over), takes its
+  `host.json` away and exits 0. The box turned off (`run/off`, `kuvo-start off`) with its keeper
+  gone, it does the same.
+- **`serve`**: `kuvo-start serve`, on a Mac's own box only (else exit 3; `run/off`, exit 0), runs
+  `kuvo-link.js serve` in the foreground with the engine's Bun, as the box's other processes are
+  started, its output in `run/serve.log`. The helper gives it, on its stdin's first line,
+  `{"password", "hostVaultSecret", "vaultFileKey"?}` and keeps the pipe open: it goes when that
+  closes. On a Mac's box in a home of its own, `serve` says where it answers itself, in
+  `run/serve.json` (`{pid, port, password, kept: false}`, `0600`), and takes it away as it leaves.
+  Started while the Keychain couldn't give the vault's file key, it's started again once it can.
+- **Host interface**: the same calls, proofs and answers as the keeper's ("Host interface",
+  `HostProof` shared by both), from its own Keychain items, named by its bundle ID
+  (`<helper ID>.phone-link`, `.integrations`, `.vault`), never asking you anything (a locked
+  Keychain answers `503 {"message"}`). `app/open` opens only Kuvo Code (the app's bundle ID, signed
+  by the helper's team); `trash` takes only what's in the box's `trash`. `sites/signed-in` and
+  `link/route`, what only the open app answers, say `503 {"message": "Kuvo Code isn't open on this
+  Mac."}`: the open app reaches a box in a home of its own itself.
+- **Keys it never makes twice.** It makes the link's keys (`link/identity`) and the vault's file key
+  the first time a box asks, and notes them in `box/keychain.json` (`{"has": ["phone-link/key",
+  "phone-link/secret", "phone-link/sign", "vault/files"]}`). One the box has had (noted there, or
+  copied by the move) and that's gone from the Keychain is never made again: `link/identity`
+  answers `503` saying the keys are missing, and `serve` starts without the vault's file key. A new
+  key would make this Mac another box to every phone, machine and peer.
+- **The Keychain's move** (legacy keychain items, as they've always been; never by changing an
+  item's list of programs, which macOS asks about once per item). Only a program an item names may
+  read it or take it away; copies of the app's items name only the helper. The journal is
+  `updates/rehome/keychain.json` (`{v, state: copying | copied | settled | returning, app, helper,
+  items: [{service, account, label?}]}`), written to disk before what it says is done.
+  - the app's keeper copies each of the app's items under the helper's names, made trusting the
+    helper the app carries (its signature, which the copy in `bin` shares), listing every one in
+    the journal first (`copying`, then `copied`);
+  - `Kuvo Code Box keys check --home <box>` (the move's check, a short run of the helper's own)
+    prints `{"unreadable": [...]}`, exiting 0 when it reads every copy;
+  - `keys uncopy` (the move went back before it cleared the old place) takes the journaled copies
+    away, then the journal; the app's own are never touched;
+  - once the move can't go back, the keeper takes the app's own away (each once its copy is
+    there), and the journal says `settled`;
+  - `keys back --app <Kuvo Code.app>` (moving back, before the helper goes): every item the helper
+    has, those made since too, made again under the app's names trusting the app, then its own
+    taken away, and the journal. It refuses (exit 2) while the app's own are still there.
+  Each of these prints JSON and exits 0 once done, 2 with why on stderr.
 
 #### The relay, on this Mac's box
 

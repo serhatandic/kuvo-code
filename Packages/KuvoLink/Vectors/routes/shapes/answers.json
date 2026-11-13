@@ -3077,6 +3077,9 @@
             "literal": "box.app"
            },
            {
+            "literal": "box.helper"
+           },
+           {
             "literal": "box.ownHome"
            },
            {
@@ -3500,6 +3503,9 @@
            },
            {
             "literal": "box.app"
+           },
+           {
+            "literal": "box.helper"
            },
            {
             "literal": "box.ownHome"
