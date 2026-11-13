@@ -12,8 +12,7 @@ struct ReplyView: NSViewRepresentable {
     /// A reply's (with file links), or another's (a Markdown file's, with `images`).
     let parser: any MarkupParser
     var images: URL? = nil
-    /// ` ```mermaid ` blocks are drawn as diagrams (a reply, a Markdown file's preview).
-    var diagrams = false
+    /// Enables rendered diagrams in this document.
     var openURL: (URL) -> Bool = { _ in false }
     @Environment(\.messageFont) private var font
     @Environment(\.colorScheme) private var scheme
@@ -46,7 +45,8 @@ struct ReplyView: NSViewRepresentable {
         let marks = (parser as? FileLinkingParser).flatMap { $0.highlight == nil && $0.mentions.isEmpty && $0.agents.isEmpty && $0.refs.isEmpty ? nil : AnyHashable(ParserMarks(highlight: $0.highlight, mentions: $0.mentions, agents: $0.agents, refs: $0.refs)) }
         view.show(markdown, document: {
             if let parser = parser as? FileLinkingParser, images == nil { return ReplyDocument.cached(markdown: markdown, parser: parser, style: style, diagrams: diagrams) }
-            return ReplyDocument(markdown: markdown, parser: parser, style: style, images: images, diagrams: diagrams)
+            return ReplyDocument(markdown: markdown, parser: parser, style: style,
+                                 images: images, diagrams: diagrams)
         }, style: style, marks: marks)
     }
 
@@ -137,25 +137,22 @@ final class ReplyPieceView: NSView {
                 let view = existing as? NSHostingView<AnyView> ?? NSHostingView(rootView: AnyView(EmptyView()))
                 view.rootView = AnyView(MathBlockView(latex: drawn, textSize: style.size))
                 views.append(view)
-            case .diagram(let source):
-                let view = existing as? MermaidView ?? MermaidView()
-                view.cardIsFocused = cardIsFocused
-                view.onHeightChange = { [weak self] in self?.diagramChangedHeight() }
-                view.show(source: source, style: style)
-                views.append(view)
+            case .diagram(source: let source):
+                let block = existing as? MermaidView ?? .init()
+                block.onResize = { [weak self] in
+                    self?.heights = nil
+                    self?.needsLayout = true
+                    self?.invalidateIntrinsicContentSize()
+                }
+                block.cardIsFocused = cardIsFocused
+                block.present(source, style: style)
+                views.append(block)
             }
         }
         for view in segmentViews where !views.contains(where: { $0 === view }) { view.removeFromSuperview() }
         for view in views where view.superview !== self { addSubview(view) }
         segmentViews = views
         gaps = document.gaps
-        heights = nil
-        needsLayout = true
-        invalidateIntrinsicContentSize()
-    }
-
-    /// A diagram came back from drawing (or showed its code instead) at another height.
-    private func diagramChangedHeight() {
         heights = nil
         needsLayout = true
         invalidateIntrinsicContentSize()
@@ -172,7 +169,7 @@ final class ReplyPieceView: NSView {
             switch view {
             case let text as ReplyTextView: text.height(for: width)
             case let code as ReplyCodeView: code.height(for: width)
-            case let diagram as MermaidView: diagram.height(for: width)
+            case let block as MermaidView: block.measure(at: width)
             case let hosting as NSHostingView<AnyView>: hosting.fittingSize.height
             default: 0
             }
@@ -704,119 +701,6 @@ final class SidewaysScrollView: NSScrollView {
             super.scrollWheel(with: event)
         }
         if event.phase == .ended || event.momentumPhase == .ended || event.phase == .cancelled { passesOn = nil }
-    }
-}
-
-/// A small text button with an icon in a code block's bar, as TextButtonStyle looks: secondary ink,
-/// and a soft fill when the pointer's over it.
-class ReplyChipButton: NSButton {
-    private var isHovering = false { didSet { needsDisplay = true } }
-    private var tracking: NSTrackingArea?
-    /// What it says now (words alone: an icon would only repeat them), and the longest it ever
-    /// says (it's as wide as that, so what's beside it stays put).
-    private(set) var current: String
-    private let widest: String
-
-    init(title: String, widest: String? = nil) {
-        current = title
-        self.widest = widest ?? title
-        super.init(frame: .zero)
-        isBordered = false
-        setButtonType(.momentaryChange)
-        font = .systemFont(ofSize: 11, weight: .medium)
-        show(title: title)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    func show(title: String) {
-        current = title
-        let ink = isHovering ? NSColor.labelColor : NSColor.secondaryLabelColor
-        self.title = title
-        attributedTitle = NSAttributedString(string: title, attributes: [.font: font!, .foregroundColor: ink])
-        invalidateIntrinsicContentSize()
-    }
-
-    override var intrinsicContentSize: NSSize {
-        let size = super.intrinsicContentSize
-        let widestWidth = NSAttributedString(string: widest, attributes: [.font: font!]).size().width
-        return NSSize(width: max(size.width, widestWidth) + 12, height: size.height + 6)
-    }
-
-    override var fittingSize: NSSize { intrinsicContentSize }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let tracking { removeTrackingArea(tracking) }
-        let area = PointerClaim.trackingArea(owner: self, in: self)
-        addTrackingArea(area)
-        tracking = area
-    }
-
-    // The pointing hand, as on the app's other borderless buttons (`clickablePointer`), where
-    // it's on top (not under a bar over the code) and can be clicked.
-    private let claim = PointerClaim()
-
-    private func claimPointer(for event: NSEvent) {
-        claim.show(isEnabled && PointerClaim.isTopmost(self, at: event.locationInWindow) ? .pointingHand : nil)
-    }
-
-    override func cursorUpdate(with event: NSEvent) { claimPointer(for: event) }
-    override func mouseMoved(with event: NSEvent) { claimPointer(for: event) }
-
-    override func mouseEntered(with event: NSEvent) {
-        isHovering = true
-        show(title: current)
-        claimPointer(for: event)
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        isHovering = false
-        show(title: current)
-        claim.show(nil)
-    }
-
-    override func viewWillMove(toWindow newWindow: NSWindow?) {
-        super.viewWillMove(toWindow: newWindow)
-        guard newWindow == nil else { return }
-        claim.show(nil)
-        // No `mouseExited` comes: back without the hover's fill.
-        if isHovering {
-            isHovering = false
-            show(title: current)
-        }
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        if isHovering || isHighlighted {
-            (isHighlighted ? NSColor.labelColor.withAlphaComponent(0.12) : NSColor.labelColor.withAlphaComponent(0.06)).setFill()
-            NSBezierPath(roundedRect: bounds, xRadius: 5, yRadius: 5).fill()
-        }
-        super.draw(dirtyRect)
-    }
-}
-
-/// Copy, in a code block's bar; "Copied" for a moment after.
-final class ReplyCopyButton: ReplyChipButton {
-    private var reset: Task<Void, Never>?
-
-    init() {
-        super.init(title: "Copy", widest: "Copied")
-        toolTip = "Copy Code"
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    func showCopied() {
-        show(title: "Copied")
-        reset?.cancel()
-        reset = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(1.5))
-            guard !Task.isCancelled else { return }
-            self?.show(title: "Copy")
-        }
     }
 }
 
