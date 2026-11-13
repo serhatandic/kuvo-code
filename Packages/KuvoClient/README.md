@@ -40,9 +40,14 @@ integrations Accounts lists as providers: no web search services, and not the en
 `PlanSignIns` is what a conversation on the engine's own OpenAI or xAI model says when the engine
 can't run it: a ChatGPT or SuperGrok plan signs in through Codex or Grok, so it needs a key, or a
 model under that agent. Only for a box without `sessions.models` (the old-box path): a box that has
-it says so itself (`SessionModelState`). `Integration.offeredSignInMethods` is the ways to sign in both apps'
-Accounts offer: not a ChatGPT or SuperGrok plan's own (they go through Codex and Grok), unless one
-was made before; held, with `PlanSignIns`, to the box's cases (`Vectors/plan-sign-ins.json`).
+it says so itself (`SessionModelState`). `Integration.offeredSignInMethods` is the ways in a box from before `sessions.models` is judged
+by (the old-box path): not a ChatGPT or SuperGrok plan's own (they go through Codex and Grok),
+unless one was made before; held, with `PlanSignIns`, to the box's cases (`Vectors/plan-sign-ins.json`).
+`SignInMethods`, `SignInAccounts` and `SignInStatus` are the box's answers for signing in
+(`kuvo/sign-in/methods`, `kuvo/sign-in/accounts`, `kuvo/sign-in/status`): the ways in, in its order
+and words, legacy ones apart, the way in an account's card names (`hint`), whether Accounts offers
+Sign In (`offersSignIn`), and what to say when one didn't work; held to `Vectors/sign-in.json`.
+Both apps' sign-in sheets and Accounts draw them.
 `ProgramUpdate` is how a coding agent's program's update stands as its box keeps it
 (`Integration.programUpdate`: under way, updated, already the newest, or why it failed, by an id
 that tells one outcome from the next), and `isInUpdateAll` whether its box's Update All updates it;
