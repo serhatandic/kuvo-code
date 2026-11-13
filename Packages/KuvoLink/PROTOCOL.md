@@ -4290,13 +4290,18 @@ is opened stay each app's own. A client reaches them as `kuvo/agents/api/kuvo/us
     panel's notifications are on. They're delivered by each app, where it reads them.
   A part never set is absent: the panel's own default. Lists hold at most 1,000 ids of up to 200
   characters each, `metricOrder` at most 200 cards, and `period` and `metric` up to 40 characters.
-- `GET kuvo/agents/api/kuvo/usage/settings` → `{data: {settings: {<part>: value}, imported}}`.
+- `GET kuvo/agents/api/kuvo/usage/settings` → `{data: {settings: {<part>: value}, versions:
+  {<part>: version}, imported}}`. `versions`: each part's version as a client names it (below).
   `imported` says whether what a client kept before has come in on this box (below).
 - `PUT kuvo/agents/api/kuvo/usage/settings` with the parts changed (`{layout?, …}`, each whole)
   answers as `GET`. With `knows: {cards, meters}`, the card and meter ids the client's app knows
   (all of them), `layout` and `providers` are whole for those alone: the ids the part held of the
-  others (a newer app's) are kept, put after the client's, and so are fields of the part the box
-  keeps that the client didn't send. Without it, a part is taken as sent. The Mac app sends it. The answer is `400 {message}` for a part that isn't one or isn't what it should
+  others (a newer app's) are kept, each after the nearest one before it that's still there (first
+  when none is), so they keep their places. Without it, a part's ids are taken as sent. Fields of a
+  part the box doesn't know (a newer box's) are kept whatever a client sends. With `based:
+  {<part>: version | null}`, the version each part was changed from (`null`: the client had none),
+  a part that has changed since (another computer's change came meanwhile) isn't changed: the
+  answer names it in `stale`, and the client shows the box's. The Mac app sends both. The answer is `400 {message}` for a part that isn't one or isn't what it should
   be, and for a `codexFallback` that isn't one of `choices` ("Usage history"); nothing changes then.
   A part sent as it already is isn't a change.
 - `POST kuvo/agents/api/kuvo/usage/settings/import` with what a client kept before (its own
@@ -4316,7 +4321,8 @@ is opened stay each app's own. A client reaches them as `kuvo/agents/api/kuvo/us
   `v` its time by the importing box's own clock (an import isn't counted on from what was seen, as
   a change is). So between two imports on two computers whose clocks are off, the one whose clock
   said earlier wins, which may not be the one made first; once either is changed anywhere, the
-  change wins. The newest wins: a change over an import, the higher `v` between two changes, the
+  change wins. A client names a version as `<v>/<by>`, with `/i` after an import's
+  (`versions`, `based`). The newest wins: a change over an import, the higher `v` between two changes, the
   lower `v` between two imports (so a Mac set up later never puts its first-run settings over the
   ones you made on another), and at the same `v` the `by` that sorts last.
 - **Across your own computers** only: between the boxes of one setup ("Your setup"), whose
@@ -4326,10 +4332,11 @@ is opened stay each app's own. A client reaches them as `kuvo/agents/api/kuvo/us
   same setup. So never to or from a box a peer vouches for, and never through a machine more than
   one Mac set up (it follows no setup, so it neither passes them on nor takes them): until setups
   can be joined (#183), Macs that share a machine each keep their own, as their boxes keep them.
-  The settings belong to the setup they were shared in (`setup` in `settings.json`, the first the
-  link named): a box the link names in another setup (it left yours, and joined someone else's)
-  starts over, every part and `imported` gone, so none of them reaches the new setup's computers,
-  and its own Mac's settings come in again.
+  The settings belong to the setup they were shared in (`setup` in `settings.json`; `null` while
+  the box followed none; a box from before this takes the first the link names): a box the link
+  names in another setup (it left yours, and joined someone else's), or in one after following
+  none, starts over, every part and `imported` gone, so none of them reaches the new setup's
+  computers, and its own Mac's settings come in again.
   Nothing goes before the link has said. Each box tells the others `{"seat": {"kind": "settings",
   at, digest, setup, usage?, ask?}}` through its link, which carries this kind only between your
   own computers (never to or from a box a peer vouches for), whole or in parts as a group chat's
@@ -4342,10 +4349,12 @@ is opened stay each app's own. A client reaches them as `kuvo/agents/api/kuvo/us
   them at once. A part a box doesn't know (a newer box's) is kept as it came, and passed on, and so
   are a part's fields it doesn't know (`digest` is of their JSON with every object's keys in one
   order), so two boxes of different versions agree. Nothing is kept per computer: what's newer is
-  taken into the box's own, kept in `usage/settings.json` (`{"kuvo": 1, units, imported?, setup?}`, with `codex: {fallback}` where a box from
+  taken into the box's own, kept in `usage/settings.json` (`{"kuvo": 1, units, imported?, setup?}`, `setup` an id or `null`, with `codex: {fallback}` where a box from
   before reads Codex's fallback model), through a restart. A box from before kept only that
   fallback model there: what it held counts as imported.
-- A Mac app shows the box's parts in its panel and sends a part it changed, whole, with `knows`.
+- A Mac app shows the box's parts in its panel and sends a part it changed, whole, with `knows`
+  and `based`. Its import waits until its panel has read its layout (the usage item starts with
+  the app); with the usage item off, it brings the layout as kept, once its meters were.
   It reads whether its box keeps them from `features` (`usage.settings`; its own box of the same
   version does). A change made while the box doesn't answer, before its first answer since a
   restart too, goes once it's back: the app keeps what the box last said, and what's still to go,

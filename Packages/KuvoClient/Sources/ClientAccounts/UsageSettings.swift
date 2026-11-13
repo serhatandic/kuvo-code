@@ -14,14 +14,21 @@ public struct BoxUsageSettings: Decodable, Hashable, Sendable {
     public var imported: Bool
     /// The parts that came in with an import.
     public var took: [String]
+    /// Each part's version: a change says which it was made from (`based`), and one changed since
+    /// on another computer is turned away (`stale`), the box's shown instead.
+    public var versions: [String: String]
+    /// The parts of a change turned away for that.
+    public var stale: [String]
 
-    private enum CodingKeys: String, CodingKey { case settings, imported, took }
+    private enum CodingKeys: String, CodingKey { case settings, imported, took, versions, stale }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         settings = (try? container.decodeIfPresent(JSONValue.self, forKey: .settings)) ?? .object([:])
         imported = (try? container.decodeIfPresent(Bool.self, forKey: .imported)) ?? false
         took = (try? container.decodeIfPresent([String].self, forKey: .took)) ?? []
+        versions = (try? container.decodeIfPresent([String: String].self, forKey: .versions)) ?? [:]
+        stale = (try? container.decodeIfPresent([String].self, forKey: .stale)) ?? []
     }
 
     /// Where a box's bridge answers them; `PUT` the parts changed, each whole, answered the same.

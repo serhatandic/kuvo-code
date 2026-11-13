@@ -111,6 +111,9 @@ public final class UsageMenuBar {
     /// True once the menu bar item is up.
     public var isRunning: Bool { statusItemController != nil }
 
+    /// Started, its panel not up yet (it waits for the login shell and the accounts first).
+    var isStarting: Bool { started && container == nil }
+
     /// Where the panel can open.
     public enum Screen: Sendable {
         case dashboard, customize, settings

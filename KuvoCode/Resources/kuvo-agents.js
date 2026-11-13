@@ -23002,7 +23002,7 @@ function unitsFrom(given) {
       const value = checked2(name, kept.value);
       if (value !== undefined)
         units[name] = { value, stamp };
-    } else if (OTHER_PART.test(name) && other < MOST_OTHER_PARTS && "value" in kept && canonical(kept.value).length <= MOST_OTHER_PART) {
+    } else if (OTHER_PART.test(name) && !(name in Object.prototype) && other < MOST_OTHER_PARTS && "value" in kept && canonical(kept.value).length <= MOST_OTHER_PART) {
       units[name] = { value: kept.value, stamp };
       other++;
     }
@@ -23016,32 +23016,54 @@ function knowsFrom(given) {
   const meters = ids(given.meters);
   return cards && meters ? { cards: new Set(cards), meters: new Set(meters) } : undefined;
 }
+var FIELDS = {
+  layout: [...LAYOUT_LISTS, "metricOrder"],
+  providers: ["enabled", "known"],
+  totalSpend: ["show", "period", "metric"],
+  codexFallback: [],
+  notifications: ["underTenPercent", "healthyToClose", "closeToRunningOut"]
+};
+function putBack(list, from, other) {
+  const was = Array.isArray(from) ? from : [];
+  const out = [...list];
+  was.forEach((id, index) => {
+    if (!other(id) || out.includes(id))
+      return;
+    let before = index - 1;
+    while (before >= 0 && !out.includes(was[before]))
+      before--;
+    out.splice(before < 0 ? 0 : out.indexOf(was[before]) + 1, 0, id);
+  });
+  return out;
+}
 function keeping(unit, before, given, knows) {
-  if (!knows || !before || typeof before !== "object" || unit !== "layout" && unit !== "providers")
+  if (!before || typeof before !== "object" || !given || typeof given !== "object")
     return given;
   const was = before;
   const now = { ...given };
-  const otherMeter = (id) => !knows.meters.has(id);
-  const otherCard = (id) => !knows.cards.has(id);
-  const add = (list, from, other) => [...list, ...(Array.isArray(from) ? from : []).filter((id) => other(id) && !list.includes(id))];
-  if (unit === "layout") {
-    for (const key of ["placed", "pinned", "expanded", "expandOnEnable", "seeded"])
-      now[key] = add(now[key] ?? [], was[key], otherMeter);
-    now.providerOrder = add(now.providerOrder ?? [], was.providerOrder, otherCard);
-    const metricOrder = { ...now.metricOrder ?? {} };
-    for (const [card, list] of Object.entries(was.metricOrder ?? {})) {
-      metricOrder[card] = otherCard(card) && !metricOrder[card] ? list : add(metricOrder[card] ?? [], list, otherMeter);
-    }
-    now.metricOrder = metricOrder;
-  } else {
-    for (const key of ["enabled", "known"])
-      now[key] = add(now[key] ?? [], was[key], otherCard);
-  }
   for (const [key, value] of Object.entries(was))
-    if (!(key in now))
+    if (!FIELDS[unit].includes(key) && !(key in now))
       now[key] = value;
+  if (knows) {
+    const otherMeter = (id) => !knows.meters.has(id);
+    const otherCard = (id) => !knows.cards.has(id);
+    if (unit === "layout") {
+      for (const key of ["placed", "pinned", "expanded", "expandOnEnable", "seeded"])
+        now[key] = putBack(now[key] ?? [], was[key], otherMeter);
+      now.providerOrder = putBack(now.providerOrder ?? [], was.providerOrder, otherCard);
+      const metricOrder = { ...now.metricOrder ?? {} };
+      for (const [card, list] of Object.entries(was.metricOrder ?? {})) {
+        metricOrder[card] = otherCard(card) && !metricOrder[card] ? list : putBack(metricOrder[card] ?? [], list, otherMeter);
+      }
+      now.metricOrder = metricOrder;
+    } else if (unit === "providers") {
+      for (const key of ["enabled", "known"])
+        now[key] = putBack(now[key] ?? [], was[key], otherCard);
+    }
+  }
   return checked2(unit, now) ?? given;
 }
+var versionOf = (stamp) => `${stamp.v}/${stamp.by}${stamp.imported ? "/i" : ""}`;
 
 class UsageSettings {
   file;
@@ -23063,7 +23085,7 @@ class UsageSettings {
       const saved = JSON.parse(readFileSync30(file, "utf8"));
       this.units = unitsFrom(saved?.units);
       this.imported = saved?.imported === true;
-      if (typeof saved?.setup === "string")
+      if (typeof saved?.setup === "string" || saved?.setup === null)
         this.setup = saved.setup;
       const codex = saved?.codex;
       if (!this.units.codexFallback && codex && typeof codex === "object" && "fallback" in codex) {
@@ -23095,6 +23117,15 @@ class UsageSettings {
       listener([...SETTINGS_UNITS]);
     return true;
   }
+  inNoSetup() {
+    if (this.setup !== undefined)
+      return;
+    this.setup = null;
+    this.save();
+  }
+  versions() {
+    return Object.fromEntries(Object.entries(this.units).flatMap(([name, unit]) => isUnit(name) ? [[name, versionOf(unit.stamp)]] : []));
+  }
   get codexFallback() {
     const value = this.units.codexFallback?.value;
     return typeof value === "string" ? value : undefined;
@@ -23118,7 +23149,7 @@ class UsageSettings {
     });
     return createHash12("sha256").update(canonical(all)).digest("hex").slice(0, 32);
   }
-  change(given, knows) {
+  change(given, knows, based) {
     const values = [];
     for (const [name, value] of Object.entries(given)) {
       if (!isUnit(name))
@@ -23129,8 +23160,13 @@ class UsageSettings {
       values.push([name, keeping(name, this.units[name]?.value, clean, knows)]);
     }
     const changed = [];
+    const stale = [];
     for (const [name, value] of values) {
       const before = this.units[name];
+      if (based && name in based && (before ? versionOf(before.stamp) : null) !== based[name]) {
+        stale.push(name);
+        continue;
+      }
       if (before && !before.stamp.imported && canonical(before.value) === canonical(value))
         continue;
       this.highest = Math.max(this.now(), this.highest + 1);
@@ -23139,7 +23175,7 @@ class UsageSettings {
     }
     if (changed.length)
       this.changed(changed);
-    return { changed };
+    return { changed, stale };
   }
   take(given) {
     if (this.imported)
@@ -23188,13 +23224,13 @@ class UsageSettings {
     try {
       mkdirSync21(dirname16(this.file), { recursive: true });
       const codex = this.units.codexFallback ? { codex: { fallback: this.units.codexFallback.value } } : {};
-      writeFileSync22(this.file + ".new", JSON.stringify({ ...codex, kuvo: 1, units: this.units, ...this.imported ? { imported: true } : {}, ...this.setup ? { setup: this.setup } : {} }), { mode: 384 });
+      writeFileSync22(this.file + ".new", JSON.stringify({ ...codex, kuvo: 1, units: this.units, ...this.imported ? { imported: true } : {}, ...this.setup !== undefined ? { setup: this.setup } : {} }), { mode: 384 });
       renameSync17(this.file + ".new", this.file);
     } catch {}
   }
 }
 var json8 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
-var answer3 = (settings, extra = {}) => json8({ data: { settings: settings.values(), imported: settings.imported, ...extra } });
+var answer3 = (settings, extra = {}) => json8({ data: { settings: settings.values(), versions: settings.versions(), imported: settings.imported, ...extra } });
 async function settingsRoutes(settings, choices, method, rest, body) {
   if (!rest.length && method === "GET")
     return answer3(settings);
@@ -23207,11 +23243,11 @@ async function settingsRoutes(settings, choices, method, rest, body) {
     if ("codexFallback" in given && given.codexFallback !== null && (typeof given.codexFallback !== "string" || !choices().includes(given.codexFallback))) {
       return json8({ message: "This model's prices aren't available now. Choose another model or None." }, 400);
     }
-    const { knows, ...parts } = given;
-    const changed = settings.change(parts, knowsFrom(knows));
+    const { knows, based, ...parts } = given;
+    const changed = settings.change(parts, knowsFrom(knows), based && typeof based === "object" && !Array.isArray(based) ? based : undefined);
     if ("message" in changed)
       return json8({ message: changed.message }, 400);
-    return answer3(settings);
+    return answer3(settings, changed.stale.length ? { stale: changed.stale } : {});
   }
   if (rest.length === 1 && rest[0] === "import" && method === "POST") {
     const given = await body().catch(() => {
@@ -30163,8 +30199,12 @@ class SettingsPeers {
     this.transport.send(to, { ...mail, setup: this.directory.setup }, false);
   }
   directorySaid() {
-    if (this.directory.told && this.directory.setup)
-      this.settings.inSetup(this.directory.setup);
+    if (this.directory.told) {
+      if (this.directory.setup)
+        this.settings.inSetup(this.directory.setup);
+      else
+        this.settings.inNoSetup();
+    }
     const ours = new Set(this.ours());
     for (const map of [this.told, this.answered])
       for (const key of [...map.keys()])
@@ -34973,4 +35013,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 6ba5815bfda9dcf0a6684efcd8a42771e1ce1b5f271c610e1788413e57c857ef
+// Built from Packages/Box/src/agents adb031c2e3680d93c4e4d4e9c00c2f08591f8880ad11bdee0b4aa1111d59f3ec

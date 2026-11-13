@@ -16,6 +16,12 @@ final class LayoutPersistence {
     /// layout, so startup must not mistake corruption for a fresh install and apply fresh-only defaults.
     var hasStoredLayout: Bool { defaults.data(forKey: keys.placed) != nil }
     var hasStoredSeededDefaults: Bool { defaults.data(forKey: keys.seededDefaults) != nil }
+    /// Whether the layout was ever arranged and kept (fork addition, `HostSettings`, while the panel
+    /// isn't running): a fresh panel keeps its meters, stars and order only once they change.
+    var hasArrangement: Bool {
+        [keys.placed, keys.pins, keys.providerOrder, keys.metricOrder].contains { defaults.object(forKey: $0) != nil }
+    }
+
     /// The keys of what the host shares of the layout (fork addition, `HostSettings`): not how each
     /// card is opened, nor the menu bar's style.
     var sharedKeys: [String] {

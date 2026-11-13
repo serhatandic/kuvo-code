@@ -31,11 +31,11 @@ final class HostSettingsTests: XCTestCase {
         enablement.seedEnabledProviders(["claude", "codex"])
         enablement.registerKnownProviders(["claude", "codex", "cursor"])
         let notifications = NotificationSettingsStore(defaults: defaults)
-        let settings = HostSettings(defaults: defaults, liveLayout: { layout }) { parts in
+        let settings = HostSettings(defaults: defaults, liveLayout: { layout }, panelStarting: { false }, reload: { parts in
             if parts.contains("layout") { layout.reloadShared() }
             if parts.contains("providers") { enablement.reload() }
             if parts.contains("notifications") { notifications.reload() }
-        }
+        })
         var told: [[String: Any]] = []
         settings.onChange = { data in told.append((try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]) }
         return (Panel(defaults: defaults, layout: layout, enablement: enablement, notifications: notifications, settings: settings), { told })
@@ -140,7 +140,7 @@ final class HostSettingsTests: XCTestCase {
         let (mac, _) = panel("Restart")
         mac.settings.apply(Data("{}".utf8))
         // The app starts again, its host not answering yet; the panel is changed meanwhile.
-        let again = HostSettings(defaults: mac.defaults, liveLayout: { mac.layout }) { _ in }
+        let again = HostSettings(defaults: mac.defaults, liveLayout: { mac.layout }, reload: { _ in })
         var told: [[String: Any]] = []
         again.onChange = { told.append(self.object($0)) }
         again.panelStarted()
@@ -211,5 +211,34 @@ final class HostSettingsTests: XCTestCase {
         mac.settings.apply(try! JSONSerialization.data(withJSONObject: older), except: ["layout"])
         XCTAssertTrue(mac.layout.isPinned("codex.session"))
         XCTAssertTrue(mac.layout.canUndo)
+    }
+
+    func testTheImportWaitsWhileThePanelStartsAndGoesOnAsItHas() {
+        let (mac, _) = panel("Starting")
+        mac.layout.setPinned(true, for: "codex.session")
+        var starting = true
+        var told = 0
+        let early = HostSettings(defaults: mac.defaults, liveLayout: { nil }, panelStarting: { starting }, reload: { _ in })
+        early.onPanelStarted = { told += 1 }
+        // The box asks before the panel has read its layout: not yet (it's brought once).
+        XCTAssertFalse(early.canImport)
+        // The panel started: the layout it shows comes.
+        starting = false
+        let started = HostSettings(defaults: mac.defaults, liveLayout: { mac.layout }, panelStarting: { false }, reload: { _ in })
+        started.onPanelStarted = { told += 1 }
+        started.panelStarted()
+        XCTAssertEqual(told, 1)
+        XCTAssertTrue(started.canImport)
+        XCTAssertNotNil(object(started.toImport())["layout"])
+    }
+
+    func testWithTheUsageItemOffTheLayoutAsKeptComesOnlyOnceArranged() {
+        let (mac, _) = panel("Off")
+        let off = HostSettings(defaults: mac.defaults, liveLayout: { nil }, panelStarting: { false }, reload: { _ in })
+        XCTAssertTrue(off.canImport)
+        XCTAssertNil(object(off.toImport())["layout"], "never arranged: a fresh panel's")
+        // (Only a layout whose meters were kept can be said without the panel: a fresh one keeps them once they change.)
+        mac.layout.setMetricEnabled("claude.weekly", false)
+        XCTAssertEqual((object(off.toImport())["layout"] as? [String: Any])?["placed"] as? [String], ["claude.session", "codex.session"])
     }
 }

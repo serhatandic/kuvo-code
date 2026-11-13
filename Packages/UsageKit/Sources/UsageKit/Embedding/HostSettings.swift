@@ -41,15 +41,25 @@ public final class HostSettings {
     var reload: (Set<String>) -> Void
     /// The panel's layout as it shows it, while it runs (it keeps a fresh one's meters only once they change).
     var liveLayout: () -> LayoutStore?
+    /// Whether the panel is starting (its layout not read yet).
+    var panelStarting: () -> Bool
+    /// Told as the panel starts: what waited for its layout (the import) goes on.
+    public var onPanelStarted: (() -> Void)?
 
     static let layoutStorageKey = "openusage.layout.v1"
     static let saidKey = "usage.hostSettings.said"
     private static let names = ["layout", "providers", "totalSpend", "notifications"]
 
-    init(defaults: UserDefaults = .standard, liveLayout: (() -> LayoutStore?)? = nil, reload: ((Set<String>) -> Void)? = nil) {
+    /// The panel's settings kept in `defaults` (the app's own: `shared`).
+    public convenience init(defaults: UserDefaults) {
+        self.init(defaults: defaults, liveLayout: nil)
+    }
+
+    init(defaults: UserDefaults = .standard, liveLayout: (() -> LayoutStore?)? = nil, panelStarting: (() -> Bool)? = nil, reload: ((Set<String>) -> Void)? = nil) {
         self.defaults = defaults
         layout = LayoutPersistence(defaults: defaults, storageKey: Self.layoutStorageKey)
         self.liveLayout = liveLayout ?? { UsageMenuBar.shared.container?.layout }
+        self.panelStarting = panelStarting ?? { UsageMenuBar.shared.isStarting }
         self.reload = reload ?? { parts in UsageMenuBar.shared.container?.reloadShared(parts) }
         said = defaults.dictionary(forKey: Self.saidKey) as? [String: Data]
         watched = watchedNow()
@@ -58,16 +68,25 @@ public final class HostSettings {
         }
     }
 
+    /// Whether what this Mac kept can be brought in now: not while the panel starts, whose layout
+    /// isn't read yet (it's brought in once, so it waits: `onPanelStarted`).
+    public var canImport: Bool { liveLayout() != nil || !panelStarting() }
+
     /// What was set on this Mac before its host kept these, as the box's parts, to bring in once:
     /// only the parts changed here (a Mac still on its first-run settings brings none, so it never
     /// puts them over the ones you made on another), and Codex's fallback model when one was
-    /// chosen. The layout only as the panel shows it, when it isn't a fresh panel's (after Reset,
-    /// or put back as it was, it is). Which cards are on isn't brought: each Mac turned on those for
-    /// the tools it found, so they're shared from the first time you turn one on or off.
+    /// chosen. The layout as the panel shows it, when it isn't a fresh panel's (after Reset, or put
+    /// back as it was, it is); with the usage item off, as kept, once its meters were. Which
+    /// cards are on isn't brought: each Mac turned on those for the tools it found, so they're
+    /// shared from the first time you turn one on or off.
     public func toImport() -> Data {
         var parts = self.parts()
         parts["providers"] = nil
-        if liveLayout().map({ $0.isDefaultArrangement() }) ?? true { parts["layout"] = nil }
+        if let live = liveLayout() {
+            if live.isDefaultArrangement() { parts["layout"] = nil }
+        } else if !layout.hasArrangement {
+            parts["layout"] = nil
+        }
         let set = { [defaults] (keys: [String]) in keys.contains { defaults.object(forKey: $0) != nil } }
         if !set([TotalSpendSetting.key, TotalSpendSetting.periodKey, TotalSpendSetting.metricKey]) { parts["totalSpend"] = nil }
         let keys = NotificationSettingsStore.storageKeys
@@ -108,10 +127,19 @@ public final class HostSettings {
     /// The panel started (its layout read and checked against this Mac's providers): what it shows
     /// is where a layout change starts from (an app updated since may show the same layout otherwise).
     public func panelStarted() {
+        defer { onPanelStarted?() }
         guard var said, let shown = partsJSON()["layout"] else { return }
         said["layout"] = shown
         self.said = said
         watched = watchedNow()
+    }
+
+    /// Looks at the panel's keys now, not on the next turn (the app is quitting: a change just made
+    /// isn't left behind).
+    public func flush() {
+        guard said != nil else { return }
+        watched = watchedNow()
+        check()
     }
 
     /// The panel's own change: looked into once the stores have all written theirs, and only when one
