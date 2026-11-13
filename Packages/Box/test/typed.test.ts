@@ -5,7 +5,7 @@
 
 import "./safety"
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test"
-import { readFileSync } from "node:fs"
+import { readFileSync, rmSync } from "node:fs"
 import { decide, KEYWORD_UNAVAILABLE } from "../src/link/typed/decide"
 import { commandsOffered, firstWake, focusAsked, parseCommand, parseGoal, parseKeyword, parseLoop, parseReview, repeatText, reviewUnfinished, scopeAsked, shellCommand, splitCommand } from "../src/link/typed/words"
 import type { AnswerPiece, RouteContext } from "../src/link/server/context"
@@ -81,6 +81,7 @@ let held: { reached: () => void; release: Promise<void> } | null = null
 /** What the bridge answers a goal, side question, handoff or review: its status and body. */
 let bridgeSays: (asked: Asked) => { status: number; body: unknown } = () => ({ status: 200, body: {} })
 let typedRoute: typeof import("../src/link/areas/typed").typedRoute
+let TYPED_SENT: string
 let TYPED_ROUTE: RegExp
 
 const asked = async (request: Request): Promise<Asked> => {
@@ -109,7 +110,7 @@ function startBridge() {
 }
 
 beforeAll(async () => {
-  ;({ typedRoute, TYPED_ROUTE } = await import("../src/link/areas/typed"))
+  ;({ typedRoute, TYPED_ROUTE, TYPED_SENT } = await import("../src/link/areas/typed"))
   engine = Bun.serve({
     port: 0,
     async fetch(request) {
@@ -148,6 +149,7 @@ beforeEach(() => {
   bridgeRuns = true
   commandsAnswer = COMMANDS
   engineLists = {}
+  rmSync(TYPED_SENT, { force: true })
   held = null
   bridgeSays = () => ({ status: 200, body: {} })
   conversations = {
@@ -317,6 +319,30 @@ describe("kuvo/sessions/<id>/typed", () => {
     expect((await ask("POST", "ses_main", { text: "/plan" })).json).toEqual({ keyword: "plan", agent: "draft" })
     // With words, it stays in Plan.
     expect((await ask("POST", "ses_main", { text: "/plan the next step" })).json).toEqual({ keyword: "plan", agent: "plan", send: { text: "the next step", typed: "/plan" } })
+  })
+
+  test("the same send again after the box started again: answered as it was, its step not done twice", async () => {
+    const { forgetEverythingSent } = await import("../src/link/server/sent-once")
+    bridgeSays = each => ({ status: 200, body: { data: { id: "q1", question: each.body.question } } })
+    const first = await ask("POST", "ses_main", { text: "/btw why this way?", id: "snd_restart" })
+    // The box stops and starts again: what it held in memory is gone.
+    forgetEverythingSent()
+    const again = await ask("POST", "ses_main", { text: "/btw why this way?", id: "snd_restart" })
+    expect(again).toEqual(first)
+    expect(bridgeAsked.filter(each => each.method === "POST" && each.path === "/api/kuvo/btw/ses_main")).toHaveLength(1)
+  })
+
+  test("two \"/plan\" at once are two switches, one after the other", async () => {
+    const [one, two] = await Promise.all([ask("POST", "ses_main", { text: "/plan" }), ask("POST", "ses_main", { text: "/plan" })])
+    expect([one.json.agent, two.json.agent]).toEqual(["plan", "build"])
+    expect(engineAsked.filter(each => each.method === "POST" && each.path === "/api/session/ses_main/agent").map(each => each.body.agent)).toEqual(["plan", "build"])
+    expect(conversations.ses_main.agent).toBe("build")
+  })
+
+  test("\"/plan\" never goes back to Plan itself, listed first with Build off", async () => {
+    conversations.ses_main.agent = "plan"
+    engineLists = { "/api/agent": [{ id: "plan", mode: "primary" }, { id: "draft", mode: "primary" }] }
+    expect((await ask("POST", "ses_main", { text: "/plan" })).json).toEqual({ keyword: "plan", agent: "draft" })
   })
 
   test("a model that can't run: said, all of it kept; a \"!\" command still runs", async () => {

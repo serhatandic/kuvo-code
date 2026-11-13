@@ -592,6 +592,30 @@ import Testing
         #expect(told == 0)
     }
 
+    /// A handoff asked for again that fails the same way shows its own end, not "writing" for good:
+    /// each is told apart by when it was asked for, so the box's answer doesn't take back an end
+    /// that came first.
+    @Test func aHandoffAskedAgainThatFailsTheSameWayShowsItsEnd() async throws {
+        defer { clean() }
+        serve(directory: "/tmp", answers: ["## Handoff\nIt pauses on blur.", "## Handoff\nIt pauses on blur."])
+        engine.on("POST", "/api/session", json: ["message": "There's no room for another conversation."], status: 500)
+        engine.on("PATCH", "/api/session/\(id)", json: ["data": [:]])
+        let model = try session()
+        let bridge = try await start(model)
+        defer { bridge.stop() }
+
+        model.draftText = "/handoff write the test"
+        model.submitDraft(for: nil, queue: false)
+        await model.messagesSent()
+        try await until { model.handoff?.state == .failed }
+        let first = try #require(model.handoff?.started)
+        model.draftText = "/handoff write the test"
+        model.submitDraft(for: nil, queue: false)
+        await model.messagesSent()
+        try await until { model.handoff?.state == .failed && model.handoff?.started != first }
+        #expect(model.handoff?.error == bridge.agents.handoffs[id]?.error)
+    }
+
     @Test func planSwitchesToPlanThenSendsWhatFollows() async throws {
         defer { clean() }
         serve(directory: "/tmp", answers: [])

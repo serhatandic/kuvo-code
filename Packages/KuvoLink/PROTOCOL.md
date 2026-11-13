@@ -4708,7 +4708,8 @@ A conversation deleted takes its side questions and its review with it (`kuvo.bt
   `kuvo.handoffTo`; the rest of it kept): show the link in each.
   - `POST …/kuvo/handoff/<session>` with `{"next"?}` → `{data: handoff}`, `state` `writing`: the
     note takes a while. A handoff: `{from, state: "writing" | "done" | "failed", to?, title?,
-    error?}`. `409` for a subagent's, one with no model yet, one being handed off, or one whose
+    error?, started?}`, `started` when it was asked for (ms since 1970): which handoff it is, so an
+    end told before the answer to its start isn't taken for an earlier one's. `409` for a subagent's, one with no model yet, one being handed off, or one whose
     agent is working (wait for its turn to end); one whose agent starts while the note is written
     fails, and makes no new conversation.
   - `GET …/kuvo/handoff/<session>` → `{data: handoff}`, its latest while the box runs.
@@ -4841,9 +4842,11 @@ client does with the rest; a client keeps the draft, puts back what it's told to
   opens and as its agents bridge comes or goes.
 - `POST` with `{"id"?, "text", "files"?, "side"?, "refusal"?, "reviewer"?}`: the send's own id
   (or `idempotency-key`, with which the phone's link sends it again after its session drops: "Sending
-  again"), under which the box answers the same send again as it did (for an hour, until it starts
-  again), never doing it twice, whatever became of the first request; one that didn't go (refused,
-  the engine not there) is tried again; the text as typed; whether
+  again"), under which the box answers the same send again as it did, never doing it twice,
+  whatever became of the first request: an answer that went is kept on disk an hour (the latest
+  1000), so it holds after the box starts again too; one that didn't go (refused, the engine not
+  there) is tried again; one cut off as its step was done (the box stopped meanwhile) may be done
+  again; the text as typed; whether
   pictures or files are attached; whether the side thread's tag is on the composer; why the
   conversation's model can't run, as the client says it; the model picked last in "Who reads it"
   (`{providerID, id}`, which wins a tie between two of the same name). It answers `200` with what it
@@ -4873,7 +4876,8 @@ client does with the rest; a client keeps the draft, puts back what it's told to
   side question, or a follow-up while the side thread's tag shows, in its side thread, being
   answered: it never joins the conversation), and puts what the box says in its place; "/" and "!" texts are asked one after another, and a message sent meanwhile
   goes at once.
-- **What each keyword does:** "/plan" alone toggles Plan, with words turns it on and sends them
+- **What each keyword does:** "/plan" alone toggles Plan (one "/plan" after another in each
+  conversation, each from the mode the one before left; the Mac's Plan Mode item goes this way too), with words turns it on and sends them
   (with files alone, on); "/autopilot" alone toggles it, with words or files the box turns it on
   first; "/loop <how often> <what to do>" adds a wake-up that sends the words again, first due by the
   box's clock (`KUVO_TZ`), and sends them now unless it keeps a time of day ("every morning at 9"

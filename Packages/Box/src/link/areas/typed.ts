@@ -7,7 +7,10 @@
 // Autopilot, compact, ask the side thread, or put what was written back in the composer, saying why.
 // The client sends the files and quotes it has with what it's told to send, and keeps the rest.
 
+import fs from "node:fs";
+import path from "node:path";
 import { isObject, parsed } from "../../shared/json";
+import { RUN } from "../home";
 import type { Target } from "../../shared/records";
 import type { SessionAutopilot } from "../../shared/routes/autopilot";
 import { call } from "../engine/client";
@@ -50,7 +53,8 @@ async function engineCommands(engine: Target | null, folder: string | undefined,
 /** The mode "/plan" alone goes back to from Plan: Build, or the first mode there is where Build is
  * turned off (as a new conversation starts in, where none is chosen). */
 export function startingAgent(agents: unknown): string {
-  const modes = Array.isArray(agents) ? agents.flatMap(each => (isObject(each) && typeof each.id === "string" && each.mode !== "subagent" && each.hidden !== true ? [each.id] : [])) : null;
+  // (Never Plan itself: it's what "/plan" leaves.)
+  const modes = Array.isArray(agents) ? agents.flatMap(each => (isObject(each) && typeof each.id === "string" && each.id !== "plan" && each.mode !== "subagent" && each.hidden !== true ? [each.id] : [])) : null;
   if (!modes) return "build";
   return modes.length === 0 || modes.includes("build") ? "build" : modes[0];
 }
@@ -60,6 +64,18 @@ async function planAgent(plan: "toggle" | "on", data: Partial<EngineSession>, en
   if (plan === "on" || data.agent !== "plan") return "plan";
   const agents = engine ? await call(engine, "GET", "/api/agent", undefined, within(signal, 10_000), folder).catch(() => null) : null;
   return startingAgent(agents);
+}
+
+/** What "/plan" does in each conversation, one after another: each reads the mode as the one before
+ * left it (two at once are two switches, the Mac's Plan Mode item and ⌥⌘2 among them). */
+const planning = new Map<string, Promise<unknown>>();
+function inTurn<T>(session: string, work: () => Promise<T>): Promise<T> {
+  const before = planning.get(session) ?? Promise.resolve();
+  const mine = before.then(work, work);
+  const settled = mine.catch(() => {});
+  planning.set(session, settled);
+  void settled.then(() => { if (planning.get(session) === settled) planning.delete(session); });
+  return mine;
 }
 
 /** The models "/review with …" can name: the engine's you can use now (a review runs beside it). */
@@ -165,6 +181,41 @@ function answerOf(decision: Decision, done: Done, failure: { restore: Restore; e
   return { ...steps, ...done, ...(command ? { command } : {}), ...(send ? { send } : {}), ...(restore ? { restore } : {}), ...(error ? { error } : {}) };
 }
 
+// What a send with its own id was answered, kept on disk an hour (the most recent 1000), so the same
+// send again after this box started again is answered as it was, its step not done twice.
+export const TYPED_SENT = path.join(RUN, "typed-sent.json");
+const KEPT_MS = 60 * 60_000;
+const KEPT_MOST = 1000;
+type KeptAnswer = { at: number; status: number; headers: Record<string, string>; body: string };
+
+function readKept(): Record<string, KeptAnswer> {
+  try {
+    const read = JSON.parse(fs.readFileSync(TYPED_SENT, "utf8"));
+    return isObject(read) ? (read as Record<string, KeptAnswer>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function keptAnswer(key: string): { status: number; headers: Record<string, string>; body: Buffer } | null {
+  const kept = readKept()[key];
+  if (!kept || Date.now() - kept.at > KEPT_MS) return null;
+  return { status: kept.status, headers: kept.headers, body: Buffer.from(kept.body, "base64") };
+}
+
+function keepAnswer(key: string, answer: { status: number; headers: Record<string, string>; body: Buffer }) {
+  const now = Date.now();
+  const all = Object.entries(readKept()).filter(([, kept]) => now - kept.at <= KEPT_MS);
+  all.push([key, { at: now, status: answer.status, headers: answer.headers, body: answer.body.toString("base64") }]);
+  const kept = Object.fromEntries(all.slice(-KEPT_MOST));
+  try {
+    fs.mkdirSync(RUN, { recursive: true });
+    const temporary = `${TYPED_SENT}.${process.pid}`;
+    fs.writeFileSync(temporary, JSON.stringify(kept));
+    fs.renameSync(temporary, TYPED_SENT);
+  } catch {}
+}
+
 // `kuvo/sessions/<id>/typed`. A send with its own id (in its body, or the link's
 // `idempotency-key`, with which a phone's link sends it again after its session drops) is answered
 // once (`sentOnce`, as a message sent again is): the same send again gets the first's answer, the
@@ -176,9 +227,18 @@ export async function* typedRoute(context: RouteContext, match: RegExpMatchArray
   const named = isObject(given) && typeof given.id === "string" && given.id.trim() ? given.id : typeof header === "string" ? header : "";
   const id = request.method.toUpperCase() === "POST" && named.trim() ? named.trim().slice(0, 200) : null;
   if (!id) return yield* typedAnswer(context, match);
+  const key = `typed\n${match[1]}\n${id}`;
+  // Answered before this box last started: as it was, its step not done again.
+  const kept = keptAnswer(key);
+  if (kept) return yield* answering(kept);
   // Done whatever becomes of this request: its link dropping (which ends its signal) is what the
   // same send again is for, and it gets this answer (as a prompt sent with its id is, forward.ts).
-  const answer = await sentOnce(`typed\n${match[1]}\n${id}`, () => collected(typedAnswer({ ...context, signal: undefined }, match)));
+  const answer = await sentOnce(key, async () => {
+    const answer = await collected(typedAnswer({ ...context, signal: undefined }, match));
+    // Kept on disk once it went, before it's answered: a box started again meanwhile has it.
+    if (answer.status >= 200 && answer.status < 300) keepAnswer(key, answer);
+    return answer;
+  });
   return yield* answering(answer);
 }
 
@@ -265,12 +325,17 @@ async function* typedAnswer(context: RouteContext, match: RegExpMatchArray): Asy
     }
   }
   // Plan on or off: which mode, as this box has the conversation and its modes, switched to here
-  // (where it reads it: two "/plan" in a row don't race a client's own switch), for the client to show.
-  const agent = !failure && decision.plan ? await planAgent(decision.plan, data, engine, folder, signal) : null;
-  if (agent && agent !== data.agent) {
-    const switched = await call(place.target, "POST", `/api/session/${encodeURIComponent(session)}/agent`, { agent }, within(signal, STEP_PATIENCE)).then(() => true, () => false);
-    if (!switched) return yield* json(200, { ...(decision.keyword ? { keyword: decision.keyword } : {}), restore: writtenBack(text), error: "The mode couldn’t be changed: its engine didn’t take it. Try again." });
-  }
+  // (where it reads it: two "/plan" in a row don't race a client's own switch), for the client to
+  // show; one "/plan" after another in each conversation, each reading the mode as it is then.
+  const plan = !failure ? decision.plan : undefined;
+  const agent = plan ? await inTurn(session, async () => {
+    const now = await call(place.target, "GET", `/api/session/${encodeURIComponent(session)}`, undefined, within(signal, 10_000)).catch(() => null) as Partial<EngineSession> | null;
+    const chosen = await planAgent(plan, now ?? data, engine, folder, signal);
+    if (chosen === (now ?? data).agent) return chosen;
+    const switched = await call(place.target, "POST", `/api/session/${encodeURIComponent(session)}/agent`, { agent: chosen }, within(signal, STEP_PATIENCE)).then(() => true, () => false);
+    return switched ? chosen : null;
+  }) : null;
+  if (plan && !agent) return yield* json(200, { ...(decision.keyword ? { keyword: decision.keyword } : {}), restore: writtenBack(text), error: "The mode couldn’t be changed: its engine didn’t take it. Try again." });
   const { plan: _plan, ...answer } = answerOf(decision, done, failure) as Record<string, unknown>;
   return yield* json(200, { ...answer, ...(agent ? { agent } : {}) });
 }

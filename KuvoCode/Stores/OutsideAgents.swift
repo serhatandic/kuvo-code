@@ -618,11 +618,12 @@ final class OutsideAgents {
     }
     func dropReview(_ session: String) { reviews[session] = nil }
     /// One just asked for here: the box's answer, before its events.
-    /// `before`: its handoff as it was when it was asked for. Its end, told before this answer
-    /// (its note written quickly, or failing at once), stays, and opens what it made.
-    func startedHandoff(_ handoff: Handoff, before: Handoff? = nil) {
+    /// Its end, told before this answer (its note written quickly, or failing at once), stays, and
+    /// opens what it made: the same handoff, by when it was asked for (one asked again that ends
+    /// the same way is still another).
+    func startedHandoff(_ handoff: Handoff) {
         opensWhenDone.insert(handoff.from)
-        if let known = handoffs[handoff.from], known != before, known.state != .writing {
+        if let known = handoffs[handoff.from], known.state != .writing, let started = handoff.started, known.started == started {
             ended(known)
             return
         }

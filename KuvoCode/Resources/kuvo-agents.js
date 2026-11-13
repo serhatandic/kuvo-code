@@ -5227,7 +5227,7 @@ class Handoffs {
       throw new HandoffError(409, "That conversation has no model yet: there's nothing to hand off.");
     if (await this.isActive(session, place))
       throw new HandoffError(409, "The agent is working now. Stop it or wait for its turn to end, then hand it off.");
-    const handoff = { from: session, state: "writing" };
+    const handoff = { from: session, state: "writing", started: Date.now() };
     this.kept.set(session, handoff);
     this.told(handoff);
     this.carryOn(handoff, info, place, next?.trim() || undefined);
@@ -33666,4 +33666,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 344afb05c3881ed09fe60e2f8d9a4edc04cd2a5b865be31d1f49fef420191216
+// Built from Packages/Box/src/agents 6191bb8ab0de4ba48a7e6da193933eda5494b4e49d2649b037aec81a09fd63df
