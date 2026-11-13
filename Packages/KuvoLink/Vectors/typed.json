@@ -1282,7 +1282,8 @@
      "do": "autopilot"
     },
     "failed": {
-     "text": "/autopilot"
+     "text": "/autopilot",
+     "beside": ""
     }
    }
   },
@@ -1295,7 +1296,8 @@
      "do": "autopilot"
     },
     "failed": {
-     "text": "/autopilot do it all"
+     "text": "/autopilot do it all",
+     "beside": "do it all"
     },
     "send": {
      "text": "do it all",
@@ -1362,7 +1364,8 @@
    "decision": {
     "keyword": "loop",
     "restore": {
-     "text": "/loop sometimes"
+     "text": "/loop sometimes",
+     "beside": "sometimes"
     },
     "error": "Can’t tell how often from that. Start with one like “every 30 min” or “weekdays at 9”, or pick one from the list after /loop."
    }
@@ -1373,7 +1376,8 @@
    "decision": {
     "keyword": "loop",
     "restore": {
-     "text": "/loop every hour"
+     "text": "/loop every hour",
+     "beside": "every hour"
     },
     "error": "Write what to do each time after how often, like “/loop every morning at 9 sum up the new issues”."
    }
@@ -1456,7 +1460,8 @@
    "decision": {
     "keyword": "review",
     "restore": {
-     "text": "/review with"
+     "text": "/review with",
+     "beside": "with"
     },
     "error": "Pick who reads it from the list, or write a model’s name after “with”."
    }
@@ -1467,7 +1472,8 @@
    "decision": {
     "keyword": "review",
     "restore": {
-     "text": "/review since"
+     "text": "/review since",
+     "beside": "since"
     },
     "error": "Write the commit to start with after “since”."
    }

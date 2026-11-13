@@ -159,15 +159,15 @@ function decideKeyword(keyword: Keyword, rest: string, written: string, facts: F
       // Alone, it turns Autopilot on or off; with words, it does them on Autopilot (on first, so its
       // agent works that way from the first word).
       if (!rest && !facts.files) return { toggleAutopilot: true };
-      return { box: { do: "autopilot" }, failed: { text: written }, ...(rest ? { send: { text: rest, typed: "/autopilot" } } : {}) };
+      return { box: { do: "autopilot" }, failed: writtenBack(written), ...(rest ? { send: { text: rest, typed: "/autopilot" } } : {}) };
     case "compact":
       return { compact: true };
     case "loop": {
       // "/loop <how often> <what to do>": the message sent now for one every so long (and then each
       // time), and a wake-up on its computer that sends it again, by its clock.
       const loop = parseLoop(rest);
-      if (!loop.schedule) return { restore: { text: written }, error: LOOP_NO_SCHEDULE };
-      if (!loop.message) return { restore: { text: written }, error: LOOP_NO_MESSAGE };
+      if (!loop.schedule) return { restore: writtenBack(written), error: LOOP_NO_SCHEDULE };
+      if (!loop.message) return { restore: writtenBack(written), error: LOOP_NO_MESSAGE };
       const due = Math.floor(firstWake(loop.schedule, facts.now, facts.timeZone) / 1000);
       return {
         box: { do: "wake", due, every: repeatText(loop.schedule.every), note: loop.message },
@@ -178,17 +178,17 @@ function decideKeyword(keyword: Keyword, rest: string, written: string, facts: F
     }
     case "btw":
       if (!rest) return { restore: { text: "/btw " } };
-      if (!facts.bridge) return { restore: { text: written }, error: KEYWORD_UNAVAILABLE };
+      if (!facts.bridge) return { restore: writtenBack(written), error: KEYWORD_UNAVAILABLE };
       return { box: { do: "btw", question: rest }, failed: writtenBack(written) };
     case "handoff":
-      if (!facts.bridge) return { restore: { text: written }, error: KEYWORD_UNAVAILABLE };
+      if (!facts.bridge) return { restore: writtenBack(written), error: KEYWORD_UNAVAILABLE };
       return { box: { do: "handoff", next: rest || null }, failed: writtenBack(written) };
     case "review": {
       const review = parseReview(rest, facts.readers, facts.reviewer);
-      if (review.searching !== null) return { restore: { text: written }, error: review.searching ? REVIEW_FINISH : REVIEW_PICK };
+      if (review.searching !== null) return { restore: writtenBack(written), error: review.searching ? REVIEW_FINISH : REVIEW_PICK };
       const unfinished = reviewUnfinished(review);
-      if (unfinished) return { restore: { text: written }, error: unfinished };
-      if (!facts.bridge) return { restore: { text: written }, error: KEYWORD_UNAVAILABLE };
+      if (unfinished) return { restore: writtenBack(written), error: unfinished };
+      if (!facts.bridge) return { restore: writtenBack(written), error: KEYWORD_UNAVAILABLE };
       const scope = scopeAsked(review);
       return { box: { do: "review", model: review.reader?.ref ?? null, focus: focusAsked(review), scope: scope?.kind === "uncommitted" ? null : scope }, failed: writtenBack(written) };
     }

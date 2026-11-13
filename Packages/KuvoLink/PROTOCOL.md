@@ -4862,7 +4862,8 @@ client does with the rest; a client keeps the draft, puts back what it's told to
   - What goes back: the composer's files stay unless `send` or `command` took them, and what it
     replies to unless `send.quoted` did; `restore` `{text, beside?}` goes back ahead of anything
     written since: `text` into an empty composer, else `beside` where it's given (a keyword's words
-    alone, nothing for a goal's pause), else `text`; `error` says why, over the composer.
+    alone, which the keyword would otherwise take in; nothing for a goal's pause), else `text`;
+    `error` says why, over the composer.
 - **What each keyword does:** "/plan" alone toggles Plan, with words turns it on and sends them
   (with files alone, on); "/autopilot" alone toggles it, with words or files the box turns it on
   first; "/loop <how often> <what to do>" adds a wake-up that sends the words again, first due by the

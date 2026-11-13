@@ -214,7 +214,7 @@ export async function* typedRoute(context: RouteContext, match: RegExpMatchArray
       const unavailable = (isObject(error) && error.unavailable === true) || ((step === "btw" || step === "handoff" || step === "review") && unreached);
       if (step === "goal" && unreached) error = new Error(GOALS_NOT_RUNNING);
       failure = unavailable
-        ? { restore: { text }, error: KEYWORD_UNAVAILABLE }
+        ? { restore: writtenBack(text), error: KEYWORD_UNAVAILABLE }
         : { restore: decision.failed ?? { text }, error: said(error, "It couldn’t be done. Try again.") };
     }
   }

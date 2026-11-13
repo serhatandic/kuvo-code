@@ -39139,7 +39139,7 @@ import fs123 from "node:fs";
 import path126 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "2b7215280d17";
+var BRIDGE_VERSION = "62cbc1d2c8db";
 
 // Packages/Box/src/link/rehome/rewrite.ts
 var NO_REWRITE = {
@@ -46122,15 +46122,15 @@ function decideKeyword(keyword, rest, written, facts) {
     case "autopilot":
       if (!rest && !facts.files)
         return { toggleAutopilot: true };
-      return { box: { do: "autopilot" }, failed: { text: written }, ...rest ? { send: { text: rest, typed: "/autopilot" } } : {} };
+      return { box: { do: "autopilot" }, failed: writtenBack(written), ...rest ? { send: { text: rest, typed: "/autopilot" } } : {} };
     case "compact":
       return { compact: true };
     case "loop": {
       const loop = parseLoop(rest);
       if (!loop.schedule)
-        return { restore: { text: written }, error: LOOP_NO_SCHEDULE };
+        return { restore: writtenBack(written), error: LOOP_NO_SCHEDULE };
       if (!loop.message)
-        return { restore: { text: written }, error: LOOP_NO_MESSAGE };
+        return { restore: writtenBack(written), error: LOOP_NO_MESSAGE };
       const due = Math.floor(firstWake(loop.schedule, facts.now, facts.timeZone) / 1000);
       return {
         box: { do: "wake", due, every: repeatText2(loop.schedule.every), note: loop.message },
@@ -46142,21 +46142,21 @@ function decideKeyword(keyword, rest, written, facts) {
       if (!rest)
         return { restore: { text: "/btw " } };
       if (!facts.bridge)
-        return { restore: { text: written }, error: KEYWORD_UNAVAILABLE };
+        return { restore: writtenBack(written), error: KEYWORD_UNAVAILABLE };
       return { box: { do: "btw", question: rest }, failed: writtenBack(written) };
     case "handoff":
       if (!facts.bridge)
-        return { restore: { text: written }, error: KEYWORD_UNAVAILABLE };
+        return { restore: writtenBack(written), error: KEYWORD_UNAVAILABLE };
       return { box: { do: "handoff", next: rest || null }, failed: writtenBack(written) };
     case "review": {
       const review = parseReview(rest, facts.readers, facts.reviewer);
       if (review.searching !== null)
-        return { restore: { text: written }, error: review.searching ? REVIEW_FINISH : REVIEW_PICK };
+        return { restore: writtenBack(written), error: review.searching ? REVIEW_FINISH : REVIEW_PICK };
       const unfinished = reviewUnfinished(review);
       if (unfinished)
-        return { restore: { text: written }, error: unfinished };
+        return { restore: writtenBack(written), error: unfinished };
       if (!facts.bridge)
-        return { restore: { text: written }, error: KEYWORD_UNAVAILABLE };
+        return { restore: writtenBack(written), error: KEYWORD_UNAVAILABLE };
       const scope = scopeAsked(review);
       return { box: { do: "review", model: review.reader?.ref ?? null, focus: focusAsked(review), scope: scope?.kind === "uncommitted" ? null : scope }, failed: writtenBack(written) };
     }
@@ -46342,7 +46342,7 @@ async function* typedRoute(context, match) {
       const unavailable = isObject(error) && error.unavailable === true || (step === "btw" || step === "handoff" || step === "review") && unreached;
       if (step === "goal" && unreached)
         error = new Error(GOALS_NOT_RUNNING);
-      failure = unavailable ? { restore: { text }, error: KEYWORD_UNAVAILABLE } : { restore: decision.failed ?? { text }, error: said6(error, "It couldn’t be done. Try again.") };
+      failure = unavailable ? { restore: writtenBack(text), error: KEYWORD_UNAVAILABLE } : { restore: decision.failed ?? { text }, error: said6(error, "It couldn’t be done. Try again.") };
     }
   }
   return yield* json(200, answerOf3(decision, done, failure));

@@ -222,7 +222,7 @@ describe("kuvo/sessions/<id>/typed", () => {
     bridge.stop(true)
     try {
       const { json } = await ask("POST", "ses_main", { text: "/handoff write the docs" })
-      expect(json).toEqual({ keyword: "handoff", restore: { text: "/handoff write the docs" }, error: KEYWORD_UNAVAILABLE })
+      expect(json).toEqual({ keyword: "handoff", restore: { text: "/handoff write the docs", beside: "write the docs" }, error: KEYWORD_UNAVAILABLE })
     } finally {
       startBridge()
     }

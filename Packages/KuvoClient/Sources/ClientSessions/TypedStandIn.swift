@@ -143,31 +143,31 @@ public enum TypedStandIn {
             return rest.isEmpty ? ["plan": "on"] : ["plan": "on", "send": ["text": rest, "typed": "/plan"]]
         case .autopilot:
             if rest.isEmpty, !facts.files { return ["toggleAutopilot": true] }
-            var decision: Decision = ["box": ["do": "autopilot"], "failed": ["text": written]]
+            var decision: Decision = ["box": ["do": "autopilot"], "failed": writtenBack(written)]
             if !rest.isEmpty { decision["send"] = ["text": rest, "typed": "/autopilot"] }
             return decision
         case .compact:
             return ["compact": true]
         case .loop:
             let loop = LoopCommand(rest)
-            guard let schedule = loop.schedule else { return ["restore": ["text": written], "error": loopNoSchedule] }
-            guard !loop.message.isEmpty else { return ["restore": ["text": written], "error": loopNoMessage] }
+            guard let schedule = loop.schedule else { return ["restore": writtenBack(written), "error": loopNoSchedule] }
+            guard !loop.message.isEmpty else { return ["restore": writtenBack(written), "error": loopNoMessage] }
             let due = Int(schedule.firstWake(now: facts.now, calendar: facts.calendar).timeIntervalSince1970.rounded(.down))
             var decision: Decision = ["box": ["do": "wake", "due": due, "every": schedule.every.text, "note": loop.message], "failed": writtenBack(written)]
             if !schedule.keepsTimeOfDay { decision["send"] = ["text": loop.message, "typed": "/loop " + loop.scheduleText, "steer": true] }
             return decision
         case .btw:
             if rest.isEmpty { return ["restore": ["text": "/btw "]] }
-            if !facts.bridge { return ["restore": ["text": written], "error": keywordUnavailable] }
+            if !facts.bridge { return ["restore": writtenBack(written), "error": keywordUnavailable] }
             return ["box": ["do": "btw", "question": rest], "failed": writtenBack(written)]
         case .handoff:
-            if !facts.bridge { return ["restore": ["text": written], "error": keywordUnavailable] }
+            if !facts.bridge { return ["restore": writtenBack(written), "error": keywordUnavailable] }
             return ["box": ["do": "handoff", "next": rest.isEmpty ? NSNull() as Any : rest], "failed": writtenBack(written)]
         case .review:
             let review = ReviewCommand(rest, readers: facts.readers, preferring: facts.reviewer)
-            if let searching = review.searching { return ["restore": ["text": written], "error": searching.isEmpty ? reviewPick : reviewFinish] }
-            if let unfinished = ReviewList.unfinished(review) { return ["restore": ["text": written], "error": unfinished] }
-            if !facts.bridge { return ["restore": ["text": written], "error": keywordUnavailable] }
+            if let searching = review.searching { return ["restore": writtenBack(written), "error": searching.isEmpty ? reviewPick : reviewFinish] }
+            if let unfinished = ReviewList.unfinished(review) { return ["restore": writtenBack(written), "error": unfinished] }
+            if !facts.bridge { return ["restore": writtenBack(written), "error": keywordUnavailable] }
             let scope: Any = review.scopeAsked.flatMap { $0 == .uncommitted ? nil : encoded($0) } ?? NSNull()
             let model: Any = review.reader.map { ["providerID": $0.ref.providerID, "id": $0.ref.id] } ?? NSNull()
             return ["box": ["do": "review", "model": model, "focus": review.focusAsked as Any? ?? NSNull(), "scope": scope], "failed": writtenBack(written)]
@@ -183,7 +183,7 @@ public enum TypedStandIn {
     /// (`failure`: why, and whether its agents bridge wasn't there to do it).
     public static func answer(_ decision: Decision, written: String, done: [String: Any] = [:], failure: (message: String, unavailable: Bool)? = nil) -> [String: Any] {
         if let failure {
-            var answer: [String: Any] = failure.unavailable ? ["restore": ["text": written], "error": keywordUnavailable]
+            var answer: [String: Any] = failure.unavailable ? ["restore": writtenBack(written), "error": keywordUnavailable]
                 : ["restore": decision["failed"] ?? ["text": written], "error": failure.message]
             if let keyword = decision["keyword"] { answer["keyword"] = keyword }
             return answer
