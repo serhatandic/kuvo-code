@@ -1,12 +1,14 @@
 // Where keys are kept (PROTOCOL.md, "Host interface"): integrations' keys by their variable's
 // name (`KUVO_KEY_<ID>_<NAME>`, a bot's own `…__<BOT>`). A machine keeps them in files only you can
 // read (its shared ones in `box/keys`, its bots' own in `box/bot-keys`); this Mac's box asks its
-// app, which keeps them in the Keychain and writes the files its engine reads them from.
+// app, which keeps them in the Keychain and, for the box in its folder, writes the files its engine
+// reads them from. A Mac's box in a home of its own writes those itself, where a machine keeps its
+// keys, from what its host keeps (`writesKeyFiles`, `keepKeyFiles`).
 
 import fs from "node:fs";
 import path from "node:path";
 import { textOf, listOf, locked, writeSecret } from "./files";
-import { BOT_KEYS, BOX_KEYS, CONFIG_LOCK, KEYS_ON_HOST } from "./home";
+import { BOT_KEYS, BOX_KEYS, CONFIG_LOCK, KEYS_ON_HOST, writesKeyFiles } from "./home";
 import { KeysUnavailable, NOT_ANSWERING, appHost, askHost } from "./host-interface";
 
 /** The only names the box ever asks for. */
@@ -69,7 +71,12 @@ export async function writeKey(name: string, value: unknown): Promise<void> {
   checkedKeyName(name);
   if (typeof value !== "string") throw new KeysUnavailable("A key is text.");
   const host = keyHost();
-  if (host) return void await askHost(host, "keys/set", { name, value });
+  if (host) {
+    await askHost(host, "keys/set", { name, value });
+    // Its file for the engine, once its host kept it.
+    if (writesKeyFiles()) writeKeyFile(name, value);
+    return;
+  }
   // A shared one under the settings' lock, as a Mac making the machine's settings its own copies them.
   if (name.includes("__")) writeSecret(keyFile(name), value);
   else locked(CONFIG_LOCK, () => writeSecret(keyFile(name), value));
@@ -79,10 +86,65 @@ export async function writeKey(name: string, value: unknown): Promise<void> {
 export async function deleteKey(name: string): Promise<void> {
   checkedKeyName(name);
   const host = keyHost();
-  if (host) return void await askHost(host, "keys/delete", { name });
+  if (host) {
+    // Its file first: an engine never reads one its host no longer keeps.
+    if (writesKeyFiles()) removeKeyFile(name);
+    return void await askHost(host, "keys/delete", { name });
+  }
   if (name.includes("__")) fs.rmSync(keyFile(name), { force: true });
   else locked(CONFIG_LOCK, () => fs.rmSync(keyFile(name), { force: true }));
 }
 
 /** A bot's own variable for one of an integration's, as the Mac's IntegrationKeys names it. */
 export const botVariable = (variable: string, bot: string) => `${variable}__${String(bot).toUpperCase().replace(/[^\p{L}\p{N}]/gu, "_")}`;
+
+/** One key's file for the engine, where a machine keeps it (only you can read it). */
+function writeKeyFile(name: string, value: string): void {
+  if (name.includes("__")) writeSecret(keyFile(name), value);
+  else locked(CONFIG_LOCK, () => writeSecret(keyFile(name), value));
+}
+
+function removeKeyFile(name: string): void {
+  if (name.includes("__")) fs.rmSync(keyFile(name), { force: true });
+  else locked(CONFIG_LOCK, () => fs.rmSync(keyFile(name), { force: true }));
+}
+
+/** The engine's keys' files as its host keeps them now (a Mac's box in a home of its own,
+ * `writesKeyFiles`): each key it keeps written, and none it doesn't left. One at a time with other
+ * key work. False, and the files as they were, where its host can't say (this Mac's app or its
+ * helper not answering, its Keychain locked): a list that can't be read isn't "no keys". */
+export function syncKeyFiles(): Promise<boolean> {
+  if (!writesKeyFiles()) return Promise.resolve(false);
+  return keyWork(async () => {
+    let names: string[];
+    try { names = await keyNames(); } catch { return false; }
+    let all = true;
+    for (const name of names) {
+      let value: string | null = null;
+      try { value = await readKey(name); } catch { all = false; continue; }
+      if (value === null) continue;
+      if (textOf(keyFile(name)) !== value) writeKeyFile(name, value);
+    }
+    for (const name of [...listOf(BOX_KEYS).filter(each => !each.includes("__")), ...listOf(BOT_KEYS).filter(each => each.includes("__"))]) {
+      if (STORED_KEY.test(name) && !names.includes(name)) removeKeyFile(name);
+    }
+    return all;
+  });
+}
+
+let keeping: ReturnType<typeof setInterval> | null = null;
+/** The keys' files kept as its host keeps them, while this box runs (`serve`): now, a minute later
+ * while that couldn't be done, and twice a day after, for a key changed in the Keychain without the
+ * box (an older client's Settings), as this Mac's app kept its own files. */
+export function keepKeyFiles(every = 12 * 3_600_000, retry = 60_000): void {
+  if (!writesKeyFiles() || keeping) return;
+  let wait = 0;
+  const round = async () => {
+    const done = await syncKeyFiles().catch(() => false);
+    wait = done ? every : retry;
+    keeping = setTimeout(() => void round(), wait);
+    keeping.unref?.();
+  };
+  keeping = setTimeout(() => void round(), wait);
+  keeping.unref?.();
+}

@@ -65,9 +65,29 @@ function writeSettings(change: Record<string, unknown>, file: string) {
   writePrivate(file, JSON.stringify({ ...kept, ...change }, null, 2));
 }
 
-/** The settings as clients read them: the folder (null for none) and, without one, one to offer. */
-export function workSettings(file = WORK_SETTINGS_FILE): { projectsFolder: string | null; suggested?: string } {
+/** Keep This Mac Awake, as this box keeps it: on unless you turned it off (a Mac's box in a home of
+ * its own goes by it, work/awake.ts). */
+export function keepsAwakeSetting(file = WORK_SETTINGS_FILE): boolean {
+  try {
+    const kept = JSON.parse(textOf(file) ?? "");
+    return !(isObject(kept) && kept.keepsAwake === false);
+  } catch {
+    return true;
+  }
+}
+
+/** Keep This Mac Awake on or off, or why not. */
+export function setKeepsAwake(given: unknown, file = WORK_SETTINGS_FILE): { keepsAwake: boolean } | { refused: string } {
+  if (typeof given !== "boolean") return { refused: "Say whether to keep this Mac awake while agents work: keepsAwake, true or false." };
+  writeSettings({ keepsAwake: given }, file);
+  return { keepsAwake: given };
+}
+
+/** The settings as clients read them: the folder (null for none) and, without one, one to offer;
+ * and on a box that keeps its Mac awake itself (`awake`), whether it does while agents work, and
+ * whether it is now. */
+export function workSettings(file = WORK_SETTINGS_FILE, awake?: { now: boolean }): { projectsFolder: string | null; suggested?: string; keepsAwake?: boolean; awakeNow?: boolean } {
   const folder = projectsFolder(file);
   const suggested = folder ? null : suggestedFolder();
-  return { projectsFolder: folder, ...(suggested ? { suggested } : {}) };
+  return { projectsFolder: folder, ...(suggested ? { suggested } : {}), ...(awake ? { keepsAwake: keepsAwakeSetting(file), awakeNow: awake.now } : {}) };
 }

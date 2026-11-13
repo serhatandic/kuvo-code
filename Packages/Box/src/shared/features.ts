@@ -36,6 +36,7 @@ export const FEATURES = [
   "bots.job",
   "bots.keys",
   "bots.make",
+  "box.ownHome",
   "branch",
   "browser",
   "btw",

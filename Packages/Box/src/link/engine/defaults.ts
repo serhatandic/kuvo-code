@@ -18,7 +18,7 @@
 
 import path from "node:path";
 import { textOf, writePrivate } from "../files";
-import { ENGINE_CONFIG, IS_MAC, K } from "../home";
+import { APP_FOLDER, ENGINE_CONFIG, K } from "../home";
 import { realish } from "../fence/policy";
 
 /** The plugin, where the engine reads its plugins (a machine's in its box's folder). */
@@ -27,8 +27,9 @@ export const DEFAULTS_PLUGIN = path.join(ENGINE_CONFIG || path.join(K, "config")
 /** Kuvo Code's own folders an agent is given files in, here. */
 export function keptFolders(): string[] {
   const folders = [path.join(K, "attachments"), path.join(K, "browser", "downloads")];
-  // This Mac's app keeps what you attach beside its box's folder (BoxProcess: `<support>/box`).
-  if (IS_MAC) folders.push(path.join(path.dirname(K), "Attachments"));
+  // This Mac's app keeps what you attach beside its box's folder (BoxProcess: `<support>/box`); a
+  // Mac's box in a home of its own keeps them all in `attachments`.
+  if (APP_FOLDER) folders.push(path.join(APP_FOLDER, "Attachments"));
   return [...new Set(folders.flatMap(folder => [folder, realish(folder)]))];
 }
 

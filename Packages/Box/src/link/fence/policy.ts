@@ -20,7 +20,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { accountHome, accountName, homeFolder, IS_MAC, K, opencodeAuthFile } from "../home";
+import { accountHome, accountName, APP_FOLDER, homeFolder, K, opencodeAuthFile } from "../home";
 
 export interface FencePolicy {
   /** The home folder whose secrets are hidden. */
@@ -334,11 +334,12 @@ function ghHosts(home: string): string[] {
 }
 
 /** This Mac's app's temporary folder (`…/T/<bundle>`), where its box's own is (`…/T/<bundle>/box`),
- * as the app names it (`/var/folders/…`, not through its link): null for a box that isn't the app's. */
+ * as the app names it (`/var/folders/…`, not through its link): null for a box that isn't in the
+ * app's folder (a Mac's in a home of its own keeps its temporary files there, as a machine's). */
 export function appTemporary(): string | null {
-  if (!IS_MAC) return null;
+  if (!APP_FOLDER) return null;
   const tmp = path.dirname(path.resolve(os.tmpdir()));
-  return path.basename(tmp) === path.basename(path.dirname(path.resolve(K))) ? tmp : null;
+  return path.basename(tmp) === path.basename(APP_FOLDER) ? tmp : null;
 }
 
 /**
@@ -355,8 +356,7 @@ export function sandboxCaches(): { npm: string; pnpm: string; uv: string; corepa
 }
 
 /** This Mac's app's folders, around its box's (`…/Application Support/<bundle>/box`). */
-function macFolders(home: string): { kuvo: string[]; readable: string[] } {
-  const app = path.dirname(path.resolve(K));
+function macFolders(home: string, app: string): { kuvo: string[]; readable: string[] } {
   const bundle = path.basename(app);
   // The app's temporary folder: the box's own is in it (`…/T/<bundle>/box`).
   const tmp = appTemporary();
@@ -392,8 +392,9 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
   const opencodes = homes.map(each => throughLinks(opencodeAuthFile(each))).filter(each => !inHomes([".local/share/opencode/auth.json"]).includes(each));
   // A machine's folder, and the real one if this is a test's own; and where it's a Mac, where its
   // app may be too, the app's connections to your computers and its logs (its other folders are
-  // kept by name, `kuvoPatterns`).
-  const own = IS_MAC ? macFolders(home) : { kuvo: [K, path.join(home, ".kuvo-code"), ...(process.platform === "darwin" ? [`/private/tmp/kuvo-ssh-${os.userInfo().uid}`, path.join(home, "Library", "Logs", "Kuvo Code")] : [])], readable: [path.join(K, "bin")] };
+  // kept by name, `kuvoPatterns`). A Mac's box in a home of its own keeps the same, never the folder
+  // around its home (your home folder): only the box in its app's folder has the app's around it.
+  const own = APP_FOLDER ? macFolders(home, APP_FOLDER) : { kuvo: [K, path.join(home, ".kuvo-code"), ...(process.platform === "darwin" ? [`/private/tmp/kuvo-ssh-${os.userInfo().uid}`, path.join(home, "Library", "Logs", "Kuvo Code")] : [])], readable: [path.join(K, "bin")] };
   const kuvo = [...new Set(own.kuvo.map(throughLinks))];
   const kuvoReadable = own.readable.map(throughLinks);
   const commandCaches = Object.values(sandboxCaches());

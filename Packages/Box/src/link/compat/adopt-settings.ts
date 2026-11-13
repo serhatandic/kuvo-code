@@ -8,7 +8,7 @@ import path from "node:path";
 import { isObject } from "../../shared/json";
 import { addDefaultRules, CONFIG_FILE, deepMerged, KEY_NAME, readSettings, sortedKeys } from "../areas/config";
 import { locked, writePrivate, writeSecret } from "../files";
-import { BOX, BOX_KEYS, CONFIG_LOCK, K, RUN, shownRoot } from "../home";
+import { BOX, BOX_KEYS, CONFIG_LOCK, IS_MAC, K, RUN, shownRoot } from "../home";
 
 // What a Mac's start used to write: its settings in the global file, the rest beside its keys.
 const GLOBAL_FILE = path.join(K, "config", "opencode", "opencode.json");
@@ -38,7 +38,9 @@ function boxKeyPaths(value: unknown): unknown {
 // COMPAT(0.7 settings): makes the settings an older Mac's start left the box's own. Goes 3 months after 0.8.0.
 export function adoptBox(seed: { settings?: unknown; keys?: unknown } | null | undefined): { status: "own" | "adopted"; seeded?: boolean; settings: unknown } {
   return locked(LAUNCH_LOCK, () => locked(CONFIG_LOCK, () => {
-    if (fs.existsSync(CONFIG_FILE)) {
+    // A Mac's box has had its own from the start: in a home of its own, its settings file is the one
+    // a machine's older Mac wrote (`config`), so nothing's taken in from there.
+    if (IS_MAC || fs.existsSync(CONFIG_FILE)) {
       addDefaultRules();
       return { status: "own", settings: readSettings().settings ?? {} };
     }

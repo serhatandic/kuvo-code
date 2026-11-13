@@ -171,6 +171,11 @@ export function updatesBlocked(link: LinkState | null = readLink(), now = Date.n
 // Whether something runs on the box: a conversation working (the engine's, the coding agents'),
 // or an agent's browser waiting on you.
 async function boxBusy(readEngine: () => EngineRecord = readEngineFile, readBridge: () => BridgeRecord = readBridgeFile): Promise<boolean> {
+  return await agentsWorking(readEngine, readBridge) || readAsks().length > 0;
+}
+
+/** Whether a conversation is working on the box now: the engine's, or the coding agents'. */
+export async function agentsWorking(readEngine: () => EngineRecord = readEngineFile, readBridge: () => BridgeRecord = readBridgeFile): Promise<boolean> {
   for (const read of [readEngine, readBridge]) {
     let target: Target | null = null;
     try { target = read(); } catch {}
@@ -178,7 +183,7 @@ async function boxBusy(readEngine: () => EngineRecord = readEngineFile, readBrid
     const active = (await asked(target, "GET", "api/session/active").catch(() => null) as UncheckedAnswer)?.data;
     if (Array.isArray(active) ? active.length : isObject(active) && Object.keys(active).length) return true;
   }
-  return readAsks().length > 0;
+  return false;
 }
 
 

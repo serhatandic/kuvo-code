@@ -95,7 +95,9 @@ import { LinkHost } from "./relay/host";
 import { engineHandler } from "./server/router";
 import { serveBox } from "./server/serve";
 import { macLink, macSign, onLinkWritten, readLink, updateLink } from "./state";
-import { checkDrift, confirmUpdate, isUpdating, noteLauncher, noteOlderMacs, noteUpdate, startUpdate, update, UPDATE_KEYS, updateNight, updatesBlocked, updateState, updateStatus } from "./updates/update";
+import { keepKeyFiles } from "./keys";
+import { keepAwakeWhileWorking } from "./work/awake";
+import { agentsWorking, checkDrift, confirmUpdate, isUpdating, noteLauncher, noteOlderMacs, noteUpdate, startUpdate, update, UPDATE_KEYS, updateNight, updatesBlocked, updateState, updateStatus } from "./updates/update";
 import { BRIDGE_VERSION } from "./version";
 import type { AddressInfo } from "node:net";
 import type { SignedDoc } from "../shared/documents";
@@ -117,6 +119,7 @@ export { decodeMessage, encodeMessage, Frame, frame, pieces, readFrame, readRela
 export { isSecretName, markingHashes, masked, maskedHexValues, maskedNamed, namesHash, showsAll } from "./notices/mask";
 export { docBytes, MOST_DOC, newSigningSeed, ownSign, readDoc, signDoc, signingKeyOf } from "./documents/format";
 export { IS_MAC, LINK_FILE } from "./home";
+export { boxPlaces } from "./places";
 export { BRIDGE_VERSION } from "./version";
 export { FEATURES } from "../shared/features";
 export { macFeatures } from "../shared/routes/mac";
@@ -139,7 +142,7 @@ export { FIRST_LOOK, WAITING_LOOK, workWatcher } from "./work/wakes";
 export { forgetOldHomes } from "./work/homes";
 export { AT_WORK_LIMIT, atWorkNow, noteStopped, readBackground, readStopped, stopWork } from "./work/background";
 export { goalFollowers, goalHolds, settleGoalHolds, lookAtGoals, periodOf, periodEnd, pauseGoal, REVIEW_PAUSE } from "./work/goals";
-export { keptAwake, letGo } from "./work/awake";
+export { awakeForWork, holdForWork, keptAwake, letGo, lookAtWork } from "./work/awake";
 export { macLink, readLink, updateLink, writeLink } from "./state";
 export { searchPlugins } from "./areas/plugins";
 export { listFolders, makeFolder } from "./areas/folders";
@@ -166,7 +169,7 @@ export { agentsAllowed, allowed, canonicalPath, signInReturn, socketAllowed } fr
 export { KEEP_FOR, SEEN_FILE, forgetPhones, phoneSeenLately } from "./compat/leave-running";
 export { engineConnect, engineControl, toolRun } from "./areas/engine";
 export { botPersonalities, changePersonalities, mergePersonalities, personalitiesDocument, readPersonalities } from "./personalities/library";
-export { botVariable } from "./keys";
+export { botVariable, syncKeyFiles } from "./keys";
 export { UPDATE_KEYS, boxVersion, checkDrift, confirmUpdate, isUpdating, newerVersion, noteLauncher, noteOlderMacs, startUpdate, update, updateNight, updateStatus, updatesBlocked, verifyBoxes, versionOrder } from "./updates/update";
 export { FILE_LIMIT } from "./areas/file";
 export { firstMessageOf, jobInMemory, jobLine, keepJobs } from "./bots/jobs";
@@ -690,6 +693,11 @@ async function serve(): Promise<void> {
   // as it starts; where its keys can't be reached yet, they stay as they were.
   upgradeIntegrations().catch(() => {});
   refreshBotsKeys().catch(() => {});
+  // A Mac's box in a home of its own: the files its engine reads its keys from, kept as its host
+  // keeps them (its app did that in its folder), and its Mac kept awake while agents work, as its
+  // setting says (its app's keeper did, by the app's).
+  keepKeyFiles();
+  keepAwakeWhileWorking(() => agentsWorking());
   // Keys of bots deleted while they couldn't be reached.
   forgetLeftKeys().catch(() => {});
   // And their conversations and places in group chats, where those weren't answering.
