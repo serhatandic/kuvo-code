@@ -3425,6 +3425,34 @@
         "chats": "string",
         "integrations": {
          "map": "string"
+        },
+        "moving?": {
+         "object": {
+          "state": {
+           "oneOf": [
+            {
+             "literal": "waiting"
+            },
+            {
+             "literal": "moving"
+            },
+            {
+             "literal": "clearing"
+            },
+            {
+             "literal": "failed"
+            }
+           ]
+          },
+          "step": {
+           "oneOf": [
+            "string",
+            "null"
+           ]
+          },
+          "overdue": "bool",
+          "why?": "string"
+         }
         }
        }
       },
