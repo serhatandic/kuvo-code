@@ -761,7 +761,6 @@ export async function rehomeNew(folders: Folders, options: MoveOptions & { engin
     // What a making cut short left, taken away; then what's there that isn't a box (one its Mac
     // removed), aside.
     if (exists(newMarker(home))) for (const name of MADE_NEW) fs.rmSync(path.join(home, name), { recursive: true, force: true });
-    writePrivate(newMarker(home), `${now}\n`);
     const aside = path.join(home, "trash", `earlier-box-${stamp(now)}`);
     const there = listOf(home).filter(name => name !== "updates" && name !== "trash").map(name => path.join(home, name))
       .concat(listOf(path.join(home, "updates")).filter(name => name !== "rehome").map(name => path.join(home, "updates", name)))
@@ -770,6 +769,8 @@ export async function rehomeNew(folders: Folders, options: MoveOptions & { engin
       fs.mkdirSync(path.dirname(path.join(aside, path.relative(home, file))), { recursive: true, mode: 0o700 });
       fs.renameSync(file, path.join(aside, path.relative(home, file)));
     }
+    // (Said once what was there is aside: all that a making cut short leaves from here is its own.)
+    writePrivate(newMarker(home), `${now}\n`);
     // Its files, whole (links followed: from the app, wherever it is), then in place.
     const bin = path.join(home, "bin");
     fs.rmSync(`${bin}.new`, { recursive: true, force: true });

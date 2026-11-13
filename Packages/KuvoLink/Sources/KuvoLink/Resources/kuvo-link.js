@@ -39855,7 +39855,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "fe461d1ed2f3";
+var BRIDGE_VERSION = "48ff890d7b1d";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -42139,14 +42139,14 @@ async function rehomeNew(folders, options = {}) {
     if (exists4(newMarker(home)))
       for (const name of MADE_NEW)
         fs130.rmSync(path135.join(home, name), { recursive: true, force: true });
-    writePrivate(newMarker(home), `${now}
-`);
     const aside = path135.join(home, "trash", `earlier-box-${stamp4(now)}`);
     const there = listOf(home).filter((name) => name !== "updates" && name !== "trash").map((name) => path135.join(home, name)).concat(listOf(path135.join(home, "updates")).filter((name) => name !== "rehome").map((name) => path135.join(home, "updates", name))).concat(listOf(path135.join(home, "trash")).filter((name) => !name.startsWith("earlier-box-")).map((name) => path135.join(home, "trash", name)));
     for (const file of there.sort()) {
       fs130.mkdirSync(path135.dirname(path135.join(aside, path135.relative(home, file))), { recursive: true, mode: 448 });
       fs130.renameSync(file, path135.join(aside, path135.relative(home, file)));
     }
+    writePrivate(newMarker(home), `${now}
+`);
     const bin = path135.join(home, "bin");
     fs130.rmSync(`${bin}.new`, { recursive: true, force: true });
     clone(path135.join(release, "bin"), `${bin}.new`, true);
@@ -42376,25 +42376,6 @@ async function rehomeCommand(root, args) {
     return EXIT[outcome.result];
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (args.includes("--failed")) {
-      const why = option("--failed");
-      if (!why) {
-        console.error(USAGE);
-        return 2;
-      }
-      say({ noted: keeperFailed(home, why), status: rehomeStatus(home) });
-      return 0;
-    }
-    if (args.includes("--new") && args.includes("--check")) {
-      let answer;
-      try {
-        answer = newReadiness(folders(), { engineData: process.env.KUVO_ENGINE_DATA || undefined });
-      } catch (error) {
-        answer = { ready: false, made: false, why: error instanceof Error ? error.message : String(error) };
-      }
-      say(answer);
-      return 0;
-    }
     if (args.includes("--ready")) {
       say({ ready: false, how: null, why: message, status: rehomeStatus(home) });
       return 0;

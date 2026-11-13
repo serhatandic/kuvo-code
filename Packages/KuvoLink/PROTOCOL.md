@@ -5453,14 +5453,15 @@ and the keeper is as "The keeper" says). Everything above it asks of the box wit
   can't be done yet), it starts nothing, and looks again every ten minutes.
 - **Running**, at its first look and every ten minutes after, and at once when `state.json`
   changes (Move Now asked), unless an update waits for it or something's under way: `--ready`. Ready
-  (`move` or `resume`), it stops the engine, the bridge and `serve` (holding `run/box.lock`, so the
-  app starts none meanwhile, and answering every control but `status` `503`, its `status` saying
-  `moving: true`), makes the box's release (`--write-box-files`' files, with the helper the app
-  carries), asks `--ready --release` with it, copies the app's Keychain items for the helper
+  (`move` or `resume`), it makes the box's release (`--write-box-files`' files, with the helper the
+  app carries) and asks `--ready --release` with it, the box still running; still ready, it stops
+  the engine, the bridge and `serve` (holding `run/box.lock`, so the
+  app starts none meanwhile, and answering every control but `status` `503` with a `message`,
+  Stop Background Work too, its `status` saying `moving: true`), copies the app's Keychain items for the helper
   (`KeychainMove`; an earlier try's copies taken away first, items an earlier box left cleared once
   with `keys clear`) and has the helper read them back (`keys check`), then runs `--release`, with
-  `--keeps-awake off` where it's off in the app. What it gives up on before `--release` (not
-  ready, the release or the copies) it says with `--failed`, so the box's tries count it.
+  `--keeps-awake off` where it's off in the app. What it gives up on before `--release` (the release
+  not made, the copies) it says with `--failed`, so the box's tries count it.
 - **Moved** (`done`), and whenever it finds the box moved: the helper's launch agent put in place
   and loaded (`helper install --load --app <its bundle ID>`, run with `KUVO_HOME` the box's home;
   one loaded already is started if it isn't running, `helper start`, as one that found the box

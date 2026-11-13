@@ -243,8 +243,11 @@ final class Keeper {
         guard request.method == (command == .status ? "GET" : "POST") else { return .init(status: 405) }
         // (Moving, the box is stopped: nothing it runs is started or told anything meanwhile.)
         // (Nor stopped: what the move's doing would be cut short, and the box down until the next
-        // start; Stop Background Work is answered once it's done.)
-        if moving, command != .status { return .init(status: 503) }
+        // start. Stop Background Work is refused, saying so, until it's done.)
+        if moving, command != .status {
+            let body = (try? JSONSerialization.data(withJSONObject: ["message": "This Mac’s box is moving into its own home: try again once that’s done."])) ?? Data()
+            return HTTPResponse(status: 503, headers: ["Content-Type": "application/json"], body: body)
+        }
         switch command {
         case .status:
             return .json(await status)
@@ -335,8 +338,8 @@ final class Keeper {
             log.info("Kuvo Code \(installed, privacy: .public) is installed now")
             handingOver = true
         }
-        if !handingOver, !busy, let move, await isDue(move) {
-            return await moveBox(move)
+        if !handingOver, !busy, let move, let release = await due(move) {
+            return await moveBox(move, release: release)
         }
         guard handingOver, !busy else { return true }
         finish(.again)
@@ -345,31 +348,36 @@ final class Keeper {
 
     /// Whether the box says to move now: asked at the first look and every ten minutes after, and at
     /// once when the move's state changed (Move Now asked, say); never while an update waits.
-    private func isDue(_ move: OwnBoxMove) async -> Bool {
+    private func due(_ move: OwnBoxMove) async -> URL? {
         func changed() -> Date? {
             (try? move.folder.appending(path: "updates/rehome/state.json").resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
         }
         if let looks = looksSinceAsked, looks < 59, changed() == askedState {
             looksSinceAsked = looks + 1
-            return false
+            return nil
         }
         looksSinceAsked = 0
-        let due = await move.isDue()
+        let release = await move.due()
         // (Its own noting it waits isn't a change to ask again for.)
         askedState = changed()
-        return due && !finished
+        guard let release else { return nil }
+        guard !finished else {
+            try? FileManager.default.removeItem(at: release)
+            return nil
+        }
+        return release
     }
 
     /// The move: the box stopped (its lock kept, so the app starts none meanwhile), moved by the
     /// box, and then either the keeper retires (moved) or starts the box again as it was. Whether to
     /// go on looking.
-    private func moveBox(_ move: OwnBoxMove) async -> Bool {
+    private func moveBox(_ move: OwnBoxMove, release: URL) async -> Bool {
         moving = true
         awake.agentsWork(false)
         // (Its tools stay up: nothing calls them with the engine stopped, and the app isn't told
         // anything meanwhile, so nothing is written where the box moves from.)
         box.stop(keepingClaim: true)
-        var next = await move.move()
+        var next = await move.move(release)
         while next == .wait {
             // (Stuck part way, or what's owed can't be done yet: nothing runs meanwhile.)
             await Self.clock(600)

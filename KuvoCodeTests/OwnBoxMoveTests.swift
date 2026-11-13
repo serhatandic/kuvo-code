@@ -182,9 +182,11 @@ import Testing
         try ranInItsFolder()
         let identity = Identity()
         let move = try keeper(identity)
-        // The box, running in the app's folder with nothing under way, says it's time.
-        #expect(await move.isDue())
-        #expect(await move.move() == .retire)
+        // The box, running in the app's folder with nothing under way, says it's time, and its
+        // files for its home are what it takes.
+        let release = try #require(await move.due())
+        #expect(await move.move(release) == .retire)
+        #expect(!exists(release), "its files for its home, gone once moved")
         // Copied and checked by the helper before the box moved, its originals deleted after.
         #expect(identity.did == ["copy", "helper check", "delete originals", "unregister"])
         try expectMoved(identity)
@@ -193,6 +195,8 @@ import Testing
         #expect(await move.settle() == .retire)
         #expect(!exists(appFolder.appending(path: "box")))
         #expect(launchctlAsked.filter { $0.hasPrefix("bootstrap") }.count == 1, "the helper running is left running")
+        // (Started if it isn't, as one that found the box moving went: never loaded and idle.)
+        #expect(launchctlAsked.last == "kickstart gui/\(getuid())/run.kuvo.code.machine")
     }
 
     @Test func aMoveThatCantGoAheadLeavesTheBoxWhereItWasWithItsKeysAsTheyWere() async throws {
@@ -201,7 +205,7 @@ import Testing
         // The helper can't read its copies: they're taken away, and nothing moves.
         let unreadable = Identity()
         unreadable.checkFails = "unreadable: phone-link/key"
-        #expect(try await keeper(unreadable).move() == .startOld)
+        #expect(try await keeper(unreadable).moveNow() == .startOld)
         #expect(unreadable.did == ["copy", "helper check", "helper uncopy"])
         expectWhereItWas(unreadable)
         // Counted by the box as a try of its own: the next waits (never a stop every ten minutes).
@@ -215,18 +219,18 @@ import Testing
         let refused = Identity()
         let move = try keeper(refused, environment: ["KUVO_TEST_REHOME_WRITE_AT": "after-fix",
                                                     "KUVO_TEST_REHOME_WRITE_FILE": appFolder.appending(path: "Chats/c1/new.md").path(percentEncoded: false)])
-        #expect(await move.move() == .startOld)
+        #expect(await move.moveNow() == .startOld)
         #expect(refused.did == ["copy", "helper check", "helper uncopy"])
         #expect(state["state"] as? String == "failed")
         expectWhereItWas(refused)
 
         // No helper in this copy of Kuvo Code: never moved where nothing would start it, and the
-        // box says so before anything's copied.
+        // box says so with the old box running, before anything's stopped or copied.
         try FileManager.default.removeItem(at: K.appending(path: "updates/rehome/state.json"))
         let noHelper = Identity()
-        #expect(try await keeper(noHelper, releaseHasHelper: false).move() == .startOld)
+        #expect(try await keeper(noHelper, releaseHasHelper: false).due() == nil)
         #expect(noHelper.did.isEmpty)
-        #expect((state["failed"] as? [String: Any])?["message"] as? String == "Kuvo Code Box isn't in this copy of Kuvo Code, so nothing would start this Mac's box in its own home.")
+        #expect(state["state"] as? String != "failed", "nothing tried")
         expectWhereItWas(noHelper)
     }
 
@@ -239,7 +243,7 @@ import Testing
         try ranInItsFolder()
         let identity = Identity()
         OwnBoxMove.stopsAt = .moved
-        #expect(try await keeper(identity, environment: ["KUVO_TEST_REHOME_STOP": point]).move() == .wait)
+        #expect(try await keeper(identity, environment: ["KUVO_TEST_REHOME_STOP": point]).moveNow() == .wait)
         OwnBoxMove.stopsAt = nil
         #expect((try? String(contentsOf: K.appending(path: "box/kind"), encoding: .utf8)) == "mac\n")
         // The app opens.
@@ -265,7 +269,7 @@ import Testing
         try ranInItsFolder()
         let identity = Identity()
         OwnBoxMove.stopsAt = step
-        #expect(try await keeper(identity).move() == .wait)
+        #expect(try await keeper(identity).moveNow() == .wait)
         OwnBoxMove.stopsAt = nil
         let next = try await keeper(identity).settle()
         switch step {
@@ -289,7 +293,7 @@ import Testing
         // (The keeper itself stopped with it: what it does after a move that didn't say how it went
         // is what the next keeper does.)
         OwnBoxMove.stopsAt = .moved
-        #expect(try await keeper(identity, environment: ["KUVO_TEST_REHOME_STOP": point]).move() == .wait)
+        #expect(try await keeper(identity, environment: ["KUVO_TEST_REHOME_STOP": point]).moveNow() == .wait)
         OwnBoxMove.stopsAt = nil
         #expect(exists(K.appending(path: "updates/rehome/journal.json")), "a move under way")
         let next = try await keeper(identity).settle()
@@ -312,7 +316,7 @@ import Testing
         let locked = OwnBoxMove(root: move.root, home: move.home, appBox: move.appBox, engineData: move.engineData, engine: move.engine, script: move.script,
                                 appID: move.appID, appVersion: move.appVersion, keepsAwakeOff: move.keepsAwakeOff, identity: stands, release: move.release)
         locked.environment = move.environment
-        #expect(await locked.move() == .wait)
+        #expect(await locked.moveNow() == .wait)
         // The box runs from its home already (its helper loaded), and the keeper stays registered,
         // owing the Keychain.
         #expect(launchctlAsked.contains { $0.hasPrefix("bootstrap") })
@@ -365,15 +369,17 @@ import Testing
         // keeper ran its box in, which the app's other tests share.)
         var atTheMove: (records: [String], claimed: Bool)?
         let stands = try self.keeper(identity)
+        var seen = stands.identity
+        seen.copyKeys = {
+            let records = ["engine.json", "bridge.json", "serve.json"].filter { KeeperFollower.record($0) != nil }
+            let lock = open(KeeperRecord.run.appending(path: "box.lock").path(percentEncoded: false), O_RDWR | O_CLOEXEC)
+            defer { if lock >= 0 { close(lock) } }
+            atTheMove = (records, lock >= 0 && flock(lock, LOCK_EX | LOCK_NB) != 0)
+            try stands.identity.copyKeys()
+        }
         let move = OwnBoxMove(root: stands.root, home: stands.home, appBox: stands.appBox, engineData: stands.engineData, engine: stands.engine,
                               script: stands.script, appID: stands.appID, appVersion: stands.appVersion, keepsAwakeOff: stands.keepsAwakeOff,
-                              identity: stands.identity, release: {
-                                  let records = ["engine.json", "bridge.json", "serve.json"].filter { KeeperFollower.record($0) != nil }
-                                  let lock = open(KeeperRecord.run.appending(path: "box.lock").path(percentEncoded: false), O_RDWR | O_CLOEXEC)
-                                  defer { if lock >= 0 { close(lock) } }
-                                  atTheMove = (records, lock >= 0 && flock(lock, LOCK_EX | LOCK_NB) != 0)
-                                  return try stands.release()
-                              })
+                              identity: seen, release: stands.release)
         move.environment = stands.environment
         let keeper = Keeper(exits: { how in
             gone.how = how
@@ -492,5 +498,14 @@ import Testing
         #expect(!work.register())
         #expect(registered == 1, "nothing registered once moved")
         #expect(work.failure == "This Mac’s box starts on its own, with Kuvo Code Box.")
+    }
+}
+
+extension OwnBoxMove {
+    /// The move as the keeper runs it: its files made once the box says it's time, then the move
+    /// (the box stopped first, by the keeper; here none runs). `startOld` when it isn't time.
+    func moveNow() async -> Next {
+        guard let release = await due() else { return .startOld }
+        return await move(release)
     }
 }

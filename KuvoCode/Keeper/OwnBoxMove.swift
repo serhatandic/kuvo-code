@@ -172,11 +172,31 @@ final class OwnBoxMove {
     // MARK: Asked
 
     /// Whether the box says to move now (or to finish one), asked with the old box running.
-    func isDue() async -> Bool {
-        guard let said = await rehome(["--ready"]) else { return false }
+    func isDue(release: URL? = nil) async -> Bool {
+        guard let said = await rehome(["--ready"] + (release.map { ["--release", $0.path(percentEncoded: false)] } ?? [])) else { return false }
         let how = said.answer["how"] as? String
         if said.answer["ready"] as? Bool != true, let why = said.answer["why"] as? String { log.info("Not moving yet: \(why, privacy: .public)") }
         return said.answer["ready"] as? Bool == true && (how == "move" || how == "resume")
+    }
+
+    /// The box's own files for its home, made once the box says to move now, and checked by the box
+    /// with them (its helper among them: never moved where nothing would start it), all with the old
+    /// box running: nil while it isn't time (nothing counted), or the release couldn't be made
+    /// (counted as a try). The move removes it once it's done with it.
+    func due() async -> URL? {
+        guard await isDue() else { return nil }
+        let release: URL
+        do {
+            release = try self.release()
+        } catch {
+            await gaveUp("The box's files for its home weren't made: \(error.localizedDescription)")
+            return nil
+        }
+        guard await isDue(release: release) else {
+            try? FileManager.default.removeItem(at: release)
+            return nil
+        }
+        return release
     }
 
     /// The move's state as the box keeps it (`state.json`), as the files say without asking the box
@@ -201,9 +221,9 @@ final class OwnBoxMove {
     /// part way finished (back or on), one that's done finished off (what's owed, then it retires),
     /// and copies of the app's keys for a move that never ran taken away. Then what's next.
     func settle() async -> Next {
-        guard let said = await rehome(["--status"]) else {
-            // (Its CLI can't run yet, no engine: a move the files say is under way or done waits
-            // for it; nothing starts meanwhile.)
+        guard let said = await rehome(["--status"]), said.status == 0, !said.answer.isEmpty else {
+            // (Its CLI can't run yet, no engine, or it didn't answer: a move the files say is under
+            // way or done, or a box there, waits for it; nothing starts meanwhile.)
             return underWayOnDisk || movedOnDisk || OwnBoxHome.kind(in: folder) == "mac" ? .wait : .startOld
         }
         let state = said.answer["state"] as? String
@@ -361,24 +381,10 @@ final class OwnBoxMove {
 
     // MARK: Moving
 
-    /// The move, with the old box stopped (its lock still held): what's next.
-    func move() async -> Next {
-        if stop(.stopped) { return .wait }
-        let release: URL
-        do {
-            release = try self.release()
-        } catch {
-            await gaveUp("The box's files for its home weren't made: \(error.localizedDescription)")
-            return .startOld
-        }
+    /// The move with `release` (`due`), the old box stopped (its lock still held): what's next.
+    func move(_ release: URL) async -> Next {
         defer { try? FileManager.default.removeItem(at: release) }
-        // The box's own files checked by the box before anything's copied (its helper among them:
-        // never moved where nothing would start it).
-        let ready = await rehome(["--ready", "--release", release.path(percentEncoded: false)])
-        guard ready?.answer["ready"] as? Bool == true else {
-            await gaveUp(ready?.answer["why"] as? String ?? "The box didn't say whether it's ready to move.")
-            return .startOld
-        }
+        if stop(.stopped) { return .wait }
         // Copies an earlier try left, taken away first: a copy starts afresh.
         if identity.copiesLeft(), let why = await identity.helper("uncopy") {
             await gaveUp("An earlier try's copies of this Mac's keys couldn't be taken away: \(why)")
@@ -428,7 +434,8 @@ final class OwnBoxMove {
     /// the app's, which a moved box's keeper mustn't make again. Its descriptor, or nil while another
     /// holds it.
     static func takeLock() -> Int32? {
-        let folder = URL.cachesDirectory.appending(path: AppInfo.bundleID, directoryHint: .isDirectory)
+        // (The tests' own, in their folder.)
+        let folder = AppInfo.isHostingTests ? AppInfo.testRoot : URL.cachesDirectory.appending(path: AppInfo.bundleID, directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let lock = open(folder.appending(path: "keeper-move.lock").path(percentEncoded: false), O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
         guard lock >= 0 else { return nil }
@@ -480,11 +487,13 @@ extension OwnBoxMove.Identity {
             },
             deleteOriginals: { try move.deleteOriginals() },
             unregister: {
+                let service = SMAppService.agent(plistName: BackgroundWork.plistName)
                 do {
-                    try await SMAppService.agent(plistName: BackgroundWork.plistName).unregister()
+                    try await service.unregister()
                     return nil
                 } catch {
-                    return error.localizedDescription
+                    // (Gone already, taken away in Login Items say: done.)
+                    return service.status == .notRegistered || service.status == .notFound ? nil : error.localizedDescription
                 }
             })
     }

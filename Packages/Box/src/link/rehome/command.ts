@@ -98,23 +98,6 @@ export async function rehomeCommand(root: string | undefined, args: string[]): P
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     // (Asked whether it's ready: not, saying why.)
-    if (args.includes("--failed")) {
-      const why = option("--failed");
-      if (!why) {
-        console.error(USAGE);
-        return 2;
-      }
-      say({ noted: keeperFailed(home, why), status: rehomeStatus(home) });
-      return 0;
-    }
-    if (args.includes("--new") && args.includes("--check")) {
-      let answer: ReturnType<typeof newReadiness>;
-      try { answer = newReadiness(folders(), { engineData: process.env.KUVO_ENGINE_DATA || undefined }); } catch (error) {
-        answer = { ready: false, made: false, why: error instanceof Error ? error.message : String(error) };
-      }
-      say(answer);
-      return 0;
-    }
     if (args.includes("--ready")) {
       say({ ready: false, how: null, why: message, status: rehomeStatus(home) });
       return 0;
