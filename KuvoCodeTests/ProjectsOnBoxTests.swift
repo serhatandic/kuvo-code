@@ -236,13 +236,22 @@ import Testing
         #expect(!workspace.projects.contains { RemoteFolder.machine(of: $0.directory) == "lab" })
     }
 
+    /// Archiving reads each session again before changing its notes, preserving other writers' keys.
+    private func listForArchiving(_ sessions: [[String: Any]]) {
+        engine.list(sessions)
+        for session in sessions {
+            guard let id = session["id"] as? String else { continue }
+            engine.on("GET", "/api/session/\(id)", json: ["data": session])
+        }
+    }
+
     /// A worktree removed before its box kept them, whose session this Mac still shows under its
     /// project: Remove Project archives that session too, so it doesn't bring the project back.
     @Test func removeProjectReachesWorktreesRemovedBeforeTheBoxKeptThem() async throws {
         defer { done() }
         let tree = work.appending(path: "trees/long-gone").path
         UserDefaults.standard.set([tree: shop], forKey: "removedWorktrees")
-        engine.list([StubEngine.session("ses_shop", directory: shop, created: 20), StubEngine.session("ses_tree", directory: tree, created: 10)])
+        listForArchiving([StubEngine.session("ses_shop", directory: shop, created: 20), StubEngine.session("ses_tree", directory: tree, created: 10)])
         let workspace = workspace()
         await workspace.refresh()
         try await engine.listed(for: workspace)
@@ -350,7 +359,7 @@ import Testing
         let tree = work.appending(path: "trees/brave-otter").path
         try FileManager.default.createDirectory(atPath: tree, withIntermediateDirectories: true)
         UserDefaults.standard.set(try JSONEncoder().encode([tree: Workspace.Worktree(project: shop, root: tree, branch: "kuvo/brave-otter", base: "main")]), forKey: "worktrees")
-        engine.list([StubEngine.session("ses_shop", directory: shop, created: 20), StubEngine.session("ses_tree", directory: tree, created: 10)])
+        listForArchiving([StubEngine.session("ses_shop", directory: shop, created: 20), StubEngine.session("ses_tree", directory: tree, created: 10)])
         let workspace = workspace()
         await workspace.refresh()
         try await engine.listed(for: workspace)
@@ -370,7 +379,7 @@ import Testing
 
     @Test func removeProjectArchivesItsSessionsThereAndKeepsItsSettings() async throws {
         defer { done() }
-        engine.list([
+        listForArchiving([
             StubEngine.session("ses_new", directory: shop, created: 20),
             StubEngine.session("ses_old", directory: shop, created: 10),
             StubEngine.session("ses_blog", directory: blog, created: 5),
