@@ -1,4 +1,5 @@
 import ClientChanges
+import ClientSessions
 import OpenCodeKit
 import Testing
 @testable import KuvoCode
