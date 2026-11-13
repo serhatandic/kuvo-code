@@ -33,7 +33,6 @@ import Testing
 
     /// This Mac's box, which messages go through, reaching the stand-in engine where it listens.
     private func withBox() async throws {
-        try await StubWeb.listen(port: 47994)
         try await box.start(engine: Self.engine, for: workspace)
     }
 

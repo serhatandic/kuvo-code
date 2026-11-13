@@ -35,14 +35,15 @@ export interface Composed {
 
 /** `fields` (with the `files` it carries, as the engine takes them) as the message the conversation
  * `session` at `target` gets: its files kept here as `attachedIn` keeps them, and its text written
- * for the agent (`composeMessage`), from a phone unless `request` is a Kuvo Code app's. */
-export async function composed(fields: MessageFields, files: unknown[], session: string, target: Target, toAgents: boolean, request: LinkRequest, readEngine: () => Target, signal?: AbortSignal, metadata?: unknown): Promise<Composed> {
+ * for the agent (`composeMessage`), from a phone unless `request` is a Kuvo Code app's (a command's
+ * arguments never say so, as a phone's prompt passed on before didn't). */
+export async function composed(fields: MessageFields, files: unknown[], session: string, target: Target, toAgents: boolean, request: LinkRequest, readEngine: () => Target, signal?: AbortSignal, metadata?: unknown, command = false): Promise<Composed> {
   const base = new URL(`http://127.0.0.1:${target.port}/`);
   const headers = { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` };
   const kept = await keptFiles(files, session, modelInput(base, headers, signal), toAgents);
   // (Everyone worked out again only for a message that names someone.)
   const everyone = fields.words.includes("&") ? await everyoneFor(fields.words, readEngine) : listedAgents();
-  const phone = request.fromMac !== true && request.fromApp !== true;
+  const phone = !command && request.fromMac !== true && request.fromApp !== true;
   const text = composeMessage(fields, { excluding: session, here: everyone.machine, agents: everyone.agents }, kept ?? {}, phone);
   return { text, files: (kept?.files ?? files) as PromptFile[], metadata: withParts(metadata, partsOf(text)) };
 }
@@ -94,7 +95,7 @@ export async function* sendRoute(context: RouteContext, match: RegExpMatchArray)
   const send = async (): Promise<SentAnswer> => {
     try {
       const message = fields
-        ? await composed(fields, files, session, target, toAgents, request, readEngine, command ? signal : undefined)
+        ? await composed(fields, files, session, target, toAgents, request, readEngine, command ? signal : undefined, undefined, command !== null)
         : { text: again!, files: files as PromptFile[], metadata: withParts(undefined, partsOf(again!)) };
       const body = command
         ? { name: command, text: message.text, ...(message.files.length ? { files: message.files } : {}), ...(delivery ? { delivery } : {}) }

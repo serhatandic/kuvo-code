@@ -40103,7 +40103,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "e38ab4b4fdc6";
+var BRIDGE_VERSION = "13c0ed98e63f";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -45167,12 +45167,12 @@ async function* pairingRoute(context) {
 var SEND_ROUTE = /^kuvo\/sessions\/([^/]+)\/send$/;
 var PARTS_ROUTE = "kuvo/messages/parts";
 var PARTS_MOST = 500;
-async function composed(fields, files, session, target, toAgents, request, readEngine, signal, metadata) {
+async function composed(fields, files, session, target, toAgents, request, readEngine, signal, metadata, command = false) {
   const base = new URL(`http://127.0.0.1:${target.port}/`);
   const headers = { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` };
   const kept = await keptFiles(files, session, modelInput(base, headers, signal), toAgents);
   const everyone = fields.words.includes("&") ? await everyoneFor(fields.words, readEngine) : listedAgents();
-  const phone = request.fromMac !== true && request.fromApp !== true;
+  const phone = !command && request.fromMac !== true && request.fromApp !== true;
   const text = composeMessage(fields, { excluding: session, here: everyone.machine, agents: everyone.agents }, kept ?? {}, phone);
   return { text, files: kept?.files ?? files, metadata: withParts(metadata, partsOf(text)) };
 }
@@ -45220,7 +45220,7 @@ async function* sendRoute(context, match) {
   const at = `http://127.0.0.1:${target.port}/api/session/${encodeURIComponent(session)}/${command ? "command" : "prompt"}`;
   const send = async () => {
     try {
-      const message = fields ? await composed(fields, files, session, target, toAgents, request, readEngine, command ? signal : undefined) : { text: again, files, metadata: withParts(undefined, partsOf(again)) };
+      const message = fields ? await composed(fields, files, session, target, toAgents, request, readEngine, command ? signal : undefined, undefined, command !== null) : { text: again, files, metadata: withParts(undefined, partsOf(again)) };
       const body = command ? { name: command, text: message.text, ...message.files.length ? { files: message.files } : {}, ...delivery ? { delivery } : {} } : { id: typeof given.id === "string" && given.id ? given.id : messageID(), text: message.text, ...message.files.length ? { files: message.files } : {}, delivery, metadata: message.metadata };
       const response = await fetch(at, { method: "POST", headers, body: JSON.stringify(body), signal: command ? signal : undefined });
       return { status: response.status, headers: answerHeaders(response), body: Buffer.from(await response.arrayBuffer()) };
