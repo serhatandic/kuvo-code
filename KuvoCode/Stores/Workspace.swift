@@ -306,6 +306,14 @@ final class Workspace {
         didSet { projectsChanged() }
     }
 
+    /// Where each box's session list is read, where a test gives it apart from `boxes` (whose other
+    /// routes it leaves as they are); nil, as in the app: `boxes`.
+    @ObservationIgnored var sessionListBoxes: ((String) -> BoxClient?)?
+
+    private func listBox(_ box: String) -> BoxClient? {
+        (sessionListBoxes ?? boxes)?(box)
+    }
+
     /// Whether `box` has said what its sessions are (here or before this launch): until then its
     /// projects and chats aren't known, rather than none.
     func isListed(_ box: String) -> Bool {
@@ -379,7 +387,7 @@ final class Workspace {
         while !Task.isCancelled, !isRemoved(box) {
             await handOverRemovedWorktrees(on: box)
             var heard = false
-            if BoxClient.streams(box), let client = boxes?(box) {
+            if BoxClient.streams(box), let client = listBox(box) {
                 do {
                     for try await data in client.follow(SessionLists.eventsRoute(since: listCursor(box))) {
                         guard let line = try? JSONDecoder().decode(SessionLists.Line.self, from: data) else { continue }
@@ -425,7 +433,7 @@ final class Workspace {
         defer { listReads[box] = nil }
         repeat {
             listReads[box] = false
-            guard !isAway(box), let client = boxes?(box) else { return }
+            guard !isAway(box), let client = listBox(box) else { return }
             if let line = try? await client.value(SessionLists.Line.self, "GET", SessionLists.route(since: listCursor(box))) { take(line, on: box) }
         } while listReads[box] == true
     }

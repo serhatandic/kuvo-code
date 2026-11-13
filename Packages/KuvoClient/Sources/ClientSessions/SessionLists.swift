@@ -133,7 +133,8 @@ public enum SessionLists {
                 for id in line.gone ?? [] { sessions[id] = nil }
             }
             projects = line.projects
-            return sessions != before.sessions || projects != before.projects
+            // (Its first line changes it either way: it's read now.)
+            return before.at == nil || sessions != before.sessions || projects != before.projects
         }
     }
 

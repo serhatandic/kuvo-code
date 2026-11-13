@@ -155,10 +155,10 @@ nonisolated final class ListingBox: BoxTransport, @unchecked Sendable {
     }
 
     /// `workspace` following this as this Mac's box's list, as AppModel has it follow its box's
-    /// (`boxes` answering the rest as `rest` does), once it has this box's first line: how to stop.
+    /// (`boxes` left as the test has them), once it has this box's first line: how to stop.
     @MainActor func follow(_ workspace: Workspace) async throws -> Task<Void, Never> {
         let listing = self
-        workspace.boxes = { id in id == BoxClient.mac ? BoxClient(box: BoxClient.mac, transport: listing) : nil }
+        workspace.sessionListBoxes = { id in id == BoxClient.mac ? BoxClient(box: BoxClient.mac, transport: listing) : nil }
         let following = Task { await workspace.followSessionList(on: BoxClient.mac) }
         try await until { workspace.listCursor(BoxClient.mac)?.hasPrefix(listing.tag) == true }
         return following
