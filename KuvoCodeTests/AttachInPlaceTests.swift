@@ -1,3 +1,4 @@
+import ClientSessions
 import Foundation
 import OpenCodeKit
 import Testing
@@ -157,7 +158,8 @@ import Testing
                     fs.writeFileSync(path.join(run, "answers.json.new"), JSON.stringify(kept));
                     fs.renameSync(path.join(run, "answers.json.new"), path.join(run, "answers.json"));
                 }
-                const body = asked.path in answers ? answers[asked.path] : { chats: path.join(process.env.KUVO_HOME, "box-chats") };
+                // (As new as the update gate needs, #679: what it has, beside where its chats go.)
+                const body = asked.path in answers ? answers[asked.path] : { chats: path.join(process.env.KUVO_HOME, "box-chats"), features: \(String(decoding: try JSONEncoder().encode(BoxGate.required), as: UTF8.self)) };
                 console.log(JSON.stringify({ status, body: JSON.stringify(body) }));
 
                 """.write(to: box.appending(path: "bin/kuvo-link.js"), atomically: true, encoding: .utf8)
