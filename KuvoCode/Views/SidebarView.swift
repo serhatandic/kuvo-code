@@ -1048,7 +1048,7 @@ struct SidebarView: View {
                 // Started from another computer: which, in a word, at the title's end; pointed at,
                 // who and where. The title always wins: in a row too narrow for both, it goes.
                 TitleWithTail(session.title ?? "New Session") { words in
-                    sessionTitle(session, in: place, words: words)
+                    sessionTitle(session, in: place, isArchived: look.isArchived, words: words)
                 } tail: {
                     Text(elsewhere)
                         .sidebarFont(11)
@@ -1065,7 +1065,7 @@ struct SidebarView: View {
                 // Who and where, pointed at, the note shown or not.
                 .help(look.origin)
             } else {
-                sessionTitle(session, in: place)
+                sessionTitle(session, in: place, isArchived: look.isArchived)
             }
         } accessory: {
             if look.isArchived {
@@ -1101,7 +1101,7 @@ struct SidebarView: View {
 
     /// A session's title in its row: a bot's face before it where its lane doesn't show it.
     /// `words`: in place of its title (what of it is kept, to measure by).
-    private func sessionTitle(_ session: Session, in place: Place, words: String? = nil) -> some View {
+    private func sessionTitle(_ session: Session, in place: Place, isArchived: Bool, words: String? = nil) -> some View {
         HStack(spacing: 6) {
             // A bot's work: its face, still, before the title; in a project, its lane shows
             // it instead, the session staying yours.
@@ -1112,7 +1112,7 @@ struct SidebarView: View {
             }
             Text(words ?? session.title ?? "New Session")
                 .fontWeight(session.isUnread ? .semibold : .regular)
-                .foregroundStyle(look.isArchived ? .secondary : .primary)
+                .foregroundStyle(isArchived ? .secondary : .primary)
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .accessibilityValue(place == .project ? WorksFor(session).flatMap { bots.bot($0.bot) }.map { Oversight.overseenBy($0.name) } ?? "" : "")
