@@ -196,6 +196,10 @@ import Testing
         #expect(!same.saves && !same.typedNow)
         let anew = BrowserAsks.handling(password: "typed-anew", saving: false, secure: true, savedPassword: await Passwords.savedForComparing("typed-anew", login))
         #expect(anew.saves && anew.typedNow)
+        // One the box can't compare now (a vault locked meanwhile): taken for the saved one, so agents
+        // aren't let use it without your Touch ID.
+        let unknown = Passwords.Login(host: "github.com", account: "me", item: "item_gone")
+        #expect(!BrowserAsks.handling(password: "filled-from-the-vault", saving: false, secure: true, savedPassword: await Passwords.savedForComparing("filled-from-the-vault", unknown)).typedNow)
         #expect(standIn.asked.filter { $0.path.hasSuffix("/values") }.count == 1, "read only to fill it")
         #expect(standIn.asked.allSatisfy { $0.fromApp })
     }

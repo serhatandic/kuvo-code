@@ -94,6 +94,8 @@ nonisolated enum OwnBoxHome {
         guard let folder else { return false }
         if kind(in: folder) == "mac" { return true }
         let rehome = folder.appending(path: "updates/rehome")
+        // (A folder there whose files can't be told: as one under way.)
+        if FileManager.default.fileExists(atPath: rehome.path), (try? FileManager.default.contentsOfDirectory(atPath: rehome.path)) == nil { return true }
         if FileManager.default.fileExists(atPath: rehome.appending(path: "keychain.json").path) { return true }
         let journal = rehome.appending(path: "journal.json")
         guard FileManager.default.fileExists(atPath: journal.path) else { return false }

@@ -70,10 +70,12 @@ enum Passwords {
     /// What a sign-in answered with `password` is compared with (`BrowserAsks.handling`): the password
     /// saved for `login`, or, once this Mac's box has moved, one that's the same exactly when they
     /// are (`matches`), so the saved one is never read just to compare it. Nil with none saved.
+    /// One the box can't compare now is taken for the saved one: never a password you typed, which
+    /// would let agents use it without asking for your Touch ID; at worst a new one isn't saved.
     static func savedForComparing(_ password: String, _ login: Login?) async -> String? {
         guard let login else { return nil }
         guard OwnBoxHome.hasMoved else { return await self.password(for: login) }
-        return await matches(password, login).map { $0 ? password : "\u{0}" + password }
+        return await matches(password, login) == false ? "\u{0}" + password : password
     }
 
     /// Lets every agent sign in to `host` with the saved login for `account` on their own (or not),
