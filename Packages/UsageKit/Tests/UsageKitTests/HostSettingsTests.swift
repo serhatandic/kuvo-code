@@ -191,7 +191,8 @@ final class HostSettingsTests: XCTestCase {
         var kept = sent!
         kept["placed"] = (sent?["placed"] as? [String] ?? []) + ["grok.weekly"]
         kept["pinned"] = ["claude.session", "grok.weekly"]
-        kept["providerOrder"] = (sent?["providerOrder"] as? [String] ?? []) + ["grok"]
+        let order = sent?["providerOrder"] as? [String] ?? []
+        kept["providerOrder"] = order.contains("grok") ? order : order + ["grok"]
         kept["metricOrder"] = (sent?["metricOrder"] as? [String: [String]] ?? [:]).merging(["grok": ["grok.weekly"]]) { first, _ in first }
         XCTAssertTrue(mac.layout.canUndo)
         mac.settings.apply(try! JSONSerialization.data(withJSONObject: ["layout": kept, "notifications": ["underTenPercent": true, "healthyToClose": false, "closeToRunningOut": false]]))

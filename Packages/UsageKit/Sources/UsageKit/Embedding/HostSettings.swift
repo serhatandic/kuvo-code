@@ -90,7 +90,7 @@ public final class HostSettings {
             let before = heard[name]
             heard[name] = theirs
             // (As it said before; or as the panel shows it, what this Mac can't show of it left aside.)
-            if before == theirs || mine[name].map({ Self.json($0) }) == Self.json(shown(name, value)) { continue }
+            if before == theirs || mine[name].map({ Self.json(shown(name, $0 as? [String: Any] ?? [:])) }) == Self.json(shown(name, value)) { continue }
             write(name, value)
             put.insert(name)
         }
