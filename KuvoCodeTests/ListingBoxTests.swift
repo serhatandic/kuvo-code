@@ -7,7 +7,7 @@ import Testing
 /// drawing the sidebar from it draws what a box would give.
 struct ListingBoxTests {
     @Test func theStandInSaysWhatTheBoxSays() throws {
-        let file = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../Packages/KuvoLink/Vectors/session-lists.json").standardized
+        let file = try SourceRoot.url().appending(path: "Packages/KuvoLink/Vectors/session-lists.json")
         let read = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
         let cases = try #require(read["cases"] as? [[String: Any]])
         #expect(!cases.isEmpty)
