@@ -1,6 +1,7 @@
 // What your accounts used and cost, by the day: each account this box runs that's signed in to Kuvo
-// Code (Claude Code's, so far), read from its agent's own logs on this computer, priced
-// (pricing.ts), and kept by the quarter hour (history.ts). This box's own, with your other computers' boxes'
+// Code (Claude Code's and Grok's, so far), read from its agent's own logs on this computer, priced
+// (pricing.ts), and what the engine's own hosted models (OpenCode Go and Zen) cost, as OpenCode
+// billed it, read from the engine's databases here (engine-hosted.ts); and kept by the quarter hour (history.ts). This box's own, with your other computers' boxes'
 // (usage-peers.ts), one row per account: an account used on two computers is the sum of both. A
 // client asks for its own days (`zone`): the box answers them. Read every five minutes, or when a
 // client asks, one round at a time. PROTOCOL.md, "Usage history".
@@ -18,13 +19,15 @@ import type { Agent } from "../agent"
 import { emit } from "../events"
 import type { LimitsService } from "../limits"
 import { claudeLine, dedupClaude, fromKeptClaude, keptClaude, type KeptClaudeEntry } from "./claude-log"
+import { dedupGrok, fromKeptGrok, grokLine, grokSlots, keptGrok, type KeptGrokEntry } from "./grok-log"
+import { databasesStamp, HOSTED_PROVIDERS, hostedRows, hostedSlots, type HostedRow } from "./engine-hosted"
 import { claudeSlots, daysIn, slotsFrom, keptSlots, knownZone, noSlots, ownZone, summed, trimmed, type Day, type Slots, KEPT_DAYS } from "./history"
 import { JSONLFiles, jsonlFiles } from "./jsonl"
 import type { Pricing, PricingStore } from "./pricing"
 import type { UsagePeers } from "./usage-peers"
 
-/** The services whose usage history a box states, so far. */
-export const USAGE_SERVICES: LimitsService[] = ["claude"]
+/** The services whose usage history a box states, so far (`opencode` only where it knows its engine's folder). */
+export const USAGE_SERVICES: LimitsService[] = ["claude", "grok", "opencode"]
 
 const MINUTE = 60_000
 const DAY = 24 * 60 * MINUTE
@@ -43,6 +46,10 @@ export interface UsageSource {
   places?(): string[]
   /** What it keeps of the logs it read, shared by the accounts of its kind: told once a round is over. */
   files?: { endRound(complete: boolean): void }
+  /** A row only while it has use: none for a source with nothing in its window (the engine's hosted providers, which every box's engine has). */
+  quiet?: true
+  /** Its dollars are what its maker billed (the engine's hosted models'), not an estimate. */
+  billed?: true
 }
 
 /** One of this box's accounts, as it's kept and told. */
@@ -61,6 +68,8 @@ export interface OwnUsage {
   cut?: true
   /** A peer's: its slots are all there from this one (quarter hours since 1970) on, none before. */
   whole?: number
+  /** Its dollars are what its maker billed (OpenCode's hosted models'), not an estimate. */
+  estimated?: false
   /**
    * The folders its logs are in, each as a hash of its computer and the folder's real path
    * (`placeOf`): two boxes on one computer reading one folder are counted once.
@@ -104,6 +113,8 @@ export interface UsageRow {
   cut?: true
   /** It's only on boxes a peer vouches for: not yours, and in no total. */
   vouched?: true
+  /** Every box of it says its dollars are what its maker billed, not an estimate. */
+  estimated?: false
   slots: Slots
   /** Its slots from your own computers only (not a vouched box's): what the totals add up. */
   yours: Slots
@@ -176,6 +187,7 @@ export function usageRows(boxes: UsageBox[]): UsageRow[] {
     if (members.every((member) => member.box.away)) row.away = true
     if (members.some((member) => member.account.cut)) row.cut = true
     if (members.every((member) => member.box.vouched)) row.vouched = true
+    if (members.every((member) => member.account.estimated === false)) row.estimated = false
     if (yours.some((member) => member.box.away)) row.yoursAway = true
     if (yours.some((member) => member.account.cut)) row.yoursCut = true
     return row
@@ -196,6 +208,8 @@ export class Usage {
   private said = ""
   /** Your other computers' usage, once the bridge's link is there to carry it. */
   peers?: UsagePeers
+  /** The services this box states the usage of (`opencode` only where it reads its engine's databases). */
+  services: LimitsService[] = USAGE_SERVICES
 
   constructor(
     private readonly sources: () => UsageSource[],
@@ -284,6 +298,7 @@ export class Usage {
     return this.sources().flatMap((source) => {
       const entry = this.entries.get(source.provider)
       if (!entry) return []
+      if (source.quiet && !entry.slots.used.size && !entry.slots.unknown.size) return []
       const identity = this.identity(source.provider) ?? entry.identity
       if (identity !== entry.identity) entry.identity = identity
       return [
@@ -296,6 +311,7 @@ export class Usage {
           ...(entry.scanned ? { scanned: entry.scanned } : {}),
           slots: entry.slots,
           ...(source.places ? { places: source.places() } : {}),
+          ...(source.billed ? { estimated: false as const } : {}),
         },
       ]
     })
@@ -324,7 +340,7 @@ export class Usage {
     // another person's), each folder once. And whether one of them is away or told less than all.
     const totals: Record<string, Day[]> = {}
     const partial: Record<string, { away?: true; cut?: true }> = {}
-    for (const service of USAGE_SERVICES) {
+    for (const service of this.services) {
       const of = rows.filter((row) => row.service === service && !row.vouched)
       if (!of.length) continue
       totals[service] = daysIn(summed(of.map((row) => row.yours)), asked, now)
@@ -333,7 +349,7 @@ export class Usage {
     const scanned = Math.max(0, ...this.own().map((account) => account.scanned ?? 0))
     return {
       zone: asked,
-      services: USAGE_SERVICES,
+      services: this.services,
       ...(scanned ? { scanned } : {}),
       rows: rows.map(({ slots, yours: _, yoursAway: _away, yoursCut: _cut, ...row }) => ({ ...row, days: daysIn(slots, asked, now) })),
       totals,
@@ -359,7 +375,7 @@ export class Usage {
     const now = JSON.stringify(this.rows().map(({ scanned: _, slots, yours, boxes, ...row }) => ({ ...row, boxes: boxes.map(({ scanned: _, ...box }) => box), slots: keptSlots(slots), yours: keptSlots(yours) })))
     if (now === this.said) return
     this.said = now
-    emit("kuvo.usage.updated", { services: USAGE_SERVICES })
+    emit("kuvo.usage.updated", { services: this.services })
   }
 
   private load() {
@@ -414,12 +430,15 @@ export async function usageRoutes(usage: Usage | undefined, method: string, rest
  * the folder's real path, so two boxes on one computer reading the same folder count it once, and
  * two computers with the same name and the same path (two Raspberry Pis' `/home/pi/.claude`) don't.
  */
-export function placeOf(computer: string, folder: string): string {
+export function placeOf(computer: string, folder: string, part?: string): string {
   let real = folder
   try {
     real = realpathSync(folder)
   } catch {}
-  return createHash("sha256").update("kuvo-code usage place v2\n").update(computer).update("\n").update(real).digest("hex").slice(0, 16)
+  const hash = createHash("sha256").update("kuvo-code usage place v2\n").update(computer).update("\n").update(real)
+  // (What's read of a folder several sources read, each its own part: the engine's databases hold every provider's.)
+  if (part !== undefined) hash.update("\n").update(part)
+  return hash.digest("hex").slice(0, 16)
 }
 
 /**
@@ -535,4 +554,84 @@ export function claudeSources(folder?: string, computer = ownComputer): (agents:
       }
       return [source]
     })
+}
+
+/**
+ * The Grok accounts whose usage is read here, from the `sessions` folder of each one's Grok home
+ * (`conversationRoots`: an added account's own, Kuvo Code's on a machine, your `~/.grok` or
+ * `GROK_HOME` on a Mac, where Grok runs with Kuvo Code's sign-in), only its sessions'
+ * `updates.jsonl`. `folder`: where what was read of them is kept (`grok-files`, a file a log). A
+ * round that read nothing new, with the same prices, works nothing out again.
+ */
+export function grokSources(folder?: string, computer = ownComputer): (agents: Agent[]) => UsageSource[] {
+  const files = new JSONLFiles<KeptGrokEntry>(
+    (line) => grokLine(line).map(keptGrok),
+    (entry) => entry[0],
+    folder ? join(folder, "grok-files") : undefined,
+    1,
+  )
+  const last = new Map<string, { version: number; pricing: Pricing; since: number; listed: string; slots: Slots }>()
+  return (agents) =>
+    agents.flatMap((agent) => {
+      const parsed = parseProvider(agent.providerID)
+      if (parsed?.kind !== "grok" || !agent.conversationRoots) return []
+      const roots = () => [...new Set(agent.conversationRoots!())]
+      const source: UsageSource = {
+        provider: agent.providerID,
+        service: "grok",
+        agent: { kind: "grok", account: parsed.id },
+        ...(agent.instance.label ? { label: agent.instance.label } : {}),
+        places: () => {
+          const here = computer()
+          return roots().map((root) => placeOf(here, root))
+        },
+        slots: async (pricing, since) => {
+          const found = new Map<string, Awaited<ReturnType<typeof jsonlFiles>>[number]>()
+          for (const root of roots()) for (const file of await jsonlFiles(root)) if (basename(file.path) === "updates.jsonl") found.set(file.path, file)
+          const ordered = [...found.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+          await files.refresh(ordered, since)
+          const listed = createHash("sha256").update(ordered.map((file) => file.path).join("\n")).digest("hex")
+          const before = last.get(agent.providerID)
+          if (before && before.version === files.version && before.pricing === pricing && before.since === since && before.listed === listed) return before.slots
+          const slots = grokSlots(dedupGrok(files.itemsOf(ordered, since).map(fromKeptGrok)), pricing, since)
+          last.set(agent.providerID, { version: files.version, pricing, since, listed, slots })
+          return slots
+        },
+        files,
+      }
+      return [source]
+    })
+}
+
+/**
+ * What the engine's own hosted models cost here (engine-hosted.ts): OpenCode Go's and Zen's, each a
+ * row of its own (`opencode-go` the same row as its plan limits'), from the engine's databases in
+ * its data folder (`folder`), read once a round for both and again only when a database changed.
+ * Billed by OpenCode, so never priced here. A provider with no use in the window has no row.
+ */
+export function engineHostedSources(folder: string | undefined, computer = ownComputer): () => UsageSource[] {
+  if (!folder) return () => []
+  // (Rounds are one at a time, their sources one after another: both providers' in a round share one read.)
+  let last: { stamp: string; since: number; rows: HostedRow[] | undefined } | undefined
+  const rows = async (since: number) => {
+    const stamp = databasesStamp(folder)
+    if (last && last.stamp === stamp && last.since === since) return last.rows
+    const found = await hostedRows(folder, since)
+    last = { stamp, since, rows: found }
+    return found
+  }
+  const sources = HOSTED_PROVIDERS.map(
+    (provider): UsageSource => ({
+      provider,
+      service: "opencode",
+      quiet: true,
+      billed: true,
+      places: () => [placeOf(computer(), folder, `opencode:${provider}`)],
+      slots: async (_pricing, since) => {
+        const found = await rows(since)
+        return found ? hostedSlots(found, provider, since) : noSlots()
+      },
+    }),
+  )
+  return () => sources
 }

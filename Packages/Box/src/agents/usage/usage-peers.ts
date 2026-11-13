@@ -303,6 +303,8 @@ export class UsagePeers {
 /**
  * What a box's accounts used, hashed, as told: the same on both sides once the receiver has put
  * together what it was told (each account's fields in one order, its slots as kept: `keptSlots`).
+ * Not whether it's billed (`estimated`), which never changes for an account, and which a box from
+ * before doesn't keep: its digest would never match, and it would ask for all of it every minute.
  */
 export function digestOf(accounts: ToldUsage[]): string {
   const canonical = accounts.map((account) => [account.provider, account.service, account.agent ?? null, account.account ?? null, account.label ?? null, account.identity ?? null, account.cut === true, account.places ?? [], account.slots.models, account.slots.used, account.slots.unknown ?? []])
@@ -355,5 +357,6 @@ function takenAccount(given: unknown, off: number, now: number): OwnUsage | null
     ...(account.cut === true ? { cut: true as const } : {}),
     ...(Number.isSafeInteger(account.whole) && account.whole > 0 ? { whole: account.whole } : {}),
     ...(Array.isArray(account.places) && account.places.length ? { places: account.places.filter((place: unknown): place is string => typeof place === "string" && /^[0-9a-f]{16}$/.test(place)).slice(0, 20) } : {}),
+    ...(account.estimated === false ? { estimated: false as const } : {}),
   }
 }

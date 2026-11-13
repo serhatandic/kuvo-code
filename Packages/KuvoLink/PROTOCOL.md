@@ -3938,33 +3938,45 @@ account you added: its own folder; a machine: Kuvo Code's, not your `~/.claude` 
 sign-in: your Claude Code settings folders, where Claude Code runs with it, as OpenUsage read them,
 each of a comma-separated `CLAUDE_CONFIG_DIR`, else `~/.config/claude` and `~/.claude`: Claude
 Code's conversations there count whoever ran them, your Terminal or Claude's desktop app), never
-another tool's folders (Cowork's, claude-swap's, Pi's). It prices them as OpenUsage does (its supplement,
+another tool's folders (Cowork's, claude-swap's, Pi's); and Grok's, each Grok account's home's
+`sessions` (an account you added: its own home; a machine: Kuvo Code's; a Mac's own sign-in: your
+`GROK_HOME`, else `~/.grok`, where Grok runs with it, its sessions there counted whoever ran them),
+only each session's `updates.jsonl`, never Grok's debug log (`logs/unified.jsonl`, which it cuts
+short). It prices them as OpenUsage does (its supplement,
 LiteLLM's catalog, models.dev's; snapshots ship with the bridge, and each feed is fetched again
 hourly, kept in the bridge's `usage/pricing`, only by a real box's bridge, in a Mac app's folder or
-a machine's `~/.kuvo-code`, never a test's): estimates, not your bill. A client reaches them as
+a machine's `~/.kuvo-code`, never a test's): estimates, not your bill, but where the maker said
+what it cost (Claude Code's `costUSD`, Grok's own costs). And what the engine's own hosted models
+cost (OpenCode Go, `opencode-go`, and OpenCode Zen, `opencode`), as OpenCode billed it, read (only
+read) from the engine's databases on that computer (each `opencode*.db` in its data folder: on a
+Mac the app's, on a machine `~/.kuvo-code/data/opencode`), never your own opencode's: a box that
+doesn't know its engine's folder doesn't state it (`services` without `opencode`). A client reaches them as
 `kuvo/agents/api/kuvo/usage…` (the Mac app at `api/kuvo/usage…` on the bridge itself), where
 `features` has `usage.history`.
 
 - `GET kuvo/agents/api/kuvo/usage?zone=<IANA time zone>` → `{data: {zone, services, scanned?, rows:
   [row], totals: {<service>: [day]}, partial?: {<service>: {away?, cut?}}}}`. The box works out the days in `zone` (the client's, so a
   Mac in Istanbul reading a machine in UTC gets its own days); one it doesn't know is its own,
-  `zone` says which. `services`: what this box states the usage of (`claude`): a client shows those
-  from here, and reads the rest as it did. `scanned`: when this box last read its logs.
+  `zone` says which. `services`: what this box states the usage of (`claude`, `grok`, `opencode`):
+  a client shows those from here, and reads the rest as it did. `scanned`: when this box last read
+  its logs.
   - A `row` is one account across your computers, with the same `id` as its plan limits row
     (`<service>#<identity>`, or `<box key>/<provider>` for one that can't say who it is), so a
     client puts an account's limits and its usage side by side: `{id, service, provider, agent?,
-    account?, label?, identity?, scanned?, boxes, away?, cut?, vouched?, days}`, `boxes` as limits'
-    rows have them (`{key, name, provider, agent?, account?, label?, scanned?, here?, away?,
+    account?, label?, identity?, scanned?, boxes, away?, cut?, vouched?, estimated?, days}`:
+    `estimated: false` where its dollars are what its maker billed (OpenCode's hosted models'), not
+    an estimate; `boxes` as limits' rows have them (`{key, name, provider, agent?, account?, label?, scanned?, here?, away?,
     vouched?, same?}`): `vouched`, a box a peer vouches for (another Mac beside a machine you
     share), not one of your computers, and the row `vouched` when all of them are; `same`, a box
     that reads a folder another of them already does (two boxes on one computer), not added again.
     Its `days` are the **sum** of every box's own (each box reads only its own logs), each folder
-    once. A conversation moved to another
+    once. OpenCode's: a row for Go (the same row as its plan limits') and one for Zen, each only
+    while it has use in the window. A conversation moved to another
     computer (`kuvo/moves`) is copied there, and the one it left keeps its copy for a while: its
     past use counts on both meanwhile.
   - `totals`: each service's days, the accounts on your own computers added up (this box and its
     peers, not a box a peer vouches for, whose accounts may be another person's: their rows show,
-    in no total), each folder once: what the Mac's Claude card shows. `partial`: a service whose
+    in no total), each folder once: what the Mac's Claude, Grok and OpenCode cards show. `partial`: a service whose
     totals are short, `away` (one of your computers isn't answering: its share is as of then) or
     `cut` (one told less than all: its oldest days).
   - A `day`: `{date, tokens, cost, models: [{model, tokens, cost}], unknown?}`, newest first, for
@@ -3979,6 +3991,23 @@ a machine's `~/.kuvo-code`, never a test's): estimates, not your bill. A client 
     where it has one, else its tokens at its model's rates (1-hour cache writes at twice the input
     rate, a request whose prompt passes the model's long-context threshold at those rates
     throughout, a fast request at its model's fast multiplier).
+  - Grok's (OpenUsage's rules): a transcript line holding `turn_completed` that parses, a
+    `turn_completed` session update (under `params.update`, else `update`) with `usage.modelUsage`
+    and a time (`_meta.agentTimestampMs`, under `params`, else the line's own; else the line's
+    `timestamp`, seconds or ISO 8601). Each model in it with input tokens is its own entry: cached
+    reads and cache writes come out of the input (never more than it), reasoning is in the output
+    already, counts past 10^12 held there. Its cost is Grok's own where it says one
+    (`costUsdTicks`, 10^-10 dollars, the model's, or the turn's when it ran one model), else its
+    tokens at its model's rates. An event (`_meta.eventId`) copied into another session's
+    transcript counts once per model.
+  - OpenCode's hosted models (OpenUsage's `OpenCodeUsageScanner`): each assistant message, and each
+    completed compaction, of `opencode-go` or `opencode` with a numeric cost, from `message`
+    (opencode 1) and `session_message` (opencode 2), on the day it was made; its tokens the total it
+    says, else its buckets added up; its cost as written, never priced again (a negative one left
+    out); a message in both tables, or in two channels' databases, once (by its ID, the first by
+    path). A database without either table says nothing; one that can't be read while another can
+    is left out; none readable: not known now (the last read stands). A model you reach with a key
+    of your own is its provider's, never counted here.
 - `POST kuvo/agents/api/kuvo/usage/refresh[?zone=]` reads the logs now, asks your other computers
   to read theirs and tell (below), and answers as `GET` once it's read here (or after five
   seconds, the rest coming as the event).
@@ -3987,8 +4016,9 @@ a machine's `~/.kuvo-code`, never a test's): estimates, not your bill. A client 
 - How often: every five minutes, and when asked; one round at a time. The event, and the mail
   below, only when what was used changed. A log is read on from where
   it was last read as it grows, and again whole when it shrank or was rewritten; what each log held
-  is kept in the bridge's folder (`usage/claude-files`, a file a log, rebuilt from the logs when
-  it's lost), and each account's use by the quarter hour, UTC (`usage/usage.json`), so a restart
+  is kept in the bridge's folder (`usage/claude-files` and `usage/grok-files`, a file a log, rebuilt
+  from the logs when it's lost; the engine's databases are read again whole, only when one or its
+  write-ahead log changed), and each account's use by the quarter hour, UTC (`usage/usage.json`), so a restart
   answers at once, and every zone's days come out whole (India's midnight is on the half hour).
   Kept 35 days.
 - **Across your computers**, as plan limits are ("Plan limits", "Across your computers": the same
@@ -4004,7 +4034,9 @@ a machine's `~/.kuvo-code`, never a test's): estimates, not your bill. A client 
   receiver whose own, put together, isn't that asks for all of it (`ask`, at most once a minute),
   and is answered at once. Each account is `{provider, service, agent?, account?, label?,
   identity?, scanned?, cut?, whole, places?, slots: {models, used: [[slot, model, tokens,
-  dollars]], unknown?: [[slot, model]]}}`: `places`, the folders its logs are in, each 16 hex
+  dollars]], unknown?: [[slot, model]]}, estimated?: false}` (`estimated`, as a row's, never in
+  `digest`: it doesn't change for an account, and a box from before doesn't keep it): `places`, the
+  folders its logs are in (for the engine's, its data folder with the provider), each 16 hex
   characters of a hash of its computer (on Linux its machine ID, `/etc/machine-id` or D-Bus's, with
   its name; on a Mac its hardware UUID; else its name) and the folder's real path (never either); `slot`, quarter hours since 1970 (UTC), `model`, an index into
   `models`, `tokens` a whole number; `whole`, the first slot the sender has all of (a UTC midnight

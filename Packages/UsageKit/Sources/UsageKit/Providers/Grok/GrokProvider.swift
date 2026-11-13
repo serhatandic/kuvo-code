@@ -141,9 +141,20 @@ final class GrokProvider: ProviderRuntime {
         let plan = await fetchPlanName(accessToken: state.token)
 
         // Local spend tiles from completed session turns. Recorded Grok costs win when available;
-        // older turns without a carried cost use the shared pricing store.
+        // older turns without a carried cost use the shared pricing store. The host's boxes state
+        // Grok's history themselves (`HostHistory`, fork addition): every Grok account Kuvo Code runs,
+        // on every computer of yours, priced there; nothing is read here then (not answered yet: none).
         var usageHistory: ProviderUsageHistory?
-        if let scan = await logUsageScanner.scan(daysBack: 30, now: now(), pricing: await pricing()) {
+        let scanned: LogUsageScan?
+        var note = "From your Grok logs (estimated)"
+        if let hosted = HostHistory.shared.scan(for: provider.id) {
+            scanned = hosted
+            note = "From your Grok usage history (estimated)"
+            if let asOf = HostHistory.shared.asOfNote(for: provider.id) { note += ", \(asOf)" }
+        } else {
+            scanned = await logUsageScanner.scan(daysBack: 30, now: now(), pricing: await pricing())
+        }
+        if let scan = scanned {
             usageHistory = ProviderUsageHistory(
                 series: scan.series,
                 modelUsage: scan.modelUsage,
@@ -155,10 +166,9 @@ final class GrokProvider: ProviderRuntime {
                 now: now(),
                 unknownModelsByDay: scan.unknownModelsByDay,
                 modelUsage: scan.modelUsage,
-                modelSourceNote: "From your Grok logs (estimated)"
+                modelSourceNote: note
             )
-            SpendTileMapper.appendUsageTrend(scan.series, to: &mapped.lines, now: now(),
-                                             note: "From your Grok logs (estimated)")
+            SpendTileMapper.appendUsageTrend(scan.series, to: &mapped.lines, now: now(), note: note)
         }
 
         return ProviderSnapshot.make(

@@ -31,7 +31,7 @@ public struct HostHistoryDay: Sendable, Hashable {
 }
 
 /// The usage history the host states itself (fork addition): for each provider family it covers
-/// (`claude`), its days take the place of what the provider would read from the logs on this Mac,
+/// (`claude`, `grok`, `opencode`), its days take the place of what the provider would read from the logs on this Mac,
 /// so the spend tiles, the trend and the model breakdown show the host's (every account it runs,
 /// on every computer of yours), and nothing is read twice. A provider it doesn't cover reads its
 /// logs as before.
@@ -83,7 +83,7 @@ public final class HostHistory {
     }
 
     /// A covered provider's history as the panel's own scan of its logs would have been, or nil for
-    /// one the host doesn't cover. Only its main card (`claude`) takes the host's days, once the
+    /// one the host doesn't cover. Only its main card (`claude`, `grok`, `opencode`) takes the host's days, once the
     /// host has answered (until then nil inside: what it last showed stays); its cards for other
     /// logins of yours show none (an empty history, so what they had before goes). Every account
     /// the host runs is in the main card's: none is counted on two cards.
