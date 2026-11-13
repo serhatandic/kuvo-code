@@ -18476,7 +18476,7 @@ var seatRefusal = () => ({ status: 403, message: SEAT });
 var isBotFolder = (folder) => folder.startsWith(path70.resolve(BOTS) + "/");
 function rulesFor(approval, parent, folders, held = []) {
   const own = Array.isArray(parent?.permissions) ? parent.permissions.filter((rule) => !isFolderRule(rule) || rule.resource.includes("/bots/bot_")) : [];
-  return approvalRules(approval, [...own, ...folderRules(folders)], held);
+  return approvalRules(approval, [...own, ...projectFolderRules(folders, own)], held);
 }
 function projectOf3(folder) {
   if (folder === CHATS)
@@ -18733,6 +18733,7 @@ async function startSession(given, by, place) {
   const project = !under ? null : realish(under) !== realish(folder) ? { name: projectName(under), folders: foldersFor(folder) } : projectOf3(under);
   const title = typeof given.title === "string" && given.title.trim() ? given.title.trim() : null;
   const brought = remote ? remote.held.filter(holdsBack) : [];
+  await askedAbout([...project?.folders ?? [], ...namedFolders(Array.isArray(parent?.permissions) ? parent.permissions : [])]);
   const rules = rulesFor(applied, parent, project?.folders ?? [], brought);
   const ownAgent = !by && typeof given.agent === "string" && given.agent.trim() ? given.agent.trim() : null;
   const agent = given.mode === "plan" || given.mode === "build" ? given.mode : ownAgent ?? parent?.agent ?? null;
@@ -30448,7 +30449,7 @@ function withFolders(rules, folders, held = []) {
     const at = folderNamed(rule.resource);
     return named.filter((each) => folderNamed(each.resource) === at);
   };
-  const adding = folderRules(folders).filter((rule) => !namedAt(rule).length);
+  const adding = projectFolderRules(folders, rules);
   const last = rules.filter((rule) => held.some((each) => same(each, rule) && each.effect === rule.effect));
   const asksFirst = rules.some((rule) => rule.action === "shell" && rule.resource === "*" && rule.effect === "ask");
   const asked = (rule) => !asksFirst && namedAt(rule).at(-1)?.effect === "ask";
@@ -30457,6 +30458,11 @@ function withFolders(rules, folders, held = []) {
 }
 var settingsFolderRules = (rules) => (permissionsHere() ?? rules.filter(holdsBack)).filter((rule) => rule.action === "external_directory");
 var folderNamed = (resource) => resource.endsWith("/*") ? realish(resource.slice(0, -2)) : resource;
+function projectFolderRules(folders, rules = []) {
+  const named = new Set(settingsFolderRules(rules).map((rule) => folderNamed(rule.resource)));
+  return folderRules(folders).filter((rule) => !named.has(folderNamed(rule.resource)));
+}
+var namedFolders = (rules = []) => [...settingsFolderRules(rules), ...rules].filter((rule) => rule.action === "external_directory" && rule.resource.endsWith("/*")).map((rule) => rule.resource.slice(0, -2));
 function foldersOf(session, at, added = false) {
   const filed = session.metadata?.kuvo?.filed;
   const project = isObject(filed) && filed.folder === at && typeof filed.project === "string" ? filed.project : null;
@@ -30491,9 +30497,7 @@ async function giveFolders(target, session, { signal, folder, whenChanged = fals
   const asked = first ? foldersOf(before, first, added) : null;
   if (!asked)
     return true;
-  const rules = before.permissions ?? [];
-  const named = [...settingsFolderRules(rules), ...rules].filter((rule) => rule.action === "external_directory" && rule.resource.endsWith("/*")).map((rule) => rule.resource.slice(0, -2));
-  await askedAbout([...asked, ...named]);
+  await askedAbout([...asked, ...namedFolders(before.permissions ?? [])]);
   for (let tries = 0;tries < 3; tries++) {
     let at = null;
     let folders = null;
@@ -40829,7 +40833,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "8354c4641999";
+var BRIDGE_VERSION = "3000b04206d3";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

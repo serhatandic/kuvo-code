@@ -114,7 +114,7 @@ export function withFolders(rules: readonly KitRule[], folders: readonly string[
     const at = folderNamed(rule.resource);
     return named.filter(each => folderNamed(each.resource) === at);
   };
-  const adding = folderRules(folders).filter(rule => !namedAt(rule).length);
+  const adding = projectFolderRules(folders, rules);
   const last = rules.filter(rule => held.some(each => same(each, rule) && each.effect === rule.effect));
   // (A folder allowed because Settings asks about it, in Auto and Full Access, which allow what it
   // asks about; never in an approval that asks first, nor one Settings doesn't allow now, which an
@@ -132,6 +132,20 @@ const settingsFolderRules = (rules: readonly KitRule[]): KitRule[] => (permissio
 
 /** The folder a rule names (`<folder>/*`), where it really is; any other resource as it is. */
 const folderNamed = (resource: string): string => (resource.endsWith("/*") ? realish(resource.slice(0, -2)) : resource);
+
+/** The rules allowing a project's other folders (`folderRules`) but those Settings › Permissions
+ * names, by where they really are (a link and where it leads are one folder): those are Settings' to
+ * say, as `refreshedRules` has them. `rules`: the session's, whose Don't Allows are Settings' where
+ * this box's aren't its own. */
+export function projectFolderRules(folders: readonly string[], rules: readonly KitRule[] = []): KitRule[] {
+  const named = new Set(settingsFolderRules(rules).map(rule => folderNamed(rule.resource)));
+  return folderRules(folders).filter(rule => !named.has(folderNamed(rule.resource)));
+}
+
+/** The folders Settings › Permissions' rules name (or a session's own `rules`), to ask macOS about
+ * before they're looked at where they really are (`askedAbout`). */
+export const namedFolders = (rules: readonly KitRule[] = []): string[] =>
+  [...settingsFolderRules(rules), ...rules].filter(rule => rule.action === "external_directory" && rule.resource.endsWith("/*")).map(rule => rule.resource.slice(0, -2));
 
 /** The other folders a session in `at` gets: as `foldersFor`, or, filed under a project that's the
  * same place by another name (`kuvo.filed`: a link, as its start found it), that project's. Null
@@ -181,9 +195,7 @@ export async function giveFolders(target: Target, session: string, { signal, fol
   const asked = first ? foldersOf(before, first, added) : null;
   if (!asked) return true;
   // (And the folders its rules and Settings name, which are looked at where they really are.)
-  const rules = (before.permissions ?? []) as KitRule[];
-  const named = [...settingsFolderRules(rules), ...rules].filter(rule => rule.action === "external_directory" && rule.resource.endsWith("/*")).map(rule => rule.resource.slice(0, -2));
-  await askedAbout([...asked, ...named]);
+  await askedAbout([...asked, ...namedFolders((before.permissions ?? []) as KitRule[])]);
   // (Folders changed again while they were given: given again, so its rules and its note agree.)
   for (let tries = 0; tries < 3; tries++) {
     let at: string | null = null;

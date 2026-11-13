@@ -18,7 +18,7 @@ import { macLink, readLink } from "../state";
 import { plainName } from "../../shared/text";
 import { withNotes } from "../../shared/session-notes";
 import { askedAbout, realish } from "../fence/policy";
-import { changeProjects, filedUnder, folderRules, foldersFor, isFolderRule, PROJECT_FOLDERS_ENTRY, PROJECTS_FILE, projectFoldersNote, readProjects } from "../areas/projects";
+import { changeProjects, filedUnder, foldersFor, isFolderRule, namedFolders, PROJECT_FOLDERS_ENTRY, projectFolderRules, PROJECTS_FILE, projectFoldersNote, readProjects } from "../areas/projects";
 import { runsWithAgents } from "../bots/kit";
 import { projectOf as projectOfFolder, readWorktrees, worktreeProjects } from "../areas/worktree-records";
 import { answerWorktrees, settleNewSession } from "../areas/worktrees";
@@ -248,7 +248,8 @@ const isBotFolder = (folder: string) => folder.startsWith(path.resolve(BOTS) + "
 // own folder stays allowed).
 function rulesFor(approval: Approval, parent: Partial<EngineSession> | null, folders: readonly string[], held: readonly KitRule[] = []): KitRule[] {
   const own = Array.isArray(parent?.permissions) ? parent.permissions.filter(rule => !isFolderRule(rule) || rule.resource.includes("/bots/bot_")) : [];
-  return approvalRules(approval, [...own, ...folderRules(folders)], held);
+  // (Not one Settings › Permissions names, by its link or where it leads: Settings' to say.)
+  return approvalRules(approval, [...own, ...projectFolderRules(folders, own)], held);
 }
 
 // The project a folder is (one of its worktrees is its project's), its name and other folders; a
@@ -552,6 +553,9 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const title = typeof given.title === "string" && given.title.trim() ? given.title.trim() : null;
   // (A lead's Don't Allows from its own computer: kept with it, so they hold here however its rules are made again.)
   const brought = remote ? remote.held.filter(holdsBack) : [];
+  // (Its project's folders and those Settings names, looked at where they really are: asked about
+  // off the box's thread first.)
+  await askedAbout([...(project?.folders ?? []), ...namedFolders(Array.isArray(parent?.permissions) ? parent.permissions : [])]);
   const rules = rulesFor(applied, parent, project?.folders ?? [], brought);
   // Its mode: the one asked for, else the conversation's (one that plans starts sessions that plan).
   // (A client may name any of its engine's agents: `agent`, as its picker has them.)

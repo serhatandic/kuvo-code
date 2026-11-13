@@ -269,3 +269,20 @@ test("a project the box adds as an agent starts a session there keeps the folder
   assert.ok(allows("ses_shop", docsRule));
   assert.ok(!allows("ses_shop", assets));
 });
+
+test("a new session in a project whose other folder Settings › Permissions doesn't allow, by a link or where it leads, isn't allowed it from its start", async () => {
+  const docsLink = path.join(home, "work", "docs-link");
+  fs.symlinkSync(docs, docsLink);
+  const settings = path.join(home, "box", "opencode.json");
+  write(settings, JSON.stringify({ permissions: [{ action: "external_directory", resource: path.join(docs, "*"), effect: "deny" }] }));
+  write(path.join(home, "box", "projects.json"), JSON.stringify({ version: 1, projects: [{ directory: shop, folders: [docsLink] }] }));
+  try {
+    const started = await route("POST", "kuvo/sessions", { folder: shop, approval: "auto" });
+    assert.equal(started.status, 200, JSON.stringify(started.body));
+    const allowed = made[0].permissions.filter(rule => rule.action === "external_directory" && rule.effect === "allow").map(rule => rule.resource);
+    assert.deepEqual(allowed.filter(each => each.startsWith(docsLink) || each.startsWith(docs)), []);
+  } finally {
+    fs.rmSync(settings, { force: true });
+    fs.rmSync(docsLink, { force: true });
+  }
+});
