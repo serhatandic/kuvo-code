@@ -7149,7 +7149,8 @@ can go three months after 0.8.0 ships.
   `kuvo/folders/tree`: 404 with nothing said, or, from 0.8.0-beta.1 (which has no `kuvo/git/…` at
   all), `403` in plain words ("That isn't available over the link."), which the newer app takes the
   same way for these four, Merge into… and Create Pull Request's confirmation (which say such a
-  machine needs a newer Kuvo Code); Changes' other routes show those words as the box's answer. A
+  machine needs a newer Kuvo Code); Changes' other routes, and any route's refusal of that kind,
+  say its computer needs a newer Kuvo Code. A
   path is sent as a box writes it (`EngineRoutes.canonical`), so such a box never refuses it as one
   that isn't what it seems. For a beta.1 machine's box, the newer app runs the machine's git (and,
   outside a repository, `find`) over SSH, as before (a 0.7 machine, whose bridge has no `box

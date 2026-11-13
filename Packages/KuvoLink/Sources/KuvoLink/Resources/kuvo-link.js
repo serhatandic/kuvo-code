@@ -7333,7 +7333,7 @@ async function gitNamesLater(folder, args, limit, signal, timeout = 600000) {
       }
     });
     child.on("error", () => resolve(null));
-    child.on("close", (code) => resolve(signal?.aborted ? null : enough || code === 0 || code === null ? { names: [...names], complete: code === 0 } : null));
+    child.on("close", (code) => resolve(signal?.aborted ? null : enough || code === 0 || code === null ? { names: [...names], complete: code === 0 && !enough } : null));
   });
 }
 function sizeLater(folder) {
@@ -38917,7 +38917,7 @@ import fs123 from "node:fs";
 import path126 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "99d703c6f857";
+var BRIDGE_VERSION = "d773de47632e";
 
 // Packages/Box/src/link/rehome/rewrite.ts
 var NO_REWRITE = {
@@ -41793,6 +41793,8 @@ async function listTree(requestPath, limit = TREE_LIMIT, signal, timeout) {
     }
   };
   await walk("");
+  if (signal?.aborted)
+    return { status: 503, value: { message: "Stopped: no one asks any longer." } };
   return { status: 200, value: await withDates({ path: at, files, git: false }, dated) };
 }
 async function withDates(tree, dated) {

@@ -590,7 +590,7 @@ private struct BranchSwitcher: View {
         .buttonStyle(TextButtonStyle(cornerRadius: 4, outset: true))
         .fixedSize()
         .help("Switch branches, or start a new one")
-        .task(id: directory + "\n" + branch) { await load() }
+        .task(id: branch) { await load() }
         // Branches made elsewhere show up the next time the pointer comes by.
         .onHover { if $0 { Task { await load() } } }
         .alert("Couldn't Switch Branches", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {

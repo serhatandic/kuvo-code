@@ -202,9 +202,17 @@ import Testing
         #expect(await Git.branches(at: place, pause: .zero) == Git.Branches(repository: true, current: "main", branches: ["main", "idea"]))
     }
 
-    /// Commit on a machine whose released box hasn't the route: its own words, never "It said no".
-    @Test func aReleasedBoxsPlainWordsAreWhatItSays() async {
+    /// Commit on a machine whose released box hasn't the route: it needs a newer Kuvo Code, never
+    /// "It said no" nor its words for it, which read as a rule.
+    @Test func aReleasedBoxSaysItNeedsANewerOne() async {
         let place = GitPlace(client: answering([(403, "That isn't available over the link.")], box: "studio"), path: "/home/ada/site", machine: "studio")
-        #expect(await Git.committing(message: "Work", push: false, at: place, environment: [:]) == "That isn't available over the link.")
+        #expect(await Git.committing(message: "Work", push: false, at: place, environment: [:]) == BoxRefusal.olderBoxMessage)
+    }
+
+    /// A box's own refusal in plain words is what it says; what went wrong on the way (5xx) isn't.
+    @Test func aBoxsPlainWords() {
+        #expect(BoxRefusal(status: 405, data: Data("Stop it with POST.".utf8)).message == "Stop it with POST.")
+        #expect(BoxRefusal(status: 502, data: Data("TypeError: fetch failed".utf8)).message == "It said no (502).")
+        #expect(BoxRefusal(status: 403, data: Data()).message == "It said no (403).")
     }
 }

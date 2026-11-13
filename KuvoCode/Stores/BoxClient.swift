@@ -167,14 +167,22 @@ struct BoxRefusal: LocalizedError {
         self.reason = reason
     }
 
+    /// What a box from before a route says, in words: what a client says when it has nothing
+    /// better (a machine named, Merge into…'s own).
+    static let olderBoxMessage = "Its computer needs a newer Kuvo Code for this. It updates by itself overnight."
+
     init(status: Int, data: Data) {
         let said = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-        // Without JSON, its words as they are, when they're a line of text ("That isn't available
-        // over the link.", a released box's), never a page.
-        let words = said == nil ? String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) : nil
+        // Without JSON, a refusal's words as they are, when they're a line of text (a box's own
+        // sentences, as its 4xx answers are), never a page nor what went wrong on the way (5xx).
+        let words = said == nil && (400..<500).contains(status) ? String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) : nil
         let plain = words.flatMap { !$0.isEmpty && $0.count <= 300 && !$0.hasPrefix("<") && !$0.contains("\n") ? $0 : nil }
-        self.init(status: status, message: said?["message"] as? String ?? plain ?? "It said no (\(status)).", problem: said?["problem"] as? String, reason: said?["reason"] as? String)
-        isOlderBox = Self.olderBox(status: status, data: data)
+        let older = Self.olderBox(status: status, data: data)
+        // A box from before the route: that, rather than its words for it ("That isn't available
+        // over the link.", which reads as a rule).
+        self.init(status: status, message: said?["message"] as? String ?? (older ? Self.olderBoxMessage : plain) ?? "It said no (\(status)).",
+                  problem: said?["problem"] as? String, reason: said?["reason"] as? String)
+        isOlderBox = older
     }
 }
 

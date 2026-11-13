@@ -107,6 +107,7 @@ export async function listTree(requestPath: string, limit = TREE_LIMIT, signal?:
     }
   };
   await walk("");
+  if (signal?.aborted) return { status: 503, value: { message: "Stopped: no one asks any longer." } };
   return { status: 200, value: await withDates({ path: at, files, git: false }, dated) };
 }
 

@@ -83,8 +83,8 @@ export async function gitNamesLater(folder: string, args: string[], limit: numbe
     });
     child.on("error", () => resolve(null));
     // Stopped (`code` null) by its time running out: what it gave, never a walk that lists what git
-    // ignores; by `signal`, nothing.
-    child.on("close", code => resolve(signal?.aborted ? null : enough || code === 0 || code === null ? { names: [...names], complete: code === 0 } : null));
+    // ignores (so too one killed otherwise, a crash or the system short of memory); by `signal`, nothing.
+    child.on("close", code => resolve(signal?.aborted ? null : enough || code === 0 || code === null ? { names: [...names], complete: code === 0 && !enough } : null));
   });
 }
 

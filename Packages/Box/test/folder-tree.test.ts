@@ -2,6 +2,7 @@ import "./safety"
 import { afterAll, beforeAll, expect, test } from "bun:test"
 import { spawnSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { open } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -63,10 +64,17 @@ test("a list no one asks for any longer stops git, and walks nothing", async () 
   const top = stuck("gone")
   const asker = new AbortController()
   const listing = folders.listTree(`kuvo/folders/tree?path=${encodeURIComponent(top)}&dated=1`, 10, asker.signal)
+  // Once git is waiting on its index (opening the FIFO to write meets git's reading), it's stopped.
+  const writer = await open(join(top, ".git", "index"), "w")
   asker.abort()
   expect((await listing).status).toBe(503)
-  const ran = gitTools.gitNamesLater(top, ["ls-files", "-z", "--cached", "--others"], 10, asker.signal)
+  await writer.close()
+  const again = new AbortController()
+  const ran = gitTools.gitNamesLater(top, ["ls-files", "-z", "--cached", "--others"], 10, again.signal)
+  const second = await open(join(top, ".git", "index"), "w")
+  again.abort()
   expect(await ran).toBeNull()
+  await second.close()
   // Asked already stopped: git never starts.
   expect(await folders.listTree(`kuvo/folders/tree?path=${encodeURIComponent(top)}`, 10, asker.signal)).toMatchObject({ status: 503 })
 }, 10_000)
