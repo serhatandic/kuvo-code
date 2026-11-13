@@ -6,6 +6,9 @@
 #                   the default "-" signs ad hoc, for local use
 #   FEED_URL        update feed (default: the newest GitHub release); for
 #                   testing updates against a local server
+#   KUVO_BOX_SIGNING_KEY  the box releases' key (PEM): with it, the app carries the box's
+#                   release, signed (scripts/app-box-release.sh); BOX_URL says where its pack
+#                   is published
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -76,5 +79,19 @@ codesign "$@" "$FRAMEWORK"
 # signed with the same identity, its own entitlements and the hardened runtime, before the app that
 # seals it: notarized with the app, and packed into the box's release from it.
 SIGN_IDENTITY="$SIGN_IDENTITY" ./scripts/build-box-helper.sh "$APP"
+# The helpers the app carries (the box's, `Contents/Helpers/<name>.app`), before the app, and before
+# the box's release packs them: each keeps its own identifier and entitlements.
+for helper in "$APP/Contents/Helpers/"*.app; do
+    if [ -d "$helper" ]; then codesign "$@" --preserve-metadata=identifier,entitlements "$helper"; fi
+done
+# (What macOS asks Kuvo Code Box about needs its entitlements: Calendars and Reminders for the box's
+# integration.)
+codesign -d --entitlements - --xml "$APP/Contents/Helpers/Kuvo Code Box.app" 2>/dev/null | grep -q personal-information.calendars \
+    || { echo "Kuvo Code Box lost its entitlements as it was signed." >&2; exit 1; }
 codesign "$@" --entitlements KuvoCode/KuvoCode.entitlements "$APP"
+# The box's release in the app, for it to offer this Mac's box as it updates: only with the key a
+# box trusts (a local build has none, and carries none).
+if [ -n "${KUVO_BOX_SIGNING_KEY:-}" ]; then
+    SIGN_IDENTITY="$SIGN_IDENTITY" ./scripts/app-box-release.sh "$APP" "$VERSION"
+fi
 echo "Built $APP $VERSION ($(du -sh "$APP" | cut -f1))"

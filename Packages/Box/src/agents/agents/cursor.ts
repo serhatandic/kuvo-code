@@ -22,6 +22,9 @@ import type { Turn } from "../turn"
 import type { Model, OAuthStatus, Session } from "../wire"
 import { CursorWorker, cursorWorker } from "./cursor-worker"
 import { privateFolder } from "../../shared/files"
+import type { LimitsSource } from "../limits"
+import { CursorClient, cursorKey, cursorKeyUnreadable } from "../usage/cursor-api"
+import { readCursorPlan, readingOf } from "../usage/cursor-plan"
 
 /** A file's bytes as base64, or nothing when it can't be read. */
 function readable(path: string): string | undefined {
@@ -55,6 +58,34 @@ export class CursorAgent implements Agent {
     readonly instance: AgentAccount = { id: "default" },
   ) {
     this.providerID = providerID("cursor", instance.id)
+  }
+
+  /**
+   * Asks Cursor of this account's plan and use with its own sign-in here (cursor-api.ts): the key
+   * your sign-in made (or CURSOR_API_KEY, your own account's), never the Cursor app's login.
+   */
+  readonly cursor = new CursorClient(() => cursorKey(this.folder, !this.instance.home), Date.now, () => cursorKeyUnreadable(this.folder))
+
+  /** Its sign-in file is there but can't be read just now: not signed out. */
+  cursorKeyUnreadable(): boolean {
+    return cursorKeyUnreadable(this.folder)
+  }
+
+  /**
+   * Its plan's limits (limits.ts): its total usage, its model pools, Grok Bot's week, on-demand
+   * spend and credits, as Cursor states them to its sign-in (cursor-plan.ts), every ten minutes.
+   * Who the account is, the access token its key was exchanged for says (its user), once Cursor
+   * has answered the exchange, whether or not its plan could be read.
+   */
+  readonly limits: LimitsSource = {
+    every: 10 * 60_000,
+    identity: () => this.cursor.identity(),
+    read: async () => {
+      const { mapped, identity } = await readCursorPlan(this.cursor)
+      return readingOf(mapped, identity)
+    },
+    signIn: () => this.cursor.signIn(),
+    account: () => this.cursor.signIn(),
   }
 
   /** Where Cursor reads skills itself: its own, Claude Code's, Codex's, Grok's and `.agents`, yours and a project's. */

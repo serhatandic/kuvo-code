@@ -66,7 +66,8 @@ const LAST_UPDATE = object({
   "to?": string,
 });
 /** This box's updates (`kuvo/update`): whether they're set up, its version and its engine's, the
- * latest it knows of, how the last one went, the step under way, and why it can't update. */
+ * latest it knows of, how the last one went, the step under way, why it can't update, and the
+ * version of a release offered from a folder here (`kuvo/box/update`) that waits to be taken. */
 export const UPDATE = object({
   setUp: bool,
   version: nullable(string),
@@ -75,6 +76,7 @@ export const UPDATE = object({
   last: nullable(LAST_UPDATE),
   updating: nullable(STEP),
   blocked: nullable(string),
+  "offered?": string,
 });
 
 /** A step of moving this Mac's box into a home of its own (PROTOCOL.md, "Moving this Mac's box"). */
@@ -243,6 +245,7 @@ export const BOX_ROUTES: RouteShape[] = [
   { route: "GET kuvo/info", answers: { 200: INFO } },
   { route: "GET kuvo/update", answers: { 200: UPDATE } },
   { route: "POST kuvo/update", answers: { 202: UPDATE } },
+  { route: "POST kuvo/box/update", answers: { 202: UPDATE } },
   { route: "GET kuvo/box/rehome", answers: { 200: REHOME } },
   { route: "POST kuvo/box/rehome", answers: { 200: REHOME } },
   { route: "GET kuvo/box/app", answers: { 200: BOX_APP } },

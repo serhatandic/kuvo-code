@@ -45,6 +45,28 @@ export interface LimitWindow {
   source: "usage" | "turn"
 }
 
+/**
+ * A fact of a plan beyond its windows (PROTOCOL.md, "Plan limits", `extras`). So far only what an
+ * account spent with no limit to it (Cursor's on-demand spend without a cap); #631 piece E adds the
+ * rest (reset grants, credits to spend, a key's spend by period) as further `kind`s.
+ */
+export interface LimitExtra {
+  /** Its own name for it, the same from every box: `on_demand`. */
+  id: string
+  /** What a client calls it, as its maker's own label ("On-demand"). */
+  name: string
+  /**
+   * `spent`: an amount used so far, with no limit to it (`amount`, `unit`). A kind a newer box
+   * states (piece E's) is passed on as told, its other fields kept as they came.
+   */
+  kind: "spent" | (string & {})
+  amount?: number
+  unit?: "usd" | "credits" | "requests"
+  /** When it starts over, in ms since 1970, where its maker says. */
+  resetsAt?: number
+  [more: string]: unknown
+}
+
 /** What an agent read of its plan just now. */
 export interface LimitReading {
   windows: Omit<LimitWindow, "read" | "source">[]
@@ -52,6 +74,8 @@ export interface LimitReading {
   plan?: string
   /** Credits left to spend, where the account has them (OpenRouter's), and the most it can, when there's a cap. */
   balance?: { left: number; limit?: number; unit: "usd" | "credits" }
+  /** What the plan has beyond its windows (`LimitExtra`). */
+  extras?: LimitExtra[]
   /** Who the account is, where only its maker's answer says (GitHub's login): as `LimitsSource.identity`. */
   identity?: string
 }
@@ -144,6 +168,7 @@ export interface AccountLimits {
   plan?: string
   windows: LimitWindow[]
   balance?: LimitReading["balance"]
+  extras?: LimitExtra[]
   /** When it was last read from its maker, whatever came of it, in ms. */
   checked?: number
   /** When it will be read again, in ms. */
@@ -156,6 +181,7 @@ interface Entry {
   plan?: string
   windows: LimitWindow[]
   balance?: LimitReading["balance"]
+  extras?: LimitExtra[]
   checked?: number
   next: number
   problem?: { kind: LimitsProblemKind; message: string; until?: number }
@@ -285,6 +311,7 @@ export class Limits {
           ...((peer.plan ?? entry.plan) ? { plan: peer.plan ?? entry.plan } : {}),
           windows: peer.windows,
           ...((peer.balance ?? entry.balance) ? { balance: peer.balance ?? entry.balance } : {}),
+          ...(peer.extras?.length ? { extras: peer.extras } : {}),
           ...(entry.checked ? { checked: entry.checked } : {}),
           ...(account.limits.read ? { next: entry.next } : {}),
         })
@@ -299,6 +326,7 @@ export class Limits {
         ...(entry.plan ? { plan: entry.plan } : {}),
         windows: entry.windows,
         ...(entry.balance ? { balance: entry.balance } : {}),
+        ...(entry.extras?.length ? { extras: entry.extras } : {}),
         ...(entry.checked ? { checked: entry.checked } : {}),
         // (One only its turns tell of is never read.)
         ...(account.limits.read ? { next: entry.next } : {}),
@@ -311,6 +339,18 @@ export class Limits {
   /** Who an account here is (`identityOf`), as last known: what its usage rows go by too. */
   identity(provider: string): string | undefined {
     return this.entries.get(provider)?.identity
+  }
+
+  /**
+   * Whether nothing more is to be asked of this account's maker now (Cursor's usage history waits
+   * on it too): its sign-in was turned away and is as it was then, or its maker holds reads off.
+   */
+  held(provider: string): boolean {
+    const entry = this.entries.get(provider)
+    const source = this.accounts().find((each) => each.provider === provider)?.limits
+    if (!entry || !source) return false
+    if (entry.problem?.kind === "expired" && entry.signIn !== undefined && entry.signIn === source.signIn?.()) return true
+    return this.heldBack(source, entry, this.now())
   }
 
   /** The accounts this box reads from their makers itself (not only from what turns hear), by provider. */
@@ -441,6 +481,7 @@ export class Limits {
       entry.checked = at
       entry.plan = reading.plan ?? entry.plan
       entry.balance = reading.balance
+      entry.extras = reading.extras?.length ? reading.extras : undefined
       // What it says now, in place of all it said before; a window a turn told of since it was
       // asked, or that only turns tell, stays as heard.
       const heard = entry.windows.filter((window) => window.source === "turn" && (window.read >= started || !reading.windows.some((each) => each.id === window.id)))
@@ -453,6 +494,8 @@ export class Limits {
       return true
     } catch (caught) {
       const at = this.now()
+      // (Who it is may be known by now though its limits weren't: its sign-in says, as the read went.)
+      if (!entry.identity) this.identify(entry, source.identity?.())
       entry.checked = at
       const problem = caught instanceof LimitsProblem ? caught : new LimitsProblem("failed", `Couldn't read its limits: ${caught instanceof Error ? caught.message : String(caught)}`)
       entry.problem = { kind: problem.kind, message: problem.message, ...(problem.until ? { until: problem.until } : {}) }
@@ -476,6 +519,7 @@ export class Limits {
           entry.windows = []
           entry.plan = undefined
           entry.balance = undefined
+          entry.extras = undefined
           entry.next = at + NOTHING_AGAIN
           break
         case "expired":
@@ -509,6 +553,7 @@ export class Limits {
     entry.windows = []
     entry.plan = undefined
     entry.balance = undefined
+    entry.extras = undefined
     entry.checked = undefined
     // Listed meanwhile, saying why it has no numbers (a maker's hold can keep it unread for hours).
     entry.problem = { kind: "failed", message: "Signed in to another account here: its limits show once they're read." }
@@ -532,6 +577,7 @@ export class Limits {
       entry.windows = []
       entry.plan = undefined
       entry.balance = undefined
+      entry.extras = undefined
       entry.checked = undefined
       entry.problem = undefined
       entry.identity = undefined

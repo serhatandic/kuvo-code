@@ -93,11 +93,25 @@ public struct BoxUsage: Decodable, Hashable, Sendable {
         public var model: String
         public var tokens: Int
         public var cost: Double
+        /// The row it shows under, where that isn't its own name (Cursor's effort and speed
+        /// variants of one model, as the box's prices group them).
+        public var family: String?
 
-        public init(model: String, tokens: Int, cost: Double) {
+        public init(model: String, tokens: Int, cost: Double, family: String? = nil) {
             self.model = model
             self.tokens = tokens
             self.cost = cost
+            self.family = family
+        }
+
+        private enum CodingKeys: String, CodingKey { case model, tokens, cost, family }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            model = try container.decode(String.self, forKey: .model)
+            tokens = try container.decode(Int.self, forKey: .tokens)
+            cost = try container.decode(Double.self, forKey: .cost)
+            family = (try? container.decodeIfPresent(String.self, forKey: .family))?.flatMap { $0.isEmpty ? nil : $0 }
         }
     }
 
@@ -114,9 +128,12 @@ public struct BoxUsage: Decodable, Hashable, Sendable {
         /// Its dollars are an estimate (priced from the logs); false where its maker billed them
         /// (OpenCode's hosted models).
         public var estimated: Bool
+        /// Its maker's account of the whole account (Cursor's), not what each computer's logs say:
+        /// its days are its newest computer's, not a sum.
+        public var accountWide: Bool
         public var days: [Day]
 
-        private enum CodingKeys: String, CodingKey { case id, service, provider, label, scanned, away, estimated, days }
+        private enum CodingKeys: String, CodingKey { case id, service, provider, label, scanned, away, estimated, accountWide, days }
 
         public init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -127,6 +144,7 @@ public struct BoxUsage: Decodable, Hashable, Sendable {
             scanned = try? container.decodeIfPresent(Double.self, forKey: .scanned)
             away = (try? container.decodeIfPresent(Bool.self, forKey: .away)) ?? false
             estimated = (try? container.decodeIfPresent(Bool.self, forKey: .estimated)) ?? true
+            accountWide = (try? container.decodeIfPresent(Bool.self, forKey: .accountWide)) ?? false
             days = (try? container.decode(Readable<Day>.self, forKey: .days).items) ?? []
         }
     }

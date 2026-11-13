@@ -11,7 +11,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 import { kinds, type AgentKind } from "./accounts"
-import type { AccountLimits, LimitedAccount, LimitWindow, Limits, LimitsService } from "./limits"
+import type { AccountLimits, LimitedAccount, LimitExtra, LimitWindow, Limits, LimitsService } from "./limits"
 import { limitRows, type LimitRow, type LimitsBox } from "./limits-rows"
 
 /** What one box tells another of its limits (`{"limits": …}` between links). */
@@ -255,6 +255,31 @@ export class LimitsPeers {
 const text = (value: unknown, most = 200) => (typeof value === "string" && value ? value.slice(0, most) : undefined)
 const time = (value: unknown) => (typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined)
 
+/** The most of an extra of a kind this box doesn't know (a newer box's), as JSON. */
+const MOST_EXTRA = 1_000
+
+/**
+ * What a peer's account has beyond its windows, as kept: a `spent` one checked; one of a kind this
+ * box doesn't know yet (a newer box's, #631 piece E's) passed on as told, but only its plain fields
+ * (text, numbers, true or false) and only while it's small, so a newer box's facts survive a hop
+ * through this one.
+ */
+function takenExtra(extra: any): LimitExtra[] {
+  if (!extra || typeof extra !== "object" || Array.isArray(extra) || !text(extra.id) || !text(extra.name, 100) || !text(extra.kind, 40)) return []
+  if (extra.kind === "spent") {
+    if (typeof extra.amount !== "number" || !Number.isFinite(extra.amount) || !["usd", "credits", "requests"].includes(extra.unit)) return []
+    return [{ id: text(extra.id)!, name: text(extra.name, 100)!, kind: "spent", amount: extra.amount, unit: extra.unit, ...(time(extra.resetsAt) ? { resetsAt: extra.resetsAt } : {}) }]
+  }
+  const plain = Object.fromEntries(
+    Object.entries(extra)
+      .slice(0, 20)
+      .filter(([, value]) => (typeof value === "string" && value.length <= 200) || (typeof value === "number" && Number.isFinite(value)) || typeof value === "boolean"),
+  )
+  const taken = { ...plain, id: text(extra.id)!, name: text(extra.name, 100)!, kind: text(extra.kind, 40)! }
+  // (Its names counted too: what's passed on is at most this, as it's told again.)
+  return Buffer.byteLength(JSON.stringify(taken)) > MOST_EXTRA ? [] : [taken]
+}
+
 /**
  * A peer's account as it's kept: only what an account says, checked, its times moved by `off` onto
  * this box's clock (never past `now`); null for what isn't one.
@@ -287,6 +312,7 @@ function takenAccount(given: unknown, off: number, now: number): AccountLimits |
     ]
   })
   const balance = account.balance
+  const extras = (Array.isArray(account.extras) ? account.extras : []).slice(0, 10).flatMap((extra: any): LimitExtra[] => takenExtra(extra))
   const problem = account.problem
   const checked = moved(account.checked)
   const next = time(account.next) === undefined ? undefined : account.next + off
@@ -299,6 +325,7 @@ function takenAccount(given: unknown, off: number, now: number): AccountLimits |
     ...(text(account.plan, 100) ? { plan: text(account.plan, 100) } : {}),
     windows,
     ...(balance && typeof balance === "object" && typeof balance.left === "number" && (balance.unit === "usd" || balance.unit === "credits") ? { balance: { left: balance.left, ...(typeof balance.limit === "number" ? { limit: balance.limit } : {}), unit: balance.unit } } : {}),
+    ...(extras.length ? { extras } : {}),
     ...(checked ? { checked } : {}),
     ...(next ? { next } : {}),
     ...(problem && typeof problem === "object" && PROBLEMS.has(problem.kind) && text(problem.message, 500) ? { problem: { kind: problem.kind, message: text(problem.message, 500)!, ...(time(problem.until) ? { until: problem.until + off } : {}) } } : {}),

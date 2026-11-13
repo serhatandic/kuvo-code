@@ -1,0 +1,107 @@
+{
+ "_note": "Generated from the box's cursor-history.ts and checked against UsageKit (UsageBoxParityCursorTests). Days in UTC; costs unrounded.",
+ "now": "2026-11-12T15:00:00Z",
+ "since": "2026-10-08T00:00:00Z",
+ "pages": [
+  {
+   "events": 4,
+   "rejected": 1,
+   "total": 7
+  },
+  {
+   "events": 2,
+   "rejected": 0,
+   "total": 7
+  },
+  {
+   "events": 3,
+   "rejected": 3,
+   "total": 6
+  },
+  {
+   "events": 3,
+   "rejected": 0,
+   "total": 3
+  }
+ ],
+ "days": [
+  {
+   "date": "2026-11-12",
+   "tokens": 385000,
+   "cost": 1.6702500000000002,
+   "models": [
+    {
+     "model": "claude-opus-5",
+     "tokens": 5000,
+     "cost": 0.027500000000000004,
+     "family": "claude-opus-5"
+    },
+    {
+     "model": "claude-opus-5-thinking-max",
+     "tokens": 353000,
+     "cost": 1.58125,
+     "family": "claude-opus-5"
+    },
+    {
+     "model": "gpt-6",
+     "tokens": 1500,
+     "cost": 0.0075,
+     "family": "gpt-6"
+    },
+    {
+     "model": "gpt-6-high-fast",
+     "tokens": 25500,
+     "cost": 0.054,
+     "family": "gpt-6"
+    }
+   ],
+   "unknown": [
+    "mystery-model"
+   ]
+  },
+  {
+   "date": "2026-11-11",
+   "tokens": 135100,
+   "cost": 0.087475,
+   "models": [
+    {
+     "model": "composer-2",
+     "tokens": 123500,
+     "cost": 0.068125,
+     "family": "composer-2"
+    },
+    {
+     "model": "gpt-6-extra-high",
+     "tokens": 3700,
+     "cost": 0.012899999999999998,
+     "family": "gpt-6"
+    },
+    {
+     "model": "kimi-k3",
+     "tokens": 7900,
+     "cost": 0.006449999999999999,
+     "family": "kimi-k3"
+    }
+   ]
+  },
+  {
+   "date": "2026-11-10",
+   "tokens": 50400,
+   "cost": 0.3781,
+   "models": [
+    {
+     "model": "claude-opus-5-thinking-high",
+     "tokens": 48000,
+     "cost": 0.3625,
+     "family": "claude-opus-5"
+    },
+    {
+     "model": "gpt-6-fast",
+     "tokens": 2400,
+     "cost": 0.0156,
+     "family": "gpt-6"
+    }
+   ]
+  }
+ ]
+}

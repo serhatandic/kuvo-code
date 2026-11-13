@@ -148,9 +148,11 @@ struct UsageBarsView: View {
                 notice: row.notice,
                 staleness: HostLimitData.staleness(row),
                 // Its windows, then what the panel has of the provider besides its limits (spend,
-                // its trend), under the first of its rows.
+                // its trend), under the first of its rows: not again what the row already shows
+                // (its credits, what it spent with no limit), which the card's lines carry too.
                 rows: HostLimitData.rows(row, store: dataStore) + (spend.map { group in
-                    group.widgets.compactMap(layout.descriptor(for:)).map(dataStore.data(for:)).filter { !$0.isBounded && $0.hasData }
+                    let shown = HostLimitData.labels(row)
+                    return group.widgets.compactMap(layout.descriptor(for:)).filter { !shown.contains($0.metricLabel) }.map(dataStore.data(for:)).filter { !$0.isBounded && $0.hasData }
                 } ?? []),
                 links: provider.visibleLinks,
                 refresh: hostLimits.refresh,

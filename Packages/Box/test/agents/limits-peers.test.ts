@@ -543,6 +543,38 @@ describe("plan limits across your computers", () => {
     expect(mac.rows()).toEqual([])
   })
 
+  test("what a peer's account has beyond its windows (`extras`) is kept as told, and only what one is", async () => {
+    const { mac, hetzner } = await threeComputers()
+    await peerRoutes(mac.parts, "POST", ["mail"], async () => ({
+      from: hetzner.key,
+      mail: {
+        kind: "limits",
+        at: time,
+        accounts: [
+          {
+            provider: "cursor",
+            service: "cursor",
+            identity: "abcdefabcdefabcd",
+            windows: [{ id: "total", used: 1, read: time, source: "usage" }],
+            extras: [
+              { id: "on_demand", name: "On-demand", kind: "spent", amount: 43.21, unit: "usd", secret: "x" },
+              { id: "x", name: "X", kind: "grants", amount: 1, unit: "usd" },
+              "nope",
+              // (Over 1 KB as it would be passed on, its ID cut to length included: not passed on.)
+              { id: "i".repeat(300), name: "Big", kind: "grants", a: "p".repeat(190), b: "p".repeat(190), c: "p".repeat(190), d: "p".repeat(190) },
+            ],
+            checked: time,
+          },
+        ],
+      },
+    }))
+    // (A kind this box doesn't know yet, a newer box's, is passed on as told: only its plain fields.)
+    expect(mac.rows()[0]!.extras).toEqual([
+      { id: "on_demand", name: "On-demand", kind: "spent", amount: 43.21, unit: "usd" },
+      { id: "x", name: "X", kind: "grants", amount: 1, unit: "usd" },
+    ])
+  })
+
   test("a computer you removed goes from the list, with its accounts", async () => {
     const { mac, hetzner, lokum } = await threeComputers()
     await lokum.limits.tick()
