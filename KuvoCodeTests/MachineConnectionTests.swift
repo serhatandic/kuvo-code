@@ -1,3 +1,4 @@
+import ClientSessions
 import CryptoKit
 import Foundation
 import os
@@ -333,6 +334,46 @@ import Testing
         #expect(app.wakeUps.wakes[session.id]?.map(\.note) == ["Check the deploy"])
         let asked = routed.withLock { Array($0.dropFirst(before)) }.filter { !$0.hasPrefix("kuvo/sessions/list") }
         #expect(asked.count == 1 && asked.allSatisfy { $0.hasPrefix("kuvo/wakes") }, "one read of them all: \(asked)")
+    }
+
+    /// The update gate (#679): a machine whose box is older than this app needs, even once its
+    /// connection has put this app's files there (here, its link still answers as one from before
+    /// `sessions.list`), isn't used. Its connection fails, saying why and what to do; it's held, and
+    /// nothing but what it has is asked of it; it isn't tried again by itself. Once it's up to date,
+    /// Try Again connects it, and it's let go.
+    @Test func aMachineOlderThanTheAppNeedsIsHeldUntilItsUpToDate() async throws {
+        defer { done() }
+        let id = Self.name()
+        let features = OSAllocatedUnfairLock(initialState: BoxGate.required.filter { $0 != "sessions.list" })
+        let routed = OSAllocatedUnfairLock(initialState: [String]())
+        SSHConnection.fedStandIn = { [ssh] address, script, input in
+            ssh.note(script, to: address)
+            guard script.contains(" box route"),
+                  let asked = input.flatMap({ try? Data(contentsOf: $0) }).flatMap({ try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }),
+                  let path = asked["path"] as? String else { return nil }
+            routed.withLock { $0.append(path) }
+            let body = path == "kuvo/info" ? (try? JSONSerialization.data(withJSONObject: ["kind": "machine", "features": features.withLock { $0 }])) ?? Data() : Data("{}".utf8)
+            let answer = try? JSONSerialization.data(withJSONObject: ["status": path == "kuvo/info" ? 200 : 404, "body": String(decoding: body, as: UTF8.self)])
+            return answer.map { String(decoding: $0, as: UTF8.self) }
+        }
+        defer { SSHConnection.fedStandIn = nil }
+        let engine = add(id, at: machine)
+
+        await app.connect(engine).value
+        let words = "Kuvo Code on \(engine.machine.name) couldn’t be updated. Its files didn’t take this Mac’s version. Try again, or update it with the Kuvo Code that set it up."
+        #expect(engine.connection == .failed)
+        #expect(engine.failure == words)
+        #expect(!engine.failureMayPass, "not tried again by itself: trying changes nothing")
+        #expect(app.machines.gates.state(of: id) == .failed(words))
+        #expect(Set(routed.withLock { $0 }) == ["kuvo/info"], "asked nothing but what it has")
+        await #expect(throws: BoxRefusal.self) { try await app.box(id).value([String: String].self, "GET", "kuvo/projects") }
+        #expect(Set(routed.withLock { $0 }) == ["kuvo/info"], "refused here, never sent")
+
+        // Brought up to date (from the Kuvo Code that set it up, say): Try Again.
+        features.withLock { $0 = BoxGate.required }
+        await app.connect(engine).value
+        #expect(engine.connection != .failed)
+        #expect(app.machines.gates.state(of: id) == nil)
     }
 
     /// Removed while its engine starts over (its Settings › Engine), before it connects again: it
