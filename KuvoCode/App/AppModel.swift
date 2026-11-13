@@ -1041,6 +1041,9 @@ final class AppModel {
         keeperBox.stop()
         self.keeperBox = nil
         keeperMakesWay = false
+        // The app runs this Mac's box itself now, of this version: looked at, and let go.
+        keeperRunsOtherVersion = false
+        followOwnBoxGate(again: true)
         // The app keeps this Mac awake itself now, while it runs the box.
         Awake.shared.keeper = nil
         box.unfollow()
