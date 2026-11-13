@@ -1,6 +1,6 @@
 // What the engine's own hosted models cost: OpenCode Go (`opencode-go`) and OpenCode Zen
 // (`opencode`), from the engine's databases on this computer (`opencode*.db` in its data folder,
-// every release channel's), only ever read (`bun:sqlite`, read-only, in a worker of its own).
+// every release channel's), only ever read (engine-db.ts).
 // UsageKit's `OpenCodeUsageScanner`, kept the same while both exist (test/fixtures/usage/
 // opencode-hosted.sql, `UsageBoxParityTests`):
 // - each assistant message (and opencode 2's completed compaction) of those two providers with a
@@ -11,10 +11,9 @@
 // - a message in both tables, or in two channels' databases, once (by its ID: the first).
 // A model you reach with a key of your own (BYO) is that provider's, not these: never counted.
 
-import { readdirSync, statSync } from "node:fs"
-import { join } from "node:path"
+import { readEngineDatabases, TABLES_SQL } from "./engine-db"
 import { add, noSlots, slotOf, type Slots } from "./history"
-import { numberOf } from "./grok-log"
+import { numberOf } from "./numbers"
 
 /** The engine's providers whose use OpenCode bills itself. */
 export const HOSTED_PROVIDERS = ["opencode-go", "opencode"] as const
@@ -32,37 +31,8 @@ export interface HostedRow {
   provider: string
 }
 
-/** Every channel's database in the engine's data folder, path-sorted; none when there's none. */
-export function engineDatabases(folder: string): string[] {
-  let names: string[]
-  try {
-    names = readdirSync(folder)
-  } catch {
-    return []
-  }
-  return names
-    .filter((name) => name.startsWith("opencode") && name.endsWith(".db"))
-    .sort()
-    .map((name) => join(folder, name))
-}
-
-/** What the databases are now (each with its write-ahead log), to read them again only when one changed. */
-export function databasesStamp(folder: string): string {
-  const parts: string[] = []
-  for (const path of engineDatabases(folder).flatMap((db) => [db, db + "-wal"])) {
-    try {
-      const info = statSync(path)
-      parts.push(`${path}:${info.size}:${info.mtimeMs}`)
-    } catch {
-      parts.push(`${path}:-`)
-    }
-  }
-  return parts.join("\n")
-}
-
 // --- The SQL, as UsageKit's ---
 
-const TABLES = "SELECT group_concat(name) FROM sqlite_master WHERE type='table' AND name IN ('message','session_message');"
 const MODEL = "COALESCE(json_extract(data,'$.model.id'), json_extract(data,'$.modelID'))"
 const PROVIDER = "COALESCE(json_extract(data,'$.model.providerID'), json_extract(data,'$.providerID'))"
 const TOTAL = `COALESCE(json_extract(data,'$.tokens.total'),
@@ -124,71 +94,14 @@ export function parseHostedRows(json: string): HostedRow[] {
 }
 
 /**
- * Reads the databases in a worker of its own, so the bridge never waits on SQLite (a busy engine's
- * database can take a second): each one read-only, its message tables, then its rows' JSON. A
- * database without either table isn't counted, read or failed.
- */
-const READER = `
-import { Database } from "bun:sqlite"
-self.onmessage = (event) => {
-  const { paths, sql } = event.data
-  const jsons = []
-  let checked = 0
-  const failed = []
-  for (const path of paths) {
-    let db
-    try {
-      db = new Database(path, { readonly: true })
-      // (The engine may be writing: wait a little for it.)
-      db.exec("PRAGMA busy_timeout = 2000")
-      const names = String(db.query(sql.tables).values()[0]?.[0] ?? "").split(",").map((name) => name.trim())
-      const v1 = names.includes("message")
-      const v2 = names.includes("session_message")
-      if (!v1 && !v2) continue
-      checked++
-      const json = db.query(v1 && v2 ? sql.both : v1 ? sql.v1 : sql.v2).values()[0]?.[0]
-      if (typeof json === "string") jsons.push(json)
-    } catch (error) {
-      checked++
-      failed.push(error instanceof Error ? error.message : String(error))
-    } finally {
-      db?.close()
-    }
-  }
-  postMessage({ checked, failed, jsons })
-}
-`
-let readerURL: string | undefined
-
-/** How long a read may take before it's given up (and tried again next round). */
-const READ_FOR = 120_000
-
-/**
  * The hosted rows of every database in `folder` from `since` (ms) on; undefined when there's no
  * database there. Fails when every one with message tables failed to be read.
  */
-export function hostedRows(folder: string, since: number): Promise<HostedRow[] | undefined> {
-  const paths = engineDatabases(folder)
-  if (!paths.length) return Promise.resolve(undefined)
-  const sql = { tables: TABLES, v1: hostedSQL(since, { v1: true, v2: false }), v2: hostedSQL(since, { v1: false, v2: true }), both: hostedSQL(since, { v1: true, v2: true }) }
-  readerURL ??= URL.createObjectURL(new Blob([READER], { type: "application/javascript" }))
-  const worker = new Worker(readerURL)
-  // (It never keeps the bridge from ending.)
-  worker.unref?.()
-  let timer: ReturnType<typeof setTimeout> | undefined
-  return new Promise<HostedRow[] | undefined>((resolve, reject) => {
-    timer = setTimeout(() => reject(new Error("The engine's database took too long to read.")), READ_FOR)
-    worker.onmessage = (event: MessageEvent<{ checked: number; failed: string[]; jsons: string[] }>) => {
-      const { checked, failed, jsons } = event.data
-      if (checked > 0 && failed.length === checked) reject(new Error(failed[0]))
-      else resolve(jsons.flatMap(parseHostedRows))
-    }
-    worker.onerror = (event) => reject(new Error(event.message))
-    worker.postMessage({ paths, sql })
-  }).finally(() => {
-    clearTimeout(timer)
-    worker.terminate()
-  })
+export async function hostedRows(folder: string, since: number): Promise<HostedRow[] | undefined> {
+  const answers = await readEngineDatabases(folder, { tables: TABLES_SQL, v1: hostedSQL(since, { v1: true, v2: false }), v2: hostedSQL(since, { v1: false, v2: true }), both: hostedSQL(since, { v1: true, v2: true }) })
+  if (!answers) return undefined
+  if (answers.checked > 0 && answers.failed.length === answers.checked) throw new Error(answers.failed[0])
+  return answers.jsons.flatMap(parseHostedRows)
 }
 
 /** A message in two tables or two databases once: the first. Rows without an ID all count. */

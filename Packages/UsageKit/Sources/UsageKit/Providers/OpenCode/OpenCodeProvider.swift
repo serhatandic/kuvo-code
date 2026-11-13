@@ -102,10 +102,11 @@ final class OpenCodeProvider: ProviderRuntime {
         // Same sources as `refresh()`: the local `opencode-go` auth key, or any hosted usage already in
         // the local database. Local-only, off the main actor. An unreadable auth.json is itself an
         // OpenCode footprint — enable the provider so `refresh()` can surface the actionable error.
-        // While the host states OpenCode's spend (fork addition), its days say whether there's any,
-        // and the databases here aren't read for it.
-        let hostCovers = HostHistory.shared.covered.contains(provider.id)
-        if hostCovers, !(HostHistory.shared.days[provider.id] ?? []).isEmpty { return true }
+        // Once the host states OpenCode's spend (fork addition), its days say whether there's any,
+        // and the databases here aren't read for it (until it has answered, they're read as before).
+        let hosted = HostHistory.shared.scan(for: provider.id)
+        if let scan = hosted ?? nil, !scan.series.daily.isEmpty { return true }
+        let hostCovers = hosted.map { $0 != nil } ?? false
         return await loadOffMainActor { [authStore, usageScanner] in
             do {
                 if try authStore.goAPIKey() != nil { return true }

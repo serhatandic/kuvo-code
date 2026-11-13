@@ -20,7 +20,8 @@ import { emit } from "../events"
 import type { LimitsService } from "../limits"
 import { claudeLine, dedupClaude, fromKeptClaude, keptClaude, type KeptClaudeEntry } from "./claude-log"
 import { dedupGrok, fromKeptGrok, grokLine, grokSlots, keptGrok, type KeptGrokEntry } from "./grok-log"
-import { databasesStamp, HOSTED_PROVIDERS, hostedRows, hostedSlots, type HostedRow } from "./engine-hosted"
+import { databasesStamp } from "./engine-db"
+import { HOSTED_PROVIDERS, hostedRows, hostedSlots, type HostedRow } from "./engine-hosted"
 import { claudeSlots, daysIn, slotsFrom, keptSlots, knownZone, noSlots, ownZone, summed, trimmed, type Day, type Slots, KEPT_DAYS } from "./history"
 import { JSONLFiles, jsonlFiles } from "./jsonl"
 import type { Pricing, PricingStore } from "./pricing"
@@ -611,14 +612,23 @@ export function grokSources(folder?: string, computer = ownComputer): (agents: A
  */
 export function engineHostedSources(folder: string | undefined, computer = ownComputer): () => UsageSource[] {
   if (!folder) return () => []
-  // (Rounds are one at a time, their sources one after another: both providers' in a round share one read.)
+  // (Rounds are one at a time, their sources one after another: both providers' in a round share one
+  // read, and one that failed fails the other too, rather than waiting on the databases again.)
   let last: { stamp: string; since: number; rows: HostedRow[] | undefined } | undefined
+  let failed: { stamp: string; since: number; at: number; error: unknown } | undefined
   const rows = async (since: number) => {
     const stamp = databasesStamp(folder)
     if (last && last.stamp === stamp && last.since === since) return last.rows
-    const found = await hostedRows(folder, since)
-    last = { stamp, since, rows: found }
-    return found
+    if (failed && failed.stamp === stamp && failed.since === since && Date.now() - failed.at < 60_000) throw failed.error
+    try {
+      const found = await hostedRows(folder, since)
+      last = { stamp, since, rows: found }
+      failed = undefined
+      return found
+    } catch (error) {
+      failed = { stamp, since, at: Date.now(), error }
+      throw error
+    }
   }
   const sources = HOSTED_PROVIDERS.map(
     (provider): UsageSource => ({

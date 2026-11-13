@@ -152,7 +152,10 @@ export class GrokAgent implements Agent {
     return join(homedir(), ".grok")
   }
 
-  /** Where it keeps its conversations (each session's `updates.jsonl`, which its usage is read from). */
+  /**
+   * Where it keeps its conversations (each session's `updates.jsonl`, which its usage is read from).
+   * A moved session's leftovers are cleared only from here, and Grok has none (no `conversationFiles`).
+   */
   conversationRoots() {
     return [join(this.grokHome, "sessions")]
   }

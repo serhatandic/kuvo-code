@@ -14,6 +14,7 @@
 
 import { addUnknown, add, noSlots, slotOf, type Slots } from "./history"
 import { timestamp } from "./claude-log"
+import { numberOf } from "./numbers"
 import { totalTokens, type Pricing, type Tokens } from "./pricing"
 
 export interface GrokEntry {
@@ -31,16 +32,6 @@ const MARKER = Buffer.from("turn_completed")
 const MOST_TOKENS = 1_000_000_000_000
 
 const isObject = (value: unknown): value is Record<string, any> => !!value && typeof value === "object" && !Array.isArray(value)
-
-/** `ProviderParse.number`: a number (not a boolean), or text that is one; finite. */
-export function numberOf(value: unknown): number | undefined {
-  if (typeof value === "number") return Number.isFinite(value) ? value : undefined
-  if (typeof value === "string" && /^\s*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?\s*$/.test(value)) {
-    const found = Number(value)
-    return Number.isFinite(found) ? found : undefined
-  }
-  return undefined
-}
 
 function bounded(value: unknown): number {
   const found = numberOf(value)

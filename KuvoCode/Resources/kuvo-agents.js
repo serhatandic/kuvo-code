@@ -19847,10 +19847,7 @@ function slotsFrom(given, most = 50000) {
   return slots;
 }
 
-// Packages/Box/src/agents/usage/grok-log.ts
-var MARKER = Buffer.from("turn_completed");
-var MOST_TOKENS = 1000000000000;
-var isObject4 = (value) => !!value && typeof value === "object" && !Array.isArray(value);
+// Packages/Box/src/agents/usage/numbers.ts
 function numberOf(value) {
   if (typeof value === "number")
     return Number.isFinite(value) ? value : undefined;
@@ -19860,6 +19857,11 @@ function numberOf(value) {
   }
   return;
 }
+
+// Packages/Box/src/agents/usage/grok-log.ts
+var MARKER = Buffer.from("turn_completed");
+var MOST_TOKENS = 1000000000000;
+var isObject4 = (value) => !!value && typeof value === "object" && !Array.isArray(value);
 function bounded(value) {
   const found = numberOf(value);
   if (found === undefined || found <= 0)
@@ -19965,10 +19967,9 @@ function fromKeptGrok(kept) {
   return { at, ...event !== null ? { event } : {}, model, tokens: { input, cacheWrite5m, cacheWrite1h: 0, cacheRead, output }, ...cost !== null ? { cost } : {} };
 }
 
-// Packages/Box/src/agents/usage/engine-hosted.ts
+// Packages/Box/src/agents/usage/engine-db.ts
 import { readdirSync as readdirSync16, statSync as statSync11 } from "fs";
 import { join as join30 } from "path";
-var HOSTED_PROVIDERS = ["opencode-go", "opencode"];
 function engineDatabases(folder) {
   let names;
   try {
@@ -19991,7 +19992,77 @@ function databasesStamp(folder) {
   return parts.join(`
 `);
 }
-var TABLES = "SELECT group_concat(name) FROM sqlite_master WHERE type='table' AND name IN ('message','session_message');";
+var READER = `
+import { Database } from "bun:sqlite"
+import { statSync } from "node:fs"
+function open(path) {
+  let db
+  try {
+    db = new Database(path, { readonly: true })
+    db.query("SELECT count(*) FROM sqlite_master").values()
+    return db
+  } catch (error) {
+    db?.close()
+    let wal = 0
+    try {
+      wal = statSync(path + "-wal").size
+    } catch {}
+    if (wal > 0 || !/unable to open/i.test(error instanceof Error ? error.message : String(error))) throw error
+    return new Database("file:" + path.replace(/[%?#]/g, (character) => "%" + character.charCodeAt(0).toString(16)) + "?immutable=1", { readonly: true })
+  }
+}
+self.onmessage = (event) => {
+  const { paths, sql } = event.data
+  const jsons = []
+  let checked = 0
+  const failed = []
+  for (const path of paths) {
+    let db
+    try {
+      db = open(path)
+      // (The engine may be writing: wait a little for it.)
+      db.exec("PRAGMA busy_timeout = 2000")
+      const names = String(db.query(sql.tables).values()[0]?.[0] ?? "").split(",").map((name) => name.trim())
+      const v1 = names.includes("message")
+      const v2 = names.includes("session_message")
+      if (!v1 && !v2) continue
+      checked++
+      const json = db.query(v1 && v2 ? sql.both : v1 ? sql.v1 : sql.v2).values()[0]?.[0]
+      if (typeof json === "string") jsons.push(json)
+    } catch (error) {
+      checked++
+      failed.push(error instanceof Error ? error.message : String(error))
+    } finally {
+      db?.close()
+    }
+  }
+  postMessage({ checked, failed, jsons })
+}
+`;
+var readerURL;
+var READ_FOR = 120000;
+var TABLES_SQL = "SELECT group_concat(name) FROM sqlite_master WHERE type='table' AND name IN ('message','session_message');";
+function readEngineDatabases(folder, sql) {
+  const paths = engineDatabases(folder);
+  if (!paths.length)
+    return Promise.resolve(undefined);
+  readerURL ??= URL.createObjectURL(new Blob([READER], { type: "application/javascript" }));
+  const worker = new Worker(readerURL);
+  worker.unref?.();
+  let timer;
+  return new Promise((resolve, reject) => {
+    timer = setTimeout(() => reject(new Error("The engine's database took too long to read.")), READ_FOR);
+    worker.onmessage = (event) => resolve(event.data);
+    worker.onerror = (event) => reject(new Error(event.message));
+    worker.postMessage({ paths, sql });
+  }).finally(() => {
+    clearTimeout(timer);
+    worker.terminate();
+  });
+}
+
+// Packages/Box/src/agents/usage/engine-hosted.ts
+var HOSTED_PROVIDERS = ["opencode-go", "opencode"];
 var MODEL = "COALESCE(json_extract(data,'$.model.id'), json_extract(data,'$.modelID'))";
 var PROVIDER = "COALESCE(json_extract(data,'$.model.providerID'), json_extract(data,'$.providerID'))";
 var TOTAL = `COALESCE(json_extract(data,'$.tokens.total'),
@@ -20053,62 +20124,13 @@ function parseHostedRows(json) {
   }
   return rows;
 }
-var READER = `
-import { Database } from "bun:sqlite"
-self.onmessage = (event) => {
-  const { paths, sql } = event.data
-  const jsons = []
-  let checked = 0
-  const failed = []
-  for (const path of paths) {
-    let db
-    try {
-      db = new Database(path, { readonly: true })
-      // (The engine may be writing: wait a little for it.)
-      db.exec("PRAGMA busy_timeout = 2000")
-      const names = String(db.query(sql.tables).values()[0]?.[0] ?? "").split(",").map((name) => name.trim())
-      const v1 = names.includes("message")
-      const v2 = names.includes("session_message")
-      if (!v1 && !v2) continue
-      checked++
-      const json = db.query(v1 && v2 ? sql.both : v1 ? sql.v1 : sql.v2).values()[0]?.[0]
-      if (typeof json === "string") jsons.push(json)
-    } catch (error) {
-      checked++
-      failed.push(error instanceof Error ? error.message : String(error))
-    } finally {
-      db?.close()
-    }
-  }
-  postMessage({ checked, failed, jsons })
-}
-`;
-var readerURL;
-var READ_FOR = 120000;
-function hostedRows(folder, since) {
-  const paths = engineDatabases(folder);
-  if (!paths.length)
-    return Promise.resolve(undefined);
-  const sql = { tables: TABLES, v1: hostedSQL(since, { v1: true, v2: false }), v2: hostedSQL(since, { v1: false, v2: true }), both: hostedSQL(since, { v1: true, v2: true }) };
-  readerURL ??= URL.createObjectURL(new Blob([READER], { type: "application/javascript" }));
-  const worker = new Worker(readerURL);
-  worker.unref?.();
-  let timer;
-  return new Promise((resolve, reject) => {
-    timer = setTimeout(() => reject(new Error("The engine's database took too long to read.")), READ_FOR);
-    worker.onmessage = (event) => {
-      const { checked, failed, jsons } = event.data;
-      if (checked > 0 && failed.length === checked)
-        reject(new Error(failed[0]));
-      else
-        resolve(jsons.flatMap(parseHostedRows));
-    };
-    worker.onerror = (event) => reject(new Error(event.message));
-    worker.postMessage({ paths, sql });
-  }).finally(() => {
-    clearTimeout(timer);
-    worker.terminate();
-  });
+async function hostedRows(folder, since) {
+  const answers = await readEngineDatabases(folder, { tables: TABLES_SQL, v1: hostedSQL(since, { v1: true, v2: false }), v2: hostedSQL(since, { v1: false, v2: true }), both: hostedSQL(since, { v1: true, v2: true }) });
+  if (!answers)
+    return;
+  if (answers.checked > 0 && answers.failed.length === answers.checked)
+    throw new Error(answers.failed[0]);
+  return answers.jsons.flatMap(parseHostedRows);
 }
 function dedupHosted(rows) {
   const seen = new Set;
@@ -20767,13 +20789,22 @@ function engineHostedSources(folder, computer = ownComputer) {
   if (!folder)
     return () => [];
   let last;
+  let failed;
   const rows = async (since) => {
     const stamp = databasesStamp(folder);
     if (last && last.stamp === stamp && last.since === since)
       return last.rows;
-    const found = await hostedRows(folder, since);
-    last = { stamp, since, rows: found };
-    return found;
+    if (failed && failed.stamp === stamp && failed.since === since && Date.now() - failed.at < 60000)
+      throw failed.error;
+    try {
+      const found = await hostedRows(folder, since);
+      last = { stamp, since, rows: found };
+      failed = undefined;
+      return found;
+    } catch (error) {
+      failed = { stamp, since, at: Date.now(), error };
+      throw error;
+    }
   };
   const sources = HOSTED_PROVIDERS.map((provider) => ({
     provider,
@@ -31585,4 +31616,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 97c8ac937b597c62eb387276cabd716bbd3b363c3362e8c00706fd1948c2792e
+// Built from Packages/Box/src/agents 9b2fc3aaf9976b0582f6f9334f3697a314ff5bc3f9ec008fac6fa5c64ea01349

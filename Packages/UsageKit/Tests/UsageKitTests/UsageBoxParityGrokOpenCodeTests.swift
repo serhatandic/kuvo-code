@@ -112,8 +112,12 @@ final class UsageBoxParityGrokOpenCodeTests: XCTestCase {
         let pending = await provider.refresh()
         XCTAssertNil(pending.usageHistory, "nothing yet: what the card showed stays")
         XCTAssertNil(pending.errorCategory)
+        let meanwhile = await provider.hasLocalCredentials()
+        XCTAssertTrue(meanwhile, "until the host answers, the database here says whether there's any")
+
+        history.update(days: [:], covered: ["opencode"])
         let none = await provider.hasLocalCredentials()
-        XCTAssertFalse(none, "the database here has use, but it's the host's to say")
+        XCTAssertFalse(none, "the database here has use, but once the host answers it's the host's to say")
 
         let date = DailyUsageAccumulator.dayKey(from: now)
         history.update(days: ["opencode": [hostDay(date, "kimi-k3", tokens: 1100, cost: 0.75)]], covered: ["opencode"])

@@ -20,7 +20,7 @@ import { bundledPricing, catalogFromCompact, Pricing, PricingStore, supplementFr
 import { claudeSources, engineHostedSources, thisComputer, Usage, usageRoutes, uuidOf, type UsageSource } from "../../src/agents/usage/usage"
 import { Database } from "bun:sqlite"
 import { isRealBridgeFolder } from "../../src/shared/account"
-import { UsagePeers, type UsageMail } from "../../src/agents/usage/usage-peers"
+import { digestOf, UsagePeers, type UsageMail } from "../../src/agents/usage/usage-peers"
 
 const base = mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-usage-test-"))
 afterAll(() => rmSync(base, { recursive: true, force: true }))
@@ -527,7 +527,10 @@ describe("across your computers", () => {
     const view = mac.usage.view("UTC")
     expect(view.rows.map((row) => [row.id, row.estimated, row.days[0]!.cost, row.boxes.map((box) => box.name)])).toEqual([["opencode#eeeeeeeeeeeeeeee", false, 0.5, ["devbox"]]])
     expect(view.totals.opencode!.map((day) => [day.date, day.tokens, day.cost])).toEqual([["2026-11-12", 900, 0.5]])
-    // (Whether it's billed isn't in the digest a box from before couldn't match: nothing asked again.)
+    // (Whether it's billed isn't in the digest: a box from before, which doesn't keep it, gets the same one.)
+    const told = relay.sent.find((each) => each.from === "dev-key" && each.mail.accounts?.length)!.mail
+    expect(told.accounts![0]!.estimated).toBe(false)
+    expect(digestOf(told.accounts!.map(({ estimated: _, ...account }) => account))).toBe(told.digest)
     const sent = relay.sent.length
     at += 11 * MINUTE
     await dev.usage.refresh()
