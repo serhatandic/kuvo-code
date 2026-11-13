@@ -150,7 +150,7 @@ describe("on one box", () => {
     const home = mkdtempSync(join(base, "mac-"))
     const mac = make("mac-key", "MacBook", home)
     // Nothing set yet: each part is the panel's own default.
-    expect(await mac.read()).toEqual({ settings: {}, imported: false })
+    expect(await mac.read()).toEqual({ settings: {}, versions: {}, imported: false })
 
     const told: unknown[] = []
     const stop = subscribe((event) => event.type === "kuvo.usage.settings" && told.push(event.data))
@@ -434,8 +434,9 @@ describe("across your own computers", () => {
     expect(answer.status).toBe(200)
     const kept = answer.body.data.settings
     expect(kept.layout.placed).toEqual(["claude.session", "grok.weekly"])
-    expect(kept.layout.pinned).toEqual(["codex.session", "grok.weekly"])
-    expect(kept.layout.providerOrder).toEqual(["claude", "codex", "grok"])
+    expect(kept.layout.pinned).toEqual(["grok.weekly", "codex.session"])
+    // (A newer app's card keeps its place.)
+    expect(kept.layout.providerOrder).toEqual(["grok", "claude", "codex"])
     expect(kept.layout.metricOrder.grok).toEqual(["grok.weekly"])
     expect(kept.providers).toEqual({ enabled: ["claude", "grok"], known: ["claude", "codex", "grok"] })
     // One that says nothing of what it knows sends the part whole.
@@ -456,6 +457,9 @@ describe("across your own computers", () => {
     expect((await mac.read()).settings).toEqual({ notifications: { ...alerts(true), dailyDigest: true } })
     expect(Object.keys(dev.settings.kept()).sort()).toEqual(["notifications", "theme"])
     expect(dev.settings.digest()).toBe(mac.settings.digest())
+    // A part named as what every object has is no part.
+    mac.peers.take("dev-key", { kind: "settings", at, digest: "odd", setup: "set_yours", usage: { toString: { value: 1, stamp }, constructor: { value: 1, stamp } } as any })
+    expect(Object.keys(mac.settings.kept()).sort()).toEqual(["notifications", "theme"])
     // Ten minutes on: each says only what it holds, and nothing more goes.
     at += 10 * MINUTE
     const before = relay.sent.length
@@ -463,5 +467,40 @@ describe("across your own computers", () => {
     dev.peers.tell()
     await relay.settled()
     expect(relay.sent.slice(before).map((each) => !!each.mail.usage)).toEqual([false, false])
+  })
+
+  test("a change made from a version of a part that has changed since (another computer's came meanwhile) is turned away, and the client shows the box's; a field a newer box added stays whatever the client sends", async () => {
+    const mac = make("mac-key", "MacBook")
+    const first = await mac.route("PUT", [], { notifications: alerts(true) })
+    const version = first.body.data.versions.notifications
+    expect(typeof version).toBe("string")
+    // Another computer's change comes.
+    at += MINUTE
+    mac.settings.merge({ notifications: { value: { ...alerts(false), dailyDigest: true }, stamp: { v: at, by: "dev-key" } } })
+    // A Mac that was closed sends what it changed from the version before: left as it is.
+    at += MINUTE
+    const late = await mac.route("PUT", [], { notifications: { ...alerts(true), closeToRunningOut: true }, based: { notifications: version } })
+    expect(late.status).toBe(200)
+    expect(late.body.data.stale).toEqual(["notifications"])
+    expect(late.body.data.settings.notifications).toEqual({ ...alerts(false), dailyDigest: true })
+    // From the version it has now: changed, the field it doesn't know kept.
+    const now = await mac.route("PUT", [], { notifications: alerts(true), based: { notifications: late.body.data.versions.notifications } })
+    expect(now.body.data.stale).toBeUndefined()
+    expect(now.body.data.settings.notifications).toEqual({ ...alerts(true), dailyDigest: true })
+    // A part it had none of: `null`.
+    expect((await mac.route("PUT", [], { totalSpend: { show: false }, based: { totalSpend: null } })).body.data.settings.totalSpend).toEqual({ show: false })
+  })
+
+  test("a box that followed no setup and joins one starts over: what it held then (a shared machine's) goes nowhere", async () => {
+    const home = mkdtempSync(join(base, "shared-"))
+    const machine = make("m-key", "machine", home)
+    await machine.meet([], [], null)
+    await machine.route("PUT", [], { notifications: alerts(true) })
+    const bob = make("bob-key", "Bob's Mac")
+    await machine.meet([bob], [], "set_bob")
+    await bob.meet([machine], [], "set_bob")
+    await relay.settled()
+    expect((await machine.read()).settings).toEqual({})
+    expect((await bob.read()).settings).toEqual({})
   })
 })

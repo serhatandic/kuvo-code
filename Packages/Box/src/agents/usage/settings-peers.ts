@@ -123,7 +123,10 @@ export class SettingsPeers {
 
   private directorySaid() {
     // In another setup than the one these were shared in: they start over (`UsageSettings.inSetup`).
-    if (this.directory.told && this.directory.setup) this.settings.inSetup(this.directory.setup)
+    if (this.directory.told) {
+      if (this.directory.setup) this.settings.inSetup(this.directory.setup)
+      else this.settings.inNoSetup()
+    }
     const ours = new Set(this.ours())
     // (A computer gone, or one that's now a box a peer vouches for: forgotten, told again should it come back as yours.)
     for (const map of [this.told, this.answered]) for (const key of [...map.keys()]) if (!ours.has(key)) map.delete(key)
