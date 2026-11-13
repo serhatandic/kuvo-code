@@ -19,9 +19,31 @@ import UsageKit
         private var _puts: [[String: Any]] = []
         var notifications: [String: Bool] = ["underTenPercent": false, "healthyToClose": false, "closeToRunningOut": false]
         var version = "1/dev-key"
+        private var changes = 0
         /// Parts a change of which it turns away (another computer's came meanwhile).
         var stale: [String] = []
+        /// The answer to the first change, held back until `release` (nil: none held).
+        private var held: (@Sendable (StubWeb.Answer) -> Void)?
+        var holdsFirstChange = false
         var puts: [[String: Any]] { lock.withLock { _puts } }
+
+        /// Answers a request, but the first change while `holdsFirstChange`, whose answer waits.
+        func answer(_ request: URLRequest, _ body: Data, reply: @escaping @Sendable (StubWeb.Answer) -> Void) {
+            let answer = self.answer(request, body)
+            let holds = lock.withLock {
+                guard holdsFirstChange, request.httpMethod == "PUT", held == nil, _puts.count == 1 else { return false }
+                held = reply
+                return true
+            }
+            if !holds { reply(answer) }
+            else { lock.withLock { heldAnswer = answer } }
+        }
+        private var heldAnswer: StubWeb.Answer?
+
+        func release() {
+            let (reply, answer) = lock.withLock { (held, heldAnswer) }
+            if let reply, let answer { reply(answer) }
+        }
 
         func answer(_ request: URLRequest, _ body: Data) -> StubWeb.Answer {
             lock.withLock {
@@ -29,11 +51,14 @@ import UsageKit
                 if request.httpMethod == "PUT" {
                     let given = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
                     _puts.append(given)
-                    if !stale.isEmpty {
-                        extra["stale"] = stale
+                    // As a box does: a change made from a version it has moved on from is turned away.
+                    let based = (given["based"] as? [String: Any])?["notifications"] as? String
+                    if !stale.isEmpty || (based != nil && based != version) {
+                        extra["stale"] = stale.isEmpty ? ["notifications"] : stale
                     } else if let changed = given["notifications"] as? [String: Bool] {
                         notifications = changed
-                        version = "2/mac-key"
+                        changes += 1
+                        version = "\(changes + 1)/mac-key"
                     }
                 }
                 return StubWeb.json(["data": ["settings": ["notifications": notifications], "versions": ["notifications": version], "imported": true].merging(extra) { first, _ in first }])
@@ -108,5 +133,30 @@ import UsageKit
         #expect(box.puts.count == 1)
         #expect(defaults.bool(forKey: "openusage.notifications.closeToRunningOut"))
         #expect(!defaults.bool(forKey: Self.underTen), "the box's, as the other computer left it")
+    }
+
+    @Test func aSecondChangeMadeWhileTheFirstIsOnItsWayIsntTurnedAway() async throws {
+        let (defaults, folder) = try suite()
+        defer { StubWeb.stop(); try? FileManager.default.removeItem(at: folder) }
+        let box = Box()
+        box.holdsFirstChange = true
+        StubWeb.hold(Self.box + "/api/kuvo/usage/settings") { request, body, reply in box.answer(request, body, reply: reply) }
+        let host = HostSettings(defaults: defaults)
+        let store = UsageSettingsOnBox(host: host, defaults: defaults)
+        store.connected(api: api(), box: BoxClient.mac)
+        try await until { store.answered == 1 }
+
+        // One notification turned on; its answer is slow. Another turned on meanwhile.
+        defaults.set(true, forKey: Self.underTen)
+        host.flush()
+        try await until { box.puts.count == 1 }
+        defaults.set(true, forKey: "openusage.notifications.healthyToClose")
+        host.flush()
+        box.release()
+        try await until { store.answered == 3 }
+
+        #expect(box.puts.count == 2)
+        #expect(box.notifications == ["underTenPercent": true, "healthyToClose": true, "closeToRunningOut": false], "the box ends with the second")
+        #expect(defaults.bool(forKey: "openusage.notifications.healthyToClose"), "and the panel keeps it")
     }
 }
