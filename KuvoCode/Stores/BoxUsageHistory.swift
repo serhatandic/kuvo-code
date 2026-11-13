@@ -87,7 +87,7 @@ final class BoxUsageHistory {
         } catch let error as ServerError where error.status == 400 {
             // (Not one of the models it can price with now.)
             log.info("usage pricing refused: \(String(describing: error), privacy: .public)")
-            return .refused
+            return .refused(error.message)
         } catch {
             log.info("usage pricing: \(String(describing: error), privacy: .public)")
             return .unreachable

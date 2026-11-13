@@ -311,6 +311,8 @@ const engineCodexUsage = engineCodexSource(
 )
 const usage = new Usage(() => [...claudeUsage(roster.all()), ...codexUsage(roster.all()), ...engineCodexUsage()], new PricingStore(join(usageFolder, "pricing"), noPriceFeeds ? null : undefined), (provider) => limits.identity(provider), join(usageFolder, "usage.json"))
 usage.settings = usageSettings
+// The engine's sign-ins known (a box's first ChatGPT use shows at once, not a round later).
+engineAccounts.onAnswered = () => void usage.tick()
 peers.usage = new UsagePeers(usage, post, directory, join(usageFolder, "peers.json"))
 
 // What every conversation here makes, recorded as it's made: the engine's and this bridge's own.

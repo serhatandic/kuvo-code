@@ -99,16 +99,21 @@ final class CodexProvider: ProviderRuntime {
     func refresh() async -> ProviderSnapshot {
         let read = await refreshLimits()
         // The host states Codex's spend itself (`HostHistory`, fork addition), every computer's: it
-        // shows whether or not this Mac can read Codex's limits now (signed in only on a machine, a
-        // lapsed sign-in here), with why the limits didn't come as the card's notice.
+        // shows while this Mac can't read Codex's limits at all (signed in only on a machine, a
+        // lapsed sign-in here), with why as the card's notice. A read that failed for now (offline,
+        // a 429, a 5xx) stays a failure, so the last limits stay on screen and it's tried again later.
         guard provider.id == ProviderAccountID.family(of: provider.id),
               HostHistory.shared.scan(for: provider.id) != nil,
-              !read.lines.isEmpty, read.lines.allSatisfy(\.isError)
+              !read.lines.isEmpty, read.lines.allSatisfy(\.isError),
+              let category = read.errorCategory, Self.cantReadHere.contains(category)
         else { return read }
         let message: String
         if case .badge(_, let text, _, _) = read.lines[0] { message = text } else { message = "Couldn't read Codex's limits." }
         return await snapshot(mapped: CodexMappedUsage(plan: nil, lines: []), limitsProblem: message)
     }
+
+    /// Failures that say this Mac has no sign-in it can read Codex's limits with, not a passing one.
+    static let cantReadHere: Set<ErrorCategory> = [.notLoggedIn, .authExpired, .authInvalid, .notAvailable]
 
     private func refreshLimits() async -> ProviderSnapshot {
         if let host = authStore.hostCandidate() { return await refreshHost(host) }

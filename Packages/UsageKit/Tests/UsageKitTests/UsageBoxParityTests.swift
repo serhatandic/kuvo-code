@@ -280,6 +280,23 @@ final class UsageBoxParityTests: XCTestCase {
         XCTAssertEqual(snapshot.usageHistory?.series.daily.map(\.totalTokens), [300])
         XCTAssertNotNil(snapshot.warning, "why the limits didn't come")
         XCTAssertNil(snapshot.errorCategory)
+
+        // Signed in here, and the read failed for now (ChatGPT answered 503): still a failure, so the
+        // store keeps the last limits on screen, and tries again later.
+        let failing = CodexProvider.isolated(
+            localHistoryWait: .seconds(1),
+            authStore: CodexAuthStore(
+                environment: FakeEnvironment(["CODEX_HOME": "/nonexistent/codex-fixture"]),
+                files: FakeFiles(["/nonexistent/codex-fixture/auth.json": #"{"tokens":{"access_token":"fixture"}}"#]),
+                keychain: FakeKeychain()
+            ),
+            usageClient: CodexUsageClient(http: FakeHTTPClient(response: HTTPResponse(statusCode: 503, headers: [:], body: Data()))),
+            now: { now },
+            pricing: { ModelPricing.empty }
+        )
+        let passing = await failing.refresh()
+        XCTAssertTrue(passing.lines.allSatisfy(\.isError))
+        XCTAssertNotNil(passing.errorCategory)
     }
 }
 

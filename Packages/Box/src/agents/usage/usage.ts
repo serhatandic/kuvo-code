@@ -364,6 +364,9 @@ export class Usage {
     return true
   }
 
+  /** Which fallback model estimated which of this box's own accounts' use, as last told. */
+  private ownEstimates?: string
+
   /** What this box's own accounts used, as last told: a round that read nothing new tells no one. */
   private ownSaid = ""
 
@@ -374,10 +377,15 @@ export class Usage {
    */
   private changed(own: boolean) {
     if (own) {
-      const mine = JSON.stringify(this.own().map(({ scanned: _, slots, ...account }) => ({ ...account, slots: keptSlots(slots) })))
+      const accounts = this.own()
+      const mine = JSON.stringify(accounts.map(({ scanned: _, slots, ...account }) => ({ ...account, slots: keptSlots(slots) })))
+      // Which fallback model estimated what: not in the digest, and older days' only as first told.
+      const estimates = JSON.stringify(accounts.map((account) => [account.provider, [...account.slots.fallback].map(([slot, models]) => [slot, [...models].sort()]).sort(([a], [b]) => (a as number) - (b as number))]))
       // (A round is minutes from the last: what changed goes at once; else, now and then, that nothing did.)
-      this.peers?.tell(mine !== this.ownSaid)
+      if (this.ownEstimates !== undefined && estimates !== this.ownEstimates) this.peers?.tellAll()
+      else this.peers?.tell(mine !== this.ownSaid)
       this.ownSaid = mine
+      this.ownEstimates = estimates
     }
     const now = JSON.stringify(this.rows().map(({ scanned: _, slots, yours, boxes, ...row }) => ({ ...row, boxes: boxes.map(({ scanned: _, ...box }) => box), slots: keptSlots(slots), yours: keptSlots(yours) })))
     if (now === this.said) return
@@ -428,7 +436,7 @@ export async function usageRoutes(usage: Usage | undefined, method: string, rest
     const given = (await body())?.codex
     const model = given && typeof given === "object" ? given.fallback : undefined
     if (model !== null && typeof model !== "string") return json({ message: "Say {codex: {fallback}}: a model, or null for none." }, 400)
-    if (!usage.setCodexFallback(model === "" ? null : model)) return json({ message: "That model can't estimate Codex's prices here." }, 400)
+    if (!usage.setCodexFallback(model === "" ? null : model)) return json({ message: "This model's prices aren't available now. Choose another model or None." }, 400)
     await Promise.race([usage.refresh(), new Promise((resolve) => setTimeout(resolve, 5_000).unref?.())])
     return json({ data: usage.view(zone) })
   }

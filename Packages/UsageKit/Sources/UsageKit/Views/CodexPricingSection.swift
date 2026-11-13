@@ -62,9 +62,7 @@ struct CodexPricingSection: View {
                     .padding(.horizontal, 12)
                     .padding(.bottom, 10)
                 if let applyFailed, host != nil {
-                    Text(applyFailed == .refused
-                         ? "Couldn't use this model: its prices aren't available now. Choose another model or None."
-                         : "Couldn't change it: Kuvo Code's background service didn't answer. Try again.")
+                    Text(Self.notice(applyFailed))
                         .font(.caption)
                         .foregroundStyle(Theme.notice)
                         .fixedSize(horizontal: false, vertical: true)
@@ -159,6 +157,12 @@ struct CodexPricingSection: View {
                 }
             }
         }
+    }
+
+    /// Why the host didn't take it: its own words when it refused.
+    private static func notice(_ outcome: HostHistory.CodexFallbackOutcome) -> String {
+        if case .refused(let message) = outcome { return message }
+        return "Couldn't change it: Kuvo Code's background service didn't answer. Try again."
     }
 
     private var selectionUnavailable: Bool {

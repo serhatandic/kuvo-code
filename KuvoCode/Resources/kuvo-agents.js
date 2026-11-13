@@ -17899,14 +17899,17 @@ class EngineAccounts {
     this.credentialsNow = credentialsNow;
   }
   answered = false;
+  onAnswered;
   async refresh() {
     try {
       const answer = await this.credentialsNow();
       const list = Array.isArray(answer) ? answer : Array.isArray(answer?.data) ? answer.data : undefined;
       if (list)
-        this.answered = true;
-      if (list)
         this.credentials = list.filter((each) => each && typeof each.integrationID === "string" && each.active === true && each.value && typeof each.value === "object");
+      if (list && !this.answered) {
+        this.answered = true;
+        this.onAnswered?.();
+      }
     } catch {}
   }
   accounts() {
@@ -20945,12 +20948,19 @@ class Usage {
     this.settings.setCodexFallback(model);
     return true;
   }
+  ownEstimates;
   ownSaid = "";
   changed(own) {
     if (own) {
-      const mine = JSON.stringify(this.own().map(({ scanned: _, slots, ...account }) => ({ ...account, slots: keptSlots(slots) })));
-      this.peers?.tell(mine !== this.ownSaid);
+      const accounts = this.own();
+      const mine = JSON.stringify(accounts.map(({ scanned: _, slots, ...account }) => ({ ...account, slots: keptSlots(slots) })));
+      const estimates = JSON.stringify(accounts.map((account) => [account.provider, [...account.slots.fallback].map(([slot, models]) => [slot, [...models].sort()]).sort(([a], [b]) => a - b)]));
+      if (this.ownEstimates !== undefined && estimates !== this.ownEstimates)
+        this.peers?.tellAll();
+      else
+        this.peers?.tell(mine !== this.ownSaid);
       this.ownSaid = mine;
+      this.ownEstimates = estimates;
     }
     const now = JSON.stringify(this.rows().map(({ scanned: _, slots, yours, boxes, ...row }) => ({ ...row, boxes: boxes.map(({ scanned: _, ...box }) => box), slots: keptSlots(slots), yours: keptSlots(yours) })));
     if (now === this.said)
@@ -20999,7 +21009,7 @@ async function usageRoutes(usage, method, rest, params, body = async () => ({}))
     if (model !== null && typeof model !== "string")
       return json8({ message: "Say {codex: {fallback}}: a model, or null for none." }, 400);
     if (!usage.setCodexFallback(model === "" ? null : model))
-      return json8({ message: "That model can't estimate Codex's prices here." }, 400);
+      return json8({ message: "This model's prices aren't available now. Choose another model or None." }, 400);
     await Promise.race([usage.refresh(), new Promise((resolve) => setTimeout(resolve, 5000).unref?.())]);
     return json8({ data: usage.view(zone) });
   }
@@ -27074,6 +27084,10 @@ class UsagePeers {
       this.told.set(key, { digest, at: now });
     }
   }
+  tellAll() {
+    this.told.clear();
+    this.tell(true);
+  }
   refreshElsewhere() {
     if (!this.transport.followed || !this.directory.told)
       return;
@@ -31852,6 +31866,7 @@ var engineData = process.env.KUVO_ENGINE_DB_FOLDER || (onMachine && machineHome 
 var engineCodexUsage = engineCodexSource(engineData, () => engineAccounts.answered ? engineAccounts.accounts().some((account) => account.provider === "openai") : undefined, () => usage.has("openai"));
 var usage = new Usage(() => [...claudeUsage2(roster.all()), ...codexUsage(roster.all()), ...engineCodexUsage()], new PricingStore(join37(usageFolder, "pricing"), noPriceFeeds ? null : undefined), (provider) => limits.identity(provider), join37(usageFolder, "usage.json"));
 usage.settings = usageSettings;
+engineAccounts.onAnswered = () => void usage.tick();
 peers.usage = new UsagePeers(usage, post, directory, join37(usageFolder, "peers.json"));
 var artifacts;
 var noted2;
@@ -32048,4 +32063,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents c3e16e8d7a2bc010a47916013ae597678fb9ef6e4c1c7987983eb8304a384066
+// Built from Packages/Box/src/agents ad0ad796b6c1752b3a4be1f54fdeb2b43767446eb9c732230a15e455909ca0ae

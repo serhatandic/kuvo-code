@@ -4017,13 +4017,14 @@ a machine's `~/.kuvo-code`, never a test's): estimates, not your bill. A client 
     `session_message` (opencode 2, a compaction too, from when the sign-in was made on), a message
     copied between two databases once (by its ID). Priced as Codex's. Whether the sign-in is OAuth
     is asked of SQLite: its tokens never leave the database. A database that can't be read now
-    (and none that could) leaves what was read before as it was, never none; one in WAL mode whose
+    (and none that could) leaves what was read before as it was, never none (its box's `scanned`
+    as of when it last was); one in WAL mode whose
     `-wal` and `-shm` are gone (its engine stopped) is read as it is.
 - `PUT kuvo/agents/api/kuvo/usage/pricing[?zone=]` `{"codex": {"fallback": <model> | null}}`: Codex's
   fallback model, whose rates estimate what a Codex model with no known price used (in this box's
   own Codex logs, not the engine's ChatGPT slice: each box prices its own with its own); one of `choices` (the supplement's
   `fallback_models.codex` priced exactly by a catalog), or `null` for none (`400 {message}` for
-  anything else). Kept in the bridge's `usage/settings.json`, through a restart; read again with it
+  anything else, its `message` a client shows as it is). Kept in the bridge's `usage/settings.json`, through a restart; read again with it
   at once, answered as `GET`.
 - `POST kuvo/agents/api/kuvo/usage/refresh[?zone=]` reads the logs now, asks your other computers
   to read theirs and tell (below), and answers as `GET` once it's read here (or after five

@@ -261,6 +261,17 @@ describe("one box", () => {
     const usage = make()
     await usage.refresh()
     expect((await view(usage)).rows.map((row: any) => [row.provider, row.days[0]?.tokens])).toEqual([["codex-cli", 340]])
+
+    // A log at the same place in two homes' sessions: one in each (only one home's sessions and
+    // archived sessions are one history). A home named again by a link to it: counted once.
+    mkdirSync(join(second, "sessions", "2026", "11", "12"), { recursive: true })
+    rmSync(join(second, "rollout-b.jsonl"))
+    writeFileSync(join(second, "sessions", "2026", "11", "12", "rollout-a.jsonl"), turn("2026-11-12T11:00:00Z", 7, 0, "gpt-5"))
+    symlinkSync(own, join(root, "own-alias"))
+    process.env.CODEX_HOME = [own, second, join(root, "own-alias")].join(",")
+    at += MINUTE
+    await usage.refresh()
+    expect((await view(usage)).rows[0].days[0].tokens).toBe(307)
   })
 
   test("the fallback model is the box's: chosen through the route, kept through a restart, a model with no price estimated at its rates; one that isn't a choice is refused", async () => {

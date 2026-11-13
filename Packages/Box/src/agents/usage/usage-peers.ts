@@ -141,6 +141,15 @@ export class UsagePeers {
     }
   }
 
+  /**
+   * What this box's accounts used, all of it, to each of them, now: which fallback model estimated
+   * which use changed, which the digest doesn't hold (`digestOf`) and their older slots keep as told.
+   */
+  tellAll() {
+    this.told.clear()
+    this.tell(true)
+  }
+
   /** A client pulled to refresh here: each peer reads its own now, and tells (at most once a minute). */
   refreshElsewhere() {
     if (!this.transport.followed || !this.directory.told) return
@@ -304,7 +313,7 @@ export class UsagePeers {
  * What a box's accounts used, hashed, as told: the same on both sides once the receiver has put
  * together what it was told (each account's fields in one order, its slots as kept: `keptSlots`).
  * Not which fallback model estimated what (`slots.fallback`): a box from before keeps none of it,
- * and would never find its own the same. (A fallback that changes changes the dollars too.)
+ * and would never find its own the same. Its peers are told all of it when that changes (`tellAll`).
  */
 export function digestOf(accounts: ToldUsage[]): string {
   const canonical = accounts.map((account) => [account.provider, account.service, account.agent ?? null, account.account ?? null, account.label ?? null, account.identity ?? null, account.cut === true, account.places ?? [], account.slots.models, account.slots.used, account.slots.unknown ?? []])

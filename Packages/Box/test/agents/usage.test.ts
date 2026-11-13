@@ -509,6 +509,25 @@ describe("across your computers", () => {
     await dev.usage.refresh()
     await relay.settled()
     expect(relay.sent.slice(sent).map((each) => [each.from, each.mail.accounts === undefined, each.mail.ask ?? false])).toEqual([["dev-key", true, false]])
+
+    // Another fallback model priced the same (the digest is the same): its older days say the new one too.
+    appendFileSync(join(codexHome, "sessions", "rollout-a.jsonl"), JSON.stringify({ timestamp: "2026-11-06T10:01:00Z", type: "event_msg", payload: { type: "token_count", info: { last_token_usage: { input_tokens: 5, output_tokens: 5, total_tokens: 10 } } } }) + "\n")
+    at += MINUTE
+    await dev.usage.refresh()
+    await relay.settled()
+    const pricing = new PricingStore(undefined, null).current()
+    const rates = (model: string) => JSON.stringify(pricing.fallbackRates(model, "codex"))
+    const choices = pricing.fallbackOptions("codex")
+    const [first, second] = choices.flatMap((one) => choices.filter((other) => other > one && rates(other) === rates(one)).map((other) => [one, other])).find(Boolean) ?? [choices[0]!, choices[1]!]
+    dev.fallback = first
+    await dev.usage.refresh()
+    await relay.settled()
+    expect(mac.usage.view("UTC").totals.codex!.map((each) => [each.date, each.fallback])).toEqual([["2026-11-12", [first]], ["2026-11-06", [first]]])
+    dev.fallback = second
+    at += MINUTE
+    await dev.usage.refresh()
+    await relay.settled()
+    expect(mac.usage.view("UTC").totals.codex!.map((each) => [each.date, each.fallback])).toEqual([["2026-11-12", [second]], ["2026-11-06", [second]]])
     mac.stop()
     dev.stop()
   })

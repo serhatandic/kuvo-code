@@ -63,10 +63,10 @@ public final class HostHistory {
     @ObservationIgnored public var setCodexFallback: ((String?) async -> CodexFallbackOutcome)?
 
     /// What came of asking the host for another fallback model.
-    public enum CodexFallbackOutcome: Sendable {
+    public enum CodexFallbackOutcome: Sendable, Equatable {
         case applied
-        /// It answered, and can't price Codex with that model now.
-        case refused
+        /// It answered, and can't price Codex with that model now: what it said.
+        case refused(String)
         /// It didn't answer.
         case unreachable
     }
