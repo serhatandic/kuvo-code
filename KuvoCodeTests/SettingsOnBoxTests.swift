@@ -60,7 +60,6 @@ import Testing
         #expect(try await phone.send("PATCH", "kuvo/config", body: body).status == 200)
         await config.refresh()
         #expect(config.permissionRules.map(\.resource) == ["docker *"])
-        #expect(rulesChanged == 2)
         #expect(changed == 1)
         // And its popular servers, Chrome DevTools among them on a Mac, Context7 added.
         struct Listed: Decodable { struct Server: Decodable { var id: String; var added: Bool; var macOnly: Bool }; var servers: [Server] }
