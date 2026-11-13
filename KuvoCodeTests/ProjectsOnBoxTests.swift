@@ -41,6 +41,23 @@ import Testing
         try? FileManager.default.removeItem(at: work)
     }
 
+    @Test func retiredTerminalSettingKeepsTheProjectAndItsOtherSettings() throws {
+        defer { done() }
+        let suite = "KuvoCodeTests.ProjectMigration.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let fixture: [String: Any] = [shop: ["name": "Storefront", "folders": [blog], "run": "bun dev", "terminal": "claude --continue"]]
+        let original = try JSONSerialization.data(withJSONObject: fixture)
+        defaults.set(original, forKey: "projectSettings")
+        let saved = Workspace.loadSettings(defaults: defaults)
+        #expect(saved[shop] == Workspace.ProjectSettings(name: "Storefront", folders: [blog], run: "bun dev"))
+        #expect(defaults.data(forKey: "projectSettings") == original, "loading settings does not rewrite defaults")
+        let cleaned = try JSONEncoder().encode(saved)
+        let object = try #require(JSONSerialization.jsonObject(with: cleaned) as? [String: [String: Any]])
+        #expect(object[shop]?["terminal"] == nil)
+        #expect(Workspace.loadSettings(defaults: defaults) == saved)
+    }
+
     /// The app's Workspace, as AppModel wires it: this Mac's box reached as a phone reaches it.
     private func workspace() -> Workspace {
         let workspace = Workspace()

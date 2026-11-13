@@ -569,7 +569,7 @@ import Testing
         try await drain()
         let reading = try #require(fromTop)
 
-        app.tabs.newSession(in: folder, conversation: true)
+        app.tabs.newSession(in: folder)
         try await drain()
         app.tabs.open(.session(log))
         try await until { fromEnd != nil }
@@ -597,7 +597,7 @@ import Testing
         defer { done() }
         _ = try #require(reply)
         let model = try #require(app.workspace.model(for: lamp))
-        app.tabs.newSession(in: folder, conversation: true)
+        app.tabs.newSession(in: folder)
         try await drain()
         app.tabs.cycle(by: -1)
         #expect(app.tabs.sessionID == lamp)
@@ -614,7 +614,7 @@ import Testing
         defer { done() }
         _ = try #require(reply)
         let model = try #require(app.workspace.model(for: lamp))
-        app.tabs.newSession(in: folder, conversation: true)
+        app.tabs.newSession(in: folder)
         try await drain()
         try await until { composerHasKeys }
         let draft = try #require(window.firstResponder as? MessageTextView)

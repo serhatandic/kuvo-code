@@ -10667,7 +10667,6 @@ var PROJECT = object({
   "name?": string,
   folders: list(string),
   "run?": string,
-  "terminal?": string,
   "removed?": bool,
   "madeBy?": object({ bot: string, name: string, at: number }),
   "addedByBox?": bool
@@ -31287,7 +31286,14 @@ var PROJECTS_LOCK = PROJECTS_FILE + ".lock";
 function readProjects(file = PROJECTS_FILE) {
   try {
     const list = JSON.parse(fs102.readFileSync(file, "utf8")).projects;
-    return Array.isArray(list) ? list.filter((each) => typeof each?.directory === "string" && path104.isAbsolute(each.directory)).map((each) => ({ ...each, folders: Array.isArray(each.folders) ? each.folders.filter((folder) => typeof folder === "string") : [] })) : [];
+    if (!Array.isArray(list))
+      return [];
+    return list.filter((each) => typeof each?.directory === "string" && path104.isAbsolute(each.directory)).map((each) => {
+      const project = { ...each };
+      delete project.terminal;
+      project.folders = Array.isArray(each.folders) ? each.folders.filter((folder) => typeof folder === "string") : [];
+      return project;
+    });
   } catch {
     return [];
   }
@@ -31468,9 +31474,7 @@ function keptProject(directory, given, before = {}) {
     project.folders = [...new Set((Array.isArray(given.folders) ? given.folders : []).filter((folder) => typeof folder === "string" && path104.isAbsolute(folder) && folder !== directory))];
   if ("run" in given)
     project.run = text(given.run);
-  if ("terminal" in given)
-    project.terminal = text(given.terminal);
-  for (const key of ["name", "run", "terminal"])
+  for (const key of ["name", "run"])
     if (project[key] === undefined)
       delete project[key];
   return project;
@@ -39861,7 +39865,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "44c324c5470d";
+var BRIDGE_VERSION = "c4d54ba80812";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
