@@ -887,17 +887,6 @@ final class PhoneLink {
                 if route == "kuvo/machines" { continuation.onTermination = { _ in task.cancel() } }
             }
         }
-        // Settings › Agents' and Commands' From Claude Code: this Mac's ~/.claude, read here.
-        if route == "kuvo/claude-code" {
-            // `?machine=<id>`: named and said to be there as that machine's pages have them.
-            let machine = URLComponents(string: request.path)?.queryItems?.first { $0.name == "machine" }?.value
-            return AsyncThrowingStream { continuation in
-                Task { @MainActor in
-                    let (status, body) = request.method.uppercased() == "GET" ? await link?.claudeCodeJSON(for: machine) ?? (503, Data()) : (405, Data("{}".utf8))
-                    Self.sendJSON(status, body, to: continuation)
-                }
-            }
-        }
         // Settings › General's While Agents Work: whether it's kept awake now can be the keeper's
         // to say.
         if route == "kuvo/mac" {
@@ -1104,7 +1093,7 @@ final class PhoneLink {
     /// This Mac's own areas, which the app answers itself: what its box hands it of a phone's
     /// (the box's `MAC_APP_ROUTES`, the one list of them, which a test holds this to). Everything
     /// else, a phone's or the app's own (`BoxClient`), is its box's (`BoxProcess`).
-    nonisolated static let appRoutes = ["kuvo/machines", "kuvo/hosts", "kuvo/usage", "kuvo/asks", "kuvo/mac", "kuvo/claude-code", "kuvo/engine"]
+    nonisolated static let appRoutes = ["kuvo/machines", "kuvo/hosts", "kuvo/usage", "kuvo/asks", "kuvo/mac", "kuvo/engine"]
     /// Where this Mac's box is reached while it runs.
     nonisolated static let box = OSAllocatedUnfairLock<ServerEndpoint?>(initialState: nil)
     /// Connections of its own to this Mac's box, plenty of them: the streams that follow it
@@ -1186,7 +1175,8 @@ final class PhoneLink {
         case let path where path.hasPrefix("kuvo/asks/"):
             return (405, Data("{}".utf8))
         case "kuvo/engine/restart" where request.method.uppercased() == "POST":
-            // Answered first: the restart takes the link down with the engine, and the phone sees
+            // Asked here only while the app runs this Mac's box itself (the keeper's box restarts
+            // its engine itself), or by an older box (old-box path). Answered first: the restart takes the link down with the engine, and the phone sees
             // this Mac come back (its box's `kuvo/info` says when it started).
             let restart = restartEngine
             Task { @MainActor in

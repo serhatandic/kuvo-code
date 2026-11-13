@@ -221,10 +221,10 @@ extension AppModel {
     /// computer's own settings change only it). Each as soon as nothing's at work in it, now or
     /// when that's done, so no one's work is cut off and nothing waits for you to remember.
     func renewEngines(mac: Bool, machines named: [String] = []) {
-        // (Attached in place, this Mac's engine is that box's, which is renewed as a machine's is:
-        // the app has none of its own to wait for.)
+        // (Attached in place, the app has no engine of its own to wait for. Nothing asks for this
+        // Mac's then: Bring Over is the one that does, and it needs the app's own engine.)
         if mac, attached == nil { renewals.insert("") }
-        for id in named + (mac && attached != nil ? [SSHConnection.thisMac] : []) where machines.engine(id)?.isReady == true { renewals.insert(id) }
+        for id in named where machines.engine(id)?.isReady == true { renewals.insert(id) }
         guard renewing == nil else { return }
         renewing = Task { [weak self] in
             while let self, !self.renewals.isEmpty, !Task.isCancelled {
@@ -590,8 +590,12 @@ extension AppModel {
     /// long as its connection lasts.
     private func connected(_ engine: MachineEngine, _ connection: MachineConnection) async {
         let machine = engine.machine.id
-        // This Mac's own box, attached in place: its engine is this Mac's, at once.
-        if engine.machine.isThisMac { thisMacsBoxConnected(engine) }
+        // This Mac's own box, attached in place: its engine is this Mac's, at once; and what this
+        // Mac kept there is handed to it again (once taken, it's only read).
+        if engine.machine.isThisMac {
+            thisMacsBoxConnected(engine)
+            workspace.connecting(to: machine)
+        }
         // What waits for it (a bot deleted, an integration removed while it was away), now.
         guard await MachineConnection.inTurn([{ await self.machines.runWaiting(only: machine) }]) else { return }
         // Its sessions, once it's up: tried again a few times, as they're what makes them live.
