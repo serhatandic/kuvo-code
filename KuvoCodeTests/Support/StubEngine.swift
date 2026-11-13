@@ -23,7 +23,7 @@ nonisolated final class StubEngine: @unchecked Sendable {
     private var log: [Request] = []
     private var sessions: [[String: Any]] = []
     private var running: Set<String> = []
-    private var answers: [String: (Request) -> StubWeb.Answer] = [:]
+    private var answers: [String: @Sendable (Request) -> StubWeb.Answer] = [:]
     /// What this Mac's box says of the sessions it lists (`ListingBox`), told again as they're
     /// listed or read: a test's workspace follows it with `listed(for:)`.
     let listing: ListingBox
@@ -98,8 +98,9 @@ nonisolated final class StubEngine: @unchecked Sendable {
         on(method, path) { _ in answer }
     }
 
-    /// What `method` `path` answers, made from each request.
-    func on(_ method: String, _ path: String, _ answer: @escaping (Request) -> StubWeb.Answer) {
+    /// What `method` `path` answers, made from each request: on the stand-in's own queue, so
+    /// `@Sendable` (a test's main-actor closure run there stops the whole run).
+    func on(_ method: String, _ path: String, _ answer: @escaping @Sendable (Request) -> StubWeb.Answer) {
         lock.withLock { answers["\(method) \(path)"] = answer }
     }
 

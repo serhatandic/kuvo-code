@@ -144,7 +144,7 @@ import Testing
         }).write(to: botsFile)
     }
 
-    private static func group(_ id: String, members: [String], seats: [String: String] = [:]) -> [String: Any] {
+    private nonisolated static func group(_ id: String, members: [String], seats: [String: String] = [:]) -> [String: Any] {
         ["id": id, "name": "Crew", "members": members, "seats": seats, "heard": [:], "created": "2026-10-21T09:00:00Z"]
     }
 
@@ -555,10 +555,11 @@ import Testing
         app.boxGroups.handle(try machineBridge.event("kuvo.group.updated", ["id": "grp_box0000001", "group": group, "status": "active",
                                                                                  "state": ["discussing": false, "paused": false]]), machine: nil)
         let reading = Gate(), release = Gate()
+        let answer = StubWeb.json(["data": ["group": group, "status": "active", "state": ["discussing": false, "paused": false], "messages": [Self.said]]])
         machineBridge.on("GET", "/api/kuvo/groups/grp_box0000001") { _ in
             reading.open()
             release.wait()
-            return StubWeb.json(["data": ["group": group, "status": "active", "state": ["discussing": false, "paused": false], "messages": [Self.said]]])
+            return answer
         }
         let read = Task { await app.boxGroups.reload("grp_box0000001", on: "box") }
         try await until { reading.isOpen }

@@ -210,7 +210,7 @@ import Testing
             model.failure = "That didn't go through, and this says why at some length so that it takes up the room it would."
         case .aMessageWaiting:
             let item: [String: Any] = ["id": run + "queued", "sessionID": id, "type": "user", "delivery": "queue", "payload": ["text": "Then make the app icon"]]
-            engine.on("GET", "/api/session/\(id)/inbox") { _ in StubWeb.json(["data": [item]]) }
+            engine.on("GET", "/api/session/\(id)/inbox", json: ["data": [item]])
             await model.load()
         }
     }

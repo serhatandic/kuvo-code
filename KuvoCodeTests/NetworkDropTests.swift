@@ -85,9 +85,10 @@ import Testing
                                       "model": ["id": "m", "providerID": "p"], "content": [["type": "text", "text": ""]]]
         let gate = Gate()
         defer { gate.open() }
-        engine.on("GET", "/api/session/\(id)/message") { [you] _ in
+        let answer = StubWeb.json(["data": [writing, you]])
+        engine.on("GET", "/api/session/\(id)/message") { _ in
             gate.wait()
-            return StubWeb.json(["data": [writing, you]])
+            return answer
         }
         let reads = engine.requests("GET", "/api/session/\(id)/message").count
         let resync = Task { await workspace.resync() }
@@ -119,9 +120,10 @@ import Testing
 
         let gate = Gate()
         defer { gate.open() }
-        engine.on("GET", "/api/session/\(id)/message") { [you] _ in
+        let answer = StubWeb.json(["data": [you]])
+        engine.on("GET", "/api/session/\(id)/message") { _ in
             gate.wait()
-            return StubWeb.json(["data": [you]])
+            return answer
         }
         let reads = engine.requests("GET", "/api/session/\(id)/message").count
         let resync = Task { await workspace.resync() }

@@ -32,7 +32,8 @@ import Testing
             "prj_site": [Self.approval("per_npm", "prj_site", "shell", "npm test"), Self.approval("per_brew", "global", "shell", "brew list")],
             "prj_api": [Self.approval("per_src", "prj_api", "edit", "src/*")],
         ]
-        engine.on("GET", "/api/permission/saved") { request in StubWeb.json(["data": saved[request.query["projectID"] ?? ""] ?? []]) }
+        let answers = saved.mapValues { StubWeb.json(["data": $0]) }
+        engine.on("GET", "/api/permission/saved") { request in answers[request.query["projectID"] ?? ""] ?? StubWeb.json(["data": []]) }
 
         var shown: [PermissionsSettings.Saved] = []
         let listed = await PermissionsSettings.saved(from: [(engine.api, nil)], sessions: workspace.sessions) { shown = $0 }
