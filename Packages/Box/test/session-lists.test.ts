@@ -9,7 +9,7 @@ import { join } from "node:path"
 // as the engine's events come, and resumed from where a client was after its stream dropped.
 
 const { factsOf, listedProjects } = await import("../src/link/lists/rule")
-const { commit, keepList, listFollowers, listPlaceHeard, listRoute, noteListEvent, readList, workOut, LIST_FILE } = await import("../src/link/lists/sessions")
+const { commit, keepList, keptList, listFollowers, listPlaceHeard, listRoute, noteListEvent, readList, workOut, LIST_FILE } = await import("../src/link/lists/sessions")
 const { engineHandler } = await import("../src/link/server/router")
 
 const vectors = JSON.parse(readFileSync(new URL("../../KuvoLink/Vectors/session-lists.json", import.meta.url), "utf8"))
@@ -67,12 +67,22 @@ let listReads = 0
 // Held: the list's next page waits until the test lets it go, as a slow engine's.
 let held: Promise<void> | null = null
 let heldAsked: () => void = () => {}
+// Held: the next read of one session, until the test lets it go.
+const holdOne = new Map<string, { asked: () => void; until: Promise<void> }>()
+function holdRead(id: string): { asked: Promise<void>; letGo: () => void } {
+  let letGo: () => void = () => {}
+  let asked: () => void = () => {}
+  const wasAsked = new Promise<void>(done => { asked = done })
+  holdOne.set(id, { asked, until: new Promise<void>(done => { letGo = done }) })
+  return { asked: wasAsked, letGo }
+}
 const engine = Bun.serve({
   port: 0,
   async fetch(request) {
     const url = new URL(request.url)
     if (url.pathname === "/api/session") {
-      listReads += 1
+      // (Reads of the whole list, page after page: counted once.)
+      if (!url.searchParams.get("cursor")) listReads += 1
       // Two to a page, so the list is read page after page.
       const all = [...sessions.values()].sort((a, b) => b.time.updated - a.time.updated)
       const from = Number(url.searchParams.get("cursor") ?? 0)
@@ -80,11 +90,15 @@ const engine = Bun.serve({
       const page = all.slice(from, from + Math.min(limit, 2))
       // (As it was when asked.)
       if (held) { heldAsked(); await held }
-      return Response.json({ data: page, cursor: { next: String(from + page.length) } })
+      return Response.json({ data: page, cursor: { next: from + page.length < all.length ? String(from + page.length) : null } })
     }
     if (url.pathname === "/api/session/active") return Response.json({ data: Object.fromEntries([...active].map(id => [id, { type: "busy" }])) })
     const one = url.pathname.match(/^\/api\/session\/([^/]+)$/)
-    if (one && sessions.has(one[1]!)) return Response.json({ data: sessions.get(one[1]!) })
+    // (As it was when asked: a held read answers late with what was there then.)
+    const answer = one && sessions.has(one[1]!) ? Response.json({ data: structuredClone(sessions.get(one[1]!)) }) : null
+    const hold = one ? holdOne.get(one[1]!) : undefined
+    if (hold) { holdOne.delete(one![1]!); hold.asked(); await hold.until }
+    if (answer) return answer
     return Response.json({ message: "Not here." }, { status: 404 })
   },
 })
@@ -111,15 +125,19 @@ async function ask(path: string): Promise<{ status: number; lines: any[] }> {
 test("a route answered in a process of its own reads the engine itself, and resumes from the list kept", async () => {
   add("ses_a", work, 100)
   add("ses_chat", chats, 50, { metadata: { kuvo: { chat: chats } } })
+  // Three pages of two, each as far as the engine says it goes on.
+  for (const n of [1, 2, 3]) add(`ses_page${n}`, work, 10 + n, { metadata: { kuvo: { archived: true } } })
   const { status, lines } = await ask("kuvo/sessions/list")
   expect(status).toBe(200)
   expect(lines[0].full).toBe(true)
+  expect(Object.keys(lines[0].sessions).sort()).toEqual(["ses_a", "ses_chat", "ses_page1", "ses_page2", "ses_page3"])
   expect(lines[0].sessions.ses_a).toEqual({ kind: "project", project: work, directory: work, created: 100, updated: 100 })
   expect(lines[0].sessions.ses_chat.kind).toBe("chat")
   expect(lines[0].projects).toEqual({ [work]: { name: "Work", updated: 100 } })
   // Kept for the next read, whichever process makes it: nothing changed since.
   const again = (await ask(`kuvo/sessions/list?since=${lines[0].at}`)).lines[0]
   expect(again).toEqual({ at: lines[0].at, sessions: {}, projects: lines[0].projects })
+  for (const n of [1, 2, 3]) sessions.delete(`ses_page${n}`)
 })
 
 test("just started, it reads its places before it answers, rather than say there's nothing", async () => {
@@ -152,6 +170,46 @@ test("a session deleted while its place is read whole stays gone", async () => {
     expect(Object.keys((await ask("kuvo/sessions/list")).lines[0].sessions)).not.toContain("ses_short")
   } finally {
     held = null
+    stop()
+  }
+})
+
+test("a read for an earlier event that answers after the session's deleted doesn't bring it back", async () => {
+  const stop = keepList()
+  try {
+    add("ses_brief", work, 610)
+    await listPlaceHeard("engine", target)
+    const read = holdRead("ses_brief")
+    const updated = noteListEvent("engine", target, { type: "session.updated", data: { sessionID: "ses_brief" } })
+    await read.asked
+    sessions.delete("ses_brief")
+    await noteListEvent("engine", target, { type: "session.deleted", data: { sessionID: "ses_brief" } })
+    read.letGo()
+    await updated
+    workOut()
+    expect(Object.keys(keptList()!.sessions)).not.toContain("ses_brief")
+  } finally {
+    sessions.delete("ses_brief")
+    stop()
+  }
+})
+
+test("two reads of one session that answer out of order leave it as the later says", async () => {
+  const stop = keepList()
+  try {
+    add("ses_twice", work, 620, { title: "First" })
+    await listPlaceHeard("engine", target)
+    const read = holdRead("ses_twice")
+    const earlier = noteListEvent("engine", target, { type: "session.updated", data: { sessionID: "ses_twice" } })
+    await read.asked
+    sessions.get("ses_twice").title = "Second"
+    await noteListEvent("engine", target, { type: "session.renamed", data: { sessionID: "ses_twice" } })
+    read.letGo()
+    await earlier
+    workOut()
+    expect(keptList()!.sessions.ses_twice!.facts.title).toBe("Second")
+  } finally {
+    sessions.delete("ses_twice")
     stop()
   }
 })
@@ -190,8 +248,6 @@ test("kept as events come: a client resumes from where it was, and one from befo
     // Nothing changed since: nothing but where it's at.
     const same = (await ask(`kuvo/sessions/list?since=${after.at}`)).lines[0]
     expect(same).toEqual({ at: after.at, sessions: {}, projects: after.projects })
-    // Kept for a route answered in a process of its own.
-    expect(JSON.parse(readFileSync(LIST_FILE, "utf8")).seq).toBe(Number(after.at.split(".")[1]))
 
     // A cursor of another list's (its file went), or from ahead of it: all of it, said so.
     for (const since of ["zz-1.3", `${after.at.split(".")[0]}.999`, "nonsense"]) {
@@ -204,6 +260,10 @@ test("kept as events come: a client resumes from where it was, and one from befo
     // An event it can't read the session of (gone meanwhile): dropped.
     await noteListEvent("engine", target, { type: "session.renamed", data: { sessionID: "ses_nowhere" } })
     expect((await ask(`kuvo/sessions/list?since=${after.at}`)).lines[0].sessions).toEqual({})
+    // Kept for a route answered in a process of its own: written a moment after a change, and
+    // as it stops at the latest.
+    stop()
+    expect(JSON.parse(readFileSync(LIST_FILE, "utf8")).seq).toBe(Number(after.at.split(".")[1]))
   } finally {
     stop()
   }
@@ -218,8 +278,13 @@ test("its projects changing changes what's filed where, with no engine read", as
     const before = (await ask("kuvo/sessions/list")).lines[0]
     expect(before.sessions.ses_tree.project).toBe(tree)
     const reads = listReads
+    // (Written as another process would: the list hears it from the system.)
+    const heard = new Promise<void>(done => {
+      const look = () => { if (keptList()?.sessions.ses_tree?.facts.project === work) { listFollowers.delete(look); done() } }
+      listFollowers.add(look)
+    })
     writeFileSync(join(home, "box", "projects.json"), JSON.stringify({ version: 1, projects: [{ directory: work, folders: [tree], name: "Work" }] }))
-    workOut()
+    await heard
     const after = (await ask(`kuvo/sessions/list?since=${before.at}`)).lines[0]
     expect(Object.keys(after.sessions)).toEqual(["ses_tree"])
     expect(after.sessions.ses_tree.project).toBe(work)
@@ -273,7 +338,7 @@ test("a place asked to be read whole again while it's read is read once more aft
     await Promise.all([first, second])
     // (The one under way, then the one asked for meanwhile, after it.)
     expect(listReads - reads).toBe(2)
-    expect(Object.keys(readList()!.sessions)).toContain("ses_late")
+    expect(Object.keys(keptList()!.sessions)).toContain("ses_late")
   } finally {
     held = null
     sessions.delete("ses_late")
@@ -335,6 +400,10 @@ test("a worktree an older Mac removed, handed over, files its sessions under its
     for await (const piece of handler({ method: "POST", path: "kuvo/worktrees/record", headers: {}, body: Buffer.from(JSON.stringify({ removed: true, folder: gone, project: work })), fromApp: true }, undefined)) pieces.push(piece)
     expect(pieces[0].head.status).toBe(200)
     expect((await ask("kuvo/sessions/list")).lines[0].sessions.ses_gone_tree.project).toBe(work)
+    // More worktrees removed here since than the 200 it keeps of them: the one handed over stays.
+    const { updateWorktrees } = await import("../src/link/areas/worktree-records")
+    for (let n = 0; n < 201; n++) updateWorktrees(each => each, { project: work, root: join(home, `lists-later-${n}`), folder: join(home, `lists-later-${n}`), branch: "b" } as any)
+    expect((await ask("kuvo/sessions/list")).lines[0].sessions.ses_gone_tree.project).toBe(work)
   } finally {
     sessions.delete("ses_gone_tree")
     rmSync(join(home, "box", "worktrees.json"), { force: true })
@@ -349,9 +418,9 @@ test("a change another process makes to the box's projects reaches the kept list
   const stop = keepList()
   try {
     await listPlaceHeard("engine", target)
-    expect(readList()!.sessions.ses_elsewhere!.facts.project).toBe(gone)
+    expect(keptList()!.sessions.ses_elsewhere!.facts.project).toBe(gone)
     const listed = new Promise<void>(done => {
-      const look = () => { if (readList()?.sessions.ses_elsewhere?.facts.project === work) { listFollowers.delete(look); done() } }
+      const look = () => { if (keptList()?.sessions.ses_elsewhere?.facts.project === work) { listFollowers.delete(look); done() } }
       listFollowers.add(look)
     })
     const route = Bun.spawn([process.execPath, join(import.meta.dir, "../src/link/main.ts"), "box", "route"], { env: process.env, stdin: "pipe", stdout: "pipe", stderr: "ignore" })
@@ -377,9 +446,9 @@ test("a bot another process makes is listed as a bot's at once", async () => {
   const stop = keepList()
   try {
     await listPlaceHeard("engine", target)
-    expect(readList()!.sessions.ses_botty!.facts.kind).toBe("project")
+    expect(keptList()!.sessions.ses_botty!.facts.kind).toBe("project")
     const listed = new Promise<void>(done => {
-      const look = () => { if (readList()?.sessions.ses_botty?.facts.kind === "bot") { listFollowers.delete(look); done() } }
+      const look = () => { if (keptList()?.sessions.ses_botty?.facts.kind === "bot") { listFollowers.delete(look); done() } }
       listFollowers.add(look)
     })
     writeFileSync(join(folder, "bot.json"), JSON.stringify({ kuvo: 1, id: "bot_listtest", name: "Lister" }))

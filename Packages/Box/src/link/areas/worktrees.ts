@@ -20,7 +20,7 @@ import { ENGINE_DATA, homeFolder } from "../home";
 import type { AnswerPiece, JSONAnswer, RouteContext } from "../server/context";
 import { readProjects } from "./projects";
 import { branchPrefixHere } from "./git-words";
-import { readRemovedWorktrees, readRestorableWorktrees, readWorktrees, updateWorktrees, worktreeFollowers } from "./worktree-records";
+import { readHandedOver, readRemovedWorktrees, readRestorableWorktrees, readWorktrees, updateWorktrees, worktreeFollowers } from "./worktree-records";
 import type { RestorableWorktree, WorktreeRecord } from "./worktree-records";
 
 /** Sessions by the folder they run in, and which are at work (their ids). */
@@ -296,7 +296,7 @@ export async function answerWorktrees(method: string, requestPath: string, body:
     if (body?.removed === true) {
       const folder = body?.folder, project = body?.project;
       if (typeof folder !== "string" || !path.isAbsolute(folder) || typeof project !== "string" || !path.isAbsolute(project) || folder === project) return { status: 400, value: message("Send {removed: true, project, folder}.") };
-      if (!list.some(each => (each.folder ?? each.root) === folder || each.root === folder) && !(folder in readRemovedWorktrees())) updateWorktrees(each => each, { project, root: folder, folder, branch: "" } as WorktreeRecord);
+      if (!list.some(each => (each.folder ?? each.root) === folder || each.root === folder) && !(folder in readRemovedWorktrees()) && !(folder in readHandedOver())) updateWorktrees(each => each, undefined, undefined, { folder, project });
       return { status: 200, value: {} };
     }
     // One a Mac made here before this box kept them: kept here from now on, if it's still here

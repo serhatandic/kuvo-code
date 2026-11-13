@@ -88,31 +88,59 @@ function parseCursor(given: string | null): { epoch: string; seq: number } | nul
   return match ? { epoch: match[1]!, seq: Number(match[2]) } : null;
 }
 
-/** What the box knows beside its sessions, as it is now. */
-export function placeNow(running: ReadonlySet<string>, sessions: Iterable<EngineSession>): ListPlace {
+/** What the box knows beside its sessions, read from its files: kept by the long-running process
+ * until one of them changes (`keepList`), so a run's every step reads none of them. */
+export interface BoxKnows {
+  projects: ReturnType<typeof readProjects>;
+  filed: Record<string, string>;
+  botSessions: Set<string>;
+  away: Set<string>;
+  asks: ReturnType<typeof readAsks>;
+}
+
+export function readBoxKnows(): BoxKnows {
   const projects = readProjects();
-  const parents = new Map<string, string>();
-  for (const session of sessions) if (session.parentID) parents.set(session.id, session.parentID);
-  // (A subagent's ask is the conversation's it works for.)
-  const asked = new Map<string, number>();
-  for (const ask of readAsks()) {
-    let root = ask.session;
-    for (let step = 0; step < 10 && parents.has(root); step++) root = parents.get(root)!;
-    asked.set(root, Math.min(asked.get(root) ?? Infinity, ask.at));
-  }
   const botSessions = new Set<string>();
   for (const id of listOf(BOTS)) {
     const bot = botHere(id);
     if (bot) botSessions.add(bot.session);
   }
-  return { isChatsFolder, botsFolder: BOTS, botSessions, filed: filedProjects(projects), projects, running, asked, away: new Set(awaySessions()) };
+  return { projects, filed: filedProjects(projects), botSessions, away: new Set(awaySessions()), asks: readAsks() };
+}
+
+/** What the box knows beside its sessions, as it is now (`known`: as it was read last). */
+export function placeNow(running: ReadonlySet<string>, sessions: Iterable<EngineSession>, known: BoxKnows = readBoxKnows()): ListPlace {
+  const parents = new Map<string, string>();
+  for (const session of sessions) if (session.parentID) parents.set(session.id, session.parentID);
+  // (A subagent's ask is the conversation's it works for.)
+  const asked = new Map<string, number>();
+  for (const ask of known.asks) {
+    let root = ask.session;
+    for (let step = 0; step < 10 && parents.has(root); step++) root = parents.get(root)!;
+    asked.set(root, Math.min(asked.get(root) ?? Infinity, ask.at));
+  }
+  return { isChatsFolder, botsFolder: BOTS, botSessions: known.botSessions, filed: known.filed, projects: known.projects, running, asked, away: known.away };
+}
+
+// Each session's facts as last worked out, while what they come from is the same (the session as
+// read, what the box knew then, whether it runs, asks or is away): not worked out again each time.
+const factsMade = new WeakMap<EngineSession, { known: BoxKnows; running: boolean; asked?: number; away: boolean; facts: SessionFacts }>();
+
+function factsNow(session: EngineSession, place: ListPlace, known?: BoxKnows): SessionFacts {
+  if (!known) return factsOf(session, place);
+  const running = place.running.has(session.id), asked = place.asked.get(session.id), away = place.away.has(session.id);
+  const made = factsMade.get(session);
+  if (made && made.known === known && made.running === running && made.asked === asked && made.away === away) return made.facts;
+  const facts = factsOf(session, place);
+  factsMade.set(session, { known, running, asked, away, facts });
+  return facts;
 }
 
 /** Every session in `sessions` (the engine's or the bridge's, each once) with its facts, and the
  * projects. */
-export function listOfSessions(sessions: EngineSession[], place: ListPlace): { sessions: Record<string, SessionFacts>; projects: Record<string, ListedProject> } {
+export function listOfSessions(sessions: EngineSession[], place: ListPlace, known?: BoxKnows): { sessions: Record<string, SessionFacts>; projects: Record<string, ListedProject> } {
   const facts: Record<string, SessionFacts> = {};
-  for (const session of sessions) if (typeof session?.id === "string" && !(session.id in facts)) facts[session.id] = factsOf(session, place);
+  for (const session of sessions) if (typeof session?.id === "string" && !(session.id in facts)) facts[session.id] = factsNow(session, place, known);
   return { sessions: facts, projects: listedProjects(facts, place) };
 }
 
@@ -130,7 +158,8 @@ export async function readSessions(target: Target, signal?: AbortSignal): Promis
     for (const each of fresh) seen.add(each.id);
     all.push(...fresh);
     const next = page?.cursor?.next;
-    query = listed.length === 200 && fresh.length && typeof next === "string" ? `limit=200&cursor=${encodeURIComponent(next)}` : null;
+    // (On as long as the engine says where the next page starts: a page may be shorter than asked.)
+    query = listed.length && fresh.length && typeof next === "string" && next ? `limit=200&cursor=${encodeURIComponent(next)}` : null;
   }
   return all;
 }
@@ -168,53 +197,72 @@ export function commit(listed: Listed, now = Date.now(), file = LIST_FILE, owner
     // A route's, while the long-running process keeps it (it started since the route looked): its
     // list stands, mark and all.
     if (owner === undefined && list.owner && list.owner !== process.pid && processRuns(list.owner, "kuvo-link")) return list;
-    const next = list.seq + 1;
-    let changed = false;
-    // (What only the file says, not the list: written, with no change to tell.)
-    let noted = list.owner !== owner;
-    if (owner === undefined) delete list.owner;
-    else list.owner = owner;
-    for (const [id, facts] of Object.entries(listed.sessions)) {
-      const before = list.sessions[id];
-      const place = listed.placeOf?.[id];
-      if (before && JSON.stringify(before.facts) === JSON.stringify(facts)) {
-        if (place && before.place !== place) { before.place = place; noted = true; }
-        continue;
-      }
-      list.sessions[id] = { seq: next, facts, ...(place ? { place } : {}) };
-      delete list.gone[id];
-      changed = true;
-    }
-    for (const id of Object.keys(list.sessions)) {
-      if (id in listed.sessions) continue;
-      delete list.sessions[id];
-      list.gone[id] = { seq: next, at: now };
-      changed = true;
-    }
-    if (JSON.stringify(list.projects) !== JSON.stringify(listed.projects)) {
-      list.projects = listed.projects;
-      changed = true;
-    }
-    const pending = listed.pending?.length ? [...listed.pending].sort() : undefined;
-    if (JSON.stringify(list.pending) !== JSON.stringify(pending)) {
-      if (pending) list.pending = pending;
-      else delete list.pending;
-      changed = true;
-    }
-    if (!changed) {
-      if (noted) try { writePrivate(file, JSON.stringify(list)); } catch {}
-      return list;
-    }
-    list.seq = next;
-    const gone = Object.entries(list.gone).sort((a, b) => b[1].seq - a[1].seq);
-    for (const [index, [id, { seq, at }]] of gone.entries()) {
-      if (index < GONE_KEPT && now - at < GONE_FOR) continue;
-      delete list.gone[id];
-      list.floor = Math.max(list.floor, seq);
-    }
-    try { writePrivate(file, JSON.stringify(list)); } catch {}
+    const { changed, noted } = takeIn(list, listed, now, owner);
+    if (changed || noted) try { writePrivate(file, JSON.stringify(list)); } catch {}
     return list;
   });
+}
+
+/** Whether two sessions' facts say the same (but `updated`, with `ignoring`). */
+function sameFacts(a: SessionFacts, b: SessionFacts, ignoring?: "updated"): boolean {
+  if (a === b) return true;
+  const keys = Object.keys(a) as (keyof SessionFacts)[];
+  if (keys.length !== Object.keys(b).length) return false;
+  return keys.every(key => key === ignoring || a[key] === b[key]);
+}
+
+const projectsSaid = (projects: Record<string, ListedProject>, withUpdated: boolean) =>
+  JSON.stringify(withUpdated ? projects : Object.fromEntries(Object.entries(projects).map(([folder, { updated: _, ...rest }]) => [folder, rest])));
+
+/** `listed` taken into `list` (changed in place): each session whose facts changed with the next
+ * change's number, each one no longer there kept as gone (a day, the latest 2000; a `since` from
+ * before the oldest let go reads it all). Whether it changed, whether only what the file says did
+ * (`noted`), and whether anything but when sessions last changed did (`telling`). */
+function takeIn(list: Kept, listed: Listed, now: number, owner?: number): { changed: boolean; noted: boolean; telling: boolean } {
+  const next = list.seq + 1;
+  let changed = false, telling = false;
+  // (What only the file says, not the list: written, with no change to tell.)
+  let noted = list.owner !== owner;
+  if (owner === undefined) delete list.owner;
+  else list.owner = owner;
+  for (const [id, facts] of Object.entries(listed.sessions)) {
+    const before = list.sessions[id];
+    const place = listed.placeOf?.[id];
+    if (before && sameFacts(before.facts, facts)) {
+      if (place && before.place !== place) { before.place = place; noted = true; }
+      continue;
+    }
+    if (!before || !sameFacts(before.facts, facts, "updated")) telling = true;
+    list.sessions[id] = { seq: next, facts, ...(place ? { place } : {}) };
+    delete list.gone[id];
+    changed = true;
+  }
+  for (const id of Object.keys(list.sessions)) {
+    if (id in listed.sessions) continue;
+    delete list.sessions[id];
+    list.gone[id] = { seq: next, at: now };
+    changed = telling = true;
+  }
+  if (projectsSaid(list.projects, true) !== projectsSaid(listed.projects, true)) {
+    if (projectsSaid(list.projects, false) !== projectsSaid(listed.projects, false)) telling = true;
+    list.projects = listed.projects;
+    changed = true;
+  }
+  const pending = listed.pending?.length ? [...listed.pending].sort() : undefined;
+  if (JSON.stringify(list.pending) !== JSON.stringify(pending)) {
+    if (pending) list.pending = pending;
+    else delete list.pending;
+    changed = telling = true;
+  }
+  if (!changed) return { changed, noted, telling };
+  list.seq = next;
+  const gone = Object.entries(list.gone).sort((a, b) => b[1].seq - a[1].seq);
+  for (const [index, [id, { seq, at }]] of gone.entries()) {
+    if (index < GONE_KEPT && now - at < GONE_FOR) continue;
+    delete list.gone[id];
+    list.floor = Math.max(list.floor, seq);
+  }
+  return { changed, noted, telling };
 }
 
 /** The list from `list`: what changed after `since` (in its epoch, not before the oldest change it
@@ -244,7 +292,10 @@ export function keepList(): () => void {
   keeping = true;
   latest = null;
   places.clear();
-  const again = () => scheduleWorkOut();
+  known = null;
+  lastWrite = -Infinity;
+  // (What the box knows read again, once, at the next working out.)
+  const again = () => { known = null; scheduleWorkOut(); };
   const followers = [projectFollowers, botFollowers, moveFollowers, askFollowers];
   for (const each of followers) each.add(again);
   // (Only what a list goes by: the box's other files, and what a bot keeps in its folder as it
@@ -277,8 +328,13 @@ export function keepList(): () => void {
     clearInterval(whole);
     clearTimeout(workOutTimer);
     workOutTimer = undefined;
+    // (What's not written yet, written now: a box started again goes on from it.)
+    if (writeTimer) writeNow();
     keeping = false;
     latest = null;
+    known = null;
+    asked.clear();
+    deleted.clear();
     places.clear();
     placeTargets.clear();
     reading.clear();
@@ -338,7 +394,14 @@ async function readOnce(name: string, target: Target): Promise<void> {
   if (!keeping || !sessions) return;
   // (Only a whole read makes a place: until then its events have nothing to change.)
   const place = places.get(name) ?? { sessions: new Map(), running: new Set() };
-  place.sessions = new Map(sessions.map(each => [each.id, each]));
+  // (Not one deleted as it was read: a read begun before says it's there.)
+  const gone = deleted.get(name);
+  place.sessions = new Map(sessions.filter(each => !gone?.has(each.id)).map(each => [each.id, each]));
+  deleted.delete(name);
+  // (Its events' count starts again: a read under way for an earlier one answers for nothing now.)
+  for (const key of asked.keys()) if (key.startsWith(name + " ")) asked.delete(key);
+  // And what the box knows read again, in case a watch missed a change.
+  known = null;
   if (running) place.running = running;
   places.set(name, place);
   // What its events said meanwhile may be newer than what was read: read those again.
@@ -350,13 +413,24 @@ async function readOnce(name: string, target: Target): Promise<void> {
   workOut();
 }
 
-/** One session of `name`'s read again: as it is now, or gone. */
+// Each session's events so far, by place, so a read answers only for the latest (one read after an
+// earlier event, landing after a later one's, says nothing); and the sessions deleted since each
+// place was last read whole, which no read brings back until the next whole read.
+const asked = new Map<string, number>();
+const deleted = new Map<string, Set<string>>();
+let eventCount = 0;
+
+/** One session of `name`'s read again: as it is now, or gone; unless another event came for it
+ * since (a later read answers for that), or it was deleted. */
 async function readOne(name: string, target: Target, id: string): Promise<void> {
+  const key = `${name} ${id}`;
+  const at = asked.get(key);
+  const current = () => asked.get(key) === at && !deleted.get(name)?.has(id);
   try {
     const session = await call(target, "GET", `/api/session/${encodeURIComponent(id)}`, undefined, AbortSignal.timeout(10_000));
-    if (isObject(session) && session.id === id) places.get(name)?.sessions.set(id, session as unknown as EngineSession);
+    if (current() && isObject(session) && session.id === id) places.get(name)?.sessions.set(id, session as unknown as EngineSession);
   } catch (error) {
-    if ((error as { status?: number }).status === 404) places.get(name)?.sessions.delete(id);
+    if (current() && (error as { status?: number }).status === 404) places.get(name)?.sessions.delete(id);
   }
 }
 
@@ -370,6 +444,11 @@ export async function noteListEvent(name: string, target: Target, event: { type?
   if (typeof id !== "string" || !id.startsWith("ses")) return;
   // (Read whole now: it's read again once that's in.)
   reading.get(name)?.add(id);
+  asked.set(`${name} ${id}`, ++eventCount);
+  if (event.type === "session.deleted") {
+    deleted.set(name, (deleted.get(name) ?? new Set()).add(id));
+    if (deleted.get(name)!.size > 5000) deleted.get(name)!.clear();
+  }
   const place = places.get(name);
   if (!place) return;
   if (event.type === "session.deleted") {
@@ -400,9 +479,9 @@ const pendingPlaces = (): string[] => (places.has("bridge") || bridgeTarget() ==
 
 /** `sessions` (each with its place) as listed, with the sessions of `pending` places carried over as
  * `before` had them. */
-function withPending(sessions: EngineSession[], placeOf: Record<string, string>, running: Set<string>, pending: string[], before: Kept | null): Listed {
-  const box = placeNow(running, sessions);
-  const listed = listOfSessions(sessions, box).sessions;
+function withPending(sessions: EngineSession[], placeOf: Record<string, string>, running: Set<string>, pending: string[], before: Kept | null, knows?: BoxKnows): Listed {
+  const box = placeNow(running, sessions, knows);
+  const listed = listOfSessions(sessions, box, knows).sessions;
   if (pending.length && before) {
     for (const [id, entry] of Object.entries(before.sessions)) {
       if (id in listed || !entry.place || !pending.includes(entry.place)) continue;
@@ -430,10 +509,55 @@ export function workOut(now = Date.now()): void {
     }
     for (const id of place.running) running.add(id);
   }
-  const before = latest;
-  latest = commit(withPending(sessions, placeOf, running, pendingPlaces(), before ?? readList()), now, LIST_FILE, process.pid);
-  if (before && before.epoch === latest.epoch && before.seq === latest.seq) return;
+  const was = latest ? cursorOf(latest) : null;
+  known ??= readBoxKnows();
+  const listed = withPending(sessions, placeOf, running, pendingPlaces(), latest ?? readList(), known);
+  if (latest?.owner === process.pid) {
+    // Its own, as it keeps it: what changed taken in here, the file written a moment after (a few
+    // changes at once are one write; one of when sessions last changed alone, more slowly).
+    const { changed, noted, telling } = takeIn(latest, listed, now, process.pid);
+    if (changed || noted) scheduleWrite(telling || noted);
+  } else {
+    latest = commit(listed, now, LIST_FILE, process.pid);
+    lastWrite = performance.now();
+  }
+  if (was === cursorOf(latest)) return;
   for (const tell of [...listFollowers]) try { tell(); } catch {}
+}
+
+/** The list as this process keeps it (the long-running one's), else as its file has it. */
+export const keptList = (): Kept | null => latest ?? readList();
+
+// What the box knows beside its sessions, as last read (`readBoxKnows`): null to read again.
+let known: BoxKnows | null = null;
+
+/** How often the file is written at most: once a second, or every ten while only when sessions
+ * last changed did (a run's every step). */
+const WRITE_EVERY = 1000;
+const QUIET_WRITE_EVERY = 10_000;
+let lastWrite = -Infinity;
+let writeTimer: ReturnType<typeof setTimeout> | undefined;
+let writeDue = Infinity;
+
+function scheduleWrite(soon: boolean): void {
+  const now = performance.now();
+  const due = Math.max(now, lastWrite + (soon ? WRITE_EVERY : QUIET_WRITE_EVERY));
+  if (due <= now) return writeNow();
+  if (writeTimer && writeDue <= due) return;
+  clearTimeout(writeTimer);
+  writeDue = due;
+  writeTimer = setTimeout(writeNow, due - now);
+  writeTimer.unref?.();
+}
+
+function writeNow(): void {
+  clearTimeout(writeTimer);
+  writeTimer = undefined;
+  writeDue = Infinity;
+  lastWrite = performance.now();
+  const kept = latest;
+  if (!kept) return;
+  try { locked(LIST_FILE + ".lock", () => writePrivate(LIST_FILE, JSON.stringify(kept))); } catch {}
 }
 
 /** The engine's place read whole, where this process hasn't yet (it just started), and the bridge's
@@ -512,7 +636,7 @@ export async function* listRoute(context: RouteContext, match: RegExpMatchArray)
         wake = () => { clearTimeout(timer); done(true); };
       });
       wake = null;
-      if (!woke) workOut();
+      if (!woke) { known = null; workOut(); }
     }
   } finally {
     listFollowers.delete(told);
