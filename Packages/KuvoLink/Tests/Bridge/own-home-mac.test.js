@@ -92,10 +92,66 @@ test("as it starts, the files are what its host keeps: each written, a bot's own
   for (const [name, value] of host.keys) assert.equal(read(fileOf(name)), value);
 });
 
+test("a key its host lists but can't give now (its Keychain locked): its file stays, and it's tried again", async () => {
+  host.keys.set("KUVO_KEY_LOCKED_TOKEN", "kept");
+  assert.equal(await link.syncKeyFiles(), true);
+  assert.equal(read(fileOf("KUVO_KEY_LOCKED_TOKEN")), "kept");
+  // Listed, but its value answers as none (a prompt turned down).
+  host.failing = new Set(["/keys/get"]);
+  try {
+    assert.equal(await link.syncKeyFiles(), false, "not done: tried again soon");
+  } finally {
+    host.failing = null;
+  }
+  assert.equal(read(fileOf("KUVO_KEY_LOCKED_TOKEN")), "kept", "still there for its engine");
+  host.keys.delete("KUVO_KEY_LOCKED_TOKEN");
+  assert.equal(await link.syncKeyFiles(), true);
+  assert.equal(fs.existsSync(fileOf("KUVO_KEY_LOCKED_TOKEN")), false, "gone once its host no longer keeps it");
+});
+
+test("a key kept or removed while the files are brought up to date is never undone", async () => {
+  host.keys.set("KUVO_KEY_TODOIST_API_KEY", "tok_before");
+  host.keys.set("KUVO_KEY_LINEAR_TOKEN", "lin");
+  assert.equal(await link.syncKeyFiles(), true);
+  // The look begins: its host's list is read as it is now, and held there.
+  const listing = new Promise(resolve => { host.held = resolve; });
+  let letGo;
+  host.hold = new Promise(resolve => { letGo = resolve; });
+  const syncing = link.syncKeyFiles();
+  await listing;
+  host.held = null;
+  // Meanwhile a client keeps a new key for Todoist, and Linear's is removed, its file with it.
+  assert.equal((await link.answerIntegrations("POST", "kuvo/integrations/todoist", { keys: { API_KEY: "tok_after" } }, null, undefined, undefined, () => {})).status, 200);
+  host.keys.delete("KUVO_KEY_LINEAR_TOKEN");
+  fs.rmSync(fileOf("KUVO_KEY_LINEAR_TOKEN"));
+  letGo();
+  // (Linear's, listed as it began and gone now, it can't tell from one it can't read: it looks again soon.)
+  assert.equal(await syncing, false);
+  assert.equal(read(fileOf("KUVO_KEY_TODOIST_API_KEY")), "tok_after", "the new one, not what was there as it began");
+  assert.equal(fs.existsSync(fileOf("KUVO_KEY_LINEAR_TOKEN")), false, "not brought back");
+  assert.equal(await link.syncKeyFiles(), true);
+  assert.equal(fs.existsSync(fileOf("KUVO_KEY_LINEAR_TOKEN")), false);
+  assert.equal((await link.answerIntegrations("DELETE", "kuvo/integrations/todoist", undefined, null, undefined)).status, 200);
+});
+
+test("a key its host couldn't let go of keeps its file, as its host keeps it", async () => {
+  assert.equal((await link.answerIntegrations("POST", "kuvo/integrations/todoist", { keys: { API_KEY: "tok_stays" } }, null, undefined, undefined, () => {})).status, 200);
+  host.failing = new Set(["/keys/delete"]);
+  try {
+    assert.equal((await link.answerIntegrations("DELETE", "kuvo/integrations/todoist", undefined, null, undefined)).status, 503);
+  } finally {
+    host.failing = null;
+  }
+  assert.equal(host.keys.get("KUVO_KEY_TODOIST_API_KEY"), "tok_stays");
+  assert.equal(read(fileOf("KUVO_KEY_TODOIST_API_KEY")), "tok_stays", "its file as its host has it");
+  assert.equal((await link.answerIntegrations("DELETE", "kuvo/integrations/todoist", undefined, null, undefined)).status, 200);
+  assert.equal(fs.existsSync(fileOf("KUVO_KEY_TODOIST_API_KEY")), false);
+});
+
 // A client's route, as the app reaches a box it's attached to: one at a time, through the CLI.
-function route(method, pathname, body) {
+function route(method, pathname, body, only) {
   return new Promise((resolve, reject) => {
-    const given = Object.fromEntries(Object.entries({ ...process.env, ...env, TMPDIR: path.join(home, "tmp") }).filter(([, value]) => value !== undefined));
+    const given = Object.fromEntries(Object.entries({ ...(only ?? { ...process.env, ...env }), TMPDIR: path.join(home, "tmp") }).filter(([, value]) => value !== undefined));
     fs.mkdirSync(given.TMPDIR, { recursive: true });
     const child = spawn(process.execPath, [script, "box", "route"], { env: given, stdio: ["pipe", "pipe", "inherit"] });
     let out = "";
@@ -108,6 +164,27 @@ function route(method, pathname, body) {
     child.stdin.end(JSON.stringify({ method, path: pathname, body }));
   });
 }
+
+test("a client's command with nothing but the box's home keeps a key where serve does: on its host, with its file", async () => {
+  // Where its host answers, as the box finds it (no host in that command's environment).
+  fs.mkdirSync(path.join(box, "run"), { recursive: true });
+  fs.writeFileSync(path.join(box, "run", "host.json"), JSON.stringify({ url: host.url, password: PASSWORD }), { mode: 0o600 });
+  try {
+    const bare = { HOME: home, KUVO_HOME: box, PATH: process.env.PATH };
+    const kept = await route("POST", "kuvo/integrations/todoist", { keys: { API_KEY: "tok_cli" } }, bare);
+    assert.equal(kept.status, 200, JSON.stringify(kept.body));
+    assert.equal(host.keys.get("KUVO_KEY_TODOIST_API_KEY"), "tok_cli", "in the Keychain, as serve keeps them");
+    assert.equal(read(fileOf("KUVO_KEY_TODOIST_API_KEY")), "tok_cli");
+    // So serve's next look at the files keeps it.
+    assert.equal(await link.syncKeyFiles(), true);
+    assert.equal(read(fileOf("KUVO_KEY_TODOIST_API_KEY")), "tok_cli");
+    assert.equal((await route("DELETE", "kuvo/integrations/todoist", undefined, bare)).status, 200);
+    assert.equal(host.keys.has("KUVO_KEY_TODOIST_API_KEY"), false);
+    assert.equal(fs.existsSync(fileOf("KUVO_KEY_TODOIST_API_KEY")), false);
+  } finally {
+    fs.rmSync(path.join(box, "run", "host.json"), { force: true });
+  }
+});
 
 // A stand-in for caffeinate, named so: a program that runs until it's let go (two minutes at most),
 // never the Mac held for real.

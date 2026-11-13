@@ -94,8 +94,12 @@ let working: ChildProcess | null = null;
 
 const holding = () => working !== null && working.exitCode === null && working.signalCode === null;
 
+let noted = "";
+/** Said for every process, when it changed (or went). */
 function noteHold(): void {
-  try { writePrivate(WORK_AWAKE_FILE, JSON.stringify({ by: process.pid, hold: holding() ? working!.pid ?? null : null })); } catch {}
+  const now = JSON.stringify({ by: process.pid, hold: holding() ? working!.pid ?? null : null });
+  if (now === noted && fs.existsSync(WORK_AWAKE_FILE)) return;
+  try { writePrivate(WORK_AWAKE_FILE, now); noted = now; } catch {}
 }
 
 /** Whether the Mac is held awake for agents' work now, by whichever of this box's processes holds
@@ -129,16 +133,26 @@ export function holdForWork(on: boolean, hold: WorkHold = WORK_HOLD): void {
   noteHold();
 }
 
+/** How long a hold stays while whether anything works can't be told, before it's let go. */
+export const UNTOLD_FOR = 5 * 60_000;
+let untoldSince: number | null = null;
+
 /** One look: held while the setting's on and something's at work (`busy`: null when that can't be
- * told, a recorded engine not answering), let go otherwise; where it can't be told, as it was.
- * The setting's read again once `busy` answers, so one turned off meanwhile is never undone. */
-export async function lookAtWork(busy: () => Promise<boolean | null>, hold: WorkHold = WORK_HOLD, setting = keepsAwakeSetting): Promise<boolean> {
-  const now = setting() ? await busy().catch(() => null) : false;
-  if (now === null) {
-    noteHold();
-    return holding();
+ * told, a recorded engine not answering), let go otherwise; where it can't be told, as it was, for
+ * five minutes at most (`UNTOLD_FOR`). The setting's read again once `busy` answers, so one turned
+ * off meanwhile is never undone. */
+export async function lookAtWork(busy: () => Promise<boolean | null>, hold: WorkHold = WORK_HOLD, setting = keepsAwakeSetting, now = Date.now()): Promise<boolean> {
+  const working = setting() ? await busy().catch(() => null) : false;
+  if (working === null) {
+    untoldSince ??= now;
+    if (now - untoldSince < UNTOLD_FOR) {
+      noteHold();
+      return holding();
+    }
+  } else {
+    untoldSince = null;
   }
-  holdForWork(now && setting(), hold);
+  holdForWork(working === true && setting(), hold);
   return holding();
 }
 

@@ -67,11 +67,11 @@ import Testing
         return process
     }
 
-    /// What a test started, stopped by its process, with what the keeper recorded holding, and the
-    /// test's folder gone.
+    /// What a test started, stopped by its process, with what it recorded starting (a keeper the
+    /// engine's start started first, then what it held and ran), and the test's folder gone.
     private func cleanUp(_ processes: [Process]) {
         for process in processes where process.isRunning { process.terminate(); process.waitUntilExit() }
-        for record in ["awake.pid", "engine.json"] {
+        for record in ["box.pid", "awake.pid", "engine.json"] {
             let said = text(run.appending(path: record))
             let pid = Int32(said.trimmingCharacters(in: .whitespacesAndNewlines)) ?? Int32(said.firstMatch(of: /"pid":(\d+)/)?.1 ?? "")
             if let pid, pid > 1 { kill(pid, SIGTERM) }

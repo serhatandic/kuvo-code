@@ -71,6 +71,11 @@ export const APP_FOLDER = process.env.KUVO_BOX === "mac" ? path.dirname(path.res
 /** A Mac's box in a home of its own: what its app did for it in its folder, it does itself (its
  * integration keys' files, keeping the Mac awake while agents work). */
 export const OWN_HOME_MAC = IS_MAC && APP_FOLDER === null;
+// (The app's keeper names a folder of the app's: one whose folder around it is your home is a home
+// of its own, started as the app's by mistake, which would take your home for the app's folder.)
+if (APP_FOLDER && [homeFolder(), accountHome()].some(home => located(APP_FOLDER) === located(home))) {
+  throw new Error(`This Mac's box was started as the app's (KUVO_BOX=mac) in ${K}, a home of its own: its folder around it is your home, not the app's.`);
+}
 
 /** Your own data folder (`XDG_DATA_HOME`, else `~/.local/share`), as apps other than Kuvo Code's
  * read it: on a machine, the box's points into Kuvo Code's folder, and yours is what its launch

@@ -342,6 +342,9 @@ export function appTemporary(): string | null {
   return path.basename(tmp) === path.basename(APP_FOLDER) ? tmp : null;
 }
 
+/** Every copy's temporary folder (`/private/var/folders/…/run.kuvo.code…`), as a pattern. */
+export const APP_TEMPORARY_PATTERN = `^/private/var/folders/[^/]+/[^/]+/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`;
+
 /**
  * The caches of npm, pnpm and uv for commands in the sandbox, Kuvo Code's own: npx, `pnpm dlx` and
  * uvx fetch a package there and run it from it, so nothing they fetch runs outside the sandbox, as
@@ -429,7 +432,7 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
       // Every copy's (`run.kuvo.code…`), wherever the system keeps an app's.
       kuvoPatterns: [
         `^${escapeRegex(home)}/Library/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`,
-        `^/private/var/folders/[^/]+/[^/]+/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`,
+        APP_TEMPORARY_PATTERN,
       ],
       patternFolders: [`^${escapeRegex(home)}/Library/[^/]+$`, `^/private/var/folders/[^/]+/[^/]+/[^/]+$`],
       writable: ["/private/tmp", "/private/var/tmp", "/dev", ...userTemporary(), ...inHome([...CACHES, ...MAC_CACHES])],

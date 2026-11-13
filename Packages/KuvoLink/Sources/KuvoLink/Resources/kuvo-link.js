@@ -552,6 +552,9 @@ function recordedKind(file = KIND_FILE) {
 var IS_MAC = process.env.KUVO_BOX === "mac" || recordedKind() === "mac";
 var APP_FOLDER = process.env.KUVO_BOX === "mac" ? path3.dirname(path3.resolve(K)) : null;
 var OWN_HOME_MAC = IS_MAC && APP_FOLDER === null;
+if (APP_FOLDER && [homeFolder(), accountHome()].some((home) => located(APP_FOLDER) === located(home))) {
+  throw new Error(`This Mac's box was started as the app's (KUVO_BOX=mac) in ${K}, a home of its own: its folder around it is your home, not the app's.`);
+}
 function ownDataHome(env = process.env, home = homeFolder()) {
   const own = "KUVO_OWN_XDG_DATA_HOME" in env ? env.KUVO_OWN_XDG_DATA_HOME : env.XDG_DATA_HOME && !path3.resolve(env.XDG_DATA_HOME).startsWith(path3.resolve(K)) ? env.XDG_DATA_HOME : undefined;
   return own && path3.isAbsolute(own) ? own : path3.join(home, ".local", "share");
@@ -3570,6 +3573,7 @@ function appTemporary() {
   const tmp = path16.dirname(path16.resolve(os3.tmpdir()));
   return path16.basename(tmp) === path16.basename(APP_FOLDER) ? tmp : null;
 }
+var APP_TEMPORARY_PATTERN = `^/private/var/folders/[^/]+/[^/]+/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`;
 function sandboxCaches() {
   const tmp = appTemporary();
   const root = throughLinks(tmp ? path16.join(homeFolder(), "Library", "Caches", path16.basename(tmp)) : path16.join(K, "cache"));
@@ -3646,7 +3650,7 @@ function fencePolicy(ports = []) {
       ],
       kuvoPatterns: [
         `^${escapeRegex(home)}/Library/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`,
-        `^/private/var/folders/[^/]+/[^/]+/[^/]+/run\\.kuvo\\.code[^/]*(/|$)`
+        APP_TEMPORARY_PATTERN
       ],
       patternFolders: [`^${escapeRegex(home)}/Library/[^/]+$`, `^/private/var/folders/[^/]+/[^/]+/[^/]+$`],
       writable: ["/private/tmp", "/private/var/tmp", "/dev", ...userTemporary(), ...inHome([...CACHES, ...MAC_CACHES])],
@@ -6736,9 +6740,10 @@ function keepsAwakeSetting(file = WORK_SETTINGS_FILE) {
     return true;
   }
 }
+var KEEPS_AWAKE_REFUSED = "Say whether to keep this Mac awake while agents work: keepsAwake, true or false.";
 function setKeepsAwake(given, file = WORK_SETTINGS_FILE) {
   if (typeof given !== "boolean")
-    return { refused: "Say whether to keep this Mac awake while agents work: keepsAwake, true or false." };
+    return { refused: KEEPS_AWAKE_REFUSED };
   writeSettings2({ keepsAwake: given }, file);
   return { keepsAwake: given };
 }
@@ -6809,9 +6814,14 @@ var WORK_HOLD = { command: "/usr/bin/caffeinate", args: ["-i", "-w", String(proc
 var WORK_AWAKE_FILE = path28.join(RUN, "work-awake.json");
 var working = null;
 var holding2 = () => working !== null && working.exitCode === null && working.signalCode === null;
+var noted = "";
 function noteHold() {
+  const now = JSON.stringify({ by: process.pid, hold: holding2() ? working.pid ?? null : null });
+  if (now === noted && fs27.existsSync(WORK_AWAKE_FILE))
+    return;
   try {
-    writePrivate(WORK_AWAKE_FILE, JSON.stringify({ by: process.pid, hold: holding2() ? working.pid ?? null : null }));
+    writePrivate(WORK_AWAKE_FILE, now);
+    noted = now;
   } catch {}
 }
 function awakeForWork() {
@@ -6850,13 +6860,20 @@ function holdForWork(on, hold = WORK_HOLD) {
   }
   noteHold();
 }
-async function lookAtWork(busy, hold = WORK_HOLD, setting = keepsAwakeSetting) {
-  const now = setting() ? await busy().catch(() => null) : false;
-  if (now === null) {
-    noteHold();
-    return holding2();
+var UNTOLD_FOR = 5 * 60000;
+var untoldSince = null;
+async function lookAtWork(busy, hold = WORK_HOLD, setting = keepsAwakeSetting, now = Date.now()) {
+  const working = setting() ? await busy().catch(() => null) : false;
+  if (working === null) {
+    untoldSince ??= now;
+    if (now - untoldSince < UNTOLD_FOR) {
+      noteHold();
+      return holding2();
+    }
+  } else {
+    untoldSince = null;
   }
-  holdForWork(now && setting(), hold);
+  holdForWork(working === true && setting(), hold);
   return holding2();
 }
 var looking = null;
@@ -7921,12 +7938,15 @@ async function boxBusy(readEngine = readEngineFile, readBridge = readBridgeFile)
 }
 async function agentsWorking(readEngine = readEngineFile, readBridge = readBridgeFile) {
   let unknown = false;
-  for (const read of [readEngine, readBridge]) {
+  for (const [read, program] of [[readEngine, "opencode"], [readBridge, "kuvo-agents"]]) {
     let target = null;
     try {
       target = read();
     } catch {}
     if (!target?.port || !target?.password)
+      continue;
+    const pid = target.pid;
+    if (pid !== undefined && !processRuns(pid, program))
       continue;
     const answer = await asked(target, "GET", "api/session/active").catch(() => null);
     const active = answer?.data;
@@ -9286,8 +9306,9 @@ async function proveHost(host, signal) {
   provenBy = host.said;
 }
 async function proveVaultHost(host) {
-  if (!HOST_VAULT_SECRET)
-    throw new KeysUnavailable("Kuvo Code on this Mac didn't give its vault its secret. Quit Kuvo Code and open it again.");
+  if (!HOST_VAULT_SECRET) {
+    throw new KeysUnavailable(OWN_HOME_MAC ? "This Mac's vault answers only through its box's service, which isn't what was asked." : "Kuvo Code on this Mac didn't give its vault its secret. Quit Kuvo Code and open it again.");
+  }
   if (vaultProvenBy === host.said)
     return;
   const nonce = crypto16.randomBytes(32).toString("hex");
@@ -20750,7 +20771,7 @@ var within4 = (file, folder) => file === folder || file.startsWith(folder.endsWi
 function inMacApp(file) {
   if (!OWN_HOME_MAC || process.platform !== "darwin")
     return false;
-  if (/^\/private\/var\/folders\/[^/]+\/[^/]+\/[^/]+\/run\.kuvo\.code[^/]*(\/|$)/i.test(file))
+  if (new RegExp(APP_TEMPORARY_PATTERN).test(file))
     return true;
   return [...new Set([homeFolder(), accountHome()].map((each) => real2(each) ?? each))].some((home) => within4(file, path76.join(home, "Library")) && /^run\.kuvo\.code/i.test(path76.relative(path76.join(home, "Library"), file).split(path76.sep)[1] ?? ""));
 }
@@ -21842,21 +21863,27 @@ async function syncKeyFiles() {
     return false;
   }
   const files = [...listOf(BOX_KEYS).filter((each) => !each.includes("__")), ...listOf(BOT_KEYS).filter((each) => each.includes("__"))].filter((name) => STORED_KEY.test(name));
+  let all = true;
   for (const name of [...new Set([...names, ...files])]) {
     await keyFileWork(async () => {
       let value;
       try {
         value = await readKey(name);
       } catch {
+        all = false;
         return;
       }
-      if (value === null)
+      if (value !== null) {
+        if (textOf(keyFile(name)) !== value)
+          writeKeyFile(name, value);
+      } else if (names.includes(name)) {
+        all = false;
+      } else {
         removeKeyFile(name);
-      else if (textOf(keyFile(name)) !== value)
-        writeKeyFile(name, value);
+      }
     });
   }
-  return true;
+  return all;
 }
 var keeping = null;
 function keepKeyFiles(every = 12 * 3600000, retry = 60000) {
@@ -39433,7 +39460,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "1c31729e32a3";
+var BRIDGE_VERSION = "e98864b61c52";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -43318,7 +43345,7 @@ async function* workAsksRoute(context, match) {
       return yield* json(400, { message: keepsMacAwakeItself() ? "Send {projectsFolder}: a full path, or null; or {keepsAwake}: true or false." : "Send {projectsFolder}: a full path, or null." });
     }
     if (keepsAwake && typeof given.keepsAwake !== "boolean")
-      return yield* json(400, { message: "Say whether to keep this Mac awake while agents work: keepsAwake, true or false." });
+      return yield* json(400, { message: KEEPS_AWAKE_REFUSED });
     if ("projectsFolder" in given && given.projectsFolder !== null) {
       const checked = folderGiven(given.projectsFolder);
       if ("refused" in checked)

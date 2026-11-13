@@ -22,7 +22,7 @@ import { botLimits } from "../work/limits";
 import { answerWork, askFollowers, workAsks } from "../work/asks";
 import { madeWords, makeProject } from "../work/projects";
 import { startOfDay } from "../work/clock";
-import { folderGiven, setKeepsAwake, setProjectsFolder, workSettings } from "../work/settings";
+import { folderGiven, KEEPS_AWAKE_REFUSED, setKeepsAwake, setProjectsFolder, workSettings } from "../work/settings";
 import { awakeForWork, keepsMacAwakeItself } from "../work/awake";
 import { unansweringList, unansweringNow } from "../work/unanswering";
 import { answerGoal, askGoal, goalFollowers, goalPlans } from "../work/goals";
@@ -151,7 +151,7 @@ export async function* workAsksRoute(context: RouteContext, match: RegExpMatchAr
       return yield* json(400, { message: keepsMacAwakeItself() ? "Send {projectsFolder}: a full path, or null; or {keepsAwake}: true or false." : "Send {projectsFolder}: a full path, or null." });
     }
     // Both checked before either is kept.
-    if (keepsAwake && typeof given.keepsAwake !== "boolean") return yield* json(400, { message: "Say whether to keep this Mac awake while agents work: keepsAwake, true or false." });
+    if (keepsAwake && typeof given.keepsAwake !== "boolean") return yield* json(400, { message: KEEPS_AWAKE_REFUSED });
     if ("projectsFolder" in given && given.projectsFolder !== null) {
       const checked = folderGiven(given.projectsFolder);
       if ("refused" in checked) return yield* json(400, { message: checked.refused });

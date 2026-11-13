@@ -178,10 +178,13 @@ async function boxBusy(readEngine: () => EngineRecord = readEngineFile, readBrid
  * that can't be told (one that's recorded as running didn't answer, a moment's restart). */
 export async function agentsWorking(readEngine: () => EngineRecord = readEngineFile, readBridge: () => BridgeRecord = readBridgeFile): Promise<boolean | null> {
   let unknown = false;
-  for (const read of [readEngine, readBridge]) {
+  for (const [read, program] of [[readEngine, "opencode"], [readBridge, "kuvo-agents"]] as const) {
     let target: Target | null = null;
     try { target = read(); } catch {}
     if (!target?.port || !target?.password) continue;
+    // (A record its process left as it went, killed: nothing works there.)
+    const pid = (target as { pid?: unknown }).pid;
+    if (pid !== undefined && !runs(pid, program)) continue;
     const answer = await asked(target, "GET", "api/session/active").catch(() => null) as UncheckedAnswer | null;
     const active = answer?.data;
     if (Array.isArray(active) ? active.length : isObject(active) && Object.keys(active).length) return true;

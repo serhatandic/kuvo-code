@@ -79,9 +79,11 @@ export function keepsAwakeSetting(file = WORK_SETTINGS_FILE): boolean {
   }
 }
 
+export const KEEPS_AWAKE_REFUSED = "Say whether to keep this Mac awake while agents work: keepsAwake, true or false.";
+
 /** Keep This Mac Awake on or off, or why not. */
 export function setKeepsAwake(given: unknown, file = WORK_SETTINGS_FILE): { keepsAwake: boolean } | { refused: string } {
-  if (typeof given !== "boolean") return { refused: "Say whether to keep this Mac awake while agents work: keepsAwake, true or false." };
+  if (typeof given !== "boolean") return { refused: KEEPS_AWAKE_REFUSED };
   writeSettings({ keepsAwake: given }, file);
   return { keepsAwake: given };
 }

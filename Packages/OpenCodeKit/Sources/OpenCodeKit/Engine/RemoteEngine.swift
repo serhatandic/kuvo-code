@@ -1326,6 +1326,7 @@ public final class RemoteServer: @unchecked Sendable {
         own_mac=; [ "$(tr -d ' \\t\\r\\n' 2>/dev/null <"$K/box/kind")" = mac ] && own_mac=1
         if [ -n "$own_mac" ]; then
           unset KUVO_SETTINGS \(privateSettingsVariable)
+          rm -f "$K/keys/settings.json"
         elif [ -f "$K/box/opencode.json" ]; then
           unset KUVO_SETTINGS \(privateSettingsVariable)
           rm -f "$K/keys/settings.json"

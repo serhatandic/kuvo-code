@@ -121,26 +121,35 @@ const keyFileWork = <T>(work: () => Promise<T>): Promise<T> => lockedWhile(KEY_F
  * what its host says of it then, under the lock its changes take, so a key kept or removed meanwhile
  * (from another process too) is never undone. False, and the files as they were, where its host
  * can't list them (this Mac's app or its helper not answering, its Keychain locked): a list that
- * can't be read isn't "no keys". One key that can't be read now stays as its file has it. */
+ * can't be read isn't "no keys". False too where a key it lists can't be read now, whose file stays
+ * as it is; only one it no longer lists, and says it doesn't keep, goes. */
 export async function syncKeyFiles(): Promise<boolean> {
   if (!writesKeyFiles()) return false;
   let names: string[];
   try { names = await keyNames(); } catch { return false; }
   const files = [...listOf(BOX_KEYS).filter(each => !each.includes("__")), ...listOf(BOT_KEYS).filter(each => each.includes("__"))].filter(name => STORED_KEY.test(name));
+  let all = true;
   for (const name of [...new Set([...names, ...files])]) {
     await keyFileWork(async () => {
       let value: string | null;
-      try { value = await readKey(name); } catch { return; }
-      if (value === null) removeKeyFile(name);
-      else if (textOf(keyFile(name)) !== value) writeKeyFile(name, value);
+      try { value = await readKey(name); } catch { all = false; return; }
+      if (value !== null) {
+        if (textOf(keyFile(name)) !== value) writeKeyFile(name, value);
+      } else if (names.includes(name)) {
+        // Listed, but its value can't be had now (the Keychain locked, its prompt turned down,
+        // which the host answers as none): its file stays, and it's tried again soon.
+        all = false;
+      } else {
+        removeKeyFile(name);
+      }
     });
   }
-  return true;
+  return all;
 }
 
 let keeping: ReturnType<typeof setTimeout> | null = null;
 /** The keys' files kept as its host keeps them, while this box runs (`serve`): now, a minute later
- * while its host can't list them, and twice a day after, for a key changed in the Keychain without
+ * while its host can't list them or give one it lists, and twice a day after, for a key changed in the Keychain without
  * the box (an older client's Settings), as this Mac's app kept its own files. */
 export function keepKeyFiles(every = 12 * 3_600_000, retry = 60_000): void {
   if (!writesKeyFiles() || keeping) return;
