@@ -2,16 +2,31 @@ import Foundation
 import Testing
 @testable import KuvoCode
 
-/// The project's files, as the panel's file filter and @ mentions list them (C5): in a repository,
-/// its files and new ones but not those it ignores, by their names as they are; outside one, every
-/// file but the usual heavy folders; and a project folder its repository ignores still lists its
-/// files. With several folders, each file after its folder's name. "@" finds them by name.
+/// The project's files, as the panel's file filter and @ mentions list them (C5), from the box the
+/// folder is on (this Mac's, the real box), as a phone would ask: in a repository, its files and
+/// new ones but not those it ignores, by their names as they are; outside one, every file but the
+/// usual heavy folders; and a project folder its repository ignores still lists its files. With
+/// several folders, each file after its folder's name. "@" finds them by name. (The box's own
+/// checks: Packages/KuvoLink/Tests/Bridge/changes.test.js.)
+@MainActor
 @Suite struct ProjectFilesTests {
-    private func paths(_ roots: [URL]) -> [String] {
-        ProjectFiles.list(roots).map(\.path).sorted()
+    let box: GitTestBox
+
+    init() async throws {
+        box = try await GitTestBox()
     }
 
-    @Test func aRepositorysFilesWithoutWhatItIgnores() throws {
+    private func paths(_ roots: [URL]) async -> [String] {
+        let client = box.client
+        return await ProjectFiles.list(roots) { _ in client }.map(\.path).sorted()
+    }
+
+    private func mentionable(_ roots: [URL]) async -> [ProjectFiles.File] {
+        let client = box.client
+        return await ProjectFiles.mentionable(roots) { _ in client }
+    }
+
+    @Test func aRepositorysFilesWithoutWhatItIgnores() async throws {
         let repo = try TestRepository()
         try repo.write(".gitignore", "*.log\n")
         try repo.write("src/app.swift", "a\n")
@@ -19,10 +34,10 @@ import Testing
         try repo.commitAll()
         try repo.write("new.swift", "c\n")
         try repo.write("debug.log", "d\n")
-        #expect(paths([repo.url]) == [".gitignore", "café notes.md", "new.swift", "src/app.swift"])
+        #expect(await paths([repo.url]) == [".gitignore", "café notes.md", "new.swift", "src/app.swift"])
     }
 
-    @Test func aFolderOutsideGitSkipsHeavyFolders() throws {
+    @Test func aFolderOutsideGitSkipsHeavyFolders() async throws {
         let folder = AppInfo.testRoot.appending(path: "Folders/plain-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: folder) }
         for path in ["index.html", "js/main.js", "node_modules/lib/index.js"] {
@@ -30,25 +45,25 @@ import Testing
             try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
             try Data("x".utf8).write(to: file)
         }
-        #expect(paths([folder]) == ["index.html", "js/main.js"])
+        #expect(await paths([folder]) == ["index.html", "js/main.js"])
     }
 
     /// A project in a folder its repository ignores (a dotfiles repository at home that ignores
     /// everything, say): its files are listed all the same.
-    @Test func aProjectItsRepositoryIgnoresListsItsFiles() throws {
+    @Test func aProjectItsRepositoryIgnoresListsItsFiles() async throws {
         let repo = try TestRepository()
         try repo.write(".gitignore", "*\n!.gitignore\n")
         try repo.commitAll()
         try repo.write("projects/site/index.html", "x\n")
         try repo.write("projects/site/css/style.css", "y\n")
-        #expect(paths([repo.url.appending(path: "projects/site")]) == ["css/style.css", "index.html"])
+        #expect(await paths([repo.url.appending(path: "projects/site")]) == ["css/style.css", "index.html"])
     }
 
-    @Test func severalFoldersEachByName() throws {
+    @Test func severalFoldersEachByName() async throws {
         let web = try TestRepository(), api = try TestRepository()
         try web.write("index.html", "x\n")
         try api.write("main.go", "y\n")
-        let files = ProjectFiles.mentionable([web.url, api.url])
+        let files = await mentionable([web.url, api.url])
         let named = files.map(\.mention)
         #expect(named.contains(web.url.lastPathComponent + "/"))
         #expect(named.contains("index.html"), "the primary folder's files by their paths there")
@@ -58,11 +73,11 @@ import Testing
     /// "@" in the composer: a word starting with it is a mention as it's typed; the files whose
     /// names start with what's typed come first, the primary folder's before another's and shorter
     /// paths before longer; picking one puts its path in, as the agent opens it, and a space.
-    @Test func atMentionsAFile() throws {
+    @Test func atMentionsAFile() async throws {
         let site = try TestRepository(), api = try TestRepository()
         for path in ["src/App.swift", "src/AppDelegate.swift", "docs/app-notes.md", "src/views/Header.swift"] { try site.write(path, "x\n") }
         try api.write("App.swift", "y\n")
-        let files = ProjectFiles.mentionable([site.url, api.url])
+        let files = await mentionable([site.url, api.url])
         let apiName = api.url.lastPathComponent
 
         let typed = "the crash in @app"

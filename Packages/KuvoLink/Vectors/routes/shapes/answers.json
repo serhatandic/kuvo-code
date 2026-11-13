@@ -3113,10 +3113,16 @@
             "literal": "folders.files"
            },
            {
+            "literal": "folders.tree"
+           },
+           {
             "literal": "git"
            },
            {
             "literal": "git.backups"
+           },
+           {
+            "literal": "git.branches"
            },
            {
             "literal": "git.changes.count"
@@ -3132,6 +3138,9 @@
            },
            {
             "literal": "git.push"
+           },
+           {
+            "literal": "git.status"
            },
            {
             "literal": "git.words"
@@ -3514,10 +3523,16 @@
             "literal": "folders.files"
            },
            {
+            "literal": "folders.tree"
+           },
+           {
             "literal": "git"
            },
            {
             "literal": "git.backups"
+           },
+           {
+            "literal": "git.branches"
            },
            {
             "literal": "git.changes.count"
@@ -3533,6 +3548,9 @@
            },
            {
             "literal": "git.push"
+           },
+           {
+            "literal": "git.status"
            },
            {
             "literal": "git.words"
@@ -4980,6 +4998,107 @@
        }
       }
      ]
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/git/branches",
+   "answers": {
+    "200": {
+     "oneOf": [
+      {
+       "object": {
+        "repository": {
+         "literal": false
+        }
+       }
+      },
+      {
+       "object": {
+        "repository": {
+         "literal": true
+        },
+        "root": "string",
+        "current": {
+         "oneOf": [
+          "string",
+          "null"
+         ]
+        },
+        "branches": {
+         "list": "string"
+        }
+       }
+      }
+     ]
+    },
+    "404": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "500": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/git/switch",
+   "answers": {
+    "200": {
+     "object": {}
+    },
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "404": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "422": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/git/status",
+   "answers": {
+    "200": {
+     "oneOf": [
+      {
+       "object": {
+        "repository": {
+         "literal": false
+        }
+       }
+      },
+      {
+       "object": {
+        "repository": {
+         "literal": true
+        },
+        "root": "string",
+        "uncommitted": "bool"
+       }
+      }
+     ]
+    },
+    "404": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "500": {
+     "object": {
+      "message": "string"
+     }
     }
    }
   },
@@ -6620,6 +6739,43 @@
     "200": {
      "object": {
       "path": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/folders/tree",
+   "answers": {
+    "200": {
+     "object": {
+      "path": "string",
+      "files": {
+       "list": "string"
+      },
+      "git": "bool"
+     }
+    },
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "403": {
+     "object": {
+      "message": "string",
+      "reason?": "string"
+     }
+    },
+    "404": {
+     "object": {
+      "message": "string",
+      "reason?": "string"
+     }
+    },
+    "500": {
+     "object": {
+      "message": "string",
+      "reason?": "string"
      }
     }
    }

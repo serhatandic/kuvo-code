@@ -2,17 +2,87 @@ import ClientChanges
 import Foundation
 import OpenCodeKit
 
-/// Whether a worktree has changes before Delete says what goes with it: one of what's left of git
-/// run by this app (`Git.run`), with the title bar's branches and the file list.
+/// The repository a folder is in, as the box it's on says (`kuvo/git/branches`, `kuvo/git/status`),
+/// and switching its branch there (`kuvo/git/switch`), as a phone would ask: the title bar's branch
+/// menu, Edit Project's worktree setup, and what Delete says goes with a worktree.
 nonisolated extension Git {
-    /// Changes that aren't committed, new files included; and, when git can't say (a machine's
-    /// connection dropped), as if there were, so nothing is thrown away on a guess.
-    /// New files count whatever git's settings say, as the Changes panel lists them.
-    /// `includingHidden`: also changes in submodules their `ignore` setting leaves out, for
-    /// before a worktree is removed, which would delete them unasked.
-    static func hasUncommittedChanges(in directory: String, includingHidden: Bool = false) -> Bool {
-        let hidden = ["--untracked-files=normal"] + (includingHidden ? ["--ignore-submodules=none"] : [])
-        return run(["status", "--porcelain"] + hidden, in: directory).map { !$0.isEmpty } ?? true
+    /// A folder's repository, as its box lists it for a branch menu.
+    struct Branches: Decodable, Equatable, Sendable {
+        /// In a repository at all.
+        var repository: Bool
+        /// The branch checked out; nil on none, or outside a repository.
+        var current: String?
+        /// Its branches, the latest commit first.
+        var branches: [String]
+
+        init(repository: Bool, current: String? = nil, branches: [String] = []) {
+            (self.repository, self.current, self.branches) = (repository, current, branches)
+        }
+
+        init(from decoder: any Decoder) throws {
+            enum Keys: String, CodingKey { case repository, current, branches }
+            let container = try decoder.container(keyedBy: Keys.self)
+            repository = try container.decode(Bool.self, forKey: .repository)
+            current = try container.decodeIfPresent(String.self, forKey: .current)
+            branches = try container.decodeIfPresent([String].self, forKey: .branches) ?? []
+        }
+    }
+
+    /// Switching branches on this Mac while Kuvo Code finishes an update: its background service
+    /// moves to the new version once the work that's running ends.
+    static let switchAfterUpdate = "Kuvo Code on this Mac is finishing an update. Switching branches works again once the work that’s running now ends; try again then."
+
+    /// Whether a box answered as one from before the route: `404` with nothing to say (a folder
+    /// that isn't there says why).
+    static func lacksRoute(_ status: Int, _ data: Data) -> Bool {
+        status == 404 && ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["message"] == nil
+    }
+
+    private struct InFolder: Encodable { let directory: String }
+
+    /// The folder's repository and its branches; nil when its box couldn't say.
+    @concurrent static func branches(at place: GitPlace) async -> Branches? {
+        guard let (status, data) = try? await place.client.send("POST", "kuvo/git/branches", body: JSONEncoder().encode(InFolder(directory: place.path))) else { return nil }
+        if (200..<300).contains(status) { return try? JSONDecoder().decode(Branches.self, from: data) }
+        guard lacksRoute(status, data), place.machine != nil else { return nil }
+        // COMPAT(beta.1 git-older-box): a machine's box from before `kuvo/git/branches`: its git over SSH, as before. Goes when 0.8.0 ships.
+        let folder = place.here(place.path)
+        guard run(["rev-parse", "--git-dir"], in: folder) != nil else { return Branches(repository: false) }
+        let listed = run(["for-each-ref", "--sort=-committerdate", "--format=%(refname:short)", "refs/heads"], in: folder) ?? ""
+        return Branches(repository: true, branches: listed.split(separator: "\n").map(String.init))
+    }
+
+    /// Switches the folder's repository to `branch`, or (`creating`) to a new one from where it is,
+    /// on its box, its hooks run there as in your terminal; nil when it went, else why not.
+    /// `environment`: your shell's, for a machine's older box only (over SSH, as before).
+    @concurrent static func switching(to branch: String, creating: Bool, at place: GitPlace, environment: [String: String]) async -> String? {
+        struct Asked: Encodable { let directory, branch: String; let create: Bool }
+        do {
+            let (status, data) = try await place.client.send("POST", "kuvo/git/switch", body: JSONEncoder().encode(Asked(directory: place.path, branch: branch, create: creating)))
+            if (200..<300).contains(status) { return nil }
+            guard lacksRoute(status, data) else { return BoxRefusal(status: status, data: data).message }
+            // COMPAT(beta.1 git-older-box): this Mac's older box, running on after an update, says Switch waits for it; a machine's box from before `kuvo/git/switch` switches with its git over SSH, as before. Goes when 0.8.0 ships.
+            guard place.machine != nil else { return switchAfterUpdate }
+            return report(["switch"] + (creating ? ["-c"] : []) + [branch], in: place.here(place.path), environment: environment)
+        } catch {
+            return place.unreachable(error)
+        }
+    }
+
+    /// Whether anything in the folder's repository isn't committed, as its box says: changes, new
+    /// files git doesn't ignore, and changes in submodules whatever their `ignore` setting (which
+    /// removing a worktree would delete unasked). When it can't say (its box away, the folder not a
+    /// repository now), as if there were, so nothing is thrown away on a guess.
+    @concurrent static func hasUncommittedChanges(at place: GitPlace) async -> Bool {
+        struct Answer: Decodable { let repository: Bool; let uncommitted: Bool? }
+        guard let (status, data) = try? await place.client.send("POST", "kuvo/git/status", body: JSONEncoder().encode(InFolder(directory: place.path))) else { return true }
+        if (200..<300).contains(status) {
+            guard let answer = try? JSONDecoder().decode(Answer.self, from: data), answer.repository else { return true }
+            return answer.uncommitted ?? true
+        }
+        guard lacksRoute(status, data), place.machine != nil else { return true }
+        // COMPAT(beta.1 git-older-box): a machine's box from before `kuvo/git/status`: its git over SSH, as before. Goes when 0.8.0 ships.
+        return run(["status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none"], in: place.here(place.path)).map { !$0.isEmpty } ?? true
     }
 }
 

@@ -1,7 +1,8 @@
 // A project's changes on this box, as the Changes panel shows and works them (PROTOCOL.md,
 // "Changes"): what git says changed, staging, unstaging and discarding a file, a file as git keeps
-// it (a picture's old side), committing and pushing, and bringing a branch's work back (Merge
-// into…, Create Pull Request). A client parses the diff itself; the box runs git, in the box's own
+// it (a picture's old side), committing and pushing, bringing a branch's work back (Merge into…,
+// Create Pull Request), and the repository's branches, switching them, and whether anything isn't
+// committed (a branch menu, what Delete says goes with a worktree). A client parses the diff itself; the box runs git, in the box's own
 // folders, with the box's git and its settings.
 
 import { execFile, execFileSync, spawn } from "node:child_process";
@@ -10,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { askedArgsLater, ownArgsLater } from "../../shared/git";
 import { parsed } from "../../shared/json";
-import type { GitChanges, GitChangesCount, PullRequestDraft } from "../../shared/routes/changes";
+import type { GitBranches, GitChanges, GitChangesCount, GitStatus, PullRequestDraft } from "../../shared/routes/changes";
 import { K } from "../home";
 import { askedEnv, commandEnv } from "../run-command";
 import type { AnswerPiece, RouteContext } from "../server/context";
@@ -377,8 +378,44 @@ export async function commit(directory: string, message: string, push: boolean, 
   return pushed ? { failed: `Committed, but the push didn’t go through:\n${pushed}`, committed: true } : null;
 }
 
+/** `directory`'s repository's top folder, or null outside one. */
+const rootOf = async (directory: string) => (await text(directory, ["rev-parse", "--show-toplevel"]))?.trim() || null;
+
+/** The repository `directory` is in, as a client's branch menu lists it: its top folder, the branch
+ * checked out (null on none) and its branches, the latest commit first; `{repository: false}`
+ * outside one, and null when git couldn't say. Read by names only: nothing settings name runs. */
+export async function branchesIn(directory: string): Promise<GitBranches | null> {
+  const root = await rootOf(directory);
+  if (!root) return { repository: false };
+  // By their full names: a tag of the same name would have `refname:short` write "heads/x".
+  const listed = await text(root, ["for-each-ref", "--sort=-committerdate", "--format=%(refname)", "refs/heads"]);
+  if (listed === null) return null;
+  const branch = (ref: string) => (ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : null);
+  const head = (await text(root, ["symbolic-ref", "--quiet", "HEAD"]))?.trim() ?? "";
+  return { repository: true, root, current: branch(head), branches: listed.split("\n").map(branch).filter((name): name is string => !!name) };
+}
+
+/** Switches `directory`'s repository to `branch`, or (`create`) to a new one from where it is, the
+ * changes not committed coming along, as `git switch` does in your terminal (its hooks run). null
+ * when it went, else what git said. */
+export async function switchBranch(directory: string, branch: string, create: boolean): Promise<string | null> {
+  const root = await rootOf(directory);
+  if (!root) return "Not a git repository.";
+  return refusal(root)(["switch", ...(create ? ["-c"] : []), branch]);
+}
+
+/** Whether anything in `directory`'s repository isn't committed: a change, a new file git doesn't
+ * ignore, or a change in a submodule whatever its `ignore` setting says, as removing a worktree
+ * would delete them; `{repository: false}` outside one, null when git couldn't say. */
+export async function statusIn(directory: string): Promise<GitStatus | null> {
+  const root = await rootOf(directory);
+  if (!root) return { repository: false };
+  const status = await text(root, ["status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none"]);
+  return status === null ? null : { repository: true, root, uncommitted: status.length > 0 };
+}
+
 /** The branch `directory` has checked out, or null. */
-const branchOf = async (directory: string) => (await text(directory, ["symbolic-ref", "--quiet", "--short", "HEAD"]))?.trim() || null;
+const branchOf =async (directory: string) => (await text(directory, ["symbolic-ref", "--quiet", "--short", "HEAD"]))?.trim() || null;
 
 /** Why `directory`'s branch can't go into `target` yet, if it can't: changes not committed (only
  * what's committed goes), or nothing `target` doesn't have. */
@@ -657,6 +694,19 @@ export async function* changesRoute(context: RouteContext): AsyncGenerator<Answe
     if (!root || !name || old === null || !STATUSES.includes(status)) return yield* json(400, { message: "Name a repository and a file in it." });
     const failed = await perform(route.slice("kuvo/git/".length) as "stage" | "unstage" | "discard", root, { path: name, oldPath: old, status }, scope);
     return yield* failed ? json(422, { message: failed }) : json(200, {});
+  }
+  if (route === "kuvo/git/branches" || route === "kuvo/git/status" || route === "kuvo/git/switch") {
+    const directory = folderAt(body.directory);
+    if (!directory) return yield* json(404, { message: "That folder isn’t there." });
+    if (route === "kuvo/git/switch") {
+      // A branch's name, never an option, nor more than one line.
+      const branch = typeof body.branch === "string" ? body.branch : "";
+      if (!branch.trim() || branch.startsWith("-") || /[\0\n\r]/.test(branch)) return yield* json(400, { message: "Name the branch." });
+      const failed = await switchBranch(directory, branch, body.create === true);
+      return yield* failed ? json(422, { message: failed }) : json(200, {});
+    }
+    const found = route === "kuvo/git/branches" ? await branchesIn(directory) : await statusIn(directory);
+    return yield* found ? json(200, found) : json(500, { message: "git couldn’t say." });
   }
   if (route === "kuvo/git/commit" || route === "kuvo/git/commit-diff") {
     const directory = folderAt(body.directory);

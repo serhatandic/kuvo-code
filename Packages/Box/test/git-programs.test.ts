@@ -13,12 +13,14 @@ import { join } from "node:path"
 
 let box: string
 let changes: typeof import("../src/link/areas/changes")
+let folders: typeof import("../src/link/areas/folders")
 let backups: typeof import("../src/link/work/backups")
 let reviews: typeof import("../src/agents/reviews")
 let snapshots: typeof import("../src/agents/snapshots")
 beforeAll(async () => {
   box = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-git-programs-")))
   changes = await import("../src/link/areas/changes")
+  folders = await import("../src/link/areas/folders")
   backups = await import("../src/link/work/backups")
   reviews = await import("../src/agents/reviews")
   snapshots = await import("../src/agents/snapshots")
@@ -102,6 +104,24 @@ test("Changes reads what changed in it without starting any of them", async () =
   expect((await changes.commitDiff(top)).diff).toContain("+two, longer")
   expect(await changes.countIn(top, "uncommitted")).toMatchObject({ repository: true, files: 1, additions: 1, deletions: 0 })
   expect(ran()).toEqual([])
+})
+
+test("the branch menu, Delete's check and the file list read it without starting any of them", async () => {
+  const { top, ran } = planted()
+  expect(await changes.branchesIn(top)).toMatchObject({ repository: true, branches: [expect.any(String)] })
+  expect(await changes.statusIn(top)).toMatchObject({ repository: true, uncommitted: true })
+  const listed = await folders.listTree(`kuvo/folders/tree?path=${encodeURIComponent(top)}`)
+  expect(listed.value).toMatchObject({ git: true, files: expect.arrayContaining([".gitattributes", "a.txt"]) })
+  expect(ran()).toEqual([])
+})
+
+test("switching branches runs its hooks, as your terminal would, but no fsmonitor or pager", async () => {
+  const { top, ran } = planted()
+  expect(await changes.switchBranch(top, "idea", true)).toBeNull()
+  expect(git(top, "symbolic-ref", "--short", "HEAD")).toBe("idea")
+  expect(ran()).toEqual(expect.arrayContaining(["hooks-post-checkout"]))
+  expect(ran()).not.toContain("fsmonitor")
+  expect(ran()).not.toContain("pager")
 })
 
 test("a review reads its changes without starting any of them", async () => {

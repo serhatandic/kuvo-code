@@ -593,9 +593,9 @@ struct SidebarView: View {
     /// Reads whether its worktree has changes that weren't committed first, for what Delete says.
     private func confirm(_ session: Session, then ask: @escaping (Session) -> Void) {
         guard hasOwnWorktree(session) else { return ask(session) }
-        let directory = session.location.directory
+        let place = GitPlace.of(session.location.directory, box: app.box)
         Task {
-            worktreeIsDirty = await Task.detached { Git.hasUncommittedChanges(in: directory, includingHidden: true) }.value
+            worktreeIsDirty = await Git.hasUncommittedChanges(at: place)
             ask(session)
         }
     }

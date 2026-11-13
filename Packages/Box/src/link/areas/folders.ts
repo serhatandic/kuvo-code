@@ -1,7 +1,9 @@
-// Folders (PROTOCOL.md, `kuvo/folders`): this box's folders, for a client to choose one.
+// Folders (PROTOCOL.md, `kuvo/folders`): this box's folders, for a client to choose one, and every
+// file under one (`kuvo/folders/tree`), for a project's file filter and "@".
 
 import fs from "node:fs";
 import path from "node:path";
+import { gitOutLater } from "../git";
 import { parsed } from "../../shared/json";
 import type { Body } from "../../shared/json";
 import { promptedFolders } from "../../shared/platform";
@@ -38,6 +40,70 @@ export function refusal(at: string, error: unknown): JSONAnswer<FolderRefused> {
   return { status: 500, value: { message: `${at} can't be read here.`, reason: said ? said[0]!.toUpperCase() + said.slice(1) : "It couldn't be read" } };
 }
 
+/** The folder a request's `path` names (none: the home folder; `~/` starts there), or null for one
+ * that isn't a full path. */
+function askedFolder(query: URLSearchParams, home: string): string | null {
+  const given = (query.get("path") ?? "").trim();
+  const folder = !given || given === "~" ? home : given.startsWith("~/") ? path.join(home, given.slice(2)) : given;
+  return path.isAbsolute(folder) ? path.resolve(folder) : null;
+}
+
+/** Every file under one of this box's folders, as a project's file filter and "@" list them. */
+export interface FolderTree {
+  path: string;
+  files: string[];
+  git: boolean;
+}
+
+/** How many files a tree lists at most. */
+export const TREE_LIMIT = 20_000;
+// Folders a walk outside git skips: what builds and installs fill.
+const HEAVY = new Set([".git", "node_modules", "build", "DerivedData", ".build", "Pods", "dist", ".next"]);
+
+/** `kuvo/folders/tree?path=`: every file under one of this box's folders (`~/` starts at the home
+ * folder), by its path there, at most
+ * `limit`: in a repository git's list (tracked and new, without what it ignores, each once, names as
+ * they are), `git` true; otherwise, and where git lists nothing there (a folder its repository
+ * ignores), a walk that skips the usual heavy folders and doesn't follow links. Refused as
+ * `kuvo/folders` refuses a folder it can't read. */
+export async function listTree(requestPath: string, limit = TREE_LIMIT): Promise<JSONAnswer<FolderTree | FolderRefused | { message: string }>> {
+  const query = new URLSearchParams(requestPath.split("?")[1] ?? "");
+  const home = homeFolder();
+  // (Named, never the home folder by default: a walk of all of it is never what's meant.)
+  const at = query.get("path")?.trim() ? askedFolder(query, home) : null;
+  if (!at) return { status: 400, value: { message: "Send a folder's full path, or one that starts with ~/." } };
+  try {
+    await fs.promises.readdir(at);
+  } catch (error) {
+    return refusal(at, error);
+  }
+  // Names as they are (git quotes ones with accents, CJK or emoji otherwise), once each (a file in
+  // conflict is listed for each side).
+  const listed = await gitOutLater(at, ["-c", "core.quotepath=off", "ls-files", "-z", "--cached", "--others", "--exclude-standard"]);
+  const named = [...new Set((listed ?? "").split("\0").filter(Boolean))];
+  if (named.length) return { status: 200, value: { path: at, files: named.slice(0, limit), git: true } };
+  // Platform: on a Mac, looking into these from the home folder would have macOS ask you for them.
+  const asks = at === home ? promptedFolders() : new Set<string>();
+  const files: string[] = [];
+  const walk = async (inside: string): Promise<void> => {
+    let entries: fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(path.join(at, inside), { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (files.length >= limit) return;
+      if (HEAVY.has(entry.name) || (!inside && asks.has(entry.name))) continue;
+      const name = inside ? `${inside}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) await walk(name);
+      else files.push(name);
+    }
+  };
+  await walk("");
+  return { status: 200, value: { path: at, files, git: false } };
+}
+
 /** `kuvo/folders?path=`: the folders in one of this box's folders (none: the home folder; `~/`
  * starts there), as a client shows them to choose one: `{path, home, parent, folders: [{name,
  * repository?}]}`, ordered as Finder orders names, hidden ones (starting with ".") only with
@@ -46,10 +112,8 @@ export function refusal(at: string, error: unknown): JSONAnswer<FolderRefused> {
 export function listFolders(requestPath: string): JSONAnswer<FolderList | FolderRefused | { message: string }> {
   const query = new URLSearchParams(requestPath.split("?")[1] ?? "");
   const home = homeFolder();
-  const given = (query.get("path") ?? "").trim();
-  const folder = !given || given === "~" ? home : given.startsWith("~/") ? path.join(home, given.slice(2)) : given;
-  if (!path.isAbsolute(folder)) return { status: 400, value: { message: "Send a folder's full path, or one that starts with ~/." } };
-  const at = path.resolve(folder);
+  const at = askedFolder(query, home);
+  if (!at) return { status: 400, value: { message: "Send a folder's full path, or one that starts with ~/." } };
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(at, { withFileTypes: true });
@@ -87,6 +151,14 @@ export function makeFolder(body: Body<"path">): JSONAnswer<{ path: string } | { 
     return { status: 403, value: { message: `A folder can't be made in ${path.dirname(at)} here.` } };
   }
   return { status: 200, value: { path: at } };
+}
+
+// Every file under a folder (PROTOCOL.md, `kuvo/folders/tree`).
+export async function* folderTreeRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
+  const { request, json } = context;
+  if (request.method.toUpperCase() !== "GET") return yield* json(405, {});
+  const { status, value } = await listTree(request.path);
+  return yield* json(status, value);
 }
 
 // A folder of this box's to choose, for a setting that names one (PROTOCOL.md, `kuvo/folders`).

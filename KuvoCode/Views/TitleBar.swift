@@ -554,7 +554,7 @@ private struct BranchSwitcher: View {
                 // Made only on Return: clicking away makes no branch.
                 InlineTitleField(original: "", prompt: "New branch from \(branch)", keepsOnLeaving: false) { name in
                     isNaming = false
-                    run(["switch", "-c", name], created: true)
+                    run(name, created: true)
                 } cancel: {
                     isNaming = false
                 }
@@ -572,7 +572,7 @@ private struct BranchSwitcher: View {
             if branches.count > 1 {
                 Section("Switch To") {
                     ForEach(branches.filter { $0 != branch }.prefix(15), id: \.self) { name in
-                        Button(name) { run(["switch", name], created: false) }
+                        Button(name) { run(name, created: false) }
                     }
                 }
             }
@@ -598,19 +598,16 @@ private struct BranchSwitcher: View {
         }
     }
 
+    /// The repository's branches, from the box the folder is on.
     private func load() async {
-        let directory = directory
-        let list = await Task.detached {
-            Git.run(["for-each-ref", "--sort=-committerdate", "--format=%(refname:short)", "refs/heads"], in: directory) ?? ""
-        }.value
-        branches = list.split(separator: "\n").map(String.init)
+        branches = await Git.branches(at: GitPlace.of(directory))?.branches ?? []
     }
 
-    private func run(_ arguments: [String], created: Bool) {
-        guard arguments.last?.isEmpty == false else { return }
-        let directory = directory, environment = environment
+    private func run(_ branch: String, created: Bool) {
+        guard !branch.isEmpty else { return }
+        let place = GitPlace.of(directory), environment = environment
         Task {
-            failure = await Task.detached { Git.report(arguments, in: directory, environment: environment) }.value
+            failure = await Git.switching(to: branch, creating: created, at: place, environment: environment)
             if failure == nil { Analytics.shared.track("branch_switched", ["created": created]) }
             switched()
         }

@@ -100,4 +100,64 @@ import Testing
         #expect(repo.exists(".git/MERGE_HEAD"), "your merge still under way")
         #expect(!repo.exists("b.txt"))
     }
+
+    // MARK: The title bar's branches, and what Delete says
+
+    private var place: GitPlace { GitPlace(client: box.client, path: repo.path, machine: nil) }
+
+    /// The title bar's branch menu, from this Mac's box: a new branch from where it is, with the
+    /// changes not committed coming along; switching back; and git's words when it can't.
+    @Test func theBranchMenuListsAndSwitchesOnTheBox() async throws {
+        try repo.write("a.txt", "one\n")
+        try repo.commitAll()
+        try repo.write("a.txt", "two\n")
+        #expect(await Git.switching(to: "idea", creating: true, at: place, environment: [:]) == nil)
+        let made = try #require(await Git.branches(at: place))
+        #expect(made.repository && made.current == "idea")
+        #expect(Set(made.branches) == ["idea", "main"])
+        #expect(repo.read("a.txt") == "two\n", "what wasn't committed came along")
+
+        try repo.commitAll("Two")
+        #expect(await Git.switching(to: "main", creating: false, at: place, environment: [:]) == nil)
+        #expect(await Git.branches(at: place)?.current == "main")
+        #expect(repo.read("a.txt") == "one\n")
+        #expect(await Git.switching(to: "nowhere", creating: false, at: place, environment: [:]) != nil)
+        #expect(await Git.switching(to: "-f", creating: false, at: place, environment: [:]) == "Name the branch.")
+
+        let plain = AppInfo.testRoot.appending(path: "Folders/plain-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: plain, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: plain) }
+        #expect(await Git.branches(at: GitPlace(client: box.client, path: plain.path(percentEncoded: false), machine: nil)) == Git.Branches(repository: false))
+    }
+
+    /// Delete on a session in its own worktree says whether changes not committed go with it, as
+    /// its box says: a new file counts, and so does one it can't say about.
+    @Test func deleteAsksTheBoxWhatGoesWithAWorktree() async throws {
+        try repo.write("a.txt", "one\n")
+        try repo.commitAll()
+        #expect(await Git.hasUncommittedChanges(at: place) == false)
+        try repo.write("new.txt", "new\n")
+        #expect(await Git.hasUncommittedChanges(at: place))
+        let gone = GitPlace(client: box.client, path: repo.path + "-gone", machine: nil)
+        #expect(await Git.hasUncommittedChanges(at: gone), "can't say: as if there were")
+    }
+
+    /// This Mac's box from before these routes, running on after an update: no git of this Mac's
+    /// runs; Switch says it waits, Delete says changes may go, the menu lists none.
+    @Test func thisMacsOlderBoxRunsNoGitHere() async throws {
+        try repo.write("a.txt", "one\n")
+        try repo.commitAll()
+        let older = BoxClient(box: BoxClient.mac, transport: LocalBox { _ in
+            AsyncThrowingStream { continuation in
+                continuation.yield(.head(status: 404, headers: [:]))
+                continuation.yield(.body(Data("{}".utf8)))
+                continuation.finish()
+            }
+        })
+        let there = GitPlace(client: older, path: repo.path, machine: nil)
+        #expect(await Git.branches(at: there) == nil)
+        #expect(await Git.switching(to: "idea", creating: true, at: there, environment: [:]) == Git.switchAfterUpdate)
+        #expect(await Git.hasUncommittedChanges(at: there))
+        #expect(try repo.git("branch", "--list", "idea").isEmpty, "nothing switched here")
+    }
 }

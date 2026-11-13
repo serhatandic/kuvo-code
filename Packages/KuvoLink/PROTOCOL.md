@@ -3122,6 +3122,23 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     elsewhere, never deleted for good.
   - `GET kuvo/git/show?root=<repository>&object=<HEAD:path | :path>`: a file as git keeps it (a
     picture's old side), its bytes; `404` for one git doesn't have, `413` over 25 MB.
+  - `POST kuvo/git/branches {"directory"}` (`git.branches`, #660): the repository's branches, for a
+    branch menu (the Mac's title bar) → `{"repository": false}` outside one, else `{"repository":
+    true, root, current, branches}`: `current` the branch checked out (null on none), `branches`
+    its local branches by their names, the latest commit first. Read by names only: nothing the
+    repository's settings name runs. `500 {"message"}` when git couldn't say. A client also reads
+    `repository` for whether a folder is in a repository at all (Edit Project's worktree setup).
+  - `POST kuvo/git/switch {"directory", "branch", "create"?}` (`git.branches`): switches the
+    repository to `branch`, or with `"create": true` to a new branch of that name from where it is,
+    the changes not committed coming along, as `git switch [-c]` does in your terminal (its hooks
+    run, with your environment as a commit's) → `200 {}`, or `422 {"message"}` with git's words (a
+    change in the way, no such branch, a name git won't take). `400` for no name, one starting with
+    `-`, or one with a line break.
+  - `POST kuvo/git/status {"directory"}` (`git.status`, #660): whether anything in the repository
+    isn't committed, as removing a worktree would delete it (what a client's Delete says goes with
+    one) → `{"repository": false}`, or `{"repository": true, root, uncommitted}`: a change, a new
+    file git doesn't ignore, or a change in a submodule whatever its `ignore` setting. `500
+    {"message"}` when git couldn't say: a client takes that, and a box away, as changes that may go.
   - `POST kuvo/git/commit {"directory", "message", "push"?, "author"?}` commits what's staged, or
     everything in the folder when nothing is, and pushes when asked (a new branch is pushed and
     tracked) → `200 {}`, or `422 {"message"}` with git's words. A push that didn't go through
@@ -3209,6 +3226,15 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `POST kuvo/folders {"path"}` makes a new folder in one that's there, as a folder panel's New
   Folder does → `{"path"}`; `409 {"message"}` for something there already, `404` when the folder
   it's in isn't there, `403` when one can't be made there, `400` for a path that isn't a full one.
+- `GET kuvo/folders/tree?path=<folder>` (`folders.tree`, #660): every file under one of this box's
+  folders, for a project's file filter, "@" and a palette → `{"path", "files", "git"}`, `files`
+  by their paths in the folder, 20,000 at most. In a repository, git's list (`git` true): tracked
+  files and new ones, without what it ignores, each once, names as they are; otherwise, and where
+  git lists none there (a folder its repository ignores), a walk that skips `.git`,
+  `node_modules`, `build`, `DerivedData`, `.build`, `Pods`, `dist` and `.next`, follows no links,
+  and on a Mac leaves out the home folder's Desktop, Documents, Downloads, Library, Movies, Music
+  and Pictures (macOS would ask for them). `path` is needed (`~/` starts at the home folder);
+  refused as `kuvo/folders` refuses, with `reason`.
 - `GET kuvo/programs?name=<program>` (`programs`): whether the box has a program an MCP server's
   command names, found on its PATH as its engine finds it (a name like `npx`, or a path, `~/`
   from the home folder) → `{"name", "path"}`, `path` null when it hasn't; `"unknown": true` (and
@@ -4592,13 +4618,16 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `file` | `kuvo/file` |
 | `folders` | `kuvo/folders` |
 | `folders.files` | `kuvo/folders?files=1`: a folder's files too, and `reason` on a refusal |
+| `folders.tree` | `GET kuvo/folders/tree`: every file under a folder, for a file filter and "@" (#660) |
 | `git` | `kuvo/git/…`: Changes (bridge 0.9.94) |
 | `git.backups` | `kuvo/git/backups…`: branch backups, and taking one back (bridge 0.9.182) |
+| `git.branches` | `POST kuvo/git/branches` and `POST kuvo/git/switch`: a branch menu (#660) |
 | `git.changes.count` | `POST kuvo/git/changes/count`: how much changed, without the diff (bridge 0.9.211) |
 | `git.merge` | `POST kuvo/git/merge`: Merge into… (bridge 0.9.143) |
 | `git.pull-request` | `POST kuvo/git/pull-request`: Create Pull Request (bridge 0.9.143) |
 | `git.pull-request.draft` | `POST kuvo/git/pull-request/draft`: Create Pull Request's confirmation (bridge 0.9.179) |
 | `git.push` | `POST kuvo/git/push`, and a commit's `committed` when only its push failed (bridge 0.9.143) |
+| `git.status` | `POST kuvo/git/status`: whether anything isn't committed (#660) |
 | `git.words` | Settings › Git in `kuvo/config` (each computer's own), `prompt` from `kuvo/git/commit-diff` and `kuvo/git/pull-request/draft`, and `POST kuvo/git/settings/move` |
 | `goals` | `kuvo/agents/api/kuvo/goals…`: goals ("Goals") |
 | `groups` | `kuvo/groups`, `…/events`, one chat's events, and writing, stopping, keep going, viewed, undo and start |
@@ -6577,7 +6606,7 @@ repository written by anything.
   fsmonitor--daemon`) for the repository then, and it runs on as it would for your terminal.
 - What the box does by itself (Changes' reads, Undo's snapshots, branch backups and taking one
   back, reviews' scopes, voice and artifacts' reads of what a turn changed, naming a worktree's
-  branch) also gets `-c safe.bareRepository=explicit -c core.hooksPath=/dev/null -c
+  branch, a branch menu's list, whether anything isn't committed, a folder's files) also gets `-c safe.bareRepository=explicit -c core.hooksPath=/dev/null -c
   commit.gpgSign=false -c tag.gpgSign=false -c credential.helper=`. Unless the command only reads
   names and objects, the box first reads, with `git config --show-scope --get-regexp`, the hooks
   any settings name (`hook.<name>.command`, which git 2.54 runs) and the filters and diff
@@ -6591,8 +6620,8 @@ repository written by anything.
   `=` in it), or the read fails; Changes then says the repository names a program it won't run.
   git before 2.26 can't say the scope, so every filter or converter counts as the repository's
   there.
-- What you ask git for yourself (Stage, Commit, Push, Pull and the rest in Changes, a worktree made,
-  switched, removed with what wasn't committed in it, or brought back, a project cloned) gets only
+- What you ask git for yourself (Stage, Commit, Push, Pull and the rest in Changes, switching
+  branches, a worktree made, switched, removed with what wasn't committed in it, or brought back, a project cloned) gets only
   the first set: the repository's hooks, filters and sign-ins run as in your terminal, so husky,
   LFS and git-crypt work, and what's kept of a removed worktree is stored as your `git add` would.
 - Neither runs (but what only reads names and objects, which starts nothing) where the repository's
@@ -6868,3 +6897,10 @@ can go three months after 0.8.0 ships.
 - Its keeper's box, the same, has no Merge into… (`kuvo/git/merge`, 404; nor, from before #341,
   one without `into`, 400): the newer app says Merge into… works again once the work under way
   ends. <!-- compat: beta.1 merge-older-box -->
+- Boxes from before #660 have no `kuvo/git/branches`, `kuvo/git/switch`, `kuvo/git/status` or
+  `kuvo/folders/tree` (404 with nothing said). For a machine's, the newer app runs the machine's
+  git (and, outside a repository, `find`) over SSH, as before. For its keeper's box on this Mac,
+  running on after an update until the work under way ends, it runs no git of its own: the title
+  bar's branch menu lists no branches and Switch says it works again then, the file filter says
+  so too, Delete says changes not committed may go with a worktree, and Edit Project leaves out
+  the worktree setup. <!-- compat: beta.1 git-older-box -->

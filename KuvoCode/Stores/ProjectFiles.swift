@@ -21,75 +21,93 @@ nonisolated enum ProjectFiles {
         var isFolder: Bool { path.hasSuffix("/") }
     }
 
-    /// What "@" can point at: with several folders, each folder first, then every file, with
-    /// when it last changed.
-    static func mentionable(_ roots: [URL]) -> [File] {
-        (roots.count > 1 ? roots.enumerated().map { File(path: $1.lastPathComponent + "/", url: $1, folder: $0, mention: $1.lastPathComponent + "/") } : []) + newestFirst(list(roots, dated: true))
+    /// What "@" can point at: with several folders, each folder first, then every file, newest
+    /// first. `box`: a box's routes by its id.
+    @MainActor static func mentionable(_ roots: [URL], box: (String) -> BoxClient = { BoxClient.routes($0) }) async -> [File] {
+        (roots.count > 1 ? roots.enumerated().map { File(path: $1.lastPathComponent + "/", url: $1, folder: $0, mention: $1.lastPathComponent + "/") } : [])
+            + (await newestFirst(roots, box: box))
+    }
+
+    /// Every file, newest first: what a list shows before anything's typed.
+    @MainActor static func newestFirst(_ roots: [URL], box: (String) -> BoxClient = { BoxClient.routes($0) }) async -> [File] {
+        await read(roots, at: places(roots, box), dated: true, sorted: true).files
     }
 
     /// Files sorted by when they last changed, newest first: what a list shows before
-    /// anything's typed. Sorted once here, off the main thread.
+    /// anything's typed.
     static func newestFirst(_ files: [File]) -> [File] {
         files.sorted { ($0.modified ?? .distantPast) > ($1.modified ?? .distantPast) }
     }
 
     /// The files in `roots`, the primary folder's first; `dated`, with when each last changed.
-    /// Slow for big trees: call it off the main thread.
-    static func list(_ roots: [URL], dated: Bool = false) -> [File] {
-        listing(roots, dated: dated).files
+    @MainActor static func list(_ roots: [URL], dated: Bool = false, box: (String) -> BoxClient = { BoxClient.routes($0) }) async -> [File] {
+        await listing(roots, dated: dated, box: box).files
     }
 
     /// The same, with why a folder couldn't be read (the first one that couldn't), so a list
     /// that's empty for that never says there's nothing.
-    static func listing(_ roots: [URL], dated: Bool = false) -> (files: [File], failure: FolderFailure?) {
+    @MainActor static func listing(_ roots: [URL], dated: Bool = false, box: (String) -> BoxClient = { BoxClient.routes($0) }) async -> (files: [File], failure: FolderFailure?) {
+        await read(roots, at: places(roots, box), dated: dated, sorted: false)
+    }
+
+    /// Each root on the box it's on.
+    @MainActor private static func places(_ roots: [URL], _ box: (String) -> BoxClient) -> [GitPlace] {
+        roots.map { GitPlace.of(RemoteFolder.folder(of: $0), box: box) }
+    }
+
+    /// Off the main thread: thousands of files, and for this Mac's, when each last changed.
+    @concurrent private static func read(_ roots: [URL], at places: [GitPlace], dated: Bool, sorted: Bool) async -> (files: [File], failure: FolderFailure?) {
         var failure: FolderFailure?
-        let files = roots.enumerated().flatMap { index, root in
+        var files: [File] = []
+        for (index, root) in roots.enumerated() {
             let prefix = roots.count > 1 ? root.lastPathComponent + "/" : ""
             let paths: [String]
-            switch listFiles(in: root) {
+            switch await listFiles(in: root, at: places[index]) {
             case .success(let listed): paths = listed
             case .failure(let reason): paths = []; failure = failure ?? reason
             }
-            return paths.map { path in
+            files += paths.map { path in
                 let url = root.appending(path: path)
                 // (A machine's files go without: a date each would be a round trip each.)
                 let modified = dated && url.isFileURL ? (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate : nil
                 return File(path: prefix + path, url: url, folder: index, mention: index == 0 ? path : prefix + path, modified: modified)
             }
         }
-        return (files, failure)
+        return (sorted ? newestFirst(files) : files, failure)
     }
 
-    /// git's list (tracked and new, without ignored files) in a repository; otherwise a
-    /// walk that skips the usual heavy folders. So too for a folder git lists nothing in: one its
-    /// repository ignores (a dotfiles repository at home that ignores everything) has files.
-    private static func listFiles(in root: URL) -> Result<[String], FolderFailure> {
-        // Names as they are (git quotes ones with accents, CJK or emoji otherwise), once each (a
-        // file in conflict is listed for each side), as many as a walk gives.
-        if let listed = Git.run(["-c", "core.quotepath=off", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], in: RemoteFolder.folder(of: root)), !listed.isEmpty {
-            var seen = Set<String>()
-            return .success(listed.split(separator: "\0").map(String.init).filter { seen.insert($0).inserted }.prefix(20_000).map { $0 })
-        }
-        let skip: Set<String> = [".git", "node_modules", "build", "DerivedData", ".build", "Pods", "dist", ".next"]
-        if !root.isFileURL { return RemoteShell.files(in: root, skipping: skip, limit: 20_000) }
-        var files: [String] = []
-        // Paths relative to the folder as the walk gives them, also where the folder, or one it's
-        // in, is a link (/tmp, a cloud drive's).
-        let folder = root.resolvingSymlinksInPath()
+    /// The files under one root, as the box it's on lists them (`kuvo/folders/tree`): git's list
+    /// (tracked and new, without ignored files) in a repository; otherwise, and where git lists
+    /// nothing (a folder its repository ignores), a walk that skips the usual heavy folders.
+    private static func listFiles(in root: URL, at place: GitPlace) async -> Result<[String], FolderFailure> {
+        struct Tree: Decodable { let files: [String] }
+        var query = URLComponents()
+        query.queryItems = [URLQueryItem(name: "path", value: place.path)]
+        let asked = "kuvo/folders/tree?" + (query.percentEncodedQuery ?? "").replacingOccurrences(of: "+", with: "%2B")
+        let status: Int, data: Data
         do {
-            _ = try FileManager.default.contentsOfDirectory(atPath: folder.path)
+            (status, data) = try await place.client.send("GET", asked)
         } catch {
-            return .failure(FolderFailure(error))
+            return .failure(place.machine.map(FolderFailure.unreached) ?? FolderFailure(reason: "Kuvo Code’s background service on this Mac didn’t answer", said: false))
         }
-        guard let walker = FileManager.default.enumerator(atPath: folder.path) else { return .success([]) }
-        while let path = walker.nextObject() as? String {
-            if skip.contains((path as NSString).lastPathComponent) { walker.skipDescendants(); continue }
-            if walker.fileAttributes?[.type] as? FileAttributeType != .typeDirectory {
-                files.append(path)
-                if files.count >= 20_000 { break }
+        if (200..<300).contains(status) {
+            guard let tree = try? JSONDecoder().decode(Tree.self, from: data) else { return .failure(FolderFailure(reason: "Its list of files couldn’t be read", said: false)) }
+            return .success(tree.files)
+        }
+        if Git.lacksRoute(status, data) {
+            // COMPAT(beta.1 git-older-box): this Mac's older box, running on after an update, says the list waits for it; a machine's box from before `kuvo/folders/tree` lists them with its git or a walk over SSH, as before. Goes when 0.8.0 ships.
+            guard place.machine != nil else { return .failure(FolderFailure(reason: "Kuvo Code on this Mac is finishing an update. Try again once the work that’s running now ends", said: false)) }
+            if let listed = Git.run(["-c", "core.quotepath=off", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], in: RemoteFolder.folder(of: root)), !listed.isEmpty {
+                var seen = Set<String>()
+                return .success(listed.split(separator: "\0").map(String.init).filter { seen.insert($0).inserted }.prefix(20_000).map { $0 })
             }
+            return RemoteShell.files(in: root, skipping: [".git", "node_modules", "build", "DerivedData", ".build", "Pods", "dist", ".next"], limit: 20_000)
         }
-        return .success(files)
+        let refusal = BoxRefusal(status: status, data: data)
+        // This Mac's box starting (with the app, or again after an update), or not up.
+        if status == 503 { return .failure(FolderFailure(reason: refusal.reason == "starting" ? "Kuvo Code’s background service on this Mac is starting" : refusal.message, said: false)) }
+        // What the computer said ("Permission denied").
+        return .failure(FolderFailure(reason: refusal.reason ?? refusal.message))
     }
 }
 

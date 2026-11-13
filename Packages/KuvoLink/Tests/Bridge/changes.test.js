@@ -716,3 +716,125 @@ test("Discard on a submodule with edits of its own says to discard them there, a
   assert.equal(json.message, "lib is a submodule: its changes are in its own repository, so discard them there.");
   assert.equal(read("lib/lib.js"), "let lib = 2\n");
 });
+
+// A commit on the branch checked out, dated `when` (seconds since 1970), as git sorts branches by it.
+const commitAt = (when, name) => {
+  write(`${name}.txt`, `${name}\n`);
+  git("add", "-A");
+  execFileSync("git", ["commit", "-q", "-m", name], { cwd: repo, env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_COMMITTER_DATE: `${when} +0000`, GIT_AUTHOR_DATE: `${when} +0000` } });
+};
+
+test("the branch menu: a repository's branches, the latest commit first, by their names, the one checked out, and none outside one", async () => {
+  commitAt(1_000_000_000, "first");
+  git("switch", "-q", "-c", "older");
+  commitAt(2_000_000_000, "older");
+  git("switch", "-q", "-c", "newer");
+  commitAt(2_000_000_100, "newer");
+  git("switch", "-q", "older");
+  // A tag of a branch's name: still the branch's own name.
+  git("tag", "newer");
+  const { status: code, json } = await route("POST", "kuvo/git/branches", { directory: path.join(repo, "src") });
+  assert.equal(code, 200);
+  assert.deepEqual(json, { repository: true, root: repo, current: "older", branches: ["newer", "older", "main"] });
+
+  git("switch", "-q", "--detach");
+  assert.equal((await route("POST", "kuvo/git/branches", { directory: repo })).json.current, null);
+  const plain = fs.mkdtempSync(path.join(root, "plain-"));
+  assert.deepEqual((await route("POST", "kuvo/git/branches", { directory: plain })).json, { repository: false });
+  assert.equal((await route("POST", "kuvo/git/branches", { directory: path.join(root, "gone") })).status, 404);
+});
+
+test("switching branches: to one there, or a new one with the changes not committed coming along, its hooks run as in your terminal; git's words when it can't", async () => {
+  git("branch", "other");
+  const mark = path.join(root, `checked-out-${path.basename(repo)}`);
+  fs.writeFileSync(path.join(repo, ".git/hooks/post-checkout"), `#!/bin/sh\ntouch "${mark}"\n`, { mode: 0o755 });
+  assert.equal((await route("POST", "kuvo/git/switch", { directory: repo, branch: "other" })).status, 200);
+  assert.equal(git("symbolic-ref", "--short", "HEAD").trim(), "other");
+  assert.ok(fs.existsSync(mark), "post-checkout ran");
+
+  write("README.md", "Hello\nWorld\n");
+  assert.equal((await route("POST", "kuvo/git/switch", { directory: repo, branch: "idea", create: true })).status, 200);
+  assert.equal(git("symbolic-ref", "--short", "HEAD").trim(), "idea");
+  assert.equal(read("README.md"), "Hello\nWorld\n", "what wasn't committed came along");
+
+  // A change in the way: git says so, and nothing moves.
+  git("commit", "-qam", "World");
+  write("README.md", "Hello\nThere\n");
+  const refused = await route("POST", "kuvo/git/switch", { directory: repo, branch: "main" });
+  assert.equal(refused.status, 422);
+  assert.match(refused.json.message, /README\.md/);
+  assert.equal(git("symbolic-ref", "--short", "HEAD").trim(), "idea");
+  // A name that's an option, or none, is no branch.
+  for (const branch of ["-f", "--orphan=x", "", "  ", "a\nb", undefined]) assert.equal((await route("POST", "kuvo/git/switch", { directory: repo, branch })).status, 400, String(branch));
+  assert.equal((await route("POST", "kuvo/git/switch", { directory: repo, branch: "nowhere" })).status, 422);
+});
+
+test("whether anything isn't committed, as Delete asks before a worktree goes: a change, a new file, a submodule's change its ignore setting hides", async () => {
+  const status = directory => route("POST", "kuvo/git/status", { directory });
+  assert.deepEqual((await status(repo)).json, { repository: true, root: repo, uncommitted: false });
+  write("notes.txt", "new\n");
+  assert.equal((await status(path.join(repo, "src"))).json.uncommitted, true);
+  fs.rmSync(path.join(repo, "notes.txt"));
+  write("src/app.js", "let a = 2\n");
+  assert.equal((await status(repo)).json.uncommitted, true);
+  git("checkout", "--", "src/app.js");
+
+  const library = fs.mkdtempSync(path.join(root, "library-"));
+  const inLibrary = (...args) => execFileSync("git", args, { cwd: library, encoding: "utf8", env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
+  inLibrary("init", "-q", "-b", "main");
+  inLibrary("config", "user.name", "Ada");
+  inLibrary("config", "user.email", "ada@example.com");
+  fs.writeFileSync(path.join(library, "lib.js"), "let lib = 1\n");
+  inLibrary("add", "-A");
+  inLibrary("commit", "-q", "-m", "Library");
+  git("-c", "protocol.file.allow=always", "submodule", "add", "-q", library, "lib");
+  git("config", "-f", ".gitmodules", "submodule.lib.ignore", "all");
+  git("add", "-A");
+  git("commit", "-q", "-m", "Add the library");
+  assert.equal((await status(repo)).json.uncommitted, false);
+  write("lib/lib.js", "let lib = 2\n");
+  assert.equal(git("status", "--porcelain").trim(), "", "git's own status leaves it out");
+  assert.equal((await status(repo)).json.uncommitted, true);
+
+  const plain = fs.mkdtempSync(path.join(root, "plain-"));
+  assert.deepEqual((await status(plain)).json, { repository: false });
+  assert.equal((await status(path.join(root, "gone"))).status, 404);
+});
+
+test("every file under a folder, for the file filter and @: git's list without what it ignores, by names as they are; a folder outside git, or one its repository ignores, walked without the heavy folders", async () => {
+  const tree = folder => route("GET", `kuvo/folders/tree?path=${encodeURIComponent(folder)}`);
+  write(".gitignore", "*.log\n");
+  write("café notes.md", "b\n");
+  git("add", "-A");
+  git("commit", "-qm", "Notes");
+  write("new.swift", "c\n");
+  write("debug.log", "d\n");
+  let { status: code, json } = await tree(repo);
+  assert.equal(code, 200);
+  assert.equal(json.git, true);
+  assert.deepEqual(json.files.sort(), [".gitignore", "README.md", "café notes.md", "logo.png", "new.swift", "src/app.js"]);
+  assert.deepEqual((await tree(path.join(repo, "src"))).json.files, ["app.js"]);
+
+  // A folder its repository ignores (a dotfiles repository at home that ignores everything).
+  write(".gitignore", "*\n!.gitignore\n");
+  write("projects/site/index.html", "x\n");
+  write("projects/site/css/style.css", "y\n");
+  ({ json } = await tree(path.join(repo, "projects/site")));
+  assert.equal(json.git, false);
+  assert.deepEqual(json.files.sort(), ["css/style.css", "index.html"]);
+
+  const plain = fs.mkdtempSync(path.join(root, "plain-"));
+  for (const name of ["index.html", "js/main.js", "node_modules/lib/index.js", ".next/cache.json"]) {
+    fs.mkdirSync(path.dirname(path.join(plain, name)), { recursive: true });
+    fs.writeFileSync(path.join(plain, name), "x");
+  }
+  fs.symlinkSync(plain, path.join(plain, "js/loop"));
+  ({ json } = await tree(plain));
+  assert.deepEqual(json.files.sort(), ["index.html", "js/loop", "js/main.js"]);
+
+  const gone = await tree(path.join(root, "gone"));
+  assert.equal(gone.status, 404);
+  assert.equal(gone.json.reason, "No such folder");
+  assert.equal((await tree(path.join(plain, "index.html"))).status, 404);
+  assert.equal((await route("GET", "kuvo/folders/tree")).status, 400, "never the whole home folder by default");
+});

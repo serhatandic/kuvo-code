@@ -2204,13 +2204,16 @@ var FEATURES = [
   "file",
   "folders",
   "folders.files",
+  "folders.tree",
   "git",
   "git.backups",
+  "git.branches",
   "git.changes.count",
   "git.merge",
   "git.pull-request",
   "git.pull-request.draft",
   "git.push",
+  "git.status",
   "git.words",
   "goals",
   "groups",
@@ -7295,11 +7298,14 @@ function gitAsked(folder, args, env = {}) {
   return ranIn(folder, askedArgs(args, folder), env);
 }
 async function gitLater(folder, args) {
+  return (await gitOutLater(folder, args))?.trim() ?? null;
+}
+async function gitOutLater(folder, args) {
   const own = await ownArgsLater(args, folder);
   if (!own)
     return null;
   return new Promise((resolve) => {
-    execFile4("git", own, { cwd: folder, encoding: "utf8", env: GIT_ENV, timeout: 60000, maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => resolve(error ? null : String(stdout ?? "").trim()));
+    execFile4("git", own, { cwd: folder, encoding: "utf8", env: GIT_ENV, timeout: 60000, maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => resolve(error ? null : String(stdout ?? "")));
   });
 }
 function sizeLater(folder) {
@@ -34771,6 +34777,32 @@ async function commit(directory, message, push, author) {
   return pushed ? { failed: `Committed, but the push didn’t go through:
 ${pushed}`, committed: true } : null;
 }
+var rootOf3 = async (directory) => (await text4(directory, ["rev-parse", "--show-toplevel"]))?.trim() || null;
+async function branchesIn(directory) {
+  const root = await rootOf3(directory);
+  if (!root)
+    return { repository: false };
+  const listed = await text4(root, ["for-each-ref", "--sort=-committerdate", "--format=%(refname)", "refs/heads"]);
+  if (listed === null)
+    return null;
+  const branch = (ref) => ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : null;
+  const head = (await text4(root, ["symbolic-ref", "--quiet", "HEAD"]))?.trim() ?? "";
+  return { repository: true, root, current: branch(head), branches: listed.split(`
+`).map(branch).filter((name) => !!name) };
+}
+async function switchBranch(directory, branch, create) {
+  const root = await rootOf3(directory);
+  if (!root)
+    return "Not a git repository.";
+  return refusal(root)(["switch", ...create ? ["-c"] : [], branch]);
+}
+async function statusIn(directory) {
+  const root = await rootOf3(directory);
+  if (!root)
+    return { repository: false };
+  const status = await text4(root, ["status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none"]);
+  return status === null ? null : { repository: true, root, uncommitted: status.length > 0 };
+}
 var branchOf = async (directory) => (await text4(directory, ["symbolic-ref", "--quiet", "--short", "HEAD"]))?.trim() || null;
 async function unready(directory, branch, target) {
   const status = await text4(directory, ["status", "--porcelain", "--untracked-files=normal"]);
@@ -35041,6 +35073,20 @@ async function* changesRoute(context) {
       return yield* json(400, { message: "Name a repository and a file in it." });
     const failed = await perform(route.slice("kuvo/git/".length), root, { path: name, oldPath: old, status }, scope);
     return yield* failed ? json(422, { message: failed }) : json(200, {});
+  }
+  if (route === "kuvo/git/branches" || route === "kuvo/git/status" || route === "kuvo/git/switch") {
+    const directory = folderAt(body.directory);
+    if (!directory)
+      return yield* json(404, { message: "That folder isn’t there." });
+    if (route === "kuvo/git/switch") {
+      const branch = typeof body.branch === "string" ? body.branch : "";
+      if (!branch.trim() || branch.startsWith("-") || /[\0\n\r]/.test(branch))
+        return yield* json(400, { message: "Name the branch." });
+      const failed = await switchBranch(directory, branch, body.create === true);
+      return yield* failed ? json(422, { message: failed }) : json(200, {});
+    }
+    const found = route === "kuvo/git/branches" ? await branchesIn(directory) : await statusIn(directory);
+    return yield* found ? json(200, found) : json(500, { message: "git couldn’t say." });
   }
   if (route === "kuvo/git/commit" || route === "kuvo/git/commit-diff") {
     const directory = folderAt(body.directory);
@@ -40717,14 +40763,58 @@ function refusal2(at, error) {
   const said = error?.message?.replace(/^[A-Z]+: /, "").split(",")[0]?.trim();
   return { status: 500, value: { message: `${at} can't be read here.`, reason: said ? said[0].toUpperCase() + said.slice(1) : "It couldn't be read" } };
 }
+function askedFolder(query, home) {
+  const given = (query.get("path") ?? "").trim();
+  const folder = !given || given === "~" ? home : given.startsWith("~/") ? path132.join(home, given.slice(2)) : given;
+  return path132.isAbsolute(folder) ? path132.resolve(folder) : null;
+}
+var TREE_LIMIT = 20000;
+var HEAVY = new Set([".git", "node_modules", "build", "DerivedData", ".build", "Pods", "dist", ".next"]);
+async function listTree(requestPath, limit = TREE_LIMIT) {
+  const query = new URLSearchParams(requestPath.split("?")[1] ?? "");
+  const home = homeFolder();
+  const at = query.get("path")?.trim() ? askedFolder(query, home) : null;
+  if (!at)
+    return { status: 400, value: { message: "Send a folder's full path, or one that starts with ~/." } };
+  try {
+    await fs130.promises.readdir(at);
+  } catch (error) {
+    return refusal2(at, error);
+  }
+  const listed = await gitOutLater(at, ["-c", "core.quotepath=off", "ls-files", "-z", "--cached", "--others", "--exclude-standard"]);
+  const named = [...new Set((listed ?? "").split("\x00").filter(Boolean))];
+  if (named.length)
+    return { status: 200, value: { path: at, files: named.slice(0, limit), git: true } };
+  const asks = at === home ? promptedFolders() : new Set;
+  const files = [];
+  const walk = async (inside) => {
+    let entries;
+    try {
+      entries = await fs130.promises.readdir(path132.join(at, inside), { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (files.length >= limit)
+        return;
+      if (HEAVY.has(entry.name) || !inside && asks.has(entry.name))
+        continue;
+      const name = inside ? `${inside}/${entry.name}` : entry.name;
+      if (entry.isDirectory())
+        await walk(name);
+      else
+        files.push(name);
+    }
+  };
+  await walk("");
+  return { status: 200, value: { path: at, files, git: false } };
+}
 function listFolders(requestPath) {
   const query = new URLSearchParams(requestPath.split("?")[1] ?? "");
   const home = homeFolder();
-  const given = (query.get("path") ?? "").trim();
-  const folder = !given || given === "~" ? home : given.startsWith("~/") ? path132.join(home, given.slice(2)) : given;
-  if (!path132.isAbsolute(folder))
+  const at = askedFolder(query, home);
+  if (!at)
     return { status: 400, value: { message: "Send a folder's full path, or one that starts with ~/." } };
-  const at = path132.resolve(folder);
   let entries;
   try {
     entries = fs130.readdirSync(at, { withFileTypes: true });
@@ -40761,6 +40851,13 @@ function makeFolder(body) {
     return { status: 403, value: { message: `A folder can't be made in ${path132.dirname(at)} here.` } };
   }
   return { status: 200, value: { path: at } };
+}
+async function* folderTreeRoute(context) {
+  const { request, json } = context;
+  if (request.method.toUpperCase() !== "GET")
+    return yield* json(405, {});
+  const { status, value } = await listTree(request.path);
+  return yield* json(status, value);
 }
 async function* foldersRoute(context) {
   const { request, json } = context;
@@ -40881,7 +40978,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "08f69e97d65f";
+var BRIDGE_VERSION = "cffd4c4b8a59";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -44887,6 +44984,7 @@ var ROUTES = [
   { when: (route) => !IS_MAC && route === "kuvo/browser", answer: browserRoute },
   { when: (route, request) => /^kuvo\/integrations(\/|\?|$)/.test(request.path), answer: integrationsRoute },
   { when: (route) => route === "kuvo/folders", answer: foldersRoute },
+  { when: (route) => route === "kuvo/folders/tree", answer: folderTreeRoute },
   { when: (route) => route === "kuvo/plugins/search", answer: pluginSearchRoute },
   { when: (route) => route === "kuvo/programs", answer: programsRoute },
   { when: (route) => route === "kuvo/providers/models", answer: providerModelsRoute },

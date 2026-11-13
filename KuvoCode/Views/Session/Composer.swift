@@ -1038,7 +1038,7 @@ struct Composer: View {
         let folders = folders
         let roots = folders.map(RemoteFolder.url)
         Task {
-            let files = await Task.detached { ProjectFiles.mentionable(roots) }.value
+            let files = await ProjectFiles.mentionable(roots)
             mentionFiles = files
             mentionFilesFolders = folders
         }

@@ -47,10 +47,15 @@ export function gitAsked(folder: string, args: string[], env: Record<string, str
 
 /** [gitIn] without holding up the bridge, for what takes a while in a big worktree. */
 export async function gitLater(folder: string, args: string[]): Promise<string | null> {
+  return (await gitOutLater(folder, args))?.trim() ?? null;
+}
+
+/** [gitLater]'s output as git wrote it (a list of names, where one may start with a space). */
+export async function gitOutLater(folder: string, args: string[]): Promise<string | null> {
   const own = await ownArgsLater(args, folder);
   if (!own) return null;
   return new Promise(resolve => {
-    execFile("git", own, { cwd: folder, encoding: "utf8", env: GIT_ENV, timeout: 60_000, maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => resolve(error ? null : String(stdout ?? "").trim()));
+    execFile("git", own, { cwd: folder, encoding: "utf8", env: GIT_ENV, timeout: 60_000, maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => resolve(error ? null : String(stdout ?? "")));
   });
 }
 

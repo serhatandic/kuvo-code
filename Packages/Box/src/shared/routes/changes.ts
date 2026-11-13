@@ -1,6 +1,6 @@
 // Changes (PROTOCOL.md, "Changes"): a project's changes on the box as git has them, for a client to
-// show and parse, and staging, unstaging, discarding, committing and pushing them there, and bringing a
-// branch's work back (Merge into…, Create Pull Request).
+// show and parse, and staging, unstaging, discarding, committing and pushing them there, bringing a
+// branch's work back (Merge into…, Create Pull Request), and the repository's branches and status.
 
 import { bool, BYTES, type Infer, list, literal, map, NOTHING, nullable, number, object, oneOf, type RouteShape, string } from "../shape";
 
@@ -24,6 +24,22 @@ export const GIT_CHANGES_COUNT = oneOf(
   object({ repository: literal(true), root: string, against: string, files: number, additions: number, deletions: number, untracked: number, uncommitted: bool }),
 );
 export type GitChangesCount = Infer<typeof GIT_CHANGES_COUNT>;
+
+/** The repository a folder is in, for a branch menu: outside one `repository: false`; in one, its
+ * top folder, the branch checked out (null on none) and its branches, the latest commit first. */
+export const GIT_BRANCHES = oneOf(
+  object({ repository: literal(false) }),
+  object({ repository: literal(true), root: string, current: nullable(string), branches: list(string) }),
+);
+export type GitBranches = Infer<typeof GIT_BRANCHES>;
+
+/** Whether anything in a folder's repository isn't committed (changes, new files git doesn't
+ * ignore, changes in submodules whatever their `ignore` setting): outside one `repository: false`. */
+export const GIT_STATUS = oneOf(
+  object({ repository: literal(false) }),
+  object({ repository: literal(true), root: string, uncommitted: bool }),
+);
+export type GitStatus = Infer<typeof GIT_STATUS>;
 
 /** What a commit would take, for writing its message: the diff, cut short, whether it's what's
  * staged, and (asked with `prompt`) what a model is asked to write its message from, with your
@@ -75,6 +91,9 @@ const REFUSED = object({ message: string });
 export const CHANGES_ROUTES: RouteShape[] = [
   { route: "POST kuvo/git/changes", answers: { 200: GIT_CHANGES } },
   { route: "POST kuvo/git/changes/count", answers: { 200: GIT_CHANGES_COUNT } },
+  { route: "POST kuvo/git/branches", answers: { 200: GIT_BRANCHES, 404: REFUSED, 500: REFUSED } },
+  { route: "POST kuvo/git/switch", answers: { 200: NOTHING, 400: REFUSED, 404: REFUSED, 422: REFUSED } },
+  { route: "POST kuvo/git/status", answers: { 200: GIT_STATUS, 404: REFUSED, 500: REFUSED } },
   { route: "POST kuvo/git/stage", answers: { 200: NOTHING } },
   { route: "POST kuvo/git/unstage", answers: { 200: NOTHING } },
   { route: "POST kuvo/git/discard", answers: { 200: NOTHING } },

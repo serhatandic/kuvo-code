@@ -287,7 +287,7 @@ final class FileTree {
             allFilesFailure = nil
         } else if allFiles != nil {
             let roots = roots
-            let listing = await Task.detached { ProjectFiles.listing(roots) }.value
+            let listing = await ProjectFiles.listing(roots)
             if listing.files != allFiles { allFiles = listing.files }
             if listing.failure != allFilesFailure { allFilesFailure = listing.failure }
         }
@@ -329,7 +329,7 @@ final class FileTree {
     func loadAllFiles() async {
         guard allFiles == nil else { return }
         let roots = roots
-        let listing = await Task.detached { ProjectFiles.listing(roots) }.value
+        let listing = await ProjectFiles.listing(roots)
         allFiles = listing.files
         allFilesFailure = listing.failure
     }

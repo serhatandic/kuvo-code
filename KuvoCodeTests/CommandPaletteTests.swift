@@ -27,10 +27,12 @@ import Testing
         Dictionary(uniqueKeysWithValues: sections.map { ($0.title, $0.items.map(\.title)) })
     }
 
-    @Test func itFindsSessionsFilesAndActions() throws {
+    @Test func itFindsSessionsFilesAndActions() async throws {
         let repo = try TestRepository()
         for path in ["Sources/LoginView.swift", "Sources/Settings.swift", "README.md"] { try repo.write(path, "x\n") }
-        let files = ProjectFiles.mentionable([repo.url])
+        // The project's files as this Mac's box lists them.
+        let box = try await GitTestBox(), client = box.client
+        let files = await ProjectFiles.mentionable([repo.url]) { _ in client }
         var opened: URL?
         func listed(_ query: String) -> [String: [String]] {
             titles(CommandPalette.sections(for: query, actions: actions, sessions: sessions, files: files) { opened = $0 })
