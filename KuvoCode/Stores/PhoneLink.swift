@@ -129,6 +129,12 @@ final class PhoneLink {
     private var secret: RelaySecret { identity.secret }
     /// This Mac's box, which holds the relay connection (`BoxProcess`); set by AppModel.
     @ObservationIgnored var box: () -> BoxClient? = { nil }
+    /// Why there's no box of the app's own for its link, when that's for good rather than for a
+    /// moment (the app attached to the box already on this Mac, which keeps a link of its own); set
+    /// by AppModel.
+    @ObservationIgnored var noBox: () -> String? = { nil }
+    /// What `noBox` says while the app uses the box already on this Mac.
+    static let keptByTheBoxHere = "The box already on this Mac keeps its own link to your phones and other computers. For now, pair a phone or set up a machine for them from the Mac that set this one up."
     /// Following the link's state and its phones, as the box keeps them.
     @ObservationIgnored private var running: Task<Void, Never>?
     @ObservationIgnored private var endpoint: ServerEndpoint?
@@ -259,7 +265,7 @@ final class PhoneLink {
     }
 
     /// This Mac's name, as Sharing settings has it.
-    static var computerName: String {
+    nonisolated static var computerName: String {
         (SCDynamicStoreCopyComputerName(nil, nil) as String?) ?? "Mac"
     }
 
@@ -440,7 +446,7 @@ final class PhoneLink {
         let round = pairingRound
         struct Made: Decodable { var link: String }
         guard let client = box() else {
-            pairingProblem = "Kuvo Code’s background service on this Mac isn’t running. Try again in a moment."
+            pairingProblem = noBox() ?? "Kuvo Code’s background service on this Mac isn’t running. Try again in a moment."
             return
         }
         // The last one shown ended first, so its end never ends this one.
@@ -566,7 +572,18 @@ final class PhoneLink {
     /// and the one after this Mac's box is told its settings, would run into each other there).
     /// `asked`: you asked (Set Up Again), so what keeps it from being set up now is said too.
     func sync(_ engine: MachineEngine, asked: Bool = false) async {
-        guard relayWanted, engine.isReady, hasIdentity else {
+        // (Never this Mac's own box, attached in place: it's used as it is, its link included.)
+        guard !engine.machine.isThisMac, relayWanted, engine.isReady else {
+            setupFailed[engine.machine.id] = nil
+            return
+        }
+        // No box of the app's own to set it up with (attached in place): said, when you asked,
+        // before anything goes to the machine or this Mac's keys are read.
+        if let why = noBox() {
+            setupFailed[engine.machine.id] = asked ? why : nil
+            return
+        }
+        guard hasIdentity else {
             setupFailed[engine.machine.id] = nil
             return
         }
@@ -870,17 +887,6 @@ final class PhoneLink {
                 if route == "kuvo/machines" { continuation.onTermination = { _ in task.cancel() } }
             }
         }
-        // Settings › Agents' and Commands' From Claude Code: this Mac's ~/.claude, read here.
-        if route == "kuvo/claude-code" {
-            // `?machine=<id>`: named and said to be there as that machine's pages have them.
-            let machine = URLComponents(string: request.path)?.queryItems?.first { $0.name == "machine" }?.value
-            return AsyncThrowingStream { continuation in
-                Task { @MainActor in
-                    let (status, body) = request.method.uppercased() == "GET" ? await link?.claudeCodeJSON(for: machine) ?? (503, Data()) : (405, Data("{}".utf8))
-                    Self.sendJSON(status, body, to: continuation)
-                }
-            }
-        }
         // Settings › General's While Agents Work: whether it's kept awake now can be the keeper's
         // to say.
         if route == "kuvo/mac" {
@@ -1087,7 +1093,7 @@ final class PhoneLink {
     /// This Mac's own areas, which the app answers itself: what its box hands it of a phone's
     /// (the box's `MAC_APP_ROUTES`, the one list of them, which a test holds this to). Everything
     /// else, a phone's or the app's own (`BoxClient`), is its box's (`BoxProcess`).
-    nonisolated static let appRoutes = ["kuvo/machines", "kuvo/hosts", "kuvo/usage", "kuvo/asks", "kuvo/mac", "kuvo/claude-code", "kuvo/engine"]
+    nonisolated static let appRoutes = ["kuvo/machines", "kuvo/hosts", "kuvo/usage", "kuvo/asks", "kuvo/mac", "kuvo/engine"]
     /// Where this Mac's box is reached while it runs.
     nonisolated static let box = OSAllocatedUnfairLock<ServerEndpoint?>(initialState: nil)
     /// Connections of its own to this Mac's box, plenty of them: the streams that follow it
@@ -1169,7 +1175,8 @@ final class PhoneLink {
         case let path where path.hasPrefix("kuvo/asks/"):
             return (405, Data("{}".utf8))
         case "kuvo/engine/restart" where request.method.uppercased() == "POST":
-            // Answered first: the restart takes the link down with the engine, and the phone sees
+            // Asked here only while the app runs this Mac's box itself (the keeper's box restarts
+            // its engine itself), or by an older box (old-box path). Answered first: the restart takes the link down with the engine, and the phone sees
             // this Mac come back (its box's `kuvo/info` says when it started).
             let restart = restartEngine
             Task { @MainActor in

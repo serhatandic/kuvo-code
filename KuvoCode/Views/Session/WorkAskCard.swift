@@ -26,7 +26,7 @@ struct WorkAskCard: View {
     /// Being answered, here or on another of its cards.
     private var isAnswering: Bool { app.botAsks.answering.contains(ask.id) }
 
-    private var onThisMac: Bool { box == BoxClient.mac }
+    private var onThisMac: Bool { BoxClient.isThisMac(box) }
     private var computer: String { onThisMac ? "this Mac" : app.machines.engine(box)?.machine.name ?? box }
     /// The folder projects go in: as its box has it, else the one picked here.
     private var projectsFolder: String? { ask.folder.map { ($0 as NSString).deletingLastPathComponent } ?? picked }

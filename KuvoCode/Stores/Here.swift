@@ -122,38 +122,41 @@ nonisolated struct Here: Decodable, Equatable, Sendable {
         }
     }
 
-    /// How the box in the machines' folder is started again: by launchd, through the launch agent its
-    /// Mac put in place (the real `~/.kuvo-code`'s), as at login, so it runs as its own and never
-    /// under Kuvo Code's privacy permissions; else by its own `bin/kuvo-start`.
+    /// How the box in the machines' folder is started again, each tried in turn: by launchd, through
+    /// the launch agent its Mac put in place (the real `~/.kuvo-code`'s), as at login, so it runs as
+    /// its own and never under Kuvo Code's privacy permissions: started where launchd has it loaded,
+    /// else loaded (its agent starts it as it loads, as at login). Never by the app then. With no
+    /// agent, by its own `bin/kuvo-start`.
     /// (`real`: the account's own home, which launchd's agents are of: never a test's.)
-    static func startCommand(home: URL, root: String, user: uid_t = getuid(), real: Bool? = nil) -> (path: String, arguments: [String]) {
+    static func startCommands(home: URL, root: String, user: uid_t = getuid(), real: Bool? = nil) -> [(path: String, arguments: [String])] {
         let real = real ?? (!AppInfo.isHostingTests && home.standardizedFileURL == FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL)
         let agent = home.appending(path: "Library/LaunchAgents/\(RemoteServer.launchAgent).plist")
         if real, root == ".kuvo-code", FileManager.default.fileExists(atPath: agent.path) {
-            return ("/bin/launchctl", ["kickstart", "gui/\(user)/\(RemoteServer.launchAgent)"])
+            return [("/bin/launchctl", ["kickstart", "gui/\(user)/\(RemoteServer.launchAgent)"]),
+                    ("/bin/launchctl", ["bootstrap", "gui/\(user)", agent.path])]
         }
-        return ("/bin/sh", [home.appending(path: root).appending(path: "bin/kuvo-start").path])
+        return [("/bin/sh", [home.appending(path: root).appending(path: "bin/kuvo-start").path])]
     }
 
-    /// The box in the machines' folder, stopped, started again in place (`startCommand`; its own
-    /// `kuvo-start` where launchd can't, which starts its keeper once and returns): what `here` says
-    /// then, once it runs or after a few seconds.
+    /// Whether the box here is started by launchd, through its login item (`startCommands`).
+    static func startsByLaunchd(home: URL) -> Bool {
+        root.map { startCommands(home: home, root: $0).first?.path == "/bin/launchctl" } ?? false
+    }
+
+    /// The box in the machines' folder, stopped, started again in place (`startCommands`): what
+    /// `here` says then, once it runs or after a few seconds.
     static func started(engine: URL, script: URL, appBox: URL, engineData: URL, home: URL) async -> Here? {
         guard let root else { return nil }
         let box = home.appending(path: root)
         let env = ["HOME": home.path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": FileManager.default.temporaryDirectory.path]
-        var command = startCommand(home: home, root: root)
-        for _ in 0..<2 {
+        for command in startCommands(home: home, root: root) {
             do {
                 let result = try await ChildProcess.run(command.path, command.arguments, environment: env, directory: box, limit: .seconds(20))
                 if result.succeeded { break }
-                log.error("The box here didn't start (\(command.path, privacy: .public)): \(result.errorText.suffix(200), privacy: .public)")
+                log.error("The box here didn't start (\(command.arguments.first ?? command.path, privacy: .public)): \(result.errorText.suffix(200), privacy: .public)")
             } catch {
                 log.error("The box here didn't start: \(error.localizedDescription, privacy: .public)")
             }
-            // (An agent launchd hasn't loaded yet, put in place since this login: its own script.)
-            guard command.path != "/bin/sh" else { break }
-            command = ("/bin/sh", [box.appending(path: "bin/kuvo-start").path])
         }
         var here: Here?
         for attempt in 0..<6 {

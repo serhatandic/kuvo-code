@@ -24,8 +24,6 @@ struct GoalCard: View {
     @State private var renamesProject = false
     /// Its computer has Autopilot, as last read.
     private var offersAutopilot: Bool { app.workspace.autopilotHere[box] == true }
-    /// The Model row asks, and you've kept the box's pick.
-    @State private var modelAsks = false
     @State private var wake = false
     /// On Autopilot: one setting with the bot's conversation.
     @State private var autopilot = false
@@ -52,7 +50,7 @@ struct GoalCard: View {
     @State private var reviews = false
 
     private var isAnswering: Bool { app.goalPlans.answering.contains(plan.id) }
-    private var onThisMac: Bool { box == BoxClient.mac }
+    private var onThisMac: Bool { BoxClient.isThisMac(box) }
     private var computer: String { onThisMac ? "This Mac" : app.machines.engine(box)?.machine.name ?? box }
     private var bot: Bot? { app.bots.list.first { $0.id == plan.bot } }
     /// What only you can do (and what failed), first.
@@ -238,7 +236,8 @@ struct GoalCard: View {
     // MARK: The sandbox row
 
     private var sandboxRow: GoalSandbox.Row? {
-        GoalSandbox.row(sandbox, computer: computer, onThisMac: onThisMac, bot: plan.name,
+        // (The box attached in place is updated as a machine is, so it's named as one here.)
+        GoalSandbox.row(sandbox, computer: box == BoxClient.mac ? computer : app.name(of: SidebarBox(id: box)), onThisMac: box == BoxClient.mac, bot: plan.name,
                         codingAgent: bot?.agents == true, restarting: restartingAgents, restartingSessions: restartingSessions)
     }
 
@@ -324,8 +323,8 @@ struct GoalCard: View {
         }
     }
 
-    /// How it runs: its deadline, how often you hear, the model the box does the work on (asked once),
-    /// what it may spend, its projects and Wake me, each a row with its control on the right.
+    /// How it runs: its deadline, how often you hear, what it may spend, its projects and Wake me,
+    /// each a row with its control on the right.
     private var settingsSection: some View {
         GoalCardSection(symbol: "slider.horizontal.3", title: "Execution settings", caption: "How the goal runs") {
             VStack(spacing: 0) {
@@ -358,7 +357,6 @@ struct GoalCard: View {
                         }
                     }
                 }
-                GoalModelRow(box: box, asks: $modelAsks)
                 ForEach(Array(plan.spend.enumerated()), id: \.offset) { index, line in
                     Divider().padding(.leading, GoalCardMetrics.markWidth + 12)
                     GoalSettingRow(symbol: "creditcard", title: plan.spend.count == 1 ? "Spending" : "Spending on \(line.what)", subtitle: plan.spend.count == 1 ? "On \(line.what)" : nil) {
@@ -473,8 +471,10 @@ struct GoalCard: View {
     /// where new projects go (Settings › Worktrees, on its computer).
     private func open(_ action: GoalPlan.Check.Action) {
         switch action.kind {
-        case .open: if let url = action.url { app.utilities.openForAgent(url, bot: plan.bot, machine: onThisMac ? nil : box) }
-        case .projectsFolder: app.openSettings(.worktrees, on: SidebarBox(machine: onThisMac ? nil : box))
+        // (In the bot's browser: the app's own box's is the panel's; any other box's, the one
+        // attached in place too, its own.)
+        case .open: if let url = action.url { app.utilities.openForAgent(url, bot: plan.bot, machine: box == BoxClient.mac ? nil : box) }
+        case .projectsFolder: app.openSettings(.worktrees, on: SidebarBox(id: box))
         }
     }
 
@@ -484,11 +484,7 @@ struct GoalCard: View {
         let answer: GoalPlanAnswer = action == .start
             ? Self.start(plan, wake: wake, digest: digest, deadline: deadline, caps: caps, periods: periods, autopilot: offersAutopilot ? autopilot : nil)
             : .decline
-        let client = action == .start && modelAsks ? app.goalPlans.client(box) : nil
         Task {
-            // Started with the box's pick kept: it isn't asked again. A box from before the ask
-            // turns it down, and nothing comes of that.
-            _ = try? await client?.value(ModelRoles.self, "PUT", "kuvo/models/roles", body: ModelRoles.Asked())
             do {
                 try await app.goalPlans.answer(plan, on: box, answer)
             } catch {

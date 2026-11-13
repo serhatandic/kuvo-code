@@ -25,8 +25,10 @@ export const GIT_CHANGES_COUNT = oneOf(
 );
 export type GitChangesCount = Infer<typeof GIT_CHANGES_COUNT>;
 
-/** What a commit would take, for writing its message: the diff, cut short, and whether it's what's staged. */
-export const COMMIT_DIFF = object({ diff: string, staged: bool });
+/** What a commit would take, for writing its message: the diff, cut short, whether it's what's
+ * staged, and (asked with `prompt`) what a model is asked to write its message from, with your
+ * instructions on this computer. */
+export const COMMIT_DIFF = object({ diff: string, staged: bool, "prompt?": string });
 
 /** A commit whose push didn't go through: committed all the same, for a client to offer Push. */
 const NOT_PUSHED = object({ message: string, "committed?": literal(true), "pushed?": literal(false) });
@@ -36,11 +38,12 @@ const NOT_MERGED = object({ message: string, "conflicts?": list(string) });
  * box doesn't know, where the branch is pushed. */
 export const PULL_REQUEST = object({ "url?": string, "compareURL?": string });
 /** Create Pull Request's confirmation (`kuvo/git/pull-request/draft`): the branch, its base, a title
- * and description from the commits, what it brings (`summary`, when asked, for a model to write them from), its
+ * and description from the commits, what it brings (`summary`, when asked, for a model to write them from), what a
+ * model is asked to write them from (`prompt`, when asked, with your instructions on this computer), its
  * host, and whether Create makes it on the box (`creates`, with `gh` there and signed in), or why
  * not on GitHub (`gh`: not signed in, or not there), when it opens the host's page instead. */
 export const PULL_REQUEST_DRAFT = object({
-  branch: string, "base?": string, title: string, body: string, "summary?": string,
+  branch: string, "base?": string, title: string, body: string, "summary?": string, "prompt?": string,
   host: oneOf(literal("github"), literal("gitlab"), literal("other")), creates: bool, "gh?": oneOf(literal("signed-out"), literal("missing")),
 });
 export type PullRequestDraft = Infer<typeof PULL_REQUEST_DRAFT>;
@@ -81,6 +84,7 @@ export const CHANGES_ROUTES: RouteShape[] = [
   { route: "POST kuvo/git/pull-request", answers: { 200: PULL_REQUEST } },
   { route: "POST kuvo/git/pull-request/draft", answers: { 200: PULL_REQUEST_DRAFT } },
   { route: "POST kuvo/git/commit-diff", answers: { 200: COMMIT_DIFF } },
+  { route: "POST kuvo/git/settings/move", answers: { 200: object({ moved: bool }), 400: REFUSED, 409: REFUSED, 500: REFUSED } },
   { route: "GET kuvo/git/backups", answers: { 200: BRANCH_BACKUPS, 400: REFUSED } },
   { route: "POST kuvo/git/backups/restore", answers: { 200: BACKUP_RESTORED, 400: REFUSED, 404: REFUSED, 409: REFUSED, 500: REFUSED } },
 ];

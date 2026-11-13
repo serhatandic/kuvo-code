@@ -12,7 +12,46 @@ struct BoxClient: Sendable {
     let box: String
     let transport: any BoxTransport
 
-    static let mac = "mac"
+    nonisolated static let mac = "mac"
+
+    // MARK: This Mac's box (#333)
+
+    /// This Mac's box: the app's own (`mac`), or the box already here that the app attached to in
+    /// place (`SSHConnection.thisMac`, a machine to the app, reached with no SSH). What something
+    /// with no computer of its own is on. Follows `AppModel.attached`.
+    @MainActor static var thisMac: String = mac
+
+    /// Whether `id` is this Mac's box, either way: what's on it is on this disk, under this account
+    /// (its folders open here, its apps open here, it's named "this Mac"), and it's never away or
+    /// removed like a machine.
+    nonisolated static func isThisMac(_ id: String) -> Bool { id == mac || id == SSHConnection.thisMac }
+
+    /// Whether its routes stream (`follow` keeps sending as things change): the app's own box,
+    /// answered in this process. Every other box, the one attached in place too, answers each
+    /// request once (a process run for it, over SSH or not), so what follows it reads it again on
+    /// a timer, as slowly as a machine.
+    nonisolated static func streams(_ id: String) -> Bool { id == mac }
+
+    /// How long what follows a box that doesn't stream waits before it reads the box again: as long
+    /// as a machine's bots wait (`Bots.machineFollowPause`), so the one attached in place, whose
+    /// every read runs a process, isn't read more often than a machine over SSH. (A test's shorter.)
+    nonisolated(unsafe) static var readAgainAfter: Duration = .seconds(30)
+
+    /// Whether a request to its vault carries this Mac's proof (PROTOCOL.md, "Vault"): every box but
+    /// the app's own, which answers in this process. The one attached in place takes a request
+    /// through its CLI as a Mac's, so it asks for one too; but it takes only its own Macs' proofs
+    /// (`link.macs`), and this Mac isn't one of those for a box another Mac set up, so its vault
+    /// (and the saved passwords in it) can't be reached from here yet (#333).
+    nonisolated static func needsVaultProof(_ id: String) -> Bool { id != mac }
+
+    /// Whether it has everything this app knows of, without asking it (`kuvo/info`'s features): the
+    /// app's own box, of this version. One attached in place is whatever version it is, and is asked,
+    /// as a machine is.
+    nonisolated static func hasEveryFeature(_ id: String) -> Bool { id == mac }
+
+    /// Whether `machine` (nil: this Mac) is one of your machines, as analytics counts where
+    /// something happened: this Mac's box attached in place is this Mac.
+    nonisolated static func isMachine(_ machine: String?) -> Bool { machine.map { !isThisMac($0) } ?? false }
 
     /// A machine's box, by the machine's id, through `kuvo-link.js box route` over its SSH connection.
     nonisolated static func machine(_ id: String) -> BoxClient {

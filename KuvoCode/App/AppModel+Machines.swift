@@ -45,20 +45,12 @@ extension AppModel {
                 }
             }
         }
-        BrowserTools.mail = { name, arguments, caller in await AgentMail.shared.call(name, arguments: arguments, caller: caller) }
+        BrowserTools.mail = { name, arguments, caller, inView in await AgentMail.shared.call(name, arguments: arguments, caller: caller, inView: inView) }
         // A conversation at work, or waiting for you, keeps its tabs (see `Utilities.tidyAgentTabs`).
         utilities.isBusy = { [weak self] id in
             guard let self else { return false }
             let session = bots.bot(id)?.sessionID ?? id
             return [session, workspace.root(of: session)].contains { workspace.isWorking($0) || workspace.needsAttention($0) }
-        }
-        // Their wake-ups, set with the tools of Kuvo Code's own.
-        BrowserTools.wake = { [weak self] name, arguments, caller in
-            await self?.wakeUps.call(name, arguments: arguments, caller: caller) ?? ("Kuvo Code isn't ready yet.", true)
-        }
-        // A bot on this Mac keeping its job: its box keeps it.
-        BrowserTools.job = { [weak self] arguments, caller in
-            await self?.bots.setJob(arguments, caller: caller) ?? ("Kuvo Code isn't ready yet.", true)
         }
         // The vault's tools and fills, through this Mac's box.
         wireVault()
@@ -80,8 +72,6 @@ extension AppModel {
         // One machine at two addresses: the one added later is one of the other's addresses, and
         // what's kept under its name is the other's.
         machines.onFolded = { [weak self] address, machine in self?.machineFolded(address, into: machine) }
-        // This Mac's settings changed (a mode, a rule), wherever from: its group chats follow.
-        engineConfig.onChanged = { [weak self] in self?.settingsSaved() }
         engineConfig.onRulesChanged = { [weak self] in self?.workspace.syncPermissions() }
         // Each machine's settings are its own: its sessions, bots and group chats go by them.
         EngineConfig.machine = { [weak self] machine in self?.machines.engine(machine)?.config }
@@ -231,7 +221,9 @@ extension AppModel {
     /// computer's own settings change only it). Each as soon as nothing's at work in it, now or
     /// when that's done, so no one's work is cut off and nothing waits for you to remember.
     func renewEngines(mac: Bool, machines named: [String] = []) {
-        if mac { renewals.insert("") }
+        // (Attached in place, the app has no engine of its own to wait for. Nothing asks for this
+        // Mac's then: Bring Over is the one that does, and it needs the app's own engine.)
+        if mac, attached == nil { renewals.insert("") }
         for id in named where machines.engine(id)?.isReady == true { renewals.insert(id) }
         guard renewing == nil else { return }
         renewing = Task { [weak self] in
@@ -332,6 +324,8 @@ extension AppModel {
     // COMPAT(0.7 engine-stop): Start, for an engine an older Mac stopped. Goes 3 months after 0.8.0.
     /// Starts a machine's engine stopped on purpose (Start), and connects to it.
     func startEngine(_ engine: MachineEngine) {
+        // (This Mac's own box starts by its own keeper: connected again, as it is.)
+        if engine.machine.isThisMac { reconnectNow(engine); return }
         engine.disconnect()
         connectionClosed(engine.machine.id)
         engine.startWanted = true
@@ -343,6 +337,9 @@ extension AppModel {
     /// ends it: nothing more of it goes there, and it doesn't connect again itself.
     @discardableResult
     func restartEngine(_ engine: MachineEngine) -> Task<Void, Never> {
+        // This Mac's own box restarts by its own keeper, never from the app (which would run it as
+        // Kuvo Code's): it's connected again as it is.
+        if engine.machine.isThisMac { return reconnectNow(engine) ?? Task {} }
         engine.disconnect()
         connectionClosed(engine.machine.id)
         // Restart asks for it to be connected, as Connect does.
@@ -373,6 +370,8 @@ extension AppModel {
     /// are at work (they'd stop), nor over a box a newer Kuvo Code set up: why not, then.
     func makeHome(_ engine: MachineEngine) async -> String? {
         let name = engine.machine.name
+        // This Mac's own box: making this Mac the main one is the setup's to do (#183), not this.
+        if engine.machine.isThisMac { return "This is this Mac’s own box already." }
         guard engine.isReady else { return "\(name) isn’t connected. Connect it first." }
         guard engine.isAnotherMacsEngine else { return nil }
         guard engine.movingHomeFrom == nil else { return "\(name) is moving to this Mac already." }
@@ -423,16 +422,9 @@ extension AppModel {
             if event.type == "credential.updated" { self?.nudgeSignIns(engine) }
         }
         engine.onReconnect = { [weak self] in _ = await self?.workspace.refresh(engine) }
-        // Its Settings › Permissions changed: its open sessions follow, and what its group chats
-        // and new bots there start with.
-        engine.config.onRulesChanged = { [weak self] in
-            guard let self else { return }
-            workspace.syncPermissions()
-            Task {
-                await self.boxGroups.giveSettings(to: machine)
-                await self.bots.writeKit(on: machine)
-            }
-        }
+        // Its Settings › Permissions changed: its open sessions follow. (Its group chats and new
+        // bots go by them as its box has them.)
+        engine.config.onRulesChanged = { [weak self] in self?.workspace.syncPermissions() }
         // Its coding agents, beside its engine: their sessions as its engine's, their accounts,
         // models and Custom Auto lists (its own) in its catalog.
         engine.agents.onEvent = { [weak self, weak engine] event in
@@ -571,8 +563,9 @@ extension AppModel {
             return
         }
         #endif
-        // It takes this Mac's accounts and settings, so this Mac's engine comes first.
-        for _ in 0..<240 where api == nil { try? await Task.sleep(for: .milliseconds(250)) }
+        // It takes this Mac's accounts and settings, so this Mac's engine comes first; attached to
+        // the box already here, there's none of the app's own to wait for.
+        for _ in 0..<240 where api == nil && attached == nil { try? await Task.sleep(for: .milliseconds(250)) }
         // Removed a moment ago and added again: after the removal there has finished.
         await machines.waitForRemoval(of: engine.machine.id)
         // Disconnected while it waited (its tries ended): nothing goes there.
@@ -597,6 +590,12 @@ extension AppModel {
     /// long as its connection lasts.
     private func connected(_ engine: MachineEngine, _ connection: MachineConnection) async {
         let machine = engine.machine.id
+        // This Mac's own box, attached in place: its engine is this Mac's, at once; and what this
+        // Mac kept there is handed to it again (once taken, it's only read).
+        if engine.machine.isThisMac {
+            thisMacsBoxConnected(engine)
+            workspace.connecting(to: machine)
+        }
         // What waits for it (a bot deleted, an integration removed while it was away), now.
         guard await MachineConnection.inTurn([{ await self.machines.runWaiting(only: machine) }]) else { return }
         // Its sessions, once it's up: tried again a few times, as they're what makes them live.
@@ -610,6 +609,8 @@ extension AppModel {
             },
             // Its worktrees, as it keeps them (some this Mac made there before, handed over once).
             { await self.workspace.takeWorktrees(from: machine) },
+            // COMPAT(0.7 mac-git-settings): Settings › Git as this Mac kept it before, to its box once. Goes 3 months after 0.8.0.
+            { await GitPreferences.move(to: self.box(machine)) },
             // Its bots' keys of their own are its own: any this Mac kept from before go to it, and
             // its bots' folders' settings follow its integrations as they are now.
             { await BotKeys.applyAll(on: machine, app: self) },
@@ -620,9 +621,10 @@ extension AppModel {
             { await self.bots.refresh(machine) },
             // What it says is moving to or from it.
             { await self.moves.reload(machine) },
-            // What you signed in to here works there too, kept in step while it's connected.
-            { await self.syncSignIns(with: engine) },
-            { await self.syncSignInFiles(with: engine) },
+            // What you signed in to here works there too, kept in step while it's connected. (This
+            // Mac's own box, attached, is where this Mac's sign-ins are: none to bring.)
+            { if !engine.machine.isThisMac { await self.syncSignIns(with: engine) } },
+            { if !engine.machine.isThisMac { await self.syncSignInFiles(with: engine) } },
             { await self.wakeUps.share(with: engine) },
             // Its vault, read as it connects: an older copy of its files put back while it was
             // away is caught now, not only when its page is opened.
@@ -633,10 +635,12 @@ extension AppModel {
             // Its bots' goals, the same way.
             { await self.goalPlans.read(machine) },
         ]) else { return }
-        connection.every(600, "sign-ins", [
-            { await self.syncSignIns(with: engine) },
-            { await self.syncSignInFiles(with: engine) },
-        ])
+        if !engine.machine.isThisMac {
+            connection.every(600, "sign-ins", [
+                { await self.syncSignIns(with: engine) },
+                { await self.syncSignInFiles(with: engine) },
+            ])
+        }
         connection.every(60, "wake-ups", [
             { await self.wakeUps.share(with: engine) },
         ])
@@ -656,12 +660,22 @@ extension AppModel {
         connection.run("background") { [weak self] in await self?.workspace.followBackground(machine) }
         // Its projects as its box has them, changed from a phone too.
         connection.run("projects") { [weak self] in await self?.workspace.followProjects(on: machine) }
+        // This Mac's own box, attached in place: what the app's own box is followed for as it runs
+        // is followed there too (its wake-ups and worktrees, and your personalities, which it keeps
+        // for this Mac), read now and then as it answers once a read.
+        if engine.machine.isThisMac {
+            connection.run("follow-wakes") { [weak self] in await self?.wakeUps.follow(on: machine) }
+            connection.run("follow-worktrees") { [weak self] in await self?.workspace.followWorktrees(on: machine) }
+            connection.run("follow-personalities") { await Personalities.shared.follow() }
+        }
     }
 
     /// Closes this Mac's connection to a machine. It runs on, as a box of its own: its sessions,
     /// bots, group chats and phone link carry on, and are there when you connect again. (A demo or
     /// test copy's stops, unless a session there is working.)
     func disconnect(_ engine: MachineEngine) {
+        // The window is on this Mac's own box: it stays connected.
+        guard !engine.machine.isThisMac else { return }
         engine.startWanted = false
         engine.isDisconnected = true
         // It isn't tried again by itself now, nor does Settings offer Connect Now for it.
@@ -670,7 +684,8 @@ extension AppModel {
         utilities.closeMachineBrowser(engine.machine.id)
         // What runs for its connection ends now, a test copy's too, whose engine stops after.
         engine.endConnection()
-        if leavesMachinesRunning || workspace.isRunning(on: engine.machine.id) { engine.disconnect() } else { Task { await engine.shutDown() } }
+        // (This Mac's own box runs this Mac: never stopped from here.)
+        if leavesMachinesRunning || engine.machine.isThisMac || workspace.isRunning(on: engine.machine.id) { engine.disconnect() } else { Task { await engine.shutDown() } }
         connectionClosed(engine.machine.id)
     }
 
@@ -712,9 +727,23 @@ extension AppModel {
     /// keep; `uninstall`, also stopped there, its sign-ins and keys deleted, and gone from your
     /// phones (`Machines.remove`).
     func removeMachine(_ id: String, uninstall: Bool = false) {
+        // This Mac's own box runs this Mac: it isn't removed from here.
+        guard id != SSHConnection.thisMac else { return }
         planLimits.stopped(id)
         // Left running, as Disconnect leaves it (a test or demo copy's stops).
         if !uninstall, let engine = machines.engine(id) { disconnect(engine) }
+        closeAll(on: id)
+        machines.remove(id, uninstall: uninstall)
+        if uninstall { phoneLink.forget(machine: id) } else { phoneLink.machineRemoved(id) }
+        forgetAll(of: id)
+        // Your others hear of it: one uninstalled stops being their peer (one only removed stays,
+        // as your phones keep it); the last gone, no relay for it.
+        phoneLink.machinesChanged()
+        moves.forget(id)
+    }
+
+    /// What's open here on machine `id`, closed: its browser, browser asks and terminals.
+    func closeAll(on id: String) {
         if let engine = machines.engine(id) {
             stopRetrying(engine)
             engine.browser.reset()
@@ -723,8 +752,11 @@ extension AppModel {
         utilities.closeMachineBrowser(id)
         utilities.closeTerminals(on: id)
         mainTerminals.close(on: id)
-        machines.remove(id, uninstall: uninstall)
-        if uninstall { phoneLink.forget(machine: id) } else { phoneLink.machineRemoved(id) }
+    }
+
+    /// What this Mac keeps of machine `id` (once it's off the list), forgotten: its sessions and
+    /// their tabs, group chats, vault and sandbox, and its pages in Settings.
+    func forgetAll(of id: String) {
         workspace.machines = Set(machines.list.map(\.id))
         workspace.forget(id, forGood: true)
         boxGroups.forget(machine: id)
@@ -732,10 +764,6 @@ extension AppModel {
         Sandboxes.shared.forget(id)
         // Its pages in Settings.
         settingsTabs.closeTabs(notOn: Set(machines.list.map(\.id)), machines: machines)
-        // Your others hear of it: one uninstalled stops being their peer (one only removed stays,
-        // as your phones keep it); the last gone, no relay for it.
-        phoneLink.machinesChanged()
-        moves.forget(id)
     }
 
     /// When the app quits: each machine runs on, as a box of its own. (A demo or test copy's
@@ -756,7 +784,7 @@ extension AppModel {
         for engine in reached {
             let busy = workspace.isRunning(on: engine.machine.id)
             engine.disconnect()
-            if !leavesMachinesRunning && !busy { stopping.append(engine.machine.connection) }
+            if !leavesMachinesRunning && !busy && !engine.machine.isThisMac { stopping.append(engine.machine.connection) }
         }
         let stops = stopping
         DispatchQueue.concurrentPerform(iterations: stops.count) { RemoteServer.stopNow(on: stops[$0]) }
@@ -808,24 +836,16 @@ extension AppModel {
         }
     }
 
-    /// This Mac's settings changed (a mode, a permission rule…), here, from a phone or by hand:
-    /// what its group chats go by follows, a moment after the last change, so typing in a field
-    /// doesn't tell them for each letter.
-    func settingsSaved() {
-        settingsSync?.cancel()
-        settingsSync = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(3))
-            guard let self, !Task.isCancelled else { return }
-            // Machines keep their own settings (`MachineBox`): this Mac's stay here. What their
-            // group chats go by (Ask First, what's denied).
-            boxGroups.settingsChanged()
-        }
-    }
-
     /// This Mac's copy of your personalities met with `engine`'s machine's: both end up as one
     /// (see `Personalities`). One that changed here goes to the other machines too, and bots with
     /// it hear its new words.
     func syncPersonalities(with engine: MachineEngine) async {
+        // This Mac's own box, attached in place, keeps the library this Mac shows (`Personalities.box`):
+        // read, not met with itself.
+        if engine.machine.isThisMac {
+            await Personalities.shared.refresh()
+            return
+        }
         guard let met = try? await MachineBox.personalities(Personalities.shared.library, on: engine.machine.connection) else { return }
         // Where this Mac keeps them: what changed there is told (`Personalities.onChange`).
         await Personalities.shared.take(met)
@@ -836,10 +856,9 @@ extension AppModel {
     func personalitiesChanged(except machine: String? = nil) {
         // (Every machine hears it by mail too, connected or not: this Mac's box tells them,
         // PROTOCOL.md "Documents".)
-        // This Mac's bots with one of them are told what it is now, by its box.
+        // This Mac's bots with one of them are told what it is now, by its box. (Its group chats
+        // hear it from its box too.)
         bots.personalitiesChanged()
-        // This Mac's group chats, what each personality tells a bot.
-        Task { await boxGroups.giveSettings(to: nil) }
         for engine in machines.engines.values where engine.machine.id != machine {
             // A moment on, the last change's round only.
             engine.activeConnection?.run("personalities") { [weak self] in
@@ -848,7 +867,6 @@ extension AppModel {
                 await MachineConnection.inTurn([
                     { await self.syncPersonalities(with: engine) },
                     { await self.bots.writeKit(on: engine.machine.id) },
-                    { await self.boxGroups.giveSettings(to: engine.machine.id) },
                 ])
             }
         }

@@ -19,7 +19,7 @@ private struct BranchBackupsPresenter: ViewModifier {
         content
             .sheet(isPresented: $isPresented) {
                 let remote = RemoteFolder.parse(folder)
-                BranchBackupsSheet(folder: remote?.path ?? folder, box: BranchBackupsSheet.box(remote?.machine ?? BoxClient.mac, app: app))
+                BranchBackupsSheet(folder: remote?.path ?? folder, box: BranchBackupsSheet.box(remote?.machine ?? BoxClient.thisMac, app: app))
             }
             .closesWhenKept($isPresented)
     }

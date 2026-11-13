@@ -3,17 +3,16 @@ import ClientDesign
 import OpenCodeKit
 import SwiftUI
 
-/// Git: how sessions' branches are named, and how commit messages and pull requests are written.
+/// Git: how sessions' branches are named, and how commit messages and pull requests are written,
+/// on one computer: each keeps its own (`kuvo/config`), for any client that asks it.
 struct GitSettings: View {
-    @AppStorage(GitPreferences.branchPrefixKey) private var branchPrefix = GitPreferences.defaultBranchPrefix
-    @AppStorage(GitPreferences.commitInstructionsKey) private var commitInstructions = ""
-    @AppStorage(GitPreferences.pullRequestInstructionsKey) private var pullRequestInstructions = ""
-
     var body: some View {
         ScrollingSettingsForm {
             Section {
                 SettingsTextRow {
-                    TextField("Branch prefix", text: $branchPrefix, prompt: Text(verbatim: GitPreferences.defaultBranchPrefix))
+                    // Emptied: no prefix at all. None set: the box's own default (git-words.ts's
+                    // DEFAULT_BRANCH_PREFIX).
+                    ConfigTextField(title: "Branch prefix", path: ["branch_prefix"], prompt: "None", unset: "kuvo/", bare: true)
                 } label: {
                     Text("Branch prefix")
                     Text("How a session’s own branch in a worktree starts.")
@@ -23,7 +22,8 @@ struct GitSettings: View {
             }
 
             Section {
-                InstructionsEditor(text: $commitInstructions, prompt: "For example: Start with the area changed, like “ui: …”, and never mention tickets.")
+                ConfigTextField(title: "Instructions", path: ["commit_instructions"], prompt: "For example: Start with the area changed, like “ui: …”, and never mention tickets.", multiline: true, bare: true)
+                    .lineLimit(3...8)
             } header: {
                 Text("Commit Messages")
             } footer: {
@@ -32,7 +32,8 @@ struct GitSettings: View {
             }
 
             Section {
-                InstructionsEditor(text: $pullRequestInstructions, prompt: "For example: Add a Testing section, and link the issue if the branch names one.")
+                ConfigTextField(title: "Instructions", path: ["pull_request_instructions"], prompt: "For example: Add a Testing section, and link the issue if the branch names one.", multiline: true, bare: true)
+                    .lineLimit(3...8)
             } header: {
                 Text("Pull Requests")
             } footer: {
@@ -40,18 +41,6 @@ struct GitSettings: View {
                     .foregroundStyle(.secondary)
             }
         }
-    }
-}
-
-/// A few lines of instructions for the model.
-private struct InstructionsEditor: View {
-    @Binding var text: String
-    let prompt: String
-
-    var body: some View {
-        TextField("Instructions", text: $text, prompt: Text(prompt), axis: .vertical)
-            .labelsHidden()
-            .lineLimit(3...8)
     }
 }
 

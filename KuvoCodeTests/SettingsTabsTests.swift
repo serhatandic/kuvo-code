@@ -35,6 +35,23 @@ import Testing
 
     private func pages(_ tabs: SettingsTabs) -> [SettingsPage?] { tabs.tabs.map(\.page) }
 
+    /// This Mac's pages follow its box (#333): attached to the box already here, the tabs it had on
+    /// this Mac are that box's, and a page opened with no computer given (General, ⌘,) is too,
+    /// with this Mac's own pages still listed there; they're kept as this Mac's for the next time.
+    @Test func thisMacsTabsFollowItsBox() {
+        let tabs = SettingsTabs()
+        tabs.show(.accounts)
+        tabs.keepSelected()
+        tabs.thisMac = .attached
+        #expect(tabs.box == .attached && tabs.tabs.allSatisfy { $0.box == .attached })
+        tabs.show(.general)
+        #expect(tabs.page == .general && tabs.box == .attached, "the app's own pages are this Mac's, on its box")
+        #expect(SettingsPage.shown(on: .attached).contains(.machines) && SettingsPage.shown(on: .attached).contains(.accounts))
+        #expect(!SettingsPage.shown(on: .machine("devbox")).contains(.general), "a machine has its box's pages only")
+        let again = SettingsTabs()
+        #expect(pages(again) == [.accounts, .general] && again.tabs.allSatisfy { $0.box == .mac }, "kept as this Mac's")
+    }
+
     @Test func pagesTakeThePreviewTabUntilYouWorkInOne() {
         let tabs = SettingsTabs()
         #expect(pages(tabs) == [.general], "the first time: General, only looked at")

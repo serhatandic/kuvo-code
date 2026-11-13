@@ -498,18 +498,25 @@ enum DemoDirector {
 
     private static func runSession(_ environment: [String: String], app: AppModel, window: DemoWindow) async {
         let workspace = app.workspace
-        // KUVO_DEMO_SHOW_IN_PANEL=<path>|<folder or file>: as if the agent of the session in view
+        // KUVO_DEMO_SHOW_IN_PANEL=<full path>: as if the agent of the session in view
         // showed that in the panel (its show_in_panel tool), once it's been connected a while.
         if let spec = environment["KUVO_DEMO_SHOW_IN_PANEL"] {
             let parts = spec.split(separator: "|").map(String.init)
             Task {
                 await DemoWait.pause(.connectedAWhile)
-                guard let id = app.tabs.sessionID, let session = workspace.session(id), parts.count == 2 else { return }
+                guard let id = app.tabs.sessionID, let session = workspace.session(id), let path = parts.first else { return }
                 let machine = RemoteFolder.machine(of: session.location.directory)
-                let said = BrowserTools.shown(parts[0], isFolder: parts[1] == "folder", inView: true)
+                // What its box answers the call, as the tool server passes it on, while you look at it.
+                struct Said: Decodable { var text: String; var isError: Bool }
+                guard let body = try? JSONSerialization.data(withJSONObject: ["name": BrowserTools.showInPanel, "arguments": ["path": path], "session": id, "inView": true] as [String: Any]),
+                      let answer = try? await app.box(machine ?? BoxClient.mac).send("POST", "kuvo/agent-tools", body: body), answer.status == 200,
+                      let said = (try? JSONDecoder().decode(Said.self, from: answer.body)).flatMap({ $0.isError ? nil : $0.text }) else {
+                    print("KUVO_DEMO_SHOW_IN_PANEL failed: its box didn't show \(path) (a full path that's there, on the session's computer).")
+                    return
+                }
                 for (type, data) in [
                     ("session.tool.input.started", #""name":"kuvo-browser_show_in_panel""#),
-                    ("session.tool.called", #""input":{"path":\#(String(decoding: try! JSONEncoder().encode(parts[0]), as: UTF8.self))}"#),
+                    ("session.tool.called", #""input":{"path":\#(String(decoding: try! JSONEncoder().encode(path), as: UTF8.self))}"#),
                     ("session.tool.success", #""content":[{"type":"text","text":\#(String(decoding: try! JSONEncoder().encode(said), as: UTF8.self))}]"#),
                 ] {
                     let json = #"{"id":"evt_demo","type":"\#(type)","data":{"sessionID":"\#(id)","assistantMessageID":"msg_demo","id":"call_show",\#(data)}}"#

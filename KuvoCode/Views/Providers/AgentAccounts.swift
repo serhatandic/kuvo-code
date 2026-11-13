@@ -30,6 +30,8 @@ struct SubscriptionsSection: View {
     @Environment(\.colorScheme) private var scheme
     /// Another account asked of a product, from the header's Add Account menu.
     @State private var addRequest: AddRequest?
+    /// Why Update All couldn't be asked of this page's computer.
+    @State private var updateAllFailure: String?
 
     struct AddRequest: Equatable {
         let product: String
@@ -73,7 +75,7 @@ struct SubscriptionsSection: View {
                 }
                 // Only while its agents show: a machine's that aren't running show none.
                 if shows == .agents, !updatable.isEmpty, machine.map(isRunning) != false {
-                    Button { app.updateAllAgents(on: box) } label: {
+                    Button(action: updateAll) {
                         Label("Update All", systemImage: "arrow.down.circle")
                             .font(.callout)
                             .fixedSize()
@@ -138,15 +140,24 @@ struct SubscriptionsSection: View {
             if shows == .agents { await catalog.refreshAgents(fresh: true) }
         }
         // How an update went is news while you're here, not the next time you look.
-        .onDisappear { if shows == .agents { agents.forgetUpdates() } }
+        .onDisappear { if shows == .agents { agents.forgetUpdates(catalog.codingAgents) } }
+        .alert("Couldn't Update All", isPresented: Binding(get: { updateAllFailure != nil }, set: { if !$0 { updateAllFailure = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(updateAllFailure ?? "")
+        }
     }
 
-    /// What Update All updates, on this page's computer, not updating already; each shows how it
+    /// What Update All updates, on this page's computer, as its box picks it; each shows how it
     /// goes on its row or tile.
     private var updatable: [String] {
-        app.outdatedAgents(on: box).compactMap { outdated in
-            guard !agents.isUpdating(outdated.id) else { return nil }
-            return OutsideAgents.name(outdated.id)
+        app.outdatedAgents(on: box).map { OutsideAgents.name($0.id) }
+    }
+
+    private func updateAll() {
+        let app = app, box = box
+        Task {
+            do { try await app.updateAllAgents(on: box) } catch { updateAllFailure = error.localizedDescription }
         }
     }
 
@@ -257,6 +268,8 @@ private struct ProductBlock: View {
     @State private var naming = false
     @State private var name = ""
     @State private var failure: String?
+    /// Why its update couldn't be asked of its computer (how one goes is its box's).
+    @State private var updateRefused: String?
 
     private var main: Integration { product.main }
     private var isAgent: Bool { product.isAgent }
@@ -267,8 +280,7 @@ private struct ProductBlock: View {
     private var latest: String? { main.metadata?["outdated"]?.bool == true ? main.metadata?["latestVersion"]?.string : nil }
     private var updates: Bool { main.metadata?["updates"]?.bool == true }
     private var updateCommand: String? { main.metadata?["updateCommand"]?.string }
-    private var isUpdating: Bool { agents.isUpdating(main.id) }
-    private var updateFailure: String? { agents.updateFailure(main.id) }
+    private var updateFailure: String? { updateRefused ?? agents.updateFailure(main) }
     private var isInstalling: Bool { agents.installing.contains(main.id) }
     private var installFailure: String? { agents.installFailures[main.id] }
 
@@ -333,7 +345,7 @@ private struct ProductBlock: View {
         } message: {
             Text(failure ?? "")
         }
-        .alert("Couldn't Update \(title)", isPresented: Binding(get: { updateFailure != nil }, set: { if !$0 { agents.dismissUpdateFailure(main.id) } })) {
+        .alert("Couldn't Update \(title)", isPresented: Binding(get: { updateFailure != nil }, set: { if !$0 { dismissUpdateFailure() } })) {
             if let updateCommand {
                 Button("Copy Command") { Clipboard.copy(updateCommand) }
             }
@@ -483,8 +495,14 @@ private struct ProductBlock: View {
     }
 
     private func update() {
-        let catalog = catalog
-        agents.update(main.id) { await catalog.refreshAgents(fresh: true) }
+        let catalog = catalog, agents = agents, main = main
+        Task {
+            do { try await agents.update(main) { await catalog.refreshAgents() } } catch { updateRefused = error.localizedDescription }
+        }
+    }
+
+    private func dismissUpdateFailure() {
+        if updateRefused != nil { updateRefused = nil } else { agents.dismissUpdateFailure(main) }
     }
 
     private func install() {
@@ -576,13 +594,13 @@ private struct SubscriptionTile: View {
         } message: {
             Text(installFailure ?? "")
         }
-        .alert("Couldn't Update \(product.title)", isPresented: Binding(get: { agents.updateFailure(product.main.id) != nil }, set: { if !$0 { agents.dismissUpdateFailure(product.main.id) } })) {
+        .alert("Couldn't Update \(product.title)", isPresented: Binding(get: { agents.updateFailure(product.main) != nil }, set: { if !$0 { agents.dismissUpdateFailure(product.main) } })) {
             if let command = product.main.metadata?["updateCommand"]?.string {
                 Button("Copy Command") { Clipboard.copy(command) }
             }
             Button("OK", role: .cancel) {}
         } message: {
-            Text(agents.updateFailure(product.main.id) ?? "")
+            Text(agents.updateFailure(product.main) ?? "")
         }
     }
 

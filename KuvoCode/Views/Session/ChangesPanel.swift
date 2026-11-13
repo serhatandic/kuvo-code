@@ -280,10 +280,12 @@ struct ChangesPanel: View {
                         let isAgents = model.map { OutsideAgents.isAgentSession($0.session) } ?? false
                         // (Its bridge: this Mac's, or its machine's.)
                         let bridge = model.flatMap { workspace.agents(forFolder: $0.session.location.directory)?.api }
+                        // (This Mac's engine: the box attached in place's, if that's where it is.)
+                        let thisMacs = app.api(for: app.thisMacsBox)
                         CommitForm(changes: changes, environment: app.shellEnvironment,
-                                   api: isAgents ? bridge ?? app.api : model.flatMap { workspace.api(forSession: $0.id) } ?? app.api,
+                                   api: isAgents ? bridge ?? thisMacs : model.flatMap { workspace.api(forSession: $0.id) } ?? thisMacs,
                                    session: isAgents && bridge == nil ? nil : model?.id, model: isAgents ? nil : model?.session.model,
-                                   fallback: isAgents ? app.api : nil) { isCommitting = false }
+                                   fallback: isAgents ? thisMacs : nil) { isCommitting = false }
                         .popoverContent()
                     }
             }
@@ -457,6 +459,17 @@ private struct CommitForm: View {
     @State private var isWorking = false
     @AppStorage("changes.pushAfterCommit") private var pushes = false
     @FocusState private var isFocused: Bool
+    @Environment(AppModel.self) private var app
+
+    /// The box the project is on, and the folder as it names it.
+    private var box: (client: BoxClient, path: String) {
+        if let (machine, path) = RemoteFolder.parse(changes.directory) { return (app.box(machine), path) }
+        return (app.box(BoxClient.thisMac), changes.directory)
+    }
+
+    private var place: String {
+        RemoteFolder.machine(of: changes.directory).map { app.machines.engine($0)?.machine.name ?? $0 } ?? "This Mac"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -516,13 +529,9 @@ private struct CommitForm: View {
         failure = nil
         Task {
             defer { isSuggesting = false }
-            let diff = await changes.commitDiff()
-            let prompt = GitPreferences.prompt("""
-            Write a git commit message for the changes below. A summary line in the imperative mood, under 72 characters; then, only if it helps, a blank line and a few short lines on what changed and why. Reply with the message alone: no quotes, no code fences.
-
-            \(diff)
-            """, instructionsKey: GitPreferences.commitInstructionsKey)
             do {
+                // In the words of the box the project is on, with your instructions there.
+                let prompt = try await CommitMessages.prompt(on: box.client, directory: box.path, place: place)
                 // Through the session where there is one: free models only answer there.
                 let text: String
                 if let session {
@@ -783,7 +792,7 @@ private struct PullRequestForm: View {
     /// The box the project is on, and the folder as it names it.
     private var box: (client: BoxClient, path: String) {
         if let (machine, path) = RemoteFolder.parse(directory) { return (app.box(machine), path) }
-        return (app.box(BoxClient.mac), directory)
+        return (app.box(BoxClient.thisMac), directory)
     }
 
     private var place: String {
@@ -812,22 +821,22 @@ private struct PullRequestForm: View {
         isSuggesting = true
         Task {
             defer { isSuggesting = false }
-            let summary: String
+            // In the words of the box the project is on, with your instructions there.
+            let asked: String?
             do {
-                summary = try await PullRequests.draft(on: box.client, directory: box.path, withSummary: true).summary ?? ""
+                asked = try await PullRequests.draft(on: box.client, directory: box.path, withPrompt: true).prompt
             } catch {
                 failure = error.localizedDescription
                 return
             }
-            let prompt = GitPreferences.prompt("""
-            Write a pull request for the changes below. The first line is its title: under 72 characters, in the imperative mood. Then a blank line and a short description in Markdown: what changed and why, in a few bullet points, and anything a reviewer should check. Reply with the pull request alone: no preamble, no code fences.
-
-            \(summary)
-            """, instructionsKey: GitPreferences.pullRequestInstructionsKey)
+            guard let prompt = asked else {
+                failure = "\(place.prefix(1).uppercased() + place.dropFirst()) needs a newer Kuvo Code to write one. It updates by itself overnight, or connect to it from this Mac."
+                return
+            }
             // A coding agent's session asks its own model; one whose agent can't answer outside
             // the conversation, the engine's default model.
             var written = try? await api.generate(prompt, session: session)
-            if written == nil, isAgents { written = try? await app.api?.generate(prompt) }
+            if written == nil, isAgents { written = try? await app.api(for: app.thisMacsBox)?.generate(prompt) }
             guard let text = written, let pull = PullRequestDraft.parse(text) else {
                 failure = "The model didn’t write one. Try again, or write it yourself."
                 return

@@ -224,4 +224,88 @@ struct PlanLimitsTests {
         ])
         #expect(away.map(\.account.title) == ["Claude · hetzner", "Claude · hetzner"])
     }
+
+    // MARK: As the box lists them (#210)
+
+    /// `rows`, as a box from #210 on answers: this box's Claude, read on lokum, and an account
+    /// signed in only on hetzner, which isn't heard from lately.
+    let rowsAnswer = """
+    {"data": {"services": ["claude"], "accounts": [
+      {"provider": "claude-code", "service": "claude", "agent": "claude", "account": "default", "identity": "aaaaaaaaaaaaaaaa", "windows": []}
+    ], "rows": [
+      {"id": "claude#aaaaaaaaaaaaaaaa", "provider": "claude-code", "service": "claude", "agent": "claude", "account": "default", "identity": "aaaaaaaaaaaaaaaa", "plan": "Max 20x", "checked": 1794164000000,
+       "windows": [{"id": "five_hour", "used": 0.53, "minutes": 300, "resetsAt": 1794180000000, "read": 1794164000000, "source": "usage"}],
+       "boxes": [{"key": "kmac", "name": "MacBook Pro", "provider": "claude-code", "agent": "claude", "account": "default", "here": true},
+                 {"key": "klokum", "name": "lokum", "provider": "claude-code", "agent": "claude", "account": "default", "checked": 1794164000000}]},
+      {"id": "claude#bbbbbbbbbbbbbbbb", "provider": "claude-code", "service": "claude", "agent": "claude", "account": "default", "identity": "bbbbbbbbbbbbbbbb", "checked": 1794164500000, "away": true,
+       "windows": [{"id": "five_hour", "used": 0.2, "minutes": 300, "resetsAt": 1794180000000, "read": 1794164500000, "source": "usage"}],
+       "boxes": [{"key": "khetzner", "name": "hetzner", "provider": "claude-code", "agent": "claude", "account": "default", "checked": 1794164500000, "away": true}]}
+    ]}}
+    """
+
+    @Test func aBoxsRowsAreListedAsTheyAreWithTheComputersEachIsOn() throws {
+        let limits = try BoxLimits.decode(Data(rowsAnswer.utf8))
+        let rows = try #require(limits.rows)
+        let panel = [Entry(id: "claude", covers: "claude")]
+        let listing = UsageListing.listing([.init(key: "", name: nil, limits: limits)])
+        #expect(listing.lister == "")
+        let listed = UsageListing.items(panel: panel, covers: \.covers, listing: listing).map { item -> String in
+            switch item {
+            case .panel(let entry): "panel:\(entry.id)"
+            case .account(let row, let below):
+                row.account.title + (below.map { " +\($0.id)" } ?? "") + " on " + row.sources.map { $0.name ?? "here" }.joined(separator: ",")
+            }
+        }
+        // Its own numbers are lokum's: the box listed it so; the other, only on hetzner, named for it.
+        #expect(listed == ["Claude +claude on here,lokum", "Claude · hetzner on hetzner"])
+        let first = UsageListing.accounts(rows: rows)[0]
+        #expect(first.id == "claude#aaaaaaaaaaaaaaaa")
+        #expect(first.account.tightest(at: now)?.used == 0.53)
+        #expect(first.sources.map(\.box) == ["", "klokum"])
+    }
+
+    @Test func aRowWhoseComputersAreAllAwayIsNeverShownAsLive() throws {
+        let rows = try #require(try BoxLimits.decode(Data(rowsAnswer.utf8)).rows)
+        // Read a moment ago, but its computer isn't heard from: as of then.
+        let soon = Date(timeIntervalSince1970: 1_794_164_600)
+        #expect(rows[1].away)
+        #expect(rows[1].isOutdated(now: soon))
+        #expect(!rows[0].isOutdated(now: soon))
+        #expect(rows[1].boxes.map(\.away) == [true])
+    }
+
+    @Test func aBoxFromBeforeRowsSaysNone() throws {
+        #expect(try BoxLimits.decode(Data(answer.utf8)).rows == nil)
+    }
+
+    /// The first box's list stands for every computer the client reached only when it has each of
+    /// their own accounts: one from before rows, or one it hasn't heard from yet (just added, or
+    /// cut off from the relay), has each box's own merged here, so none goes missing.
+    @Test func theFirstBoxsListIsShownOnlyWhenItHasEveryComputerTheClientReached() throws {
+        // The Mac's box hears from hetzner now.
+        let mac = try BoxLimits.decode(Data(rowsAnswer.replacingOccurrences(of: #", "away": true"#, with: "").utf8))
+        // hetzner, as it says itself: its Athas, which the Mac's list has.
+        let hetzner = try BoxLimits.decode(Data(#"""
+        {"data": {"services": ["claude"], "accounts": [], "rows": [
+          {"id": "claude#bbbbbbbbbbbbbbbb", "provider": "claude-code", "service": "claude", "identity": "bbbbbbbbbbbbbbbb", "windows": [],
+           "boxes": [{"key": "khetzner", "name": "hetzner", "provider": "claude-code", "here": true}]}]}}
+        """#.utf8))
+        #expect(UsageListing.listing([.init(key: "", name: nil, limits: mac), .init(key: "hetzner", name: "hetzner", limits: hetzner)]).lister == "")
+        // A machine just added, whose account the Mac's box hasn't heard of: each box's own, merged.
+        let added = try BoxLimits.decode(Data(#"""
+        {"data": {"services": ["grok"], "accounts": [{"provider": "grok-cli", "service": "grok", "agent": "grok", "identity": "6600660066006600", "windows": []}], "rows": [
+          {"id": "grok#6600660066006600", "provider": "grok-cli", "service": "grok", "identity": "6600660066006600", "windows": [],
+           "boxes": [{"key": "kadded", "name": "added", "provider": "grok-cli", "here": true}]}]}}
+        """#.utf8))
+        let merged = UsageListing.listing([.init(key: "", name: nil, limits: mac), .init(key: "added", name: "added", limits: added)])
+        #expect(merged.lister == nil)
+        #expect(merged.accounts.map(\.account.title) == ["Claude", "Grok"])
+        // One from before rows: the same.
+        let old = try BoxLimits.decode(Data(answer.utf8))
+        #expect(UsageListing.listing([.init(key: "", name: nil, limits: mac), .init(key: "old", name: "old", limits: old)]).lister == nil)
+        // hetzner away from the Mac's box (the relay down), though this Mac reaches it: what
+        // hetzner says now, merged, not the Mac's box's last word of it.
+        let cutOff = try BoxLimits.decode(Data(rowsAnswer.utf8))
+        #expect(UsageListing.listing([.init(key: "", name: nil, limits: cutOff), .init(key: "hetzner", name: "hetzner", limits: hetzner)]).lister == nil)
+    }
 }
