@@ -335,9 +335,8 @@ struct ChangesPanel: View {
     /// branch, which the engine's own review reads (/review-quick, where the keyword has the name).
     private func review(in model: SessionModel) {
         Analytics.shared.track("review_requested", ["scope": changes.scope.rawValue])
-        let commands = Keyword.commands(catalog.commands(in: model.session.location.directory), keywords: model.keywords)
         let message = Self.reviewMessage(scope: changes.scope, base: changes.base, keywords: model.keywords)
-        model.submit(message, files: [], for: catalog.model(model.session.model), queue: false, commands: commands)
+        model.submit(message, files: [], for: catalog.model(model.session.model), queue: false)
     }
 
     /// What the review button sends. The engine's review, given a branch, reviews what this one

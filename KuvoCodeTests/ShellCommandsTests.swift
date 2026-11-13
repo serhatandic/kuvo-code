@@ -38,7 +38,7 @@ import Testing
         model.draftText = "!npm test -- --watch=false"
         model.draftFiles = [file]
         model.draftQuotes = [Drafts.Quote(text: "The build fails on CI")]
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { !engine.requests("POST", "/api/session/\(id)/shell").isEmpty }
         #expect(engine.requests("POST", "/api/session/\(id)/shell").first?.body["command"] as? String == "npm test -- --watch=false")
         #expect(engine.requests("POST", "/api/session/\(id)/prompt").isEmpty, "no message to the agent")
@@ -55,7 +55,7 @@ import Testing
         engine.on("POST", "/api/session/\(id)/shell", json: ["message": "Session is busy"], status: 409)
         let model = try await open()
         model.draftText = "!git status"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { model.failure != nil }
         #expect(model.draftText == "!git status", "back as you typed it")
         #expect(model.failure != nil)

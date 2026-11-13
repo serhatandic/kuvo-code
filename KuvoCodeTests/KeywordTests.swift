@@ -94,7 +94,7 @@ import Testing
         let why = "Cursor can't summarize on request: it does so by itself when the conversation fills up."
         engine.on("POST", "/api/session/\(id)/compact", json: ["message": why], status: 400)
         model.draftText = "/compact"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         #expect(model.draftText.isEmpty)
         try await until { model.failure != nil }
         #expect(engine.requests("POST", "/api/session/\(id)/compact").count == 1)
@@ -122,7 +122,7 @@ import Testing
         #expect(model.keywords.contains(.btw))
 
         model.draftText = "/btw where does it pause?"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         #expect(model.draftText.isEmpty)
         try await until { model.sideQuestions.first?.state == .answered }
         let question = try #require(model.sideQuestions.first)
@@ -146,7 +146,7 @@ import Testing
 
         // "/btw" alone leaves what to type.
         model.draftText = "/btw"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         #expect(model.draftText == "/btw ")
         #expect(model.failure == nil)
     }
@@ -164,15 +164,15 @@ import Testing
         defer { bridge.stop() }
 
         model.draftText = "/btw where does it pause?"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { model.sideQuestions.first?.state == .answered }
         model.hidesSideQuestion = true
         #expect(model.asksSideThread)
         model.draftText = "why there?"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         #expect(model.draftText.isEmpty)
         model.draftText = "and on close?"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         #expect(model.draftText == "and on close?")
         // The tag's ×, before the follow-up is in: it stays off once it is.
         model.composerAsksSide = false
@@ -189,12 +189,12 @@ import Testing
         // So the next message is the conversation's.
         engine.on("POST", "/api/session/\(id)/prompt", json: ["data": [:]])
         model.draftText = "Pause it on blur then."
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { told == 1 }
         #expect(model.shownSideThread?.questions.count == 2)
 
         model.draftText = "/btw what does parseDuration match?"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         // (The new thread, by its question: the first is answered already, and shows until it does.)
         try await until { model.shownSideThread?.latest.question == "what does parseDuration match?" && model.shownSideThread?.latest.state == .answered }
         #expect(model.sideThreads.count == 2)
@@ -215,17 +215,17 @@ import Testing
         defer { bridge.stop() }
 
         model.draftText = "/btw where does it pause?"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { model.sideQuestions.first?.state == .answered }
         #expect(model.asksSideThread)
         let file = URL(fileURLWithPath: "/tmp/screenshot.png")
         model.draftFiles = [file]
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         let why = "A side question can’t include pictures or files. Remove them, or close Side question to send it all to the agent."
         #expect(model.failure == why)
         model.failure = nil
         model.draftText = "[Image 1] what's this?"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         #expect(model.failure == why)
         #expect(model.draftText == "[Image 1] what's this?")
         #expect(model.draftFiles == [file])
@@ -236,7 +236,7 @@ import Testing
         model.draftFiles = []
         #expect(model.failure == nil)
         model.draftFiles = [file]
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         #expect(model.failure == why)
         model.composerAsksSide = false
         #expect(model.failure == nil)
@@ -307,7 +307,7 @@ import Testing
         defer { bridge.stop() }
 
         model.draftText = "/review"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { model.review?.state == .done }
         let review = try #require(model.review)
         #expect(review.summary == "One real problem.")
@@ -345,7 +345,7 @@ import Testing
         defer { bridge.stop() }
 
         model.draftText = "/review the timer and its tests"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { model.review?.state == .done }
         let review = try #require(model.review)
         #expect(review.scope == .described("the timer and its tests", paths: ["src/timer.ts", "test/timer.test.ts"]))
@@ -366,7 +366,7 @@ import Testing
         let bridge = try await start(model)
         defer { bridge.stop() }
         model.draftText = "/review"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { model.review?.state == .done }
         let review = try #require(model.review)
 
@@ -423,13 +423,13 @@ import Testing
 
         // A name half typed comes back, saying so; nothing is read.
         model.draftText = "/review with deep"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         #expect(model.draftText == "/review with deep")
         #expect(model.failure == "Finish the model’s name, or pick it from the list.")
         #expect(model.review == nil)
 
         model.draftText = "/review with deepseek v4.1 flash the pause handling"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { model.review?.state == .done }
         #expect(model.review?.model == ModelRef(id: "v4.1-flash", providerID: "deepseek"))
         #expect(model.review?.focus == "the pause handling")
@@ -465,7 +465,7 @@ import Testing
             return
         }
         model.draftText = "/review " + since + security
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { model.review?.state == .done }
         let first = try repository.git("rev-parse", "--short", "HEAD~1").trimmingCharacters(in: .whitespacesAndNewlines)
         #expect(model.review?.scope == .commits(from: first + "^", to: nil))
@@ -499,7 +499,7 @@ import Testing
         #expect(offered.map(\.name) == [Keyword.quickReview])
 
         model.draftText = "/review-quick main"
-        model.submitDraft(for: nil, queue: false, commands: offered)
+        model.submitDraft(for: nil, queue: false)
         try await until { !engine.requests("POST", "/api/session/\(id)/command").isEmpty }
         let ran = try #require(engine.requests("POST", "/api/session/\(id)/command").first)
         #expect(ran.body["name"] as? String == "review")
@@ -518,10 +518,9 @@ import Testing
         let model = try session()
         let bridge = try await start(model)
         defer { bridge.stop() }
-        let engineCommands = try JSONDecoder().decode([Command].self, from: Data(#"[{"name": "review", "description": "Review changes"}]"#.utf8))
 
         model.draftText = "/review-quick main"
-        model.submitDraft(for: nil, queue: false, commands: engineCommands)
+        model.submitDraft(for: nil, queue: false)
         try await until { !engine.requests("POST", "/api/session/\(id)/command").isEmpty || !engine.requests("POST", "/api/session/\(id)/prompt").isEmpty }
         #expect(engine.requests("POST", "/api/session/\(id)/prompt").isEmpty, "not sent to the model as a message")
         let ran = try #require(engine.requests("POST", "/api/session/\(id)/command").first)
@@ -545,7 +544,7 @@ import Testing
         bridge.agents.onHandoff = { opened.append($0.to ?? "") }
 
         model.draftText = "/handoff write the test"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { model.handoff?.state == .done && !opened.isEmpty }
         #expect(opened == ["ses_next"])
         #expect(model.handoff?.to == "ses_next")
@@ -565,7 +564,7 @@ import Testing
         defer { bridge.stop() }
 
         model.draftText = "/plan how to test the blur pause"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { !engine.requests("POST", "/api/session/\(id)/prompt").isEmpty }
         #expect(model.session.agent == "plan")
         let asked = engine.asked.filter { $0.hasSuffix("/agent") || $0.hasSuffix("/prompt") }
@@ -592,19 +591,19 @@ import Testing
         let picked = { engine.requests("POST", "/api/session/\(id)/agent").compactMap { $0.body["agent"] as? String } }
 
         model.draftText = "/plan"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { picked() == ["plan"] }
         #expect(model.session.agent == "plan")
         #expect(model.draftText.isEmpty)
 
         model.draftText = "/plan"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { picked() == ["plan", "build"] }
         #expect(model.session.agent == "build")
 
         model.togglePlan()
         model.draftText = "/plan the next step"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { !engine.requests("POST", "/api/session/\(id)/prompt").isEmpty }
         #expect(model.session.agent == "plan")
         #expect(picked() == ["plan", "build", "plan"], "already in Plan: it stays, and sends")
@@ -619,11 +618,11 @@ import Testing
         defer { bridge.stop() }
 
         model.draftText = "/loop now and then check CI"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         #expect(model.draftText == "/loop now and then check CI")
         #expect(model.failure?.hasPrefix("Can’t tell how often") == true)
         model.draftText = "/loop every morning at 9"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         #expect(model.draftText == "/loop every morning at 9")
         #expect(model.failure?.hasPrefix("Write what to do each time") == true)
         #expect(told == 0)

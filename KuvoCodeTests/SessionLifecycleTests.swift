@@ -140,7 +140,7 @@ import Testing
         engine.conversation("ses_new", [])
         let session = try await workspace.createSession(in: project, model: nil, agent: "build")
         let model = try #require(workspace.model(for: session.id))
-        model.submit("Say hi in three words.", files: [], for: nil, queue: false, commands: [])
+        model.submit("Say hi in three words.", files: [], for: nil, queue: false)
         try await until { !engine.requests("POST", "/api/session/ses_new/prompt").isEmpty }
         let sent = try #require(engine.requests("POST", "/api/session/ses_new/prompt").first?.body["id"] as? String)
         workspace.handle(try engine.event("session.created", session: "ses_new"))
