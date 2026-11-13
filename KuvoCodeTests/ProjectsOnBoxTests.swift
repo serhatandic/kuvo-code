@@ -340,8 +340,6 @@ import Testing
         await workspace.refresh()
         try await engine.listed(for: workspace)
         await workspace.loadProjects(on: BoxClient.mac)
-        engine.listing.push()
-        try await until { workspace.projects.first { $0.directory == shop }?.sessions.map(\.id) == ["ses_shop", "ses_tree"] }
 
         #expect(try await workspace.removeProject(shop) == 0)
         let patched = Set(engine.requests("PATCH", "").compactMap { request -> String? in

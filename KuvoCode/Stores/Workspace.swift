@@ -628,12 +628,12 @@ final class Workspace {
         madeProjects = nil
     }
 
-    /// Each session in the project its box files it under, and each project its box lists (with
-    /// those this Mac has added and its box hasn't taken yet): the sidebar's order (`SessionLists`).
+    /// Each session in the project its box files it under, and each project of the list its boxes
+    /// keep (`folders`, as each box's `kuvo/projects` says, a change made here shown at once): the
+    /// sidebar's order (`SessionLists`).
     private func makeProjects() -> [Project] {
         let shown = { (directory: String) in RemoteFolder.machine(of: directory).map(self.machines.contains) ?? true }
-        let listed = sessionLists.flatMap { box, listing in listing.projects.keys.map { Self.here($0, on: box) } }
-        let grouped = SessionLists.projects(sessions.filter { !deleting.contains($0.id) }, directories: Set(listed).union(folders).filter(shown), project: { session in
+        let grouped = SessionLists.projects(sessions.filter { !deleting.contains($0.id) }, directories: Set(folders).filter(shown), project: { session in
             guard case .project(let directory) = self.listPlace(of: session), shown(directory) else { return nil }
             return directory
         }, updated: { $0.time.updated }, name: { self.settings[$0]?.name ?? ($0 as NSString).lastPathComponent })
