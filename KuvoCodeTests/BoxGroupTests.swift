@@ -68,6 +68,9 @@ import Testing
                 // Your clock (`routes.ts`: the Mac sends only that, to `clock`).
                 case ("PUT", "clock", _):
                     return StubWeb.json([:])
+                // Anything else that isn't a chat's id, none (as the box: never taken for a chat).
+                case (_, let id?, _) where !id.hasPrefix("grp_"):
+                    return StubWeb.json(["message": "No such chat."], status: 404)
                 case ("GET", let id?, nil):
                     return chats[id] == nil ? StubWeb.json(["message": "No such chat."], status: 404) : StubWeb.json(["data": read(id)])
                 case ("PUT", let id?, nil):

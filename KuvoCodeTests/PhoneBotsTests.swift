@@ -28,11 +28,16 @@ import Testing
         engine.on("PUT", "/api/experimental/session/*", json: [:])
         engine.on("POST", "/api/session/*", json: [:])
         engine.on("DELETE", "/api/session/*", json: [:])
-        var made = 0
+        var made: [String: [String: Any]] = [:]
         engine.on("POST", "/api/session") { request in
-            made += 1
-            return StubWeb.json(["data": StubEngine.session("ses_bot\(made)", title: request.body["title"] as? String ?? "",
-                                                             directory: (request.body["location"] as? [String: Any])?["directory"] as? String ?? "")])
+            let session = StubEngine.session("ses_bot\(made.count + 1)", title: request.body["title"] as? String ?? "",
+                                             directory: (request.body["location"] as? [String: Any])?["directory"] as? String ?? "")
+            made[session["id"] as! String] = session
+            return StubWeb.json(["data": session])
+        }
+        // One it made, as the box reads it just before marking it.
+        engine.on("GET", "/api/session/*") { request in
+            made[String(request.path.split(separator: "/").last ?? "")].map { StubWeb.json(["data": $0]) } ?? StubWeb.json(["message": "Not found."], status: 404)
         }
     }
 
