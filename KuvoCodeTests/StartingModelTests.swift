@@ -7,7 +7,9 @@ import Testing
 /// The model a new session or bot starts on: the one you picked if you can still use it, else
 /// the engine's default, else the first you can use; never one whose account you signed out of
 /// (it would only fail). Before the models are known, what you picked, as it is. The engine's
-/// answers are stubbed (StubWeb), in the shape it sends them.
+/// answers are stubbed (StubWeb), in the shape it sends them. With no box to ask, these are the
+/// old-box path (COMPAT(0.7 model-rule)); a box with `models.offered` decides for itself
+/// (`itsBoxDecidesWhatsOfferedAndWhatANewOneStartsOn`).
 @MainActor
 @Suite(.serialized) struct StartingModelTests {
     static let engine = "http://127.0.0.1:47999"
@@ -254,6 +256,35 @@ import Testing
         #expect(catalog.refusal(ModelRef(id: "opus", providerID: "claude-code")) == nil, "its agents still loading")
         // A provider the project's own settings add, which the engine lists only in that project: it goes.
         #expect(catalog.refusal(ModelRef(id: "qwen", providerID: "lmstudio")) == nil)
+    }
+
+    /// A box that decides (`models.offered`, #341 item 13): the picker offers what it says runs, and
+    /// a new conversation starts on the model it says, not what this Mac's own lists would have it
+    /// on. Here the engine lists Anthropic signed in, while its box says only Luna runs (Anthropic's
+    /// sign-in ended there) and a new one starts on Luna.
+    @Test func itsBoxDecidesWhatsOfferedAndWhatANewOneStartsOn() async throws {
+        defer { StubWeb.stop() }
+        let offered = #"{"models":[{"providerID":"openai","id":"luna","name":"Luna"}],"known":{"engine":true,"agents":true},"starting":{"providerID":"openai","id":"luna"}}"#
+        catalog.box = BoxClient(box: BoxClient.mac, transport: LocalBox { request in
+            AsyncThrowingStream { continuation in
+                let answered = request.path.hasPrefix("kuvo/models/offered")
+                continuation.yield(.head(status: answered ? 200 : 404, headers: ["content-type": "application/json"]))
+                continuation.yield(.body(Data((answered ? offered : #"{"message":"No such route."}"#).utf8)))
+                continuation.finish()
+            }
+        })
+        try await engine(accounts: [Self.account("anthropic", signedIn: true), Self.account("openai", signedIn: true)],
+                         models: [Self.model("anthropic", "sonnet"), Self.model("openai", "luna")],
+                         defaultModel: Self.model("anthropic", "sonnet"))
+        #expect(catalog.startingModel(sonnet) == sonnet, "until its box says: as it is")
+        try await until { catalog.startingModel(sonnet) == luna }
+        #expect(catalog.modelsByProvider.flatMap(\.models).map(\.id) == ["luna"])
+        #expect(catalog.isUnavailable(sonnet))
+        // What a conversation's own box hasn't said of yet goes by that alone: no reckoning of its
+        // own account here, no refusal worded here.
+        #expect(catalog.chipModel(sonnet, in: .all, said: nil) == nil, "Choose a Model")
+        #expect(catalog.refusal(sonnet, said: nil) == nil)
+        #expect(!catalog.needsAccount(sonnet, said: nil))
     }
 
     private func said(_ json: String) throws -> SessionModelState {
