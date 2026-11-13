@@ -136,12 +136,34 @@ export async function askingNow(listed: Listed, signal?: AbortSignal): Promise<{
   return null;
 }
 
+// A line's Markdown block marks at its start (a heading's, a quote's, a list item's), however many.
+const blockMarks = /^(?:\s*(?:#{1,6}(?=\s|$)|>|[-*+](?=\s)|\d{1,9}[.)](?=\s)))+\s*/;
+
+/**
+ * A reply on one line, its lines' block marks taken off and its code fences, rules and underlines
+ * left out; what's inline (code, emphasis, a link) kept, as its lead reads it. Both apps draw it as
+ * Markdown on its card: a heading's marks left at the start of that one line made all of it a
+ * heading (#606).
+ */
+export function replyLine(text: string): string {
+  return text.split("\n").map((line) => line.replace(blockMarks, ""))
+    .filter((line) => !/^\s*(?:`{3,}|~{3,})/.test(line) && !/^\s*(?:[-*_=]\s*)+$/.test(line))
+    .join(" ").replace(/\s+/g, " ").trim();
+}
+
 /** The first lines of what the latest of `messages` (newest first) to say something said, or null. */
 function replyIn(messages: unknown): string | null {
   for (const message of Array.isArray(messages) ? messages : []) {
     if (!isObject(message) || message.type !== "assistant" || !Array.isArray(message.content)) continue;
-    const text = message.content.filter((part: unknown) => isObject(part) && part.type === "text").map((part: { text?: unknown }) => String(part.text ?? "")).join(" ").replace(/\s+/g, " ").trim();
-    if (text) return cut(text, 280);
+    const written = message.content.filter((part: unknown) => isObject(part) && part.type === "text").map((part: { text?: unknown }) => String(part.text ?? "")).join("\n");
+    if (!written.trim()) continue;
+    // (Marks alone said nothing: not an earlier reply in its place.)
+    const text = replyLine(written);
+    if (!text) return null;
+    if (text.length <= 280) return text;
+    // Cut short: not inside code, whose words would read as Markdown.
+    const start = cut(text, 280);
+    return (start.match(/`/g)?.length ?? 0) % 2 ? start.slice(0, start.lastIndexOf("`")).trimEnd() + "…" : start;
   }
   return null;
 }

@@ -10172,13 +10172,26 @@ async function askingNow(listed, signal) {
     return { id: questions[0].id, what: `Asks: ${questions[0].text}` };
   return null;
 }
+var blockMarks = /^(?:\s*(?:#{1,6}(?=\s|$)|>|[-*+](?=\s)|\d{1,9}[.)](?=\s)))+\s*/;
+function replyLine(text) {
+  return text.split(`
+`).map((line) => line.replace(blockMarks, "")).filter((line) => !/^\s*(?:`{3,}|~{3,})/.test(line) && !/^\s*(?:[-*_=]\s*)+$/.test(line)).join(" ").replace(/\s+/g, " ").trim();
+}
 function replyIn(messages) {
   for (const message of Array.isArray(messages) ? messages : []) {
     if (!isObject(message) || message.type !== "assistant" || !Array.isArray(message.content))
       continue;
-    const text = message.content.filter((part) => isObject(part) && part.type === "text").map((part) => String(part.text ?? "")).join(" ").replace(/\s+/g, " ").trim();
-    if (text)
-      return cut(text, 280);
+    const written = message.content.filter((part) => isObject(part) && part.type === "text").map((part) => String(part.text ?? "")).join(`
+`);
+    if (!written.trim())
+      continue;
+    const text = replyLine(written);
+    if (!text)
+      return null;
+    if (text.length <= 280)
+      return text;
+    const start = cut(text, 280);
+    return (start.match(/`/g)?.length ?? 0) % 2 ? start.slice(0, start.lastIndexOf("`")).trimEnd() + "…" : start;
   }
   return null;
 }
@@ -40614,7 +40627,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0fa0cb9d2068";
+var BRIDGE_VERSION = "5d2edf8836df";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
