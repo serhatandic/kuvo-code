@@ -614,7 +614,7 @@ final class AppModel {
                         try? await Task.sleep(for: .seconds(5))
                         guard let self, launch == self.launch, engine == .starting, boxMoving != nil else { return }
                         engine = .preparing
-                        await start()
+                        await self.start()
                     }
                     return
                 case .own, .two:
