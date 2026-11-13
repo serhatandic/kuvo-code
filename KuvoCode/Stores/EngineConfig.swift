@@ -88,11 +88,6 @@ final class EngineConfig {
         return config.permissionRules
     }
 
-    /// The computer's rules are known: once its settings are read.
-    static func knowsRules(on machine: String?) -> Bool {
-        of(machine)?.isLoaded == true
-    }
-
     /// Its settings as they were just read some other way (as a machine's engine is started, or
     /// Also Apply's answer).
     func took(_ read: [String: JSONValue]) {

@@ -201,7 +201,6 @@ import Testing
         await config.refresh()
         #expect(!config.isLoaded)
         #expect(config.problem == "Its settings couldn't be read: Kuvo Code’s background service on this Mac isn’t running. Try again in a moment.")
-        #expect(EngineConfig.knowsRules(on: nil) == false, "sessions wait for its rules")
         config.set(.string("openai/luna"), at: ["model"])
         #expect(try SettingsBox.onDisk()["model"] as? String == "anthropic/sonnet")
 

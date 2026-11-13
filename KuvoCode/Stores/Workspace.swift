@@ -1377,18 +1377,6 @@ final class Workspace {
         """
     }
 
-    /// A new worktree of the project's repository on a branch of its own, made by the box the
-    /// project's on, which keeps it (PROTOCOL.md, "Worktrees"), its branch named with that
-    /// computer's branch prefix (Settings › Git). Returns the folder for the session to run in.
-    private func makeWorktree(of directory: String) async throws -> String {
-        let box = Self.box(of: directory)
-        let made: BoxWorktree = try await onBox(box, "POST", "kuvo/worktrees", ["project": Self.onBox(directory)])
-        let folder = Self.here(made.folder ?? made.root, on: box)
-        worktrees[folder] = Worktree(project: directory, root: Self.here(made.root, on: box), branch: made.branch, base: made.base)
-        saveWorktrees()
-        return folder
-    }
-
     /// A worktree made for a session that wasn't: removed, with its branch, and not recorded as
     /// one you removed.
     /// Whether it went: one the engine couldn't remove stays listed, to remove from Settings.
