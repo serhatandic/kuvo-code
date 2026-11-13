@@ -373,7 +373,9 @@ import Testing
             sending.finish()
             return HTTPResponse(status: 200, headers: ["Content-Type": "application/x-ndjson"], stream: body)
         }
-        let port = try await server.start()
+        // (Which side couldn't, and on which port, if one can't: "Address already in use" came once.)
+        let port: UInt16
+        do { port = try await server.start() } catch { throw TestFailure("The server couldn't listen on a loopback port: \(error)") }
         defer { server.stop() }
         let client = try await RawClient.connect(port: port)
         defer { client.close() }
@@ -413,75 +415,52 @@ import Testing
 /// One HTTP/1.1 connection, written and read as bytes: what a client that keeps its connection
 /// sends on it, in order. Each wait ends: with what came, with the connection's error, or with the
 /// test's time limit, which closes the connection (a wait on it alone would hold the test past
-/// its limit for good, the test process with it).
+/// its limit for good, the test process with it). A plain socket, its own port the kernel's pick:
+/// one free for the server's, never a pair still closing from an earlier connection there, which
+/// Network's own pick can be ("Address already in use", once a test before left one).
 @MainActor
 final class RawClient {
-    private let connection: NWConnection
+    private let socket: Int32
+    private var isClosed = false
     /// What came past what was read so far.
     private var pending = Data()
     /// Why the connection ended, once it did: in what a read returns, so a failure says.
     private var ended: String?
 
-    private init(connection: NWConnection) {
-        self.connection = connection
+    private init(socket: Int32) {
+        self.socket = socket
     }
 
     static func connect(port: UInt16) async throws -> RawClient {
-        let connection = NWConnection(host: .ipv4(.loopback), port: try #require(NWEndpoint.Port(rawValue: port)), using: .tcp)
-        do {
-            try await opened(connection)
-        } catch {
-            // (One left waiting would go on trying.)
-            connection.cancel()
-            throw error
+        let socket = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        guard socket >= 0 else { throw TestFailure("The client couldn't make a socket: \(String(cString: strerror(errno)))") }
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = port.bigEndian
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        // (On loopback the kernel answers it at once, whatever the server's queue is doing.)
+        let connected = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(socket, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
         }
-        connection.stateUpdateHandler = nil
-        return RawClient(connection: connection)
-    }
-
-    /// Starts `connection`, until it's open, or it can't be, or the test stops.
-    private static func opened(_ connection: NWConnection) async throws {
-        try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
-                let once = OSAllocatedUnfairLock(initialState: false)
-                let resume = { @Sendable (outcome: Result<Void, Error>) in
-                    if !once.withLock({ let was = $0; $0 = true; return was }) { done.resume(with: outcome) }
-                }
-                connection.stateUpdateHandler = { state in
-                    switch state {
-                    case .ready: resume(.success(()))
-                    // TCP's refusals and failures wait for the network to change, which on loopback
-                    // never comes: they're the outcome.
-                    case .failed(let error), .waiting(let error): resume(.failure(error))
-                    case .cancelled: resume(.failure(CancellationError()))
-                    default: break
-                    }
-                }
-                connection.start(queue: .main)
-                // Stopped before it started: what cancelled it then may not have reached it.
-                if Task.isCancelled { connection.cancel() }
-            }
-        } onCancel: {
-            connection.cancel()
+        guard connected == 0 else {
+            let why = String(cString: strerror(errno))
+            Darwin.close(socket)
+            throw TestFailure("The client couldn't connect to 127.0.0.1:\(port): \(why)")
         }
+        return RawClient(socket: socket)
     }
 
     func send(_ text: String) async {
-        let connection = connection
-        await withTaskCancellationHandler {
-            await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
-                connection.send(content: Data(text.utf8), completion: .contentProcessed { _ in done.resume() })
-            }
-        } onCancel: {
-            connection.cancel()
-        }
+        let socket = socket
+        _ = Array(text.utf8).withUnsafeBytes { Darwin.send(socket, $0.baseAddress, $0.count, 0) }
     }
 
     /// What comes, up to and including `marker`; or, once the connection has ended, all there was,
     /// and why it ended.
     func read(through marker: String) async -> String {
         let marker = Data(marker.utf8)
-        let connection = connection
+        let socket = socket
         while true {
             if let found = pending.range(of: marker) {
                 let read = pending[..<found.upperBound]
@@ -492,21 +471,26 @@ final class RawClient {
                 defer { pending = Data() }
                 return String(decoding: pending, as: UTF8.self) + " (\(ended))"
             }
-            let (data, complete, error) = await withTaskCancellationHandler {
-                await withCheckedContinuation { (done: CheckedContinuation<(Data?, Bool, NWError?), Never>) in
-                    connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, complete, error in
-                        done.resume(returning: (data, complete, error))
-                    }
-                }
+            // Read off the main actor, where the server answers: ended by the test's limit through
+            // the socket's shutdown.
+            let (data, failure) = await withTaskCancellationHandler {
+                await Task.detached { () -> (Data, String?) in
+                    var buffer = [UInt8](repeating: 0, count: 65536)
+                    let count = recv(socket, &buffer, buffer.count, 0)
+                    return count < 0 ? (Data(), String(cString: strerror(errno))) : (Data(buffer[..<count]), nil)
+                }.value
             } onCancel: {
-                connection.cancel()
+                shutdown(socket, SHUT_RDWR)
             }
-            if let data { pending.append(data) }
-            if let error { ended = "ended: \(error)" } else if complete { ended = "closed by the server" }
+            if let failure { ended = "ended: \(failure)" } else if data.isEmpty { ended = "closed by the server" } else { pending.append(data) }
         }
     }
 
-    func close() { connection.cancel() }
+    func close() {
+        guard !isClosed else { return }
+        isClosed = true
+        Darwin.close(socket)
+    }
 }
 
 /// An engine that answers each request with `answer`'s bytes as they are, then closes: one cut off

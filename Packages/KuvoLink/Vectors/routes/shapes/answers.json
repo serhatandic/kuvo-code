@@ -3323,6 +3323,9 @@
             "literal": "shell.stop"
            },
            {
+            "literal": "sign-in.methods"
+           },
+           {
             "literal": "sign-in.return"
            },
            {
@@ -3798,6 +3801,9 @@
            },
            {
             "literal": "shell.stop"
+           },
+           {
+            "literal": "sign-in.methods"
            },
            {
             "literal": "sign-in.return"
@@ -7582,6 +7588,80 @@
    }
   },
   {
+   "route": "GET kuvo/sign-in/methods",
+   "answers": {
+    "200": {
+     "object": {
+      "methods": {
+       "list": {
+        "object": {
+         "type": "string",
+         "id?": "string",
+         "label": "string",
+         "form?": {
+          "list": "any"
+         },
+         "legacy?": "bool"
+        }
+       }
+      },
+      "environment": {
+       "list": "string"
+      },
+      "hint": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/sign-in/accounts",
+   "answers": {
+    "200": {
+     "object": {
+      "accounts": {
+       "list": {
+        "object": {
+         "id": "string",
+         "methods": {
+          "list": {
+           "object": {
+            "type": "string",
+            "id?": "string",
+            "label": "string",
+            "form?": {
+             "list": "any"
+            },
+            "legacy?": "bool"
+           }
+          }
+         },
+         "environment": {
+          "list": "string"
+         },
+         "hint": "string"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/sign-in/status",
+   "answers": {
+    "200": {
+     "object": {
+      "status": "string",
+      "message?": "string",
+      "url?": "string",
+      "instructions?": "string",
+      "userCode?": "string",
+      "failure?": "string"
+     }
+    }
+   }
+  },
+  {
    "route": "GET kuvo/search",
    "answers": {
     "200": {
@@ -7765,14 +7845,20 @@
    "answers": {
     "200": {
      "object": {
-      "archived": "number"
+      "archived": "number",
+      "sessions": {
+       "list": "string"
+      }
      }
     },
     "409": {
      "object": {
       "message": "string",
       "archived": "number",
-      "kept": "number"
+      "kept": "number",
+      "sessions": {
+       "list": "string"
+      }
      }
     }
    }

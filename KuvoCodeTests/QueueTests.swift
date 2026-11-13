@@ -47,7 +47,7 @@ import Testing
     /// reaches it. `queues`: what the box keeps, before it starts.
     /// `older`: its box is a machine's from before the box carried the queue (no `queue` in its
     /// `kuvo/info`, none of the queue's routes).
-    private func open(running: Bool, inbox: [[String: Any]], queues: String? = nil, older: Bool = false, prompt: ((StubEngine.Request) -> Void)? = nil) async throws -> (SessionModel, TestBox, Inbox) {
+    private func open(running: Bool, inbox: [[String: Any]], queues: String? = nil, older: Bool = false, prompt: (@Sendable (StubEngine.Request) -> Void)? = nil) async throws -> (SessionModel, TestBox, Inbox) {
         let session = StubEngine.session(id, title: "Queue", directory: "/tmp/kuvo-tests-queue")
         engine.list([session], running: running ? [id] : [])
         let kept = Inbox(inbox)

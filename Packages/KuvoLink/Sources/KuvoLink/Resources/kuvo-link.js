@@ -2525,6 +2525,7 @@ var FEATURES = [
   "setup",
   "setup.mainOnly",
   "shell.stop",
+  "sign-in.methods",
   "sign-in.return",
   "skills",
   "skills.trash",
@@ -10876,7 +10877,7 @@ var PROJECTS = object({ projects: list(PROJECT), worktrees: map(string) });
 var PROJECT_ROUTES = [
   { route: "GET kuvo/projects", answers: { 200: PROJECTS } },
   { route: "PUT kuvo/projects", answers: { 200: object({ project: PROJECT }) } },
-  { route: "DELETE kuvo/projects", answers: { 200: object({ archived: number }), 409: object({ message: string, archived: number, kept: number }) } }
+  { route: "DELETE kuvo/projects", answers: { 200: object({ archived: number, sessions: list(string) }), 409: object({ message: string, archived: number, kept: number, sessions: list(string) }) } }
 ];
 
 // Packages/Box/src/shared/routes/work.ts
@@ -16698,10 +16699,11 @@ var PLANS = {
   openai: { name: "ChatGPT", agent: "Codex", provider: "codex-cli", hidden: (method) => method.startsWith("chatgpt") },
   xai: { name: "SuperGrok", agent: "Grok", provider: "grok-cli", hidden: (method) => method === "device" }
 };
+var planHides = (provider, method) => PLANS[provider]?.hidden(method) ?? false;
 var FEATURED = ["openai", "github-copilot", "anthropic", "google", "xai", "openrouter", "opencode", "deepseek", "mistral", "groq"];
 function signInNeed(providerID, methods) {
   const plan = PLANS[providerID];
-  const offered = methods.filter(([type, id]) => ["oauth", "key", "external"].includes(type) && !(type === "oauth" && plan?.hidden(id ?? "")));
+  const offered = methods.filter(([type, id]) => ["oauth", "key", "external"].includes(type) && !(type === "oauth" && planHides(providerID, id ?? "")));
   const key = offered.length > 0 && offered.every(([type]) => type === "key");
   return {
     missing: key ? "key" : "signIn",
@@ -31632,12 +31634,12 @@ async function archiveProject(directory, also, readEngine, readBridge, signal, f
   try {
     targets.push(readEngine());
   } catch {
-    return { archived: 0, kept: null };
+    return { archived: 0, kept: null, sessions: [] };
   }
   try {
     await call(targets[0], "GET", "/api/session?limit=1", undefined, signal);
   } catch {
-    return { archived: 0, kept: null };
+    return { archived: 0, kept: null, sessions: [] };
   }
   try {
     const bridge = readBridge();
@@ -31645,6 +31647,7 @@ async function archiveProject(directory, also, readEngine, readBridge, signal, f
       targets.push(bridge);
   } catch {}
   let archived = 0, kept = 0;
+  const archivedIds = [];
   for (const target of targets) {
     for (const folder of [...folders, null]) {
       let query = `limit=100&order=desc&parentID=null${folder === null ? "" : `&directory=${encodeURIComponent(folder)}`}`;
@@ -31674,6 +31677,7 @@ async function archiveProject(directory, also, readEngine, readBridge, signal, f
               if (!working || working.has(session.id))
                 await stopIfWaiting(target, session.id);
               archived += 1;
+              archivedIds.push(session.id);
             } catch {
               kept += 1;
             }
@@ -31684,7 +31688,7 @@ async function archiveProject(directory, also, readEngine, readBridge, signal, f
       }
     }
   }
-  return { archived, kept };
+  return { archived, kept, sessions: archivedIds };
 }
 function filedElsewhere(session, directory, filed) {
   const mark = session?.metadata?.kuvo?.filed;
@@ -31727,16 +31731,16 @@ async function* answerProjects(request, readEngine = readEngineFile, readBridge 
   if (method === "DELETE") {
     const body = parsed(request.body);
     const also = isObject(body) && Array.isArray(body.folders) ? body.folders.filter((folder) => typeof folder === "string" && path104.isAbsolute(folder)) : [];
-    const { archived, kept } = await archiveProject(given, also, readEngine, readBridge, signal, file);
+    const { archived, kept, sessions } = await archiveProject(given, also, readEngine, readBridge, signal, file);
     if (kept === null)
       return yield* json(503, { message: "Its sessions can’t be archived now: the engine isn’t running. Try again in a moment." });
     if (kept > 0)
-      return yield* json(409, { message: `${kept === 1 ? "One of its sessions" : `${kept} of its sessions`} couldn’t be archived, so it stays with them. Try again in a moment.`, archived, kept });
+      return yield* json(409, { message: `${kept === 1 ? "One of its sessions" : `${kept} of its sessions`} couldn’t be archived, so it stays with them. Try again in a moment.`, archived, kept, sessions });
     changeProjects((projects) => {
       const before = projects.find((each) => each.directory === given);
       return before ? projects.map((each) => each === before ? { ...each, removed: true } : each) : projects;
     }, file, lock);
-    return yield* json(200, { archived });
+    return yield* json(200, { archived, sessions });
   }
   return yield* json(405, {});
 }
@@ -40011,7 +40015,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "5a076542dcc1";
+var BRIDGE_VERSION = "31ce47e403d8";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -49361,6 +49365,147 @@ async function* providerModelsRoute(context) {
   return yield* json(status, value);
 }
 
+// Packages/Box/src/link/areas/sign-in.ts
+var SIGN_IN_METHODS_ROUTE = "kuvo/sign-in/methods";
+var SIGN_IN_STATUS_ROUTE = "kuvo/sign-in/status";
+var SIGN_IN_ACCOUNTS_ROUTE = "kuvo/sign-in/accounts";
+var ORDER = { oauth: 0, external: 1, key: 2 };
+var KEY_LABEL = "Use an API key";
+var SIGN_IN_LABEL = "Sign in";
+function signInMethods(account) {
+  const provider = typeof account.id === "string" ? account.id : "";
+  const listed = (Array.isArray(account.methods) ? account.methods : []).filter((method) => !!method && typeof method === "object");
+  const connections = Array.isArray(account.connections) ? account.connections : [];
+  const signedInWithPlan = connections.some((connection) => connection?.method === "oauth");
+  const offered = [];
+  for (const method of listed) {
+    const type = method.type;
+    if (type !== "oauth" && type !== "external" && type !== "key")
+      continue;
+    const id = typeof method.id === "string" ? method.id : undefined;
+    if (type !== "key" && !id)
+      continue;
+    if (type === "oauth" && !signedInWithPlan && planHides(provider, id))
+      continue;
+    const given = typeof method.label === "string" ? method.label.trim() : "";
+    const label = given || (type === "key" ? KEY_LABEL : SIGN_IN_LABEL);
+    offered.push({
+      type,
+      ...type !== "key" ? { id } : {},
+      label,
+      ...Array.isArray(method.form) ? { form: method.form } : {},
+      .../legacy/i.test(label) ? { legacy: true } : {}
+    });
+  }
+  const methods = offered.map((method, at) => ({ method, at })).sort((a, b) => Number(!!a.method.legacy) - Number(!!b.method.legacy) || ORDER[a.method.type] - ORDER[b.method.type] || a.at - b.at).map((each) => each.method);
+  const environment = listed.filter((method) => method.type === "env" && Array.isArray(method.names)).flatMap((method) => method.names.filter((name) => typeof name === "string" && name !== ""));
+  return { methods, environment, hint: hintOf(methods, typeof account.name === "string" ? account.name : provider) };
+}
+function hintOf(methods, name) {
+  const signIn = methods.find((method) => method.type === "oauth" && !method.legacy);
+  if (signIn)
+    return name && signIn.label.toLowerCase().includes(name.toLowerCase()) ? "Sign in" : signIn.label.replaceAll("Login with", "Sign in with");
+  return methods.some((method) => method.type === "key") ? "API key" : "Connect";
+}
+function failureWords(status, message) {
+  if (status === "expired")
+    return "The sign-in timed out. Try again.";
+  const said = typeof message === "string" ? message.trim() : "";
+  if (!said)
+    return "Signing in didn’t work.";
+  const lower = said.toLowerCase();
+  if (lower.includes("access_denied"))
+    return "The sign-in was turned down on its page. Try again to sign in.";
+  if (lower.includes("server_error") || lower.includes("temporarily_unavailable"))
+    return "The service couldn’t sign you in just now. Try again in a moment.";
+  if (lower.includes("state mismatch") || lower.includes("state_mismatch"))
+    return "That page was from an earlier sign-in. Try again to sign in.";
+  if (/^[a-z]+(_[a-z]+)+$/i.test(said))
+    return `Signing in didn’t work (${lower.replaceAll("_", " ")}).`;
+  return said;
+}
+function placeOf(query, context) {
+  if (query.get("agents") === "1") {
+    const bridge = context.bridge();
+    return bridge ? { target: bridge } : { down: agentsDown() ?? "The coding agents aren't running. Try again in a moment." };
+  }
+  try {
+    return { target: context.readEngine() };
+  } catch {
+    return { down: engineDown() };
+  }
+}
+var MOST_WAIT = 25;
+async function* accountsRoute2(context, query) {
+  const { signal, json } = context;
+  const place = placeOf(query, context);
+  if ("down" in place)
+    return yield* json(503, { message: place.down });
+  const deadline = AbortSignal.timeout(15000);
+  try {
+    const listed = await call(place.target, "GET", "/api/integration", undefined, signal ? AbortSignal.any([signal, deadline]) : deadline);
+    const accounts = (Array.isArray(listed) ? listed : []).filter((each) => typeof each?.id === "string");
+    return yield* json(200, { accounts: accounts.map((account) => ({ id: account.id, ...signInMethods(account) })) });
+  } catch (error) {
+    if (deadline.aborted)
+      return yield* json(504, { message: "It didn't answer in time. Try again." });
+    const status = error?.status;
+    return yield* json(typeof status === "number" && status >= 400 ? status : 502, { message: error instanceof Error && error.message ? error.message : "It didn't answer." });
+  }
+}
+async function* signInRoute(context) {
+  const { request, route, signal, json } = context;
+  if (request.method.toUpperCase() !== "GET")
+    return yield* json(405, {});
+  const query = new URLSearchParams(request.path.split("?")[1] ?? "");
+  if (route === SIGN_IN_ACCOUNTS_ROUTE)
+    return yield* accountsRoute2(context, query);
+  const integration = query.get("integration")?.trim() ?? "";
+  const attempt = route === SIGN_IN_STATUS_ROUTE ? query.get("attempt")?.trim() ?? "" : null;
+  if (!integration || attempt === "")
+    return yield* json(400, { message: attempt === "" ? "Say which sign-in (integration, attempt)." : "Say which account (integration)." });
+  const place = placeOf(query, context);
+  if ("down" in place)
+    return yield* json(503, { message: place.down });
+  const deadline = AbortSignal.timeout(15000);
+  const asking = signal ? AbortSignal.any([signal, deadline]) : deadline;
+  try {
+    if (attempt === null) {
+      const listed = await call(place.target, "GET", "/api/integration", undefined, asking);
+      const account = (Array.isArray(listed) ? listed : []).find((each) => each?.id === integration);
+      if (!account)
+        return yield* json(404, { message: `There's no ${integration} to sign in to here.` });
+      return yield* json(200, signInMethods(account));
+    }
+    const statusRoute = `/api/integration/${encodeURIComponent(integration)}/connect/oauth/${encodeURIComponent(attempt)}`;
+    const read = async () => {
+      const each = AbortSignal.timeout(15000);
+      return await call(place.target, "GET", statusRoute, undefined, signal ? AbortSignal.any([signal, each]) : each);
+    };
+    let said = await read();
+    const wait = Math.min(Math.max(Number(query.get("wait")) || 0, 0), MOST_WAIT) * 1000;
+    if (wait > 0) {
+      const first = JSON.stringify(said), until = Date.now() + wait;
+      while (said?.status === "pending" && JSON.stringify(said) === first && Date.now() < until && !signal?.aborted) {
+        await pause(1000, signal);
+        if (signal?.aborted)
+          break;
+        said = await read();
+      }
+    }
+    const status = said?.status;
+    if (status !== "pending" && status !== "complete" && status !== "failed" && status !== "expired")
+      return yield* json(502, { message: "The sign-in's status couldn't be read." });
+    return yield* json(200, { ...said, ...status === "failed" || status === "expired" ? { failure: failureWords(status, said?.message) } : {} });
+  } catch (error) {
+    if (attempt === null ? deadline.aborted : error?.name === "TimeoutError")
+      return yield* json(504, { message: "It didn't answer in time. Try again." });
+    const status = error?.status;
+    const message = error instanceof Error && error.message ? error.message : "It didn't answer.";
+    return yield* json(typeof status === "number" && status >= 400 ? status : 502, { message });
+  }
+}
+
 // Packages/Box/src/link/areas/apply.ts
 import fs152 from "node:fs";
 var BUILT_IN_AGENTS2 = ["build", "plan", "general", "explore", "compaction", "title", "summary"];
@@ -50469,6 +50614,7 @@ var ROUTES = [
   { when: (route) => route.match(/^kuvo\/asks\/([^/]+)$/), answer: askAnswerRoute },
   { when: (route) => route.match(/^kuvo\/engine\/(start|restart)$/), answer: engineControlRoute },
   { when: (route) => route === "kuvo/sign-in/return", answer: signInReturnRoute },
+  { when: (route) => route === SIGN_IN_METHODS_ROUTE || route === SIGN_IN_STATUS_ROUTE || route === SIGN_IN_ACCOUNTS_ROUTE, answer: signInRoute },
   { when: (route) => route === "kuvo/claude-code", answer: claudeCodeRoute },
   { when: (route, request) => request.path.startsWith(AGENTS), answer: agentsRoute },
   { when: (route) => route === "kuvo/accounts/ended" || route === "kuvo/accounts/refreshable" || /^kuvo\/accounts\/[^/]+\/(forget|refresh)$/.test(route), answer: accountsRoute },

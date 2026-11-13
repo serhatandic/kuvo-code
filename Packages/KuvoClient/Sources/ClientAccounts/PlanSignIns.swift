@@ -39,11 +39,11 @@ public enum PlanSignIns {
 }
 
 extension Integration {
-    /// The ways to sign in Accounts offers, in both apps: a ChatGPT plan is used through Codex and
+    /// The ways to sign in a box from before `sessions.models` is judged by (the old-box path; a box
+    /// says them itself now, `SignInAccounts`): a ChatGPT plan is used through Codex and
     /// a SuperGrok plan through Grok (Subscriptions), so the engine's own sign-ins with those plans
     /// aren't offered: two ways to one plan read as two accounts. One made before still works,
-    /// shows as connected, and can be signed in to again. (Each app offers those of them it can
-    /// take: the phone, a sign-in page or a key.)
+    /// shows as connected, and can be signed in to again.
     public var offeredSignInMethods: [Method] {
         if connections.contains(where: { $0.method == "oauth" }) { return signInMethods }
         return signInMethods.filter { method in
