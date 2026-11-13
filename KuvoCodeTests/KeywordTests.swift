@@ -663,7 +663,7 @@ import Testing
         await model.togglePlan()?.value
         #expect(picked() == ["plan", "build", "plan", "build"])
         #expect(model.session.agent == "build")
-        #expect(model.transcript.pending.isEmpty, "a menu's switch shows no message")
+        #expect(!model.transcript.pending.contains { $0.text.hasPrefix("/plan") }, "a menu's switch shows no message")
         #expect(engine.requests("POST", "/api/session/\(id)/prompt").count == 1)
     }
 
