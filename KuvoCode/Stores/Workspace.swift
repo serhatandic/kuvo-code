@@ -1230,14 +1230,11 @@ final class Workspace {
         settings[directory] = project == ProjectSettings() ? nil : project
         saveSettings()
         keepOnBox(directory)
-        // Sessions not open yet catch up when they open. A box with `projects.folders` gives each
-        // its folders as it next runs or opens, never all at once at rest, which would make each
-        // the newest: only those open in a tab now. A box from before: the app gives each loaded
-        // one them now.
-        givingFolders = models.values.filter { projectDirectory(of: $0.session) == directory }.map { model in
-            let isShown = shown.contains(model.id)
-            return Task {
-                if !isShown, await model.boxHas(ProjectFoldersOnBox.feature) { return }
+        // Sessions not open yet catch up when they open: their box gives each its folders as it
+        // next runs or opens, never all at once at rest, which would make each the newest. Only
+        // those open in a tab now.
+        givingFolders = models.values.filter { shown.contains($0.id) && projectDirectory(of: $0.session) == directory }.map { model in
+            Task {
                 // (Once its box has them.)
                 await projectsWritten()
                 await model.syncFolders()
@@ -1249,18 +1246,6 @@ final class Workspace {
     /// The project's folders being given to its loaded sessions after Edit Project (what a test
     /// waits for).
     @ObservationIgnored private(set) var givingFolders: [Task<Void, Never>] = []
-
-    /// Settings › Permissions changed: each box makes its conversations' rules again with them
-    /// (PROTOCOL.md, "Approval"); open sessions' folders follow here where their box is from
-    /// before `projects.folders` (one with it keeps them itself).
-    func syncPermissions() {
-        for model in models.values {
-            Task {
-                if await model.boxHas(ProjectFoldersOnBox.feature) { return }
-                await model.syncFolders()
-            }
-        }
-    }
 
     /// Each computer's approvals (`GET kuvo/approval`), by box, as last read: what a new
     /// conversation's composer starts with there.
