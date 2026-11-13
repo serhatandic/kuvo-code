@@ -68,9 +68,11 @@ final class UsageSettingsOnBox {
             for (name, value) in parts where unsent[name] == value { unsent[name] = nil }
             apply(answer)
         } catch let error as ServerError where error.status == 400 || error.status == 404 {
-            // Not a part it takes (a box from before them, or a part it can't): the box's stay.
+            // Not a part it takes (a box from before them, or a part it can't): the box's stay, and show again.
             log.info("usage settings refused: \(String(describing: error), privacy: .public)")
             for (name, value) in parts where unsent[name] == value { unsent[name] = nil }
+            host.forget(Set(parts.keys))
+            if error.status == 400 { await read() }
         } catch {
             // Not answering: they go again as it's back.
             log.info("usage settings: \(String(describing: error), privacy: .public)")
@@ -84,7 +86,7 @@ final class UsageSettingsOnBox {
         do {
             var answer = try await api.client.send(try api.client.request("GET", BoxUsageSettings.bridgePath), as: DataEnvelope<BoxUsageSettings>.self).data
             if !answer.imported {
-                let mine = try JSONDecoder().decode(JSONValue.self, from: host.current(withCodexFallback: true))
+                let mine = try JSONDecoder().decode(JSONValue.self, from: host.toImport())
                 answer = try await api.client.send(try api.client.request("POST", BoxUsageSettings.bridgeImportPath, body: mine), as: DataEnvelope<BoxUsageSettings>.self).data
                 log.info("usage settings brought to this Mac's box: \(answer.took.joined(separator: ", "), privacy: .public)")
             }
@@ -97,8 +99,9 @@ final class UsageSettingsOnBox {
         }
     }
 
+    /// The box's, shown: but a part changed here and still on its way, which comes back with its answer.
     private func apply(_ answer: BoxUsageSettings) {
         guard let settings = try? JSONEncoder().encode(answer.settings) else { return }
-        host.apply(settings)
+        host.apply(settings, except: Set(unsent.keys))
     }
 }

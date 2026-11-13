@@ -53,18 +53,21 @@ final class HostSettingsTests: XCTestCase {
         mac.defaults.set("Last 30 Days", forKey: TotalSpendSetting.periodKey)
         mac.defaults.set("gpt-5", forKey: CodexFallbackModelSetting.key)
 
-        let parts = object(mac.settings.current(withCodexFallback: true))
+        let parts = object(mac.settings.toImport())
         let layout = parts["layout"] as? [String: Any]
         XCTAssertEqual(layout?["placed"] as? [String], ["claude.session", "claude.weekly", "codex.session"])
         XCTAssertEqual(layout?["pinned"] as? [String], ["claude.session", "codex.session"], "pins in one order, whatever order the panel kept them in")
         XCTAssertEqual(layout?["providerOrder"] as? [String], ["claude", "codex", "cursor"])
-        XCTAssertEqual((parts["providers"] as? [String: Any])?["enabled"] as? [String], ["claude", "codex"])
-        XCTAssertEqual((parts["providers"] as? [String: Any])?["known"] as? [String], ["claude", "codex", "cursor"])
+        XCTAssertNil(parts["providers"], "the cards each Mac turned on for the tools it found aren't brought")
         XCTAssertEqual(parts["totalSpend"] as? [String: AnyHashable], ["show": false, "period": "Last 30 Days"])
         XCTAssertEqual(parts["notifications"] as? [String: Bool], ["underTenPercent": false, "healthyToClose": false, "closeToRunningOut": true])
         XCTAssertEqual(parts["codexFallback"] as? String, "gpt-5")
-        // Not as a change: Codex's fallback model goes to the host through its own route.
-        XCTAssertNil(object(mac.settings.current())["codexFallback"])
+    }
+
+    func testAMacStillOnItsFirstRunSettingsBringsNothing() {
+        let (fresh, _) = panel("Fresh")
+        // (It turned on the cards for the tools it found, and shows its default meters.)
+        XCTAssertEqual(object(fresh.settings.toImport()).count, 0, "nothing to put over the panel you made on another Mac")
     }
 
     func testTheHostsPartsShowInThePanelAndNoneGoBack() {
@@ -130,5 +133,53 @@ final class HostSettingsTests: XCTestCase {
         mac.settings.check()
         XCTAssertEqual(told().count, 2)
         XCTAssertEqual((told()[1]["providers"] as? [String: Any])?["enabled"] as? [String], ["claude", "codex", "cursor"])
+    }
+
+    func testWhatThisMacDoesntKnowOfTheLayoutGoesBackWithAChange() {
+        let (mac, told) = panel("Newer")
+        // A newer app's: a Grok card with a meter this Mac doesn't know, shown, starred and offered.
+        let fromHost: [String: Any] = [
+            "layout": [
+                "placed": ["claude.session", "grok.weekly"],
+                "providerOrder": ["grok", "claude", "codex", "cursor"],
+                "metricOrder": ["grok": ["grok.weekly"], "claude": ["claude.session", "claude.weekly", "claude.next"]],
+                "pinned": ["grok.weekly"],
+                "expanded": [],
+                "expandOnEnable": [],
+                "seeded": ["claude.session", "claude.weekly", "codex.session", "grok.weekly"],
+            ],
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: fromHost)
+        mac.settings.apply(data)
+        XCTAssertEqual(mac.layout.placed.map(\.descriptorID), ["claude.session"], "what it can't show stays out of its panel")
+
+        mac.layout.setPinned(true, for: "claude.session")
+        mac.settings.check()
+        let sent = told().last?["layout"] as? [String: Any]
+        XCTAssertEqual(sent?["placed"] as? [String], ["claude.session", "grok.weekly"])
+        XCTAssertEqual(sent?["pinned"] as? [String], ["claude.session", "grok.weekly"])
+        XCTAssertEqual((sent?["seeded"] as? [String])?.contains("grok.weekly"), true, "a default turned off on the newer Mac stays off there")
+        XCTAssertEqual(sent?["providerOrder"] as? [String], ["grok", "claude", "codex", "cursor"])
+        XCTAssertEqual((sent?["metricOrder"] as? [String: [String]])?["grok"], ["grok.weekly"])
+        XCTAssertEqual((sent?["metricOrder"] as? [String: [String]])?["claude"]?.last, "claude.next")
+
+        // The host says the layout it took from this Mac again (another part changed): Undo and the panel stay as they are.
+        XCTAssertTrue(mac.layout.canUndo)
+        mac.settings.apply(try! JSONSerialization.data(withJSONObject: ["layout": sent!, "notifications": ["underTenPercent": true, "healthyToClose": false, "closeToRunningOut": false]]))
+        XCTAssertTrue(mac.layout.canUndo, "not put in again")
+        XCTAssertTrue(mac.layout.isPinned("claude.session"))
+        XCTAssertTrue(mac.notifications.underTenPercent)
+    }
+
+    func testAChangeOnItsWayStaysWhileAnOlderAnswerComes() {
+        let (mac, _) = panel("OnItsWay")
+        mac.settings.apply(Data("{}".utf8))
+        mac.layout.setPinned(true, for: "codex.session")
+        mac.settings.check()
+        // The host's answer to an earlier ask, before it has this change: the layout stays.
+        let older: [String: Any] = ["layout": ["placed": ["claude.session"], "providerOrder": [], "metricOrder": [:], "pinned": [], "expanded": [], "expandOnEnable": [], "seeded": []]]
+        mac.settings.apply(try! JSONSerialization.data(withJSONObject: older), except: ["layout"])
+        XCTAssertTrue(mac.layout.isPinned("codex.session"))
+        XCTAssertTrue(mac.layout.canUndo)
     }
 }

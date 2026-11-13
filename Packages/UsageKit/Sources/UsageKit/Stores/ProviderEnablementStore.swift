@@ -121,6 +121,10 @@ final class ProviderEnablementStore {
         return new
     }
 
+    /// Switches the store into enabled-list mode with exactly `ids` on. Used by `FirstRunSeeder`: a
+    /// fresh install starts with none on, and Reset All snaps to the fallback set, then the detected
+    /// set. Fires `onProviderEnabled` for each newly-on provider and posts the change notification, so
+    /// the refresh loop fetches them promptly.
     func seedEnabledProviders(_ ids: Set<String>) {
         let newlyEnabled = ids.filter { !isEnabled($0) }
         let changed = enabledIDs != ids
