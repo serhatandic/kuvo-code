@@ -1,5 +1,6 @@
 import ClientDesign
 import ClientSessions
+import ClientText
 import Foundation
 import OpenCodeKit
 import Testing
@@ -9,7 +10,8 @@ import Testing
 /// (the agents bridge the app ships, run for real): a side question answered without a word added
 /// to the conversation, a review with fresh eyes whose findings go to the agent only when you ask,
 /// a handoff that carries the work on in a new conversation, /plan, and a /loop that can't be read.
-/// Only the engine is a stand-in.
+/// What each means is its box's to say (`ConversationBox`, the real one). Only the engine is a
+/// stand-in.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct KeywordTests {
     let engine = StubEngine(port: 47960)
@@ -64,8 +66,12 @@ import Testing
     nonisolated final class Answers: @unchecked Sendable {
         private let lock = NSLock()
         private var left: [String]
+        private var last: String?
         init(_ answers: [String]) { left = answers }
         func next() -> String { lock.withLock { left.isEmpty ? "" : left.removeFirst() } }
+        /// One value, kept (a mode the engine was switched to).
+        func set(_ value: String) { lock.withLock { last = value } }
+        var now: String? { lock.withLock { last } }
     }
 
     private func session(directory: String = "/tmp") throws -> SessionModel {
@@ -73,12 +79,33 @@ import Testing
         return SessionModel(session: session, api: engine.api)
     }
 
-    /// The bridge up, and the conversation's keywords offered once it has said it runs them.
-    private func start(_ model: SessionModel) async throws -> RealBridge {
+    /// The bridge up, and the conversation's keywords offered once it has said it runs them, as
+    /// its box says them (the box beside it).
+    private func start(_ model: SessionModel) async throws -> Started {
         let bridge = try await RealBridge.start(engine: engine, folder: folder)
         model.goalBridge = { bridge.agents }
         try await until { bridge.agents.runsKeywords == true }
-        return bridge
+        let box = try await ConversationBox(engine: engine, bridge: bridge)
+        await box.serves(model)
+        return Started(bridge: bridge, box: box)
+    }
+
+    /// The bridge and the box beside it, stopped together.
+    @MainActor final class Started {
+        let bridge: RealBridge
+        let box: ConversationBox
+        var agents: OutsideAgents { bridge.agents }
+        var api: OpenCodeAPI? { bridge.api }
+
+        init(bridge: RealBridge, box: ConversationBox) {
+            self.bridge = bridge
+            self.box = box
+        }
+
+        func stop() {
+            box.stop()
+            bridge.stop()
+        }
     }
 
     /// `/compact` is on offer in a coding agent's conversation as in the engine's, goes to its box,
@@ -88,13 +115,17 @@ import Testing
         serve(directory: "/tmp", answers: [])
         let session = try JSONDecoder().decode(Session.self, from: JSONSerialization.data(withJSONObject: StubEngine.session(id, directory: "/tmp", extra: ["metadata": ["kuvoAgent": "cursor"]])))
         let model = SessionModel(session: session, api: engine.api)
+        let box = try await ConversationBox(engine: engine)
+        defer { box.stop() }
+        await box.serves(model)
         #expect(OutsideAgents.isAgentSession(session))
         #expect(model.keywords.contains(.compact))
 
         let why = "Cursor can't summarize on request: it does so by itself when the conversation fills up."
         engine.on("POST", "/api/session/\(id)/compact", json: ["message": why], status: 400)
         model.draftText = "/compact"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
+        await model.messagesSent()
         #expect(model.draftText.isEmpty)
         try await until { model.failure != nil }
         #expect(engine.requests("POST", "/api/session/\(id)/compact").count == 1)
@@ -122,7 +153,9 @@ import Testing
         #expect(model.keywords.contains(.btw))
 
         model.draftText = "/btw where does it pause?"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
+
+        await model.messagesSent()
         #expect(model.draftText.isEmpty)
         try await until { model.sideQuestions.first?.state == .answered }
         let question = try #require(model.sideQuestions.first)
@@ -146,7 +179,8 @@ import Testing
 
         // "/btw" alone leaves what to type.
         model.draftText = "/btw"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
+        await model.messagesSent()
         #expect(model.draftText == "/btw ")
         #expect(model.failure == nil)
     }
@@ -164,15 +198,15 @@ import Testing
         defer { bridge.stop() }
 
         model.draftText = "/btw where does it pause?"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { model.sideQuestions.first?.state == .answered }
         model.hidesSideQuestion = true
         #expect(model.asksSideThread)
         model.draftText = "why there?"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         #expect(model.draftText.isEmpty)
         model.draftText = "and on close?"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         #expect(model.draftText == "and on close?")
         // The tag's ×, before the follow-up is in: it stays off once it is.
         model.composerAsksSide = false
@@ -189,12 +223,12 @@ import Testing
         // So the next message is the conversation's.
         engine.on("POST", "/api/session/\(id)/prompt", json: ["data": [:]])
         model.draftText = "Pause it on blur then."
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { told == 1 }
         #expect(model.shownSideThread?.questions.count == 2)
 
         model.draftText = "/btw what does parseDuration match?"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         // (The new thread, by its question: the first is answered already, and shows until it does.)
         try await until { model.shownSideThread?.latest.question == "what does parseDuration match?" && model.shownSideThread?.latest.state == .answered }
         #expect(model.sideThreads.count == 2)
@@ -215,17 +249,17 @@ import Testing
         defer { bridge.stop() }
 
         model.draftText = "/btw where does it pause?"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { model.sideQuestions.first?.state == .answered }
         #expect(model.asksSideThread)
         let file = URL(fileURLWithPath: "/tmp/screenshot.png")
         model.draftFiles = [file]
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         let why = "A side question can’t include pictures or files. Remove them, or close Side question to send it all to the agent."
         #expect(model.failure == why)
         model.failure = nil
         model.draftText = "[Image 1] what's this?"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         #expect(model.failure == why)
         #expect(model.draftText == "[Image 1] what's this?")
         #expect(model.draftFiles == [file])
@@ -236,7 +270,7 @@ import Testing
         model.draftFiles = []
         #expect(model.failure == nil)
         model.draftFiles = [file]
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         #expect(model.failure == why)
         model.composerAsksSide = false
         #expect(model.failure == nil)
@@ -307,7 +341,7 @@ import Testing
         defer { bridge.stop() }
 
         model.draftText = "/review"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { model.review?.state == .done }
         let review = try #require(model.review)
         #expect(review.summary == "One real problem.")
@@ -345,7 +379,7 @@ import Testing
         defer { bridge.stop() }
 
         model.draftText = "/review the timer and its tests"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { model.review?.state == .done }
         let review = try #require(model.review)
         #expect(review.scope == .described("the timer and its tests", paths: ["src/timer.ts", "test/timer.test.ts"]))
@@ -366,7 +400,7 @@ import Testing
         let bridge = try await start(model)
         defer { bridge.stop() }
         model.draftText = "/review"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { model.review?.state == .done }
         let review = try #require(model.review)
 
@@ -412,6 +446,7 @@ import Testing
         engine.on("GET", "/api/model/default", json: ["location": location, "data": NSNull()])
         engine.on("GET", "/api/agent", json: ["location": location, "data": []])
         engine.on("GET", "/api/command", json: ["location": location, "data": []])
+        engine.on("GET", "/api/provider", json: ["location": location, "data": [["id": "deepseek", "name": "DeepSeek"]]])
         let catalog = Catalog()
         catalog.api = engine.api
         await catalog.refresh()
@@ -423,13 +458,14 @@ import Testing
 
         // A name half typed comes back, saying so; nothing is read.
         model.draftText = "/review with deep"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
+        await model.messagesSent()
         #expect(model.draftText == "/review with deep")
         #expect(model.failure == "Finish the model’s name, or pick it from the list.")
         #expect(model.review == nil)
 
         model.draftText = "/review with deepseek v4.1 flash the pause handling"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { model.review?.state == .done }
         #expect(model.review?.model == ModelRef(id: "v4.1-flash", providerID: "deepseek"))
         #expect(model.review?.focus == "the pause handling")
@@ -465,7 +501,7 @@ import Testing
             return
         }
         model.draftText = "/review " + since + security
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { model.review?.state == .done }
         let first = try repository.git("rev-parse", "--short", "HEAD~1").trimmingCharacters(in: .whitespacesAndNewlines)
         #expect(model.review?.scope == .commits(from: first + "^", to: nil))
@@ -491,6 +527,7 @@ import Testing
         defer { clean() }
         serve(directory: "/tmp", answers: [])
         engine.on("POST", "/api/session/\(id)/command", json: ["data": [:]])
+        engine.on("GET", "/api/command", json: ["data": [["name": "review", "description": "Review changes"]]])
         let model = try session()
         let bridge = try await start(model)
         defer { bridge.stop() }
@@ -499,7 +536,7 @@ import Testing
         #expect(offered.map(\.name) == [Keyword.quickReview])
 
         model.draftText = "/review-quick main"
-        model.submitDraft(for: nil, queue: false, commands: offered)
+        model.submitDraft(for: nil, queue: false)
         try await until { !engine.requests("POST", "/api/session/\(id)/command").isEmpty }
         let ran = try #require(engine.requests("POST", "/api/session/\(id)/command").first)
         #expect(ran.body["name"] as? String == "review")
@@ -515,13 +552,13 @@ import Testing
         serve(directory: "/tmp", answers: [])
         engine.on("POST", "/api/session/\(id)/command", json: ["data": [:]])
         engine.on("POST", "/api/session/\(id)/prompt", json: ["data": [:]])
+        engine.on("GET", "/api/command", json: ["data": [["name": "review", "description": "Review changes"]]])
         let model = try session()
         let bridge = try await start(model)
         defer { bridge.stop() }
-        let engineCommands = try JSONDecoder().decode([Command].self, from: Data(#"[{"name": "review", "description": "Review changes"}]"#.utf8))
 
         model.draftText = "/review-quick main"
-        model.submitDraft(for: nil, queue: false, commands: engineCommands)
+        model.submitDraft(for: nil, queue: false)
         try await until { !engine.requests("POST", "/api/session/\(id)/command").isEmpty || !engine.requests("POST", "/api/session/\(id)/prompt").isEmpty }
         #expect(engine.requests("POST", "/api/session/\(id)/prompt").isEmpty, "not sent to the model as a message")
         let ran = try #require(engine.requests("POST", "/api/session/\(id)/command").first)
@@ -545,7 +582,7 @@ import Testing
         bridge.agents.onHandoff = { opened.append($0.to ?? "") }
 
         model.draftText = "/handoff write the test"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { model.handoff?.state == .done && !opened.isEmpty }
         #expect(opened == ["ses_next"])
         #expect(model.handoff?.to == "ses_next")
@@ -553,6 +590,55 @@ import Testing
         let note = try #require(engine.requests("POST", "/api/session/ses_next/synthetic").first)
         #expect((note.body["text"] as? String)?.contains("What to do next: write the test") == true)
         #expect(told == 0)
+    }
+
+    /// A handoff's end told before the box's answer to its start (it failed at once) stays, also for
+    /// one asked again that fails the same way: they're told apart by when each was asked for, not
+    /// by what they say.
+    @Test func aHandoffsEndToldBeforeItsStartStaysOneAskedAgainToo() throws {
+        let agents = OutsideAgents()
+        let told = { (handoff: [String: Any]) throws in
+            agents.keywordEvent(try ServerEvent(json: JSONSerialization.data(withJSONObject: ["id": "evt_\(UUID().uuidString)", "type": "kuvo.handoff", "data": ["sessionID": "ses_a", "handoff": handoff]])))
+        }
+        let answer = { (started: Double) in Handoff(from: "ses_a", state: .writing, started: started) }
+        let failed: [String: Any] = ["from": "ses_a", "state": "failed", "error": "No room."]
+
+        // The first: its end, then the answer to its start.
+        try told(failed.merging(["started": 1_000.0]) { $1 })
+        agents.startedHandoff(answer(1_000))
+        #expect(agents.handoffs["ses_a"]?.state == .failed)
+        // Asked again, failing the same way, in the same order.
+        try told(failed.merging(["started": 2_000.0]) { $1 })
+        agents.startedHandoff(answer(2_000))
+        #expect(agents.handoffs["ses_a"]?.state == .failed)
+        #expect(agents.handoffs["ses_a"]?.started == 2_000)
+        // The answer first, as usual: writing, until its end is told.
+        agents.startedHandoff(answer(3_000))
+        #expect(agents.handoffs["ses_a"]?.state == .writing)
+    }
+
+    /// A handoff asked for again that fails the same way shows its own end, not "writing" for good:
+    /// each is told apart by when it was asked for, so the box's answer doesn't take back an end
+    /// that came first.
+    @Test func aHandoffAskedAgainThatFailsTheSameWayShowsItsEnd() async throws {
+        defer { clean() }
+        serve(directory: "/tmp", answers: ["## Handoff\nIt pauses on blur.", "## Handoff\nIt pauses on blur."])
+        engine.on("POST", "/api/session", json: ["message": "There's no room for another conversation."], status: 500)
+        engine.on("PATCH", "/api/session/\(id)", json: ["data": [:]])
+        let model = try session()
+        let bridge = try await start(model)
+        defer { bridge.stop() }
+
+        model.draftText = "/handoff write the test"
+        model.submitDraft(for: nil, queue: false)
+        await model.messagesSent()
+        try await until { model.handoff?.state == .failed }
+        let first = try #require(model.handoff?.started)
+        model.draftText = "/handoff write the test"
+        model.submitDraft(for: nil, queue: false)
+        await model.messagesSent()
+        try await until { model.handoff?.state == .failed && model.handoff?.started != first }
+        #expect(model.handoff?.error == bridge.agents.handoffs[id]?.error)
     }
 
     @Test func planSwitchesToPlanThenSendsWhatFollows() async throws {
@@ -565,7 +651,7 @@ import Testing
         defer { bridge.stop() }
 
         model.draftText = "/plan how to test the blur pause"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { !engine.requests("POST", "/api/session/\(id)/prompt").isEmpty }
         #expect(model.session.agent == "plan")
         let asked = engine.asked.filter { $0.hasSuffix("/agent") || $0.hasSuffix("/prompt") }
@@ -584,7 +670,15 @@ import Testing
     @Test func planAloneTurnsPlanOnAndOff() async throws {
         defer { clean() }
         serve(directory: "/tmp", answers: [])
-        engine.on("POST", "/api/session/\(id)/agent", json: ["data": [:]])
+        // The engine keeps the mode it's switched to, as its box reads it.
+        let mode = Answers([])
+        engine.on("POST", "/api/session/\(id)/agent") { request in
+            mode.set(request.body["agent"] as? String ?? "")
+            return StubWeb.json(["data": [:]])
+        }
+        engine.on("GET", "/api/session/\(id)") { _ in
+            StubWeb.json(["data": StubEngine.session(self.id, title: "Pause on blur", directory: "/tmp", extra: ["model": ["id": "m", "providerID": "p"], "agent": mode.now ?? "build"])])
+        }
         engine.on("POST", "/api/session/\(id)/prompt", json: ["data": [:]])
         let model = try session()
         let bridge = try await start(model)
@@ -592,22 +686,33 @@ import Testing
         let picked = { engine.requests("POST", "/api/session/\(id)/agent").compactMap { $0.body["agent"] as? String } }
 
         model.draftText = "/plan"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
+        await model.messagesSent()
         try await until { picked() == ["plan"] }
         #expect(model.session.agent == "plan")
         #expect(model.draftText.isEmpty)
 
         model.draftText = "/plan"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
+        await model.messagesSent()
         try await until { picked() == ["plan", "build"] }
         #expect(model.session.agent == "build")
 
-        model.togglePlan()
+        // The Plan Mode menu item and ⌥⌘2 go by the box too.
+        await model.togglePlan()?.value
+        #expect(picked() == ["plan", "build", "plan"])
+        #expect(model.session.agent == "plan")
         model.draftText = "/plan the next step"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { !engine.requests("POST", "/api/session/\(id)/prompt").isEmpty }
         #expect(model.session.agent == "plan")
         #expect(picked() == ["plan", "build", "plan"], "already in Plan: it stays, and sends")
+        #expect(engine.requests("POST", "/api/session/\(id)/prompt").count == 1)
+        // And off again, back to Build, as its box says.
+        await model.togglePlan()?.value
+        #expect(picked() == ["plan", "build", "plan", "build"])
+        #expect(model.session.agent == "build")
+        #expect(!model.transcript.pending.contains { $0.text.hasPrefix("/plan") }, "a menu's switch shows no message")
         #expect(engine.requests("POST", "/api/session/\(id)/prompt").count == 1)
     }
 
@@ -619,13 +724,75 @@ import Testing
         defer { bridge.stop() }
 
         model.draftText = "/loop now and then check CI"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
+
+        await model.messagesSent()
         #expect(model.draftText == "/loop now and then check CI")
         #expect(model.failure?.hasPrefix("Can’t tell how often") == true)
         model.draftText = "/loop every morning at 9"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
+        await model.messagesSent()
         #expect(model.draftText == "/loop every morning at 9")
         #expect(model.failure?.hasPrefix("Write what to do each time") == true)
         #expect(told == 0)
+    }
+
+    /// A "/" or "!" text shows at once where it was sent, until its box has said what it means: in
+    /// the conversation, as a message waiting to go, or, for a side question, in its side thread,
+    /// being answered (it never joins the conversation). A message sent meanwhile shows and goes at
+    /// once, not after it.
+    @Test func aTypedTextShowsAtOnceWhereItWasSentAndAMessageSentMeanwhileDoesntWait() async throws {
+        defer { clean() }
+        serve(directory: "/tmp", answers: ["In `onBlur`."])
+        engine.on("POST", "/api/session/\(id)/prompt", json: ["data": [:]])
+        engine.on("POST", "/api/session/\(id)/shell", json: ["data": [:]])
+        let model = try session()
+        let bridge = try await start(model)
+        defer { bridge.stop() }
+        // (Its side questions read, as an open conversation has them.)
+        await bridge.agents.loadSideQuestions(of: id)
+
+        model.draftText = "!pwd"
+        model.submitDraft(for: nil, queue: false)
+        #expect(model.transcript.pending.map(\.text) == ["!pwd"])
+        model.draftText = "Pause it on blur then."
+        model.submitDraft(for: nil, queue: false)
+        #expect(model.transcript.pending.map(\.text) == ["!pwd", "Pause it on blur then."], "the message shows at once")
+        model.draftText = "/btw where does it pause?"
+        model.submitDraft(for: nil, queue: false)
+        #expect(model.transcript.pending.map(\.text) == ["!pwd", "Pause it on blur then."], "a side question isn't the conversation's")
+        #expect(model.shownSideThread?.latest.question == "where does it pause?")
+        #expect(model.shownSideThread?.latest.state == .answering)
+
+        await model.messagesSent()
+        #expect(!model.transcript.pending.contains { $0.text == "!pwd" }, "its row gives way to what it means")
+        try await until { model.sideQuestions.map(\.question) == ["where does it pause?"] && model.sideQuestions.first?.state == .answered && told == 1 }
+        #expect(engine.requests("POST", "/api/session/\(id)/shell").count == 1)
+    }
+
+    /// What you're replying to goes with one message: a "/" text that turns out to be a message
+    /// takes it only if it's still in the composer, not after a message sent meanwhile took it.
+    @Test func aQuoteGoesWithOneMessageOnly() async throws {
+        defer { clean() }
+        serve(directory: "/tmp", answers: [])
+        engine.on("POST", "/api/session/\(id)/prompt", json: ["data": [:]])
+        // (Its commands, as an engine lists them: none of them is "/tmp".)
+        engine.on("GET", "/api/command", json: ["data": []])
+        let model = try session()
+        let bridge = try await start(model)
+        defer { bridge.stop() }
+        let quote = Drafts.Quote(text: "The timer stops at zero.")
+
+        model.draftQuotes = [quote]
+        model.draftText = "/tmp/timer.log says why"
+        model.submitDraft(for: nil, queue: false)
+        #expect(model.draftQuotes.map(\.text) == ["The timer stops at zero."], "it waits for what the box says")
+        model.draftText = "Fix it."
+        model.submitDraft(for: nil, queue: false)
+        #expect(model.draftQuotes.isEmpty)
+        await model.messagesSent()
+        try await until { engine.requests("POST", "/api/session/\(id)/prompt").count == 2 }
+        let sent = engine.requests("POST", "/api/session/\(id)/prompt").compactMap { $0.body["text"] as? String }
+        #expect(sent.filter { $0.contains("The timer stops at zero.") }.count == 1, "\(sent)")
     }
 }

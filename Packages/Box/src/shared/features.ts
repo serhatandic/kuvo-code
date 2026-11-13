@@ -121,6 +121,7 @@ export const FEATURES = [
   "sign-in.return",
   "skills",
   "skills.trash",
+  "typed",
   "update",
   "usage.history",
   "usage.settings",

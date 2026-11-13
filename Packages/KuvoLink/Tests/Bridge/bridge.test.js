@@ -1648,6 +1648,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "sign-in.return": ["GET", "kuvo/sign-in/return"],
     skills: ["GET", "kuvo/skills"],
     "skills.trash": ["GET", "kuvo/skill-trash"],
+    // (What "/" offers in a conversation; what a typed text means is POST on the same route.)
+    typed: ["GET", "kuvo/sessions/ses_none/typed"],
     update: ["GET", "kuvo/update"],
     "usage.history": ["GET", "kuvo/agents/api/kuvo/usage"],
     "usage.settings": ["GET", "kuvo/agents/api/kuvo/usage/settings"],

@@ -3,8 +3,8 @@ import OpenCodeKit
 import Testing
 @testable import KuvoCode
 
-/// "/goal" in a conversation, as its computer's box runs it (the agents bridge the app ships, run
-/// for real): typed in the composer, the box gives the agent the goal and keeps it going turn
+/// "/goal" in a conversation, as its computer's box reads it and runs it (its box and the agents
+/// bridge the app ships, run for real): typed in the composer, the box gives the agent the goal and keeps it going turn
 /// after turn until a check finds it met, and the conversation shows where it stands; Done puts it
 /// away. Only the engine is a stand-in: each note to its agent takes a turn that runs a command,
 /// and its model's checks answer in turn. Its live feed ends at once, as a dropped one does, so
@@ -85,10 +85,13 @@ import Testing
         defer { bridge.stop() }
         let model = try session()
         model.goalBridge = { bridge.agents }
+        let box = try await ConversationBox(engine: engine, bridge: bridge)
+        defer { box.stop() }
+        await box.serves(model)
         #expect(model.takesGoals)
 
         model.draftText = "/goal all tests in test/auth pass"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         #expect(model.draftText.isEmpty)
         try await until { model.goal?.state == .met }
 
@@ -116,8 +119,11 @@ import Testing
         defer { bridge.stop() }
         let model = try session()
         model.goalBridge = { bridge.agents }
+        let box = try await ConversationBox(engine: engine, bridge: bridge)
+        defer { box.stop() }
+        await box.serves(model)
         model.draftText = "/goal the build is green"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { model.goal != nil && !model.isChangingGoal }
 
         // Pause shows at once, as the box answered.
@@ -160,18 +166,23 @@ import Testing
         defer { bridge.stop() }
         let model = try session()
         model.goalBridge = { bridge.agents }
+        let box = try await ConversationBox(engine: engine, bridge: bridge)
+        defer { box.stop() }
+        await box.serves(model)
 
         // No goal yet: "/goal" alone is ready to be finished.
         model.draftText = "/goal"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
+        await model.messagesSent()
         #expect(model.draftText == "/goal ")
 
         // A conversation its engine doesn't have: what you wrote comes back, with why.
         let elsewhere = try JSONDecoder().decode(Session.self, from: JSONSerialization.data(withJSONObject: StubEngine.session("ses_elsewhere", directory: "/tmp")))
         let other = SessionModel(session: elsewhere, api: engine.api)
         other.goalBridge = { bridge.agents }
+        await box.serves(other)
         other.draftText = "/goal the build is green"
-        other.submitDraft(for: nil, queue: false, commands: [])
+        other.submitDraft(for: nil, queue: false)
         try await until { other.failure != nil }
         #expect(other.draftText == "/goal the build is green")
         #expect(other.failure == "There's no such conversation here.")
@@ -189,8 +200,11 @@ import Testing
         let elsewhere = try JSONDecoder().decode(Session.self, from: JSONSerialization.data(withJSONObject: StubEngine.session("ses_elsewhere", directory: "/tmp")))
         let model = SessionModel(session: elsewhere, api: engine.api)
         model.goalBridge = { bridge.agents }
+        let box = try await ConversationBox(engine: engine, bridge: bridge)
+        defer { box.stop() }
+        await box.serves(model)
         model.draftText = "/goal the build is green"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         // Typed while the box is asked.
         model.draftText = "also update the docs"
         try await until { model.failure != nil }
@@ -209,15 +223,18 @@ import Testing
         let elsewhere = try JSONDecoder().decode(Session.self, from: JSONSerialization.data(withJSONObject: StubEngine.session("ses_elsewhere", directory: "/tmp")))
         let model = SessionModel(session: elsewhere, api: engine.api)
         model.goalBridge = { bridge.agents }
+        let box = try await ConversationBox(engine: engine, bridge: bridge)
+        defer { box.stop() }
+        await box.serves(model)
         model.draftText = "/goal pause"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         model.draftText = "also update the docs"
         try await until { model.failure != nil }
         #expect(model.draftText == "also update the docs", "\(model.draftText)")
 
         model.failure = nil
         model.draftText = "/goal pause"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { model.failure != nil }
         #expect(model.draftText == "/goal pause")
     }
@@ -233,19 +250,20 @@ import Testing
         let elsewhere = try JSONDecoder().decode(Session.self, from: JSONSerialization.data(withJSONObject: StubEngine.session("ses_elsewhere", directory: "/tmp")))
         let model = SessionModel(session: elsewhere, api: engine.api)
         model.goalBridge = { bridge.agents }
-        // Not a bot's conversation: its goal isn't asked of a bot first (an app made by another
-        // test leaves that asking set, and the goal would come back only after it).
-        let askBot = SessionModel.askBotForGoal
-        SessionModel.askBotForGoal = nil
-        defer { SessionModel.askBotForGoal = askBot }
-        model.draftText = "/goal pause"
-        model.submitDraft(for: nil, queue: false, commands: [])
-        // A goal sent while the pause is on its way can't be set yet, and comes back as one.
+        let box = try await ConversationBox(engine: engine, bridge: bridge)
+        defer { box.stop() }
+        await box.serves(model)
+        // A goal that can't be set comes back as one.
         model.draftText = "/goal ship v2"
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
+        await model.messagesSent()
         #expect(model.draftText == "/goal ship v2")
-        // Then the computer answers: the pause couldn't be done.
-        try await until { model.failure != nil }
+        // Then a pause sent meanwhile (not from the composer, as a goal bar's could be) comes back
+        // too: the pause couldn't be done.
+        model.failure = nil
+        model.submit("/goal pause", files: [], for: nil, queue: false)
+        await model.messagesSent()
+        #expect(model.failure != nil)
         #expect(model.draftText == "/goal ship v2", "\(model.draftText), \(model.failure ?? "")")
     }
 }

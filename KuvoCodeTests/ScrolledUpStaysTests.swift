@@ -437,7 +437,7 @@ import Testing
         CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
         defer { CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, .commonModes) }
         model.draftText = "Looks good.\nOne more thing:\nkeep the toggle."
-        model.submitDraft(for: nil, queue: false, commands: [])
+        model.submitDraft(for: nil, queue: false)
         try await until { laidOut && atTheEnd && !isOffTheEnd }
         await settled()
         await settled()

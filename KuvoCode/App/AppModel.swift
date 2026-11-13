@@ -376,11 +376,6 @@ final class AppModel {
         workspace.boxTellsNews = { [weak self] box in self?.boxNotices.tells(box) ?? false }
         boxGroups.boxTellsNews = { [weak self] box in self?.boxNotices.tells(box) ?? false }
         ServiceIcons.shared.boxes = { [weak self] box in self?.goalPlans.client(box) }
-        SessionModel.askBotForGoal = { [weak self] session, words in
-            guard let self, let bot = self.bots.bot(forSession: session) else { return false }
-            try await self.goalPlans.ask(words, of: session, on: bot.box)
-            return true
-        }
         goalPlans.onChange = { [weak self] sessions in self?.workspace.goalCards = sessions }
         boxGroups.app = self
         moves.app = self

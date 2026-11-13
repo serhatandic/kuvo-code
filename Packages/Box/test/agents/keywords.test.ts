@@ -199,7 +199,8 @@ describe("a handoff", () => {
     engine.details.set("ses_work", { model: { providerID: "p", id: "m", variant: "high" }, agent: "plan", permissions: [{ permission: "bash", action: "allow", pattern: "*" }] })
     engine.holdingChecks = true
     const started = await handoffs.start("ses_work", "Write the test for it.")
-    expect(started).toEqual({ from: "ses_work", state: "writing" })
+    // (With when it was asked for: which handoff this is.)
+    expect(started).toEqual({ from: "ses_work", state: "writing", started: expect.any(Number) })
     // One being written isn't started again.
     expect((await handoffRoutes(handoffs, "POST", ["ses_work"], async () => ({}))).status).toBe(409)
     await until(() => engine.checks.length === 1)
