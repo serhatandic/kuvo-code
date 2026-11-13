@@ -79,10 +79,80 @@ test("each sign-in in Settings › Accounts is a row of its own, read with that 
 
   // No cap on the key: its credits left.
   expect(by.openrouter!.windows).toEqual([])
-  expect(by.openrouter!.balance).toEqual({ left: 12.5, unit: "usd" })
+  expect(by.openrouter!.balance).toEqual({ left: 12.5, limit: 20, unit: "usd" })
 
   expect(by["zai-coding-plan"]!.windows.map((w) => [w.id, w.used, w.minutes, w.name ?? null])).toEqual([["session", 0.12, 300, null], ["web_search", 0.4, undefined, "Web searches"]])
   expect(by["opencode-go"]!.windows.map((w) => [w.id, w.used, w.resetsAt ?? null])).toEqual([["rolling", 0.09, Date.parse("2026-11-08T22:00:00.000Z")], ["weekly", 0.21, Date.parse("2026-11-12T00:00:00.000Z")]])
+})
+
+test("an OpenRouter key's spend today, this week and this month (UTC's), each starting over when OpenRouter's does; what was bought, for what's left of it", async () => {
+  answers["/openrouterKey"] = () => Response.json({ data: { limit: null, usage: 31.75, usage_daily: 1.84, usage_weekly: 9.2, usage_monthly: 31.75, is_free_tier: false } })
+  answers["/openrouterCredits"] = () => Response.json({ data: { total_credits: 50, total_usage: 42.3 } })
+  const [account] = (await stated([credential("openrouter", { type: "api", key: "or-key" })])).accounts
+  const at = new Date(NOW)
+  const day = Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate())
+  expect(account!.balance).toEqual({ left: 50 - 42.3, limit: 50, unit: "usd" })
+  expect(account!.extras).toEqual([
+    { id: "today", name: "Today", kind: "spent", amount: 1.84, unit: "usd", resetsAt: day + 86_400_000 },
+    { id: "week", name: "This Week", kind: "spent", amount: 9.2, unit: "usd", resetsAt: day + (7 - ((at.getUTCDay() + 6) % 7)) * 86_400_000 },
+    { id: "month", name: "This Month", kind: "spent", amount: 31.75, unit: "usd", resetsAt: Date.UTC(at.getUTCFullYear(), at.getUTCMonth() + 1, 1) },
+  ])
+  // A key that doesn't say its spend: none, never a zero.
+  answers["/openrouterKey"] = () => Response.json({ data: { limit: 10, usage: 2 } })
+  expect((await stated([credential("openrouter", { type: "api", key: "or-key" })])).accounts[0]!.extras).toBeUndefined()
+})
+
+test("a Copilot seat its organization pays for by the credit: the organization's credits and spend this month, where the sign-in may read its billing; nothing, never a zero, where it may not", async () => {
+  answers["/copilot"] = () => Response.json({ copilot_plan: "business", token_based_billing: true, quota_snapshots: { premium_interactions: { entitlement: 0, remaining: 0, percent_remaining: 0 } } })
+  answers["/githubOrgs"] = () => Response.json([{ login: "member-only" }, { login: "acme" }])
+  answers["/githubBilling/member-only/settings/billing/usage/summary"] = () => Response.json({ message: "Must have admin rights" }, { status: 403 })
+  answers["/githubBilling/acme/settings/billing/usage/summary"] = () => Response.json({ usageItems: [
+    { product: "Copilot", unitType: "ai-credits", grossQuantity: 1200, netAmount: 14.5 },
+    { product: "copilot", unitType: "AI-Units", grossQuantity: 300, netAmount: 0.5 },
+    // A seat's fee isn't credits.
+    { product: "Copilot", unitType: "user-months", grossQuantity: 3, netAmount: 57 },
+    { product: "Actions", unitType: "minutes", grossQuantity: 900, netAmount: 2 },
+  ] })
+  const [account] = (await stated([credential("github-copilot", { type: "oauth", access: "short", refresh: "gho_admin", expires: NOW - 1 })])).accounts
+  expect(account!.windows).toEqual([])
+  expect(account!.extras).toEqual([
+    { id: "org_credits", name: "Org Credits", kind: "spent", amount: 1500, unit: "credits" },
+    { id: "org_spend", name: "Org Spend", kind: "spent", amount: 15, unit: "usd" },
+  ])
+  expect(reads.find((read) => read.path === "/githubOrgs")!.headers.get("authorization")).toBe("token gho_admin")
+
+  // GitHub failing the organization's billing for now: what was read stays, never none.
+  answers["/githubBilling/acme/settings/billing/usage/summary"] = () => new Response("{}", { status: 503 })
+  const [kept] = (await stated([credential("github-copilot", { type: "oauth", access: "short", refresh: "gho_admin", expires: NOW - 1 })])).accounts
+  expect(kept!.extras?.map((extra) => [extra.id, extra.amount])).toEqual([["org_credits", 1500], ["org_spend", 15]])
+
+  // A member who can't read any organization's billing: the plan alone.
+  answers["/githubBilling/acme/settings/billing/usage/summary"] = () => Response.json({ message: "Must have admin rights" }, { status: 403 })
+  const [member] = (await stated([credential("github-copilot", { type: "oauth", access: "short", refresh: "gho_member", expires: NOW - 1 })])).accounts
+  expect(member!.plan).toBe("Business")
+  expect(member!.extras).toBeUndefined()
+})
+
+test("GitHub holding requests off (a 403 with retry-after) stops the look through your organizations, and the next read looks again", async () => {
+  answers["/copilot"] = () => Response.json({ copilot_plan: "business", token_based_billing: true, quota_snapshots: { premium_interactions: { entitlement: 0, remaining: 0 } } })
+  answers["/githubOrgs"] = () => Response.json([{ login: "first" }, { login: "second" }, { login: "acme" }])
+  answers["/githubBilling/first/settings/billing/usage/summary"] = () => new Response("{}", { status: 403, headers: { "retry-after": "60" } })
+  answers["/githubBilling/acme/settings/billing/usage/summary"] = () => Response.json({ usageItems: [{ product: "Copilot", unitType: "ai-credits", grossQuantity: 10, netAmount: 1 }] })
+  const read = async () => (await stated([credential("github-copilot", { type: "oauth", access: "short", refresh: "gho_held", expires: NOW - 1 })])).accounts[0]!
+  expect((await read()).extras).toBeUndefined()
+  expect(reads.filter((each) => each.path.startsWith("/githubBilling/")).map((each) => each.path.split("/")[2])).toEqual(["first"])
+  // Not taken for "none here": asked again at the next read.
+  answers["/githubBilling/first/settings/billing/usage/summary"] = () => new Response("{}", { status: 403 })
+  expect((await read()).extras?.map((extra) => extra.id)).toEqual(["org_credits", "org_spend"])
+})
+
+test("ChatGPT's credits and reset credits, read with the engine's sign-in", async () => {
+  answers["/chatgpt"] = () => Response.json({ plan_type: "plus", rate_limit: { primary_window: { used_percent: 30, limit_window_seconds: 18_000, reset_at: 1_794_200_000 } }, credits: { has_credits: true, balance: "821.9" }, rate_limit_reset_credits: { available_count: 0 } })
+  const [account] = (await stated([credential("openai", { type: "oauth", access: "chatgpt-token", expires: NOW + 3_600_000, metadata: { accountID: "acct_1" } })])).accounts
+  expect(account!.extras).toEqual([
+    { id: "credits", name: "Extra Usage", kind: "left", amount: 821, unit: "credits" },
+    { id: "resets", name: "Rate Limit Resets", kind: "resets", count: 0, usable: false },
+  ])
 })
 
 test("an API key with no plan isn't listed; a lapsed sign-in says so without asking its maker", async () => {

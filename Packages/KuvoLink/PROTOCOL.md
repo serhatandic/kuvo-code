@@ -1811,11 +1811,18 @@ folder you pick once per box, after asking you.
   with `note`, "Peers").
   - An ask goes with its bot (deleted), or after a week unanswered.
   - `GET kuvo/work/asks` and `GET kuvo/work/asks/events` (ndjson, a line now and at each change)
-    → `{asks: [{id, action: makeProject|cloneProject, session, name, bot?, project, clone?,
-    folderName, folder: string|null, suggested?, at}]}`: `session` and `name` are the
+    → `{asks: [{id, action: makeProject|cloneProject|resetLimits, session, name, bot?, project, clone?,
+    folderName, folder: string|null, suggested?, reset?, at}]}`: `session` and `name` are the
     conversation asking (a bot's own), `folderName` the folder it gets, `folder` where it would go
     (null with no projects folder yet). A bot's are in its `kuvo/work` too, as `asks`, with the
-    projects it made, as `projects`.
+    projects it made, as `projects`. `resetLimits` is any agent's `use_limit_reset` ("Plan limits",
+    "Resets"): `project` is the account's name, `folderName` empty, `folder` null, and `reset`
+    `{row, account, service, count, refills?, on?}` the account's row, how many resets it has, what
+    one refills and the computer of yours that uses it where that isn't this box, and `words`
+    `{title, body}`, what its notification says (every client says the same). One open card a
+    conversation for each account. Allow uses one;
+    Always keeps Always Allow with the account (never with the bot), then uses one; deny uses none.
+    No folder is picked.
   - `POST kuvo/work/asks/<id>` `{answer: allow|always|deny, folder?}` → `{answer, text, isError}`:
     what's asked is done there and then, `text` in the words its asker reads (`isError` when it
     couldn't be: the ask is answered all the same). `folder` picks the projects folder while none
@@ -4064,16 +4071,44 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     window whose `resetsAt` has passed has started over since: show it as not read yet, not as
     used.
   - `balance` `{left, limit?, unit}`: credits left to spend, where the account has them.
-  - `extras`: what the plan has beyond its windows, each `{id, name, kind, …}`. So far one `kind`,
-    `spent` `{amount, unit, resetsAt?}`: an amount used so far with no limit to it (`unit` `usd`,
-    `credits` or `requests`; `name` its maker's own label), Cursor's on-demand spend without a cap
-    (`on_demand`, "On-demand", its `resetsAt` the billing cycle's end where Cursor says it). #631
-    piece E grows this list with more kinds (Claude's extra usage and reset grants, Codex's credits,
-    OpenRouter's key spend by period): a client leaves out a kind it doesn't know, and one whose
-    `resetsAt` has passed (not known now, as a window), and a box from before this keeps none from a
-    peer's mail (one from now on passes a kind it doesn't know on as told, only its plain fields,
-    1 KB at most). Absent when there's none. A row's are its newest reading's that had no problem: a
-    reading without them says there are none now.
+  - `balance` with `limit`: what was bought (OpenRouter's total credits), so a client draws what's
+    left of it as a meter.
+  - `extras`: what the plan has beyond its windows, each `{id, name, kind, …}` (`name` its maker's
+    own label), by `kind` (#631 E):
+    - `spent` `{amount, unit, resetsAt?}`: an amount used so far with no limit to it (`unit` `usd`,
+      `credits` or `requests`): Cursor's on-demand spend without a cap (`on_demand`), Claude's extra
+      usage without a monthly cap (`extra_usage`), an OpenRouter key's spend (`today`, `week`,
+      `month`: "Today", "This Week", "This Month", each `resetsAt` the end of OpenRouter's UTC day,
+      week from Monday, or month), a Copilot organization's credits and spend this month for a seat
+      it pays for by the credit (`org_credits` in `credits`, `org_spend` in `usd`; only where the
+      sign-in may read that organization's billing, else none, never a zero);
+    - `capped` `{amount, limit, unit, resetsAt?}`: an amount used of a limit: Claude's extra usage
+      with its monthly cap (`extra_usage`, "Extra Usage", dollars);
+    - `left` `{amount, unit}`: an amount left to spend, with no cap: Codex's credits (`credits`,
+      "Extra Usage", whole credits);
+    - `resets` `{count, expiries?, refills?, usable, agents?}`: the plan's rate-limit resets
+      (`resets`, "Rate Limit Resets"): Claude's reset grants (read at most hourly an account, with
+      Claude Code's own request, as Anthropic offers them to no other; `refills`, the windows the
+      next one refills, `five_hour` and `seven_day`, where it says) and Codex's reset credits (the
+      Codex agent's own sign-in, its home's `auth.json`, or the engine's ChatGPT sign-in); `count`,
+      how many; `expiries`, each one's, soonest first (ms, 50 at most); `usable`, one can be used now
+      with this sign-in; `agents: true`, agents may use them without asking (Always Allow, below).
+      In a row, `usable` and `on` `{key, name, here?}` say which of your computers would use one:
+      the first of its `boxes` (this box first, one heard from before one that's away, never one a
+      peer only vouches for) whose own
+      `resets` say `usable`; none can, `usable: false` and no `on`. `agents` is that computer's.
+    - `unreadable` `{message}`: what this sign-in can't read: a Mac's Claude token can only run
+      Claude, so its extra usage and resets show only from a computer of yours signed in to Claude
+      Code with the same account (as one row, its numbers are that computer's); alone, the row
+      states this (`id` `resets`).
+    A read of them that fails keeps what was read (a failed read never states none, nor a zero).
+    A box a peer only vouches for is told an account's limits and its `resets` count, never what
+    it spends or has to spend (`spent`, `capped`, `left`, `balance`) nor `agents`/`agentsReset`.
+    A client leaves out a kind it doesn't know, and one whose `resetsAt` has passed (not known
+    now, as a window); a box keeps from a peer's mail the kinds it knows, checked, and passes a
+    kind it doesn't know on as told, only its plain fields, 1 KB at most. Absent when there's none.
+    A row's are its newest reading's that had no problem (a reading without them says there are
+    none now); with none, while none could read lately, the last read, before an `unreadable` one.
   - `checked`, when its maker last answered (with its limits or a problem; absent for an account
     only its turns tell of); `next`, when it's read again (absent for one that's never read).
   - `problem` `{kind, message, until?}` when the last read didn't work, with `windows` as last
@@ -4208,7 +4243,89 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   as asked before it's answered, so a restart meanwhile never asks again; a sign-in that lapsed or
   can't read its limits isn't asked again until it changes.
 - Agents read them with the tool `plan_limits` (read only): each account's windows, how much is
-  used, when each resets and as of when, and why one couldn't be read just now.
+  used, when each resets and as of when, what the plan has beyond them (an account with resets
+  with its row's `id`, for `use_limit_reset`), and why one couldn't be read just now.
+- **Resets** (#631 E, feature `limits.resets`): using one of an account's rate-limit resets, from
+  any client or an agent, through any box of yours.
+  - `POST kuvo/agents/api/kuvo/limits/reset {row}` → `{data: {confirm, row, service, count,
+    refills?, on, always, expires}}`: what one more ask spends (one of `count`), the computer whose
+    sign-in spends it (`on`), whether agents may without asking (`always`), and a one-time
+    `confirm` id that holds 10 minutes. Spends nothing. 404 `{message}` for no such row; 409 for a
+    row with no resets, none left, none any computer of yours can use (a Mac's Claude token alone:
+    its `unreadable` message), or one whose maker holds requests off; 503 when the computer with the
+    sign-in can't be reached.
+  - `POST … {row, confirm, by?, unasked?}` → `{data: {outcome, until?, message?, row?}}`: one reset spent,
+    once. `outcome` `reset` (done: the windows it refills start over; the account is read again at
+    once, and `row` is as it is then), `unconfirmed` (its maker took it but couldn't say it went
+    through), `nothing-to-reset` (not at a limit), `no-reset` (none to spend), `not-now` (a
+    cooldown, `until` where it says), `failed` (turned away, or nothing sent: nothing used) or
+    `unknown` (no answer came: a timeout, its maker failing, its sign-in turned away for now, the
+    computer with the sign-in not answering within 45 seconds; it may have been used); `message`
+    says it in words where it isn't `reset`. The same `confirm` again answers how it went, and never spends twice; one never given,
+    for another row, or older than 10 minutes is 404. `by`: who asked (an agent's name), for the
+    log.
+  - **Once**: a spend is written to the box's journal (`limits-resets.json` in the bridge's
+    folder, 200 at most, a month) before any request goes, with the request id its maker takes as
+    the same request (Anthropic's `request_id`, ChatGPT's `redeem_request_id`) and, once chosen,
+    what it spends (the grant Anthropic names next; the reset credit soonest to expire), also kept
+    before the request. Asked again after a crash, a lost answer or a failure, it goes as the same
+    request with the same grant or credit, and its maker answers that it's done (`already_used`,
+    `already_redeemed`) rather than spending another. `unknown` and `unconfirmed` leave it open (it
+    may have gone); every other outcome settles it, but a refusal here before anything goes (its
+    maker holding requests off, its sign-in unreadable for a moment, another account signed in)
+    leaves an open spend open, and says so. Within 10 minutes of a row's open spend, a new
+    confirmation for that row is that same spend (its request here, or its id on the peer it was
+    passed to), and two confirmations at once share one request; later (a day at most), the open
+    one is asked again first, as itself, and the new one is that one only if it was used just now
+    or still can't be told, else it goes as its own. Right before a request goes, the account
+    signed in there now (its sign-in's own identity, not as last read) must be the row's: if
+    another is, nothing is spent (`no-reset`), and the slot's earlier account's Always Allow goes
+    off (below). Claude on Linux: its token carries no claims and Claude Code's own record of the
+    sign-in can lag a new one, so Anthropic's profile is asked too, right then; its account must be
+    the record's (and its organization, where both say one), and the reset is spent with that very
+    sign-in (one signed in meanwhile never is), else nothing is spent, and nothing of
+    what's allowed changes on that (whichever of the two lags, the newly signed-in account's
+    stays). `unasked: true` marks an agent's spend under Always Allow that no one confirmed:
+    refused (`failed`) where the asking box's own decision for the row is off, and again by the box
+    that spends it unless its decision is on. A confirmation by the user that joins an open
+    `unasked` spend (or, past the 10 minutes, asks it again first) makes it the user's, here and on
+    the peer it was passed to (the same request: nothing more is spent). A peer asked to spend one follows these same rules for a new ask
+    (joining within 10 minutes, settling an older one first). A client sends the same
+    `confirm` again after a lost answer, and after `unknown` or `unconfirmed`; a 404 then (the box no
+    longer knows it) asks anew.
+  - **On the computer with the sign-in**: a box whose own sign-in can't spend it passes it to
+    `on`, a peer of yours (never a box a peer vouches for), as `{"seat": {"kind": "reset", at, ask:
+    {id, row, by?}}}`, and answers when that one does (`{"seat": {"kind": "reset", at, answer: {id,
+    outcome, until?, already?, open?, message?}}}`: `already`, its maker said this request was done
+    before; `open`, the spend stays open there, so it stays open here too), or `unknown` after 45
+    seconds (asked again, with the same `confirm` or a new one for that row, it's asked there again
+    under the same id, which that box's journal answers once). An open one that can't be passed
+    there now stays open (`not-now`, saying an earlier try may have gone); a new one that can't is
+    never kept. A box takes a
+    reset's mail only from your own computers; its link drops it from a box a peer vouches for.
+  - **Always Allow**: `PUT kuvo/agents/api/kuvo/limits/reset/always {provider | row, always}`:
+    agents may (or may not) use an account's resets without asking. It's the account's, by who it
+    is (its row `<service>#<identity>`; 409 for one that doesn't say who it is yet): each decision
+    stamped with when it was made and kept in the journal (`allowed`, by row, whether or not the box
+    knows the account yet) on every computer of yours with its sign-in, here (`provider`, as
+    Settings › Accounts names it here, or the `row`) and on the others among its row's `boxes`,
+    told to every computer of yours as `{"seat": {"kind": "reset", at, always: {row, on, at}}}` mail
+    that's kept until it's there; a decision older than the one kept is ignored, and of two stamped
+    the same, an off holds. One made here (by `PUT`, or a slot signed in to another account since,
+    which turns its earlier account's off, so coming back asks again) is stamped after any this box
+    knows of, so it's always kept here, and told. What that leaves: a decision made on a computer
+    that hadn't yet heard an opposite one made elsewhere (the mail on its way, or one of the two
+    off the relay) is ordered by the two computers' clocks, so within as much as their clocks
+    differ, the one stamped later holds, whichever was made later. Stated as
+    `agents: true` on its `resets`, and as `agentsReset: true` on the account in this box's own
+    `accounts` whether or not it has resets now (so a client can turn it off). Answering a card
+    Always while the computer with the sign-in is away keeps it all the same; no reset is used then.
+  - **The agents' tool** `use_limit_reset {account}` (an account's row `id`, or its name as
+    `plan_limits` says it): asks the user first, every time, on the permission card in the calling
+    conversation (`kuvo/work/asks`, action `resetLimits`, "Work"), unless its account's `always` is
+    set; Allow uses one; Always Allow sets `always` first, then uses one; Don't uses none. Its answer
+    says how it went with the account's limits after. Every use is in the conversation (the tool's
+    call) and the bridge's log.
 - Times are ms since 1970.
 
 ### Usage history
@@ -5316,6 +5433,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `keys` | `kuvo/keys…` |
 | `letters-read` | (in a peer's agents' mail) it takes a letter with `read` (bridge 0.9.100) |
 | `limits` | `kuvo/agents/api/kuvo/limits…` and `plan_limits`: each account's plan limits ("Plan limits") |
+| `limits.resets` | `kuvo/agents/api/kuvo/limits/reset…` and `use_limit_reset`: using a plan's resets, once, on the computer with its sign-in ("Plan limits", "Resets") |
 | `mac` | a Mac only: `kuvo/mac` |
 | `machines` | a Mac only: `kuvo/machines…` (with its app closed its box still lists them, and the rest says the app must be open) |
 | `mcp.catalog` | `kuvo/mcp/catalog…` |

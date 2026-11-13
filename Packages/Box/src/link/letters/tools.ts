@@ -4,7 +4,8 @@
 // (start_session), and run the sessions it started as you would (list_sessions, stop_session, compact_session,
 // answer_ask, list_models, make_project, list_projects: `work/tools.ts`, PROTOCOL.md "Work"; and a bot's
 // goal: propose_goal, goal_progress, may_spend, finish_goal, "Work › Goals"; and telling you something on
-// purpose, notify_user, `notices/notify.ts`; and the rest of Kuvo Code's own: wake-ups, a bot's job and
+// purpose, notify_user, `notices/notify.ts`; a plan's limits, plan_limits, and using one of its
+// resets, use_limit_reset, with your OK, `work/plan-reset.ts`; and the rest of Kuvo Code's own: wake-ups, a bot's job and
 // the show tools' checks, `own-tools.ts`). Every box answers them alike (`POST kuvo/agent-tools`): this
 // Mac's app and keeper, and a machine's kuvo-browser.js, only pass the call on. A message reaches its conversation as input that
 // says who sent it, and the agent there takes it up; with `wait`, the sender gets its answer back.
@@ -31,7 +32,8 @@ import { answerTo } from "./take";
 import { noteOversightBy } from "../work/oversight";
 import { notifyUserTool } from "../notices/notify";
 import { planLimitsTool } from "../work/plan-limits";
-import { answerAskTool, describeList, finishGoalTool, goalProgressTool, leadOf, listModelsTool, listProjectsTool, liveRows, makeProjectTool, maySpendTool, proposeGoalTool, compactSessionTool, stopSessionTool } from "../work/tools";
+import { useResetTool } from "../work/plan-reset";
+import { answerAskTool, askReset, describeList, finishGoalTool, goalProgressTool, leadOf, listModelsTool, listProjectsTool, liveRows, makeProjectTool, maySpendTool, proposeGoalTool, compactSessionTool, stopSessionTool } from "../work/tools";
 import { under, workSessions } from "../work/tree";
 import { rowsBox } from "../work/elsewhere";
 import { awaySince } from "../peers/reach";
@@ -61,7 +63,7 @@ export interface ToolPlace {
 }
 
 /** The tools, by name. */
-export const AGENT_TOOLS = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "compact_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal", "notify_user", "plan_limits", ...WAKE_TOOLS, "set_job", ...SHOW_TOOLS] as const;
+export const AGENT_TOOLS = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "compact_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal", "notify_user", "plan_limits", "use_limit_reset", ...WAKE_TOOLS, "set_job", ...SHOW_TOOLS] as const;
 export type AgentToolName = (typeof AGENT_TOOLS)[number];
 export const isAgentTool = (name: unknown): name is AgentToolName => AGENT_TOOLS.includes(name as AgentToolName);
 
@@ -346,6 +348,11 @@ export async function agentTool(name: AgentToolName, args: Record<string, unknow
     }
     case "plan_limits":
       return planLimitsTool(place.bridge(), place.signal);
+    case "use_limit_reset": {
+      // Asked of the user first, on the card in the conversation (unless Always Allow for that account).
+      const caller = root ? { ...root, name: nameOf(root.session, all) } : null;
+      return useResetTool(place.bridge(), args, caller, given => askReset(caller!, given, { signal: place.signal, ...(place.step ? { every: place.step } : {}) }), place.signal);
+    }
     case "make_project": {
       if (!root) return refused("Only a conversation on this computer makes projects here.");
       return makeProjectTool({ ...root, name: nameOf(root.session, all) }, args, { signal: place.signal, ...(place.step ? { every: place.step } : {}) });

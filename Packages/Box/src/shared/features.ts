@@ -81,6 +81,7 @@ export const FEATURES = [
   "keys",
   "letters-read",
   "limits",
+  "limits.resets",
   "mcp.catalog",
   "messages.send",
   "models.offered",

@@ -100,7 +100,9 @@ final class ClaudeResetClaimTests: XCTestCase {
         let provider = makeProvider(http: http)
         _ = await provider.refresh()
         let service = ClaudeResetClaimService(provider: provider)
-        XCTAssertTrue(service.isClaimable)
+        // (Never offered from the panel since #631 E: the box uses resets. The claim below is the
+        // provider's own, as it was.)
+        XCTAssertFalse(service.isClaimable)
 
         let outcome = await service.claim(creditExpiringAt: Self.start, redeemRequestID: Self.requestID)
 

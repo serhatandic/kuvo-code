@@ -157,7 +157,11 @@ struct UsageBarsView: View {
                 links: provider.visibleLinks,
                 refresh: hostLimits.refresh,
                 toggleMeterStyle: { dataStore.meterStyle.toggle() },
-                toggleResetDisplay: { dataStore.resetDisplayMode.toggle() }
+                toggleResetDisplay: { dataStore.resetDisplayMode.toggle() },
+                // Its resets (and what its login can't read), after its own rows, before the panel's spend.
+                resets: row.resets.map { ($0, hostLimits.resetFlow(for: row.id)) },
+                unreadable: row.resets == nil ? row.unreadable : nil,
+                extrasEnd: HostLimitData.rows(row, store: dataStore).count
             )
             .padding(.vertical, 4)
         }
@@ -166,7 +170,9 @@ struct UsageBarsView: View {
     /// The meter a host row's bar shows, as the panel's own pick it.
     private func hostReading(_ row: HostLimitRow) -> WidgetData? {
         let rows = HostLimitData.rows(row, store: dataStore)
-        let meters = rows.filter(\.isBounded)
+        // The plan's limits, not what it has beyond them (Claude's extra usage cap), where it has any.
+        let limits = rows.filter { data in data.isBounded && row.meters.contains { $0.title == data.title } }
+        let meters = limits.isEmpty ? rows.filter(\.isBounded) : limits
         switch barMetric {
         case .first: return meters.first ?? rows.first
         case .tightest: return meters.min { $0.remainingFraction < $1.remainingFraction } ?? rows.first

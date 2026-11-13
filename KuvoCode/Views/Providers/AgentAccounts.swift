@@ -1,3 +1,4 @@
+import ClientAccounts
 import ClientDesign
 import OpenCodeKit
 import SwiftUI
@@ -664,6 +665,7 @@ private struct AgentAccountRow: View {
                     problem: ended ? AccountProblem.signInEnded.text : limit.map { AccountProblem.atLimit(until: $0).text },
                     signIn: account.isConnected ? nil : connect) {
             HeldRow.button("Sign In Again…", action: connect)
+            agentsUseResetsRow(account.id, machine: catalog.machine, app: app, failure: $failure)
             if isAdded {
                 HeldRow.button("Rename…") {
                     name = label ?? ""
@@ -774,6 +776,7 @@ private struct PlanAccountRow: View {
                     badge: isInUse && !isOnly ? "In use" : nil,
                     isWorking: isInUse && catalog.refreshingModels[plan.id] != nil) {
             if connection.type == "credential" {
+                if isInUse { agentsUseResetsRow(plan.id, machine: catalog.machine, app: app, failure: $failure) }
                 if !isInUse, let id = connection.credentialID {
                     HeldRow.button("Use This Account") {
                         change { try await app.reachableAPI(for: box).activateCredential(id) }
@@ -904,6 +907,25 @@ private struct AccountLine: View {
         .frame(minHeight: 30)
         .contentShape(.rect)
         .heldContextMenu(menu)
+    }
+}
+
+/// Always Allow for an account's rate-limit resets (Claude's reset grants, Codex's reset
+/// credits), where its box says it has them: checked, agents use them without asking first (each use
+/// still shows in its conversation); unchecked, every use asks on the card. Kept with the account on
+/// the box whose page this is (`kuvo/agents/api/kuvo/limits/reset/always`).
+@MainActor @HeldRows func agentsUseResetsRow(_ provider: String, machine: String?, app: AppModel, failure: Binding<String?>) -> [HeldRow] {
+    if let resets = app.planLimits.resets(of: provider, on: machine) {
+        HeldRow.button("Agents Use Resets Without Asking", checked: resets.agents,
+                       help: resets.agents ? "Agents use this account's rate-limit resets without asking. Each use still shows in its conversation." : "Agents ask before they use one of this account's rate-limit resets.") {
+            Task {
+                do {
+                    try await app.planLimits.setAgentsUseResets(!resets.agents, provider: provider, machine: machine)
+                } catch {
+                    failure.wrappedValue = error.localizedDescription
+                }
+            }
+        }
     }
 }
 
