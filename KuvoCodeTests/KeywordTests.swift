@@ -692,6 +692,8 @@ import Testing
         defer { clean() }
         serve(directory: "/tmp", answers: [])
         engine.on("POST", "/api/session/\(id)/prompt", json: ["data": [:]])
+        // (Its commands, as an engine lists them: none of them is "/tmp".)
+        engine.on("GET", "/api/command", json: ["data": []])
         let model = try session()
         let bridge = try await start(model)
         defer { bridge.stop() }
