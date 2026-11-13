@@ -94,6 +94,7 @@ import Testing
             "CFBundleIdentifier": Self.app, "CFBundleName": "Kuvo Code", "CFBundleExecutable": "Kuvo Code", "CFBundlePackageType": "APPL",
             "CFBundleShortVersionString": "0.0.4", "CFBundleVersion": "4", "LSMinimumSystemVersion": "26.0",
             "NSCalendarsFullAccessUsageDescription": "The agent reads your calendar when you've turned it on.",
+            "NSMicrophoneUsageDescription": "Kuvo Code listens while you talk.",
         ]
         try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0).write(to: contents.appending(path: "Info.plist"))
         try Data("icon".utf8).write(to: contents.appending(path: "Resources/AppIcon.icns"))
@@ -670,11 +671,13 @@ import Testing
         #expect(info["LSUIElement"] as? Bool == true)
         #expect(info["CFBundleShortVersionString"] as? String == "0.0.4")
         #expect(info["NSCalendarsFullAccessUsageDescription"] as? String == "The agent reads your calendar when you've turned it on.")
+        #expect(info["NSMicrophoneUsageDescription"] as? String == "Kuvo Code listens while you talk.")
         #expect(text(helperInApp.appending(path: "Contents/Resources/AppIcon.icns")) == "icon")
         let signature = try Self.ran("/usr/bin/codesign", ["-d", "--verbose=2", "--entitlements", "-", helperInApp.path])
         #expect(signature.errors.contains("Identifier=\(Self.helperID)"))
         #expect(signature.errors.contains("runtime"), "the hardened runtime, as notarizing asks")
         #expect(signature.output.contains("com.apple.security.personal-information.calendars"))
+        #expect(signature.output.contains("com.apple.security.device.audio-input"), "the microphone, as the app's keeper has it")
         #expect(BoxHelperBundle.isGenuine(helperInApp, identifier: Self.helperID, signer: .adHoc, adHocMatch: true))
         #expect(!BoxHelperBundle.isGenuine(helperInApp, identifier: Self.helperID, signer: .adHoc), "ad hoc, only what's proved this very build")
         #expect(!BoxHelperBundle.isGenuine(helperInApp, identifier: Self.helperID, signer: nil), "nothing when who signed this can't be told")

@@ -6,5 +6,8 @@
 	     and Reminders integration's server, under it, reads them as the app's did. -->
 	<key>com.apple.security.personal-information.calendars</key>
 	<true/>
+	<!-- And the microphone, as the app's keeper has it today, for what an agent's command records. -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
 </dict>
 </plist>

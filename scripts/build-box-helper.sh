@@ -63,7 +63,7 @@ put CFBundleIconFile string AppIcon
 put LSMinimumSystemVersion string "$(plist LSMinimumSystemVersion)"
 put LSUIElement bool YES
 # What macOS says as it asks, for what the box's agents and integrations reach (the app's words).
-for key in NSCalendarsFullAccessUsageDescription NSRemindersFullAccessUsageDescription NSHumanReadableCopyright; do
+for key in NSCalendarsFullAccessUsageDescription NSRemindersFullAccessUsageDescription NSMicrophoneUsageDescription NSHumanReadableCopyright; do
     value=$(plist "$key")
     [ -z "$value" ] || put "$key" string "$value"
 done
