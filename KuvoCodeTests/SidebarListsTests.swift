@@ -98,6 +98,23 @@ import Testing
         #expect(workspace.chats.map(\.id) == ["s_chat"])
     }
 
+    /// Settings › Storage's Delete Old Sessions offers only what its box calls people's
+    /// conversations: never a bot's (one this Mac doesn't know is a bot's yet, too) nor a seat, however
+    /// long they've been quiet, as deleting one would end the bot's conversation or the group's seat.
+    @Test func deletingOldSessionsLeavesBotsAndSeats() async throws {
+        defer { done() }
+        sessions.add(Self.session("s_bot", in: "/tmp/kuvo-tests/web", updated: 5))
+        var seat = Self.session("s_seat", in: "/tmp/kuvo-tests/web", updated: 6)
+        seat["metadata"] = ["kuvo": ["seat": ["group": "g"]]]
+        sessions.add(seat)
+        listing.change { $0.botSessions = ["s_bot"] }
+        await workspace.refresh()
+        let kind = { (id: String) in workspace.session(id).flatMap { workspace.listKind(of: $0) } }
+        try await until { kind("s_bot") == .bot && kind("s_seat") == .seat }
+        // (Older than 45 ms since 1970: all but the archived one, the bot's and the seat left out.)
+        #expect(workspace.oldSessions(unusedSince: 45, keepsPinned: true).map(\.id) == ["s_web_old", "s_chat", "s_api"])
+    }
+
     /// A chat is drawn as its box marks it (#571, `kuvo.chat`): in the chats, named Chats, whatever
     /// its folder is called there, and never a project of its own. One from a box from before the
     /// mark (`s_chat`) is still a chat by its folder.

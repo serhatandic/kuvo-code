@@ -486,16 +486,9 @@ private struct OldSessions: View {
     /// Why some couldn't be deleted, the last time: they stay listed.
     @State private var failure: String?
 
-    /// This Mac's sessions, not a machine's, unused for the chosen time. Not a bot's conversation
-    /// (the bot lives on in it, wake-ups and all, however long it's been quiet), nor one with a
-    /// message you started writing.
+    /// This Mac's sessions unused for the chosen time (`Workspace.oldSessions`).
     private var old: [Session] {
-        let cutoff = (Date.now.timeIntervalSince1970 - Double(days) * 86_400) * 1000
-        let bots = workspace.botSessions
-        return workspace.sessions
-            .filter { $0.time.updated < cutoff && !RemoteFolder.isRemote($0.location.directory) && !(keepsPinned && Workspace.isPinned($0)) && !workspace.running.contains($0.id) }
-            .filter { !bots.contains($0.id) && !Workspace.isBotFolder($0.location.directory) && Drafts.shared[$0.id].isEmpty }
-            .sorted { $0.time.updated < $1.time.updated }
+        workspace.oldSessions(unusedSince: (Date.now.timeIntervalSince1970 - Double(days) * 86_400) * 1000, keepsPinned: keepsPinned)
     }
 
     var body: some View {

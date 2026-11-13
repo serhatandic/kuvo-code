@@ -339,6 +339,30 @@ final class Workspace {
         return Self.isChat(session) ? .chat : .project(projectDirectory(of: session))
     }
 
+    /// A session `box` just made, shown at once where its start answer says (in Chats, or in the
+    /// project it names, else `project`'s), until its list says. (A box not listed yet: its sessions
+    /// show as last filed, this one with them.)
+    private func noteMade(_ session: Session, as started: SessionStart.Started, in project: String, on box: String) {
+        guard var listing = sessionLists[box] else { return }
+        let filed = started.project ?? started.worktree?.project ?? Self.onBox(projectDirectory(project))
+        listing.noteMade(session.id, facts: .init(kind: started.isChat ? .chat : .project, project: started.isChat ? nil : filed, directory: Self.onBox(session.location.directory),
+                                                  title: session.title, created: session.time.created, updated: session.time.updated))
+        sessionLists[box] = listing
+    }
+
+    /// This Mac's sessions, not a machine's, unused since `cutoff` (ms), oldest first: what Settings ›
+    /// Storage offers to delete. Only those its box lists as people's conversations (a project's, a
+    /// chat) or runs kept out of sight: never a bot's (the bot lives on in it, wake-ups and all,
+    /// however long it's been quiet), a seat or a subagent's, nor one its box hasn't listed; nor one
+    /// at work, one with a message you started writing, or (`keepsPinned`) one pinned.
+    func oldSessions(unusedSince cutoff: Double, keepsPinned: Bool) -> [Session] {
+        let deletable: Set<SessionLists.Kind> = [.project, .chat, .hidden]
+        return sessions
+            .filter { $0.time.updated < cutoff && !RemoteFolder.isRemote($0.location.directory) && !(keepsPinned && Self.isPinned($0)) && !running.contains($0.id) }
+            .filter { listKind(of: $0).map(deletable.contains) == true && Drafts.shared[$0.id].isEmpty }
+            .sorted { $0.time.updated < $1.time.updated }
+    }
+
     /// What `session` is, as its box says; nil for one it hasn't listed.
     func listKind(of session: Session) -> SessionLists.Kind? {
         sessionLists[Self.box(of: session.location.directory)]?.facts(of: session.id)?.kind
@@ -524,7 +548,11 @@ final class Workspace {
     }
 
     private func isHidden(_ session: Session) -> Bool {
-        seats.contains(session.id) || HiddenSessions.isHidden(session)
+        // As its box says, where it has listed it (a subagent's own kind says nothing of it: a
+        // review's part is one too); else as it's marked.
+        if seats.contains(session.id) { return true }
+        if session.parentID == nil, let kind = listKind(of: session) { return kind == .hidden || kind == .seat }
+        return HiddenSessions.isHidden(session)
     }
 
     /// The engine's session for a model of the engine's run in a session with the agents (Auto's,
@@ -1112,11 +1140,19 @@ final class Workspace {
     /// The name of the project a session is filed under, as its box says (an archived one's too);
     /// one that's in none (a bot's, a subagent's) by its folder.
     func projectName(of session: Session) -> String {
-        let box = Self.box(of: session.location.directory)
-        let facts = sessionLists[box]?.facts(of: session.id)
-        if facts?.kind == .chat { return "Chats" }
-        let directory = facts?.project.map { Self.here($0, on: box) } ?? session.location.directory
+        guard let directory = listedProject(of: session) else { return "Chats" }
         return settings[directory]?.name ?? (directory as NSString).lastPathComponent
+    }
+
+    /// The project `session` is filed under (its folder as named here), archived or not: as its box
+    /// says, nil for a chat, its own folder for one its box hasn't listed; for a machine its box
+    /// hasn't answered for since this update, as this Mac filed it before (`lastFiled`).
+    func listedProject(of session: Session) -> String? {
+        let box = Self.box(of: session.location.directory)
+        guard let listing = sessionLists[box] else { return Self.isChat(session) ? nil : projectDirectory(of: session) }
+        let facts = listing.facts(of: session.id)
+        if facts?.kind == .chat { return nil }
+        return facts?.project.map { Self.here($0, on: box) } ?? session.location.directory
     }
 
     /// Adds a project, or updates one, and gives its open sessions the new folders.
@@ -1247,6 +1283,7 @@ final class Workspace {
                 // (Its box told it it works there.)
                 toldWorktree.insert(session.id)
             }
+            noteMade(session, as: started, in: directory, on: boxID)
             upsert(session)
             trackCreated(session, model: model, agent: agent, approval: session.metadata?["kuvo"]?["applied"]?.string ?? "default", worktree: worktree)
             return session
