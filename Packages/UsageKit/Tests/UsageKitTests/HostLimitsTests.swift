@@ -210,6 +210,23 @@ final class HostLimitsTests: XCTestCase {
         XCTAssertEqual(applied["openrouter"]?.lines.first?.label, "Mine")
     }
 
+    /// The credits a row has go on the card only where the card reads nothing of its own (Cursor's):
+    /// OpenRouter's card keeps its own credits meter, not the box's credits left in its place.
+    func testOnlyACardThatReadsNothingTakesTheRowsCredits() {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let limits = HostLimits()
+        limits.update(rows: [
+            HostLimitRow(id: "this Mac/openrouter", providerID: "openrouter", name: "OpenRouter", meters: [HostLimitRow.Meter(title: "Key limit", fraction: 0.1)],
+                         balance: .init(left: 12.5, unit: "usd"), readAt: now, isOwnLogin: true),
+            HostLimitRow(id: "cursor#aaaaaaaaaaaaaaaa", providerID: "cursor", name: "Cursor", meters: [HostLimitRow.Meter(title: "Total usage", fraction: 0.25)],
+                         balance: .init(left: 18, unit: "usd"), readAt: now, isOwnLogin: true),
+        ], covered: ["openrouter", "cursor"])
+        let snapshot = { (id: String) in ProviderSnapshot.make(provider: Provider(id: id, displayName: id, icon: .providerMark(id)), plan: nil, lines: [], refreshedAt: now) }
+        let applied = limits.applied(to: ["openrouter": snapshot("openrouter"), "cursor": snapshot("cursor")], now: now)
+        XCTAssertEqual(applied["openrouter"]?.lines.map(\.label), ["Key limit"])
+        XCTAssertEqual(applied["cursor"]?.lines.map(\.label), ["Total usage", "Credits"])
+    }
+
     func testClaudesBarSaysWhenItsLimitsWillShowWhileThisMacHasNone() async throws {
         let now = OpenUsageISO8601.date(from: "2026-02-20T16:00:00.000Z")!
         let provider = ClaudeProvider(

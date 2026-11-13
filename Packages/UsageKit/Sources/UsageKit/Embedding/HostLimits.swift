@@ -135,8 +135,9 @@ public final class HostLimits {
     }
 
     /// A covered provider's limits as the panel's own lines, from this Mac's own login's row; nil
-    /// with none, or none read in the last half hour. Its credits left, where it has them, as a
-    /// `Credits` line (Cursor's).
+    /// with none, or none read in the last half hour. For a card that reads nothing of its own
+    /// (`limitsOnlyFromHost`: Cursor's), its credits left too, as its `Credits` line; another
+    /// card's credits are its own (OpenRouter's is a meter of what's used).
     func lines(for providerID: String, now: Date = .now) -> (lines: [MetricLine], plan: String?, readAt: Date?, notice: String?)? {
         guard let row = ownRow(for: providerID) else { return nil }
         if let readAt = row.readAt, now.timeIntervalSince(readAt) > Self.outdated { return nil }
@@ -149,7 +150,7 @@ public final class HostLimits {
             return .progress(label: meter.title, used: ProviderParse.clampPercent(meter.fraction * 100), limit: 100, format: .percent,
                              resetsAt: meter.resetsAt, periodDurationMs: meter.periodMinutes.map { $0 * 60_000 })
         }
-        if let balance = row.balance, balance.unit == "usd" {
+        if Self.limitsOnlyFromHost.contains(ProviderAccountID.family(of: providerID)), let balance = row.balance, balance.unit == "usd" {
             lines.append(.values(label: "Credits", values: [MetricValue(number: balance.left, kind: .dollars)]))
         }
         return (lines, row.plan, row.readAt, row.notice)
@@ -165,9 +166,7 @@ public final class HostLimits {
         for (id, snapshot) in snapshots {
             guard let host = lines(for: id, now: now) else { continue }
             var applied = snapshot
-            // (The card's own credits, where it reads them, rather than the host's again.)
-            let own = snapshot.lines.filter { if case .progress = $0 { false } else { true } }
-            applied.lines = host.lines.filter { line in !(line.label == "Credits" && own.contains { $0.label == "Credits" }) } + own
+            applied.lines = host.lines + snapshot.lines.filter { if case .progress = $0 { false } else { true } }
             applied.plan = host.plan ?? snapshot.plan
             applied.warning = host.notice
             applied.errorCategory = nil
