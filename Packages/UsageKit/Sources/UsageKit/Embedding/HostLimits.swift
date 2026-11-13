@@ -373,15 +373,24 @@ public struct HostResetOffer: Sendable, Hashable {
     }
 }
 
-/// How using a reset went: done, or why not in words.
+/// How using a reset went: done, or why not in words; `stillOpen`, it may have gone (the box keeps
+/// it open: asked again with the same confirmation, it's the same request).
 public struct HostResetDone: Sendable, Hashable {
     public var succeeded: Bool
     public var message: String?
+    public var stillOpen: Bool
 
-    public init(succeeded: Bool, message: String? = nil) {
+    public init(succeeded: Bool, message: String? = nil, stillOpen: Bool = false) {
         self.succeeded = succeeded
         self.message = message
+        self.stillOpen = stillOpen
     }
+}
+
+/// The host's box doesn't know a confirmation any more (it expired, or the box started again before
+/// it was used): Retry asks anew.
+public struct HostResetExpired: Error {
+    public init() {}
 }
 
 /// One row's reset being used, as its resets row and the confirmation in place under it draw it:
@@ -403,6 +412,9 @@ final class HostResetFlow {
     /// (Set only by this flow, and by pictures of its states.)
     var phase: Phase = .idle
     @ObservationIgnored private weak var limits: HostLimits?
+    /// A confirmation sent whose answer didn't come back, or that may have gone: Retry sends it
+    /// again (the box's journal makes it the same request), never a new one.
+    @ObservationIgnored private(set) var sent: HostResetOffer?
     /// How long "done" shows before the row is as it was.
     @ObservationIgnored var doneFor: Duration = .seconds(3)
 
@@ -418,6 +430,12 @@ final class HostResetFlow {
     @discardableResult
     func begin() -> Task<Void, Never>? {
         guard phase == .idle || phase == .done || isFailed, let ask = limits?.askReset else { return nil }
+        // One sent that may have gone: the same again.
+        if isFailed, let sent {
+            phase = .confirming(sent)
+            return confirm()
+        }
+        sent = nil
         phase = .asking
         return Task {
             do {
@@ -437,17 +455,26 @@ final class HostResetFlow {
     func confirm() -> Task<Void, Never>? {
         guard case .confirming(let offer) = phase, let use = limits?.useReset else { return nil }
         phase = .using
+        sent = offer
         return Task {
             do {
                 let done = try await use(row, offer.confirm)
                 guard done.succeeded else {
+                    if !done.stillOpen { sent = nil }
                     phase = .failed(done.message ?? "Didn't go through. Nothing was used.")
                     return
                 }
+                sent = nil
                 phase = .done
                 try? await Task.sleep(for: doneFor)
                 if phase == .done { phase = .idle }
+            } catch is HostResetExpired {
+                // (Not known there now: a new confirmation, asked for at once.)
+                sent = nil
+                phase = .idle
+                await begin()?.value
             } catch {
+                // No answer came back: it may have gone, and Retry sends the same confirmation.
                 phase = .failed(error.localizedDescription)
             }
         }

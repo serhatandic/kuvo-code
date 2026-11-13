@@ -15,7 +15,7 @@ struct PlanResetsTests {
          {"id": "extra_usage", "name": "Extra Usage", "kind": "capped", "amount": 12.4, "limit": 50, "unit": "usd", "resetsAt": 1795000000000},
          {"id": "resets", "name": "Rate Limit Resets", "kind": "resets", "count": 2, "expiries": [1794600000000, 1795000000000], "refills": ["five_hour", "seven_day"], "usable": true, "on": {"key": "key-hetzner", "name": "hetzner"}}
        ], "boxes": []},
-      {"id": "codex#bbbb", "provider": "codex-cli", "service": "codex", "agent": "codex", "account": "default", "windows": [],
+      {"id": "codex#bbbb", "provider": "codex-cli", "service": "codex", "agent": "codex", "account": "default", "windows": [], "agentsReset": true,
        "extras": [
          {"id": "credits", "name": "Extra Usage", "kind": "left", "amount": 1240, "unit": "credits"},
          {"id": "resets", "name": "Rate Limit Resets", "kind": "resets", "count": 1, "usable": true, "agents": true, "on": {"key": "", "name": "", "here": true}},
@@ -52,6 +52,7 @@ struct PlanResetsTests {
         #expect(codex.extras[0].unit == "credits")
         #expect(codex.resets?.on?.here == true)
         #expect(codex.resets?.agents == true)
+        #expect(codex.agentsReset && !claude.agentsReset)
 
         #expect(openrouter.balance == .init(left: 7.7, limit: 50, unit: "usd"))
         #expect(openrouter.extras.map(\.name) == ["Today", "This Week"])
@@ -72,6 +73,8 @@ struct PlanResetsTests {
         #expect(!offer.on.here)
         #expect(offer.expires == Date(timeIntervalSince1970: 1_794_600_000))
 
+        let open = try JSONDecoder().decode(Envelope<ResetDone>.self, from: Data(#"{"data": {"outcome": "unconfirmed", "message": "It may still be going through: check again in a minute."}}"#.utf8)).data
+        #expect(open.stillOpen && !open.succeeded)
         let done = try JSONDecoder().decode(Envelope<ResetDone>.self, from: Data(#"{"data": {"outcome": "nothing-to-reset", "message": "Nothing to reset: this account isn't at a limit. Nothing was used."}}"#.utf8)).data
         #expect(!done.succeeded)
         #expect(ResetWords.failure(done) == "Nothing to reset: this account isn't at a limit. Nothing was used.")

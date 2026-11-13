@@ -1326,7 +1326,14 @@ async function spendReset(bridge, row, by, { always = false, signal } = {}) {
   try {
     if (always)
       await call(bridge, "PUT", "/api/kuvo/limits/reset/always", { row, always: true }, signal);
-    const offer = await call(bridge, "POST", "/api/kuvo/limits/reset", { row }, signal);
+    let offer;
+    try {
+      offer = await call(bridge, "POST", "/api/kuvo/limits/reset", { row }, signal);
+    } catch (error) {
+      if (always && error?.status === 503)
+        return refused(`Always Allow is kept for this account. ${why(error)} So no reset was used now: ask again once it's back.`);
+      throw error;
+    }
     if (!isObject(offer) || typeof offer.confirm !== "string")
       return refused("The reset couldn't be asked for.");
     const done = await call(bridge, "POST", "/api/kuvo/limits/reset", { row, confirm: offer.confirm, by }, signal);
@@ -10923,6 +10930,7 @@ var WORK_ASK = object({
   folder: nullable(string),
   "suggested?": string,
   "reset?": object({ row: string, account: string, service: string, count: number, "refills?": list(string), "on?": string }),
+  "words?": object({ title: string, body: string }),
   at: number
 });
 var WORK_ASKS = object({ asks: list(WORK_ASK) });
@@ -32424,7 +32432,7 @@ function workAsks(file = WORK_ASKS2) {
   return readKept5(file).filter((each) => !each.answered && (!each.bot || botHere(each.bot))).map((kept) => {
     const { given: _, late: __, answering: ____, answered: ___, toldLate: _____, ...listed } = kept;
     if (kept.action === "resetLimits")
-      return { ...listed, folder: null };
+      return { ...listed, folder: null, ...kept.reset ? { words: resetAskWords(kept.name, kept.reset) } : {} };
     const root = projectsFolder();
     const named = kept.given?.folder;
     const folder = named ?? projectPlace(listed.project, root);
@@ -32461,7 +32469,7 @@ function allowAlways(bot, action) {
 }
 function askWork(asker, action, given, file = WORK_ASKS2) {
   const ask = changeKept2((asks) => {
-    const same = asks.find((each) => !each.answered && each.session === asker.session && each.action === action && each.project.toLowerCase() === given.name.toLowerCase());
+    const same = asks.find((each) => !each.answered && each.session === asker.session && each.action === action && (action === "resetLimits" ? each.given?.reset?.row === given.reset?.row : each.project.toLowerCase() === given.name.toLowerCase()));
     if (same) {
       delete same.late;
       return same;
@@ -40015,7 +40023,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "31ce47e403d8";
+var BRIDGE_VERSION = "7dc665d8f21b";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";

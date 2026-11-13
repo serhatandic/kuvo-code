@@ -309,8 +309,8 @@ async function organizationCredits(secret: string, now: number): Promise<LimitEx
   const read = async (org: string): Promise<LimitExtra[] | null | undefined> => {
     try {
       const response = await fetch(`${engineEndpoints.githubBilling}/${encodeURIComponent(org)}/settings/billing/usage/summary`, { headers: githubHeaders(secret), signal: AbortSignal.timeout(15_000) })
-      // (Turned away, or not found: not this organization's. A 429 or worse: not now.)
-      if (response.status === 429 || response.status >= 500) return undefined
+      // (Turned away, or not found: not this organization's. Held off, or failing: not now.)
+      if (notNow(response)) return undefined
       if (!response.ok) return null
       return billingExtras(await response.json())
     } catch {
@@ -332,7 +332,9 @@ async function organizationCredits(secret: string, now: number): Promise<LimitEx
   let orgs: string[]
   try {
     const response = await fetch(engineEndpoints.githubOrgs, { headers: githubHeaders(secret), signal: AbortSignal.timeout(15_000) })
-    // (A sign-in without `read:org` is turned away: nothing to look through.)
+    // (Held off: looked at again at the next read. A sign-in without `read:org` is turned away:
+    // nothing to look through.)
+    if (notNow(response)) return known?.extras
     if (!response.ok) {
       billingOrgs.set(key, { none: now })
       return undefined
@@ -352,6 +354,15 @@ async function organizationCredits(secret: string, now: number): Promise<LimitEx
   }
   billingOrgs.set(key, { none: now })
   return undefined
+}
+
+/**
+ * GitHub saying not now rather than no: a 429, a failure, or a 403 that's its rate limit (a
+ * `retry-after`, or none of the hour's requests left), as GitHub's secondary limits answer.
+ */
+function notNow(response: Response): boolean {
+  if (response.status === 429 || response.status >= 500) return true
+  return response.status === 403 && (response.headers.has("retry-after") || response.headers.get("x-ratelimit-remaining") === "0")
 }
 
 /** A billing summary's Copilot credits and what they cost beyond those included; null where it has none. */

@@ -250,6 +250,8 @@ export interface AccountLimits {
   windows: LimitWindow[]
   balance?: LimitReading["balance"]
   extras?: LimitExtra[]
+  /** Agents may use its resets without asking (Always Allow, kept with it here), whether or not it has resets now. */
+  agentsReset?: true
   /** When it was last read from its maker, whatever came of it, in ms. */
   checked?: number
   /** When it will be read again, in ms. */
@@ -423,6 +425,7 @@ export class Limits {
         windows: entry.windows,
         ...(entry.balance ? { balance: entry.balance } : {}),
         ...(extrasOf(entry, account.limits) ? { extras: extrasOf(entry, account.limits, this.resets?.agentsMay(account.provider)) } : {}),
+        ...(this.resets?.agentsMay(account.provider) ? { agentsReset: true as const } : {}),
         ...(entry.checked ? { checked: entry.checked } : {}),
         // (One only its turns tell of is never read.)
         ...(account.limits.read ? { next: entry.next } : {}),
@@ -439,6 +442,13 @@ export class Limits {
       const identity = this.entries.get(account.provider)?.identity
       return (identity ? `${account.service}#${identity}` : `${own}/${account.provider}`) === rowID
     })
+  }
+
+  /** The account signed in to this slot (by provider), by who it is (`<service>#<identity>`, as rows name it); none while that isn't known. */
+  accountRow(provider: string): string | undefined {
+    const account = this.account(provider)
+    const identity = this.entries.get(provider)?.identity
+    return account && identity ? `${account.service}#${identity}` : undefined
   }
 
   /** Accounts to read here at their next round whoever else read them lately (a reset was spent here). */

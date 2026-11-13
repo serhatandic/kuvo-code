@@ -136,9 +136,11 @@ export class LimitsPeers {
   tell(urgent = false) {
     if (!this.transport.followed || !this.directory.told) return
     const now = this.now()
-    const accounts = this.shared()
-    const json = JSON.stringify(accounts)
+    const mine = this.shared()
+    const theirs = forVouched(mine)
     for (const { key } of this.directory.peerBoxes()) {
+      const accounts = this.ours(key) ? mine : theirs
+      const json = JSON.stringify(accounts)
       const last = this.told.get(key)
       const due = !last || now - last.at >= TELL_AGAIN || (last.json !== json && (urgent || now - last.at >= HEARD_EVERY))
       if (!due) continue
@@ -191,8 +193,8 @@ export class LimitsPeers {
       asks.set(box.key, [...(asks.get(box.key) ?? []), row.id])
     }
     const now = this.now()
-    const accounts = this.shared()
-    for (const [key, refresh] of asks) this.transport.send(key, { kind: "limits", at: now, accounts, refresh }, false)
+    const mine = this.shared()
+    for (const [key, refresh] of asks) this.transport.send(key, { kind: "limits", at: now, accounts: this.ours(key) ? mine : forVouched(mine), refresh }, false)
   }
 
   /** An account of this box's, as rows name it. */
@@ -206,9 +208,14 @@ export class LimitsPeers {
     const now = this.now()
     if (now - (this.answered.get(key) ?? -Infinity) < HEARD_EVERY) return
     this.answered.set(key, now)
-    const accounts = this.shared()
+    const accounts = this.ours(key) ? this.shared() : forVouched(this.shared())
     this.transport.send(key, { kind: "limits", at: now, accounts }, false)
     this.told.set(key, { json: JSON.stringify(accounts), at: now })
+  }
+
+  /** Whether a box is one of your own computers (not one a peer of yours only vouches for). */
+  private ours(key: string) {
+    return this.directory.isPeer?.(key) === true
   }
 
   /** This box's own accounts, as many as fit in one mail (with up to 200 rows' ids asked of it besides). */
@@ -255,6 +262,19 @@ export class LimitsPeers {
       renameSync(this.file + ".new", this.file)
     } catch {}
   }
+}
+
+/**
+ * What a box a peer only vouches for is told of your accounts: their limits, but not what you spend
+ * or have to spend beyond them (`spent`, `capped`, `left`), nor whether agents may use their resets.
+ */
+function forVouched(accounts: AccountLimits[]): AccountLimits[] {
+  return accounts.map((account) => {
+    const { agentsReset: _, ...told } = account
+    const extras = (account.extras ?? []).filter((extra) => extra.kind === "resets" || extra.kind === "unreadable").map(({ agents: __, ...extra }) => extra)
+    delete told.extras
+    return extras.length ? { ...told, extras } : told
+  })
 }
 
 const text = (value: unknown, most = 200) => (typeof value === "string" && value ? value.slice(0, most) : undefined)
@@ -347,6 +367,7 @@ function takenAccount(given: unknown, off: number, now: number): AccountLimits |
     windows,
     ...(balance && typeof balance === "object" && typeof balance.left === "number" && (balance.unit === "usd" || balance.unit === "credits") ? { balance: { left: balance.left, ...(typeof balance.limit === "number" ? { limit: balance.limit } : {}), unit: balance.unit } } : {}),
     ...(extras.length ? { extras } : {}),
+    ...(account.agentsReset === true ? { agentsReset: true as const } : {}),
     ...(checked ? { checked } : {}),
     ...(next ? { next } : {}),
     ...(problem && typeof problem === "object" && PROBLEMS.has(problem.kind) && text(problem.message, 500) ? { problem: { kind: problem.kind, message: text(problem.message, 500)!, ...(time(problem.until) ? { until: problem.until + off } : {}) } } : {}),

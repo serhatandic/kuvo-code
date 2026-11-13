@@ -83,8 +83,9 @@ function changeKept<T>(change: (asks: KeptAsk[]) => T, file = WORK_ASKS): T {
 export function workAsks(file = WORK_ASKS): WorkAskShape[] {
   return readKept(file).filter(each => !each.answered && (!each.bot || botHere(each.bot))).map(kept => {
     const { given: _, late: __, answering: ____, answered: ___, toldLate: _____, ...listed } = kept;
-    // A reset's: the account and what it has, nothing of folders.
-    if (kept.action === "resetLimits") return { ...listed, folder: null };
+    // A reset's: the account and what it has, nothing of folders; and its notification's words, the
+    // box's, so every client says the same.
+    if (kept.action === "resetLimits") return { ...listed, folder: null, ...(kept.reset ? { words: resetAskWords(kept.name, kept.reset) } : {}) };
     // Where it would go, as it stands now: the folder may have been picked since (unless one was
     // named for it).
     const root = projectsFolder();
@@ -136,7 +137,8 @@ export interface Asker {
  * is the ask it already has. */
 export function askWork(asker: Asker, action: WorkAction, given: KeptAsk["given"], file = WORK_ASKS): KeptAsk {
   const ask = changeKept(asks => {
-    const same = asks.find(each => !each.answered && each.session === asker.session && each.action === action && each.project.toLowerCase() === given.name.toLowerCase());
+    // (One open card a conversation for each project, or for each account's resets.)
+    const same = asks.find(each => !each.answered && each.session === asker.session && each.action === action && (action === "resetLimits" ? each.given?.reset?.row === given.reset?.row : each.project.toLowerCase() === given.name.toLowerCase()));
     if (same) {
       delete same.late;
       return same;

@@ -142,7 +142,6 @@ final class AppContainer {
                     await ResetClaimRefresh.run(dataStore: dataStore, providerID: id, tag: "codex")
                 }
             )
-            claims.hostCovers = { HostLimits.shared.covers(id) }
             resetClaims[id] = claims
         }
         for claude in providers.compactMap({ $0 as? ClaudeProvider }) {

@@ -133,6 +133,19 @@ test("a Copilot seat its organization pays for by the credit: the organization's
   expect(member!.extras).toBeUndefined()
 })
 
+test("GitHub holding requests off (a 403 with retry-after) stops the look through your organizations, and the next read looks again", async () => {
+  answers["/copilot"] = () => Response.json({ copilot_plan: "business", token_based_billing: true, quota_snapshots: { premium_interactions: { entitlement: 0, remaining: 0 } } })
+  answers["/githubOrgs"] = () => Response.json([{ login: "first" }, { login: "second" }, { login: "acme" }])
+  answers["/githubBilling/first/settings/billing/usage/summary"] = () => new Response("{}", { status: 403, headers: { "retry-after": "60" } })
+  answers["/githubBilling/acme/settings/billing/usage/summary"] = () => Response.json({ usageItems: [{ product: "Copilot", unitType: "ai-credits", grossQuantity: 10, netAmount: 1 }] })
+  const read = async () => (await stated([credential("github-copilot", { type: "oauth", access: "short", refresh: "gho_held", expires: NOW - 1 })])).accounts[0]!
+  expect((await read()).extras).toBeUndefined()
+  expect(reads.filter((each) => each.path.startsWith("/githubBilling/")).map((each) => each.path.split("/")[2])).toEqual(["first"])
+  // Not taken for "none here": asked again at the next read.
+  answers["/githubBilling/first/settings/billing/usage/summary"] = () => new Response("{}", { status: 403 })
+  expect((await read()).extras?.map((extra) => extra.id)).toEqual(["org_credits", "org_spend"])
+})
+
 test("ChatGPT's credits and reset credits, read with the engine's sign-in", async () => {
   answers["/chatgpt"] = () => Response.json({ plan_type: "plus", rate_limit: { primary_window: { used_percent: 30, limit_window_seconds: 18_000, reset_at: 1_794_200_000 } }, credits: { has_credits: true, balance: "821.9" }, rate_limit_reset_credits: { available_count: 0 } })
   const [account] = (await stated([credential("openai", { type: "oauth", access: "chatgpt-token", expires: NOW + 3_600_000, metadata: { accountID: "acct_1" } })])).accounts

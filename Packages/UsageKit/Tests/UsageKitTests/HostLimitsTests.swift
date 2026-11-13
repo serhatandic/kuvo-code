@@ -288,6 +288,50 @@ final class HostLimitsTests: XCTestCase {
         XCTAssertNil(mac.resets)
     }
 
+    /// #631 E second review: the answer to Use didn't come back (the connection dropped), or the box
+    /// said it may have gone: Retry sends the same confirmation again (the box's journal makes it the
+    /// same request), never a new one; only once the box no longer knows it does Retry ask anew.
+    func testRetryAfterALostAnswerSendsTheSameConfirmationAgain() async throws {
+        struct Dropped: LocalizedError { var errorDescription: String? { "The connection was lost." } }
+        let limits = HostLimits()
+        var asked = 0
+        var used: [String] = []
+        var answers: [Result<HostResetDone, Error>] = [
+            .failure(Dropped()),
+            .success(HostResetDone(succeeded: false, message: "No answer came, so it may have been used. Asking again won't use another.", stillOpen: true)),
+            .success(HostResetDone(succeeded: true)),
+            .failure(HostResetExpired()),
+            .success(HostResetDone(succeeded: true)),
+        ]
+        limits.askReset = { _ in
+            asked += 1
+            return HostResetOffer(confirm: "rsc_\(asked)", question: "Use 1 of 2 resets?", detail: "")
+        }
+        limits.useReset = { _, confirm in
+            used.append(confirm)
+            return try answers.removeFirst().get()
+        }
+        let flow = limits.resetFlow(for: "claude#a")
+        flow.doneFor = .zero
+
+        await flow.begin()?.value
+        await flow.confirm()?.value
+        XCTAssertEqual(flow.phase, .failed("The connection was lost."))
+        await flow.begin()?.value
+        XCTAssertEqual(flow.phase, .failed("No answer came, so it may have been used. Asking again won't use another."))
+        await flow.begin()?.value
+        XCTAssertEqual(flow.phase, .idle)
+        XCTAssertEqual(used, ["rsc_1", "rsc_1", "rsc_1"], "Retry is the same confirmation")
+        XCTAssertEqual(asked, 1)
+
+        // A new one the box no longer knows when it's sent (it started again meanwhile): asked anew.
+        await flow.begin()?.value
+        await flow.confirm()?.value
+        XCTAssertEqual(used.last, "rsc_2")
+        XCTAssertEqual(asked, 3, "a new confirmation once the box no longer knows the old")
+        if case .confirming(let offer) = flow.phase { XCTAssertEqual(offer.confirm, "rsc_3") } else { XCTFail("not confirming: \(flow.phase)") }
+    }
+
     /// Using a reset from its row: asked of the box, confirmed in place, used once, done; Cancel
     /// leaves it as it was; what the box says when it doesn't go through shows, and Retry asks again.
     func testAResetIsAskedConfirmedInPlaceAndUsedOnce() async throws {

@@ -10878,6 +10878,12 @@
            "on?": "string"
           }
          },
+         "words?": {
+          "object": {
+           "title": "string",
+           "body": "string"
+          }
+         },
          "at": "number"
         }
        }
@@ -11121,6 +11127,12 @@
            "on?": "string"
           }
          },
+         "words?": {
+          "object": {
+           "title": "string",
+           "body": "string"
+          }
+         },
          "at": "number"
         }
        }
@@ -11174,6 +11186,12 @@
             "list": "string"
            },
            "on?": "string"
+          }
+         },
+         "words?": {
+          "object": {
+           "title": "string",
+           "body": "string"
           }
          },
          "at": "number"

@@ -75,6 +75,9 @@ public struct LimitsAccount: Decodable, Hashable, Sendable, Identifiable {
     /// What the plan has beyond its windows (Cursor's on-demand spend with no cap); #631 piece E
     /// adds more kinds, which this copy leaves out until it knows them.
     public var extras: [Extra] = []
+    /// Agents may use this account's resets without asking (Always Allow), as its own box keeps it:
+    /// said whether or not it has resets now, so Settings › Accounts can turn it off.
+    public var agentsReset = false
     public var checked: Date?
     public var next: Date?
     public var problem: Problem?
@@ -279,7 +282,7 @@ public struct LimitsAccount: Decodable, Hashable, Sendable, Identifiable {
         self.problem = problem
     }
 
-    private enum CodingKeys: String, CodingKey { case provider, service, agent, account, label, identity, plan, windows, balance, extras, checked, next, problem, id, boxes, away }
+    private enum CodingKeys: String, CodingKey { case provider, service, agent, account, label, identity, plan, windows, balance, extras, agentsReset, checked, next, problem, id, boxes, away }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -294,6 +297,7 @@ public struct LimitsAccount: Decodable, Hashable, Sendable, Identifiable {
         windows = try container.decodeIfPresent(Readable<LimitsWindow>.self, forKey: .windows)?.items ?? []
         balance = try? container.decodeIfPresent(Balance.self, forKey: .balance)
         extras = (try? container.decodeIfPresent(Readable<Extra>.self, forKey: .extras))?.items ?? []
+        agentsReset = (try? container.decodeIfPresent(Bool.self, forKey: .agentsReset)) ?? false
         checked = try container.decodeIfPresent(Double.self, forKey: .checked).map(Date.init(milliseconds:))
         next = try container.decodeIfPresent(Double.self, forKey: .next).map(Date.init(milliseconds:))
         problem = try? container.decodeIfPresent(Problem.self, forKey: .problem)
@@ -744,6 +748,9 @@ public struct ResetDone: Decodable, Hashable, Sendable {
     }
 
     public var succeeded: Bool { outcome == "reset" }
+    /// It may have gone (no answer came, or its maker couldn't say): the box keeps it open, so
+    /// asking again with the same confirmation goes as the same request, never a second reset.
+    public var stillOpen: Bool { outcome == "unknown" || outcome == "unconfirmed" }
 
     private enum CodingKeys: String, CodingKey { case outcome, until, message }
 

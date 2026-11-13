@@ -1818,7 +1818,9 @@ folder you pick once per box, after asking you.
     projects it made, as `projects`. `resetLimits` is any agent's `use_limit_reset` ("Plan limits",
     "Resets"): `project` is the account's name, `folderName` empty, `folder` null, and `reset`
     `{row, account, service, count, refills?, on?}` the account's row, how many resets it has, what
-    one refills and the computer of yours that uses it where that isn't this box. Allow uses one;
+    one refills and the computer of yours that uses it where that isn't this box, and `words`
+    `{title, body}`, what its notification says (every client says the same). One open card a
+    conversation for each account. Allow uses one;
     Always keeps Always Allow with the account (never with the bot), then uses one; deny uses none.
     No folder is picked.
   - `POST kuvo/work/asks/<id>` `{answer: allow|always|deny, folder?}` → `{answer, text, isError}`:
@@ -4050,6 +4052,8 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
       Code with the same account (as one row, its numbers are that computer's); alone, the row
       states this (`id` `resets`).
     A read of them that fails keeps what was read (a failed read never states none, nor a zero).
+    A box a peer only vouches for is told an account's limits and its `resets` count, never what
+    it spends or has to spend (`spent`, `capped`, `left`) nor `agents`/`agentsReset`.
     A client leaves out a kind it doesn't know, and one whose `resetsAt` has passed (not known
     now, as a window); a box keeps from a peer's mail the kinds it knows, checked, and passes a
     kind it doesn't know on as told, only its plain fields, 1 KB at most. Absent when there's none.
@@ -4216,21 +4220,29 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     what it spends (the grant Anthropic names next; the reset credit soonest to expire), also kept
     before the request. Asked again after a crash, a lost answer or a failure, it goes as the same
     request with the same grant or credit, and its maker answers that it's done (`already_used`,
-    `already_redeemed`) rather than spending another; a new ask of an account whose last spend
-    never settled (within a day) reuses that one's request too, here or, for one passed to a peer,
-    that one's id there (a client's Retry asks anew). Every outcome but `unknown` settles it.
+    `already_redeemed`) rather than spending another. `unknown` and `unconfirmed` leave it open (it
+    may have gone); every other outcome settles it. While one of a row's spends is open (a day at
+    most), a new confirmation for that row is that same spend: its request here, or its id on the
+    peer it was passed to, and two confirmations at once share one request. A client sends the same
+    `confirm` again after a lost answer, and after `unknown` or `unconfirmed`; a 404 then (the box no
+    longer knows it) asks anew.
   - **On the computer with the sign-in**: a box whose own sign-in can't spend it passes it to
     `on`, a peer of yours (never a box a peer vouches for), as `{"seat": {"kind": "reset", at, ask:
     {id, row, by?}}}`, and answers when that one does (`{"seat": {"kind": "reset", at, answer: {id,
-    outcome, until?}}}`), or `failed` after 45 seconds (asked again with the same `confirm`, it's
-    asked there again under the same id, which that box's journal answers once). A box takes a
+    outcome, until?}}}`), or `unknown` after 45 seconds (asked again, with the same `confirm` or a
+    new one for that row, it's asked there again under the same id, which that box's journal
+    answers once). A box takes a
     reset's mail only from your own computers; its link drops it from a box a peer vouches for.
   - **Always Allow**: `PUT kuvo/agents/api/kuvo/limits/reset/always {provider | row, always}`:
-    agents may (or may not) use an account's resets without asking, kept in the journal with the
-    account on every computer of yours with its sign-in: here (`provider`, as Settings › Accounts
-    names it here, or the `row`), and told to the others among its row's `boxes` as `{"seat":
-    {"kind": "reset", at, always: {row, on}}}`, which keep it for their own account of it. Stated
-    as `agents: true` on its `resets`.
+    agents may (or may not) use an account's resets without asking. It's the account's, by who it
+    is (its row `<service>#<identity>`; 409 for one that doesn't say who it is yet): kept in the
+    journal on every computer of yours with its sign-in, here (`provider`, as Settings › Accounts
+    names it here, or the `row`) and on the others among its row's `boxes`, told as `{"seat":
+    {"kind": "reset", at, always: {row, on}}}` mail that's kept until it's there. A sign-in in the
+    same place signed in to another account since isn't allowed, and its keeping goes. Stated as
+    `agents: true` on its `resets`, and as `agentsReset: true` on the account in this box's own
+    `accounts` whether or not it has resets now (so a client can turn it off). Answering a card
+    Always while the computer with the sign-in is away keeps it all the same; no reset is used then.
   - **The agents' tool** `use_limit_reset {account}` (an account's row `id`, or its name as
     `plan_limits` says it): asks the user first, every time, on the permission card in the calling
     conversation (`kuvo/work/asks`, action `resetLimits`, "Work"), unless its account's `always` is

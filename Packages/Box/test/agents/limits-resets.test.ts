@@ -72,6 +72,8 @@ class Makers {
   holdAnswer?: Gate
   /** The next consume: spent, then answered with a failure (its answer lost). */
   failAfterSpending = false
+  /** The next claim: spent, and answered `reset_unconfirmed`. */
+  unconfirmedOnce = false
   /** Credits it refuses outright (expired since they were listed): a 400. */
   refuses = new Set<string>()
   fiveHour = 92
@@ -92,6 +94,14 @@ class Makers {
         const body: any = await request.json()
         this.claims.push({ org: claim[1]!, grant: body.grant_id, request: body.request_id })
         if (this.spent.has(body.request_id)) return Response.json({ result: "already_used" })
+        // Spent, but it can't say so (Anthropic's `reset_unconfirmed`).
+        if (this.unconfirmedOnce) {
+          this.unconfirmedOnce = false
+          const grant = this.grants.grants.find((each) => each.id === body.grant_id)!
+          grant.resets_left--
+          this.spent.set(body.request_id, grant.id)
+          return Response.json({ result: "reset_unconfirmed" })
+        }
         const grant = this.grants.grants.find((each) => each.id === body.grant_id)
         if (!grant || grant.resets_left < 1) return Response.json({ result: "unavailable", reason: "no_grant" })
         grant.resets_left--
@@ -342,10 +352,12 @@ class Box {
   resets: LimitResets
   parts: PeerParts
   private following = new AbortController()
-  constructor(readonly key: string, readonly name: string, accounts: () => LimitedAccount[], folder: string, relay: Map<string, Box>) {
+  /** Mail of its own the relay loses (it never reaches the box it's for). */
+  loses?: (mail: any) => boolean
+  constructor(readonly key: string, readonly name: string, accounts: () => LimitedAccount[], folder: string, relay: Map<string, Box>, peerWait = 5_000) {
     this.limits = new Limits(accounts, join(folder, "limits.json"), now)
     this.peers = new LimitsPeers(this.limits, this.post, this.directory, undefined, now)
-    this.resets = new LimitResets(this.limits, join(folder, "limits-resets.json"), now, this.post, this.directory, 5_000)
+    this.resets = new LimitResets(this.limits, join(folder, "limits-resets.json"), now, this.post, this.directory, peerWait)
     this.parts = { post: this.post, directory: this.directory, limits: this.peers, resets: this.resets }
     relay.set(key, this)
     void this.carry(relay)
@@ -364,12 +376,14 @@ class Box {
         const line = JSON.parse(buffer.slice(0, end))
         buffer = buffer.slice(end + 1)
         const to = relay.get(line.to)
+        if (this.loses?.(line.mail)) continue
         if (to) queueMicrotask(() => void peerRoutes(to.parts, "POST", ["mail"], async () => ({ from: this.key, mail: structuredClone(line.mail) })).then(beat))
       }
     }
   }
-  async meet(others: Box[]) {
-    await peerRoutes(this.parts, "PUT", [], async () => ({ self: { key: this.key, name: this.name }, boxes: others.map((box) => ({ key: box.key, name: box.name, seats: true })), bots: [] }))
+  /** Its link says who your computers are, and `also`, boxes a peer of yours only vouches for. */
+  async meet(others: Box[], also: Box[] = []) {
+    await peerRoutes(this.parts, "PUT", [], async () => ({ self: { key: this.key, name: this.name }, boxes: others.map((box) => ({ key: box.key, name: box.name, seats: true })), also: also.map((box) => ({ key: box.key, name: box.name })), bots: [] }))
   }
   stop() {
     this.following.abort()
@@ -515,7 +529,7 @@ describe("a Mac's Claude token and your other computers", () => {
       expect(resets()!.agents).toBe(true)
       expect((await post(mac.limits, { row: id })).body.data.always).toBe(true)
       // Kept through hetzner's restart, in its journal.
-      expect(JSON.parse(readFileSync(join(linuxFolder, "limits-resets.json"), "utf8")).always).toEqual(["claude-code"])
+      expect(JSON.parse(readFileSync(join(linuxFolder, "limits-resets.json"), "utf8")).always).toEqual({ "claude-code": id })
 
       // Turned off where the account is (Settings › Accounts on hetzner's page).
       await limitsRoutes(hetzner.limits, "PUT", ["reset", "always"], async () => ({ provider: "claude-code", always: false }))
@@ -524,6 +538,171 @@ describe("a Mac's Claude token and your other computers", () => {
     } finally {
       mac.stop()
       hetzner.stop()
+    }
+  })
+})
+
+describe("the second review's cases", () => {
+  /** A Linux machine's Claude box, alone or among your computers. */
+  async function linuxBox(key: string, name: string, relay: Map<string, Box>, peerWait?: number) {
+    const folder = mkdtempSync(join(base, `${name}-`))
+    const claude = linuxClaude(folder)
+    return new Box(key, name, () => agentAccounts([claude]), folder, relay, peerWait)
+  }
+
+  test("its maker couldn't say a reset went through: Retry, with a new confirmation, goes as the same request, so a second isn't used", async () => {
+    const relay = new Map<string, Box>()
+    const box = await linuxBox("key-l", "hetzner", relay)
+    try {
+      await box.meet([])
+      await box.limits.tick()
+      const id = box.limits.rows()[0]!.id
+      makers.unconfirmedOnce = true
+      const first = await post(box.limits, { row: id })
+      expect((await post(box.limits, { row: id, confirm: first.body.data.confirm })).body.data.outcome).toBe("unconfirmed")
+      expect(makers.spends).toBe(1)
+      const again = await post(box.limits, { row: id })
+      expect((await post(box.limits, { row: id, confirm: again.body.data.confirm })).body.data.outcome).toBe("reset")
+      expect(makers.claims.map((each) => each.request)).toEqual([makers.claims[0]!.request, makers.claims[0]!.request])
+      expect(makers.spends).toBe(1)
+      expect(makers.grants.grants[0]!.resets_left).toBe(1)
+    } finally {
+      box.stop()
+    }
+  })
+
+  test("two confirmations at once (two apps): one request goes, and both hear it went", async () => {
+    const { limits } = await chatGPTBox(mkdtempSync(join(base, "twice-")))
+    const [row] = limits.rows()
+    const one = await post(limits, { row: row!.id })
+    const two = await post(limits, { row: row!.id })
+    makers.holdAnswer = new Gate()
+    const first = post(limits, { row: row!.id, confirm: one.body.data.confirm })
+    await makers.holdAnswer.reached
+    const second = post(limits, { row: row!.id, confirm: two.body.data.confirm })
+    makers.holdAnswer.release()
+    expect([(await first).body.data.outcome, (await second).body.data.outcome]).toEqual(["reset", "reset"])
+    expect(makers.consumes).toHaveLength(1)
+    expect(makers.spends).toBe(1)
+  })
+
+  test("Always Allow is the account's: signed in to another account in the same place, agents ask again, and coming back doesn't bring it back", async () => {
+    let account = "acct-1"
+    const engine = new EngineAccounts(async () => [{ integrationID: "openai", active: true, value: { type: "oauth", access: chatGPTToken(account), refresh: `refresh-${account}`, expires: time + DAY, metadata: { accountID: account } } }])
+    const limits = new Limits(() => engine.accounts(), undefined, now, () => engine.refresh(), () => engine.answered)
+    const resets = new LimitResets(limits, join(mkdtempSync(join(base, "slot-")), "limits-resets.json"), now)
+    await limits.tick()
+    const first = limits.rows()[0]!.id
+    expect((await limitsRoutes(limits, "PUT", ["reset", "always"], async () => ({ provider: "openai", always: true }))).status).toBe(200)
+    expect(resets.agentsMay("openai")).toBe(true)
+    expect((await post(limits, { row: first })).body.data.always).toBe(true)
+
+    account = "acct-2"
+    time += 11 * 60_000
+    await limits.tick()
+    const second = limits.rows()[0]!.id
+    expect(second).not.toBe(first)
+    expect(resets.agentsMay("openai")).toBe(false)
+    expect((await post(limits, { row: second })).body.data.always).toBe(false)
+    account = "acct-1"
+    time += 11 * 60_000
+    await limits.tick()
+    expect(resets.agentsMay("openai")).toBe(false)
+  })
+
+  test("Always Allow set on one of your computers with the sign-in is kept on the other, and turned off on either, it's off on both", async () => {
+    const relay = new Map<string, Box>()
+    const one = await linuxBox("key-one", "hetzner", relay)
+    const two = await linuxBox("key-two", "lokum", relay)
+    try {
+      await one.meet([two])
+      await two.meet([one])
+      await one.limits.tick()
+      await two.limits.tick()
+      // (Each has heard the other is signed in to it.)
+      await until(() => one.limits.rows()[0]?.boxes.length === 2 && two.limits.rows()[0]?.boxes.length === 2)
+      const id = one.limits.rows()[0]!.id
+      expect((await limitsRoutes(one.limits, "PUT", ["reset", "always"], async () => ({ row: id, always: true }))).status).toBe(200)
+      await until(() => two.resets.agentsMay("claude-code"))
+      expect(one.resets.agentsMay("claude-code")).toBe(true)
+      // Off on lokum's page: off on hetzner too.
+      await limitsRoutes(two.limits, "PUT", ["reset", "always"], async () => ({ provider: "claude-code", always: false }))
+      await until(() => !one.resets.agentsMay("claude-code"))
+      expect(two.resets.agentsMay("claude-code")).toBe(false)
+    } finally {
+      one.stop()
+      two.stop()
+    }
+  })
+
+  test("the answer from the computer with the sign-in is lost: Retry, with a new confirmation, is asked there under the same id, and nothing more is used", async () => {
+    const relay = new Map<string, Box>()
+    const macFolder = mkdtempSync(join(base, "mac-lost-"))
+    const claudeMac = macClaude(macFolder)
+    const mac = new Box("key-mac", "MacBook Pro", () => agentAccounts([claudeMac]), macFolder, relay, 20)
+    const hetzner = await linuxBox("key-hetzner", "hetzner", relay)
+    try {
+      await mac.meet([hetzner])
+      await hetzner.meet([mac])
+      await mac.limits.tick()
+      claudeMac.limits.heard!({ id: "five_hour", used: 0.9, minutes: 300 })
+      await hetzner.limits.tick()
+      const merged = () => mac.limits.rows().find((row) => row.boxes.length === 2)
+      await until(() => !!merged()?.extras?.some((extra) => extra.kind === "resets"))
+      const id = merged()!.id
+      // (A minute on: hetzner may read the account again once it's used.)
+      time += 2 * 60_000
+      // hetzner's first answer never reaches the Mac.
+      let lost = 0
+      hetzner.loses = (mail) => mail.kind === "reset" && !!mail.answer && lost++ === 0
+      const first = await post(mac.limits, { row: id })
+      const gone = await post(mac.limits, { row: id, confirm: first.body.data.confirm })
+      expect(gone.body.data.outcome).toBe("unknown")
+      // (Used there, and read again: hetzner tells the Mac one fewer.)
+      await until(() => merged()?.extras?.find((extra) => extra.kind === "resets")?.count === 1)
+      expect(makers.claims).toHaveLength(1)
+      const again = await post(mac.limits, { row: id })
+      expect((await post(mac.limits, { row: id, confirm: again.body.data.confirm })).body.data.outcome).toBe("reset")
+      // Asked once of Anthropic: hetzner's journal answered the second ask.
+      expect(makers.claims).toHaveLength(1)
+      expect(makers.spends).toBe(1)
+    } finally {
+      mac.stop()
+      hetzner.stop()
+    }
+  })
+
+  test("a box a peer only vouches for hears an account's limits but not its spend or Always Allow, and can't ask for a reset", async () => {
+    const relay = new Map<string, Box>()
+    const hetzner = await linuxBox("key-hetzner", "hetzner", relay)
+    const macFolder = mkdtempSync(join(base, "mac-v-"))
+    const claudeMac = macClaude(macFolder)
+    const mac = new Box("key-mac", "MacBook Pro", () => agentAccounts([claudeMac]), macFolder, relay)
+    const otherFolder = mkdtempSync(join(base, "vouched-"))
+    const other = new Box("key-other", "another Mac", () => [], otherFolder, relay)
+    try {
+      await hetzner.meet([mac], [other])
+      await mac.meet([hetzner])
+      await other.meet([], [hetzner])
+      await hetzner.limits.tick()
+      const id = hetzner.limits.rows()[0]!.id
+      await limitsRoutes(hetzner.limits, "PUT", ["reset", "always"], async () => ({ row: id, always: true }))
+      const theirs = () => other.limits.rows().find((row) => row.id === id)
+      const ours = () => mac.limits.rows().find((row) => row.id === id)
+      await until(() => !!theirs() && !!ours()?.extras?.some((extra) => extra.agents))
+      expect(theirs()!.windows.length).toBeGreaterThan(0)
+      expect(theirs()!.extras?.map((extra) => extra.kind)).toEqual(["resets"])
+      expect(theirs()!.extras?.[0]!.agents).toBeUndefined()
+      expect(theirs()!.agentsReset).toBeUndefined()
+      // Your own Mac hears all of it.
+      expect(ours()!.extras?.map((extra) => extra.kind)).toEqual(["capped", "resets"])
+      // And its ask is never taken.
+      await peerRoutes(hetzner.parts, "POST", ["mail"], async () => ({ from: "key-other", mail: { kind: "reset", at: time, ask: { id: "v1", row: id } } }))
+      expect(makers.claims).toEqual([])
+    } finally {
+      hetzner.stop()
+      mac.stop()
+      other.stop()
     }
   })
 })

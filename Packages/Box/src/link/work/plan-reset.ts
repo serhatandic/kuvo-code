@@ -73,7 +73,15 @@ export function resetGiven(row: Record<string, unknown>, offer: Record<string, u
 export async function spendReset(bridge: Target, row: string, by: string, { always = false, signal }: { always?: boolean; signal?: AbortSignal } = {}): Promise<{ text: string; isError: boolean }> {
   try {
     if (always) await call(bridge, "PUT", "/api/kuvo/limits/reset/always", { row, always: true }, signal);
-    const offer = await call(bridge, "POST", "/api/kuvo/limits/reset", { row }, signal);
+    let offer: unknown;
+    try {
+      offer = await call(bridge, "POST", "/api/kuvo/limits/reset", { row }, signal);
+    } catch (error) {
+      // The computer with its sign-in is away: Always Allow is kept all the same (it gets it once it's
+      // back), and the reset waits for it.
+      if (always && (error as { status?: number } | null)?.status === 503) return refused(`Always Allow is kept for this account. ${why(error)} So no reset was used now: ask again once it's back.`);
+      throw error;
+    }
     if (!isObject(offer) || typeof offer.confirm !== "string") return refused("The reset couldn't be asked for.");
     const done = await call(bridge, "POST", "/api/kuvo/limits/reset", { row, confirm: offer.confirm, by }, signal);
     if (!isObject(done)) return refused("The reset's answer didn't come.");

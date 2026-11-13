@@ -324,6 +324,13 @@ public struct WorkAsk: Decodable, Sendable, Hashable, Identifiable {
     public let at: Double
     /// For a reset: the account, what it has, and where it's used.
     public let reset: ResetAsk?
+    /// What a notification of it says, in its box's words (a reset's).
+    public let words: Words?
+
+    public struct Words: Decodable, Sendable, Hashable {
+        public let title: String
+        public let body: String
+    }
 
     /// The reset an agent asks to use: the account (its row in the plan limits), how many resets it
     /// has, what one refills, and the computer of yours that uses it where that isn't the asking one.
@@ -346,8 +353,9 @@ public struct WorkAsk: Decodable, Sendable, Hashable, Identifiable {
         }
     }
 
-    public init(id: String, action: WorkAction, session: String, name: String, bot: String?, project: String, clone: String? = nil, folderName: String, folder: String?, suggested: String? = nil, at: Double, reset: ResetAsk? = nil) {
+    public init(id: String, action: WorkAction, session: String, name: String, bot: String?, project: String, clone: String? = nil, folderName: String, folder: String?, suggested: String? = nil, at: Double, reset: ResetAsk? = nil, words: Words? = nil) {
         self.reset = reset
+        self.words = words
         self.id = id
         self.action = action
         self.session = session

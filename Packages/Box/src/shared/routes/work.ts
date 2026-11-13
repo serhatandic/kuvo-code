@@ -74,6 +74,8 @@ export const WORK_ASK = object({
   "suggested?": string,
   /** For a reset (`use_limit_reset`): the account (its row in "Plan limits"), how many resets it has, what one refills, and the computer of yours that uses it where that isn't this one. */
   "reset?": object({ row: string, account: string, service: string, count: number, "refills?": list(string), "on?": string }),
+  /** What a notification of it says, in the box's words (a reset's). */
+  "words?": object({ title: string, body: string }),
   at: number,
 });
 /** What's asked here now, the oldest first. */

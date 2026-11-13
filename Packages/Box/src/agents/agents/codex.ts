@@ -159,10 +159,8 @@ export class CodexAgent implements Agent {
     every: 10 * 60_000,
     read: (now) => this.readLimits(now),
     identity: () => this.chatGPTAccount(),
+    // (Its reset credits are read again with every read: what was read stands while that fails.)
     reset: (attempt, now) => spendCodexReset(this.chatGPTSignIn(), attempt, now),
-    afterReset: () => {
-      this.resetsRead = undefined
-    },
   }
 
   /** Its ChatGPT sign-in, as its home's `auth.json` keeps it (none in the Keychain): to read and spend its reset credits. */

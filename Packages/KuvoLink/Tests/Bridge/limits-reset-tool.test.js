@@ -40,16 +40,18 @@ const serve = handle => {
 
 // The engine: Mira's conversation.
 const mira = { id: "ses_mira", title: "Mira", location: { directory: home }, permissions: [], time: { created: 1, updated: 5 } };
+let onAutopilot = false;
+const miraNow = () => ({ ...mira, ...(onAutopilot ? { metadata: { kuvo: { autopilot: true } } } : {}) });
 const engine = serve((request, url, _body, reply) => {
-  if (url.pathname === "/api/session" && request.method === "GET") return reply({ data: url.searchParams.get("parentID") && url.searchParams.get("parentID") !== "null" ? [] : [mira] });
+  if (url.pathname === "/api/session" && request.method === "GET") return reply({ data: url.searchParams.get("parentID") && url.searchParams.get("parentID") !== "null" ? [] : [miraNow()] });
   if (url.pathname === "/api/session/active") return reply({ data: {} });
-  if (url.pathname === "/api/session/ses_mira" && request.method === "GET") return reply({ data: mira });
+  if (url.pathname === "/api/session/ses_mira" && request.method === "GET") return reply({ data: miraNow() });
   reply({ message: "Not here." }, 404);
 });
 
 // The coding agents' bridge: the accounts' rows, and their resets as its routes answer them.
 const ROW = "codex#0123456789abcdef";
-let left, always, spent, alwaysSet, asked;
+let left, always, spent, alwaysSet, asked, away;
 const row = () => ({
   id: ROW, provider: "codex-cli", service: "codex", agent: "codex", account: "default", plan: "Plus",
   windows: [{ id: "primary", used: spent ? 0 : 0.97, minutes: 300, resetsAt: Date.now() + 3_600_000, read: Date.now(), source: "usage" }],
@@ -62,6 +64,7 @@ const bridge = serve((request, url, body, reply) => {
   if (url.pathname === "/api/kuvo/limits/reset" && request.method === "POST") {
     if (body.row !== ROW) return reply({ message: "This account has no resets." }, 409);
     if (body.confirm === undefined) {
+      if (away) return reply({ message: "hetzner can't be reached now: its reset is used there." }, 503);
       asked++;
       return reply({ data: { confirm: `rsc_${asked}`, row: ROW, service: "codex", count: left, on: { key: "", name: "", here: true }, always, expires: Date.now() + 600_000 } });
     }
@@ -82,7 +85,7 @@ for (const server of [engine, bridge]) {
 }
 
 beforeEach(() => {
-  left = 2; always = false; spent = 0; alwaysSet = []; asked = 0;
+  left = 2; always = false; spent = 0; alwaysSet = []; asked = 0; away = false; onAutopilot = false;
   for (const each of ["box", "run"]) fs.rmSync(path.join(home, each), { recursive: true, force: true });
   write(path.join(home, "run", "engine.json"), JSON.stringify({ port: engine.address().port, password: "p", version: "0.0.0" }));
 });
@@ -191,4 +194,31 @@ test("without the coding agents' bridge running, nothing can be used, and it say
   const said = await tool({ account: "Codex" });
   assert.equal(said.isError, true);
   assert.match(said.text, /The coding agents aren't running/);
+});
+
+test("on Autopilot the card stays asked for when the user's back, and asking again doesn't add a second", async t => {
+  await bridgeRuns(t);
+  onAutopilot = true;
+  const first = await tool({ account: "Codex" });
+  assert.equal(first.isError, false);
+  assert.match(first.text, /The user hasn't answered yet: it stays asked/);
+  const second = await tool({ account: "Codex" });
+  assert.match(second.text, /The user hasn't answered yet/);
+  const { body } = await route("GET", "kuvo/work/asks");
+  assert.equal(body.asks.length, 1, "one card for the conversation and the account");
+  assert.deepEqual(body.asks[0].words, { title: "Mira asks to use a reset", body: "Codex: 1 of 2" });
+  assert.equal(spent, 0);
+});
+
+test("Always Allow while the computer with the sign-in is away: kept all the same, and the reset waits for it", async t => {
+  await bridgeRuns(t);
+  const using = tool({ account: "Codex" });
+  const [ask] = await asks();
+  away = true;
+  await route("POST", `kuvo/work/asks/${ask.id}`, { answer: "always" });
+  const said = await using;
+  assert.equal(said.isError, true);
+  assert.match(said.text, /^Always Allow is kept for this account\. hetzner can't be reached now: its reset is used there\. So no reset was used now: ask again once it's back\./);
+  assert.deepEqual(alwaysSet, [{ row: ROW, always: true }]);
+  assert.equal(spent, 0);
 });

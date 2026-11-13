@@ -9528,6 +9528,7 @@ import { randomBytes as randomBytes5 } from "crypto";
 import { mkdirSync as mkdirSync10, readFileSync as readFileSync15, renameSync as renameSync8, writeFileSync as writeFileSync12 } from "fs";
 import { dirname as dirname10 } from "path";
 var isResetMail = (value) => value !== null && typeof value === "object" && value.kind === "reset";
+var OPEN = new Set(["unknown", "unconfirmed"]);
 var MINUTE = 60000;
 var CONFIRM_FOR = 10 * MINUTE;
 var PEER_WAIT = 45000;
@@ -9544,7 +9545,7 @@ class LimitResets {
   peerWait;
   confirms = new Map;
   spends = [];
-  always = new Set;
+  always = new Map;
   waiting = new Map;
   running = new Map;
   constructor(limits, file, now = Date.now, transport, directory, peerWait = PEER_WAIT) {
@@ -9558,26 +9559,41 @@ class LimitResets {
     limits.resets = this;
   }
   agentsMay(provider) {
-    return this.always.has(provider);
+    const allowed = this.always.get(provider);
+    if (!allowed)
+      return false;
+    const now = this.limits.accountRow(provider);
+    if (now === undefined)
+      return false;
+    if (now === allowed)
+      return true;
+    this.always.delete(provider);
+    this.save();
+    return false;
   }
   setAlways(given, on, tell = true) {
     const ownProvider = given.provider ?? (given.row ? this.limits.accountOf(given.row)?.provider : undefined);
-    const rowID = given.row ?? (given.provider ? this.limits.rows().find((each) => each.boxes.some((box) => box.here && box.provider === given.provider))?.id : undefined);
-    const row = rowID ? this.limits.rows().find((each) => each.id === rowID) : undefined;
-    const others = tell ? (row?.boxes ?? []).filter((box) => !box.here && box.key && this.reaches(box.key)) : [];
-    const ownCan = ownProvider !== undefined && !!this.limits.account(ownProvider)?.limits.reset;
+    const rowID = given.row ?? (given.provider ? this.limits.accountRow(given.provider) : undefined);
+    if (!rowID)
+      return { status: 404, message: "No account of yours by that name has resets." };
+    if (!rowID.includes("#"))
+      return { status: 409, message: "This account doesn't say who it is yet, so Always Allow can't be kept for it." };
+    const row = this.limits.rows().find((each) => each.id === rowID);
+    const ownCan = ownProvider !== undefined && !!this.limits.account(ownProvider)?.limits.reset && this.limits.accountRow(ownProvider) === rowID;
+    const others = tell ? (row?.boxes ?? []).filter((box) => !box.here && box.key && this.directory?.isPeer?.(box.key) === true) : [];
     if (!ownCan && !others.length)
-      return { status: row ? 503 : 404, message: row ? "None of your computers with this account's sign-in can be reached now." : "No account of yours by that name has resets." };
+      return { status: 404, message: "No computer of yours has this account's sign-in." };
     if (ownCan) {
       if (on)
-        this.always.add(ownProvider);
+        this.always.set(ownProvider, rowID);
       else
         this.always.delete(ownProvider);
       this.save();
       this.limits.ownChanged();
-    }
+    } else if (!on && ownProvider)
+      this.always.delete(ownProvider);
     for (const box of others)
-      this.transport.send(box.key, { kind: "reset", at: this.now(), always: { row: row.id, on } }, true);
+      this.transport?.send(box.key, { kind: "reset", at: this.now(), always: { row: rowID, on } }, true);
     return null;
   }
   ask(rowID) {
@@ -9624,7 +9640,7 @@ class LimitResets {
     };
   }
   async spend(rowID, confirm, by) {
-    const kept = this.spends.find((spend) => spend.id === confirm && spend.row === rowID);
+    const kept = this.spends.find((spend) => (spend.id === confirm || spend.also?.includes(confirm)) && spend.row === rowID);
     let result;
     if (kept?.state === "done") {
       result = { outcome: kept.outcome, ...kept.until ? { until: kept.until } : {} };
@@ -9635,17 +9651,23 @@ class LimitResets {
       if (!asked || asked.row !== rowID || this.now() - asked.at > CONFIRM_FOR)
         return { refused: { status: 404, message: "That confirmation has expired: ask again." } };
       this.confirms.delete(confirm);
-      if (asked.via) {
-        const unsettled = this.spends.find((each) => each.via === asked.via && each.row === rowID && each.state === "sending" && this.now() - each.at < UNSETTLED_FOR);
-        const spend = unsettled ?? { id: confirm, row: rowID, via: asked.via, request: confirm, at: this.now(), state: "sending", ...by ? { by } : {} };
-        if (!unsettled)
-          this.keep(spend);
+      const open = this.open(rowID, asked.via);
+      if (open) {
+        open.also = [...new Set([...open.also ?? [], confirm])].slice(-20);
+        this.save();
+        result = open.via ? await this.passed(open) : await this.here(open.id, rowID, open.provider ?? asked.provider, open.by ?? by);
+      } else if (asked.via) {
+        const spend = { id: confirm, row: rowID, via: asked.via, request: confirm, at: this.now(), state: "sending", ...by ? { by } : {} };
+        this.keep(spend);
         result = await this.passed(spend);
       } else {
         result = await this.here(confirm, rowID, asked.provider, by);
       }
     }
     return { done: { ...result, ...words2(result.outcome) ? { message: words2(result.outcome) } : {}, row: this.limits.rows().find((each) => each.id === rowID) } };
+  }
+  open(rowID, via) {
+    return this.spends.findLast((each) => each.row === rowID && each.state === "sending" && (via ? each.via === via : !each.via) && this.now() - each.at < UNSETTLED_FOR);
   }
   take(from, mail) {
     if (!isResetMail(mail))
@@ -9666,7 +9688,14 @@ class LimitResets {
     if (!ask || typeof ask.id !== "string" || !/^[A-Za-z0-9_-]{1,80}$/.test(ask.id) || typeof ask.row !== "string")
       return;
     const by = typeof ask.by === "string" ? ask.by.slice(0, 200) : undefined;
-    this.here(`${from}:${ask.id}`, ask.row, undefined, by).then((result) => {
+    const id = `${from}:${ask.id}`;
+    const known = this.spends.find((each) => each.id === id || each.also?.includes(id));
+    const open = known ? undefined : this.open(ask.row);
+    if (open) {
+      open.also = [...new Set([...open.also ?? [], id])].slice(-20);
+      this.save();
+    }
+    this.here(known?.id ?? open?.id ?? id, ask.row, open?.provider, by).then((result) => {
       this.transport?.send(from, { kind: "reset", at: this.now(), answer: { id: ask.id, ...result } }, false);
     });
   }
@@ -9698,7 +9727,7 @@ class LimitResets {
     if (!answer)
       return { outcome: "unknown" };
     const outcome = OUTCOMES.has(answer.outcome) ? answer.outcome : "unknown";
-    if (outcome !== "unknown") {
+    if (!OPEN.has(outcome)) {
       spend.state = "done";
       spend.outcome = outcome;
       if (typeof answer.until === "number")
@@ -9725,12 +9754,7 @@ class LimitResets {
     if (this.limits.held(account.provider))
       return this.settle(spend, id, rowID, "not-now");
     if (!spend) {
-      const unsettled = this.spends.find((each) => each.provider === account.provider && each.state === "sending" && !each.via && this.now() - each.at < UNSETTLED_FOR);
-      spend = { id, row: rowID, provider: account.provider, request: unsettled?.request ?? requestID(), ...unsettled?.target ? { target: unsettled.target } : {}, at: this.now(), state: "sending", ...by ? { by } : {} };
-      if (unsettled) {
-        unsettled.state = "done";
-        unsettled.outcome = "failed";
-      }
+      spend = { id, row: rowID, provider: account.provider, request: requestID(), at: this.now(), state: "sending", ...by ? { by } : {} };
       this.keep(spend);
     }
     const kept = spend;
@@ -9744,7 +9768,7 @@ class LimitResets {
       result = { outcome: "unknown" };
     }
     console.error(`limits: a reset of ${account.provider} ${result.outcome === "reset" ? "was used" : `didn't go through (${result.outcome})`}${kept.by ? `, asked by ${kept.by}` : ""}.`);
-    if (result.outcome !== "unknown") {
+    if (!OPEN.has(result.outcome)) {
       kept.state = "done";
       kept.outcome = result.outcome;
       if (result.until)
@@ -9775,9 +9799,11 @@ class LimitResets {
     try {
       const saved = JSON.parse(readFileSync15(this.file, "utf8"));
       this.spends = (Array.isArray(saved.spends) ? saved.spends : []).filter((spend) => spend && typeof spend.id === "string" && typeof spend.request === "string" && typeof spend.row === "string");
-      for (const provider of Array.isArray(saved.always) ? saved.always : [])
-        if (typeof provider === "string")
-          this.always.add(provider);
+      if (saved.always && typeof saved.always === "object" && !Array.isArray(saved.always)) {
+        for (const [provider, row] of Object.entries(saved.always))
+          if (typeof row === "string" && row.includes("#"))
+            this.always.set(provider, row);
+      }
     } catch {}
   }
   save() {
@@ -9786,7 +9812,7 @@ class LimitResets {
     const at = this.now();
     this.spends = this.spends.filter((spend) => spend.state === "sending" || at - spend.at < KEEP_FOR).slice(-KEEP);
     mkdirSync10(dirname10(this.file), { recursive: true });
-    writeFileSync12(this.file + ".new", JSON.stringify({ spends: this.spends, always: [...this.always] }), { mode: 384 });
+    writeFileSync12(this.file + ".new", JSON.stringify({ spends: this.spends, always: Object.fromEntries(this.always) }), { mode: 384 });
     renameSync8(this.file + ".new", this.file);
   }
 }
@@ -10050,6 +10076,7 @@ class Limits {
         windows: entry.windows,
         ...entry.balance ? { balance: entry.balance } : {},
         ...extrasOf(entry, account.limits) ? { extras: extrasOf(entry, account.limits, this.resets?.agentsMay(account.provider)) } : {},
+        ...this.resets?.agentsMay(account.provider) ? { agentsReset: true } : {},
         ...entry.checked ? { checked: entry.checked } : {},
         ...account.limits.read ? { next: entry.next } : {},
         ...problem ? { problem } : {}
@@ -10063,6 +10090,11 @@ class Limits {
       const identity = this.entries.get(account.provider)?.identity;
       return (identity ? `${account.service}#${identity}` : `${own}/${account.provider}`) === rowID;
     });
+  }
+  accountRow(provider) {
+    const account = this.account(provider);
+    const identity = this.entries.get(provider)?.identity;
+    return account && identity ? `${account.service}#${identity}` : undefined;
   }
   forced = new Set;
   readAgain(provider) {
@@ -14401,7 +14433,8 @@ class ClaudeAgent {
       return claimClaudeGrant(signIn, version, await claudeOrganization(this.instance.home, signIn, version), grant, attempt);
     },
     afterReset: () => {
-      this.grants = undefined;
+      if (this.grants)
+        this.grants = { ...this.grants, at: -Infinity };
     }
   };
   grants;
@@ -16629,10 +16662,7 @@ class CodexAgent {
     every: 10 * 60000,
     read: (now) => this.readLimits(now),
     identity: () => this.chatGPTAccount(),
-    reset: (attempt, now) => spendCodexReset(this.chatGPTSignIn(), attempt, now),
-    afterReset: () => {
-      this.resetsRead = undefined;
-    }
+    reset: (attempt, now) => spendCodexReset(this.chatGPTSignIn(), attempt, now)
   };
   chatGPTSignIn() {
     try {
@@ -20018,7 +20048,7 @@ async function organizationCredits(secret, now) {
   const read = async (org) => {
     try {
       const response = await fetch(`${engineEndpoints.githubBilling}/${encodeURIComponent(org)}/settings/billing/usage/summary`, { headers: githubHeaders(secret), signal: AbortSignal.timeout(15000) });
-      if (response.status === 429 || response.status >= 500)
+      if (notNow(response))
         return;
       if (!response.ok)
         return null;
@@ -20042,6 +20072,8 @@ async function organizationCredits(secret, now) {
   let orgs;
   try {
     const response = await fetch(engineEndpoints.githubOrgs, { headers: githubHeaders(secret), signal: AbortSignal.timeout(15000) });
+    if (notNow(response))
+      return known?.extras;
     if (!response.ok) {
       billingOrgs.set(key, { none: now });
       return;
@@ -20062,6 +20094,11 @@ async function organizationCredits(secret, now) {
   }
   billingOrgs.set(key, { none: now });
   return;
+}
+function notNow(response) {
+  if (response.status === 429 || response.status >= 500)
+    return true;
+  return response.status === 403 && (response.headers.has("retry-after") || response.headers.get("x-ratelimit-remaining") === "0");
 }
 function billingExtras(body) {
   const items = Array.isArray(body?.usageItems) ? body.usageItems : null;
@@ -35227,9 +35264,11 @@ class LimitsPeers {
     if (!this.transport.followed || !this.directory.told)
       return;
     const now = this.now();
-    const accounts = this.shared();
-    const json = JSON.stringify(accounts);
+    const mine = this.shared();
+    const theirs = forVouched(mine);
     for (const { key } of this.directory.peerBoxes()) {
+      const accounts = this.ours(key) ? mine : theirs;
+      const json = JSON.stringify(accounts);
       const last = this.told.get(key);
       const due = !last || now - last.at >= TELL_AGAIN3 || last.json !== json && (urgent || now - last.at >= HEARD_EVERY);
       if (!due)
@@ -35280,9 +35319,9 @@ class LimitsPeers {
       asks.set(box.key, [...asks.get(box.key) ?? [], row.id]);
     }
     const now = this.now();
-    const accounts = this.shared();
+    const mine = this.shared();
     for (const [key, refresh] of asks)
-      this.transport.send(key, { kind: "limits", at: now, accounts, refresh }, false);
+      this.transport.send(key, { kind: "limits", at: now, accounts: this.ours(key) ? mine : forVouched(mine), refresh }, false);
   }
   idOf(account, identity) {
     return identity ? `${account.service}#${identity}` : `${this.directory.own()?.key ?? ""}/${account.provider}`;
@@ -35294,9 +35333,12 @@ class LimitsPeers {
     if (now - (this.answered.get(key) ?? -Infinity) < HEARD_EVERY)
       return;
     this.answered.set(key, now);
-    const accounts = this.shared();
+    const accounts = this.ours(key) ? this.shared() : forVouched(this.shared());
     this.transport.send(key, { kind: "limits", at: now, accounts }, false);
     this.told.set(key, { json: JSON.stringify(accounts), at: now });
+  }
+  ours(key) {
+    return this.directory.isPeer?.(key) === true;
   }
   shared() {
     const accounts = this.limits.list(false);
@@ -35346,6 +35388,14 @@ class LimitsPeers {
       renameSync24(this.file + ".new", this.file);
     } catch {}
   }
+}
+function forVouched(accounts) {
+  return accounts.map((account) => {
+    const { agentsReset: _, ...told } = account;
+    const extras = (account.extras ?? []).filter((extra) => extra.kind === "resets" || extra.kind === "unreadable").map(({ agents: __, ...extra }) => extra);
+    delete told.extras;
+    return extras.length ? { ...told, extras } : told;
+  });
 }
 var text7 = (value, most = 200) => typeof value === "string" && value ? value.slice(0, most) : undefined;
 var time2 = (value) => typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
@@ -35422,6 +35472,7 @@ function takenAccount2(given, off, now) {
     windows,
     ...balance && typeof balance === "object" && typeof balance.left === "number" && (balance.unit === "usd" || balance.unit === "credits") ? { balance: { left: balance.left, ...typeof balance.limit === "number" ? { limit: balance.limit } : {}, unit: balance.unit } } : {},
     ...extras.length ? { extras } : {},
+    ...account.agentsReset === true ? { agentsReset: true } : {},
     ...checked ? { checked } : {},
     ...next ? { next } : {},
     ...problem && typeof problem === "object" && PROBLEMS.has(problem.kind) && text7(problem.message, 500) ? { problem: { kind: problem.kind, message: text7(problem.message, 500), ...time2(problem.until) ? { until: problem.until + off } : {} } } : {}
@@ -35807,4 +35858,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 46b2e2757b579859e71895250ab540c41cdbf4921280e746f06e8f6346358fbb
+// Built from Packages/Box/src/agents 3f118da879f9d2015ebf5de0be67f7aac733c853cbe7a53c8e795318c632a992

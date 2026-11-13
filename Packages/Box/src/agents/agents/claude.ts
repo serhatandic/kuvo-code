@@ -457,8 +457,10 @@ export class ClaudeAgent implements Agent {
           if (!signIn || (!grant && !attempt.target)) return { outcome: "no-reset" }
           return claimClaudeGrant(signIn, version, await claudeOrganization(this.instance.home, signIn, version), grant, attempt)
         },
+        // Read again at the next read, what was read standing meanwhile (a read that fails then
+        // keeps it, never none).
         afterReset: () => {
-          this.grants = undefined
+          if (this.grants) this.grants = { ...this.grants, at: -Infinity }
         },
       }
 

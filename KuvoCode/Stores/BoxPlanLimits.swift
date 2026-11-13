@@ -71,9 +71,14 @@ final class BoxPlanLimits {
     /// are read again as it answers.
     func useReset(_ row: String, confirm: String) async throws -> HostResetDone {
         let api = try resetBox()
-        let done = try await api.client.send(try api.client.request("POST", BoxLimits.bridgeResetPath, body: ResetAsk(row: row, confirm: confirm)), as: DataEnvelope<ResetDone>.self, patience: .seconds(90)).data
+        let done: ResetDone
+        do {
+            done = try await api.client.send(try api.client.request("POST", BoxLimits.bridgeResetPath, body: ResetAsk(row: row, confirm: confirm)), as: DataEnvelope<ResetDone>.self, patience: .seconds(90)).data
+        } catch let error as ServerError where error.status == 404 {
+            throw HostResetExpired()
+        }
         refreshAll()
-        return HostResetDone(succeeded: done.succeeded, message: done.succeeded ? nil : ResetWords.failure(done))
+        return HostResetDone(succeeded: done.succeeded, message: done.succeeded ? nil : ResetWords.failure(done), stillOpen: done.stillOpen)
     }
 
     /// A box's bridge is up (again): what it has is read.
@@ -226,8 +231,11 @@ final class BoxPlanLimits {
 
     /// An account's resets as its own box states them (Settings › Accounts, that box's page), by
     /// its provider there: whether agents may use them without asking.
-    func resets(of provider: String, on machine: String?) -> LimitsAccount.Extra? {
-        boxes[machine ?? ""]?.accounts.first { $0.provider == provider }?.resets
+    func resets(of provider: String, on machine: String?) -> (has: Bool, agents: Bool)? {
+        guard let account = boxes[machine ?? ""]?.accounts.first(where: { $0.provider == provider }) else { return nil }
+        // (Shown while it's on, resets or not, so it can always be turned off.)
+        let agents = account.agentsReset || account.resets?.agents == true
+        return account.resets != nil || agents ? (account.resets != nil, agents) : nil
     }
 
     /// Always Allow for an account's resets, on or off, kept with the account on its box.
