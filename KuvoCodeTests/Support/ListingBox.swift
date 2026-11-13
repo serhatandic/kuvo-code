@@ -1,5 +1,6 @@
 import Foundation
 import KuvoLink
+import Testing
 @testable import KuvoCode
 
 /// This Mac's box's session list for a test (`kuvo/sessions/list`, PROTOCOL.md "Session lists"),
@@ -81,7 +82,7 @@ nonisolated final class ListingBox: BoxTransport, @unchecked Sendable {
         return AsyncThrowingStream { continuation in
             guard path == "kuvo/sessions/list" || path == "kuvo/sessions/list/events" else {
                 if let rest = lock.withLock({ rest }) {
-                    let task = Task {
+                    let task = Task { @MainActor in
                         do {
                             for try await part in rest.send(request) { continuation.yield(part) }
                             continuation.finish()
@@ -137,7 +138,7 @@ nonisolated final class ListingBox: BoxTransport, @unchecked Sendable {
     }
 
     /// A real box's projects and worktrees, as it answers `kuvo/projects`.
-    private static func projects(from box: BoxTransport) async -> Projects? {
+    @MainActor private static func projects(from box: BoxTransport) async -> Projects? {
         var data = Data()
         var status = 0
         do {
