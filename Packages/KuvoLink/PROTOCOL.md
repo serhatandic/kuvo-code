@@ -4767,8 +4767,11 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `bots.job` | a bot's job as its box's record: `jobDetails` in `kuvo/bots`, `job` in `PATCH kuvo/bots/<id>` |
 | `bots.keys` | `kuvo/bots/<id>/keys…` |
 | `bots.make` | `kuvo/bots/templates` and `POST kuvo/bots` |
+| `box.app` | `kuvo/box/app` and `kuvo/box/app/open`: this Mac's app registering with a Mac's box in a home of its own, and opened by it for its agents' browser ("This Mac's box: this Mac's app") |
 | `box.ownHome` | a Mac's box can run in a home of its own, laid out as a machine's (`box/kind`, "This Mac's box: a home of its own"); there, `keepsAwake` and `awakeNow` in `kuvo/work/settings` |
 | `box.rehome` | `kuvo/box/rehome`: moving this Mac's box into a home of its own, and back ("This Mac's box: moving this Mac's box"); `kuvo-link.js rehome`, and `here`'s `moving` |
+| `box.serve` | `kuvo/box/serve`: the box's server kept running for clients ("Kept for clients"); `kuvo-link.js serve --kept` |
+| `box.uninstall` | `kuvo-link.js uninstall [--check]`: removing Kuvo Code from this computer ("Uninstalling") |
 | `branch` | `kuvo/agents/api/kuvo/branch/<session>`: Branch from here, marked |
 | `browser` | a machine only: `kuvo/browser`, its browser set up by the box itself ("The browser on a machine") |
 | `btw` | `kuvo/agents/api/kuvo/btw…`: side questions ("Side questions, handoffs and reviews") |
@@ -4989,7 +4992,11 @@ is. With the app closed, the tools are listed as the app last listed them (`run/
 and the keeper answers them through this Mac's box, as a machine's `kuvo-browser.js` does: the
 agents' tools (`POST kuvo/agent-tools`), wake-ups (kuvo-wake), `set_job` (`PATCH kuvo/bots/<id>`),
 the vault (`POST kuvo/vault/tools`), and show_file, show_widget and mark_final. Only the browser's
-tools and show_in_panel need the app: a call answers `isError`, saying Kuvo Code must be open.
+tools and show_in_panel need the app: a call answers `isError`, saying Kuvo Code must be open. A
+browser call with the app closed opens it in the background (#211: the keeper opens the app it runs
+from, once for every call waiting, 30 seconds, five minutes' rest after one that failed, never while
+an update installs). A Mac's box in a home of its own has no keeper's tools: its own
+`kuvo-browser.js` sends the browser's tools to the app, and the box opens it ("This Mac's app").
 
 Its group chats run in its coding agents' bridge, as a machine's do, with folders in the app's
 own: the chats in `groups` (`KUVO_GROUPS`), its bots' in `bots` (`KUVO_BOTS`), what it lets go
@@ -5177,6 +5184,50 @@ only for the home `KUVO_MACHINE_ROOT` names, else nothing: it never reads or ask
 same: only from Kuvo Code itself (the app, or `box route`; 403 from a phone), 409 with why when it
 can't (a machine, or nothing to move back).
 
+#### This Mac's app
+
+`box.app` (#333 piece 3). A Mac's box in a home of its own (`box/kind` says `mac`; not the app's box
+in its folder, whose keeper does this) is where its app registers, and its agents browse in the
+app's panel through it, with no Chromium of its own. A machine's box answers `409` to both routes
+(after a phone's `403` where one asks what only Kuvo Code may).
+
+- **`kuvo/box/app`**: `POST` from Kuvo Code itself (`403` from a phone), `{tools: {url, token}, bundle}`
+  as the app opens: where its panel's tools answer (MCP over HTTP, on `127.0.0.1`, `localhost` or
+  `[::1]` only, to `Authorization: Bearer <token>`), and where it's installed (a whole path to its
+  `.app`). `{tools: null}` as it quits, its place kept. `{updating: true}` as it quits to install an
+  update (today's app doesn't say it yet: #333 piece 6b, with telling the box it quits; until then
+  the box finds it gone when its tools stop answering). `bundle` left out keeps the one before. `GET` and each `POST` answer `{bundle, open,
+  updating, opening, failed}`: where it's installed (null before it ever said), whether its tools
+  answer now, whether an update installs (said in the last two minutes), whether an opening is under
+  way, and the last opening that failed, within its rest (`{at, message}`, `at` in ms). Kept in
+  `run/app.json` (`{bundle, tools, at}`, `0600`).
+- **The browser's tools.** The box's tool server (`kuvo-browser.js mcp`, as its engine and coding
+  agents run it) sends each `browser_*` call to the app's tools as it came (`tools/call`, with the
+  session's `_meta`, `x-kuvo-session` naming the conversation, and an `mcp-session-id` of its own;
+  a call stopped is told to the app as `notifications/cancelled`), and gives back what the app
+  answers. Nothing there, or something there that doesn't answer as the app's tools do (a `401`, not
+  JSON-RPC), is the app gone: the call has it opened again. Its other tools are the box's, as on a
+  machine. On a Mac the app's tools' port is refused to agents' commands in the sandbox, as the box's
+  own servers are.
+- **Opening the app**, when a browser call comes with no app registered:
+  `POST kuvo/box/app/open` (from Kuvo Code's own processes; `{gone: <token>}` says the app
+  registered with that token didn't answer, so it's taken for closed). The box decides:
+  - one opening at a time, across all its processes (`run/app-opening.json`, `{at, by}`): a call
+    while one's under way waits for it, and hears how it ended; one whose process is gone (a call
+    stopped is told to stop once, and sees its opening through; one cut off anyway), or that ran
+    past its time, is taken over;
+  - the app is opened where it last registered, by what runs as the app (its host interface's
+    `app/open`, below), and waited for: 30 seconds from the opening's start, for it to register;
+  - while an update of the app installs (`{updating: true}` in the last two minutes,
+    `run/app-updating`), it isn't opened: calls wait for Sparkle to open it;
+  - after one that failed (`run/app-open-failed.json`), none for five minutes: calls are told what
+    it said. The app registering forgets it, and the update's note.
+  It answers `200` with the app's state once the app's registered, else `503 {"message"}`, what the
+  agent's told (Kuvo Code's own words, as the keeper said them): it isn't where it was installed
+  any more; it couldn't be opened (and why); it wasn't ready within 30 seconds; it never registered
+  here (nothing to open). A call stopped while it waits stops waiting; the one that asked for the
+  opening sees it through, for the others.
+
 #### Host interface
 
 What only the app can do for this Mac's box, the box asks the app for (bridge 0.9.46): the keeper
@@ -5215,6 +5266,11 @@ application/json`:
   0.9.100);
 - `trash {"path"}` → `{}`: a folder the box put in its trash (`box/trash`, a deleted bot's), to the
   Finder's Trash (bridge 0.9.52); one anywhere else stays where it is;
+- `app/open {"bundle"}` → `{}`: Kuvo Code at `bundle` opened in the background, as the box asks for
+  its agents' browser ("This Mac's app"): no window, out of the Dock, not taking focus; one running
+  from there already is left as it is. The keeper opens only the app it runs from, whose bundle ID
+  is its own and whose signature meets its own designated requirement (`403` for anything else),
+  answering `410` when there's nothing there and `502 {"message"}` when macOS didn't open it. The open app answers `{}` (it's open). A host that doesn't know it answers `404`;
 - for its link (bridge 0.9.61, "The relay, on this Mac's box"):
   - `link/identity {}` → `{"key", "secret", "sign"}` (each 32 bytes, base64url): this Mac's link
     key, relay secret and signing key, from the Keychain, never asking you to unlock it; `503` while
@@ -6967,6 +7023,51 @@ engine again when it ends, unless it was stopped on purpose (`run/stopped`), and
 running while it has something to answer: a phone paired, a pairing waiting, or peers
 (`run/link.needed`, which the bridge writes). The bridge stays up while the engine is down, and
 starts the keeper when it isn't running. A Mac quitting or disconnecting leaves all of it running.
+
+**Kept for clients** (`box.serve`, #333 piece 3). While a client wants the box's own server here
+(`run/serve.needed`: `POST kuvo/box/serve {needed: true}`, from Kuvo Code itself (`403` from a
+phone), which starts the
+keeper too if it isn't running; `{needed: false}` lets it go), the keeper keeps `kuvo-link.js serve
+--kept` running, as it keeps the link, starting it again within a round (15 s) when it ends. It
+answers clients' routes as `serve` does, streams included, at `127.0.0.1`, with a password of its
+own, where `run/serve.json` says (`{pid, port, password, kept: true}`, `0600`); on a Mac its port
+is refused to agents' commands in the sandbox, as the box's other servers are, from the sandbox's
+next look (ten seconds at most). It does nothing else: what the
+box does in the background stays with its link and its keeper. It goes once `run/serve.needed` is
+gone (it looks every 30 s) or another took its place, after an update (the keeper starts the new
+one), and with `kuvo-start off`, which takes `run/serve.needed` away too (and stops only a server
+its record says it keeps, `kept`). One at a time: one
+started while another runs leaves. `GET kuvo/box/serve` answers `{needed, serving}`. Not on a Mac's
+own box (`409`): its server is Kuvo Code's to run.
+
+**Uninstalling** (`box.uninstall`, #333 piece 3). Removing Kuvo Code from a computer is the box's
+own command, which the app or a Terminal line runs: `kuvo-link.js uninstall`. Nothing of the box
+starts again, and nothing of it runs:
+- the launch agent that starts it at login on a Mac (`~/Library/LaunchAgents/run.kuvo.code.machine.plist`)
+  is let go of (`launchctl bootout gui/<uid>/run.kuvo.code.machine`) and removed, first, so nothing
+  starts it as it stops;
+- its line in your crontab (by its mark, `# kuvo-code: starts its engine again after a restart`)
+  is taken out, the rest kept; a crontab that can't be read is never written over;
+- `run/serve.needed` and `run/link.needed` go, it's marked off (`run/off`), and its keeper stops
+  everything for good (`kuvo-start off`, run only where its script names this very folder, with
+  `HOME` the folder around it, so another home's box is never touched); then whatever of it still
+  runs by its records (its keeper, engine, coding agents, link, server and browser, each only while
+  its process's command line says it's that one), waiting up to ten seconds for them to end.
+
+Its folder stays, with your sessions and settings: the command says where, for you to remove (or the
+app to move to the Trash). The launch agent and the crontab line are touched only for the real
+`~/.kuvo-code` (a test's home uses stand-ins it names, `KUVO_TEST_UNINSTALL_TOOLS`, else leaves
+both alone). It prints one JSON line: `{result: "uninstalled" | "unfinished", stopped, launchAgent,
+crontab, startsAgain, left, message}` (`startsAgain`, what it found but couldn't take away, the
+launch agent or the crontab line; `left`, the folders it leaves), says `message` on stderr, and
+exits 0 when everything's stopped and nothing would start it again, 1 otherwise (run it again) or
+for a folder that isn't a box (neither `bin/kuvo-start` nor `run`, `{result: "refused"}`), 2 for an
+argument it doesn't know. `uninstall --check` changes nothing and says what it would stop: `{folder, kind, running,
+starts: {launchAgent, crontab, checked}, bots, wakes, phones, computers}` (what runs of it now, by
+name; whether its launch agent and crontab line are there, `checked` false where it doesn't look;
+how many bots, wake-ups and watches, phones paired, and your other computers it talks to). This
+Mac's box in its app's folder refuses both (exit 1, `{result: "refused", message}`): the app's own
+keeper runs it, and removing Kuvo Code removes that.
 
 **A server that hangs while running** (from 0.9.201, on this Mac and on machines alike:
 `src/shared/hang.ts`). The coding agents' bridge watches the engine, and the link watches the

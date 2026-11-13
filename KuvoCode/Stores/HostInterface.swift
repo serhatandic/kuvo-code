@@ -2,6 +2,7 @@ import AppKit
 import CryptoKit
 import Foundation
 import KuvoLink
+import Security
 
 /// What this Mac's box asks its app for, that only the app can do (KuvoLink's PROTOCOL.md, "Host
 /// interface"): Kuvo Code's own keys in your Keychain, by name, which a machine's box keeps in its
@@ -334,6 +335,13 @@ final class HostInterface {
             let headers = (given["headers"] as? [String: Any])?.compactMapValues { $0 as? String } ?? [:]
             let phone = (given["phone"] as? String).flatMap { Data(base64URL: $0) }
             return await Self.answer(phoneLink.answerForBox(LinkRequest(method: method, path: path, headers: headers, body: body), phone: phone))
+        case "/app/open":
+            // Kuvo Code opened for its box's browser (#333 piece 3): the box decides when (one
+            // opening for every call waiting, its time, its rest), and only the act of opening is
+            // here, with what runs as the installed app (the keeper; the open app is open already).
+            guard let bundle = given["bundle"] as? String, bundle.hasPrefix("/") else { return .init(status: 400) }
+            if appAnswers { return .json([:]) }
+            return await Self.openApp(at: URL(filePath: bundle), runningFrom: Bundle.main.bundleURL)
         case "/trash":
             // What the box let go of (a deleted bot's folder), from its own trash folder only, to
             // the Finder's Trash, where you look for what you deleted.
@@ -392,6 +400,46 @@ extension HostInterface {
             if let value = response.value(forHTTPHeaderField: name) { headers[name] = value }
         }
         return HTTPResponse(status: response.statusCode, headers: headers, stream: stream)
+    }
+
+    /// Kuvo Code at `bundle`, opened in the background as the keeper opens it for an agent's browser
+    /// (`AppOpener.openQuietly`: no window, out of the Dock, not taking focus; one running already
+    /// is left as it is). Only the app this runs from (`runningFrom`: the keeper's own, as #211
+    /// opened it; never another copy, an older one say, that the box was told of), whose Info.plist
+    /// says it's Kuvo Code (its bundle ID) and whose signature meets this one's own designated
+    /// requirement (the same identifier and team; a development build's, this very build). 410 when
+    /// it isn't there any more, 403 for another app, 502 with why it couldn't be opened.
+    static func openApp(at bundle: URL, runningFrom own: URL) async -> HTTPResponse {
+        func said(_ status: Int, _ message: String) -> HTTPResponse {
+            var answer = HTTPResponse.json(["message": message])
+            answer.status = status
+            return answer
+        }
+        guard FileManager.default.fileExists(atPath: bundle.path(percentEncoded: false)) else { return said(410, "It isn’t there any more.") }
+        let place = { (url: URL) in url.resolvingSymlinksInPath().standardizedFileURL.path(percentEncoded: false).trimmingCharacters(in: CharacterSet(charactersIn: "/")) }
+        guard place(bundle) == place(own) else { return said(403, "That isn’t the Kuvo Code this runs from.") }
+        guard let id = Bundle(url: bundle)?.bundleIdentifier, id == Bundle.main.bundleIdentifier,
+              await Task.detached(operation: { isSignedAsThis(bundle) }).value else { return said(403, "That isn’t Kuvo Code.") }
+        do {
+            try await AppOpener.openQuietly(bundle)
+            return .json([:])
+        } catch {
+            return said(502, error.localizedDescription)
+        }
+    }
+
+    /// Whether the app at `bundle` is signed as this running one is: its signature valid, meeting
+    /// this process's own designated requirement.
+    nonisolated static func isSignedAsThis(_ bundle: URL) -> Bool {
+        var running: SecCode?
+        var own: SecStaticCode?
+        var requirement: SecRequirement?
+        var given: SecStaticCode?
+        guard SecCodeCopySelf([], &running) == errSecSuccess, let running,
+              SecCodeCopyStaticCode(running, [], &own) == errSecSuccess, let own,
+              SecCodeCopyDesignatedRequirement(own, [], &requirement) == errSecSuccess, let requirement,
+              SecStaticCodeCreateWithPath(bundle as CFURL, [], &given) == errSecSuccess, let given else { return false }
+        return SecStaticCodeCheckValidity(given, SecCSFlags(rawValue: kSecCSCheckAllArchitectures), requirement) == errSecSuccess
     }
 
     /// What only the open app answers, asked while it isn't.

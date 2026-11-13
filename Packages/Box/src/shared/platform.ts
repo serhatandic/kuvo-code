@@ -66,6 +66,15 @@ export function commandLineOf(pid: number, proc = "/proc"): string | undefined {
   }
 }
 
+/** Whether `pid` runs as the role `role` says, by its command line as read (`commandLineOf`), never
+ * taken on trust where it can't be read: for what's stopped by a recorded number, or a record
+ * believed. `role` is matched against its words joined by spaces (`/kuvo-link\.js serve --kept/`). */
+export function runsAs(pid: unknown, role: RegExp, proc = "/proc"): boolean {
+  if (!Number.isInteger(pid) || (pid as number) <= 1 || !alive(pid as number)) return false;
+  const line = commandLineOf(pid as number, proc);
+  return line !== undefined && role.test(line);
+}
+
 /**
  * The folders in a home folder that the system asks you about before an app looks into them:
  * on a Mac, its privacy prompts (so a folder list from the home folder doesn't look inside

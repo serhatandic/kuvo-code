@@ -3074,10 +3074,19 @@
             "literal": "bots.make"
            },
            {
+            "literal": "box.app"
+           },
+           {
             "literal": "box.ownHome"
            },
            {
             "literal": "box.rehome"
+           },
+           {
+            "literal": "box.serve"
+           },
+           {
+            "literal": "box.uninstall"
            },
            {
             "literal": "branch"
@@ -3490,10 +3499,19 @@
             "literal": "bots.make"
            },
            {
+            "literal": "box.app"
+           },
+           {
             "literal": "box.ownHome"
            },
            {
             "literal": "box.rehome"
+           },
+           {
+            "literal": "box.serve"
+           },
+           {
+            "literal": "box.uninstall"
            },
            {
             "literal": "branch"
@@ -4499,6 +4517,115 @@
         "null"
        ]
       }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/box/app",
+   "answers": {
+    "200": {
+     "object": {
+      "bundle": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "open": "bool",
+      "updating": "bool",
+      "opening": "bool",
+      "failed": {
+       "oneOf": [
+        {
+         "object": {
+          "at": "number",
+          "message": "string"
+         }
+        },
+        "null"
+       ]
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/box/app",
+   "answers": {
+    "200": {
+     "object": {
+      "bundle": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "open": "bool",
+      "updating": "bool",
+      "opening": "bool",
+      "failed": {
+       "oneOf": [
+        {
+         "object": {
+          "at": "number",
+          "message": "string"
+         }
+        },
+        "null"
+       ]
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/box/app/open",
+   "answers": {
+    "200": {
+     "object": {
+      "bundle": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "open": "bool",
+      "updating": "bool",
+      "opening": "bool",
+      "failed": {
+       "oneOf": [
+        {
+         "object": {
+          "at": "number",
+          "message": "string"
+         }
+        },
+        "null"
+       ]
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/box/serve",
+   "answers": {
+    "200": {
+     "object": {
+      "needed": "bool",
+      "serving": "bool"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/box/serve",
+   "answers": {
+    "200": {
+     "object": {
+      "needed": "bool",
+      "serving": "bool"
      }
     }
    }

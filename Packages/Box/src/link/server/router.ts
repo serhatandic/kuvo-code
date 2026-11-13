@@ -54,6 +54,8 @@ import { isMachinesRoute } from "../mac/machines";
 import { linkRoute } from "../mac/routes";
 import { updateRoute } from "../updates/update";
 import { rehomeRoute } from "../rehome/route";
+import { appOpenRoute, appRoute } from "../mac/app";
+import { serveRoute } from "../serve-kept";
 import { browserRoute } from "../browser/install";
 import { IS_MAC } from "../home";
 import { vaultRoute } from "../areas/vault";
@@ -82,6 +84,11 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route === "kuvo/update", answer: updateRoute },
   // Moving this Mac's box into a home of its own (PROTOCOL.md, "Moving this Mac's box").
   { when: route => route === "kuvo/box/rehome", answer: rehomeRoute },
+  // This Mac's app, registered with a Mac's box in a home of its own, and opened for its browser
+  // (PROTOCOL.md, "This Mac's app"); the box's server kept for clients ("Kept for clients").
+  { when: route => route === "kuvo/box/app", answer: appRoute },
+  { when: route => route === "kuvo/box/app/open", answer: appOpenRoute },
+  { when: route => route === "kuvo/box/serve", answer: serveRoute },
   // (A machine's: this Mac's agents browse in its app's panel.)
   { when: route => !IS_MAC && route === "kuvo/browser", answer: browserRoute },
   { when: (route, request) => /^kuvo\/integrations(\/|\?|$)/.test(request.path), answer: integrationsRoute },
