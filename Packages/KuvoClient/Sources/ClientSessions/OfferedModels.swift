@@ -45,23 +45,37 @@ public struct OfferedModels: Decodable, Equatable, Sendable {
         }
     }
 
-    public var models: [Entry]
+    public var models: [Entry] {
+        didSet { index = Self.index(models) }
+    }
     public var known: Known
     /// The model a new session starts on, for the one asked about: `.some(nil)` for none (nothing
     /// runs there); nil where it wasn't said (the engine can't say yet).
     public var starting: ModelRef??
 
+    /// `models` by provider and id, for `runs` (asked of every model a picker draws).
+    private var index: Set<String>
+
+    private static func index(_ models: [Entry]) -> Set<String> {
+        Set(models.map { key($0.providerID, $0.id) })
+    }
+
+    private static func key(_ providerID: String, _ id: String) -> String { providerID + "\u{0}" + id }
+
     public init(models: [Entry], known: Known, starting: ModelRef?? = nil) {
         self.models = models
         self.known = known
         self.starting = starting
+        index = Self.index(models)
     }
 
     private enum CodingKeys: String, CodingKey { case models, known, starting }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        models = try container.decode([Entry].self, forKey: .models)
+        let models = try container.decode([Entry].self, forKey: .models)
+        self.models = models
+        index = Self.index(models)
         known = try container.decode(Known.self, forKey: .known)
         starting = container.contains(.starting) ? .some(try container.decodeIfPresent(ModelRef.self, forKey: .starting)) : nil
     }
@@ -98,7 +112,7 @@ public struct OfferedModels: Decodable, Equatable, Sendable {
     /// By its own id (a picker's models are listed by theirs).
     public func runs(_ ref: ModelRef, isAgent: (String) -> Bool) -> Bool? {
         guard isKnown(ref.providerID, isAgent: isAgent) else { return nil }
-        return models.contains { $0.providerID == ref.providerID && $0.id == ref.id }
+        return index.contains(Self.key(ref.providerID, ref.id))
     }
 
     /// This answer, with what `before` said of a side this one couldn't say (the agents' bridge
