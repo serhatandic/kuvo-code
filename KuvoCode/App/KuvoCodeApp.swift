@@ -93,10 +93,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let updates = Updates()
 
     func applicationWillFinishLaunching(_ notification: Notification) {
-        // Opened from the disk image, it can't update itself: it offers to move to Applications.
-        AppLocation.offerMove()
-        // Opened again after an update installed from the background: there again, without
-        // showing in the Dock on the way.
+        // Opened from the disk image, it can't update itself: it offers to move to Applications
+        // (not when the keeper opened it for an agent, with nobody looking).
+        if !InBackground.shared.openedQuietly { AppLocation.offerMove() }
+        // Opened again after an update installed from the background, or by the keeper for an
+        // agent's browser: there again, without showing in the Dock on the way.
         if InBackground.shared.relaunchesInBackground { NSApp.setActivationPolicy(.accessory) }
     }
 
@@ -104,16 +105,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // This Mac's box, at work from launch: at login, in the background, without the window,
         // which goes as soon as it's there (it opens with the app); opening Kuvo Code brings it.
         model.startedAtLogin = Self.launchedAtLogin
+        // Open again after an update: the keeper may open it for an agent's browser again.
+        try? FileManager.default.removeItem(at: AppOpener.updateFile)
         Task { [model] in await model.start() }
         InBackground.shared.keepsWorking = { [weak model] in model?.keepsWorkingAfterQuit ?? false }
-        // Relaunched after an update installed from the background (`InBackground`): the same,
-        // unless you opened it meanwhile.
+        // Relaunched after an update installed from the background, or opened hidden by the
+        // keeper for an agent's browser (`InBackground`): the same, unless you opened it
+        // meanwhile. Opened hidden, its window is closed unseen, and it's shown again after (with
+        // nothing to show), so its menu bar panels open.
         let intoBackground = InBackground.shared.relaunchesInBackground
         if model.startedAtLogin || intoBackground {
             for delay in [0.0, 0.2, 0.6, 1.5] {
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                     if intoBackground, !InBackground.shared.isOn { return }
-                    for window in NSApp.windows where InBackground.isMainWindow(window) && window.isVisible { window.close() }
+                    for window in NSApp.windows where InBackground.isMainWindow(window) && (window.isVisible || intoBackground) { window.close() }
+                    if delay == 1.5, intoBackground, NSApp.isHidden { NSApp.unhideWithoutActivation() }
                 }
             }
         }
