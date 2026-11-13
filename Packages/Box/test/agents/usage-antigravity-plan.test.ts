@@ -3,7 +3,7 @@ import fixtures from "../fixtures/usage/antigravity-plan-cases.json"
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { AntigravityPlan, antigravitySummary, antigravityLegacy, antigravityProcPorts, discoverAntigravity } from "../../src/agents/usage/antigravity-plan"
+import { AntigravityPlan, antigravitySummary, antigravityLegacy, antigravityProcPorts, discoverAntigravity, antigravityMacOwns } from "../../src/agents/usage/antigravity-plan"
 import { Limits, LimitsProblem } from "../../src/agents/limits"
 
 const summary = (fraction = 0.75) => ({ groups: [{ buckets: ["gemini-5h", "gemini-weekly", "3p-5h", "3p-weekly"].map(bucketId => ({ bucketId, remainingFraction: fraction })) }] })
@@ -50,6 +50,13 @@ describe("Antigravity discovery", () => {
       expect(await discoverAntigravity("/missing", "linux", proc)).toEqual([])
     } finally { rmSync(root, { recursive: true, force: true }) }
   })
+  test("Mac own profile can contain spaces and regex punctuation", () => {
+    const profile = "/Users/test/Library/Application Support/Kuvo Code/profile[1]"
+    expect(antigravityMacOwns(`language_server --csrf_token fixture GEMINI_HOME=${profile} PATH=/fixture`, profile)).toBe(true)
+    expect(antigravityMacOwns(`language_server --app_data_dir=${profile} --csrf_token fixture`, profile)).toBe(true)
+    expect(antigravityMacOwns(`language_server GEMINI_HOME=${profile}-outside PATH=/fixture`, profile)).toBe(false)
+    expect(antigravityMacOwns(`language_server GEMINI_HOME=${profile} outside PATH=/fixture`, profile)).toBe(false)
+  })
   test("Mac ps/lsof stand-ins require own profile", async () => {
     const calls: string[] = []
     const runner: any = async (program: string) => { calls.push(program); return { code: 0, stdout: program.endsWith("ps") ? "10 /fixture/language_server --csrf_token fixture GEMINI_HOME=/fixture/profile\n" : "agy 10 TCP 127.0.0.1:12345 (LISTEN)\n", stderr: "" } }
@@ -78,6 +85,30 @@ describe("Antigravity own-account stand-in service", () => {
       writeFileSync(join(root, "antigravity-acp/acp_token.json"), JSON.stringify({ access_token: "old-fixture", refresh_token: "refresh-fixture", expiry: "2000-01-01T00:00:00Z" }))
       await plan.limits.read!(3000)
       expect(refreshes).toBe(1); expect(oldCalls).toBe(1)
+    } finally { server.stop(true); rmSync(root, { recursive: true, force: true }) }
+  })
+  test("malformed and unreadable sign-in retain known identity and windows", async () => {
+    const root = temp()
+    const id = `fixture.${Buffer.from(JSON.stringify({ sub: "fixture-google-user" })).toString("base64url")}.signature`
+    mkdirSync(join(root, "antigravity-acp"), { recursive: true })
+    writeFileSync(join(root, "antigravity-acp/acp_token.json"), JSON.stringify({ access_token: "fixture", id_token: id }))
+    let at = 10_000_000
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(req) { return Response.json(new URL(req.url).pathname.includes("loadCodeAssist") ? {} : summary()) } })
+    try {
+      const plan = new AntigravityPlan(() => root, undefined, async () => [], [server.url.origin])
+      const limits = new Limits(() => [{ provider: "antigravity", service: "antigravity", limits: plan.limits }], undefined, () => at)
+      await limits.tick()
+      const before = limits.list()[0]!
+      writeFileSync(join(root, "antigravity-acp/acp_token.json"), "{broken")
+      at += 610_000; await limits.tick()
+      expect(limits.list()[0]?.identity).toBe(before.identity)
+      expect(limits.list()[0]?.windows).toEqual(before.windows)
+      const raw = (plan as any).raw.bind(plan)
+      ;(plan as any).raw = () => { throw new Error("EACCES fixture") }
+      at += 610_000; await limits.tick()
+      expect(limits.list()[0]?.identity).toBe(before.identity)
+      expect(limits.list()[0]?.windows).toEqual(before.windows)
+      ;(plan as any).raw = raw
     } finally { server.stop(true); rmSync(root, { recursive: true, force: true }) }
   })
   test("holds stop further endpoints; a refusal never resends unchanged credential", async () => {

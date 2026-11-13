@@ -72,6 +72,13 @@ export function antigravityProcPorts(tables: string[], inodes: Set<string>): num
   }
   return [...ports].sort((a, b) => a - b)
 }
+const regexEscape = (value: string) => value.split("").map(c => "\\^$.*+?()[]{}|".includes(c) ? "\\" + c : c).join("")
+/** ps prints environment values with spaces without quoting them. Bound a complete assignment. */
+export function antigravityMacOwns(command: string, profile: string): boolean {
+  const value = regexEscape(profile)
+  return new RegExp(`(?:^|\\s)GEMINI_HOME=${value}(?=$|\\s+[A-Za-z_][A-Za-z_0-9]*=)`).test(command)
+    || new RegExp(`(?:^|\\s)--app_data_dir(?:=|\\s+)["']?${value}["']?(?=$|\\s+--|\\s+[A-Za-z_][A-Za-z_0-9]*=)`).test(command)
+}
 export function antigravityEndpoints(argv: string[], ports: number[]): AntigravityEndpoint[] {
   const csrf = flagValue(argv, "--csrf_token")
   if (!csrf) return []
@@ -106,7 +113,7 @@ export async function discoverAntigravity(profile: string, platform = process.pl
     const match = /^\s*(\d+)\s+(.+)$/.exec(line)
     if (!match || !/language_server|\/agy\b/.test(match[2]!)) continue
     const argv = match[2]!.split(/\s+/)
-    if (!argv.includes(`GEMINI_HOME=${profile}`) && flagValue(argv, "--app_data_dir") !== profile) continue
+    if (!antigravityMacOwns(match[2]!, profile)) continue
     const result = await runner("/usr/sbin/lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-a", "-p", match[1]!], { timeout: 5000 })
     const ports = [...new Set(result.stdout.split("\n").filter(l => l.includes("LISTEN")).flatMap(l => { const p = port(/:(\d+)\s+\(LISTEN\)/.exec(l)?.[1]); return p ? [p] : [] }))].sort((a,b) => a-b)
     const endpoints = antigravityEndpoints(argv, ports)
@@ -132,15 +139,26 @@ export class AntigravityPlan {
   private denied = new Set<string>()
   private deniedAccess = new Set<string>()
   private deniedCSRF = new Set<string>()
+  private lastCredential?: Credential
+  private lastSignIn?: string
+  private lastAccount?: string
   private access?: { credential: string; token: string; expires: number }
   readonly limits: LimitsSource
   constructor(readonly profile: () => string, private readonly fetcher: AntigravityFetch = (url, init) => fetch(url, init), private readonly discover = discoverAntigravity, private readonly bases = productionBases, private readonly oauth = "https://oauth2.googleapis.com/token") {
     this.limits = { every: 10 * 60_000, bucket: "antigravity", read: now => this.read(now), signIn: () => this.signIn(), account: () => this.account(), identity: () => this.credential()?.identity }
   }
   private raw(): string | undefined { if (!antigravityTransport.live && this.bases === productionBases) return undefined; try { return readFileSync(join(this.profile(), "antigravity-acp", "acp_token.json"), "utf8") } catch (e: any) { if (e?.code === "ENOENT") return undefined; throw new LimitsProblem("failed", "Antigravity's own sign-in cannot be read here.", undefined, false) } }
-  private credential() { try { return antigravityCredential(JSON.parse(this.raw() ?? "null")) } catch { return undefined } }
-  signIn() { try { return fingerprint(this.raw()) } catch { return "unreadable" } }
-  account() { const c = this.credential(); return fingerprint(c?.refresh ?? c?.access) }
+  private credential(): Credential | undefined {
+    try {
+      const raw = this.raw()
+      if (raw === undefined) { this.lastCredential = undefined; this.lastSignIn = undefined; this.lastAccount = undefined; return undefined }
+      const credential = antigravityCredential(JSON.parse(raw))
+      if (credential) { this.lastCredential = credential; this.lastSignIn = fingerprint(raw); this.lastAccount = fingerprint(credential.refresh ?? credential.access) }
+    } catch { /* An indeterminate read never changes the known account or its sign-in generation. */ }
+    return this.lastCredential
+  }
+  signIn() { this.credential(); return this.lastSignIn }
+  account() { this.credential(); return this.lastAccount }
   private async request(url: string, init: RequestInit & { tls?: { rejectUnauthorized: boolean } }, now: number, allowMissing = false): Promise<any> {
     let response: Response
     try { response = await this.fetcher(url, { ...init, redirect: "error", signal: AbortSignal.timeout(15000) }) } catch { throw new LimitsProblem("failed", "Antigravity's quota service is unavailable.") }
