@@ -17,9 +17,16 @@ before adding. Nothing from Zed's GPL-3.0 crates is used or copied: only `gpui` 
 | tree-sitter | MIT | Parsing code for highlighting | kuvo_ui |
 | tree-sitter-highlight | MIT | Turning parses into highlights | kuvo_ui |
 | tree-sitter-rust, -typescript, -javascript, -python, -json, -bash, -go | MIT | The grammars and their highlight queries | kuvo_ui |
+| async-channel | Apache-2.0 OR MIT | Handing what a follow sees to a UI's executor or a thread | kuvo_box |
+| base64 | MIT OR Apache-2.0 | A box's password in Basic auth; the script and bytes over SSH | kuvo_box |
+| getrandom | MIT OR Apache-2.0 | The random part of a message's id | kuvo_box |
+| libc | MIT OR Apache-2.0 | Reading a process's command line on macOS (is it the box's server?) | kuvo_box |
+| percent-encoding | MIT OR Apache-2.0 | Writing a route's path and query | kuvo_box |
+| serde, serde_json | MIT OR Apache-2.0 | Reading and writing a box's JSON | kuvo_box |
 
 GPUI's `test-support` feature (Apache-2.0, same crate) is used only by the tests and the
-`shots` binary.
+`shots` binary. `tempfile` (MIT OR Apache-2.0) gives `kuvo_box`'s tests and example folders of
+their own. Every crate `kuvo_box` uses was already in the build (below); it adds none.
 
 GPUI also brings in other crates from Zed's repository, all Apache-2.0: `gpui_apple`,
 `gpui_macos`, `gpui_macros`, `gpui_shared_string`, `gpui_util`, `collections`, `refineable`,

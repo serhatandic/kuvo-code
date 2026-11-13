@@ -2,8 +2,10 @@
 
 Phase 0 of the desktop client Kuvo will ship on GPUI (Mac first, then Linux and Windows): the
 building blocks every screen is made from, and a gallery that shows each one in light and dark.
-The box holds the logic; these blocks only draw.
+The box holds the logic; these blocks only draw. Phase 1 adds `kuvo_box`, the client of a box
+the screens will read from.
 
+- `kuvo_box/`: a client of a Kuvo box, with no GPUI ("Talking to a box", below).
 - `kuvo_ui/`: the blocks, one module each: `theme`, `icon`, `button`, `text_field`,
   `chat_list`, `markdown`, `code_block`, `menu`, `row`, `small`, plus the dotted `backdrop`.
 - `gallery/`: the gallery app (`kuvo_gallery`) and the `shots` binary.
@@ -57,3 +59,59 @@ Scenario tests drive the blocks through a window with real keystrokes, clicks an
 the text field (`kuvo_ui/tests/text_field.rs`), the chat list (`tests/chat_list.rs`) and menus
 (`tests/menu.rs`), plus unit tests for markdown parsing, highlighting, icons and the theme's
 contrast.
+
+`kuvo_box`'s tests (`cargo test -p kuvo_box`) hold it to the shared vectors in
+`Packages/KuvoLink/Vectors` (`tests/vectors.rs`), and run its scenarios against a stand-in box on
+127.0.0.1 (`tests/stand_in.rs`) and a stand-in `ssh` with a machine's home in a test folder
+(`tests/ssh.rs`). None reaches a real box, and none reads a `KUVO_*` variable.
+
+## Talking to a box
+
+`kuvo_box` is how a Rust client reaches a Kuvo box (`Packages/KuvoLink/PROTOCOL.md`): it finds
+the box, holds one that's older than it needs, and reads and changes the box's state through its
+routes. It decides nothing the box decides: it orders the sidebar as every client does, from the
+box's facts.
+
+```rust
+use kuvo_box::{BoxClient, Delivery, SshBox, Timing, follow::ListUpdate};
+
+// This Mac's own box: found by its server's record (`run/serve.json`), whose process is checked
+// to be the box's server before its password is sent. A machine's: over SSH, through
+// `kuvo-link.js box route` there.
+let client = BoxClient::this_mac(&home)?; // or BoxClient::machine(SshBox::new("me@devbox"))
+let info = client.connect()?;             // kuvo/info, and the update gate
+// A box lacking a name in `kuvo_box::gate::REQUIRED` is held: everything but what keeps work
+// going there fails with `Error::NeedsUpdating { missing }`, without reaching it.
+
+// The session lists, live: the list now, then each change.
+let lists = client.follow_sessions(Timing::default());
+while let Some(update) = lists.next_blocking() {       // a GPUI view awaits lists.updates() instead
+    if let ListUpdate::Listing(listing) = update {
+        let sidebar = listing.sidebar();                // pinned, projects in order, chats
+    }
+}
+
+// One conversation, live: its messages, and the words it streams as they come.
+let conversation = client.follow_conversation("ses_…", Timing::default());
+
+// What the composer sends: a message to the agent, or "/…" and "!…" to the box first.
+let place = client.where_is("ses_…")?;                  // its engine, or the coding agents' bridge
+client.send_text("ses_…", place, &BoxClient::new_id(), "/plan sketch it", Delivery::Now)?;
+```
+
+What it uses of the box: `kuvo/info`; `kuvo/sessions/list` and `…/events` (with `since`);
+`api/session/<id>`, `…/message` and `api/event` on the engine, and the same under
+`kuvo/agents/` for a coding agent's conversation; `kuvo/sessions/<id>/typed` (`GET` and `POST`);
+`api/session/<id>/prompt` and `kuvo/sessions/<id>/queue/add`; `kuvo/work-queue?owner=all&glance=1`
+and `kuvo/asks` for the counts.
+
+Over a box's own server, what's followed streams. A machine over SSH answers each request once,
+so its lists are read again every half minute and an open conversation every few seconds.
+
+To see it list sessions without touching a real box:
+
+```sh
+cargo run -p kuvo_box --example list_sessions -- --stand-in
+cargo run -p kuvo_box --example list_sessions                 # this Mac's own box
+cargo run -p kuvo_box --example list_sessions -- --ssh me@devbox
+```
