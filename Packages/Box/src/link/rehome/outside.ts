@@ -53,12 +53,12 @@ function gitIn(folder: string, depth: number, found: { worktrees: string[]; repo
   }
 }
 
-/** Where a `.git` file says its record is (relative to it, or whole). */
-function recordOf(worktree: string): string | null {
+/** Where a `.git` file says its record is: whole, or relative to where the worktree was (`was`). */
+function recordOf(worktree: string, was: string): string | null {
   let text = "";
   try { text = fs.readFileSync(path.join(worktree, ".git"), "utf8"); } catch { return null; }
   const found = /^gitdir:\s*(.+?)\s*$/m.exec(text);
-  return found ? path.resolve(worktree, found[1]) : null;
+  return found ? path.resolve(was, found[1]) : null;
 }
 
 /** A repository's common folder (`.git`), from a worktree's record (its `commondir`). */
@@ -68,13 +68,11 @@ function commonOf(record: string): string {
   return path.resolve(record, common);
 }
 
-/** `act` journaled, then `file` written: what it held kept in the journal, to put back. */
-function rewriteKept(file: string, write: () => void, journal: (act: Act) => void): void {
+/** What `file` holds, journaled before anything writes it, to put back going back. */
+function keepAsItWas(file: string, journal: (act: Act) => void): void {
   let was: string | null = null;
   try { was = fs.readFileSync(file, "utf8"); } catch {}
-  if (was === null) return;
-  journal({ act: "wrote", path: file, was });
-  write();
+  if (was !== null) journal({ act: "wrote", path: file, was });
 }
 
 const git = (args: string[]) => spawnSync("git", args, { encoding: "utf8", timeout: 120_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
@@ -87,35 +85,50 @@ export function repairWorktrees(placed: readonly string[], map: PathMap, journal
   for (const folder of placed) if (isFolder(folder)) gitIn(folder, 6, found);
   const isPlaced = (file: string) => placed.some(folder => inside(file, folder));
   const links: WorktreeLink[] = [];
+  // (A link relative to where its end was: `worktree.useRelativePaths`.)
+  const back = map.map(({ from, to }) => ({ from: to, to: from })).sort((a, b) => b.from.length - a.from.length);
+  const was = (file: string) => mapped(file, back);
   // Worktrees that moved: their records may name where they were, in a repository that moved too or not.
   for (const worktree of found.worktrees) {
-    const record = recordOf(worktree);
+    const record = recordOf(worktree, was(worktree));
     if (record) links.push({ worktree, record: mapped(record, map) });
   }
-  // Repositories that moved: their worktrees elsewhere name where the repository was.
+  // Repositories that moved: their worktrees name where the repository was, wherever they are
+  // (elsewhere, or inside it, where the walk doesn't look: Claude Code's `.claude/worktrees`).
   for (const repository of found.repositories) {
     for (const name of listOf(path.join(repository, ".git", "worktrees"))) {
       const record = path.join(repository, ".git", "worktrees", name);
       let gitdir = "";
       try { gitdir = fs.readFileSync(path.join(record, "gitdir"), "utf8").trim(); } catch { continue; }
-      const worktree = path.dirname(mapped(path.resolve(record, gitdir), map));
-      if (!isPlaced(worktree) && exists(path.join(worktree, ".git"))) links.push({ worktree, record });
+      const worktree = path.dirname(mapped(path.resolve(was(record), gitdir), map));
+      if (!links.some(each => each.worktree === worktree) && exists(path.join(worktree, ".git"))) links.push({ worktree, record });
     }
   }
   const repaired: string[] = [];
-  for (const { worktree, record } of links) {
-    if (!exists(record)) continue;
-    // What git rewrites that's outside the box's folders, kept to put back.
-    const gitdirFile = path.join(record, "gitdir"), gitFile = path.join(worktree, ".git");
-    let before: { gitdir: string | null; git: string | null } = { gitdir: null, git: null };
-    try { before.gitdir = fs.readFileSync(gitdirFile, "utf8"); } catch {}
-    try { before.git = fs.readFileSync(gitFile, "utf8"); } catch {}
-    for (const file of [gitdirFile, gitFile]) if (!isPlaced(file)) rewriteKept(file, () => {}, journal);
-    const common = commonOf(record);
-    const result = git(["-C", common, "worktree", "repair", worktree]);
+  const there = links.filter(({ record }) => exists(record));
+  // What git may rewrite that's outside what was placed, kept as it was to put back, all of it before
+  // any repair: repairing from a repository fixes every one of its worktrees' links (the copies still
+  // where they were too), so each record of each repository and the `.git` file it names.
+  const kept = new Set<string>();
+  const keep = (file: string) => {
+    if (isPlaced(file) || kept.has(file)) return;
+    kept.add(file);
+    keepAsItWas(file, journal);
+  };
+  for (const { worktree, record } of there) {
+    keep(path.join(record, "gitdir"));
+    keep(path.join(worktree, ".git"));
+    const records = path.join(commonOf(record), "worktrees");
+    for (const name of listOf(records)) {
+      const each = path.join(records, name);
+      keep(path.join(each, "gitdir"));
+      try { keep(path.resolve(each, fs.readFileSync(path.join(each, "gitdir"), "utf8").trim())); } catch {}
+    }
+  }
+  for (const { worktree, record } of there) {
+    // (Linked as the repository's own settings say: by relative paths, `worktree.useRelativePaths`, or whole.)
+    const result = git(["-C", commonOf(record), "worktree", "repair", worktree]);
     if (result.status !== 0) throw new Error(`The worktree ${worktree} couldn't be linked again: ${`${result.stderr}`.trim().slice(0, 300)}`);
-    // (Unchanged files needn't be journaled; harmless where they are.)
-    void before;
     repaired.push(worktree);
   }
   return repaired;
@@ -132,17 +145,23 @@ const security = (args: string[]) => spawnSync("/usr/bin/security", [...args, ..
 function readItem(service: string): { account: string; value: string } | null {
   const found = security(["find-generic-password", "-s", service]);
   if (found.status !== 0) return null;
-  const account = /"acct"<blob>="((?:[^"\\]|\\.)*)"/.exec(found.stdout)?.[1];
-  if (account === undefined) return null;
+  // (Its account as `security` prints it: in quotes, or in hex where it isn't plain text.)
+  const quoted = /"acct"<blob>="((?:[^"\\]|\\.)*)"/.exec(found.stdout)?.[1];
+  const hex = /"acct"<blob>=0x([0-9A-Fa-f]+)/.exec(found.stdout)?.[1];
+  const account = quoted ?? (hex ? Buffer.from(hex, "hex").toString("utf8") : undefined);
+  if (account === undefined) throw new Error(`Claude Code's sign-in (${service}) couldn't be read.`);
   const value = security(["find-generic-password", "-s", service, "-a", account, "-w"]);
   if (value.status !== 0) throw new Error(`Claude Code's sign-in (${service}) couldn't be read.`);
   return { account, value: value.stdout.replace(/\n$/, "") };
 }
 
-/** An item written as Claude Code writes it (`-U`, the value in hex). */
+/** An item written as Claude Code writes it: through `security -i` on its stdin (never on a command
+ * line, where your other processes could read it), `-U`, the value in hex. */
 export function writeItem(service: string, account: string, value: string): void {
-  const written = security(["add-generic-password", "-U", "-a", account, "-s", service, "-X", Buffer.from(value, "utf8").toString("hex")]);
-  if (written.status !== 0) throw new Error(`Claude Code's sign-in (${service}) couldn't be written: ${written.stderr.trim().slice(0, 200)}`);
+  const quoted = (text: string) => `"${text.replace(/(["\\])/g, "\\$1")}"`;
+  const line = ["add-generic-password", "-U", "-a", quoted(account), "-s", quoted(service), "-X", Buffer.from(value, "utf8").toString("hex"), ...keychain().map(quoted)].join(" ");
+  const written = spawnSync("/usr/bin/security", ["-i"], { input: line + "\n", encoding: "utf8", timeout: 60_000 });
+  if (written.status !== 0 || /error|usage/i.test(written.stderr ?? "")) throw new Error(`Claude Code's sign-in (${service}) couldn't be written: ${`${written.stderr}`.trim().slice(0, 200)}`);
 }
 
 export function deleteItem(service: string): void {
@@ -159,8 +178,12 @@ export function copyClaudeSignIns(accounts: readonly string[], map: PathMap, jou
     if (from === to) continue;
     const item = readItem(from);
     if (!item) continue;
+    // (One there already under the new name: the same, nothing to do; another, never written over,
+    // since going back couldn't put it back without keeping its secret in the journal.)
     const there = readItem(to);
-    journal({ act: "keychain", service: to, account: item.account, ...(there ? { was: there.value } : {}) });
+    if (there?.value === item.value) continue;
+    if (there) throw new Error(`Claude Code has another sign-in under ${path.basename(folder)}'s new name already (${to}).`);
+    journal({ act: "keychain", service: to, account: item.account });
     writeItem(to, item.account, item.value);
     const back = readItem(to);
     if (back?.value !== item.value) throw new Error(`Claude Code's sign-in for ${path.basename(folder)} didn't read back as it was written.`);
@@ -178,10 +201,9 @@ export function clearClaudeSignIns(accounts: readonly string[], map: PathMap): v
   }
 }
 
-/** A copy's undoing: the item deleted, or what was there put back. */
-export function undoKeychain(act: { service: string; account: string; was?: string }): void {
-  if (act.was !== undefined) writeItem(act.service, act.account, act.was);
-  else deleteItem(act.service);
+/** A copy's undoing: the item deleted (none was there before it). */
+export function undoKeychain(act: { service: string }): void {
+  deleteItem(act.service);
 }
 
 /** Each folder's history in a Claude Code settings folder (`projects/<slug>`) renamed to its new
@@ -219,6 +241,27 @@ export function renameGrokSessions(home: string, map: PathMap, rename: (from: st
   return renamed;
 }
 
+/** Grok's index for searching its sessions (`sessions/session_search.sqlite`, with its log): a cache
+ * that names each session's folder (`session_docs.cwd`), which Grok makes anew from its sessions'
+ * folders when it isn't there. */
+const GROK_INDEX = ["session_search.sqlite", "session_search.sqlite-wal", "session_search.sqlite-shm"];
+/** What a move sets Grok's index aside as, in your own Grok's home, till it's done (then deleted). */
+const ASIDE = ".before-kuvo-move";
+
+/** Grok's index set aside where sessions were renamed (each `rename` journaled), for Grok to make
+ * it anew with their new folders. */
+export function setAsideGrokIndex(home: string, rename: (from: string, to: string) => void): void {
+  for (const name of GROK_INDEX) {
+    const file = path.join(home, "sessions", name);
+    if (exists(file) && !exists(file + ASIDE)) rename(file, file + ASIDE);
+  }
+}
+
+/** Grok's index set aside, deleted once the move's done. */
+export function clearGrokIndex(home: string): void {
+  for (const name of GROK_INDEX) fs.rmSync(path.join(home, "sessions", name + ASIDE), { force: true });
+}
+
 /** Your own settings folders for Claude Code and Grok (the default accounts', which a Mac's box
  * keeps in your home, as the agents do). */
 export function ownAgentHomes(): { claude: string; grok: string } {
@@ -232,16 +275,16 @@ export function ownAgentHomes(): { claude: string; grok: string } {
 
 // In the staged copy
 
-/** The coding agents' bridge's folder as staged (`agents`): each added account's history and
- * sessions renamed for its folders' new places, and Cursor's records of its agents' folders
+/** The coding agents' bridge's folder as staged (`agents`): Kuvo Code's own Console sign-in's and each
+ * added account's history and sessions renamed for its folders' new places, and Cursor's records of its agents' folders
  * (`agents.ndjson`'s `cwd`) rewritten. */
 export function rewriteAgents(staged: string, folders: Iterable<string>, map: PathMap): void {
   const list = [...folders];
-  for (const name of listOf(path.join(staged, "claude", "accounts"))) {
-    renameClaudeHistory(path.join(staged, "claude", "accounts", name), list, map, (from, to) => fs.renameSync(from, to));
-  }
+  for (const settings of claudeAccounts(staged)) renameClaudeHistory(settings, list, map, (from, to) => fs.renameSync(from, to));
   for (const name of listOf(path.join(staged, "grok", "accounts"))) {
-    renameGrokSessions(path.join(staged, "grok", "accounts", name), map, (from, to) => fs.renameSync(from, to));
+    const home = path.join(staged, "grok", "accounts", name);
+    // (Its index of them named their folders: dropped from the copy, for Grok to make it anew.)
+    if (renameGrokSessions(home, map, (from, to) => fs.renameSync(from, to))) for (const each of GROK_INDEX) fs.rmSync(path.join(home, "sessions", each), { force: true });
   }
   // Cursor's: its own (`cursor/agents`) and each added account's.
   const records = [path.join(staged, "cursor", "agents", "agents.ndjson"),
@@ -263,8 +306,9 @@ export function rewriteAgents(staged: string, folders: Iterable<string>, map: Pa
   }
 }
 
-/** The added Claude Code accounts' folders in a bridge's folder (`claude/accounts/<id>`), by where
- * they were. */
+/** The Claude Code settings folders in a bridge's folder, each signed in under its own Keychain item:
+ * Kuvo Code's own Anthropic Console sign-in (`claude/console`) and each added account's
+ * (`claude/accounts/<id>`). */
 export function claudeAccounts(agents: string): string[] {
-  return listOf(path.join(agents, "claude", "accounts")).map(name => path.join(agents, "claude", "accounts", name)).filter(isFolder);
+  return [path.join(agents, "claude", "console"), ...listOf(path.join(agents, "claude", "accounts")).map(name => path.join(agents, "claude", "accounts", name))].filter(isFolder);
 }

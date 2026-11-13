@@ -38941,7 +38941,7 @@ import fs129 from "node:fs";
 import path133 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "8a7aac214c2a";
+var BRIDGE_VERSION = "475a1802ebac";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -38953,9 +38953,9 @@ import path127 from "node:path";
 import { createHash as createHash2 } from "node:crypto";
 import path126 from "node:path";
 import { fileURLToPath as fileURLToPath3, pathToFileURL } from "node:url";
-function pathMap(placements) {
+function pathMap(placements, root) {
   const seen = new Set;
-  return placements.filter((each) => !each.installed).map((each) => ({ from: each.from, to: each.to })).filter((each) => !seen.has(each.from) && seen.add(each.from)).sort((a, b) => b.from.length - a.from.length);
+  return [...placements.filter((each) => !each.installed).map((each) => ({ from: each.from, to: each.to })), ...root ? [root] : []].filter((each) => !seen.has(each.from) && seen.add(each.from)).sort((a, b) => b.from.length - a.from.length);
 }
 function mapped(file, map) {
   for (const { from, to } of map) {
@@ -39041,7 +39041,7 @@ function mapLines(text, map) {
   if (!map.length)
     return text;
   const escaped = map.map(({ from }) => from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-  return text.replace(new RegExp(`(^|[\\s=:"'])(${escaped})(?=$|[/\\s"'])`, "gm"), (_, before, from) => before + mapped(from, map));
+  return text.replace(new RegExp(`(^|[\\s=:"'])(${escaped})(?=$|[/"'\\r\\n])`, "gm"), (_, before, from) => before + mapped(from, map));
 }
 function namesOld(text, map) {
   return map.some(({ from }) => {
@@ -39050,7 +39050,7 @@ function namesOld(text, map) {
       while (at >= 0) {
         const after = text[at + form.length];
         if (after === undefined || after === "/" || after === '"' || after === "'" || after === `
-` || after === "}" || after === "\\" || after === " " || after === "?" || after === "#")
+` || after === "\r" || after === "}" || after === "\\" || after === "?" || after === "#")
           return true;
         at = text.indexOf(form, at + 1);
       }
@@ -39118,7 +39118,7 @@ function gitIn3(folder, depth, found) {
       gitIn3(each, depth - 1, found);
   }
 }
-function recordOf(worktree) {
+function recordOf(worktree, was) {
   let text = "";
   try {
     text = fs123.readFileSync(path127.join(worktree, ".git"), "utf8");
@@ -39126,7 +39126,7 @@ function recordOf(worktree) {
     return null;
   }
   const found = /^gitdir:\s*(.+?)\s*$/m.exec(text);
-  return found ? path127.resolve(worktree, found[1]) : null;
+  return found ? path127.resolve(was, found[1]) : null;
 }
 function commonOf(record) {
   let common = "../..";
@@ -39135,15 +39135,13 @@ function commonOf(record) {
   } catch {}
   return path127.resolve(record, common);
 }
-function rewriteKept(file, write, journal) {
+function keepAsItWas(file, journal) {
   let was = null;
   try {
     was = fs123.readFileSync(file, "utf8");
   } catch {}
-  if (was === null)
-    return;
-  journal({ act: "wrote", path: file, was });
-  write();
+  if (was !== null)
+    journal({ act: "wrote", path: file, was });
 }
 var git3 = (args) => spawnSync9("git", args, { encoding: "utf8", timeout: 120000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
 function repairWorktrees(placed, map, journal) {
@@ -39153,8 +39151,10 @@ function repairWorktrees(placed, map, journal) {
       gitIn3(folder, 6, found);
   const isPlaced = (file) => placed.some((folder) => inside4(file, folder));
   const links = [];
+  const back = map.map(({ from, to }) => ({ from: to, to: from })).sort((a, b) => b.from.length - a.from.length);
+  const was = (file) => mapped(file, back);
   for (const worktree of found.worktrees) {
-    const record = recordOf(worktree);
+    const record = recordOf(worktree, was(worktree));
     if (record)
       links.push({ worktree, record: mapped(record, map) });
   }
@@ -39167,28 +39167,34 @@ function repairWorktrees(placed, map, journal) {
       } catch {
         continue;
       }
-      const worktree = path127.dirname(mapped(path127.resolve(record, gitdir), map));
-      if (!isPlaced(worktree) && exists2(path127.join(worktree, ".git")))
+      const worktree = path127.dirname(mapped(path127.resolve(was(record), gitdir), map));
+      if (!links.some((each) => each.worktree === worktree) && exists2(path127.join(worktree, ".git")))
         links.push({ worktree, record });
     }
   }
   const repaired = [];
-  for (const { worktree, record } of links) {
-    if (!exists2(record))
-      continue;
-    const gitdirFile = path127.join(record, "gitdir"), gitFile = path127.join(worktree, ".git");
-    let before = { gitdir: null, git: null };
-    try {
-      before.gitdir = fs123.readFileSync(gitdirFile, "utf8");
-    } catch {}
-    try {
-      before.git = fs123.readFileSync(gitFile, "utf8");
-    } catch {}
-    for (const file of [gitdirFile, gitFile])
-      if (!isPlaced(file))
-        rewriteKept(file, () => {}, journal);
-    const common = commonOf(record);
-    const result = git3(["-C", common, "worktree", "repair", worktree]);
+  const there = links.filter(({ record }) => exists2(record));
+  const kept = new Set;
+  const keep = (file) => {
+    if (isPlaced(file) || kept.has(file))
+      return;
+    kept.add(file);
+    keepAsItWas(file, journal);
+  };
+  for (const { worktree, record } of there) {
+    keep(path127.join(record, "gitdir"));
+    keep(path127.join(worktree, ".git"));
+    const records = path127.join(commonOf(record), "worktrees");
+    for (const name of listOf4(records)) {
+      const each = path127.join(records, name);
+      keep(path127.join(each, "gitdir"));
+      try {
+        keep(path127.resolve(each, fs123.readFileSync(path127.join(each, "gitdir"), "utf8").trim()));
+      } catch {}
+    }
+  }
+  for (const { worktree, record } of there) {
+    const result = git3(["-C", commonOf(record), "worktree", "repair", worktree]);
     if (result.status !== 0)
       throw new Error(`The worktree ${worktree} couldn't be linked again: ${`${result.stderr}`.trim().slice(0, 300)}`);
     repaired.push(worktree);
@@ -39201,18 +39207,23 @@ function readItem(service) {
   const found = security(["find-generic-password", "-s", service]);
   if (found.status !== 0)
     return null;
-  const account = /"acct"<blob>="((?:[^"\\]|\\.)*)"/.exec(found.stdout)?.[1];
+  const quoted = /"acct"<blob>="((?:[^"\\]|\\.)*)"/.exec(found.stdout)?.[1];
+  const hex = /"acct"<blob>=0x([0-9A-Fa-f]+)/.exec(found.stdout)?.[1];
+  const account = quoted ?? (hex ? Buffer.from(hex, "hex").toString("utf8") : undefined);
   if (account === undefined)
-    return null;
+    throw new Error(`Claude Code's sign-in (${service}) couldn't be read.`);
   const value = security(["find-generic-password", "-s", service, "-a", account, "-w"]);
   if (value.status !== 0)
     throw new Error(`Claude Code's sign-in (${service}) couldn't be read.`);
   return { account, value: value.stdout.replace(/\n$/, "") };
 }
 function writeItem(service, account, value) {
-  const written = security(["add-generic-password", "-U", "-a", account, "-s", service, "-X", Buffer.from(value, "utf8").toString("hex")]);
-  if (written.status !== 0)
-    throw new Error(`Claude Code's sign-in (${service}) couldn't be written: ${written.stderr.trim().slice(0, 200)}`);
+  const quoted = (text) => `"${text.replace(/(["\\])/g, "\\$1")}"`;
+  const line = ["add-generic-password", "-U", "-a", quoted(account), "-s", quoted(service), "-X", Buffer.from(value, "utf8").toString("hex"), ...keychain().map(quoted)].join(" ");
+  const written = spawnSync9("/usr/bin/security", ["-i"], { input: line + `
+`, encoding: "utf8", timeout: 60000 });
+  if (written.status !== 0 || /error|usage/i.test(written.stderr ?? ""))
+    throw new Error(`Claude Code's sign-in (${service}) couldn't be written: ${`${written.stderr}`.trim().slice(0, 200)}`);
 }
 function deleteItem(service) {
   security(["delete-generic-password", "-s", service]);
@@ -39229,7 +39240,11 @@ function copyClaudeSignIns(accounts, map, journal) {
     if (!item)
       continue;
     const there = readItem(to);
-    journal({ act: "keychain", service: to, account: item.account, ...there ? { was: there.value } : {} });
+    if (there?.value === item.value)
+      continue;
+    if (there)
+      throw new Error(`Claude Code has another sign-in under ${path127.basename(folder)}'s new name already (${to}).`);
+    journal({ act: "keychain", service: to, account: item.account });
     writeItem(to, item.account, item.value);
     const back = readItem(to);
     if (back?.value !== item.value)
@@ -39248,10 +39263,7 @@ function clearClaudeSignIns(accounts, map) {
   }
 }
 function undoKeychain(act) {
-  if (act.was !== undefined)
-    writeItem(act.service, act.account, act.was);
-  else
-    deleteItem(act.service);
+  deleteItem(act.service);
 }
 function renameClaudeHistory(settings, folders, map, rename) {
   const projects = path127.join(settings, "projects");
@@ -39291,6 +39303,19 @@ function renameGrokSessions(home, map, rename) {
   }
   return renamed;
 }
+var GROK_INDEX = ["session_search.sqlite", "session_search.sqlite-wal", "session_search.sqlite-shm"];
+var ASIDE = ".before-kuvo-move";
+function setAsideGrokIndex(home, rename) {
+  for (const name of GROK_INDEX) {
+    const file = path127.join(home, "sessions", name);
+    if (exists2(file) && !exists2(file + ASIDE))
+      rename(file, file + ASIDE);
+  }
+}
+function clearGrokIndex(home) {
+  for (const name of GROK_INDEX)
+    fs123.rmSync(path127.join(home, "sessions", name + ASIDE), { force: true });
+}
 function ownAgentHomes() {
   const home = os16.homedir();
   const grok = process.env.GROK_HOME?.trim();
@@ -39301,11 +39326,13 @@ function ownAgentHomes() {
 }
 function rewriteAgents(staged, folders, map) {
   const list = [...folders];
-  for (const name of listOf4(path127.join(staged, "claude", "accounts"))) {
-    renameClaudeHistory(path127.join(staged, "claude", "accounts", name), list, map, (from, to) => fs123.renameSync(from, to));
-  }
+  for (const settings of claudeAccounts(staged))
+    renameClaudeHistory(settings, list, map, (from, to) => fs123.renameSync(from, to));
   for (const name of listOf4(path127.join(staged, "grok", "accounts"))) {
-    renameGrokSessions(path127.join(staged, "grok", "accounts", name), map, (from, to) => fs123.renameSync(from, to));
+    const home = path127.join(staged, "grok", "accounts", name);
+    if (renameGrokSessions(home, map, (from, to) => fs123.renameSync(from, to)))
+      for (const each of GROK_INDEX)
+        fs123.rmSync(path127.join(home, "sessions", each), { force: true });
   }
   const records = [
     path127.join(staged, "cursor", "agents", "agents.ndjson"),
@@ -39336,7 +39363,7 @@ function rewriteAgents(staged, folders, map) {
   }
 }
 function claudeAccounts(agents) {
-  return listOf4(path127.join(agents, "claude", "accounts")).map((name) => path127.join(agents, "claude", "accounts", name)).filter(isFolder2);
+  return [path127.join(agents, "claude", "console"), ...listOf4(path127.join(agents, "claude", "accounts")).map((name) => path127.join(agents, "claude", "accounts", name))].filter(isFolder2);
 }
 
 // Packages/Box/src/link/rehome/rewrite.ts
@@ -39432,7 +39459,15 @@ function databasesIn(folder) {
   return names.filter((name) => name.startsWith("opencode") && name.endsWith(".db")).sort().map((name) => path129.join(folder, name));
 }
 function naming(column, map) {
-  const forms = [...new Set(map.flatMap(({ from }) => [from, pathToFileURL2(from).href.slice("file://".length)]))];
+  const parts = map.map(({ from }) => from.split("/"));
+  const common = parts.length ? parts[0].slice(0, parts.reduce((most, each) => {
+    let n = 0;
+    while (n < most && each[n] === parts[0][n])
+      n++;
+    return n;
+  }, parts[0].length)).join("/") : "";
+  const prefixes = common.split("/").length > 2 ? [common] : map.map(({ from }) => from);
+  const forms = [...new Set(prefixes.flatMap((from) => [from, pathToFileURL2(from).href.slice("file://".length)]))];
   return { where: `typeof("${column}") = 'text' AND (${forms.map(() => `instr("${column}", ?) > 0`).join(" OR ") || "0"})`, values: forms };
 }
 var tables = (db) => new Set(db.query("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name));
@@ -39496,6 +39531,8 @@ function rewriteDatabase(file, map) {
     const has = (table) => there.has(table);
     let changed = 0;
     const projects = [];
+    const brokenLink = (row) => `${row.table} ${row.rowid} ${row.parent} ${row.fkid}`;
+    const brokenBefore = new Set(db.query("PRAGMA foreign_key_check").all().map(brokenLink));
     db.exec("BEGIN IMMEDIATE");
     try {
       if (has("project")) {
@@ -39565,7 +39602,7 @@ function rewriteDatabase(file, map) {
       }
       for (const [table, column] of FILES_COLUMNS)
         rewriteJSON(table, column, (holder) => mapFiles(holder.value, map));
-      const broken = db.query("PRAGMA foreign_key_check").all();
+      const broken = db.query("PRAGMA foreign_key_check").all().filter((row) => !brokenBefore.has(brokenLink(row)));
       if (broken.length)
         throw new Error(`The engine's database didn't hold together once rewritten (${broken.length} broken links, ${broken[0].table}).`);
       db.exec("COMMIT");
@@ -39660,40 +39697,57 @@ var listOf5 = (folder) => {
     return [];
   }
 };
+function holdsOldPath(value, map) {
+  if (typeof value === "string")
+    return mappedValue(value, map) !== null;
+  if (Array.isArray(value))
+    return value.some((each) => holdsOldPath(each, map));
+  if (value && typeof value === "object")
+    return Object.entries(value).some(([key, inner]) => mappedValue(key, map) !== null || holdsOldPath(inner, map));
+  return false;
+}
 function databaseLeftovers(file, map) {
   const db = open2(file, true);
   const rewritten = [], elsewhere = [];
+  const is = (list, table, column) => list.some(([t, c]) => t === table && c === column);
   try {
     const there = tables(db);
-    const checked = new Set([...PATH_COLUMNS, ...JSON_COLUMNS, ["permission", "resource"]].map(([table, column]) => `${table}.${column}`));
     for (const table of there) {
       for (const { name: column } of db.query(`PRAGMA table_info("${table}")`).all()) {
-        let hits = 0;
+        let missed = 0, said = 0;
         const { where, values } = naming(column, map);
-        for (const row of db.query(`SELECT "${column}" AS v FROM "${table}" WHERE ${where}`).all(...values)) {
+        for (const row of db.query(`SELECT "${column}" AS v FROM "${table}" WHERE ${where}`).iterate(...values)) {
           if (typeof row.v !== "string" || !namesOld(row.v, map))
             continue;
-          if (FILES_COLUMNS.some(([t, c]) => t === table && c === column)) {
+          let left = false;
+          if (is(PATH_COLUMNS, table, column) || table === "permission" && column === "resource")
+            left = moves(row.v, map);
+          else if (is(JSON_COLUMNS, table, column)) {
+            try {
+              left = holdsOldPath(JSON.parse(row.v), map);
+            } catch {}
+          } else if (is(FILES_COLUMNS, table, column)) {
             let value = null;
             try {
               value = JSON.parse(row.v);
             } catch {}
-            if (Array.isArray(value?.files) && value.files.some((each) => [each?.uri, each?.source?.uri].some((uri) => typeof uri === "string" && mappedURL(uri, map) !== null))) {
-              rewritten.push(`${table}.${column}`);
-              continue;
-            }
+            left = Array.isArray(value?.files) && value.files.some((each) => [each?.uri, each?.source?.uri].some((uri) => typeof uri === "string" && mappedURL(uri, map) !== null));
           }
-          hits++;
+          if (left)
+            missed++;
+          else
+            said++;
         }
-        if (!hits)
-          continue;
-        (checked.has(`${table}.${column}`) ? rewritten : elsewhere).push(`${table}.${column} (${hits})`);
+        if (missed)
+          rewritten.push(`${table}.${column} (${missed})`);
+        if (said)
+          elsewhere.push(`${table}.${column} (${said})`);
       }
     }
   } finally {
     db.close();
   }
-  return { rewritten: [...new Set(rewritten)], elsewhere };
+  return { rewritten, elsewhere };
 }
 function databaseCounts(file) {
   const db = open2(file, true);
@@ -39735,7 +39789,7 @@ function sessionSample(file, most) {
 function quietCopy(file, to) {
   for (const suffix of ["", "-wal", "-shm"]) {
     if (fs125.existsSync(file + suffix))
-      fs125.copyFileSync(file + suffix, to + suffix);
+      fs125.copyFileSync(file + suffix, to + suffix, fs125.constants.COPYFILE_FICLONE);
   }
   const db = open2(to);
   try {
@@ -39744,8 +39798,12 @@ function quietCopy(file, to) {
       if (there.has(table))
         db.exec(`DELETE FROM "${table}"`);
     }
-    if (there.has("session_v2"))
-      db.exec("UPDATE session_v2 SET time_busy = NULL, time_compacting = NULL");
+    if (there.has("session_v2")) {
+      const columns = new Set(db.query(`PRAGMA table_info("session_v2")`).all().map((row) => row.name));
+      const quiet = ["time_busy", "time_compacting", "time_suspended"].filter((column) => columns.has(column));
+      if (quiet.length)
+        db.exec(`UPDATE session_v2 SET ${quiet.map((column) => `"${column}" = NULL`).join(", ")}`);
+    }
     db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   } finally {
     db.close();
@@ -39789,14 +39847,25 @@ async function checkWithEngine({ engine, data, scratch, lost }) {
       OPENCODE_DISABLE_FREE_MODELS: "1",
       OPENCODE_DISABLE_PROJECT_CONFIG: "1",
       OPENCODE_DISABLE_CLAUDE_CODE: "1",
-      OPENCODE_DISABLE_FILEWATCHER: "1"
+      OPENCODE_DISABLE_FILEWATCHER: "1",
+      HTTP_PROXY: "http://127.0.0.1:9",
+      HTTPS_PROXY: "http://127.0.0.1:9",
+      ALL_PROXY: "http://127.0.0.1:9",
+      http_proxy: "http://127.0.0.1:9",
+      https_proxy: "http://127.0.0.1:9",
+      NO_PROXY: "localhost,127.0.0.1,::1",
+      no_proxy: "localhost,127.0.0.1,::1"
     }
   });
+  child.stdin.on("error", () => {});
   let said = "", errors = "";
   child.stderr.on("data", (chunk) => {
     errors = (errors + chunk).slice(-2000);
   });
-  const gone = new Promise((resolve) => child.once("exit", () => resolve()));
+  const gone = new Promise((resolve) => {
+    child.once("exit", () => resolve());
+    child.once("error", () => resolve());
+  });
   try {
     const url = await new Promise((resolve, reject) => {
       const limit = setTimeout(() => reject(new Error("The engine didn't start on the moved data in time.")), START_LIMIT);
@@ -39828,7 +39897,7 @@ async function checkWithEngine({ engine, data, scratch, lost }) {
     for (const archived of [false, true]) {
       let cursor = null;
       for (let page = 0;page < 1e5; page++) {
-        const answer = await ask(`/api/session?limit=200${archived ? "&archived=true" : ""}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
+        const answer = await ask(`/api/session?limit=200&order=desc${archived ? "&archived=true" : ""}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
         for (const session of answer?.data ?? [])
           if (typeof session?.id === "string")
             listed.add(session.id);
@@ -39976,7 +40045,7 @@ function rewriteOwnFile({ file, relative, kind }, map) {
   if (kind === "path") {
     const to = mappedValue(text.trim(), map);
     if (to !== null)
-      next = text.replace(text.trim(), to);
+      next = text.replace(text.trim(), () => to);
   } else if (kind === "lines") {
     next = mapLines(text, map);
   } else if (kind === "json") {
@@ -40236,6 +40305,7 @@ var listOf7 = (folder) => {
   }
 };
 var foldersFile = (move) => path132.join(move.work, "folders.json");
+var countsFile = (move) => path132.join(move.work, "counts.json");
 function readFolders(move) {
   try {
     const kept = JSON.parse(fs128.readFileSync(foldersFile(move), "utf8"));
@@ -40263,6 +40333,61 @@ function stagedEngine(move) {
   const version = named && versions.includes(named) ? named : versions.at(-1);
   return version ? path132.join(engines.staged, version, "opencode") : null;
 }
+function mergeClashes(move) {
+  if (move.way !== "move")
+    return [];
+  const clashes = [];
+  const kindOf = (file) => {
+    try {
+      return fs128.lstatSync(file).isDirectory() ? "dir" : "file";
+    } catch {
+      return null;
+    }
+  };
+  const byPlace = new Map;
+  for (const placement of move.placements)
+    byPlace.set(placement.to, [...byPlace.get(placement.to) ?? [], placement]);
+  for (const [to, group] of byPlace) {
+    const taken = new Map;
+    const add = (file, relative) => {
+      const kind = kindOf(file);
+      if (!kind)
+        return;
+      taken.set(relative, kind);
+      if (kind === "dir")
+        for (const name of listOf7(file))
+          add(path132.join(file, name), path132.join(relative, name));
+    };
+    if (kindOf(to))
+      add(to, "");
+    const free = (relative) => {
+      const extension = path132.extname(relative), base = relative.slice(0, relative.length - extension.length);
+      for (let n = 2;; n++)
+        if (!taken.has(`${base} ${n}${extension}`))
+          return `${base} ${n}${extension}`;
+    };
+    for (const placement of group) {
+      const put = (file, relative) => {
+        const kind = kindOf(file);
+        if (!kind)
+          return;
+        if (taken.get(relative) === "dir" && kind === "dir") {
+          for (const name of listOf7(file).sort())
+            put(path132.join(file, name), path132.join(relative, name));
+        } else if (!taken.has(relative)) {
+          add(file, relative);
+        } else {
+          const named = free(relative);
+          clashes.push({ from: path132.join(placement.from, relative), to: path132.join(to, named) });
+          add(file, named);
+        }
+      };
+      put(placement.staged, "");
+    }
+  }
+  return clashes;
+}
+var withClashes = (move) => [...mergeClashes(move), ...move.map].sort((a, b) => b.from.length - a.from.length);
 var PATH_REWRITER = {
   refuses(move) {
     const data = placementOf(move, "data");
@@ -40274,7 +40399,8 @@ var PATH_REWRITER = {
     return schemaRefusal(folder);
   },
   rewrite(move) {
-    const { map, placements, way, home } = move;
+    const { placements, way, home } = move;
+    const map = withClashes(move);
     fs128.mkdirSync(move.work, { recursive: true, mode: 448 });
     const data = placementOf(move, "data");
     const engineData = data ? path132.join(data.staged, "opencode") : null;
@@ -40291,6 +40417,10 @@ var PATH_REWRITER = {
     const list = [...folders].filter((folder) => path132.isAbsolute(folder)).sort();
     fs128.writeFileSync(foldersFile(move), JSON.stringify(list), { mode: 384 });
     if (engineData) {
+      const counts = {};
+      for (const database of databasesIn(engineData))
+        counts[path132.basename(database)] = databaseCounts(database);
+      fs128.writeFileSync(countsFile(move), JSON.stringify(counts), { mode: 384 });
       for (const database of databasesIn(engineData)) {
         const { projects } = rewriteDatabase(database, map);
         rewriteDataFolders(engineData, database, projects, map);
@@ -40316,7 +40446,9 @@ var PATH_REWRITER = {
       if (rewritten.length)
         throw new Error(`The engine's database still names where the box was: ${rewritten.join(", ")}`);
       notes.push(...elsewhere.map((each) => `${path132.basename(database)}: ${each}`));
-      const before = databaseCounts(path132.join(data.from, "opencode", path132.basename(database)));
+      const before = JSON.parse(fs128.readFileSync(countsFile(move), "utf8"))[path132.basename(database)];
+      if (!before)
+        throw new Error(`The engine's database ${path132.basename(database)} wasn't counted before it was rewritten.`);
       const after = databaseCounts(database);
       if (before.sessions !== after.sessions || before.projects !== after.projects) {
         throw new Error(`The engine's database lost what it held as it was rewritten (${after.sessions} of ${before.sessions} sessions, ${after.projects} of ${before.projects} projects).`);
@@ -40354,12 +40486,14 @@ var PATH_REWRITER = {
     const folders = readFolders(move);
     const own = ownAgentHomes();
     renameClaudeHistory(own.claude, folders, map, rename);
-    renameGrokSessions(own.grok, map, rename);
+    if (renameGrokSessions(own.grok, map, rename))
+      setAsideGrokIndex(own.grok, rename);
     const agents = placementOf(move, "agents");
     if (agents)
       copyClaudeSignIns(claudeAccounts(agents.from), map, journal);
   },
   cleared(move) {
+    clearGrokIndex(ownAgentHomes().grok);
     const agents = placementOf(move, "agents");
     if (!agents)
       return;
@@ -40533,6 +40667,10 @@ function planBack({ appFolder, home }, merged = []) {
   const clearing = [...sources.filter((each) => !sources.some((other) => inside5(each, other))), path133.join(home, "bin")].filter(exists4);
   return { placements, clearing };
 }
+function mapOf(way, { appFolder, home }, placements) {
+  const box = path133.join(appFolder, "box");
+  return pathMap(placements, way === "move" ? { from: box, to: home } : { from: home, to: box });
+}
 function moveRefusal({ appFolder, home }, { appVersion, release, bridgeVersion = BRIDGE_VERSION, rewriter = PATH_REWRITER, running: checkRunning = true }) {
   if (process.platform !== "darwin")
     return NOTHING_TO_MOVE;
@@ -40576,9 +40714,9 @@ function moveRefusal({ appFolder, home }, { appVersion, release, bridgeVersion =
   if (free !== null && free < needed)
     return `There isn't room to move this Mac's box: it needs ${Math.ceil(needed / 1e6)} MB free.`;
   const plan = planMove({ appFolder, home }, release ?? path133.join(home, "bin"));
-  return rewriter.refuses({ way: "move", home, appFolder, placements: plan.placements, map: pathMap(plan.placements), work: path133.join(staging(home), "work") });
+  return rewriter.refuses({ way: "move", home, appFolder, placements: plan.placements, map: mapOf("move", { appFolder, home }, plan.placements), work: path133.join(staging(home), "work") });
 }
-function backRefusal({ appFolder, home }, { running: checkRunning = true } = {}) {
+function backRefusal({ appFolder, home }, { running: checkRunning = true, rewriter = PATH_REWRITER } = {}) {
   if (process.platform !== "darwin")
     return NOTHING_TO_MOVE;
   const state = readRecord(home);
@@ -40592,7 +40730,8 @@ function backRefusal({ appFolder, home }, { running: checkRunning = true } = {})
     return "Kuvo Code has a box of its own in its folder again: this one can't move back beside it.";
   if (!exists4(appFolder) || fs129.statSync(appFolder).dev !== fs129.statSync(home).dev)
     return "Kuvo Code can't move its box back on this disk.";
-  return null;
+  const plan = planBack({ appFolder, home }, readRecord(home).merged);
+  return rewriter.refuses({ way: "back", home, appFolder, placements: plan.placements, map: mapOf("back", { appFolder, home }, plan.placements), work: path133.join(staging(home), "work") });
 }
 function rename(home, from, to, extra = {}) {
   journalAct(home, { act: "rename", from, to, ...extra });
@@ -40730,10 +40869,14 @@ function undo(journal) {
           stopPoint("in-undo");
       }
     } else if (act.act === "wrote") {
+      if (!["gitdir", ".git"].includes(path133.basename(act.path)))
+        continue;
       try {
         if (fs129.readFileSync(act.path, "utf8") !== act.was)
           fs129.writeFileSync(act.path, act.was);
-      } catch {}
+      } catch (error) {
+        console.error(`${act.path} couldn't be put back as it was: ${error.message}`);
+      }
     } else if (act.act === "keychain") {
       undoKeychain(act);
     } else if (act.folder) {
@@ -40758,7 +40901,7 @@ var contextOf2 = (journal) => ({
   way: journal.way,
   ...foldersOf2(journal),
   placements: journal.placements,
-  map: pathMap(journal.placements),
+  map: mapOf(journal.way, foldersOf2(journal), journal.placements),
   work: path133.join(staging(homeOf(journal)), "work")
 });
 async function carryOn2(journal, rewriter) {
@@ -40997,7 +41140,7 @@ async function rehomeBack(home, options = {}) {
       return earlier;
     const record = readRecord(home);
     const appFolder = typeof record.from === "string" ? record.from : null;
-    const refusal = backRefusal({ appFolder: appFolder ?? home, home });
+    const refusal = backRefusal({ appFolder: appFolder ?? home, home }, { rewriter });
     const now = Date.now();
     if (refusal || !appFolder) {
       if (record.state === "done" && record.way === "move")

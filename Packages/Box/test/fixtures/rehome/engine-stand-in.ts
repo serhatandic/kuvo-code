@@ -16,6 +16,8 @@ const server = Bun.serve({
     if (url.pathname === "/api/session") {
       const archived = url.searchParams.get("archived") === "true"
       const rows = db.query(`SELECT * FROM session_v2 WHERE time_archived IS ${archived ? "NOT " : ""}NULL ORDER BY time_updated DESC`).all()
+      // (One that's lost a session, for a test of the check: as told by its launcher.)
+      if (process.env.STAND_IN_LOSES_ONE && !archived) rows.pop()
       return Response.json({ data: rows.map(session), cursor: { previous: null, next: null } })
     }
     const one = /^\/api\/session\/([^/]+)$/.exec(url.pathname)

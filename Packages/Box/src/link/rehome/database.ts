@@ -11,7 +11,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { folderProjectID, mapLines, mapped, mappedURL, mapJSON, moves, namesOld, snapshotName, type PathMap } from "./paths";
+import { folderProjectID, mapLines, mapped, mappedURL, mappedValue, mapJSON, moves, namesOld, snapshotName, type PathMap } from "./paths";
 
 /** The schemas the rewrite was tried with: the engine's migrations, counted and the last
  * (`SELECT count(*), max(id) FROM migration`), as its pinned version made them. The weekly upstream
@@ -34,7 +34,7 @@ const PROJECT_ID_COLUMNS: readonly [string, string][] = [
   ["event_sequence", "aggregate_id"], ["event", "aggregate_id"],
 ];
 
-interface Statement { all(...values: unknown[]): any[]; get(...values: unknown[]): any; run(...values: unknown[]): unknown }
+interface Statement { all(...values: unknown[]): any[]; iterate(...values: unknown[]): IterableIterator<any>; get(...values: unknown[]): any; run(...values: unknown[]): unknown }
 interface Database { query(sql: string): Statement; exec(sql: string): void; close(): void }
 
 /** SQLite, as the engine's Bun has it (`bun:sqlite`): the box's command runs with that Bun. */
@@ -58,7 +58,15 @@ export function databasesIn(folder: string): string[] {
 /** A column's text naming an old prefix somewhere (plainly or URL-encoded), as SQL: what's then
  * looked at row by row, never the whole table. */
 function naming(column: string, map: PathMap): { where: string; values: string[] } {
-  const forms = [...new Set(map.flatMap(({ from }) => [from, pathToFileURL(from).href.slice("file://".length)]))];
+  // (By the folder every old prefix is in, where there's one: one look a row, not one a prefix.)
+  const parts = map.map(({ from }) => from.split("/"));
+  const common = parts.length ? parts[0].slice(0, parts.reduce((most, each) => {
+    let n = 0;
+    while (n < most && each[n] === parts[0][n]) n++;
+    return n;
+  }, parts[0].length)).join("/") : "";
+  const prefixes = common.split("/").length > 2 ? [common] : map.map(({ from }) => from);
+  const forms = [...new Set(prefixes.flatMap(from => [from, pathToFileURL(from).href.slice("file://".length)]))];
   return { where: `typeof("${column}") = 'text' AND (${forms.map(() => `instr("${column}", ?) > 0`).join(" OR ") || "0"})`, values: forms };
 }
 
@@ -129,6 +137,9 @@ export function rewriteDatabase(file: string, map: PathMap): DatabaseRewrite {
     const has = (table: string) => there.has(table);
     let changed = 0;
     const projects: ProjectMove[] = [];
+    // (Links broken before it's rewritten, by an engine's own migration, aren't the rewrite's.)
+    const brokenLink = (row: any) => `${row.table} ${row.rowid} ${row.parent} ${row.fkid}`;
+    const brokenBefore = new Set(db.query("PRAGMA foreign_key_check").all().map(brokenLink));
     db.exec("BEGIN IMMEDIATE");
     try {
       // Projects outside git: their IDs are their folders', so they change with them.
@@ -186,7 +197,7 @@ export function rewriteDatabase(file: string, map: PathMap): DatabaseRewrite {
         });
       }
       for (const [table, column] of FILES_COLUMNS) rewriteJSON(table, column, holder => mapFiles((holder as { value: unknown }).value, map));
-      const broken = db.query("PRAGMA foreign_key_check").all();
+      const broken = db.query("PRAGMA foreign_key_check").all().filter(row => !brokenBefore.has(brokenLink(row)));
       if (broken.length) throw new Error(`The engine's database didn't hold together once rewritten (${broken.length} broken links, ${broken[0].table}).`);
       db.exec("COMMIT");
     } catch (error) {
@@ -267,39 +278,51 @@ export function rewriteDataFolders(data: string, database: string, projects: rea
 
 const listOf = (folder: string): string[] => { try { return fs.readdirSync(folder); } catch { return []; } };
 
-/** What a database still says of the old place: in the columns it rewrites (which fails the move),
- * and elsewhere (people's and agents' words, the instructions' blobs: noted, never a failure). */
+/** Whether a JSON value still holds, whole, a path the map moves (a value or a key): what the
+ * rewrite would have rewritten. A path among other words (a diff's text) isn't. */
+function holdsOldPath(value: unknown, map: PathMap): boolean {
+  if (typeof value === "string") return mappedValue(value, map) !== null;
+  if (Array.isArray(value)) return value.some(each => holdsOldPath(each, map));
+  if (value && typeof value === "object") return Object.entries(value).some(([key, inner]) => mappedValue(key, map) !== null || holdsOldPath(inner, map));
+  return false;
+}
+
+/** What a database still says of the old place: where the rewrite would have rewritten it (a path
+ * column's path, a path whole in its JSON, a file sent), which fails the move; and elsewhere
+ * (people's and agents' words, a diff's text, a command in a rule, the instructions' blobs: noted,
+ * never a failure). */
 export function databaseLeftovers(file: string, map: PathMap): { rewritten: string[]; elsewhere: string[] } {
   const db = open(file, true);
   const rewritten: string[] = [], elsewhere: string[] = [];
+  const is = (list: readonly (readonly [string, string])[], table: string, column: string) => list.some(([t, c]) => t === table && c === column);
   try {
     const there = tables(db);
-    const checked = new Set([...PATH_COLUMNS, ...JSON_COLUMNS, ["permission", "resource"]].map(([table, column]) => `${table}.${column}`));
     for (const table of there) {
       for (const { name: column } of db.query(`PRAGMA table_info("${table}")`).all() as { name: string }[]) {
-        let hits = 0;
+        let missed = 0, said = 0;
         const { where, values } = naming(column, map);
-        for (const row of db.query(`SELECT "${column}" AS v FROM "${table}" WHERE ${where}`).all(...values)) {
+        for (const row of db.query(`SELECT "${column}" AS v FROM "${table}" WHERE ${where}`).iterate(...values)) {
           if (typeof row.v !== "string" || !namesOld(row.v, map)) continue;
-          // (In a message's files, what's left is its words; the files' URLs are checked apart.)
-          if (FILES_COLUMNS.some(([t, c]) => t === table && c === column)) {
+          let left = false;
+          if (is(PATH_COLUMNS, table, column) || (table === "permission" && column === "resource")) left = moves(row.v, map);
+          else if (is(JSON_COLUMNS, table, column)) {
+            try { left = holdsOldPath(JSON.parse(row.v), map); } catch {}
+          } else if (is(FILES_COLUMNS, table, column)) {
             let value: any = null;
             try { value = JSON.parse(row.v); } catch {}
-            if (Array.isArray(value?.files) && value.files.some((each: any) => [each?.uri, each?.source?.uri].some(uri => typeof uri === "string" && mappedURL(uri, map) !== null))) {
-              rewritten.push(`${table}.${column}`);
-              continue;
-            }
+            left = Array.isArray(value?.files) && value.files.some((each: any) => [each?.uri, each?.source?.uri].some(uri => typeof uri === "string" && mappedURL(uri, map) !== null));
           }
-          hits++;
+          if (left) missed++;
+          else said++;
         }
-        if (!hits) continue;
-        (checked.has(`${table}.${column}`) ? rewritten : elsewhere).push(`${table}.${column} (${hits})`);
+        if (missed) rewritten.push(`${table}.${column} (${missed})`);
+        if (said) elsewhere.push(`${table}.${column} (${said})`);
       }
     }
   } finally {
     db.close();
   }
-  return { rewritten: [...new Set(rewritten)], elsewhere };
+  return { rewritten, elsewhere };
 }
 
 /** How many sessions and projects a database holds. */
@@ -345,7 +368,7 @@ export function sessionSample(file: string, most: number): { id: string; directo
  * schedules or jobs, no accounts or keys, nothing said to be busy. */
 export function quietCopy(file: string, to: string): void {
   for (const suffix of ["", "-wal", "-shm"]) {
-    if (fs.existsSync(file + suffix)) fs.copyFileSync(file + suffix, to + suffix);
+    if (fs.existsSync(file + suffix)) fs.copyFileSync(file + suffix, to + suffix, fs.constants.COPYFILE_FICLONE);
   }
   const db = open(to);
   try {
@@ -353,7 +376,11 @@ export function quietCopy(file: string, to: string): void {
     for (const table of ["schedule", "job", "credential", "account", "account_state", "control_account", "session_inbox"]) {
       if (there.has(table)) db.exec(`DELETE FROM "${table}"`);
     }
-    if (there.has("session_v2")) db.exec("UPDATE session_v2 SET time_busy = NULL, time_compacting = NULL");
+    if (there.has("session_v2")) {
+      const columns = new Set(db.query(`PRAGMA table_info("session_v2")`).all().map(row => row.name as string));
+      const quiet = ["time_busy", "time_compacting", "time_suspended"].filter(column => columns.has(column));
+      if (quiet.length) db.exec(`UPDATE session_v2 SET ${quiet.map(column => `"${column}" = NULL`).join(", ")}`);
+    }
     db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   } finally {
     db.close();

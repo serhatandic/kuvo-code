@@ -104,12 +104,12 @@ export function rehomeStatus(home: string, now = Date.now()): RehomeStatus {
 /** One thing a move did, journaled before it's done, so going back undoes exactly what was:
  * renamed (`from` → `to`; `source`, where it came from before it was staged), made (a folder or
  * file that wasn't there), written over (a file outside the box, `was` what it held: a git link),
- * or a Keychain item written (`was`, what it held, where there was one). */
+ * or a Keychain item written where there was none (never a secret in the journal). */
 export type Act =
   | { act: "rename"; from: string; to: string; source?: string; merged?: boolean }
   | { act: "made"; path: string; folder?: boolean }
   | { act: "wrote"; path: string; was: string }
-  | { act: "keychain"; service: string; account: string; was?: string };
+  | { act: "keychain"; service: string; account: string };
 
 /** What moves where: each staged (`staged`, in the move's staging folder) from where it is
  * (`from`), then put in place (`to`). `run` takes its files but its processes' records. */

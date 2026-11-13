@@ -10,7 +10,7 @@ import { enginesIn } from "../../shared/engines";
 import { checkWithEngine } from "./engine-check";
 import { databaseCounts, databaseFolders, databaseLeftovers, databasesIn, rewriteDataFolders, rewriteDatabase, schemaRefusal } from "./database";
 import { homeSide, namedElsewhere, ownFiles, ownFolders, ownLeftovers, renameKeptByPath, rewriteOwnFile } from "./own";
-import { claudeAccounts, clearClaudeSignIns, copyClaudeSignIns, ownAgentHomes, renameClaudeHistory, renameGrokSessions, repairWorktrees, rewriteAgents } from "./outside";
+import { claudeAccounts, clearClaudeSignIns, clearGrokIndex, copyClaudeSignIns, ownAgentHomes, renameClaudeHistory, renameGrokSessions, repairWorktrees, rewriteAgents, setAsideGrokIndex } from "./outside";
 import { mapped, type PathMap } from "./paths";
 import type { Act, Placement } from "./state";
 
@@ -74,6 +74,7 @@ const listOf = (folder: string): string[] => { try { return fs.readdirSync(folde
 /** The folders the box's sessions and agents worked in, as they were (the move's own record of them,
  * `folders.json`, written as it rewrites). */
 const foldersFile = (move: MoveContext) => path.join(move.work, "folders.json");
+const countsFile = (move: MoveContext) => path.join(move.work, "counts.json");
 function readFolders(move: MoveContext): string[] {
   try {
     const kept = JSON.parse(fs.readFileSync(foldersFile(move), "utf8"));
@@ -100,6 +101,53 @@ function stagedEngine(move: MoveContext): string | null {
   return version ? path.join(engines.staged, version, "opencode") : null;
 }
 
+/** What placing will rename as it merges a folder into one that's there (a sent file of the app's
+ * named as one of the box's: `<name> 2`), worked out as `place` does it, in its order, before
+ * anything's placed: each to its new name, for what names it to follow it. Only a move's: going
+ * back, what's put there keeps its name. */
+export function mergeClashes(move: MoveContext): PathMap {
+  if (move.way !== "move") return [];
+  const clashes: PathMap = [];
+  const kindOf = (file: string): "file" | "dir" | null => { try { return fs.lstatSync(file).isDirectory() ? "dir" : "file"; } catch { return null; } };
+  const byPlace = new Map<string, Placement[]>();
+  for (const placement of move.placements) byPlace.set(placement.to, [...(byPlace.get(placement.to) ?? []), placement]);
+  for (const [to, group] of byPlace) {
+    // What's there, as it will be: what's in its place already, then each placed in turn.
+    const taken = new Map<string, "file" | "dir">();
+    const add = (file: string, relative: string) => {
+      const kind = kindOf(file);
+      if (!kind) return;
+      taken.set(relative, kind);
+      if (kind === "dir") for (const name of listOf(file)) add(path.join(file, name), path.join(relative, name));
+    };
+    if (kindOf(to)) add(to, "");
+    const free = (relative: string) => {
+      const extension = path.extname(relative), base = relative.slice(0, relative.length - extension.length);
+      for (let n = 2; ; n++) if (!taken.has(`${base} ${n}${extension}`)) return `${base} ${n}${extension}`;
+    };
+    for (const placement of group) {
+      const put = (file: string, relative: string) => {
+        const kind = kindOf(file);
+        if (!kind) return;
+        if (taken.get(relative) === "dir" && kind === "dir") {
+          for (const name of listOf(file).sort()) put(path.join(file, name), path.join(relative, name));
+        } else if (!taken.has(relative)) {
+          add(file, relative);
+        } else {
+          const named = free(relative);
+          clashes.push({ from: path.join(placement.from, relative), to: path.join(to, named) });
+          add(file, named);
+        }
+      };
+      put(placement.staged, "");
+    }
+  }
+  return clashes;
+}
+
+/** The map the rewrite goes by: the move's, and what merging renames. */
+const withClashes = (move: MoveContext): PathMap => [...mergeClashes(move), ...move.map].sort((a, b) => b.from.length - a.from.length);
+
 /** The rewriter (#333 §3.4). */
 export const PATH_REWRITER: Rewriter = {
   refuses(move) {
@@ -111,7 +159,8 @@ export const PATH_REWRITER: Rewriter = {
   },
 
   rewrite(move) {
-    const { map, placements, way, home } = move;
+    const { placements, way, home } = move;
+    const map = withClashes(move);
     fs.mkdirSync(move.work, { recursive: true, mode: 0o700 });
     const data = placementOf(move, "data");
     const engineData = data ? path.join(data.staged, "opencode") : null;
@@ -124,8 +173,11 @@ export const PATH_REWRITER: Rewriter = {
     }
     const list = [...folders].filter(folder => path.isAbsolute(folder)).sort();
     fs.writeFileSync(foldersFile(move), JSON.stringify(list), { mode: 0o600 });
-    // The engine's.
+    // The engine's (what each held counted first, from the copy, to hold the rewrite to).
     if (engineData) {
+      const counts: Record<string, ReturnType<typeof databaseCounts>> = {};
+      for (const database of databasesIn(engineData)) counts[path.basename(database)] = databaseCounts(database);
+      fs.writeFileSync(countsFile(move), JSON.stringify(counts), { mode: 0o600 });
       for (const database of databasesIn(engineData)) {
         const { projects } = rewriteDatabase(database, map);
         rewriteDataFolders(engineData, database, projects, map);
@@ -152,7 +204,8 @@ export const PATH_REWRITER: Rewriter = {
       if (rewritten.length) throw new Error(`The engine's database still names where the box was: ${rewritten.join(", ")}`);
       notes.push(...elsewhere.map(each => `${path.basename(database)}: ${each}`));
       // The same sessions and projects as before.
-      const before = databaseCounts(path.join(data!.from, "opencode", path.basename(database)));
+      const before = (JSON.parse(fs.readFileSync(countsFile(move), "utf8")) as Record<string, ReturnType<typeof databaseCounts>>)[path.basename(database)];
+      if (!before) throw new Error(`The engine's database ${path.basename(database)} wasn't counted before it was rewritten.`);
       const after = databaseCounts(database);
       if (before.sessions !== after.sessions || before.projects !== after.projects) {
         throw new Error(`The engine's database lost what it held as it was rewritten (${after.sessions} of ${before.sessions} sessions, ${after.projects} of ${before.projects} projects).`);
@@ -192,13 +245,14 @@ export const PATH_REWRITER: Rewriter = {
     const folders = readFolders(move);
     const own = ownAgentHomes();
     renameClaudeHistory(own.claude, folders, map, rename);
-    renameGrokSessions(own.grok, map, rename);
+    if (renameGrokSessions(own.grok, map, rename)) setAsideGrokIndex(own.grok, rename);
     // Each added Claude Code account's sign-in, under its folder's new name.
     const agents = placementOf(move, "agents");
     if (agents) copyClaudeSignIns(claudeAccounts(agents.from), map, journal);
   },
 
   cleared(move) {
+    clearGrokIndex(ownAgentHomes().grok);
     const agents = placementOf(move, "agents");
     if (!agents) return;
     // (The accounts as they were: where they are now, named as they were.)

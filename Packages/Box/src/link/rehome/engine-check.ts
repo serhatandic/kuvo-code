@@ -61,11 +61,17 @@ export async function checkWithEngine({ engine, data, scratch, lost }: EngineChe
       OPENCODE_DISABLE_PROJECT_CONFIG: "1",
       OPENCODE_DISABLE_CLAUDE_CODE: "1",
       OPENCODE_DISABLE_FILEWATCHER: "1",
+      // (Nowhere to reach: nothing it could start would get a model to answer.)
+      HTTP_PROXY: "http://127.0.0.1:9", HTTPS_PROXY: "http://127.0.0.1:9", ALL_PROXY: "http://127.0.0.1:9",
+      http_proxy: "http://127.0.0.1:9", https_proxy: "http://127.0.0.1:9", NO_PROXY: "localhost,127.0.0.1,::1", no_proxy: "localhost,127.0.0.1,::1",
     },
   });
+  // (Its stdin closing on one that's gone, or never started, is no failure of the move's.)
+  child.stdin.on("error", () => {});
   let said = "", errors = "";
   child.stderr.on("data", chunk => { errors = (errors + chunk).slice(-2000); });
-  const gone = new Promise<void>(resolve => child.once("exit", () => resolve()));
+  // (Gone once it's stopped, or once it couldn't be started at all.)
+  const gone = new Promise<void>(resolve => { child.once("exit", () => resolve()); child.once("error", () => resolve()); });
   try {
     const url = await new Promise<string>((resolve, reject) => {
       const limit = setTimeout(() => reject(new Error("The engine didn't start on the moved data in time.")), START_LIMIT);
@@ -88,7 +94,7 @@ export async function checkWithEngine({ engine, data, scratch, lost }: EngineChe
     for (const archived of [false, true]) {
       let cursor: string | null = null;
       for (let page = 0; page < 100_000; page++) {
-        const answer: any = await ask(`/api/session?limit=200${archived ? "&archived=true" : ""}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
+        const answer: any = await ask(`/api/session?limit=200&order=desc${archived ? "&archived=true" : ""}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
         for (const session of answer?.data ?? []) if (typeof session?.id === "string") listed.add(session.id);
         cursor = typeof answer?.cursor?.next === "string" && (answer?.data ?? []).length ? answer.cursor.next : null;
         if (!cursor) break;

@@ -5151,38 +5151,51 @@ refused anything but `--status` on the real `~/.kuvo-code`.
        log (`agents/usage/*-files/<sha256(log)[:32]>.json`). Never what's yours or an agent's own
        (chats' and bots' folders, sent files, the agents' settings folders, the trash, the vault),
        nor what the box makes anew as it starts (`run/fence`, the engine's plugins).
-     - **The coding agents' own, in the bridge's folder**: an added Claude Code account's history
-       of each folder (`projects/<slug>`, its slug as Claude Code makes it: each character but a
+     - **Sent files merged beside one of the same name** (`<name> 2`, as placing does it): what
+       names them names the new name.
+     - **The coding agents' own, in the bridge's folder**: Kuvo Code's own Console sign-in's and
+       an added Claude Code account's history of each folder (`projects/<slug>`, its slug as Claude Code makes it: each character but a
        letter or digit a `-`, one over 200 cut there with `-` and its 32-bit string hash in base
        36), an added Grok account's sessions (`sessions/<URL-encoded path>`), and Cursor's records
-       of its agents' folders (`agents.ndjson`'s `cwd`). Codex needs nothing.
+       of its agents' folders (`agents.ndjson`'s `cwd`). Codex needs nothing; Antigravity keeps
+       its conversations by their IDs (whether it keeps anything else by a folder isn't known).
   5. **Check.** It goes back, saying why, if any of the box's own files still names the old place
-     as a path, if a column it rewrites still does, if the engine's database holds other counts of
-     sessions or projects than before, or if the engine (the version the box's keeper names, else
-     the newest) started on a copy of the staged database (no schedules, jobs, accounts, keys or
-     queued messages; nothing busy; settings, home and cache of its own; at a port of its own,
-     stopped as its stdin closes) doesn't list every session, or has one of the newest 25 in
+     as a path, whole, if the database still does where it rewrites (a path column, a path whole
+     in its JSON, a file sent), if the engine's database holds other counts of sessions or
+     projects than its copy did before the rewrite, or if the engine (the version the box's keeper
+     names, else the newest) started on a copy of the staged database (no schedules, jobs,
+     accounts, keys or queued messages; nothing busy or suspended; settings, home and cache of its
+     own; no network, through a proxy that's nowhere; at a port of its own, stopped as its stdin
+     closes) doesn't list every session (page by page, and the archived), or has one of the newest 25 in
      another folder than the database says, or a moved one's folder isn't staged though it was
      there. Where the old place is still named but isn't the box's to change (people's and
-     agents' words in the database and in files that moved, a command's saved output), it's
+     agents' words in the database and in files that moved, a diff's text, a command in a kept
+     rule, a command's saved output), it's
      noted in `state.json`'s `leftovers` for support, never a failure.
   6. **Place.** Each staged folder renamed into place, merged entry by entry where one's there
      (a name in both keeps both: the one there keeps its name, the other is `<name> 2`); then
      `box/kind` (`mac`), last.
   7. **Fix.** What outside the box names its folders, each change journaled first, so going back
      puts it back: every worktree link between what was placed and a repository anywhere,
-     repaired from the repository (`git worktree repair <worktree>` in its common folder), with
-     what git writes outside what was placed (the repository's `worktrees/<name>/gitdir`, or a
+     repaired from the repository (`git worktree repair <worktree>` in its common folder; a link
+     relative to where its end was, `worktree.useRelativePaths`, read from there), with what git
+     writes outside what was placed, all of it before any repair, (the repository's `worktrees/<name>/gitdir`, or a
      worktree's `.git` outside the box) journaled as it was (`{act: "wrote", path, was}`; the old
      place is still there, so nothing prunes the link before); your own Claude Code's history of
      each folder that moved (`$CLAUDE_CONFIG_DIR` or `~/.claude`, `projects/<slug>`) and your
      own Grok's sessions (`$GROK_HOME` or `~/.grok`, `sessions/<URL-encoded path>`; one too long
-     for a name stays) renamed; and each added Claude Code account's sign-in, the Keychain item
+     for a name stays) renamed, with Grok's index for searching them
+     (`sessions/session_search.sqlite`, a cache naming each session's folder, which Grok makes anew
+     when it's missing) set aside as `<name>.before-kuvo-move` and deleted once the old place is
+     cleared (an added Grok account's, in the bridge's folder, is dropped from the staged copy);
+     and each added Claude Code account's sign-in, the Keychain item
      named by its folder (`Claude Code-credentials-<sha256(NFC folder)[0:8]>`), copied under its
      new folder's name with `/usr/bin/security` as Claude Code writes it (`-U`, the value in hex),
-     which the item trusts, so nothing's asked (`{act: "keychain", service, account, was?}`: going
-     back deletes the copy, or puts back what was there). The originals are deleted once the old
-     place is cleared.
+     which the item trusts, so nothing's asked, written on its stdin (never a command line), read
+     back to check (`{act: "keychain", service, account}`: going back deletes the copy; no secret
+     is journaled, so one there already under the new name with another value refuses the move).
+     The originals are deleted once the old place is cleared. Kuvo Code's own Anthropic Console
+     sign-in (`agents/claude/console`) goes the same way as an added account's.
   8. **Clear.** Should something have started in the old box meanwhile, or anything changed, or
      been made, in what it clears since it cloned (the engine's `opencode` folder aside, which only
      the engine writes, and in `run` its processes' records: a file the app kept as you sent it,

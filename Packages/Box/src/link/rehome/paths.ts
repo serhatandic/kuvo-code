@@ -12,9 +12,9 @@ export type PathMap = { from: string; to: string }[];
 
 /** The path map of a plan: each placement's folder to where it goes, the longest first (a folder
  * inside another moved apart from it goes by its own). */
-export function pathMap(placements: readonly Placement[]): PathMap {
+export function pathMap(placements: readonly Placement[], root?: { from: string; to: string }): PathMap {
   const seen = new Set<string>();
-  return placements.filter(each => !each.installed).map(each => ({ from: each.from, to: each.to }))
+  return [...placements.filter(each => !each.installed).map(each => ({ from: each.from, to: each.to })), ...(root ? [root] : [])]
     .filter(each => !seen.has(each.from) && seen.add(each.from))
     .sort((a, b) => b.from.length - a.from.length);
 }
@@ -104,7 +104,7 @@ export function mapLines(text: string, map: PathMap): string {
   if (!map.length) return text;
   // (One pass, the longest prefix first: what's written anew is never mapped again.)
   const escaped = map.map(({ from }) => from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-  return text.replace(new RegExp(`(^|[\\s=:"'])(${escaped})(?=$|[/\\s"'])`, "gm"), (_, before: string, from: string) => before + mapped(from, map));
+  return text.replace(new RegExp(`(^|[\\s=:"'])(${escaped})(?=$|[/"'\\r\\n])`, "gm"), (_, before: string, from: string) => before + mapped(from, map));
 }
 
 /** Whether `text` names an old path still: where the map's old prefix starts a path. */
@@ -114,7 +114,7 @@ export function namesOld(text: string, map: PathMap): boolean {
       let at = text.indexOf(form);
       while (at >= 0) {
         const after = text[at + form.length];
-        if (after === undefined || after === "/" || after === "\"" || after === "'" || after === "\n" || after === "}" || after === "\\" || after === " " || after === "?" || after === "#") return true;
+        if (after === undefined || after === "/" || after === "\"" || after === "'" || after === "\n" || after === "\r" || after === "}" || after === "\\" || after === "?" || after === "#") return true;
         at = text.indexOf(form, at + 1);
       }
     }

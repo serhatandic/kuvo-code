@@ -100,7 +100,7 @@ export function rewriteOwnFile({ file, relative, kind }: OwnFile, map: PathMap):
   let next = text;
   if (kind === "path") {
     const to = mappedValue(text.trim(), map);
-    if (to !== null) next = text.replace(text.trim(), to);
+    if (to !== null) next = text.replace(text.trim(), () => to);
   } else if (kind === "lines") {
     next = mapLines(text, map);
   } else if (kind === "json") {

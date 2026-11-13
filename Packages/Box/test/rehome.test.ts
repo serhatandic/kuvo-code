@@ -75,9 +75,11 @@ function engineDatabase(file: string, { S, home, rootCommit }: { S: string; home
   mkdirSync(join(file, ".."), { recursive: true })
   const db = new Database(file)
   db.exec(sql)
+  // (A diff whose text names the chat's folder, and a rule a command names it in: words, not paths.)
   db.query("UPDATE session_v2 SET summary_diffs = ?, permission = ? WHERE directory = ?").run(
-    JSON.stringify([{ file: "notes.md", patch: "", additions: 1, deletions: 0, status: "modified" }]),
+    JSON.stringify([{ file: "notes.md", patch: `--- a/notes.md\n+++ b/notes.md\n+see ${S}/Chats/c1/notes.md\n`, additions: 1, deletions: 0, status: "modified" }]),
     JSON.stringify([{ action: "edit", resource: `${S}/Chats/c1/*`, effect: "allow" }]), `${S}/Chats/c1`)
+  db.query("INSERT INTO permission VALUES ('psv_words', ?, 'shell', ?, 1, 1)").run(sha("sha1", `directory:${S}/Chats/c1`), `cd ${S}/Chats/c1 && npm test*`)
   db.close()
 }
 
@@ -100,6 +102,13 @@ function world(given: (w: World) => void = () => {}, { appFolder = "App Support"
   const worktree = join(S, "opencode", "data", "opencode", "worktree", rootCommit.slice(0, 6), "feature one")
   mkdirSync(join(worktree, ".."), { recursive: true })
   git(repository, ["worktree", "add", "-q", "--detach", worktree])
+  // And one of a repository that links its worktrees by relative paths (`worktree.useRelativePaths`), in the box too.
+  const relativeRepository = join(home, "proj-relative")
+  mkdirSync(relativeRepository, { recursive: true })
+  git(relativeRepository, ["init", "-q", "-b", "main"])
+  git(relativeRepository, ["config", "worktree.useRelativePaths", "true"])
+  git(relativeRepository, ["commit", "-q", "--allow-empty", "-m", "root"])
+  git(relativeRepository, ["worktree", "add", "-q", "--detach", join(S, "opencode", "data", "opencode", "worktree", "relative", "relative one")])
   const w = { home, S, K: join(home, ".kuvo-code"), release: join(home, "release"), repository, worktree, rootCommit }
   const chat = join(S, "Chats", "c1")
   // The box's own folder.
@@ -123,6 +132,8 @@ function world(given: (w: World) => void = () => {}, { appFolder = "App Support"
   put(join(S, "box", "trash", "t1", "f"), "trashed")
   put(join(S, "box", "updates", "rollback", "restore.sh"), "#!/bin/sh\n")
   put(join(S, "box", "attachments", "ses_1", "a.png"), "box's a")
+  // (One the box was sent under the same name as a file a message names in the app's: merged beside it.)
+  put(join(S, "box", "attachments", "ses_a", "b.png"), "the box's own b")
   put(join(S, "box", "bin", "mcp-catalog.json"), "{}")
   // Beside it, the app's: the engine's data, as its engine made it.
   const data = join(S, "opencode", "data", "opencode")
@@ -153,6 +164,8 @@ function world(given: (w: World) => void = () => {}, { appFolder = "App Support"
   git(chatRepository, ["init", "-q", "-b", "main"])
   git(chatRepository, ["commit", "-q", "--allow-empty", "-m", "root"])
   git(chatRepository, ["worktree", "add", "-q", "--detach", join(home, "elsewhere")])
+  // And one inside it, where Claude Code makes them.
+  git(chatRepository, ["worktree", "add", "-q", "--detach", join(chatRepository, ".claude", "worktrees", "x")])
   put(join(home, "Projects", "plain", "p.txt"), "plain")
   put(join(S, "Attachments", "ses_1", "b.png"), "app's b")
   put(join(S, "Attachments", "ses_1", "a.png"), "app's a, the same name")
@@ -172,11 +185,18 @@ function world(given: (w: World) => void = () => {}, { appFolder = "App Support"
   put(join(agents, "usage", "claude-files", sha("sha256", log).slice(0, 32) + ".json"), JSON.stringify({ version: 1, path: log, record: { items: [], offset: 0, size: 0 } }))
   put(join(agents, "snapshots", sha("sha1", chat).slice(0, 20), "HEAD"), "ref: refs/heads/main\n")
   if (mac) spawnSync("/usr/bin/security", ["add-generic-password", "-U", "-a", "you", "-s", claudeItem(account), "-X", Buffer.from("{\"token\":\"t\"}").toString("hex"), KEYCHAIN])
+  // Kuvo Code's own Anthropic Console sign-in, in a folder of its own too.
+  const console_ = join(agents, "claude", "console")
+  put(join(console_, "projects", claudeSlug(worktree), "c.jsonl"), "{}\n")
+  if (mac) spawnSync("/usr/bin/security", ["add-generic-password", "-U", "-a", "you", "-s", claudeItem(console_), "-X", Buffer.from("{\"console\":true}").toString("hex"), KEYCHAIN])
   put(join(S, "phone-link.json"), "{\"machines\":[]}")
   // Your own Claude Code's and Grok's history of the chat and the worktree, in your home.
   put(join(home, ".claude", "projects", claudeSlug(chat), "c.jsonl"), "{}\n")
   put(join(home, ".claude", "projects", claudeSlug(worktree), "w.jsonl"), "{}\n")
   put(join(home, ".grok", "sessions", encodeURIComponent(worktree), "s1", "meta.json"), "{}")
+  // Grok's index of its sessions, naming their folders, there and in the added account's home.
+  put(join(home, ".grok", "sessions", "session_search.sqlite"), `cwd ${worktree}`)
+  put(join(agents, "grok", "accounts", "g1", "sessions", "session_search.sqlite"), `cwd ${chat}`)
   // The app's own, which stays.
   put(join(S, "Browser", "x"), "browser")
   put(join(S, "bots.json"), "[]")
@@ -257,6 +277,8 @@ function cleanResult(at: string) {
   expect(moved.status, moved.errors).toBe(0)
   const result = { K: snapshot(w.K, boxOnly), S: snapshot(w.S), outside: outside(w) }
   rmSync(w.home, { recursive: true, force: true })
+  // (Its copy of the sign-in too: the world held to it must make its own.)
+  for (const folder of [join(w.K, "agents", "claude", "accounts", CLAUDE_ACCOUNT), join(w.K, "agents", "claude", "console")]) spawnSync("/usr/bin/security", ["delete-generic-password", "-s", claudeItem(folder), KEYCHAIN])
   return result
 }
 
@@ -265,13 +287,17 @@ function cleanResult(at: string) {
  * sign-in under its new name. */
 function outside(w: World) {
   const links: Record<string, string> = {}
-  for (const name of readdirSync(join(w.repository, ".git", "worktrees"))) links[name] = readFileSync(join(w.repository, ".git", "worktrees", name, "gitdir"), "utf8")
+  for (const repository of [w.repository, join(w.home, "proj-relative")]) {
+    for (const name of readdirSync(join(repository, ".git", "worktrees"))) links[`${repository}:${name}`] = readFileSync(join(repository, ".git", "worktrees", name, "gitdir"), "utf8")
+  }
   return {
     claude: snapshot(join(w.home, ".claude")),
     grok: snapshot(join(w.home, ".grok")),
     links,
     elsewhere: readFileSync(join(w.home, "elsewhere", ".git"), "utf8"),
     signIn: keychainItem(claudeItem(join(w.K, "agents", "claude", "accounts", CLAUDE_ACCOUNT))),
+    original: keychainItem(claudeItem(join(w.S, "agents", "claude", "accounts", CLAUDE_ACCOUNT))),
+    console: [keychainItem(claudeItem(join(w.K, "agents", "claude", "console"))), keychainItem(claudeItem(join(w.S, "agents", "claude", "console")))],
   }
 }
 
@@ -300,16 +326,20 @@ test.if(mac)("the move puts this Mac's box in a home of its own, laid out as a m
   expect((db.session_v2 as any[]).map(each => each.directory).sort()).toEqual([join(w.home, "Projects", "plain"), w.repository, newChat, newChat, worktree].sort())
   expect((db.project as any[]).map(each => [each.id, each.worktree]).sort()).toEqual([[w.rootCommit, w.repository], [chatID, newChat], [sha("sha1", `directory:${join(w.home, "Projects", "plain")}`), join(w.home, "Projects", "plain")]].sort())
   expect((db.session_v2 as any[]).filter(each => each.directory === newChat).map(each => each.project_id)).toEqual([chatID, chatID])
-  expect((db.permission as any[]).map(each => each.project_id)).toEqual([chatID])
+  expect((db.permission as any[]).map(each => each.project_id)).toEqual([chatID, chatID])
   expect((db.worktree as any[]).map(each => each.directory).sort()).toEqual([w.repository, worktree].sort())
   const sent = (db.session_inbox as any[]).flatMap(each => JSON.parse(each.payload).files ?? []).map((each: any) => each.source.uri)
-  expect(sent.sort()).toEqual([`file://${newChat.replace("chats/c1", "attachments/ses_a/b.png")}`, `file://${pathToFileURL(join(K, "attachments", "ses_a", "b.png")).href.slice(7)}`, `file://${pathToFileURL(join(K, "attachments", "ses_a", "b.png")).href.slice(7)}`].sort())
+  // (The app's file, merged beside the box's of the same name as `b 2.png`: named so.)
+  expect(sent.sort()).toEqual([`file://${join(K, "attachments", "ses_a", "b 2.png")}`, pathToFileURL(join(K, "attachments", "ses_a", "b 2.png")).href, pathToFileURL(join(K, "attachments", "ses_a", "b 2.png")).href].sort())
+  expect(read("attachments/ses_a/b 2.png")).toBe("sent")
+  expect(read("attachments/ses_a/b.png")).toBe("the box's own b")
   expect(JSON.parse((db.session_v2 as any[]).find(each => each.directory === newChat && each.permission).permission)).toEqual([{ action: "edit", resource: `${newChat}/*`, effect: "allow" }])
   // What a person or an agent wrote is as it was: said for support, never rewritten.
   expect(JSON.stringify(db.session_message)).toContain(`${S}/Chats/c1`)
   expect(moved.said!.status).toBeDefined()
   const record = JSON.parse(readFileSync(join(K, "updates", "rehome", "state.json"), "utf8"))
-  expect(record.leftovers).toEqual(expect.arrayContaining([expect.stringContaining("instruction_blob.value"), expect.stringContaining("session_message.data"), "bots/b1/workspace/notes.md"]))
+  expect(record.leftovers).toEqual(expect.arrayContaining([expect.stringContaining("instruction_blob.value"), expect.stringContaining("session_message.data"),
+    expect.stringContaining("session_v2.summary_diffs"), expect.stringContaining("permission.resource"), "bots/b1/workspace/notes.md"]))
   // Its folders kept by a path: the worktree's snapshots by its new path, their links rewritten;
   // the chat's commands' output under its project's new ID.
   const snapshots = join(K, "data", "opencode", "snapshot", w.rootCommit)
@@ -325,6 +355,14 @@ test.if(mac)("the move puts this Mac's box in a home of its own, laid out as a m
   expect(readFileSync(join(w.home, "elsewhere", ".git"), "utf8")).toBe(`gitdir: ${join(K, "chats", "c2", ".git", "worktrees", "elsewhere")}\n`)
   expect(git(join(w.home, "elsewhere"), ["status", "--porcelain"])).toBe("")
   expect(git(join(K, "chats", "c2"), ["worktree", "list", "--porcelain"])).toContain(`worktree ${join(w.home, "elsewhere")}\n`)
+  // One linked by relative paths, as it was.
+  const relative = join(K, "data", "opencode", "worktree", "relative", "relative one")
+  expect(git(relative, ["status", "--porcelain"])).toBe("")
+  expect(readFileSync(join(relative, ".git"), "utf8")).toStartWith("gitdir: ../")
+  expect(git(join(w.home, "proj-relative"), ["worktree", "list", "--porcelain"])).toContain(`worktree ${relative}\n`)
+  // And a worktree inside the chat's repository, which moved with it.
+  expect(git(join(K, "chats", "c2", ".claude", "worktrees", "x"), ["status", "--porcelain"])).toBe("")
+  expect(git(join(K, "chats", "c2"), ["worktree", "list", "--porcelain"])).toContain(`worktree ${join(K, "chats", "c2", ".claude", "worktrees", "x")}\n`)
   // The box's own files.
   expect(JSON.parse(read("box/projects.json"))).toEqual({ projects: [{ name: "p", directory: w.repository, folders: [newChat] }] })
   expect(JSON.parse(read("box/worktrees.json"))).toEqual({ worktrees: [{ root: w.repository, folder: worktree, project: w.repository }], removed: { [join(K, "chats", "gone")]: w.repository } })
@@ -345,16 +383,20 @@ test.if(mac)("the move puts this Mac's box in a home of its own, laid out as a m
   expect(existsSync(log)).toBe(true)
   expect(readdirSync(join(K, "agents", "grok", "accounts", "g1", "sessions"))).toEqual([encodeURIComponent(newChat)])
   expect(keychainItem(claudeItem(account))).toBe("{\"token\":\"t\"}")
+  expect(keychainItem(claudeItem(join(K, "agents", "claude", "console")))).toBe("{\"console\":true}")
+  expect(keychainItem(claudeItem(join(S, "agents", "claude", "console")))).toBeNull()
+  expect(readdirSync(join(K, "agents", "claude", "console", "projects"))).toEqual([claudeSlug(worktree)])
   expect(keychainItem(claudeItem(join(S, "agents", "claude", "accounts", CLAUDE_ACCOUNT)))).toBeNull()
   // Your own Claude Code's and Grok's history of the folders that moved.
   expect(readdirSync(join(w.home, ".claude", "projects")).sort()).toEqual([claudeSlug(newChat), claudeSlug(worktree)].sort())
+  // (Grok's indexes of them gone, for Grok to make anew with their new folders.)
   expect(readdirSync(join(w.home, ".grok", "sessions"))).toEqual([encodeURIComponent(worktree)])
   expect(existsSync(join(K, "engine", "2.2.6", "opencode"))).toBe(true)
   expect(read("chats/c1/notes.md")).toBe("chat")
   expect(read("phone-link.json")).toBe("{\"machines\":[]}")
   for (const each of ["state/x", "cache/x", "integrations/notion/x", "bots/b1/workspace/notes.md", "wakes/ses_1/directory", "groups/g1/chat.json", "agents/store.json"]) expect(existsSync(join(K, each))).toBe(true)
   // Both folders of sent files, merged: a name in both keeps both.
-  expect(snapshot(join(K, "attachments"))).toMatchObject({ "ses_1/a.png": expect.any(String), "ses_1/a 2.png": expect.any(String), "ses_1/b.png": expect.any(String), "ses_2/c.png": expect.any(String), "ses_a/b.png": expect.any(String) })
+  expect(snapshot(join(K, "attachments"))).toMatchObject({ "ses_1/a.png": expect.any(String), "ses_1/a 2.png": expect.any(String), "ses_1/b.png": expect.any(String), "ses_2/c.png": expect.any(String), "ses_a/b.png": expect.any(String), "ses_a/b 2.png": expect.any(String) })
   expect(read("attachments/ses_1/a.png")).toBe("box's a")
   expect(read("attachments/ses_1/a 2.png")).toBe("app's a, the same name")
   // Its run state, not its processes' records; its files from its release, not the app's bin.
@@ -493,7 +535,7 @@ test.if(mac)("a move back brings the box back into the app's folder as it is now
   // (The engine's database is compared row by row.)
   const made = (relative: string) => /^box\/run\/(engine\.json|serve\.json|served\.json|keeper\.json|socket\.key)$/.test(relative) || relative.startsWith("box/bin") || relative === "opencode/data/opencode/opencode.db"
   const now = snapshot(w.S)
-  expect(Object.fromEntries(Object.entries(before).filter(([file]) => !made(file)))).toEqual(Object.fromEntries(Object.entries(now).filter(([file]) =>
+  expect(Object.fromEntries(Object.entries(before).filter(([file]) => !made(file) && !file.includes("session_search")))).toEqual(Object.fromEntries(Object.entries(now).filter(([file]) =>
     !["opencode/data/opencode/since", "opencode/data/opencode/opencode.db", "box/attachments/ses_3", "box/attachments/ses_3/d.png", "box/run/box.pid"].includes(file))))
   // (A file sent, by the file its URL names: written plainly or with `%20` where it was, which
   // ~/.kuvo-code's, the same both ways, doesn't keep.)
@@ -501,7 +543,10 @@ test.if(mac)("a move back brings the box back into the app's folder as it is now
   expect(byFile(rows(database))).toEqual(byFile(beforeRows))
   // What's outside the box names it where it is again: git's links, your agents' history; the
   // sign-in back under its old name, the copy gone.
-  expect({ ...outside(w), signIn: null }).toEqual({ ...beforeOutside, signIn: null })
+  // (Grok's index of its sessions isn't back: a cache, it's made anew with their folders.)
+  const noIndex = (seen: ReturnType<typeof outside>) => ({ ...seen, signIn: null, console: null, grok: Object.fromEntries(Object.entries(seen.grok).filter(([file]) => !file.includes("session_search"))) })
+  expect(existsSync(join(w.home, ".grok", "sessions", "session_search.sqlite"))).toBe(false)
+  expect(noIndex(outside(w))).toEqual(noIndex(beforeOutside))
   expect(keychainItem(claudeItem(join(w.S, "agents", "claude", "accounts", CLAUDE_ACCOUNT)))).toBe(signIn)
   expect(keychainItem(claudeItem(join(w.K, "agents", "claude", "accounts", CLAUDE_ACCOUNT)))).toBeNull()
   expect(git(w.worktree, ["status", "--porcelain"])).toBe("")
@@ -823,4 +868,50 @@ test.if(mac && !!ENGINE && existsSync(ENGINE))("with the engine itself, the move
     engine.stdin.end()
     await engine.exited
   }
+}, 120_000)
+
+test.if(mac)("a check that finds the moved data wrong sends it back, saying why: the engine that won't start on it, or one that lists fewer sessions", () => {
+  for (const [engine, why] of [["exit 3", "The engine stopped as it started on the moved data"], [`STAND_IN_LOSES_ONE=1 exec '${process.execPath}' '${join(import.meta.dir, "fixtures", "rehome", "engine-stand-in.ts")}' "$@"`, "The engine on the moved data lists 4 sessions, not 5."]]) {
+    const w = world(v => put(join(v.S, "engine", "2.2.6", "opencode"), `#!/bin/sh\n${engine}\n`))
+    const before = { S: snapshot(w.S), outside: outside(w) }
+    const refused = move(w)
+    expect([refused.status, refused.said?.result], refused.errors).toEqual([1, "failed"])
+    expect(refused.said).toMatchObject({ status: { state: "failed", failed: { step: "check" } } })
+    expect(refused.said!.message).toContain(why)
+    expect(snapshot(w.S)).toEqual(before.S)
+    expect(outside(w)).toEqual(before.outside)
+    expect(readdirSync(w.K)).toEqual(["updates"])
+  }
+}, 60_000)
+
+test.if(mac)("Move Back is refused while the engine's database is of a schema the move wasn't tried with, and the box stays where it is", () => {
+  const w = world()
+  expect(move(w).status).toBe(0)
+  const db = new Database(join(w.K, "data", "opencode", "opencode.db"))
+  db.exec("INSERT INTO migration VALUES ('20261201000000_newer', 1)")
+  db.close()
+  const back = rehome(w, ["--back"])
+  expect([back.status, back.said?.message]).toEqual([1, "The engine's database (opencode.db) is of a version this box can't move yet (60 20261201000000_newer): it moves once the box updates."])
+  expect(back.said).toMatchObject({ status: { state: "done", way: "move" } })
+  expect(existsSync(join(w.K, "box", "kind"))).toBe(true)
+}, 60_000)
+
+test.if(mac && !!ENGINE && existsSync(ENGINE))("with the engine itself, a box of hundreds of sessions, some archived, is checked page by page", () => {
+  const w = world(v => {
+    rmSync(join(v.S, "engine", "2.2.6", "opencode"))
+    expect(spawnSync("/bin/cp", ["-c", ENGINE!, join(v.S, "engine", "2.2.6", "opencode")]).status).toBe(0)
+    const db = new Database(join(v.S, "opencode", "data", "opencode", "opencode.db"))
+    const chat = db.query("SELECT * FROM session_v2 WHERE directory = ? ORDER BY id LIMIT 1").get(join(v.S, "Chats", "c1")) as Record<string, unknown>
+    const columns = Object.keys(chat)
+    const insert = db.query(`INSERT INTO session_v2 (${columns.map(each => `"${each}"`).join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`)
+    for (let i = 0; i < 250; i++) {
+      const id = `ses_e2c1${String(i).padStart(4, "0")}ffeMoreSessions${String(i).padStart(2, "0").slice(-2)}`.slice(0, 30)
+      insert.run(...columns.map(each => each === "id" ? id : each === "time_updated" ? 1794556100000 + i : each === "time_archived" ? (i % 50 === 0 ? 1794556200000 : null) : each === "slug" ? `more-${i}` : chat[each]) as never[])
+    }
+    db.close()
+  })
+  const moved = move(w)
+  expect(moved.said, moved.errors).toMatchObject({ result: "done" })
+  const db = rows(join(w.K, "data", "opencode", "opencode.db"))
+  expect(db.session_v2.length).toBe(255)
 }, 120_000)

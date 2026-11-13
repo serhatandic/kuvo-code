@@ -21,7 +21,7 @@ import { agentsWorking } from "../updates/update";
 import { BRIDGE_VERSION } from "../version";
 import { setKeepsAwake } from "../work/settings";
 import { undoKeychain } from "./outside";
-import { PATH_REWRITER, pathMap, type MoveContext, type Rewriter } from "./rewrite";
+import { PATH_REWRITER, pathMap, type MoveContext, type PathMap, type Rewriter } from "./rewrite";
 import {
   AFTER_A_FAILURE, KEPT_FOR, MOST_TRIES, forgetJournal, forwardOnly, giveLock, holdsLock, journalAct, noteRecord, readActs, readJournal,
   moveUnderWay, readRecord, rehomeFolder, rehomeStatus, stepIndex, takeLock, writeJournal, type Act, type Journal, type Placement,
@@ -187,6 +187,13 @@ export function planBack({ appFolder, home }: Folders, merged: { source: string;
   return { placements, clearing };
 }
 
+/** A move's path map: each placement's folder to where it goes, and the box's own folder (the app's
+ * `box`, the home itself) for what's in it that isn't placed apart (its `bin`). */
+function mapOf(way: "move" | "back", { appFolder, home }: Folders, placements: readonly Placement[]): PathMap {
+  const box = path.join(appFolder, "box");
+  return pathMap(placements, way === "move" ? { from: box, to: home } : { from: home, to: box });
+}
+
 /** Why the move can't go ahead now, or null: checked as it's planned, before anything changes. */
 export function moveRefusal({ appFolder, home }: Folders, { appVersion, release, bridgeVersion = BRIDGE_VERSION, rewriter = PATH_REWRITER, running: checkRunning = true }: { appVersion: string | null; release: string | null | undefined; bridgeVersion?: string; rewriter?: Rewriter; running?: boolean }): string | null {
   if (process.platform !== "darwin") return NOTHING_TO_MOVE;
@@ -224,11 +231,11 @@ export function moveRefusal({ appFolder, home }: Folders, { appVersion, release,
   const free = freeBytes(target);
   if (free !== null && free < needed) return `There isn't room to move this Mac's box: it needs ${Math.ceil(needed / 1_000_000)} MB free.`;
   const plan = planMove({ appFolder, home }, release ?? path.join(home, "bin"));
-  return rewriter.refuses({ way: "move", home, appFolder, placements: plan.placements, map: pathMap(plan.placements), work: path.join(staging(home), "work") });
+  return rewriter.refuses({ way: "move", home, appFolder, placements: plan.placements, map: mapOf("move", { appFolder, home }, plan.placements), work: path.join(staging(home), "work") });
 }
 
 /** Why a move back can't go ahead now, or null. */
-export function backRefusal({ appFolder, home }: Folders, { running: checkRunning = true } = {}): string | null {
+export function backRefusal({ appFolder, home }: Folders, { running: checkRunning = true, rewriter = PATH_REWRITER }: { running?: boolean; rewriter?: Rewriter } = {}): string | null {
   if (process.platform !== "darwin") return NOTHING_TO_MOVE;
   const state = readRecord(home);
   if (state.state !== "done" || state.way !== "move") return NOT_MOVED;
@@ -238,7 +245,9 @@ export function backRefusal({ appFolder, home }: Folders, { running: checkRunnin
   const old = path.join(appFolder, "box", "run");
   if (["setup-card.json", "link.json"].some(file => exists(path.join(old, file))) || runningIn(old).length) return "Kuvo Code has a box of its own in its folder again: this one can't move back beside it.";
   if (!exists(appFolder) || fs.statSync(appFolder).dev !== fs.statSync(home).dev) return "Kuvo Code can't move its box back on this disk.";
-  return null;
+  // (Its engine's database as it is now: of a schema the rewrite knows, as a move's is.)
+  const plan = planBack({ appFolder, home }, readRecord(home).merged);
+  return rewriter.refuses({ way: "back", home, appFolder, placements: plan.placements, map: mapOf("back", { appFolder, home }, plan.placements), work: path.join(staging(home), "work") });
 }
 
 // Doing it
@@ -389,8 +398,11 @@ function undo(journal: Journal): void {
         if (++undone === 1) stopPoint("in-undo");
       }
     } else if (act.act === "wrote") {
-      // (A file outside the box, as it was: git's link to a worktree.)
-      try { if (fs.readFileSync(act.path, "utf8") !== act.was) fs.writeFileSync(act.path, act.was); } catch {}
+      // (A file outside the box, as it was: git's link to a worktree, never another.)
+      if (!["gitdir", ".git"].includes(path.basename(act.path))) continue;
+      try { if (fs.readFileSync(act.path, "utf8") !== act.was) fs.writeFileSync(act.path, act.was); } catch (error) {
+        console.error(`${act.path} couldn't be put back as it was: ${(error as Error).message}`);
+      }
     } else if (act.act === "keychain") {
       undoKeychain(act);
     } else if (act.folder) {
@@ -417,7 +429,7 @@ function stepTo(journal: Journal, step: RehomeStep): void {
 
 /** What the rewriter's told of a move, by its journal. */
 const contextOf = (journal: Journal): MoveContext => ({
-  way: journal.way, ...foldersOf(journal), placements: journal.placements, map: pathMap(journal.placements), work: path.join(staging(homeOf(journal)), "work"),
+  way: journal.way, ...foldersOf(journal), placements: journal.placements, map: mapOf(journal.way, foldersOf(journal), journal.placements), work: path.join(staging(homeOf(journal)), "work"),
 });
 
 /** Its steps from where the journal is, to the end (a failure before `clear` throws, for the move to
@@ -685,7 +697,7 @@ export async function rehomeBack(home: string, options: MoveOptions = {}): Promi
     if (earlier) return earlier;
     const record = readRecord(home);
     const appFolder = typeof record.from === "string" ? record.from : null;
-    const refusal = backRefusal({ appFolder: appFolder ?? home, home });
+    const refusal = backRefusal({ appFolder: appFolder ?? home, home }, { rewriter });
     const now = Date.now();
     if (refusal || !appFolder) {
       // (Move Back asked: answered, for the keeper not to ask again until it's asked again.)
