@@ -27,4 +27,30 @@ final class UsageBoxParityAntigravityQuotaTests: XCTestCase {
             }
         }
     }
+    func testLegacyPoolsAndPlanNamesMatchBoxFixtures() throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Box/test/fixtures/usage/antigravity-legacy-plan-cases.json")
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        for each in try XCTUnwrap(fixture["legacy"] as? [[String: Any]]) {
+            let configs = try XCTUnwrap(each["configs"] as? [[String: Any]]).map { row in
+                let quota = row["quotaInfo"] as? [String: Any]
+                return AntigravityModelConfig(label: row["label"] as? String ?? "", modelID: row["modelID"] as? String,
+                    remainingFraction: quota?["remainingFraction"] as? Double ?? 0, resetTime: nil)
+            }
+            let expected = try XCTUnwrap(each["expected"] as? [[String: Any]])
+            let actual = AntigravityUsageMapper.buildLines(configs)
+            XCTAssertEqual(actual.count, expected.count)
+            for (line, row) in zip(actual, expected) {
+                guard case .progress(let label, let used, _, _, _, let period, _) = line else { XCTFail(); continue }
+                XCTAssertEqual(label, row["label"] as? String)
+                XCTAssertEqual(used, (row["used"] as? NSNumber)?.doubleValue)
+                XCTAssertEqual(period, (row["periodMs"] as? NSNumber)?.intValue)
+            }
+        }
+        for each in try XCTUnwrap(fixture["plans"] as? [[String: Any]]) {
+            XCTAssertEqual(AntigravityUsageMapper.formatPlan(each["input"] as? String), each["expected"] as? String)
+        }
+    }
+
 }
