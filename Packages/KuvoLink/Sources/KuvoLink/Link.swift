@@ -477,10 +477,10 @@ public actor LinkClient {
         func goesAgain(after error: LinkError) -> Bool {
             switch error {
             case .closed, .timedOut, .relayUnavailable: true
-            // Nothing at its address (asleep, offline): said at once on its first try, as ever,
-            // rather than shown going for minutes. Once it's gone and dropped, its host may only
-            // be connecting again (the relay started again), and it may have arrived: it goes again.
-            case .hostOffline: since != nil
+            // Nothing at its address (asleep, offline): said at once, as ever, rather than shown
+            // going for minutes. Once it's gone (put on a session), its host may have it, and may
+            // only be connecting again (the relay or the link started again): it goes again.
+            case .hostOffline: ticket.hasReached
             case .refused, .unsupportedVersion, .notAvailable: false
             }
         }
@@ -606,7 +606,7 @@ public actor LinkClient {
         let address = host.linkAddress
         var taken: Set<String> = []
         func unsent(_ attempt: Repeat) -> String? {
-            guard attempt.host.linkAddress == address, !attempt.ticket.hasReached, let key = attempt.request.repeatableKey, keys.contains(key) else { return nil }
+            guard attempt.host.linkAddress == address, !attempt.ticket.hasReached, !attempt.ticket.isStopped, let key = attempt.request.repeatableKey, keys.contains(key) else { return nil }
             return key
         }
         // On their way to a connection: stopped, they end as they get one.
@@ -675,6 +675,8 @@ public actor LinkClient {
             session.unanswered[id] = sent
             watchAnswer(id, in: session)
         } catch {
+            // Taken back (`takeBack`) or stopped meanwhile: cancelled, whatever else ended it.
+            if ticket.isStopped { return listener.failed(CancellationError()) }
             if let repeating, let error = error as? LinkError, repeating.goesAgain(after: error) {
                 // Sent again from here, not again when its session ends.
                 if let placed {

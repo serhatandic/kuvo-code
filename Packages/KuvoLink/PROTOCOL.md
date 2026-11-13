@@ -2291,8 +2291,8 @@ are in one line, in the order they were first sent: the first goes at once, then
 computer, whichever comes first; none goes before one sent ahead of it, and one sent while any
 waits goes behind them. A computer that isn't connected to the relay (asleep, offline), turns the
 phone away, or can't talk with it isn't tried again: that's said at once, as before. Once a try has
-gone and dropped, though, a computer not on the relay is tried again like a dropped link (the relay
-started again, and it's still connecting), as it may have the message already. A try whose wait ends
+gone (it was put on a session, so the computer may have it), though, a computer not on the relay is
+tried again like a dropped link (the relay or its link started again, and it's still connecting). A try whose wait ends
 after its two minutes (the app was suspended meanwhile) fails then, rather than going late.
 
 Stopping a request (the client stops reading, or cancels it) ends it at once: one waiting to go

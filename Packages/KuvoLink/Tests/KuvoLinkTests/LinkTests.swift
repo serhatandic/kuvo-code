@@ -1177,33 +1177,64 @@ private func collect(_ stream: LinkResponse) async throws -> (status: Int, heade
         #expect(seen.value == ["msg_went"])
     }
 
-    /// Its computer not on the relay yet as a try goes again (the relay started again, and the
-    /// computer's still connecting): the message it may have had waits for it rather than failing,
-    /// and goes once it's back (#144).
-    @Test(.timeLimit(.minutes(1))) func aMessageGoingAgainWaitsForAComputerStillConnecting() async throws {
+    /// Its computer gone from the relay after a message went (its link started again, its Wi-Fi
+    /// blinked): it may have the message, so it goes again once the computer's back, rather than
+    /// failing with "asleep or offline" while it's still connecting (#144).
+    @Test(.timeLimit(.minutes(1))) func aMessageThatWentWaitsForItsComputerToComeBack() async throws {
         let relay = MemoryRelay()
         let clock = ManualClock()
-        let host = TestHost(relay: relay, handle: echo)
-        let offline = Locked(false)
+        let seen = Locked<[String]>([])
+        // (The first never answers: it's gone before it can.)
+        let host = TestHost(relay: relay) { request, _ in
+            if request.method == "POST" { seen.value.append(String(decoding: request.body, as: UTF8.self)) }
+            return AsyncThrowingStream { _ in }
+        }
+        let client = await phone(on: relay, clock: clock)
+        let paired = try await client.pair(host.link)
+        let sending = Task { try await collect(client.send(safeToRepeat("msg_back"), to: paired)) }
+        await clock.sleepers(1, dueWithin: Link.answerWithin)
+        try #require(seen.value == ["msg_back"])
+        host.connection.close()
+        try #require(await waitsToGoAgain(sending, clock, within: Link.repeatWait(try: 2)), "it failed with its computer still connecting")
+        host.startedAgain(on: relay, handle: echo)
+        await clock.advance(by: Link.repeatWait(try: 2))
+        let answered = try await sending.value
+        #expect(answered.status == 200 && answered.body == Data("msg_back".utf8))
+    }
+
+    /// Taken back by Stop while it's still connecting: it ends cancelled, whatever the connection
+    /// it waited for says (its computer isn't there), and never reaches it (#144).
+    @Test(.timeLimit(.minutes(1))) func stopTakesBackAMessageStillConnecting() async throws {
+        let relay = MemoryRelay()
+        let clock = ManualClock()
+        let seen = Locked<[String]>([])
+        let host = TestHost(relay: relay) { request, phone in
+            if request.method == "POST" { seen.value.append(String(decoding: request.body, as: UTF8.self)) }
+            return echo(request, phone)
+        }
+        // A relay connection that's slow to come: held until the test lets it.
+        let (entered, enter) = AsyncStream.makeStream(of: Void.self)
+        let (released, release) = AsyncStream.makeStream(of: Void.self)
+        let slow = Locked(false)
         let client = LinkClient(relay: URL(string: "wss://relay.test")!, key: LinkKey(), secret: RelaySecret(), name: "Test iPhone", app: "0.0.1") { _, secret in
-            if offline.value { throw LinkError.relayUnavailable }
+            if slow.value {
+                enter.yield()
+                for await _ in released { break }
+            }
             return relay.connect(secret)
         }
         await client.setClockForTesting(clock.link)
         let paired = try await client.pair(host.link)
-        offline.value = true
+        slow.value = true
         client.relayMayBeGone()
+        let sending = Task { try await collect(client.send(safeToRepeat("msg_connecting"), to: paired)) }
+        for await _ in entered { break }
+        #expect(await client.takeBack(["msg_connecting"], from: paired) == ["msg_connecting"])
+        #expect(await client.takeBack(["msg_connecting"], from: paired).isEmpty, "taken back once")
         host.connection.close()
-        let sending = Task { try await collect(client.send(safeToRepeat("msg_back"), to: paired)) }
-        try #require(await waitsToGoAgain(sending, clock, within: Link.repeatWait(try: 2)), "it failed at once")
-        // The relay's back before the computer is.
-        offline.value = false
-        await clock.advance(by: Link.repeatWait(try: 2))
-        try #require(await waitsToGoAgain(sending, clock, within: Link.repeatWait(try: 3)), "it failed with its computer still connecting")
-        host.startedAgain(on: relay, handle: echo)
-        await clock.advance(by: Link.repeatWait(try: 3))
-        let answered = try await sending.value
-        #expect(answered.status == 200 && answered.body == Data("msg_back".utf8))
+        release.yield()
+        await #expect(throws: CancellationError.self) { try await sending.value }
+        #expect(seen.value.isEmpty)
     }
 
     /// Its time up while it waited (the app suspended, its timer late): it fails as it would have,
