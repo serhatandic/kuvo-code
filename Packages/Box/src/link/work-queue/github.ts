@@ -47,8 +47,9 @@ const ISSUE_FIELDS = "id number title url state stateReason closedAt";
 const PULL_FIELDS = "id number title url state isDraft merged closedAt";
 
 /** An issue or a pull request to read: where it is, and GitHub's id for one found missing there
- * since (moved to another repository, or turned into a discussion), read by that instead. */
-export type IssueAsk = IssueAt & { id?: string };
+ * since (moved to another repository, or turned into a discussion), read by that instead; or the id
+ * its item knows (`knownId`), to read it by if it isn't found where it was. */
+export type IssueAsk = IssueAt & { id?: string; knownId?: string };
 
 const fields = (body: boolean) => `__typename ... on Issue { ${ISSUE_FIELDS}${body ? " body" : ""} } ... on PullRequest { ${PULL_FIELDS}${body ? " body" : ""} }`;
 
@@ -91,6 +92,11 @@ export const ISSUES: Reader<IssueAsk, IssueRead> = register<IssueAsk, IssueRead>
   freshFor: value => (!value ? FRESH_MISSING : DONE_STATES.has(value.state) ? FRESH_DONE : FRESH_OPEN),
   keptFor: 30 * 86_400_000,
   keepsLast: true,
+  // (Missing where it was: by GitHub's id for it, moved to another repository say.)
+  again: (ask, before) => {
+    const id = before?.value?.id ?? ask.knownId;
+    return !ask.id && id ? { ...ask, id } : null;
+  },
 });
 
 /** At most this many read at once, for one view or one ask of chips: those read longest ago first. */
@@ -117,11 +123,14 @@ export async function readSeen(items: { source?: Source; removed?: unknown; seen
     if (told !== undefined && now - told < (DONE_STATES.has(item.seen!.state) ? FRESH_DONE : TOLD_FRESH)) continue;
     const key = sourceKey(at);
     // (One found missing where it was, or found elsewhere since: by GitHub's id, wherever it went.)
+    // (Never read here, one handed or told from another computer: as its item says, its page there
+    // and whether that one found it gone.)
     const kept = reads[key];
-    const there = kept?.value ? issueAt(kept.value.url) : null;
+    const there = kept?.value ? issueAt(kept.value.url) : !kept && item.source!.url ? issueAt(item.source!.url) : null;
     const moved = Boolean(there && sourceKey(there) !== key);
-    const id = kept?.gone || moved ? kept?.value?.id ?? item.source!.id : undefined;
-    if (!asks.has(key)) asks.set(key, { ...at, ...(id ? { id } : {}) });
+    const knownId = kept?.value?.id ?? item.source!.id;
+    const id = kept?.gone || moved || (!kept && item.seen?.gone) ? knownId : undefined;
+    if (!asks.has(key)) asks.set(key, { ...at, ...(id ? { id } : knownId ? { knownId } : {}) });
   }
   const asked = (key: string) => reads[key]?.checked ?? reads[key]?.at ?? 0;
   const wanted = [...asks].sort(([a], [b]) => asked(a) - asked(b)).slice(0, MOST_READ).map(([, at]) => at);
@@ -159,6 +168,13 @@ export function seenOf(source: Source | undefined): Read<IssueRead> | undefined 
 /** Whether GitHub said it's closed or merged, as last read (here, or as its computer told it). */
 export const doneOnGitHub = (state: string | undefined): boolean => state !== undefined && DONE_STATES.has(state);
 
+/** Whether what was read here makes it Done: closed or merged, or gone from GitHub since (deleted,
+ * or no longer visible to `gh` here: GitHub says the same of both). */
+export const doneByRead = (read: Read<IssueRead> | undefined): boolean => Boolean(read?.value && (read.gone || doneOnGitHub(read.value.state)));
+
+/** What a client shows in place of its category while GitHub makes it Done. */
+const doneWords = (seen: Seen): string => (seen.gone ? "Gone from GitHub" : seen.state === "merged" ? "Merged on GitHub" : "Closed on GitHub");
+
 /** The name a client shows: `kuvo-ai#12`, or `owner/kuvo-ai#12` where another owner's repository
  * read here has the same name. */
 export function shownName(at: IssueAt): string {
@@ -177,11 +193,13 @@ interface Shown {
   doneAt?: number;
   struck?: boolean;
   closesOn?: string;
+  doneAs?: string;
 }
 
 /** A summary with what GitHub says of its issue or pull request taken in: the newer of what was
- * read here and what its computer told (`seen`). Done while it's closed or merged (never in
- * progress then), its own category kept in `keptIn`; GitHub's title; the name a client shows. */
+ * read here and what its computer told (`seen`). Done while it's closed or merged, or gone (never
+ * in progress then), its own category kept in `keptIn`, and said in words (`doneAs`); GitHub's
+ * title; the name a client shows. */
 export function withSeen<S extends Shown>(summary: S): S {
   if (!summary.source) return summary;
   const at = issueAt(summary.source.ref);
@@ -204,8 +222,8 @@ export function withSeen<S extends Shown>(summary: S): S {
     source = { ...source, kind: read.value!.kind, url: read.value!.url, id: read.value!.id };
     closedAt = read.value!.closedAt;
   }
-  const done = doneOnGitHub(seen?.state);
-  const { keptIn: _, doneAt, struck: __, ...rest } = summary;
+  const done = Boolean(seen && (seen.gone || doneOnGitHub(seen.state)));
+  const { keptIn: _, doneAt, struck: __, doneAs: ___, ...rest } = summary;
   // (A Done one's time: when GitHub closed it; one Done only by what was told keeps the time told.)
   const doneSince = closedAt ?? (summary.keptIn !== undefined ? doneAt : undefined) ?? seen?.at;
   return {
@@ -215,10 +233,11 @@ export function withSeen<S extends Shown>(summary: S): S {
     ...(seen ? { seen } : {}),
     category: done ? "done" : keptIn,
     inProgress: done ? false : summary.inProgress,
-    // (What a client draws: its title struck through when it was closed without being done.)
-    ...(seen && STRUCK.has(seen.state) ? { struck: true } : {}),
+    // (What a client draws: its title struck through when it was closed without being done, or is
+    // gone.)
+    ...(seen && (seen.gone || STRUCK.has(seen.state)) ? { struck: true } : {}),
     closesOn: "github",
-    ...(done ? { keptIn, doneAt: doneSince } : doneAt !== undefined && summary.keptIn === undefined ? { doneAt } : {}),
+    ...(done ? { keptIn, doneAt: doneSince, doneAs: doneWords(seen!) } : doneAt !== undefined && summary.keptIn === undefined ? { doneAt } : {}),
   } as S;
 }
 
@@ -234,6 +253,9 @@ export async function readIssue(at: IssueAt): Promise<{ read: IssueRead; body: s
   // (Under the reader's lock and back-off, as every read of GitHub here.)
   const answer = await readOne(ISSUES, at, `query { ${nodeQuery(at, "p0", true)} }`, data => issueReadOf(data.p0));
   if ("unread" in answer) return { refused: unreadWords(answer.unread) };
+  // (Not that it isn't there: GitHub wouldn't say, as an organization's SAML sign-on or IP allow
+  // list keeps it from gh's sign-in.)
+  if (answer.held?.size) return { refused: `GitHub wouldn't answer for ${refText(at)} to gh on ${HERE}${answer.said ? `: ${answer.said}` : "."}` };
   const read = issueReadOf(answer.data.p0);
   if (!read) return { refused: `GitHub has no issue or pull request ${refText(at)} that gh on ${HERE} may see (gh auth status says which account it uses).` };
   const node = isObject(answer.data.p0) && isObject(answer.data.p0.issueOrPullRequest) ? answer.data.p0.issueOrPullRequest : {};

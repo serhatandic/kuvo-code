@@ -10923,6 +10923,7 @@
          "keptIn?": "string",
          "struck?": "bool",
          "closesOn?": "string",
+         "doneAs?": "string",
          "handing?": {
           "object": {
            "to": "string",
@@ -11127,6 +11128,7 @@
          "keptIn?": "string",
          "struck?": "bool",
          "closesOn?": "string",
+         "doneAs?": "string",
          "handing?": {
           "object": {
            "to": "string",
@@ -11338,6 +11340,7 @@
          "keptIn?": "string",
          "struck?": "bool",
          "closesOn?": "string",
+         "doneAs?": "string",
          "handing?": {
           "object": {
            "to": "string",
@@ -11542,6 +11545,7 @@
          "keptIn?": "string",
          "struck?": "bool",
          "closesOn?": "string",
+         "doneAs?": "string",
          "handing?": {
           "object": {
            "to": "string",
@@ -11948,6 +11952,7 @@
         "keptIn?": "string",
         "struck?": "bool",
         "closesOn?": "string",
+        "doneAs?": "string",
         "handing?": {
          "object": {
           "to": "string",
@@ -12217,6 +12222,7 @@
         "keptIn?": "string",
         "struck?": "bool",
         "closesOn?": "string",
+        "doneAs?": "string",
         "handing?": {
          "object": {
           "to": "string",
@@ -12417,6 +12423,7 @@
         "keptIn?": "string",
         "struck?": "bool",
         "closesOn?": "string",
+        "doneAs?": "string",
         "handing?": {
          "object": {
           "to": "string",
@@ -12617,6 +12624,7 @@
         "keptIn?": "string",
         "struck?": "bool",
         "closesOn?": "string",
+        "doneAs?": "string",
         "handing?": {
          "object": {
           "to": "string",

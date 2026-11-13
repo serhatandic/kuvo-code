@@ -12325,6 +12325,7 @@ var sourceKeyOf = (source) => {
   const at = issueAt(source.ref);
   return at ? sourceKey(at) : `${source.kind}:${source.ref}`.toLowerCase();
 };
+var sameSource = (a, b) => sourceKeyOf(a) === sourceKeyOf(b) || a.id !== undefined && a.id === b.id;
 
 // Packages/Box/src/link/work-queue/store.ts
 var WORK_QUEUE = path52.join(RUN, "work-queue");
@@ -12620,7 +12621,7 @@ function noteQueuesChanged() {
   for (const tell of queueFollowers2)
     tell();
 }
-var matching2 = (items, ref) => items.filter((item) => refNames(ref, item));
+var matching2 = (items, ref) => items.filter((item) => refNames(ref, item)).sort((a, b) => Number(Boolean(a.removed)) - Number(Boolean(b.removed)));
 var refNames = (ref, item) => ("id" in ref) ? item.id === ref.id : ("number" in ref) ? item.number === ref.number : Boolean(item.source) && sourceKeyOf(item.source) === ref.source;
 var filesOf = (item) => path52.join(FILES2, item);
 function placeIn(items, category, { top = false } = {}) {
@@ -20103,6 +20104,32 @@ var answeringOnce = () => answersOnce;
 var HOLD = 3 * 60000;
 var BACK_OFF = 5 * 60000;
 var PER_QUERY = 50;
+function heldOf2(data, errors) {
+  const held = new Set;
+  const missing = new Set;
+  let all = false;
+  let said;
+  for (const error of Array.isArray(errors) ? errors : []) {
+    if (!isObject(error))
+      continue;
+    const alias = Array.isArray(error.path) && typeof error.path[0] === "string" ? error.path[0] : null;
+    if (error.type === "NOT_FOUND") {
+      if (alias)
+        missing.add(alias);
+      continue;
+    }
+    said ??= typeof error.message === "string" ? error.message.slice(0, 300) : undefined;
+    if (alias)
+      held.add(alias);
+    else
+      all = true;
+  }
+  for (const [alias, value] of Object.entries(data)) {
+    if (all || value == null && !missing.has(alias))
+      held.add(alias);
+  }
+  return held.size ? { held, ...said ? { said } : {} } : {};
+}
 function askGitHub(host, query, timeout = 30000) {
   return new Promise((resolve) => {
     execFile8("gh", ["api", "graphql", "--hostname", host, "-f", `query=${query}`], {
@@ -20113,8 +20140,9 @@ function askGitHub(host, query, timeout = 30000) {
     }, (error, stdout, stderr) => {
       try {
         const answer = JSON.parse(String(stdout));
-        if (isObject(answer) && isObject(answer.data))
-          return resolve({ data: answer.data });
+        if (isObject(answer) && isObject(answer.data)) {
+          return resolve({ data: answer.data, ...heldOf2(answer.data, answer.errors) });
+        }
       } catch {}
       const code = error?.code;
       if (code === "ENOENT")
@@ -20126,7 +20154,13 @@ function askGitHub(host, query, timeout = 30000) {
 function readKept3(file) {
   try {
     const kept = JSON.parse(fs72.readFileSync(file, "utf8"));
-    return { reads: isObject(kept.reads) ? kept.reads : {}, hosts: isObject(kept.hosts) ? kept.hosts : {} };
+    const reads = {};
+    for (const [key, read] of Object.entries(isObject(kept.reads) ? kept.reads : {})) {
+      if (!isObject(read) || typeof read.at !== "number")
+        continue;
+      reads[key] = "value" in read ? read : { at: read.at, value: read.pull ?? null };
+    }
+    return { reads, hosts: isObject(kept.hosts) ? kept.hosts : {} };
   } catch {
     return { reads: {}, hosts: {} };
   }
@@ -20199,7 +20233,7 @@ function keep2(reader, kept, now) {
 }
 function readOf(before, value, keepsLast, now) {
   if (value === null && keepsLast && before?.value)
-    return { at: before.at, value: before.value, checked: now, gone: true };
+    return { at: before.gone ? before.at : now, value: before.value, checked: now, gone: true };
   if (before && JSON.stringify(before.value) === JSON.stringify(value) && !before.gone)
     return { at: before.at, value, checked: now };
   return { at: now, value };
@@ -20232,10 +20266,47 @@ async function readDue(reader, asks, now) {
           held.set(host, now() + BACK_OFF);
           break;
         }
+        const values = new Map;
+        const heldBack = (key) => {
+          const before = kept.reads[key];
+          read.set(key, before ? { ...before, checked: now() } : { at: now(), value: null });
+        };
         part.forEach((ask, index) => {
           const key = reader.keyOf(ask);
-          read.set(key, readOf(kept.reads[key], reader.valueOf(answer.data[`p${index}`], ask), reader.keepsLast, now()));
+          if (answer.held?.has(`p${index}`))
+            return heldBack(key);
+          values.set(key, reader.valueOf(answer.data[`p${index}`], ask));
         });
+        const again = part.flatMap((ask) => {
+          const key = reader.keyOf(ask);
+          const other = values.has(key) && values.get(key) === null ? reader.again?.(ask, kept.reads[key]) : null;
+          return other ? [other] : [];
+        });
+        let unread = false;
+        if (again.length) {
+          const second = await askGitHub(host, reader.query(again));
+          if ("unread" in second) {
+            unread = true;
+            held.set(host, now() + BACK_OFF);
+            for (const ask of again)
+              values.delete(reader.keyOf(ask));
+          } else {
+            again.forEach((ask, index) => {
+              const key = reader.keyOf(ask);
+              if (second.held?.has(`p${index}`)) {
+                values.delete(key);
+                return heldBack(key);
+              }
+              const value = reader.valueOf(second.data[`p${index}`], ask);
+              if (value !== null)
+                values.set(key, value);
+            });
+          }
+        }
+        for (const [key, value] of values)
+          read.set(key, readOf(kept.reads[key], value, reader.keepsLast, now()));
+        if (unread)
+          break;
       }
     }
     const latest = readKept3(reader.file);
@@ -20337,7 +20408,8 @@ async function readOne(reader, ask, query, valueOf, now = Date.now) {
       kept.hosts[host] = Math.max(kept.hosts[host] ?? 0, now() + BACK_OFF);
     else {
       delete kept.hosts[host];
-      kept.reads[reader.keyOf(ask)] = readOf(kept.reads[reader.keyOf(ask)], valueOf(answer.data), reader.keepsLast, now());
+      if (!answer.held?.size)
+        kept.reads[reader.keyOf(ask)] = readOf(kept.reads[reader.keyOf(ask)], valueOf(answer.data), reader.keepsLast, now());
     }
     keep2(reader, kept, now());
     return answer;
@@ -20386,7 +20458,11 @@ var ISSUES = register({
   valueOf: (found, ask) => issueReadOf(found, Boolean(ask.id)),
   freshFor: (value) => !value ? FRESH_MISSING : DONE_STATES.has(value.state) ? FRESH_DONE : FRESH_OPEN,
   keptFor: 30 * 86400000,
-  keepsLast: true
+  keepsLast: true,
+  again: (ask, before) => {
+    const id = before?.value?.id ?? ask.knownId;
+    return !ask.id && id ? { ...ask, id } : null;
+  }
 });
 var MOST_READ2 = 200;
 var TOLD_FRESH = 5 * 60000;
@@ -20402,11 +20478,12 @@ async function readSeen(items, wait, now = Date.now()) {
       continue;
     const key = sourceKey(at);
     const kept = reads[key];
-    const there = kept?.value ? issueAt(kept.value.url) : null;
+    const there = kept?.value ? issueAt(kept.value.url) : !kept && item.source.url ? issueAt(item.source.url) : null;
     const moved = Boolean(there && sourceKey(there) !== key);
-    const id = kept?.gone || moved ? kept?.value?.id ?? item.source.id : undefined;
+    const knownId = kept?.value?.id ?? item.source.id;
+    const id = kept?.gone || moved || !kept && item.seen?.gone ? knownId : undefined;
     if (!asks.has(key))
-      asks.set(key, { ...at, ...id ? { id } : {} });
+      asks.set(key, { ...at, ...id ? { id } : knownId ? { knownId } : {} });
   }
   const asked = (key) => reads[key]?.checked ?? reads[key]?.at ?? 0;
   const wanted = [...asks].sort(([a], [b]) => asked(a) - asked(b)).slice(0, MOST_READ2).map(([, at]) => at);
@@ -20437,6 +20514,8 @@ function seenOf(source) {
   return at ? seenReads().reads[sourceKey(at)] : undefined;
 }
 var doneOnGitHub = (state) => state !== undefined && DONE_STATES.has(state);
+var doneByRead = (read) => Boolean(read?.value && (read.gone || doneOnGitHub(read.value.state)));
+var doneWords = (seen) => seen.gone ? "Gone from GitHub" : seen.state === "merged" ? "Merged on GitHub" : "Closed on GitHub";
 function shownName(at) {
   const others = seenReads().owners.get(at.repo.toLowerCase());
   return `${others && [...others].some((owner) => owner !== at.owner.toLowerCase()) ? `${at.owner}/` : ""}${at.repo}#${at.number}`;
@@ -20463,8 +20542,8 @@ function withSeen(summary) {
     source = { ...source, kind: read.value.kind, url: read.value.url, id: read.value.id };
     closedAt = read.value.closedAt;
   }
-  const done = doneOnGitHub(seen?.state);
-  const { keptIn: _, doneAt, struck: __, ...rest } = summary;
+  const done = Boolean(seen && (seen.gone || doneOnGitHub(seen.state)));
+  const { keptIn: _, doneAt, struck: __, doneAs: ___, ...rest } = summary;
   const doneSince = closedAt ?? (summary.keptIn !== undefined ? doneAt : undefined) ?? seen?.at;
   return {
     ...rest,
@@ -20473,9 +20552,9 @@ function withSeen(summary) {
     ...seen ? { seen } : {},
     category: done ? "done" : keptIn,
     inProgress: done ? false : summary.inProgress,
-    ...seen && STRUCK.has(seen.state) ? { struck: true } : {},
+    ...seen && (seen.gone || STRUCK.has(seen.state)) ? { struck: true } : {},
     closesOn: "github",
-    ...done ? { keptIn, doneAt: doneSince } : doneAt !== undefined && summary.keptIn === undefined ? { doneAt } : {}
+    ...done ? { keptIn, doneAt: doneSince, doneAs: doneWords(seen) } : doneAt !== undefined && summary.keptIn === undefined ? { doneAt } : {}
   };
 }
 var unreadWords = (unread) => unread === "missing" ? `GitHub's gh isn't on ${HERE}: the Work Queue reads GitHub with it (cli.github.com), signed in with gh auth login.` : unread === "signed-out" ? `gh isn't signed in to GitHub on ${HERE}: gh auth login signs it in.` : "gh couldn't reach GitHub just now: try again in a moment.";
@@ -20483,6 +20562,8 @@ async function readIssue(at) {
   const answer = await readOne(ISSUES, at, `query { ${nodeQuery(at, "p0", true)} }`, (data) => issueReadOf(data.p0));
   if ("unread" in answer)
     return { refused: unreadWords(answer.unread) };
+  if (answer.held?.size)
+    return { refused: `GitHub wouldn't answer for ${refText(at)} to gh on ${HERE}${answer.said ? `: ${answer.said}` : "."}` };
   const read = issueReadOf(answer.data.p0);
   if (!read)
     return { refused: `GitHub has no issue or pull request ${refText(at)} that gh on ${HERE} may see (gh auth status says which account it uses).` };
@@ -20584,6 +20665,17 @@ async function ownersOf(owner, items, facts, targets, cache) {
     };
   });
   return { owners, titles: named };
+}
+async function titlesHere(owners, targets) {
+  const bots = listBots();
+  const titles = new Map;
+  for (const owner of new Set(owners)) {
+    const bot = bots.find((each) => each.session === owner)?.name;
+    const title = bot ?? (owner.startsWith("ses_") ? (await placeOfSession(owner, targets).catch(() => null))?.data.title : undefined);
+    if (title)
+      titles.set(owner, title);
+  }
+  return (owner) => titles.get(owner);
 }
 function agoWords(at, now = Date.now()) {
   const minutes = Math.max(0, Math.round((now - at) / 60000));
@@ -20813,7 +20905,7 @@ function applyFileOps(acting) {
   for (const op of acting.fileOps.splice(0))
     op();
 }
-var openIn = (book, owner) => book.queue(owner).items.filter((item) => !item.removed && item.category !== "done" && !(item.source && doneOnGitHub(seenOf(item.source)?.value?.state))).length;
+var openIn = (book, owner) => book.queue(owner).items.filter((item) => !item.removed && item.category !== "done" && !(item.source && doneByRead(seenOf(item.source)))).length;
 function addItem2(book, owner, fields, acting, primary, source) {
   const title = plainName(text2(fields.title ?? "", MOST_TITLE * 4, "The title")).slice(0, MOST_TITLE);
   if (!title)
@@ -20866,8 +20958,8 @@ function changeItem2(book, item, fields, acting, { added = false } = {}) {
     const category = categoryFor(fields.category);
     if (item.source && category === "done")
       refuseDone(nameOf2(item));
-    if (item.source && doneOnGitHub(seenOf(item.source)?.value?.state))
-      refuse(`${nameOf2(item)} is closed on GitHub, so it's Done: it's back in its place once it's reopened there.`);
+    if (item.source && doneByRead(seenOf(item.source)))
+      refuse(seenOf(item.source).gone ? `${nameOf2(item)} is gone from GitHub (or gh here can no longer see it), so it's Done: it's back in its place once GitHub shows it again.` : `${nameOf2(item)} is closed on GitHub, so it's Done: it's back in its place once it's reopened there.`);
     if (category !== item.category) {
       item.category = category;
       item.order = placeIn(book.items(), category, { top: fields.top === true });
@@ -22848,10 +22940,26 @@ function callOffHanding(item, who, now) {
   item.notes.push({ at: now, by: who, text: `Its hand-off to ${name || to} on another computer was called off.` });
   sent.delete(id);
 }
-function refuseLiveElsewhere(item) {
+function twinOf(item, items = allItems()) {
+  const source = item.source;
+  if (!source)
+    return null;
+  const isIt = (each) => each.id !== item.id && !each.removed && Boolean(each.source) && sameSource(each.source, source);
+  return items.find(isIt) ?? itemsElsewhere("all").items.find(isIt) ?? null;
+}
+var twinWhere = (twin, titled) => {
+  if ("computer" in twin)
+    return `on ${twin.computer.name}`;
+  const title = titled?.(twin.owner);
+  return `in the queue of ${title ? `"${title}"` : twin.owner}`;
+};
+function refuseLiveElsewhere(item, items, titled) {
   const far = itemElsewhere({ id: item.id });
   if (far && !far.handing)
     refuse2(`${nameOf2(item)} is on ${far.computer.name} now (it got there before its hand-off was called off): change it there.`);
+  const twin = twinOf(item, items);
+  if (twin)
+    refuse2(`Another item is ${item.source.ref} now, ${twinWhere(twin, titled)}: one item for each issue, so this one stays deleted.`);
 }
 function giveBack(ids, why, now) {
   const gone = new Set(ids);
@@ -22950,6 +23058,7 @@ async function handArrived(sender, given, reply, places, now = Date.now()) {
   const kept = whoOf(given.by) ?? { name: "someone else" };
   const by = typeof kept.name === "string" ? { ...kept, name: plainName(kept.name).slice(0, 100) } : kept;
   let refused = null;
+  let twinHere = null;
   let again = false;
   const primary = primaryOf();
   changeQueues((book) => {
@@ -22964,6 +23073,11 @@ async function handArrived(sender, given, reply, places, now = Date.now()) {
     }
     if (here)
       return;
+    const twin = item.source ? book.items().find((each) => !each.removed && each.source && sameSource(each.source, item.source)) : undefined;
+    if (twin) {
+      twinHere = twin;
+      return;
+    }
     if (book.queue(owner).items.filter((each) => !each.removed && each.category !== "done").length >= MOST_ITEMS) {
       refused = `That queue has ${MOST_ITEMS} open items already.`;
       return;
@@ -22988,6 +23102,10 @@ async function handArrived(sender, given, reply, places, now = Date.now()) {
   }, now, { onItsOwn: true });
   if (again)
     return answer(false, `${HERE} is still handing that item on: it comes again once that's done.`, true);
+  if (twinHere) {
+    const twin = twinHere;
+    return answer(false, `${twin.source.ref} is in the Work Queue there already, ${twinWhere(twin, await titlesHere([twin.owner], targets))}: one item for each issue`);
+  }
   if (refused)
     return answer(false, refused);
   seenHand(id, now, true);
@@ -23030,15 +23148,19 @@ var toldItem = (item, working, titles) => {
 async function tellingNow2(targets, link, signal, cache) {
   const facts = await factsOf(targets, signal);
   const all = allItems().filter((item) => OWNER2.test(item.owner) && !item.removed);
-  const isDone = (item) => item.category === "done" || Boolean(item.source && doneOnGitHub(seenOf(item.source)?.value?.state));
-  const done = all.filter(isDone).sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0)).slice(0, MOST_TOLD_DONE);
+  const isDone = (item) => item.category === "done" || Boolean(item.source && doneByRead(seenOf(item.source)));
+  const doneTime = (item) => {
+    const read = item.source ? seenOf(item.source) : undefined;
+    return read?.value && doneByRead(read) ? read.value.closedAt ?? read.at : item.doneAt ?? 0;
+  };
+  const done = all.filter(isDone).sort((a, b) => doneTime(b) - doneTime(a)).slice(0, MOST_TOLD_DONE);
   const items = [...all.filter((item) => !isDone(item)).sort((a, b) => b.updated.at - a.updated.at).slice(0, MOST_TOLD - done.length), ...done];
   const { owners, titles } = await ownersOf("all", items, facts, targets, cache);
   const told = items.map((item) => toldItem(item, facts.working, titles));
   const custom = categories().filter((each) => !each.builtIn).map(({ id, name }) => ({ id, name }));
   const content = { items: told, owners, categories: custom, ...numberingNow(link) };
-  const byTwo = { ...content, items: told.map((item) => item.seen?.checked !== undefined ? { ...item, seen: { ...item.seen, checked: Math.floor(item.seen.checked / 120000) } } : item) };
-  const id = "wqt_" + crypto33.createHash("sha256").update(JSON.stringify(byTwo)).digest("base64url").slice(0, 22);
+  const unchecked = { ...content, items: told.map((item) => item.seen?.checked !== undefined ? { ...item, seen: { ...item.seen, checked: undefined } } : item) };
+  const id = "wqt_" + crypto33.createHash("sha256").update(JSON.stringify(unchecked)).digest("base64url").slice(0, 22);
   return { id, payload: { told: { id, at: Date.now(), ...content } } };
 }
 var pushed = new Map;
@@ -39266,7 +39388,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "ff7d5a8d0918";
+var BRIDGE_VERSION = "4a53fdf1b8aa";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -41818,7 +41940,9 @@ function itemFor(items, given, caller, overseen) {
   if (!ref)
     throw new Refusal("Say which item (item), by its number, like #243 (or the id an item without one was given), or the GitHub issue or pull request it is, like gh:owner/repo#12.");
   const found = matching2(items, ref);
-  const item = found.find((each) => inView(caller.owner, each, overseen)) ?? found[0];
+  const live = found.filter((each) => !each.removed);
+  const deleted = live.length || itemElsewhere(ref) ? [] : found;
+  const item = live.find((each) => inView(caller.owner, each, overseen)) ?? live[0] ?? deleted.find((each) => inView(caller.owner, each, overseen)) ?? deleted[0];
   if (!item) {
     const far = itemElsewhere(ref);
     if (far && !itemsElsewhere(caller.owner).items.some((each) => each.id === far.id))
@@ -41869,7 +41993,7 @@ async function run3(name, args, caller, targets, signal) {
     case "queue_show": {
       const ref = refOf(args.item);
       const here = allItems();
-      const far = ref && !matching2(here, ref).length ? itemElsewhere(ref) : null;
+      const far = ref && !matching2(here, ref).some((item) => !item.removed) ? itemElsewhere(ref) : null;
       if (far) {
         if (!itemsElsewhere(caller.owner).items.some((item) => item.id === far.id))
           return refused6(`${nameOf2(far)} is on ${far.computer.name}, and isn't in your Work Queue, nor in a session's you oversee: ask the conversation it belongs to, or the user.`);
@@ -41952,6 +42076,9 @@ async function run3(name, args, caller, targets, signal) {
           throw new Refusal(deletedWords(item));
         refuseMoving([item.owner, to.owner]);
         refuseHanding(item);
+        const twin = to.peer && item.source ? itemsElsewhere("all").items.find((each) => each.computer.key === to.peer.key && each.id !== item.id && each.source && sameSource(each.source, item.source)) : undefined;
+        if (twin)
+          throw new Refusal(`${item.source.ref} is in the Work Queue on ${twin.computer.name} already, in the queue of ${twin.owner}: one item for each issue. Ask that conversation (send_message), or the user.`);
         if (to.peer)
           handElsewhere(item, { owner: to.owner, peer: to.peer, name: to.name }, caller.who, now);
         else
@@ -41972,7 +42099,7 @@ async function run3(name, args, caller, targets, signal) {
             throw new Refusal(`${nameOf2(item)} isn't deleted.`);
           if (byUser(item.removed.by))
             throw new Refusal(deletedWords(item));
-          refuseLiveElsewhere(item);
+          refuseLiveElsewhere(item, book.items());
           restoreItem(book, item, caller.who, now);
         } else {
           if (item.removed)
@@ -42027,9 +42154,7 @@ async function issueFor(given, caller, overseen, except) {
 function refuseTaken(items, at, caller, overseen, except, id) {
   const key = sourceKey(at);
   const isIt = (source) => Boolean(source) && (sourceKeyOf(source) === key || id !== undefined && source.id === id);
-  const here = items.find((item) => item.id !== except && isIt(item.source));
-  if (here?.removed)
-    throw new Refusal(deletedWords(here));
+  const here = items.find((item) => item.id !== except && !item.removed && isIt(item.source));
   if (here && inView(caller.owner, here, overseen))
     throw new Refusal(`${nameOf2(here)} is in your Work Queue already: refer to it as ${here.source.ref}.`);
   if (here)
@@ -42037,6 +42162,9 @@ function refuseTaken(items, at, caller, overseen, except, id) {
   const far = itemElsewhere({ source: key }) ?? (id !== undefined ? itemsElsewhere("all").items.find((item) => isIt(item.source)) ?? null : null);
   if (far && far.id !== except)
     throw new Refusal(`${nameOf2(far)} is in the Work Queue already, on ${far.computer.name}: one item for each issue.`);
+  const deleted = items.find((item) => item.id !== except && isIt(item.source));
+  if (deleted)
+    throw new Refusal(deletedWords(deleted));
 }
 function withFiles(args, caller, acting, work) {
   if (args.files === undefined)
@@ -42094,7 +42222,7 @@ var shownOf = (item, working) => withSeen({ title: item.title, category: item.ca
 function line2(item, facts, caller, owners, now) {
   const working = item.sessions.filter((each) => facts.working.has(each.session));
   const shown = shownOf(item, facts.working);
-  const state = shown.inProgress ? `in progress (${working.map((each) => `"${owners.get(each.session)?.title ?? "a session"}" at work`).join(", ")})${item.progress?.note ? `: ${item.progress.note}` : ""}` : shown.category === "done" ? item.source && shown.seen ? `${seenWords(shown.seen.state)} on GitHub` : `done ${agoWords(shown.doneAt ?? item.updated.at, now)}` : "";
+  const state = shown.inProgress ? `in progress (${working.map((each) => `"${owners.get(each.session)?.title ?? "a session"}" at work`).join(", ")})${item.progress?.note ? `: ${item.progress.note}` : ""}` : shown.category === "done" ? item.source && shown.seen ? shown.seen.gone ? "gone from GitHub" : `${seenWords(shown.seen.state)} on GitHub` : `done ${agoWords(shown.doneAt ?? item.updated.at, now)}` : "";
   const progress = item.progress?.value !== undefined ? ` ${Math.round(item.progress.value * 100)}%` : "";
   const whose = item.owner === caller.owner ? "" : item.owner.startsWith("grp_") ? " · in the group's queue" : ` · in "${owners.get(item.owner)?.title ?? "another session"}" (${item.owner})`;
   return `- ${nameOf2({ ...item, title: shown.title })}${state ? ` · ${state}` : ""}${progress}${whose} · updated ${agoWords(item.updated.at, now)}`;
@@ -42181,7 +42309,7 @@ async function showWords(item, facts, targets, caller) {
   const read = seenOf(item.source);
   const parts = [
     `${nameOf2({ ...item, title: shown.title })} · ${shown.inProgress ? `In progress (kept in ${category})` : shown.category === "done" && item.category !== "done" ? `Done (kept in ${category})` : category}${item.removed ? " · DELETED" : ""}${item.owner === caller.owner ? "" : ` · in ${title(item.owner)}'s queue (${item.owner})`}`,
-    item.source ? `On GitHub: ${read?.value ? `${seenWords(read.value.state)}, as read ${agoWords(read.at, now)}${read.gone ? " (it couldn't be read since: gone, or no longer visible to gh here)" : ""}` : "not read yet"} · ${item.source.url ?? item.source.ref}${item.number !== undefined ? ` · was #${item.number}` : ""}` : "",
+    item.source ? `On GitHub: ${read?.value ? read.gone ? `gone, or no longer visible to gh here, since ${agoWords(read.at, now)} (${seenWords(read.value.state)} before)` : `${seenWords(read.value.state)}, as read ${agoWords(read.at, now)}` : "not read yet"} · ${item.source.url ?? item.source.ref}${item.number !== undefined ? ` · was #${item.number}` : ""}` : "",
     `Added ${agoWords(item.created.at, now)} by ${whoWords(item.created.by)}; updated ${agoWords(item.updated.at, now)}.`,
     item.progress ? `Progress: ${item.progress.value !== undefined ? `${Math.round(item.progress.value * 100)}%` : ""}${item.progress.value !== undefined && item.progress.note ? " · " : ""}${item.progress.note ?? ""}` : "",
     item.sessions.length ? `Sessions on it: ${item.sessions.map((each) => `${title(each.session)} (${each.session}) ${facts.working.has(each.session) ? "at work" : "not at work"}`).join("; ")}` : "",
@@ -42222,7 +42350,8 @@ async function viewOf(owner, targets, facts, signal, cache, wait = GITHUB_WAIT) 
   const overseen = owner === ALL ? new Set : overseenBy(owner, known.all);
   const here = allItems();
   const all = here.filter((item) => owner === ALL || inView(owner, item, overseen) || linkedTo(owner, item));
-  await readSeen([...all, ...itemsElsewhere(owner, readLink(), undefined, undefined, { asTold: true, linked: true }).items], wait);
+  if (wait !== null)
+    await readSeen([...all, ...itemsElsewhere(owner, readLink(), undefined, undefined, { asTold: true, linked: true }).items], wait);
   const { owners, titles } = await ownersOf(owner, all, known, targets, cache);
   const elsewhere = itemsElsewhere(owner, readLink(), new Set(here.filter((item) => !item.removed).map((item) => item.id)), new Set(here.filter((item) => item.removed).map((item) => item.id)), { linked: true });
   const named = new Set(owners.map((each) => each.owner));
@@ -42289,13 +42418,15 @@ async function* workQueueRoute(context, match) {
     const facts = await factsOf(targets, signal ?? undefined);
     const found = wanted.map((ref) => {
       const named = refOf(ref);
-      const item = named ? matching2(items, named)[0] : undefined;
-      return { ref, item, far: !item && named ? itemElsewhere(named, readLink(), { asTold: true }) : null };
+      const here = named ? matching2(items, named)[0] : undefined;
+      const far = (!here || here.removed) && named ? itemElsewhere(named, readLink(), { asTold: true }) : null;
+      return { ref, item: far ? undefined : here, far, here };
     });
     await readSeen(found.flatMap((each) => [each.item ?? each.far].filter(Boolean)), GITHUB_WAIT);
     const refs = {};
-    for (const { ref, item, far } of found) {
+    for (const { ref, far, here } of found) {
       const again = far ? itemElsewhere({ id: far.id }) : null;
+      const item = again ? undefined : here;
       refs[ref] = item ? refFacts(summaryOf(item, facts.working, new Map)) : again ? { ...refFacts(again), computer: again.computer } : null;
     }
     return yield* json(200, { refs });
@@ -42348,10 +42479,11 @@ async function* workQueueRoute(context, match) {
     const owner = queryOf(request).get("owner") ?? "";
     if (!OWNER2.test(owner) && owner !== ALL)
       return yield* json(400, { message: "Say whose queue (owner): a conversation's address, a group chat's id, or all." });
+    const glance = queryOf(request).get("glance") === "1";
     if (part === undefined)
-      return yield* json(200, await viewOf(owner, targets, undefined, signal ?? undefined));
+      return yield* json(200, await viewOf(owner, targets, undefined, signal ?? undefined, undefined, glance ? null : GITHUB_WAIT));
     yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
-    return yield* followView(owner, targets, signal ?? undefined);
+    return yield* followView(owner, targets, signal ?? undefined, glance);
   }
   const ref = refOf(decodeURIComponent(rawItem ?? ""));
   if (!ref)
@@ -42416,10 +42548,13 @@ async function* workQueueRoute(context, match) {
     }, { handing: true }), json);
   }
   if (action === "restore" && method === "POST") {
+    const deleted = find(allItems());
+    const twin = deleted?.removed ? twinOf(deleted) : null;
+    const titled = twin && !("computer" in twin) ? await titlesHere([twin.owner], targets) : undefined;
     return yield* changed2(inBook((item, book) => {
       if (!item.removed)
         throw new Refusal("It isn't deleted.");
-      refuseLiveElsewhere(item);
+      refuseLiveElsewhere(item, book.items(), titled);
       restoreItem(book, item, YOU, now);
     }), json);
   }
@@ -42435,7 +42570,7 @@ async function* workQueueRoute(context, match) {
   }
   return yield* json(405, {});
 }
-async function* followView(owner, targets, signal) {
+async function* followView(owner, targets, signal, glance = false) {
   let wake = null;
   let dirty = true;
   const told = () => {
@@ -42472,7 +42607,7 @@ async function* followView(owner, targets, signal) {
         facts = { all: known.all, working: await atWorkNow(targets, signal).catch(() => known.working) };
       }
       dirty = false;
-      const line = JSON.stringify(await viewOf(owner, targets, facts, signal, titles, 0));
+      const line = JSON.stringify(await viewOf(owner, targets, facts, signal, titles, glance ? null : 0));
       if (line !== last) {
         yield { body: Buffer.from(line + `
 `) };
