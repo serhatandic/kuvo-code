@@ -7126,7 +7126,7 @@ function ancestors(path) {
 }
 
 // Packages/Box/src/agents/agents/antigravity.ts
-import { createHash as createHash7 } from "crypto";
+import { createHash as createHash8 } from "crypto";
 import { chmodSync, existsSync as existsSync13, mkdirSync as mkdirSync13, readdirSync as readdirSync14, readFileSync as readFileSync21, renameSync as renameSync11, rmSync as rmSync11, statSync as statSync8, writeFileSync as writeFileSync15 } from "fs";
 import { dirname as dirname12, join as join23 } from "path";
 import { pathToFileURL as pathToFileURL2 } from "url";
@@ -9519,7 +9519,7 @@ import { readFileSync as readFileSync17, readdirSync as readdirSync10, readlinkS
 import { join as join19 } from "path";
 
 // Packages/Box/src/agents/limits.ts
-import { createHash as createHash4 } from "crypto";
+import { createHash as createHash5 } from "crypto";
 import { mkdirSync as mkdirSync10, readFileSync as readFileSync15, renameSync as renameSync8, writeFileSync as writeFileSync12 } from "fs";
 import { dirname as dirname10 } from "path";
 
@@ -9611,7 +9611,7 @@ function limitOf2(window) {
 }
 
 // Packages/Box/src/agents/usage/notices.ts
-import { randomUUID } from "crypto";
+import { createHash as createHash4 } from "crypto";
 var milestones = ["underTenPercent", "healthyToClose", "closeToRunningOut"];
 var initialState = () => ({ fired: [], previous: "untracked", under: false, primed: false });
 var severity = (bucket) => ["untracked", "healthy", "close", "runningOut"].indexOf(bucket);
@@ -9619,6 +9619,8 @@ function transitions(meter, fraction, resetsAt, previous, toggles) {
   const state = structuredClone(previous);
   if (resetsAt !== undefined && (previous.resetsAt === undefined || resetsAt - previous.resetsAt > 1000)) {
     state.fired = [];
+    state.anchor = Math.round(resetsAt / 1000);
+    state.counts = {};
     state.under = false;
     state.previous = "untracked";
   }
@@ -9683,8 +9685,12 @@ function meter(window, now) {
     return "level";
   return projected <= 1 && Math.round((1 - projected) * 100) >= 1 ? "close" : "runningOut";
 }
-function newNotice(row, service, window, milestone, at) {
-  return { id: `usage_${randomUUID()}`, row, service, window: window.id, milestone, at, remaining: 1 - window.used, ...window.resetsAt ? { resetsAt: window.resetsAt } : {} };
+function newNotice(row, service, window, milestone, at, state) {
+  state.counts ??= {};
+  state.counts[milestone] = (state.counts[milestone] ?? 0) + 1;
+  const identity = JSON.stringify([row, window.id, state.anchor ?? 0, milestone, state.counts[milestone]]);
+  const id = "usage_" + createHash4("sha256").update(identity).digest("hex");
+  return { id, row, service, window: window.id, milestone, at, remaining: (100 - window.used * 100) / 100, ...window.resetsAt ? { resetsAt: window.resetsAt } : {} };
 }
 function takeNotices(given) {
   if (!Array.isArray(given))
@@ -9696,7 +9702,7 @@ function takeStates(given) {
     return {};
   return Object.fromEntries(Object.entries(given).slice(0, 30).flatMap(([id, value]) => {
     const s = value;
-    return s && Array.isArray(s.fired) && s.fired.every((m) => milestones.includes(m)) && ["untracked", "healthy", "close", "runningOut"].includes(s.previous) && typeof s.under === "boolean" && typeof s.primed === "boolean" && (s.resetsAt === undefined || Number.isFinite(s.resetsAt)) ? [[id, s]] : [];
+    return s && Array.isArray(s.fired) && s.fired.every((m) => milestones.includes(m)) && ["untracked", "healthy", "close", "runningOut"].includes(s.previous) && typeof s.under === "boolean" && typeof s.primed === "boolean" && (s.resetsAt === undefined || Number.isFinite(s.resetsAt)) && (s.read === undefined || Number.isFinite(s.read)) && (s.anchor === undefined || Number.isFinite(s.anchor)) && (s.counts === undefined || s.counts && typeof s.counts === "object" && Object.entries(s.counts).every(([m, count]) => milestones.includes(m) && Number.isSafeInteger(count) && count >= 0)) ? [[id, s]] : [];
   }));
 }
 function metricID(service, window) {
@@ -10097,10 +10103,10 @@ class Limits {
       entry.noticeState = {};
       return;
     }
-    const peer = entry.identity ? this.peers?.freshest(account.service, entry.identity) : undefined;
+    const peers = entry.identity ? this.peers?.noticeStates(account.service, entry.identity) ?? [] : [];
     entry.noticeState ??= {};
     const siblings = entry.identity ? [...this.entries.values()].filter((e) => e !== entry && e.identity === entry.identity) : [];
-    const candidates = [peer?.noticeState, ...siblings.map((e) => e.noticeState)];
+    const candidates = [...peers, ...siblings.map((e) => e.noticeState)];
     for (const candidate of candidates)
       for (const [id, state] of Object.entries(takeStates(candidate))) {
         if ((state.read ?? 0) > (entry.noticeState[id]?.read ?? -1))
@@ -10114,11 +10120,11 @@ class Limits {
         continue;
       }
       const previous = entry.noticeState[window.id] ?? initialState();
-      const result = transitions(meter(window, this.now()), 1 - window.used, window.resetsAt, previous, toggles);
+      const result = transitions(meter(window, this.now()), (100 - window.used * 100) / 100, window.resetsAt, previous, toggles);
       result.state.fired.push(...result.fire);
       entry.noticeState[window.id] = { ...result.state, read: window.read };
       for (const milestone of result.fire)
-        created.push(newNotice(row, account.service, window, milestone, this.now()));
+        created.push(newNotice(row, account.service, window, milestone, this.now(), entry.noticeState[window.id]));
     }
     const present = new Set(entry.windows.filter((w) => !settings?.layout || settings.layout.placed.includes(metricID(account.service, w))).map((w) => w.id));
     for (const id of Object.keys(entry.noticeState))
@@ -10229,10 +10235,10 @@ function agentAccounts(agents) {
   });
 }
 function fingerprint(secret) {
-  return secret ? createHash4("sha256").update(secret).digest("hex").slice(0, 16) : undefined;
+  return secret ? createHash5("sha256").update(secret).digest("hex").slice(0, 16) : undefined;
 }
 function identityOf(raw) {
-  return createHash4("sha256").update(`kuvo-code plan limits account v1
+  return createHash5("sha256").update(`kuvo-code plan limits account v1
 `).update(raw).digest("hex").slice(0, 16);
 }
 function tokenClaims(token) {
@@ -12039,7 +12045,7 @@ function lastLines(text) {
 }
 
 // Packages/Box/src/agents/skills.ts
-import { createHash as createHash5 } from "crypto";
+import { createHash as createHash6 } from "crypto";
 import { cpSync, existsSync as existsSync11, mkdirSync as mkdirSync11, readdirSync as readdirSync12, readFileSync as readFileSync19, renameSync as renameSync9, rmSync as rmSync9, statSync as statSync6, symlinkSync, utimesSync, writeFileSync as writeFileSync13 } from "fs";
 import { dirname as dirname11, join as join21, resolve as resolve6, sep as sep10 } from "path";
 var link2;
@@ -12174,7 +12180,7 @@ function skillsFolder(skills) {
   const list = named2(skills);
   if (!list.length)
     return;
-  const set = createHash5("sha256").update(list.map((entry) => `${entry.name}\x00${entry.skill.folder}\x00${entry.stamp}`).join(`
+  const set = createHash6("sha256").update(list.map((entry) => `${entry.name}\x00${entry.skill.folder}\x00${entry.stamp}`).join(`
 `)).digest("hex").slice(0, 16);
   const root = join21(home, "skills");
   const folder = join21(root, set);
@@ -12241,11 +12247,11 @@ function copySkillsInto(folder, skills) {
     }
     writeFileSync13(record, JSON.stringify(after));
   }
-  return list.length ? createHash5("sha256").update(JSON.stringify(after)).digest("hex").slice(0, 16) : undefined;
+  return list.length ? createHash6("sha256").update(JSON.stringify(after)).digest("hex").slice(0, 16) : undefined;
 }
 
 // Packages/Box/src/agents/subagents.ts
-import { createHash as createHash6 } from "crypto";
+import { createHash as createHash7 } from "crypto";
 import { existsSync as existsSync12, lstatSync as lstatSync6, mkdirSync as mkdirSync12, readdirSync as readdirSync13, readFileSync as readFileSync20, realpathSync as realpathSync5, renameSync as renameSync10, rmSync as rmSync10, statSync as statSync7, utimesSync as utimesSync2, writeFileSync as writeFileSync14 } from "fs";
 import { join as join22 } from "path";
 
@@ -12432,7 +12438,7 @@ function antigravityCustomAgents(home, subagents) {
     const tier = antigravityTier(agent.model);
     after[`${file}.md`] = frontMatter({ name: agent.name, description: agent.description, subagent: true, mainAgent: false, ...tier ? { model: tier } : {} }, agent.prompt);
   }
-  const stamps = Object.fromEntries(Object.entries(after).map(([name, text]) => [name, createHash6("sha256").update(text).digest("hex").slice(0, 16)]));
+  const stamps = Object.fromEntries(Object.entries(after).map(([name, text]) => [name, createHash7("sha256").update(text).digest("hex").slice(0, 16)]));
   try {
     const config = join22(home, "config");
     const folder = join22(config, "agents");
@@ -12462,7 +12468,7 @@ function antigravityCustomAgents(home, subagents) {
     console.error(`Antigravity's custom agents couldn't be written: ${error.message}`);
     return;
   }
-  return Object.keys(after).length ? createHash6("sha256").update(JSON.stringify(stamps)).digest("hex").slice(0, 16) : undefined;
+  return Object.keys(after).length ? createHash7("sha256").update(JSON.stringify(stamps)).digest("hex").slice(0, 16) : undefined;
 }
 function frontMatter(fields, body) {
   const lines = Object.entries(fields).map(([key, value]) => `${key}: ${typeof value === "string" ? quoted(value) : value}`);
@@ -12480,7 +12486,7 @@ function setFolder(kind, files) {
   if (!root || !Object.keys(files).length)
     return;
   const names = Object.keys(files).sort();
-  const set = createHash6("sha256").update(names.map((name) => `${name}\x00${files[name]}`).join("\x00\x00")).digest("hex").slice(0, 16);
+  const set = createHash7("sha256").update(names.map((name) => `${name}\x00${files[name]}`).join("\x00\x00")).digest("hex").slice(0, 16);
   const folder = join22(root, `${kind}-${set}`);
   const now = new Date;
   if (existsSync12(join22(folder, ".complete"))) {
@@ -12898,7 +12904,7 @@ class AntigravityAgent {
       const response = await fetch(release.url);
       if (!response.ok || !response.body)
         throw new Error(`Couldn't download Antigravity's agent (HTTP ${response.status}).`);
-      const hash = createHash7("sha256");
+      const hash = createHash8("sha256");
       const writer = Bun.file(archive).writer();
       let bytes = 0;
       this.downloaded = { bytes, total: release.bytes };
@@ -13204,7 +13210,7 @@ function unzipper() {
 
 // Packages/Box/src/agents/agents/claude.ts
 import { spawn as spawn5 } from "child_process";
-import { createHash as createHash9, randomUUID as randomUUID2 } from "crypto";
+import { createHash as createHash10, randomUUID } from "crypto";
 import { existsSync as existsSync15, mkdirSync as mkdirSync14, readdirSync as readdirSync15, readFileSync as readFileSync23, rmdirSync as rmdirSync2, rmSync as rmSync12, statSync as statSync10 } from "fs";
 import { homedir } from "os";
 import { basename as basename8, dirname as dirname13, join as join26, resolve as resolve7 } from "path";
@@ -13405,7 +13411,7 @@ function homebrewLatest(json, cask) {
 }
 
 // Packages/Box/src/agents/agents/claude-limits.ts
-import { createHash as createHash8 } from "crypto";
+import { createHash as createHash9 } from "crypto";
 import { readFileSync as readFileSync22, statSync as statSync9 } from "fs";
 import { join as join25 } from "path";
 var claudeUsage = { url: "https://api.anthropic.com/api/oauth/usage" };
@@ -13467,8 +13473,8 @@ function recordIdentity(configHome, stampText, signatureText, token) {
     const stamp = JSON.parse(stampText);
     if (stamp?.v !== 1 || typeof stamp.identity !== "string")
       return unread(configHome, "its policy note isn't one this version reads");
-    const principal = `token:${createHash8("sha256").update(token.trim()).digest("hex").slice(0, 32)}`;
-    if (stamp?.kind !== "token" || stamp.identity !== createHash8("sha256").update(principal).digest("hex"))
+    const principal = `token:${createHash9("sha256").update(token.trim()).digest("hex").slice(0, 32)}`;
+    if (stamp?.kind !== "token" || stamp.identity !== createHash9("sha256").update(principal).digest("hex"))
       return;
     const payload = String(JSON.parse(signatureText)?.jws ?? "").split(".")[1];
     if (!payload)
@@ -14015,7 +14021,7 @@ class ClaudeAgent {
       written = statSync10(join26(own ?? join26(homedir(), ".claude"), ".credentials.json")).mtimeMs;
     } catch {}
     if (process.platform === "darwin")
-      written = Math.max(written, await keychainWritten(`Claude Code-credentials${own ? `-${createHash9("sha256").update(own).digest("hex").slice(0, 8)}` : ""}`));
+      written = Math.max(written, await keychainWritten(`Claude Code-credentials${own ? `-${createHash10("sha256").update(own).digest("hex").slice(0, 8)}` : ""}`));
     return written;
   }
   signsInRemotely = true;
@@ -14824,7 +14830,7 @@ ${input.text}` } : input, this.copies());
     let id = this.state.claudeSession;
     const resume = Boolean(id && this.state.claudeStarted);
     if (!id) {
-      id = randomUUID2();
+      id = randomUUID();
       this.state.claudeSession = id;
       hooks.saveState();
     }
@@ -15918,7 +15924,7 @@ Attached files:
 ${others.map((path) => `- ${path}`).join(`
 `)}`;
   content.push({ type: "text", text });
-  return { type: "user", message: { role: "user", content }, parent_tool_use_id: null, uuid: randomUUID2() };
+  return { type: "user", message: { role: "user", content }, parent_tool_use_id: null, uuid: randomUUID() };
 }
 function safeBase642(path) {
   try {
@@ -19993,7 +19999,7 @@ async function branchRoutes(places, method, parts, body) {
 
 // Packages/Box/src/agents/usage/usage.ts
 import { execFileSync as execFileSync2 } from "child_process";
-import { createHash as createHash13 } from "crypto";
+import { createHash as createHash14 } from "crypto";
 import { lstatSync as lstatSync8, mkdirSync as mkdirSync22, readFileSync as readFileSync31, realpathSync as realpathSync8, renameSync as renameSync18, statSync as statSync15, writeFileSync as writeFileSync23 } from "fs";
 import { homedir as homedir5, hostname } from "os";
 import { basename as basename11, dirname as dirname17, join as join37 } from "path";
@@ -22352,7 +22358,7 @@ function readAntigravityDatabase(path) {
 }
 
 // Packages/Box/src/agents/usage/cursor-history.ts
-import { createHash as createHash10 } from "crypto";
+import { createHash as createHash11 } from "crypto";
 import { mkdirSync as mkdirSync19, readFileSync as readFileSync29, renameSync as renameSync15, writeFileSync as writeFileSync20 } from "fs";
 import { join as join34 } from "path";
 var DAY2 = 24 * 60 * 60000;
@@ -22426,7 +22432,7 @@ class CursorHistory {
     const user = cursorSession(access)?.user;
     if (!user)
       throw new LimitsProblem("failed", "Cursor's sign-in doesn't say whose it is.");
-    const key = createHash10("sha256").update(`kuvo-code cursor history v1
+    const key = createHash11("sha256").update(`kuvo-code cursor history v1
 `).update(user).digest("hex").slice(0, 16);
     const under = this.reading.get(key);
     if (under)
@@ -22821,7 +22827,7 @@ function hostedSlots(rows, provider, since) {
 }
 
 // Packages/Box/src/agents/usage/jsonl.ts
-import { createHash as createHash11 } from "crypto";
+import { createHash as createHash12 } from "crypto";
 import { mkdirSync as mkdirSync20, renameSync as renameSync16, rmSync as rmSync15, writeFileSync as writeFileSync21 } from "fs";
 import { open, readdir, readFile as readFile3, stat as stat2 } from "fs/promises";
 import { join as join36 } from "path";
@@ -23048,17 +23054,17 @@ class JSONLFiles {
     return consumed;
   }
 }
-var keptName = (path) => createHash11("sha256").update(path).digest("hex").slice(0, 32) + ".json";
+var keptName = (path) => createHash12("sha256").update(path).digest("hex").slice(0, 32) + ".json";
 async function headOf(handle, length) {
   if (!length)
     return "";
   const buffer = Buffer.alloc(length);
   const { bytesRead } = await handle.read(buffer, 0, length, 0);
-  return createHash11("sha256").update(buffer.subarray(0, bytesRead)).digest("hex").slice(0, 32);
+  return createHash12("sha256").update(buffer.subarray(0, bytesRead)).digest("hex").slice(0, 32);
 }
 
 // Packages/Box/src/agents/usage/settings.ts
-import { createHash as createHash12, randomBytes as randomBytes5 } from "crypto";
+import { createHash as createHash13, randomBytes as randomBytes5 } from "crypto";
 import { mkdirSync as mkdirSync21, readFileSync as readFileSync30, renameSync as renameSync17, statSync as statSync14, writeFileSync as writeFileSync22 } from "fs";
 import { dirname as dirname16 } from "path";
 var SETTINGS_UNITS = ["layout", "providers", "totalSpend", "codexFallback", "notifications"];
@@ -23316,7 +23322,7 @@ class UsageSettings {
       const unit = this.units[name];
       return [name, unit.stamp.v, unit.stamp.by, unit.stamp.imported === true, unit.value];
     });
-    return createHash12("sha256").update(canonical(all)).digest("hex").slice(0, 32);
+    return createHash13("sha256").update(canonical(all)).digest("hex").slice(0, 32);
   }
   change(given, knows, based) {
     const values = [];
@@ -23780,7 +23786,7 @@ function placeOf(computer, folder, part) {
   try {
     real = realpathSync8(folder);
   } catch {}
-  const hash = createHash13("sha256").update(`kuvo-code usage place v2
+  const hash = createHash14("sha256").update(`kuvo-code usage place v2
 `).update(computer).update(`
 `).update(real);
   if (part !== undefined)
@@ -23857,7 +23863,7 @@ function claudeSources(folder, computer = ownComputer) {
             found.set(file.path, file);
         const ordered = [...found.values()].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
         await files.refresh(ordered, since);
-        const listed = createHash13("sha256").update(ordered.map((file) => file.path).join(`
+        const listed = createHash14("sha256").update(ordered.map((file) => file.path).join(`
 `)).digest("hex");
         const before = last.get(agent.providerID);
         if (before && before.version === files.version && before.pricing === pricing && before.since === since && before.listed === listed)
@@ -23947,7 +23953,7 @@ function codexSources(folder, fallback = () => {
             }
           }
           await files.refresh(found, since);
-          const listed = createHash13("sha256").update(found.map((file) => file.path).join(`
+          const listed = createHash14("sha256").update(found.map((file) => file.path).join(`
 `)).digest("hex");
           const model = fallback();
           const before = last.get(agent.providerID);
@@ -24030,7 +24036,7 @@ function grokSources(folder, computer = ownComputer) {
                 found.set(file.path, file);
           const ordered = [...found.values()].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
           await files.refresh(ordered, since);
-          const listed = createHash13("sha256").update(ordered.map((file) => file.path).join(`
+          const listed = createHash14("sha256").update(ordered.map((file) => file.path).join(`
 `)).digest("hex");
           const before = last.get(agent.providerID);
           if (before && before.version === files.version && before.pricing === pricing && before.since === since && before.listed === listed)
@@ -24161,7 +24167,7 @@ function cursorSources(folder, elsewhere, history = new CursorHistory(folder ? j
           if (read.whole)
             wholeAt.set(agent.providerID, now());
           const days = read.days;
-          const said = createHash13("sha256").update(JSON.stringify([...days])).digest("hex");
+          const said = createHash14("sha256").update(JSON.stringify([...days])).digest("hex");
           const before = last.get(agent.providerID);
           if (before && before.days === said && before.pricing === pricing && before.since === since)
             return before.slots;
@@ -24316,7 +24322,7 @@ async function updateAll(agents, accounts, noted, known) {
 }
 
 // Packages/Box/src/agents/sessions.ts
-import { createHash as createHash14 } from "crypto";
+import { createHash as createHash15 } from "crypto";
 import { spawn as spawnProcess } from "child_process";
 import { readFileSync as readFileSync32, realpathSync as realpathSync9, statSync as statSync16 } from "fs";
 import { homedir as homedir6 } from "os";
@@ -25677,7 +25683,7 @@ class Sessions {
     const directory = body.location.directory;
     const session = {
       id: newID("ses"),
-      projectID: "prj_" + createHash14("sha1").update(directory).digest("hex").slice(0, 16),
+      projectID: "prj_" + createHash15("sha1").update(directory).digest("hex").slice(0, 16),
       agent: typeof body.agent === "string" && body.agent ? body.agent : "build",
       model: body.model,
       cost: 0,
@@ -27949,7 +27955,7 @@ function followed(store, read, signal) {
 }
 
 // Packages/Box/src/agents/carry.ts
-import { createHash as createHash15 } from "crypto";
+import { createHash as createHash16 } from "crypto";
 import { createReadStream } from "fs";
 import { copyFile, lstat as lstat2, mkdir, readFile as readFile4, readdir as readdir2, rename, rm, stat as stat3, writeFile } from "fs/promises";
 import { basename as basename12, dirname as dirname19, isAbsolute as isAbsolute3, join as join39, normalize, sep as sep11 } from "path";
@@ -27963,7 +27969,7 @@ class CantCarry extends Error {
   }
 }
 async function hashOf(file) {
-  const hash = createHash15("sha256");
+  const hash = createHash16("sha256");
   for await (const chunk of createReadStream(file))
     hash.update(chunk);
   return hash.digest("hex");
@@ -27981,7 +27987,7 @@ async function plainFiles(from, link, at = "") {
   return files;
 }
 var digestOf = (records, lanes, said = []) => {
-  const hash = createHash15("sha256");
+  const hash = createHash16("sha256");
   for (const record of records)
     hash.update(`r ${record.path} ${record.size} ${record.sha256}
 `);
@@ -28271,7 +28277,7 @@ class Carrying {
           const { chat: _, ...kuvo } = session.metadata?.kuvo ?? {};
           session.metadata = { ...session.metadata ?? {}, kuvo: chat ? { ...kuvo, chat } : kuvo };
         }
-        session.projectID = "prj_" + createHash15("sha1").update(directory).digest("hex").slice(0, 16);
+        session.projectID = "prj_" + createHash16("sha1").update(directory).digest("hex").slice(0, 16);
         delete agent.snapshots;
         const lanesHere = manifest.lanes.filter((lane) => lane.session === id);
         const threads = agent.threads ?? {};
@@ -29951,7 +29957,7 @@ import { existsSync as existsSync19, readFileSync as readFileSync36, renameSync 
 var SEAT_MAIL_KINDS = ["turn", "state", "result", "steer", "stop", "drop", "work", "held", "report", "memory"];
 
 // Packages/Box/src/agents/usage/usage-peers.ts
-import { createHash as createHash16 } from "crypto";
+import { createHash as createHash17 } from "crypto";
 import { mkdirSync as mkdirSync24, readFileSync as readFileSync35, renameSync as renameSync20, writeFileSync as writeFileSync25 } from "fs";
 import { dirname as dirname20 } from "path";
 var isUsageMail = (value) => value !== null && typeof value === "object" && value.kind === "usage";
@@ -30226,7 +30232,7 @@ class UsagePeers {
 }
 function digestOf2(accounts) {
   const canonical = accounts.map((account) => [account.provider, account.service, account.agent ?? null, account.account ?? null, account.label ?? null, account.identity ?? null, account.cut === true, account.places ?? [], account.slots.models, account.slots.used, account.slots.unknown ?? []]);
-  return createHash16("sha256").update(JSON.stringify(canonical)).digest("hex").slice(0, 32);
+  return createHash17("sha256").update(JSON.stringify(canonical)).digest("hex").slice(0, 32);
 }
 var toldOf2 = ({ slots, ...account }) => ({ ...account, slots: keptSlots(slots) });
 function fromSlot(slots, first) {
@@ -34607,6 +34613,11 @@ class LimitsPeers {
     }
     return newest;
   }
+  noticeStates(service, identity) {
+    if (!this.directory.told || !this.directory.isPeer)
+      return [];
+    return [...this.peers].flatMap(([key, kept]) => this.directory.isPeer(key) ? kept.accounts.filter((a) => a.service === service && a.identity === identity).map((a) => a.noticeState ?? {}) : []);
+  }
   notices() {
     if (!this.directory.told || !this.directory.isPeer)
       return [];
@@ -34708,7 +34719,13 @@ class LimitsPeers {
     return this.directory.isPeer?.(key) ? accounts : accounts.map(({ notices, noticeState, ...account }) => account);
   }
   shared() {
-    const accounts = this.limits.list(false);
+    const accounts = structuredClone(this.limits.list(false));
+    while (Buffer.byteLength(JSON.stringify(accounts)) > MOST_BYTES3 - 200 * 60) {
+      const largest = accounts.filter((a) => a.notices?.length).sort((a, b) => b.notices.length - a.notices.length)[0];
+      if (!largest)
+        break;
+      largest.notices.shift();
+    }
     while (accounts.length && Buffer.byteLength(JSON.stringify(accounts)) > MOST_BYTES3 - 200 * 60)
       accounts.pop();
     return accounts;
@@ -34815,7 +34832,7 @@ function takenAccount2(given, off, now) {
     ...text7(account.plan, 100) ? { plan: text7(account.plan, 100) } : {},
     windows,
     notices: takeNotices(account.notices),
-    noticeState: takeStates(account.noticeState),
+    noticeState: Object.fromEntries(Object.entries(takeStates(account.noticeState)).map(([id, state]) => [id, { ...state, ...state.read !== undefined ? { read: moved(state.read) } : {} }])),
     ...balance && typeof balance === "object" && typeof balance.left === "number" && (balance.unit === "usd" || balance.unit === "credits") ? { balance: { left: balance.left, ...typeof balance.limit === "number" ? { limit: balance.limit } : {}, unit: balance.unit } } : {},
     ...extras.length ? { extras } : {},
     ...checked ? { checked } : {},
@@ -35204,4 +35221,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 2d56120135451af6f6421ea43869767ba181ca9bff901f2f8e964faf6c05cf05
+// Built from Packages/Box/src/agents 7a16e3152ff069f2d78e048f7b6f31751a570db556794e2fe51239ff697e5e47
