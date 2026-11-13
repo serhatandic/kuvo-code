@@ -228,3 +228,31 @@ fn moving_the_caret_starts_a_new_undo_step(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-z");
     assert_eq!(text(&field, cx), "hello");
 }
+
+/// An input method asks where text is right after it changes, before the field draws again.
+#[gpui::test]
+fn the_input_method_gets_bounds_for_text_not_yet_drawn(cx: &mut TestAppContext) {
+    let (field, _, cx) = field(cx, |f| f.multi_line(1, 4));
+    cx.simulate_input("Hello");
+    cx.update(|window, cx| {
+        field.update(cx, |f, cx| {
+            f.replace_and_mark_text_in_range(None, " にほん", Some(4..4), window, cx);
+            // UTF-16 offsets 6..9 are the composition, which hasn't been drawn yet.
+            let marked = f.bounds_for_range(6..9, Default::default(), window, cx).expect("bounds for new text");
+            let start = f.bounds_for_range(0..0, Default::default(), window, cx).unwrap();
+            assert!(marked.left() > start.left());
+            // And Shift-Return's new line is below, before any draw.
+            f.replace_text_in_range(None, "\n", window, cx);
+            let below = f.bounds_for_range(10..10, Default::default(), window, cx).expect("bounds on the new line");
+            assert!(below.top() > start.top());
+            assert!(f.character_index_for_point(below.origin, window, cx).is_some());
+        })
+    });
+}
+
+#[gpui::test]
+fn text_set_from_code_follows_the_same_rules_as_typing(cx: &mut TestAppContext) {
+    let (one_line, _, cx) = field(cx, |f| f);
+    one_line.update(cx, |f, cx| f.set_text("first\nsecond\r\nthird", cx));
+    assert_eq!(text(&one_line, cx), "first second  third");
+}

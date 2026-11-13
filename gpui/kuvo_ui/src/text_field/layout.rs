@@ -2,8 +2,9 @@
 //! a minimum and a maximum, scrolling past it), and paints selection, text and caret.
 //!
 //! The single-line shaping, the underlined run for marked text and the input-handler
-//! registration are adapted from GPUI's `examples/input.rs` (Copyright Zed Industries, Inc.,
-//! Apache-2.0), and modified: wrapping, many lines, scrolling and our look are ours.
+//! registration are adapted from GPUI's `examples/input.rs` (Copyright 2022 - 2025 Zed
+//! Industries, Inc., Apache-2.0; the license text is in `Licenses/gpui.txt` at the repository's
+//! root), and modified: wrapping, many lines, scrolling and our look are ours.
 
 use std::ops::Range;
 
@@ -32,12 +33,33 @@ pub(super) struct Layout {
     /// The top of each paragraph, from the top of the text.
     pub tops: Vec<Pixels>,
     pub line_height: Pixels,
+    /// The width the text wraps at (`None` for one line).
+    pub wrap: Option<Pixels>,
     /// Where the text's top-left is drawn, in window coordinates (scroll included).
     pub origin: Point<Pixels>,
     pub content_height: Pixels,
 }
 
 impl Layout {
+    /// Shapes new text where the old was drawn, for questions asked about text that changed
+    /// since the last paint (an input method placing its window, an arrow key pressed twice
+    /// within a frame). The next paint replaces it.
+    pub fn reshape(&mut self, text: &str, marked: Option<&Range<usize>>, window: &Window) {
+        if text.is_empty() {
+            self.lines = SmallVec::new();
+            self.starts = vec![0];
+            self.tops = vec![px(0.)];
+            self.content_height = self.line_height;
+        } else {
+            let (lines, starts, tops, height) = shape(text, marked, gpui::black(), self.wrap, window);
+            self.lines = lines;
+            self.starts = starts;
+            self.tops = tops;
+            self.content_height = height;
+        }
+        self.text = text.to_string();
+    }
+
     fn line_of(&self, offset: usize) -> usize {
         self.starts.partition_point(|start| *start <= offset).saturating_sub(1)
     }
@@ -263,6 +285,7 @@ impl Element for TextElement {
                 starts: if showing_placeholder { vec![0] } else { starts },
                 tops: if showing_placeholder { vec![px(0.)] } else { tops },
                 line_height,
+                wrap,
                 origin: bounds.origin,
                 content_height: if showing_placeholder { line_height } else { content_height },
             };

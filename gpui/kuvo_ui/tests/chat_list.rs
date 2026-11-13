@@ -21,6 +21,12 @@ struct Conversation {
 }
 
 impl Conversation {
+    fn grow(&mut self, ix: usize, by: f32, cx: &mut Context<Self>) {
+        self.heights[ix] += by;
+        self.list.changed(ix);
+        cx.notify();
+    }
+
     fn grow_last(&mut self, by: f32, cx: &mut Context<Self>) {
         let last = self.heights.len() - 1;
         self.heights[last] += by;
@@ -176,4 +182,21 @@ fn scrolling_back_from_the_keyboard_moves_by_what_was_asked(cx: &mut TestAppCont
     view.update(cx, |c, cx| c.grow_last(200., cx));
     cx.run_until_parked();
     assert_eq!(item_top(&view, 3, cx), Some(before + px(100.)));
+}
+
+#[gpui::test]
+fn only_changes_below_the_view_count_as_new(cx: &mut TestAppContext) {
+    let (view, cx) = conversation(cx, vec![300., 300., 300., 300., 300., 40.]);
+    wheel(cx, 900.);
+    assert!(item_top(&view, 2, cx).is_some(), "reading the third message");
+
+    // A message above the view changing (a tool result arriving late) isn't news.
+    view.update(cx, |c, cx| c.grow(0, 20., cx));
+    cx.run_until_parked();
+    assert!(!cx.read(|cx| view.read(cx).list.has_unseen()));
+
+    // The reply at the bottom growing is.
+    view.update(cx, |c, cx| c.grow_last(80., cx));
+    cx.run_until_parked();
+    assert!(cx.read(|cx| view.read(cx).list.has_unseen()));
 }

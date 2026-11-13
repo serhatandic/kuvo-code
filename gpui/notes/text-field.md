@@ -48,6 +48,12 @@ crates.
   fields sit on the sunken fill with faint text; `set_error` draws a red edge and the message
   under the field (the message comes from the box). `bare()` drops the box for a composer.
 - Moving the caret ends a run of typing, so the next word is its own undo step (as on a Mac).
+  The undo history is capped by the text it holds (8 MB), not by a count.
+- Text is held the same way however it arrives (typed, pasted, set by code, or from an input
+  method): a one-line field turns line breaks into spaces.
+- Questions asked before the next paint (an input method placing its candidate window right
+  after a keystroke, two arrow keys in one frame) reshape the text on demand, so the answer is
+  about the text as it is, not as it was last drawn.
 
 ## Tests (through the window's key bindings)
 
@@ -58,7 +64,8 @@ and undone in one step. IME calls go straight to the entity's input handler, whi
 GPUI's platform layer calls; the test platform has no input method to drive.
 
 Also: Up, Down and the input method's caret query in an empty field (a crash the review
-found), and moving the caret starting a new undo step.
+found), moving the caret starting a new undo step, bounds and offsets for text not yet drawn,
+and text set from code following the typing rules.
 
 ## Not yet
 

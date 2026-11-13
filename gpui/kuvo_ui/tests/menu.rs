@@ -52,6 +52,8 @@ fn session_menu(log: Log, field: FocusHandle, _: &mut Window, cx: &mut gpui::App
 struct Host {
     log: Log,
     handle: PopoverMenuHandle,
+    /// A second dropdown, beside the first.
+    other: PopoverMenuHandle,
     focus: FocusHandle,
     /// A field elsewhere that the context menu's "Rename" moves focus to.
     rename_field: FocusHandle,
@@ -65,7 +67,7 @@ impl Focusable for Host {
 
 impl Render for Host {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let (a, b) = (self.log.clone(), self.log.clone());
+        let (a, b, d) = (self.log.clone(), self.log.clone(), self.log.clone());
         let rename_field = self.rename_field.clone();
         div()
             .track_focus(&self.focus)
@@ -75,6 +77,13 @@ impl Render for Host {
                 // The trigger sits at the top left, 120 × 30.
                 PopoverMenu::new("model", div().w(px(120.)).h(px(30.)), move |window, cx| model_menu(a.clone(), window, cx))
                     .with_handle(self.handle.clone()),
+            )
+            .child(
+                // The second trigger sits at (200, 0), 120 × 30, over the first's menu's row.
+                div().absolute().top_0().left(px(200.)).child(
+                    PopoverMenu::new("other", div().w(px(120.)).h(px(30.)), move |window, cx| model_menu(d.clone(), window, cx))
+                        .with_handle(self.other.clone()),
+                ),
             )
             .child(
                 div().mt(px(300.)).child(ContextMenuArea::new(
@@ -94,6 +103,7 @@ fn host(cx: &mut TestAppContext) -> (Entity<Host>, &mut VisualTestContext) {
     let (host, cx) = cx.add_window_view(|_, cx| Host {
         log: Default::default(),
         handle: Default::default(),
+        other: Default::default(),
         focus: cx.focus_handle(),
         rename_field: cx.focus_handle(),
     });
@@ -189,6 +199,19 @@ fn a_second_right_click_still_gives_focus_back_when_closed(cx: &mut TestAppConte
     let (host, cx) = host(cx);
     right_click(cx, point(px(100.), px(350.)));
     right_click(cx, point(px(370.), px(500.))); // in the area, beside the first menu
+    cx.simulate_keystrokes("escape");
+    assert!(cx.update(|window, cx| host.focus_handle(cx).is_focused(window)));
+}
+
+#[gpui::test]
+fn opening_one_menu_from_another_still_returns_focus_to_where_it_was(cx: &mut TestAppContext) {
+    let (host, cx) = host(cx);
+    cx.simulate_click(point(px(20.), px(15.)), Modifiers::default());
+    assert!(is_open(&host, cx));
+    // With the first menu open, press the second dropdown's trigger.
+    cx.simulate_click(point(px(220.), px(15.)), Modifiers::default());
+    assert!(cx.read(|cx| host.read(cx).other.is_open()));
+    assert!(!is_open(&host, cx));
     cx.simulate_keystrokes("escape");
     assert!(cx.update(|window, cx| host.focus_handle(cx).is_focused(window)));
 }

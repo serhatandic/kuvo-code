@@ -109,7 +109,7 @@ fn accounts(cx: &App) -> impl IntoElement {
                 .into_any_element(),
             ListRow::new("a-sleep", "Keep working when this Mac sleeps")
                 .icon(IconName::Computer, cx)
-                .detail("A session can carry on on another of your computers")
+                .detail("A session can move to another of your computers")
                 .trailing(value("On"))
                 .on_click(|_, _, _| {})
                 .into_any_element(),

@@ -6,8 +6,9 @@
 //! minimum to a maximum number of lines, then scroll. Return submits (or adds a line, if the
 //! field is told to), Shift-Return always adds a line.
 //!
-//! Adapted in part from GPUI's `examples/input.rs` (Copyright Zed Industries, Inc., Apache-2.0),
-//! and modified: the selection model, grapheme movement, clipboard actions, UTF-16 helpers and
+//! Adapted in part from GPUI's `examples/input.rs` (Copyright 2022 - 2025 Zed Industries, Inc.,
+//! Apache-2.0; the license text is in `Licenses/gpui.txt` at the repository's root), and
+//! modified: the selection model, grapheme movement, clipboard actions, UTF-16 helpers and
 //! the input-handler methods follow that example; words, lines, many lines, undo, the mouse
 //! beyond single clicks, events and the look are ours.
 
@@ -275,7 +276,7 @@ impl TextField {
 
     /// Replaces the text and puts the caret at its end.
     pub fn set_text(&mut self, text: impl Into<String>, cx: &mut Context<Self>) {
-        self.content = text.into();
+        self.content = self.normalize(&text.into());
         self.selection = self.content.len()..self.content.len();
         self.marked = None;
         self.undo.clear();
@@ -298,6 +299,15 @@ impl TextField {
         self.reversed = false;
         self.reveal_caret = true;
         cx.notify();
+    }
+
+    /// Brings the shaped layout up to date with the text, if it changed since the last paint,
+    /// so positions asked for before the next frame are right.
+    fn refresh_layout(&mut self, window: &Window) {
+        let marked = self.marked.clone();
+        if let Some(layout) = self.layout.as_mut().filter(|l| l.text != self.content) {
+            layout.reshape(&self.content, marked.as_ref(), window);
+        }
     }
 
     fn cursor(&self) -> usize {
@@ -421,14 +431,16 @@ impl TextField {
         self.move_to(to, cx);
     }
 
-    fn up(&mut self, _: &Up, _: &mut Window, cx: &mut Context<Self>) {
+    fn up(&mut self, _: &Up, window: &mut Window, cx: &mut Context<Self>) {
+        self.refresh_layout(window);
         let to = self.vertical(-1., cx).unwrap_or(0);
         let goal = self.goal_x;
         self.move_to(to, cx);
         self.goal_x = goal;
     }
 
-    fn down(&mut self, _: &Down, _: &mut Window, cx: &mut Context<Self>) {
+    fn down(&mut self, _: &Down, window: &mut Window, cx: &mut Context<Self>) {
+        self.refresh_layout(window);
         let to = self.vertical(1., cx).unwrap_or(self.content.len());
         let goal = self.goal_x;
         self.move_to(to, cx);
@@ -445,12 +457,14 @@ impl TextField {
         self.select_to(self.next_grapheme(self.cursor()), cx);
     }
 
-    fn select_up(&mut self, _: &SelectUp, _: &mut Window, cx: &mut Context<Self>) {
+    fn select_up(&mut self, _: &SelectUp, window: &mut Window, cx: &mut Context<Self>) {
+        self.refresh_layout(window);
         let to = self.vertical(-1., cx).unwrap_or(0);
         self.select_to(to, cx);
     }
 
-    fn select_down(&mut self, _: &SelectDown, _: &mut Window, cx: &mut Context<Self>) {
+    fn select_down(&mut self, _: &SelectDown, window: &mut Window, cx: &mut Context<Self>) {
+        self.refresh_layout(window);
         let to = self.vertical(1., cx).unwrap_or(self.content.len());
         self.select_to(to, cx);
     }
@@ -473,7 +487,8 @@ impl TextField {
         self.select_to(self.next_word(self.cursor()), cx);
     }
 
-    fn line_start(&mut self, _: &LineStart, _: &mut Window, cx: &mut Context<Self>) {
+    fn line_start(&mut self, _: &LineStart, window: &mut Window, cx: &mut Context<Self>) {
+        self.refresh_layout(window);
         self.goal_x = None;
         self.move_to(self.line_around(self.cursor()).start, cx);
     }
@@ -489,16 +504,19 @@ impl TextField {
         }
     }
 
-    fn line_end(&mut self, _: &LineEnd, _: &mut Window, cx: &mut Context<Self>) {
+    fn line_end(&mut self, _: &LineEnd, window: &mut Window, cx: &mut Context<Self>) {
+        self.refresh_layout(window);
         self.goal_x = None;
         self.move_to(self.line_end_offset(), cx);
     }
 
-    fn select_line_start(&mut self, _: &SelectLineStart, _: &mut Window, cx: &mut Context<Self>) {
+    fn select_line_start(&mut self, _: &SelectLineStart, window: &mut Window, cx: &mut Context<Self>) {
+        self.refresh_layout(window);
         self.select_to(self.line_around(self.cursor()).start, cx);
     }
 
-    fn select_line_end(&mut self, _: &SelectLineEnd, _: &mut Window, cx: &mut Context<Self>) {
+    fn select_line_end(&mut self, _: &SelectLineEnd, window: &mut Window, cx: &mut Context<Self>) {
+        self.refresh_layout(window);
         self.select_to(self.line_end_offset(), cx);
     }
 
@@ -534,7 +552,7 @@ impl TextField {
         if self.disabled {
             return;
         }
-        let text = if self.lines.is_none() { text.replace(['\n', '\r'], " ") } else { text.replace('\r', "") };
+        let text = self.normalize(text);
         let coalesce = kind == EditKind::Typing
             && self.last_edit == EditKind::Typing
             && range.is_empty()
@@ -555,10 +573,21 @@ impl TextField {
         cx.notify();
     }
 
+    /// Text as this field holds it, however it arrives (typed, pasted, set, or from an input
+    /// method): a one-line field turns line breaks into spaces; carriage returns are dropped.
+    fn normalize(&self, text: &str) -> String {
+        if self.lines.is_none() { text.replace(['\n', '\r'], " ") } else { text.replace('\r', "") }
+    }
+
+    /// Keeps the state before an edit, so it can be undone. The history is capped by the
+    /// text it holds (8 MB), not by a count: a few huge pastes can't grow it without bound,
+    /// and many small edits still go back a long way.
     fn push_undo(&mut self) {
+        const MAX_BYTES: usize = 8 * 1024 * 1024;
         self.undo.push(Snapshot { content: self.content.clone(), selection: self.selection.clone() });
-        if self.undo.len() > 200 {
-            self.undo.remove(0);
+        let mut total: usize = self.undo.iter().map(|s| s.content.len()).sum();
+        while total > MAX_BYTES && self.undo.len() > 1 {
+            total -= self.undo.remove(0).content.len();
         }
     }
 
@@ -585,7 +614,8 @@ impl TextField {
         self.delete_or(|this| this.cursor()..this.next_word(this.cursor()), cx);
     }
 
-    fn delete_to_line_start(&mut self, _: &DeleteToLineStart, _: &mut Window, cx: &mut Context<Self>) {
+    fn delete_to_line_start(&mut self, _: &DeleteToLineStart, window: &mut Window, cx: &mut Context<Self>) {
+        self.refresh_layout(window);
         self.delete_or(
             |this| {
                 let start = this.line_around(this.cursor()).start;
@@ -676,6 +706,7 @@ impl TextField {
         if self.disabled {
             return;
         }
+        self.refresh_layout(window);
         window.focus(&self.focus, cx);
         let offset = self.offset_at(event.position);
         self.goal_x = None;
@@ -704,8 +735,9 @@ impl TextField {
         }
     }
 
-    fn mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn mouse_move(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.selecting {
+            self.refresh_layout(window);
             let offset = self.offset_at(event.position);
             self.select_to(offset, cx);
         }
@@ -801,13 +833,8 @@ impl EntityInputHandler for TextField {
             .map(|r| self.range_from_utf16(&r))
             .or(self.marked.clone())
             .unwrap_or(self.selection.clone());
-        let flattened;
-        let text = if self.lines.is_none() && text.contains(['\n', '\r']) {
-            flattened = text.replace(['\n', '\r'], " ");
-            flattened.as_str()
-        } else {
-            text
-        };
+        let normalized = self.normalize(text);
+        let text = normalized.as_str();
         // Composition is one undo step: keep the state from before it started.
         if self.marked.is_none() {
             self.push_undo();
@@ -833,9 +860,10 @@ impl EntityInputHandler for TextField {
         &mut self,
         range_utf16: Range<usize>,
         _element_bounds: Bounds<Pixels>,
-        _: &mut Window,
+        window: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
+        self.refresh_layout(window);
         let range = self.range_from_utf16(&range_utf16);
         let layout = self.layout.as_ref().filter(|l| l.text == self.content)?;
         let start = layout.position_for(range.start);
@@ -844,7 +872,8 @@ impl EntityInputHandler for TextField {
         Some(Bounds::new(layout.origin + start, gpui::size(width, layout.line_height)))
     }
 
-    fn character_index_for_point(&mut self, point: Point<Pixels>, _: &mut Window, _: &mut Context<Self>) -> Option<usize> {
+    fn character_index_for_point(&mut self, point: Point<Pixels>, window: &mut Window, _: &mut Context<Self>) -> Option<usize> {
+        self.refresh_layout(window);
         let layout = self.layout.as_ref().filter(|l| l.text == self.content)?;
         Some(self.offset_to_utf16(layout.offset_for(point - layout.origin)))
     }
