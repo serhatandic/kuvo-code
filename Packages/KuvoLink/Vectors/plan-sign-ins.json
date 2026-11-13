@@ -1,5 +1,5 @@
 {
-  "why": "How a signed-out provider of the engine's is signed in to, the same in the box (kuvo/sessions/models' signInNeed), the Mac's Accounts (Integration.offeredSignInMethods) and KuvoClient's PlanSignIns: the ways Accounts offers (a ChatGPT or SuperGrok plan's sign-in isn't: those plans go through Codex and Grok), whether that leaves only a key, and the plan a key's words point to. Methods as engine 2.2.5 lists them (api/integration).",
+  "why": "How a signed-out provider of the engine's is signed in to, the same in the box (work/model-rule.ts's signInNeed, which kuvo/sessions/models and kuvo/models/offered go by), the Mac's Accounts (Integration.offeredSignInMethods) and KuvoClient's PlanSignIns: the ways Accounts offers (a ChatGPT or SuperGrok plan's sign-in isn't: those plans go through Codex and Grok), whether that leaves only a key, and the plan a key's words point to. Methods as engine 2.2.5 lists them (api/integration).",
   "cases": [
     {
       "provider": "xai", "name": "xAI",

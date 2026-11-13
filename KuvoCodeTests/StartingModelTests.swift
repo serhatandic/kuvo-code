@@ -1,5 +1,6 @@
 import ClientSessions
 import Foundation
+import KuvoLink
 import OpenCodeKit
 import Testing
 @testable import KuvoCode
@@ -7,7 +8,9 @@ import Testing
 /// The model a new session or bot starts on: the one you picked if you can still use it, else
 /// the engine's default, else the first you can use; never one whose account you signed out of
 /// (it would only fail). Before the models are known, what you picked, as it is. The engine's
-/// answers are stubbed (StubWeb), in the shape it sends them.
+/// answers are stubbed (StubWeb), in the shape it sends them. With no box to ask, these are the
+/// old-box path (COMPAT(0.7 model-rule)); a box with `models.offered` decides for itself
+/// (`itsBoxDecidesWhatsOfferedAndWhatANewOneStartsOn`).
 @MainActor
 @Suite(.serialized) struct StartingModelTests {
     static let engine = "http://127.0.0.1:47999"
@@ -254,6 +257,103 @@ import Testing
         #expect(catalog.refusal(ModelRef(id: "opus", providerID: "claude-code")) == nil, "its agents still loading")
         // A provider the project's own settings add, which the engine lists only in that project: it goes.
         #expect(catalog.refusal(ModelRef(id: "qwen", providerID: "lmstudio")) == nil)
+    }
+
+    /// A box that decides (`models.offered`, #341 item 13): the picker offers what it says runs, and
+    /// a new conversation starts on the model it says, not what this Mac's own lists would have it
+    /// on. Here the engine lists Anthropic signed in, while its box says only Luna runs (Anthropic's
+    /// sign-in ended there) and a new one starts on Luna.
+    @Test func itsBoxDecidesWhatsOfferedAndWhatANewOneStartsOn() async throws {
+        defer { StubWeb.stop() }
+        let offered = #"{"models":[{"providerID":"openai","id":"luna","name":"Luna"}],"known":{"engine":true,"agents":true},"starting":{"providerID":"openai","id":"luna"}}"#
+        catalog.box = BoxClient(box: BoxClient.mac, transport: LocalBox { request in
+            AsyncThrowingStream { continuation in
+                let answered = request.path.hasPrefix("kuvo/models/offered")
+                continuation.yield(.head(status: answered ? 200 : 404, headers: ["content-type": "application/json"]))
+                continuation.yield(.body(Data((answered ? offered : #"{"message":"No such route."}"#).utf8)))
+                continuation.finish()
+            }
+        })
+        try await engine(accounts: [Self.account("anthropic", signedIn: true), Self.account("openai", signedIn: true)],
+                         models: [Self.model("anthropic", "sonnet"), Self.model("openai", "luna")],
+                         defaultModel: Self.model("anthropic", "sonnet"))
+        #expect(catalog.startingModel(sonnet) == sonnet, "until its box says: as it is")
+        try await until { catalog.startingModel(sonnet) == luna }
+        #expect(catalog.modelsByProvider.flatMap(\.models).map(\.id) == ["luna"])
+        #expect(catalog.isUnavailable(sonnet))
+        // What a conversation's own box hasn't said of yet goes by that alone: no reckoning of its
+        // own account here, no refusal worded here.
+        #expect(catalog.chipModel(sonnet, in: .all, said: nil) == nil, "Choose a Model")
+        #expect(catalog.refusal(sonnet, said: nil) == nil)
+        #expect(!catalog.needsAccount(sonnet, said: nil))
+    }
+
+    /// The model picked last is one Codex has since kept out of its picker: its box says a new
+    /// conversation starts on it, and the chip names it (by the name its box gives) with Send on,
+    /// though it isn't offered in the picker and this Mac's own lists of Codex's (loaded) don't
+    /// have it. (Before, it was unavailable: "Choose a Model", and Send waited.)
+    @Test func aModelCodexHidesRunsWhereItsBoxSaysSo() async throws {
+        defer { StubWeb.stop() }
+        let mini = ModelRef(id: "gpt-5.1-codex-mini", providerID: "codex-cli")
+        let offered = #"{"models":[{"providerID":"openai","id":"luna","name":"Luna"},{"providerID":"codex-cli","id":"gpt-5.1-codex-mini","name":"GPT-5.1 Codex Mini","hidden":true}],"known":{"engine":true,"agents":true},"starting":{"providerID":"codex-cli","id":"gpt-5.1-codex-mini"}}"#
+        catalog.box = BoxClient(box: BoxClient.mac, transport: LocalBox { request in
+            AsyncThrowingStream { continuation in
+                let answered = request.path.hasPrefix("kuvo/models/offered")
+                continuation.yield(.head(status: answered ? 200 : 404, headers: ["content-type": "application/json"]))
+                continuation.yield(.body(Data((answered ? offered : #"{"message":"No such route."}"#).utf8)))
+                continuation.finish()
+            }
+        })
+        try await engine(accounts: [Self.account("openai", signedIn: true)], models: [Self.model("openai", "luna")], defaultModel: Self.model("openai", "luna"))
+        // Codex signed in, its picker's list (as this Mac reads it) without the one it hides.
+        let bridge = "http://127.0.0.1:47981"
+        StubWeb.handle(bridge + "/api/integration") { _, _ in
+            StubWeb.json(["data": [[
+                "id": "codex-cli", "name": "Codex", "methods": [["type": "oauth", "id": "chatgpt", "label": "ChatGPT"]],
+                "connections": [["type": "credential", "credentialID": "cred_codex", "method": "oauth"]],
+                "metadata": ["source": "agent", "agent": "codex-cli", "accountID": "default", "installed": true],
+            ]]])
+        }
+        let listed = StubWeb.json(["data": [Self.model("codex-cli", "gpt-5.5")]])
+        StubWeb.handle(bridge + "/api/model") { _, _ in listed }
+        let agents = OutsideAgents()
+        catalog.outsideAgents = agents
+        agents.connect(ServerEndpoint(url: URL(string: bridge)!, password: "test"), folderPrefix: "")
+        defer { agents.disconnect() }
+        await catalog.refreshAgents(fresh: true)
+        _ = catalog.startingModel(mini)
+        try await until { catalog.offeredSaid != nil }
+        #expect(catalog.startingModel(mini) == mini)
+        #expect(!catalog.isUnavailable(mini))
+        #expect(catalog.chipModel(mini, in: .all, said: nil)?.name == "GPT-5.1 Codex Mini")
+        #expect(ComposerSend(ready: true, text: "Fix the build", hasModel: catalog.chipModel(mini, in: .all, said: nil) != nil) == .send)
+        #expect(!catalog.offered.contains { $0.id == mini.id }, "not in the picker")
+    }
+
+    /// Its box's first answer fails (a machine's connection drops a moment): it's asked again, and
+    /// the picker fills, rather than staying empty until an account or model changes.
+    @Test func aFailedAskIsAskedAgain() async throws {
+        defer { StubWeb.stop() }
+        nonisolated final class Asks: @unchecked Sendable {
+            let lock = NSLock()
+            var count = 0
+        }
+        let asks = Asks()
+        let offered = #"{"models":[{"providerID":"openai","id":"luna","name":"Luna"}],"known":{"engine":true,"agents":true},"starting":{"providerID":"openai","id":"luna"}}"#
+        catalog.offeredRetryAfter = .milliseconds(1)
+        catalog.box = BoxClient(box: BoxClient.mac, transport: LocalBox { request in
+            AsyncThrowingStream { continuation in
+                let first = request.path.hasPrefix("kuvo/models/offered") && asks.lock.withLock { asks.count += 1; return asks.count == 1 }
+                let answered = request.path.hasPrefix("kuvo/models/offered") && !first
+                continuation.yield(.head(status: answered ? 200 : 503, headers: ["content-type": "application/json"]))
+                continuation.yield(.body(Data((answered ? offered : #"{"message":"Not now."}"#).utf8)))
+                continuation.finish()
+            }
+        })
+        try await engine(accounts: [Self.account("openai", signedIn: true)], models: [Self.model("openai", "luna")], defaultModel: Self.model("openai", "luna"))
+        _ = catalog.offered
+        try await until { catalog.offered.map(\.id) == ["luna"] }
+        #expect(asks.lock.withLock { asks.count } >= 2)
     }
 
     private func said(_ json: String) throws -> SessionModelState {

@@ -5,7 +5,7 @@
 import "./safety"
 import { expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
-import { signInNeed } from "../src/link/areas/session-models"
+import { signInNeed } from "../src/link/work/model-rule"
 
 const vectors = JSON.parse(readFileSync(new URL("../../KuvoLink/Vectors/plan-sign-ins.json", import.meta.url), "utf8"))
 
