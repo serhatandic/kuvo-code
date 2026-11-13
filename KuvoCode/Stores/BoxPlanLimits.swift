@@ -61,7 +61,8 @@ final class BoxPlanLimits {
     /// What using one of a row's resets would spend, in the words the confirmation shows.
     func askReset(_ row: String) async throws -> HostResetOffer {
         let api = try resetBox()
-        let offer = try await api.client.send(try api.client.request("POST", BoxLimits.bridgeResetPath, body: ResetAsk(row: row)), as: DataEnvelope<ResetOffer>.self).data
+        // (A 503 here is the box saying the computer with the sign-in can't be reached: said at once, not waited out.)
+        let offer = try await api.client.send(try api.client.request("POST", BoxLimits.bridgeResetPath, body: ResetAsk(row: row)), as: DataEnvelope<ResetOffer>.self, patience: .zero).data
         return HostResetOffer(confirm: offer.confirm, question: ResetWords.question(offer.count),
                               detail: ResetWords.consequence(offer.refills) + (offer.on.here ? "" : " " + ResetWords.usedOn(offer.on.name)))
     }
