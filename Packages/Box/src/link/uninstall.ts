@@ -175,11 +175,15 @@ export function uninstall(): Uninstalled {
   const left = running();
   stopped &&= left.length === 0;
   const where = K.startsWith(homeFolder() + "/") ? "~" + K.slice(homeFolder().length) : K;
-  const message = !stopped
-    ? `Kuvo Code ${startsAgain.length ? "" : "won't start again on this computer, but "}${left.length ? `its ${left.join(", ")} still ran` : "couldn't stop everything"} just now${startsAgain.length ? `, and ${startsAgain.join(" and ")} couldn't be taken away` : ""}. Run this again in a moment.`
-    : startsAgain.length
-      ? `Kuvo Code is stopped on this computer, but ${startsAgain.join(" and ")} couldn't be taken away, so it may start again. Run this again in a moment.`
-      : `Kuvo Code is stopped on this computer and won't start again. Its folder stays, with your sessions and settings: remove ${where} to remove them too.`;
+  const ran = left.length ? `its ${left.join(", ")} still ran just now` : "it couldn't stop everything just now";
+  const starts = `${startsAgain.join(" and ")} couldn't be taken away`;
+  const message = !stopped && startsAgain.length
+    ? `Kuvo Code isn't removed yet: ${ran}, and ${starts}. Run this again in a moment.`
+    : !stopped
+      ? `Kuvo Code won't start again on this computer, but ${ran}. Run this again in a moment.`
+      : startsAgain.length
+        ? `Kuvo Code is stopped on this computer, but ${starts}, so it may start again. Run this again in a moment.`
+        : `Kuvo Code is stopped on this computer and won't start again. Its folder stays, with your sessions and settings: remove ${where} to remove them too.`;
   return { stopped, launchAgent, crontab: crontabLine, startsAgain, left: [K], message };
 }
 
