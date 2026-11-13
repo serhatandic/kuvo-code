@@ -444,15 +444,16 @@ export function thisComputer(platform: string = process.platform, read = (path: 
   return "host:" + name()
 }
 
-let computer: string | undefined
+let computer: { found: string; sure: boolean; at: number } | undefined
 /**
- * `thisComputer()`, worked out once it's found (a Mac's `ioreg` that didn't answer is asked again
- * next time, so two boxes on one Mac don't end up named differently).
+ * `thisComputer()`, worked out once it's found. A Mac's `ioreg` that didn't answer is asked again,
+ * at most once a minute (each try holds the bridge up to 5 s), so two boxes on one Mac don't stay
+ * named differently; meanwhile its name stands in.
  */
-export function ownComputer(): string {
-  if (computer) return computer
+export function ownComputer(now = Date.now()): string {
+  if (computer && (computer.sure || now - computer.at < 60_000)) return computer.found
   const found = thisComputer()
-  if (process.platform !== "darwin" || found.startsWith("mac:")) computer = found
+  computer = { found, sure: process.platform !== "darwin" || found.startsWith("mac:"), at: now }
   return found
 }
 
@@ -514,7 +515,10 @@ export function claudeSources(folder?: string, computer = ownComputer): (agents:
         service: "claude",
         agent: { kind: "claude", account: parsed.id },
         ...(agent.instance.label ? { label: agent.instance.label } : {}),
-        places: () => roots().map((root) => placeOf(computer(), root)),
+        places: () => {
+          const here = computer()
+          return roots().map((root) => placeOf(here, root))
+        },
         slots: async (pricing, since) => {
           const found = new Map<string, Awaited<ReturnType<typeof jsonlFiles>>[number]>()
           for (const root of roots()) for (const file of await jsonlFiles(root)) found.set(file.path, file)

@@ -20287,12 +20287,11 @@ function thisComputer(platform = process.platform, read = (path) => readFileSync
   return "host:" + name();
 }
 var computer;
-function ownComputer() {
-  if (computer)
-    return computer;
+function ownComputer(now = Date.now()) {
+  if (computer && (computer.sure || now - computer.at < 60000))
+    return computer.found;
   const found = thisComputer();
-  if (process.platform !== "darwin" || found.startsWith("mac:"))
-    computer = found;
+  computer = { found, sure: process.platform !== "darwin" || found.startsWith("mac:"), at: now };
   return found;
 }
 function uuidOf(said) {
@@ -20328,7 +20327,10 @@ function claudeSources(folder, computer = ownComputer) {
       service: "claude",
       agent: { kind: "claude", account: parsed.id },
       ...agent.instance.label ? { label: agent.instance.label } : {},
-      places: () => roots().map((root) => placeOf(computer(), root)),
+      places: () => {
+        const here = computer();
+        return roots().map((root) => placeOf(here, root));
+      },
       slots: async (pricing, since) => {
         const found = new Map;
         for (const root of roots())
@@ -31141,4 +31143,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents f5690734629a57c3bfdb4abab19e54d1000cd217b0f97745a0d585cef7de2d88
+// Built from Packages/Box/src/agents 9520d31a521b72d3a4b16897693b8a6632384166208957a512a95fefa4fd4579

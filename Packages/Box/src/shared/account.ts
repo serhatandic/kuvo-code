@@ -50,7 +50,8 @@ export function accountName(): string {
 /**
  * Whether the coding agents' bridge's folder (`KUVO_AGENTS_HOME`, `…/agents`) is a real box's: a Mac
  * app's (in `run.kuvo.code…`, any copy's) or a machine's (`~/.kuvo-code/agents`, in your account's
- * own home), as `REAL_BOX` (link/home.ts) judges the box's. Never a test's, whoever started it.
+ * own home), as `REAL_BOX` (link/home.ts) judges the box's. Never a test's, whoever started it. (A
+ * build under another bundle ID counts as a test's here too, as it does there.)
  */
 export function isRealBridgeFolder(folder: string, home: string = accountHome()): boolean {
   const located = (each: string) => {
