@@ -258,6 +258,19 @@ test("a test can't read, copy or write the coding agents' sign-ins in the real h
   assert.equal(fs.existsSync(path.join(real, ".claude")), false);
 });
 
+// A bridge a test starts with an environment it made itself (`{ PATH, HOME, ... }`, none of the run's)
+// still prices its usage history with what it ships, never with the feeds on the web.
+test("what a test starts, with an environment of its own, is told to fetch no prices", () => {
+  const told = env => spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.env.KUVO_TEST_PRICE_FEEDS))"], { encoding: "utf8", env }).stdout;
+  assert.equal(told({ PATH: "/usr/bin:/bin" }), "off");
+  assert.equal(told({ PATH: "/usr/bin:/bin", KUVO_TEST_PRICE_FEEDS: "on" }), "off");
+  assert.equal(told(undefined), "off");
+  if (process.versions.bun) {
+    const started = Bun.spawnSync([process.execPath, "-e", "process.stdout.write(String(process.env.KUVO_TEST_PRICE_FEEDS))"], { env: { PATH: "/usr/bin:/bin" } });
+    assert.equal(started.stdout.toString(), "off");
+  }
+});
+
 test("every bridge test file, in any folder under this one, loads test-safety.js before anything else", () => {
   const found = fs.readdirSync(here, { recursive: true }).filter(name => !name.split(path.sep).includes("node_modules") && /([._-]test|[._]spec)\.[cm]?[jt]sx?$|(^|\/)test\.[cm]?[jt]s$/.test(name));
   assert.ok(found.length > 10, "the test files were found");

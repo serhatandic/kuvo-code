@@ -1,7 +1,7 @@
 // @bun
 // Packages/Box/src/agents/main.ts
-import { mkdirSync as mkdirSync21, readdirSync as readdirSync18, readFileSync as readFileSync32, rmSync as rmSync16 } from "fs";
-import { basename as basename12, dirname as dirname20, join as join33 } from "path";
+import { mkdirSync as mkdirSync25, readdirSync as readdirSync18, readFileSync as readFileSync35, rmSync as rmSync17 } from "fs";
+import { basename as basename13, dirname as dirname22, join as join36 } from "path";
 
 // Packages/Box/src/agents/accounts.ts
 import { randomBytes } from "crypto";
@@ -11566,6 +11566,9 @@ class Limits {
     }
     return listed;
   }
+  identity(provider) {
+    return this.entries.get(provider)?.identity;
+  }
   reads() {
     return new Set(this.accounts().filter((account) => account.limits.read).map((account) => account.provider));
   }
@@ -18482,6 +18485,1874 @@ async function branchRoutes(places, method, parts, body) {
   }
 }
 
+// Packages/Box/src/agents/usage/usage.ts
+import { execFileSync as execFileSync2 } from "child_process";
+import { createHash as createHash11 } from "crypto";
+import { mkdirSync as mkdirSync20, readFileSync as readFileSync27, realpathSync as realpathSync7, renameSync as renameSync16, writeFileSync as writeFileSync21 } from "fs";
+import { homedir as homedir5, hostname } from "os";
+import { basename as basename11, dirname as dirname16, join as join31 } from "path";
+
+// Packages/Box/src/agents/usage/claude-log.ts
+var USAGE = Buffer.from('"usage":{');
+var isObject2 = (value) => !!value && typeof value === "object" && !Array.isArray(value);
+var isNumber = (value) => typeof value === "number" && Number.isFinite(value);
+var int = (value) => isNumber(value) ? Math.trunc(value) : 0;
+function claudeLine(line) {
+  if (line.indexOf(USAGE) < 0)
+    return [];
+  let object;
+  try {
+    object = JSON.parse(line.toString("utf8"));
+  } catch {
+    return [];
+  }
+  return claudeEntries(object);
+}
+function claudeEntries(object) {
+  if (!isObject2(object) || typeof object.timestamp !== "string")
+    return [];
+  const at = timestamp(object.timestamp);
+  const message = object.message;
+  if (at === undefined || !isObject2(message) || !isObject2(message.usage))
+    return [];
+  const usage = message.usage;
+  if (nullWhereNever(object, message, usage))
+    return [];
+  const parsed = tokensOf(usage);
+  if (!parsed || !valid(object, message))
+    return [];
+  const model = typeof message.model === "string" && message.model !== "<synthetic>" ? message.model : undefined;
+  const parent = {
+    at,
+    tokens: parsed.tokens,
+    ...typeof message.id === "string" ? { message: message.id } : {},
+    ...typeof object.requestId === "string" ? { request: object.requestId } : {},
+    sidechain: object.isSidechain === true,
+    speed: parsed.speed,
+    ...isNumber(object.costUSD) ? { cost: object.costUSD } : {},
+    ...model !== undefined ? { model } : {}
+  };
+  const iterations = usage.iterations;
+  if (!Array.isArray(iterations) || !iterations.every(isObject2))
+    return [parent];
+  const entries = [parent];
+  let advisor = 0;
+  for (const iteration of iterations) {
+    if (iteration.type !== "advisor_message" || typeof iteration.model !== "string" || !iteration.model)
+      continue;
+    const own = tokensOf(iteration);
+    if (!own)
+      continue;
+    entries.push({
+      at,
+      tokens: own.tokens,
+      ...parent.message !== undefined ? { message: `${parent.message}:advisor:${advisor}` } : {},
+      ...parent.request !== undefined ? { request: parent.request } : {},
+      sidechain: parent.sidechain,
+      speed: own.speed,
+      model: iteration.model
+    });
+    advisor++;
+  }
+  return entries;
+}
+function tokensOf(usage) {
+  if (!isNumber(usage.input_tokens) || !isNumber(usage.output_tokens))
+    return;
+  const speed = typeof usage.speed === "string" ? usage.speed : undefined;
+  if (speed !== undefined && speed !== "fast" && speed !== "standard")
+    return;
+  let cacheWrite5m = 0;
+  let cacheWrite1h = 0;
+  if (isObject2(usage.cache_creation)) {
+    cacheWrite5m = int(usage.cache_creation.ephemeral_5m_input_tokens);
+    cacheWrite1h = int(usage.cache_creation.ephemeral_1h_input_tokens);
+  } else
+    cacheWrite5m = int(usage.cache_creation_input_tokens);
+  return {
+    tokens: { input: Math.trunc(usage.input_tokens), cacheWrite5m, cacheWrite1h, cacheRead: int(usage.cache_read_input_tokens), output: Math.trunc(usage.output_tokens), ...speed === "fast" ? { fast: true } : {} },
+    speed: speed !== undefined
+  };
+}
+function valid(object, message) {
+  if (typeof object.version === "string" && !/^\d+\.\d+\.\d/.test(object.version))
+    return false;
+  for (const value of [object.sessionId, object.requestId, message.id, message.model])
+    if (value === "")
+      return false;
+  return true;
+}
+function nullWhereNever(object, message, usage) {
+  const levels = [
+    [object, ["cwd", "costUSD", "version", "sessionId", "requestId", "isApiErrorMessage"]],
+    [message, ["id", "model"]],
+    [usage, ["speed", "cache_read_input_tokens", "cache_creation_input_tokens"]]
+  ];
+  return levels.some(([container, fields]) => fields.some((field) => container[field] === null));
+}
+function timestamp(raw) {
+  let text = raw.trim();
+  if (!text)
+    return;
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(text))
+    text = text.slice(0, 10) + "T" + text.slice(11);
+  if (text.endsWith(" UTC"))
+    text = text.slice(0, -4) + "Z";
+  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})?$/.exec(text);
+  if (!match)
+    return;
+  const fraction = (match[2] ?? "").slice(1, 4).padEnd(match[2] ? 3 : 0, "0");
+  const at = Date.parse(`${match[1]}${fraction ? "." + fraction : ""}${match[3] ?? "Z"}`);
+  return Number.isFinite(at) ? at : undefined;
+}
+var total = (entry) => entry.tokens.input + entry.tokens.cacheWrite5m + entry.tokens.cacheWrite1h + entry.tokens.cacheRead + entry.tokens.output;
+function dedupClaude(entries) {
+  const kept = [];
+  const exact = new Map;
+  const byMessage = new Map;
+  const keyOf = (message, request) => `${message}\x00${request ?? "\x01"}`;
+  for (const entry of entries) {
+    if (entry.message === undefined) {
+      kept.push(entry);
+      continue;
+    }
+    const key = keyOf(entry.message, entry.request);
+    const collision = exact.get(key) ?? byMessage.get(entry.message)?.find((index) => entry.sidechain || kept[index].sidechain);
+    if (collision !== undefined) {
+      if (replaces(entry, kept[collision])) {
+        const old = kept[collision];
+        exact.delete(keyOf(old.message, old.request));
+        kept[collision] = entry;
+        exact.set(key, collision);
+      }
+      continue;
+    }
+    exact.set(key, kept.length);
+    byMessage.set(entry.message, [...byMessage.get(entry.message) ?? [], kept.length]);
+    kept.push(entry);
+  }
+  return kept;
+}
+function replaces(candidate, existing) {
+  if (candidate.sidechain !== existing.sidechain)
+    return existing.sidechain;
+  const [a, b] = [total(candidate), total(existing)];
+  if (a !== b)
+    return a > b;
+  return candidate.speed && !existing.speed;
+}
+function keptClaude(entry) {
+  const flags = (entry.sidechain ? 1 : 0) | (entry.speed ? 2 : 0) | (entry.tokens.fast ? 4 : 0);
+  const { input, cacheWrite5m, cacheWrite1h, cacheRead, output } = entry.tokens;
+  return [entry.at, entry.message ?? null, entry.request ?? null, flags, entry.model ?? null, input, cacheWrite5m, cacheWrite1h, cacheRead, output, entry.cost ?? null];
+}
+function fromKeptClaude(kept) {
+  const [at, message, request, flags, model, input, cacheWrite5m, cacheWrite1h, cacheRead, output, cost] = kept;
+  return {
+    at,
+    tokens: { input, cacheWrite5m, cacheWrite1h, cacheRead, output, ...flags & 4 ? { fast: true } : {} },
+    ...message !== null ? { message } : {},
+    ...request !== null ? { request } : {},
+    sidechain: !!(flags & 1),
+    speed: !!(flags & 2),
+    ...cost !== null ? { cost } : {},
+    ...model !== null ? { model } : {}
+  };
+}
+
+// Packages/Box/src/agents/usage/pricing.ts
+import { mkdirSync as mkdirSync18, readFileSync as readFileSync26, renameSync as renameSync14, writeFileSync as writeFileSync19 } from "fs";
+import { join as join29 } from "path";
+// Packages/Box/src/agents/usage/pricing/pricing_litellm_snapshot.json
+var pricing_litellm_snapshot_default = {
+  models: { "ai21.j2-mid-v1": { cr: 1.25, cw: 12.5, i: 12.5, o: 12.5 }, "ai21.j2-ultra-v1": { cr: 1.88, cw: 18.8, i: 18.8, o: 18.8 }, "ai21.jamba-1-5-large-v1:0": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "ai21.jamba-1-5-mini-v1:0": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.39999999999999997 }, "ai21.jamba-instruct-v1:0": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.7 }, "amazon-nova/nova-lite-v1": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.24 }, "amazon-nova/nova-micro-v1": { cr: 0.0035000000000000005, cw: 0.035, i: 0.035, o: 0.14 }, "amazon-nova/nova-premier-v1": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 12.5 }, "amazon-nova/nova-pro-v1": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 3.1999999999999997 }, "amazon.nova-2-lite-v1:0": { cr: 0.075, cw: 0.3, i: 0.3, o: 2.5 }, "amazon.nova-2-multimodal-embeddings-v1:0": { cr: 0.013500000000000002, cw: 0.135, i: 0.135, o: 0 }, "amazon.nova-2-pro-preview-20251202-v1:0": { cr: 0.546875, cw: 2.1875, i: 2.1875, o: 17.5 }, "amazon.nova-lite-v1:0": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.24 }, "amazon.nova-micro-v1:0": { cr: 0.0035000000000000005, cw: 0.035, i: 0.035, o: 0.14 }, "amazon.nova-pro-v1:0": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 3.1999999999999997 }, "amazon.rerank-v1:0": { cr: 0, cw: 0, i: 0, o: 0 }, "amazon.titan-embed-g1-text-02": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "amazon.titan-embed-image-v1": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 0 }, "amazon.titan-embed-text-v1": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "amazon.titan-embed-text-v2:0": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "amazon.titan-text-express-v1": { cr: 0.13, cw: 1.3, i: 1.3, o: 1.7 }, "amazon.titan-text-lite-v1": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.39999999999999997 }, "amazon.titan-text-premier-v1:0": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "anthropic.claude-3-5-haiku-20241022-v1:0": { cr: 0.08, cw: 1, i: 0.7999999999999999, o: 4 }, "anthropic.claude-3-5-sonnet-20240620-v1:0": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 30 }, "anthropic.claude-3-5-sonnet-20241022-v2:0": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 30 }, "anthropic.claude-3-7-sonnet-20240620-v1:0": { cr: 0.36, cw: 4.5, i: 3.5999999999999996, o: 18 }, "anthropic.claude-3-7-sonnet-20250219-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic.claude-3-haiku-20240307-v1:0": { cr: 0.024999999999999998, cw: 0.3125, i: 0.25, o: 1.25 }, "anthropic.claude-3-opus-20240229-v1:0": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "anthropic.claude-3-sonnet-20240229-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic.claude-fable-5": { cr: 1, cw: 12.5, i: 10, o: 50 }, "anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "anthropic.claude-haiku-4-5@20251001": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "anthropic.claude-instant-v1": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 2.4 }, "anthropic.claude-mythos-preview": { cr: 0, cw: 0, i: 0, o: 0 }, "anthropic.claude-opus-4-1-20250805-v1:0": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "anthropic.claude-opus-4-20250514-v1:0": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "anthropic.claude-opus-4-5-20251101-v1:0": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "anthropic.claude-opus-4-6-v1": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "anthropic.claude-opus-4-7": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "anthropic.claude-opus-4-8": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "anthropic.claude-sonnet-4-20250514-v1:0": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "anthropic.claude-sonnet-4-6": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic.claude-sonnet-5": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic.claude-v1": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "anthropic.claude-v2:1": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "anyscale/HuggingFaceH4/zephyr-7b-beta": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "anyscale/codellama/CodeLlama-34b-Instruct-hf": { cr: 0.09999999999999999, cw: 1, i: 1, o: 1 }, "anyscale/codellama/CodeLlama-70b-Instruct-hf": { cr: 0.09999999999999999, cw: 1, i: 1, o: 1 }, "anyscale/google/gemma-7b-it": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "anyscale/meta-llama/Llama-2-13b-chat-hf": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.25 }, "anyscale/meta-llama/Llama-2-70b-chat-hf": { cr: 0.09999999999999999, cw: 1, i: 1, o: 1 }, "anyscale/meta-llama/Llama-2-7b-chat-hf": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "anyscale/meta-llama/Meta-Llama-3-70B-Instruct": { cr: 0.09999999999999999, cw: 1, i: 1, o: 1 }, "anyscale/meta-llama/Meta-Llama-3-8B-Instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "anyscale/mistralai/Mistral-7B-Instruct-v0.1": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "anyscale/mistralai/Mixtral-8x22B-Instruct-v0.1": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "anyscale/mistralai/Mixtral-8x7B-Instruct-v0.1": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "apac.amazon.nova-2-lite-v1:0": { cr: 0.0825, cw: 0.33, i: 0.33, o: 2.75 }, "apac.amazon.nova-2-pro-preview-20251202-v1:0": { cr: 0.546875, cw: 2.1875, i: 2.1875, o: 17.5 }, "apac.amazon.nova-lite-v1:0": { cr: 0.0063, cw: 0.063, i: 0.063, o: 0.252 }, "apac.amazon.nova-micro-v1:0": { cr: 0.0037, cw: 0.037, i: 0.037, o: 0.148 }, "apac.amazon.nova-pro-v1:0": { cr: 0.084, cw: 0.84, i: 0.84, o: 3.36 }, "apac.anthropic.claude-3-5-sonnet-20240620-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "apac.anthropic.claude-3-5-sonnet-20241022-v2:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "apac.anthropic.claude-3-haiku-20240307-v1:0": { cr: 0.024999999999999998, cw: 0.3125, i: 0.25, o: 1.25 }, "apac.anthropic.claude-3-sonnet-20240229-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "apac.anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.11, cw: 1.375, i: 1.1, o: 5.5 }, "apac.anthropic.claude-sonnet-4-20250514-v1:0": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "au.anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.11, cw: 1.375, i: 1.1, o: 5.5 }, "au.anthropic.claude-opus-4-6-v1": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "au.anthropic.claude-opus-4-7": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "au.anthropic.claude-opus-4-8": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "au.anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.33, cra: 0.66, cw: 4.125, cwa: 8.25, i: 3.3000000000000003, ia: 6.6000000000000005, o: 16.5, oa: 24.75 }, "au.anthropic.claude-sonnet-4-6": { cr: 0.33, cw: 4.125, i: 3.3000000000000003, o: 16.5 }, "au.anthropic.claude-sonnet-5": { cr: 0.33, cw: 4.125, i: 3.3000000000000003, o: 16.5 }, "azure/ada": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "azure/codex-mini": { cr: 0.375, cw: 1.5, i: 1.5, o: 6 }, "azure/command-r-plus": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "azure/computer-use-preview": { cr: 0.30000000000000004, cw: 3, i: 3, o: 12 }, "azure/eu/gpt-4o-2024-08-06": { cr: 1.375, cw: 2.75, i: 2.75, o: 11 }, "azure/eu/gpt-4o-2024-11-20": { cr: 0.275, cw: 1.38, i: 2.75, o: 11 }, "azure/eu/gpt-4o-mini-2024-07-18": { cr: 0.083, cw: 0.165, i: 0.165, o: 0.66 }, "azure/eu/gpt-4o-mini-realtime-preview-2024-12-17": { cr: 0.33, cw: 0.66, i: 0.66, o: 2.64 }, "azure/eu/gpt-4o-realtime-preview-2024-10-01": { cr: 2.75, cw: 5.5, i: 5.5, o: 22 }, "azure/eu/gpt-4o-realtime-preview-2024-12-17": { cr: 2.75, cw: 5.5, i: 5.5, o: 22 }, "azure/eu/gpt-5-2025-08-07": { cr: 0.1375, cw: 1.375, i: 1.375, o: 11 }, "azure/eu/gpt-5-mini-2025-08-07": { cr: 0.0275, cw: 0.275, i: 0.275, o: 2.2 }, "azure/eu/gpt-5-nano-2025-08-07": { cr: 0.0055, cw: 0.055, i: 0.055, o: 0.44 }, "azure/eu/gpt-5.1": { cr: 0.14, cw: 1.38, i: 1.38, o: 11 }, "azure/eu/gpt-5.1-chat": { cr: 0.14, cw: 1.38, i: 1.38, o: 11 }, "azure/eu/gpt-5.1-codex": { cr: 0.14, cw: 1.38, i: 1.38, o: 11 }, "azure/eu/gpt-5.1-codex-mini": { cr: 0.028, cw: 0.275, i: 0.275, o: 2.2 }, "azure/eu/o1-2024-12-17": { cr: 8.25, cw: 16.5, i: 16.5, o: 66 }, "azure/eu/o1-mini-2024-09-12": { cr: 0.605, cw: 1.21, i: 1.21, o: 4.84 }, "azure/eu/o1-preview-2024-09-12": { cr: 8.25, cw: 16.5, i: 16.5, o: 66 }, "azure/eu/o3-mini-2025-01-31": { cr: 0.605, cw: 1.21, i: 1.21, o: 4.84 }, "azure/global-standard/gpt-4o-2024-08-06": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "azure/global-standard/gpt-4o-2024-11-20": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "azure/global-standard/gpt-4o-mini": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "azure/global/gpt-4o-2024-08-06": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "azure/global/gpt-4o-2024-11-20": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "azure/global/gpt-5.1": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/global/gpt-5.1-chat": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/global/gpt-5.1-codex": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/global/gpt-5.1-codex-mini": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "azure/gpt-3.5-turbo": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "azure/gpt-3.5-turbo-0125": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "azure/gpt-3.5-turbo-instruct-0914": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 2 }, "azure/gpt-35-turbo": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "azure/gpt-35-turbo-0125": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "azure/gpt-35-turbo-1106": { cr: 0.09999999999999999, cw: 1, i: 1, o: 2 }, "azure/gpt-35-turbo-16k": { cr: 0.30000000000000004, cw: 3, i: 3, o: 4 }, "azure/gpt-35-turbo-16k-0613": { cr: 0.30000000000000004, cw: 3, i: 3, o: 4 }, "azure/gpt-35-turbo-instruct": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 2 }, "azure/gpt-35-turbo-instruct-0914": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 2 }, "azure/gpt-4": { cr: 3, cw: 30, i: 30, o: 60 }, "azure/gpt-4-0125-preview": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "azure/gpt-4-0613": { cr: 3, cw: 30, i: 30, o: 60 }, "azure/gpt-4-1106-preview": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "azure/gpt-4-32k": { cr: 6, cw: 60, i: 60, o: 120 }, "azure/gpt-4-32k-0613": { cr: 6, cw: 60, i: 60, o: 120 }, "azure/gpt-4-turbo": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "azure/gpt-4-turbo-2024-04-09": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "azure/gpt-4-turbo-vision-preview": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "azure/gpt-4.1": { cr: 0.5, cw: 2, i: 2, o: 8 }, "azure/gpt-4.1-2025-04-14": { cr: 0.5, cw: 2, i: 2, o: 8 }, "azure/gpt-4.1-mini": { cr: 0.09999999999999999, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "azure/gpt-4.1-mini-2025-04-14": { cr: 0.09999999999999999, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "azure/gpt-4.1-nano": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "azure/gpt-4.1-nano-2025-04-14": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "azure/gpt-4.5-preview": { cr: 37.5, cw: 75, i: 75, o: 150 }, "azure/gpt-4o": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "azure/gpt-4o-2024-05-13": { cr: 0.5000000000000001, cw: 5, i: 5, o: 15 }, "azure/gpt-4o-2024-08-06": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "azure/gpt-4o-2024-11-20": { cr: 1.25, cw: 2.75, i: 2.75, o: 11 }, "azure/gpt-4o-audio-preview-2024-12-17": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "azure/gpt-4o-mini": { cr: 0.075, cw: 0.165, i: 0.165, o: 0.66 }, "azure/gpt-4o-mini-2024-07-18": { cr: 0.075, cw: 0.165, i: 0.165, o: 0.66 }, "azure/gpt-4o-mini-audio-preview-2024-12-17": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "azure/gpt-4o-mini-realtime-preview-2024-12-17": { cr: 0.3, cw: 0.6, i: 0.6, o: 2.4 }, "azure/gpt-4o-mini-transcribe": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 5 }, "azure/gpt-4o-mini-tts": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "azure/gpt-4o-realtime-preview-2024-10-01": { cr: 2.5, cw: 5, i: 5, o: 20 }, "azure/gpt-4o-realtime-preview-2024-12-17": { cr: 2.5, cw: 5, i: 5, o: 20 }, "azure/gpt-4o-transcribe": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "azure/gpt-4o-transcribe-diarize": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "azure/gpt-5": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5-2025-08-07": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5-chat": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5-chat-latest": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5-codex": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5-mini": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "azure/gpt-5-mini-2025-08-07": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "azure/gpt-5-nano": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.39999999999999997 }, "azure/gpt-5-nano-2025-08-07": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.39999999999999997 }, "azure/gpt-5-pro": { cr: 1.5, cw: 15, i: 15, o: 120 }, "azure/gpt-5.1": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5.1-2025-11-13": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5.1-chat": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5.1-chat-2025-11-13": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5.1-codex": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5.1-codex-2025-11-13": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5.1-codex-max": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5.1-codex-mini": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "azure/gpt-5.1-codex-mini-2025-11-13": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "azure/gpt-5.2": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "azure/gpt-5.2-2025-12-11": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "azure/gpt-5.2-chat": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "azure/gpt-5.2-chat-2025-12-11": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "azure/gpt-5.2-codex": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "azure/gpt-5.2-pro": { cr: 2.0999999999999996, cw: 21, i: 21, o: 168 }, "azure/gpt-5.2-pro-2025-12-11": { cr: 2.0999999999999996, cw: 21, i: 21, o: 168 }, "azure/gpt-5.3-chat": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "azure/gpt-5.3-codex": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "azure/gpt-5.4": { cr: 0.25, cw: 2.5, i: 2.5, o: 15 }, "azure/gpt-5.4-2026-03-05": { cr: 0.25, cw: 2.5, i: 2.5, o: 15 }, "azure/gpt-5.4-mini": { cr: 0.075, cw: 0.75, i: 0.75, o: 4.5 }, "azure/gpt-5.4-mini-2026-03-17": { cr: 0.075, cw: 0.75, i: 0.75, o: 4.5 }, "azure/gpt-5.4-nano": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.25 }, "azure/gpt-5.4-nano-2026-03-17": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.25 }, "azure/gpt-5.4-pro": { cr: 3, cw: 30, i: 30, o: 180 }, "azure/gpt-5.4-pro-2026-03-05": { cr: 3, cw: 30, i: 30, o: 180 }, "azure/gpt-5.5": { cr: 0.5, cw: 5, i: 5, o: 30 }, "azure/gpt-5.5-2026-04-23": { cr: 0.5, cw: 5, i: 5, o: 30 }, "azure/gpt-5.5-pro": { cr: 3, cw: 30, i: 30, o: 180 }, "azure/gpt-5.5-pro-2026-04-23": { cr: 3, cw: 30, i: 30, o: 180 }, "azure/gpt-audio-1.5-2026-02-23": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "azure/gpt-audio-2025-08-28": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "azure/gpt-audio-mini-2025-10-06": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "azure/gpt-image-2": { cr: 1.25, cw: 5, i: 5, o: 10 }, "azure/gpt-image-2-2026-04-21": { cr: 1.25, cw: 5, i: 5, o: 10 }, "azure/gpt-realtime-1.5-2026-02-23": { cr: 4, cw: 4, i: 4, o: 16 }, "azure/gpt-realtime-2025-08-28": { cr: 4, cw: 4, i: 4, o: 16 }, "azure/gpt-realtime-mini-2025-10-06": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "azure/mistral-large-2402": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "azure/mistral-large-latest": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "azure/o1": { cr: 7.5, cw: 15, i: 15, o: 60 }, "azure/o1-2024-12-17": { cr: 7.5, cw: 15, i: 15, o: 60 }, "azure/o1-mini": { cr: 0.605, cw: 1.21, i: 1.21, o: 4.84 }, "azure/o1-mini-2024-09-12": { cr: 0.55, cw: 1.1, i: 1.1, o: 4.4 }, "azure/o1-preview": { cr: 7.5, cw: 15, i: 15, o: 60 }, "azure/o1-preview-2024-09-12": { cr: 7.5, cw: 15, i: 15, o: 60 }, "azure/o3": { cr: 0.5, cw: 2, i: 2, o: 8 }, "azure/o3-2025-04-16": { cr: 0.5, cw: 2, i: 2, o: 8 }, "azure/o3-deep-research": { cr: 2.5, cw: 10, i: 10, o: 40 }, "azure/o3-mini": { cr: 0.55, cw: 1.1, i: 1.1, o: 4.4 }, "azure/o3-mini-2025-01-31": { cr: 0.55, cw: 1.1, i: 1.1, o: 4.4 }, "azure/o3-pro": { cr: 2.0000000000000004, cw: 20, i: 20, o: 80 }, "azure/o3-pro-2025-06-10": { cr: 2.0000000000000004, cw: 20, i: 20, o: 80 }, "azure/o4-mini": { cr: 0.275, cw: 1.1, i: 1.1, o: 4.4 }, "azure/o4-mini-2025-04-16": { cr: 0.275, cw: 1.1, i: 1.1, o: 4.4 }, "azure/text-embedding-3-large": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0 }, "azure/text-embedding-3-small": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "azure/text-embedding-ada-002": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "azure/us/gpt-4.1-2025-04-14": { cr: 0.55, cw: 2.2, i: 2.2, o: 8.8 }, "azure/us/gpt-4.1-mini-2025-04-14": { cr: 0.11, cw: 0.44, i: 0.44, o: 1.76 }, "azure/us/gpt-4.1-nano-2025-04-14": { cr: 0.024999999999999998, cw: 0.11, i: 0.11, o: 0.44 }, "azure/us/gpt-4o-2024-08-06": { cr: 1.375, cw: 2.75, i: 2.75, o: 11 }, "azure/us/gpt-4o-2024-11-20": { cr: 0.275, cw: 1.38, i: 2.75, o: 11 }, "azure/us/gpt-4o-mini-2024-07-18": { cr: 0.083, cw: 0.165, i: 0.165, o: 0.66 }, "azure/us/gpt-4o-mini-realtime-preview-2024-12-17": { cr: 0.33, cw: 0.66, i: 0.66, o: 2.64 }, "azure/us/gpt-4o-realtime-preview-2024-10-01": { cr: 2.75, cw: 5.5, i: 5.5, o: 22 }, "azure/us/gpt-4o-realtime-preview-2024-12-17": { cr: 2.75, cw: 5.5, i: 5.5, o: 22 }, "azure/us/gpt-5-2025-08-07": { cr: 0.1375, cw: 1.375, i: 1.375, o: 11 }, "azure/us/gpt-5-mini-2025-08-07": { cr: 0.0275, cw: 0.275, i: 0.275, o: 2.2 }, "azure/us/gpt-5-nano-2025-08-07": { cr: 0.0055, cw: 0.055, i: 0.055, o: 0.44 }, "azure/us/gpt-5.1": { cr: 0.14, cw: 1.38, i: 1.38, o: 11 }, "azure/us/gpt-5.1-chat": { cr: 0.14, cw: 1.38, i: 1.38, o: 11 }, "azure/us/gpt-5.1-codex": { cr: 0.14, cw: 1.38, i: 1.38, o: 11 }, "azure/us/gpt-5.1-codex-mini": { cr: 0.028, cw: 0.275, i: 0.275, o: 2.2 }, "azure/us/o1-2024-12-17": { cr: 8.25, cw: 16.5, i: 16.5, o: 66 }, "azure/us/o1-mini-2024-09-12": { cr: 0.605, cw: 1.21, i: 1.21, o: 4.84 }, "azure/us/o1-preview-2024-09-12": { cr: 8.25, cw: 16.5, i: 16.5, o: 66 }, "azure/us/o3-2025-04-16": { cr: 0.55, cw: 2.2, i: 2.2, o: 8.8 }, "azure/us/o3-mini-2025-01-31": { cr: 0.605, cw: 1.21, i: 1.21, o: 4.84 }, "azure/us/o4-mini-2025-04-16": { cr: 0.31, cw: 1.21, i: 1.21, o: 4.84 }, "azure_ai/Cohere-embed-v3-english": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "azure_ai/Cohere-embed-v3-multilingual": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "azure_ai/Llama-3.2-11B-Vision-Instruct": { cr: 0.037, cw: 0.37, i: 0.37, o: 0.37 }, "azure_ai/Llama-3.2-90B-Vision-Instruct": { cr: 0.204, cw: 2.04, i: 2.04, o: 2.04 }, "azure_ai/Llama-3.3-70B-Instruct": { cr: 0.071, cw: 0.71, i: 0.71, o: 0.71 }, "azure_ai/Llama-4-Maverick-17B-128E-Instruct-FP8": { cr: 0.14100000000000001, cw: 1.4100000000000001, i: 1.4100000000000001, o: 0.35 }, "azure_ai/Llama-4-Scout-17B-16E-Instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.78 }, "azure_ai/MAI-DS-R1": { cr: 0.135, cw: 1.35, i: 1.35, o: 5.4 }, "azure_ai/Meta-Llama-3-70B-Instruct": { cr: 0.11, cw: 1.1, i: 1.1, o: 0.37 }, "azure_ai/Meta-Llama-3.1-405B-Instruct": { cr: 0.533, cw: 5.33, i: 5.33, o: 16 }, "azure_ai/Meta-Llama-3.1-70B-Instruct": { cr: 0.268, cw: 2.68, i: 2.68, o: 3.54 }, "azure_ai/Meta-Llama-3.1-8B-Instruct": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.61 }, "azure_ai/Phi-3-medium-128k-instruct": { cr: 0.017, cw: 0.16999999999999998, i: 0.16999999999999998, o: 0.6799999999999999 }, "azure_ai/Phi-3-medium-4k-instruct": { cr: 0.017, cw: 0.16999999999999998, i: 0.16999999999999998, o: 0.6799999999999999 }, "azure_ai/Phi-3-mini-128k-instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.52 }, "azure_ai/Phi-3-mini-4k-instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.52 }, "azure_ai/Phi-3-small-128k-instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "azure_ai/Phi-3-small-8k-instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "azure_ai/Phi-3.5-MoE-instruct": { cr: 0.016, cw: 0.16, i: 0.16, o: 0.64 }, "azure_ai/Phi-3.5-mini-instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.52 }, "azure_ai/Phi-3.5-vision-instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.52 }, "azure_ai/Phi-4": { cr: 0.012499999999999999, cw: 0.125, i: 0.125, o: 0.5 }, "azure_ai/Phi-4-mini-instruct": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0.3 }, "azure_ai/Phi-4-mini-reasoning": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.32 }, "azure_ai/Phi-4-multimodal-instruct": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.32 }, "azure_ai/Phi-4-reasoning": { cr: 0.012499999999999999, cw: 0.125, i: 0.125, o: 0.5 }, "azure_ai/claude-fable-5": { cr: 1, cw: 12.5, i: 10, o: 50 }, "azure_ai/claude-haiku-4-5": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "azure_ai/claude-opus-4-1": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "azure_ai/claude-opus-4-5": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "azure_ai/claude-opus-4-6": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "azure_ai/claude-opus-4-7": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "azure_ai/claude-opus-4-8": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "azure_ai/claude-sonnet-4-5": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "azure_ai/claude-sonnet-4-6": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "azure_ai/claude-sonnet-5": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "azure_ai/cohere-rerank-v3-english": { cr: 0, cw: 0, i: 0, o: 0 }, "azure_ai/cohere-rerank-v3-multilingual": { cr: 0, cw: 0, i: 0, o: 0 }, "azure_ai/cohere-rerank-v3.5": { cr: 0, cw: 0, i: 0, o: 0 }, "azure_ai/cohere-rerank-v4.0-fast": { cr: 0, cw: 0, i: 0, o: 0 }, "azure_ai/cohere-rerank-v4.0-pro": { cr: 0, cw: 0, i: 0, o: 0 }, "azure_ai/deepseek-r1": { cr: 0.135, cw: 1.35, i: 1.35, o: 5.4 }, "azure_ai/deepseek-v3": { cr: 0.11400000000000002, cw: 1.1400000000000001, i: 1.1400000000000001, o: 4.5600000000000005 }, "azure_ai/deepseek-v3-0324": { cr: 0.11400000000000002, cw: 1.1400000000000001, i: 1.1400000000000001, o: 4.5600000000000005 }, "azure_ai/deepseek-v3.1": { cr: 0.123, cw: 1.23, i: 1.23, o: 4.94 }, "azure_ai/deepseek-v3.2": { cr: 0.057999999999999996, cw: 0.58, i: 0.58, o: 1.68 }, "azure_ai/deepseek-v3.2-speciale": { cr: 0.057999999999999996, cw: 0.58, i: 0.58, o: 1.68 }, "azure_ai/deepseek-v4-flash": { cr: 0.019000000000000003, cw: 0.19, i: 0.19, o: 0.51 }, "azure_ai/deepseek-v4-pro": { cr: 0.17400000000000002, cw: 1.74, i: 1.74, o: 3.48 }, "azure_ai/embed-v-4-0": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, "azure_ai/global/grok-3": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "azure_ai/global/grok-3-mini": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.27 }, "azure_ai/gpt-5.4": { cr: 0.25, cw: 2.5, i: 2.5, o: 15 }, "azure_ai/gpt-5.4-2026-03-05": { cr: 0.25, cw: 2.5, i: 2.5, o: 15 }, "azure_ai/gpt-5.4-mini": { cr: 0.075, cw: 0.75, i: 0.75, o: 4.5 }, "azure_ai/gpt-5.4-mini-2026-03-17": { cr: 0.075, cw: 0.75, i: 0.75, o: 4.5 }, "azure_ai/gpt-5.4-nano": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.25 }, "azure_ai/gpt-5.4-nano-2026-03-17": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.25 }, "azure_ai/gpt-5.4-pro": { cr: 3, cw: 30, i: 30, o: 180 }, "azure_ai/gpt-5.4-pro-2026-03-05": { cr: 3, cw: 30, i: 30, o: 180 }, "azure_ai/gpt-5.5": { cr: 0.5, cw: 5, i: 5, o: 30 }, "azure_ai/gpt-5.5-2026-04-23": { cr: 0.5, cw: 5, i: 5, o: 30 }, "azure_ai/gpt-oss-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "azure_ai/grok-3": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "azure_ai/grok-3-mini": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.27 }, "azure_ai/grok-4": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "azure_ai/grok-4-1-fast-non-reasoning": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "azure_ai/grok-4-1-fast-reasoning": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "azure_ai/grok-4-fast-non-reasoning": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "azure_ai/grok-4-fast-reasoning": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "azure_ai/grok-code-fast-1": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.5 }, "azure_ai/jais-30b-chat": { cr: 320, cw: 3200, i: 3200, o: 9710 }, "azure_ai/jamba-instruct": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.7 }, "azure_ai/kimi-k2.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 3 }, "azure_ai/kimi-k2.6": { cr: 0.095, cw: 0.95, i: 0.95, o: 4 }, "azure_ai/ministral-3b": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.04 }, "azure_ai/mistral-large": { cr: 0.39999999999999997, cw: 4, i: 4, o: 12 }, "azure_ai/mistral-large-2407": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "azure_ai/mistral-large-3": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "azure_ai/mistral-large-latest": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "azure_ai/mistral-medium-2505": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "azure_ai/mistral-nemo": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "azure_ai/mistral-small": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "azure_ai/mistral-small-2503": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "azure_ai/model_router": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0 }, "babbage-002": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 0.39999999999999997 }, "baseten/MiniMaxAI/MiniMax-M2.5": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "baseten/deepseek-ai/DeepSeek-V3-0324": { cr: 0.07700000000000001, cw: 0.77, i: 0.77, o: 0.77 }, "baseten/deepseek-ai/DeepSeek-V3.1": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "baseten/moonshotai/Kimi-K2-Instruct-0905": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "baseten/moonshotai/Kimi-K2-Thinking": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "baseten/moonshotai/Kimi-K2.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 3 }, "baseten/nvidia/Nemotron-120B-A12B": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.75 }, "baseten/openai/gpt-oss-120b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.5 }, "baseten/zai-org/GLM-4.6": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.2 }, "baseten/zai-org/GLM-4.7": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.2 }, "baseten/zai-org/GLM-5": { cr: 0.095, cw: 0.95, i: 0.95, o: 3.15 }, "bedrock/ap-northeast-1/anthropic.claude-instant-v1": { cr: 0.223, cw: 2.23, i: 2.23, o: 7.55 }, "bedrock/ap-northeast-1/anthropic.claude-v1": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "bedrock/ap-northeast-1/anthropic.claude-v2:1": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "bedrock/ap-northeast-1/deepseek.v3.2": { cr: 0.074, cw: 0.74, i: 0.74, o: 2.2199999999999998 }, "bedrock/ap-northeast-1/minimax.minimax-m2.1": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/ap-northeast-1/minimax.minimax-m2.5": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/ap-northeast-1/moonshotai.kimi-k2-thinking": { cr: 0.07300000000000001, cw: 0.73, i: 0.73, o: 3.03 }, "bedrock/ap-northeast-1/moonshotai.kimi-k2.5": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 3.5999999999999996 }, "bedrock/ap-northeast-1/qwen.qwen3-coder-next": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.44 }, "bedrock/ap-south-1/deepseek.v3.2": { cr: 0.074, cw: 0.74, i: 0.74, o: 2.2199999999999998 }, "bedrock/ap-south-1/meta.llama3-70b-instruct-v1:0": { cr: 0.318, cw: 3.18, i: 3.18, o: 4.199999999999999 }, "bedrock/ap-south-1/meta.llama3-8b-instruct-v1:0": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 0.72 }, "bedrock/ap-south-1/minimax.minimax-m2.1": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/ap-south-1/minimax.minimax-m2.5": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/ap-south-1/moonshotai.kimi-k2-thinking": { cr: 0.071, cw: 0.71, i: 0.71, o: 2.94 }, "bedrock/ap-south-1/moonshotai.kimi-k2.5": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 3.5999999999999996 }, "bedrock/ap-south-1/qwen.qwen3-coder-next": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.44 }, "bedrock/ap-southeast-2/minimax.minimax-m2.5": { cr: 0.0309, cw: 0.309, i: 0.309, o: 1.236 }, "bedrock/ap-southeast-3/deepseek.v3.2": { cr: 0.074, cw: 0.74, i: 0.74, o: 2.2199999999999998 }, "bedrock/ap-southeast-3/minimax.minimax-m2.1": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/ap-southeast-3/minimax.minimax-m2.5": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/ap-southeast-3/moonshotai.kimi-k2.5": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 3.5999999999999996 }, "bedrock/ap-southeast-3/qwen.qwen3-coder-next": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.44 }, "bedrock/ca-central-1/meta.llama3-70b-instruct-v1:0": { cr: 0.30500000000000005, cw: 3.05, i: 3.05, o: 4.03 }, "bedrock/ca-central-1/meta.llama3-8b-instruct-v1:0": { cr: 0.035, cw: 0.35, i: 0.35, o: 0.69 }, "bedrock/eu-central-1/anthropic.claude-instant-v1": { cr: 0.248, cw: 2.48, i: 2.48, o: 8.379999999999999 }, "bedrock/eu-central-1/anthropic.claude-v1": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "bedrock/eu-central-1/anthropic.claude-v2:1": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "bedrock/eu-central-1/minimax.minimax-m2.1": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/eu-central-1/minimax.minimax-m2.5": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/eu-central-1/qwen.qwen3-coder-next": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.44 }, "bedrock/eu-north-1/deepseek.v3.2": { cr: 0.074, cw: 0.74, i: 0.74, o: 2.2199999999999998 }, "bedrock/eu-north-1/minimax.minimax-m2.1": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/eu-north-1/minimax.minimax-m2.5": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/eu-north-1/moonshotai.kimi-k2.5": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 3.5999999999999996 }, "bedrock/eu-south-1/minimax.minimax-m2.1": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/eu-south-1/minimax.minimax-m2.5": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/eu-south-1/qwen.qwen3-coder-next": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.44 }, "bedrock/eu-west-1/meta.llama3-70b-instruct-v1:0": { cr: 0.28600000000000003, cw: 2.8600000000000003, i: 2.8600000000000003, o: 3.78 }, "bedrock/eu-west-1/meta.llama3-8b-instruct-v1:0": { cr: 0.032, cw: 0.32, i: 0.32, o: 0.65 }, "bedrock/eu-west-1/minimax.minimax-m2.1": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/eu-west-1/minimax.minimax-m2.5": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/eu-west-1/qwen.qwen3-coder-next": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.44 }, "bedrock/eu-west-2/meta.llama3-70b-instruct-v1:0": { cr: 0.34500000000000003, cw: 3.45, i: 3.45, o: 4.55 }, "bedrock/eu-west-2/meta.llama3-8b-instruct-v1:0": { cr: 0.03900000000000001, cw: 0.39, i: 0.39, o: 0.78 }, "bedrock/eu-west-2/minimax.minimax-m2.1": { cr: 0.04700000000000001, cw: 0.47, i: 0.47, o: 1.8599999999999999 }, "bedrock/eu-west-2/minimax.minimax-m2.5": { cr: 0.04700000000000001, cw: 0.47, i: 0.47, o: 1.8599999999999999 }, "bedrock/eu-west-2/qwen.qwen3-coder-next": { cr: 0.07800000000000001, cw: 0.78, i: 0.78, o: 1.8599999999999999 }, "bedrock/eu-west-3/mistral.mistral-7b-instruct-v0:2": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.26 }, "bedrock/eu-west-3/mistral.mistral-large-2402-v1:0": { cr: 1.04, cw: 10.4, i: 10.4, o: 31.2 }, "bedrock/eu-west-3/mistral.mixtral-8x7b-instruct-v0:1": { cr: 0.059, cw: 0.59, i: 0.59, o: 0.9099999999999999 }, "bedrock/invoke/anthropic.claude-3-5-sonnet-20240620-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "bedrock/moonshotai.kimi-k2-thinking": { cr: 0.07300000000000001, cw: 0.73, i: 0.73, o: 3.03 }, "bedrock/moonshotai.kimi-k2.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 3.03 }, "bedrock/sa-east-1/deepseek.v3.2": { cr: 0.074, cw: 0.74, i: 0.74, o: 2.2199999999999998 }, "bedrock/sa-east-1/meta.llama3-70b-instruct-v1:0": { cr: 0.44499999999999995, cw: 4.45, i: 4.45, o: 5.88 }, "bedrock/sa-east-1/meta.llama3-8b-instruct-v1:0": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.01 }, "bedrock/sa-east-1/minimax.minimax-m2.1": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/sa-east-1/minimax.minimax-m2.5": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/sa-east-1/moonshotai.kimi-k2-thinking": { cr: 0.07300000000000001, cw: 0.73, i: 0.73, o: 3.03 }, "bedrock/sa-east-1/moonshotai.kimi-k2.5": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 3.5999999999999996 }, "bedrock/sa-east-1/qwen.qwen3-coder-next": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.44 }, "bedrock/us-east-1/anthropic.claude-instant-v1": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 2.4 }, "bedrock/us-east-1/anthropic.claude-v1": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "bedrock/us-east-1/anthropic.claude-v2:1": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "bedrock/us-east-1/deepseek.v3.2": { cr: 0.062, cw: 0.62, i: 0.62, o: 1.85 }, "bedrock/us-east-1/meta.llama3-70b-instruct-v1:0": { cr: 0.265, cw: 2.65, i: 2.65, o: 3.5 }, "bedrock/us-east-1/meta.llama3-8b-instruct-v1:0": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.6 }, "bedrock/us-east-1/minimax.minimax-m2.1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "bedrock/us-east-1/minimax.minimax-m2.5": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "bedrock/us-east-1/mistral.mistral-7b-instruct-v0:2": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.19999999999999998 }, "bedrock/us-east-1/mistral.mistral-large-2402-v1:0": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "bedrock/us-east-1/mistral.mixtral-8x7b-instruct-v0:1": { cr: 0.045, cw: 0.44999999999999996, i: 0.44999999999999996, o: 0.7 }, "bedrock/us-east-1/moonshotai.kimi-k2-thinking": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "bedrock/us-east-1/moonshotai.kimi-k2.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 3 }, "bedrock/us-east-1/qwen.qwen3-coder-next": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.2 }, "bedrock/us-east-1/zai.glm-5": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3.1999999999999997 }, "bedrock/us-east-2/deepseek.v3.2": { cr: 0.062, cw: 0.62, i: 0.62, o: 1.85 }, "bedrock/us-east-2/minimax.minimax-m2.1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "bedrock/us-east-2/minimax.minimax-m2.5": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "bedrock/us-east-2/moonshotai.kimi-k2-thinking": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "bedrock/us-east-2/moonshotai.kimi-k2.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 3 }, "bedrock/us-east-2/qwen.qwen3-coder-next": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.2 }, "bedrock/us-gov-east-1/amazon.nova-pro-v1:0": { cr: 0.096, cw: 0.96, i: 0.96, o: 3.84 }, "bedrock/us-gov-east-1/amazon.titan-embed-text-v1": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "bedrock/us-gov-east-1/amazon.titan-embed-text-v2:0": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0 }, "bedrock/us-gov-east-1/amazon.titan-text-express-v1": { cr: 0.13, cw: 1.3, i: 1.3, o: 1.7 }, "bedrock/us-gov-east-1/amazon.titan-text-lite-v1": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.39999999999999997 }, "bedrock/us-gov-east-1/amazon.titan-text-premier-v1:0": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "bedrock/us-gov-east-1/anthropic.claude-3-5-sonnet-20240620-v1:0": { cr: 0.36, cw: 4.5, i: 3.5999999999999996, o: 18 }, "bedrock/us-gov-east-1/anthropic.claude-3-haiku-20240307-v1:0": { cr: 0.03, cw: 0.375, i: 0.3, o: 1.5 }, "bedrock/us-gov-east-1/anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.12, cw: 1.5, i: 1.2, o: 6 }, "bedrock/us-gov-east-1/anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.36, cw: 4.5, i: 3.5999999999999996, o: 18 }, "bedrock/us-gov-east-1/claude-sonnet-4-5-20250929-v1:0": { cr: 0.36, cw: 4.5, i: 3.5999999999999996, o: 18 }, "bedrock/us-gov-east-1/meta.llama3-70b-instruct-v1:0": { cr: 0.265, cw: 2.65, i: 2.65, o: 3.5 }, "bedrock/us-gov-east-1/meta.llama3-8b-instruct-v1:0": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.65 }, "bedrock/us-gov-west-1/amazon.nova-pro-v1:0": { cr: 0.096, cw: 0.96, i: 0.96, o: 3.84 }, "bedrock/us-gov-west-1/amazon.titan-embed-text-v1": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "bedrock/us-gov-west-1/amazon.titan-embed-text-v2:0": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0 }, "bedrock/us-gov-west-1/amazon.titan-text-express-v1": { cr: 0.13, cw: 1.3, i: 1.3, o: 1.7 }, "bedrock/us-gov-west-1/amazon.titan-text-lite-v1": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.39999999999999997 }, "bedrock/us-gov-west-1/amazon.titan-text-premier-v1:0": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "bedrock/us-gov-west-1/anthropic.claude-3-5-sonnet-20240620-v1:0": { cr: 0.36, cw: 4.5, i: 3.5999999999999996, o: 18 }, "bedrock/us-gov-west-1/anthropic.claude-3-7-sonnet-20250219-v1:0": { cr: 0.36, cw: 4.5, i: 3.5999999999999996, o: 18 }, "bedrock/us-gov-west-1/anthropic.claude-3-haiku-20240307-v1:0": { cr: 0.03, cw: 0.375, i: 0.3, o: 1.5 }, "bedrock/us-gov-west-1/anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.12, cw: 1.5, i: 1.2, o: 6 }, "bedrock/us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.36, cw: 4.5, i: 3.5999999999999996, o: 18 }, "bedrock/us-gov-west-1/claude-sonnet-4-5-20250929-v1:0": { cr: 0.36, cw: 4.5, i: 3.5999999999999996, o: 18 }, "bedrock/us-gov-west-1/meta.llama3-70b-instruct-v1:0": { cr: 0.265, cw: 2.65, i: 2.65, o: 3.5 }, "bedrock/us-gov-west-1/meta.llama3-8b-instruct-v1:0": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.65 }, "bedrock/us-west-1/meta.llama3-70b-instruct-v1:0": { cr: 0.265, cw: 2.65, i: 2.65, o: 3.5 }, "bedrock/us-west-1/meta.llama3-8b-instruct-v1:0": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.6 }, "bedrock/us-west-2/anthropic.claude-instant-v1": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 2.4 }, "bedrock/us-west-2/anthropic.claude-v1": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "bedrock/us-west-2/anthropic.claude-v2:1": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "bedrock/us-west-2/deepseek.v3.2": { cr: 0.062, cw: 0.62, i: 0.62, o: 1.85 }, "bedrock/us-west-2/minimax.minimax-m2.1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "bedrock/us-west-2/minimax.minimax-m2.5": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "bedrock/us-west-2/mistral.mistral-7b-instruct-v0:2": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.19999999999999998 }, "bedrock/us-west-2/mistral.mistral-large-2402-v1:0": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "bedrock/us-west-2/mistral.mixtral-8x7b-instruct-v0:1": { cr: 0.045, cw: 0.44999999999999996, i: 0.44999999999999996, o: 0.7 }, "bedrock/us-west-2/moonshotai.kimi-k2-thinking": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "bedrock/us-west-2/moonshotai.kimi-k2.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 3 }, "bedrock/us-west-2/qwen.qwen3-coder-next": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.2 }, "bedrock/us-west-2/zai.glm-5": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3.1999999999999997 }, "bedrock/us.anthropic.claude-3-5-haiku-20241022-v1:0": { cr: 0.08, cw: 1, i: 0.7999999999999999, o: 4 }, "bedrock_mantle/google.gemma-4-26b-a4b": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.39999999999999997 }, "bedrock_mantle/google.gemma-4-31b": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.39999999999999997 }, "bedrock_mantle/google.gemma-4-e2b": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.08 }, "bedrock_mantle/openai.gpt-5.4": { cr: 0.275, cw: 2.75, i: 2.75, o: 16.5 }, "bedrock_mantle/openai.gpt-5.5": { cr: 0.55, cw: 5.5, i: 5.5, o: 33 }, "bedrock_mantle/openai.gpt-oss-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "bedrock_mantle/openai.gpt-oss-20b": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0.3 }, "bedrock_mantle/openai.gpt-oss-safeguard-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "bedrock_mantle/openai.gpt-oss-safeguard-20b": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0.3 }, "cerebras/gpt-oss-120b": { cr: 0.035, cw: 0.35, i: 0.35, o: 0.75 }, "cerebras/llama-3.3-70b": { cr: 0.085, cw: 0.85, i: 0.85, o: 1.2 }, "cerebras/llama3.1-70b": { cr: 0.06, cw: 0.6, i: 0.6, o: 0.6 }, "cerebras/llama3.1-8b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "cerebras/qwen-3-32b": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 0.7999999999999999 }, "cerebras/zai-glm-4.6": { cr: 0.225, cw: 2.25, i: 2.25, o: 2.75 }, "cerebras/zai-glm-4.7": { cr: 0.225, cw: 2.25, i: 2.25, o: 2.75 }, chatdolphin: { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "chatgpt-4o-latest": { cr: 0.5000000000000001, cw: 5, i: 5, o: 15 }, "claude-3-7-sonnet-20250219": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "claude-3-haiku-20240307": { cr: 0.03, cw: 0.3, i: 0.25, o: 1.25 }, "claude-3-opus-20240229": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "claude-4-opus-20250514": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "claude-4-sonnet-20250514": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "claude-fable-5": { cr: 1, cw: 12.5, i: 10, o: 50 }, "claude-haiku-4-5": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "claude-haiku-4-5-20251001": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "claude-opus-4-1": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "claude-opus-4-1-20250805": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "claude-opus-4-20250514": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "claude-opus-4-5": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "claude-opus-4-5-20251101": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "claude-opus-4-6": { cr: 0.5, cw: 6.25, fast: 6, i: 5, o: 25 }, "claude-opus-4-6-20260205": { cr: 0.5, cw: 6.25, fast: 6, i: 5, o: 25 }, "claude-opus-4-7": { cr: 0.5, cw: 6.25, fast: 6, i: 5, o: 25 }, "claude-opus-4-7-20260416": { cr: 0.5, cw: 6.25, fast: 6, i: 5, o: 25 }, "claude-opus-4-8": { cr: 0.5, cw: 6.25, fast: 2, i: 5, o: 25 }, "claude-sonnet-4-20250514": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "claude-sonnet-4-5": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "claude-sonnet-4-5-20250929": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "claude-sonnet-4-5-20250929-v1:0": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "claude-sonnet-4-6": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "claude-sonnet-5": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "cloudflare/@cf/aisingapore/gemma-sea-lion-v4-27b-it": { cr: 0.035100000000000006, cw: 0.351, i: 0.351, o: 0.5549999999999999 }, "cloudflare/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b": { cr: 0.0497, cw: 0.49699999999999994, i: 0.49699999999999994, o: 4.881 }, "cloudflare/@cf/google/gemma-2b-it-lora": { cr: 0, cw: 0, i: 0, o: 0 }, "cloudflare/@cf/google/gemma-4-26b-a4b-it": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "cloudflare/@cf/google/gemma-7b-it-lora": { cr: 0, cw: 0, i: 0, o: 0 }, "cloudflare/@cf/ibm-granite/granite-4.0-h-micro": { cr: 0.0017000000000000001, cw: 0.017, i: 0.017, o: 0.112 }, "cloudflare/@cf/meta-llama/llama-2-7b-chat-hf-lora": { cr: 0, cw: 0, i: 0, o: 0 }, "cloudflare/@cf/meta/llama-2-7b-chat-fp16": { cr: 0.19230000000000003, cw: 1.923, i: 1.923, o: 1.923 }, "cloudflare/@cf/meta/llama-2-7b-chat-int8": { cr: 0.19230000000000003, cw: 1.923, i: 1.923, o: 1.923 }, "cloudflare/@cf/meta/llama-3.1-8b-instruct-fp8": { cr: 0.0152, cw: 0.15200000000000002, i: 0.15200000000000002, o: 0.28700000000000003 }, "cloudflare/@cf/meta/llama-3.2-11b-vision-instruct": { cr: 0.00485, cw: 0.048499999999999995, i: 0.048499999999999995, o: 0.6759999999999999 }, "cloudflare/@cf/meta/llama-3.2-1b-instruct": { cr: 0.0027, cw: 0.027, i: 0.027, o: 0.201 }, "cloudflare/@cf/meta/llama-3.2-3b-instruct": { cr: 0.005090000000000001, cw: 0.0509, i: 0.0509, o: 0.335 }, "cloudflare/@cf/meta/llama-3.3-70b-instruct-fp8-fast": { cr: 0.0293, cw: 0.293, i: 0.293, o: 2.2529999999999997 }, "cloudflare/@cf/meta/llama-4-scout-17b-16e-instruct": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 0.85 }, "cloudflare/@cf/meta/llama-guard-3-8b": { cr: 0.04840000000000001, cw: 0.48400000000000004, i: 0.48400000000000004, o: 0.03 }, "cloudflare/@cf/mistral/mistral-7b-instruct-v0.1": { cr: 0.19230000000000003, cw: 1.923, i: 1.923, o: 1.923 }, "cloudflare/@cf/mistral/mistral-7b-instruct-v0.2-lora": { cr: 0, cw: 0, i: 0, o: 0 }, "cloudflare/@cf/mistralai/mistral-small-3.1-24b-instruct": { cr: 0.035100000000000006, cw: 0.351, i: 0.351, o: 0.5549999999999999 }, "cloudflare/@cf/moonshotai/kimi-k2.6": { cr: 0.16, cw: 0.95, i: 0.95, o: 4 }, "cloudflare/@cf/moonshotai/kimi-k2.7-code": { cr: 0.19, cw: 0.95, i: 0.95, o: 4 }, "cloudflare/@cf/nvidia/nemotron-3-120b-a12b": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "cloudflare/@cf/openai/gpt-oss-120b": { cr: 0.035, cw: 0.35, i: 0.35, o: 0.75 }, "cloudflare/@cf/openai/gpt-oss-20b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.3 }, "cloudflare/@cf/qwen/qwen2.5-coder-32b-instruct": { cr: 0.066, cw: 0.66, i: 0.66, o: 1 }, "cloudflare/@cf/qwen/qwen3-30b-a3b-fp8": { cr: 0.005090000000000001, cw: 0.0509, i: 0.0509, o: 0.335 }, "cloudflare/@cf/qwen/qwq-32b": { cr: 0.066, cw: 0.66, i: 0.66, o: 1 }, "cloudflare/@cf/zai-org/glm-4.7-flash": { cr: 0.0060500000000000016, cw: 0.060500000000000005, i: 0.060500000000000005, o: 0.39999999999999997 }, "cloudflare/@cf/zai-org/glm-5.2": { cr: 0.26, cw: 1.4, i: 1.4, o: 4.4 }, "cloudflare/@hf/thebloke/codellama-7b-instruct-awq": { cr: 0.19230000000000003, cw: 1.923, i: 1.923, o: 1.923 }, "codestral/codestral-2405": { cr: 0, cw: 0, i: 0, o: 0 }, "codestral/codestral-latest": { cr: 0, cw: 0, i: 0, o: 0 }, "codex-mini-latest": { cr: 0.375, cw: 1.5, i: 1.5, o: 6 }, "cohere.command-light-text-v14": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.6 }, "cohere.command-r-plus-v1:0": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "cohere.command-r-v1:0": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "cohere.command-text-v14": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 2 }, "cohere.embed-english-v3": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "cohere.embed-multilingual-v3": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "cohere.embed-v4:0": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, "cohere.rerank-v3-5:0": { cr: 0, cw: 0, i: 0, o: 0 }, "cohere/embed-v4.0": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, command: { cr: 0.09999999999999999, cw: 1, i: 1, o: 2 }, "command-a-03-2025": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "command-light": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.6 }, "command-nightly": { cr: 0.09999999999999999, cw: 1, i: 1, o: 2 }, "command-r": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "command-r-08-2024": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "command-r-plus": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "command-r-plus-08-2024": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "command-r7b-12-2024": { cr: 0.00375, cw: 0.0375, i: 0.0375, o: 0.15 }, "computer-use-preview": { cr: 0.30000000000000004, cw: 3, i: 3, o: 12 }, "crusoe/Qwen/Qwen3-235B-A22B-Instruct-2507": { cr: 0.30000000000000004, cw: 3, i: 3, o: 3 }, "crusoe/deepseek-ai/DeepSeek-R1-0528": { cr: 0.30000000000000004, cw: 3, i: 3, o: 7 }, "crusoe/deepseek-ai/DeepSeek-V3-0324": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 1.5 }, "crusoe/google/gemma-3-12b-it": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "crusoe/meta-llama/Llama-3.3-70B-Instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "crusoe/moonshotai/Kimi-K2-Thinking": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 2.5 }, "crusoe/openai/gpt-oss-120b": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 0.7999999999999999 }, "darkbloom/gemma-4-26b": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.165 }, "darkbloom/gpt-oss-20b": { cr: 0.0014500000000000001, cw: 0.0145, i: 0.0145, o: 0.07 }, "dashscope/qwen-coder": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.5 }, "dashscope/qwen-max": { cr: 0.16, cw: 1.5999999999999999, i: 1.5999999999999999, o: 6.3999999999999995 }, "dashscope/qwen-plus": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.2 }, "dashscope/qwen-plus-2025-01-25": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.2 }, "dashscope/qwen-plus-2025-04-28": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.2 }, "dashscope/qwen-plus-2025-07-14": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.2 }, "dashscope/qwen-turbo": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.19999999999999998 }, "dashscope/qwen-turbo-2024-11-01": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.19999999999999998 }, "dashscope/qwen-turbo-2025-04-28": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.19999999999999998 }, "dashscope/qwen-turbo-latest": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.19999999999999998 }, "dashscope/qwen3-next-80b-a3b-instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.2 }, "dashscope/qwen3-next-80b-a3b-thinking": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.2 }, "dashscope/qwen3-vl-235b-a22b-instruct": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "dashscope/qwen3-vl-235b-a22b-thinking": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 4 }, "dashscope/qwen3-vl-32b-instruct": { cr: 0.016, cw: 0.16, i: 0.16, o: 0.64 }, "dashscope/qwen3-vl-32b-thinking": { cr: 0.016, cw: 0.16, i: 0.16, o: 2.87 }, "dashscope/qwq-plus": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 2.4 }, "databricks/databricks-bge-large-en": { cr: 0.010003, cw: 0.10003000000000001, i: 0.10003000000000001, o: 0 }, "databricks/databricks-claude-3-7-sonnet": { cr: 0.29999900000000007, cw: 2.9999900000000004, i: 2.9999900000000004, o: 15.000020000000001 }, "databricks/databricks-claude-haiku-4-5": { cr: 0.10000200000000001, cw: 1.0000200000000001, i: 1.0000200000000001, o: 5.00003 }, "databricks/databricks-claude-opus-4": { cr: 1.5000020000000003, cw: 15.000020000000001, i: 15.000020000000001, o: 75.00003000000001 }, "databricks/databricks-claude-opus-4-1": { cr: 1.5000020000000003, cw: 15.000020000000001, i: 15.000020000000001, o: 75.00003000000001 }, "databricks/databricks-claude-opus-4-5": { cr: 0.5000030000000001, cw: 5.00003, i: 5.00003, o: 25.000010000000003 }, "databricks/databricks-claude-sonnet-4": { cr: 0.29999900000000007, cw: 2.9999900000000004, i: 2.9999900000000004, o: 15.000020000000001 }, "databricks/databricks-claude-sonnet-4-1": { cr: 0.29999900000000007, cw: 2.9999900000000004, i: 2.9999900000000004, o: 15.000020000000001 }, "databricks/databricks-claude-sonnet-4-5": { cr: 0.29999900000000007, cw: 2.9999900000000004, i: 2.9999900000000004, o: 15.000020000000001 }, "databricks/databricks-gemini-2-5-flash": { cr: 0.030002, cw: 0.30001999999999995, i: 0.30001999999999995, o: 2.49998 }, "databricks/databricks-gemini-2-5-pro": { cr: 0.12499900000000001, cw: 1.24999, i: 1.24999, o: 9.999990000000002 }, "databricks/databricks-gemma-3-12b": { cr: 0.015001, cw: 0.15000999999999998, i: 0.15000999999999998, o: 0.5000100000000001 }, "databricks/databricks-gpt-5": { cr: 0.12499900000000001, cw: 1.24999, i: 1.24999, o: 9.999990000000002 }, "databricks/databricks-gpt-5-1": { cr: 0.12499900000000001, cw: 1.24999, i: 1.24999, o: 9.999990000000002 }, "databricks/databricks-gpt-5-mini": { cr: 0.02499700000000001, cw: 0.24997000000000005, i: 0.24997000000000005, o: 1.9999700000000002 }, "databricks/databricks-gpt-5-nano": { cr: 0.004998000000000001, cw: 0.049980000000000004, i: 0.049980000000000004, o: 0.39998000000000006 }, "databricks/databricks-gpt-oss-120b": { cr: 0.015001, cw: 0.15000999999999998, i: 0.15000999999999998, o: 0.59997 }, "databricks/databricks-gpt-oss-20b": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.30001999999999995 }, "databricks/databricks-gte-large-en": { cr: 0.012999000000000004, cw: 0.12999000000000002, i: 0.12999000000000002, o: 0 }, "databricks/databricks-llama-2-70b-chat": { cr: 0.050001000000000004, cw: 0.5000100000000001, i: 0.5000100000000001, o: 1.5000300000000002 }, "databricks/databricks-llama-4-maverick": { cr: 0.050001000000000004, cw: 0.5000100000000001, i: 0.5000100000000001, o: 1.5000300000000002 }, "databricks/databricks-meta-llama-3-1-405b-instruct": { cr: 0.5000030000000001, cw: 5.00003, i: 5.00003, o: 15.000020000000001 }, "databricks/databricks-meta-llama-3-1-8b-instruct": { cr: 0.015001, cw: 0.15000999999999998, i: 0.15000999999999998, o: 0.45003000000000004 }, "databricks/databricks-meta-llama-3-3-70b-instruct": { cr: 0.050001000000000004, cw: 0.5000100000000001, i: 0.5000100000000001, o: 1.5000300000000002 }, "databricks/databricks-meta-llama-3-70b-instruct": { cr: 0.10000200000000001, cw: 1.0000200000000001, i: 1.0000200000000001, o: 2.9999900000000004 }, "databricks/databricks-mixtral-8x7b-instruct": { cr: 0.050001000000000004, cw: 0.5000100000000001, i: 0.5000100000000001, o: 1.0000200000000001 }, "databricks/databricks-mpt-30b-instruct": { cr: 0.10000200000000001, cw: 1.0000200000000001, i: 1.0000200000000001, o: 1.0000200000000001 }, "databricks/databricks-mpt-7b-instruct": { cr: 0.050001000000000004, cw: 0.5000100000000001, i: 0.5000100000000001, o: 0 }, "davinci-002": { cr: 0.19999999999999998, cw: 2, i: 2, o: 2 }, "deep-research-pro-preview-12-2025": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "deepinfra/Gryphe/MythoMax-L2-13b": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.09 }, "deepinfra/NousResearch/Hermes-3-Llama-3.1-405B": { cr: 0.09999999999999999, cw: 1, i: 1, o: 1 }, "deepinfra/NousResearch/Hermes-3-Llama-3.1-70B": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.3 }, "deepinfra/Qwen/QwQ-32B": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.39999999999999997 }, "deepinfra/Qwen/Qwen2.5-72B-Instruct": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.39 }, "deepinfra/Qwen/Qwen2.5-7B-Instruct": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.09999999999999999 }, "deepinfra/Qwen/Qwen2.5-VL-32B-Instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "deepinfra/Qwen/Qwen3-14B": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.24 }, "deepinfra/Qwen/Qwen3-235B-A22B": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0.54 }, "deepinfra/Qwen/Qwen3-235B-A22B-Instruct-2507": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.6 }, "deepinfra/Qwen/Qwen3-235B-A22B-Thinking-2507": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.9000000000000004 }, "deepinfra/Qwen/Qwen3-30B-A3B": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.29 }, "deepinfra/Qwen/Qwen3-32B": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.28 }, "deepinfra/Qwen/Qwen3-Coder-480B-A35B-Instruct": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "deepinfra/Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo": { cr: 0.028999999999999998, cw: 0.29, i: 0.29, o: 1.2 }, "deepinfra/Qwen/Qwen3-Next-80B-A3B-Instruct": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 1.4 }, "deepinfra/Qwen/Qwen3-Next-80B-A3B-Thinking": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 1.4 }, "deepinfra/Sao10K/L3-8B-Lunaris-v1-Turbo": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.049999999999999996 }, "deepinfra/Sao10K/L3.1-70B-Euryale-v2.2": { cr: 0.065, cw: 0.65, i: 0.65, o: 0.75 }, "deepinfra/Sao10K/L3.3-70B-Euryale-v2.3": { cr: 0.065, cw: 0.65, i: 0.65, o: 0.75 }, "deepinfra/allenai/olmOCR-7B-0725-FP8": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 1.5 }, "deepinfra/anthropic/claude-3-7-sonnet-latest": { cr: 0.33, cw: 3.3000000000000003, i: 3.3000000000000003, o: 16.5 }, "deepinfra/anthropic/claude-4-opus": { cr: 1.6500000000000004, cw: 16.5, i: 16.5, o: 82.5 }, "deepinfra/anthropic/claude-4-sonnet": { cr: 0.33, cw: 3.3000000000000003, i: 3.3000000000000003, o: 16.5 }, "deepinfra/deepseek-ai/DeepSeek-R1": { cr: 0.07, cw: 0.7, i: 0.7, o: 2.4 }, "deepinfra/deepseek-ai/DeepSeek-R1-0528": { cr: 0.39999999999999997, cw: 0.5, i: 0.5, o: 2.1500000000000004 }, "deepinfra/deepseek-ai/DeepSeek-R1-0528-Turbo": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "deepinfra/deepseek-ai/DeepSeek-R1-Distill-Llama-70B": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "deepinfra/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 0.27 }, "deepinfra/deepseek-ai/DeepSeek-R1-Turbo": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "deepinfra/deepseek-ai/DeepSeek-V3": { cr: 0.038000000000000006, cw: 0.38, i: 0.38, o: 0.8899999999999999 }, "deepinfra/deepseek-ai/DeepSeek-V3-0324": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.88 }, "deepinfra/deepseek-ai/DeepSeek-V3.1": { cr: 0.216, cw: 0.27, i: 0.27, o: 1 }, "deepinfra/deepseek-ai/DeepSeek-V3.1-Terminus": { cr: 0.216, cw: 0.27, i: 0.27, o: 1 }, "deepinfra/google/gemini-2.0-flash-001": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "deepinfra/google/gemini-2.5-flash": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "deepinfra/google/gemini-2.5-pro": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 10 }, "deepinfra/google/gemma-3-12b-it": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.09999999999999999 }, "deepinfra/google/gemma-3-27b-it": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.16 }, "deepinfra/google/gemma-3-4b-it": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.08 }, "deepinfra/meta-llama/Llama-3.2-11B-Vision-Instruct": { cr: 0.004900000000000001, cw: 0.049, i: 0.049, o: 0.049 }, "deepinfra/meta-llama/Llama-3.2-3B-Instruct": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.02 }, "deepinfra/meta-llama/Llama-3.3-70B-Instruct": { cr: 0.023, cw: 0.22999999999999998, i: 0.22999999999999998, o: 0.39999999999999997 }, "deepinfra/meta-llama/Llama-3.3-70B-Instruct-Turbo": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.39 }, "deepinfra/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "deepinfra/meta-llama/Llama-4-Scout-17B-16E-Instruct": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.3 }, "deepinfra/meta-llama/Llama-Guard-3-8B": { cr: 0.0055000000000000005, cw: 0.055, i: 0.055, o: 0.055 }, "deepinfra/meta-llama/Llama-Guard-4-12B": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0.18 }, "deepinfra/meta-llama/Meta-Llama-3-8B-Instruct": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.06 }, "deepinfra/meta-llama/Meta-Llama-3.1-70B-Instruct": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 0.39999999999999997 }, "deepinfra/meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.28 }, "deepinfra/meta-llama/Meta-Llama-3.1-8B-Instruct": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.049999999999999996 }, "deepinfra/meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.03 }, "deepinfra/microsoft/WizardLM-2-8x22B": { cr: 0.048, cw: 0.48, i: 0.48, o: 0.48 }, "deepinfra/microsoft/phi-4": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.14 }, "deepinfra/mistralai/Mistral-Nemo-Instruct-2407": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.04 }, "deepinfra/mistralai/Mistral-Small-24B-Instruct-2501": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.08 }, "deepinfra/mistralai/Mistral-Small-3.2-24B-Instruct-2506": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0.19999999999999998 }, "deepinfra/mistralai/Mixtral-8x7B-Instruct-v0.1": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 0.39999999999999997 }, "deepinfra/moonshotai/Kimi-K2-Instruct": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 2 }, "deepinfra/moonshotai/Kimi-K2-Instruct-0905": { cr: 0.39999999999999997, cw: 0.5, i: 0.5, o: 2 }, "deepinfra/nvidia/Llama-3.1-Nemotron-70B-Instruct": { cr: 0.06, cw: 0.6, i: 0.6, o: 0.6 }, "deepinfra/nvidia/Llama-3.3-Nemotron-Super-49B-v1.5": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "deepinfra/nvidia/NVIDIA-Nemotron-Nano-9B-v2": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.16 }, "deepinfra/openai/gpt-oss-120b": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.44999999999999996 }, "deepinfra/openai/gpt-oss-20b": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.15 }, "deepinfra/zai-org/GLM-4.5": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "deepseek-chat": { cr: 0.028, cw: 0.28, i: 0.28, o: 0.42 }, "deepseek-reasoner": { cr: 0.028, cw: 0.28, i: 0.28, o: 0.42 }, "deepseek-v3-2-251201": { cr: 0, cw: 0, i: 0, o: 0 }, "deepseek-v4-flash": { cr: 0.0028, cw: 0, i: 0.14, o: 0.28 }, "deepseek-v4-pro": { cr: 0.003625, cw: 0, i: 0.435, o: 0.87 }, "deepseek.v3-v1:0": { cr: 0.057999999999999996, cw: 0.58, i: 0.58, o: 1.68 }, "deepseek.v3.2": { cr: 0.062, cw: 0.62, i: 0.62, o: 1.85 }, "deepseek/deepseek-chat": { cr: 0.028, cw: 0, i: 0.28, o: 0.42 }, "deepseek/deepseek-coder": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.28 }, "deepseek/deepseek-r1": { cr: 0.055, cw: 0.55, i: 0.55, o: 2.1900000000000004 }, "deepseek/deepseek-reasoner": { cr: 0.028, cw: 0.28, i: 0.28, o: 0.42 }, "deepseek/deepseek-v3": { cr: 0.07, cw: 0, i: 0.27, o: 1.1 }, "deepseek/deepseek-v3.2": { cr: 0.028000000000000004, cw: 0.28, i: 0.28, o: 0.39999999999999997 }, "deepseek/deepseek-v4-flash": { cr: 0.0028, cw: 0, i: 0.14, o: 0.28 }, "deepseek/deepseek-v4-pro": { cr: 0.003625, cw: 0, i: 0.435, o: 0.87 }, dolphin: { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "doubao-embedding": { cr: 0, cw: 0, i: 0, o: 0 }, "doubao-embedding-large": { cr: 0, cw: 0, i: 0, o: 0 }, "doubao-embedding-large-text-240915": { cr: 0, cw: 0, i: 0, o: 0 }, "doubao-embedding-large-text-250515": { cr: 0, cw: 0, i: 0, o: 0 }, "doubao-embedding-text-240715": { cr: 0, cw: 0, i: 0, o: 0 }, "embed-english-light-v2.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "embed-english-light-v3.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "embed-english-v2.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "embed-english-v3.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "embed-multilingual-light-v3.0": { cr: 10, cw: 100, i: 100, o: 0 }, "embed-multilingual-v2.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "embed-multilingual-v3.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "eu.amazon.nova-2-lite-v1:0": { cr: 0.0825, cw: 0.33, i: 0.33, o: 2.75 }, "eu.amazon.nova-2-pro-preview-20251202-v1:0": { cr: 0.546875, cw: 2.1875, i: 2.1875, o: 17.5 }, "eu.amazon.nova-lite-v1:0": { cr: 0.0078000000000000005, cw: 0.078, i: 0.078, o: 0.312 }, "eu.amazon.nova-micro-v1:0": { cr: 0.004600000000000001, cw: 0.046, i: 0.046, o: 0.184 }, "eu.amazon.nova-pro-v1:0": { cr: 0.105, cw: 1.0499999999999998, i: 1.0499999999999998, o: 4.199999999999999 }, "eu.anthropic.claude-3-5-haiku-20241022-v1:0": { cr: 0.024999999999999998, cw: 0.3125, i: 0.25, o: 1.25 }, "eu.anthropic.claude-3-5-sonnet-20240620-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "eu.anthropic.claude-3-5-sonnet-20241022-v2:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "eu.anthropic.claude-3-7-sonnet-20250219-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "eu.anthropic.claude-3-haiku-20240307-v1:0": { cr: 0.024999999999999998, cw: 0.3125, i: 0.25, o: 1.25 }, "eu.anthropic.claude-3-opus-20240229-v1:0": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "eu.anthropic.claude-3-sonnet-20240229-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "eu.anthropic.claude-fable-5": { cr: 1.1, cw: 13.75, i: 11, o: 55 }, "eu.anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.11, cw: 1.375, i: 1.1, o: 5.5 }, "eu.anthropic.claude-opus-4-1-20250805-v1:0": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "eu.anthropic.claude-opus-4-20250514-v1:0": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "eu.anthropic.claude-opus-4-5-20251101-v1:0": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "eu.anthropic.claude-opus-4-6-v1": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "eu.anthropic.claude-opus-4-7": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "eu.anthropic.claude-opus-4-8": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "eu.anthropic.claude-sonnet-4-20250514-v1:0": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "eu.anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.33, cra: 0.66, cw: 4.125, cwa: 8.25, i: 3.3000000000000003, ia: 6.6000000000000005, o: 16.5, oa: 24.75 }, "eu.anthropic.claude-sonnet-4-6": { cr: 0.33, cw: 4.125, i: 3.3000000000000003, o: 16.5 }, "eu.anthropic.claude-sonnet-5": { cr: 0.33, cw: 4.125, i: 3.3000000000000003, o: 16.5 }, "eu.deepseek.v3.2": { cr: 0.074, cw: 0.74, i: 0.74, o: 2.2199999999999998 }, "eu.meta.llama3-2-1b-instruct-v1:0": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.13 }, "eu.meta.llama3-2-3b-instruct-v1:0": { cr: 0.019000000000000003, cw: 0.19, i: 0.19, o: 0.19 }, "eu.mistral.pixtral-large-2502-v1:0": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "eu.twelvelabs.marengo-embed-2-7-v1:0": { cr: 7, cw: 70, i: 70, o: 0 }, "fireworks-ai-4.1b-to-16b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks-ai-56b-to-176b": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks-ai-above-16b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks-ai-default": { cr: 0, cw: 0, i: 0, o: 0 }, "fireworks-ai-embedding-150m-to-350m": { cr: 0.0016000000000000003, cw: 0.016, i: 0.016, o: 0 }, "fireworks-ai-embedding-up-to-150m": { cr: 0.0008000000000000001, cw: 0.008, i: 0.008, o: 0 }, "fireworks-ai-moe-up-to-56b": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks-ai-up-to-4b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/WhereIsAI/UAE-Large-V1": { cr: 0.0016000000000000003, cw: 0.016, i: 0.016, o: 0 }, "fireworks_ai/accounts/fireworks/models/": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "fireworks_ai/accounts/fireworks/models/SSD-1B": { cr: 0.000013000000000000001, cw: 0.00013, i: 0.00013, o: 0.00013 }, "fireworks_ai/accounts/fireworks/models/chronos-hermes-13b-v2": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/code-llama-13b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/code-llama-13b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/code-llama-13b-python": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/code-llama-34b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/code-llama-34b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/code-llama-34b-python": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/code-llama-70b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/code-llama-70b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/code-llama-70b-python": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/code-llama-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/code-llama-7b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/code-llama-7b-python": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/code-qwen-1p5-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/codegemma-2b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/codegemma-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/cogito-671b-v2-p1": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/cogito-v1-preview-llama-3b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/cogito-v1-preview-llama-70b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/cogito-v1-preview-llama-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/cogito-v1-preview-qwen-14b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/cogito-v1-preview-qwen-32b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/dbrx-instruct": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/deepseek-coder-1b-base": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/deepseek-coder-33b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/deepseek-coder-7b-base": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/deepseek-coder-7b-base-v1p5": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/deepseek-coder-7b-instruct-v1p5": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/deepseek-coder-v2-instruct": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/deepseek-coder-v2-lite-base": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/deepseek-coder-v2-lite-instruct": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/deepseek-prover-v2": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/deepseek-r1": { cr: 0.30000000000000004, cw: 3, i: 3, o: 8 }, "fireworks_ai/accounts/fireworks/models/deepseek-r1-0528": { cr: 0.30000000000000004, cw: 3, i: 3, o: 8 }, "fireworks_ai/accounts/fireworks/models/deepseek-r1-0528-distill-qwen3-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/deepseek-r1-basic": { cr: 0.055, cw: 0.55, i: 0.55, o: 2.1900000000000004 }, "fireworks_ai/accounts/fireworks/models/deepseek-r1-distill-llama-70b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/deepseek-r1-distill-llama-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/deepseek-r1-distill-qwen-14b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/deepseek-r1-distill-qwen-1p5b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/deepseek-r1-distill-qwen-32b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/deepseek-r1-distill-qwen-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/deepseek-v2-lite-chat": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/deepseek-v2p5": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/deepseek-v3": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/deepseek-v3-0324": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/deepseek-v3p1": { cr: 0.05600000000000001, cw: 0.56, i: 0.56, o: 1.68 }, "fireworks_ai/accounts/fireworks/models/deepseek-v3p1-terminus": { cr: 0.05600000000000001, cw: 0.56, i: 0.56, o: 1.68 }, "fireworks_ai/accounts/fireworks/models/deepseek-v3p2": { cr: 0.05600000000000001, cw: 0.56, i: 0.56, o: 1.68 }, "fireworks_ai/accounts/fireworks/models/deepseek-v4-flash": { cr: 0.028, cw: 0.14, i: 0.14, o: 0.28 }, "fireworks_ai/accounts/fireworks/models/deepseek-v4-pro": { cr: 0.145, cw: 1.74, i: 1.74, o: 3.48 }, "fireworks_ai/accounts/fireworks/models/devstral-small-2505": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/dobby-mini-unhinged-plus-llama-3-1-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/dobby-unhinged-llama-3-3-70b-new": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/dolphin-2-9-2-qwen2-72b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/dolphin-2p6-mixtral-8x7b": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/ernie-4p5-21b-a3b-pt": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/ernie-4p5-300b-a47b-pt": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/fare-20b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/firefunction-v1": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/firefunction-v2": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/firellava-13b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/firesearch-ocr-v6": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/fireworks-asr-large": { cr: 0, cw: 0, i: 0, o: 0 }, "fireworks_ai/accounts/fireworks/models/fireworks-asr-v2": { cr: 0, cw: 0, i: 0, o: 0 }, "fireworks_ai/accounts/fireworks/models/flux-1-dev": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/flux-1-dev-controlnet-union": { cr: 0.00010000000000000002, cw: 0.001, i: 0.001, o: 0.001 }, "fireworks_ai/accounts/fireworks/models/flux-1-dev-fp8": { cr: 0.00005000000000000001, cw: 0.0005, i: 0.0005, o: 0.0005 }, "fireworks_ai/accounts/fireworks/models/flux-1-schnell": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/flux-1-schnell-fp8": { cr: 0.000035000000000000004, cw: 0.00035, i: 0.00035, o: 0.00035 }, "fireworks_ai/accounts/fireworks/models/flux-kontext-max": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.08 }, "fireworks_ai/accounts/fireworks/models/flux-kontext-pro": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.04 }, "fireworks_ai/accounts/fireworks/models/gemma-2b-it": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/gemma-3-27b-it": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/gemma-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/gemma-7b-it": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/gemma2-9b-it": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/glm-4p5": { cr: 0.055, cw: 0.55, i: 0.55, o: 2.1900000000000004 }, "fireworks_ai/accounts/fireworks/models/glm-4p5-air": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.88 }, "fireworks_ai/accounts/fireworks/models/glm-4p5v": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/glm-4p6": { cr: 0.055, cw: 0.55, i: 0.55, o: 2.1900000000000004 }, "fireworks_ai/accounts/fireworks/models/glm-4p7": { cr: 0.3, cw: 0.6, i: 0.6, o: 2.2 }, "fireworks_ai/accounts/fireworks/models/glm-5p1": { cr: 0.26, cw: 1.4, i: 1.4, o: 4.4 }, "fireworks_ai/accounts/fireworks/models/glm-5p2": { cr: 0.26, cw: 1.4, i: 1.4, o: 4.4 }, "fireworks_ai/accounts/fireworks/models/gpt-oss-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "fireworks_ai/accounts/fireworks/models/gpt-oss-20b": { cr: 0.035, cw: 0.07, i: 0.07, o: 0.3 }, "fireworks_ai/accounts/fireworks/models/gpt-oss-safeguard-120b": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/gpt-oss-safeguard-20b": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/hermes-2-pro-mistral-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/internvl3-38b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/internvl3-78b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/internvl3-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/japanese-stable-diffusion-xl": { cr: 0.000013000000000000001, cw: 0.00013, i: 0.00013, o: 0.00013 }, "fireworks_ai/accounts/fireworks/models/kat-coder": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/kat-dev-32b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/kat-dev-72b-exp": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/kimi-k2-instruct": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "fireworks_ai/accounts/fireworks/models/kimi-k2-instruct-0905": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "fireworks_ai/accounts/fireworks/models/kimi-k2-thinking": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "fireworks_ai/accounts/fireworks/models/kimi-k2p5": { cr: 0.09999999999999999, cw: 0.6, i: 0.6, o: 3 }, "fireworks_ai/accounts/fireworks/models/kimi-k2p6": { cr: 0.16, cw: 0.95, i: 0.95, o: 4 }, "fireworks_ai/accounts/fireworks/models/kimi-k2p7-code": { cr: 0.19, cw: 0.95, i: 0.95, o: 4 }, "fireworks_ai/accounts/fireworks/models/llama-guard-2-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/llama-guard-3-1b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-guard-3-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/llama-v2-13b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/llama-v2-13b-chat": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/llama-v2-70b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v2-70b-chat": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v2-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/llama-v2-7b-chat": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct-hf": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/llama-v3-8b-instruct-hf": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/llama-v3p1-405b-instruct": { cr: 0.30000000000000004, cw: 3, i: 3, o: 3 }, "fireworks_ai/accounts/fireworks/models/llama-v3p1-405b-instruct-long": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3p1-70b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3p1-70b-instruct-1b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3p1-8b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3p1-nemotron-70b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3p2-11b-vision-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/llama-v3p2-1b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3p2-1b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3p2-3b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3p2-3b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3p2-90b-vision-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama4-maverick-instruct-basic": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.88 }, "fireworks_ai/accounts/fireworks/models/llama4-scout-instruct-basic": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "fireworks_ai/accounts/fireworks/models/llamaguard-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/llava-yi-34b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/minimax-m1-80k": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/minimax-m2": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/minimax-m2p1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/minimax-m2p7": { cr: 0.06, cw: 0.3, i: 0.3, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/minimax-m3": { cr: 0.06, cw: 0.3, i: 0.3, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/ministral-3-14b-instruct-2512": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/ministral-3-3b-instruct-2512": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/ministral-3-8b-instruct-2512": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/mistral-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/mistral-7b-instruct-4k": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/mistral-7b-instruct-v0p2": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/mistral-7b-instruct-v3": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/mistral-7b-v0p2": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/mistral-large-3-fp8": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/mistral-nemo-base-2407": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/mistral-nemo-instruct-2407": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/mistral-small-24b-instruct-2501": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/mixtral-8x22b": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/mixtral-8x22b-instruct": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/mixtral-8x22b-instruct-hf": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/mixtral-8x7b": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/mixtral-8x7b-instruct": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/mixtral-8x7b-instruct-hf": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/mythomax-l2-13b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/nemotron-nano-v2-12b-vl": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/nous-capybara-7b-v1p9": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/nous-hermes-2-mixtral-8x7b-dpo": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/nous-hermes-2-yi-34b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/nous-hermes-llama2-13b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/nous-hermes-llama2-70b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/nous-hermes-llama2-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/nvidia-nemotron-nano-12b-v2": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/nvidia-nemotron-nano-9b-v2": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/openchat-3p5-0106-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/openhermes-2-mistral-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/openhermes-2p5-mistral-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/openorca-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/phi-2-3b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/phi-3-mini-128k-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/phi-3-vision-128k-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/phind-code-llama-34b-python-v1": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/phind-code-llama-34b-v1": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/phind-code-llama-34b-v2": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/playground-v2-1024px-aesthetic": { cr: 0.000013000000000000001, cw: 0.00013, i: 0.00013, o: 0.00013 }, "fireworks_ai/accounts/fireworks/models/playground-v2-5-1024px-aesthetic": { cr: 0.000013000000000000001, cw: 0.00013, i: 0.00013, o: 0.00013 }, "fireworks_ai/accounts/fireworks/models/pythia-12b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen-qwq-32b-preview": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen-v2p5-14b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen-v2p5-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen1p5-72b-chat": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2-72b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2-7b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen2-vl-2b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2-vl-72b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2-vl-7b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-0p5b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-14b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-1p5b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-32b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-32b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-72b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-72b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-7b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-0p5b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-0p5b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-14b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-14b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-1p5b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-1p5b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-32b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-32b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-32b-instruct-128k": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-32b-instruct-32k-rope": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-32b-instruct-64k": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-3b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-3b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-7b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-math-72b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-vl-32b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-vl-3b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-vl-72b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-vl-7b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen3-0p6b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-14b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen3-1p7b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-1p7b-fp8-draft": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-1p7b-fp8-draft-131072": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-1p7b-fp8-draft-40960": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-235b-a22b": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.88 }, "fireworks_ai/accounts/fireworks/models/qwen3-235b-a22b-instruct-2507": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.88 }, "fireworks_ai/accounts/fireworks/models/qwen3-235b-a22b-thinking-2507": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.88 }, "fireworks_ai/accounts/fireworks/models/qwen3-30b-a3b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "fireworks_ai/accounts/fireworks/models/qwen3-30b-a3b-instruct-2507": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/qwen3-30b-a3b-thinking-2507": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-32b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-4b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen3-4b-instruct-2507": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen3-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen3-coder-30b-a3b-instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "fireworks_ai/accounts/fireworks/models/qwen3-coder-480b-a35b-instruct": { cr: 0.045, cw: 0.44999999999999996, i: 0.44999999999999996, o: 1.7999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen3-coder-480b-instruct-bf16": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-embedding-0p6b": { cr: 0, cw: 0, i: 0, o: 0 }, "fireworks_ai/accounts/fireworks/models/qwen3-embedding-4b": { cr: 0, cw: 0, i: 0, o: 0 }, "fireworks_ai/accounts/fireworks/models/qwen3-next-80b-a3b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-next-80b-a3b-thinking": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-reranker-0p6b": { cr: 0, cw: 0, i: 0, o: 0 }, "fireworks_ai/accounts/fireworks/models/qwen3-reranker-4b": { cr: 0, cw: 0, i: 0, o: 0 }, "fireworks_ai/accounts/fireworks/models/qwen3-reranker-8b": { cr: 0, cw: 0, i: 0, o: 0 }, "fireworks_ai/accounts/fireworks/models/qwen3-vl-235b-a22b-instruct": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.88 }, "fireworks_ai/accounts/fireworks/models/qwen3-vl-235b-a22b-thinking": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.88 }, "fireworks_ai/accounts/fireworks/models/qwen3-vl-30b-a3b-instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "fireworks_ai/accounts/fireworks/models/qwen3-vl-30b-a3b-thinking": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "fireworks_ai/accounts/fireworks/models/qwen3-vl-32b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-vl-8b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen3p7-plus": { cr: 0.08, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwq-32b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/rolm-ocr": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/snorkel-mistral-7b-pairrm-dpo": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/stable-diffusion-xl-1024-v1-0": { cr: 0.000013000000000000001, cw: 0.00013, i: 0.00013, o: 0.00013 }, "fireworks_ai/accounts/fireworks/models/stablecode-3b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/starcoder-16b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/starcoder-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/starcoder2-15b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/starcoder2-3b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/starcoder2-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/toppy-m-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/yi-34b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/yi-34b-200k-capybara": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/yi-34b-chat": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/yi-6b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/yi-large": { cr: 0.30000000000000004, cw: 3, i: 3, o: 3 }, "fireworks_ai/accounts/fireworks/models/zephyr-7b-beta": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/routers/glm-5p1-fast": { cr: 0.52, cw: 2.8, i: 2.8, o: 8.8 }, "fireworks_ai/accounts/fireworks/routers/kimi-k2p6-fast": { cr: 0.3, cw: 2, i: 2, o: 8 }, "fireworks_ai/accounts/fireworks/routers/kimi-k2p7-code-fast": { cr: 0.38, cw: 1.9, i: 1.9, o: 8 }, "fireworks_ai/deepseek-v4-flash": { cr: 0.028, cw: 0.14, i: 0.14, o: 0.28 }, "fireworks_ai/deepseek-v4-pro": { cr: 0.145, cw: 1.74, i: 1.74, o: 3.48 }, "fireworks_ai/glm-4p7": { cr: 0.3, cw: 0.6, i: 0.6, o: 2.2 }, "fireworks_ai/glm-5p1": { cr: 0.26, cw: 1.4, i: 1.4, o: 4.4 }, "fireworks_ai/glm-5p1-fast": { cr: 0.52, cw: 2.8, i: 2.8, o: 8.8 }, "fireworks_ai/glm-5p2": { cr: 0.26, cw: 1.4, i: 1.4, o: 4.4 }, "fireworks_ai/gpt-oss-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "fireworks_ai/gpt-oss-20b": { cr: 0.035, cw: 0.07, i: 0.07, o: 0.3 }, "fireworks_ai/kimi-k2p5": { cr: 0.09999999999999999, cw: 0.6, i: 0.6, o: 3 }, "fireworks_ai/kimi-k2p6": { cr: 0.16, cw: 0.95, i: 0.95, o: 4 }, "fireworks_ai/kimi-k2p6-fast": { cr: 0.3, cw: 2, i: 2, o: 8 }, "fireworks_ai/kimi-k2p7-code": { cr: 0.19, cw: 0.95, i: 0.95, o: 4 }, "fireworks_ai/kimi-k2p7-code-fast": { cr: 0.38, cw: 1.9, i: 1.9, o: 8 }, "fireworks_ai/minimax-m2p1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "fireworks_ai/minimax-m2p7": { cr: 0.06, cw: 0.3, i: 0.3, o: 1.2 }, "fireworks_ai/minimax-m3": { cr: 0.06, cw: 0.3, i: 0.3, o: 1.2 }, "fireworks_ai/nomic-ai/nomic-embed-text-v1": { cr: 0.0008000000000000001, cw: 0.008, i: 0.008, o: 0 }, "fireworks_ai/nomic-ai/nomic-embed-text-v1.5": { cr: 0.0008000000000000001, cw: 0.008, i: 0.008, o: 0 }, "fireworks_ai/qwen3p7-plus": { cr: 0.08, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "fireworks_ai/thenlper/gte-base": { cr: 0.0008000000000000001, cw: 0.008, i: 0.008, o: 0 }, "fireworks_ai/thenlper/gte-large": { cr: 0.0016000000000000003, cw: 0.016, i: 0.016, o: 0 }, "friendliai/meta-llama-3.1-70b-instruct": { cr: 0.06, cw: 0.6, i: 0.6, o: 0.6 }, "friendliai/meta-llama-3.1-8b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "ft:babbage-002": { cr: 0.16, cw: 1.5999999999999999, i: 1.5999999999999999, o: 1.5999999999999999 }, "ft:davinci-002": { cr: 1.2000000000000002, cw: 12, i: 12, o: 12 }, "ft:gpt-3.5-turbo": { cr: 0.30000000000000004, cw: 3, i: 3, o: 6 }, "ft:gpt-3.5-turbo-0125": { cr: 0.30000000000000004, cw: 3, i: 3, o: 6 }, "ft:gpt-3.5-turbo-0613": { cr: 0.30000000000000004, cw: 3, i: 3, o: 6 }, "ft:gpt-3.5-turbo-1106": { cr: 0.30000000000000004, cw: 3, i: 3, o: 6 }, "ft:gpt-4-0613": { cr: 3, cw: 30, i: 30, o: 60 }, "ft:gpt-4.1-2025-04-14": { cr: 0.75, cw: 3, i: 3, o: 12 }, "ft:gpt-4.1-mini-2025-04-14": { cr: 0.19999999999999998, cw: 0.7999999999999999, i: 0.7999999999999999, o: 3.1999999999999997 }, "ft:gpt-4.1-nano-2025-04-14": { cr: 0.049999999999999996, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.7999999999999999 }, "ft:gpt-4o-2024-08-06": { cr: 1.875, cw: 3.75, i: 3.75, o: 15 }, "ft:gpt-4o-2024-11-20": { cr: 0.375, cw: 1.875, i: 3.75, o: 15 }, "ft:gpt-4o-mini-2024-07-18": { cr: 0.15, cw: 0.3, i: 0.3, o: 1.2 }, "ft:o4-mini-2025-04-16": { cr: 1, cw: 4, i: 4, o: 16 }, "gemini-2.0-flash": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini-2.0-flash-001": { cr: 0.0375, cw: 0.15, i: 0.15, o: 0.6 }, "gemini-2.0-flash-exp-image-generation": { cr: 0, cw: 0, i: 0, o: 0 }, "gemini-2.0-flash-lite": { cr: 0.01875, cw: 0.075, i: 0.075, o: 0.3 }, "gemini-2.0-flash-lite-001": { cr: 0.01875, cw: 0.075, i: 0.075, o: 0.3 }, "gemini-2.5-computer-use-preview-10-2025": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, ia: 2.5, o: 10, oa: 15 }, "gemini-2.5-flash": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-2.5-flash-image": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-2.5-flash-lite": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini-2.5-flash-lite-preview-06-17": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini-2.5-flash-lite-preview-09-2025": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini-2.5-flash-native-audio-latest": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-2.5-flash-native-audio-preview-09-2025": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-2.5-flash-native-audio-preview-12-2025": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-2.5-flash-preview-09-2025": { cr: 0.075, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-2.5-flash-preview-tts": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-2.5-pro": { cr: 0.125, cra: 0.25, cw: 1.25, cwa: 0.25, i: 1.25, ia: 2.5, o: 10, oa: 15 }, "gemini-2.5-pro-preview-tts": { cr: 0.125, cra: 0.25, cw: 1.25, i: 1.25, ia: 2.5, o: 10, oa: 15 }, "gemini-3-flash-preview": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 3 }, "gemini-3-pro-image": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "gemini-3-pro-image-preview": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "gemini-3-pro-preview": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, cwa: 0.25, i: 2, ia: 4, o: 12, oa: 18 }, "gemini-3.1-flash-image": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 3 }, "gemini-3.1-flash-image-preview": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 3 }, "gemini-3.1-flash-lite": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "gemini-3.1-flash-lite-preview": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "gemini-3.1-flash-live-preview": { cr: 0.07500000000000001, cw: 0.75, i: 0.75, o: 4.5 }, "gemini-3.1-pro-preview": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, cwa: 0.25, i: 2, ia: 4, o: 12, oa: 18 }, "gemini-3.1-pro-preview-customtools": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, cwa: 0.25, i: 2, ia: 4, o: 12, oa: 18 }, "gemini-3.5-flash": { cr: 0.15, cw: 1.5, i: 1.5, o: 9 }, "gemini-embedding-001": { cr: 0.015, cw: 0.15, i: 0.15, o: 0 }, "gemini-embedding-2": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0 }, "gemini-embedding-2-preview": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0 }, "gemini-exp-1206": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-flash-experimental": { cr: 0, cw: 0, i: 0, o: 0 }, "gemini-flash-latest": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-flash-lite-latest": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini-live-2.5-flash-preview-native-audio-09-2025": { cr: 0.075, cw: 0.3, i: 0.3, o: 2 }, "gemini-pro-latest": { cr: 0.125, cra: 0.25, cw: 1.25, i: 1.25, ia: 2.5, o: 10, oa: 15 }, "gemini-robotics-er-1.5-preview": { cr: 0, cw: 0.3, i: 0.3, o: 2.5 }, "gemini/deep-research-pro-preview-12-2025": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "gemini/gemini-1.5-flash": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0 }, "gemini/gemini-2.0-flash": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini/gemini-2.0-flash-001": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini/gemini-2.0-flash-exp-image-generation": { cr: 0, cw: 0, i: 0, o: 0 }, "gemini/gemini-2.0-flash-lite": { cr: 0.01875, cw: 0.075, i: 0.075, o: 0.3 }, "gemini/gemini-2.0-flash-lite-001": { cr: 0.01875, cw: 0.075, i: 0.075, o: 0.3 }, "gemini/gemini-2.5-computer-use-preview-10-2025": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, ia: 2.5, o: 10, oa: 15 }, "gemini/gemini-2.5-flash": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini/gemini-2.5-flash-image": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini/gemini-2.5-flash-lite": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini/gemini-2.5-flash-lite-preview-06-17": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini/gemini-2.5-flash-lite-preview-09-2025": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini/gemini-2.5-flash-native-audio-latest": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini/gemini-2.5-flash-native-audio-preview-09-2025": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini/gemini-2.5-flash-native-audio-preview-12-2025": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini/gemini-2.5-flash-preview-09-2025": { cr: 0.075, cw: 0.3, i: 0.3, o: 2.5 }, "gemini/gemini-2.5-flash-preview-tts": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini/gemini-2.5-pro": { cr: 0.125, cra: 0.25, cw: 1.25, i: 1.25, ia: 2.5, o: 10, oa: 15 }, "gemini/gemini-2.5-pro-preview-tts": { cr: 0.125, cra: 0.25, cw: 1.25, i: 1.25, ia: 2.5, o: 10, oa: 15 }, "gemini/gemini-3-flash-preview": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 3 }, "gemini/gemini-3-pro-image": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "gemini/gemini-3-pro-image-preview": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "gemini/gemini-3-pro-preview": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, i: 2, ia: 4, o: 12, oa: 18 }, "gemini/gemini-3.1-flash-image": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "gemini/gemini-3.1-flash-image-preview": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "gemini/gemini-3.1-flash-lite": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "gemini/gemini-3.1-flash-lite-preview": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "gemini/gemini-3.1-flash-live-preview": { cr: 0.07500000000000001, cw: 0.75, i: 0.75, o: 4.5 }, "gemini/gemini-3.1-pro-preview": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, i: 2, ia: 4, o: 12, oa: 18 }, "gemini/gemini-3.1-pro-preview-customtools": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, i: 2, ia: 4, o: 12, oa: 18 }, "gemini/gemini-3.5-flash": { cr: 0.15, cw: 1.5, i: 1.5, o: 9 }, "gemini/gemini-embedding-001": { cr: 0.015, cw: 0.15, i: 0.15, o: 0 }, "gemini/gemini-embedding-2": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0 }, "gemini/gemini-embedding-2-preview": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0 }, "gemini/gemini-exp-1114": { cr: 0, cw: 0, i: 0, o: 0 }, "gemini/gemini-exp-1206": { cr: 0, cw: 0, i: 0, o: 0 }, "gemini/gemini-flash-latest": { cr: 0.075, cw: 0.3, i: 0.3, o: 2.5 }, "gemini/gemini-flash-lite-latest": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini/gemini-gemma-2-27b-it": { cr: 0.035, cw: 0.35, i: 0.35, o: 1.0499999999999998 }, "gemini/gemini-gemma-2-9b-it": { cr: 0.035, cw: 0.35, i: 0.35, o: 1.0499999999999998 }, "gemini/gemini-live-2.5-flash-preview-native-audio-09-2025": { cr: 0.075, cw: 0.3, i: 0.3, o: 2 }, "gemini/gemini-pro-latest": { cr: 0.125, cra: 0.25, cw: 1.25, i: 1.25, ia: 2.5, o: 10, oa: 15 }, "gemini/gemini-robotics-er-1.5-preview": { cr: 0, cw: 0.3, i: 0.3, o: 2.5 }, "gemini/gemma-3-27b-it": { cr: 0, cw: 0, i: 0, o: 0 }, "gemini/learnlm-1.5-pro-experimental": { cr: 0, cw: 0, i: 0, o: 0 }, "gemini/lyria-3-clip-preview": { cr: 0, cw: 0, i: 0, o: 0 }, "gemini/lyria-3-pro-preview": { cr: 0, cw: 0, i: 0, o: 0 }, "gigachat/Embeddings": { cr: 0, cw: 0, i: 0, o: 0 }, "gigachat/Embeddings-2": { cr: 0, cw: 0, i: 0, o: 0 }, "gigachat/EmbeddingsGigaR": { cr: 0, cw: 0, i: 0, o: 0 }, "gigachat/GigaChat-2-Lite": { cr: 0, cw: 0, i: 0, o: 0 }, "gigachat/GigaChat-2-Max": { cr: 0, cw: 0, i: 0, o: 0 }, "gigachat/GigaChat-2-Pro": { cr: 0, cw: 0, i: 0, o: 0 }, "github_copilot/mai-code-1-flash": { cr: 0.075, cw: 0.75, i: 0.75, o: 4.5 }, "github_copilot/mai-code-1-flash-internal": { cr: 0.075, cw: 0.75, i: 0.75, o: 4.5 }, "glm-4-7-251222": { cr: 0, cw: 0, i: 0, o: 0 }, "global.amazon.nova-2-lite-v1:0": { cr: 0.075, cw: 0.3, i: 0.3, o: 2.5 }, "global.anthropic.claude-fable-5": { cr: 1, cw: 12.5, i: 10, o: 50 }, "global.anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "global.anthropic.claude-opus-4-5-20251101-v1:0": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "global.anthropic.claude-opus-4-6-v1": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "global.anthropic.claude-opus-4-7": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "global.anthropic.claude-opus-4-8": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "global.anthropic.claude-sonnet-4-20250514-v1:0": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "global.anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "global.anthropic.claude-sonnet-4-6": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "global.anthropic.claude-sonnet-5": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "gmi/MiniMaxAI/MiniMax-M2.1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "gmi/Qwen/Qwen3-VL-235B-A22B-Instruct-FP8": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.4 }, "gmi/anthropic/claude-opus-4": { cr: 1.5, cw: 15, i: 15, o: 75 }, "gmi/anthropic/claude-opus-4.5": { cr: 0.5000000000000001, cw: 5, i: 5, o: 25 }, "gmi/anthropic/claude-sonnet-4": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "gmi/anthropic/claude-sonnet-4.5": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "gmi/deepseek-ai/DeepSeek-V3-0324": { cr: 0.028000000000000004, cw: 0.28, i: 0.28, o: 0.88 }, "gmi/deepseek-ai/DeepSeek-V3.2": { cr: 0.028000000000000004, cw: 0.28, i: 0.28, o: 0.39999999999999997 }, "gmi/google/gemini-3-flash-preview": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 3 }, "gmi/google/gemini-3-pro-preview": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "gmi/moonshotai/Kimi-K2-Thinking": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 1.2 }, "gmi/openai/gpt-4o": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gmi/openai/gpt-4o-mini": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "gmi/openai/gpt-5": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 10 }, "gmi/openai/gpt-5.1": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 10 }, "gmi/openai/gpt-5.2": { cr: 0.17500000000000002, cw: 1.75, i: 1.75, o: 14 }, "gmi/zai-org/GLM-4.7-FP8": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "google.gemma-3-12b-it": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.29 }, "google.gemma-3-27b-it": { cr: 0.023, cw: 0.22999999999999998, i: 0.22999999999999998, o: 0.38 }, "google.gemma-3-4b-it": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.08 }, "gpt-3.5-turbo": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "gpt-3.5-turbo-0125": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "gpt-3.5-turbo-1106": { cr: 0.09999999999999999, cw: 1, i: 1, o: 2 }, "gpt-3.5-turbo-16k": { cr: 0.30000000000000004, cw: 3, i: 3, o: 4 }, "gpt-3.5-turbo-instruct": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 2 }, "gpt-3.5-turbo-instruct-0914": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 2 }, "gpt-4": { cr: 3, cw: 30, i: 30, o: 60 }, "gpt-4-0125-preview": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "gpt-4-0314": { cr: 3, cw: 30, i: 30, o: 60 }, "gpt-4-0613": { cr: 3, cw: 30, i: 30, o: 60 }, "gpt-4-1106-preview": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "gpt-4-turbo": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "gpt-4-turbo-2024-04-09": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "gpt-4-turbo-preview": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "gpt-4.1": { cr: 0.5, cw: 2, i: 2, o: 8 }, "gpt-4.1-2025-04-14": { cr: 0.5, cw: 2, i: 2, o: 8 }, "gpt-4.1-mini": { cr: 0.09999999999999999, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "gpt-4.1-mini-2025-04-14": { cr: 0.09999999999999999, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "gpt-4.1-nano": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gpt-4.1-nano-2025-04-14": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gpt-4o": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-2024-05-13": { cr: 0.5000000000000001, cw: 5, i: 5, o: 15 }, "gpt-4o-2024-08-06": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-2024-11-20": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-audio-preview": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-audio-preview-2024-12-17": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-audio-preview-2025-06-03": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-mini": { cr: 0.075, cw: 0.15, i: 0.15, o: 0.6 }, "gpt-4o-mini-2024-07-18": { cr: 0.075, cw: 0.15, i: 0.15, o: 0.6 }, "gpt-4o-mini-audio-preview": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "gpt-4o-mini-audio-preview-2024-12-17": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "gpt-4o-mini-realtime-preview": { cr: 0.3, cw: 0.6, i: 0.6, o: 2.4 }, "gpt-4o-mini-realtime-preview-2024-12-17": { cr: 0.3, cw: 0.6, i: 0.6, o: 2.4 }, "gpt-4o-mini-search-preview": { cr: 0.075, cw: 0.15, i: 0.15, o: 0.6 }, "gpt-4o-mini-search-preview-2025-03-11": { cr: 0.075, cw: 0.15, i: 0.15, o: 0.6 }, "gpt-4o-mini-transcribe": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 5 }, "gpt-4o-mini-transcribe-2025-03-20": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 5 }, "gpt-4o-mini-transcribe-2025-12-15": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 5 }, "gpt-4o-mini-tts": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-mini-tts-2025-03-20": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-mini-tts-2025-12-15": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-realtime-preview": { cr: 2.5, cw: 5, i: 5, o: 20 }, "gpt-4o-realtime-preview-2024-12-17": { cr: 2.5, cw: 5, i: 5, o: 20 }, "gpt-4o-realtime-preview-2025-06-03": { cr: 2.5, cw: 5, i: 5, o: 20 }, "gpt-4o-search-preview": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-search-preview-2025-03-11": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-transcribe": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-transcribe-diarize": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-5": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5-2025-08-07": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5-chat": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5-chat-latest": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5-codex": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5-mini": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "gpt-5-mini-2025-08-07": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "gpt-5-nano": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.39999999999999997 }, "gpt-5-nano-2025-08-07": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.39999999999999997 }, "gpt-5-pro": { cr: 1.5, cw: 15, i: 15, o: 120 }, "gpt-5-pro-2025-10-06": { cr: 1.5, cw: 15, i: 15, o: 120 }, "gpt-5-search-api": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5-search-api-2025-10-14": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5.1": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5.1-2025-11-13": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5.1-chat-latest": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5.1-codex": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5.1-codex-max": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5.1-codex-mini": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "gpt-5.2": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "gpt-5.2-2025-12-11": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "gpt-5.2-chat-latest": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "gpt-5.2-codex": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "gpt-5.2-pro": { cr: 2.0999999999999996, cw: 21, i: 21, o: 168 }, "gpt-5.2-pro-2025-12-11": { cr: 2.0999999999999996, cw: 21, i: 21, o: 168 }, "gpt-5.3-chat-latest": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "gpt-5.3-codex": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "gpt-5.4": { cr: 0.25, cw: 2.5, i: 2.5, o: 15 }, "gpt-5.4-2026-03-05": { cr: 0.25, cw: 2.5, i: 2.5, o: 15 }, "gpt-5.4-mini": { cr: 0.075, cw: 0.75, i: 0.75, o: 4.5 }, "gpt-5.4-mini-2026-03-17": { cr: 0.075, cw: 0.75, i: 0.75, o: 4.5 }, "gpt-5.4-nano": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.25 }, "gpt-5.4-nano-2026-03-17": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.25 }, "gpt-5.4-pro": { cr: 3, cw: 30, i: 30, o: 180 }, "gpt-5.4-pro-2026-03-05": { cr: 3, cw: 30, i: 30, o: 180 }, "gpt-5.5": { cr: 0.5, cw: 5, i: 5, o: 30 }, "gpt-5.5-2026-04-23": { cr: 0.5, cw: 5, i: 5, o: 30 }, "gpt-5.5-pro": { cr: 3, cw: 30, i: 30, o: 180 }, "gpt-5.5-pro-2026-04-23": { cr: 3, cw: 30, i: 30, o: 180 }, "gpt-audio": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-audio-1.5": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-audio-2025-08-28": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-audio-mini": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "gpt-audio-mini-2025-10-06": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "gpt-audio-mini-2025-12-15": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "gpt-image-1.5": { cr: 1.25, cw: 5, i: 5, o: 10 }, "gpt-image-1.5-2025-12-16": { cr: 1.25, cw: 5, i: 5, o: 10 }, "gpt-image-2": { cr: 1.25, cw: 5, i: 5, o: 10 }, "gpt-image-2-2026-04-21": { cr: 1.25, cw: 5, i: 5, o: 10 }, "gpt-realtime": { cr: 0.39999999999999997, cw: 4, i: 4, o: 16 }, "gpt-realtime-1.5": { cr: 0.39999999999999997, cw: 4, i: 4, o: 16 }, "gpt-realtime-2": { cr: 0.39999999999999997, cw: 4, i: 4, o: 16 }, "gpt-realtime-2025-08-28": { cr: 0.39999999999999997, cw: 4, i: 4, o: 16 }, "gpt-realtime-mini": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "gpt-realtime-mini-2025-10-06": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "gpt-realtime-mini-2025-12-15": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "gradient_ai/anthropic-claude-3-opus": { cr: 1.5, cw: 15, i: 15, o: 75 }, "gradient_ai/anthropic-claude-3.5-haiku": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 4 }, "gradient_ai/anthropic-claude-3.5-sonnet": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "gradient_ai/anthropic-claude-3.7-sonnet": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "gradient_ai/deepseek-r1-distill-llama-70b": { cr: 0.09900000000000002, cw: 0.9900000000000001, i: 0.9900000000000001, o: 0.9900000000000001 }, "gradient_ai/llama3-8b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "gradient_ai/llama3.3-70b-instruct": { cr: 0.065, cw: 0.65, i: 0.65, o: 0.65 }, "gradient_ai/mistral-nemo-instruct-2407": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.3 }, "gradient_ai/openai-o3": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "gradient_ai/openai-o3-mini": { cr: 0.11, cw: 1.1, i: 1.1, o: 4.4 }, "groq/gemma-7b-it": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.08 }, "groq/llama-3.1-8b-instant": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.08 }, "groq/llama-3.3-70b-versatile": { cr: 0.059, cw: 0.59, i: 0.59, o: 0.7899999999999999 }, "groq/meta-llama/llama-4-maverick-17b-128e-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "groq/meta-llama/llama-4-scout-17b-16e-instruct": { cr: 0.011000000000000001, cw: 0.11, i: 0.11, o: 0.33999999999999997 }, "groq/meta-llama/llama-guard-4-12b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "groq/moonshotai/kimi-k2-instruct-0905": { cr: 0.5, cw: 1, i: 1, o: 3 }, "groq/openai/gpt-oss-120b": { cr: 0.075, cw: 0.15, i: 0.15, o: 0.6 }, "groq/openai/gpt-oss-20b": { cr: 0.0375, cw: 0.075, i: 0.075, o: 0.3 }, "groq/openai/gpt-oss-safeguard-20b": { cr: 0.037, cw: 0.075, i: 0.075, o: 0.3 }, "groq/qwen/qwen3-32b": { cr: 0.028999999999999998, cw: 0.29, i: 0.29, o: 0.59 }, "hyperbolic/NousResearch/Hermes-3-Llama-3.1-70B": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "hyperbolic/Qwen/QwQ-32B": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "hyperbolic/Qwen/Qwen2.5-72B-Instruct": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "hyperbolic/Qwen/Qwen2.5-Coder-32B-Instruct": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "hyperbolic/Qwen/Qwen3-235B-A22B": { cr: 0.19999999999999998, cw: 2, i: 2, o: 2 }, "hyperbolic/deepseek-ai/DeepSeek-R1": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 0.39999999999999997 }, "hyperbolic/deepseek-ai/DeepSeek-R1-0528": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.25 }, "hyperbolic/deepseek-ai/DeepSeek-V3": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "hyperbolic/deepseek-ai/DeepSeek-V3-0324": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 0.39999999999999997 }, "hyperbolic/meta-llama/Llama-3.2-3B-Instruct": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "hyperbolic/meta-llama/Llama-3.3-70B-Instruct": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "hyperbolic/meta-llama/Meta-Llama-3-70B-Instruct": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "hyperbolic/meta-llama/Meta-Llama-3.1-405B-Instruct": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "hyperbolic/meta-llama/Meta-Llama-3.1-70B-Instruct": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "hyperbolic/meta-llama/Meta-Llama-3.1-8B-Instruct": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "hyperbolic/moonshotai/Kimi-K2-Instruct": { cr: 0.19999999999999998, cw: 2, i: 2, o: 2 }, "inception/mercury-2": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.75 }, "j2-light": { cr: 0.30000000000000004, cw: 3, i: 3, o: 3 }, "j2-mid": { cr: 1.0000000000000002, cw: 10, i: 10, o: 10 }, "j2-ultra": { cr: 1.5, cw: 15, i: 15, o: 15 }, "jamba-1.5": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.39999999999999997 }, "jamba-1.5-large": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "jamba-1.5-large@001": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "jamba-1.5-mini": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.39999999999999997 }, "jamba-1.5-mini@001": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.39999999999999997 }, "jamba-large-1.6": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "jamba-large-1.7": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "jamba-mini-1.6": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.39999999999999997 }, "jamba-mini-1.7": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.39999999999999997 }, "jina-reranker-v2-base-multilingual": { cr: 0.0018, cw: 0.018, i: 0.018, o: 0.018 }, "jp.anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.11, cw: 1.375, i: 1.1, o: 5.5 }, "jp.anthropic.claude-opus-4-7": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "jp.anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.33, cra: 0.66, cw: 4.125, cwa: 8.25, i: 3.3000000000000003, ia: 6.6000000000000005, o: 16.5, oa: 24.75 }, "jp.anthropic.claude-sonnet-4-6": { cr: 0.33, cw: 4.125, i: 3.3000000000000003, o: 16.5 }, "jp.anthropic.claude-sonnet-5": { cr: 0.33, cw: 4.125, i: 3.3000000000000003, o: 16.5 }, "kimi-k2-thinking-251104": { cr: 0, cw: 0, i: 0, o: 0 }, "lambda_ai/deepseek-llama3.3-70b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "lambda_ai/deepseek-r1-0528": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "lambda_ai/deepseek-r1-671b": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 0.7999999999999999 }, "lambda_ai/deepseek-v3-0324": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "lambda_ai/hermes3-405b": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 0.7999999999999999 }, "lambda_ai/hermes3-70b": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "lambda_ai/hermes3-8b": { cr: 0.0025, cw: 0.024999999999999998, i: 0.024999999999999998, o: 0.04 }, "lambda_ai/lfm-40b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.19999999999999998 }, "lambda_ai/lfm-7b": { cr: 0.0025, cw: 0.024999999999999998, i: 0.024999999999999998, o: 0.04 }, "lambda_ai/llama-4-maverick-17b-128e-instruct-fp8": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.09999999999999999 }, "lambda_ai/llama-4-scout-17b-16e-instruct": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.09999999999999999 }, "lambda_ai/llama3.1-405b-instruct-fp8": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 0.7999999999999999 }, "lambda_ai/llama3.1-70b-instruct-fp8": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "lambda_ai/llama3.1-8b-instruct": { cr: 0.0025, cw: 0.024999999999999998, i: 0.024999999999999998, o: 0.04 }, "lambda_ai/llama3.1-nemotron-70b-instruct-fp8": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "lambda_ai/llama3.2-11b-vision-instruct": { cr: 0.0015, cw: 0.015, i: 0.015, o: 0.024999999999999998 }, "lambda_ai/llama3.2-3b-instruct": { cr: 0.0015, cw: 0.015, i: 0.015, o: 0.024999999999999998 }, "lambda_ai/llama3.3-70b-instruct-fp8": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "lambda_ai/qwen25-coder-32b-instruct": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.09999999999999999 }, "lambda_ai/qwen3-32b-fp8": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.09999999999999999 }, "lemonade/Gemma-3-4b-it-GGUF": { cr: 0, cw: 0, i: 0, o: 0 }, "lemonade/Qwen3-4B-Instruct-2507-GGUF": { cr: 0, cw: 0, i: 0, o: 0 }, "lemonade/Qwen3-Coder-30B-A3B-Instruct-GGUF": { cr: 0, cw: 0, i: 0, o: 0 }, "lemonade/gpt-oss-120b-mxfp-GGUF": { cr: 0, cw: 0, i: 0, o: 0 }, "lemonade/gpt-oss-20b-mxfp4-GGUF": { cr: 0, cw: 0, i: 0, o: 0 }, "libertai/bge-m3": { cr: 0.001, cw: 0.01, i: 0.01, o: 0 }, "libertai/deepseek-v4-flash": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.75 }, "libertai/deepseek-v4-flash-thinking": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.75 }, "libertai/gemma-4-31b-it": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.39999999999999997 }, "libertai/gemma-4-31b-it-thinking": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.39999999999999997 }, "libertai/hermes-3-8b-tee": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "libertai/qwen3.5-122b-a10b": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.75 }, "libertai/qwen3.5-122b-a10b-thinking": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.75 }, "libertai/qwen3.6-27b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.5 }, "libertai/qwen3.6-27b-thinking": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.5 }, "libertai/qwen3.6-35b-a3b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.5 }, "libertai/qwen3.6-35b-a3b-thinking": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.5 }, "llamagate/codellama-7b": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.12 }, "llamagate/deepseek-coder-6.7b": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.12 }, "llamagate/deepseek-r1-7b-qwen": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.15 }, "llamagate/deepseek-r1-8b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.19999999999999998 }, "llamagate/dolphin3-8b": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.15 }, "llamagate/gemma3-4b": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.08 }, "llamagate/llama-3.1-8b": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.049999999999999996 }, "llamagate/llama-3.2-3b": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.08 }, "llamagate/llava-7b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.19999999999999998 }, "llamagate/mistral-7b-v0.3": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.15 }, "llamagate/nomic-embed-text": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "llamagate/openthinker-7b": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.15 }, "llamagate/qwen2.5-coder-7b": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.12 }, "llamagate/qwen3-8b": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.14 }, "llamagate/qwen3-embedding-8b": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "llamagate/qwen3-vl-8b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.55 }, "meta.llama2-13b-chat-v1": { cr: 0.07500000000000001, cw: 0.75, i: 0.75, o: 1 }, "meta.llama2-70b-chat-v1": { cr: 0.195, cw: 1.95, i: 1.95, o: 2.56 }, "meta.llama3-1-405b-instruct-v1:0": { cr: 0.532, cw: 5.32, i: 5.32, o: 16 }, "meta.llama3-1-70b-instruct-v1:0": { cr: 0.09900000000000002, cw: 0.9900000000000001, i: 0.9900000000000001, o: 0.9900000000000001 }, "meta.llama3-1-8b-instruct-v1:0": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.22 }, "meta.llama3-2-11b-instruct-v1:0": { cr: 0.035, cw: 0.35, i: 0.35, o: 0.35 }, "meta.llama3-2-1b-instruct-v1:0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "meta.llama3-2-3b-instruct-v1:0": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "meta.llama3-2-90b-instruct-v1:0": { cr: 0.19999999999999998, cw: 2, i: 2, o: 2 }, "meta.llama3-3-70b-instruct-v1:0": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "meta.llama3-70b-instruct-v1:0": { cr: 0.265, cw: 2.65, i: 2.65, o: 3.5 }, "meta.llama3-8b-instruct-v1:0": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.6 }, "meta.llama4-maverick-17b-instruct-v1:0": { cr: 0.024, cw: 0.24, i: 0.24, o: 0.9700000000000001 }, "meta.llama4-scout-17b-instruct-v1:0": { cr: 0.017, cw: 0.16999999999999998, i: 0.16999999999999998, o: 0.66 }, "minimax.minimax-m2": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "minimax.minimax-m2.1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "minimax.minimax-m2.5": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "minimax/MiniMax-M2": { cr: 0.03, cw: 0.375, i: 0.3, o: 1.2 }, "minimax/MiniMax-M2.1": { cr: 0.03, cw: 0.375, i: 0.3, o: 1.2 }, "minimax/MiniMax-M2.1-lightning": { cr: 0.03, cw: 0.375, i: 0.3, o: 2.4 }, "minimax/MiniMax-M2.5": { cr: 0.03, cw: 0.375, i: 0.3, o: 1.2 }, "minimax/MiniMax-M2.5-lightning": { cr: 0.03, cw: 0.375, i: 0.3, o: 2.4 }, "minimax/MiniMax-M3": { cr: 0.06, cw: 0.3, i: 0.3, o: 1.2 }, "mistral.devstral-2-123b": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "mistral.magistral-small-2509": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "mistral.ministral-3-14b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "mistral.ministral-3-3b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "mistral.ministral-3-8b-instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "mistral.mistral-7b-instruct-v0:2": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.19999999999999998 }, "mistral.mistral-large-2402-v1:0": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "mistral.mistral-large-2407-v1:0": { cr: 0.30000000000000004, cw: 3, i: 3, o: 9 }, "mistral.mistral-large-3-675b-instruct": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "mistral.mistral-small-2402-v1:0": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "mistral.mixtral-8x7b-instruct-v0:1": { cr: 0.045, cw: 0.44999999999999996, i: 0.44999999999999996, o: 0.7 }, "mistral.voxtral-mini-3b-2507": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.04 }, "mistral.voxtral-small-24b-2507": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "mistral/codestral-2405": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "mistral/codestral-2508": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.8999999999999999 }, "mistral/codestral-latest": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "mistral/codestral-mamba-latest": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.25 }, "mistral/devstral-2512": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "mistral/devstral-latest": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "mistral/devstral-medium-2507": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "mistral/devstral-medium-latest": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "mistral/devstral-small-2505": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "mistral/devstral-small-2507": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "mistral/devstral-small-latest": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "mistral/labs-devstral-small-2512": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "mistral/magistral-medium-1-2-2509": { cr: 0.19999999999999998, cw: 2, i: 2, o: 5 }, "mistral/magistral-medium-2506": { cr: 0.19999999999999998, cw: 2, i: 2, o: 5 }, "mistral/magistral-medium-2509": { cr: 0.19999999999999998, cw: 2, i: 2, o: 5 }, "mistral/magistral-medium-latest": { cr: 0.19999999999999998, cw: 2, i: 2, o: 5 }, "mistral/magistral-small-1-2-2509": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "mistral/magistral-small-2506": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "mistral/magistral-small-latest": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "mistral/ministral-3-14b-2512": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "mistral/ministral-3-3b-2512": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "mistral/ministral-3-8b-2512": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "mistral/ministral-8b-2512": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "mistral/ministral-8b-latest": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "mistral/mistral-large-2402": { cr: 0.39999999999999997, cw: 4, i: 4, o: 12 }, "mistral/mistral-large-2407": { cr: 0.30000000000000004, cw: 3, i: 3, o: 9 }, "mistral/mistral-large-2411": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "mistral/mistral-large-2512": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "mistral/mistral-large-3": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "mistral/mistral-large-latest": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "mistral/mistral-medium": { cr: 0.27, cw: 2.7, i: 2.7, o: 8.1 }, "mistral/mistral-medium-2312": { cr: 0.27, cw: 2.7, i: 2.7, o: 8.1 }, "mistral/mistral-medium-2505": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "mistral/mistral-medium-2508": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "mistral/mistral-medium-2604": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 7.5 }, "mistral/mistral-medium-3-1-2508": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "mistral/mistral-medium-3-5": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 7.5 }, "mistral/mistral-medium-latest": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 7.5 }, "mistral/mistral-small": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "mistral/mistral-small-3-2-2506": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.18 }, "mistral/mistral-small-latest": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.18 }, "mistral/mistral-tiny": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.25 }, "mistral/open-codestral-mamba": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.25 }, "mistral/open-mistral-7b": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.25 }, "mistral/open-mistral-nemo": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.3 }, "mistral/open-mistral-nemo-2407": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.3 }, "mistral/open-mixtral-8x22b": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "mistral/open-mixtral-8x7b": { cr: 0.07, cw: 0.7, i: 0.7, o: 0.7 }, "mistral/pixtral-12b-2409": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "mistral/pixtral-large-2411": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "mistral/pixtral-large-latest": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "moonshot.kimi-k2-thinking": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "moonshot/kimi-k2-0711-preview": { cr: 0.15, cw: 0.6, i: 0.6, o: 2.5 }, "moonshot/kimi-k2-0905-preview": { cr: 0.15, cw: 0.6, i: 0.6, o: 2.5 }, "moonshot/kimi-k2-thinking": { cr: 0.15, cw: 0.6, i: 0.6, o: 2.5 }, "moonshot/kimi-k2-thinking-turbo": { cr: 0.15, cw: 1.15, i: 1.15, o: 8 }, "moonshot/kimi-k2-turbo-preview": { cr: 0.15, cw: 1.15, i: 1.15, o: 8 }, "moonshot/kimi-k2.5": { cr: 0.09999999999999999, cw: 0.6, i: 0.6, o: 3 }, "moonshot/kimi-k2.6": { cr: 0.16, cw: 0.95, i: 0.95, o: 4 }, "moonshot/kimi-latest": { cr: 0.15, cw: 2, i: 2, o: 5 }, "moonshot/kimi-latest-128k": { cr: 0.15, cw: 2, i: 2, o: 5 }, "moonshot/kimi-latest-32k": { cr: 0.15, cw: 1, i: 1, o: 3 }, "moonshot/kimi-latest-8k": { cr: 0.15, cw: 0.19999999999999998, i: 0.19999999999999998, o: 2 }, "moonshot/kimi-thinking-preview": { cr: 0.15, cw: 0.6, i: 0.6, o: 2.5 }, "moonshot/moonshot-v1-128k": { cr: 0.19999999999999998, cw: 2, i: 2, o: 5 }, "moonshot/moonshot-v1-128k-0430": { cr: 0.19999999999999998, cw: 2, i: 2, o: 5 }, "moonshot/moonshot-v1-128k-vision-preview": { cr: 0.19999999999999998, cw: 2, i: 2, o: 5 }, "moonshot/moonshot-v1-32k": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "moonshot/moonshot-v1-32k-0430": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "moonshot/moonshot-v1-32k-vision-preview": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "moonshot/moonshot-v1-8k": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 2 }, "moonshot/moonshot-v1-8k-0430": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 2 }, "moonshot/moonshot-v1-8k-vision-preview": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 2 }, "moonshot/moonshot-v1-auto": { cr: 0.19999999999999998, cw: 2, i: 2, o: 5 }, "moonshotai.kimi-k2.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 3 }, "morph/morph-v3-fast": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 1.2 }, "morph/morph-v3-large": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 1.9 }, multimodalembedding: { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 0 }, "multimodalembedding@001": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 0 }, "nebius/BAAI/bge-en-icl": { cr: 0.001, cw: 0.01, i: 0.01, o: 0 }, "nebius/BAAI/bge-multilingual-gemma2": { cr: 0.001, cw: 0.01, i: 0.01, o: 0 }, "nebius/NousResearch/Hermes-3-Llama-3.1-405B": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "nebius/Qwen/QwQ-32B": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.44999999999999996 }, "nebius/Qwen/Qwen2-VL-72B-Instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.39999999999999997 }, "nebius/Qwen/Qwen2-VL-7B-Instruct": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.06 }, "nebius/Qwen/Qwen2.5-32B-Instruct": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.19999999999999998 }, "nebius/Qwen/Qwen2.5-72B-Instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.39999999999999997 }, "nebius/Qwen/Qwen2.5-Coder-7B": { cr: 0.001, cw: 0.01, i: 0.01, o: 0.03 }, "nebius/Qwen/Qwen2.5-VL-72B-Instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.39999999999999997 }, "nebius/Qwen/Qwen3-14B": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.24 }, "nebius/Qwen/Qwen3-235B-A22B": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "nebius/Qwen/Qwen3-30B-A3B": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "nebius/Qwen/Qwen3-32B": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "nebius/Qwen/Qwen3-4B": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.24 }, "nebius/deepseek-ai/DeepSeek-R1": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 2.4 }, "nebius/deepseek-ai/DeepSeek-R1-0528": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 2.4 }, "nebius/deepseek-ai/DeepSeek-R1-Distill-Llama-70B": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.75 }, "nebius/deepseek-ai/DeepSeek-V3": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "nebius/deepseek-ai/DeepSeek-V3-0324": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "nebius/google/gemma-3-27b-it": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.19999999999999998 }, "nebius/intfloat/e5-mistral-7b-instruct": { cr: 0.001, cw: 0.01, i: 0.01, o: 0 }, "nebius/meta-llama/Llama-3.3-70B-Instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.39999999999999997 }, "nebius/meta-llama/Llama-Guard-3-8B": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.06 }, "nebius/meta-llama/Meta-Llama-3.1-405B-Instruct": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "nebius/meta-llama/Meta-Llama-3.1-70B-Instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.39999999999999997 }, "nebius/meta-llama/Meta-Llama-3.1-8B-Instruct": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.06 }, "nebius/mistralai/Mistral-Nemo-Instruct-2407": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.12 }, "nebius/nvidia/Llama-3.1-Nemotron-Ultra-253B-v1": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.7999999999999998 }, "nebius/nvidia/Llama-3.3-Nemotron-Super-49B-v1": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "novita/Sao10K/L3-8B-Stheno-v3.2": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.049999999999999996 }, "novita/baai/bge-m3": { cr: 0.001, cw: 0.01, i: 0.01, o: 0.01 }, "novita/baai/bge-reranker-v2-m3": { cr: 0.001, cw: 0.01, i: 0.01, o: 0.01 }, "novita/baichuan/baichuan-m2-32b": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.07 }, "novita/baidu/ernie-4.5-21B-a3b": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.28 }, "novita/baidu/ernie-4.5-21B-a3b-thinking": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.28 }, "novita/baidu/ernie-4.5-300b-a47b-paddle": { cr: 0.028000000000000004, cw: 0.28, i: 0.28, o: 1.1 }, "novita/baidu/ernie-4.5-vl-28b-a3b": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.56 }, "novita/baidu/ernie-4.5-vl-28b-a3b-thinking": { cr: 0.03900000000000001, cw: 0.39, i: 0.39, o: 0.39 }, "novita/baidu/ernie-4.5-vl-424b-a47b": { cr: 0.042, cw: 0.42, i: 0.42, o: 1.25 }, "novita/deepseek/deepseek-ocr": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.03 }, "novita/deepseek/deepseek-prover-v2-671b": { cr: 0.07, cw: 0.7, i: 0.7, o: 2.5 }, "novita/deepseek/deepseek-r1-0528": { cr: 0.35, cw: 0.7, i: 0.7, o: 2.5 }, "novita/deepseek/deepseek-r1-0528-qwen3-8b": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.09 }, "novita/deepseek/deepseek-r1-distill-llama-70b": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 0.7999999999999999 }, "novita/deepseek/deepseek-r1-distill-qwen-14b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "novita/deepseek/deepseek-r1-distill-qwen-32b": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.3 }, "novita/deepseek/deepseek-r1-turbo": { cr: 0.07, cw: 0.7, i: 0.7, o: 2.5 }, "novita/deepseek/deepseek-v3-0324": { cr: 0.135, cw: 0.27, i: 0.27, o: 1.12 }, "novita/deepseek/deepseek-v3-turbo": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.3 }, "novita/deepseek/deepseek-v3.1": { cr: 0.135, cw: 0.27, i: 0.27, o: 1 }, "novita/deepseek/deepseek-v3.1-terminus": { cr: 0.135, cw: 0.27, i: 0.27, o: 1 }, "novita/deepseek/deepseek-v3.2": { cr: 0.13449999999999998, cw: 0.26899999999999996, i: 0.26899999999999996, o: 0.39999999999999997 }, "novita/deepseek/deepseek-v3.2-exp": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 0.41 }, "novita/google/gemma-3-12b-it": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.09999999999999999 }, "novita/google/gemma-3-27b-it": { cr: 0.0119, cw: 0.119, i: 0.119, o: 0.19999999999999998 }, "novita/gryphe/mythomax-l2-13b": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.09 }, "novita/kwaipilot/kat-coder-pro": { cr: 0.06, cw: 0.3, i: 0.3, o: 1.2 }, "novita/meta-llama/llama-3-70b-instruct": { cr: 0.051, cw: 0.51, i: 0.51, o: 0.74 }, "novita/meta-llama/llama-3-8b-instruct": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.04 }, "novita/meta-llama/llama-3.1-8b-instruct": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.049999999999999996 }, "novita/meta-llama/llama-3.2-3b-instruct": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.049999999999999996 }, "novita/meta-llama/llama-3.3-70b-instruct": { cr: 0.013500000000000002, cw: 0.135, i: 0.135, o: 0.39999999999999997 }, "novita/meta-llama/llama-4-maverick-17b-128e-instruct-fp8": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 0.85 }, "novita/meta-llama/llama-4-scout-17b-16e-instruct": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0.59 }, "novita/microsoft/wizardlm-2-8x22b": { cr: 0.062, cw: 0.62, i: 0.62, o: 0.62 }, "novita/minimax/minimax-m2": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "novita/minimax/minimax-m2.1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "novita/minimaxai/minimax-m1-80k": { cr: 0.055, cw: 0.55, i: 0.55, o: 2.2 }, "novita/mistralai/mistral-nemo": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.16999999999999998 }, "novita/moonshotai/kimi-k2-0905": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "novita/moonshotai/kimi-k2-instruct": { cr: 0.05700000000000001, cw: 0.5700000000000001, i: 0.5700000000000001, o: 2.3 }, "novita/moonshotai/kimi-k2-thinking": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "novita/nousresearch/hermes-2-pro-llama-3-8b": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.14 }, "novita/openai/gpt-oss-120b": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.25 }, "novita/openai/gpt-oss-20b": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.15 }, "novita/paddlepaddle/paddleocr-vl": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.02 }, "novita/qwen/qwen-2.5-72b-instruct": { cr: 0.038000000000000006, cw: 0.38, i: 0.38, o: 0.39999999999999997 }, "novita/qwen/qwen-mt-plus": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.75 }, "novita/qwen/qwen2.5-7b-instruct": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.07 }, "novita/qwen/qwen2.5-vl-72b-instruct": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 0.7999999999999999 }, "novita/qwen/qwen3-235b-a22b-fp8": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.7999999999999999 }, "novita/qwen/qwen3-235b-a22b-instruct-2507": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.58 }, "novita/qwen/qwen3-235b-a22b-thinking-2507": { cr: 0.03, cw: 0.3, i: 0.3, o: 3 }, "novita/qwen/qwen3-30b-a3b-fp8": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.44999999999999996 }, "novita/qwen/qwen3-32b-fp8": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.44999999999999996 }, "novita/qwen/qwen3-4b-fp8": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.03 }, "novita/qwen/qwen3-8b-fp8": { cr: 0.0035000000000000005, cw: 0.035, i: 0.035, o: 0.13799999999999998 }, "novita/qwen/qwen3-coder-30b-a3b-instruct": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.27 }, "novita/qwen/qwen3-coder-480b-a35b-instruct": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.3 }, "novita/qwen/qwen3-embedding-0.6b": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0 }, "novita/qwen/qwen3-embedding-8b": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0 }, "novita/qwen/qwen3-max": { cr: 0.21100000000000002, cw: 2.1100000000000003, i: 2.1100000000000003, o: 8.450000000000001 }, "novita/qwen/qwen3-next-80b-a3b-instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.5 }, "novita/qwen/qwen3-next-80b-a3b-thinking": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.5 }, "novita/qwen/qwen3-omni-30b-a3b-instruct": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.9700000000000001 }, "novita/qwen/qwen3-omni-30b-a3b-thinking": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.9700000000000001 }, "novita/qwen/qwen3-reranker-8b": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.049999999999999996 }, "novita/qwen/qwen3-vl-235b-a22b-instruct": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.5 }, "novita/qwen/qwen3-vl-235b-a22b-thinking": { cr: 0.098, cw: 0.98, i: 0.98, o: 3.95 }, "novita/qwen/qwen3-vl-30b-a3b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.7 }, "novita/qwen/qwen3-vl-30b-a3b-thinking": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1 }, "novita/qwen/qwen3-vl-8b-instruct": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.5 }, "novita/sao10k/l3-70b-euryale-v2.1": { cr: 0.148, cw: 1.48, i: 1.48, o: 1.48 }, "novita/sao10k/l3-8b-lunaris": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.049999999999999996 }, "novita/sao10k/l31-70b-euryale-v2.2": { cr: 0.148, cw: 1.48, i: 1.48, o: 1.48 }, "novita/skywork/r1v4-lite": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "novita/xiaomimimo/mimo-v2-flash": { cr: 0.02, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "novita/zai-org/autoglm-phone-9b-multilingual": { cr: 0.0035000000000000005, cw: 0.035, i: 0.035, o: 0.13799999999999998 }, "novita/zai-org/glm-4.5": { cr: 0.11, cw: 0.6, i: 0.6, o: 2.2 }, "novita/zai-org/glm-4.5-air": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.85 }, "novita/zai-org/glm-4.5v": { cr: 0.11, cw: 0.6, i: 0.6, o: 1.7999999999999998 }, "novita/zai-org/glm-4.6": { cr: 0.11, cw: 0.55, i: 0.55, o: 2.2 }, "novita/zai-org/glm-4.6v": { cr: 0.055, cw: 0.3, i: 0.3, o: 0.8999999999999999 }, "novita/zai-org/glm-4.7": { cr: 0.11, cw: 0.6, i: 0.6, o: 2.2 }, "nscale/Qwen/QwQ-32B": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0.19999999999999998 }, "nscale/Qwen/Qwen2.5-Coder-32B-Instruct": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.19999999999999998 }, "nscale/Qwen/Qwen2.5-Coder-3B-Instruct": { cr: 0.001, cw: 0.01, i: 0.01, o: 0.03 }, "nscale/Qwen/Qwen2.5-Coder-7B-Instruct": { cr: 0.001, cw: 0.01, i: 0.01, o: 0.03 }, "nscale/deepseek-ai/DeepSeek-R1-Distill-Llama-70B": { cr: 0.037500000000000006, cw: 0.375, i: 0.375, o: 0.375 }, "nscale/deepseek-ai/DeepSeek-R1-Distill-Llama-8B": { cr: 0.0025, cw: 0.024999999999999998, i: 0.024999999999999998, o: 0.024999999999999998 }, "nscale/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.09 }, "nscale/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.07 }, "nscale/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "nscale/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "nscale/meta-llama/Llama-3.1-8B-Instruct": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.03 }, "nscale/meta-llama/Llama-3.3-70B-Instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "nscale/meta-llama/Llama-4-Scout-17B-16E-Instruct": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.29 }, "nscale/mistralai/mixtral-8x22b-instruct-v0.1": { cr: 0.06, cw: 0.6, i: 0.6, o: 0.6 }, "nvidia.nemotron-nano-12b-v2": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "nvidia.nemotron-nano-3-30b": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.24 }, "nvidia.nemotron-nano-9b-v2": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.22999999999999998 }, "nvidia.nemotron-super-3-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.65 }, "nvidia_nim/nvidia/llama-3_2-nv-rerankqa-1b-v2": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia_nim/nvidia/nv-rerankqa-mistral-4b-v3": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia_nim/ranking/nvidia/llama-3.2-nv-rerankqa-1b-v2": { cr: 0, cw: 0, i: 0, o: 0 }, o1: { cr: 7.5, cw: 15, i: 15, o: 60 }, "o1-2024-12-17": { cr: 7.5, cw: 15, i: 15, o: 60 }, "o1-pro": { cr: 14.999999999999998, cw: 150, i: 150, o: 600 }, "o1-pro-2025-03-19": { cr: 14.999999999999998, cw: 150, i: 150, o: 600 }, o3: { cr: 0.5, cw: 2, i: 2, o: 8 }, "o3-2025-04-16": { cr: 0.5, cw: 2, i: 2, o: 8 }, "o3-deep-research": { cr: 2.5, cw: 10, i: 10, o: 40 }, "o3-deep-research-2025-06-26": { cr: 2.5, cw: 10, i: 10, o: 40 }, "o3-mini": { cr: 0.55, cw: 1.1, i: 1.1, o: 4.4 }, "o3-mini-2025-01-31": { cr: 0.55, cw: 1.1, i: 1.1, o: 4.4 }, "o3-pro": { cr: 2.0000000000000004, cw: 20, i: 20, o: 80 }, "o3-pro-2025-06-10": { cr: 2.0000000000000004, cw: 20, i: 20, o: 80 }, "o4-mini": { cr: 0.275, cw: 1.1, i: 1.1, o: 4.4 }, "o4-mini-2025-04-16": { cr: 0.275, cw: 1.1, i: 1.1, o: 4.4 }, "o4-mini-deep-research": { cr: 0.5, cw: 2, i: 2, o: 8 }, "o4-mini-deep-research-2025-06-26": { cr: 0.5, cw: 2, i: 2, o: 8 }, "oci/cohere.command-a-03-2025": { cr: 0.15600000000000003, cw: 1.56, i: 1.56, o: 1.56 }, "oci/cohere.command-a-reasoning": { cr: 0.15600000000000003, cw: 1.56, i: 1.56, o: 1.56 }, "oci/cohere.command-a-reasoning-08-2025": { cr: 0.15600000000000003, cw: 1.56, i: 1.56, o: 1.56 }, "oci/cohere.command-a-translate-08-2025": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.09 }, "oci/cohere.command-a-vision": { cr: 0.15600000000000003, cw: 1.56, i: 1.56, o: 1.56 }, "oci/cohere.command-a-vision-07-2025": { cr: 0.15600000000000003, cw: 1.56, i: 1.56, o: 1.56 }, "oci/cohere.command-latest": { cr: 0.15600000000000003, cw: 1.56, i: 1.56, o: 1.56 }, "oci/cohere.command-plus-latest": { cr: 0.15600000000000003, cw: 1.56, i: 1.56, o: 1.56 }, "oci/cohere.command-r-08-2024": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "oci/cohere.command-r-plus-08-2024": { cr: 0.15600000000000003, cw: 1.56, i: 1.56, o: 1.56 }, "oci/cohere.embed-english-image-v3.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "oci/cohere.embed-english-light-image-v3.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "oci/cohere.embed-english-light-v3.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "oci/cohere.embed-english-v3.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "oci/cohere.embed-multilingual-light-image-v3.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "oci/cohere.embed-multilingual-light-v3.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "oci/cohere.embed-multilingual-v3.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "oci/cohere.embed-v4.0": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, "oci/google.gemini-2.5-flash": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "oci/google.gemini-2.5-flash-lite": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0.3 }, "oci/google.gemini-2.5-pro": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 10 }, "oci/meta.llama-3.1-405b-instruct": { cr: 1.068, cw: 10.68, i: 10.68, o: 10.68 }, "oci/meta.llama-3.1-70b-instruct": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "oci/meta.llama-3.1-8b-instruct": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "oci/meta.llama-3.2-11b-vision-instruct": { cr: 0.19999999999999998, cw: 2, i: 2, o: 2 }, "oci/meta.llama-3.2-90b-vision-instruct": { cr: 0.19999999999999998, cw: 2, i: 2, o: 2 }, "oci/meta.llama-3.3-70b-instruct": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "oci/meta.llama-3.3-70b-instruct-fp8-dynamic": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "oci/meta.llama-4-maverick-17b-128e-instruct-fp8": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "oci/meta.llama-4-scout-17b-16e-instruct": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "oci/openai.gpt-5": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 10 }, "oci/openai.gpt-5-mini": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "oci/openai.gpt-5-nano": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.39999999999999997 }, "oci/xai.grok-3": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "oci/xai.grok-3-fast": { cr: 0.5000000000000001, cw: 5, i: 5, o: 25 }, "oci/xai.grok-3-mini": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.5 }, "oci/xai.grok-3-mini-fast": { cr: 0.06, cw: 0.6, i: 0.6, o: 4 }, "oci/xai.grok-4": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "oci/xai.grok-4-fast": { cr: 0.5000000000000001, cw: 5, i: 5, o: 25 }, "oci/xai.grok-4.1-fast": { cr: 0.5000000000000001, cw: 5, i: 5, o: 25 }, "oci/xai.grok-4.20": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "oci/xai.grok-4.20-multi-agent": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "oci/xai.grok-code-fast-1": { cr: 0.5000000000000001, cw: 5, i: 5, o: 25 }, "ollama/codegeex4": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/codegemma": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/codellama": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/deepseek-coder-v2-base": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/deepseek-coder-v2-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/deepseek-coder-v2-lite-base": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/deepseek-coder-v2-lite-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/deepseek-v3.1:671b-cloud": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/gpt-oss:120b-cloud": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/gpt-oss:20b-cloud": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/internlm2_5-20b-chat": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/llama2": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/llama2-uncensored": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/llama2:13b": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/llama2:70b": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/llama2:7b": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/llama3": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/llama3.1": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/llama3:70b": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/llama3:8b": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/mistral": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/mistral-7B-Instruct-v0.1": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/mistral-7B-Instruct-v0.2": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/mistral-large-instruct-2407": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/mixtral-8x22B-Instruct-v0.1": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/mixtral-8x7B-Instruct-v0.1": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/orca-mini": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/qwen3-coder:480b-cloud": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/vicuna": { cr: 0, cw: 0, i: 0, o: 0 }, "omni-moderation-2024-09-26": { cr: 0, cw: 0, i: 0, o: 0 }, "omni-moderation-latest": { cr: 0, cw: 0, i: 0, o: 0 }, "openai.gpt-oss-120b-1:0": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "openai.gpt-oss-20b-1:0": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.3 }, "openai.gpt-oss-safeguard-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "openai.gpt-oss-safeguard-20b": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.19999999999999998 }, "openrouter/anthropic/claude-3-haiku": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.25 }, "openrouter/anthropic/claude-3.5-sonnet": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "openrouter/anthropic/claude-3.7-sonnet": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "openrouter/anthropic/claude-haiku-4.5": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "openrouter/anthropic/claude-opus-4": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "openrouter/anthropic/claude-opus-4.1": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "openrouter/anthropic/claude-opus-4.5": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "openrouter/anthropic/claude-opus-4.6": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "openrouter/anthropic/claude-opus-4.7": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "openrouter/anthropic/claude-sonnet-4": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "openrouter/anthropic/claude-sonnet-4.5": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "openrouter/anthropic/claude-sonnet-4.6": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "openrouter/bytedance/ui-tars-1.5-7b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.19999999999999998 }, "openrouter/deepseek/deepseek-chat": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.28 }, "openrouter/deepseek/deepseek-chat-v3-0324": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.28 }, "openrouter/deepseek/deepseek-chat-v3.1": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.7999999999999999 }, "openrouter/deepseek/deepseek-r1": { cr: 0.055, cw: 0.55, i: 0.55, o: 2.1900000000000004 }, "openrouter/deepseek/deepseek-r1-0528": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 2.1500000000000004 }, "openrouter/deepseek/deepseek-v3.2": { cr: 0.028000000000000004, cw: 0.28, i: 0.28, o: 0.39999999999999997 }, "openrouter/deepseek/deepseek-v3.2-exp": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.39999999999999997 }, "openrouter/google/gemini-2.0-flash-001": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "openrouter/google/gemini-2.5-flash": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "openrouter/google/gemini-2.5-pro": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 10 }, "openrouter/google/gemini-3-flash-preview": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 3 }, "openrouter/google/gemini-3-pro-preview": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, cwa: 0.25, i: 2, ia: 4, o: 12, oa: 18 }, "openrouter/google/gemini-3.1-flash-lite": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "openrouter/google/gemini-3.1-flash-lite-preview": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "openrouter/google/gemini-3.1-pro-preview": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, cwa: 0.25, i: 2, ia: 4, o: 12, oa: 18 }, "openrouter/gryphe/mythomax-l2-13b": { cr: 0.1875, cw: 1.875, i: 1.875, o: 1.875 }, "openrouter/mancer/weaver": { cr: 0.5625, cw: 5.625, i: 5.625, o: 5.625 }, "openrouter/meta-llama/llama-3-70b-instruct": { cr: 0.059, cw: 0.59, i: 0.59, o: 0.7899999999999999 }, "openrouter/minimax/minimax-m2": { cr: 0.0255, cw: 0.255, i: 0.255, o: 1.02 }, "openrouter/minimax/minimax-m2.1": { cr: 0, cw: 0, i: 0.27, o: 1.2 }, "openrouter/minimax/minimax-m2.5": { cr: 0.15, cw: 0.3, i: 0.3, o: 1.1 }, "openrouter/mistralai/devstral-2512": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "openrouter/mistralai/ministral-14b-2512": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "openrouter/mistralai/ministral-3b-2512": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "openrouter/mistralai/ministral-8b-2512": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "openrouter/mistralai/mistral-7b-instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.13 }, "openrouter/mistralai/mistral-large": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "openrouter/mistralai/mistral-large-2512": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "openrouter/mistralai/mistral-small-3.1-24b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "openrouter/mistralai/mistral-small-3.2-24b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "openrouter/mistralai/mixtral-8x22b-instruct": { cr: 0.065, cw: 0.65, i: 0.65, o: 0.65 }, "openrouter/moonshotai/kimi-k2.5": { cr: 0.09999999999999999, cw: 0.6, i: 0.6, o: 3 }, "openrouter/openai/gpt-3.5-turbo": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 2 }, "openrouter/openai/gpt-3.5-turbo-16k": { cr: 0.30000000000000004, cw: 3, i: 3, o: 4 }, "openrouter/openai/gpt-4": { cr: 3, cw: 30, i: 30, o: 60 }, "openrouter/openai/gpt-4.1": { cr: 0.5, cw: 2, i: 2, o: 8 }, "openrouter/openai/gpt-4.1-mini": { cr: 0.09999999999999999, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "openrouter/openai/gpt-4.1-nano": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "openrouter/openai/gpt-4o": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "openrouter/openai/gpt-4o-2024-05-13": { cr: 0.5000000000000001, cw: 5, i: 5, o: 15 }, "openrouter/openai/gpt-5": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "openrouter/openai/gpt-5-chat": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "openrouter/openai/gpt-5-codex": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "openrouter/openai/gpt-5-mini": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "openrouter/openai/gpt-5-nano": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.39999999999999997 }, "openrouter/openai/gpt-5.1-codex-max": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "openrouter/openai/gpt-5.2": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "openrouter/openai/gpt-5.2-chat": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "openrouter/openai/gpt-5.2-codex": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "openrouter/openai/gpt-5.2-pro": { cr: 2.0999999999999996, cw: 21, i: 21, o: 168 }, "openrouter/openai/gpt-oss-120b": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0.7999999999999999 }, "openrouter/openai/gpt-oss-20b": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.09999999999999999 }, "openrouter/openai/o1": { cr: 7.5, cw: 15, i: 15, o: 60 }, "openrouter/openai/o3-mini": { cr: 0.11, cw: 1.1, i: 1.1, o: 4.4 }, "openrouter/openai/o3-mini-high": { cr: 0.11, cw: 1.1, i: 1.1, o: 4.4 }, "openrouter/openrouter/auto": { cr: 0, cw: 0, i: 0, o: 0 }, "openrouter/openrouter/bodybuilder": { cr: 0, cw: 0, i: 0, o: 0 }, "openrouter/openrouter/free": { cr: 0, cw: 0, i: 0, o: 0 }, "openrouter/qwen/qwen-2.5-coder-32b-instruct": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0.18 }, "openrouter/qwen/qwen-vl-plus": { cr: 0.021, cw: 0.21, i: 0.21, o: 0.63 }, "openrouter/qwen/qwen3-235b-a22b-2507": { cr: 0.0071, cw: 0.071, i: 0.071, o: 0.09999999999999999 }, "openrouter/qwen/qwen3-235b-a22b-thinking-2507": { cr: 0.011000000000000001, cw: 0.11, i: 0.11, o: 0.6 }, "openrouter/qwen/qwen3-coder": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.95 }, "openrouter/qwen/qwen3-coder-plus": { cr: 0.09999999999999999, cw: 1, i: 1, o: 5 }, "openrouter/qwen/qwen3.5-122b-a10b": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "openrouter/qwen/qwen3.5-27b": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.4 }, "openrouter/qwen/qwen3.5-35b-a3b": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "openrouter/qwen/qwen3.5-397b-a17b": { cr: 0.06, cw: 0.6, i: 0.6, o: 3.5999999999999996 }, "openrouter/qwen/qwen3.5-flash-02-23": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "openrouter/qwen/qwen3.5-plus-02-15": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2.4 }, "openrouter/qwen/qwen3.6-plus": { cr: 0.0325, cw: 0.325, i: 0.325, o: 1.95 }, "openrouter/switchpoint/router": { cr: 0.085, cw: 0.85, i: 0.85, o: 3.4 }, "openrouter/undi95/remm-slerp-l2-13b": { cr: 0.1875, cw: 1.875, i: 1.875, o: 1.875 }, "openrouter/x-ai/grok-4": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "openrouter/xiaomi/mimo-v2-flash": { cr: 0.01, cw: 0, i: 0.09999999999999999, o: 0.3 }, "openrouter/xiaomi/mimo-v2.5": { cr: 0.08, cw: 0, i: 0.39999999999999997, o: 2 }, "openrouter/xiaomi/mimo-v2.5-pro": { cr: 0.19999999999999998, cw: 0, i: 1, o: 3 }, "openrouter/z-ai/glm-4.6": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.75 }, "openrouter/z-ai/glm-4.6:exacto": { cr: 0.045, cw: 0.44999999999999996, i: 0.44999999999999996, o: 1.9 }, "openrouter/z-ai/glm-4.7": { cr: 0, cw: 0, i: 0.39999999999999997, o: 1.5 }, "openrouter/z-ai/glm-4.7-flash": { cr: 0, cw: 0, i: 0.07, o: 0.39999999999999997 }, "openrouter/z-ai/glm-5": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 2.56 }, "openrouter/z-ai/glm-5.1": { cr: 0.5249999999999999, cw: 0, i: 1.0499999999999998, o: 3.5 }, "ovhcloud/DeepSeek-R1-Distill-Llama-70B": { cr: 0.067, cw: 0.67, i: 0.67, o: 0.67 }, "ovhcloud/Llama-3.1-8B-Instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "ovhcloud/Meta-Llama-3_1-70B-Instruct": { cr: 0.067, cw: 0.67, i: 0.67, o: 0.67 }, "ovhcloud/Meta-Llama-3_3-70B-Instruct": { cr: 0.067, cw: 0.67, i: 0.67, o: 0.67 }, "ovhcloud/Mistral-7B-Instruct-v0.3": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "ovhcloud/Mistral-Nemo-Instruct-2407": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.13 }, "ovhcloud/Mistral-Small-3.2-24B-Instruct-2506": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.28 }, "ovhcloud/Mixtral-8x7B-Instruct-v0.1": { cr: 0.06300000000000001, cw: 0.63, i: 0.63, o: 0.63 }, "ovhcloud/Qwen2.5-Coder-32B-Instruct": { cr: 0.08700000000000001, cw: 0.87, i: 0.87, o: 0.87 }, "ovhcloud/Qwen2.5-VL-72B-Instruct": { cr: 0.09100000000000001, cw: 0.9099999999999999, i: 0.9099999999999999, o: 0.9099999999999999 }, "ovhcloud/Qwen3-32B": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.22999999999999998 }, "ovhcloud/gpt-oss-120b": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.39999999999999997 }, "ovhcloud/gpt-oss-20b": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.15 }, "ovhcloud/llava-v1.6-mistral-7b-hf": { cr: 0.028999999999999998, cw: 0.29, i: 0.29, o: 0.29 }, "ovhcloud/mamba-codestral-7B-v0.1": { cr: 0.019000000000000003, cw: 0.19, i: 0.19, o: 0.19 }, "palm/chat-bison": { cr: 0.012499999999999999, cw: 0.125, i: 0.125, o: 0.125 }, "palm/chat-bison-001": { cr: 0.012499999999999999, cw: 0.125, i: 0.125, o: 0.125 }, "palm/text-bison": { cr: 0.012499999999999999, cw: 0.125, i: 0.125, o: 0.125 }, "palm/text-bison-001": { cr: 0.012499999999999999, cw: 0.125, i: 0.125, o: 0.125 }, "palm/text-bison-safety-off": { cr: 0.012499999999999999, cw: 0.125, i: 0.125, o: 0.125 }, "palm/text-bison-safety-recitation-off": { cr: 0.012499999999999999, cw: 0.125, i: 0.125, o: 0.125 }, "perplexity/codellama-34b-instruct": { cr: 0.035, cw: 0.35, i: 0.35, o: 1.4 }, "perplexity/codellama-70b-instruct": { cr: 0.07, cw: 0.7, i: 0.7, o: 2.8 }, "perplexity/llama-2-70b-chat": { cr: 0.07, cw: 0.7, i: 0.7, o: 2.8 }, "perplexity/llama-3.1-70b-instruct": { cr: 0.09999999999999999, cw: 1, i: 1, o: 1 }, "perplexity/llama-3.1-8b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "perplexity/mistral-7b-instruct": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.28 }, "perplexity/mixtral-8x7b-instruct": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.28 }, "perplexity/pplx-70b-chat": { cr: 0.07, cw: 0.7, i: 0.7, o: 2.8 }, "perplexity/pplx-70b-online": { cr: 0, cw: 0, i: 0, o: 2.8 }, "perplexity/pplx-7b-chat": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.28 }, "perplexity/pplx-7b-online": { cr: 0, cw: 0, i: 0, o: 0.28 }, "perplexity/pplx-embed-v1-0.6b": { cr: 0.0004000000000000001, cw: 0.004, i: 0.004, o: 0 }, "perplexity/pplx-embed-v1-4b": { cr: 0.003, cw: 0.03, i: 0.03, o: 0 }, "perplexity/sonar": { cr: 0.09999999999999999, cw: 1, i: 1, o: 1 }, "perplexity/sonar-deep-research": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "perplexity/sonar-medium-chat": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.7999999999999998 }, "perplexity/sonar-medium-online": { cr: 0, cw: 0, i: 0, o: 1.7999999999999998 }, "perplexity/sonar-pro": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "perplexity/sonar-reasoning": { cr: 0.09999999999999999, cw: 1, i: 1, o: 5 }, "perplexity/sonar-reasoning-pro": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "perplexity/sonar-small-chat": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.28 }, "perplexity/sonar-small-online": { cr: 0, cw: 0, i: 0, o: 0.28 }, "pinstripes/ps/deepseek-v4-flash": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.19999999999999998 }, "pinstripes/ps/glm-4.5-air": { cr: 0.012499999999999999, cw: 0.125, i: 0.125, o: 0.44999999999999996 }, "pinstripes/ps/minimax-m2.7": { cr: 0.0255, cw: 0.255, i: 0.255, o: 0.55 }, "pinstripes/ps/qwen3-30b-a3b": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.19999999999999998 }, "pinstripes/ps/qwen3-coder-30b-a3b": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.6 }, "pinstripes/ps/qwen3.6-35b-a3b": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.44999999999999996 }, "publicai/BSC-LT/ALIA-40b-instruct_Q8_0": { cr: 0, cw: 0, i: 0, o: 0 }, "publicai/BSC-LT/salamandra-7b-instruct-tools-16k": { cr: 0, cw: 0, i: 0, o: 0 }, "publicai/aisingapore/Gemma-SEA-LION-v4-27B-IT": { cr: 0, cw: 0, i: 0, o: 0 }, "publicai/aisingapore/Qwen-SEA-LION-v4-32B-IT": { cr: 0, cw: 0, i: 0, o: 0 }, "publicai/allenai/Olmo-3-32B-Think": { cr: 0, cw: 0, i: 0, o: 0 }, "publicai/allenai/Olmo-3-7B-Instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "publicai/allenai/Olmo-3-7B-Think": { cr: 0, cw: 0, i: 0, o: 0 }, "publicai/swiss-ai/apertus-70b-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "publicai/swiss-ai/apertus-8b-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "qwen.qwen3-235b-a22b-2507-v1:0": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.88 }, "qwen.qwen3-32b-v1:0": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "qwen.qwen3-coder-30b-a3b-v1:0": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "qwen.qwen3-coder-480b-a35b-v1:0": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 1.7999999999999998 }, "qwen.qwen3-coder-next": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.2 }, "qwen.qwen3-next-80b-a3b": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.2 }, "qwen.qwen3-vl-235b-a22b": { cr: 0.053000000000000005, cw: 0.53, i: 0.53, o: 2.66 }, "replicate/anthropic/claude-3.5-haiku": { cr: 0.09999999999999999, cw: 1, i: 1, o: 5 }, "replicate/anthropic/claude-3.5-sonnet": { cr: 0.375, cw: 3.75, i: 3.75, o: 18.75 }, "replicate/anthropic/claude-3.7-sonnet": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "replicate/anthropic/claude-4-sonnet": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "replicate/anthropic/claude-4.5-haiku": { cr: 0.09999999999999999, cw: 1, i: 1, o: 5 }, "replicate/anthropic/claude-4.5-sonnet": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "replicate/deepseek-ai/deepseek-r1": { cr: 0.375, cw: 3.75, i: 3.75, o: 10 }, "replicate/deepseek-ai/deepseek-v3": { cr: 0.14500000000000002, cw: 1.4500000000000002, i: 1.4500000000000002, o: 1.4500000000000002 }, "replicate/deepseek-ai/deepseek-v3.1": { cr: 0.06720000000000001, cw: 0.6719999999999999, i: 0.6719999999999999, o: 2.016 }, "replicate/google/gemini-2.5-flash": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 2.5 }, "replicate/google/gemini-3-pro": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "replicate/ibm-granite/granite-3.3-8b-instruct": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.25 }, "replicate/meta/llama-2-13b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.5 }, "replicate/meta/llama-2-13b-chat": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.5 }, "replicate/meta/llama-2-70b": { cr: 0.065, cw: 0.65, i: 0.65, o: 2.75 }, "replicate/meta/llama-2-70b-chat": { cr: 0.065, cw: 0.65, i: 0.65, o: 2.75 }, "replicate/meta/llama-2-7b": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.25 }, "replicate/meta/llama-2-7b-chat": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.25 }, "replicate/meta/llama-3-70b": { cr: 0.065, cw: 0.65, i: 0.65, o: 2.75 }, "replicate/meta/llama-3-70b-instruct": { cr: 0.065, cw: 0.65, i: 0.65, o: 2.75 }, "replicate/meta/llama-3-8b": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.25 }, "replicate/meta/llama-3-8b-instruct": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.25 }, "replicate/mistralai/mistral-7b-instruct-v0.2": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.25 }, "replicate/mistralai/mistral-7b-v0.1": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.25 }, "replicate/mistralai/mixtral-8x7b-instruct-v0.1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1 }, "replicate/openai/gpt-4.1": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "replicate/openai/gpt-4.1-mini": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "replicate/openai/gpt-4.1-nano": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "replicate/openai/gpt-4o": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "replicate/openai/gpt-4o-mini": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "replicate/openai/gpt-5": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 10 }, "replicate/openai/gpt-5-mini": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "replicate/openai/gpt-5-nano": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.39999999999999997 }, "replicate/openai/gpt-oss-120b": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0.72 }, "replicate/openai/o1": { cr: 1.5, cw: 15, i: 15, o: 60 }, "replicate/openai/o1-mini": { cr: 0.11, cw: 1.1, i: 1.1, o: 4.4 }, "replicate/openai/o4-mini": { cr: 0.09999999999999999, cw: 1, i: 1, o: 4 }, "replicate/qwen/qwen3-235b-a22b-instruct-2507": { cr: 0.0264, cw: 0.26399999999999996, i: 0.26399999999999996, o: 1.06 }, "replicate/xai/grok-4": { cr: 0.72, cw: 7.199999999999999, i: 7.199999999999999, o: 36 }, "replicateopenai/gpt-oss-20b": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.36 }, "rerank-english-v2.0": { cr: 0, cw: 0, i: 0, o: 0 }, "rerank-english-v3.0": { cr: 0, cw: 0, i: 0, o: 0 }, "rerank-multilingual-v2.0": { cr: 0, cw: 0, i: 0, o: 0 }, "rerank-multilingual-v3.0": { cr: 0, cw: 0, i: 0, o: 0 }, "rerank-v3.5": { cr: 0, cw: 0, i: 0, o: 0 }, "sagemaker/meta-textgeneration-llama-2-13b": { cr: 0, cw: 0, i: 0, o: 0 }, "sagemaker/meta-textgeneration-llama-2-13b-f": { cr: 0, cw: 0, i: 0, o: 0 }, "sagemaker/meta-textgeneration-llama-2-70b": { cr: 0, cw: 0, i: 0, o: 0 }, "sagemaker/meta-textgeneration-llama-2-70b-b-f": { cr: 0, cw: 0, i: 0, o: 0 }, "sagemaker/meta-textgeneration-llama-2-7b": { cr: 0, cw: 0, i: 0, o: 0 }, "sagemaker/meta-textgeneration-llama-2-7b-f": { cr: 0, cw: 0, i: 0, o: 0 }, "sambanova/DeepSeek-R1": { cr: 0.5000000000000001, cw: 5, i: 5, o: 7 }, "sambanova/DeepSeek-R1-Distill-Llama-70B": { cr: 0.07, cw: 0.7, i: 0.7, o: 1.4 }, "sambanova/DeepSeek-V3-0324": { cr: 0.30000000000000004, cw: 3, i: 3, o: 4.5 }, "sambanova/DeepSeek-V3.1": { cr: 0.30000000000000004, cw: 3, i: 3, o: 4.5 }, "sambanova/DeepSeek-V3.2": { cr: 0.30000000000000004, cw: 3, i: 3, o: 4.5 }, "sambanova/Llama-4-Maverick-17B-128E-Instruct": { cr: 0.06300000000000001, cw: 0.63, i: 0.63, o: 1.7999999999999998 }, "sambanova/Llama-4-Scout-17B-16E-Instruct": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 0.7 }, "sambanova/Meta-Llama-3.1-405B-Instruct": { cr: 0.5000000000000001, cw: 5, i: 5, o: 10 }, "sambanova/Meta-Llama-3.1-8B-Instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.19999999999999998 }, "sambanova/Meta-Llama-3.2-1B-Instruct": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.08 }, "sambanova/Meta-Llama-3.2-3B-Instruct": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.16 }, "sambanova/Meta-Llama-3.3-70B-Instruct": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.2 }, "sambanova/Meta-Llama-Guard-3-8B": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.3 }, "sambanova/MiniMax-M2.7": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "sambanova/QwQ-32B": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1 }, "sambanova/Qwen2-Audio-7B-Instruct": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 100 }, "sambanova/Qwen3-32B": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 0.7999999999999999 }, "sambanova/gemma-4-31B-it": { cr: 0.038000000000000006, cw: 0.38, i: 0.38, o: 1.15 }, "sambanova/gpt-oss-120b": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.59 }, sample_spec: { cr: 0, cw: 0, i: 0, o: 0 }, "sarvam/sarvam-m": { cr: 0, cw: 0, i: 0, o: 0 }, "scaleway/BAAI/bge-multilingual-gemma2": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "scaleway/google/gemma-3-27b-it": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.5 }, "scaleway/google/gemma-4-26b-a4b-it": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.5 }, "scaleway/hcompany/holo2-30b-a3b": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.7 }, "scaleway/meta/llama-3.3-70b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "scaleway/mistralai/devstral-2-123b-instruct-2512": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "scaleway/mistralai/mistral-medium-3.5-128b": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 7.5 }, "scaleway/mistralai/mistral-small-3.2-24b-instruct-2506": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.35 }, "scaleway/mistralai/pixtral-12b-2409": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "scaleway/mistralai/voxtral-small-24b-2507": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.35 }, "scaleway/openai/gpt-oss-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "scaleway/qwen/qwen3-235b-a22b-instruct-2507": { cr: 0.07500000000000001, cw: 0.75, i: 0.75, o: 2.25 }, "scaleway/qwen/qwen3-coder-30b-a3b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.7999999999999999 }, "scaleway/qwen/qwen3-embedding-8b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "scaleway/qwen/qwen3.5-397b-a17b": { cr: 0.06, cw: 0.6, i: 0.6, o: 3.5999999999999996 }, "scaleway/qwen/qwen3.6-35b-a3b": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "snowflake/claude-3-5-sonnet": { cr: 0.3, cw: 3, i: 3, o: 15 }, "snowflake/claude-3-7-sonnet": { cr: 0.3, cw: 3, i: 3, o: 15 }, "snowflake/claude-4-opus": { cr: 0.5, cw: 5, i: 5, o: 25 }, "snowflake/claude-4-sonnet": { cr: 0.3, cw: 3, i: 3, o: 15 }, "snowflake/claude-haiku-4-5": { cr: 0.09999999999999999, cw: 1, i: 1, o: 5 }, "snowflake/claude-sonnet-4-5": { cr: 0.3, cw: 3, i: 3, o: 15 }, "snowflake/claude-sonnet-4-6": { cr: 0.3, cw: 3, i: 3, o: 15 }, "snowflake/deepseek-r1": { cr: 0.135, cw: 1.35, i: 1.35, o: 5.4 }, "snowflake/llama3.1-405b": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "snowflake/llama3.1-70b": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "snowflake/llama3.1-8b": { cr: 0.024, cw: 0.24, i: 0.24, o: 0.24 }, "snowflake/llama3.3-70b": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "snowflake/llama4-maverick": { cr: 0.024, cw: 0.24, i: 0.24, o: 0.9700000000000001 }, "snowflake/mistral-large2": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "snowflake/openai-gpt-4.1": { cr: 0.5, cw: 2, i: 2, o: 8 }, "snowflake/openai-gpt-5": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "snowflake/openai-gpt-5-mini": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "snowflake/openai-gpt-5-nano": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "snowflake/snowflake-arctic-embed-l-v2.0": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0 }, "snowflake/snowflake-arctic-embed-m-v2.0": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0 }, "snowflake/snowflake-llama-3.3-70b": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "tensormesh/MiniMaxAI/MiniMax-M2.5": { cr: 0, cw: 0.3, i: 0.3, o: 1.2 }, "tensormesh/Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8": { cr: 0, cw: 0.44999999999999996, i: 0.44999999999999996, o: 1.7999999999999998 }, "tensormesh/Qwen/Qwen3.5-397B-A17B-FP8": { cr: 0, cw: 0.6, i: 0.6, o: 3.5999999999999996 }, "tensormesh/Qwen/Qwen3.6-27B-FP8": { cr: 0, cw: 0.32, i: 0.32, o: 3.1999999999999997 }, "tensormesh/deepseek-ai/DeepSeek-V4-Flash": { cr: 0, cw: 0.14, i: 0.14, o: 0.28 }, "tensormesh/google/gemma-4-31B-it": { cr: 0, cw: 0.14, i: 0.14, o: 0.56 }, "tensormesh/lukealonso/GLM-5.1-NVFP4-MTP": { cr: 0, cw: 1.4, i: 1.4, o: 4.4 }, "tensormesh/moonshotai/Kimi-K2.6": { cr: 0, cw: 0.96, i: 0.96, o: 4 }, "tensormesh/openai/gpt-oss-120b": { cr: 0, cw: 0.15, i: 0.15, o: 0.6 }, "tensormesh/openai/gpt-oss-20b": { cr: 0, cw: 0.07, i: 0.07, o: 0.28 }, "text-completion-codestral/codestral-2405": { cr: 0, cw: 0, i: 0, o: 0 }, "text-completion-codestral/codestral-latest": { cr: 0, cw: 0, i: 0, o: 0 }, "text-completion-inception/mercury-edit-2": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.75 }, "text-embedding-004": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "text-embedding-005": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "text-embedding-3-large": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0 }, "text-embedding-3-small": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "text-embedding-ada-002": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "text-embedding-ada-002-v2": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "text-embedding-large-exp-03-07": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "text-embedding-preview-0409": { cr: 0.000625, cw: 0.0062499999999999995, i: 0.0062499999999999995, o: 0 }, "text-moderation-007": { cr: 0, cw: 0, i: 0, o: 0 }, "text-moderation-latest": { cr: 0, cw: 0, i: 0, o: 0 }, "text-moderation-stable": { cr: 0, cw: 0, i: 0, o: 0 }, "text-multilingual-embedding-002": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "text-unicorn": { cr: 1.0000000000000002, cw: 10, i: 10, o: 28 }, "text-unicorn@001": { cr: 1.0000000000000002, cw: 10, i: 10, o: 28 }, "together-ai-21.1b-41b": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 0.7999999999999999 }, "together-ai-4.1b-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "together-ai-41.1b-80b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "together-ai-8.1b-21b": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.3 }, "together-ai-81.1b-110b": { cr: 0.18, cw: 1.7999999999999998, i: 1.7999999999999998, o: 1.7999999999999998 }, "together-ai-embedding-151m-to-350m": { cr: 0.0016000000000000003, cw: 0.016, i: 0.016, o: 0 }, "together-ai-embedding-up-to-150m": { cr: 0.0008000000000000001, cw: 0.008, i: 0.008, o: 0 }, "together-ai-up-to-4b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "together_ai/BAAI/bge-base-en-v1.5": { cr: 0.0008000000000000001, cw: 0.008, i: 0.008, o: 0 }, "together_ai/Qwen/Qwen3-235B-A22B-Instruct-2507-tput": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 6 }, "together_ai/Qwen/Qwen3-235B-A22B-Thinking-2507": { cr: 0.065, cw: 0.65, i: 0.65, o: 3 }, "together_ai/Qwen/Qwen3-235B-A22B-fp8-tput": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "together_ai/Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8": { cr: 0.19999999999999998, cw: 2, i: 2, o: 2 }, "together_ai/Qwen/Qwen3-Next-80B-A3B-Instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.5 }, "together_ai/Qwen/Qwen3-Next-80B-A3B-Thinking": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.5 }, "together_ai/Qwen/Qwen3.5-397B-A17B": { cr: 0.06, cw: 0.6, i: 0.6, o: 3.5999999999999996 }, "together_ai/baai/bge-base-en-v1.5": { cr: 0.0008000000000000001, cw: 0.008, i: 0.008, o: 0 }, "together_ai/deepseek-ai/DeepSeek-R1": { cr: 0.30000000000000004, cw: 3, i: 3, o: 7 }, "together_ai/deepseek-ai/DeepSeek-R1-0528-tput": { cr: 0.055, cw: 0.55, i: 0.55, o: 2.1900000000000004 }, "together_ai/deepseek-ai/DeepSeek-V3": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 1.25 }, "together_ai/deepseek-ai/DeepSeek-V3.1": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.7 }, "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo": { cr: 0.08800000000000001, cw: 0.88, i: 0.88, o: 0.88 }, "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo-Free": { cr: 0, cw: 0, i: 0, o: 0 }, "together_ai/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 0.85 }, "together_ai/meta-llama/Llama-4-Scout-17B-16E-Instruct": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0.59 }, "together_ai/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo": { cr: 0.35000000000000003, cw: 3.5, i: 3.5, o: 3.5 }, "together_ai/meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo": { cr: 0.08800000000000001, cw: 0.88, i: 0.88, o: 0.88 }, "together_ai/meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0.18 }, "together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1": { cr: 0.06, cw: 0.6, i: 0.6, o: 0.6 }, "together_ai/moonshotai/Kimi-K2-Instruct": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "together_ai/moonshotai/Kimi-K2-Instruct-0905": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "together_ai/moonshotai/Kimi-K2.5": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 2.8 }, "together_ai/openai/gpt-oss-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "together_ai/openai/gpt-oss-20b": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.19999999999999998 }, "together_ai/zai-org/GLM-4.5-Air-FP8": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.1 }, "together_ai/zai-org/GLM-4.6": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.2 }, "together_ai/zai-org/GLM-4.7": { cr: 0.045, cw: 0.44999999999999996, i: 0.44999999999999996, o: 2 }, "twelvelabs.marengo-embed-2-7-v1:0": { cr: 7, cw: 70, i: 70, o: 0 }, "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.36, cra: 0.72, cw: 4.5, cwa: 9, i: 3.5999999999999996, ia: 7.199999999999999, o: 18, oa: 27 }, "us.amazon.nova-2-lite-v1:0": { cr: 0.0825, cw: 0.33, i: 0.33, o: 2.75 }, "us.amazon.nova-2-pro-preview-20251202-v1:0": { cr: 0.546875, cw: 2.1875, i: 2.1875, o: 17.5 }, "us.amazon.nova-lite-v1:0": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.24 }, "us.amazon.nova-micro-v1:0": { cr: 0.0035000000000000005, cw: 0.035, i: 0.035, o: 0.14 }, "us.amazon.nova-premier-v1:0": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 12.5 }, "us.amazon.nova-pro-v1:0": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 3.1999999999999997 }, "us.anthropic.claude-3-5-haiku-20241022-v1:0": { cr: 0.08, cw: 1, i: 0.7999999999999999, o: 4 }, "us.anthropic.claude-3-5-sonnet-20240620-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "us.anthropic.claude-3-5-sonnet-20241022-v2:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "us.anthropic.claude-3-7-sonnet-20250219-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "us.anthropic.claude-3-haiku-20240307-v1:0": { cr: 0.024999999999999998, cw: 0.3125, i: 0.25, o: 1.25 }, "us.anthropic.claude-3-opus-20240229-v1:0": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "us.anthropic.claude-3-sonnet-20240229-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "us.anthropic.claude-fable-5": { cr: 1.1, cw: 13.75, i: 11, o: 55 }, "us.anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.11, cw: 1.375, i: 1.1, o: 5.5 }, "us.anthropic.claude-opus-4-1-20250805-v1:0": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "us.anthropic.claude-opus-4-20250514-v1:0": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "us.anthropic.claude-opus-4-5-20251101-v1:0": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "us.anthropic.claude-opus-4-6-v1": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "us.anthropic.claude-opus-4-7": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "us.anthropic.claude-opus-4-8": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "us.anthropic.claude-sonnet-4-20250514-v1:0": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "us.anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.33, cra: 0.66, cw: 4.125, cwa: 8.25, i: 3.3000000000000003, ia: 6.6000000000000005, o: 16.5, oa: 24.75 }, "us.anthropic.claude-sonnet-4-6": { cr: 0.33, cw: 4.125, i: 3.3000000000000003, o: 16.5 }, "us.anthropic.claude-sonnet-5": { cr: 0.33, cw: 4.125, i: 3.3000000000000003, o: 16.5 }, "us.deepseek.r1-v1:0": { cr: 0.135, cw: 1.35, i: 1.35, o: 5.4 }, "us.deepseek.v3.2": { cr: 0.062, cw: 0.62, i: 0.62, o: 1.85 }, "us.meta.llama3-1-405b-instruct-v1:0": { cr: 0.532, cw: 5.32, i: 5.32, o: 16 }, "us.meta.llama3-1-70b-instruct-v1:0": { cr: 0.09900000000000002, cw: 0.9900000000000001, i: 0.9900000000000001, o: 0.9900000000000001 }, "us.meta.llama3-1-8b-instruct-v1:0": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.22 }, "us.meta.llama3-2-11b-instruct-v1:0": { cr: 0.035, cw: 0.35, i: 0.35, o: 0.35 }, "us.meta.llama3-2-1b-instruct-v1:0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "us.meta.llama3-2-3b-instruct-v1:0": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "us.meta.llama3-2-90b-instruct-v1:0": { cr: 0.19999999999999998, cw: 2, i: 2, o: 2 }, "us.meta.llama3-3-70b-instruct-v1:0": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "us.meta.llama4-maverick-17b-instruct-v1:0": { cr: 0.024, cw: 0.24, i: 0.24, o: 0.9700000000000001 }, "us.meta.llama4-scout-17b-instruct-v1:0": { cr: 0.017, cw: 0.16999999999999998, i: 0.16999999999999998, o: 0.66 }, "us.mistral.pixtral-large-2502-v1:0": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "us.twelvelabs.marengo-embed-2-7-v1:0": { cr: 7, cw: 70, i: 70, o: 0 }, "us.writer.palmyra-x4-v1:0": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "us.writer.palmyra-x5-v1:0": { cr: 0.06, cw: 0.6, i: 0.6, o: 6 }, "v0/v0-1.0-md": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "v0/v0-1.5-lg": { cr: 1.5, cw: 15, i: 15, o: 75 }, "v0/v0-1.5-md": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "vercel_ai_gateway/alibaba/qwen-3-14b": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.24 }, "vercel_ai_gateway/alibaba/qwen-3-235b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "vercel_ai_gateway/alibaba/qwen-3-30b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "vercel_ai_gateway/alibaba/qwen-3-32b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "vercel_ai_gateway/alibaba/qwen3-coder": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "vercel_ai_gateway/amazon/nova-lite": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.24 }, "vercel_ai_gateway/amazon/nova-micro": { cr: 0.0035000000000000005, cw: 0.035, i: 0.035, o: 0.14 }, "vercel_ai_gateway/amazon/nova-pro": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 3.1999999999999997 }, "vercel_ai_gateway/amazon/titan-embed-text-v2": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "vercel_ai_gateway/anthropic/claude-3-5-sonnet": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vercel_ai_gateway/anthropic/claude-3-5-sonnet-20241022": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vercel_ai_gateway/anthropic/claude-3-7-sonnet": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vercel_ai_gateway/anthropic/claude-3-haiku": { cr: 0.03, cw: 0.3, i: 0.25, o: 1.25 }, "vercel_ai_gateway/anthropic/claude-3-opus": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "vercel_ai_gateway/anthropic/claude-3.5-haiku": { cr: 0.08, cw: 1, i: 0.7999999999999999, o: 4 }, "vercel_ai_gateway/anthropic/claude-3.5-sonnet": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vercel_ai_gateway/anthropic/claude-3.7-sonnet": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vercel_ai_gateway/anthropic/claude-4-opus": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "vercel_ai_gateway/anthropic/claude-4-sonnet": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vercel_ai_gateway/anthropic/claude-haiku-4.5": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "vercel_ai_gateway/anthropic/claude-opus-4": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "vercel_ai_gateway/anthropic/claude-opus-4.1": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "vercel_ai_gateway/anthropic/claude-opus-4.5": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "vercel_ai_gateway/anthropic/claude-opus-4.6": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "vercel_ai_gateway/anthropic/claude-sonnet-4": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vercel_ai_gateway/anthropic/claude-sonnet-4.5": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vercel_ai_gateway/cohere/command-a": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "vercel_ai_gateway/cohere/command-r": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "vercel_ai_gateway/cohere/command-r-plus": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "vercel_ai_gateway/cohere/embed-v4.0": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, "vercel_ai_gateway/deepseek/deepseek-r1": { cr: 0.055, cw: 0.55, i: 0.55, o: 2.1900000000000004 }, "vercel_ai_gateway/deepseek/deepseek-r1-distill-llama-70b": { cr: 0.07500000000000001, cw: 0.75, i: 0.75, o: 0.9900000000000001 }, "vercel_ai_gateway/deepseek/deepseek-v3": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "vercel_ai_gateway/google/gemini-2.0-flash": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "vercel_ai_gateway/google/gemini-2.0-flash-lite": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0.3 }, "vercel_ai_gateway/google/gemini-2.5-flash": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "vercel_ai_gateway/google/gemini-2.5-pro": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "vercel_ai_gateway/google/gemini-embedding-001": { cr: 0.015, cw: 0.15, i: 0.15, o: 0 }, "vercel_ai_gateway/google/gemma-2-9b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "vercel_ai_gateway/google/text-embedding-005": { cr: 0.0025, cw: 0.024999999999999998, i: 0.024999999999999998, o: 0 }, "vercel_ai_gateway/google/text-multilingual-embedding-002": { cr: 0.0025, cw: 0.024999999999999998, i: 0.024999999999999998, o: 0 }, "vercel_ai_gateway/inception/mercury-coder-small": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1 }, "vercel_ai_gateway/meta/llama-3-70b": { cr: 0.059, cw: 0.59, i: 0.59, o: 0.7899999999999999 }, "vercel_ai_gateway/meta/llama-3-8b": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.08 }, "vercel_ai_gateway/meta/llama-3.1-70b": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "vercel_ai_gateway/meta/llama-3.1-8b": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.08 }, "vercel_ai_gateway/meta/llama-3.2-11b": { cr: 0.016, cw: 0.16, i: 0.16, o: 0.16 }, "vercel_ai_gateway/meta/llama-3.2-1b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "vercel_ai_gateway/meta/llama-3.2-3b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "vercel_ai_gateway/meta/llama-3.2-90b": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "vercel_ai_gateway/meta/llama-3.3-70b": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "vercel_ai_gateway/meta/llama-4-maverick": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "vercel_ai_gateway/meta/llama-4-scout": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "vercel_ai_gateway/mistral/codestral": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.8999999999999999 }, "vercel_ai_gateway/mistral/codestral-embed": { cr: 0.015, cw: 0.15, i: 0.15, o: 0 }, "vercel_ai_gateway/mistral/devstral-small": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.28 }, "vercel_ai_gateway/mistral/magistral-medium": { cr: 0.19999999999999998, cw: 2, i: 2, o: 5 }, "vercel_ai_gateway/mistral/magistral-small": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "vercel_ai_gateway/mistral/ministral-3b": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.04 }, "vercel_ai_gateway/mistral/ministral-8b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "vercel_ai_gateway/mistral/mistral-embed": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "vercel_ai_gateway/mistral/mistral-large": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "vercel_ai_gateway/mistral/mistral-saba-24b": { cr: 0.079, cw: 0.7899999999999999, i: 0.7899999999999999, o: 0.7899999999999999 }, "vercel_ai_gateway/mistral/mistral-small": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "vercel_ai_gateway/mistral/mixtral-8x22b-instruct": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "vercel_ai_gateway/mistral/pixtral-12b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "vercel_ai_gateway/mistral/pixtral-large": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "vercel_ai_gateway/moonshotai/kimi-k2": { cr: 0.055, cw: 0.55, i: 0.55, o: 2.2 }, "vercel_ai_gateway/morph/morph-v3-fast": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 1.2 }, "vercel_ai_gateway/morph/morph-v3-large": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 1.9 }, "vercel_ai_gateway/openai/gpt-3.5-turbo": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "vercel_ai_gateway/openai/gpt-3.5-turbo-instruct": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 2 }, "vercel_ai_gateway/openai/gpt-4-turbo": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "vercel_ai_gateway/openai/gpt-4.1": { cr: 0.5, cw: 0, i: 2, o: 8 }, "vercel_ai_gateway/openai/gpt-4.1-mini": { cr: 0.09999999999999999, cw: 0, i: 0.39999999999999997, o: 1.5999999999999999 }, "vercel_ai_gateway/openai/gpt-4.1-nano": { cr: 0.024999999999999998, cw: 0, i: 0.09999999999999999, o: 0.39999999999999997 }, "vercel_ai_gateway/openai/gpt-4o": { cr: 1.25, cw: 0, i: 2.5, o: 10 }, "vercel_ai_gateway/openai/gpt-4o-mini": { cr: 0.075, cw: 0, i: 0.15, o: 0.6 }, "vercel_ai_gateway/openai/o1": { cr: 7.5, cw: 0, i: 15, o: 60 }, "vercel_ai_gateway/openai/o3": { cr: 0.5, cw: 0, i: 2, o: 8 }, "vercel_ai_gateway/openai/o3-mini": { cr: 0.55, cw: 0, i: 1.1, o: 4.4 }, "vercel_ai_gateway/openai/o4-mini": { cr: 0.275, cw: 0, i: 1.1, o: 4.4 }, "vercel_ai_gateway/openai/text-embedding-3-large": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0 }, "vercel_ai_gateway/openai/text-embedding-3-small": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "vercel_ai_gateway/openai/text-embedding-ada-002": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "vercel_ai_gateway/perplexity/sonar": { cr: 0.09999999999999999, cw: 1, i: 1, o: 1 }, "vercel_ai_gateway/perplexity/sonar-pro": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "vercel_ai_gateway/perplexity/sonar-reasoning": { cr: 0.09999999999999999, cw: 1, i: 1, o: 5 }, "vercel_ai_gateway/perplexity/sonar-reasoning-pro": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "vercel_ai_gateway/vercel/v0-1.0-md": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "vercel_ai_gateway/vercel/v0-1.5-md": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "vercel_ai_gateway/xai/grok-2": { cr: 0.19999999999999998, cw: 2, i: 2, o: 10 }, "vercel_ai_gateway/xai/grok-2-vision": { cr: 0.19999999999999998, cw: 2, i: 2, o: 10 }, "vercel_ai_gateway/xai/grok-3": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "vercel_ai_gateway/xai/grok-3-fast": { cr: 0.5000000000000001, cw: 5, i: 5, o: 25 }, "vercel_ai_gateway/xai/grok-3-mini": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.5 }, "vercel_ai_gateway/xai/grok-3-mini-fast": { cr: 0.06, cw: 0.6, i: 0.6, o: 4 }, "vercel_ai_gateway/xai/grok-4": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "vercel_ai_gateway/zai/glm-4.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.2 }, "vercel_ai_gateway/zai/glm-4.5-air": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.1 }, "vercel_ai_gateway/zai/glm-4.6": { cr: 0.11, cw: 0.44999999999999996, i: 0.44999999999999996, o: 1.7999999999999998 }, "vertex_ai/claude-3-5-haiku": { cr: 0.09999999999999999, cw: 1, i: 1, o: 5 }, "vertex_ai/claude-3-5-haiku@20241022": { cr: 0.09999999999999999, cw: 1, i: 1, o: 5 }, "vertex_ai/claude-3-5-sonnet": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "vertex_ai/claude-3-5-sonnet@20240620": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "vertex_ai/claude-3-7-sonnet@20250219": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vertex_ai/claude-3-haiku": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.25 }, "vertex_ai/claude-3-haiku@20240307": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.25 }, "vertex_ai/claude-3-opus": { cr: 1.5, cw: 15, i: 15, o: 75 }, "vertex_ai/claude-3-opus@20240229": { cr: 1.5, cw: 15, i: 15, o: 75 }, "vertex_ai/claude-3-sonnet": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "vertex_ai/claude-3-sonnet@20240229": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "vertex_ai/claude-fable-5": { cr: 1, cw: 12.5, i: 10, o: 50 }, "vertex_ai/claude-fable-5@default": { cr: 1, cw: 12.5, i: 10, o: 50 }, "vertex_ai/claude-haiku-4-5": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "vertex_ai/claude-haiku-4-5@20251001": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "vertex_ai/claude-opus-4": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "vertex_ai/claude-opus-4-1": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "vertex_ai/claude-opus-4-1@20250805": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "vertex_ai/claude-opus-4-5": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "vertex_ai/claude-opus-4-5@20251101": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "vertex_ai/claude-opus-4-6": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "vertex_ai/claude-opus-4-6@default": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "vertex_ai/claude-opus-4-7": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "vertex_ai/claude-opus-4-7@default": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "vertex_ai/claude-opus-4-8": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "vertex_ai/claude-opus-4-8@default": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "vertex_ai/claude-opus-4@20250514": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "vertex_ai/claude-sonnet-4": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "vertex_ai/claude-sonnet-4-5": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "vertex_ai/claude-sonnet-4-5@20250929": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "vertex_ai/claude-sonnet-4-6": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vertex_ai/claude-sonnet-4-6@default": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vertex_ai/claude-sonnet-4@20250514": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "vertex_ai/claude-sonnet-5": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vertex_ai/claude-sonnet-5@default": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vertex_ai/codestral-2": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.8999999999999999 }, "vertex_ai/codestral-2501": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "vertex_ai/codestral-2@001": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.8999999999999999 }, "vertex_ai/codestral@2405": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "vertex_ai/codestral@latest": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "vertex_ai/deep-research-pro-preview-12-2025": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "vertex_ai/deepseek-ai/deepseek-ocr-maas": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "vertex_ai/deepseek-ai/deepseek-r1-0528-maas": { cr: 0.135, cw: 1.35, i: 1.35, o: 5.4 }, "vertex_ai/deepseek-ai/deepseek-v3.1-maas": { cr: 0.135, cw: 1.35, i: 1.35, o: 5.4 }, "vertex_ai/deepseek-ai/deepseek-v3.2-maas": { cr: 0.05600000000000001, cw: 0.56, i: 0.56, o: 1.68 }, "vertex_ai/gemini-2.5-flash-image": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "vertex_ai/gemini-3-flash-preview": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 3 }, "vertex_ai/gemini-3-pro-image": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "vertex_ai/gemini-3-pro-image-preview": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "vertex_ai/gemini-3-pro-preview": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, cwa: 0.25, i: 2, ia: 4, o: 12, oa: 18 }, "vertex_ai/gemini-3.1-flash-image": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 3 }, "vertex_ai/gemini-3.1-flash-image-preview": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 3 }, "vertex_ai/gemini-3.1-flash-lite": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "vertex_ai/gemini-3.1-flash-lite-preview": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "vertex_ai/gemini-3.1-pro-preview": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, cwa: 0.25, i: 2, ia: 4, o: 12, oa: 18 }, "vertex_ai/gemini-3.1-pro-preview-customtools": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, cwa: 0.25, i: 2, ia: 4, o: 12, oa: 18 }, "vertex_ai/gemini-3.5-flash": { cr: 0.15, cw: 1.5, i: 1.5, o: 9 }, "vertex_ai/gemini-embedding-2": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0 }, "vertex_ai/gemini-embedding-2-preview": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0 }, "vertex_ai/google/gemma-4-26b-a4b-it-maas": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "vertex_ai/jamba-1.5": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.39999999999999997 }, "vertex_ai/jamba-1.5-large": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "vertex_ai/jamba-1.5-large@001": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "vertex_ai/jamba-1.5-mini": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.39999999999999997 }, "vertex_ai/jamba-1.5-mini@001": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.39999999999999997 }, "vertex_ai/meta/llama-3.1-405b-instruct-maas": { cr: 0.5000000000000001, cw: 5, i: 5, o: 16 }, "vertex_ai/meta/llama-3.1-70b-instruct-maas": { cr: 0, cw: 0, i: 0, o: 0 }, "vertex_ai/meta/llama-3.1-8b-instruct-maas": { cr: 0, cw: 0, i: 0, o: 0 }, "vertex_ai/meta/llama-3.2-90b-vision-instruct-maas": { cr: 0, cw: 0, i: 0, o: 0 }, "vertex_ai/meta/llama-4-maverick-17b-128e-instruct-maas": { cr: 0.035, cw: 0.35, i: 0.35, o: 1.15 }, "vertex_ai/meta/llama-4-maverick-17b-16e-instruct-maas": { cr: 0.035, cw: 0.35, i: 0.35, o: 1.15 }, "vertex_ai/meta/llama-4-scout-17b-128e-instruct-maas": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.7 }, "vertex_ai/meta/llama-4-scout-17b-16e-instruct-maas": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.7 }, "vertex_ai/meta/llama3-405b-instruct-maas": { cr: 0, cw: 0, i: 0, o: 0 }, "vertex_ai/meta/llama3-70b-instruct-maas": { cr: 0, cw: 0, i: 0, o: 0 }, "vertex_ai/meta/llama3-8b-instruct-maas": { cr: 0, cw: 0, i: 0, o: 0 }, "vertex_ai/minimaxai/minimax-m2-maas": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "vertex_ai/mistral-large-2411": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "vertex_ai/mistral-large@2407": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "vertex_ai/mistral-large@2411-001": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "vertex_ai/mistral-large@latest": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "vertex_ai/mistral-medium-3": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "vertex_ai/mistral-medium-3@001": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "vertex_ai/mistral-nemo@2407": { cr: 0.30000000000000004, cw: 3, i: 3, o: 3 }, "vertex_ai/mistral-nemo@latest": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "vertex_ai/mistral-small-2503": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "vertex_ai/mistral-small-2503@001": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "vertex_ai/mistralai/codestral-2": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.8999999999999999 }, "vertex_ai/mistralai/codestral-2@001": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.8999999999999999 }, "vertex_ai/mistralai/mistral-medium-3": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "vertex_ai/mistralai/mistral-medium-3@001": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "vertex_ai/moonshotai/kimi-k2-thinking-maas": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "vertex_ai/openai/gpt-oss-120b-maas": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "vertex_ai/openai/gpt-oss-20b-maas": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0.3 }, "vertex_ai/qwen/qwen3-235b-a22b-instruct-2507-maas": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1 }, "vertex_ai/qwen/qwen3-coder-480b-a35b-instruct-maas": { cr: 0.09999999999999999, cw: 1, i: 1, o: 4 }, "vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.2 }, "vertex_ai/qwen/qwen3-next-80b-a3b-thinking-maas": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.2 }, "vertex_ai/xai/grok-4.1-fast-non-reasoning": { cr: 0.049999999999999996, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "vertex_ai/xai/grok-4.1-fast-reasoning": { cr: 0.049999999999999996, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "vertex_ai/xai/grok-4.20-non-reasoning": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "vertex_ai/xai/grok-4.20-reasoning": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "vertex_ai/zai-org/glm-4.7-maas": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.2 }, "vertex_ai/zai-org/glm-5-maas": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3.1999999999999997 }, "voyage/rerank-2": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0 }, "voyage/rerank-2-lite": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "voyage/rerank-2.5": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0 }, "voyage/rerank-2.5-lite": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "voyage/voyage-2": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "voyage/voyage-3": { cr: 0.006, cw: 0.06, i: 0.06, o: 0 }, "voyage/voyage-3-large": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0 }, "voyage/voyage-3-lite": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "voyage/voyage-3.5": { cr: 0.006, cw: 0.06, i: 0.06, o: 0 }, "voyage/voyage-3.5-lite": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "voyage/voyage-code-2": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, "voyage/voyage-code-3": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0 }, "voyage/voyage-context-3": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0 }, "voyage/voyage-finance-2": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, "voyage/voyage-large-2": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, "voyage/voyage-law-2": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, "voyage/voyage-lite-01": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "voyage/voyage-lite-02-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "voyage/voyage-multimodal-3": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, "wandb/MiniMaxAI/MiniMax-M2.5": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "wandb/Qwen/Qwen3-235B-A22B-Instruct-2507": { cr: 1000, cw: 1e4, i: 1e4, o: 1e4 }, "wandb/Qwen/Qwen3-235B-A22B-Thinking-2507": { cr: 1000, cw: 1e4, i: 1e4, o: 1e4 }, "wandb/Qwen/Qwen3-Coder-480B-A35B-Instruct": { cr: 10000.000000000002, cw: 1e5, i: 1e5, o: 150000 }, "wandb/deepseek-ai/DeepSeek-R1-0528": { cr: 13500.000000000002, cw: 135000, i: 135000, o: 540000 }, "wandb/deepseek-ai/DeepSeek-V3-0324": { cr: 11400, cw: 114000, i: 114000, o: 275000 }, "wandb/deepseek-ai/DeepSeek-V3.1": { cr: 5500.000000000001, cw: 55000, i: 55000, o: 165000 }, "wandb/meta-llama/Llama-3.1-8B-Instruct": { cr: 2200, cw: 22000, i: 22000, o: 22000 }, "wandb/meta-llama/Llama-3.3-70B-Instruct": { cr: 7099.999999999999, cw: 71000, i: 71000, o: 71000 }, "wandb/meta-llama/Llama-4-Scout-17B-16E-Instruct": { cr: 1700.0000000000002, cw: 17000, i: 17000, o: 66000 }, "wandb/microsoft/Phi-4-mini-instruct": { cr: 800, cw: 8000, i: 8000, o: 35000 }, "wandb/moonshotai/Kimi-K2-Instruct": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "wandb/moonshotai/Kimi-K2.5": { cr: 0.09999999999999999, cw: 0.6, i: 0.6, o: 3 }, "wandb/openai/gpt-oss-120b": { cr: 1500, cw: 15000, i: 15000, o: 60000 }, "wandb/openai/gpt-oss-20b": { cr: 500, cw: 5000, i: 5000, o: 20000 }, "wandb/zai-org/GLM-4.5": { cr: 5500.000000000001, cw: 55000, i: 55000, o: 200000 }, "watsonx/bigscience/mt0-xxl-13b": { cr: 50, cw: 500, i: 500, o: 2000 }, "watsonx/core42/jais-13b-chat": { cr: 50, cw: 500, i: 500, o: 2000 }, "watsonx/google/flan-t5-xl-3b": { cr: 0.06, cw: 0.6, i: 0.6, o: 0.6 }, "watsonx/ibm/granite-13b-chat-v2": { cr: 0.06, cw: 0.6, i: 0.6, o: 0.6 }, "watsonx/ibm/granite-13b-instruct-v2": { cr: 0.06, cw: 0.6, i: 0.6, o: 0.6 }, "watsonx/ibm/granite-3-3-8b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "watsonx/ibm/granite-3-8b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "watsonx/ibm/granite-4-h-small": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.25 }, "watsonx/ibm/granite-guardian-3-2-2b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "watsonx/ibm/granite-guardian-3-3-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "watsonx/ibm/granite-ttm-1024-96-r2": { cr: 0.038000000000000006, cw: 0.38, i: 0.38, o: 0.38 }, "watsonx/ibm/granite-ttm-1536-96-r2": { cr: 0.038000000000000006, cw: 0.38, i: 0.38, o: 0.38 }, "watsonx/ibm/granite-ttm-512-96-r2": { cr: 0.038000000000000006, cw: 0.38, i: 0.38, o: 0.38 }, "watsonx/ibm/granite-vision-3-2-2b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "watsonx/meta-llama/llama-3-2-11b-vision-instruct": { cr: 0.035, cw: 0.35, i: 0.35, o: 0.35 }, "watsonx/meta-llama/llama-3-2-1b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "watsonx/meta-llama/llama-3-2-3b-instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "watsonx/meta-llama/llama-3-2-90b-vision-instruct": { cr: 0.19999999999999998, cw: 2, i: 2, o: 2 }, "watsonx/meta-llama/llama-3-3-70b-instruct": { cr: 0.071, cw: 0.71, i: 0.71, o: 0.71 }, "watsonx/meta-llama/llama-4-maverick-17b": { cr: 0.035, cw: 0.35, i: 0.35, o: 1.4 }, "watsonx/meta-llama/llama-guard-3-11b-vision": { cr: 0.035, cw: 0.35, i: 0.35, o: 0.35 }, "watsonx/mistralai/mistral-large": { cr: 0.30000000000000004, cw: 3, i: 3, o: 10 }, "watsonx/mistralai/mistral-medium-2505": { cr: 0.30000000000000004, cw: 3, i: 3, o: 10 }, "watsonx/mistralai/mistral-small-2503": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "watsonx/mistralai/mistral-small-3-1-24b-instruct-2503": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "watsonx/mistralai/pixtral-12b-2409": { cr: 0.035, cw: 0.35, i: 0.35, o: 0.35 }, "watsonx/openai/gpt-oss-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "watsonx/sdaia/allam-1-13b-instruct": { cr: 0.18, cw: 1.7999999999999998, i: 1.7999999999999998, o: 1.7999999999999998 }, "writer.palmyra-x4-v1:0": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "writer.palmyra-x5-v1:0": { cr: 0.06, cw: 0.6, i: 0.6, o: 6 }, "xai/grok-2": { cr: 0.19999999999999998, cw: 2, i: 2, o: 10 }, "xai/grok-2-1212": { cr: 0.19999999999999998, cw: 2, i: 2, o: 10 }, "xai/grok-2-latest": { cr: 0.19999999999999998, cw: 2, i: 2, o: 10 }, "xai/grok-2-vision": { cr: 0.19999999999999998, cw: 2, i: 2, o: 10 }, "xai/grok-2-vision-1212": { cr: 0.19999999999999998, cw: 2, i: 2, o: 10 }, "xai/grok-2-vision-latest": { cr: 0.19999999999999998, cw: 2, i: 2, o: 10 }, "xai/grok-3": { cr: 0.75, cw: 3, i: 3, o: 15 }, "xai/grok-3-beta": { cr: 0.75, cw: 3, i: 3, o: 15 }, "xai/grok-3-fast-beta": { cr: 1.25, cw: 5, i: 5, o: 25 }, "xai/grok-3-fast-latest": { cr: 1.25, cw: 5, i: 5, o: 25 }, "xai/grok-3-latest": { cr: 0.75, cw: 3, i: 3, o: 15 }, "xai/grok-3-mini": { cr: 0.075, cw: 0.3, i: 0.3, o: 0.5 }, "xai/grok-3-mini-beta": { cr: 0.075, cw: 0.3, i: 0.3, o: 0.5 }, "xai/grok-3-mini-fast": { cr: 0.15, cw: 0.6, i: 0.6, o: 4 }, "xai/grok-3-mini-fast-beta": { cr: 0.15, cw: 0.6, i: 0.6, o: 4 }, "xai/grok-3-mini-fast-latest": { cr: 0.15, cw: 0.6, i: 0.6, o: 4 }, "xai/grok-3-mini-latest": { cr: 0.075, cw: 0.3, i: 0.3, o: 0.5 }, "xai/grok-4": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "xai/grok-4-0709": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "xai/grok-4-1-fast": { cr: 0.049999999999999996, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "xai/grok-4-1-fast-non-reasoning": { cr: 0.049999999999999996, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "xai/grok-4-1-fast-non-reasoning-latest": { cr: 0.049999999999999996, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "xai/grok-4-1-fast-reasoning": { cr: 0.049999999999999996, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "xai/grok-4-1-fast-reasoning-latest": { cr: 0.049999999999999996, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "xai/grok-4-fast-non-reasoning": { cr: 0.049999999999999996, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "xai/grok-4-fast-reasoning": { cr: 0.049999999999999996, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "xai/grok-4-latest": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "xai/grok-4.20-0309-reasoning": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "xai/grok-4.20-beta-0309-non-reasoning": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "xai/grok-4.20-beta-0309-reasoning": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "xai/grok-4.20-multi-agent-beta-0309": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "xai/grok-4.3": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 1.25, i: 1.25, ia: 2.5, o: 2.5, oa: 5 }, "xai/grok-4.3-latest": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 1.25, i: 1.25, ia: 2.5, o: 2.5, oa: 5 }, "xai/grok-beta": { cr: 0.5000000000000001, cw: 5, i: 5, o: 15 }, "xai/grok-code-fast": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.5 }, "xai/grok-code-fast-1": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.5 }, "xai/grok-code-fast-1-0825": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.5 }, "xai/grok-vision-beta": { cr: 0.5000000000000001, cw: 5, i: 5, o: 15 }, "zai.glm-4.7": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.2 }, "zai.glm-4.7-flash": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.39999999999999997 }, "zai.glm-5": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3.1999999999999997 }, "zai/glm-4-32b-0414-128k": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "zai/glm-4.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.2 }, "zai/glm-4.5-air": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.1 }, "zai/glm-4.5-airx": { cr: 0.11, cw: 1.1, i: 1.1, o: 4.5 }, "zai/glm-4.5-flash": { cr: 0, cw: 0, i: 0, o: 0 }, "zai/glm-4.5-x": { cr: 0.22, cw: 2.2, i: 2.2, o: 8.9 }, "zai/glm-4.5v": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.7999999999999998 }, "zai/glm-4.6": { cr: 0.11, cw: 0, i: 0.6, o: 2.2 }, "zai/glm-4.7": { cr: 0.11, cw: 0, i: 0.6, o: 2.2 }, "zai/glm-4.7-flash": { cr: 0, cw: 0, i: 0, o: 0 }, "zai/glm-5": { cr: 0.19999999999999998, cw: 0, i: 1, o: 3.1999999999999997 }, "zai/glm-5-code": { cr: 0.3, cw: 0, i: 1.2, o: 5 }, "zai/glm-5.1": { cr: 0.26, cw: 0, i: 1.4, o: 4.4 } },
+  retrieved_at: "2026-07-02T12:43:06Z"
+};
+// Packages/Box/src/agents/usage/pricing/pricing_models_dev_snapshot.json
+var pricing_models_dev_snapshot_default = {
+  models: { "@cf/aisingapore/gemma-sea-lion-v4-27b-it": { cr: 0.0351, cw: 0.351, i: 0.351, o: 0.555 }, "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b": { cr: 0.0497, cw: 0.497, i: 0.497, o: 4.881 }, "@cf/google/gemma-4-26b-a4b-it": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.3 }, "@cf/ibm-granite/granite-4.0-h-micro": { cr: 0.0017000000000000001, cw: 0.017, i: 0.017, o: 0.112 }, "@cf/meta/llama-3.1-8b-instruct-fp8": { cr: 0.0152, cw: 0.152, i: 0.152, o: 0.287 }, "@cf/meta/llama-3.2-11b-vision-instruct": { cr: 0.00485, cw: 0.0485, i: 0.0485, o: 0.676 }, "@cf/meta/llama-3.2-1b-instruct": { cr: 0.0027, cw: 0.027, i: 0.027, o: 0.201 }, "@cf/meta/llama-3.2-3b-instruct": { cr: 0.005090000000000001, cw: 0.0509, i: 0.0509, o: 0.335 }, "@cf/meta/llama-3.3-70b-instruct-fp8-fast": { cr: 0.0293, cw: 0.293, i: 0.293, o: 2.253 }, "@cf/meta/llama-4-scout-17b-16e-instruct": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 0.85 }, "@cf/meta/llama-guard-3-8b": { cr: 0.0484, cw: 0.484, i: 0.484, o: 0.03 }, "@cf/mistralai/mistral-small-3.1-24b-instruct": { cr: 0.0351, cw: 0.351, i: 0.351, o: 0.555 }, "@cf/moonshotai/kimi-k2.6": { cr: 0.16, cw: 0.95, i: 0.95, o: 4 }, "@cf/moonshotai/kimi-k2.7-code": { cr: 0.19, cw: 0.95, i: 0.95, o: 4 }, "@cf/nvidia/nemotron-3-120b-a12b": { cr: 0.05, cw: 0.5, i: 0.5, o: 1.5 }, "@cf/openai/gpt-oss-120b": { cr: 0.034999999999999996, cw: 0.35, i: 0.35, o: 0.75 }, "@cf/openai/gpt-oss-20b": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.3 }, "@cf/qwen/qwen2.5-coder-32b-instruct": { cr: 0.066, cw: 0.66, i: 0.66, o: 1 }, "@cf/qwen/qwen3-30b-a3b-fp8": { cr: 0.005090000000000001, cw: 0.0509, i: 0.0509, o: 0.335 }, "@cf/qwen/qwq-32b": { cr: 0.066, cw: 0.66, i: 0.66, o: 1 }, "@cf/zai-org/glm-4.7-flash": { cr: 0.00605, cw: 0.0605, i: 0.0605, o: 0.4 }, "@cf/zai-org/glm-5.2": { cr: 0.26, cw: 1.4, i: 1.4, o: 4.4 }, "Alibaba-NLP/Tongyi-DeepResearch-30B-A3B": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.24000000000000002 }, "Baichuan-M2": { cr: 1.5730000000000002, cw: 15.73, i: 15.73, o: 15.73 }, "Baichuan4-Air": { cr: 0.015700000000000002, cw: 0.157, i: 0.157, o: 0.157 }, "Baichuan4-Turbo": { cr: 0.242, cw: 2.42, i: 2.42, o: 2.42 }, "ByteDance-Seed/Seed-OSS-36B-Instruct": { cr: 0.021, cw: 0.21, i: 0.21, o: 0.57 }, "Doctor-Shotgun/MS3.2-24B-Magnum-Diamond": { cr: 0.0493, cw: 0.49299999999999994, i: 0.49299999999999994, o: 0.49299999999999994 }, "EVA-UNIT-01/EVA-LLaMA-3.33-70B-v0.0": { cr: 0.2006, cw: 2.006, i: 2.006, o: 2.006 }, "EVA-UNIT-01/EVA-LLaMA-3.33-70B-v0.1": { cr: 0.2006, cw: 2.006, i: 2.006, o: 2.006 }, "EVA-UNIT-01/EVA-Qwen2.5-32B-v0.2": { cr: 0.0799, cw: 0.7989999999999999, i: 0.7989999999999999, o: 0.7989999999999999 }, "EVA-UNIT-01/EVA-Qwen2.5-72B-v0.2": { cr: 0.0799, cw: 0.7989999999999999, i: 0.7989999999999999, o: 0.7989999999999999 }, "Envoid/Llama-3.05-NT-Storybreaker-Ministral-70B": { cr: 0.0493, cw: 0.49299999999999994, i: 0.49299999999999994, o: 0.49299999999999994 }, "Envoid/Llama-3.05-Nemotron-Tenyxchat-Storybreaker-70B": { cr: 0.0493, cw: 0.49299999999999994, i: 0.49299999999999994, o: 0.49299999999999994 }, "GLM-4.6-Derestricted-v5": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 1.5 }, "GLM-4.7": { cr: 0, cw: 0, i: 0, o: 0 }, "GLM-5.1": { cr: 0.1, cw: 0, i: 1, o: 3.2 }, "GLM-5.2": { cr: 0.2, cw: 0, i: 1.2, o: 4.1 }, "GalrionSoftworks/MN-LooseCannon-12B-v1": { cr: 0.0493, cw: 0.49299999999999994, i: 0.49299999999999994, o: 0.49299999999999994 }, "Gemma-4-31B-Claude-4.6-Opus-Reasoning-Distilled": { cr: 0.0306, cw: 0.306, i: 0.306, o: 0.306 }, "Gemma-4-31B-Cognitive-Unshackled": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Gemma-4-31B-DarkIdol": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Gemma-4-31B-GarnetV2": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Gemma-4-31B-Gemopus": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Gemma-4-31B-Musica-v1": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Gemma-4-31B-Queen": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Gemma-4-31B-it": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Gryphe/MythoMax-L2-13b": { cr: 0.01003, cw: 0.1003, i: 0.1003, o: 0.1003 }, "Infermatic/MN-12B-Inferor-v0.0": { cr: 0.025499999999999995, cw: 0.25499999999999995, i: 0.25499999999999995, o: 0.49299999999999994 }, "Intel/Qwen3-Coder-480B-A35B-Instruct-int4-mixed-ar": { cr: 0.11, cw: 0.44, i: 0.22, o: 0.95 }, "KAT-Coder-Air-V1": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.2 }, "KAT-Coder-Exp-72B-1010": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.2 }, "KBLab/kb-whisper-large": { cr: 0.00023, cw: 0.0023, i: 0.0023, o: 0.0023 }, "Kimi-K2.6": { cr: 0.07, cw: 0, i: 0.68, o: 3.15 }, "LLM360/K2-Think": { cr: 0.017, cw: 0.17, i: 0.17, o: 0.68 }, "LatitudeGames/Wayfarer-Large-70B-Llama-3.3": { cr: 0.0700000007, cw: 0.700000007, i: 0.700000007, o: 0.700000007 }, "Ling-1T": { cr: 0.056999999999999995, cw: 0.57, i: 0.57, o: 2.29 }, "LiquidAI/LFM2-24B-A2B": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.12 }, "Magistral-Small-2506": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 1.4 }, "MarinaraSpaghetti/NemoMix-Unleashed-12B": { cr: 0.0493, cw: 0.49299999999999994, i: 0.49299999999999994, o: 0.49299999999999994 }, "Meta-Llama-3-1-8B-Instruct-FP8": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.03 }, "Meta-Llama-3_1-8B-Instruct-GGUF": { cr: 0, cw: 0, i: 0, o: 0 }, "MiniMax-M1": { cr: 0.013200000000000002, cw: 0.132, i: 0.132, o: 1.254 }, "MiniMax-M2": { cr: 0.033, cw: 0.33, i: 0.33, o: 1.32 }, "MiniMax-M2.1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "MiniMax-M2.5": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "MiniMax-M2.5-highspeed": { cr: 0.06, cw: 0.375, i: 0.6, o: 2.4 }, "MiniMax-M2.7": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "MiniMax-M2.7-highspeed": { cr: 0.06, cw: 0.6, i: 0.6, o: 4.8 }, "MiniMax-M3": { cr: 0.06, cw: 0.3, i: 0.3, o: 1.2 }, "MiniMax/MiniMax-M2.7": { cr: 0.06, cw: 0.375, i: 0.3, o: 1.2 }, "MiniMaxAI/MiniMax-M1-80k": { cr: 0.06052, cw: 0.6052, i: 0.6052, o: 2.4225000000000003 }, "MiniMaxAI/MiniMax-M2": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "MiniMaxAI/MiniMax-M2.1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "MiniMaxAI/MiniMax-M2.5": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "MiniMaxAI/MiniMax-M2.5-TEE": { cr: 0.075, cw: 0.15, i: 0.15, o: 1.2 }, "MiniMaxAI/MiniMax-M2.5-fast": { cr: 0.03, cw: 0.375, i: 0.3, o: 1.2 }, "MiniMaxAI/MiniMax-M2.7": { cr: 0.06, cw: 0.3, i: 0.3, o: 1.2 }, "MiniMaxAI/MiniMax-M3": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "NeverSleep/Lumimaid-v0.2-70B": { cr: 0.1, cw: 1, i: 1, o: 1.5 }, "NousResearch/DeepHermes-3-Mistral-24B-Preview": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.3 }, "NousResearch/Hermes-4-405B": { cr: 0.1, cw: 1.25, i: 1, o: 3 }, "NousResearch/Hermes-4-70B": { cr: 0.013, cw: 0.16, i: 0.13, o: 0.4 }, "NousResearch/Hermes-4-70B:thinking": { cr: 0.02006, cw: 0.2006, i: 0.2006, o: 0.3995 }, "NousResearch/hermes-3-llama-3.1-70b": { cr: 0.0408, cw: 0.408, i: 0.408, o: 0.408 }, "NousResearch/hermes-4-405b": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "NousResearch/hermes-4-405b:thinking": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "NousResearch/hermes-4-70b": { cr: 0.02006, cw: 0.2006, i: 0.2006, o: 0.3995 }, "OpenPipe/Qwen3-14B-Instruct": { cr: 0.005000000000000001, cw: 0.05, i: 0.05, o: 0.22 }, "PaddlePaddle/PaddleOCR-VL-1.5": { cr: 0, cw: 0, i: 0, o: 0 }, "PrimeIntellect/INTELLECT-3": { cr: 0.02, cw: 0.25, i: 0.2, o: 1.1 }, "Pro/MiniMaxAI/MiniMax-M2.5": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.22 }, "Pro/deepseek-ai/DeepSeek-R1": { cr: 0.05, cw: 0.5, i: 0.5, o: 2.18 }, "Pro/deepseek-ai/DeepSeek-V3": { cr: 0.025, cw: 0.25, i: 0.25, o: 1 }, "Pro/deepseek-ai/DeepSeek-V3.1-Terminus": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 1 }, "Pro/deepseek-ai/DeepSeek-V3.2": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 0.42 }, "Pro/moonshotai/Kimi-K2.5": { cr: 0.045000000000000005, cw: 0.45, i: 0.45, o: 2.25 }, "Pro/moonshotai/Kimi-K2.6": { cr: 0.16, cw: 0.95, i: 0.95, o: 4 }, "Pro/zai-org/GLM-5": { cr: 0.1, cw: 1, i: 1, o: 3.2 }, "Pro/zai-org/GLM-5.1": { cr: 0.13999999999999999, cw: 0, i: 1.4, o: 4.4 }, "Qwen/QwQ-32B": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 0.4 }, "Qwen/Qwen2.5-72B-Instruct": { cr: 0.011000000000000001, cw: 0.11, i: 0.11, o: 0.38 }, "Qwen/Qwen2.5-7B-Instruct": { cr: 0.005000000000000001, cw: 0.05, i: 0.05, o: 0.05 }, "Qwen/Qwen2.5-7B-Instruct-Turbo": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.3 }, "Qwen/Qwen2.5-VL-32B-Instruct": { cr: 0.025, cw: 0.1, i: 0.05, o: 0.22 }, "Qwen/Qwen2.5-VL-72B-Instruct": { cr: 0.025, cw: 0.31, i: 0.25, o: 0.75 }, "Qwen/Qwen3-14B": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.28 }, "Qwen/Qwen3-235B-A22B": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.8 }, "Qwen/Qwen3-235B-A22B-Instruct-2507": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.6 }, "Qwen/Qwen3-235B-A22B-Instruct-2507-tput": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.6 }, "Qwen/Qwen3-235B-A22B-Thinking-2507": { cr: 0.03, cw: 0.3, i: 0.3, o: 3 }, "Qwen/Qwen3-235B-A22B-Thinking-2507-TEE": { cr: 0.14945, cw: 0.2989, i: 0.2989, o: 1.1957 }, "Qwen/Qwen3-235B-A22B-Thinking-2507-fast": { cr: 0.05, cw: 0.625, i: 0.5, o: 2 }, "Qwen/Qwen3-30B-A3B-Instruct-2507": { cr: 0, cw: 0, i: 0, o: 0 }, "Qwen/Qwen3-30B-A3B-Thinking-2507": { cr: 0, cw: 0, i: 0, o: 0 }, "Qwen/Qwen3-32B": { cr: 0.009, cw: 0.09, i: 0.09, o: 0.29 }, "Qwen/Qwen3-32B-TEE": { cr: 0.052, cw: 0.104, i: 0.104, o: 0.416 }, "Qwen/Qwen3-8B": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.06 }, "Qwen/Qwen3-Coder-30B-A3B-Instruct": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.26 }, "Qwen/Qwen3-Coder-480B-A35B-Instruct": { cr: 0.2, cw: 2, i: 2, o: 2 }, "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.8 }, "Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo": { cr: 0.03, cw: 0.3, i: 0.3, o: 1 }, "Qwen/Qwen3-Coder-Next": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 1.5 }, "Qwen/Qwen3-Coder-Next-FP8": { cr: 0.05, cw: 0.5, i: 0.5, o: 1.2 }, "Qwen/Qwen3-Embedding-0.6B": { cr: 0.001, cw: 0.01, i: 0.01, o: 0 }, "Qwen/Qwen3-Embedding-4B": { cr: 0.001, cw: 0.01, i: 0.01, o: 0 }, "Qwen/Qwen3-Embedding-8B": { cr: 0.011500000000000002, cw: 0.115, i: 0.115, o: 0.115 }, "Qwen/Qwen3-Next-80B-A3B-Instruct": { cr: 0.025, cw: 0.25, i: 0.25, o: 1 }, "Qwen/Qwen3-Next-80B-A3B-Thinking": { cr: 0.03, cw: 0.3, i: 0.3, o: 2 }, "Qwen/Qwen3-Next-80B-A3B-Thinking-fast": { cr: 0.015, cw: 0.1875, i: 0.15, o: 1.2 }, "Qwen/Qwen3-Reranker-0.6B": { cr: 0.001, cw: 0.01, i: 0.01, o: 0.01 }, "Qwen/Qwen3-Reranker-4B": { cr: 0.005750000000000001, cw: 0.0575, i: 0.0575, o: 0 }, "Qwen/Qwen3-VL-235B-A22B-Instruct": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.5 }, "Qwen/Qwen3-VL-235B-A22B-Instruct-FP8": { cr: 0.164, cw: 1.64, i: 1.64, o: 1.91 }, "Qwen/Qwen3-VL-235B-A22B-Thinking": { cr: 0.045000000000000005, cw: 0.45, i: 0.45, o: 3.5 }, "Qwen/Qwen3-VL-30B-A3B-Instruct": { cr: 0.023000000000000003, cw: 0.23, i: 0.23, o: 0.92 }, "Qwen/Qwen3-VL-30B-A3B-Thinking": { cr: 0.028999999999999998, cw: 0.29, i: 0.29, o: 1 }, "Qwen/Qwen3-VL-32B-Instruct": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.6 }, "Qwen/Qwen3-VL-32B-Thinking": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 1.5 }, "Qwen/Qwen3-VL-8B-Instruct": { cr: 0.018, cw: 0.18, i: 0.18, o: 0.68 }, "Qwen/Qwen3-VL-Embedding-8B": { cr: 0.009, cw: 0.09, i: 0.09, o: 0.09 }, "Qwen/Qwen3.5-122B-A10B": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 3.2 }, "Qwen/Qwen3.5-27B": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.4 }, "Qwen/Qwen3.5-35B-A3B": { cr: 0.05, cw: 0.14, i: 0.14, o: 1 }, "Qwen/Qwen3.5-397B-A17B": { cr: 0.22, cw: 0.45, i: 0.45, o: 3 }, "Qwen/Qwen3.5-397B-A17B-FP8": { cr: 0.1725, cw: 0.69, i: 0.69, o: 4.14 }, "Qwen/Qwen3.5-397B-A17B-TEE": { cr: 0.225, cw: 0.45, i: 0.45, o: 3 }, "Qwen/Qwen3.5-397B-A17B-fast": { cr: 0.06, cw: 0.75, i: 0.6, o: 3.6 }, "Qwen/Qwen3.5-4B": { cr: 0, cw: 0, i: 0, o: 0 }, "Qwen/Qwen3.5-9B": { cr: 0.017, cw: 0.17, i: 0.17, o: 0.25 }, "Qwen/Qwen3.5-Plus": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 2.4 }, "Qwen/Qwen3.6-27B": { cr: 0.047, cw: 0.47, i: 0.47, o: 3.19 }, "Qwen/Qwen3.6-27B-TEE": { cr: 0.15, cw: 0.3, i: 0.3, o: 2 }, "Qwen/Qwen3.6-35B-A3B": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.95 }, "Qwen/Qwen3.6-35B-A3B-FP8": { cr: 0.034499999999999996, cw: 0.345, i: 0.345, o: 1.38 }, "Qwen/Qwen3.6-Plus": { cr: 0.05, cw: 0.5, i: 0.5, o: 3 }, "Qwen/Qwen3.7-Max": { cr: 0.25, cw: 3.125, i: 2.5, o: 7.5 }, "Qwen/qwen3-coder-480b-a35b-instruct": { cr: 0.028999999999999998, cw: 0.29, i: 0.29, o: 1.2 }, "Qwen2.5-32B-EVA-v0.2": { cr: 0.049300000000000004, cw: 0.493, i: 0.493, o: 0.493 }, "Qwen3.5-27B-Anko": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Qwen3.5-27B-BlueStar-Derestricted": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Qwen3.5-27B-BlueStar-Derestricted-Lite": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Qwen3.5-27B-BlueStar-v2-Derestricted": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Qwen3.5-27B-BlueStar-v2-Derestricted-Lite": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Qwen3.5-27B-BlueStar-v3-Derestricted": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Qwen3.5-27B-BlueStar-v3-Derestricted-Lite": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Qwen3.5-27B-Derestricted": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Qwen3.5-27B-Infracelestial": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Qwen3.5-27B-Marvin-DPO-V2-Derestricted": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Qwen3.5-27B-Marvin-DPO-V2-Derestricted-Lite": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Qwen3.5-27B-Marvin-V2-Derestricted": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Qwen3.5-27B-Marvin-V2-Derestricted-Lite": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Qwen3.5-27B-Musica-v1": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Qwen3.5-27B-NaNovel-Derestricted": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Qwen3.5-27B-NaNovel-Derestricted-Lite": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Qwen3.5-27B-Omega-Evolution-v2.0-Derestricted": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Qwen3.5-27B-Omega-Evolution-v2.0-Derestricted-Lite": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Qwen3.5-27B-Omega-Evolution-v2.2-Derestricted": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Qwen3.5-27B-Omega-Evolution-v2.2-Derestricted-Lite": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Qwen3.5-27B-Queen-Derestricted": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Qwen3.5-27B-Queen-Derestricted-Lite": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Qwen3.5-27B-RpRMax-v1": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Qwen3.5-27B-Vivid-Durian": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Qwen3.5-27B-Writer-Derestricted": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Qwen3.5-27B-Writer-Derestricted-Lite": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Qwen3.5-27B-Writer-V2-Derestricted": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Qwen3.5-27B-Writer-V2-Derestricted-Lite": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Qwen3.5-27B-earica-Derestricted": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Qwen3.5-27B-earica-Derestricted-Lite": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "Qwen3.5-397B-A17B": { cr: 0.04, cw: 0, i: 0.43, o: 2.6 }, "Qwen3.6-35B-A3B": { cr: 0.02, cw: 0, i: 0.15, o: 1 }, "Qwen3_5-9B-MLX-4bit": { cr: 0, cw: 0, i: 0, o: 0 }, "Qwen3_5-9B-Q4_K_M": { cr: 0, cw: 0, i: 0, o: 0 }, "ReadyArt/MS3.2-The-Omega-Directive-24B-Unslop-v2.0": { cr: 0.05, cw: 0.5, i: 0.5, o: 0.5 }, "Ring-1T": { cr: 0.056999999999999995, cw: 0.57, i: 0.57, o: 2.29 }, "Salesforce/Llama-xLAM-2-70b-fc-r": { cr: 0.25, cw: 2.5, i: 2.5, o: 2.5 }, "Sao10K/L3-8B-Stheno-v3.2": { cr: 0.02006, cw: 0.2006, i: 0.2006, o: 0.2006 }, "Sao10K/L3.1-70B-Euryale-v2.2": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.357 }, "Sao10K/L3.1-70B-Hanami-x1": { cr: 0.0493, cw: 0.49299999999999994, i: 0.49299999999999994, o: 0.49299999999999994 }, "Sao10K/L3.3-70B-Euryale-v2.3": { cr: 0.0493, cw: 0.49299999999999994, i: 0.49299999999999994, o: 0.49299999999999994 }, "Steelskull/L3.3-Cu-Mai-R1-70b": { cr: 0.0493, cw: 0.49299999999999994, i: 0.49299999999999994, o: 0.49299999999999994 }, "Steelskull/L3.3-Electra-R1-70b": { cr: 0.06998900000000001, cw: 0.69989, i: 0.69989, o: 0.69989 }, "Steelskull/L3.3-MS-Evalebis-70b": { cr: 0.0493, cw: 0.49299999999999994, i: 0.49299999999999994, o: 0.49299999999999994 }, "Steelskull/L3.3-MS-Evayale-70B": { cr: 0.0493, cw: 0.49299999999999994, i: 0.49299999999999994, o: 0.49299999999999994 }, "Steelskull/L3.3-MS-Nevoria-70b": { cr: 0.0493, cw: 0.49299999999999994, i: 0.49299999999999994, o: 0.49299999999999994 }, "Steelskull/L3.3-Nevoria-R1-70b": { cr: 0.0493, cw: 0.49299999999999994, i: 0.49299999999999994, o: 0.49299999999999994 }, "TEE/deepseek-v3.1": { cr: 0.1, cw: 1, i: 1, o: 2.5 }, "TEE/deepseek-v3.2": { cr: 0.05, cw: 0.5, i: 0.5, o: 1 }, "TEE/deepseek-v4-pro": { cr: 0.15, cw: 1.5, i: 1.5, o: 5.25 }, "TEE/deepseek-v4-pro:thinking": { cr: 0.15, cw: 1.5, i: 1.5, o: 5.25 }, "TEE/gemma-3-27b-it": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.8 }, "TEE/gemma-4-26b-a4b-uncensored": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.7 }, "TEE/gemma-4-31b-it": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.46 }, "TEE/gemma4-31b": { cr: 0.045000000000000005, cw: 0.45, i: 0.45, o: 1 }, "TEE/gemma4-31b:thinking": { cr: 0.045000000000000005, cw: 0.45, i: 0.45, o: 1 }, "TEE/glm-4.7": { cr: 0.085, cw: 0.85, i: 0.85, o: 3.3 }, "TEE/glm-4.7-flash": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.5 }, "TEE/glm-5": { cr: 0.12, cw: 1.2, i: 1.2, o: 3.5 }, "TEE/glm-5.1": { cr: 0.3, cw: 1.5, i: 1.5, o: 5.25 }, "TEE/glm-5.1-thinking": { cr: 0.3, cw: 1.5, i: 1.5, o: 5.25 }, "TEE/gpt-oss-120b": { cr: 0.2, cw: 2, i: 2, o: 2 }, "TEE/gpt-oss-20b": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.8 }, "TEE/kimi-k2.5": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.9 }, "TEE/kimi-k2.5-thinking": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.9 }, "TEE/kimi-k2.6": { cr: 0.375, cw: 1.5, i: 1.5, o: 5.25 }, "TEE/llama3-3-70b": { cr: 0.2, cw: 2, i: 2, o: 2 }, "TEE/minimax-m2.5": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 1.38 }, "TEE/qwen2.5-vl-72b-instruct": { cr: 0.06999999999999999, cw: 0.7, i: 0.7, o: 0.7 }, "TEE/qwen3-30b-a3b-instruct-2507": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.44999999999999996 }, "TEE/qwen3.5-122b-a10b": { cr: 0.046000000000000006, cw: 0.46, i: 0.46, o: 3.68 }, "TEE/qwen3.5-27b": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.4 }, "TEE/qwen3.5-397b-a17b": { cr: 0.06, cw: 0.6, i: 0.6, o: 3.6 }, "TEE/qwen3.6-35b-a3b-uncensored": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.5 }, "THUDM/GLM-4-32B-0414": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.2 }, "THUDM/GLM-4-9B-0414": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.2 }, "THUDM/GLM-Z1-32B-0414": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.2 }, "THUDM/GLM-Z1-9B-0414": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.2 }, "TheDrummer/Anubis-70B-v1": { cr: 0.031, cw: 0.31, i: 0.31, o: 0.31 }, "TheDrummer/Anubis-70B-v1.1": { cr: 0.031, cw: 0.31, i: 0.31, o: 0.31 }, "TheDrummer/Cydonia-24B-v2": { cr: 0.01003, cw: 0.1003, i: 0.1003, o: 0.1207 }, "TheDrummer/Cydonia-24B-v4": { cr: 0.02006, cw: 0.2006, i: 0.2006, o: 0.2414 }, "TheDrummer/Cydonia-24B-v4.1": { cr: 0.01003, cw: 0.1003, i: 0.1003, o: 0.1207 }, "TheDrummer/Cydonia-24B-v4.3": { cr: 0.01003, cw: 0.1003, i: 0.1003, o: 0.1207 }, "TheDrummer/Magidonia-24B-v4.3": { cr: 0.01003, cw: 0.1003, i: 0.1003, o: 0.1207 }, "TheDrummer/Rocinante-12B-v1.1": { cr: 0.0408, cw: 0.408, i: 0.408, o: 0.595 }, "TheDrummer/Skyfall-31B-v4.2": { cr: 0.05500000000000001, cw: 0.55, i: 0.55, o: 0.8 }, "TheDrummer/UnslopNemo-12B-v4.1": { cr: 0.049300000000000004, cw: 0.493, i: 0.493, o: 0.493 }, "TheDrummer/skyfall-36b-v2": { cr: 0.049300000000000004, cw: 0.493, i: 0.493, o: 0.493 }, "Tongyi-Zhiwen/QwenLong-L1-32B": { cr: 0.013999999999999999, cw: 0.13999999999999999, i: 0.13999999999999999, o: 0.6 }, "Unbabel/M-Prometheus-14B": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.2 }, "VongolaChouko/Starcannon-Unleashed-12B-v1.0": { cr: 0.0493, cw: 0.49299999999999994, i: 0.49299999999999994, o: 0.49299999999999994 }, "XiaomiMiMo/MiMo-V2-Flash": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.3 }, "XiaomiMiMo/MiMo-V2.5": { cr: 0.08, cw: 0.4, i: 0.4, o: 2 }, "XiaomiMiMo/MiMo-V2.5-Pro": { cr: 0.2, cw: 1, i: 1, o: 3 }, "ZhipuAI/GLM-4.5": { cr: 0, cw: 0, i: 0, o: 0 }, "ZhipuAI/GLM-4.6": { cr: 0, cw: 0, i: 0, o: 0 }, "abacusai/Dracarys-72B-Instruct": { cr: 0.0493, cw: 0.49299999999999994, i: 0.49299999999999994, o: 0.49299999999999994 }, "abacusai/dracarys-llama-3_1-70b-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "abliterated-model": { cr: 0.30000000000000004, cw: 3, i: 3, o: 3 }, "accounts/fireworks/models/deepseek-v4-flash": { cr: 0.028, cw: 0.14, i: 0.14, o: 0.28 }, "accounts/fireworks/models/deepseek-v4-pro": { cr: 0.145, cw: 1.74, i: 1.74, o: 3.48 }, "accounts/fireworks/models/glm-5p1": { cr: 0.26, cw: 1.4, i: 1.4, o: 4.4 }, "accounts/fireworks/models/glm-5p2": { cr: 0.26, cw: 1.4, i: 1.4, o: 4.4 }, "accounts/fireworks/models/gpt-oss-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "accounts/fireworks/models/gpt-oss-20b": { cr: 0.035, cw: 0.07, i: 0.07, o: 0.3 }, "accounts/fireworks/models/kimi-k2p6": { cr: 0.16, cw: 0.95, i: 0.95, o: 4 }, "accounts/fireworks/models/kimi-k2p7-code": { cr: 0.19, cw: 0.95, i: 0.95, o: 4 }, "accounts/fireworks/models/minimax-m2p7": { cr: 0.06, cw: 0.3, i: 0.3, o: 1.2 }, "accounts/fireworks/models/minimax-m3": { cr: 0.06, cw: 0.3, i: 0.3, o: 1.2 }, "accounts/fireworks/models/qwen3p7-plus": { cr: 0.08, cw: 0.4, i: 0.4, o: 1.6 }, "accounts/fireworks/routers/glm-5p1-fast": { cr: 0.52, cw: 2.8, i: 2.8, o: 8.8 }, "accounts/fireworks/routers/glm-5p2-fast": { cr: 0.21, cw: 2.1, i: 2.1, o: 6.6 }, "accounts/fireworks/routers/kimi-k2p6-fast": { cr: 0.3, cw: 2, i: 2, o: 8 }, "accounts/fireworks/routers/kimi-k2p6-turbo": { cr: 0.3, cw: 2, i: 2, o: 8 }, "accounts/fireworks/routers/kimi-k2p7-code-fast": { cr: 0.38, cw: 1.9, i: 1.9, o: 8 }, "ai21-labs/ai21-jamba-1.5-large": { cr: 0, cw: 0, i: 0, o: 0 }, "ai21-labs/ai21-jamba-1.5-mini": { cr: 0, cw: 0, i: 0, o: 0 }, "ai21/jamba-large-1.7": { cr: 0.2, cw: 2, i: 2, o: 8 }, "aion-labs-aion-2-0": { cr: 0.25, cw: 1, i: 1, o: 2 }, "aion-labs/aion-1.0": { cr: 0.4, cw: 4, i: 4, o: 8 }, "aion-labs/aion-1.0-mini": { cr: 0.06999999999999999, cw: 0.7, i: 0.7, o: 1.4 }, "aion-labs/aion-2.0": { cr: 0.08000000000000002, cw: 0.8, i: 0.8, o: 1.6 }, "aion-labs/aion-2.5": { cr: 0.35, cw: 1, i: 1, o: 3 }, "aion-labs/aion-rp-llama-3.1-8b": { cr: 0.08000000000000002, cw: 0.8, i: 0.8, o: 1.6 }, "alfredpros/codellama-7b-instruct-solidity": { cr: 0.08000000000000002, cw: 0.8, i: 0.8, o: 1.2 }, "alibaba-qwen3-32b": { cr: 0.025, cw: 0.25, i: 0.25, o: 0.55 }, "alibaba/qwen-3-14b": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.24 }, "alibaba/qwen-3-235b": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.88 }, "alibaba/qwen-3-30b": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.5 }, "alibaba/qwen-3-32b": { cr: 0.016, cw: 0.16, i: 0.16, o: 0.64 }, "alibaba/qwen-3.6-max-preview": { cr: 0.26, cw: 1.625, i: 1.3, o: 7.8 }, "alibaba/qwen3-235b-a22b-thinking": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 4 }, "alibaba/qwen3-coder": { cr: 0.3, cw: 1.5, i: 1.5, o: 7.5 }, "alibaba/qwen3-coder-30b-a3b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "alibaba/qwen3-coder-next": { cr: 0.05, cw: 0.5, i: 0.5, o: 1.2 }, "alibaba/qwen3-coder-plus": { cr: 0.2, cw: 1, i: 1, o: 5 }, "alibaba/qwen3-max": { cr: 0.24, cw: 1.2, i: 1.2, o: 6 }, "alibaba/qwen3-max-preview": { cr: 0.24, cw: 1.2, i: 1.2, o: 6 }, "alibaba/qwen3-max-thinking": { cr: 0.24, cw: 1.2, i: 1.2, o: 6 }, "alibaba/qwen3-next-80b-a3b-instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.2 }, "alibaba/qwen3-next-80b-a3b-thinking": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.2 }, "alibaba/qwen3-vl-235b-a22b-instruct": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 1.6 }, "alibaba/qwen3-vl-instruct": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 1.6 }, "alibaba/qwen3-vl-thinking": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 4 }, "alibaba/qwen3.5-flash": { cr: 0.001, cw: 0.125, i: 0.1, o: 0.4 }, "alibaba/qwen3.5-plus": { cr: 0.04, cw: 0.5, i: 0.4, o: 2.4 }, "alibaba/qwen3.6-27b": { cr: 0.020300000000000002, cw: 0.203, i: 0.203, o: 2.24 }, "alibaba/qwen3.6-27b:thinking": { cr: 0.020300000000000002, cw: 0.203, i: 0.203, o: 2.24 }, "alibaba/qwen3.6-flash": { cr: 0.019000000000000003, cw: 0.19, i: 0.19, o: 1.16 }, "alibaba/qwen3.6-plus": { cr: 0.05, cw: 0.5, i: 0.5, o: 3 }, "alibaba/qwen3.7-max": { cr: 0.165, cw: 1.65, i: 1.65, o: 4.95 }, "alibaba/qwen3.7-plus": { cr: 0.08, cw: 0.5, i: 0.4, o: 1.6 }, "alicloud-deepseek-v4-flash": { cr: 0.028, cw: 0.14, i: 0.14, o: 0.28 }, "alicloud-deepseek-v4-pro": { cr: 0.13, cw: 1.69, i: 1.69, o: 3.38 }, "alicloud-glm-5.1": { cr: 0.169, cw: 1.05625, i: 0.84, o: 3.38 }, "all-mini-lm-l6-v2": { cr: 0.0009, cw: 0.009, i: 0.009, o: 0 }, "allenai/olmo-3-32b-think": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.5 }, "amazon.nova-2-lite-v1:0": { cr: 0.033, cw: 0.33, i: 0.33, o: 2.75 }, "amazon.nova-lite-v1:0": { cr: 0.015, cw: 0.06, i: 0.06, o: 0.24 }, "amazon.nova-micro-v1:0": { cr: 0.00875, cw: 0.035, i: 0.035, o: 0.14 }, "amazon.nova-pro-v1:0": { cr: 0.2, cw: 0.8, i: 0.8, o: 3.2 }, "amazon/nova-2-lite": { cr: 0.075, cw: 0.3, i: 0.3, o: 2.5 }, "amazon/nova-2-lite-v1": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "amazon/nova-lite": { cr: 0.015, cw: 0.06, i: 0.06, o: 0.24 }, "amazon/nova-lite-v1": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.24 }, "amazon/nova-micro": { cr: 0.00875, cw: 0.035, i: 0.035, o: 0.14 }, "amazon/nova-micro-v1": { cr: 0.0035000000000000005, cw: 0.035, i: 0.035, o: 0.14 }, "amazon/nova-premier-v1": { cr: 0.25, cw: 2.5, i: 2.5, o: 12.5 }, "amazon/nova-pro": { cr: 0.2, cw: 0.8, i: 0.8, o: 3.2 }, "amazon/nova-pro-v1": { cr: 0.08000000000000002, cw: 0.8, i: 0.8, o: 3.2 }, "anthracite-org/magnum-v2-72b": { cr: 0.2006, cw: 2.006, i: 2.006, o: 2.992 }, "anthracite-org/magnum-v4-72b": { cr: 0.30000000000000004, cw: 3, i: 3, o: 5 }, "anthropic--claude-3-haiku": { cr: 0.03, cw: 0.3, i: 0.25, o: 1.25 }, "anthropic--claude-3-opus": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "anthropic--claude-3-sonnet": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic--claude-3.5-sonnet": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic--claude-3.7-sonnet": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic--claude-4-opus": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "anthropic--claude-4-sonnet": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic--claude-4.5-haiku": { cr: 0.1, cw: 1.25, i: 1, o: 5 }, "anthropic--claude-4.5-opus": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "anthropic--claude-4.5-sonnet": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic--claude-4.6-opus": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "anthropic--claude-4.6-sonnet": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic--claude-4.7-opus": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "anthropic-claude-3-opus": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "anthropic-claude-3.5-haiku": { cr: 0.08, cw: 1, i: 0.8, o: 4 }, "anthropic-claude-3.5-sonnet": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic-claude-3.7-sonnet": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic-claude-4.1-opus": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "anthropic-claude-4.5-haiku": { cr: 1, cw: 1.25, i: 1, o: 5 }, "anthropic-claude-4.5-sonnet": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic-claude-4.6-sonnet": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic-claude-haiku-4.5": { cr: 1, cw: 1.25, i: 1, o: 5 }, "anthropic-claude-opus-4": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "anthropic-claude-opus-4.5": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "anthropic-claude-opus-4.6": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "anthropic-claude-opus-4.7": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "anthropic-claude-opus-4.8": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "anthropic-claude-sonnet-4": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic.claude-fable-5": { cr: 1, cw: 12.5, i: 10, o: 50 }, "anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.1, cw: 1.25, i: 1, o: 5 }, "anthropic.claude-opus-4-1-20250805-v1:0": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "anthropic.claude-opus-4-5-20251101-v1:0": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "anthropic.claude-opus-4-6-v1": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "anthropic.claude-opus-4-7": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "anthropic.claude-opus-4-8": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic.claude-sonnet-4-6": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic.claude-sonnet-5": { cr: 0.2, cw: 2.5, i: 2, o: 10 }, "anthropic/claude-3-5-haiku": { cr: 0.08, cw: 1, i: 0.8, o: 4 }, "anthropic/claude-3-7-sonnet": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic/claude-3-haiku": { cr: 0.03, cw: 0.3, i: 0.25, o: 1.25 }, "anthropic/claude-3-opus": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "anthropic/claude-3-sonnet": { cr: 0.3, cw: 0.3, i: 3, o: 15 }, "anthropic/claude-3.5-haiku": { cr: 0.08, cw: 1, i: 0.8, o: 4 }, "anthropic/claude-3.5-sonnet": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic/claude-3.7-sonnet": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic/claude-fable-5": { cr: 1, cw: 12.5, i: 10, o: 50 }, "anthropic/claude-haiku-3": { cr: 0.021, cw: 0.26, i: 0.21, o: 1.1 }, "anthropic/claude-haiku-3.5": { cr: 0.068, cw: 0.85, i: 0.68, o: 3.4 }, "anthropic/claude-haiku-4-5": { cr: 0.1, cw: 1.25, i: 1, o: 5 }, "anthropic/claude-haiku-4-5-20251001": { cr: 0.1, cw: 1.25, i: 1, o: 5 }, "anthropic/claude-haiku-4.5": { cr: 0.1, cw: 1.25, i: 1, o: 5 }, "anthropic/claude-haiku-latest": { cr: 0.1, cw: 1, i: 1, o: 5 }, "anthropic/claude-opus-4": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "anthropic/claude-opus-4-1": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "anthropic/claude-opus-4-1-20250805": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "anthropic/claude-opus-4-20250514": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "anthropic/claude-opus-4-5": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "anthropic/claude-opus-4-5-20251101": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "anthropic/claude-opus-4-6": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "anthropic/claude-opus-4-7": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "anthropic/claude-opus-4-8": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "anthropic/claude-opus-4.1": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "anthropic/claude-opus-4.5": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "anthropic/claude-opus-4.6": { cr: 0.5, cw: 5, i: 5, o: 25 }, "anthropic/claude-opus-4.6-fast": { cr: 3, cw: 37.5, i: 30, o: 150 }, "anthropic/claude-opus-4.6:thinking": { cr: 0.4998, cw: 4.998, i: 4.998, o: 25.007 }, "anthropic/claude-opus-4.6:thinking:low": { cr: 0.4998, cw: 4.998, i: 4.998, o: 25.007 }, "anthropic/claude-opus-4.6:thinking:max": { cr: 0.4998, cw: 4.998, i: 4.998, o: 25.007 }, "anthropic/claude-opus-4.6:thinking:medium": { cr: 0.4998, cw: 4.998, i: 4.998, o: 25.007 }, "anthropic/claude-opus-4.7": { cr: 0.45, cw: 4.5, i: 4.5, o: 22.5 }, "anthropic/claude-opus-4.7-fast": { cr: 3, cw: 37.5, i: 30, o: 150 }, "anthropic/claude-opus-4.7:thinking": { cr: 0.4998, cw: 4.998, i: 4.998, o: 25.007 }, "anthropic/claude-opus-4.8": { cr: 0.5, cw: 5, i: 5, o: 25 }, "anthropic/claude-opus-4.8-fast": { cr: 1, cw: 12.5, i: 10, o: 50 }, "anthropic/claude-opus-4.8:thinking": { cr: 0.4998, cw: 4.998, i: 4.998, o: 25.007 }, "anthropic/claude-opus-latest": { cr: 0.4998, cw: 4.998, i: 4.998, o: 25.007 }, "anthropic/claude-sonnet-3.5": { cr: 0.26, cw: 3.2, i: 2.6, o: 13 }, "anthropic/claude-sonnet-3.5-june": { cr: 0.26, cw: 3.2, i: 2.6, o: 13 }, "anthropic/claude-sonnet-3.7": { cr: 0.26, cw: 3.2, i: 2.6, o: 13 }, "anthropic/claude-sonnet-4": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic/claude-sonnet-4-20250514": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic/claude-sonnet-4-5": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic/claude-sonnet-4-5-20250929": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic/claude-sonnet-4-6": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic/claude-sonnet-4.5": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic/claude-sonnet-4.6": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "anthropic/claude-sonnet-4.6:thinking": { cr: 0.2992, cw: 2.992, i: 2.992, o: 14.993999999999998 }, "anthropic/claude-sonnet-5": { cr: 0.2, cw: 2.5, i: 2, o: 10 }, "anthropic/claude-sonnet-latest": { cr: 0.2992, cw: 2.992, i: 2.992, o: 14.994 }, "arcee-ai/coder-large": { cr: 0.05, cw: 0.5, i: 0.5, o: 0.8 }, "arcee-ai/maestro-reasoning": { cr: 0.09000000000000001, cw: 0.9, i: 0.9, o: 3.3 }, "arcee-ai/spotlight": { cr: 0.018, cw: 0.18, i: 0.18, o: 0.18 }, "arcee-ai/trinity-large-preview": { cr: 0.025, cw: 0.25, i: 0.25, o: 1 }, "arcee-ai/trinity-large-thinking": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.85 }, "arcee-ai/trinity-mini": { cr: 0.0045, cw: 0.045, i: 0.045, o: 0.15 }, "arcee-ai/virtuoso-large": { cr: 0.07500000000000001, cw: 0.75, i: 0.75, o: 1.2 }, "arcee-trinity-large-thinking": { cr: 0.06, cw: 0.25, i: 0.25, o: 0.9 }, "arcee_ai/AFM/models/trinity-mini": { cr: 0.0045, cw: 0.045, i: 0.045, o: 0.15 }, "asi1-mini": { cr: 0.1, cw: 1, i: 1, o: 1 }, "au.anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.1, cw: 1.25, i: 1, o: 5 }, "au.anthropic.claude-opus-4-6-v1": { cr: 1.65, cw: 20.625, i: 16.5, o: 82.5 }, "au.anthropic.claude-opus-4-8": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "au.anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "au.anthropic.claude-sonnet-4-6": { cr: 0.33, cw: 4.125, i: 3.3, o: 16.5 }, "au.anthropic.claude-sonnet-5": { cr: 0.2, cw: 2.5, i: 2, o: 10 }, auto: { cr: 0, cw: 0, i: 0, o: 0 }, "auto-model": { cr: 0, cw: 0, i: 0, o: 0 }, "auto-model-basic": { cr: 0.9996, cw: 9.996, i: 9.996, o: 19.992 }, "auto-model-premium": { cr: 0.9996, cw: 9.996, i: 9.996, o: 19.992 }, "auto-model-standard": { cr: 0.9996, cw: 9.996, i: 9.996, o: 19.992 }, "azure-gpt-4-turbo": { cr: 0.9996, cw: 9.996, i: 9.996, o: 30.005 }, "azure-gpt-4o": { cr: 0.2499, cw: 2.499, i: 2.499, o: 9.996 }, "azure-gpt-4o-mini": { cr: 0.014960000000000001, cw: 0.1496, i: 0.1496, o: 0.595 }, "azure-o1": { cr: 1.4994, cw: 14.994, i: 14.994, o: 59.993 }, "azure-o3-mini": { cr: 0.10880000000000001, cw: 1.088, i: 1.088, o: 4.3996 }, "baai/bge-m3": { cr: 0, cw: 0, i: 0, o: 0 }, "baichuan/baichuan-m2-32b": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.07 }, "baidu/ERNIE-4.5-300B-A47B": { cr: 0.028000000000000004, cw: 0.28, i: 0.28, o: 1.1 }, "baidu/cobuddy:free": { cr: 0, cw: 0, i: 0, o: 0 }, "baidu/ernie-4.5-21B-a3b": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.28 }, "baidu/ernie-4.5-21B-a3b-thinking": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.28 }, "baidu/ernie-4.5-21b-a3b": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.28 }, "baidu/ernie-4.5-21b-a3b-thinking": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.28 }, "baidu/ernie-4.5-300b-a47b": { cr: 0.028000000000000004, cw: 0.28, i: 0.28, o: 1.1 }, "baidu/ernie-4.5-300b-a47b-paddle": { cr: 0.028000000000000004, cw: 0.28, i: 0.28, o: 1.1 }, "baidu/ernie-4.5-vl-28b-a3b": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.56 }, "baidu/ernie-4.5-vl-28b-a3b-thinking": { cr: 0.03900000000000001, cw: 0.39, i: 0.39, o: 0.39 }, "baidu/ernie-4.5-vl-424b-a47b": { cr: 0.042, cw: 0.42, i: 0.42, o: 1.25 }, "baidu/ernie-5.0-thinking-preview": { cr: 0.084, cw: 0.84, i: 0.84, o: 3.37 }, "baidu/qianfan-ocr-fast": { cr: 0.068, cw: 0.68, i: 0.68, o: 2.81 }, "baseten/Kimi-K2-Instruct-FP4": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 2 }, "bge-m3": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "bge-multilingual-gemma2": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0 }, "bge-reranker-v2-m3": { cr: 0.001, cw: 0.01, i: 0.01, o: 0 }, "big-pickle": { cr: 0, cw: 0, i: 0, o: 0 }, "black-forest-labs/FLUX.2-klein-4B": { cr: 0.1, cw: 1, i: 1, o: 1 }, "black-forest-labs/flux.1-dev": { cr: 0, cw: 0, i: 0, o: 0 }, "black-forest-labs/flux_1-kontext-dev": { cr: 0, cw: 0, i: 0, o: 0 }, "black-forest-labs/flux_1-schnell": { cr: 0, cw: 0, i: 0, o: 0 }, "black-forest-labs/flux_2-klein-4b": { cr: 0, cw: 0, i: 0, o: 0 }, brave: { cr: 0.5, cw: 5, i: 5, o: 5 }, "brave-pro": { cr: 0.5, cw: 5, i: 5, o: 5 }, "brave-research": { cr: 0.5, cw: 5, i: 5, o: 5 }, "bytedance-seed/seed-1.6": { cr: 0.025, cw: 0.25, i: 0.25, o: 2 }, "bytedance-seed/seed-1.6-flash": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0.3 }, "bytedance-seed/seed-2.0-lite": { cr: 0.025, cw: 0.25, i: 0.25, o: 2 }, "bytedance-seed/seed-2.0-mini": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.4 }, "bytedance/seed-1.6": { cr: 0.05, cw: 0.25, i: 0.25, o: 2 }, "bytedance/seed-1.8": { cr: 0.05, cw: 0.25, i: 0.25, o: 2 }, "bytedance/seed-oss-36b-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "bytedance/ui-tars-1.5-7b": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.2 }, "cerebras-llama-4-maverick-17b-128e-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "cerebras-llama-4-scout-17b-16e-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "cerebras/gpt-oss-120b-cs": { cr: 0.034999999999999996, cw: 0.35, i: 0.35, o: 0.75 }, "cerebras/llama-3.1-8b-cs": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.1 }, "chatgpt-4o-latest": { cr: 0.5, cw: 5, i: 5, o: 15 }, "chutesai/Mistral-Small-3.2-24B-Instruct-2506": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.4 }, "clarifai/main/models/mm-poly-8b": { cr: 0.06580000000000001, cw: 0.658, i: 0.658, o: 1.11 }, "claude-3-5-haiku": { cr: 0.08, cw: 1, i: 0.8, o: 4 }, "claude-3-5-haiku-20241022": { cr: 0.08000000000000002, cw: 0.8, i: 0.8, o: 4 }, "claude-3-5-haiku-latest": { cr: 0.08000000000000002, cw: 0.8, i: 0.8, o: 4 }, "claude-3-5-haiku@20241022": { cr: 0.08, cw: 1, i: 0.8, o: 4 }, "claude-3-5-sonnet-20240620": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "claude-3-5-sonnet-20241022": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "claude-3-7-sonnet": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "claude-3-7-sonnet-20250219": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "claude-3-haiku-20240307": { cr: 0.03, cw: 0.3, i: 0.25, o: 1.25 }, "claude-3-opus": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "claude-3-opus-20240229": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "claude-3-sonnet-20240229": { cr: 0.3, cw: 0.3, i: 3, o: 15 }, "claude-3.5-haiku": { cr: 0.08, cw: 1, i: 0.7999999999999999, o: 4 }, "claude-3.5-sonnet-v2": { cr: 0.30000000000000004, cw: 3.75, i: 3, o: 15 }, "claude-3.7-sonnet": { cr: 0.30000000000000004, cw: 3.75, i: 3, o: 15 }, "claude-4-5-sonnet": { cr: 0.3259, cw: 3.259, i: 3.259, o: 16.296 }, "claude-4-6-sonnet": { cr: 0.359, cw: 3.59, i: 3.59, o: 17.92 }, "claude-4.5-haiku": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "claude-4.5-opus": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "claude-4.5-sonnet": { cr: 0.30000000000000004, cw: 3.75, i: 3, o: 15 }, "claude-fable-5": { cr: 1, cw: 12.5, i: 10, o: 50 }, "claude-haiku-4-5": { cr: 0.1, cw: 1, i: 1, o: 5 }, "claude-haiku-4-5-20251001": { cr: 0.1, cw: 1, i: 1, o: 5 }, "claude-haiku-4-5-20251001-thinking": { cr: 0.1, cw: 1, i: 1, o: 5 }, "claude-haiku-4-5-free": { cr: 0, cw: 0, i: 0, o: 0 }, "claude-haiku-4-5@20251001": { cr: 0.1, cw: 1.25, i: 1, o: 5 }, "claude-haiku-4.5": { cr: 0.1, cw: 1.25, i: 1, o: 5 }, "claude-opus-4": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "claude-opus-4-0": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "claude-opus-4-1": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "claude-opus-4-1-20250805": { cr: 1.5, cw: 15, i: 15, o: 75 }, "claude-opus-4-1-20250805-thinking": { cr: 1.5, cw: 15, i: 15, o: 75 }, "claude-opus-4-1-thinking": { cr: 1.4994, cw: 14.994, i: 14.994, o: 75.004 }, "claude-opus-4-1-thinking:1024": { cr: 1.4994, cw: 14.994, i: 14.994, o: 75.004 }, "claude-opus-4-1-thinking:32000": { cr: 1.4994, cw: 14.994, i: 14.994, o: 75.004 }, "claude-opus-4-1-thinking:32768": { cr: 1.4994, cw: 14.994, i: 14.994, o: 75.004 }, "claude-opus-4-1-thinking:8192": { cr: 1.4994, cw: 14.994, i: 14.994, o: 75.004 }, "claude-opus-4-1@20250805": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "claude-opus-4-20250514": { cr: 1.5, cw: 15, i: 15, o: 75 }, "claude-opus-4-5": { cr: 0.5, cw: 5, i: 5, o: 25 }, "claude-opus-4-5-20251101": { cr: 0.5, cw: 5, i: 5, o: 25 }, "claude-opus-4-5-20251101-thinking": { cr: 0.5, cw: 5, i: 5, o: 25 }, "claude-opus-4-5-20251101:thinking": { cr: 0.4998, cw: 4.998, i: 4.998, o: 25.007 }, "claude-opus-4-5@20251101": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "claude-opus-4-6": { cr: 0.5, cw: 5, i: 5, o: 25 }, "claude-opus-4-6-think": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "claude-opus-4-6-thinking": { cr: 0.5, cw: 5, i: 5, o: 25 }, "claude-opus-4-6@default": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "claude-opus-4-7": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "claude-opus-4-7-fast": { cr: 3.6, cw: 45, i: 36, o: 180 }, "claude-opus-4-7-think": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "claude-opus-4-7@default": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "claude-opus-4-8": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "claude-opus-4-8-fast": { cr: 1.2, cw: 15, i: 12, o: 60 }, "claude-opus-4-8@default": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "claude-opus-4-thinking": { cr: 1.4994, cw: 14.994, i: 14.994, o: 75.004 }, "claude-opus-4-thinking:1024": { cr: 1.4994, cw: 14.994, i: 14.994, o: 75.004 }, "claude-opus-4-thinking:32000": { cr: 1.4994, cw: 14.994, i: 14.994, o: 75.004 }, "claude-opus-4-thinking:32768": { cr: 1.4994, cw: 14.994, i: 14.994, o: 75.004 }, "claude-opus-4-thinking:8192": { cr: 1.4994, cw: 14.994, i: 14.994, o: 75.004 }, "claude-opus-4.5": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "claude-opus-4.6": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "claude-opus-4.7": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "claude-opus-4.8": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "claude-opus-4@20250514": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "claude-opus4-5": { cr: 0.5980000000000001, cw: 5.98, i: 5.98, o: 29.89 }, "claude-opus4-6": { cr: 0.5980000000000001, cw: 5.98, i: 5.98, o: 29.89 }, "claude-opus4-7": { cr: 0.56, cw: 6.99, i: 5.6, o: 27.99 }, "claude-opus4-8": { cr: 0.563, cw: 7.049, i: 5.64, o: 28.198 }, "claude-sonnet-4": { cr: 0.3307, cw: 3.307, i: 3.307, o: 16.536 }, "claude-sonnet-4-0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "claude-sonnet-4-20250514": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "claude-sonnet-4-5": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "claude-sonnet-4-5-20250929": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "claude-sonnet-4-5-20250929-thinking": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "claude-sonnet-4-5@20250929": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "claude-sonnet-4-6": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "claude-sonnet-4-6-think": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "claude-sonnet-4-6-thinking": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "claude-sonnet-4-6@default": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "claude-sonnet-4-thinking": { cr: 0.2992, cw: 2.992, i: 2.992, o: 14.994 }, "claude-sonnet-4-thinking:1024": { cr: 0.2992, cw: 2.992, i: 2.992, o: 14.994 }, "claude-sonnet-4-thinking:32768": { cr: 0.2992, cw: 2.992, i: 2.992, o: 14.994 }, "claude-sonnet-4-thinking:64000": { cr: 0.2992, cw: 2.992, i: 2.992, o: 14.994 }, "claude-sonnet-4-thinking:8192": { cr: 0.2992, cw: 2.992, i: 2.992, o: 14.994 }, "claude-sonnet-4.5": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "claude-sonnet-4.6": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "claude-sonnet-4@20250514": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "claude-sonnet-5": { cr: 0.2, cw: 2.5, i: 2, o: 10 }, "claude-sonnet-5@default": { cr: 0.2, cw: 2.5, i: 2, o: 10 }, claudinio: { cr: 0.15, cw: 0.5, i: 0.5, o: 2 }, claudius: { cr: 0.9, cw: 3, i: 3, o: 8 }, "claw-high": { cr: 0.4998, cw: 4.998, i: 4.998, o: 25.007 }, "claw-low": { cr: 0.025, cw: 0.25, i: 0.25, o: 1.5 }, "claw-medium": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "codestral-2501": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.9 }, "codestral-2508": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.9 }, "codestral-latest": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.9 }, "codex-mini": { cr: 0.375, cw: 1.5, i: 1.5, o: 6 }, "coding-glm-5.1": { cr: 0.013, cw: 0.06, i: 0.06, o: 0.22 }, "coding-glm-5.1-free": { cr: 0, cw: 0, i: 0, o: 0 }, "coding-minimax-m2.7": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.2 }, "coding-minimax-m2.7-free": { cr: 0, cw: 0, i: 0, o: 0 }, "coding-minimax-m2.7-highspeed": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.2 }, "coding-xiaomi-mimo-v2.5": { cr: 0.016, cw: 0.08, i: 0.08, o: 0.4 }, "coding-xiaomi-mimo-v2.5-pro": { cr: 0.04, cw: 0.2, i: 0.2, o: 0.6 }, "cognitivecomputations/dolphin-2.9.2-qwen2-72b": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "cognitivecomputations/dolphin-mistral-24b-venice-edition:free": { cr: 0, cw: 0, i: 0, o: 0 }, "cohere-command-a": { cr: 0.25, cw: 2.5, i: 2.5, o: 10 }, "cohere-command-r-08-2024": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "cohere-command-r-plus-08-2024": { cr: 0.25, cw: 2.5, i: 2.5, o: 10 }, "cohere-embed-v-4-0": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, "cohere-embed-v3-english": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0 }, "cohere-embed-v3-multilingual": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0 }, "cohere/cohere-command-a": { cr: 0, cw: 0, i: 0, o: 0 }, "cohere/cohere-command-r": { cr: 0, cw: 0, i: 0, o: 0 }, "cohere/cohere-command-r-08-2024": { cr: 0, cw: 0, i: 0, o: 0 }, "cohere/cohere-command-r-plus": { cr: 0, cw: 0, i: 0, o: 0 }, "cohere/cohere-command-r-plus-08-2024": { cr: 0, cw: 0, i: 0, o: 0 }, "cohere/command-a": { cr: 0.25, cw: 2.5, i: 2.5, o: 10 }, "cohere/command-a-03-2025": { cr: 0.25, cw: 2.5, i: 2.5, o: 10 }, "cohere/command-r": { cr: 0.0476, cw: 0.476, i: 0.476, o: 1.428 }, "cohere/command-r-08-2024": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "cohere/command-r-plus-08-2024": { cr: 0.25, cw: 2.5, i: 2.5, o: 10 }, "cohere/command-r7b-12-2024": { cr: 0.00375, cw: 0.0375, i: 0.0375, o: 0.15 }, "cohere/north-mini-code:free": { cr: 0, cw: 0, i: 0, o: 0 }, "command-a-03-2025": { cr: 0.25, cw: 2.5, i: 2.5, o: 10 }, "command-a-plus-05-2026": { cr: 0.25, cw: 2.5, i: 2.5, o: 10 }, "command-a-reasoning-08-2025": { cr: 0.25, cw: 2.5, i: 2.5, o: 10 }, "command-a-translate-08-2025": { cr: 0.25, cw: 2.5, i: 2.5, o: 10 }, "command-a-vision-07-2025": { cr: 0.25, cw: 2.5, i: 2.5, o: 10 }, "command-r-08-2024": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "command-r-plus-08-2024": { cr: 0.25, cw: 2.5, i: 2.5, o: 10 }, "command-r7b-12-2024": { cr: 0.00375, cw: 0.0375, i: 0.0375, o: 0.15 }, "command-r7b-arabic-02-2025": { cr: 0.00375, cw: 0.0375, i: 0.0375, o: 0.15 }, "core42/jais-30b-chat": { cr: 0, cw: 0, i: 0, o: 0 }, "cortecs/Llama-3.3-70B-Instruct-FP8-Dynamic": { cr: 0.049, cw: 0.49, i: 0.49, o: 0.71 }, custom: { cr: 0, cw: 0, i: 0, o: 0 }, "databricks-claude-haiku-4-5": { cr: 0.1, cw: 1.25, i: 1, o: 5 }, "databricks-claude-opus-4-1": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "databricks-claude-opus-4-5": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "databricks-claude-opus-4-6": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "databricks-claude-opus-4-7": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "databricks-claude-sonnet-4": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "databricks-claude-sonnet-4-5": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "databricks-claude-sonnet-4-6": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "databricks-gemini-2-5-flash": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "databricks-gemini-2-5-pro": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "databricks-gemini-3-1-flash-lite": { cr: 0.025, cw: 0.25, i: 0.25, o: 1.5 }, "databricks-gemini-3-1-pro": { cr: 0.2, cw: 2, i: 2, o: 12 }, "databricks-gemini-3-flash": { cr: 0.05, cw: 0.5, i: 0.5, o: 3 }, "databricks-gemini-3-pro": { cr: 0.2, cw: 2, i: 2, o: 12 }, "databricks-gpt-5": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "databricks-gpt-5-1": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "databricks-gpt-5-2": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "databricks-gpt-5-4": { cr: 0.25, cw: 2.5, i: 2.5, o: 15 }, "databricks-gpt-5-4-mini": { cr: 0.075, cw: 0.75, i: 0.75, o: 4.5 }, "databricks-gpt-5-4-nano": { cr: 0.02, cw: 0.2, i: 0.2, o: 1.25 }, "databricks-gpt-5-5": { cr: 0.5, cw: 5, i: 5, o: 30 }, "databricks-gpt-5-mini": { cr: 0.025, cw: 0.25, i: 0.25, o: 2 }, "databricks-gpt-5-nano": { cr: 0.005, cw: 0.05, i: 0.05, o: 0.4 }, "databricks-gpt-oss-120b": { cr: 0.0072, cw: 0.072, i: 0.072, o: 0.28 }, "databricks-gpt-oss-20b": { cr: 0.005000000000000001, cw: 0.05, i: 0.05, o: 0.2 }, "deep-deepseek-v4-flash": { cr: 0.0308, cw: 0.154, i: 0.154, o: 0.308 }, "deep-deepseek-v4-pro": { cr: 0.004302, cw: 0.478, i: 0.478, o: 0.956 }, deepclaude: { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "deepcogito/cogito-v1-preview-qwen-32B": { cr: 0.18, cw: 1.7999999999999998, i: 1.7999999999999998, o: 1.7999999999999998 }, "deepcogito/cogito-v2-1-671b": { cr: 0.125, cw: 1.25, i: 1.25, o: 1.25 }, "deepcogito/cogito-v2.1-671b": { cr: 0.125, cw: 1.25, i: 1.25, o: 1.25 }, "deepseek-3.2": { cr: 0.05, cw: 0.5, i: 0.5, o: 1.6 }, "deepseek-ai/DeepSeek-OCR": { cr: 0, cw: 0, i: 0, o: 0 }, "deepseek-ai/DeepSeek-R1": { cr: 0.30000000000000004, cw: 3, i: 3, o: 7 }, "deepseek-ai/DeepSeek-R1-0528": { cr: 0.35, cw: 0.5, i: 0.5, o: 2.15 }, "deepseek-ai/DeepSeek-V3": { cr: 0.025, cw: 0.25, i: 0.25, o: 1 }, "deepseek-ai/DeepSeek-V3-0324": { cr: 0.025, cw: 0.25, i: 0.25, o: 0.88 }, "deepseek-ai/DeepSeek-V3-1": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.7 }, "deepseek-ai/DeepSeek-V3.1": { cr: 0.05, cw: 0.5, i: 0.5, o: 1.5 }, "deepseek-ai/DeepSeek-V3.1-Terminus": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 1 }, "deepseek-ai/DeepSeek-V3.1-Terminus:thinking": { cr: 0.025, cw: 0.25, i: 0.25, o: 0.7 }, "deepseek-ai/DeepSeek-V3.1:thinking": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.7 }, "deepseek-ai/DeepSeek-V3.2": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 0.4 }, "deepseek-ai/DeepSeek-V3.2-Exp": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 0.4 }, "deepseek-ai/DeepSeek-V3.2-TEE": { cr: 0.5, cw: 1, i: 1, o: 1 }, "deepseek-ai/DeepSeek-V3.2-fast": { cr: 0.04, cw: 0.5, i: 0.4, o: 2 }, "deepseek-ai/DeepSeek-V4-Flash": { cr: 0.02, cw: 0.1, i: 0.1, o: 0.2 }, "deepseek-ai/DeepSeek-V4-Pro": { cr: 0.145, cw: 1.74, i: 1.74, o: 3.48 }, "deepseek-ai/deepseek-ocr/models/DeepSeek-OCR": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.7 }, "deepseek-ai/deepseek-r1-distill-llama-70b": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.14 }, "deepseek-ai/deepseek-v3.1-maas": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.7 }, "deepseek-ai/deepseek-v3.2-exp": { cr: 0.027999999999999997, cw: 0.27999999999999997, i: 0.27999999999999997, o: 0.42000000000000004 }, "deepseek-ai/deepseek-v3.2-exp-thinking": { cr: 0.027999999999999997, cw: 0.27999999999999997, i: 0.27999999999999997, o: 0.42000000000000004 }, "deepseek-ai/deepseek-v3.2-maas": { cr: 0.056, cw: 0.56, i: 0.56, o: 1.68 }, "deepseek-ai/deepseek-v4-flash": { cr: 0.0028, cw: 0.14, i: 0.14, o: 0.28 }, "deepseek-ai/deepseek-v4-pro": { cr: 0.003625, cw: 0.435, i: 0.435, o: 0.87 }, "deepseek-chat": { cr: 0.028999999999999998, cw: 0.29, i: 0.29, o: 0.43 }, "deepseek-chat-cheaper": { cr: 0.025, cw: 0.25, i: 0.25, o: 0.7 }, "deepseek-math-v2": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.2 }, "deepseek-r1": { cr: 0.0574, cw: 0.574, i: 0.574, o: 2.294 }, "deepseek-r1-0528": { cr: 0.0574, cw: 0.574, i: 0.574, o: 2.294 }, "deepseek-r1-distill-llama-70b": { cr: 0.0287, cw: 0.287, i: 0.287, o: 0.861 }, "deepseek-r1-distill-llama-8b": { cr: 0, cw: 0, i: 0, o: 0 }, "deepseek-r1-distill-qwen-1-5b": { cr: 0, cw: 0, i: 0, o: 0 }, "deepseek-r1-distill-qwen-14b": { cr: 0.0144, cw: 0.144, i: 0.144, o: 0.431 }, "deepseek-r1-distill-qwen-32b": { cr: 0.0287, cw: 0.287, i: 0.287, o: 0.861 }, "deepseek-r1-distill-qwen-7b": { cr: 0.0072, cw: 0.072, i: 0.072, o: 0.144 }, "deepseek-r1-sambanova": { cr: 0.4998, cw: 4.998, i: 4.998, o: 6.987 }, "deepseek-reasoner": { cr: 0.028999999999999998, cw: 0.29, i: 0.29, o: 0.43 }, "deepseek-reasoner-cheaper": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 1.7 }, "deepseek-tng-r1t2-chimera": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "deepseek-v3": { cr: 0.0287, cw: 0.287, i: 0.287, o: 1.147 }, "deepseek-v3-0324": { cr: 0.11399999999999999, cw: 1.14, i: 1.14, o: 4.56 }, "deepseek-v3-1": { cr: 0.0574, cw: 0.574, i: 0.574, o: 1.721 }, "deepseek-v3-2-exp": { cr: 0.0287, cw: 0.287, i: 0.287, o: 0.431 }, "deepseek-v3.1": { cr: 0.05600000000000001, cw: 0.56, i: 0.56, o: 1.68 }, "deepseek-v3.1-terminus": { cr: 0.21600000000000003, cw: 0.27, i: 0.27, o: 1 }, "deepseek-v3.2": { cr: 0.028999999999999998, cw: 0.29, i: 0.29, o: 0.43 }, "deepseek-v3.2-speciale": { cr: 0.057999999999999996, cw: 0.58, i: 0.58, o: 1.68 }, "deepseek-v3.2-thinking": { cr: 0.028999999999999998, cw: 0.29, i: 0.29, o: 0.43 }, "deepseek-v4-flash": { cr: 0.0028, cw: 0.14, i: 0.14, o: 0.28 }, "deepseek-v4-flash-free": { cr: 0, cw: 0, i: 0, o: 0 }, "deepseek-v4-pro": { cr: 0.003625, cw: 0.435, i: 0.435, o: 0.87 }, "deepseek-v4-pro-lightning": { cr: 0.02, cw: 0.8, i: 0.8, o: 1.6 }, "deepseek.r1-v1:0": { cr: 0.135, cw: 1.35, i: 1.35, o: 5.4 }, "deepseek.v3-v1:0": { cr: 0.057999999999999996, cw: 0.58, i: 0.58, o: 1.68 }, "deepseek.v3.2": { cr: 0.062, cw: 0.62, i: 0.62, o: 1.85 }, "deepseek/deepseek-chat": { cr: 0.15, cw: 0.32, i: 0.32, o: 0.89 }, "deepseek/deepseek-chat-v3-0324": { cr: 0.095, cw: 0.2, i: 0.2, o: 0.77 }, "deepseek/deepseek-chat-v3.1": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.75 }, "deepseek/deepseek-latest": { cr: 0.11, cw: 1.1, i: 1.1, o: 2.2 }, "deepseek/deepseek-ocr": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.03 }, "deepseek/deepseek-ocr-2": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.03 }, "deepseek/deepseek-prover-v2-671b": { cr: 0.1, cw: 1, i: 1, o: 2.5 }, "deepseek/deepseek-r1": { cr: 0, cw: 0, i: 0, o: 0 }, "deepseek/deepseek-r1-0528": { cr: 0, cw: 0, i: 0, o: 0 }, "deepseek/deepseek-r1-0528-qwen3-8b": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.09 }, "deepseek/deepseek-r1-distill-llama-70b": { cr: 0.015, cw: 0.7, i: 0.7, o: 0.8 }, "deepseek/deepseek-r1-distill-qwen-14b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "deepseek/deepseek-r1-distill-qwen-32b": { cr: 0.028999999999999998, cw: 0.29, i: 0.29, o: 0.29 }, "deepseek/deepseek-r1-turbo": { cr: 0.06999999999999999, cw: 0.7, i: 0.7, o: 2.5 }, "deepseek/deepseek-reasoner": { cr: 0.028, cw: 0.435, i: 0.435, o: 0.87 }, "deepseek/deepseek-v3": { cr: 0.135, cw: 0.27, i: 0.27, o: 1.12 }, "deepseek/deepseek-v3-0324": { cr: 0, cw: 0, i: 0, o: 0 }, "deepseek/deepseek-v3-turbo": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 1.3 }, "deepseek/deepseek-v3.1": { cr: 0.05500000000000001, cw: 0.55, i: 0.55, o: 1.66 }, "deepseek/deepseek-v3.1-terminus": { cr: 0.13, cw: 0.21, i: 0.21, o: 0.79 }, "deepseek/deepseek-v3.2": { cr: 0.125, cw: 0.26, i: 0.26, o: 0.38 }, "deepseek/deepseek-v3.2-exp": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 0.41 }, "deepseek/deepseek-v3.2-speciale": { cr: 0.135, cw: 0.4, i: 0.4, o: 1.2 }, "deepseek/deepseek-v3.2-thinking": { cr: 0.062, cw: 0.62, i: 0.62, o: 1.85 }, "deepseek/deepseek-v3.2:thinking": { cr: 0.027999999999999997, cw: 0.27999999999999997, i: 0.27999999999999997, o: 0.42000000000000004 }, "deepseek/deepseek-v4-flash": { cr: 0.0028, cw: 0.14, i: 0.14, o: 0.28 }, "deepseek/deepseek-v4-flash:thinking": { cr: 0.028, cw: 0.14, i: 0.14, o: 0.28 }, "deepseek/deepseek-v4-pro": { cr: 0.17400000000000002, cw: 1.74, i: 1.74, o: 3.48 }, "deepseek/deepseek-v4-pro-cheaper": { cr: 0.003625, cw: 0.435, i: 0.435, o: 0.87 }, "deepseek/deepseek-v4-pro-cheaper:thinking": { cr: 0.003625, cw: 0.435, i: 0.435, o: 0.87 }, "deepseek/deepseek-v4-pro:thinking": { cr: 0.11, cw: 1.1, i: 1.1, o: 2.2 }, "devstral-2-123b-instruct-2512": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 2 }, "devstral-2512": { cr: 0, cw: 0, i: 0, o: 0 }, "devstral-latest": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 2 }, "devstral-medium-2507": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 2 }, "devstral-medium-latest": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 2 }, "devstral-small-2505": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.3 }, "devstral-small-2507": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.3 }, "dmind/dmind-1": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.6 }, "dmind/dmind-1-mini": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.4 }, "doubao-1-5-thinking-pro-250415": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "doubao-1-5-thinking-pro-vision-250415": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "doubao-1-5-thinking-vision-pro-250428": { cr: 0.05500000000000001, cw: 0.55, i: 0.55, o: 1.43 }, "doubao-1.5-pro-256k": { cr: 0.07990000000000001, cw: 0.799, i: 0.799, o: 1.445 }, "doubao-1.5-pro-32k": { cr: 0.013430000000000001, cw: 0.1343, i: 0.1343, o: 0.3349 }, "doubao-1.5-vision-pro-32k": { cr: 0.0459, cw: 0.459, i: 0.459, o: 1.377 }, "doubao-seed-1-6-250615": { cr: 0.0204, cw: 0.204, i: 0.204, o: 0.51 }, "doubao-seed-1-6-flash-250615": { cr: 0.0037400000000000003, cw: 0.0374, i: 0.0374, o: 0.374 }, "doubao-seed-1-6-thinking-250615": { cr: 0.0204, cw: 0.204, i: 0.204, o: 2.04 }, "doubao-seed-1-6-thinking-250715": { cr: 0.0121, cw: 0.121, i: 0.121, o: 1.21 }, "doubao-seed-1-6-vision-250815": { cr: 0.0114, cw: 0.114, i: 0.114, o: 1.143 }, "doubao-seed-1-8-251215": { cr: 0.0114, cw: 0.114, i: 0.114, o: 0.286 }, "doubao-seed-2-0-code-preview": { cr: 0.09644, cw: 0.48, i: 0.48, o: 2.41 }, "doubao-seed-2-0-code-preview-260215": { cr: 0.0782, cw: 0.782, i: 0.782, o: 3.893 }, "doubao-seed-2-0-lite-260215": { cr: 0.014620000000000001, cw: 0.1462, i: 0.1462, o: 0.8738 }, "doubao-seed-2-0-lite-260428": { cr: 0.01692, cw: 0.08, i: 0.08, o: 0.51 }, "doubao-seed-2-0-mini-260215": { cr: 0.00493, cw: 0.0493, i: 0.0493, o: 0.4845 }, "doubao-seed-2-0-mini-260428": { cr: 0.00564, cw: 0.03, i: 0.03, o: 0.28 }, "doubao-seed-2-0-pro": { cr: 0.09644, cw: 0.48, i: 0.48, o: 2.41 }, "doubao-seed-2-0-pro-260215": { cr: 0.0782, cw: 0.782, i: 0.782, o: 3.876 }, "doubao-seed-code-preview-251028": { cr: 0.017, cw: 0.17, i: 0.17, o: 1.14 }, "duo-chat-gpt-5-1": { cr: 0, cw: 0, i: 0, o: 0 }, "duo-chat-gpt-5-2": { cr: 0, cw: 0, i: 0, o: 0 }, "duo-chat-gpt-5-2-codex": { cr: 0, cw: 0, i: 0, o: 0 }, "duo-chat-gpt-5-3-codex": { cr: 0, cw: 0, i: 0, o: 0 }, "duo-chat-gpt-5-4": { cr: 0, cw: 0, i: 0, o: 0 }, "duo-chat-gpt-5-4-mini": { cr: 0, cw: 0, i: 0, o: 0 }, "duo-chat-gpt-5-4-nano": { cr: 0, cw: 0, i: 0, o: 0 }, "duo-chat-gpt-5-5": { cr: 0, cw: 0, i: 0, o: 0 }, "duo-chat-gpt-5-codex": { cr: 0, cw: 0, i: 0, o: 0 }, "duo-chat-gpt-5-mini": { cr: 0, cw: 0, i: 0, o: 0 }, "duo-chat-haiku-4-5": { cr: 0, cw: 0, i: 0, o: 0 }, "duo-chat-opus-4-5": { cr: 0, cw: 0, i: 0, o: 0 }, "duo-chat-opus-4-6": { cr: 0, cw: 0, i: 0, o: 0 }, "duo-chat-opus-4-7": { cr: 0, cw: 0, i: 0, o: 0 }, "duo-chat-opus-4-8": { cr: 0, cw: 0, i: 0, o: 0 }, "duo-chat-sonnet-4-5": { cr: 0, cw: 0, i: 0, o: 0 }, "duo-chat-sonnet-4-6": { cr: 0, cw: 0, i: 0, o: 0 }, "e5-large-v2": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "empiriolabs/deepseek-v4-flash-el": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.28 }, "empiriolabs/deepseek-v4-pro-el": { cr: 0.167, cw: 1.67, i: 1.67, o: 3.33 }, "ernie-4.5-21b-a3b-thinking": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.28 }, "ernie-4.5-8k-preview": { cr: 0.066, cw: 0.66, i: 0.66, o: 2.6 }, "ernie-4.5-turbo-128k": { cr: 0.013200000000000002, cw: 0.132, i: 0.132, o: 0.55 }, "ernie-4.5-turbo-vl-32k": { cr: 0.0495, cw: 0.495, i: 0.495, o: 1.43 }, "ernie-5.0-thinking-preview": { cr: 0.11000000000000001, cw: 1.1, i: 1.1, o: 2 }, "ernie-5.1": { cr: 0.75, cw: 0.75, i: 0.75, o: 3 }, "ernie-5.1:thinking": { cr: 0.75, cw: 0.75, i: 0.75, o: 3 }, "ernie-x1-32k": { cr: 0.033, cw: 0.33, i: 0.33, o: 1.32 }, "ernie-x1-32k-preview": { cr: 0.033, cw: 0.33, i: 0.33, o: 1.32 }, "ernie-x1-turbo-32k": { cr: 0.0165, cw: 0.165, i: 0.165, o: 0.66 }, "ernie-x1.1-preview": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "essentialai/Rnj-1-Instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "essentialai/rnj-1-instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "eu.anthropic.claude-fable-5": { cr: 1.1, cw: 13.75, i: 11, o: 55 }, "eu.anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.11, cw: 1.375, i: 1.1, o: 5.5 }, "eu.anthropic.claude-opus-4-5-20251101-v1:0": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "eu.anthropic.claude-opus-4-6-v1": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "eu.anthropic.claude-opus-4-7": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "eu.anthropic.claude-opus-4-8": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "eu.anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.33, cw: 4.125, i: 3.3, o: 16.5 }, "eu.anthropic.claude-sonnet-4-6": { cr: 0.33, cw: 4.125, i: 3.3, o: 16.5 }, "eu.anthropic.claude-sonnet-5": { cr: 0.22, cw: 2.75, i: 2.2, o: 11 }, "evroc/roc": { cr: 0.28750000000000003, cw: 2.875, i: 2.875, o: 11.516 }, "exa-answer": { cr: 0.25, cw: 2.5, i: 2.5, o: 2.5 }, "exa-research": { cr: 0.25, cw: 2.5, i: 2.5, o: 2.5 }, "exa-research-pro": { cr: 0.25, cw: 2.5, i: 2.5, o: 2.5 }, "failspy/Meta-Llama-3-70B-Instruct-abliterated-v3.5": { cr: 0.06999999999999999, cw: 0.7, i: 0.7, o: 0.7 }, fastgpt: { cr: 0.75, cw: 7.5, i: 7.5, o: 7.5 }, "featherless-ai/Qwerky-72B": { cr: 0.05, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks-ai/kimi-k2.5-fw": { cr: 0, cw: 0, i: 0, o: 0 }, "fugu-ultra": { cr: 0.5, cw: 5, i: 5, o: 30 }, "fugu-ultra-20260615": { cr: 0.5, cw: 5, i: 5, o: 30 }, "gemini-2-5-flash": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-2-5-pro": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gemini-2.0-flash": { cr: 0.025, cw: 0.1, i: 0.1, o: 0.4 }, "gemini-2.0-flash-001": { cr: 0.01003, cw: 0.1003, i: 0.1003, o: 0.408 }, "gemini-2.0-flash-exp-image-generation": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.8 }, "gemini-2.0-flash-lite": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0.3 }, "gemini-2.0-flash-thinking-exp-01-21": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 1.003 }, "gemini-2.0-flash-thinking-exp-1219": { cr: 0.01003, cw: 0.1003, i: 0.1003, o: 0.408 }, "gemini-2.0-pro-exp-02-05": { cr: 0.19890000000000002, cw: 1.989, i: 1.989, o: 7.956 }, "gemini-2.0-pro-reasoner": { cr: 0.1292, cw: 1.292, i: 1.292, o: 4.998 }, "gemini-2.5-flash": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-2.5-flash-image": { cr: 0.03, cw: 0.3, i: 0.3, o: 30 }, "gemini-2.5-flash-lite": { cr: 0.01, cw: 0.1, i: 0.1, o: 0.4 }, "gemini-2.5-flash-lite-preview-06-17": { cr: 0.009, cw: 0.09, i: 0.09, o: 0.36 }, "gemini-2.5-flash-lite-preview-09-2025": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.4 }, "gemini-2.5-flash-lite-preview-09-2025-thinking": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.4 }, "gemini-2.5-flash-nothink": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-2.5-flash-nothinking": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-2.5-flash-preview-04-17": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "gemini-2.5-flash-preview-04-17:thinking": { cr: 0.015, cw: 0.15, i: 0.15, o: 3.5 }, "gemini-2.5-flash-preview-05-20": { cr: 0.013500000000000002, cw: 0.135, i: 0.135, o: 3.15 }, "gemini-2.5-flash-preview-05-20:thinking": { cr: 0.015, cw: 0.15, i: 0.15, o: 3.5 }, "gemini-2.5-flash-preview-09-2025": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-2.5-flash-preview-09-2025-thinking": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-2.5-flash-preview-tts": { cr: 0.05, cw: 0.5, i: 0.5, o: 10 }, "gemini-2.5-flash-tts": { cr: 0.05, cw: 0.5, i: 0.5, o: 10 }, "gemini-2.5-pro": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gemini-2.5-pro-exp-03-25": { cr: 0.25, cw: 2.5, i: 2.5, o: 10 }, "gemini-2.5-pro-preview-03-25": { cr: 0.25, cw: 2.5, i: 2.5, o: 10 }, "gemini-2.5-pro-preview-05-06": { cr: 0.25, cw: 2.5, i: 2.5, o: 10 }, "gemini-2.5-pro-preview-06-05": { cr: 0.1125, cw: 1.125, i: 1.125, o: 9 }, "gemini-2.5-pro-preview-tts": { cr: 0.1, cw: 1, i: 1, o: 20 }, "gemini-2.5-pro-tts": { cr: 0.1, cw: 1, i: 1, o: 20 }, "gemini-3-1-flash-lite": { cr: 0.025, cw: 0.25, i: 0.25, o: 1.5 }, "gemini-3-1-pro": { cr: 0.2, cw: 2, i: 2, o: 12 }, "gemini-3-1-pro-preview": { cr: 0.2, cw: 2, i: 2, o: 12 }, "gemini-3-5-flash": { cr: 0.155, cw: 0.086, i: 1.55, o: 9.45 }, "gemini-3-flash": { cr: 0.05, cw: 0.5, i: 0.5, o: 3 }, "gemini-3-flash-preview": { cr: 0.05, cw: 0.5, i: 0.5, o: 3 }, "gemini-3-pro": { cr: 0.2, cw: 2, i: 2, o: 12 }, "gemini-3-pro-image-preview": { cr: 0.2, cw: 2, i: 2, o: 120 }, "gemini-3-pro-preview": { cr: 0.2, cw: 2, i: 2, o: 12 }, "gemini-3.1-flash-image-preview": { cr: 0.05, cw: 0.5, i: 0.5, o: 60 }, "gemini-3.1-flash-lite": { cr: 0.025, cw: 1, i: 0.25, o: 1.5 }, "gemini-3.1-flash-lite-preview": { cr: 0.025, cw: 1, i: 0.25, o: 1.5 }, "gemini-3.1-pro": { cr: 0.2, cw: 2, i: 2, o: 12 }, "gemini-3.1-pro-preview": { cr: 0.2, cw: 2, i: 2, o: 12 }, "gemini-3.1-pro-preview-customtools": { cr: 0.2, cw: 2, i: 2, o: 12 }, "gemini-3.5-flash": { cr: 0.15, cw: 1.5, i: 1.5, o: 9 }, "gemini-embedding-001": { cr: 0.015, cw: 0.15, i: 0.15, o: 0 }, "gemini-exp-1206": { cr: 0.1258, cw: 1.258, i: 1.258, o: 4.998 }, "gemini-flash-latest": { cr: 0.075, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-flash-lite-latest": { cr: 0.025, cw: 0.1, i: 0.1, o: 0.4 }, "gemini-pro-latest": { cr: 0.2, cw: 2, i: 2, o: 12 }, "gemma-3-12b-it": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.09999999999999999 }, "gemma-3-27b": { cr: 0, cw: 0, i: 0, o: 0 }, "gemma-3-27b-it": { cr: 0.025, cw: 0.25, i: 0.25, o: 0.5 }, "gemma-4": { cr: 0.5, cw: 5, i: 5, o: 10 }, "gemma-4-26b-a4b-it": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.34 }, "gemma-4-31B-Fabled": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "gemma-4-31B-Garnet": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "gemma-4-31B-K1-v5": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "gemma-4-31B-Larkspur-v0.5": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "gemma-4-31B-MeroMero": { cr: 0.030600000000000002, cw: 0.306, i: 0.306, o: 0.306 }, "gemma-4-31B-it": { cr: 0.018, cw: 0.18, i: 0.18, o: 0.5 }, "gemma-4-31b": { cr: 0.099, cw: 0.99, i: 0.99, o: 1.49 }, "gemma-4-31b-it": { cr: 0.02, cw: 0.1, i: 0.1, o: 0.3 }, "gemma-4-E4B-it-IQ4_XS": { cr: 0, cw: 0, i: 0, o: 0 }, "gemma-4-E4B-it-MLX-4bit": { cr: 0, cw: 0, i: 0, o: 0 }, "gemma-4-uncensored": { cr: 0.01625, cw: 0.1625, i: 0.1625, o: 0.5 }, "gemma2-9b-it": { cr: 0.001, cw: 0.01, i: 0.01, o: 0.03 }, "gemma4-31b": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 1 }, "glm-4": { cr: 1.4994, cw: 14.994, i: 14.994, o: 14.994 }, "glm-4-32b-0414-128k": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.1 }, "glm-4-air": { cr: 0.02006, cw: 0.2006, i: 0.2006, o: 0.2006 }, "glm-4-air-0111": { cr: 0.013940000000000001, cw: 0.1394, i: 0.1394, o: 0.1394 }, "glm-4-airx": { cr: 0.2006, cw: 2.006, i: 2.006, o: 2.006 }, "glm-4-flash": { cr: 0.01003, cw: 0.1003, i: 0.1003, o: 0.1003 }, "glm-4-long": { cr: 0.02006, cw: 0.2006, i: 0.2006, o: 0.2006 }, "glm-4-plus": { cr: 0.7497, cw: 7.497, i: 7.497, o: 7.497 }, "glm-4-plus-0111": { cr: 0.9996, cw: 9.996, i: 9.996, o: 9.996 }, "glm-4.1v-thinking-flash": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.3 }, "glm-4.1v-thinking-flashx": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.3 }, "glm-4.5": { cr: 0.0286, cw: 0.286, i: 0.286, o: 1.142 }, "glm-4.5-air": { cr: 0.011430000000000001, cw: 0.1143, i: 0.1143, o: 0.286 }, "glm-4.5-airx": { cr: 0.0572, cw: 0.572, i: 0.572, o: 1.714 }, "glm-4.5-flash": { cr: 0, cw: 0, i: 0, o: 0 }, "glm-4.5-x": { cr: 0.11430000000000001, cw: 1.143, i: 1.143, o: 2.29 }, "glm-4.5v": { cr: 0.028999999999999998, cw: 0.29, i: 0.29, o: 0.86 }, "glm-4.6": { cr: 0.0286, cw: 0.286, i: 0.286, o: 1.142 }, "glm-4.6v": { cr: 0.014499999999999999, cw: 0.145, i: 0.145, o: 0.43 }, "glm-4.6v-flashx": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.4 }, "glm-4.7": { cr: 0.0286, cw: 0.286, i: 0.286, o: 1.142 }, "glm-4.7-flash": { cr: 0.009, cw: 0.09, i: 0.09, o: 0.53 }, "glm-4.7-flashx": { cr: 0.00715, cw: 0.0715, i: 0.0715, o: 0.429 }, "glm-4.7-free": { cr: 0, cw: 0, i: 0, o: 0 }, "glm-5": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.6 }, "glm-5-2": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 5.25 }, "glm-5-free": { cr: 0, cw: 0, i: 0, o: 0 }, "glm-5-turbo": { cr: 0.072, cw: 0.72, i: 0.72, o: 3.2 }, "glm-5.1": { cr: 0.08600000000000001, cw: 0.86, i: 0.86, o: 3.5 }, "glm-5.2": { cr: 0.2817, cw: 1.1268, i: 1.1268, o: 3.9438 }, "glm-5.2-fast": { cr: 0.3625, cw: 1.45, i: 1.45, o: 4.5 }, "glm-5.2-flex": { cr: 0.18125, cw: 0.725, i: 0.725, o: 2.25 }, "glm-5.2-short": { cr: 0.3625, cw: 1.45, i: 1.45, o: 4.5 }, "glm-5.2-short-fast": { cr: 0.3625, cw: 1.45, i: 1.45, o: 4.5 }, "glm-5.2-short-fast-flex": { cr: 0.18125, cw: 0.725, i: 0.725, o: 2.25 }, "glm-5.2-short-flex": { cr: 0.18125, cw: 0.725, i: 0.725, o: 2.25 }, "glm-5v-turbo": { cr: 0.072, cw: 0.72, i: 0.72, o: 3.2 }, "glm-for-coding": { cr: 0.0086, cw: 0.086, i: 0.086, o: 0.343 }, "glm-z1-air": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.07 }, "glm-z1-airx": { cr: 0.06999999999999999, cw: 0.7, i: 0.7, o: 0.7 }, "glm-zero-preview": { cr: 0.18020000000000003, cw: 1.802, i: 1.802, o: 1.802 }, "global.anthropic.claude-fable-5": { cr: 1, cw: 12.5, i: 10, o: 50 }, "global.anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.1, cw: 1.25, i: 1, o: 5 }, "global.anthropic.claude-opus-4-5-20251101-v1:0": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "global.anthropic.claude-opus-4-6-v1": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "global.anthropic.claude-opus-4-7": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "global.anthropic.claude-opus-4-8": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "global.anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "global.anthropic.claude-sonnet-4-6": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "global.anthropic.claude-sonnet-5": { cr: 0.2, cw: 2.5, i: 2, o: 10 }, "google-gemma-3-27b-it": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.2 }, "google-gemma-4-26b-a4b-it": { cr: 0.01625, cw: 0.1625, i: 0.1625, o: 0.5 }, "google-gemma-4-31b-it": { cr: 0.09, cw: 0.12, i: 0.12, o: 0.36 }, "google.gemma-3-12b-it": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.09999999999999999 }, "google.gemma-3-27b-it": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.2 }, "google.gemma-3-4b-it": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.08 }, "google/gemini-2.0-flash": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.42 }, "google/gemini-2.0-flash-001": { cr: 0.025, cw: 0.083333, i: 0.1, o: 0.4 }, "google/gemini-2.0-flash-lite": { cr: 0.0052, cw: 0.052, i: 0.052, o: 0.21 }, "google/gemini-2.0-flash-lite-001": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0.3 }, "google/gemini-2.5-flash": { cr: 0.0375, cw: 0.3, i: 0.3, o: 2.5 }, "google/gemini-2.5-flash-image": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "google/gemini-2.5-flash-lite": { cr: 0.01, cw: 0.083333, i: 0.1, o: 0.4 }, "google/gemini-2.5-flash-lite-preview-09-2025": { cr: 0.01, cw: 0.083333, i: 0.1, o: 0.4 }, "google/gemini-2.5-pro": { cr: 0.31, cw: 1.25, i: 1.25, o: 10 }, "google/gemini-2.5-pro-preview": { cr: 0.125, cw: 0.375, i: 1.25, o: 10 }, "google/gemini-2.5-pro-preview-05-06": { cr: 0.125, cw: 0.375, i: 1.25, o: 10 }, "google/gemini-3-flash": { cr: 0.04, cw: 0.4, i: 0.4, o: 2.4 }, "google/gemini-3-flash-preview": { cr: 0.05, cw: 0.083333, i: 0.5, o: 3 }, "google/gemini-3-flash-preview-thinking": { cr: 0.05, cw: 0.5, i: 0.5, o: 3 }, "google/gemini-3-pro": { cr: 0, cw: 1.25, i: 1.25, o: 15 }, "google/gemini-3-pro-image": { cr: 0.2, cw: 0.375, i: 2, o: 12 }, "google/gemini-3-pro-image-preview": { cr: 0.2, cw: 2, i: 2, o: 12 }, "google/gemini-3-pro-preview": { cr: 0.2, cw: 2, i: 2, o: 12 }, "google/gemini-3.1-flash-image": { cr: 0.05, cw: 0.5, i: 0.5, o: 3 }, "google/gemini-3.1-flash-image-preview": { cr: 0.05, cw: 0.5, i: 0.5, o: 3 }, "google/gemini-3.1-flash-lite": { cr: 0.025, cw: 0.08333, i: 0.25, o: 1.5 }, "google/gemini-3.1-flash-lite-image": { cr: 0.025, cw: 0.25, i: 0.25, o: 1.5 }, "google/gemini-3.1-flash-lite-preview": { cr: 0.025, cw: 0.25, i: 0.25, o: 1.5 }, "google/gemini-3.1-pro": { cr: 0.2, cw: 2, i: 2, o: 12 }, "google/gemini-3.1-pro-preview": { cr: 0.2, cw: 2, i: 2, o: 12 }, "google/gemini-3.1-pro-preview-customtools": { cr: 0.2, cw: 2, i: 2, o: 12 }, "google/gemini-3.1-pro-preview-high": { cr: 0.2, cw: 2, i: 2, o: 12 }, "google/gemini-3.1-pro-preview-low": { cr: 0.2, cw: 2, i: 2, o: 12 }, "google/gemini-3.5-flash": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 9 }, "google/gemini-3.5-flash-thinking": { cr: 0.15, cw: 1.5, i: 1.5, o: 9 }, "google/gemini-deep-research": { cr: 0.16000000000000003, cw: 1.6, i: 1.6, o: 9.6 }, "google/gemini-flash-1.5": { cr: 0.0074800000000000005, cw: 0.0748, i: 0.0748, o: 0.306 }, "google/gemini-flash-latest": { cr: 0.075, cw: 0.3, i: 0.3, o: 2.5 }, "google/gemini-flash-lite-latest": { cr: 0.025, cw: 0.1, i: 0.1, o: 0.4 }, "google/gemini-pro-latest": { cr: 0.2, cw: 2, i: 2, o: 12 }, "google/gemma-2-27b-it": { cr: 0.065, cw: 0.65, i: 0.65, o: 0.65 }, "google/gemma-2-2b-it": { cr: 0, cw: 0, i: 0, o: 0 }, "google/gemma-3": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.3 }, "google/gemma-3-12b-it": { cr: 0.015, cw: 0.04, i: 0.04, o: 0.13 }, "google/gemma-3-27b-it": { cr: 0.02, cw: 0.03, i: 0.03, o: 0.11 }, "google/gemma-3-4b-it": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.08 }, "google/gemma-3n-E4B-it": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.12 }, "google/gemma-3n-e2b-it": { cr: 0, cw: 0, i: 0, o: 0 }, "google/gemma-3n-e4b-it": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.04 }, "google/gemma-4-26B-A4B-it": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.34 }, "google/gemma-4-26b-a4b-it": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.4 }, "google/gemma-4-26b-a4b-it:free": { cr: 0, cw: 0, i: 0, o: 0 }, "google/gemma-4-26b-a4b-it:thinking": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.4 }, "google/gemma-4-31B-it": { cr: 0.027500000000000004, cw: 0.275, i: 0.275, o: 0.55 }, "google/gemma-4-31B-turbo-TEE": { cr: 0.06, cw: 0.12, i: 0.12, o: 0.37 }, "google/gemma-4-31b": { cr: 0, cw: 0, i: 0, o: 0 }, "google/gemma-4-31b-it": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.38 }, "google/gemma-4-31b-it:free": { cr: 0, cw: 0, i: 0, o: 0 }, "google/gemma-4-31b-it:thinking": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.35 }, "google/google-paligemma": { cr: 0, cw: 0, i: 0, o: 0 }, "google/lyria-3-clip-preview": { cr: 0, cw: 0, i: 0, o: 0 }, "google/lyria-3-pro-preview": { cr: 0, cw: 0, i: 0, o: 0 }, "google/nano-banana": { cr: 0.021, cw: 0.21, i: 0.21, o: 1.8 }, "google/nano-banana-pro": { cr: 0.2, cw: 2, i: 2, o: 12 }, "gpt-3.5-turbo": { cr: 0, cw: 0.5, i: 0.5, o: 1.5 }, "gpt-3.5-turbo-0125": { cr: 0.05, cw: 0.5, i: 0.5, o: 1.5 }, "gpt-3.5-turbo-0301": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 2 }, "gpt-3.5-turbo-0613": { cr: 0.30000000000000004, cw: 3, i: 3, o: 4 }, "gpt-3.5-turbo-1106": { cr: 0.1, cw: 1, i: 1, o: 2 }, "gpt-3.5-turbo-instruct": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 2 }, "gpt-4": { cr: 6, cw: 60, i: 60, o: 120 }, "gpt-4-32k": { cr: 6, cw: 60, i: 60, o: 120 }, "gpt-4-turbo": { cr: 1, cw: 10, i: 10, o: 30 }, "gpt-4-turbo-vision": { cr: 1, cw: 10, i: 10, o: 30 }, "gpt-4.1": { cr: 0.2, cw: 2, i: 2, o: 8 }, "gpt-4.1-mini": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 1.6 }, "gpt-4.1-mini-2025-04-14": { cr: 0.09999999999999999, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "gpt-4.1-nano": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.4 }, "gpt-4o": { cr: 0.25, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-2024-05-13": { cr: 0.5, cw: 5, i: 5, o: 15 }, "gpt-4o-2024-08-06": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-2024-11-20": { cr: 0.25, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-mini": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "gpt-4o-mini-search-preview": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "gpt-4o-search-preview": { cr: 0.25, cw: 2.5, i: 2.5, o: 10 }, "gpt-5": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5-1": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5-2": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "gpt-5-3-codex": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "gpt-5-4": { cr: 0.25, cw: 2.5, i: 2.5, o: 15 }, "gpt-5-4-mini": { cr: 0.075, cw: 0.75, i: 0.75, o: 4.5 }, "gpt-5-4-nano": { cr: 0.02, cw: 0.2, i: 0.2, o: 1.25 }, "gpt-5-5": { cr: 0.25, cw: 2.5, i: 2.5, o: 15 }, "gpt-5-chat": { cr: 0.13, cw: 1.25, i: 1.25, o: 10 }, "gpt-5-chat-latest": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 10 }, "gpt-5-codex": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5-mini": { cr: 0.025, cw: 0.25, i: 0.25, o: 2 }, "gpt-5-nano": { cr: 0.005000000000000001, cw: 0.05, i: 0.05, o: 0.4 }, "gpt-5-pro": { cr: 1.5, cw: 15, i: 15, o: 120 }, "gpt-5-thinking": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5.1": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5.1-chat": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5.1-chat-latest": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5.1-codex": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5.1-codex-max": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5.1-codex-mini": { cr: 0.025, cw: 0.25, i: 0.25, o: 2 }, "gpt-5.2": { cr: 0.17500000000000002, cw: 1.75, i: 1.75, o: 14 }, "gpt-5.2-chat": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "gpt-5.2-chat-latest": { cr: 0.17500000000000002, cw: 1.75, i: 1.75, o: 14 }, "gpt-5.2-codex": { cr: 0.17500000000000002, cw: 1.75, i: 1.75, o: 14 }, "gpt-5.2-pro": { cr: 1.89, cw: 18.9, i: 18.9, o: 151.2 }, "gpt-5.3-chat": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "gpt-5.3-chat-latest": { cr: 0.17500000000000002, cw: 1.75, i: 1.75, o: 14 }, "gpt-5.3-codex": { cr: 0.17500000000000002, cw: 1.75, i: 1.75, o: 14 }, "gpt-5.3-codex-spark": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "gpt-5.3-codex-xhigh": { cr: 0.17500000000000002, cw: 1.75, i: 1.75, o: 14 }, "gpt-5.4": { cr: 0.25, cw: 0, i: 2.5, o: 15 }, "gpt-5.4-mini": { cr: 0.07500000000000001, cw: 0.75, i: 0.75, o: 4.5 }, "gpt-5.4-mini-2026-03-17": { cr: 0.07500000000000001, cw: 0.75, i: 0.75, o: 4.5 }, "gpt-5.4-nano": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 1.25 }, "gpt-5.4-nano-2026-03-17": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 1.25 }, "gpt-5.4-pro": { cr: 0, cw: 0, i: 30, o: 180 }, "gpt-5.5": { cr: 0.5, cw: 5, i: 5, o: 30 }, "gpt-5.5-pro": { cr: 3, cw: 30, i: 30, o: 180 }, "gpt-image-1": { cr: 1.25, cw: 5, i: 5, o: 40 }, "gpt-image-1.5": { cr: 1.25, cw: 5, i: 5, o: 32 }, "gpt-image-2": { cr: 1.25, cw: 5, i: 5, o: 30 }, "gpt-oss-120b": { cr: 0.034999999999999996, cw: 0.35, i: 0.35, o: 0.75 }, "gpt-oss-20b": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.2 }, "gpt-oss-safeguard-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "greg-1-mini": { cr: 0.01, cw: 0.07, i: 0.07, o: 0.15 }, "greg-2-super": { cr: 0.25, cw: 1.5, i: 1.5, o: 5 }, "greg-2-ultra": { cr: 0.5, cw: 3, i: 3, o: 10 }, "greg-rp": { cr: 0.02, cw: 0.1, i: 0.1, o: 0.3 }, "grok-3": { cr: 0.75, cw: 3, i: 3, o: 15 }, "grok-3-mini": { cr: 0.075, cw: 0.3, i: 0.3, o: 0.5 }, "grok-4": { cr: 0.75, cw: 3, i: 3, o: 15 }, "grok-4-0709": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "grok-4-1-fast-non-reasoning": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.5 }, "grok-4-1-fast-reasoning": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.5 }, "grok-4-20": { cr: 0.23, cw: 1.42, i: 1.42, o: 2.83 }, "grok-4-20-beta-0309-non-reasoning": { cr: 0.2, cw: 2, i: 2, o: 6 }, "grok-4-20-beta-0309-reasoning": { cr: 0.2, cw: 2, i: 2, o: 6 }, "grok-4-20-multi-agent": { cr: 0.23, cw: 1.42, i: 1.42, o: 2.83 }, "grok-4-20-non-reasoning": { cr: 0.2, cw: 2, i: 2, o: 6 }, "grok-4-20-reasoning": { cr: 0.2, cw: 2, i: 2, o: 6 }, "grok-4-3": { cr: 0.2, cw: 1.25, i: 1.25, o: 2.5 }, "grok-4-fast-non-reasoning": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.5 }, "grok-4-fast-reasoning": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.5 }, "grok-4.1": { cr: 0.2, cw: 2, i: 2, o: 10 }, "grok-4.20-0309-non-reasoning": { cr: 0.2, cw: 1.25, i: 1.25, o: 2.5 }, "grok-4.20-0309-reasoning": { cr: 0.2, cw: 1.25, i: 1.25, o: 2.5 }, "grok-4.20-beta-0309-non-reasoning": { cr: 0.2, cw: 2, i: 2, o: 6 }, "grok-4.20-beta-0309-reasoning": { cr: 0.2, cw: 2, i: 2, o: 6 }, "grok-4.20-multi-agent-0309": { cr: 0.2, cw: 1.25, i: 1.25, o: 2.5 }, "grok-4.20-multi-agent-beta-0309": { cr: 0.2, cw: 2, i: 2, o: 6 }, "grok-4.3": { cr: 0.2, cw: 1.25, i: 1.25, o: 2.5 }, "grok-build-0-1": { cr: 0.2, cw: 1, i: 1, o: 2 }, "grok-build-0.1": { cr: 0.2, cw: 1, i: 1, o: 2 }, "grok-code": { cr: 0, cw: 0, i: 0, o: 0 }, "grok-code-fast-1": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 1.5 }, "grok/grok-4.3": { cr: 0.2, cw: 1.25, i: 1.25, o: 2.5 }, "groq-llama-4-maverick-17b-128e-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "gryphe/mythomax-l2-13b": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.06 }, "gte-large-en-v1.5": { cr: 0.009, cw: 0.09, i: 0.09, o: 0 }, "hermes-2-pro-llama-3-8b": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.14 }, "hermes-3-llama-3.1-405b": { cr: 0.11000000000000001, cw: 1.1, i: 1.1, o: 3 }, "hermes-4-70b": { cr: 0.011600000000000001, cw: 0.116, i: 0.116, o: 0.358 }, "hermes-high": { cr: 0.4998, cw: 4.998, i: 4.998, o: 25.007 }, "hermes-low": { cr: 0.025, cw: 0.25, i: 0.25, o: 1.5 }, "hermes-medium": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "hf:MiniMaxAI/MiniMax-M3": { cr: 0.6, cw: 0.6, i: 0.6, o: 1.2 }, "hf:Qwen/Qwen3.6-27B": { cr: 0.45, cw: 0.45, i: 0.45, o: 3.6 }, "hf:moonshotai/Kimi-K2.7-Code": { cr: 0.95, cw: 0.95, i: 0.95, o: 4 }, "hf:nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4": { cr: 0.3, cw: 0.3, i: 0.3, o: 1 }, "hf:openai/gpt-oss-120b": { cr: 0.1, cw: 0.1, i: 0.1, o: 0.1 }, "hf:zai-org/GLM-4.7-Flash": { cr: 0.1, cw: 0.1, i: 0.1, o: 0.5 }, "hf:zai-org/GLM-5.2": { cr: 1.4, cw: 1.4, i: 1.4, o: 4.4 }, "holo3-35b-a3b": { cr: 0.025, cw: 0.25, i: 0.25, o: 1.8 }, "holo3-35b-a3b:thinking": { cr: 0.025, cw: 0.25, i: 0.25, o: 1.8 }, "huihui-ai/DeepSeek-R1-Distill-Llama-70B-abliterated": { cr: 0.06999999999999999, cw: 0.7, i: 0.7, o: 0.7 }, "huihui-ai/DeepSeek-R1-Distill-Qwen-32B-abliterated": { cr: 0.13999999999999999, cw: 1.4, i: 1.4, o: 1.4 }, "huihui-ai/Llama-3.3-70B-Instruct-abliterated": { cr: 0.06999999999999999, cw: 0.7, i: 0.7, o: 0.7 }, "huihui-ai/Qwen2.5-32B-Instruct-abliterated": { cr: 0.06999999999999999, cw: 0.7, i: 0.7, o: 0.7 }, "hunyuan-2.0-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "hunyuan-2.0-thinking": { cr: 0, cw: 0, i: 0, o: 0 }, "hunyuan-t1": { cr: 0, cw: 0, i: 0, o: 0 }, "hunyuan-turbos": { cr: 0, cw: 0, i: 0, o: 0 }, "hunyuan-turbos-20250226": { cr: 0.0187, cw: 0.187, i: 0.187, o: 0.374 }, "hy3-preview": { cr: 0, cw: 0, i: 0, o: 0 }, "hy3-preview-free": { cr: 0, cw: 0, i: 0, o: 0 }, "ibm-granite/granite-4.0-h-micro": { cr: 0.0017000000000000001, cw: 0.017, i: 0.017, o: 0.11 }, "ibm-granite/granite-4.1-8b": { cr: 0.05, cw: 0.05, i: 0.05, o: 0.1 }, "inception/mercury-2": { cr: 0.025, cw: 0.25, i: 0.25, o: 0.75 }, "inception/mercury-coder-small": { cr: 0.025, cw: 0.25, i: 0.25, o: 1 }, "inclusionAI/Ling-flash-2.0": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.57 }, "inclusionai/ling-1t": { cr: 0.11, cw: 0.56, i: 0.56, o: 2.24 }, "inclusionai/ling-2.6-1t": { cr: 0.06, cw: 0.3, i: 0.3, o: 2.5 }, "inclusionai/ling-2.6-flash": { cr: 0.016, cw: 0.08, i: 0.08, o: 0.24 }, "inclusionai/ring-1t": { cr: 0.11, cw: 0.56, i: 0.56, o: 2.24 }, "inclusionai/ring-2.6-1t": { cr: 0.015, cw: 0.075, i: 0.075, o: 0.625 }, "inflatebot/MN-12B-Mag-Mell-R1": { cr: 0.0493, cw: 0.49299999999999994, i: 0.49299999999999994, o: 0.49299999999999994 }, "inflection/inflection-3-pi": { cr: 0.25, cw: 2.5, i: 2.5, o: 10 }, "inflection/inflection-3-productivity": { cr: 0.25, cw: 2.5, i: 2.5, o: 10 }, "intellect-3": { cr: 0.021900000000000003, cw: 0.219, i: 0.219, o: 1.202 }, "interfaze/interfaze-beta": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 3.5 }, "intfloat/e5-mistral-7b-instruct": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.02 }, "intfloat/multilingual-e5-large-instruct": { cr: 0.0114, cw: 0.114, i: 0.114, o: 0.114 }, "jamba-large": { cr: 0.19890000000000002, cw: 1.989, i: 1.989, o: 7.99 }, "jamba-large-1.6": { cr: 0.19890000000000002, cw: 1.989, i: 1.989, o: 7.99 }, "jamba-large-1.7": { cr: 0.19890000000000002, cw: 1.989, i: 1.989, o: 7.99 }, "jamba-mini": { cr: 0.01989, cw: 0.1989, i: 0.1989, o: 0.408 }, "jamba-mini-1.6": { cr: 0.01989, cw: 0.1989, i: 0.1989, o: 0.408 }, "jamba-mini-1.7": { cr: 0.01989, cw: 0.1989, i: 0.1989, o: 0.408 }, "jp.anthropic.claude-opus-4-7": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "jp.anthropic.claude-opus-4-8": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "jp.anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "jp.anthropic.claude-sonnet-4-6": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "jp.anthropic.claude-sonnet-5": { cr: 0.2, cw: 2.5, i: 2, o: 10 }, k2p5: { cr: 0, cw: 0, i: 0, o: 0 }, k2p6: { cr: 0, cw: 0, i: 0, o: 0 }, k2p7: { cr: 0, cw: 0, i: 0, o: 0 }, "kilo-auto/balanced": { cr: 0.06, cw: 0.6, i: 0.6, o: 3 }, "kilo-auto/free": { cr: 0, cw: 0, i: 0, o: 0 }, "kilo-auto/frontier": { cr: 0.5, cw: 5, i: 5, o: 25 }, "kilo-auto/small": { cr: 0.005000000000000001, cw: 0.05, i: 0.05, o: 0.4 }, "kimi-k2": { cr: 0, cw: 0, i: 0, o: 0 }, "kimi-k2-0711": { cr: 0.05700000000000001, cw: 0.5700000000000001, i: 0.5700000000000001, o: 2.3 }, "kimi-k2-0711-preview": { cr: 0.15, cw: 0.6, i: 0.6, o: 2.5 }, "kimi-k2-0905": { cr: 0.39999999999999997, cw: 0.5, i: 0.5, o: 2 }, "kimi-k2-0905-preview": { cr: 0.0632, cw: 0.632, i: 0.632, o: 2.53 }, "kimi-k2-5": { cr: 0.22, cw: 0.56, i: 0.56, o: 3.5 }, "kimi-k2-6": { cr: 0.16, cw: 0.95, i: 0.95, o: 4 }, "kimi-k2-7-code": { cr: 0.2, cw: 0.9, i: 0.9, o: 4.3 }, "kimi-k2-instruct": { cr: 0.05510000000000001, cw: 0.551, i: 0.551, o: 2.646 }, "kimi-k2-instruct-fast": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 2 }, "kimi-k2-thinking": { cr: 0.057499999999999996, cw: 0.575, i: 0.575, o: 2.3 }, "kimi-k2-thinking-turbo": { cr: 0.1265, cw: 1.265, i: 1.265, o: 9.119 }, "kimi-k2-turbo-preview": { cr: 0.015, cw: 0.15, i: 0.15, o: 8 }, "kimi-k2.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 3 }, "kimi-k2.5-fast": { cr: 0.13, cw: 0.52, i: 0.52, o: 2.59 }, "kimi-k2.5-free": { cr: 0, cw: 0, i: 0, o: 0 }, "kimi-k2.5-lightning": { cr: 0.2, cw: 1, i: 1, o: 3 }, "kimi-k2.6": { cr: 0.16, cw: 0.95, i: 0.95, o: 4 }, "kimi-k2.6-fast": { cr: 0.1725, cw: 0.69, i: 0.69, o: 3.22 }, "kimi-k2.6-flex": { cr: 0.08625, cw: 0.345, i: 0.345, o: 1.61 }, "kimi-k2.7-code": { cr: 0, cw: 0, i: 0, o: 0 }, "kimi-k2.7-code-flex": { cr: 0.11875, cw: 0.475, i: 0.475, o: 2 }, "kimi-k2.7-code-highspeed": { cr: 0.38, cw: 1.9, i: 1.9, o: 8 }, "kimi-thinking-preview": { cr: 3.1460000000000004, cw: 31.46, i: 31.46, o: 31.46 }, "kimi/kimi-k2.5": { cr: 0.1, cw: 0.6, i: 0.6, o: 3 }, "kimi/kimi-k2.6": { cr: 0.16, cw: 0.95, i: 0.95, o: 4 }, "kuaishou/kat-coder-pro-v2": { cr: 0.06, cw: 0.3, i: 0.3, o: 1.2 }, "kwaipilot/kat-coder-pro": { cr: 0.06, cw: 0.3, i: 0.3, o: 1.2 }, "kwaipilot/kat-coder-pro-v1": { cr: 0.06, cw: 0.3, i: 0.3, o: 1.2 }, "kwaipilot/kat-coder-pro-v2": { cr: 0.06, cw: 0.3, i: 0.3, o: 1.2 }, "labs-devstral-small-2512": { cr: 0, cw: 0, i: 0, o: 0 }, "learnlm-1.5-pro-experimental": { cr: 0.3502, cw: 3.502, i: 3.502, o: 10.506 }, "ling-2.6-flash-free": { cr: 0, cw: 0, i: 0, o: 0 }, "liquid/lfm-2-24b-a2b": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.12 }, "liquid/lfm-2.5-1.2b-instruct:free": { cr: 0, cw: 0, i: 0, o: 0 }, "liquid/lfm-2.5-1.2b-thinking:free": { cr: 0, cw: 0, i: 0, o: 0 }, "llama-3-70b-instruct": { cr: 0.051000000000000004, cw: 0.51, i: 0.51, o: 0.74 }, "llama-3-8b-instruct": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.04 }, "llama-3.1-405b-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "llama-3.1-70b-instruct": { cr: 0.072, cw: 0.72, i: 0.72, o: 0.72 }, "llama-3.1-8b-instant": { cr: 0.005000000000000001, cw: 0.05, i: 0.05, o: 0.08 }, "llama-3.1-8b-instruct": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.049999999999999996 }, "llama-3.1-8b-instruct-turbo": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.03 }, "llama-3.1-nemotron-ultra-253b": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.8 }, "llama-3.2-11b-instruct": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.33 }, "llama-3.2-11b-vision-instruct": { cr: 0.037, cw: 0.37, i: 0.37, o: 0.37 }, "llama-3.2-3b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "llama-3.2-3b-instruct": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.05 }, "llama-3.2-90b-vision-instruct": { cr: 0.20400000000000001, cw: 2.04, i: 2.04, o: 2.04 }, "llama-3.3-70b": { cr: 0.06999999999999999, cw: 0.7, i: 0.7, o: 2.8 }, "llama-3.3-70b-instruct": { cr: 0.071, cw: 0.71, i: 0.71, o: 0.71 }, "llama-3.3-70b-versatile": { cr: 0.059, cw: 0.59, i: 0.59, o: 0.79 }, "llama-3.3-8b-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "llama-4-maverick": { cr: 0.03, cw: 0.151, i: 0.124, o: 0.603 }, "llama-4-maverick-17b-128e-instruct-fp8": { cr: 0.025, cw: 0.25, i: 0.25, o: 1 }, "llama-4-maverick-17b-instruct": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 0.85 }, "llama-4-scout": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.3 }, "llama-4-scout-17b-16e-instruct": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.78 }, "llama-4-scout-17b-16e-instruct-fp8": { cr: 0, cw: 0, i: 0, o: 0 }, "llama-4-scout-17b-instruct": { cr: 0.018, cw: 0.18, i: 0.18, o: 0.59 }, "llama-guard-4": { cr: 0.021, cw: 0.21, i: 0.21, o: 0.21 }, "llama-prompt-guard-2-22m": { cr: 0.001, cw: 0.01, i: 0.01, o: 0.01 }, "llama-prompt-guard-2-86m": { cr: 0.001, cw: 0.01, i: 0.01, o: 0.01 }, "llama3-3-70b": { cr: 0.17500000000000002, cw: 1.75, i: 1.75, o: 2.75 }, "llama3-8b-instruct": { cr: 0.0198, cw: 0.198, i: 0.198, o: 0.198 }, "llama3.3-70b-instruct": { cr: 0.065, cw: 0.65, i: 0.65, o: 0.65 }, "lucidnova-rf1-100b": { cr: 0.2, cw: 2, i: 2, o: 5 }, "lucidquery-agi-01-frontier": { cr: 0.45, cw: 4.5, i: 4.5, o: 22 }, "lucidquery-agi-01-swift": { cr: 0.25, cw: 2.5, i: 2.5, o: 15 }, "lucidquery-nexus-coder": { cr: 0.2, cw: 2, i: 2, o: 5 }, "magibu-11b-v8": { cr: 0, cw: 0, i: 0, o: 0 }, "magistral-medium-latest": { cr: 0.2, cw: 2, i: 2, o: 5 }, "magistral-small": { cr: 0.05, cw: 0.5, i: 0.5, o: 1.5 }, "mancer/weaver": { cr: 0.07500000000000001, cw: 0.75, i: 0.75, o: 1 }, "medgemma-4b": { cr: 0.30000000000000004, cw: 3, i: 3, o: 5 }, "meganova-ai/manta-flash-1.0": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.16 }, "meganova-ai/manta-mini-1.0": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.16 }, "meganova-ai/manta-pro-1.0": { cr: 0.006000000000000001, cw: 0.060000000000000005, i: 0.060000000000000005, o: 0.5 }, "mercury-2": { cr: 0.025, cw: 0.25, i: 0.25, o: 0.75 }, "mercury-edit-2": { cr: 0.025, cw: 0.25, i: 0.25, o: 0.75 }, "meta-llama-3-70b-instruct": { cr: 0.268, cw: 2.68, i: 2.68, o: 3.54 }, "meta-llama-3-8b-instruct": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.61 }, "meta-llama-3.1-405b-instruct": { cr: 0.533, cw: 5.33, i: 5.33, o: 16 }, "meta-llama-3.1-70b-instruct": { cr: 0.268, cw: 2.68, i: 2.68, o: 3.54 }, "meta-llama-3.1-8b-instruct": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.61 }, "meta-llama-3_3-70b-instruct": { cr: 0.074, cw: 0.74, i: 0.74, o: 0.74 }, "meta-llama/Llama-3.1-70B-Instruct": { cr: 0.08000000000000002, cw: 0.8, i: 0.8, o: 0.8 }, "meta-llama/Llama-3.1-8B-Instruct": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.22 }, "meta-llama/Llama-3.2-90B-Vision-Instruct": { cr: 0.175, cw: 0.7, i: 0.35, o: 0.4 }, "meta-llama/Llama-3.3-70B-Instruct": { cr: 0.099, cw: 0.99, i: 0.99, o: 0.99 }, "meta-llama/Llama-3.3-70B-Instruct-Turbo": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.32 }, "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.59 }, "meta-llama/Llama-4-Scout-17B-16E-Instruct": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.3 }, "meta-llama/Meta-Llama-3-8B-Instruct-Lite": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.14 }, "meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo": { cr: 0.35000000000000003, cw: 3.5, i: 3.5, o: 3.5 }, "meta-llama/Meta-Llama-3.1-8B-Instruct": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.05 }, "meta-llama/llama-3-70b-instruct": { cr: 0.051000000000000004, cw: 0.51, i: 0.51, o: 0.74 }, "meta-llama/llama-3-8b-instruct": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.04 }, "meta-llama/llama-3.1-70b-instruct": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 0.4 }, "meta-llama/llama-3.1-8b-instruct": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.05 }, "meta-llama/llama-3.2-11b-vision-instruct": { cr: 0.004900000000000001, cw: 0.049, i: 0.049, o: 0.049 }, "meta-llama/llama-3.2-1b-instruct": { cr: 0.0027, cw: 0.027, i: 0.027, o: 0.2 }, "meta-llama/llama-3.2-3b-instruct": { cr: 0.0051, cw: 0.051, i: 0.051, o: 0.34 }, "meta-llama/llama-3.2-3b-instruct:free": { cr: 0, cw: 0, i: 0, o: 0 }, "meta-llama/llama-3.3-70b-instruct": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.32 }, "meta-llama/llama-3.3-70b-instruct:free": { cr: 0, cw: 0, i: 0, o: 0 }, "meta-llama/llama-4-maverick": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "meta-llama/llama-4-maverick-17b-128e-instruct-fp8": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 0.85 }, "meta-llama/llama-4-scout": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.3 }, "meta-llama/llama-4-scout-17b-16e-instruct": { cr: 0.011000000000000001, cw: 0.11, i: 0.11, o: 0.34 }, "meta-llama/llama-guard-3-8b": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.06 }, "meta-llama/llama-guard-4-12b": { cr: 0.018, cw: 0.18, i: 0.18, o: 0.18 }, "meta-llama/llama-prompt-guard-2-22m": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.03 }, "meta-llama/llama-prompt-guard-2-86m": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.04 }, "meta.llama3-1-70b-instruct-v1:0": { cr: 0.072, cw: 0.72, i: 0.72, o: 0.72 }, "meta.llama3-1-8b-instruct-v1:0": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.22 }, "meta.llama3-3-70b-instruct-v1:0": { cr: 0.072, cw: 0.72, i: 0.72, o: 0.72 }, "meta.llama4-maverick-17b-instruct-v1:0": { cr: 0.024, cw: 0.24, i: 0.24, o: 0.97 }, "meta.llama4-scout-17b-instruct-v1:0": { cr: 0.017, cw: 0.17, i: 0.17, o: 0.66 }, "meta/esm2-650m": { cr: 0, cw: 0, i: 0, o: 0 }, "meta/esmfold": { cr: 0, cw: 0, i: 0, o: 0 }, "meta/llama-3.1-70b": { cr: 0.072, cw: 0.72, i: 0.72, o: 0.72 }, "meta/llama-3.1-70b-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "meta/llama-3.1-8b": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.22 }, "meta/llama-3.1-8b-instruct": { cr: 0.0025000000000000005, cw: 0.025, i: 0.025, o: 0.025 }, "meta/llama-3.2-11b": { cr: 0.016, cw: 0.16, i: 0.16, o: 0.16 }, "meta/llama-3.2-11b-vision-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "meta/llama-3.2-1b": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.1 }, "meta/llama-3.2-1b-instruct": { cr: 0.001, cw: 0.01, i: 0.01, o: 0.01 }, "meta/llama-3.2-3b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "meta/llama-3.2-3b-instruct": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.02 }, "meta/llama-3.2-90b": { cr: 0.072, cw: 0.72, i: 0.72, o: 0.72 }, "meta/llama-3.2-90b-vision-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "meta/llama-3.3-70b": { cr: 0, cw: 0, i: 0, o: 0 }, "meta/llama-3.3-70b-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "meta/llama-3.3-70b-instruct-maas": { cr: 0.072, cw: 0.72, i: 0.72, o: 0.72 }, "meta/llama-4-maverick": { cr: 0, cw: 0, i: 0, o: 0 }, "meta/llama-4-maverick-17b-128e-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "meta/llama-4-maverick-17b-128e-instruct-fp8": { cr: 0, cw: 0, i: 0, o: 0 }, "meta/llama-4-maverick-17b-128e-instruct-maas": { cr: 0.034999999999999996, cw: 0.35, i: 0.35, o: 1.15 }, "meta/llama-4-scout": { cr: 0, cw: 0, i: 0, o: 0 }, "meta/llama-4-scout-17b-16e-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "meta/llama-guard-4-12b": { cr: 0, cw: 0, i: 0, o: 0 }, "meta/meta-llama-3-70b-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "meta/meta-llama-3-8b-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "meta/meta-llama-3.1-405b-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "meta/meta-llama-3.1-70b-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "meta/meta-llama-3.1-8b-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "microsoft/Phi-4-mini-instruct": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.35 }, "microsoft/mai-ds-r1": { cr: 0, cw: 0, i: 0, o: 0 }, "microsoft/phi-3-medium-128k-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "microsoft/phi-3-medium-4k-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "microsoft/phi-3-mini-128k-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "microsoft/phi-3-mini-4k-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "microsoft/phi-3-small-128k-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "microsoft/phi-3-small-8k-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "microsoft/phi-3.5-mini-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "microsoft/phi-3.5-moe-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "microsoft/phi-3.5-vision-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "microsoft/phi-4": { cr: 0, cw: 0, i: 0, o: 0 }, "microsoft/phi-4-mini-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "microsoft/phi-4-mini-reasoning": { cr: 0, cw: 0, i: 0, o: 0 }, "microsoft/phi-4-multimodal-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "microsoft/phi-4-reasoning": { cr: 0, cw: 0, i: 0, o: 0 }, "microsoft/wizardlm-2-8x22b": { cr: 0.062, cw: 0.62, i: 0.62, o: 0.62 }, "mimo-v2-flash": { cr: 0.01, cw: 0.1, i: 0.1, o: 0.3 }, "mimo-v2-flash-free": { cr: 0, cw: 0, i: 0, o: 0 }, "mimo-v2-omni": { cr: 0.08, cw: 0.4, i: 0.4, o: 2 }, "mimo-v2-omni-free": { cr: 0, cw: 0, i: 0, o: 0 }, "mimo-v2-pro": { cr: 0.2, cw: 1, i: 1, o: 3 }, "mimo-v2-pro-free": { cr: 0, cw: 0, i: 0, o: 0 }, "mimo-v2-tts": { cr: 0, cw: 0, i: 0, o: 0 }, "mimo-v2.5": { cr: 0.0028, cw: 0.14, i: 0.14, o: 0.28 }, "mimo-v2.5-free": { cr: 0, cw: 0, i: 0, o: 0 }, "mimo-v2.5-pro": { cr: 0.003, cw: 0.4, i: 0.4, o: 0.8 }, "mimo-v2.5-pro-ultraspeed": { cr: 0.0108, cw: 1.305, i: 1.305, o: 2.61 }, "mimo-v2.5-tts": { cr: 0, cw: 0, i: 0, o: 0 }, "mimo-v2.5-tts-voiceclone": { cr: 0, cw: 0, i: 0, o: 0 }, "mimo-v2.5-tts-voicedesign": { cr: 0, cw: 0, i: 0, o: 0 }, "minimax-m2": { cr: 0.03900000000000001, cw: 0.39, i: 0.39, o: 1.57 }, "minimax-m2-5": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "minimax-m2-7": { cr: 0.03, cw: 0.375, i: 0.3, o: 1.2 }, "minimax-m2-7-highspeed": { cr: 0.06, cw: 0.375, i: 0.6, o: 2.4 }, "minimax-m2.1": { cr: 0.034, cw: 0.34, i: 0.34, o: 1.34 }, "minimax-m2.1-free": { cr: 0, cw: 0, i: 0, o: 0 }, "minimax-m2.1-lightning": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.48 }, "minimax-m2.5": { cr: 0.032, cw: 0.32, i: 0.32, o: 1.18 }, "minimax-m2.5-free": { cr: 0, cw: 0, i: 0, o: 0 }, "minimax-m2.5-highspeed": { cr: 0.03, cw: 0.375, i: 0.6, o: 2.4 }, "minimax-m2.7": { cr: 0.06, cw: 0.375, i: 0.3, o: 1.2 }, "minimax-m2.7-highspeed": { cr: 0.06, cw: 0.375, i: 0.6, o: 2.4 }, "minimax-m25": { cr: 0.04, cw: 0.34, i: 0.34, o: 1.19 }, "minimax-m27": { cr: 0.06875, cw: 0.375, i: 0.375, o: 1.5 }, "minimax-m3": { cr: 0.089, cw: 0.355, i: 0.355, o: 1.775 }, "minimax-m3-free": { cr: 0, cw: 0, i: 0, o: 0 }, "minimax-m3-preview": { cr: 0.06, cw: 0.3, i: 0.3, o: 1.2 }, "minimax-text-01": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 1.1 }, "minimax.minimax-m2": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "minimax.minimax-m2.1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "minimax.minimax-m2.5": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "minimax/minimax-01": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 1.1 }, "minimax/minimax-latest": { cr: 0.06, cw: 0.3, i: 0.3, o: 1.2 }, "minimax/minimax-m1": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 2.2 }, "minimax/minimax-m2": { cr: 0.03, cw: 0.255, i: 0.255, o: 1 }, "minimax/minimax-m2-her": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "minimax/minimax-m2.1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "minimax/minimax-m2.1-lightning": { cr: 0.03, cw: 0.375, i: 0.3, o: 2.4 }, "minimax/minimax-m2.5": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "minimax/minimax-m2.5-highspeed": { cr: 0.06, cw: 0.375, i: 0.6, o: 2.4 }, "minimax/minimax-m2.5-lightning": { cr: 0.06, cw: 0.75, i: 0.6, o: 4.8 }, "minimax/minimax-m2.7": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "minimax/minimax-m2.7-highspeed": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "minimax/minimax-m2.7-turbo": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "minimax/minimax-m3": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "minimax/minimax-m3:thinking": { cr: 0.06, cw: 0.3, i: 0.3, o: 1.2 }, "minimaxai/chat-completion/models/MiniMax-M2_5-high-throughput": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "minimaxai/minimax-m1-80k": { cr: 0.05500000000000001, cw: 0.55, i: 0.55, o: 2.2 }, "minimaxai/minimax-m2.7": { cr: 0, cw: 0, i: 0, o: 0 }, "minimaxai/minimax-m3": { cr: 0.05, cw: 0.28, i: 0.28, o: 1.1 }, "ministral-14b-2512": { cr: 0.033, cw: 0.33, i: 0.33, o: 0.33 }, "ministral-3b": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.04 }, "ministral-3b-2512": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.1 }, "ministral-3b-latest": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.04 }, "ministral-8b-2512": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "ministral-8b-latest": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.1 }, "mirothinker-1-7-deepresearch": { cr: 0.4, cw: 4, i: 4, o: 25 }, "mirothinker-1-7-deepresearch-mini": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "mistral-3-14B": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.2 }, "mistral-7b-instruct-v0.3": { cr: 0.011000000000000001, cw: 0.11, i: 0.11, o: 0.11 }, "mistral-ai/codestral-2501": { cr: 0, cw: 0, i: 0, o: 0 }, "mistral-ai/ministral-3b": { cr: 0, cw: 0, i: 0, o: 0 }, "mistral-ai/mistral-large-2411": { cr: 0, cw: 0, i: 0, o: 0 }, "mistral-ai/mistral-medium-2505": { cr: 0, cw: 0, i: 0, o: 0 }, "mistral-ai/mistral-nemo": { cr: 0, cw: 0, i: 0, o: 0 }, "mistral-ai/mistral-small-2503": { cr: 0, cw: 0, i: 0, o: 0 }, "mistral-code-agent-latest": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 2 }, "mistral-code-latest": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.9 }, "mistral-embed": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0 }, "mistral-large-2411": { cr: 0.2, cw: 2, i: 2, o: 6 }, "mistral-large-2512": { cr: 0.11000000000000001, cw: 1.1, i: 1.1, o: 3.3 }, "mistral-large-latest": { cr: 0.4, cw: 4, i: 4, o: 12 }, "mistral-medium-2505": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 2 }, "mistral-medium-2508": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 2 }, "mistral-medium-2604": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 7.5 }, "mistral-medium-3.5-128b": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 7.5 }, "mistral-medium-latest": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 2 }, "mistral-nemo": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "mistral-nemo-instruct-2407": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.3 }, "mistral-small": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0.2 }, "mistral-small-2503": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.3 }, "mistral-small-2506": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.3 }, "mistral-small-2603": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "mistral-small-3-2-24b-instruct": { cr: 0.009375000000000001, cw: 0.09375, i: 0.09375, o: 0.25 }, "mistral-small-3.2-24b-instruct-2506": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.31 }, "mistral-small-31-24b-instruct": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.3 }, "mistral-small-4-119b": { cr: 0.07500000000000001, cw: 0.75, i: 0.75, o: 3 }, "mistral-small-latest": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "mistral-small3.2": { cr: 0.05, cw: 0.5, i: 0.5, o: 2.2 }, "mistral.devstral-2-123b": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 2 }, "mistral.magistral-small-2509": { cr: 0.05, cw: 0.5, i: 0.5, o: 1.5 }, "mistral.ministral-3-14b-instruct": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.2 }, "mistral.ministral-3-3b-instruct": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.1 }, "mistral.ministral-3-8b-instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "mistral.mistral-large-3-675b-instruct": { cr: 0.05, cw: 0.5, i: 0.5, o: 1.5 }, "mistral.pixtral-large-2502-v1:0": { cr: 0.2, cw: 2, i: 2, o: 6 }, "mistral.voxtral-mini-3b-2507": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.04 }, "mistral.voxtral-small-24b-2507": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.35 }, "mistral/codestral": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.9 }, "mistral/codestral-latest": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.9 }, "mistral/devstral-2": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 2 }, "mistral/devstral-2512": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 2 }, "mistral/devstral-medium-2507": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 2 }, "mistral/devstral-medium-latest": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 2 }, "mistral/devstral-small": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.3 }, "mistral/devstral-small-2": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.3 }, "mistral/devstral-small-2507": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.3 }, "mistral/magistral-medium": { cr: 0.2, cw: 2, i: 2, o: 5 }, "mistral/magistral-medium-latest": { cr: 0.2, cw: 2, i: 2, o: 5 }, "mistral/magistral-small": { cr: 0.05, cw: 0.5, i: 0.5, o: 1.5 }, "mistral/ministral-14b": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.2 }, "mistral/ministral-3b": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.04 }, "mistral/ministral-8b": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.1 }, "mistral/mistral-large-2411": { cr: 0.2, cw: 2, i: 2, o: 6 }, "mistral/mistral-large-2512": { cr: 0.05, cw: 0.5, i: 0.5, o: 1.5 }, "mistral/mistral-large-3": { cr: 0.05, cw: 0.5, i: 0.5, o: 1.5 }, "mistral/mistral-large-latest": { cr: 0.05, cw: 0.5, i: 0.5, o: 1.5 }, "mistral/mistral-medium": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 2 }, "mistral/mistral-medium-2505": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 2 }, "mistral/mistral-medium-3.5": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 7.5 }, "mistral/mistral-medium-3.5:thinking": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 7.5 }, "mistral/mistral-medium-latest": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 2 }, "mistral/mistral-nemo": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "mistral/mistral-nemo-12b-instruct": { cr: 0.0038, cw: 0.038, i: 0.038, o: 0.1 }, "mistral/mistral-small": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.3 }, "mistral/mistral-small-latest": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "mistral/pixtral-12b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "mistral/pixtral-large": { cr: 0.2, cw: 2, i: 2, o: 6 }, "mistral/pixtral-large-latest": { cr: 0.2, cw: 2, i: 2, o: 6 }, "mistralai/Devstral-Small-2505": { cr: 0.025, cw: 0.1, i: 0.05, o: 0.22 }, "mistralai/Magistral-Small-2506": { cr: 0.25, cw: 1, i: 0.5, o: 1.5 }, "mistralai/Mistral-Large-Instruct-2411": { cr: 1, cw: 4, i: 2, o: 6 }, "mistralai/Mistral-Medium-3.5-128B": { cr: 0.165, cw: 1.65, i: 1.65, o: 5.5 }, "mistralai/Mistral-Nemo-Instruct-2407": { cr: 0.01, cw: 0.04, i: 0.02, o: 0.04 }, "mistralai/Mistral-Small-3.2-24B-Instruct-2506": { cr: 0.033, cw: 0.33, i: 0.33, o: 0.33 }, "mistralai/Voxtral-Small-24B-2507": { cr: 0.00023, cw: 0.0023, i: 0.0023, o: 0.0023 }, "mistralai/codestral-2508": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.9 }, "mistralai/completion/models/Ministral-3-14B-Reasoning-2512": { cr: 0.25, cw: 2.5, i: 2.5, o: 1.7 }, "mistralai/completion/models/Ministral-3-3B-Reasoning-2512": { cr: 0.10389999999999999, cw: 1.039, i: 1.039, o: 0.54825 }, "mistralai/devstral-2-123b-instruct-2512": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 1.4 }, "mistralai/devstral-2512": { cr: 0.025, cw: 0.4, i: 0.4, o: 2 }, "mistralai/devstral-medium": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 2 }, "mistralai/devstral-small": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.3 }, "mistralai/magistral-small-2506": { cr: 0, cw: 0, i: 0, o: 0 }, "mistralai/ministral-14b-2512": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.2 }, "mistralai/ministral-14b-instruct-2512": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.4 }, "mistralai/ministral-3b-2512": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.1 }, "mistralai/ministral-8b-2512": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "mistralai/mistral-7b-instruct-v0.1": { cr: 0.011000000000000001, cw: 0.11, i: 0.11, o: 0.19 }, "mistralai/mistral-7b-instruct-v03": { cr: 0, cw: 0, i: 0, o: 0 }, "mistralai/mistral-large": { cr: 0.2, cw: 2, i: 2, o: 6 }, "mistralai/mistral-large-2407": { cr: 0.2, cw: 2, i: 2, o: 6 }, "mistralai/mistral-large-2411": { cr: 0.2, cw: 2, i: 2, o: 6 }, "mistralai/mistral-large-2512": { cr: 0.05, cw: 0.5, i: 0.5, o: 1.5 }, "mistralai/mistral-large-3-675b-instruct-2512": { cr: 0.1, cw: 1, i: 1, o: 3 }, "mistralai/mistral-medium-3": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 2 }, "mistralai/mistral-medium-3-5": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 7.5 }, "mistralai/mistral-medium-3-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "mistralai/mistral-medium-3.1": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 2 }, "mistralai/mistral-nemo": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.04 }, "mistralai/mistral-nemotron": { cr: 0, cw: 0, i: 0, o: 0 }, "mistralai/mistral-saba": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.6 }, "mistralai/mistral-small-24b-instruct-2501": { cr: 0.005000000000000001, cw: 0.05, i: 0.05, o: 0.08 }, "mistralai/mistral-small-2603": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "mistralai/mistral-small-3.1-24b-instruct": { cr: 0.015, cw: 0.35, i: 0.35, o: 0.56 }, "mistralai/mistral-small-3.2-24b-instruct": { cr: 0.03, cw: 0.06, i: 0.06, o: 0.18 }, "mistralai/mistral-small-4-119b-2603": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 1.4 }, "mistralai/mistral-small-4-119b-2603:thinking": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 1.4 }, "mistralai/mixtral-8x22b-instruct": { cr: 0.2, cw: 2, i: 2, o: 6 }, "mistralai/mixtral-8x22b-instruct-v0.1": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "mistralai/mixtral-8x7b-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "mistralai/mixtral-8x7b-instruct-v0.1": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 0.27 }, "mistralai/pixtral-large-2411": { cr: 0.2, cw: 2, i: 2, o: 6 }, "mistralai/voxtral-small-24b-2507": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.3 }, "mixtral-8x7B-instruct-v0.1": { cr: 0.043800000000000006, cw: 0.438, i: 0.438, o: 0.68 }, "mlabonne/NeuralDaredevil-8B-abliterated": { cr: 0.044000000000000004, cw: 0.44, i: 0.44, o: 0.44 }, "model-router": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0 }, "moonshot-kimi-k2-instruct": { cr: 0.0574, cw: 0.574, i: 0.574, o: 2.294 }, "moonshot.kimi-k2-thinking": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "moonshotai.kimi-k2.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 3 }, "moonshotai/Kimi-K2-Instruct": { cr: 0.1, cw: 1, i: 1, o: 3 }, "moonshotai/Kimi-K2-Instruct-0905": { cr: 0.1, cw: 1, i: 1, o: 3 }, "moonshotai/Kimi-K2-Thinking": { cr: 0.15, cw: 0.6, i: 0.6, o: 2.5 }, "moonshotai/Kimi-K2.5": { cr: 0.12, cw: 0.6, i: 0.6, o: 3 }, "moonshotai/Kimi-K2.5-TEE": { cr: 0.22, cw: 0.44, i: 0.44, o: 2 }, "moonshotai/Kimi-K2.5-fast": { cr: 0.05, cw: 0.625, i: 0.5, o: 2.5 }, "moonshotai/Kimi-K2.6": { cr: 0.16, cw: 0.95, i: 0.95, o: 4 }, "moonshotai/Kimi-K2.6-Fast": { cr: 0.4, cw: 0, i: 1.32, o: 7 }, "moonshotai/Kimi-K2.6-TEE": { cr: 0.33, cw: 0.66, i: 0.66, o: 3.5 }, "moonshotai/Kimi-K2.7-Code": { cr: 0.16, cw: 0.95, i: 0.95, o: 4 }, "moonshotai/chat-completion/models/Kimi-K2_6": { cr: 0.095, cw: 0.95, i: 0.95, o: 4 }, "moonshotai/kimi-k2": { cr: 0.05500000000000001, cw: 0.55, i: 0.55, o: 2.2 }, "moonshotai/kimi-k2-0905": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "moonshotai/kimi-k2-instruct": { cr: 0.056999999999999995, cw: 0.57, i: 0.57, o: 2.3 }, "moonshotai/kimi-k2-instruct-0711": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 2 }, "moonshotai/kimi-k2-instruct-0905": { cr: 0, cw: 0, i: 0, o: 0 }, "moonshotai/kimi-k2-thinking": { cr: 0.2, cw: 0.47, i: 0.47, o: 2 }, "moonshotai/kimi-k2-thinking-maas": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "moonshotai/kimi-k2-thinking-original": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "moonshotai/kimi-k2-thinking-turbo": { cr: 0.15, cw: 1.15, i: 1.15, o: 8 }, "moonshotai/kimi-k2-thinking-turbo-original": { cr: 0.11499999999999999, cw: 1.15, i: 1.15, o: 8 }, "moonshotai/kimi-k2.5": { cr: 0.05, cw: 0.3, i: 0.3, o: 1.5 }, "moonshotai/kimi-k2.5:thinking": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.9 }, "moonshotai/kimi-k2.6": { cr: 0.2, cw: 0, i: 0.95, o: 4 }, "moonshotai/kimi-k2.6:thinking": { cr: 0.053000000000000005, cw: 0.53, i: 0.53, o: 2.73 }, "moonshotai/kimi-k2.7-code": { cr: 0.16, cw: 0, i: 0.75, o: 3.5 }, "moonshotai/kimi-k2.7-code-free": { cr: 0, cw: 0, i: 0, o: 0 }, "moonshotai/kimi-k2.7-code-highspeed": { cr: 0.38, cw: 1.9, i: 1.9, o: 8 }, "moonshotai/kimi-latest": { cr: 0.125, cw: 0.5, i: 0.5, o: 2.6 }, "morph-v3-fast": { cr: 0.08000000000000002, cw: 0.8, i: 0.8, o: 1.2 }, "morph-v3-large": { cr: 0.09000000000000001, cw: 0.9, i: 0.9, o: 1.9 }, "morph/morph-v3-fast": { cr: 0.08000000000000002, cw: 0.8, i: 0.8, o: 1.2 }, "morph/morph-v3-large": { cr: 0.09000000000000001, cw: 0.9, i: 0.9, o: 1.9 }, "multi-qa-mpnet-base-dot-v1": { cr: 0.0009, cw: 0.009, i: 0.009, o: 0 }, "nanogpt/coding-router": { cr: 0.11, cw: 1.1, i: 1.1, o: 2.2 }, "nanogpt/coding-router:high": { cr: 0.11, cw: 1.1, i: 1.1, o: 2.2 }, "nanogpt/coding-router:low": { cr: 0.028, cw: 0.14, i: 0.14, o: 0.28 }, "nanogpt/coding-router:max": { cr: 0.5, cw: 5, i: 5, o: 30 }, "nanogpt/coding-router:medium": { cr: 0.028, cw: 0.14, i: 0.14, o: 0.28 }, "nemotron-3-nano-omni": { cr: 0.05, cw: 0.5, i: 0.5, o: 0.9 }, "nemotron-3-super-120b-a12b": { cr: 0.026600000000000002, cw: 0.266, i: 0.266, o: 0.799 }, "nemotron-3-super-free": { cr: 0, cw: 0, i: 0, o: 0 }, "nemotron-3-ultra-550b": { cr: 0.15, cw: 0.5, i: 0.5, o: 2.5 }, "nemotron-3-ultra-free": { cr: 0, cw: 0, i: 0, o: 0 }, "nemotron-nano-12b-v2-vl": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.6 }, "neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8": { cr: 0.016, cw: 0.16, i: 0.16, o: 0.27 }, "neuralmagic/Mistral-Nemo-Instruct-2407-FP8": { cr: 0.049, cw: 0.49, i: 0.49, o: 0.71 }, "nex-agi/deepseek-v3.1-nex-n1": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 1 }, "nex-agi/nex-n2-pro": { cr: 0.025, cw: 0.25, i: 0.25, o: 1 }, "nomic-embed-text": { cr: 0.005000000000000001, cw: 0.05, i: 0.05, o: 0 }, "north-mini-code-1-0": { cr: 0, cw: 0, i: 0, o: 0 }, "north-mini-code-free": { cr: 0, cw: 0, i: 0, o: 0 }, "nothingiisreal/L3.1-70B-Celeste-V0.1-BF16": { cr: 0.0493, cw: 0.49299999999999994, i: 0.49299999999999994, o: 0.49299999999999994 }, "nousresearch/hermes-2-pro-llama-3-8b": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.14 }, "nousresearch/hermes-3-llama-3.1-405b": { cr: 0.1, cw: 1, i: 1, o: 1 }, "nousresearch/hermes-3-llama-3.1-405b:free": { cr: 0, cw: 0, i: 0, o: 0 }, "nousresearch/hermes-3-llama-3.1-70b": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.3 }, "nousresearch/hermes-4-405b": { cr: 0.1, cw: 1, i: 1, o: 3 }, "nousresearch/hermes-4-70b": { cr: 0.055, cw: 0.13, i: 0.13, o: 0.4 }, "nova-2-lite-v1": { cr: 0, cw: 0, i: 0, o: 0 }, "nova-2-pro-v1": { cr: 0, cw: 0, i: 0, o: 0 }, "nova-pro-v1": { cr: 0.10160000000000001, cw: 1.016, i: 1.016, o: 4.061 }, "novita/deepseek-v3.2": { cr: 0.13, cw: 0.27, i: 0.27, o: 0.4 }, "novita/glm-5": { cr: 0.2, cw: 1, i: 1, o: 3.2 }, "novita/kimi-k2.5": { cr: 0.1, cw: 0.6, i: 0.6, o: 3 }, "novita/kimi-k2.6": { cr: 0.16, cw: 0.96, i: 0.96, o: 4.04 }, "nvidia-nemotron-3-nano-30b-a3b": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0.3 }, "nvidia-nemotron-3-super-120b": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.65 }, "nvidia-nemotron-3-ultra-550b-a55b": { cr: 0.1875, cw: 0.625, i: 0.625, o: 3.125 }, "nvidia-nemotron-cascade-2-30b-a3b": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.8 }, "nvidia.nemotron-nano-12b-v2": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.6 }, "nvidia.nemotron-nano-3-30b": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.24 }, "nvidia.nemotron-nano-9b-v2": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.23 }, "nvidia.nemotron-super-3-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.65 }, "nvidia/DeepSeek-V3.2-NVFP4": { cr: 0.05500000000000001, cw: 0.55, i: 0.55, o: 1.65 }, "nvidia/Llama-3.1-Nemotron-70B-Instruct-HF": { cr: 0.0357, cw: 0.357, i: 0.357, o: 0.408 }, "nvidia/Llama-3.1-Nemotron-Safety-Guard-8B-v3": { cr: 0.001, cw: 0.01, i: 0.01, o: 0.01 }, "nvidia/Llama-3.3-70B-Instruct-FP8": { cr: 0.11499999999999999, cw: 1.15, i: 1.15, o: 1.15 }, "nvidia/Llama-3.3-Nemotron-Super-49B-v1": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "nvidia/Llama-3_1-Nemotron-Ultra-253B-v1": { cr: 0.06, cw: 0.75, i: 0.6, o: 1.8 }, "nvidia/Llama-3_3-Nemotron-Super-49B-v1_5": { cr: 0.005000000000000001, cw: 0.05, i: 0.05, o: 0.25 }, "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B": { cr: 0.006, cw: 0.075, i: 0.06, o: 0.24 }, "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.8 }, "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B": { cr: 0.12, cw: 0.6, i: 0.6, o: 2.4 }, "nvidia/Nemotron-120B-A12B": { cr: 0.06, cw: 0.3, i: 0.3, o: 0.75 }, "nvidia/Nemotron-3-Nano-Omni": { cr: 0.006, cw: 0.075, i: 0.06, o: 0.24 }, "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.38 }, "nvidia/Nemotron-Cascade-2-30B-A3B": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "nvidia/active-speaker-detection": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/bevformer": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/cosmos-predict1-5b": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/cosmos-transfer1-7b": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/cosmos-transfer2_5-2b": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/gliner-pii": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/llama-3.3-nemotron-super-49b-v1.5": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.4 }, "nvidia/llama-3_1-nemotron-safety-guard-8b-v3": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/llama-3_2-nemoretriever-300m-embed-v1": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/llama-nemotron-embed-vl-1b-v2": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/llama-nemotron-rerank-vl-1b-v2": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/magpie-tts-zeroshot": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/nemotron-3-content-safety": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/nemotron-3-nano-30b-a3b": { cr: 0.005000000000000001, cw: 0.05, i: 0.05, o: 0.2 }, "nvidia/nemotron-3-nano-30b-a3b:free": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning": { cr: 0.0105, cw: 0.105, i: 0.105, o: 0.42 }, "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/nemotron-3-super-120b-a12b": { cr: 0.1, cw: 0.1, i: 0.1, o: 0.5 }, "nvidia/nemotron-3-super-120b-a12b:free": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/nemotron-3-super-120b-a12b:thinking": { cr: 0.005000000000000001, cw: 0.05, i: 0.05, o: 0.25 }, "nvidia/nemotron-3-ultra-550b-a55b": { cr: 0.15, cw: 0.5, i: 0.5, o: 2.5 }, "nvidia/nemotron-3-ultra-550b-a55b:free": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/nemotron-3.5-content-safety:free": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/nemotron-content-safety-reasoning-4b": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/nemotron-mini-4b-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/nemotron-nano-12b-v2-vl": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.6 }, "nvidia/nemotron-nano-12b-v2-vl:free": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/nemotron-nano-9b-v2": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.16 }, "nvidia/nemotron-nano-9b-v2:free": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/nemotron-voicechat": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/nv-embed-v1": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/nv-embedcode-7b-v1": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/nvidia-nemotron-nano-9b-v2": { cr: 0.017, cw: 0.17, i: 0.17, o: 0.68 }, "nvidia/rerank-qa-mistral-4b": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/riva-translate-4b-instruct-v1_1": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/sparsedrive": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/streampetr": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/studiovoice": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/synthetic-video-detector": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/usdcode": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia/usdvalidate": { cr: 0, cw: 0, i: 0, o: 0 }, o1: { cr: 7.5, cw: 15, i: 15, o: 60 }, "o1-mini": { cr: 0.55, cw: 1.1, i: 1.1, o: 4.4 }, "o1-pro": { cr: 15, cw: 150, i: 150, o: 600 }, o3: { cr: 0.2, cw: 2, i: 2, o: 8 }, "o3-deep-research": { cr: 2.5, cw: 10, i: 10, o: 40 }, "o3-mini": { cr: 0.11000000000000001, cw: 1.1, i: 1.1, o: 4.4 }, "o3-pro": { cr: 2, cw: 20, i: 20, o: 40 }, "o4-mini": { cr: 0.11000000000000001, cw: 1.1, i: 1.1, o: 4.4 }, "o4-mini-deep-research": { cr: 0.5, cw: 2, i: 2, o: 8 }, "olafangensan-glm-4.7-flash-heretic": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.8 }, "open-mistral-7b": { cr: 0.025, cw: 0.25, i: 0.25, o: 0.25 }, "open-mistral-nemo": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "open-mixtral-8x22b": { cr: 0.2, cw: 2, i: 2, o: 6 }, "open-mixtral-8x7b": { cr: 0.06999999999999999, cw: 0.7, i: 0.7, o: 0.7 }, "openai-gpt-4.1": { cr: 0.5, cw: 2, i: 2, o: 8 }, "openai-gpt-4o": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "openai-gpt-4o-2024-11-20": { cr: 0.3125, cw: 3.125, i: 3.125, o: 12.5 }, "openai-gpt-4o-mini": { cr: 0.075, cw: 0.15, i: 0.15, o: 0.6 }, "openai-gpt-4o-mini-2024-07-18": { cr: 0.09375, cw: 0.1875, i: 0.1875, o: 0.75 }, "openai-gpt-5": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "openai-gpt-5-mini": { cr: 0.025, cw: 0.25, i: 0.25, o: 2 }, "openai-gpt-5-nano": { cr: 0.005, cw: 0.05, i: 0.05, o: 0.4 }, "openai-gpt-5.1-codex-max": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "openai-gpt-5.2": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "openai-gpt-5.2-pro": { cr: 2.1, cw: 21, i: 21, o: 168 }, "openai-gpt-5.3-codex": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "openai-gpt-5.4": { cr: 0.25, cw: 2.5, i: 2.5, o: 15 }, "openai-gpt-5.4-mini": { cr: 0.075, cw: 0.75, i: 0.75, o: 4.5 }, "openai-gpt-5.4-nano": { cr: 0.02, cw: 0.2, i: 0.2, o: 1.25 }, "openai-gpt-5.4-pro": { cr: 3, cw: 30, i: 30, o: 180 }, "openai-gpt-5.5": { cr: 0.5, cw: 5, i: 5, o: 30 }, "openai-gpt-52": { cr: 0.219, cw: 2.19, i: 2.19, o: 17.5 }, "openai-gpt-52-codex": { cr: 0.219, cw: 2.19, i: 2.19, o: 17.5 }, "openai-gpt-53-codex": { cr: 0.219, cw: 2.19, i: 2.19, o: 17.5 }, "openai-gpt-54": { cr: 0.313, cw: 3.13, i: 3.13, o: 18.8 }, "openai-gpt-54-mini": { cr: 0.09375, cw: 0.9375, i: 0.9375, o: 5.625 }, "openai-gpt-54-pro": { cr: 3.75, cw: 37.5, i: 37.5, o: 225 }, "openai-gpt-55": { cr: 0.625, cw: 6.25, i: 6.25, o: 37.5 }, "openai-gpt-55-pro": { cr: 3.75, cw: 37.5, i: 37.5, o: 225 }, "openai-gpt-image-1": { cr: 1.25, cw: 5, i: 5, o: 40 }, "openai-gpt-image-1.5": { cr: 1, cw: 5, i: 5, o: 10 }, "openai-gpt-oss-120b": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.7 }, "openai-gpt-oss-20b": { cr: 0.005000000000000001, cw: 0.05, i: 0.05, o: 0.45 }, "openai-o1": { cr: 7.5, cw: 15, i: 15, o: 60 }, "openai-o3": { cr: 0.5, cw: 2, i: 2, o: 8 }, "openai-o3-mini": { cr: 0.55, cw: 1.1, i: 1.1, o: 4.4 }, "openai.gpt-5.4": { cr: 0.275, cw: 2.75, i: 2.75, o: 16.5 }, "openai.gpt-5.5": { cr: 0.55, cw: 5.5, i: 5.5, o: 33 }, "openai.gpt-oss-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "openai.gpt-oss-120b-1:0": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "openai.gpt-oss-20b": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.3 }, "openai.gpt-oss-20b-1:0": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.3 }, "openai.gpt-oss-safeguard-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "openai.gpt-oss-safeguard-20b": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.2 }, "openai/chat-completion/models/gpt-oss-120b-high-throughput": { cr: 0.009, cw: 0.09, i: 0.09, o: 0.36 }, "openai/chat-completion/models/gpt-oss-20b": { cr: 0.0045, cw: 0.045, i: 0.045, o: 0.18 }, "openai/chatgpt-4o-latest": { cr: 0.45, cw: 4.5, i: 4.5, o: 14 }, "openai/gpt-3.5-turbo": { cr: 1.25, cw: 0.5, i: 0.5, o: 1.5 }, "openai/gpt-3.5-turbo-0613": { cr: 0.1, cw: 1, i: 1, o: 2 }, "openai/gpt-3.5-turbo-16k": { cr: 0.30000000000000004, cw: 3, i: 3, o: 4 }, "openai/gpt-3.5-turbo-instruct": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 2 }, "openai/gpt-3.5-turbo-raw": { cr: 0.045000000000000005, cw: 0.45, i: 0.45, o: 1.4 }, "openai/gpt-4": { cr: 3, cw: 30, i: 30, o: 60 }, "openai/gpt-4-0314": { cr: 3, cw: 30, i: 30, o: 60 }, "openai/gpt-4-1106-preview": { cr: 1, cw: 10, i: 10, o: 30 }, "openai/gpt-4-classic": { cr: 2.7, cw: 27, i: 27, o: 54 }, "openai/gpt-4-classic-0314": { cr: 2.7, cw: 27, i: 27, o: 54 }, "openai/gpt-4-turbo": { cr: 1, cw: 10, i: 10, o: 30 }, "openai/gpt-4-turbo-preview": { cr: 1, cw: 10, i: 10, o: 30 }, "openai/gpt-4.1": { cr: 0.5, cw: 2, i: 2, o: 8 }, "openai/gpt-4.1-mini": { cr: 0, cw: 0, i: 0, o: 0 }, "openai/gpt-4.1-nano": { cr: 0, cw: 0, i: 0, o: 0 }, "openai/gpt-4o": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "openai/gpt-4o-2024-05-13": { cr: 0.5, cw: 5, i: 5, o: 15 }, "openai/gpt-4o-2024-08-06": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "openai/gpt-4o-2024-11-20": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "openai/gpt-4o-audio-preview": { cr: 0.25, cw: 2.5, i: 2.5, o: 10 }, "openai/gpt-4o-aug": { cr: 1.1, cw: 2.2, i: 2.2, o: 9 }, "openai/gpt-4o-mini": { cr: 0.08, cw: 0.15, i: 0.15, o: 0.6 }, "openai/gpt-4o-mini-2024-07-18": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "openai/gpt-4o-mini-search": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.54 }, "openai/gpt-4o-mini-search-preview": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "openai/gpt-4o-mini-transcribe": { cr: 0.125, cw: 1.25, i: 1.25, o: 5 }, "openai/gpt-4o-search": { cr: 0.22000000000000003, cw: 2.2, i: 2.2, o: 9 }, "openai/gpt-4o-search-preview": { cr: 0.25, cw: 2.5, i: 2.5, o: 10 }, "openai/gpt-4o-transcribe": { cr: 0.25, cw: 2.5, i: 2.5, o: 10 }, "openai/gpt-5": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "openai/gpt-5-chat": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "openai/gpt-5-chat-latest": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "openai/gpt-5-codex": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "openai/gpt-5-image": { cr: 1, cw: 10, i: 10, o: 10 }, "openai/gpt-5-image-mini": { cr: 0.25, cw: 2.5, i: 2.5, o: 2 }, "openai/gpt-5-mini": { cr: 0.025, cw: 0.25, i: 0.25, o: 2 }, "openai/gpt-5-nano": { cr: 0.005, cw: 0.05, i: 0.05, o: 0.4 }, "openai/gpt-5-pro": { cr: 1.5, cw: 15, i: 15, o: 120 }, "openai/gpt-5.1": { cr: 0.13, cw: 1.25, i: 1.25, o: 10 }, "openai/gpt-5.1-2025-11-13": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "openai/gpt-5.1-chat": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "openai/gpt-5.1-chat-latest": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "openai/gpt-5.1-codex": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "openai/gpt-5.1-codex-max": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "openai/gpt-5.1-codex-mini": { cr: 0.025, cw: 0.25, i: 0.25, o: 2 }, "openai/gpt-5.1-instant": { cr: 0.11, cw: 1.1, i: 1.1, o: 9 }, "openai/gpt-5.1-thinking": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "openai/gpt-5.2": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "openai/gpt-5.2-chat": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "openai/gpt-5.2-chat-latest": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "openai/gpt-5.2-codex": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "openai/gpt-5.2-instant": { cr: 0.16, cw: 1.6, i: 1.6, o: 13 }, "openai/gpt-5.2-pro": { cr: 2.1, cw: 21, i: 21, o: 168 }, "openai/gpt-5.3-chat": { cr: 0.17500000000000002, cw: 1.75, i: 1.75, o: 14 }, "openai/gpt-5.3-chat-latest": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "openai/gpt-5.3-codex": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "openai/gpt-5.3-codex-spark": { cr: 0, cw: 0, i: 0, o: 0 }, "openai/gpt-5.3-instant": { cr: 0.16, cw: 1.6, i: 1.6, o: 13 }, "openai/gpt-5.4": { cr: 0.25, cw: 2.5, i: 2.5, o: 15 }, "openai/gpt-5.4-image-2": { cr: 2, cw: 8, i: 8, o: 15 }, "openai/gpt-5.4-mini": { cr: 0.07500000000000001, cw: 0.75, i: 0.75, o: 4.5 }, "openai/gpt-5.4-nano": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 1.25 }, "openai/gpt-5.4-pro": { cr: 3, cw: 30, i: 30, o: 180 }, "openai/gpt-5.5": { cr: 0.5, cw: 5, i: 5, o: 30 }, "openai/gpt-5.5-instant": { cr: 0.5, cw: 5, i: 5, o: 30 }, "openai/gpt-5.5-pro": { cr: 3, cw: 30, i: 30, o: 180 }, "openai/gpt-audio": { cr: 0.25, cw: 2.5, i: 2.5, o: 10 }, "openai/gpt-audio-mini": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "openai/gpt-chat-latest": { cr: 0.5, cw: 5, i: 5, o: 30 }, "openai/gpt-image-1": { cr: 1.25, cw: 5, i: 5, o: 40 }, "openai/gpt-image-1-mini": { cr: 0.2, cw: 2, i: 2, o: 8 }, "openai/gpt-image-1.5": { cr: 1.25, cw: 5, i: 5, o: 32 }, "openai/gpt-image-2": { cr: 1.2626, cw: 5.0505, i: 5.0505, o: 32.3232 }, "openai/gpt-latest": { cr: 0.5, cw: 5, i: 5, o: 30 }, "openai/gpt-oss-120b": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.44 }, "openai/gpt-oss-120b-fast": { cr: 0.01, cw: 0.125, i: 0.1, o: 0.5 }, "openai/gpt-oss-120b-maas": { cr: 0.009, cw: 0.09, i: 0.09, o: 0.36 }, "openai/gpt-oss-120b:free": { cr: 0, cw: 0, i: 0, o: 0 }, "openai/gpt-oss-20b": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.14 }, "openai/gpt-oss-20b-maas": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.25 }, "openai/gpt-oss-20b:free": { cr: 0, cw: 0, i: 0, o: 0 }, "openai/gpt-oss-safeguard-20b": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0.3 }, "openai/gpt-realtime-1.5": { cr: 0.4, cw: 4, i: 4, o: 16 }, "openai/gpt-realtime-2": { cr: 0.4, cw: 4, i: 4, o: 24 }, "openai/gpt-realtime-mini": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "openai/o1": { cr: 7.5, cw: 15, i: 15, o: 60 }, "openai/o1-mini": { cr: 0, cw: 0, i: 0, o: 0 }, "openai/o1-preview": { cr: 0, cw: 0, i: 0, o: 0 }, "openai/o1-pro": { cr: 15, cw: 150, i: 150, o: 600 }, "openai/o3": { cr: 0.5, cw: 2, i: 2, o: 8 }, "openai/o3-deep-research": { cr: 2.5, cw: 10, i: 10, o: 40 }, "openai/o3-mini": { cr: 0.55, cw: 1.1, i: 1.1, o: 4.4 }, "openai/o3-mini-high": { cr: 0.55, cw: 1.1, i: 1.1, o: 4.4 }, "openai/o3-mini-low": { cr: 0.9996, cw: 9.996, i: 9.996, o: 19.992 }, "openai/o3-pro": { cr: 2, cw: 20, i: 20, o: 80 }, "openai/o3-pro-2025-06-10": { cr: 0.9996, cw: 9.996, i: 9.996, o: 19.992 }, "openai/o4-mini": { cr: 0.28, cw: 1.1, i: 1.1, o: 4.4 }, "openai/o4-mini-deep-research": { cr: 0.5, cw: 2, i: 2, o: 8 }, "openai/o4-mini-high": { cr: 0.11000000000000001, cw: 1.1, i: 1.1, o: 4.4 }, "openai/whisper-large-v3": { cr: 0.00023, cw: 0.0023, i: 0.0023, o: 0.0023 }, "openai/whisper-large-v3-turbo": { cr: 0.00023, cw: 0.0023, i: 0.0023, o: 0.0023 }, "openrouter/auto": { cr: 0, cw: 0, i: 0, o: 0 }, "openrouter/bodybuilder": { cr: 0, cw: 0, i: 0, o: 0 }, "openrouter/free": { cr: 0, cw: 0, i: 0, o: 0 }, "openrouter/owl-alpha": { cr: 0, cw: 0, i: 0, o: 0 }, "openrouter/pareto-code": { cr: 0, cw: 0, i: 0, o: 0 }, "orcarouter/auto": { cr: 0, cw: 0, i: 0, o: 0 }, "osmosis/osmosis-structure-0.6b": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.5 }, owl: { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.3 }, "paddlepaddle/paddleocr-vl": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.02 }, "pamanseau/OpenReasoning-Nemotron-32B": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.4 }, "pearl-ai/gemma-4-31b-it": { cr: 0.028000000000000004, cw: 0.28, i: 0.28, o: 0.86 }, "perceptron/perceptron-mk1": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.5 }, "perplexity/sonar": { cr: 0.1, cw: 1, i: 1, o: 1 }, "perplexity/sonar-deep-research": { cr: 0.2, cw: 2, i: 2, o: 8 }, "perplexity/sonar-pro": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "perplexity/sonar-pro-search": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "perplexity/sonar-reasoning-pro": { cr: 0.2, cw: 2, i: 2, o: 8 }, "phi-3-medium-128k-instruct": { cr: 0.017, cw: 0.17, i: 0.17, o: 0.68 }, "phi-3-medium-4k-instruct": { cr: 0.017, cw: 0.17, i: 0.17, o: 0.68 }, "phi-3-mini-128k-instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.52 }, "phi-3-mini-4k-instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.52 }, "phi-3-small-128k-instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "phi-3-small-8k-instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "phi-3.5-mini-instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.52 }, "phi-3.5-moe-instruct": { cr: 0.016, cw: 0.16, i: 0.16, o: 0.64 }, "phi-4": { cr: 0.0125, cw: 0.125, i: 0.125, o: 0.5 }, "phi-4-mini": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0.3 }, "phi-4-mini-instruct": { cr: 0.017, cw: 0.17, i: 0.17, o: 0.68 }, "phi-4-mini-reasoning": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0.3 }, "phi-4-multimodal": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.32 }, "phi-4-multimodal-instruct": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.11 }, "phi-4-reasoning": { cr: 0.0125, cw: 0.125, i: 0.125, o: 0.5 }, "phi-4-reasoning-plus": { cr: 0.0125, cw: 0.125, i: 0.125, o: 0.5 }, "pixtral-12b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "pixtral-12b-2409": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.2 }, "pixtral-large-latest": { cr: 0.4, cw: 4, i: 4, o: 12 }, "poolside/laguna-m.1": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.3 }, "poolside/laguna-m.1:free": { cr: 0, cw: 0, i: 0, o: 0 }, "poolside/laguna-xs.2": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.3 }, "poolside/laguna-xs.2:free": { cr: 0, cw: 0, i: 0, o: 0 }, "prime-intellect/intellect-3": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 1.1 }, "public/deepseek-r1": { cr: 0.05500000000000001, cw: 0.55, i: 0.55, o: 2.2 }, "public/deepseek-v3": { cr: 0.028000000000000004, cw: 0.28, i: 0.28, o: 1.1 }, "public/minimax-m25": { cr: 0.028999999999999998, cw: 0.29, i: 0.29, o: 1.16 }, "qvq-max": { cr: 0.12, cw: 1.2, i: 1.2, o: 4.8 }, "qwen-2.5-72b-instruct": { cr: 0.006200000000000001, cw: 0.062, i: 0.062, o: 0.231 }, "qwen-2.5-coder-32b": { cr: 0.07900000000000001, cw: 0.79, i: 0.79, o: 0.79 }, "qwen-3-6-plus": { cr: 0.1, cw: 0.5, i: 0.5, o: 3 }, "qwen-3-7-max": { cr: 0.27, cw: 3.35, i: 2.7, o: 8.05 }, "qwen-3-7-plus": { cr: 0.05, cw: 0.625, i: 0.5, o: 2 }, "qwen-3.6-plus": { cr: 0.1, cw: 0.5, i: 0.5, o: 3 }, "qwen-coder-plus": { cr: 0.0502, cw: 0.502, i: 0.502, o: 1.004 }, "qwen-deep-research": { cr: 0.7742, cw: 7.742, i: 7.742, o: 23.367 }, "qwen-doc-turbo": { cr: 0.0087, cw: 0.087, i: 0.087, o: 0.144 }, "qwen-flash": { cr: 0.0022, cw: 0.022, i: 0.022, o: 0.22 }, "qwen-image": { cr: 0.05, cw: 0.5, i: 0.5, o: 2 }, "qwen-image-2.0": { cr: 0, cw: 0, i: 0, o: 0 }, "qwen-image-2.0-pro": { cr: 0, cw: 0, i: 0, o: 0 }, "qwen-long": { cr: 0.0072, cw: 0.072, i: 0.072, o: 0.287 }, "qwen-math-plus": { cr: 0.0574, cw: 0.574, i: 0.574, o: 1.721 }, "qwen-math-turbo": { cr: 0.0287, cw: 0.287, i: 0.287, o: 0.861 }, "qwen-max": { cr: 0.16000000000000003, cw: 1.6, i: 1.6, o: 6.4 }, "qwen-max-latest": { cr: 0.034300000000000004, cw: 0.343, i: 0.343, o: 1.372 }, "qwen-mt-plus": { cr: 0.246, cw: 2.46, i: 2.46, o: 7.37 }, "qwen-mt-turbo": { cr: 0.016, cw: 0.16, i: 0.16, o: 0.49 }, "qwen-omni-turbo": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.27 }, "qwen-omni-turbo-realtime": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 1.07 }, "qwen-plus": { cr: 0.012, cw: 0.12, i: 0.12, o: 1.2 }, "qwen-plus-character": { cr: 0.011500000000000002, cw: 0.115, i: 0.115, o: 0.287 }, "qwen-plus-character-ja": { cr: 0.05, cw: 0.5, i: 0.5, o: 1.4 }, "qwen-plus-latest": { cr: 0.08, cw: 0.5, i: 0.4, o: 1.2 }, "qwen-turbo": { cr: 0.005000000000000001, cw: 0.05, i: 0.05, o: 0.2 }, "qwen-vl-max": { cr: 0.08000000000000002, cw: 0.8, i: 0.8, o: 3.2 }, "qwen-vl-ocr": { cr: 0.072, cw: 0.72, i: 0.72, o: 0.72 }, "qwen-vl-plus": { cr: 0.021, cw: 0.21, i: 0.21, o: 0.63 }, "qwen.qwen3-235b-a22b-2507-v1:0": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.88 }, "qwen.qwen3-32b-v1:0": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "qwen.qwen3-coder-30b-a3b-v1:0": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "qwen.qwen3-coder-480b-a35b-v1:0": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 1.8 }, "qwen.qwen3-coder-next": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 1.8 }, "qwen.qwen3-next-80b-a3b": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 1.4 }, "qwen.qwen3-vl-235b-a22b": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.5 }, "qwen/Qwen2.5-Coder-32B-Instruct": { cr: 0.02006, cw: 0.2006, i: 0.2006, o: 0.2006 }, "qwen/Qwen3-235B-A22B-Instruct-2507": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.5 }, "qwen/Qwen3-235B-A22B-Instruct-2507-TEE": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.5 }, "qwen/Qwen3-235B-A22B-Thinking-2507": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.5 }, "qwen/Qwen3-8B": { cr: 0.047, cw: 0.47, i: 0.47, o: 0.47 }, "qwen/Qwen3-Next-80B-A3B-Instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.65 }, "qwen/Qwen3-VL-235B-A22B-Instruct": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "qwen/Qwen3.6-35B-A3B": { cr: 0.011200000000000002, cw: 0.112, i: 0.112, o: 0.8 }, "qwen/Qwen3.6-35B-A3B:thinking": { cr: 0.011200000000000002, cw: 0.112, i: 0.112, o: 0.8 }, "qwen/qwen-2.5-72b-instruct": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.39 }, "qwen/qwen-2.5-7b-instruct": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.1 }, "qwen/qwen-2.5-7b-vision-instruct": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.2 }, "qwen/qwen-2.5-coder-32b-instruct": { cr: 0.015, cw: 0.2, i: 0.2, o: 0.2 }, "qwen/qwen-image": { cr: 0, cw: 0, i: 0, o: 0 }, "qwen/qwen-image-edit": { cr: 0, cw: 0, i: 0, o: 0 }, "qwen/qwen-mt-plus": { cr: 0.025, cw: 0.25, i: 0.25, o: 0.75 }, "qwen/qwen-plus": { cr: 0.08, cw: 0.4, i: 0.4, o: 1.2 }, "qwen/qwen-plus-2025-07-28": { cr: 0.026000000000000002, cw: 0.26, i: 0.26, o: 0.78 }, "qwen/qwen-plus-2025-07-28:thinking": { cr: 0.026000000000000002, cw: 0.26, i: 0.26, o: 0.78 }, "qwen/qwen2.5-7b-instruct": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.07 }, "qwen/qwen2.5-coder-32b-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "qwen/qwen2.5-vl-72b-instruct": { cr: 0.075, cw: 0.8, i: 0.8, o: 0.8 }, "qwen/qwen3-14b": { cr: 0.025, cw: 0.06, i: 0.06, o: 0.24 }, "qwen/qwen3-235b-a22b": { cr: 0.15, cw: 0.455, i: 0.455, o: 1.82 }, "qwen/qwen3-235b-a22b-2507": { cr: 0.0070999999999999995, cw: 0.071, i: 0.071, o: 0.1 }, "qwen/qwen3-235b-a22b-fp8": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.8 }, "qwen/qwen3-235b-a22b-instruct-2507": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.8 }, "qwen/qwen3-235b-a22b-instruct-2507-maas": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.88 }, "qwen/qwen3-235b-a22b-thinking-2507": { cr: 0.03, cw: 0.3, i: 0.3, o: 3 }, "qwen/qwen3-30b-a3b": { cr: 0.03, cw: 0.08, i: 0.08, o: 0.28 }, "qwen/qwen3-30b-a3b-2507": { cr: 0, cw: 0, i: 0, o: 0 }, "qwen/qwen3-30b-a3b-fp8": { cr: 0.009, cw: 0.09, i: 0.09, o: 0.45 }, "qwen/qwen3-30b-a3b-instruct-2507": { cr: 0.04, cw: 0.09, i: 0.09, o: 0.3 }, "qwen/qwen3-30b-a3b-thinking-2507": { cr: 0.0051, cw: 0.051, i: 0.051, o: 0.34 }, "qwen/qwen3-32b": { cr: 0.028999999999999998, cw: 0.29, i: 0.29, o: 0.59 }, "qwen/qwen3-32b-fp8": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.45 }, "qwen/qwen3-4b-fp8": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.03 }, "qwen/qwen3-8b": { cr: 0.05, cw: 0.05, i: 0.05, o: 0.4 }, "qwen/qwen3-8b-fp8": { cr: 0.0035000000000000005, cw: 0.035, i: 0.035, o: 0.138 }, "qwen/qwen3-coder": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "qwen/qwen3-coder-30b": { cr: 0, cw: 0, i: 0, o: 0 }, "qwen/qwen3-coder-30b-a3b-instruct": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.27 }, "qwen/qwen3-coder-480b-a35b-instruct": { cr: 0.028999999999999998, cw: 0.29, i: 0.29, o: 1.2 }, "qwen/qwen3-coder-flash": { cr: 0.06, cw: 0.195, i: 0.195, o: 0.975 }, "qwen/qwen3-coder-next": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 1.5 }, "qwen/qwen3-coder-plus": { cr: 0.2, cw: 0.65, i: 0.65, o: 3.25 }, "qwen/qwen3-coder:free": { cr: 0, cw: 0, i: 0, o: 0 }, "qwen/qwen3-embedding-4b": { cr: 0.001, cw: 0.01, i: 0.01, o: 0 }, "qwen/qwen3-max": { cr: 0.24, cw: 1.2, i: 1.2, o: 6 }, "qwen/qwen3-max-thinking": { cr: 0.07800000000000001, cw: 0.78, i: 0.78, o: 3.9 }, "qwen/qwen3-next-80b-a3b-instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.5 }, "qwen/qwen3-next-80b-a3b-instruct:free": { cr: 0, cw: 0, i: 0, o: 0 }, "qwen/qwen3-next-80b-a3b-thinking": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.5 }, "qwen/qwen3-omni-30b-a3b-instruct": { cr: 0.025, cw: 0.25, i: 0.25, o: 0.97 }, "qwen/qwen3-omni-30b-a3b-thinking": { cr: 0.025, cw: 0.25, i: 0.25, o: 0.97 }, "qwen/qwen3-vl-235b-a22b-instruct": { cr: 0.11, cw: 0.2, i: 0.2, o: 0.88 }, "qwen/qwen3-vl-235b-a22b-thinking": { cr: 0.026000000000000002, cw: 0.26, i: 0.26, o: 2.6 }, "qwen/qwen3-vl-30b-a3b-instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.52 }, "qwen/qwen3-vl-30b-a3b-thinking": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 1.56 }, "qwen/qwen3-vl-32b-instruct": { cr: 0.0104, cw: 0.104, i: 0.104, o: 0.416 }, "qwen/qwen3-vl-8b-instruct": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.5 }, "qwen/qwen3-vl-8b-thinking": { cr: 0.011700000000000002, cw: 0.117, i: 0.117, o: 1.365 }, "qwen/qwen3.5-122b-a10b": { cr: 0.026000000000000002, cw: 0.26, i: 0.26, o: 2.08 }, "qwen/qwen3.5-27b": { cr: 0.019500000000000003, cw: 0.195, i: 0.195, o: 1.56 }, "qwen/qwen3.5-35b-a3b": { cr: 0.01625, cw: 0.1625, i: 0.1625, o: 1.3 }, "qwen/qwen3.5-397b-a17b": { cr: 0.03900000000000001, cw: 0.39, i: 0.39, o: 2.34 }, "qwen/qwen3.5-397b-a17b-thinking": { cr: 0.06, cw: 0.6, i: 0.6, o: 3.6 }, "qwen/qwen3.5-9b": { cr: 0.005000000000000001, cw: 0.05, i: 0.05, o: 0.15 }, "qwen/qwen3.5-flash": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.4 }, "qwen/qwen3.5-flash-02-23": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.4 }, "qwen/qwen3.5-plus": { cr: 0.04, cw: 0.4, i: 0.4, o: 2.4 }, "qwen/qwen3.5-plus-02-15": { cr: 0.026000000000000002, cw: 0.26, i: 0.26, o: 1.56 }, "qwen/qwen3.5-plus-20260420": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 2.4 }, "qwen/qwen3.5-plus-thinking": { cr: 0.04, cw: 0.4, i: 0.4, o: 2.4 }, "qwen/qwen3.6-27b": { cr: 0.0325, cw: 0.325, i: 0.325, o: 3.25 }, "qwen/qwen3.6-35b-a3b": { cr: 0.1612, cw: 0.1612, i: 0.1612, o: 0.96525 }, "qwen/qwen3.6-flash": { cr: 0.025, cw: 0.3125, i: 0.25, o: 1.5 }, "qwen/qwen3.6-max-preview": { cr: 0.10400000000000001, cw: 1.3, i: 1.04, o: 6.24 }, "qwen/qwen3.6-plus": { cr: 0.0325, cw: 0.40625, i: 0.325, o: 1.95 }, "qwen/qwen3.7-max": { cr: 0.1625, cw: 2.03125, i: 1.625, o: 4.875 }, "qwen/qwen3.7-plus": { cr: 0.064, cw: 0.4, i: 0.32, o: 1.28 }, "qwen/qwenCoder/models/Qwen3-Coder-30B-A3B-Instruct": { cr: 0.011458000000000001, cw: 0.11458, i: 0.11458, o: 0.74812 }, "qwen/qwenLM/models/Qwen3-30B-A3B-Instruct-2507": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.5 }, "qwen/qwenLM/models/Qwen3-30B-A3B-Thinking-2507": { cr: 0.036, cw: 0.36, i: 0.36, o: 1.3 }, "qwen/qwq-32b-preview": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.2 }, "qwen2-5-14b-instruct": { cr: 0.034999999999999996, cw: 0.35, i: 0.35, o: 1.4 }, "qwen2-5-32b-instruct": { cr: 0.06999999999999999, cw: 0.7, i: 0.7, o: 2.8 }, "qwen2-5-72b-instruct": { cr: 0.13999999999999999, cw: 1.4, i: 1.4, o: 5.6 }, "qwen2-5-7b-instruct": { cr: 0.017499999999999998, cw: 0.175, i: 0.175, o: 0.7 }, "qwen2-5-coder-32b-instruct": { cr: 0.0287, cw: 0.287, i: 0.287, o: 0.861 }, "qwen2-5-coder-7b-instruct": { cr: 0.0144, cw: 0.144, i: 0.144, o: 0.287 }, "qwen2-5-math-72b-instruct": { cr: 0.0574, cw: 0.574, i: 0.574, o: 1.721 }, "qwen2-5-math-7b-instruct": { cr: 0.0144, cw: 0.144, i: 0.144, o: 0.287 }, "qwen2-5-omni-7b": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.4 }, "qwen2-5-vl-32b-instruct": { cr: 0.13999999999999999, cw: 1.4, i: 1.4, o: 4.2 }, "qwen2-5-vl-72b-instruct": { cr: 0.27999999999999997, cw: 2.8, i: 2.8, o: 8.4 }, "qwen2-5-vl-7b-instruct": { cr: 0.034999999999999996, cw: 0.35, i: 0.35, o: 1.05 }, "qwen2.5-coder-7b-fast": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.09 }, "qwen2.5-vl-72b-instruct": { cr: 0.101, cw: 1.01, i: 1.01, o: 1.01 }, "qwen25-vl-72b-instruct": { cr: 0.06998900000000001, cw: 0.69989, i: 0.69989, o: 0.69989 }, "qwen3-14b": { cr: 0.034999999999999996, cw: 0.35, i: 0.35, o: 1.4 }, "qwen3-235b": { cr: 0, cw: 0, i: 0, o: 0 }, "qwen3-235b-a22b": { cr: 0.028999999999999998, cw: 0.29, i: 0.29, o: 2.86 }, "qwen3-235b-a22b-fp8": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.8 }, "qwen3-235b-a22b-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "qwen3-235b-a22b-instruct-2507": { cr: 0.028999999999999998, cw: 0.29, i: 0.29, o: 1.143 }, "qwen3-235b-a22b-thinking": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.9000000000000004 }, "qwen3-235b-a22b-thinking-2507": { cr: 0, cw: 0, i: 0, o: 0 }, "qwen3-30b-a3b": { cr: 0.011000000000000001, cw: 0.11, i: 0.11, o: 1.08 }, "qwen3-30b-a3b-instruct-2507": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.3 }, "qwen3-32b": { cr: 0.06999999999999999, cw: 0.7, i: 0.7, o: 2.8 }, "qwen3-4b-fp8": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.03 }, "qwen3-5-35b-a3b": { cr: 0.15625, cw: 0.3125, i: 0.3125, o: 1.25 }, "qwen3-5-397b-a17b": { cr: 0.07500000000000001, cw: 0.75, i: 0.75, o: 4.5 }, "qwen3-5-9b": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.15 }, "qwen3-6-27b": { cr: 0.0325, cw: 0.325, i: 0.325, o: 3.25 }, "qwen3-6-35b": { cr: 0.5, cw: 5, i: 5, o: 10 }, "qwen3-8b": { cr: 0.018, cw: 0.18, i: 0.18, o: 0.7 }, "qwen3-asr-flash": { cr: 0.0035000000000000005, cw: 0.035, i: 0.035, o: 0.035 }, "qwen3-coder": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.95 }, "qwen3-coder-30b-a3b": { cr: 0, cw: 0, i: 0, o: 0 }, "qwen3-coder-30b-a3b-instruct": { cr: 0.045000000000000005, cw: 0.45, i: 0.45, o: 2.25 }, "qwen3-coder-480b-a35b-instruct": { cr: 0.08600000000000001, cw: 0.86, i: 0.86, o: 3.43 }, "qwen3-coder-480b-a35b-instruct-turbo": { cr: 0.04, cw: 0.35, i: 0.35, o: 1.5 }, "qwen3-coder-flash": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.5 }, "qwen3-coder-next": { cr: 0, cw: 0, i: 0, o: 0 }, "qwen3-coder-plus": { cr: 0.1, cw: 1, i: 1, o: 5 }, "qwen3-embedding-0.6b": { cr: 0.004, cw: 0.04, i: 0.04, o: 0 }, "qwen3-embedding-4b": { cr: 0, cw: 0, i: 0, o: 0 }, "qwen3-embedding-8b": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.1 }, "qwen3-livetranslate-flash-realtime": { cr: 1, cw: 10, i: 10, o: 10 }, "qwen3-max": { cr: 0.12, cw: 1.2, i: 1.2, o: 6 }, "qwen3-max-2025-09-23": { cr: 0.08600000000000001, cw: 0.86, i: 0.86, o: 3.43 }, "qwen3-max-2026-01-23": { cr: 0, cw: 0, i: 0, o: 0 }, "qwen3-max-preview": { cr: 0, cw: 0, i: 0, o: 0 }, "qwen3-next-80b": { cr: 0.034999999999999996, cw: 0.35, i: 0.35, o: 1.9 }, "qwen3-next-80b-a3b-instruct": { cr: 0.05, cw: 0.5, i: 0.5, o: 2 }, "qwen3-next-80b-a3b-thinking": { cr: 0.05, cw: 0.5, i: 0.5, o: 6 }, "qwen3-omni-flash": { cr: 0.043000000000000003, cw: 0.43, i: 0.43, o: 1.66 }, "qwen3-omni-flash-realtime": { cr: 0.052000000000000005, cw: 0.52, i: 0.52, o: 1.99 }, "qwen3-reranker-4b": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.12 }, "qwen3-vl-235b-a22b": { cr: 0.06999999999999999, cw: 0.7, i: 0.7, o: 2.8 }, "qwen3-vl-235b-a22b-instruct": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.5 }, "qwen3-vl-235b-a22b-instruct-original": { cr: 0.05, cw: 0.5, i: 0.5, o: 1.2 }, "qwen3-vl-235b-a22b-thinking": { cr: 0.05, cw: 0.5, i: 0.5, o: 2 }, "qwen3-vl-30b-a3b": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.8 }, "qwen3-vl-30b-a3b-instruct": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.7 }, "qwen3-vl-30b-a3b-thinking": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 1 }, "qwen3-vl-8b-instruct": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.5 }, "qwen3-vl-flash": { cr: 0.01, cw: 0.05, i: 0.05, o: 0.4 }, "qwen3-vl-plus": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 1.6 }, "qwen3.5-122b": { cr: 0.09000000000000001, cw: 0.9, i: 0.9, o: 3.6 }, "qwen3.5-122b-a10b": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 3.2 }, "qwen3.5-122b-a10b:thinking": { cr: 0.036, cw: 0.36, i: 0.36, o: 2.88 }, "qwen3.5-27b": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.4 }, "qwen3.5-27b:thinking": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 2.16 }, "qwen3.5-35b-a3b": { cr: 0.025, cw: 0.25, i: 0.25, o: 2 }, "qwen3.5-35b-a3b:thinking": { cr: 0.022500000000000003, cw: 0.225, i: 0.225, o: 1.8 }, "qwen3.5-397b-a17b": { cr: 0.06, cw: 0.6, i: 0.6, o: 3.6 }, "qwen3.5-397b-fast": { cr: 0.1725, cw: 0.69, i: 0.69, o: 4.14 }, "qwen3.5-9b": { cr: 0.008, cw: 0.04, i: 0.04, o: 0.15 }, "qwen3.5-flash": { cr: 0.0172, cw: 0.172, i: 0.172, o: 1.72 }, "qwen3.5-flash:thinking": { cr: 0.009, cw: 0.09, i: 0.09, o: 0.36 }, "qwen3.5-omni-flash": { cr: 0, cw: 0, i: 0, o: 0 }, "qwen3.5-omni-plus": { cr: 0, cw: 0, i: 0, o: 0 }, "qwen3.5-plus": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 2.4 }, "qwen3.6-27b": { cr: 0.06, cw: 0.6, i: 0.6, o: 3.6 }, "qwen3.6-35b-a3b": { cr: 0.024800000000000003, cw: 0.248, i: 0.248, o: 1.485 }, "qwen3.6-35b-fast": { cr: 0.0725, cw: 0.29, i: 0.29, o: 1.15 }, "qwen3.6-flash": { cr: 0.0169, cw: 0.21125, i: 0.17, o: 1.01 }, "qwen3.6-max-preview": { cr: 0.1268, cw: 1.585, i: 1.27, o: 7.61 }, "qwen3.6-plus": { cr: 0.0282, cw: 0.3525, i: 0.28, o: 1.69 }, "qwen3.6-plus-free": { cr: 0, cw: 0, i: 0, o: 0 }, "qwen3.7-max": { cr: 0.169, cw: 2.1125, i: 1.69, o: 5.07 }, "qwen3.7-max:thinking": { cr: 0.25, cw: 2.5, i: 2.5, o: 7.5 }, "qwen3.7-plus": { cr: 0.0564, cw: 0.3525, i: 0.282, o: 1.128 }, "qwen3.7-plus:thinking": { cr: 0.04, cw: 0.4, i: 0.4, o: 1.6 }, "qwen35-397b-a17b": { cr: 0.06, cw: 0.6, i: 0.6, o: 3.6 }, "qwq-32b": { cr: 0.0287, cw: 0.287, i: 0.287, o: 0.861 }, "qwq-plus": { cr: 0.08000000000000002, cw: 0.8, i: 0.8, o: 2.4 }, "rekaai/reka-edge": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.1 }, "rekaai/reka-flash-3": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.2 }, "relace/relace-apply-3": { cr: 0.085, cw: 0.85, i: 0.85, o: 1.25 }, "relace/relace-search": { cr: 0.1, cw: 1, i: 1, o: 3 }, "ring-2.6-1t-free": { cr: 0, cw: 0, i: 0, o: 0 }, "route-llm": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "route/deepseek-v3.2": { cr: 0.049280000000000004, cw: 0.4928, i: 0.4928, o: 0.7392 }, "route/deepseek-v4-flash": { cr: 0.0028, cw: 0.4928, i: 0.4928, o: 0.7392 }, "route/deepseek-v4-flash-6bit": { cr: 0.0028, cw: 0.4928, i: 0.4928, o: 0.7392 }, "route/deepseek-v4-pro": { cr: 0.003625, cw: 0.4928, i: 0.4928, o: 0.7392 }, "route/deepseek-v4-pro-6bit": { cr: 0.003625, cw: 0.4928, i: 0.4928, o: 0.7392 }, "route/gemma-4-31b-it": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.3 }, "route/glm-5.1": { cr: 0.26, cw: 0, i: 1, o: 3 }, "route/glm-5.1-6bit": { cr: 0.26, cw: 0, i: 1, o: 3 }, "route/kimi-k2.5": { cr: 0.1, cw: 0.462, i: 0.462, o: 2.42 }, "route/kimi-k2.6": { cr: 0.16, cw: 0.462, i: 0.462, o: 2.42 }, "route/kimi-k2.6-6bit": { cr: 0.16, cw: 0.462, i: 0.462, o: 2.42 }, "route/mimo-v2.5": { cr: 0.2, cw: 0.45, i: 0.45, o: 1.35 }, "route/mimo-v2.5-pro": { cr: 0.2, cw: 0.45, i: 0.45, o: 1.35 }, "route/mimo-v2.5-pro-6bit": { cr: 0.2, cw: 0.45, i: 0.45, o: 1.35 }, "route/minimax-m2.5": { cr: 0.03, cw: 0.375, i: 0.193, o: 1.238 }, "route/minimax-m2.5-highspeed": { cr: 0.06, cw: 0.375, i: 0.193, o: 1.238 }, "route/minimax-m2.7": { cr: 0.06, cw: 0.375, i: 0.33, o: 1.32 }, "route/minimax-m2.7-highspeed": { cr: 0.06, cw: 0.375, i: 0.33, o: 1.32 }, "route/mistral-large-3": { cr: 0.05, cw: 0.5, i: 0.5, o: 1.5 }, "route/mistral-medium-2505": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 2 }, "route/mistral-small-2503": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "route/qwen3.6-27b": { cr: 0.11000000000000001, cw: 1.1, i: 1.1, o: 3.3 }, "route/qwen3.6-27b-202k": { cr: 0.11000000000000001, cw: 1.1, i: 1.1, o: 3.3 }, "route/step-3.5-flash": { cr: 0.019, cw: 0.096, i: 0.096, o: 0.288 }, "route/step-3.5-flash-2603": { cr: 0.02, cw: 0.1, i: 0.1, o: 0.3 }, "route/stepfun-3.5-flash": { cr: 0.019, cw: 0.096, i: 0.096, o: 0.288 }, "sakana/fugu-ultra": { cr: 0.5, cw: 5, i: 5, o: 30 }, "sao10K/L3-8B-stheno-v3.2": { cr: 0.005000000000000001, cw: 0.05, i: 0.05, o: 0.05 }, "sao10K/l3-70b-euryale-v2.1": { cr: 0.148, cw: 1.48, i: 1.48, o: 1.48 }, "sao10K/l3-8b-lunaris": { cr: 0.005000000000000001, cw: 0.05, i: 0.05, o: 0.05 }, "sao10K/l31-70b-euryale-v2.2": { cr: 0.148, cw: 1.48, i: 1.48, o: 1.48 }, "sao10k/l3-euryale-70b": { cr: 0.148, cw: 1.48, i: 1.48, o: 1.48 }, "sao10k/l3-lunaris-8b": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.05 }, "sao10k/l3.1-70b-hanami-x1": { cr: 0.30000000000000004, cw: 3, i: 3, o: 3 }, "sao10k/l3.1-euryale-70b": { cr: 0.085, cw: 0.85, i: 0.85, o: 0.85 }, "sao10k/l3.3-euryale-70b": { cr: 0.065, cw: 0.65, i: 0.65, o: 0.75 }, "sapiens-ai/agnes-1.5-lite": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.6 }, "sapiens-ai/agnes-1.5-pro": { cr: 0.016, cw: 0.16, i: 0.16, o: 0.8 }, "sarvam-105b": { cr: 0.028, cw: 0.045, i: 0.045, o: 0.177 }, "sarvam-30b": { cr: 0.017, cw: 0.028, i: 0.028, o: 0.111 }, "sarvam/sarvam-105b": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.16 }, "sarvam/sarvam-30b": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.1 }, "sarvamai/sarvam-m": { cr: 0, cw: 0, i: 0, o: 0 }, "seed-1-6-250615": { cr: 0.05, cw: 0.25, i: 0.25, o: 2 }, "seed-1-6-250915": { cr: 0.05, cw: 0.25, i: 0.25, o: 2 }, "seed-1-6-flash-250715": { cr: 0.015, cw: 0.07, i: 0.07, o: 0.3 }, "seed-1-8-251228": { cr: 0.05, cw: 0.25, i: 0.25, o: 2 }, "shisa-ai/shisa-v2-llama3.3-70b": { cr: 0.05, cw: 0.5, i: 0.5, o: 0.5 }, "shisa-ai/shisa-v2.1-llama3.3-70b": { cr: 0.05, cw: 0.5, i: 0.5, o: 0.5 }, "siliconflow/deepseek-r1-0528": { cr: 0.05, cw: 0.5, i: 0.5, o: 2.18 }, "siliconflow/deepseek-v3-0324": { cr: 0.025, cw: 0.25, i: 0.25, o: 1 }, "siliconflow/deepseek-v3.1-terminus": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 1 }, "siliconflow/deepseek-v3.2": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 0.42 }, sincap: { cr: 0, cw: 0, i: 0, o: 0 }, "solar-mini": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "solar-pro2": { cr: 0.025, cw: 0.25, i: 0.25, o: 0.25 }, "solar-pro3": { cr: 0.025, cw: 0.25, i: 0.25, o: 0.25 }, sonar: { cr: 0.1, cw: 1, i: 1, o: 1 }, "sonar-deep-research": { cr: 0.2, cw: 2, i: 2, o: 8 }, "sonar-pro": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "sonar-reasoning": { cr: 0.1, cw: 1, i: 1, o: 5 }, "sonar-reasoning-pro": { cr: 0.2, cw: 2, i: 2, o: 8 }, "soob3123/GrayLine-Qwen3-8B": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.3 }, "soob3123/Veiled-Calla-12B": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.3 }, "soob3123/amoral-gemma3-27B-v2": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.3 }, "speakleash/Bielik-11B-v2.6-Instruct": { cr: 0.067, cw: 0.67, i: 0.67, o: 0.67 }, "speakleash/Bielik-11B-v3.0-Instruct": { cr: 0.067, cw: 0.67, i: 0.67, o: 0.67 }, "stable-diffusion-3.5-large": { cr: 0.008, cw: 0.08, i: 0.08, o: 0 }, "stealth/claude-opus-4.6": { cr: 0.4, cw: 5, i: 4, o: 20 }, "stealth/claude-opus-4.7": { cr: 0.4, cw: 5, i: 4, o: 20 }, "stealth/claude-sonnet-4.6": { cr: 0.24, cw: 3, i: 2.4, o: 12 }, "step-1-32k": { cr: 0.41, cw: 2.05, i: 2.05, o: 9.59 }, "step-2-16k": { cr: 1.04, cw: 5.21, i: 5.21, o: 16.44 }, "step-2-16k-exp": { cr: 0.7004, cw: 7.004, i: 7.004, o: 19.992 }, "step-2-mini": { cr: 0.02006, cw: 0.2006, i: 0.2006, o: 0.408 }, "step-3": { cr: 0.024990000000000002, cw: 0.2499, i: 0.2499, o: 0.6494 }, "step-3.5-flash": { cr: 0.02, cw: 0.1, i: 0.1, o: 0.3 }, "step-3.5-flash-2603": { cr: 0.02, cw: 0.1, i: 0.1, o: 0.3 }, "step-3.7-flash": { cr: 0.04, cw: 0.2, i: 0.2, o: 1.15 }, "step-r1-v-mini": { cr: 0.25, cw: 2.5, i: 2.5, o: 11 }, "stepfun-ai/Step-3.5-Flash": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.3 }, "stepfun-ai/Step-3.7-Flash": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 1.15 }, "stepfun-ai/step-3.5-flash": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.5 }, "stepfun-ai/step-3.5-flash-2603": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.3 }, "stepfun-ai/step-3.7-flash": { cr: 0, cw: 0, i: 0, o: 0 }, "stepfun/step-3": { cr: 0.021, cw: 0.21, i: 0.21, o: 0.57 }, "stepfun/step-3.5-flash": { cr: 0.02, cw: 0.1, i: 0.1, o: 0.3 }, "stepfun/step-3.7-flash": { cr: 0.04, cw: 0.2, i: 0.2, o: 1.15 }, "stepfun/step-3.7-flash-free": { cr: 0, cw: 0, i: 0, o: 0 }, "stepfun/step-3.7-flash:thinking": { cr: 0.04, cw: 0.2, i: 0.2, o: 1.15 }, "subconscious/tim-qwen3.6-27b": { cr: 0, cw: 0, i: 0, o: 0 }, "switchpoint/router": { cr: 0.085, cw: 0.85, i: 0.85, o: 3.4 }, "tc-code-latest": { cr: 0, cw: 0, i: 0, o: 0 }, "tencent/Hunyuan-A13B-Instruct": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.57 }, "tencent/Hunyuan-MT-7B": { cr: 1, cw: 10, i: 10, o: 20 }, "tencent/Hy3-preview": { cr: 0.029, cw: 0.066, i: 0.066, o: 0.26 }, "tencent/hunyuan-a13b-instruct": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.57 }, "tencent/hy3-preview": { cr: 0.029, cw: 0.066, i: 0.066, o: 0.26 }, "text-embedding-3-large": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0 }, "text-embedding-3-small": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "text-embedding-ada-002": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0 }, "thedrummer/cydonia-24b-v4.1": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.5 }, "thedrummer/rocinante-12b": { cr: 0.017, cw: 0.17, i: 0.17, o: 0.43 }, "thedrummer/skyfall-36b-v2": { cr: 0.05500000000000001, cw: 0.55, i: 0.55, o: 0.8 }, "thedrummer/unslopnemo-12b": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 0.4 }, "tongyi-intent-detect-v3": { cr: 0.0058000000000000005, cw: 0.058, i: 0.058, o: 0.144 }, "trendyol-7b": { cr: 0, cw: 0, i: 0, o: 0 }, "trinity-large-preview-free": { cr: 0, cw: 0, i: 0, o: 0 }, "umans-coder": { cr: 0.19, cw: 0.95, i: 0.95, o: 4 }, "umans-flash": { cr: 0.05, cw: 0.15, i: 0.15, o: 1 }, "umans-glm-5.1": { cr: 0.29, cw: 1.4, i: 1.4, o: 4.4 }, "umans-glm-5.2": { cr: 0.26, cw: 1.4, i: 1.4, o: 4.4 }, "umans-kimi-k2.7": { cr: 0.19, cw: 0.95, i: 0.95, o: 4 }, "umans-qwen3.6-35b-a3b": { cr: 0, cw: 0, i: 0, o: 0 }, "undi95/remm-slerp-l2-13b": { cr: 0.045000000000000005, cw: 0.45, i: 0.45, o: 0.65 }, "universal-summarizer": { cr: 3, cw: 30, i: 30, o: 30 }, "unsloth/Mistral-Nemo-Instruct-2407-TEE": { cr: 0.01225, cw: 0.0245, i: 0.0245, o: 0.0978 }, "unsloth/gemma-3-12b-it": { cr: 0.027200000000000002, cw: 0.272, i: 0.272, o: 0.272 }, "unsloth/gemma-3-27b-it": { cr: 0.029920000000000002, cw: 0.2992, i: 0.2992, o: 0.2992 }, "unsloth/gemma-3-4b-it": { cr: 0.02006, cw: 0.2006, i: 0.2006, o: 0.2006 }, "upstage/solar-10_7b-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "upstage/solar-pro-3": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "us.anthropic.claude-fable-5": { cr: 1, cw: 12.5, i: 10, o: 50 }, "us.anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.1, cw: 1.25, i: 1, o: 5 }, "us.anthropic.claude-opus-4-1-20250805-v1:0": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "us.anthropic.claude-opus-4-5-20251101-v1:0": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "us.anthropic.claude-opus-4-6-v1": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "us.anthropic.claude-opus-4-7": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "us.anthropic.claude-opus-4-8": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "us.anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "us.anthropic.claude-sonnet-4-6": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "us.anthropic.claude-sonnet-5": { cr: 0.2, cw: 2.5, i: 2, o: 10 }, "us.deepseek.r1-v1:0": { cr: 0.135, cw: 1.35, i: 1.35, o: 5.4 }, "us.meta.llama4-maverick-17b-instruct-v1:0": { cr: 0.024, cw: 0.24, i: 0.24, o: 0.97 }, "us.meta.llama4-scout-17b-instruct-v1:0": { cr: 0.017, cw: 0.17, i: 0.17, o: 0.66 }, "v0-1.0-md": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "v0-1.5-lg": { cr: 1.5, cw: 15, i: 15, o: 75 }, "v0-1.5-md": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "venice-uncensored": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 0.4 }, "venice-uncensored-1-2": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.9 }, "venice-uncensored-role-play": { cr: 0.05, cw: 0.5, i: 0.5, o: 2 }, "venice-uncensored:web": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 0.4 }, "volcengine/doubao-seed-1.8": { cr: 0.02, cw: 0.0024, i: 0.11, o: 0.28 }, "volcengine/doubao-seed-2.0-code": { cr: 0.09000000000000001, cw: 0.9, i: 0.9, o: 4.48 }, "volcengine/doubao-seed-2.0-lite": { cr: 0.02, cw: 0.0024, i: 0.09, o: 0.51 }, "volcengine/doubao-seed-2.0-mini": { cr: 0.01, cw: 0.0024, i: 0.03, o: 0.28 }, "volcengine/doubao-seed-2.0-pro": { cr: 0.09, cw: 0.0024, i: 0.45, o: 2.24 }, "volcengine/doubao-seed-code": { cr: 0.03, cw: 0.17, i: 0.17, o: 1.12 }, "voxtral-small-24b-2507": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.35 }, "wan2-2-t2v-a14b": { cr: 0.06, cw: 0.6, i: 0.6, o: 0 }, "wan2.7-image": { cr: 0, cw: 0, i: 0, o: 0 }, "wan2.7-image-pro": { cr: 0, cw: 0, i: 0, o: 0 }, "whisper-large-v3": { cr: 0, cw: 0, i: 0, o: 0 }, "workers-ai/@cf/ai4bharat/indictrans2-en-indic-1B": { cr: 0.034, cw: 0.34, i: 0.34, o: 0.34 }, "workers-ai/@cf/aisingapore/gemma-sea-lion-v4-27b-it": { cr: 0.034999999999999996, cw: 0.35, i: 0.35, o: 0.56 }, "workers-ai/@cf/baai/bge-base-en-v1.5": { cr: 0.006700000000000001, cw: 0.067, i: 0.067, o: 0 }, "workers-ai/@cf/baai/bge-large-en-v1.5": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0 }, "workers-ai/@cf/baai/bge-m3": { cr: 0.0012000000000000001, cw: 0.012, i: 0.012, o: 0 }, "workers-ai/@cf/baai/bge-reranker-base": { cr: 0.00031, cw: 0.0031, i: 0.0031, o: 0 }, "workers-ai/@cf/baai/bge-small-en-v1.5": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "workers-ai/@cf/deepgram/aura-2-en": { cr: 0, cw: 0, i: 0, o: 0 }, "workers-ai/@cf/deepgram/aura-2-es": { cr: 0, cw: 0, i: 0, o: 0 }, "workers-ai/@cf/deepgram/nova-3": { cr: 0, cw: 0, i: 0, o: 0 }, "workers-ai/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b": { cr: 0.05, cw: 0.5, i: 0.5, o: 4.88 }, "workers-ai/@cf/facebook/bart-large-cnn": { cr: 0, cw: 0, i: 0, o: 0 }, "workers-ai/@cf/google/gemma-3-12b-it": { cr: 0.034999999999999996, cw: 0.35, i: 0.35, o: 0.56 }, "workers-ai/@cf/huggingface/distilbert-sst-2-int8": { cr: 0.0026, cw: 0.026, i: 0.026, o: 0 }, "workers-ai/@cf/ibm-granite/granite-4.0-h-micro": { cr: 0.0017000000000000001, cw: 0.017, i: 0.017, o: 0.11 }, "workers-ai/@cf/meta/llama-2-7b-chat-fp16": { cr: 0.05600000000000001, cw: 0.56, i: 0.56, o: 6.67 }, "workers-ai/@cf/meta/llama-3-8b-instruct": { cr: 0.028000000000000004, cw: 0.28, i: 0.28, o: 0.83 }, "workers-ai/@cf/meta/llama-3-8b-instruct-awq": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.27 }, "workers-ai/@cf/meta/llama-3.1-8b-instruct": { cr: 0.028000000000000004, cw: 0.28, i: 0.28, o: 0.8299999999999998 }, "workers-ai/@cf/meta/llama-3.1-8b-instruct-awq": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.27 }, "workers-ai/@cf/meta/llama-3.1-8b-instruct-fp8": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.29 }, "workers-ai/@cf/meta/llama-3.2-11b-vision-instruct": { cr: 0.004900000000000001, cw: 0.049, i: 0.049, o: 0.68 }, "workers-ai/@cf/meta/llama-3.2-1b-instruct": { cr: 0.0027, cw: 0.027, i: 0.027, o: 0.2 }, "workers-ai/@cf/meta/llama-3.2-3b-instruct": { cr: 0.0051, cw: 0.051, i: 0.051, o: 0.34 }, "workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast": { cr: 0.028999999999999998, cw: 0.29, i: 0.29, o: 2.25 }, "workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 0.85 }, "workers-ai/@cf/meta/llama-guard-3-8b": { cr: 0.048, cw: 0.48, i: 0.48, o: 0.03 }, "workers-ai/@cf/meta/m2m100-1.2b": { cr: 0.034, cw: 0.34, i: 0.34, o: 0.34 }, "workers-ai/@cf/mistral/mistral-7b-instruct-v0.1": { cr: 0.011000000000000001, cw: 0.11, i: 0.11, o: 0.19 }, "workers-ai/@cf/mistralai/mistral-small-3.1-24b-instruct": { cr: 0.034999999999999996, cw: 0.35, i: 0.35, o: 0.56 }, "workers-ai/@cf/moonshotai/kimi-k2.5": { cr: 0.1, cw: 0.6, i: 0.6, o: 3 }, "workers-ai/@cf/moonshotai/kimi-k2.6": { cr: 0.16, cw: 0.95, i: 0.95, o: 4 }, "workers-ai/@cf/myshell-ai/melotts": { cr: 0, cw: 0, i: 0, o: 0 }, "workers-ai/@cf/nvidia/nemotron-3-120b-a12b": { cr: 0.05, cw: 0.5, i: 0.5, o: 1.5 }, "workers-ai/@cf/openai/gpt-oss-120b": { cr: 0.034999999999999996, cw: 0.35, i: 0.35, o: 0.75 }, "workers-ai/@cf/openai/gpt-oss-20b": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.3 }, "workers-ai/@cf/pfnet/plamo-embedding-1b": { cr: 0.0019, cw: 0.019, i: 0.019, o: 0 }, "workers-ai/@cf/pipecat-ai/smart-turn-v2": { cr: 0, cw: 0, i: 0, o: 0 }, "workers-ai/@cf/qwen/qwen2.5-coder-32b-instruct": { cr: 0.066, cw: 0.66, i: 0.66, o: 1 }, "workers-ai/@cf/qwen/qwen3-30b-a3b-fp8": { cr: 0.0051, cw: 0.051, i: 0.051, o: 0.34 }, "workers-ai/@cf/qwen/qwen3-embedding-0.6b": { cr: 0.0012000000000000001, cw: 0.012, i: 0.012, o: 0 }, "workers-ai/@cf/qwen/qwq-32b": { cr: 0.066, cw: 0.66, i: 0.66, o: 1 }, "workers-ai/@cf/zai-org/glm-4.7-flash": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.4 }, "writer.palmyra-x4-v1:0": { cr: 0.25, cw: 2.5, i: 2.5, o: 10 }, "writer.palmyra-x5-v1:0": { cr: 0.06, cw: 0.6, i: 0.6, o: 6 }, "writer/palmyra-x5": { cr: 0.06, cw: 0.6, i: 0.6, o: 6 }, "x-ai/grok-4": { cr: 0.75, cw: 15, i: 3, o: 15 }, "x-ai/grok-4-fast": { cr: 0.05, cw: 0.2, i: 0.2, o: 0.5 }, "x-ai/grok-4.1-fast": { cr: 0.05, cw: 0.2, i: 0.2, o: 0.5 }, "x-ai/grok-4.1-fast-non-reasoning": { cr: 0.05, cw: 0.2, i: 0.2, o: 0.5 }, "x-ai/grok-4.2-fast": { cr: 0.30000000000000004, cw: 3, i: 3, o: 9 }, "x-ai/grok-4.2-fast-non-reasoning": { cr: 0.30000000000000004, cw: 3, i: 3, o: 9 }, "x-ai/grok-4.20": { cr: 0.2, cw: 2, i: 2, o: 6 }, "x-ai/grok-4.20-multi-agent": { cr: 0.2, cw: 2, i: 2, o: 6 }, "x-ai/grok-4.3": { cr: 0.125, cw: 1.25, i: 1.25, o: 2.5 }, "x-ai/grok-build-0.1": { cr: 0.1, cw: 1, i: 1, o: 2 }, "x-ai/grok-code-fast-1": { cr: 0.02, cw: 0.2, i: 0.2, o: 1.5 }, "x-ai/grok-latest": { cr: 0.2, cw: 1.25, i: 1.25, o: 2.5 }, "xai.grok-4.3": { cr: 0.2, cw: 1.25, i: 1.25, o: 2.5 }, "xai/grok-3": { cr: 0, cw: 0, i: 0, o: 0 }, "xai/grok-3-mini": { cr: 0, cw: 0, i: 0, o: 0 }, "xai/grok-4": { cr: 0.75, cw: 3, i: 3, o: 15 }, "xai/grok-4-1-fast-non-reasoning": { cr: 0.05, cw: 0.2, i: 0.2, o: 0.5 }, "xai/grok-4-fast": { cr: 0.05, cw: 0.2, i: 0.2, o: 0.5 }, "xai/grok-4-fast-non-reasoning": { cr: 0.05, cw: 0.2, i: 0.2, o: 0.5 }, "xai/grok-4-fast-reasoning": { cr: 0.05, cw: 0.2, i: 0.2, o: 0.5 }, "xai/grok-4.1-fast-non-reasoning": { cr: 0.05, cw: 0.2, i: 0.2, o: 0.5 }, "xai/grok-4.1-fast-reasoning": { cr: 0.05, cw: 0.2, i: 0.2, o: 0.5 }, "xai/grok-4.20-0309-reasoning": { cr: 0.2, cw: 1.25, i: 1.25, o: 2.5 }, "xai/grok-4.20-multi-agent": { cr: 0.2, cw: 2, i: 2, o: 6 }, "xai/grok-4.20-multi-agent-beta": { cr: 0.2, cw: 1.25, i: 1.25, o: 2.5 }, "xai/grok-4.20-non-reasoning": { cr: 0.2, cw: 1.25, i: 1.25, o: 2.5 }, "xai/grok-4.20-non-reasoning-beta": { cr: 0.4, cw: 1.25, i: 1.25, o: 2.5 }, "xai/grok-4.20-reasoning": { cr: 0.2, cw: 1.25, i: 1.25, o: 2.5 }, "xai/grok-4.20-reasoning-beta": { cr: 0.2, cw: 1.25, i: 1.25, o: 2.5 }, "xai/grok-4.3": { cr: 0.2, cw: 1.25, i: 1.25, o: 2.5 }, "xai/grok-build-0.1": { cr: 0.2, cw: 1, i: 1, o: 2 }, "xai/grok-code-fast-1": { cr: 0.02, cw: 0.2, i: 0.2, o: 1.5 }, "xiaomi-mimo-v2-5": { cr: 0.0625, cw: 0.175, i: 0.175, o: 0.35 }, "xiaomi-mimo-v2.5": { cr: 0.088, cw: 0.44, i: 0.44, o: 2.2 }, "xiaomi-mimo-v2.5-free": { cr: 0, cw: 0, i: 0, o: 0 }, "xiaomi-mimo-v2.5-pro": { cr: 0.22, cw: 1.1, i: 1.1, o: 3.3 }, "xiaomi-mimo-v2.5-pro-free": { cr: 0, cw: 0, i: 0, o: 0 }, "xiaomi/mimo-v2-flash": { cr: 0.045, cw: 0.09, i: 0.09, o: 0.29 }, "xiaomi/mimo-v2-flash-original": { cr: 0.0102, cw: 0.102, i: 0.102, o: 0.306 }, "xiaomi/mimo-v2-flash-thinking": { cr: 0.0102, cw: 0.102, i: 0.102, o: 0.306 }, "xiaomi/mimo-v2-flash-thinking-original": { cr: 0.0102, cw: 0.102, i: 0.102, o: 0.306 }, "xiaomi/mimo-v2-omni": { cr: 0.08, cw: 0.4, i: 0.4, o: 2 }, "xiaomi/mimo-v2-pro": { cr: 0.2, cw: 1, i: 1, o: 3 }, "xiaomi/mimo-v2.5": { cr: 0.08, cw: 0.4, i: 0.4, o: 2 }, "xiaomi/mimo-v2.5-pro": { cr: 0.2, cw: 1, i: 1, o: 3 }, "xiaomimimo/mimo-v2-flash": { cr: 0, cw: 0, i: 0, o: 0 }, "xiaomimimo/mimo-v2-pro": { cr: 0.4, cw: 2, i: 2, o: 6 }, "xiaomimimo/mimo-v2.5-pro": { cr: 0.4, cw: 2, i: 2, o: 6 }, "xpersona-frieren-coder": { cr: 0.15, cw: 1.5, i: 1.5, o: 6 }, "xpersona-gpt-5.5": { cr: 0.3, cw: 3, i: 3, o: 18 }, "yi-large": { cr: 0.31960000000000005, cw: 3.196, i: 3.196, o: 3.196 }, "yi-lightning": { cr: 0.02006, cw: 0.2006, i: 0.2006, o: 0.2006 }, "yi-medium-200k": { cr: 0.2499, cw: 2.499, i: 2.499, o: 2.499 }, "z-ai-glm-5-turbo": { cr: 0.24, cw: 1.2, i: 1.2, o: 4 }, "z-ai-glm-5v-turbo": { cr: 0.3, cw: 1.5, i: 1.5, o: 5 }, "z-ai/glm-4-32b": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.1 }, "z-ai/glm-4.5": { cr: 0.175, cw: 0.6, i: 0.6, o: 2.2 }, "z-ai/glm-4.5-air": { cr: 0.025, cw: 0.13, i: 0.13, o: 0.85 }, "z-ai/glm-4.5v": { cr: 0.11, cw: 0.6, i: 0.6, o: 1.8 }, "z-ai/glm-4.5v:thinking": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.7999999999999998 }, "z-ai/glm-4.6": { cr: 0.175, cw: 0.39, i: 0.39, o: 1.9 }, "z-ai/glm-4.6:thinking": { cr: 0.04000000000000001, cw: 0.4, i: 0.4, o: 1.5 }, "z-ai/glm-4.6v": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.9 }, "z-ai/glm-4.6v-flash": { cr: 0.0043, cw: 0.02, i: 0.02, o: 0.21 }, "z-ai/glm-4.6v-flash-free": { cr: 0, cw: 0, i: 0, o: 0 }, "z-ai/glm-4.7": { cr: 0.2, cw: 0.38, i: 0.38, o: 1.98 }, "z-ai/glm-4.7-flash": { cr: 0.01, cw: 0.06, i: 0.06, o: 0.4 }, "z-ai/glm-4.7-flash-free": { cr: 0, cw: 0, i: 0, o: 0 }, "z-ai/glm-4.7-flashx": { cr: 0.01, cw: 0.07, i: 0.07, o: 0.42 }, "z-ai/glm-5": { cr: 0.095, cw: 0.95, i: 0.95, o: 3.15 }, "z-ai/glm-5-turbo": { cr: 0.24, cw: 1.2, i: 1.2, o: 4 }, "z-ai/glm-5.1": { cr: 0.10500000000000001, cw: 1.05, i: 1.05, o: 3.5 }, "z-ai/glm-5.2": { cr: 0.18, cw: 0.93, i: 0.93, o: 3 }, "z-ai/glm-5.2-free": { cr: 0, cw: 0, i: 0, o: 0 }, "z-ai/glm-5v-turbo": { cr: 0.24, cw: 1.2, i: 1.2, o: 4 }, "z-ai/glm-5v-turbo:thinking": { cr: 0.24, cw: 1.2, i: 1.2, o: 4 }, "z-code": { cr: 0, cw: 0, i: 0, o: 0 }, "zai-glm-4.7": { cr: 0, cw: 0, i: 2.25, o: 2.75 }, "zai-glm-5-1": { cr: 0.26, cw: 1.4, i: 1.4, o: 4.4 }, "zai-glm-5.1": { cr: 0.183112, cw: 0.845, i: 0.845, o: 3.38 }, "zai-org-glm-4.6": { cr: 0.08, cw: 0.43, i: 0.43, o: 1.75 }, "zai-org-glm-4.7": { cr: 0.11, cw: 0.55, i: 0.55, o: 2.65 }, "zai-org-glm-4.7-flash": { cr: 0.0125, cw: 0.125, i: 0.125, o: 0.5 }, "zai-org-glm-5": { cr: 0.2, cw: 1, i: 1, o: 3.2 }, "zai-org-glm-5-1": { cr: 0.325, cw: 1.75, i: 1.75, o: 5.5 }, "zai-org-glm-5-2": { cr: 0.26, cw: 1.4, i: 1.4, o: 4.4 }, "zai-org/GLM-4.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.2 }, "zai-org/GLM-4.5-Air": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.85 }, "zai-org/GLM-4.5-Air:thinking": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.8 }, "zai-org/GLM-4.5-FP8": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.8 }, "zai-org/GLM-4.5:thinking": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.3 }, "zai-org/GLM-4.5V": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.8 }, "zai-org/GLM-4.6": { cr: 0.08, cw: 0.43, i: 0.43, o: 1.74 }, "zai-org/GLM-4.6-turbo": { cr: 0.1, cw: 1, i: 1, o: 3 }, "zai-org/GLM-4.6-turbo:thinking": { cr: 0.1, cw: 1, i: 1, o: 3 }, "zai-org/GLM-4.7": { cr: 0.12, cw: 0.6, i: 0.6, o: 2.2 }, "zai-org/GLM-4.7-Flash": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.4 }, "zai-org/GLM-5": { cr: 0.2, cw: 0.95, i: 0.95, o: 3.15 }, "zai-org/GLM-5-FP8": { cr: 0.12, cw: 0.6, i: 0.6, o: 1.92 }, "zai-org/GLM-5-TEE": { cr: 0.475, cw: 0.95, i: 0.95, o: 2.55 }, "zai-org/GLM-5.1": { cr: 0.26, cw: 1.3, i: 1.3, o: 4.3 }, "zai-org/GLM-5.1-FP8": { cr: 0, cw: 0, i: 1.4, o: 4.4 }, "zai-org/GLM-5.1-TEE": { cr: 0.49, cw: 0.98, i: 0.98, o: 3.08 }, "zai-org/GLM-5.2": { cr: 0.3, cw: 1.4, i: 1.4, o: 4.4 }, "zai-org/GLM-5.2-FP8": { cr: 0.182, cw: 0.979, i: 0.979, o: 3.08 }, "zai-org/GLM-5.2-TEE": { cr: 0.7, cw: 1.4, i: 1.4, o: 4.4 }, "zai-org/GLM-5V-Turbo": { cr: 0.12, cw: 0, i: 1.2, o: 4 }, "zai-org/autoglm-phone-9b-multilingual": { cr: 0.0035000000000000005, cw: 0.035, i: 0.035, o: 0.138 }, "zai-org/glm-4.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.2 }, "zai-org/glm-4.5-air": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.85 }, "zai-org/glm-4.5v": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.8 }, "zai-org/glm-4.6": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.2 }, "zai-org/glm-4.6-original": { cr: 0.034999999999999996, cw: 0.35, i: 0.35, o: 1.4 }, "zai-org/glm-4.6v": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.9 }, "zai-org/glm-4.6v-flash-original": { cr: 0.010000000000000002, cw: 0.1, i: 0.1, o: 0.4 }, "zai-org/glm-4.6v-original": { cr: 0.06, cw: 0.6, i: 0.6, o: 0.9 }, "zai-org/glm-4.7": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.2 }, "zai-org/glm-4.7-flash": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.4 }, "zai-org/glm-4.7-flash-original": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.4 }, "zai-org/glm-4.7-flash-original:thinking": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.4 }, "zai-org/glm-4.7-flash:thinking": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.4 }, "zai-org/glm-4.7-maas": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.2 }, "zai-org/glm-4.7-original": { cr: 0.11, cw: 0.6, i: 0.6, o: 2.2 }, "zai-org/glm-4.7-original:thinking": { cr: 0.11, cw: 0.6, i: 0.6, o: 2.2 }, "zai-org/glm-4.7:thinking": { cr: 0.020000000000000004, cw: 0.2, i: 0.2, o: 0.8 }, "zai-org/glm-5": { cr: 0.1, cw: 1, i: 1, o: 3.2 }, "zai-org/glm-5-maas": { cr: 0.1, cw: 1, i: 1, o: 3.2 }, "zai-org/glm-5-original": { cr: 0.2, cw: 1, i: 1, o: 3.2 }, "zai-org/glm-5-original:thinking": { cr: 0.2, cw: 1, i: 1, o: 3.2 }, "zai-org/glm-5.1": { cr: 0.133, cw: 0.615, i: 0.615, o: 2.46 }, "zai-org/glm-5.1:thinking": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.55 }, "zai-org/glm-5.2": { cr: 0.27, cw: 0.9, i: 0.9, o: 3 }, "zai-org/glm-5:thinking": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.55 }, "zai-org/glm-latest": { cr: 0.15, cw: 0.75, i: 0.75, o: 2.6 }, "zai.glm-4.7": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.2 }, "zai.glm-4.7-flash": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.4 }, "zai.glm-5": { cr: 0.1, cw: 1, i: 1, o: 3.2 }, "zai/glm-4.5": { cr: 0.11, cw: 0, i: 0.6, o: 2.2 }, "zai/glm-4.5-air": { cr: 0.03, cw: 0, i: 0.2, o: 1.1 }, "zai/glm-4.5v": { cr: 0.11, cw: 0.6, i: 0.6, o: 1.8 }, "zai/glm-4.6": { cr: 0.11, cw: 0, i: 0.6, o: 2.2 }, "zai/glm-4.6v": { cr: 0.05, cw: 0.3, i: 0.3, o: 0.9 }, "zai/glm-4.7": { cr: 0.11, cw: 0, i: 0.6, o: 2.2 }, "zai/glm-4.7-flash": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.4 }, "zai/glm-4.7-flashx": { cr: 0.01, cw: 0, i: 0.07, o: 0.4 }, "zai/glm-5": { cr: 0.2, cw: 0, i: 1, o: 3.2 }, "zai/glm-5-turbo": { cr: 0.24, cw: 0, i: 1.2, o: 4 }, "zai/glm-5.1": { cr: 0.26, cw: 0, i: 1.4, o: 4.4 }, "zai/glm-5.2": { cr: 0.13999999999999999, cw: 1.4, i: 1.4, o: 4.4 }, "zai/glm-5.2-fast": { cr: 0.5, cw: 3, i: 3, o: 10.25 }, "zai/glm-5v-turbo": { cr: 0.24, cw: 1.2, i: 1.2, o: 4 }, "~anthropic/claude-fable-latest": { cr: 1, cw: 12.5, i: 10, o: 50 }, "~anthropic/claude-haiku-latest": { cr: 0.1, cw: 1.25, i: 1, o: 5 }, "~anthropic/claude-opus-latest": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "~anthropic/claude-sonnet-latest": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "~google/gemini-flash-latest": { cr: 0.05, cw: 0.08333333333333334, i: 0.5, o: 3 }, "~google/gemini-pro-latest": { cr: 0.2, cw: 0.375, i: 2, o: 12 }, "~moonshotai/kimi-latest": { cr: 0.14, cw: 0.74, i: 0.74, o: 3.49 }, "~openai/gpt-latest": { cr: 0.5, cw: 5, i: 5, o: 30 }, "~openai/gpt-mini-latest": { cr: 0.075, cw: 0.75, i: 0.75, o: 4.5 } },
+  retrieved_at: "2026-07-02T12:43:06Z"
+};
+// Packages/Box/src/agents/usage/pricing/pricing_supplement.json
+var pricing_supplement_default = {
+  $comment: "OpenUsage pricing supplement. Prices Cursor-native models that no public catalog carries, supplies fast-variant multipliers the catalogs omit, and maps provider log/CSV model slugs to canonical pricing keys (LiteLLM keys, models.dev ids, or entries in this file). Cursor Router rows name the routed model in prose instead of a slug ('Opus 5 (Auto Balanced)'), so those labels get alias rules too. Published to gh-pages by .github/workflows/pricing-supplement.yml on every change, so installed apps pick edits up within about an hour - no release needed. Rates are USD per million tokens. Sources: https://cursor.com/docs/models-and-pricing.md for Cursor-native entries; https://platform.claude.com/docs/en/about-claude/pricing for Claude Fable 5.1; https://developers.openai.com/api/docs/models/daybreak-blue-latest and https://developers.openai.com/api/docs/pricing for Daybreak aliases and rates; https://docs.z.ai/guides/overview/pricing for GLM 5.3.",
+  updated_at: "2026-10-16T23:28:55Z",
+  pricing: {
+    auto: {
+      input_per_million: 1.25,
+      cache_write_per_million: 1.25,
+      cache_read_per_million: 0.25,
+      output_per_million: 6
+    },
+    "composer-1": {
+      input_per_million: 1.25,
+      cache_write_per_million: 1.25,
+      cache_read_per_million: 0.125,
+      output_per_million: 10
+    },
+    "composer-1.5": {
+      input_per_million: 3.5,
+      cache_write_per_million: 3.5,
+      cache_read_per_million: 0.35,
+      output_per_million: 17.5
+    },
+    "composer-2": {
+      input_per_million: 0.5,
+      cache_write_per_million: 0.5,
+      cache_read_per_million: 0.2,
+      output_per_million: 2.5
+    },
+    "composer-2-fast": {
+      input_per_million: 1.5,
+      cache_write_per_million: 1.5,
+      cache_read_per_million: 0.35,
+      output_per_million: 7.5
+    },
+    "composer-2.5": {
+      input_per_million: 0.5,
+      cache_write_per_million: 0.5,
+      cache_read_per_million: 0.2,
+      output_per_million: 2.5
+    },
+    "composer-2.5-fast": {
+      input_per_million: 3,
+      cache_write_per_million: 3,
+      cache_read_per_million: 0.5,
+      output_per_million: 15
+    },
+    github_bugbot: {
+      input_per_million: 5,
+      cache_write_per_million: 5,
+      cache_read_per_million: 0.5,
+      output_per_million: 30
+    },
+    "glm-5.3": {
+      $comment: "Z.ai's official GLM 5.3 API rates. Cache storage has no separate charge, so cache writes bill at the input rate. Neither bundled public catalog carries the model yet.",
+      input_per_million: 1.4,
+      cache_write_per_million: 1.4,
+      cache_read_per_million: 0.26,
+      output_per_million: 4.4
+    },
+    "grok-4.5": {
+      $comment: "Cursor + SpaceXAI first-party model. Cache write not published separately; defaults to input.",
+      input_per_million: 2,
+      cache_write_per_million: 2,
+      cache_read_per_million: 0.5,
+      output_per_million: 6
+    },
+    "grok-4.5-fast": {
+      input_per_million: 4,
+      cache_write_per_million: 4,
+      cache_read_per_million: 1,
+      output_per_million: 12
+    },
+    "grok-4.6": {
+      $comment: "Cursor + SpaceXAI first-party model. Cache write not published separately; defaults to input. Cursor lists a 50% launch discount for one week starting 2026-08-12; rates below are the numbers on the pricing table as of 2026-08-13.",
+      input_per_million: 2,
+      cache_write_per_million: 2,
+      cache_read_per_million: 0.5,
+      output_per_million: 6
+    },
+    "grok-4.6-fast": {
+      input_per_million: 4,
+      cache_write_per_million: 4,
+      cache_read_per_million: 1,
+      output_per_million: 12
+    },
+    "grok-4.7": {
+      $comment: "Cursor + SpaceXAI first-party model. Cache write not published separately; defaults to input. Source: https://cursor.com/docs/models-and-pricing.md",
+      input_per_million: 2,
+      cache_write_per_million: 2,
+      cache_read_per_million: 0.5,
+      output_per_million: 6
+    },
+    "grok-4.7-fast": {
+      input_per_million: 4,
+      cache_write_per_million: 4,
+      cache_read_per_million: 1,
+      output_per_million: 12
+    },
+    "grok-4.7-500k": {
+      $comment: "Cursor's Grok 4.7 long-context tier (>256k input, up to 500k). Whole-request 2x standard rates per https://cursor.com/docs/models-and-pricing.md.",
+      input_per_million: 4,
+      cache_write_per_million: 4,
+      cache_read_per_million: 1,
+      output_per_million: 12
+    },
+    "grok-4.7-500k-fast": {
+      $comment: "Cursor's Grok 4.7 Fast long-context tier: 3x standard rates.",
+      input_per_million: 6,
+      cache_write_per_million: 6,
+      cache_read_per_million: 1.5,
+      output_per_million: 18
+    },
+    "kimi-k2.7-code": {
+      $comment: "Cursor's published Kimi K2.7 Code rates. Public catalogs disagree (some bare keys are $0), so this override wins.",
+      input_per_million: 0.95,
+      cache_write_per_million: 0.95,
+      cache_read_per_million: 0.19,
+      output_per_million: 4
+    },
+    "kimi-k3": {
+      $comment: "Cursor's published Kimi K3 rates (Moonshot). Cursor lists no separate cache-write fee, so cache writes bill at the input rate, same as the Kimi K2.7 Code entry. Neither LiteLLM nor models.dev carries the model.",
+      input_per_million: 3,
+      cache_write_per_million: 3,
+      cache_read_per_million: 0.3,
+      output_per_million: 15
+    },
+    "muse-spark-1.3": {
+      $comment: "Cursor's published Muse Spark 1.3 rates, also confirmed by live LiteLLM and models.dev. Bundled catalogs do not carry it yet. All effort levels share these rates, with no long-context surcharge. There is no separate cache-write charge, so cache writes bill at the input rate. Contributor variants have separate pricing and must not alias here.",
+      input_per_million: 1.25,
+      cache_write_per_million: 1.25,
+      cache_read_per_million: 0.15,
+      output_per_million: 4.25
+    },
+    "claude-opus-4-7-fast": {
+      $comment: "Cursor bills Opus 4.7 fast mode at these rates; the models.dev entry carries higher (stale) numbers, so this override wins.",
+      input_per_million: 30,
+      cache_write_per_million: 37.5,
+      cache_read_per_million: 3,
+      output_per_million: 150
+    },
+    "claude-opus-4-8-fast": {
+      $comment: "Cursor states Opus 4.8 fast mode is 3x lower per-token than Opus 4.7 fast mode (= 2x the Opus 4.8 base rate, matching LiteLLM's fast multiplier); the models.dev entry disagrees, so this override wins.",
+      input_per_million: 10,
+      cache_write_per_million: 12.5,
+      cache_read_per_million: 1,
+      output_per_million: 50
+    },
+    "claude-fable-5.1": {
+      $comment: "Claude Fable 5.1 launch pricing per platform.claude.com and Cursor's Other Models table. Same $10/$50 input/output as Fable 5; cache reads are $0.25/M (0.025x, 75% below Fable 5). Cache write is the standard 1.25x 5m rate. Neither bundled public catalog carries the model yet.",
+      input_per_million: 10,
+      cache_write_per_million: 12.5,
+      cache_read_per_million: 0.25,
+      output_per_million: 50
+    },
+    "claude-opus-5": {
+      $comment: "Claude Opus 5 launch pricing per anthropic.com/news/claude-opus-5: $5 input / $25 output per million, plus the standard Anthropic cache multipliers (1.25x 5m cache write, 0.1x cache read). LiteLLM, models.dev, and Cursor have not listed the model yet, so it would otherwise show as an unpriced model.",
+      input_per_million: 5,
+      cache_write_per_million: 6.25,
+      cache_read_per_million: 0.5,
+      output_per_million: 25
+    },
+    "claude-opus-5-fast": {
+      $comment: "Opus 5 fast mode: the launch announcement prices it at twice the Opus 5 base rate, matching the fast multiplier already used for Opus 4.8.",
+      input_per_million: 10,
+      cache_write_per_million: 12.5,
+      cache_read_per_million: 1,
+      output_per_million: 50
+    },
+    "claude-opus-5-5": {
+      $comment: "Claude Opus 5.5 rates from https://platform.claude.com/docs/en/about-claude/pricing. Cache read is 0.05x input; the 5-minute cache write is 1.25x input. The full 1M context uses these rates.",
+      input_per_million: 4,
+      cache_write_per_million: 5,
+      cache_read_per_million: 0.2,
+      output_per_million: 20
+    },
+    "claude-opus-5-5-fast": {
+      $comment: "Claude Opus 5.5 Fast mode is 2x the standard rate, including cache writes and reads.",
+      input_per_million: 8,
+      cache_write_per_million: 10,
+      cache_read_per_million: 0.4,
+      output_per_million: 40
+    },
+    "claude-sonnet-5-5": {
+      $comment: "Claude Sonnet 5.5 rates from https://www.anthropic.com/claude-sonnet-5-5: same per-token prices as Sonnet 5 ($2 input, $10 output, $2.50 5-minute cache write, $0.20 cache read). Public catalogs had not added it at launch.",
+      input_per_million: 2,
+      cache_write_per_million: 2.5,
+      cache_read_per_million: 0.2,
+      output_per_million: 10
+    },
+    "claude-4-sonnet-1m": {
+      $comment: "Cursor's long-context Sonnet 4 tier: the whole request bills at the >200k rate.",
+      input_per_million: 6,
+      cache_write_per_million: 7.5,
+      cache_read_per_million: 0.6,
+      output_per_million: 22.5
+    },
+    "gpt-5.6-sol": {
+      $comment: "OpenAI GPT-5.6 Sol promotional rates from https://developers.openai.com/api/docs/pricing, available at least through November 21, 2026.",
+      input_per_million: 4,
+      cache_write_per_million: 5,
+      cache_read_per_million: 0.4,
+      output_per_million: 20
+    },
+    "gpt-6-astra": {
+      $comment: "OpenAI GPT-6 Astra official rates (developers.openai.com/api/docs/models/gpt-6-astra). Cache write is 1.25x input; cache read is 0.1x. Fast mode is 2x. Public catalogs have not added it yet.",
+      input_per_million: 10,
+      cache_write_per_million: 12.5,
+      cache_read_per_million: 1,
+      output_per_million: 50
+    },
+    "gpt-6.1-sol": {
+      $comment: "OpenAI GPT-6.1 Sol official rates from https://developers.openai.com/api/docs/pricing. Cache write is 1.25x input; cache read is 0.05x. Public catalogs have not added it yet.",
+      input_per_million: 2,
+      cache_write_per_million: 2.5,
+      cache_read_per_million: 0.1,
+      output_per_million: 10
+    },
+    "gpt-6-sol": {
+      $comment: "OpenAI GPT-6 Sol official rates from https://developers.openai.com/api/docs/pricing. Cache write is 1.25x input; cache read is 0.1x. Public catalogs have not added it yet.",
+      input_per_million: 2,
+      cache_write_per_million: 2.5,
+      cache_read_per_million: 0.2,
+      output_per_million: 10
+    },
+    "gpt-6-luna": {
+      $comment: "OpenAI GPT-6 Luna official rates from https://developers.openai.com/api/docs/pricing. Cache write is 1.25x input; cache read is 0.1x. Public catalogs have not added it yet.",
+      input_per_million: 0.1,
+      cache_write_per_million: 0.125,
+      cache_read_per_million: 0.01,
+      output_per_million: 0.5
+    },
+    "gpt-5.6-terra": {
+      input_per_million: 2,
+      cache_write_per_million: 2.5,
+      cache_read_per_million: 0.2,
+      output_per_million: 12
+    },
+    "gpt-5.6-luna": {
+      input_per_million: 0.2,
+      cache_write_per_million: 0.25,
+      cache_read_per_million: 0.02,
+      output_per_million: 1.2
+    },
+    "gemini-3.6-flash": {
+      $comment: "Google Gemini 3.6 Flash. Bundled LiteLLM/models.dev snapshots do not carry it yet; Cursor and LiteLLM agree on these API rates. Cache write is unpublished, so it defaults to input.",
+      input_per_million: 1.5,
+      cache_write_per_million: 1.5,
+      cache_read_per_million: 0.15,
+      output_per_million: 7.5
+    },
+    "gemini-3.7-flash": {
+      $comment: "Google Gemini 3.7 Flash introductory API rate. Cursor's table lists output at $3.50; Google and LiteLLM publish $3.75, which is the API rate Cursor bills. Cache write is unpublished, so it defaults to input.",
+      input_per_million: 0.75,
+      cache_write_per_million: 0.75,
+      cache_read_per_million: 0.075,
+      output_per_million: 3.75
+    },
+    "gemini-3.8-flash": {
+      $comment: "Google Gemini 3.8 Flash introductory API rates through 2026-12-31 (https://ai.google.dev/gemini-api/docs/pricing), also listed by models.dev. Cursor's table lists output at $3.50; use Google's $3.75 API rate, consistent with Gemini 3.7. Bundled catalogs do not carry this model yet. Cache write is unpublished, so it defaults to input.",
+      input_per_million: 0.75,
+      cache_write_per_million: 0.75,
+      cache_read_per_million: 0.075,
+      output_per_million: 3.75
+    },
+    "gemini-4-argon": {
+      $comment: "Google Gemini 4 Argon introductory API rates through 2026-11-30 (https://ai.google.dev/gemini-api/docs/pricing), also listed by Cursor. From 2026-12-01 Google lists $4 input / $20 output / $0.20 cache read; update this entry when those rates take effect. Bundled catalogs do not carry Argon yet. Only implicit caching is supported; cache write uses the existing input-rate default.",
+      input_per_million: 2,
+      cache_write_per_million: 2,
+      cache_read_per_million: 0.1,
+      output_per_million: 10
+    }
+  },
+  fast_multipliers: {
+    "claude-opus-5": 2,
+    "claude-opus-5-5": 2,
+    "gpt-5": 2,
+    "gpt-5.1-codex": 2,
+    "gpt-5.1-codex-max": 2,
+    "gpt-5.2": 2,
+    "gpt-5.2-codex": 2,
+    "gpt-5.3-codex": 2,
+    "gpt-5.4": 2,
+    "gpt-5.5": 2.5,
+    "gpt-5.6-sol": 2,
+    "gpt-6-astra": 2,
+    "gpt-6.1-sol": 2,
+    "gpt-6-sol": 2,
+    "gpt-6-luna": 2,
+    "gpt-5.6-terra": 2,
+    "gpt-5.6-luna": 2
+  },
+  alias_rules: [
+    { pattern: "^agent_review$", canonical: "gpt-5.4" },
+    { pattern: "^default$", canonical: "auto" },
+    { pattern: "^auto$", canonical: "auto" },
+    { pattern: "^composer$", canonical: "composer-2.5" },
+    { pattern: "^composer-1$", canonical: "composer-1" },
+    { pattern: "^composer-1\\.5$", canonical: "composer-1.5" },
+    { pattern: "^composer-2$", canonical: "composer-2" },
+    { pattern: "^composer-2-fast$", canonical: "composer-2-fast" },
+    { pattern: "^composer-2\\.5$", canonical: "composer-2.5" },
+    { pattern: "^composer-2\\.5-fast$", canonical: "composer-2.5-fast" },
+    { pattern: "^github_bugbot$", canonical: "github_bugbot" },
+    { pattern: "^(?:cursor-)?grok-4[.-]7(?:-500k|\\[500k\\])-fast(?:-(?:low|medium|high|xhigh))?$", canonical: "grok-4.7-500k-fast" },
+    { pattern: "^(?:cursor-)?grok-4[.-]7(?:-500k|\\[500k\\])(?:-(?:low|medium|high|xhigh))?-fast$", canonical: "grok-4.7-500k-fast" },
+    { pattern: "^(?:cursor-)?grok-4[.-]7(?:-500k|\\[500k\\])(?:-(?:build|low|medium|high|xhigh))?$", canonical: "grok-4.7-500k" },
+    { pattern: "^(?:cursor-)?grok-4[.-]7-fast(?:-slow)?(?:-(?:low|medium|high|xhigh))?$", canonical: "grok-4.7-fast" },
+    { pattern: "^(?:cursor-)?grok-4[.-]7(?:-slow)?(?:-(?:low|medium|high|xhigh))?-fast$", canonical: "grok-4.7-fast" },
+    { pattern: "^(?:cursor-)?grok-4[.-]7(?:-slow)?(?:-(?:build|low|medium|high|xhigh))?$", canonical: "grok-4.7" },
+    { pattern: "^(?:cursor-)?grok-4[.-]6-fast(?:-(?:low|medium|high|xhigh))?$", canonical: "grok-4.6-fast" },
+    { pattern: "^(?:cursor-)?grok-4[.-]6(?:-(?:low|medium|high|xhigh))?-fast$", canonical: "grok-4.6-fast" },
+    { pattern: "^(?:cursor-)?grok-4[.-]6(?:-(?:build|low|medium|high|xhigh))?$", canonical: "grok-4.6" },
+    { $comment: "Cursor event list prices reported in #1229 track Grok 4.6 Fast for default and base for automation. grok-bot-cua uses Grok 4.7 base at the maintainer's direction.", pattern: "^grok-bot-default$", canonical: "grok-4.6-fast" },
+    { pattern: "^grok-bot-automation$", canonical: "grok-4.6" },
+    { pattern: "^grok-bot-cua$", canonical: "grok-4.7" },
+    { pattern: "^(?:cursor-)?grok-4[.-]5-fast(?:-(?:low|medium|high|xhigh))?$", canonical: "grok-4.5-fast" },
+    { pattern: "^(?:cursor-)?grok-4[.-]5(?:-(?:low|medium|high|xhigh))?-fast$", canonical: "grok-4.5-fast" },
+    { pattern: "^(?:cursor-)?grok-4[.-]5(?:-(?:build|low|medium|high|xhigh))?$", canonical: "grok-4.5" },
+    { pattern: "^kimi-k2\\.7(?:-code)?$", canonical: "kimi-k2.7-code" },
+    { pattern: "^kimi-k2p7(?:-code)?$", canonical: "kimi-k2.7-code" },
+    { pattern: "^kimi-k3(?:-code)?(?:-(?:low|medium|high|xhigh|max))?$", canonical: "kimi-k3" },
+    { pattern: "^muse-spark-1\\.3(?:-(?:minimal|low|medium|high|xhigh|extra-high|max))?$", canonical: "muse-spark-1.3" },
+    { pattern: "^claude-4\\.5-haiku(?:-thinking)?$", canonical: "claude-haiku-4-5" },
+    { pattern: "^claude-4\\.5-opus-(?:low|medium|high)(?:-thinking)?$", canonical: "claude-opus-4-5" },
+    { pattern: "^claude-4-sonnet-1m(?:-thinking)?$", canonical: "claude-4-sonnet-1m" },
+    { pattern: "^claude-4-sonnet(?:-thinking)?$", canonical: "claude-sonnet-4-20250514" },
+    { pattern: "^claude-4\\.5-sonnet(?:-thinking)?$", canonical: "claude-sonnet-4-5" },
+    { pattern: "^claude-4\\.6-sonnet(?:-(?:low|medium|high|xhigh|max))?(?:-thinking)?$", canonical: "claude-sonnet-4-6" },
+    { pattern: "^claude-4\\.6-opus-(?:low|medium|high|max)(?:-thinking)?-fast$", canonical: "claude-opus-4-6-fast" },
+    { pattern: "^claude-4\\.6-opus-(?:low|medium|high|max)(?:-thinking)?$", canonical: "claude-opus-4-6" },
+    { pattern: "^claude-4\\.7-opus-(?:low|medium|high|max)(?:-thinking)?-fast$", canonical: "claude-opus-4-7-fast" },
+    { pattern: "^claude-4\\.7-opus-(?:low|medium|high|max)(?:-thinking)?$", canonical: "claude-opus-4-7" },
+    { pattern: "^claude-opus-4-7(?:-thinking)?(?:-(?:low|medium|high|xhigh|max))?-fast$", canonical: "claude-opus-4-7-fast" },
+    { pattern: "^claude-opus-4-7(?:-thinking)?(?:-(?:low|medium|high|xhigh|max))?$", canonical: "claude-opus-4-7" },
+    { pattern: "^claude-opus-4-8(?:-thinking)?(?:-(?:low|medium|high|xhigh|max))?-fast$", canonical: "claude-opus-4-8-fast" },
+    { pattern: "^claude-opus-4-8(?:-thinking)?(?:-(?:low|medium|high|xhigh|max))?$", canonical: "claude-opus-4-8" },
+    { pattern: "^claude-opus-4-6(?:-thinking)?(?:-(?:low|medium|high|xhigh|max))?$", canonical: "claude-opus-4-6" },
+    { pattern: "^claude-sonnet-4-6(?:-thinking)?(?:-(?:low|medium|high|xhigh|max))?$", canonical: "claude-sonnet-4-6" },
+    { pattern: "^claude-opus-5(?:\\[1m\\])?(?:-thinking)?(?:-(?:low|medium|high|xhigh|max))?-fast$", canonical: "claude-opus-5-fast" },
+    { pattern: "^claude-opus-5(?:\\[1m\\])?(?:-thinking)?(?:-(?:low|medium|high|xhigh|max))?$", canonical: "claude-opus-5" },
+    { pattern: "^claude-opus-5[.-]5(?:\\[1m\\])?(?:-thinking)?(?:-(?:low|medium|high|xhigh|max))?-fast$", canonical: "claude-opus-5-5-fast" },
+    { pattern: "^claude-opus-5[.-]5(?:\\[1m\\])?(?:-thinking)?(?:-(?:low|medium|high|xhigh|max))?$", canonical: "claude-opus-5-5" },
+    { pattern: "^claude-5[.-]5-opus(?:-(?:low|medium|high|xhigh|max))?(?:-thinking)?-fast$", canonical: "claude-opus-5-5-fast" },
+    { pattern: "^claude-5[.-]5-opus(?:-(?:low|medium|high|xhigh|max))?(?:-thinking)?$", canonical: "claude-opus-5-5" },
+    { pattern: "^claude-fable-5[.-]1(?:\\[1m\\])?(?:-thinking)?(?:-(?:low|medium|high|xhigh|max))?$", canonical: "claude-fable-5.1" },
+    { pattern: "^claude-fable-5(?:-thinking)?(?:-(?:low|medium|high|xhigh|max))?$", canonical: "claude-fable-5" },
+    { pattern: "^claude-sonnet-5[.-]5(?:\\[1m\\])?(?:-thinking)?(?:-(?:low|medium|high|xhigh|max))?$", canonical: "claude-sonnet-5-5" },
+    { pattern: "^claude-sonnet-5(?:-thinking)?(?:-(?:low|medium|high|xhigh|max))?$", canonical: "claude-sonnet-5" },
+    { pattern: "^gemini-2\\.5-flash(?:-(?:none|n|low|medium|high|xhigh))?$", canonical: "gemini-2.5-flash" },
+    { pattern: "^gemini-3-flash(?:-(?:a|b|c))?(?:-preview)?(?:-(?:none|n|low|medium|high|xhigh))?(?:-preview)?$", canonical: "gemini-3-flash-preview" },
+    { pattern: "^gemini-3\\.5-flash(?:-exp-[a-z])?(?:-preview)?(?:-(?:none|n|low|medium|high|xhigh))?(?:-preview)?$", canonical: "gemini-3.5-flash" },
+    { pattern: "^gemini-3\\.6-flash(?:-exp-[a-z])?(?:-preview)?(?:-(?:none|n|low|medium|high|xhigh))?(?:-preview)?$", canonical: "gemini-3.6-flash" },
+    { pattern: "^gemini-3\\.7-flash(?:-exp-[a-z])?(?:-preview)?(?:-(?:none|n|low|medium|high|xhigh))?(?:-preview)?$", canonical: "gemini-3.7-flash" },
+    { pattern: "^gemini-3\\.8-flash(?:-exp-[a-z])?(?:-preview)?(?:-(?:none|n|low|medium|high|xhigh))?(?:-preview)?$", canonical: "gemini-3.8-flash" },
+    { pattern: "^gemini-4-argon(?:-(?:trial|preview))?(?:-(?:none|n|low|medium|high|xhigh))?(?:-(?:trial|preview))?$", canonical: "gemini-4-argon" },
+    { pattern: "^gemini-3-pro(?=-)(?:-preview)?(?:-(?:none|n|low|medium|high|xhigh))?(?:-preview)?$", canonical: "gemini-3-pro-preview" },
+    { pattern: "^gemini-3\\.1-pro(?:-preview)?(?:-(?:none|n|low|medium|high|xhigh))?(?:-preview)?$", canonical: "gemini-3.1-pro-preview" },
+    { $comment: "Antigravity internal IDs for Gemini 3.1 Pro: gemini-pro-agent is the High-effort wire ID (pi-antigravity routing table, OmniRoute#3696) and gemini-pro-default is the CLI's label when the picker is on its default, which resolves to Gemini 3.1 Pro (High) via the display label; the slug alone covers records without one. gemini-default is deliberately unaliased: its label has pointed at 3.5 Flash and 3.6 Flash over time.", pattern: "^gemini-pro-(?:default|agent)$", canonical: "gemini-3.1-pro-preview" },
+    { pattern: "^gpt-5(?:-(?:low|high))?-fast$", canonical: "gpt-5-fast" },
+    { pattern: "^gpt-5(?:-(?:low|high))?$", canonical: "gpt-5" },
+    { pattern: "^gpt-5\\.1(?:-(?:low|high))?-fast$", canonical: "gpt-5-fast" },
+    { pattern: "^gpt-5\\.1(?:-(?:low|high))?$", canonical: "gpt-5" },
+    { pattern: "^gpt-5-mini$", canonical: "gpt-5-mini" },
+    { pattern: "^grok-4-20(?:-thinking)?$", canonical: "xai/grok-4.20-0309-reasoning" },
+    { pattern: "^grok-4\\.3(?:-thinking)?$", canonical: "xai/grok-4.3" },
+    { pattern: "^grok-build-0\\.1$", canonical: "grok-build-0.1" },
+    { pattern: "^grok-code-fast-1$", canonical: "grok-build-0.1" },
+    { pattern: "^grok-build$", canonical: "grok-build-0.1" },
+    { pattern: "^grok-proxy$", canonical: "grok-build-0.1" },
+    { pattern: "^grok-composer-2\\.5-fast$", canonical: "composer-2.5-fast" },
+    { pattern: "^gpt-5\\.1-codex-max(?:-(?:low|medium|high|xhigh))?-fast$", canonical: "gpt-5.1-codex-max-fast" },
+    { pattern: "^gpt-5\\.1-codex-max(?:-(?:low|medium|high|xhigh))?$", canonical: "gpt-5.1-codex-max" },
+    { pattern: "^gpt-5\\.1-codex-mini(?:-(?:low|medium|high|xhigh))?$", canonical: "gpt-5.1-codex-mini" },
+    { pattern: "^gpt-5\\.1-codex(?:-(?:low|medium|high|xhigh))?-fast$", canonical: "gpt-5.1-codex-fast" },
+    { pattern: "^gpt-5\\.1-codex(?:-(?:low|medium|high|xhigh))?$", canonical: "gpt-5.1-codex" },
+    { pattern: "^gpt-5\\.2-codex(?:-(?:low|high|xhigh))?-fast$", canonical: "gpt-5.2-codex-fast" },
+    { pattern: "^gpt-5\\.2-codex(?:-(?:low|high|xhigh))?$", canonical: "gpt-5.2-codex" },
+    { pattern: "^gpt-5\\.2(?:-(?:low|high|xhigh))?-fast$", canonical: "gpt-5.2-fast" },
+    { pattern: "^gpt-5\\.2(?:-(?:low|high|xhigh))?$", canonical: "gpt-5.2" },
+    { pattern: "^gpt-5\\.3-codex-spark-preview(?:-(?:low|high|xhigh))?$", canonical: "gpt-5.3-codex-spark" },
+    { pattern: "^gpt-5\\.3-spark$", canonical: "gpt-5.3-codex-spark" },
+    { pattern: "^gpt-5\\.3-codex(?:-(?:low|high|xhigh))?-fast$", canonical: "gpt-5.3-codex-fast" },
+    { pattern: "^gpt-5\\.3-codex(?:-(?:low|high|xhigh))?$", canonical: "gpt-5.3-codex" },
+    { pattern: "^gpt-5\\.4-mini(?:-(?:none|low|medium|high|xhigh))?$", canonical: "gpt-5.4-mini" },
+    { pattern: "^gpt-5\\.4-nano(?:-(?:none|low|medium|high|xhigh))?$", canonical: "gpt-5.4-nano" },
+    { pattern: "^gpt-5\\.4-(?:low|medium|high|xhigh)-fast$", canonical: "gpt-5.4-fast" },
+    { pattern: "^gpt-5\\.4-(?:low|medium|high|xhigh)$", canonical: "gpt-5.4" },
+    { pattern: "^gpt-5\\.5(?:-(?:low|medium|high|xhigh|extra-high))?-fast$", canonical: "gpt-5.5-fast" },
+    { pattern: "^gpt-5\\.5(?:-(?:low|medium|high|xhigh|extra-high))?$", canonical: "gpt-5.5" },
+    { pattern: "^gpt-5\\.6-sol(?:-(?:none|low|medium|high|xhigh|max|ultra))?-fast$", canonical: "gpt-5.6-sol-fast" },
+    { pattern: "^gpt-5\\.6-sol(?:-(?:none|low|medium|high|xhigh|max|ultra))?$", canonical: "gpt-5.6-sol" },
+    { pattern: "^gpt-6-astra(?:-(?:none|low|medium|high|xhigh|max|ultra))?-fast$", canonical: "gpt-6-astra-fast" },
+    { pattern: "^gpt-6-astra(?:-(?:none|low|medium|high|xhigh|max|ultra))?$", canonical: "gpt-6-astra" },
+    { pattern: "^gpt-6\\.1-sol(?:-(?:none|low|medium|high|xhigh|max|ultra))?-fast$", canonical: "gpt-6.1-sol-fast" },
+    { pattern: "^gpt-6\\.1-sol(?:-(?:none|low|medium|high|xhigh|max|ultra))?$", canonical: "gpt-6.1-sol" },
+    { pattern: "^gpt-6-sol(?:-(?:none|low|medium|high|xhigh|max|ultra))?-fast$", canonical: "gpt-6-sol-fast" },
+    { pattern: "^gpt-6-sol(?:-(?:none|low|medium|high|xhigh|max|ultra))?$", canonical: "gpt-6-sol" },
+    { pattern: "^gpt-6-luna(?:-(?:none|low|medium|high|xhigh|max|ultra))?-fast$", canonical: "gpt-6-luna-fast" },
+    { pattern: "^gpt-6-luna(?:-(?:none|low|medium|high|xhigh|max|ultra))?$", canonical: "gpt-6-luna" },
+    { pattern: "^gpt-5\\.6-terra(?:-(?:none|low|medium|high|xhigh|max))?-fast$", canonical: "gpt-5.6-terra-fast" },
+    { pattern: "^gpt-5\\.6-terra(?:-(?:none|low|medium|high|xhigh|max))?$", canonical: "gpt-5.6-terra" },
+    { pattern: "^gpt-5\\.6-luna(?:-(?:none|low|medium|high|xhigh|max))?-fast$", canonical: "gpt-5.6-luna-fast" },
+    { pattern: "^gpt-5\\.6-luna(?:-(?:none|low|medium|high|xhigh|max))?$", canonical: "gpt-5.6-luna" },
+    { pattern: "^(?:gpt-)?daybreak-blue-latest$", canonical: "gpt-5.6-sol" },
+    { pattern: "^kimi-k2\\.5$", canonical: "moonshot/kimi-k2.5" },
+    { pattern: "^kimi-k2p5$", canonical: "moonshot/kimi-k2.5" },
+    { pattern: "^glm-5\\.2(?:-(?:high|max))?$", canonical: "glm-5.2" },
+    { pattern: "(?i)^(?:(?:z-ai|zai|zhipu)/)?glm-5\\.3(?:-(?:low|high|max))?$", canonical: "glm-5.3" },
+    { pattern: "^[Pp]remium \\((?:[Gg][Pp][Tt]-5\\.3-[Cc]odex|[Cc]odex 5\\.3)\\)$", canonical: "gpt-5.3-codex" },
+    { pattern: "(?i)^Composer 2\\.5 Fast \\(Auto[^)]*\\)$", canonical: "composer-2.5-fast" },
+    { pattern: "(?i)^Composer 2\\.5 \\(Auto[^)]*\\)$", canonical: "composer-2.5" },
+    { pattern: "(?i)^Composer 2 Fast \\(Auto[^)]*\\)$", canonical: "composer-2-fast" },
+    { pattern: "(?i)^Composer 2 \\(Auto[^)]*\\)$", canonical: "composer-2" },
+    { pattern: "(?i)^(?:Cursor )?Grok 4\\.7 500k Fast \\(Auto[^)]*\\)$", canonical: "grok-4.7-500k-fast" },
+    { pattern: "(?i)^(?:Cursor )?Grok 4\\.7 500k \\(Auto[^)]*\\)$", canonical: "grok-4.7-500k" },
+    { pattern: "(?i)^(?:Cursor )?Grok 4\\.7 Fast \\(Auto[^)]*\\)$", canonical: "grok-4.7-fast" },
+    { pattern: "(?i)^(?:Cursor )?Grok 4\\.7 \\(Auto[^)]*\\)$", canonical: "grok-4.7" },
+    { pattern: "(?i)^(?:Cursor )?Grok 4\\.6 Fast \\(Auto[^)]*\\)$", canonical: "grok-4.6-fast" },
+    { pattern: "(?i)^(?:Cursor )?Grok 4\\.6 \\(Auto[^)]*\\)$", canonical: "grok-4.6" },
+    { pattern: "(?i)^(?:Cursor )?Grok 4\\.5 Fast \\(Auto[^)]*\\)$", canonical: "grok-4.5-fast" },
+    { pattern: "(?i)^(?:Cursor )?Grok 4\\.5 \\(Auto[^)]*\\)$", canonical: "grok-4.5" },
+    { pattern: "(?i)^(?:Claude )?Haiku 4\\.5 \\(Auto[^)]*\\)$", canonical: "claude-haiku-4-5" },
+    { pattern: "(?i)^(?:Claude )?Opus 4\\.6(?: \\([^)]*\\))?$", canonical: "claude-opus-4-6" },
+    { pattern: "(?i)^(?:Claude )?Sonnet 4\\.6(?: \\([^)]*\\))?$", canonical: "claude-sonnet-4-6" },
+    { pattern: "(?i)^(?:Claude )?Opus 4\\.8 \\(Auto[^)]*\\)$", canonical: "claude-opus-4-8" },
+    { pattern: "(?i)^(?:Claude )?Opus 5 \\(Auto[^)]*\\)$", canonical: "claude-opus-5" },
+    { pattern: "(?i)^(?:Claude )?Opus 5\\.5 Fast \\(Auto[^)]*\\)$", canonical: "claude-opus-5-5-fast" },
+    { pattern: "(?i)^(?:Claude )?Opus 5\\.5 \\(Auto[^)]*\\)$", canonical: "claude-opus-5-5" },
+    { pattern: "(?i)^(?:Claude )?Sonnet 5\\.5 \\(Auto[^)]*\\)$", canonical: "claude-sonnet-5-5" },
+    { pattern: "(?i)^(?:Claude )?Sonnet 5 \\(Auto[^)]*\\)$", canonical: "claude-sonnet-5" },
+    { pattern: "(?i)^(?:Claude )?Fable 5\\.1 \\(Auto[^)]*\\)$", canonical: "claude-fable-5.1" },
+    { pattern: "(?i)^(?:Claude )?Fable 5 \\(Auto[^)]*\\)$", canonical: "claude-fable-5" },
+    { pattern: "(?i)^GPT-5\\.5 \\(Auto[^)]*\\)$", canonical: "gpt-5.5" },
+    { pattern: "(?i)^GPT-5\\.6 Sol \\(Auto[^)]*\\)$", canonical: "gpt-5.6-sol" },
+    { pattern: "(?i)^GPT-6 Astra \\(Auto[^)]*\\)$", canonical: "gpt-6-astra" },
+    { pattern: "(?i)^GPT-6 Sol \\(Auto[^)]*\\)$", canonical: "gpt-6-sol" },
+    { pattern: "(?i)^GPT-6\\.1 Sol \\(Auto[^)]*\\)$", canonical: "gpt-6.1-sol" },
+    { pattern: "(?i)^GPT-6 Luna \\(Auto[^)]*\\)$", canonical: "gpt-6-luna" },
+    { pattern: "(?i)^GPT-5\\.6 Terra \\(Auto[^)]*\\)$", canonical: "gpt-5.6-terra" },
+    { pattern: "(?i)^GPT-5\\.6 Luna \\(Auto[^)]*\\)$", canonical: "gpt-5.6-luna" },
+    { pattern: "(?i)^Gemini 3\\.1 Pro(?: \\([^)]*\\))?$", canonical: "gemini-3.1-pro-preview" },
+    { pattern: "(?i)^Gemini 3\\.5 Flash(?: \\([^)]*\\))?$", canonical: "gemini-3.5-flash" },
+    { pattern: "(?i)^Gemini 3\\.6 Flash(?: \\([^)]*\\))?$", canonical: "gemini-3.6-flash" },
+    { pattern: "(?i)^Gemini 3\\.7 Flash(?: \\([^)]*\\))?$", canonical: "gemini-3.7-flash" },
+    { pattern: "(?i)^Gemini 3\\.8 Flash(?: \\([^)]*\\))?$", canonical: "gemini-3.8-flash" },
+    { pattern: "(?i)^Gemini 4 Argon(?: \\((?:None|Low|Medium|High|XHigh|Trial|Preview)\\))?$", canonical: "gemini-4-argon" },
+    { pattern: "(?i)^GLM 5\\.2 \\(Auto[^)]*\\)$", canonical: "glm-5.2" },
+    { pattern: "(?i)^GLM 5\\.3 \\(Auto[^)]*\\)$", canonical: "glm-5.3" },
+    { pattern: "(?i)^Kimi K3 \\(Auto[^)]*\\)$", canonical: "kimi-k3" }
+  ],
+  fallback_models: {
+    codex: [
+      "gpt-6-astra",
+      "gpt-6.1-sol",
+      "gpt-6-sol",
+      "gpt-6-luna",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-5.5",
+      "gpt-5.5-pro",
+      "gpt-5.4",
+      "gpt-5.4-pro",
+      "gpt-5.4-mini",
+      "gpt-5.4-nano",
+      "gpt-5.3-codex",
+      "gpt-5.3-chat-latest",
+      "gpt-5.2",
+      "gpt-5.2-pro",
+      "gpt-5.2-codex",
+      "gpt-5.2-chat-latest",
+      "gpt-5.1",
+      "gpt-5.1-codex",
+      "gpt-5.1-codex-max",
+      "gpt-5.1-codex-mini",
+      "gpt-5.1-chat-latest",
+      "gpt-5",
+      "gpt-5-pro",
+      "gpt-5-mini",
+      "gpt-5-nano",
+      "gpt-5-codex",
+      "gpt-5-chat-latest",
+      "gpt-4.1",
+      "gpt-4.1-mini",
+      "gpt-4.1-nano",
+      "gpt-4o",
+      "gpt-4o-mini",
+      "gpt-4-turbo",
+      "gpt-4",
+      "gpt-3.5-turbo",
+      "o4-mini",
+      "o3",
+      "o3-pro",
+      "o3-mini",
+      "o1",
+      "o1-pro",
+      "o1-mini",
+      "codex-mini-latest"
+    ]
+  }
+};
+
+// Packages/Box/src/agents/usage/pricing.ts
+var totalTokens = (tokens) => tokens.input + tokens.cacheWrite5m + tokens.cacheWrite1h + tokens.cacheRead + tokens.output;
+var promptTokens = (tokens) => tokens.input + tokens.cacheWrite5m + tokens.cacheWrite1h + tokens.cacheRead;
+function costDollars(rates, tokens, longContext = true) {
+  const above = longContext && promptTokens(tokens) > rates.longContextThreshold;
+  const pick = (base, tier) => above ? tier ?? base : base;
+  const input = pick(rates.input, rates.inputAbove);
+  const cost = tokens.input * input / 1e6 + tokens.output * pick(rates.output, rates.outputAbove) / 1e6 + tokens.cacheWrite5m * pick(rates.cacheWrite, rates.cacheWriteAbove) / 1e6 + tokens.cacheWrite1h * input * 2 / 1e6 + tokens.cacheRead * pick(rates.cacheRead, rates.cacheReadAbove) / 1e6;
+  return cost * (tokens.fast ? rates.fast : 1);
+}
+function scaled(rates, factor) {
+  const times = (value) => value === undefined ? undefined : value * factor;
+  return {
+    input: rates.input * factor,
+    output: rates.output * factor,
+    cacheWrite: rates.cacheWrite * factor,
+    cacheRead: rates.cacheRead * factor,
+    inputAbove: times(rates.inputAbove),
+    outputAbove: times(rates.outputAbove),
+    cacheWriteAbove: times(rates.cacheWriteAbove),
+    cacheReadAbove: times(rates.cacheReadAbove),
+    cacheReadIsExplicit: rates.cacheReadIsExplicit,
+    longContextThreshold: rates.longContextThreshold,
+    fast: 1
+  };
+}
+var rates = (input, output, cacheWrite, cacheRead, cacheReadIsExplicit, fast = 1) => ({ input, output, cacheWrite, cacheRead, cacheReadIsExplicit, longContextThreshold: 200000, fast });
+var number2 = (value) => typeof value === "number" && Number.isFinite(value) ? value : undefined;
+var isObject3 = (value) => !!value && typeof value === "object" && !Array.isArray(value);
+
+class Catalog {
+  entries;
+  constructor(entries = new Map) {
+    this.entries = entries;
+  }
+  exact(model) {
+    const found = this.entries.get(model);
+    return found ? [model, found] : undefined;
+  }
+  fuzzy(model) {
+    const normalized = normalizedKey(model);
+    let best;
+    for (const [key, value] of this.entries) {
+      if (!keyMatches(key, model, normalized))
+        continue;
+      if (!best || key.length > best[0].length || key.length === best[0].length && key < best[0])
+        best = [key, value];
+    }
+    return best;
+  }
+  merging(other) {
+    return new Catalog(new Map([...this.entries, ...other.entries]));
+  }
+}
+var normalizedKey = (value) => value.includes(".") || value.includes("@") ? value.replaceAll(".", "-").replaceAll("@", "-") : value;
+function keyMatches(candidate, model, normalizedModel) {
+  if (containsKey(model, candidate) || containsKey(candidate, model))
+    return true;
+  const normalizedCandidate = normalizedKey(candidate);
+  return containsKey(normalizedModel, normalizedCandidate) || containsKey(normalizedCandidate, normalizedModel);
+}
+var isDigit = (code) => code !== undefined && code >= 48 && code <= 57;
+var isAlphanumeric = (code) => code !== undefined && (isDigit(code) || code >= 97 && code <= 122 || code >= 65 && code <= 90);
+function containsKey(value, key) {
+  if (!key || key.length > value.length)
+    return false;
+  for (let start = value.indexOf(key);start >= 0; start = value.indexOf(key, start + 1)) {
+    if (start > 0 && isAlphanumeric(value.charCodeAt(start - 1)))
+      continue;
+    if (suffixAllows(key, value.slice(start + key.length)))
+      return true;
+  }
+  return false;
+}
+function suffixAllows(key, suffix) {
+  if (!suffix)
+    return true;
+  if (isAlphanumeric(suffix.charCodeAt(0)))
+    return false;
+  if (!isDigit(key.charCodeAt(key.length - 1)))
+    return true;
+  if (suffix[0] !== "-" && suffix[0] !== ".")
+    return true;
+  let digits = 0;
+  while (isDigit(suffix.charCodeAt(1 + digits)))
+    digits++;
+  if (digits === 0)
+    return true;
+  const after = suffix.charCodeAt(1 + digits);
+  const date = digits === 8 && (Number.isNaN(after) || !isAlphanumeric(after));
+  return date;
+}
+function catalogFromLiteLLM(root) {
+  if (!isObject3(root))
+    throw new Error("Pricing feed is not a JSON object.");
+  const entries = new Map;
+  for (const [key, entry] of Object.entries(root)) {
+    if (!isObject3(entry))
+      continue;
+    const input = number2(entry.input_cost_per_token);
+    const output = number2(entry.output_cost_per_token);
+    if (input === undefined || output === undefined)
+      continue;
+    const cacheWrite = number2(entry.cache_creation_input_token_cost);
+    const cacheRead = number2(entry.cache_read_input_token_cost);
+    const value = rates(input * 1e6, output * 1e6, (cacheWrite ?? input) * 1e6, (cacheRead ?? input * 0.1) * 1e6, cacheRead !== undefined);
+    const million = (field) => {
+      const found = number2(entry[field]);
+      return found === undefined ? undefined : found * 1e6;
+    };
+    value.inputAbove = million("input_cost_per_token_above_200k_tokens");
+    value.outputAbove = million("output_cost_per_token_above_200k_tokens");
+    value.cacheWriteAbove = million("cache_creation_input_token_cost_above_200k_tokens");
+    value.cacheReadAbove = million("cache_read_input_token_cost_above_200k_tokens");
+    const fast = isObject3(entry.provider_specific_entry) ? number2(entry.provider_specific_entry.fast) : undefined;
+    if (fast !== undefined)
+      value.fast = fast;
+    entries.set(key, value);
+  }
+  if (!entries.size)
+    throw new Error("Pricing feed contained no usable model entries.");
+  return new Catalog(entries);
+}
+function catalogFromModelsDev(root) {
+  if (!isObject3(root))
+    throw new Error("Pricing feed is not a JSON object.");
+  const entries = new Map;
+  for (const name of Object.keys(root).sort()) {
+    const models = isObject3(root[name]) ? root[name].models : undefined;
+    if (!isObject3(models))
+      continue;
+    for (const [id, model] of Object.entries(models)) {
+      if (entries.has(id) || !isObject3(model) || !isObject3(model.cost))
+        continue;
+      const input = number2(model.cost.input);
+      const output = number2(model.cost.output);
+      if (input === undefined || output === undefined)
+        continue;
+      entries.set(id, rates(input, output, number2(model.cost.cache_write) ?? input, number2(model.cost.cache_read) ?? input * 0.1, "cache_read" in model.cost));
+    }
+  }
+  if (!entries.size)
+    throw new Error("Pricing feed contained no usable model entries.");
+  return new Catalog(entries);
+}
+function catalogFromCompact(root) {
+  if (!isObject3(root) || !isObject3(root.models))
+    throw new Error("Pricing catalog is not compact JSON.");
+  const entries = new Map;
+  for (const [key, model] of Object.entries(root.models)) {
+    if (!isObject3(model))
+      continue;
+    const [i, o, cw, cr] = [number2(model.i), number2(model.o), number2(model.cw), number2(model.cr)];
+    if (i === undefined || o === undefined || cw === undefined || cr === undefined)
+      continue;
+    const value = rates(i, o, cw, cr, model.cre !== false, number2(model.fast) ?? 1);
+    value.inputAbove = number2(model.ia);
+    value.outputAbove = number2(model.oa);
+    value.cacheWriteAbove = number2(model.cwa);
+    value.cacheReadAbove = number2(model.cra);
+    entries.set(key, value);
+  }
+  return new Catalog(entries);
+}
+function compactOf(catalog) {
+  const models = {};
+  for (const [key, value] of [...catalog.entries].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
+    models[key] = {
+      i: value.input,
+      o: value.output,
+      cw: value.cacheWrite,
+      cr: value.cacheRead,
+      ...value.inputAbove !== undefined ? { ia: value.inputAbove } : {},
+      ...value.outputAbove !== undefined ? { oa: value.outputAbove } : {},
+      ...value.cacheWriteAbove !== undefined ? { cwa: value.cacheWriteAbove } : {},
+      ...value.cacheReadAbove !== undefined ? { cra: value.cacheReadAbove } : {},
+      ...value.cacheReadIsExplicit ? {} : { cre: false },
+      ...value.fast !== 1 ? { fast: value.fast } : {}
+    };
+  }
+  return JSON.stringify({ models });
+}
+function supplementFrom(root) {
+  if (!isObject3(root) || !isObject3(root.pricing) || !Array.isArray(root.alias_rules))
+    throw new Error("The pricing supplement isn't one.");
+  const fastMultipliers = new Map;
+  if (isObject3(root.fast_multipliers)) {
+    for (const [model, value] of Object.entries(root.fast_multipliers))
+      if (number2(value) !== undefined)
+        fastMultipliers.set(model, value);
+  }
+  const pricing = new Map;
+  for (const [model, entry] of Object.entries(root.pricing)) {
+    if (!isObject3(entry))
+      throw new Error("The pricing supplement isn't one.");
+    const input = number2(entry.input_per_million);
+    const output = number2(entry.output_per_million);
+    if (input === undefined || output === undefined)
+      throw new Error("The pricing supplement isn't one.");
+    const cacheRead = number2(entry.cache_read_per_million);
+    pricing.set(model, rates(input, output, number2(entry.cache_write_per_million) ?? input, cacheRead ?? input * 0.1, cacheRead !== undefined, fastMultipliers.get(model) ?? 1));
+  }
+  const aliases = [];
+  for (const rule of root.alias_rules) {
+    if (!isObject3(rule) || typeof rule.pattern !== "string" || typeof rule.canonical !== "string")
+      throw new Error("The pricing supplement isn't one.");
+    const insensitive = rule.pattern.startsWith("(?i)");
+    try {
+      aliases.push({ pattern: new RegExp(insensitive ? rule.pattern.slice(4) : rule.pattern, insensitive ? "i" : ""), canonical: rule.canonical });
+    } catch {}
+  }
+  return { pricing, fastMultipliers, aliases, ...typeof root.updated_at === "string" ? { updatedAt: root.updated_at } : {} };
+}
+function canonicalOf(supplement, model) {
+  return supplement.aliases.find((rule) => rule.pattern.test(model))?.canonical;
+}
+function fastMultiplierOf(supplement, model) {
+  const exact = supplement.fastMultipliers.get(model);
+  if (exact !== undefined)
+    return exact;
+  for (const part of normalizedKey(model).split(/[/:]/)) {
+    if (!part)
+      continue;
+    for (const [base, multiplier] of supplement.fastMultipliers) {
+      const key = normalizedKey(base);
+      const at = part.lastIndexOf(key);
+      if (at < 0)
+        continue;
+      const rest = part.slice(at + key.length);
+      if (!rest || rest.startsWith("-"))
+        return multiplier;
+    }
+  }
+  return;
+}
+
+class Pricing {
+  supplement;
+  primary;
+  secondary;
+  memo = new Map;
+  constructor(supplement, primary, secondary) {
+    this.supplement = supplement;
+    this.primary = primary;
+    this.secondary = secondary;
+  }
+  resolve(model) {
+    const known = this.memo.get(model);
+    if (known !== undefined)
+      return known ?? undefined;
+    const canonical = canonicalOf(this.supplement, model);
+    const found = canonical !== undefined && canonical !== model ? this.lookup(canonical) ?? this.lookup(model) : this.lookup(model);
+    this.memo.set(model, found ?? null);
+    return found;
+  }
+  cost(model, tokens, longContext = true) {
+    const found = this.resolve(model);
+    return found ? costDollars(found, tokens, longContext) : undefined;
+  }
+  lookup(name) {
+    const own = this.supplement.pricing.get(name);
+    if (own)
+      return own;
+    const exact = this.primary.exact(name);
+    if (exact)
+      return exact[1];
+    const fast = this.fastVariant(name);
+    if (fast)
+      return fast;
+    if (name.endsWith("-fast"))
+      return this.secondary.exact(name)?.[1];
+    return this.primary.fuzzy(name)?.[1] ?? this.secondary.exact(name)?.[1];
+  }
+  fastVariant(name) {
+    if (!name.endsWith("-fast"))
+      return;
+    const base = name.slice(0, -"-fast".length);
+    if (!base)
+      return;
+    const own = this.supplement.pricing.get(base);
+    const entry = own ? [base, own] : this.primary.exact(base) ?? this.primary.fuzzy(base) ?? this.secondary.exact(base);
+    if (!entry)
+      return;
+    const multiplier = entry[1].fast !== 1 ? entry[1].fast : fastMultiplierOf(this.supplement, entry[0]) ?? fastMultiplierOf(this.supplement, base);
+    return multiplier === undefined ? undefined : scaled(entry[1], multiplier);
+  }
+}
+var SOURCES = ["litellm", "models_dev", "supplement"];
+var PRICING_FEEDS = {
+  litellm: "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
+  models_dev: "https://models.dev/api.json",
+  supplement: "https://robinebers.github.io/openusage/pricing_supplement.json"
+};
+var HOUR = 3600000;
+var RETRY = 30 * 60000;
+var MOST_BYTES = 64 * 1024 * 1024;
+
+class PricingStore {
+  folder;
+  fetcher;
+  now;
+  pricing;
+  states = {};
+  refreshing;
+  onChange;
+  constructor(folder, fetcher = (url, init) => fetch(url, init), now = Date.now) {
+    this.folder = folder;
+    this.fetcher = fetcher;
+    this.now = now;
+    if (folder) {
+      try {
+        this.states = JSON.parse(readFileSync26(join29(folder, "state.json"), "utf8"));
+      } catch {}
+    }
+  }
+  current() {
+    this.pricing ??= this.build();
+    if (this.fetcher && this.folder && !this.refreshing && SOURCES.some((source) => this.due(source)))
+      this.refreshing = this.refreshDue().finally(() => this.refreshing = undefined);
+    return this.pricing;
+  }
+  async refreshNow() {
+    this.current();
+    await this.refreshing;
+  }
+  due(source) {
+    const state = this.states[source] ?? {};
+    if (state.failedAt !== undefined && this.now() - state.failedAt < RETRY)
+      return false;
+    return state.fetchedAt === undefined || this.now() - state.fetchedAt >= HOUR;
+  }
+  async refreshDue() {
+    let changed = false;
+    for (const source of SOURCES)
+      if (this.due(source) && await this.fetchOne(source))
+        changed = true;
+    if (changed) {
+      this.pricing = this.build();
+      this.onChange?.();
+    }
+    this.write("state.json", JSON.stringify(this.states));
+  }
+  async fetchOne(source) {
+    const state = this.states[source] ?? {};
+    try {
+      const cached = state.etag !== undefined && this.read(`${source}.json`) !== undefined;
+      const response = await this.fetcher(PRICING_FEEDS[source], { headers: cached ? { "If-None-Match": state.etag } : {}, signal: AbortSignal.timeout(30000) });
+      if (response.status === 304) {
+        this.states[source] = { ...state, fetchedAt: this.now(), failedAt: undefined };
+        return false;
+      }
+      if (response.status !== 200)
+        throw new Error(`HTTP ${response.status}`);
+      const length = Number(response.headers.get("content-length") ?? 0);
+      if (length > MOST_BYTES)
+        throw new Error("too big");
+      const text = await response.text();
+      if (text.length > MOST_BYTES)
+        throw new Error("too big");
+      const body = JSON.parse(text);
+      const kept = source === "litellm" ? compactOf(catalogFromLiteLLM(body)) : source === "models_dev" ? compactOf(catalogFromModelsDev(body)) : (supplementFrom(body), text);
+      this.write(`${source}.json`, kept);
+      const etag = response.headers.get("etag") ?? undefined;
+      this.states[source] = { ...etag ? { etag } : {}, fetchedAt: this.now() };
+      return true;
+    } catch {
+      this.states[source] = { ...state, failedAt: this.now() };
+      return false;
+    }
+  }
+  read(name) {
+    if (!this.folder)
+      return;
+    try {
+      return JSON.parse(readFileSync26(join29(this.folder, name), "utf8"));
+    } catch {
+      return;
+    }
+  }
+  write(name, text) {
+    if (!this.folder)
+      return;
+    try {
+      mkdirSync18(this.folder, { recursive: true });
+      writeFileSync19(join29(this.folder, name + ".new"), text);
+      renameSync14(join29(this.folder, name + ".new"), join29(this.folder, name));
+    } catch {}
+  }
+  build() {
+    const catalog = (snapshot, source) => {
+      let built = catalogFromCompact(snapshot);
+      const cached = this.read(`${source}.json`);
+      if (cached !== undefined) {
+        try {
+          built = built.merging(catalogFromCompact(cached));
+        } catch {}
+      }
+      return built;
+    };
+    const bundled = supplementFrom(pricing_supplement_default);
+    let supplement = bundled;
+    const cached = this.read("supplement.json");
+    if (cached !== undefined) {
+      try {
+        const fetched = supplementFrom(cached);
+        if (!(bundled.updatedAt !== undefined && (fetched.updatedAt === undefined || bundled.updatedAt > fetched.updatedAt)))
+          supplement = fetched;
+      } catch {}
+    }
+    return new Pricing(supplement, catalog(pricing_litellm_snapshot_default, "litellm"), catalog(pricing_models_dev_snapshot_default, "models_dev"));
+  }
+}
+
+// Packages/Box/src/agents/usage/history.ts
+var SLOT = 15 * 60000;
+var DAY = 24 * 60 * 60000;
+var KEPT_DAYS = 35;
+var noSlots = () => ({ used: new Map, unknown: new Map });
+var UNATTRIBUTED = "Unattributed";
+var slotOf = (at) => Math.floor(at / SLOT) * SLOT;
+function claudeSlots(entries, pricing, since) {
+  const slots = noSlots();
+  for (const entry of entries) {
+    if (entry.at < since)
+      continue;
+    const slot = slotOf(entry.at);
+    const model = entry.model?.trim() || undefined;
+    let cost = entry.cost;
+    if (cost === undefined && model !== undefined)
+      cost = pricing.cost(model, entry.tokens);
+    if (cost === undefined) {
+      if (model !== undefined && totalTokens(entry.tokens) > 0)
+        addUnknown(slots, slot, model);
+      continue;
+    }
+    add(slots, slot, model ?? UNATTRIBUTED, totalTokens(entry.tokens), cost);
+  }
+  return slots;
+}
+function add(slots, slot, model, tokens, cost) {
+  let models = slots.used.get(slot);
+  if (!models)
+    slots.used.set(slot, models = new Map);
+  const use = models.get(model);
+  if (use) {
+    use[0] += tokens;
+    use[1] += cost;
+  } else
+    models.set(model, [tokens, cost]);
+}
+function addUnknown(slots, slot, model) {
+  let models = slots.unknown.get(slot);
+  if (!models)
+    slots.unknown.set(slot, models = new Set);
+  models.add(model);
+}
+function summed(all) {
+  const sum = noSlots();
+  for (const slots of all) {
+    for (const [slot, models] of slots.used)
+      for (const [model, [tokens, cost]] of models)
+        add(sum, slot, model, tokens, cost);
+    for (const [slot, models] of slots.unknown)
+      for (const model of models)
+        addUnknown(sum, slot, model);
+  }
+  return sum;
+}
+function trimmed(slots, now) {
+  const since = now - KEPT_DAYS * DAY;
+  const kept = noSlots();
+  for (const [slot, models] of slots.used)
+    if (slot >= since)
+      kept.used.set(slot, models);
+  for (const [slot, models] of slots.unknown)
+    if (slot >= since)
+      kept.unknown.set(slot, models);
+  return kept;
+}
+var formats = new Map;
+function knownZone(zone) {
+  if (!zone || zone.length > 64)
+    return;
+  try {
+    dayFormat(zone);
+    return zone;
+  } catch {
+    return;
+  }
+}
+var ownZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+function dayFormat(zone) {
+  let format = formats.get(zone);
+  if (!format) {
+    format = new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" });
+    formats.set(zone, format);
+  }
+  return format;
+}
+function dayIn(at, zone) {
+  const parts = dayFormat(zone).formatToParts(at);
+  const part = (type) => parts.find((each) => each.type === type)?.value ?? "00";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+function windowDays(now, zone, previous = 30) {
+  const [year, month, day] = dayIn(now, zone).split("-").map(Number);
+  const noon = Date.UTC(year, month - 1, day, 12);
+  return Array.from({ length: previous + 1 }, (_, back) => new Date(noon - back * DAY).toISOString().slice(0, 10));
+}
+function daysIn(slots, zone, now) {
+  const window = new Set(windowDays(now, zone));
+  const days = new Map;
+  const dayOf = (date) => {
+    let found = days.get(date);
+    if (!found)
+      days.set(date, found = { models: new Map, unknown: new Set });
+    return found;
+  };
+  for (const [slot, models] of slots.used) {
+    const date = dayIn(slot, zone);
+    if (!window.has(date))
+      continue;
+    const day = dayOf(date);
+    for (const [model, [tokens, cost]] of models) {
+      const use = day.models.get(model);
+      if (use) {
+        use[0] += tokens;
+        use[1] += cost;
+      } else
+        day.models.set(model, [tokens, cost]);
+    }
+  }
+  for (const [slot, models] of slots.unknown) {
+    const date = dayIn(slot, zone);
+    if (!window.has(date))
+      continue;
+    for (const model of models)
+      dayOf(date).unknown.add(model);
+  }
+  return [...days.entries()].sort(([a], [b]) => a < b ? 1 : a > b ? -1 : 0).map(([date, { models, unknown }]) => {
+    const listed = [...models.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([model, [tokens, cost]]) => ({ model, tokens, cost }));
+    return {
+      date,
+      tokens: listed.reduce((sum, each) => sum + each.tokens, 0),
+      cost: listed.reduce((sum, each) => sum + each.cost, 0),
+      models: listed,
+      ...unknown.size ? { unknown: [...unknown].sort() } : {}
+    };
+  });
+}
+function keptSlots(slots) {
+  const models = [];
+  const index = (model) => {
+    let at = models.indexOf(model);
+    if (at < 0)
+      at = models.push(model) - 1;
+    return at;
+  };
+  const used = [];
+  for (const [slot, uses] of [...slots.used].sort(([a], [b]) => a - b))
+    for (const [model, [tokens, cost]] of uses)
+      used.push([slot / SLOT, index(model), tokens, Math.round(cost * 1e6) / 1e6]);
+  const unknown = [];
+  for (const [slot, names] of [...slots.unknown].sort(([a], [b]) => a - b))
+    for (const model of names)
+      unknown.push([slot / SLOT, index(model)]);
+  return { models, used, ...unknown.length ? { unknown } : {} };
+}
+function slotsFrom(given, most = 50000) {
+  const slots = noSlots();
+  if (!given || typeof given !== "object")
+    return slots;
+  const kept = given;
+  const models = Array.isArray(kept.models) ? kept.models.map((model) => typeof model === "string" ? model.slice(0, 200) : undefined) : [];
+  const slotAt = (value) => typeof value === "number" && Number.isInteger(value) && value > 0 && value < 1e9 ? value * SLOT : undefined;
+  for (const use of (Array.isArray(kept.used) ? kept.used : []).slice(0, most)) {
+    if (!Array.isArray(use))
+      continue;
+    const [slot, model, tokens, cost] = [slotAt(use[0]), typeof use[1] === "number" ? models[use[1]] : undefined, use[2], use[3]];
+    if (slot === undefined || model === undefined || !Number.isSafeInteger(tokens) || tokens < 0 || typeof cost !== "number" || !Number.isFinite(cost) || cost < 0)
+      continue;
+    add(slots, slot, model, tokens, cost);
+  }
+  for (const each of (Array.isArray(kept.unknown) ? kept.unknown : []).slice(0, most)) {
+    if (!Array.isArray(each))
+      continue;
+    const [slot, model] = [slotAt(each[0]), typeof each[1] === "number" ? models[each[1]] : undefined];
+    if (slot !== undefined && model !== undefined)
+      addUnknown(slots, slot, model);
+  }
+  return slots;
+}
+
+// Packages/Box/src/agents/usage/jsonl.ts
+import { createHash as createHash10 } from "crypto";
+import { mkdirSync as mkdirSync19, renameSync as renameSync15, rmSync as rmSync14, writeFileSync as writeFileSync20 } from "fs";
+import { open, readdir, readFile as readFile3, stat as stat2 } from "fs/promises";
+import { join as join30 } from "path";
+var CHUNK = 1 << 20;
+var LONGEST_LINE = 64 << 20;
+var HEAD = 4096;
+var MOST_FILES = 1e5;
+var MOST_WALKED = 4 * MOST_FILES;
+async function jsonlFiles(folder) {
+  let found = [];
+  const walk = async (dir) => {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (found.length >= MOST_WALKED)
+        return;
+      const path = join30(dir, entry.name);
+      if (entry.isDirectory())
+        await walk(path);
+      else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+        try {
+          const info = await stat2(path);
+          found.push({ path, size: info.size, mtime: info.mtimeMs });
+        } catch {}
+      }
+    }
+  };
+  await walk(folder);
+  if (found.length > MOST_FILES)
+    found = found.sort((a, b) => b.mtime - a.mtime).slice(0, MOST_FILES);
+  return found.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+}
+
+class JSONLFiles {
+  parse;
+  at;
+  folder;
+  format;
+  same;
+  records = new Map;
+  changed = new Set;
+  forgotten = new Set;
+  seen = new Set;
+  loading;
+  version = 0;
+  constructor(parse, at, folder, format = 1, same) {
+    this.parse = parse;
+    this.at = at;
+    this.folder = folder;
+    this.format = format;
+    this.same = same;
+  }
+  load() {
+    this.loading ??= (async () => {
+      if (!this.folder)
+        return;
+      let names = [];
+      try {
+        names = await readdir(this.folder);
+      } catch {}
+      for (const name of names) {
+        if (!/^[0-9a-f]{32}\.json$/.test(name))
+          continue;
+        try {
+          const saved = JSON.parse(await readFile3(join30(this.folder, name), "utf8"));
+          const record = saved?.record;
+          if (saved?.version === this.format && typeof saved.path === "string" && keptName(saved.path) === name && record && Array.isArray(record.items) && typeof record.offset === "number" && typeof record.size === "number")
+            this.records.set(saved.path, record);
+          else
+            rmSync14(join30(this.folder, name), { force: true });
+        } catch {}
+      }
+    })();
+    return this.loading;
+  }
+  async refresh(files, since) {
+    await this.load();
+    for (const file of files) {
+      if (file.mtime < since)
+        continue;
+      this.seen.add(file.path);
+      await this.read(file, since);
+    }
+  }
+  itemsOf(files, since) {
+    const all = [];
+    for (const file of files)
+      for (const item of this.records.get(file.path)?.items ?? [])
+        if (this.at(item) >= since)
+          all.push(item);
+    return all;
+  }
+  async items(files, since) {
+    await this.refresh(files, since);
+    return this.itemsOf(files, since);
+  }
+  endRound(complete = true) {
+    if (complete) {
+      for (const path of [...this.records.keys()]) {
+        if (this.seen.has(path))
+          continue;
+        this.records.delete(path);
+        this.changed.delete(path);
+        this.forgotten.add(path);
+        this.version++;
+      }
+    }
+    this.seen.clear();
+    this.save();
+  }
+  save() {
+    if (!this.folder)
+      return;
+    try {
+      mkdirSync19(this.folder, { recursive: true, mode: 448 });
+    } catch {
+      return;
+    }
+    for (const path of this.forgotten) {
+      try {
+        rmSync14(join30(this.folder, keptName(path)), { force: true });
+      } catch {}
+    }
+    this.forgotten.clear();
+    for (const path of this.changed) {
+      const file = join30(this.folder, keptName(path));
+      try {
+        writeFileSync20(file + ".new", JSON.stringify({ version: this.format, path, record: this.records.get(path) }), { mode: 384 });
+        renameSync15(file + ".new", file);
+      } catch {}
+    }
+    this.changed.clear();
+  }
+  async read(file, since) {
+    const before = this.records.get(file.path);
+    if (before && before.size === file.size && before.mtime === file.mtime)
+      return;
+    let handle;
+    try {
+      handle = await open(file.path, "r");
+    } catch {
+      return;
+    }
+    try {
+      let record;
+      const appended = before && file.size > before.size && await headOf(handle, before.headLength) === before.head;
+      if (appended)
+        record = { ...before, items: before.items.filter((item) => this.at(item) >= since) };
+      else {
+        const headLength = Math.min(HEAD, file.size);
+        record = { size: 0, mtime: 0, offset: 0, head: await headOf(handle, headLength), headLength, items: [] };
+      }
+      const had = this.same ? new Set(record.items.map(this.same).filter((key) => key !== undefined)) : undefined;
+      record.offset = await this.readLines(handle, record.offset, file.size, (line) => {
+        for (const item of this.parse(line)) {
+          if (this.at(item) < since)
+            continue;
+          const key = had ? this.same(item) : undefined;
+          if (had && key !== undefined) {
+            if (had.has(key))
+              continue;
+            had.add(key);
+          }
+          record.items.push(item);
+        }
+      });
+      record.size = file.size;
+      record.mtime = file.mtime;
+      if (record.headLength < HEAD && file.size > record.headLength) {
+        record.headLength = Math.min(HEAD, file.size);
+        record.head = await headOf(handle, record.headLength);
+      }
+      this.records.set(file.path, record);
+      this.changed.add(file.path);
+      this.version++;
+    } finally {
+      await handle.close().catch(() => {});
+    }
+  }
+  async readLines(handle, offset, end, line) {
+    const buffer = Buffer.alloc(CHUNK);
+    let pieces = [];
+    let pending = 0;
+    let skipping = false;
+    let position = offset;
+    let consumed = offset;
+    while (position < end) {
+      const { bytesRead } = await handle.read(buffer, 0, Math.min(CHUNK, end - position), position);
+      if (!bytesRead)
+        break;
+      let start = 0;
+      for (let at = buffer.indexOf(10, 0);at >= 0 && at < bytesRead; at = buffer.indexOf(10, at + 1)) {
+        if (!skipping) {
+          const piece = buffer.subarray(start, at);
+          const whole = pieces.length ? Buffer.concat([...pieces, piece]) : piece;
+          if (whole.length)
+            line(whole);
+        }
+        pieces = [];
+        pending = 0;
+        skipping = false;
+        start = at + 1;
+        consumed = position + at + 1;
+      }
+      if (start < bytesRead && !skipping) {
+        pending += bytesRead - start;
+        if (pending > LONGEST_LINE) {
+          pieces = [];
+          skipping = true;
+        } else
+          pieces.push(Buffer.from(buffer.subarray(start, bytesRead)));
+      }
+      position += bytesRead;
+    }
+    return consumed;
+  }
+}
+var keptName = (path) => createHash10("sha256").update(path).digest("hex").slice(0, 32) + ".json";
+async function headOf(handle, length) {
+  if (!length)
+    return "";
+  const buffer = Buffer.alloc(length);
+  const { bytesRead } = await handle.read(buffer, 0, length, 0);
+  return createHash10("sha256").update(buffer.subarray(0, bytesRead)).digest("hex").slice(0, 32);
+}
+
+// Packages/Box/src/agents/usage/usage.ts
+var USAGE_SERVICES = ["claude"];
+var MINUTE2 = 60000;
+var DAY2 = 24 * 60 * MINUTE2;
+var SCAN_EVERY = 5 * MINUTE2;
+function usageRows(boxes) {
+  const groups = [];
+  const found = new Map;
+  const counted = new Set;
+  for (const box of boxes) {
+    for (const account of box.accounts) {
+      const same = (account.places ?? []).some((place) => counted.has(place));
+      if (!same)
+        for (const place of account.places ?? [])
+          counted.add(place);
+      const id = account.identity ? `${account.service}#${account.identity}` : `${box.key}/${account.provider}`;
+      const index = found.get(id);
+      if (index !== undefined)
+        groups[index].members.push({ box, account, same });
+      else {
+        found.set(id, groups.length);
+        groups.push({ id, members: [{ box, account, same }] });
+      }
+    }
+  }
+  return groups.map(({ id, members }) => {
+    const base = members.find((member) => member.account.agent)?.account ?? members[0].account;
+    const label = members.map((member) => member.account.label?.trim()).find(Boolean);
+    const scanned = Math.max(0, ...members.map((member) => member.account.scanned ?? 0));
+    const row = {
+      id,
+      service: base.service,
+      provider: base.provider,
+      ...base.agent ? { agent: base.agent } : {},
+      ...base.account ? { account: base.account } : {},
+      ...label ? { label } : {},
+      ...base.identity ? { identity: base.identity } : {},
+      ...scanned ? { scanned } : {},
+      boxes: members.map(({ box, account, same }) => ({
+        key: box.key,
+        name: box.name,
+        provider: account.provider,
+        ...account.agent ? { agent: account.agent } : {},
+        ...account.account ? { account: account.account } : {},
+        ...account.label ? { label: account.label } : {},
+        ...account.scanned ? { scanned: account.scanned } : {},
+        ...box.here ? { here: true } : {},
+        ...box.away ? { away: true } : {},
+        ...box.vouched ? { vouched: true } : {},
+        ...same ? { same: true } : {}
+      })),
+      slots: summed(members.filter((member) => !member.same).map((member) => member.account.slots)),
+      yours: summed(members.filter((member) => !member.same && !member.box.vouched).map((member) => member.account.slots))
+    };
+    const yours = members.filter((member) => !member.same && !member.box.vouched);
+    if (members.every((member) => member.box.away))
+      row.away = true;
+    if (members.some((member) => member.account.cut))
+      row.cut = true;
+    if (members.every((member) => member.box.vouched))
+      row.vouched = true;
+    if (yours.some((member) => member.box.away))
+      row.yoursAway = true;
+    if (yours.some((member) => member.account.cut))
+      row.yoursCut = true;
+    return row;
+  });
+}
+
+class Usage {
+  sources;
+  pricing;
+  identity;
+  file;
+  now;
+  entries = new Map;
+  scanning;
+  again = false;
+  timer;
+  said = "";
+  peers;
+  constructor(sources, pricing, identity, file, now = Date.now) {
+    this.sources = sources;
+    this.pricing = pricing;
+    this.identity = identity;
+    this.file = file;
+    this.now = now;
+    this.load();
+    pricing.onChange = () => void this.refresh();
+  }
+  start() {
+    this.timer ??= setInterval(() => void this.tick(), SCAN_EVERY);
+    this.timer.unref?.();
+    this.tick();
+  }
+  stop() {
+    if (this.timer)
+      clearInterval(this.timer);
+    this.timer = undefined;
+  }
+  tick() {
+    if (this.scanning) {
+      this.again = true;
+      return this.scanning;
+    }
+    this.scanning = this.round().finally(() => {
+      this.scanning = undefined;
+      if (this.again) {
+        this.again = false;
+        this.tick();
+      }
+    });
+    return this.scanning;
+  }
+  async refresh() {
+    await this.tick();
+    if (this.scanning)
+      await this.scanning;
+  }
+  async round() {
+    const pricing = this.pricing.current();
+    const at = this.now();
+    const since = Math.floor((at - KEPT_DAYS * DAY2) / DAY2) * DAY2;
+    const sources = this.sources();
+    let complete = true;
+    for (const source of sources) {
+      let slots;
+      try {
+        slots = await source.slots(pricing, since);
+      } catch (error) {
+        console.error(`usage of ${source.provider}:`, error);
+      }
+      const entry = this.entries.get(source.provider) ?? { slots: noSlots() };
+      if (slots) {
+        entry.slots = slots;
+        entry.scanned = this.now();
+      } else {
+        complete = false;
+        entry.slots = trimmed(entry.slots, at);
+      }
+      this.entries.set(source.provider, entry);
+    }
+    const here = new Set(sources.map((source) => source.provider));
+    for (const provider of [...this.entries.keys()])
+      if (!here.has(provider))
+        this.entries.delete(provider);
+    for (const files of new Set(sources.flatMap((source) => source.files ? [source.files] : [])))
+      files.endRound(complete);
+    this.save();
+    this.changed(true);
+  }
+  own() {
+    return this.sources().flatMap((source) => {
+      const entry = this.entries.get(source.provider);
+      if (!entry)
+        return [];
+      const identity = this.identity(source.provider) ?? entry.identity;
+      if (identity !== entry.identity)
+        entry.identity = identity;
+      return [
+        {
+          provider: source.provider,
+          service: source.service,
+          ...source.agent ? { agent: source.agent.kind, account: source.agent.account } : {},
+          ...source.label ? { label: source.label } : {},
+          ...identity ? { identity } : {},
+          ...entry.scanned ? { scanned: entry.scanned } : {},
+          slots: entry.slots,
+          ...source.places ? { places: source.places() } : {}
+        }
+      ];
+    });
+  }
+  rows() {
+    const own = this.own();
+    return this.peers ? this.peers.rows(own) : usageRows([{ key: "", name: "", here: true, away: false, accounts: own }]);
+  }
+  peersChanged() {
+    this.changed(false);
+  }
+  view(zone) {
+    const asked = knownZone(zone) ?? ownZone();
+    const now = this.now();
+    const rows = this.rows();
+    const totals = {};
+    const partial = {};
+    for (const service of USAGE_SERVICES) {
+      const of = rows.filter((row) => row.service === service && !row.vouched);
+      if (!of.length)
+        continue;
+      totals[service] = daysIn(summed(of.map((row) => row.yours)), asked, now);
+      if (of.some((row) => row.yoursAway || row.yoursCut))
+        partial[service] = { ...of.some((row) => row.yoursAway) ? { away: true } : {}, ...of.some((row) => row.yoursCut) ? { cut: true } : {} };
+    }
+    const scanned = Math.max(0, ...this.own().map((account) => account.scanned ?? 0));
+    return {
+      zone: asked,
+      services: USAGE_SERVICES,
+      ...scanned ? { scanned } : {},
+      rows: rows.map(({ slots, yours: _, yoursAway: _away, yoursCut: _cut, ...row }) => ({ ...row, days: daysIn(slots, asked, now) })),
+      totals,
+      ...Object.keys(partial).length ? { partial } : {}
+    };
+  }
+  ownSaid = "";
+  changed(own) {
+    if (own) {
+      const mine = JSON.stringify(this.own().map(({ scanned: _, slots, ...account }) => ({ ...account, slots: keptSlots(slots) })));
+      this.peers?.tell(mine !== this.ownSaid);
+      this.ownSaid = mine;
+    }
+    const now = JSON.stringify(this.rows().map(({ scanned: _, slots, yours, boxes, ...row }) => ({ ...row, boxes: boxes.map(({ scanned: _, ...box }) => box), slots: keptSlots(slots), yours: keptSlots(yours) })));
+    if (now === this.said)
+      return;
+    this.said = now;
+    emit("kuvo.usage.updated", { services: USAGE_SERVICES });
+  }
+  load() {
+    if (!this.file)
+      return;
+    try {
+      const saved = JSON.parse(readFileSync27(this.file, "utf8"));
+      for (const [provider, kept] of Object.entries(saved?.accounts ?? {})) {
+        if (!kept || typeof kept !== "object")
+          continue;
+        this.entries.set(provider, {
+          ...typeof kept.identity === "string" && /^[0-9a-f]{16}$/.test(kept.identity) ? { identity: kept.identity } : {},
+          ...typeof kept.scanned === "number" ? { scanned: kept.scanned } : {},
+          slots: trimmed(slotsFrom(kept.slots, 200000), this.now())
+        });
+      }
+    } catch {}
+    this.said = "";
+  }
+  save() {
+    if (!this.file)
+      return;
+    const accounts = Object.fromEntries([...this.entries].map(([provider, entry]) => [provider, { ...entry.identity ? { identity: entry.identity } : {}, ...entry.scanned ? { scanned: entry.scanned } : {}, slots: keptSlots(entry.slots) }]));
+    try {
+      mkdirSync20(dirname16(this.file), { recursive: true });
+      writeFileSync21(this.file + ".new", JSON.stringify({ accounts }), { mode: 384 });
+      renameSync16(this.file + ".new", this.file);
+    } catch {}
+  }
+}
+var json8 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+async function usageRoutes(usage, method, rest, params) {
+  if (!usage)
+    return json8({ message: "Usage isn't read on this computer." }, 503);
+  const zone = params.get("zone");
+  if (!rest.length && method === "GET")
+    return json8({ data: usage.view(zone) });
+  if (rest.length === 1 && rest[0] === "refresh" && method === "POST") {
+    usage.peers?.refreshElsewhere();
+    await Promise.race([usage.refresh(), new Promise((resolve) => setTimeout(resolve, 5000).unref?.())]);
+    return json8({ data: usage.view(zone) });
+  }
+  return json8({ message: "Not available for this agent." }, 404);
+}
+function placeOf(computer, folder) {
+  let real = folder;
+  try {
+    real = realpathSync7(folder);
+  } catch {}
+  return createHash11("sha256").update(`kuvo-code usage place v2
+`).update(computer).update(`
+`).update(real).digest("hex").slice(0, 16);
+}
+function thisComputer(platform = process.platform, read = (path) => readFileSync27(path, "utf8"), macUUID = () => uuidOf(ioreg()), name = hostname) {
+  if (platform === "darwin") {
+    const uuid = macUUID();
+    if (uuid)
+      return "mac:" + uuid;
+  } else {
+    for (const path of ["/etc/machine-id", "/var/lib/dbus/machine-id"]) {
+      try {
+        const id = read(path).trim();
+        if (/^[0-9a-fA-F]{16,}$/.test(id))
+          return "machine-id:" + id.toLowerCase() + `
+` + name();
+      } catch {}
+    }
+  }
+  return "host:" + name();
+}
+var computer;
+function ownComputer(now = Date.now()) {
+  if (computer && (computer.sure || now - computer.at < 60000))
+    return computer.found;
+  const found = thisComputer();
+  computer = { found, sure: process.platform !== "darwin" || found.startsWith("mac:"), at: now };
+  return found;
+}
+function uuidOf(said) {
+  return said ? /"IOPlatformUUID"\s*=\s*"([0-9A-Fa-f-]{16,})"/.exec(said)?.[1] : undefined;
+}
+function ioreg() {
+  try {
+    return execFileSync2("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] });
+  } catch {
+    return;
+  }
+}
+function claudeRoots(agent, env = process.env, home = homedir5()) {
+  const roots = [...agent.conversationRoots?.() ?? []];
+  if (!agent.instance.home) {
+    const configured = env.CLAUDE_CONFIG_DIR?.trim();
+    const folders = configured ? configured.split(",").map((part) => part.trim()).filter(Boolean).map((part) => part.startsWith("~/") ? join31(home, part.slice(2)) : part) : [join31(env.XDG_CONFIG_HOME?.trim() || join31(home, ".config"), "claude"), join31(home, ".claude")];
+    for (const folder of folders)
+      roots.push(basename11(folder) === "projects" ? folder : join31(folder, "projects"));
+  }
+  return [...new Set(roots)];
+}
+function claudeSources(folder, computer = ownComputer) {
+  const files = new JSONLFiles((line) => claudeLine(line).map(keptClaude), (entry) => entry[0], folder ? join31(folder, "claude-files") : undefined, 1, (entry) => entry[1] === null ? undefined : JSON.stringify(entry.slice(1)));
+  const last = new Map;
+  return (agents) => agents.flatMap((agent) => {
+    const parsed = parseProvider(agent.providerID);
+    if (parsed?.kind !== "claude" || !agent.conversationRoots)
+      return [];
+    const roots = () => claudeRoots(agent);
+    const source = {
+      provider: agent.providerID,
+      service: "claude",
+      agent: { kind: "claude", account: parsed.id },
+      ...agent.instance.label ? { label: agent.instance.label } : {},
+      places: () => {
+        const here = computer();
+        return roots().map((root) => placeOf(here, root));
+      },
+      slots: async (pricing, since) => {
+        const found = new Map;
+        for (const root of roots())
+          for (const file of await jsonlFiles(root))
+            found.set(file.path, file);
+        const ordered = [...found.values()].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+        await files.refresh(ordered, since);
+        const listed = createHash11("sha256").update(ordered.map((file) => file.path).join(`
+`)).digest("hex");
+        const before = last.get(agent.providerID);
+        if (before && before.version === files.version && before.pricing === pricing && before.since === since && before.listed === listed)
+          return before.slots;
+        const slots = claudeSlots(dedupClaude(files.itemsOf(ordered, since).map(fromKeptClaude)), pricing, since);
+        last.set(agent.providerID, { version: files.version, pricing, since, listed, slots });
+        return slots;
+      },
+      files
+    };
+    return [source];
+  });
+}
+
 // Packages/Box/src/agents/updates.ts
 var NEWS_KEPT = 60 * 60000;
 var kept2 = new Map;
@@ -18598,11 +20469,11 @@ async function updateAll(agents, accounts, noted, known) {
 }
 
 // Packages/Box/src/agents/sessions.ts
-import { createHash as createHash10 } from "crypto";
+import { createHash as createHash12 } from "crypto";
 import { spawn as spawnProcess } from "child_process";
-import { readFileSync as readFileSync26, realpathSync as realpathSync7, statSync as statSync11 } from "fs";
-import { homedir as homedir5 } from "os";
-import { dirname as dirname16, join as join29, resolve as resolve8 } from "path";
+import { readFileSync as readFileSync28, realpathSync as realpathSync8, statSync as statSync11 } from "fs";
+import { homedir as homedir6 } from "os";
+import { dirname as dirname17, join as join32, resolve as resolve8 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
 
 // Packages/Box/src/agents/handover.ts
@@ -18821,7 +20692,7 @@ class Turn {
       step.finish = end.finish;
     if (end.tokens) {
       step.tokens = end.tokens;
-      this.tokens = add(this.tokens, end.tokens);
+      this.tokens = add2(this.tokens, end.tokens);
     }
     if (end.cost !== undefined) {
       step.cost = end.cost;
@@ -18843,7 +20714,7 @@ class Turn {
     if (this.ended)
       return;
     if (tokens)
-      this.tokens = add(this.tokens, tokens);
+      this.tokens = add2(this.tokens, tokens);
     if (cost)
       this.cost += cost;
   }
@@ -19100,14 +20971,14 @@ class Turn {
       session.outcome = outcome;
       session.time.idle = event.created;
       session.time.updated = event.created;
-      session.tokens = add(session.tokens, this.tokens);
+      session.tokens = add2(session.tokens, this.tokens);
       session.cost += this.cost;
       emit("session.usage.updated", { sessionID: this.sessionID, cost: session.cost, tokens: session.tokens }, this.directory);
       this.store.save(this.sessionID, true);
     }
   }
 }
-function add(a, b) {
+function add2(a, b) {
   return {
     input: a.input + b.input,
     output: a.output + b.output,
@@ -19645,27 +21516,27 @@ function hidesFromBlocks(blocks, ask) {
 }
 var fileActions = new Set(["read", "edit", "write", "patch", "list", "grep", "glob"]);
 function ownPlaces() {
-  const places = [process.env.KUVO_AGENTS_HOME, process.env.TMPDIR?.replace(/\/$/, ""), join29(homedir5(), ".claude", "plans")].filter((place) => Boolean(place));
+  const places = [process.env.KUVO_AGENTS_HOME, process.env.TMPDIR?.replace(/\/$/, ""), join32(homedir6(), ".claude", "plans")].filter((place) => Boolean(place));
   if (process.env.KUVO_AGENTS_HOME && !onMachine)
-    places.push(join29(dirname16(process.env.KUVO_AGENTS_HOME), "Attachments"));
+    places.push(join32(dirname17(process.env.KUVO_AGENTS_HOME), "Attachments"));
   return [...places, ...skillFolders()];
 }
 function outsidePaths(ask, directory, attached, own = ownPlaces(), owns) {
   if (!fileActions.has(ask.action))
     return [];
-  const paths = ask.resources.filter((resource) => resource && resource !== "*" && (resource.startsWith("/") || resource.startsWith("~/") || !/[*?[]/.test(resource))).map((resource) => resolve8(directory, resource.startsWith("~/") ? join29(homedir5(), resource.slice(2)) : resource));
+  const paths = ask.resources.filter((resource) => resource && resource !== "*" && (resource.startsWith("/") || resource.startsWith("~/") || !/[*?[]/.test(resource))).map((resource) => resolve8(directory, resource.startsWith("~/") ? join32(homedir6(), resource.slice(2)) : resource));
   const places = [directory, realFolder(directory), ...own];
   return paths.filter((path) => !within2(path, places) && !attached.has(path) && !owns?.(path));
 }
 function realFolder(folder) {
   try {
-    return realpathSync7(folder);
+    return realpathSync8(folder);
   } catch {
     return folder;
   }
 }
 function outsideFolders(ask, paths) {
-  return [...new Set(paths.map((path) => join29(isFolder(path, ask.action) ? path : dirname16(path), "*")))];
+  return [...new Set(paths.map((path) => join32(isFolder(path, ask.action) ? path : dirname17(path), "*")))];
 }
 function outsideRefusable(ask, paths, folders) {
   return [...paths.filter((path) => !isFolder(path, ask.action)), ...folders];
@@ -19959,7 +21830,7 @@ class Sessions {
     const directory = body.location.directory;
     const session = {
       id: newID("ses"),
-      projectID: "prj_" + createHash10("sha1").update(directory).digest("hex").slice(0, 16),
+      projectID: "prj_" + createHash12("sha1").update(directory).digest("hex").slice(0, 16),
       agent: typeof body.agent === "string" && body.agent ? body.agent : "build",
       model: body.model,
       cost: 0,
@@ -21934,7 +23805,7 @@ function withTextFiles(text, files) {
     let contents;
     if (!file.mime.startsWith("image/") && file.mime !== "application/pdf") {
       try {
-        const bytes = file.data ? Buffer.from(file.data, "base64") : file.path && statSync11(file.path).isFile() && statSync11(file.path).size <= textFileLimit ? readFileSync26(file.path) : undefined;
+        const bytes = file.data ? Buffer.from(file.data, "base64") : file.path && statSync11(file.path).isFile() && statSync11(file.path).size <= textFileLimit ? readFileSync28(file.path) : undefined;
         if (bytes && !bytes.includes(0))
           contents = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
       } catch {}
@@ -21992,8 +23863,8 @@ async function signedOut(agent) {
 }
 
 // Packages/Box/src/agents/artifacts/routes.ts
-var json8 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
-var message = (status, text) => json8({ message: text }, status);
+var json9 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+var message = (status, text) => json9({ message: text }, status);
 var kinds2 = new Set(["memory", "skill", "image", "page", "document", "download", "code", "file"]);
 var seconds = (text) => {
   if (!text)
@@ -22049,7 +23920,7 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
     const scope = scopeOf(query);
     if (typeof scope === "string")
       return message(400, scope);
-    return json8(list(store, scope, Math.min(500, Math.max(1, Number(query.get("limit")) || 200)), beforeOf(query)));
+    return json9(list(store, scope, Math.min(500, Math.max(1, Number(query.get("limit")) || 200)), beforeOf(query)));
   }
   if (first === "events" || first === "timeline" && second === "events") {
     if (method !== "GET")
@@ -22065,7 +23936,7 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
     const scope = scopeOf(query);
     if (typeof scope === "string")
       return message(400, scope);
-    return json8(timeline(store, scope, Math.min(500, Math.max(1, Number(query.get("limit")) || 200)), beforeOf(query)));
+    return json9(timeline(store, scope, Math.min(500, Math.max(1, Number(query.get("limit")) || 200)), beforeOf(query)));
   }
   if (first === "storage") {
     if (!second && method === "POST") {
@@ -22073,14 +23944,14 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
       if (typeof budget !== "number" || !Number.isFinite(budget) || budget < 0)
         return message(400, "Say the budget for older versions, in bytes (budget).");
       store.setBudget(budget);
-      return json8(store.storage());
+      return json9(store.storage());
     }
     if (!second)
-      return method === "GET" ? json8(store.storage()) : message(405, "Read it with GET, or set its budget with POST.");
+      return method === "GET" ? json9(store.storage()) : message(405, "Read it with GET, or set its budget with POST.");
     if (second === "clear" && method === "POST") {
       const { before } = await body() ?? {};
       const at = typeof before === "number" ? new Date(before * 1000).toISOString() : undefined;
-      return json8({ cleared: store.clearOlder(at), ...store.storage() });
+      return json9({ cleared: store.clearOlder(at), ...store.storage() });
     }
     return message(404, "No such route.");
   }
@@ -22088,7 +23959,7 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
   if (!artifact)
     return message(404, "That isn't in this computer's record.");
   if (!second)
-    return method === "GET" ? json8(clientArtifact(await store.checkGone(artifact.id) ?? artifact, store)) : message(405, "Read it with GET.");
+    return method === "GET" ? json9(clientArtifact(await store.checkGone(artifact.id) ?? artifact, store)) : message(405, "Read it with GET.");
   if (second === "pin") {
     if (method !== "POST")
       return message(405, "Pin it with POST.");
@@ -22096,7 +23967,7 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
     if (typeof pinned !== "boolean")
       return message(400, "Say whether it's pinned (pinned).");
     const changed = await store.pin(artifact.id, pinned ? { by: "you", ...typeof note === "string" && note.trim() ? { note: note.trim() } : {} } : null);
-    return changed ? json8(clientArtifact(changed, store)) : message(409, "It couldn't be kept now. Try again in a moment.");
+    return changed ? json9(clientArtifact(changed, store)) : message(409, "It couldn't be kept now. Try again in a moment.");
   }
   if (second === "restore") {
     if (method !== "POST")
@@ -22105,7 +23976,7 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
     if (!Number.isInteger(version))
       return message(400, "Say which version to put back (version).");
     const restored = await store.restore(artifact.id, version);
-    return typeof restored === "string" ? message(409, restored) : json8(clientArtifact(restored, store));
+    return typeof restored === "string" ? message(409, restored) : json9(clientArtifact(restored, store));
   }
   if (second === "versions" && third !== undefined) {
     const n = Number(third);
@@ -22127,15 +23998,15 @@ async function artifactRoutes(store, method, parts, query, body, signal) {
       if (version.reason && privateReasons.has(version.reason))
         return message(410, notKept(version));
       if (version.patch)
-        return json8({ style: "lines", patch: version.patch, added: version.lines?.added ?? 0, removed: version.lines?.removed ?? 0, from: from?.n ?? null, to: n });
+        return json9({ style: "lines", patch: version.patch, added: version.lines?.added ?? 0, removed: version.lines?.removed ?? 0, from: from?.n ?? null, to: n });
       if (!isText(artifact.type)) {
-        return json8({ style: artifact.kind === "image" || artifact.type === "application/pdf" ? "pair" : "none", from: from?.n ?? null, to: n });
+        return json9({ style: artifact.kind === "image" || artifact.type === "application/pdf" ? "pair" : "none", from: from?.n ?? null, to: n });
       }
       const after = version.status === "deleted" ? "" : store.bytes(artifact.id, n);
       const before = from ? from.status === "deleted" ? "" : store.bytes(artifact.id, from.n) : "";
       if (after === null || after === undefined || before === null || before === undefined)
         return message(410, version.kept ? "The version before isn't kept, so what changed can't be shown." : notKept(version));
-      return json8({ ...changes(before.toString(), after.toString(), isProse(artifact.path)), from: from?.n ?? null, to: n });
+      return json9({ ...changes(before.toString(), after.toString(), isProse(artifact.path)), from: from?.n ?? null, to: n });
     }
   }
   return message(404, "No such route.");
@@ -22152,7 +24023,7 @@ async function notedRoute(noted, method, body) {
     return message(400, "Say whose it is (session).");
   if (via !== "download")
     return message(400, "Say how it came (via: download).");
-  return await noted(session, path, via) ? json8({ ok: true }) : message(404, "There's no such conversation on this computer.");
+  return await noted(session, path, via) ? json9({ ok: true }) : message(404, "There's no such conversation on this computer.");
 }
 function notKept(version) {
   if (version.status === "deleted")
@@ -22231,10 +24102,10 @@ function followed(store, read, signal) {
 }
 
 // Packages/Box/src/agents/carry.ts
-import { createHash as createHash11 } from "crypto";
+import { createHash as createHash13 } from "crypto";
 import { createReadStream } from "fs";
-import { copyFile, lstat as lstat2, mkdir, readFile as readFile3, readdir, rename, rm, stat as stat2, writeFile } from "fs/promises";
-import { basename as basename11, dirname as dirname17, isAbsolute as isAbsolute3, join as join30, normalize, sep as sep11 } from "path";
+import { copyFile, lstat as lstat2, mkdir, readFile as readFile4, readdir as readdir2, rename, rm, stat as stat3, writeFile } from "fs/promises";
+import { basename as basename12, dirname as dirname18, isAbsolute as isAbsolute3, join as join33, normalize, sep as sep11 } from "path";
 var WORKING = 423;
 
 class CantCarry extends Error {
@@ -22245,25 +24116,25 @@ class CantCarry extends Error {
   }
 }
 async function hashOf(file) {
-  const hash = createHash11("sha256");
+  const hash = createHash13("sha256");
   for await (const chunk of createReadStream(file))
     hash.update(chunk);
   return hash.digest("hex");
 }
 async function plainFiles(from, link, at = "") {
-  const whole = at ? join30(from, at) : from;
+  const whole = at ? join33(from, at) : from;
   const kind = await lstat2(whole);
   if (kind.isFile())
     return [{ path: at, size: kind.size }];
   if (!kind.isDirectory())
     throw link(whole);
   const files = [];
-  for (const name of (await readdir(whole)).sort())
-    files.push(...await plainFiles(from, link, at ? join30(at, name) : name));
+  for (const name of (await readdir2(whole)).sort())
+    files.push(...await plainFiles(from, link, at ? join33(at, name) : name));
   return files;
 }
 var digestOf = (records, lanes, said = []) => {
-  const hash = createHash11("sha256");
+  const hash = createHash13("sha256");
   for (const record of records)
     hash.update(`r ${record.path} ${record.size} ${record.sha256}
 `);
@@ -22324,18 +24195,18 @@ class Carrying {
     return { files };
   }
   async laneList(at, files) {
-    const link = (path) => new CantCarry(`its conversation has something that isn't a plain file (${basename11(path)})`);
+    const link = (path) => new CantCarry(`its conversation has something that isn't a plain file (${basename12(path)})`);
     const out = [];
     const take = async (from, into) => {
       for (const { path, size } of await plainFiles(from, link)) {
-        const whole = path ? join30(from, path) : from;
-        out.push({ from: whole, file: { path: path ? join30(into, path) : into, size, sha256: await hashOf(whole) } });
+        const whole = path ? join33(from, path) : from;
+        out.push({ from: whole, file: { path: path ? join33(into, path) : into, size, sha256: await hashOf(whole) } });
       }
     };
     for (const item of files.items)
-      await take(item.path, join30("lanes", String(at), "conversation", item.name));
+      await take(item.path, join33("lanes", String(at), "conversation", item.name));
     if (files.memory)
-      await take(files.memory, join30("lanes", String(at), "memory"));
+      await take(files.memory, join33("lanes", String(at), "memory"));
     return out;
   }
   async read(root, conversation, into) {
@@ -22353,12 +24224,12 @@ class Carrying {
       said.push(JSON.stringify([id, record.session.title ?? null, record.session.model ?? null, archived]));
       for (const name of ["session.json", "messages.json", "agent.json"]) {
         const file = this.store.fileOf(id, name);
-        const path = join30("sessions", id, name);
+        const path = join33("sessions", id, name);
         if (name === "messages.json")
-          records.push({ path, size: (await stat2(file)).size, sha256: await hashOf(file) });
+          records.push({ path, size: (await stat3(file)).size, sha256: await hashOf(file) });
         if (into) {
-          await mkdir(dirname17(join30(into, path)), { recursive: true });
-          await copyFile(file, join30(into, path));
+          await mkdir(dirname18(join33(into, path)), { recursive: true });
+          await copyFile(file, join33(into, path));
         }
       }
       const slots = this.sessions.slotsOf(id);
@@ -22385,8 +24256,8 @@ class Carrying {
           left.push({ provider, paths: files.items.map((item) => item.path), ...files.memory && !files.memoryShared ? { memory: files.memory } : {}, directory: record.session.location.directory });
         if (into) {
           for (const { from, file } of list) {
-            await mkdir(dirname17(join30(into, file.path)), { recursive: true });
-            await copyFile(from, join30(into, file.path));
+            await mkdir(dirname18(join33(into, file.path)), { recursive: true });
+            await copyFile(from, join33(into, file.path));
           }
         }
         at++;
@@ -22413,7 +24284,7 @@ class Carrying {
     if (!closed)
       return;
     const files = family.flatMap((record) => Object.entries(this.sessions.slotsOf(record.session.id)).flatMap(([provider, slot]) => this.laneFiles(record, provider, slot.state, true).files?.items.map((item) => item.path) ?? []));
-    const when = async () => (await Promise.all(files.map((file) => stat2(file).then((found) => found.mtimeMs, () => 0)))).join();
+    const when = async () => (await Promise.all(files.map((file) => stat3(file).then((found) => found.mtimeMs, () => 0)))).join();
     const began = Date.now();
     let last = await when();
     while (Date.now() - began < QUIET.most) {
@@ -22446,7 +24317,7 @@ class Carrying {
       if (concrete)
         each.model = concrete;
     }
-    await writeFile(join30(into, "carry.json"), JSON.stringify(manifest), { mode: 384 });
+    await writeFile(join33(into, "carry.json"), JSON.stringify(manifest), { mode: 384 });
     return { sessions: manifest.sessions, lanes: manifest.lanes.map(({ list: _, ...lane }) => lane), digest: manifest.digest, left };
   }
   async concreteOf(model) {
@@ -22464,10 +24335,10 @@ class Carrying {
   async keep(root, into) {
     for (const { session } of this.family(root)) {
       this.store.save(session.id, true);
-      const folder = join30(into, session.id);
+      const folder = join33(into, session.id);
       await mkdir(folder, { recursive: true });
       for (const name of ["session.json", "messages.json"])
-        await copyFile(this.store.fileOf(session.id, name), join30(folder, name));
+        await copyFile(this.store.fileOf(session.id, name), join33(folder, name));
     }
   }
   async hostOf(provider) {
@@ -22536,7 +24407,7 @@ class Carrying {
         stillOn();
         const read = async (name, or) => {
           try {
-            return JSON.parse(await readFile3(join30(from, "sessions", id, name), "utf8"));
+            return JSON.parse(await readFile4(join33(from, "sessions", id, name), "utf8"));
           } catch (error) {
             if (or !== undefined)
               return or;
@@ -22553,7 +24424,7 @@ class Carrying {
           const { chat: _, ...kuvo } = session.metadata?.kuvo ?? {};
           session.metadata = { ...session.metadata ?? {}, kuvo: chat ? { ...kuvo, chat } : kuvo };
         }
-        session.projectID = "prj_" + createHash11("sha1").update(directory).digest("hex").slice(0, 16);
+        session.projectID = "prj_" + createHash13("sha1").update(directory).digest("hex").slice(0, 16);
         delete agent.snapshots;
         const lanesHere = manifest.lanes.filter((lane) => lane.session === id);
         const threads = agent.threads ?? {};
@@ -22569,15 +24440,15 @@ class Carrying {
             kept[here] = slot;
             const where = host.conversationPlace(slot.state, session);
             for (const file of lane.list) {
-              const conversation = join30("lanes", String(manifest.lanes.indexOf(lane)), "conversation") + sep11;
-              const memory = join30("lanes", String(manifest.lanes.indexOf(lane)), "memory");
-              const dest = file.path.startsWith(conversation) ? where.item(file.path.slice(conversation.length)) : file.path === memory ? where.memory ?? null : file.path.startsWith(memory + sep11) && where.memory ? join30(where.memory, file.path.slice(memory.length + 1)) : null;
+              const conversation = join33("lanes", String(manifest.lanes.indexOf(lane)), "conversation") + sep11;
+              const memory = join33("lanes", String(manifest.lanes.indexOf(lane)), "memory");
+              const dest = file.path.startsWith(conversation) ? where.item(file.path.slice(conversation.length)) : file.path === memory ? where.memory ?? null : file.path.startsWith(memory + sep11) && where.memory ? join33(where.memory, file.path.slice(memory.length + 1)) : null;
               if (!dest)
                 throw new CantCarry("its conversation didn't come whole");
               if (inUse.some((path) => dest === path || dest.startsWith(path + sep11)))
                 throw new CantCarry("its conversation is one here already");
               stillOn();
-              await undo.put(join30(from, file.path), dest, file, Boolean(where.memoryMerges && !file.path.startsWith(conversation)));
+              await undo.put(join33(from, file.path), dest, file, Boolean(where.memoryMerges && !file.path.startsWith(conversation)));
             }
             placed.push(lane);
           } else {
@@ -22609,7 +24480,7 @@ class Carrying {
   async readManifest(from) {
     let manifest;
     try {
-      manifest = JSON.parse(await readFile3(join30(from, "carry.json"), "utf8"));
+      manifest = JSON.parse(await readFile4(join33(from, "carry.json"), "utf8"));
     } catch {
       throw new CantCarry("its conversation didn't come whole");
     }
@@ -22627,11 +24498,11 @@ class Carrying {
   async checked(from, file) {
     let found;
     try {
-      found = await lstat2(join30(from, file.path));
+      found = await lstat2(join33(from, file.path));
     } catch {
       throw new CantCarry("a file of its conversation didn't come with it");
     }
-    if (!found.isFile() || found.size !== file.size || await hashOf(join30(from, file.path)) !== file.sha256)
+    if (!found.isFile() || found.size !== file.size || await hashOf(join33(from, file.path)) !== file.sha256)
       throw new CantCarry("a file of its conversation didn't come whole");
   }
   async undo(keep) {
@@ -22690,11 +24561,11 @@ class Undo {
     this.keep = keep;
   }
   get file() {
-    return join30(this.keep, "placed.json");
+    return join33(this.keep, "placed.json");
   }
   async read() {
     try {
-      const said = JSON.parse(await readFile3(this.file, "utf8"));
+      const said = JSON.parse(await readFile4(this.file, "utf8"));
       this.list = { sessions: Array.isArray(said?.sessions) ? said.sessions : [], placed: Array.isArray(said?.placed) ? said.placed : [] };
     } catch {}
     return this.list;
@@ -22707,23 +24578,23 @@ class Undo {
     await this.write();
   }
   async put(from, dest, file, merges) {
-    await mkdir(dirname17(dest), { recursive: true });
+    await mkdir(dirname18(dest), { recursive: true });
     let there = await lstat2(dest).then(() => true, () => false);
     if (there && merges) {
       if (await hashOf(dest).catch(() => "") === file.sha256)
         return;
-      dest = join30(dirname17(dest), `moved-${file.sha256.slice(0, 8)}-${basename11(dest)}`);
+      dest = join33(dirname18(dest), `moved-${file.sha256.slice(0, 8)}-${basename12(dest)}`);
       there = await lstat2(dest).then(() => true, () => false);
       if (there)
         return;
     }
     const placed = merges ? { dest, sha256: file.sha256 } : { dest };
     if (there)
-      placed.replaced = join30(this.keep, "replaced", String(this.count++));
+      placed.replaced = join33(this.keep, "replaced", String(this.count++));
     this.list.placed.push(placed);
     await this.write();
     if (placed.replaced) {
-      await mkdir(dirname17(placed.replaced), { recursive: true });
+      await mkdir(dirname18(placed.replaced), { recursive: true });
       await rename(dest, placed.replaced);
     }
     await copyFile(from, dest);
@@ -23295,7 +25166,7 @@ function bare(call) {
   }
   return call;
 }
-function trimmed(call) {
+function trimmed2(call) {
   const cut = (output) => output.map((item) => item?.type === "text" && length(item.text) > 4000 ? { ...item, text: sliceCharacters(item.text, 4000) + "\u2026" } : item);
   const state = call.state;
   if (state?.status === "completed")
@@ -23364,8 +25235,8 @@ function seatRules(folder, askFirst, denies) {
 }
 
 // Packages/Box/src/agents/groups/store.ts
-import { existsSync as existsSync17, mkdirSync as mkdirSync18, readdirSync as readdirSync16, readFileSync as readFileSync27, renameSync as renameSync14, rmSync as rmSync14, writeFileSync as writeFileSync19 } from "fs";
-import { join as join31 } from "path";
+import { existsSync as existsSync17, mkdirSync as mkdirSync21, readdirSync as readdirSync16, readFileSync as readFileSync29, renameSync as renameSync17, rmSync as rmSync15, writeFileSync as writeFileSync22 } from "fs";
+import { join as join34 } from "path";
 var version2 = 1;
 function isTurning(value) {
   return value && typeof value.bot === "string" && typeof value.seat === "string" && typeof value.agents === "boolean" && typeof value.prompt === "string" && typeof value.sent === "number" && (value.wrapUp === undefined || typeof value.wrapUp === "boolean");
@@ -23407,21 +25278,21 @@ function isMessages(value) {
 var forgottenFor = 3 * 86400000;
 var read2 = (file) => {
   try {
-    return JSON.parse(readFileSync27(file, "utf8"));
+    return JSON.parse(readFileSync29(file, "utf8"));
   } catch {
     return;
   }
 };
 var text3 = (file) => {
   try {
-    return readFileSync27(file, "utf8");
+    return readFileSync29(file, "utf8");
   } catch {
     return;
   }
 };
 function write(file, value) {
-  writeFileSync19(file + ".new", JSON.stringify(value, null, 2), { mode: 384 });
-  renameSync14(file + ".new", file);
+  writeFileSync22(file + ".new", JSON.stringify(value, null, 2), { mode: 384 });
+  renameSync17(file + ".new", file);
 }
 
 class GroupStore {
@@ -23432,10 +25303,10 @@ class GroupStore {
     this.root = root;
     this.bots = bots;
     this.agentsFile = agentsFile;
-    mkdirSync18(root, { recursive: true, mode: 448 });
+    mkdirSync21(root, { recursive: true, mode: 448 });
   }
   folder(id) {
-    return join31(this.root, id);
+    return join34(this.root, id);
   }
   load() {
     const all = new Map;
@@ -23453,39 +25324,39 @@ class GroupStore {
     return all;
   }
   read(id) {
-    const record = read2(join31(this.folder(id), "group.json"));
+    const record = read2(join34(this.folder(id), "group.json"));
     if (!record || typeof record.kuvo !== "number" || record.kuvo > version2 || !isGroup(record.group, id))
       return;
-    const messages = read2(join31(this.folder(id), "messages.json")) ?? [];
+    const messages = read2(join34(this.folder(id), "messages.json")) ?? [];
     if (!isMessages(messages))
       return;
     return { group: record.group, status: record.status === "held" ? "held" : "active", talking: record.talking === true, paused: record.paused === true, ...isTurning(record.turning) ? { turning: record.turning } : {}, messages };
   }
   saveGroup(kept) {
-    mkdirSync18(this.folder(kept.group.id), { recursive: true, mode: 448 });
-    write(join31(this.folder(kept.group.id), "group.json"), { kuvo: version2, status: kept.status, ...kept.talking ? { talking: true } : {}, ...kept.paused ? { paused: true } : {}, ...kept.turning ? { turning: kept.turning } : {}, group: kept.group });
+    mkdirSync21(this.folder(kept.group.id), { recursive: true, mode: 448 });
+    write(join34(this.folder(kept.group.id), "group.json"), { kuvo: version2, status: kept.status, ...kept.talking ? { talking: true } : {}, ...kept.paused ? { paused: true } : {}, ...kept.turning ? { turning: kept.turning } : {}, group: kept.group });
   }
   saveMessages(kept) {
-    mkdirSync18(this.folder(kept.group.id), { recursive: true, mode: 448 });
-    write(join31(this.folder(kept.group.id), "messages.json"), kept.messages);
+    mkdirSync21(this.folder(kept.group.id), { recursive: true, mode: 448 });
+    write(join34(this.folder(kept.group.id), "messages.json"), kept.messages);
   }
   setAwake(id, awake) {
-    const file = join31(this.folder(id), "awake");
+    const file = join34(this.folder(id), "awake");
     if (awake && !existsSync17(file) && existsSync17(this.folder(id)))
-      writeFileSync19(file, "");
+      writeFileSync22(file, "");
     if (!awake)
-      rmSync14(file, { force: true });
+      rmSync15(file, { force: true });
   }
   trash(id, trash) {
     if (!existsSync17(this.folder(id)))
       return;
-    const into = join31(trash, `${new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "")}-group-${id}`);
-    mkdirSync18(into, { recursive: true, mode: 448 });
-    renameSync14(this.folder(id), join31(into, id));
+    const into = join34(trash, `${new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "")}-group-${id}`);
+    mkdirSync21(into, { recursive: true, mode: 448 });
+    renameSync17(this.folder(id), join34(into, id));
     emit("kuvo.group.trashed", { id, path: into });
   }
   settings() {
-    const value = read2(join31(this.root, "settings.json"));
+    const value = read2(join34(this.root, "settings.json"));
     if (!value || typeof value !== "object")
       return;
     return {
@@ -23498,8 +25369,8 @@ class GroupStore {
     };
   }
   writeSettings(settings) {
-    const kept = read2(join31(this.root, "settings.json"));
-    write(join31(this.root, "settings.json"), { ...kept && typeof kept === "object" ? kept : {}, kuvo: version2, ...settings });
+    const kept = read2(join34(this.root, "settings.json"));
+    write(join34(this.root, "settings.json"), { ...kept && typeof kept === "object" ? kept : {}, kuvo: version2, ...settings });
   }
   allBots() {
     let names = [];
@@ -23511,28 +25382,28 @@ class GroupStore {
   bot(id) {
     if (!/^bot_[A-Za-z0-9]+$/.test(id))
       return;
-    const folder = join31(this.bots, id);
-    const described = read2(join31(folder, "bot.json"));
-    const sessionID = text3(join31(folder, "session"))?.trim();
+    const folder = join34(this.bots, id);
+    const described = read2(join34(folder, "bot.json"));
+    const sessionID = text3(join34(folder, "session"))?.trim();
     if (!described?.name || !sessionID)
       return;
-    const job = read2(join31(folder, "job.json"));
-    const directory = text3(join31(folder, "directory"))?.trim() || join31(folder, "workspace");
+    const job = read2(join34(folder, "job.json"));
+    const directory = text3(join34(folder, "directory"))?.trim() || join34(folder, "workspace");
     return {
       id,
       name: String(described.name),
       job: typeof job?.line === "string" ? job.line : String(described.job ?? ""),
       instructions: typeof job?.details === "string" ? job.details : "",
-      memoryFile: join31(folder, "MEMORY.md"),
+      memoryFile: join34(folder, "MEMORY.md"),
       folder,
       sessionID,
       directory,
       model: described.model?.id && described.model?.providerID ? described.model : undefined,
       personality: typeof described.personality === "string" ? described.personality : undefined,
-      agents: text3(join31(folder, "via"))?.trim() === "bridge",
+      agents: text3(join34(folder, "via"))?.trim() === "bridge",
       ...described.look !== undefined ? { look: described.look } : {},
       ...typeof described.created === "string" ? { created: described.created } : {},
-      ...text3(join31(folder, "paused"))?.trim() === "moving" ? { moving: true } : {}
+      ...text3(join34(folder, "paused"))?.trim() === "moving" ? { moving: true } : {}
     };
   }
   peerMemory(bot) {
@@ -23544,7 +25415,7 @@ class GroupStore {
     return typeof at === "number" ? at : 0;
   }
   peerEntries(bot) {
-    const all = read2(join31(this.root, "peer-memory.json"));
+    const all = read2(join34(this.root, "peer-memory.json"));
     const entries = all && typeof all === "object" ? all[bot] : undefined;
     return entries && typeof entries === "object" ? entries : {};
   }
@@ -23560,7 +25431,7 @@ class GroupStore {
     });
   }
   changePeerMemory(bot, change) {
-    const all = read2(join31(this.root, "peer-memory.json")) ?? {};
+    const all = read2(join34(this.root, "peer-memory.json")) ?? {};
     const entries = { ...all[bot] ?? {} };
     change(entries);
     for (const [key, entry] of Object.entries(entries))
@@ -23570,10 +25441,10 @@ class GroupStore {
       delete all[bot];
     else
       all[bot] = entries;
-    write(join31(this.root, "peer-memory.json"), all);
+    write(join34(this.root, "peer-memory.json"), all);
   }
   peerWork() {
-    const all = read2(join31(this.root, "peer-work.json"));
+    const all = read2(join34(this.root, "peer-work.json"));
     return all && typeof all === "object" ? all : {};
   }
   keepPeerWork(task, work) {
@@ -23587,39 +25458,39 @@ class GroupStore {
   changePeerWork(change) {
     const all = this.peerWork();
     change(all);
-    write(join31(this.root, "peer-work.json"), all);
+    write(join34(this.root, "peer-work.json"), all);
   }
   pendingMemory() {
-    const value = read2(join31(this.root, "pending-memory.json"));
+    const value = read2(join34(this.root, "pending-memory.json"));
     if (!value || typeof value !== "object" || Array.isArray(value))
       return {};
     return Object.fromEntries(Object.entries(value).filter(([bot, chats]) => /^bot_[A-Za-z0-9]+$/.test(bot) && strings2(chats)));
   }
   setPendingMemory(pending) {
     if (Object.keys(pending).length === 0)
-      rmSync14(join31(this.root, "pending-memory.json"), { force: true });
+      rmSync15(join34(this.root, "pending-memory.json"), { force: true });
     else
-      write(join31(this.root, "pending-memory.json"), pending);
+      write(join34(this.root, "pending-memory.json"), pending);
   }
   peerTurns() {
-    const all = read2(join31(this.root, "peer-turns.json"));
+    const all = read2(join34(this.root, "peer-turns.json"));
     return all && typeof all === "object" ? all : {};
   }
   keepPeerTurns(turns) {
-    write(join31(this.root, "peer-turns.json"), turns);
+    write(join34(this.root, "peer-turns.json"), turns);
   }
   writeFile(path, contents) {
-    mkdirSync18(join31(path, ".."), { recursive: true });
-    writeFileSync19(path + ".new", contents, { mode: 384 });
-    renameSync14(path + ".new", path);
+    mkdirSync21(join34(path, ".."), { recursive: true });
+    writeFileSync22(path + ".new", contents, { mode: 384 });
+    renameSync17(path + ".new", path);
   }
   removeFile(path) {
-    rmSync14(path, { force: true });
+    rmSync15(path, { force: true });
   }
 }
 
 // Packages/Box/src/agents/groups/named.ts
-import { readFileSync as readFileSync28 } from "fs";
+import { readFileSync as readFileSync30 } from "fs";
 var start = "<named-agents>";
 var end = "</named-agents>";
 var heading = "Agents the user named with & in this message, by their address. Read one's conversation with read_conversation only when what the user asks needs what it knows or did, and write to it with send_message only to ask it something or hand it work; when the user only mentions one, do neither:";
@@ -23627,7 +25498,7 @@ function readDirectory(file) {
   if (!file)
     return { machine: null, agents: [] };
   try {
-    const value = JSON.parse(readFileSync28(file, "utf8"));
+    const value = JSON.parse(readFileSync30(file, "utf8"));
     const agents = Array.isArray(value?.agents) ? value.agents.filter((agent) => agent && typeof agent.session === "string" && agent.session.startsWith("ses_") && typeof agent.name === "string" && agent.name) : [];
     return { machine: typeof value?.machine === "string" ? value.machine : null, agents };
   } catch {
@@ -23706,10 +25577,10 @@ function parseRepeat(text) {
 }
 var keepsTimeOfDay = (every) => every.kind === "days" || every.kind === "weeks" || every.kind === "weekdays";
 var keepsWeekday = (every) => every.kind === "weeks";
-var formats = new Map;
+var formats2 = new Map;
 var weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 function local(time, zone) {
-  let format = formats.get(zone);
+  let format = formats2.get(zone);
   if (!format) {
     format = new Intl.DateTimeFormat("en-US", {
       timeZone: zone,
@@ -23721,7 +25592,7 @@ function local(time, zone) {
       minute: "numeric",
       weekday: "short"
     });
-    formats.set(zone, format);
+    formats2.set(zone, format);
   }
   const parts = {};
   for (const part of format.formatToParts(new Date(time)))
@@ -23824,15 +25695,15 @@ function planMeeting(plan, before, zone, now = Date.now()) {
 }
 
 // Packages/Box/src/agents/groups/routes.ts
-var json9 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
-var error = (status, message) => json9({ message }, status);
+var json10 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+var error = (status, message) => json10({ message }, status);
 async function groupRoutes(runner, store, method, parts, body) {
   if (!runner || !store)
     return error(404, "Group chats run on the Mac here.");
   const [id, action] = parts;
   if (!id) {
     if (method === "GET")
-      return json9({ version: version2, data: runner.list() });
+      return json10({ version: version2, data: runner.list() });
     return error(405, "Not allowed");
   }
   if ((id === "box-settings" || id === "clock" || id === "settings") && method === "PUT" && action === undefined) {
@@ -23854,14 +25725,14 @@ async function groupRoutes(runner, store, method, parts, body) {
     const after = store.settings();
     if (JSON.stringify([before?.askFirst, before?.denies]) !== JSON.stringify([after?.askFirst, after?.denies]))
       runner.rulesChanged();
-    return json9({});
+    return json10({});
   }
   if (!/^grp_[a-z0-9]+$/.test(id))
     return error(404, "No such chat.");
   if (!action) {
     if (method === "GET") {
       const chat = runner.get(id);
-      return chat ? json9({ version: version2, data: chat }) : error(404, "No such chat.");
+      return chat ? json10({ version: version2, data: chat }) : error(404, "No such chat.");
     }
     if (method === "PUT") {
       const { group, messages, status, replace } = await body();
@@ -23869,7 +25740,7 @@ async function groupRoutes(runner, store, method, parts, body) {
         return error(400, "That isn't a group chat.");
       if (!runner.put(group, messages ?? [], status === "active" ? "active" : "held", replace === true))
         return error(409, "That chat is here already.");
-      return json9({ data: runner.get(id) });
+      return json10({ data: runner.get(id) });
     }
     if (method === "PATCH") {
       const edits = await body();
@@ -23890,12 +25761,12 @@ async function groupRoutes(runner, store, method, parts, body) {
         return error(400, "That isn't a meeting.");
       if (edits?.members !== undefined && !(Array.isArray(edits.members) && edits.members.every((member) => typeof member === "string")))
         return error(400, "Those aren't bots.");
-      return await runner.update(id, edits ?? {}) ? json9({ data: runner.get(id) }) : error(404, "No such chat.");
+      return await runner.update(id, edits ?? {}) ? json10({ data: runner.get(id) }) : error(404, "No such chat.");
     }
     if (method === "DELETE") {
       if (runner.get(id)?.status === "held")
         return error(409, "That chat is moving.");
-      return await runner.delete(id) ? json9({}) : error(404, "No such chat.");
+      return await runner.delete(id) ? json10({}) : error(404, "No such chat.");
     }
     return error(405, "Not allowed");
   }
@@ -23907,12 +25778,12 @@ async function groupRoutes(runner, store, method, parts, body) {
   switch (action) {
     case "activate":
       runner.activate(id);
-      return json9({ data: runner.get(id) });
+      return json10({ data: runner.get(id) });
     case "hold":
-      return json9({ data: runner.hold(id) });
+      return json10({ data: runner.hold(id) });
     case "release":
       runner.release(id);
-      return json9({});
+      return json10({});
   }
   if (found.status !== "active")
     return error(409, "That chat is moving.");
@@ -23924,32 +25795,32 @@ async function groupRoutes(runner, store, method, parts, body) {
       const members = new Set(found.group.members.flatMap((member) => store.bot(member)?.sessionID ?? runner.peers?.bots().find((bot) => bot.id === member)?.session ?? []));
       const named = typeof text === "string" ? namedBlock(text, readDirectory(store.agentsFile), members) : undefined;
       const message = typeof text === "string" ? runner.send(id, text, named) : undefined;
-      return message ? json9({ data: message }) : error(400, "Nothing to send.");
+      return message ? json10({ data: message }) : error(400, "Nothing to send.");
     }
     case "stop":
       runner.stop(id);
-      return json9({});
+      return json10({});
     case "keep-going":
       runner.keepGoing(id);
-      return json9({});
+      return json10({});
     case "undo": {
       const { message } = await body();
       const text = typeof message === "string" ? runner.undo(id, message) : undefined;
-      return text === undefined ? error(404, "No such message.") : json9({ data: { text } });
+      return text === undefined ? error(404, "No such message.") : json10({ data: { text } });
     }
     case "start-work": {
       const { wrapUp } = await body();
       if (typeof wrapUp === "string")
         runner.startWork(wrapUp, id);
-      return json9({});
+      return json10({});
     }
   }
   return error(404, "Not found");
 }
 
 // Packages/Box/src/agents/groups/link.ts
-var json10 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
-var message2 = (status, text) => json10({ message: text }, status);
+var json11 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+var message2 = (status, text) => json11({ message: text }, status);
 var seconds2 = (text) => {
   const time = Date.parse(text ?? "");
   return Number.isFinite(time) ? time / 1000 : undefined;
@@ -24093,7 +25964,7 @@ function joinable(runner, store) {
 }
 async function linkRoutes(runner, store, method, parts, body, signal) {
   if (!runner || !store)
-    return json10({}, 404);
+    return json11({}, 404);
   const [id, action] = parts;
   const here = () => {
     const { here, there } = bots(runner, store);
@@ -24101,21 +25972,21 @@ async function linkRoutes(runner, store, method, parts, body, signal) {
   };
   if (!id || id === "events") {
     if (method === "GET")
-      return id ? following(() => list2(runner, store), undefined, signal) : json10(list2(runner, store));
+      return id ? following(() => list2(runner, store), undefined, signal) : json11(list2(runner, store));
     if (method === "POST" && !id)
       return await make(runner, store, await body().catch(() => {
         return;
       }), here());
-    return json10({}, 405);
+    return json11({}, 405);
   }
   if (id === "joinable")
-    return method === "GET" ? json10({ bots: joinable(runner, store) }) : json10({}, 405);
+    return method === "GET" ? json11({ bots: joinable(runner, store) }) : json11({}, 405);
   if (!/^grp_[a-z0-9]+$/.test(id))
-    return json10({}, 404);
+    return json11({}, 404);
   if (method === "GET" && (!action || action === "events")) {
     if (!chat(runner, id))
-      return json10({}, 404);
-    return action ? following((withMessages) => chat(runner, id, withMessages), id, signal) : json10(chat(runner, id));
+      return json11({}, 404);
+    return action ? following((withMessages) => chat(runner, id, withMessages), id, signal) : json11(chat(runner, id));
   }
   if (method === "PATCH" && !action) {
     const given = await body().catch(() => {
@@ -24149,18 +26020,18 @@ async function linkRoutes(runner, store, method, parts, body, signal) {
     const asked = await ask(runner, store, "PATCH", [id], edits);
     if (asked.status !== 200)
       return message2([400, 404, 409].includes(asked.status) ? asked.status : 503, asked.value?.message ?? "The group chat couldn\u2019t be changed.");
-    return json10({ group: list2(runner, store).groups.find((each) => each.id === id) ?? null });
+    return json11({ group: list2(runner, store).groups.find((each) => each.id === id) ?? null });
   }
   if (method === "DELETE" && !action) {
     const asked = await ask(runner, store, "DELETE", [id]);
     if (asked.status === 200 || asked.status === 404 && asked.value?.message === "No such chat.")
-      return json10({});
+      return json11({});
     if (asked.status === 409)
       return message2(409, "That chat is moving. Try again once it\u2019s there.");
     return message2(503, asked.value?.message ?? "The group chat couldn\u2019t be deleted. Try again in a moment.");
   }
   if (method !== "POST" || action === "events")
-    return json10({}, 405);
+    return json11({}, 405);
   const given = await body().catch(() => {
     return;
   }) ?? {};
@@ -24168,7 +26039,7 @@ async function linkRoutes(runner, store, method, parts, body, signal) {
   switch (action) {
     case undefined:
       if (typeof given.text !== "string" || !trim(given.text))
-        return json10({}, 400);
+        return json11({}, 400);
       asked = await ask(runner, store, "POST", [id, "send"], { text: given.text, ...typeof given.named === "string" ? { named: given.named } : {} });
       if (asked.status === 400 && asked.value?.message)
         return message2(400, asked.value.message);
@@ -24182,21 +26053,21 @@ async function linkRoutes(runner, store, method, parts, body, signal) {
       break;
     case "undo": {
       if (typeof given.message !== "string")
-        return json10({}, 404);
+        return json11({}, 404);
       asked = await ask(runner, store, "POST", [id, "undo"], { message: given.message });
       if (asked.status !== 200)
-        return json10({}, failed(asked.status));
-      return json10({ text: asked.value?.data?.text ?? "" });
+        return json11({}, failed(asked.status));
+      return json11({ text: asked.value?.data?.text ?? "" });
     }
     case "start":
       if (typeof given.message !== "string")
-        return json10({}, 404);
+        return json11({}, 404);
       asked = await ask(runner, store, "POST", [id, "start-work"], { wrapUp: given.message });
       break;
     default:
-      return json10({}, 404);
+      return json11({}, 404);
   }
-  return json10({}, asked.status === 200 ? 200 : failed(asked.status));
+  return json11({}, asked.status === 200 ? 200 : failed(asked.status));
 }
 async function make(runner, store, given, here) {
   if (!given || typeof given !== "object" || Array.isArray(given))
@@ -24223,14 +26094,295 @@ async function make(runner, store, given, here) {
   if (!runner.put({ id, name, ...purpose ? { purpose } : {}, members, seats: {}, heard: {}, created: now, viewed: now, ...meeting ? { meeting } : {} }, [], "active", false)) {
     return message2(409, "That chat is here already.");
   }
-  return json10({ group: list2(runner, store).groups.find((each) => each.id === id) ?? null }, 201);
+  return json11({ group: list2(runner, store).groups.find((each) => each.id === id) ?? null }, 201);
 }
 
 // Packages/Box/src/agents/groups/post.ts
-import { existsSync as existsSync18, readFileSync as readFileSync29, renameSync as renameSync15, writeFileSync as writeFileSync20 } from "fs";
+import { existsSync as existsSync18, readFileSync as readFileSync32, renameSync as renameSync19, writeFileSync as writeFileSync24 } from "fs";
 
 // Packages/Box/src/shared/seats.ts
 var SEAT_MAIL_KINDS = ["turn", "state", "result", "steer", "stop", "drop", "work", "held", "report", "memory"];
+
+// Packages/Box/src/agents/usage/usage-peers.ts
+import { createHash as createHash14 } from "crypto";
+import { mkdirSync as mkdirSync22, readFileSync as readFileSync31, renameSync as renameSync18, writeFileSync as writeFileSync23 } from "fs";
+import { dirname as dirname19 } from "path";
+var isUsageMail = (value) => value !== null && typeof value === "object" && value.kind === "usage";
+var MINUTE3 = 60000;
+var DAY3 = 24 * 60 * MINUTE3;
+var TELL_AGAIN = 10 * MINUTE3;
+var PEER_AWAY = 25 * MINUTE3;
+var SKEW = MINUTE3;
+var MOST_ACCOUNTS = 50;
+var MOST_USES = 50000;
+var MOST_BYTES2 = 400000;
+var RECENT = 2 * 24 * 60 * MINUTE3;
+var SERVICE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+var text4 = (value, most = 200) => typeof value === "string" && value ? value.slice(0, most) : undefined;
+
+class UsagePeers {
+  usage;
+  transport;
+  directory;
+  file;
+  now;
+  most;
+  peers = new Map;
+  told = new Map;
+  answered = new Map;
+  askedBack = new Map;
+  readFor = new Map;
+  refreshedElsewhere = -Infinity;
+  reading = new Set;
+  constructor(usage, transport, directory, file, now = Date.now, most = MOST_BYTES2) {
+    this.usage = usage;
+    this.transport = transport;
+    this.directory = directory;
+    this.file = file;
+    this.now = now;
+    this.most = most;
+    this.load();
+    usage.peers = this;
+    directory.listen(() => this.directorySaid());
+    transport.onFollowed?.(() => this.told.clear());
+  }
+  rows(own) {
+    const now = this.now();
+    const self = this.directory.own();
+    const boxes = [{ key: self?.key ?? "", name: self?.name ?? "", here: true, away: false, accounts: own }];
+    const peers = [...this.peers.entries()].sort(([, a], [, b]) => a.name.localeCompare(b.name));
+    for (const [key, kept] of peers)
+      boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY, vouched: this.vouched(key), accounts: kept.accounts.map((account) => ({ ...account, slots: trimmed(account.slots, now) })) });
+    return usageRows(boxes);
+  }
+  vouched(key) {
+    if (!this.directory.isPeer)
+      return false;
+    return this.directory.told ? !this.directory.isPeer(key) : this.peers.get(key)?.vouched === true;
+  }
+  tell(changed = false) {
+    if (!this.transport.followed || !this.directory.told)
+      return;
+    const now = this.now();
+    const { accounts, digest } = this.shared();
+    const from = Math.floor((now - RECENT) / SLOT);
+    const recent = () => recentOf(accounts, from);
+    for (const { key } of this.directory.peerBoxes()) {
+      const last = this.told.get(key);
+      if (!last)
+        this.transport.send(key, { kind: "usage", at: now, accounts, digest, ask: true }, false);
+      else if (last.digest !== digest && (changed || now - last.at >= TELL_AGAIN))
+        this.transport.send(key, { kind: "usage", at: now, accounts: recent(), from, digest }, false);
+      else if (now - last.at >= TELL_AGAIN)
+        this.transport.send(key, { kind: "usage", at: now, digest }, false);
+      else
+        continue;
+      this.told.set(key, { digest, at: now });
+    }
+  }
+  refreshElsewhere() {
+    if (!this.transport.followed || !this.directory.told)
+      return;
+    const now = this.now();
+    if (now - this.refreshedElsewhere < MINUTE3)
+      return;
+    this.refreshedElsewhere = now;
+    const digest = this.lastDigest ?? this.shared().digest;
+    for (const { key } of this.directory.peerBoxes())
+      this.transport.send(key, { kind: "usage", at: now, digest, refresh: true }, false);
+  }
+  take(from, mail) {
+    if (!isUsageMail(mail))
+      return;
+    if (this.directory.told && !this.directory.peerBoxes().some((box) => box.key === from))
+      return;
+    const now = this.now();
+    const before = this.peers.get(from);
+    const name = this.directory.peerBoxes().find((box) => box.key === from)?.name ?? before?.name ?? "another computer";
+    const digest = text4(mail.digest, 64);
+    const wasAway = !!before && now - before.heard > PEER_AWAY;
+    let whole = !!before && !!digest && before.digest === digest;
+    if (Array.isArray(mail.accounts)) {
+      const off = typeof mail.at === "number" && Number.isFinite(mail.at) && Math.abs(now - mail.at) >= SKEW ? now - mail.at : 0;
+      let accounts = mail.accounts.slice(0, MOST_ACCOUNTS).flatMap((account) => {
+        const taken = takenAccount(account, off, now);
+        return taken ? [taken] : [];
+      });
+      const since = typeof mail.from === "number" && Number.isInteger(mail.from) && mail.from > 0 ? mail.from * SLOT : undefined;
+      if (since !== undefined)
+        accounts = accounts.map((account) => withOlder(account, before?.accounts.find((kept) => kept.provider === account.provider), since));
+      whole = !!digest && digestOf2(accounts.map(toldOf2)) === digest;
+      const vouched = this.vouched(from);
+      this.peers.set(from, { name, heard: now, ...digest ? { digest } : {}, ...vouched ? { vouched } : {}, accounts });
+      this.save();
+      this.usage.peersChanged();
+    } else if (before) {
+      before.heard = now;
+      before.name = name;
+      if (wasAway)
+        this.usage.peersChanged();
+    }
+    if (!whole && digest && mail.ask !== true && now - (this.askedBack.get(from) ?? -Infinity) >= MINUTE3) {
+      this.askedBack.set(from, now);
+      const mine = this.shared();
+      this.transport.send(from, { kind: "usage", at: now, ...mine, ask: true }, false);
+      this.told.set(from, { digest: mine.digest, at: now });
+    }
+    if (mail.ask === true || wasAway)
+      this.answer(from, mail.ask === true);
+    if (mail.refresh === true && now - (this.readFor.get(from) ?? -Infinity) >= MINUTE3) {
+      this.readFor.set(from, now);
+      const reading = this.usage.refresh().then(() => this.answer(from, true));
+      this.reading.add(reading);
+      reading.finally(() => this.reading.delete(reading));
+    }
+  }
+  async idle() {
+    while (this.reading.size)
+      await Promise.all([...this.reading]);
+  }
+  answer(key, urgent = false) {
+    if (!this.transport.followed)
+      return;
+    const now = this.now();
+    if (!urgent && now - (this.answered.get(key) ?? -Infinity) < MINUTE3)
+      return;
+    this.answered.set(key, now);
+    const mine = this.shared();
+    this.transport.send(key, { kind: "usage", at: now, ...mine }, false);
+    this.told.set(key, { digest: mine.digest, at: now });
+  }
+  lastDigest;
+  shared() {
+    const start = Math.floor(Math.floor((this.now() - KEPT_DAYS * DAY3) / DAY3) * DAY3) / SLOT;
+    const accounts = this.usage.own().slice(0, MOST_ACCOUNTS).flatMap((own) => {
+      const taken = takenAccount(toldOf2(own), 0, Infinity);
+      return taken ? [{ ...toldOf2(taken), slots: fromSlot(keptSlots(taken.slots), start), whole: start }] : [];
+    });
+    for (let bytes = Buffer.byteLength(JSON.stringify(accounts));bytes > this.most; bytes = Buffer.byteLength(JSON.stringify(accounts))) {
+      const uses = accounts.reduce((sum, account) => sum + account.slots.used.length, 0);
+      if (!uses)
+        break;
+      const over = Math.ceil((bytes - this.most) / bytes * uses) + 16;
+      const cutoff = accounts.flatMap((account) => account.slots.used.map((use) => use[0])).sort((a, b) => a - b)[Math.min(over, uses) - 1];
+      for (const account of accounts) {
+        if (!account.slots.used.some((use) => use[0] <= cutoff))
+          continue;
+        account.slots = fromSlot(account.slots, cutoff + 1);
+        account.whole = Math.max(account.whole ?? 0, cutoff + 1);
+        account.cut = true;
+      }
+    }
+    const digest = digestOf2(accounts);
+    this.lastDigest = digest;
+    return { accounts, digest };
+  }
+  directorySaid() {
+    const here = new Set(this.directory.peerBoxes().map((box) => box.key));
+    let gone = false;
+    for (const key of [...this.peers.keys()]) {
+      if (here.has(key))
+        continue;
+      this.peers.delete(key);
+      gone = true;
+    }
+    for (const map of [this.told, this.answered, this.askedBack, this.readFor])
+      for (const key of [...map.keys()])
+        if (!here.has(key))
+          map.delete(key);
+    let moved = false;
+    for (const [key, kept] of this.peers) {
+      const vouched = this.vouched(key);
+      if (kept.vouched === true === vouched)
+        continue;
+      if (vouched)
+        kept.vouched = true;
+      else
+        delete kept.vouched;
+      moved = true;
+    }
+    if (gone || moved) {
+      this.save();
+      this.usage.peersChanged();
+    }
+    this.tell();
+  }
+  load() {
+    if (!this.file)
+      return;
+    try {
+      const saved = JSON.parse(readFileSync31(this.file, "utf8"));
+      for (const [key, kept] of Object.entries(saved.peers ?? {})) {
+        if (!kept || typeof kept.heard !== "number" || !Array.isArray(kept.accounts))
+          continue;
+        const digest = text4(kept.digest, 64);
+        this.peers.set(key, { name: typeof kept.name === "string" ? kept.name : "another computer", heard: kept.heard, ...digest ? { digest } : {}, ...kept.vouched === true ? { vouched: true } : {}, accounts: kept.accounts.flatMap((account) => takenAccount(account, 0, Infinity) ?? []) });
+      }
+    } catch {}
+  }
+  save() {
+    if (!this.file)
+      return;
+    try {
+      mkdirSync22(dirname19(this.file), { recursive: true });
+      const peers = Object.fromEntries([...this.peers].map(([key, kept]) => [key, { ...kept, accounts: kept.accounts.map(({ slots, ...account }) => ({ ...account, slots: keptSlots(slots) })) }]));
+      writeFileSync23(this.file + ".new", JSON.stringify({ peers }), { mode: 384 });
+      renameSync18(this.file + ".new", this.file);
+    } catch {}
+  }
+}
+function digestOf2(accounts) {
+  const canonical = accounts.map((account) => [account.provider, account.service, account.agent ?? null, account.account ?? null, account.label ?? null, account.identity ?? null, account.cut === true, account.places ?? [], account.slots.models, account.slots.used, account.slots.unknown ?? []]);
+  return createHash14("sha256").update(JSON.stringify(canonical)).digest("hex").slice(0, 32);
+}
+var toldOf2 = ({ slots, ...account }) => ({ ...account, slots: keptSlots(slots) });
+function fromSlot(slots, first) {
+  return keptSlots(slotsFrom({ ...slots, used: slots.used.filter((use) => use[0] >= first), ...slots.unknown ? { unknown: slots.unknown.filter((each) => each[0] >= first) } : {} }, Infinity));
+}
+function recentOf(accounts, from) {
+  return accounts.map((account) => ({
+    ...account,
+    slots: { models: account.slots.models, used: account.slots.used.filter((use) => use[0] >= from), ...account.slots.unknown ? { unknown: account.slots.unknown.filter((each) => each[0] >= from) } : {} }
+  }));
+}
+function withOlder(account, kept, since) {
+  const slots = noSlots();
+  const first = (account.whole ?? 0) * SLOT;
+  for (const [slot, models] of kept?.slots.used ?? [])
+    if (slot < since && slot >= first)
+      slots.used.set(slot, models);
+  for (const [slot, models] of kept?.slots.unknown ?? [])
+    if (slot < since && slot >= first)
+      slots.unknown.set(slot, models);
+  for (const [slot, models] of account.slots.used)
+    if (slot >= since)
+      slots.used.set(slot, models);
+  for (const [slot, models] of account.slots.unknown)
+    if (slot >= since)
+      slots.unknown.set(slot, models);
+  return { ...account, slots };
+}
+function takenAccount(given, off, now) {
+  if (!given || typeof given !== "object")
+    return null;
+  const account = given;
+  const provider = text4(account.provider);
+  if (!provider || typeof account.service !== "string" || !SERVICE.test(account.service))
+    return null;
+  const scanned = typeof account.scanned === "number" && Number.isFinite(account.scanned) && account.scanned > 0 ? Math.min(account.scanned + off, now) : undefined;
+  return {
+    provider,
+    service: account.service,
+    ...kinds.includes(account.agent) ? { agent: account.agent, ...text4(account.account) ? { account: text4(account.account) } : {} } : {},
+    ...text4(account.label, 100) ? { label: text4(account.label, 100) } : {},
+    ...typeof account.identity === "string" && /^[0-9a-f]{16}$/.test(account.identity) ? { identity: account.identity } : {},
+    ...scanned ? { scanned } : {},
+    slots: slotsFrom(account.slots, MOST_USES),
+    ...account.cut === true ? { cut: true } : {},
+    ...Number.isSafeInteger(account.whole) && account.whole > 0 ? { whole: account.whole } : {},
+    ...Array.isArray(account.places) && account.places.length ? { places: account.places.filter((place) => typeof place === "string" && /^[0-9a-f]{16}$/.test(place)).slice(0, 20) } : {}
+  };
+}
 
 // Packages/Box/src/agents/groups/api.ts
 function server3(url, password) {
@@ -25814,7 +27966,7 @@ class GroupRunner {
       text: ampersands(result.text, this.everyone().map((each) => each.name)),
       time: stamp3(),
       kind: wrapUp ? "wrapUp" : "message",
-      ...result.steps.length ? { steps: result.steps.map(trimmed) } : {}
+      ...result.steps.length ? { steps: result.steps.map(trimmed2) } : {}
     }, id);
     return "said";
   }
@@ -27018,7 +29170,7 @@ class PeerPost {
     let kept = [];
     try {
       if (file && existsSync18(file))
-        kept = JSON.parse(readFileSync29(file, "utf8"));
+        kept = JSON.parse(readFileSync32(file, "utf8"));
     } catch {}
     this.kept = Array.isArray(kept) ? kept.filter((line) => line && typeof line.id === "string" && typeof line.to === "string" && isSeatMail(line.mail)) : [];
   }
@@ -27043,8 +29195,8 @@ class PeerPost {
     if (!this.file)
       return;
     try {
-      writeFileSync20(this.file + ".new", JSON.stringify(this.kept), { mode: 384 });
-      renameSync15(this.file + ".new", this.file);
+      writeFileSync24(this.file + ".new", JSON.stringify(this.kept), { mode: 384 });
+      renameSync19(this.file + ".new", this.file);
     } catch {}
   }
   follow(signal) {
@@ -27135,10 +29287,10 @@ function gaveUp(parts, to, mail, at) {
       return;
   }
 }
-var json11 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+var json12 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 async function peerRoutes(parts, method, path, body, signal) {
   if (!parts)
-    return json11({ message: "Group chats don't run here." }, 404);
+    return json12({ message: "Group chats don't run here." }, 404);
   const [what] = path;
   if (what === "mail" && method === "GET")
     return parts.post.follow(signal);
@@ -27148,42 +29300,46 @@ async function peerRoutes(parts, method, path, body, signal) {
     });
     if (typeof given?.from === "string" && given.from && isLimitsMail(given.mail)) {
       parts.limits?.take(given.from, given.mail);
-      return json11({});
+      return json12({});
+    }
+    if (typeof given?.from === "string" && given.from && isUsageMail(given.mail)) {
+      parts.usage?.take(given.from, given.mail);
+      return json12({});
     }
     if (!parts.server || !parts.runner)
-      return json11({ message: "Group chats don't run here." }, 404);
+      return json12({ message: "Group chats don't run here." }, 404);
     if (typeof given?.from !== "string" || !given.from || !isSeatMail(given.mail))
-      return json11({ message: "That isn't group chat mail." }, 400);
+      return json12({ message: "That isn't group chat mail." }, 400);
     receive(parts, given.from, given.mail);
-    return json11({});
+    return json12({});
   }
   if (what === "gaveup" && method === "POST") {
     if (!parts.server || !parts.runner)
-      return json11({ message: "Group chats don't run here." }, 404);
+      return json12({ message: "Group chats don't run here." }, 404);
     const given = await body().catch(() => {
       return;
     });
     if (typeof given?.to !== "string" || !given.to || !isSeatMail(given.mail))
-      return json11({ message: "That isn't group chat mail." }, 400);
+      return json12({ message: "That isn't group chat mail." }, 400);
     if (!parts.directory.told)
-      return json11({ message: "Not yet." }, 503);
+      return json12({ message: "Not yet." }, 503);
     gaveUp(parts, given.to, given.mail, typeof given.at === "number" ? given.at : undefined);
-    return json11({});
+    return json12({});
   }
   if (what === "sent" && method === "POST") {
     const given = await body().catch(() => {
       return;
     });
     if (!Array.isArray(given?.ids) || !given.ids.every((id) => typeof id === "string"))
-      return json11({ message: "Those aren't mail." }, 400);
+      return json12({ message: "Those aren't mail." }, 400);
     parts.post.sent(given.ids);
-    return json11({});
+    return json12({});
   }
   if (!what && method === "PUT")
     return parts.directory.set(await body().catch(() => {
       return;
-    })) ? json11({}) : json11({ message: "That isn't who your computers are." }, 400);
-  return json11({ message: "Not found" }, 404);
+    })) ? json12({}) : json12({ message: "That isn't who your computers are." }, 400);
+  return json12({ message: "Not found" }, 404);
 }
 
 class LinkDirectory {
@@ -27280,9 +29436,9 @@ setInterval(() => {
     attempts.delete(id);
   }
 }, 60000).unref?.();
-var json12 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
-var located = (value) => json12({ location: { directory: process.cwd() }, data: value });
-var error2 = (status, message) => json12({ message }, status);
+var json13 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+var located = (value) => json13({ location: { directory: process.cwd() }, data: value });
+var error2 = (status, message) => json13({ message }, status);
 var lastSeen = new Map;
 var lastMaintained = new Map;
 function maintainedNow(agent, value) {
@@ -27390,7 +29546,7 @@ function handler(context) {
         return error2(404, "Not found");
       const [, area, a, b, c, d, e] = parts;
       if (area === "info")
-        return json12({ version: context.version, pid: process.pid, build: context.build ?? null });
+        return json13({ version: context.version, pid: process.pid, build: context.build ?? null });
       if (area === "event")
         return feed();
       if (area === "integration") {
@@ -27436,12 +29592,12 @@ function handler(context) {
             if (!pending.attempt.complete)
               return error2(400, "This sign-in finishes in the browser.");
             await pending.attempt.complete(String(code ?? ""));
-            return json12({});
+            return json13({});
           }
           if (method === "DELETE") {
             pending.attempt.cancel();
             attempts.delete(d);
-            return json12({});
+            return json13({});
           }
         }
         if (b === "connect" && c === "key" && method === "POST") {
@@ -27449,12 +29605,12 @@ function handler(context) {
           if (!agent.signInWithKey)
             return error2(400, `${agent.name} doesn't take a key here.`);
           await agent.signInWithKey(String(key ?? "").trim());
-          return json12({});
+          return json13({});
         }
         if (b === "update" && method === "POST") {
           if (!agent.update || !agent.maintenance)
             return error2(400, `Update ${agent.name} the way you installed it.`);
-          return json12({ data: await updateProgram(agent, () => roster.all(), maintainedNow) });
+          return json13({ data: await updateProgram(agent, () => roster.all(), maintainedNow) });
         }
         if (b === "install" && method === "POST") {
           if (!agent.installProgram)
@@ -27468,13 +29624,13 @@ function handler(context) {
             emit("integration.updated", { integrationID: agent.providerID });
             emit("model.updated", {});
           }
-          return json12({ data: result });
+          return json13({ data: result });
         }
         if (b === "disconnect" && method === "POST") {
           if (!agent.signOut)
             return error2(400, `Sign out of ${agent.name} where you signed in.`);
           await agent.signOut();
-          return json12({});
+          return json13({});
         }
       }
       if (area === "model") {
@@ -27501,46 +29657,46 @@ function handler(context) {
           return read ? located(read) : error2(404, "No such command.");
         }
         if (a && !b && method === "DELETE")
-          return await stopShell(a) ? json12({}) : error2(404, "No such command.");
+          return await stopShell(a) ? json13({}) : error2(404, "No such command.");
       }
       if (area === "session") {
         if (!a) {
           if (method === "POST")
-            return json12({ data: sessions.create(await body()) });
+            return json13({ data: sessions.create(await body()) });
           const directory = url.searchParams.get("directory") ?? undefined;
           const under = url.searchParams.get("parentID") ?? url.searchParams.get("cursor")?.split(":")[2] ?? null;
           const roots = sessions.list(directory, under === null || under === "" ? undefined : under === "null" ? null : under);
           const ordered = url.searchParams.get("cursor")?.startsWith("asc") || url.searchParams.get("order") === "asc" ? [...roots].reverse() : roots;
-          return json12(page(ordered, url));
+          return json13(page(ordered, url));
         }
         if (a === "active")
-          return json12({ data: Object.fromEntries(sessions.active().map((id) => [id, { type: "busy" }])) });
+          return json13({ data: Object.fromEntries(sessions.active().map((id) => [id, { type: "busy" }])) });
         if (a === "background")
-          return json12({ data: sessions.background() });
+          return json13({ data: sessions.background() });
         if (a === "import" && method === "POST")
-          return json12({ data: sessions.importSession(await body()) });
+          return json13({ data: sessions.importSession(await body()) });
         const id = a;
         if (!b) {
           if (method === "GET")
-            return json12({ data: sessions.get(id) });
+            return json13({ data: sessions.get(id) });
           if (method === "PATCH") {
             sessions.update(id, await body());
-            return json12({ data: sessions.get(id) });
+            return json13({ data: sessions.get(id) });
           }
           if (method === "DELETE") {
             await sessions.remove(id);
-            return json12({});
+            return json13({});
           }
         }
         switch (b) {
           case "compact":
             if (method === "POST")
-              return json12({ data: sessions.compact(id) });
+              return json13({ data: sessions.compact(id) });
             break;
           case "background":
             if (method === "DELETE") {
               await sessions.stopBackground(id);
-              return json12({});
+              return json13({});
             }
             break;
           case "message": {
@@ -27549,44 +29705,44 @@ function handler(context) {
             const ordered = asc ? messages : [...messages].reverse();
             if (c) {
               const found = messages.find((message) => message.id === c);
-              return found ? json12({ data: found }) : error2(404, "No such message.");
+              return found ? json13({ data: found }) : error2(404, "No such message.");
             }
-            return json12(page(ordered, url));
+            return json13(page(ordered, url));
           }
           case "inbox":
             if (method === "DELETE" && c) {
               sessions.cancelInput(id, c);
-              return json12({});
+              return json13({});
             }
             if (method === "PATCH" && c) {
               sessions.setDelivery(id, c, (await body()).delivery);
-              return json12({});
+              return json13({});
             }
-            return json12({ data: sessions.inbox(id) });
+            return json13({ data: sessions.inbox(id) });
           case "prompt": {
             const input = await body();
             sessions.prompt(id, { id: input.id ?? newID("msg"), text: String(input.text ?? ""), files: input.files ?? [], delivery: input.delivery ?? "steer", metadata: input.metadata && typeof input.metadata === "object" && !Array.isArray(input.metadata) ? input.metadata : undefined });
-            return json12({});
+            return json13({});
           }
           case "fork":
-            return json12({ data: sessions.fork(id, String((await body()).before ?? "")) });
+            return json13({ data: sessions.fork(id, String((await body()).before ?? "")) });
           case "revert":
             if (c === "stage" && method === "POST")
-              return json12({ data: await sessions.stageRevert(id, String((await body()).messageID ?? "")) });
+              return json13({ data: await sessions.stageRevert(id, String((await body()).messageID ?? "")) });
             if (!c && method === "DELETE") {
               await sessions.clearRevert(id);
-              return json12({});
+              return json13({});
             }
             break;
           case "shell":
             if (method !== "POST")
               break;
             sessions.runShell(id, String((await body()).command ?? ""));
-            return json12({});
+            return json13({});
           case "synthetic": {
             const input = await body();
             sessions.synthetic(id, String(input.text ?? ""), typeof input.description === "string" ? input.description : undefined);
-            return json12({});
+            return json13({});
           }
           case "generate": {
             const input = await body();
@@ -27594,7 +29750,7 @@ function handler(context) {
             if (!prompt.trim())
               throw new BadRequest("Say what to write.");
             const model = input.model && typeof input.model.providerID === "string" && typeof input.model.id === "string" ? { providerID: input.model.providerID, id: input.model.id } : undefined;
-            return json12({ data: { text: await sessions.generate(id, prompt, { orAnother: input.orAnother === true, model }) } });
+            return json13({ data: { text: await sessions.generate(id, prompt, { orAnother: input.orAnother === true, model }) } });
           }
           case "command": {
             const input = await body();
@@ -27603,44 +29759,44 @@ function handler(context) {
             const template = name ? await link.commandTemplate(name, sessions.get(id).location.directory) : undefined;
             const text = template ? expandCommand(template, written) : `/${name} ${written}`.trim();
             sessions.prompt(id, { id: newID("msg"), text, files: input.files ?? [], delivery: input.delivery ?? "steer" });
-            return json12({});
+            return json13({});
           }
           case "interrupt":
-            return json12({ interrupted: await sessions.interrupt(id, url.searchParams.get("resume") === "true") });
+            return json13({ interrupted: await sessions.interrupt(id, url.searchParams.get("resume") === "true") });
           case "model":
             sessions.selectModel(id, (await body()).model);
-            return json12({});
+            return json13({});
           case "agent":
             sessions.selectAgent(id, (await body()).agent);
-            return json12({});
+            return json13({});
           case "permission":
             if (!c)
-              return json12({ data: id === "global" ? [] : sessions.permissions(id) });
+              return json13({ data: id === "global" ? [] : sessions.permissions(id) });
             if (d === "reply") {
               const { decision, message } = await body();
               sessions.replyPermission(id, c, decision, typeof message === "string" ? message : undefined);
-              return json12({});
+              return json13({});
             }
             break;
           case "form":
             if (!c)
-              return json12({ data: id === "global" ? [] : sessions.forms(id) });
+              return json13({ data: id === "global" ? [] : sessions.forms(id) });
             if (d === "reply") {
               sessions.replyForm(id, c, (await body()).answer ?? {});
-              return json12({});
+              return json13({});
             }
             if (method === "DELETE") {
               sessions.replyForm(id, c, null, url.searchParams.get("message") ?? undefined);
-              return json12({});
+              return json13({});
             }
             break;
           case "view": {
             const { idle } = await body();
             sessions.view(id, Number(idle) || Date.now());
-            return json12({});
+            return json13({});
           }
           case "diff":
-            return json12({ data: [] });
+            return json13({ data: [] });
         }
       }
       if (area === "kuvo" && a === "accounts") {
@@ -27652,7 +29808,7 @@ function handler(context) {
           roster.sync();
           const added = roster.all().find((each) => each.instance.id === record.id && each.id === agent);
           emit("integration.updated", { integrationID: added.providerID });
-          return json12({ data: { providerID: added.providerID } });
+          return json13({ data: { providerID: added.providerID } });
         }
         const target = b ? roster.find(b) : undefined;
         if (!target)
@@ -27663,7 +29819,7 @@ function handler(context) {
           roster.accounts.rename(target.providerID, (await body()).label);
           roster.sync();
           emit("integration.updated", { integrationID: target.providerID });
-          return json12({});
+          return json13({});
         }
         if (method === "DELETE") {
           sessions.forgetProvider(target.providerID);
@@ -27673,14 +29829,14 @@ function handler(context) {
           roster.sync();
           emit("integration.updated", { integrationID: target.providerID });
           emit("model.updated", {});
-          return json12({});
+          return json13({});
         }
       }
       if (area === "kuvo" && a === "updates" && !c) {
         if (!b) {
           if (method !== "POST")
             return error2(405, "Not allowed.");
-          return json12({ data: { updating: await updateAll(roster.all(), () => roster.all(), maintainedNow, (agent) => lastMaintained.get(agent.id)) } });
+          return json13({ data: { updating: await updateAll(roster.all(), () => roster.all(), maintainedNow, (agent) => lastMaintained.get(agent.id)) } });
         }
         const agent = agentFor(b);
         if (!agent)
@@ -27692,18 +29848,18 @@ function handler(context) {
               if (each.id === agent.id)
                 emit("integration.updated", { integrationID: each.providerID });
           }
-          return json12({});
+          return json13({});
         }
         if (method !== "POST")
           return error2(405, "Not allowed.");
         if (!agent.update || !agent.maintenance)
           return error2(400, `Update ${agent.name} the way you installed it.`);
         updateProgram(agent, () => roster.all(), maintainedNow);
-        return json12({ data: { updating: [agent.id] } });
+        return json13({ data: { updating: [agent.id] } });
       }
       if (area === "kuvo" && a === "sandbox" && b === "restart" && !c && method === "POST") {
         context.restartOutside?.();
-        return json12({});
+        return json13({});
       }
       if (area === "kuvo" && a === "carry")
         return await carryRoutes(context.carrying, method, parts.slice(3), body);
@@ -27721,6 +29877,8 @@ function handler(context) {
         return await voiceRoutes(context.voice, method, parts.slice(3));
       if (area === "kuvo" && a === "limits")
         return await limitsRoutes(context.limits, method, parts.slice(3));
+      if (area === "kuvo" && a === "usage")
+        return await usageRoutes(context.usage, method, parts.slice(3), url.searchParams);
       if (area === "kuvo" && a === "groups")
         return await groupRoutes(context.groups?.runner, context.groups?.store, method, parts.slice(3), body);
       if (area === "kuvo" && a === "link" && b === "groups")
@@ -27735,12 +29893,12 @@ function handler(context) {
         const { url: address, token, timeout } = await body();
         setToolServer(typeof address === "string" && address && typeof token === "string" ? { url: address, token, timeout: Number(timeout) || 960000 } : undefined);
         noteToolServer(typeof address === "string" && typeof token === "string" ? address : undefined);
-        return json12({});
+        return json13({});
       }
       if (area === "kuvo" && a === "engine" && method === "PUT") {
         const { url: address, password } = await body();
         link.configure(typeof address === "string" && address ? address : undefined, typeof password === "string" ? password : undefined);
-        return json12({});
+        return json13({});
       }
       if (area === "kuvo" && a === "auto") {
         if (b === "limits" && method === "DELETE") {
@@ -27750,7 +29908,7 @@ function handler(context) {
           else
             auto.clearLimits();
           emit("kuvo.auto.updated", {});
-          return json12({});
+          return json13({});
         }
         if (!b && method === "PUT") {
           const { entries, lists } = await body();
@@ -27767,20 +29925,20 @@ function handler(context) {
           emit("kuvo.auto.updated", {});
         }
         if (!b && (method === "GET" || method === "PUT"))
-          return json12({ data: { entries: await sessions.autoEntries(), lists: await sessions.autoLists(), limits: auto.limits() } });
+          return json13({ data: { entries: await sessions.autoEntries(), lists: await sessions.autoLists(), limits: auto.limits() } });
       }
       if (area === "experimental" && a === "session" && b) {
         const id = b;
         if (c === "instructions" && d === "entries" && !e && method === "GET")
-          return json12({ data: sessions.instructionEntries(id) });
+          return json13({ data: sessions.instructionEntries(id) });
         if (c === "instructions" && d === "entries" && e && (method === "PUT" || method === "DELETE")) {
           sessions.setInstruction(id, e, method === "DELETE" ? undefined : String((await body()).value ?? ""));
-          return json12({});
+          return json13({});
         }
         if (c === "wait") {
           while (sessions.active().includes(id))
             await Bun.sleep(200);
-          return json12({});
+          return json13({});
         }
       }
       return error2(404, "Not available for this agent.");
@@ -27810,7 +29968,7 @@ ${all}`;
 
 // Packages/Box/src/agents/renewal.ts
 import { statSync as statSync12 } from "fs";
-import { dirname as dirname18 } from "path";
+import { dirname as dirname20 } from "path";
 
 // Packages/Box/src/shared/bundle.ts
 import fs6 from "fs";
@@ -27884,7 +30042,7 @@ class Renewal {
     this.looking = setInterval(() => this.look(), renewalTiming.look);
     this.looking.unref?.();
     try {
-      this.watching = watchFolder(dirname18(this.options.script), () => this.look());
+      this.watching = watchFolder(dirname20(this.options.script), () => this.look());
     } catch {}
     this.look();
   }
@@ -28052,21 +30210,72 @@ function keeperEngine(root) {
   return named && there.includes(named) ? named : there.at(-1) ?? null;
 }
 
-// Packages/Box/src/shared/updating.ts
+// Packages/Box/src/shared/account.ts
+import { spawnSync as spawnSync3 } from "child_process";
 import fs8 from "fs";
+import os from "os";
 import path6 from "path";
+function homeFolder() {
+  return process.env.HOME || os.homedir();
+}
+var account;
+function accountEntry() {
+  if (account)
+    return account;
+  const uid = process.getuid?.() ?? -1;
+  let line;
+  if (process.platform === "darwin") {
+    line = spawnSync3("/usr/bin/id", ["-P"], { encoding: "utf8", timeout: 5000 }).stdout;
+  } else {
+    line = spawnSync3("getent", ["passwd", String(uid)], { encoding: "utf8", timeout: 5000 }).stdout;
+    if (!line?.trim()) {
+      try {
+        line = fs8.readFileSync("/etc/passwd", "utf8").split(`
+`).find((each) => each.split(":")[2] === String(uid));
+      } catch {}
+    }
+  }
+  const fields = line?.trim().split(":") ?? [];
+  let home = fields[process.platform === "darwin" ? 8 : 5] || "";
+  if (!path6.isAbsolute(home))
+    try {
+      home = os.userInfo().homedir;
+    } catch {
+      home = homeFolder();
+    }
+  account = { name: fields[0] || "", home };
+  return account;
+}
+function accountHome() {
+  return accountEntry().home;
+}
+function isRealBridgeFolder(folder, home = accountHome()) {
+  const located = (each) => {
+    try {
+      return fs8.realpathSync.native(each);
+    } catch {
+      return path6.resolve(each);
+    }
+  };
+  const parent = located(path6.dirname(folder));
+  return path6.basename(parent).toLowerCase().startsWith("run.kuvo.code") || parent === located(path6.join(home, ".kuvo-code"));
+}
+
+// Packages/Box/src/shared/updating.ts
+import fs9 from "fs";
+import path7 from "path";
 function updateUnderWay(run) {
-  const lock = path6.join(run, ".updating");
-  if (!fs8.existsSync(lock))
+  const lock = path7.join(run, ".updating");
+  if (!fs9.existsSync(lock))
     return false;
   let pid = null;
   try {
-    pid = Number(fs8.readFileSync(path6.join(lock, "pid"), "utf8"));
+    pid = Number(fs9.readFileSync(path7.join(lock, "pid"), "utf8"));
   } catch {}
   if (pid)
     return processRuns(pid, "kuvo-link");
   try {
-    return Date.now() - fs8.statSync(lock).mtimeMs < 60000;
+    return Date.now() - fs9.statSync(lock).mtimeMs < 60000;
   } catch {
     return false;
   }
@@ -28076,8 +30285,8 @@ function updateUnderWay(run) {
 import { spawn as spawn6 } from "child_process";
 
 // Packages/Box/src/agents/store.ts
-import { mkdirSync as mkdirSync19, readdirSync as readdirSync17, readFileSync as readFileSync30, renameSync as renameSync16, rmSync as rmSync15, statSync as statSync13, writeFileSync as writeFileSync21 } from "fs";
-import { join as join32 } from "path";
+import { mkdirSync as mkdirSync23, readdirSync as readdirSync17, readFileSync as readFileSync33, renameSync as renameSync20, rmSync as rmSync16, statSync as statSync13, writeFileSync as writeFileSync25 } from "fs";
+import { join as join35 } from "path";
 
 class Store {
   root;
@@ -28085,18 +30294,18 @@ class Store {
   pending = new Map;
   constructor(root) {
     this.root = root;
-    mkdirSync19(root, { recursive: true });
+    mkdirSync23(root, { recursive: true });
     for (const id of readdirSync17(root)) {
       try {
-        const folder = join32(root, id);
-        const session = JSON.parse(readFileSync30(join32(folder, "session.json"), "utf8"));
+        const folder = join35(root, id);
+        const session = JSON.parse(readFileSync33(join35(folder, "session.json"), "utf8"));
         let messages = [];
         try {
-          messages = JSON.parse(readFileSync30(join32(folder, "messages.json"), "utf8"));
+          messages = JSON.parse(readFileSync33(join35(folder, "messages.json"), "utf8"));
         } catch {}
         let agent = {};
         try {
-          agent = JSON.parse(readFileSync30(join32(folder, "agent.json"), "utf8"));
+          agent = JSON.parse(readFileSync33(join35(folder, "agent.json"), "utf8"));
         } catch {}
         this.records.set(session.id, { session, messages, agent });
       } catch {}
@@ -28109,7 +30318,7 @@ class Store {
     return this.records.get(id);
   }
   fileOf(id, name) {
-    return join32(this.root, id, name);
+    return join35(this.root, id, name);
   }
   addWhole(record) {
     this.records.set(record.session.id, record);
@@ -28117,7 +30326,7 @@ class Store {
   }
   writtenAt(id) {
     try {
-      return statSync13(join32(this.root, id, "messages.json")).mtimeMs;
+      return statSync13(join35(this.root, id, "messages.json")).mtimeMs;
     } catch {
       return;
     }
@@ -28130,7 +30339,7 @@ class Store {
     this.records.delete(id);
     clearTimeout(this.pending.get(id));
     this.pending.delete(id);
-    rmSync15(join32(this.root, id), { recursive: true, force: true });
+    rmSync16(join35(this.root, id), { recursive: true, force: true });
   }
   save(id, now = false) {
     clearTimeout(this.pending.get(id));
@@ -28153,16 +30362,16 @@ class Store {
     if (!record)
       return;
     try {
-      const folder = join32(this.root, id);
-      mkdirSync19(folder, { recursive: true });
+      const folder = join35(this.root, id);
+      mkdirSync23(folder, { recursive: true });
       for (const [name, value] of [
         ["session.json", record.session],
         ["messages.json", record.messages],
         ["agent.json", record.agent]
       ]) {
-        const file = join32(folder, name);
-        writeFileSync21(file + ".new", JSON.stringify(value));
-        renameSync16(file + ".new", file);
+        const file = join35(folder, name);
+        writeFileSync25(file + ".new", JSON.stringify(value));
+        renameSync20(file + ".new", file);
       }
     } catch (error) {
       console.error(`session ${id} not written:`, error);
@@ -28176,9 +30385,9 @@ class Store {
 }
 
 // Packages/Box/src/shared/hang.ts
-import fs9 from "fs";
+import fs10 from "fs";
 import net from "net";
-import path7 from "path";
+import path8 from "path";
 var LOOK_EVERY = 30000;
 var ANSWER_WITHIN = 20000;
 var HUNG_AFTER = 600000;
@@ -28284,21 +30493,21 @@ class HangWatch {
   }
   server() {
     try {
-      const { pid, port } = JSON.parse(fs9.readFileSync(this.options.record, "utf8"));
+      const { pid, port } = JSON.parse(fs10.readFileSync(this.options.record, "utf8"));
       return Number.isInteger(pid) && pid > 1 && Number.isInteger(port) && port > 0 ? { pid, port } : null;
     } catch {
       return null;
     }
   }
   stoppedOnPurpose() {
-    return ["stopped", ".launching", ".updating", ".system-asking"].some((name) => fs9.existsSync(path7.join(this.options.run, name)));
+    return ["stopped", ".launching", ".updating", ".system-asking"].some((name) => fs10.existsSync(path8.join(this.options.run, name)));
   }
   endedLately() {
-    const file = path7.join(this.options.run, `hung-${this.options.name}.json`);
-    if (!fs9.existsSync(file))
+    const file = path8.join(this.options.run, `hung-${this.options.name}.json`);
+    if (!fs10.existsSync(file))
       return [];
     try {
-      const times = JSON.parse(fs9.readFileSync(file, "utf8"));
+      const times = JSON.parse(fs10.readFileSync(file, "utf8"));
       return Array.isArray(times) ? times.filter((time) => typeof time === "number" && this.now() - time < ENDED_WHILE && time <= this.now()) : null;
     } catch {
       return null;
@@ -28312,10 +30521,10 @@ class HangWatch {
       console.error(`The ${this.options.name} has said nothing for ${minutes} minutes, and it's been ended too often lately, or there's no telling how often: it's left as it is, for you to restart.`);
       return;
     }
-    const file = path7.join(this.options.run, `hung-${this.options.name}.json`);
+    const file = path8.join(this.options.run, `hung-${this.options.name}.json`);
     try {
-      fs9.writeFileSync(`${file}.new`, JSON.stringify([...lately, this.now()]), { mode: 384 });
-      fs9.renameSync(`${file}.new`, file);
+      fs10.writeFileSync(`${file}.new`, JSON.stringify([...lately, this.now()]), { mode: 384 });
+      fs10.renameSync(`${file}.new`, file);
     } catch {
       console.error(`The ${this.options.name} has said nothing for ${minutes} minutes, but that can't be noted in ${file}: it's left as it is, for you to restart.`);
       return;
@@ -28342,15 +30551,15 @@ class HangWatch {
 var isEngine = (command) => /\bserve\b/.test(command) && !command.includes("kuvo-link");
 
 // Packages/Box/src/agents/limits-peers.ts
-import { mkdirSync as mkdirSync20, readFileSync as readFileSync31, renameSync as renameSync17, writeFileSync as writeFileSync22 } from "fs";
-import { dirname as dirname19 } from "path";
-var MINUTE2 = 60000;
-var TELL_AGAIN = 10 * MINUTE2;
-var PEER_AWAY = 25 * MINUTE2;
-var HEARD_EVERY = MINUTE2;
-var SKEW = MINUTE2;
-var MOST_BYTES = 40000;
-var SERVICE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+import { mkdirSync as mkdirSync24, readFileSync as readFileSync34, renameSync as renameSync21, writeFileSync as writeFileSync26 } from "fs";
+import { dirname as dirname21 } from "path";
+var MINUTE4 = 60000;
+var TELL_AGAIN2 = 10 * MINUTE4;
+var PEER_AWAY2 = 25 * MINUTE4;
+var HEARD_EVERY = MINUTE4;
+var SKEW2 = MINUTE4;
+var MOST_BYTES3 = 40000;
+var SERVICE2 = /^[a-z0-9][a-z0-9-]{0,39}$/;
 var PROBLEMS = new Set(["rate-limited", "expired", "unreadable", "failed"]);
 
 class LimitsPeers {
@@ -28394,7 +30603,7 @@ class LimitsPeers {
     const boxes = [{ key: self?.key ?? "", name: self?.name ?? "", here: true, away: false, accounts: own }];
     const peers = [...this.peers.entries()].sort(([, a], [, b]) => a.name.localeCompare(b.name));
     for (const [key, kept] of peers)
-      boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY, accounts: kept.accounts });
+      boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY2, accounts: kept.accounts });
     return limitRows(boxes);
   }
   tell(urgent = false) {
@@ -28405,7 +30614,7 @@ class LimitsPeers {
     const json = JSON.stringify(accounts);
     for (const { key } of this.directory.peerBoxes()) {
       const last = this.told.get(key);
-      const due = !last || now - last.at >= TELL_AGAIN || last.json !== json && (urgent || now - last.at >= HEARD_EVERY);
+      const due = !last || now - last.at >= TELL_AGAIN2 || last.json !== json && (urgent || now - last.at >= HEARD_EVERY);
       if (!due)
         continue;
       this.transport.send(key, { kind: "limits", at: now, accounts, ...!last ? { ask: true } : {} }, false);
@@ -28421,9 +30630,9 @@ class LimitsPeers {
     if (this.directory.told && !this.directory.peerBoxes().some((box) => box.key === from))
       return;
     const now = this.now();
-    const off = typeof given.at === "number" && Number.isFinite(given.at) && Math.abs(now - given.at) >= SKEW ? now - given.at : 0;
+    const off = typeof given.at === "number" && Number.isFinite(given.at) && Math.abs(now - given.at) >= SKEW2 ? now - given.at : 0;
     const accounts = given.accounts.slice(0, 100).flatMap((account) => {
-      const taken = takenAccount(account, off, now);
+      const taken = takenAccount2(account, off, now);
       return taken ? [taken] : [];
     });
     const before = this.peers.get(from);
@@ -28431,7 +30640,7 @@ class LimitsPeers {
     this.peers.set(from, { name, heard: now, accounts });
     this.save();
     this.limits.peersChanged();
-    if (given.ask === true || before && now - before.heard > PEER_AWAY)
+    if (given.ask === true || before && now - before.heard > PEER_AWAY2)
       this.answer(from);
     if (Array.isArray(given.refresh)) {
       const ids = new Set(given.refresh.filter((id) => typeof id === "string").slice(0, 200));
@@ -28474,7 +30683,7 @@ class LimitsPeers {
   }
   shared() {
     const accounts = this.limits.list(false);
-    while (accounts.length && Buffer.byteLength(JSON.stringify(accounts)) > MOST_BYTES - 200 * 60)
+    while (accounts.length && Buffer.byteLength(JSON.stringify(accounts)) > MOST_BYTES3 - 200 * 60)
       accounts.pop();
     return accounts;
   }
@@ -28503,11 +30712,11 @@ class LimitsPeers {
     if (!this.file)
       return;
     try {
-      const saved = JSON.parse(readFileSync31(this.file, "utf8"));
+      const saved = JSON.parse(readFileSync34(this.file, "utf8"));
       for (const [key, kept] of Object.entries(saved.peers ?? {})) {
         if (!kept || typeof kept.heard !== "number" || !Array.isArray(kept.accounts))
           continue;
-        this.peers.set(key, { name: typeof kept.name === "string" ? kept.name : "another computer", heard: kept.heard, accounts: kept.accounts.flatMap((account) => takenAccount(account, 0, Infinity) ?? []) });
+        this.peers.set(key, { name: typeof kept.name === "string" ? kept.name : "another computer", heard: kept.heard, accounts: kept.accounts.flatMap((account) => takenAccount2(account, 0, Infinity) ?? []) });
       }
     } catch {}
   }
@@ -28515,20 +30724,20 @@ class LimitsPeers {
     if (!this.file)
       return;
     try {
-      mkdirSync20(dirname19(this.file), { recursive: true });
-      writeFileSync22(this.file + ".new", JSON.stringify({ peers: Object.fromEntries(this.peers) }), { mode: 384 });
-      renameSync17(this.file + ".new", this.file);
+      mkdirSync24(dirname21(this.file), { recursive: true });
+      writeFileSync26(this.file + ".new", JSON.stringify({ peers: Object.fromEntries(this.peers) }), { mode: 384 });
+      renameSync21(this.file + ".new", this.file);
     } catch {}
   }
 }
-var text4 = (value, most = 200) => typeof value === "string" && value ? value.slice(0, most) : undefined;
+var text5 = (value, most = 200) => typeof value === "string" && value ? value.slice(0, most) : undefined;
 var time = (value) => typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-function takenAccount(given, off, now) {
+function takenAccount2(given, off, now) {
   if (!given || typeof given !== "object")
     return null;
   const account = given;
-  const provider = text4(account.provider);
-  if (!provider || typeof account.service !== "string" || !SERVICE.test(account.service))
+  const provider = text5(account.provider);
+  if (!provider || typeof account.service !== "string" || !SERVICE2.test(account.service))
     return null;
   const moved = (value) => {
     const at = time(value);
@@ -28536,17 +30745,17 @@ function takenAccount(given, off, now) {
   };
   const windows = (Array.isArray(account.windows) ? account.windows : []).slice(0, 30).flatMap((window) => {
     const read = moved(window?.read);
-    if (!window || typeof window !== "object" || !text4(window.id) || typeof window.used !== "number" || !Number.isFinite(window.used) || read === undefined)
+    if (!window || typeof window !== "object" || !text5(window.id) || typeof window.used !== "number" || !Number.isFinite(window.used) || read === undefined)
       return [];
     const amount = window.amount;
     return [
       {
-        id: text4(window.id),
+        id: text5(window.id),
         used: Math.min(Math.max(window.used, 0), 1),
         ...time(window.resetsAt) ? { resetsAt: window.resetsAt } : {},
         ...time(window.minutes) ? { minutes: window.minutes } : {},
-        ...text4(window.model) ? { model: text4(window.model) } : {},
-        ...text4(window.name) ? { name: text4(window.name) } : {},
+        ...text5(window.model) ? { model: text5(window.model) } : {},
+        ...text5(window.name) ? { name: text5(window.name) } : {},
         ...amount && typeof amount === "object" && typeof amount.used === "number" && typeof amount.limit === "number" && ["requests", "usd", "credits"].includes(amount.unit) ? { amount: { used: amount.used, limit: amount.limit, unit: amount.unit } } : {},
         read,
         source: window.source === "turn" ? "turn" : "usage"
@@ -28560,15 +30769,15 @@ function takenAccount(given, off, now) {
   return {
     provider,
     service: account.service,
-    ...kinds.includes(account.agent) ? { agent: account.agent, ...text4(account.account) ? { account: text4(account.account) } : {} } : {},
-    ...text4(account.label, 100) ? { label: text4(account.label, 100) } : {},
+    ...kinds.includes(account.agent) ? { agent: account.agent, ...text5(account.account) ? { account: text5(account.account) } : {} } : {},
+    ...text5(account.label, 100) ? { label: text5(account.label, 100) } : {},
     ...typeof account.identity === "string" && /^[0-9a-f]{16}$/.test(account.identity) ? { identity: account.identity } : {},
-    ...text4(account.plan, 100) ? { plan: text4(account.plan, 100) } : {},
+    ...text5(account.plan, 100) ? { plan: text5(account.plan, 100) } : {},
     windows,
     ...balance && typeof balance === "object" && typeof balance.left === "number" && (balance.unit === "usd" || balance.unit === "credits") ? { balance: { left: balance.left, ...typeof balance.limit === "number" ? { limit: balance.limit } : {}, unit: balance.unit } } : {},
     ...checked ? { checked } : {},
     ...next ? { next } : {},
-    ...problem && typeof problem === "object" && PROBLEMS.has(problem.kind) && text4(problem.message, 500) ? { problem: { kind: problem.kind, message: text4(problem.message, 500), ...time(problem.until) ? { until: problem.until + off } : {} } } : {}
+    ...problem && typeof problem === "object" && PROBLEMS.has(problem.kind) && text5(problem.message, 500) ? { problem: { kind: problem.kind, message: text5(problem.message, 500), ...time(problem.until) ? { until: problem.until + off } : {} } } : {}
   };
 }
 
@@ -28594,9 +30803,9 @@ if (onMachine) {
   takeOwnFolders();
   if (home3)
     dropCarriedSignIns(home3);
-  process.env.KUVO_BIN = join33(machineHome, "bin");
-  process.env.KUVO_BOTS ??= join33(machineHome, "bots");
-  process.env.KUVO_WAKES ??= join33(machineHome, "wakes");
+  process.env.KUVO_BIN = join36(machineHome, "bin");
+  process.env.KUVO_BOTS ??= join36(machineHome, "bots");
+  process.env.KUVO_WAKES ??= join36(machineHome, "wakes");
   for (const name of ["OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG", "OPENCODE_CLIENT", "KUVO_AGENTS_PASSWORD", "KUVO_AGENTS_PORT", "KUVO_ENGINE_PORT", "KUVO_ENGINE_PID"])
     delete process.env[name];
 }
@@ -28605,14 +30814,14 @@ var renewSettle = process.env.KUVO_TEST_RENEW_SETTLE ? Number(process.env.KUVO_T
 var renewUptime = process.env.KUVO_TEST_RENEW_UPTIME ? Number(process.env.KUVO_TEST_RENEW_UPTIME) : undefined;
 for (const name of ["KUVO_TEST_RENEW_HOLD", "KUVO_TEST_RENEW_SETTLE", "KUVO_TEST_RENEW_UPTIME"])
   delete process.env[name];
-var temporary = process.env.TMPDIR?.replace(/\/$/, "") || join33(home3, "tmp");
-mkdirSync21(temporary, { recursive: true });
-rmSync16(join33(temporary, "antigravity"), { recursive: true, force: true });
+var temporary = process.env.TMPDIR?.replace(/\/$/, "") || join36(home3, "tmp");
+mkdirSync25(temporary, { recursive: true });
+rmSync17(join36(temporary, "antigravity"), { recursive: true, force: true });
 leftSignIns(temporary);
 try {
-  for (const name of readdirSync18(join33(home3, "antigravity")))
+  for (const name of readdirSync18(join36(home3, "antigravity")))
     if (name.startsWith(".install-"))
-      rmSync16(join33(home3, "antigravity", name), { recursive: true, force: true });
+      rmSync17(join36(home3, "antigravity", name), { recursive: true, force: true });
 } catch {}
 delete process.env.BUN_BE_BUN;
 process.env.KUVO_WAKE_VIA = "bridge";
@@ -28622,15 +30831,15 @@ process.on("uncaughtException", (error) => {
   console.error("uncaught:", error);
   process.exit(1);
 });
-var deps = new Deps(join33(home3, "runtime"), join33(home3, "cache"));
+var deps = new Deps(join36(home3, "runtime"), join36(home3, "cache"));
 if (onMachine) {
-  dropOwnPrograms(join33(home3, "runtime"));
+  dropOwnPrograms(join36(home3, "runtime"));
   useSavedLoginPath();
 }
-rmSync16(join33(home3, "cache", "install"), { recursive: true, force: true });
+rmSync17(join36(home3, "cache", "install"), { recursive: true, force: true });
 var context = { home: home3, temporary, deps };
 var roster = new Roster(new Accounts(home3), context);
-var store = new Store(join33(home3, "sessions"));
+var store = new Store(join36(home3, "sessions"));
 var auto = new Auto(home3);
 var link4 = new EngineLink;
 if (machineEngine)
@@ -28647,7 +30856,7 @@ function engineAgent(providerID) {
     engineAgents.set(providerID, agent = new EngineAgent(link4, providerID));
   return agent;
 }
-var sessions = new Sessions(store, roster, auto, engineAgent, (directory) => link4.policies(directory), (name, directory) => link4.agent(name, directory), new Snapshots(join33(home3, "snapshots")), (directory) => link4.titleModel(directory));
+var sessions = new Sessions(store, roster, auto, engineAgent, (directory) => link4.policies(directory), (name, directory) => link4.agent(name, directory), new Snapshots(join36(home3, "snapshots")), (directory) => link4.titleModel(directory));
 var restarting = false;
 var noteInside = () => {
   if (restarting)
@@ -28663,15 +30872,15 @@ setInterval(noteInside, 5000).unref?.();
 var self;
 var partGiven;
 var groups;
-var groupFolders = onMachine ? { root: join33(machineHome, "groups"), bots: process.env.KUVO_BOTS ?? join33(machineHome, "bots"), trash: join33(machineHome, "trash") } : process.env.KUVO_GROUPS && process.env.KUVO_BOTS && process.env.KUVO_TRASH ? { root: process.env.KUVO_GROUPS, bots: process.env.KUVO_BOTS, trash: process.env.KUVO_TRASH } : undefined;
+var groupFolders = onMachine ? { root: join36(machineHome, "groups"), bots: process.env.KUVO_BOTS ?? join36(machineHome, "bots"), trash: join36(machineHome, "trash") } : process.env.KUVO_GROUPS && process.env.KUVO_BOTS && process.env.KUVO_TRASH ? { root: process.env.KUVO_GROUPS, bots: process.env.KUVO_BOTS, trash: process.env.KUVO_TRASH } : undefined;
 var groupMemoryKey = process.env.KUVO_GROUPS_MEMORY_KEY || undefined;
-var post = new PeerPost(groupFolders ? join33(groupFolders.root, "peer-outbox.json") : undefined);
+var post = new PeerPost(groupFolders ? join36(groupFolders.root, "peer-outbox.json") : undefined);
 var directory = new LinkDirectory(post);
 var peers = { post, directory };
-var artifactsFolder = onMachine ? join33(machineHome, "artifacts") : process.env.KUVO_ARTIFACTS || undefined;
-var botsFolder = groupFolders?.bots ?? (onMachine ? join33(machineHome, "bots") : process.env.KUVO_BOTS || undefined);
-var agentsFile = onMachine ? join33(machineHome, "run", "agents.json") : process.env.KUVO_AGENTS_FILE || undefined;
-var runFolder = onMachine ? join33(machineHome, "run") : process.env.KUVO_RUN || undefined;
+var artifactsFolder = onMachine ? join36(machineHome, "artifacts") : process.env.KUVO_ARTIFACTS || undefined;
+var botsFolder = groupFolders?.bots ?? (onMachine ? join36(machineHome, "bots") : process.env.KUVO_BOTS || undefined);
+var agentsFile = onMachine ? join36(machineHome, "run", "agents.json") : process.env.KUVO_AGENTS_FILE || undefined;
+var runFolder = onMachine ? join36(machineHome, "run") : process.env.KUVO_RUN || undefined;
 notesBeside(runFolder);
 for (const name of ["KUVO_GROUPS", "KUVO_TRASH", "KUVO_GROUPS_MEMORY_KEY", "KUVO_AGENTS_FILE", "KUVO_ARTIFACTS", "KUVO_RUN", ...onMachine ? [] : ["KUVO_BOTS"]])
   delete process.env[name];
@@ -28723,16 +30932,22 @@ var places5 = {
     }
   }
 };
-var goals = new Goals(join33(home3, "goals.json"), places5);
+var goals = new Goals(join36(home3, "goals.json"), places5);
 setInterval(() => goals.resumeDue(), 60000).unref?.();
-var sideQuestions = new SideQuestions(join33(home3, "side-questions.json"), places5);
+var sideQuestions = new SideQuestions(join36(home3, "side-questions.json"), places5);
 var handoffs = new Handoffs(places5);
-var reviews = new Reviews(join33(home3, "reviews.json"), places5);
+var reviews = new Reviews(join36(home3, "reviews.json"), places5);
 var voice = new VoiceWords(places5);
 var engineAccounts = new EngineAccounts(() => link4.request("GET", "/api/credential"));
-var limits = new Limits(() => [...agentAccounts(roster.all()), ...engineAccounts.accounts()], join33(home3, "limits.json"), Date.now, () => engineAccounts.refresh(), () => engineAccounts.answered);
+var limits = new Limits(() => [...agentAccounts(roster.all()), ...engineAccounts.accounts()], join36(home3, "limits.json"), Date.now, () => engineAccounts.refresh(), () => engineAccounts.answered);
 limits.alsoServices = ENGINE_SERVICES;
-peers.limits = new LimitsPeers(limits, post, directory, join33(home3, "limits-peers.json"));
+peers.limits = new LimitsPeers(limits, post, directory, join36(home3, "limits-peers.json"));
+var noPriceFeeds = process.env.KUVO_TEST_PRICE_FEEDS === "off" || !isRealBridgeFolder(home3);
+delete process.env.KUVO_TEST_PRICE_FEEDS;
+var usageFolder = join36(home3, "usage");
+var claudeUsage2 = claudeSources(usageFolder);
+var usage = new Usage(() => claudeUsage2(roster.all()), new PricingStore(join36(usageFolder, "pricing"), noPriceFeeds ? null : undefined), (provider) => limits.identity(provider), join36(usageFolder, "usage.json"));
+peers.usage = new UsagePeers(usage, post, directory, join36(usageFolder, "peers.json"));
 var artifacts;
 var noted2;
 if (artifactsFolder) {
@@ -28775,10 +30990,11 @@ if (artifactsFolder) {
 }
 await untilSandboxDecided();
 limits.start();
+usage.start();
 var carrying = new Carrying(sessions, store, (provider) => sessions.agent(provider), (kind) => roster.all().filter((agent) => parseProvider(agent.providerID)?.kind === kind));
 var server4;
 var renewal;
-var answer3 = handler({ roster, sessions, auto, link: link4, password, version: version3, build, groups, peers, goals, sideQuestions, handoffs, places: places5, reviews, voice, artifacts, noted: noted2, restartOutside, carrying, limits });
+var answer3 = handler({ roster, sessions, auto, link: link4, password, version: version3, build, groups, peers, goals, sideQuestions, handoffs, places: places5, reviews, voice, artifacts, noted: noted2, restartOutside, carrying, limits, usage });
 var answering = 0;
 try {
   server4 = Bun.serve({
@@ -28818,7 +31034,7 @@ link4.whenReady().then(() => {
     console.error("group chats:", error);
   }
 });
-var record2 = onMachine ? join33(machineHome, "run", "bridge.json") : undefined;
+var record2 = onMachine ? join36(machineHome, "run", "bridge.json") : undefined;
 var writeRecord = (renewal, first = false) => {
   if (!record2)
     return;
@@ -28846,10 +31062,10 @@ renewal = onMachine && build ? new Renewal({
     stop();
   },
   told: (state) => writeRecord(state),
-  paused: () => updateUnderWay(join33(machineHome, "run")),
+  paused: () => updateUnderWay(join36(machineHome, "run")),
   ready: () => {
     const kept = keeperEngine(machineHome);
-    return !kept || kept === basename12(dirname20(process.execPath));
+    return !kept || kept === basename13(dirname22(process.execPath));
   },
   lets: () => {
     const now = Date.now();
@@ -28857,7 +31073,7 @@ renewal = onMachine && build ? new Renewal({
       return launchSaid.lets;
     const lets = launchLets(commandLineOf(process.ppid), () => {
       try {
-        return readFileSync32(join33(machineHome, "run", "agents.log"), "utf8");
+        return readFileSync35(join36(machineHome, "run", "agents.log"), "utf8");
       } catch {
         return;
       }
@@ -28893,7 +31109,7 @@ if (renewing)
     renewing.look();
   });
 if (runFolder)
-  new HangWatch({ name: "engine", run: runFolder, record: join33(runFolder, "engine.json"), isIt: isEngine }).start();
+  new HangWatch({ name: "engine", run: runFolder, record: join36(runFolder, "engine.json"), isIt: isEngine }).start();
 var stopping = false;
 function stop() {
   if (stopping)
@@ -28904,8 +31120,8 @@ function stop() {
   reviews.stopAll();
   cancelSignIns();
   try {
-    if (record2 && JSON.parse(readFileSync32(record2, "utf8")).pid === process.pid)
-      rmSync16(record2, { force: true });
+    if (record2 && JSON.parse(readFileSync35(record2, "utf8")).pid === process.pid)
+      rmSync17(record2, { force: true });
   } catch {}
   sessions.closeAll();
   store.flush();
@@ -28927,4 +31143,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 3e67c87c4df47d7859208e99da82511f9d8c48666d15e313a6f649eddf599062
+// Built from Packages/Box/src/agents feba9fae5dca6297950fda4b7b3fe20d22b9d4e886f62735d7de931cba5a009a

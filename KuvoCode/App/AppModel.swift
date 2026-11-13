@@ -59,6 +59,8 @@ final class AppModel {
     let usage = UsageAccounts()
     /// Each box's plan limits, one row per login in the usage panel.
     let planLimits = BoxPlanLimits()
+    /// What your accounts used, as this Mac's box states it, for the usage panel.
+    let usageHistory = BoxUsageHistory()
     /// Bots: named agents with one job each, on this Mac or a machine.
     let bots = Bots()
     /// Bots' and sessions' wake-ups and watches.
@@ -1081,6 +1083,7 @@ final class AppModel {
             // This Mac's group chats, as it runs them.
             if event.type.hasPrefix("kuvo.group.") { self?.boxGroups.handle(event, machine: nil); return }
             self?.planLimits.handle(event, machine: nil)
+            self?.usageHistory.handle(event)
             self?.catalog.handle(event)
             self?.workspace.handleAgents(event)
         }
@@ -1088,6 +1091,7 @@ final class AppModel {
         agents.onHandoff = { [weak self] handoff in Task { await self?.workspace.openHandoff(handoff) } }
         agents.onStopped = { [weak self] in
             self?.planLimits.stopped(nil)
+            self?.usageHistory.stopped()
             self?.catalog.forgetAgents()
             self?.workspace.agentsStopped()
             self?.boxGroups.disconnected(nil)
@@ -1099,6 +1103,7 @@ final class AppModel {
                 // before this Mac's engine (it usually is), they're read once the stores are told
                 // of each other (`wireStores`).
                 planLimits.connected(nil, api: agents.api)
+                usageHistory.connected(api: agents.api)
                 if boxGroups.app == nil { chatsWaitForStores = true } else { await boxGroups.connected(nil) }
                 await catalog.refreshAgents()
                 await workspace.refreshAgents()
