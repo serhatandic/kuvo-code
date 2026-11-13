@@ -156,7 +156,7 @@ import Testing
         })
     }
 
-    private final class Answers: @unchecked Sendable {
+    nonisolated private final class Answers: @unchecked Sendable {
         private var left: [(Int, String)]
         private let lock = NSLock()
         init(_ answers: [(Int, String)]) { left = answers }

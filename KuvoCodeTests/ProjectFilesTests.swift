@@ -162,7 +162,7 @@ import Testing
         #expect(await paths([folder]) == ["index.html"])
     }
 
-    private final class Sent: @unchecked Sendable {
+    nonisolated private final class Sent: @unchecked Sendable {
         private(set) var paths: [String] = []
         private let lock = NSLock()
         func add(_ path: String) { lock.withLock { paths.append(path) } }
