@@ -18442,7 +18442,7 @@ async function startSession(given, by, place) {
   let treeMade = null;
   const removeTree = async () => {
     if (madeTree)
-      await answerWorktrees("POST", "kuvo/worktrees/remove", { path: madeTree, discard: true, forget: true }, engine, place.signal).catch(() => {});
+      await answerWorktrees("POST", "kuvo/worktrees/remove", { path: madeTree, discard: true, forget: true }, engine, undefined).catch(() => {});
   };
   if (given.worktree === true && named && folder && realish(folder) !== realish(named.directory)) {
     giveBack();
@@ -18570,6 +18570,11 @@ ${goalNote}` : ""}` : "") : task;
   if (bot && goal && given.step !== undefined && given.step !== null)
     linkSession(bot.bot, given.step, session);
   if (!task) {
+    if (making.autopilotTold === false) {
+      await call(target, "DELETE", `/api/session/${encodeURIComponent(session)}`).catch(() => {});
+      await removeTree();
+      return no(502, `Couldn't start the session in ${folder} on Autopilot: its agent couldn't be told how to work on it.`);
+    }
     const info = await call(target, "GET", `/api/session/${encodeURIComponent(session)}`, undefined, place.signal).catch(() => null);
     return { started: { session, ...making.started, ...isObject(info) ? { info } : {}, ...treeMade ? { worktree: treeMade } : {} } };
   }
@@ -18632,7 +18637,7 @@ async function markMade(making, target, session, signal) {
     await call(target, "PUT", `/api/experimental/session/${address}/instructions/entries/${PROJECT_FOLDERS_ENTRY}`, { value: projectFoldersNote(making.folder, making.folders) }).catch(() => {});
   }
   if (making.autopilot)
-    await tellAutopilot(target, session, true).catch(() => {});
+    making.autopilotTold = await tellAutopilot(target, session, true).then(() => true, () => false);
   await settleNewSession(target, session).catch(() => {});
   const marked = await rewriteOn(target, session, (now) => ({ metadata: withNotes(now.metadata, making.kuvo) })).then((done) => Boolean(done), () => false);
   if (!marked && making.prompt.unheard)
@@ -29565,8 +29570,13 @@ ${folders.map((folder) => `- ${path99.basename(folder)}: ${folder}`).join(`
 `)}
 When the user mentions one of these folders by name, they mean that folder.`;
 function foldersFor(folder, projects = readProjects()) {
+  return listedFolders(folder, projects) ?? [];
+}
+function listedFolders(folder, projects = readProjects()) {
   const directory = worktreeProjects()[folder] ?? folder;
-  const folders = projects.find((each) => each.directory === directory)?.folders ?? [];
+  const folders = projects.find((each) => each.directory === directory)?.folders;
+  if (!folders)
+    return null;
   return folders.includes(folder) ? [] : folders;
 }
 function folderRules(folders) {
@@ -29583,17 +29593,34 @@ function folderRules(folders) {
   return paths.map((each) => ({ action: "external_directory", resource: path99.join(each, "*"), effect: "allow" }));
 }
 var isFolderRule = (rule) => rule.action === "external_directory" && rule.effect === "allow" && rule.resource.endsWith("/*");
-function withFolders(rules, folders) {
-  const named = new Set((permissionsHere() ?? []).map((rule) => rule.resource));
-  return [...rules.filter((rule) => !isFolderRule(rule) || rule.resource.includes("/bots/bot_") || named.has(rule.resource)), ...folderRules(folders)];
+function withFolders(rules, folders, held = []) {
+  const same = (one, other) => one.action === other.action && one.resource === other.resource;
+  const named = (permissionsHere() ?? rules.filter(holdsBack)).filter((rule) => rule.action === "external_directory");
+  const adding = folderRules(folders).filter((rule) => !named.some((each) => same(each, rule)));
+  const last = rules.filter((rule) => held.some((each) => same(each, rule) && each.effect === rule.effect));
+  const kept = rules.filter((rule) => !last.includes(rule) && !(rule.effect === "allow" && adding.some((each) => same(each, rule))) && (!isFolderRule(rule) || rule.resource.includes("/bots/bot_") || named.some((each) => each.resource === rule.resource)));
+  return [...kept, ...adding, ...last];
 }
 function foldersOf(session, at) {
   const filed = session.metadata?.kuvo?.filed;
   const project = isObject(filed) && filed.folder === at && typeof filed.project === "string" ? filed.project : null;
   if (!project || project === at || realish(project) !== realish(at))
-    return foldersFor(at);
-  const folders = readProjects().find((each) => each.directory === project)?.folders ?? [];
+    return listedFolders(at);
+  const folders = readProjects().find((each) => each.directory === project)?.folders;
+  if (!folders)
+    return null;
   return folders.includes(at) ? [] : folders;
+}
+async function folderNoteOf(target, session, signal) {
+  try {
+    const entries = await call(target, "GET", `/api/experimental/session/${encodeURIComponent(session)}/instructions/entries`, undefined, signal);
+    if (!Array.isArray(entries))
+      return;
+    const entry = entries.find((each) => each?.key === PROJECT_FOLDERS_ENTRY);
+    return typeof entry?.value === "string" ? entry.value : null;
+  } catch {
+    return;
+  }
 }
 async function giveFolders(target, session, { signal, folder, whenChanged = false } = {}) {
   const address = encodeURIComponent(session);
@@ -29604,19 +29631,24 @@ async function giveFolders(target, session, { signal, folder, whenChanged = fals
     return true;
   const where = (now) => folder ?? now.location?.directory ?? now.directory ?? null;
   const first = where(before);
-  await askedAbout(first ? foldersOf(before, first) : []);
+  const asked = first ? foldersOf(before, first) : null;
+  if (!asked)
+    return true;
+  await askedAbout(asked);
   for (let tries = 0;tries < 3; tries++) {
     let at = null;
-    let folders = [];
+    let folders = null;
     let changed = false;
     let seen = before;
     try {
       const done = await rewriteOn(target, session, (now) => {
         seen = now;
         at = where(now);
-        folders = at ? foldersOf(now, at) : [];
+        folders = at ? foldersOf(now, at) : null;
+        if (!folders)
+          return null;
         const current = now.permissions ?? [];
-        const permissions = withFolders(current, folders);
+        const permissions = withFolders(current, folders, heldOf(now));
         changed = JSON.stringify(permissions) !== JSON.stringify(current);
         return changed ? { permissions } : null;
       }, signal);
@@ -29625,14 +29657,19 @@ async function giveFolders(target, session, { signal, folder, whenChanged = fals
     } catch {
       return false;
     }
-    if (JSON.stringify(foldersOf(seen, at)) !== JSON.stringify(folders))
-      continue;
-    if (whenChanged && !changed)
+    if (!folders)
       return true;
+    const given = folders;
+    if (JSON.stringify(foldersOf(seen, at)) !== JSON.stringify(given))
+      continue;
     const entry = `/api/experimental/session/${address}/instructions/entries/${PROJECT_FOLDERS_ENTRY}`;
+    const note = given.length ? projectFoldersNote(at, given) : null;
+    const had = await folderNoteOf(target, session, signal);
+    if (had === undefined ? whenChanged && !changed : had === note)
+      return true;
     try {
-      if (folders.length)
-        await call(target, "PUT", entry, { value: projectFoldersNote(at, folders) }, signal);
+      if (note)
+        await call(target, "PUT", entry, { value: note }, signal);
       else
         await call(target, "DELETE", entry, undefined, signal).catch(() => {});
     } catch {
@@ -39426,7 +39463,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "525bd2d439ca";
+var BRIDGE_VERSION = "ac06f91ab7e4";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

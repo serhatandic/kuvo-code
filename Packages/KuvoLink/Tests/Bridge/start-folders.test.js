@@ -1,8 +1,8 @@
 // A project's other folders, on the box (PROTOCOL.md, "Projects" and "Agents' tools"): a client's
 // new session, started with no task (`POST kuvo/sessions`), is made with them, its Autopilot and
-// its approval; a chat moved into a project (`POST kuvo/sessions/<id>/move`) gets them; and a
-// change to them (`PUT kuvo/projects`) reaches every session of the project, whichever client
-// made it. The real box script, as a client asks it; only the engine is a stand-in.
+// its approval; a chat moved into a project (`POST kuvo/sessions/<id>/move`) gets them, as does
+// one a client opens (`POST kuvo/sessions/<id>/folders`); a change to them (`PUT kuvo/projects`)
+// writes no session at rest. The real box script, as a client asks it; only the engine is a stand-in.
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/start-folders.test.js`.
 import "./test-safety.js";
@@ -39,6 +39,9 @@ let made = [];
 let prompts = [];
 let told = new Map();
 let moves = [];
+let deleted = [];
+// (Autopilot's words not taken, for a start asked to be on Autopilot.)
+let refusesAutopilot = false;
 const engine = http.createServer((request, response) => {
   let body = "";
   request.on("data", chunk => { body += chunk; });
@@ -57,6 +60,7 @@ const engine = http.createServer((request, response) => {
       return reply({ data: { id } });
     }
     if (url.pathname === "/api/session/active") return reply({ data: {} });
+    if (refusesAutopilot && request.url.endsWith("/instructions/entries/kuvo.autopilot")) return reply({ message: "Not now." }, 500);
     if (request.url.includes("/instructions/entries/")) {
       const key = request.url.match(/session\/([^/]+)\//)[1] + " " + request.url.split("/").pop();
       if (request.method === "DELETE") told.set(key, null);
@@ -67,6 +71,11 @@ const engine = http.createServer((request, response) => {
     const id = one && decodeURIComponent(one[1]);
     const session = id && sessions.get(id);
     if (one && !one[2] && request.method === "GET") return session ? reply({ data: session }) : reply({ message: "No such session." }, 404);
+    if (one && !one[2] && request.method === "DELETE" && session) {
+      deleted.push(id);
+      sessions.delete(id);
+      return reply({ data: true });
+    }
     if (one && !one[2] && request.method === "PATCH" && session) {
       Object.assign(session, JSON.parse(body));
       return reply({ data: session });
@@ -103,6 +112,8 @@ beforeEach(() => {
   prompts = [];
   told = new Map();
   moves = [];
+  deleted = [];
+  refusesAutopilot = false;
   write(path.join(home, "box", "projects.json"), JSON.stringify({ version: 1, projects: [{ directory: shop, folders: [docs] }, { directory: blog, folders: [] }] }));
   write(path.join(home, "box", "worktrees.json"), JSON.stringify({ worktrees: [{ project: shop, root: tree, folder: tree, branch: "kuvo/brave-otter" }] }));
 });
@@ -140,6 +151,15 @@ test("a client's new session, with no task, is made in its project with that pro
   assert.equal(given.metadata.kuvo.autopilot, true);
   assert.match(told.get("ses_new1 kuvo.project-folders") ?? "", new RegExp(`- docs: ${docs}`));
   assert.deepEqual(prompts, [], "it waits for the user's own first message");
+});
+
+test("a new session asked to start on Autopilot whose agent can't be told how isn't left asking you instead: it goes, and the client hears why", async () => {
+  refusesAutopilot = true;
+  const started = await route("POST", "kuvo/sessions", { folder: shop, autopilot: true });
+  assert.equal(started.status, 502, JSON.stringify(started.body));
+  assert.match(started.body.message, /on Autopilot/);
+  assert.deepEqual(deleted, ["ses_new1"]);
+  assert.equal(sessions.has("ses_new1"), false);
 });
 
 test("a new session in a worktree of the project gets its folders; one in the project's other folder works there alone", async () => {
@@ -212,4 +232,19 @@ test("a session a client opens is given its project's folders where it hasn't th
   assert.equal(JSON.stringify([...sessions.values()]), before);
   assert.equal(told.size, 0);
   assert.equal((await route("POST", "kuvo/sessions/ses_gone/folders")).status, 404);
+});
+
+test("a session whose project the box doesn't list (its Mac keeps them, or hasn't handed them over) keeps what its Mac gave it, opened or moved", async () => {
+  const assets = { action: "external_directory", resource: path.join(home, "work", "assets", "*"), effect: "allow" };
+  sessions.get("ses_shop").permissions = [asks, assets];
+  sessions.get("ses_chat").permissions = [asks, assets];
+  // (Only one other project, as make_project writes it.)
+  write(path.join(home, "box", "projects.json"), JSON.stringify({ version: 1, projects: [{ directory: blog, folders: [] }] }));
+  assert.equal((await route("POST", "kuvo/sessions/ses_shop/folders")).status, 200);
+  assert.equal((await route("POST", "kuvo/sessions/ses_chat/move", { directory: shop })).status, 200);
+  fs.rmSync(path.join(home, "box", "projects.json"));
+  assert.equal((await route("POST", "kuvo/sessions/ses_shop/folders")).status, 200);
+  assert.deepEqual(moves, [{ id: "ses_chat", directory: shop }], "it's moved all the same");
+  for (const id of ["ses_shop", "ses_chat"]) assert.deepEqual(sessions.get(id).permissions, [asks, assets], id);
+  assert.equal(told.size, 0);
 });

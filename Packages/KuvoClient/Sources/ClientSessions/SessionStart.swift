@@ -35,13 +35,24 @@ public enum SessionStart {
     }
 
     /// What it says back: the session (`info`, as its engine lists it, paths as its box knows them;
-    /// none if it couldn't be read just then), the worktree made for it, and the approval it runs
-    /// with now where that's less than asked (`got`).
+    /// none if it couldn't be read just then, or not as this client reads one: it's made all the
+    /// same), the worktree made for it, and the approval it runs with now where that's less than
+    /// asked (`got`).
     public struct Started: Decodable, Sendable {
         public var session: String
         public var info: Session?
         public var worktree: Worktree?
         public var got: String?
+
+        private enum CodingKeys: String, CodingKey { case session, info, worktree, got }
+
+        public init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            session = try container.decode(String.self, forKey: .session)
+            info = try? container.decodeIfPresent(Session.self, forKey: .info)
+            worktree = try? container.decodeIfPresent(Worktree.self, forKey: .worktree)
+            got = try? container.decodeIfPresent(String.self, forKey: .got)
+        }
 
         /// A worktree made for it, as `kuvo/worktrees` makes one.
         public struct Worktree: Decodable, Sendable, Equatable {
@@ -72,11 +83,21 @@ public enum SessionMove {
         public init(directory: String) { self.directory = directory }
     }
 
-    /// The session as it is now (it moves at its next step while it's at work).
+    /// The session as it is now (it moves at its next step while it's at work; none where it
+    /// couldn't be read, or not as this client reads one: it's moved all the same).
     public struct Moved: Decodable, Sendable {
         public var session: String
         public var directory: String
         public var info: Session?
+
+        private enum CodingKeys: String, CodingKey { case session, directory, info }
+
+        public init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            session = try container.decode(String.self, forKey: .session)
+            directory = try container.decode(String.self, forKey: .directory)
+            info = try? container.decodeIfPresent(Session.self, forKey: .info)
+        }
     }
 }
 

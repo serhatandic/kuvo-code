@@ -675,12 +675,6 @@ final class Workspace {
         }
         model.isReachable = reachable(directory)
         model.box = box(of: id, else: directory)
-        // Its box gives it its project's folders, as they change, where it can.
-        let boxID = Self.box(of: directory)
-        model.foldersOnBox = { [weak self] in
-            guard let self, self.boxes?(boxID) != nil else { return false }
-            return await self.boxHas(ProjectFoldersOnBox.feature, on: boxID)
-        }
         followGoals(of: model)
         models[id] = model
         // This Mac's conversation as last seen, in its first frame, while the engine's is read
@@ -938,8 +932,10 @@ final class Workspace {
     }
 
     /// Adds a project, or updates one, and gives its open sessions the new folders.
+    /// `shown`: the sessions open in a tab, given the project's new folders by its box at once (you
+    /// may write to one next).
     @discardableResult
-    func saveProject(_ directory: String, settings project: ProjectSettings) -> String {
+    func saveProject(_ directory: String, settings project: ProjectSettings, shown: Set<String> = []) -> String {
         let directory = addFolder(directory)
         var project = project
         project.name = project.name?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -952,11 +948,15 @@ final class Workspace {
         settings[directory] = project == ProjectSettings() ? nil : project
         saveSettings()
         keepOnBox(directory)
-        // Sessions not open yet catch up when they open (from a box with `projects.folders`, also
-        // as each next runs: its box gives them).
-        for model in models.values where projectDirectory(of: model.session) == directory {
-            // (Once its box has them.)
-            Task {
+        // Sessions not open yet catch up when they open. A box with `projects.folders` gives each
+        // its folders as it next runs or opens, never all at once at rest, which would make each
+        // the newest: only those open in a tab now. A box from before: the app gives each loaded
+        // one them now.
+        givingFolders = models.values.filter { projectDirectory(of: $0.session) == directory }.map { model in
+            let isShown = shown.contains(model.id)
+            return Task {
+                if !isShown, await model.boxHas(ProjectFoldersOnBox.feature) { return }
+                // (Once its box has them.)
                 await projectsWritten()
                 await model.syncFolders()
             }
@@ -964,11 +964,19 @@ final class Workspace {
         return directory
     }
 
+    /// The project's folders being given to its loaded sessions after Edit Project (what a test
+    /// waits for).
+    @ObservationIgnored private(set) var givingFolders: [Task<Void, Never>] = []
+
     /// Settings › Permissions changed: each box makes its conversations' rules again with them
-    /// (PROTOCOL.md, "Approval"); open sessions' folders follow here.
+    /// (PROTOCOL.md, "Approval"); open sessions' folders follow here where their box is from
+    /// before `projects.folders` (one with it keeps them itself).
     func syncPermissions() {
         for model in models.values {
-            Task { await model.syncFolders() }
+            Task {
+                if await model.boxHas(ProjectFoldersOnBox.feature) { return }
+                await model.syncFolders()
+            }
         }
     }
 

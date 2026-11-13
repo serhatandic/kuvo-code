@@ -145,6 +145,8 @@ export interface Making {
   folders: string[];
   folder: string;
   started: Omit<Started, "session">;
+  /** Whether its agent was told how to work on Autopilot, once that's been tried. */
+  autopilotTold?: boolean;
 }
 
 /** An agent's call from no conversation this box has: counted together, its task from "another
@@ -475,8 +477,9 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   // (For a client: the worktree's record, as `kuvo/worktrees` gives it, to show it at once.)
   let treeMade: Record<string, unknown> | null = null;
   const removeTree = async () => {
-    // (Never to restore: no session ran in it.)
-    if (madeTree) await answerWorktrees("POST", "kuvo/worktrees/remove", { path: madeTree, discard: true, forget: true }, engine, place.signal).catch(() => {});
+    // (Never to restore: no session ran in it. Not cut short with a start that was: it's what's
+    // left of one.)
+    if (madeTree) await answerWorktrees("POST", "kuvo/worktrees/remove", { path: madeTree, discard: true, forget: true }, engine, undefined).catch(() => {});
   };
   // (A worktree of its own is made from the project: one given a folder too would leave that.)
   if (given.worktree === true && named && folder && realish(folder) !== realish(named.directory)) {
@@ -611,6 +614,13 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   // None to give it (a client's new session): the session as it's made now, for the client to show
   // at once, and the worktree made for it.
   if (!task) {
+    // (Asked to start on Autopilot, it doesn't start asking you instead: it goes, and the client
+    // says why.)
+    if (making.autopilotTold === false) {
+      await call(target, "DELETE", `/api/session/${encodeURIComponent(session)}`).catch(() => {});
+      await removeTree();
+      return no(502, `Couldn't start the session in ${folder} on Autopilot: its agent couldn't be told how to work on it.`);
+    }
     const info = await call(target, "GET", `/api/session/${encodeURIComponent(session)}`, undefined, place.signal).catch(() => null);
     return { started: { session, ...making.started, ...(isObject(info) ? { info } : {}), ...(treeMade ? { worktree: treeMade } : {}) } };
   }
@@ -682,7 +692,7 @@ export async function markMade(making: Making, target: Target, session: string, 
   if (making.folders.length) {
     await call(target, "PUT", `/api/experimental/session/${address}/instructions/entries/${PROJECT_FOLDERS_ENTRY}`, { value: projectFoldersNote(making.folder, making.folders) }).catch(() => {});
   }
-  if (making.autopilot) await tellAutopilot(target, session, true).catch(() => {});
+  if (making.autopilot) making.autopilotTold = await tellAutopilot(target, session, true).then(() => true, () => false);
   await settleNewSession(target, session).catch(() => {});
   // (In its turn, onto its notes as they are then: what was written since it was made stays.)
   const marked = await rewriteOn(target, session, now => ({ metadata: withNotes(now.metadata, making.kuvo) })).then(done => Boolean(done), () => false);

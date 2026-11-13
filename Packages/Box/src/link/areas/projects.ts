@@ -11,7 +11,8 @@ import { call, readBridgeFile, readEngineFile } from "../engine/client";
 import { rewriteOn } from "../engine/notes";
 import { isHiddenRun, type EngineSession } from "../engine/sessions";
 import { askedAbout, realish } from "../fence/policy";
-import { permissionsHere } from "../bots/tell";
+import { holdsBack, permissionsHere } from "../bots/tell";
+import { heldOf } from "../work/approval";
 import { locked, writePrivate } from "../files";
 import { followed } from "../follow";
 import { K } from "../home";
@@ -60,8 +61,16 @@ export const projectFoldersNote = (primary: string, folders: readonly string[]):
  * primary folder of, or a worktree of; none for one in one of those other folders (or a worktree of
  * one), which works there alone, nor for a chat or a folder that's no project. */
 export function foldersFor(folder: string, projects: Project[] = readProjects()): readonly string[] {
+  return listedFolders(folder, projects) ?? [];
+}
+
+/** As `foldersFor`, but null where the box doesn't list the project `folder` is (or is a worktree
+ * of): one it doesn't know yet (a Mac from before keeps its projects itself, or hasn't handed them
+ * over yet), whose folders aren't the box's to say. */
+function listedFolders(folder: string, projects: Project[] = readProjects()): readonly string[] | null {
   const directory = worktreeProjects()[folder] ?? folder;
-  const folders = projects.find(each => each.directory === directory)?.folders ?? [];
+  const folders = projects.find(each => each.directory === directory)?.folders;
+  if (!folders) return null;
   return folders.includes(folder) ? [] : folders;
 }
 
@@ -82,28 +91,51 @@ export function folderRules(folders: readonly string[]): KitRule[] {
 export const isFolderRule = (rule: KitRule): boolean => rule.action === "external_directory" && rule.effect === "allow" && rule.resource.endsWith("/*");
 
 /** `rules` with the folders they allow made `folders`: a bot's own folder stays allowed, as it isn't
- * one of the project's, and so does one Settings › Permissions names (Auto and Full Access allow
- * what it asks about outside). */
-export function withFolders(rules: readonly KitRule[], folders: readonly string[]): KitRule[] {
-  const named = new Set((permissionsHere() ?? []).map(rule => rule.resource));
-  return [...rules.filter(rule => !isFolderRule(rule) || rule.resource.includes("/bots/bot_") || named.has(rule.resource)), ...folderRules(folders)];
+ * one of the project's, and one Settings › Permissions names is Settings' to say (Auto and Full
+ * Access allow what it asks about outside; a Don't Allow there holds), as a session's rules are
+ * made (`refreshedRules`). Don't Allows its lead brought from another computer (`held`) stay last,
+ * so no folder allowed here lets it past them. */
+export function withFolders(rules: readonly KitRule[], folders: readonly string[], held: readonly KitRule[] = []): KitRule[] {
+  const same = (one: KitRule, other: KitRule) => one.action === other.action && one.resource === other.resource;
+  const named = (permissionsHere() ?? rules.filter(holdsBack)).filter(rule => rule.action === "external_directory");
+  const adding = folderRules(folders).filter(rule => !named.some(each => same(each, rule)));
+  const last = rules.filter(rule => held.some(each => same(each, rule) && each.effect === rule.effect));
+  const kept = rules.filter(rule => !last.includes(rule) && !(rule.effect === "allow" && adding.some(each => same(each, rule)))
+    && (!isFolderRule(rule) || rule.resource.includes("/bots/bot_") || named.some(each => each.resource === rule.resource)));
+  return [...kept, ...adding, ...last];
 }
 
 /** The other folders a session in `at` gets: as `foldersFor`, or, filed under a project that's the
- * same place by another name (`kuvo.filed`: a link, as its start found it), that project's. */
-function foldersOf(session: EngineSession, at: string): readonly string[] {
+ * same place by another name (`kuvo.filed`: a link, as its start found it), that project's. Null
+ * where the box doesn't list its project: nothing it has is taken away. */
+function foldersOf(session: EngineSession, at: string): readonly string[] | null {
   const filed = session.metadata?.kuvo?.filed;
   const project = isObject(filed) && filed.folder === at && typeof filed.project === "string" ? filed.project : null;
-  if (!project || project === at || realish(project) !== realish(at)) return foldersFor(at);
-  const folders = readProjects().find(each => each.directory === project)?.folders ?? [];
+  if (!project || project === at || realish(project) !== realish(at)) return listedFolders(at);
+  const folders = readProjects().find(each => each.directory === project)?.folders;
+  if (!folders) return null;
   return folders.includes(at) ? [] : folders;
+}
+
+/** What a session on `target` is told of its project's folders (`PROJECT_FOLDERS_ENTRY`): null for
+ * nothing, undefined where that can't be read. */
+async function folderNoteOf(target: Target, session: string, signal?: AbortSignal): Promise<string | null | undefined> {
+  try {
+    const entries: unknown = await call(target, "GET", `/api/experimental/session/${encodeURIComponent(session)}/instructions/entries`, undefined, signal);
+    if (!Array.isArray(entries)) return undefined;
+    const entry = entries.find((each: { key?: unknown } | null) => each?.key === PROJECT_FOLDERS_ENTRY);
+    return typeof entry?.value === "string" ? entry.value : null;
+  } catch {
+    return undefined;
+  }
 }
 
 /** A session on `target` given its project's other folders as they're set where it is now (or in
  * `folder`, where it's moving: the engine moves one at work at its next step), `foldersFor`: its
- * rules allowing them, in its turn, and its instructions naming them (or neither, for none). With
- * `whenChanged`, the instructions only where its rules changed (as each of its runs starts: a write
- * makes it the newest, so one whose folders are as set is left alone). A subagent's and a hidden
+ * rules allowing them, in its turn, and its instructions naming them (or neither, for none), each
+ * written only where it isn't as it should be (a write makes it the newest). With `whenChanged`,
+ * where its instructions can't be read, they're written only where its rules changed. A project
+ * the box doesn't list: nothing (its folders are its Mac's to give). A subagent's and a hidden
  * run's (a group chat's seat, an engine run, a review's part) are never given any. False where the
  * engine didn't answer or take it, or it's gone. */
 export async function giveFolders(target: Target, session: string, { signal, folder, whenChanged = false }: { signal?: AbortSignal; folder?: string; whenChanged?: boolean } = {}): Promise<boolean> {
@@ -115,20 +147,24 @@ export async function giveFolders(target: Target, session: string, { signal, fol
   if (before.parentID || isHiddenRun(before)) return true;
   const where = (now: EngineSession) => folder ?? now.location?.directory ?? now.directory ?? null;
   const first = where(before);
-  await askedAbout(first ? foldersOf(before, first) : []);
+  // (A project the box doesn't list: its folders are its Mac's to give, so what it has stays.)
+  const asked = first ? foldersOf(before, first) : null;
+  if (!asked) return true;
+  await askedAbout(asked);
   // (Folders changed again while they were given: given again, so its rules and its note agree.)
   for (let tries = 0; tries < 3; tries++) {
     let at: string | null = null;
-    let folders: readonly string[] = [];
+    let folders: readonly string[] | null = null;
     let changed = false;
     let seen: EngineSession = before;
     try {
       const done = await rewriteOn(target, session, now => {
         seen = now;
         at = where(now);
-        folders = at ? foldersOf(now, at) : [];
+        folders = at ? foldersOf(now, at) : null;
+        if (!folders) return null;
         const current = (now.permissions ?? []) as KitRule[];
-        const permissions = withFolders(current, folders);
+        const permissions = withFolders(current, folders, heldOf(now));
         changed = JSON.stringify(permissions) !== JSON.stringify(current);
         return changed ? { permissions } as Partial<EngineSession> : null;
       }, signal);
@@ -136,11 +172,17 @@ export async function giveFolders(target: Target, session: string, { signal, fol
     } catch {
       return false;
     }
-    if (JSON.stringify(foldersOf(seen, at)) !== JSON.stringify(folders)) continue;
-    if (whenChanged && !changed) return true;
+    if (!folders) return true;
+    const given: readonly string[] = folders;
+    if (JSON.stringify(foldersOf(seen, at)) !== JSON.stringify(given)) continue;
     const entry = `/api/experimental/session/${address}/instructions/entries/${PROJECT_FOLDERS_ENTRY}`;
+    const note = given.length ? projectFoldersNote(at, given) : null;
+    // (Its note as it should be, or one an earlier write lost: only then written, as a write makes
+    // it the newest. Where that can't be read, written where its rules changed.)
+    const had = await folderNoteOf(target, session, signal);
+    if (had === undefined ? whenChanged && !changed : had === note) return true;
     try {
-      if (folders.length) await call(target, "PUT", entry, { value: projectFoldersNote(at, folders) }, signal);
+      if (note) await call(target, "PUT", entry, { value: note }, signal);
       // (None to name: one it had goes; most have none to take away.)
       else await call(target, "DELETE", entry, undefined, signal).catch(() => {});
     } catch {

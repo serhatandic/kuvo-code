@@ -1050,7 +1050,9 @@ browser's tools (`browser_…`), which work in a client's own browser, aren't th
     Auto (503 while it isn't running), else on the engine. Its answer adds `info`, the session as
     its engine (or the bridge) lists it then, and with `worktree: true`, `worktree`, the worktree made
     for it as `POST kuvo/worktrees` makes one (`{project, root, folder, branch, base?}`); the box
-    takes that away again, branch and all, should the session not be made. With `wait`, or from a conversation, a
+    takes that away again, branch and all, should the session not be made (also where the client
+    goes away meanwhile). Asked for `autopilot` but its agent couldn't be told how to work on it,
+    the session goes again: 502, so it never starts asking you instead. With `wait`, or from a conversation, a
     task is still needed (400). A box from before needs a task: a client makes the session with its
     engine then, and gives it its project's folders, approval and Autopilot itself.
   - Either way its project's other folders (those of the project whose folder it's in, or a
@@ -4750,11 +4752,15 @@ while a box is away goes there when it's back.
   here, 502 where the engine didn't take it: so it has them before you write to it), and as each of
   its runs starts where they changed since (for one nobody opens: a wake-up's, a letter's; that run's
   first step may go without them). Each is
-  written only where they changed (a write makes a session the newest). One filed under a project
-  that's the same place by another name (`kuvo.filed`, a link) has that project's. A folder rule
-  Settings › Permissions names stays. Not a subagent's, nor a hidden run's (a group chat's seat, an
-  engine run, a review's part). A box from before doesn't: a client gives each session it opens its
-  folders then.
+  written only where they changed, the instruction also where an earlier write lost it (a write
+  makes a session the newest). One filed under a project that's the same place by another name
+  (`kuvo.filed`, a link) has that project's. A folder Settings › Permissions names is Settings' to
+  say, as when a session's rules are made: its rule stays as it is, and the project's adds none
+  for it (no second copy in Auto; a Don't Allow there holds); Don't Allows a lead brought from
+  another computer (`kuvo.held`) stay last. Only for a project the box lists: a session of one it
+  doesn't (its Mac keeps them, or hasn't handed them over yet) keeps the rules and instruction it
+  has. Not a subagent's, nor a hidden run's (a group chat's seat, an engine run, a review's part).
+  A box from before doesn't: a client gives each session it opens its folders then.
 - `POST kuvo/sessions/<id>/move` `{directory}` (`sessions.move`, #341) moves a conversation into the
   project at `directory` here, as a chat that turns into work is: the engine moves it (one at work at
   its next step), and it gets that project's other folders as above. `200 {session, directory,

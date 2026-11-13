@@ -30,6 +30,11 @@ struct SessionStartTests {
         #expect(started.worktree?.branch == "kuvo/otter" && started.got == "askFirst")
         let bare = try JSONDecoder().decode(SessionStart.Started.self, from: Data(#"{"session": "ses_2", "title": null, "folder": "/home/me/shop", "project": "shop"}"#.utf8))
         #expect(bare.session == "ses_2" && bare.info == nil && bare.worktree == nil)
+        // A session as a newer engine lists it, that this client can't read: made all the same.
+        let newer = try JSONDecoder().decode(SessionStart.Started.self, from: Data(#"{"session": "ses_3", "title": null, "folder": "/home/me/shop", "project": "shop", "info": {"id": "ses_3", "time": "now"}}"#.utf8))
+        #expect(newer.session == "ses_3" && newer.info == nil)
+        let movedNewer = try JSONDecoder().decode(SessionMove.Moved.self, from: Data(#"{"session": "ses_3", "directory": "/home/me/shop", "info": {"id": "ses_3", "time": "now"}}"#.utf8))
+        #expect(movedNewer.directory == "/home/me/shop" && movedNewer.info == nil)
 
         let moved = try JSONDecoder().decode(SessionMove.Moved.self, from: Data(#"{"session": "ses_1", "directory": "/home/me/shop", "info": \#(session)}"#.utf8))
         #expect(moved.info?.id == "ses_1")

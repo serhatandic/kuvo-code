@@ -427,9 +427,6 @@ final class SessionModel {
     @ObservationIgnored private var queueFollow: Task<Void, Never>?
     /// The session's box (this Mac's, or its machine's).
     @ObservationIgnored var box: () -> BoxClient? = { nil }
-    /// Whether its box gives it its project's folders as they change (`projects.folders`): then this
-    /// app gives none itself.
-    @ObservationIgnored var foldersOnBox: () async -> Bool = { false }
     /// What its box says of its model (`kuvo/sessions/models`, `readModelState`): the model it runs
     /// on, whether it can, and what's missing if not, which its model button, Send and a sign-in
     /// card draw. Nil until read, and from a box without `sessions.models`, whose model this Mac
@@ -2062,19 +2059,29 @@ final class SessionModel {
     }
     /// Whether its box answers `feature` (`kuvo/info`'s `features`); this Mac's answers them all.
     func boxHas(_ feature: String) async -> Bool {
+        await boxSays(feature) == true
+    }
+
+    /// Whether its box answers `feature`, as `boxHas`; nil where it has one whose features couldn't
+    /// be read just now (its link still starting, say).
+    func boxSays(_ feature: String) async -> Bool? {
         guard let box = box() else { return false }
         guard !BoxClient.hasEveryFeature(box.box) else { return true }
-        return await boxFeatures().contains(feature)
+        return await readBoxFeatures()?.contains(feature)
     }
 
     private func boxFeatures() async -> Set<String> {
+        await readBoxFeatures() ?? []
+    }
+
+    private func readBoxFeatures() async -> Set<String>? {
         if let readFeatures { return readFeatures }
-        guard let box = box() else { return [] }
+        guard let box = box() else { return nil }
         if BoxClient.hasEveryFeature(box.box) { return ["queue", "queue.waits"] }
         struct Info: Decodable { var features: [String]? }
-        guard let info = try? await box.value(Info.self, "GET", "kuvo/info") else { return [] }
+        guard let info = try? await box.value(Info.self, "GET", "kuvo/info") else { return nil }
         readFeatures = Set(info.features ?? [])
-        return readFeatures ?? []
+        return readFeatures
     }
 
     // A box that doesn't carry the queue: this Mac carries it, as before. Once a run ends, a moment
@@ -2596,9 +2603,18 @@ final class SessionModel {
     /// allowed in its permissions, and named in its instructions.
     func syncFolders() async {
         // Its box gives them (where they've changed), now it's opened, before you write to it.
-        if await foldersOnBox() {
+        // (Where it can't be told whether it does, nothing: its next opening or run gives them,
+        // never rules this app makes without its box's Settings.)
+        let onBox = await boxSays(ProjectFoldersOnBox.feature)
+        guard let onBox else { return }
+        if onBox {
             struct Given: Decodable { var session: String }
-            _ = try? await box()?.value(Given.self, "POST", ProjectFoldersOnBox.route(id))
+            do {
+                _ = try await box()?.value(Given.self, "POST", ProjectFoldersOnBox.route(id))
+            } catch is CancellationError {
+            } catch {
+                fail(error)
+            }
             return
         }
         // A box from before `projects.folders` doesn't give its sessions their project's folders:

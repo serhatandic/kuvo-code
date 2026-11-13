@@ -35,6 +35,9 @@ const sessions: Record<string, Session> = {
 }
 const written: string[] = []
 const notes: Record<string, string | null> = {}
+// (What a session given its folders before was told of them.)
+const { projectFoldersNote } = await import("../src/link/areas/projects")
+notes.ses_given = projectFoldersNote(shop, [docs])
 let noted: (id: string) => void = () => {}
 let send: (event: unknown) => void = () => {}
 let following: () => void = () => {}
@@ -49,6 +52,11 @@ const engine = Bun.serve({
         send = event => stream.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`))
         following()
       } }), { headers: { "content-type": "text/event-stream" } })
+    }
+    const entries = url.pathname.match(/^\/api\/experimental\/session\/([^/]+)\/instructions\/entries$/)
+    if (entries) {
+      const note = notes[entries[1]!]
+      return Response.json({ data: typeof note === "string" ? [{ key: "kuvo.project-folders", value: note }] : [] })
     }
     const entry = url.pathname.match(/^\/api\/experimental\/session\/([^/]+)\/instructions\/entries\/kuvo\.project-folders$/)
     if (entry) {
@@ -91,8 +99,39 @@ test("one whose folders are as set, a subagent's and a group chat's seat aren't 
   written.length = 0
   for (const id of ["ses_given", "ses_helper", "ses_seat"]) expect(await giveFolders(target, id, { whenChanged: true })).toBe(true)
   expect(written).toEqual([])
-  expect(notes.ses_given).toBeUndefined()
+  expect(notes.ses_given).toBe(projectFoldersNote(shop, [docs]))
   expect(sessions.ses_seat!.permissions).toEqual([asks])
+})
+
+test("one whose rules are as set but whose note an earlier write lost is told of them again, its rules untouched", async () => {
+  const { giveFolders } = await import("../src/link/areas/projects")
+  sessions.ses_lost = { id: "ses_lost", location: { directory: shop }, permissions: [asks, docsRule], metadata: {} }
+  written.length = 0
+  expect(await giveFolders(target, "ses_lost", { whenChanged: true })).toBe(true)
+  expect(written).toEqual([])
+  expect(notes.ses_lost).toBe(projectFoldersNote(shop, [docs]))
+})
+
+test("a session whose project the box doesn't list keeps the folders its Mac gave it: none of its own yet, or a list of others", async () => {
+  const { giveFolders } = await import("../src/link/areas/projects")
+  const assets = { action: "external_directory", resource: join(home, "work", "assets", "*"), effect: "allow" }
+  const file = join(home, "box", "projects.json")
+  sessions.ses_mac = { id: "ses_mac", location: { directory: shop }, permissions: [asks, assets], metadata: {} }
+  notes.ses_mac = "Its Mac's note."
+  try {
+    rmSync(file)
+    written.length = 0
+    expect(await giveFolders(target, "ses_mac", { whenChanged: true })).toBe(true)
+    // (One make_project wrote with only its own.)
+    writeFileSync(file, JSON.stringify({ version: 1, projects: [{ directory: join(home, "work", "blog"), folders: [] }] }))
+    expect(await giveFolders(target, "ses_mac", { whenChanged: true })).toBe(true)
+    expect(await giveFolders(target, "ses_mac", { folder: shop })).toBe(true)
+    expect(written).toEqual([])
+    expect(sessions.ses_mac!.permissions).toEqual([asks, assets])
+    expect(notes.ses_mac).toBe("Its Mac's note.")
+  } finally {
+    keep([docs])
+  }
 })
 
 test("a worktree's session gets its project's folders; one in the project by another name keeps them; once they go, rule and note go", async () => {
@@ -130,4 +169,27 @@ test("a folder Settings › Permissions names stays allowed when a session's pro
   } finally {
     rmSync(settings, { force: true })
   }
+})
+
+test("a project's folder Settings › Permissions also asks about is allowed once in Auto, however often it's opened or run", async () => {
+  const { giveFolders } = await import("../src/link/areas/projects")
+  const settings = join(home, "box", "opencode.json")
+  writeFileSync(settings, JSON.stringify({ permissions: [{ action: "external_directory", resource: join(docs, "*"), effect: "ask" }] }))
+  sessions.ses_twice = { id: "ses_twice", location: { directory: shop }, permissions: [asks, docsRule], metadata: {} }
+  try {
+    written.length = 0
+    for (let times = 0; times < 3; times++) expect(await giveFolders(target, "ses_twice", { whenChanged: true })).toBe(true)
+    expect(sessions.ses_twice!.permissions).toEqual([asks, docsRule])
+    expect(written).toEqual([])
+  } finally {
+    rmSync(settings, { force: true })
+  }
+})
+
+test("a Don't Allow its lead brought from another computer still holds after the project's folders are given", async () => {
+  const { giveFolders } = await import("../src/link/areas/projects")
+  const held = { action: "external_directory", resource: join(home, "work", "*"), effect: "deny" }
+  sessions.ses_led = { id: "ses_led", location: { directory: shop }, permissions: [asks, held], metadata: { kuvo: { held: [held] } } }
+  expect(await giveFolders(target, "ses_led", { whenChanged: true })).toBe(true)
+  expect(sessions.ses_led!.permissions).toEqual([asks, docsRule, held])
 })
