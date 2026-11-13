@@ -1,6 +1,6 @@
 // What Kuvo Code promises of the engine's own agents, on every box, sandbox or not: working in a
 // folder outside a conversation's project asks you first, as Settings › Permissions says ("Work
-// outside the project: Ask"). opencode 2.2.5 doesn't: its agents' rules are `* allow` and the
+// outside the project: Ask"). opencode 2.2.6 doesn't: its agents' rules are `* allow` and the
 // `.env` asks, so an agent's read and write tools reached any file in your home folder.
 //
 // The engine's plugin (`kuvo-defaults.js`, which each box writes for its own engine) gives its
