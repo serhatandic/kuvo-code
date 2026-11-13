@@ -35,8 +35,7 @@ pub fn bind_keys(cx: &mut App) {
     ]);
 }
 
-/// The corner radius of menus: a row's radius plus the menu's padding, so the corners nest.
-pub const MENU_RADIUS: Pixels = px(12.);
+/// The menu's padding: with 8 px rows inside, the 12 px `radius::POPOVER` corners nest.
 const MENU_PADDING: Pixels = px(4.);
 
 type Handler = Rc<dyn Fn(&mut Window, &mut App)>;
@@ -230,10 +229,12 @@ impl Render for Menu {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let c = &theme.colors;
-        let has_checks = self.items.iter().any(|i| matches!(i, MenuItem::Entry(e) if e.checked));
+        // One leading column, shared by checks and icons (as in macOS menus), so every label in
+        // a menu starts at the same place.
+        let has_leading = self.items.iter().any(|i| matches!(i, MenuItem::Entry(e) if e.checked || e.icon.is_some()));
         let rows = self.items.iter().enumerate().map(|(ix, item)| -> AnyElement {
             match item {
-                MenuItem::Separator => div().h(px(1.)).mx(space::S2).my(space::S1).bg(c.border).into_any_element(),
+                MenuItem::Separator => div().h(px(1.)).mx(space::S2).my(space::S1).bg(c.border_strong).into_any_element(),
                 MenuItem::Header(label) => div()
                     .px(space::S2)
                     .pt(space::S2)
@@ -274,14 +275,14 @@ impl Render for Menu {
                                 }))
                                 .on_click(cx.listener(move |this, _, window, cx| this.choose(ix, window, cx)))
                         })
-                        .when(has_checks, |d| {
-                            d.child(
-                                div().w(px(14.)).flex_none().when(entry.checked, |d| {
-                                    d.child(Icon::new(IconName::Check).size(IconSize::Nav).color(c.accent))
-                                }),
-                            )
+                        .when(has_leading, |d| {
+                            let leading = if entry.checked {
+                                Some(Icon::new(IconName::Check).size(IconSize::Nav).color(c.accent))
+                            } else {
+                                entry.icon.map(|i| Icon::new(i).size(IconSize::Nav).color(icon_color))
+                            };
+                            d.child(div().flex().w(IconSize::Nav.pixels()).flex_none().children(leading))
                         })
-                        .children(entry.icon.map(|i| Icon::new(i).size(IconSize::Nav).color(icon_color)))
                         .child(div().flex_1().min_w_0().truncate().child(entry.label.clone()))
                         .children(entry.detail.clone().map(|d| div().text_color(c.text_faint).child(d)))
                         .children(entry.shortcut.clone().map(|k| {
@@ -311,7 +312,7 @@ impl Render for Menu {
             .flex_col()
             .w(self.width)
             .p(MENU_PADDING)
-            .rounded(MENU_RADIUS)
+            .rounded(radius::POPOVER)
             .bg(c.elevated)
             .border_1()
             .border_color(c.border)
@@ -326,6 +327,8 @@ pub struct PopoverMenuHandle(Rc<RefCell<Option<OpenMenu>>>);
 
 struct OpenMenu {
     menu: Entity<Menu>,
+    /// What had focus before any menu opened here; it gets focus back when the menu closes.
+    return_to: Option<FocusHandle>,
     _dismissed: Subscription,
 }
 
@@ -338,26 +341,47 @@ impl PopoverMenuHandle {
         self.0.borrow().as_ref().map(|open| open.menu.clone())
     }
 
-    /// Opens a menu, focused, closing it (and giving focus back) when it's dismissed.
+    /// Shows `menu`, giving it the keyboard. Replacing a menu that's already open (a second
+    /// right-click) keeps the original place to return focus to.
     pub fn open(&self, menu: Entity<Menu>, window: &mut Window, cx: &mut App) {
-        let previous = window.focused(cx);
-        let slot = self.0.clone();
-        let dismissed = window.subscribe(&menu, cx, move |_, _: &DismissEvent, window, cx| {
-            slot.borrow_mut().take();
-            if let Some(previous) = &previous {
-                window.focus(previous, cx);
-            }
-            window.refresh();
-        });
-        // The menu draws in a deferred layer, which joins the focus tree a frame later.
-        let focus = menu.focus_handle(cx);
-        window.defer(cx, move |window, cx| window.focus(&focus, cx));
-        *self.0.borrow_mut() = Some(OpenMenu { menu, _dismissed: dismissed });
+        let replaced = self.0.borrow_mut().take();
+        let return_to = match replaced {
+            Some(open) => open.return_to,
+            None => window.focused(cx),
+        };
+        let menu_focus = menu.focus_handle(cx);
+        let dismissed = {
+            let slot = self.0.clone();
+            let menu_focus = menu_focus.clone();
+            let return_to = return_to.clone();
+            window.subscribe(&menu, cx, move |_, _: &DismissEvent, window, cx| {
+                slot.borrow_mut().take();
+                // If the chosen entry moved focus somewhere on purpose (a rename field), or a
+                // click outside focused something else, leave it there.
+                let menu_kept_focus = menu_focus.contains_focused(window, cx) || window.focused(cx).is_none();
+                if let (true, Some(target)) = (menu_kept_focus, &return_to) {
+                    window.focus(target, cx);
+                }
+                window.refresh();
+            })
+        };
+        *self.0.borrow_mut() = Some(OpenMenu { menu, return_to, _dismissed: dismissed });
+        // A menu draws in a deferred layer, which only joins the focus tree once drawn; take
+        // the keyboard after this frame.
+        window.defer(cx, move |window, cx| window.focus(&menu_focus, cx));
         window.refresh();
     }
 
-    pub fn close(&self, window: &mut Window) {
-        self.0.borrow_mut().take();
+    /// Closes the menu without choosing, giving focus back if the menu had it.
+    pub fn close(&self, window: &mut Window, cx: &mut App) {
+        let open = self.0.borrow_mut().take();
+        if let Some(open) = open {
+            if open.menu.focus_handle(cx).contains_focused(window, cx) {
+                if let Some(target) = &open.return_to {
+                    window.focus(target, cx);
+                }
+            }
+        }
         window.refresh();
     }
 }
@@ -416,7 +440,7 @@ impl RenderOnce for PopoverMenu {
                 // The press mustn't move focus: the menu is about to take it.
                 window.prevent_default();
                 if toggle.is_open() {
-                    toggle.close(window);
+                    toggle.close(window, cx);
                     cx.stop_propagation();
                 } else {
                     let menu = builder(window, cx);

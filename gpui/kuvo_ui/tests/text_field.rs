@@ -206,3 +206,25 @@ fn input_methods_mark_compose_and_commit(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-z");
     assert_eq!(text(&field, cx), "Hello ");
 }
+
+#[gpui::test]
+fn arrows_and_input_methods_in_an_empty_field_dont_crash(cx: &mut TestAppContext) {
+    for multi in [false, true] {
+        let (field, _, cx) = field(cx, move |f| if multi { f.multi_line(1, 4) } else { f });
+        cx.simulate_keystrokes("up down shift-up shift-down");
+        let bounds = cx.update(|window, cx| field.update(cx, |f, cx| f.bounds_for_range(0..0, Default::default(), window, cx)));
+        assert!(bounds.is_some(), "the input method is told where the caret is");
+        cx.simulate_input("ok");
+        assert_eq!(text(&field, cx), "ok");
+    }
+}
+
+#[gpui::test]
+fn moving_the_caret_starts_a_new_undo_step(cx: &mut TestAppContext) {
+    let (field, _, cx) = field(cx, |f| f);
+    cx.simulate_input("hello");
+    cx.simulate_keystrokes("cmd-left");
+    cx.simulate_input("X");
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(text(&field, cx), "hello");
+}

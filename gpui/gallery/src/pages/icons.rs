@@ -76,6 +76,7 @@ fn in_use(cx: &App) -> impl IntoElement {
     };
     div()
         .flex()
+        .items_start()
         .gap(space::S8)
         .child(
             div()

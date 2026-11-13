@@ -101,13 +101,16 @@ pub const LETTER_SPACING: Pixels = px(-0.15);
 /// Corner radii.
 pub mod radius {
     use gpui::{Pixels, px};
-    /// Small inline things: inline code, keycaps, the inside of chips.
+    /// Small things: chips, keycaps, checkboxes.
     pub const SMALL: Pixels = px(6.);
     /// Navigation: sidebar rows, menu items, plain buttons, fields.
     pub const NAV: Pixels = px(8.);
-    /// Cards, popovers, menus, code blocks, the composer.
+    /// Menus and popovers: a row's 8 plus the menu's 4 px padding, so the corners nest.
+    /// (An addition to the brief's three radii, for the user to confirm.)
+    pub const POPOVER: Pixels = px(12.);
+    /// Cards, hover cards, code blocks, the composer.
     pub const CARD: Pixels = px(16.);
-    /// Calls to action and chips: fully rounded.
+    /// Calls to action, switches, badges and avatars: fully rounded.
     pub const PILL: Pixels = px(999.);
 }
 
@@ -168,6 +171,8 @@ pub struct Colors {
 
     /// The accent: focus rings, links, the text cursor, switches that are on, unread badges.
     pub accent: Hsla,
+    pub accent_hover: Hsla,
+    pub accent_pressed: Hsla,
     /// The accent, faint, behind selected text.
     pub selection: Hsla,
     /// The focus ring around a focused field.
@@ -229,8 +234,8 @@ impl Colors {
             border_strong: hex(0xDEDEDE),
 
             hover: hexa(0x2929290A),
-            pressed: hexa(0x29292914),
-            selected: hexa(0x2929290F),
+            pressed: hexa(0x2929291F),
+            selected: hexa(0x2929291A),
 
             primary: hex(0x292929),
             primary_hover: hex(0x3B3B3B),
@@ -239,6 +244,8 @@ impl Colors {
             // The macOS system blue, which is also the Mac app's accent unless the user picks
             // another; the accent itself is a brand decision left to the user.
             accent: hex(0x0A7AFF),
+            accent_hover: hex(0x086DE6),
+            accent_pressed: hex(0x0761CC),
             selection: hexa(0x0A7AFF2E),
             focus_ring: hexa(0x0A7AFF66),
             inline_code: hex(0xF0F0F0),
@@ -251,7 +258,7 @@ impl Colors {
 
             syntax: Syntax {
                 plain: hex(0x292929),
-                comment: hex(0x9E9E9E),
+                comment: hex(0x858585),
                 keyword: hex(0xA6366F),
                 string: hex(0x2F7D4F),
                 number: hex(0xB25B12),
@@ -260,7 +267,7 @@ impl Colors {
                 constant: hex(0xB25B12),
                 property: hex(0x3D6E8C),
                 punctuation: hex(0x7A7A7A),
-                line_number: hex(0xBDBDBD),
+                line_number: hex(0xA3A3A3),
             },
         }
     }
@@ -269,29 +276,31 @@ impl Colors {
         Self {
             background: hex(0x0F0F0F),
             backdrop_dot: hexa(0xFFFFFF1A),
-            surface: hex(0x171717),
-            elevated: hex(0x1F1F1F),
-            sunken: hex(0x1D1D1D),
+            surface: hex(0x181818),
+            elevated: hex(0x242424),
+            sunken: hex(0x121212),
 
             // The same three steps as light, mirrored: bright, mid and dim greys.
             text: hex(0xECECEC),
             text_muted: hex(0xA3A3A3),
             text_faint: hex(0x6E6E6E),
-            text_on_primary: hex(0x171717),
+            text_on_primary: hex(0x181818),
             text_on_accent: hex(0xFFFFFF),
 
             border: hex(0x262626),
             border_strong: hex(0x333333),
 
             hover: hexa(0xFFFFFF0D),
-            pressed: hexa(0xFFFFFF17),
-            selected: hexa(0xFFFFFF12),
+            pressed: hexa(0xFFFFFF1F),
+            selected: hexa(0xFFFFFF1A),
 
             primary: hex(0xECECEC),
             primary_hover: hex(0xFFFFFF),
             primary_pressed: hex(0xD4D4D4),
 
             accent: hex(0x2E8BFF),
+            accent_hover: hex(0x4799FF),
+            accent_pressed: hex(0x2479E0),
             selection: hexa(0x2E8BFF47),
             focus_ring: hexa(0x2E8BFF73),
             inline_code: hex(0x2A2A2A),
@@ -304,7 +313,7 @@ impl Colors {
 
             syntax: Syntax {
                 plain: hex(0xE3E3E3),
-                comment: hex(0x6E6E6E),
+                comment: hex(0x858585),
                 keyword: hex(0xE884B5),
                 string: hex(0x8BCF9F),
                 number: hex(0xF0A86B),
@@ -313,7 +322,7 @@ impl Colors {
                 constant: hex(0xF0A86B),
                 property: hex(0x8EC3DE),
                 punctuation: hex(0x8C8C8C),
-                line_number: hex(0x4D4D4D),
+                line_number: hex(0x666666),
             },
         }
     }
@@ -410,11 +419,15 @@ pub trait StyledType: Styled + Sized {
             .line_height(size.line_height())
     }
 
-    /// Monospaced text at the given size.
+    /// Monospaced text. SF Mono runs larger than SF Pro, so it's set a step down (14 → 13,
+    /// 13 → 12), never below 12.
     fn text_mono(self, size: TypeSize) -> Self {
-        self.font_family(MONO_FONT)
-            .text_size(size.size() - px(1.))
-            .line_height(size.line_height())
+        let mono = match size {
+            TypeSize::Body => TypeSize::Small.size(),
+            TypeSize::Small | TypeSize::Caption => TypeSize::Caption.size(),
+            TypeSize::Title => TypeSize::Title.size(),
+        };
+        self.font_family(MONO_FONT).text_size(mono).line_height(size.line_height())
     }
 
     fn medium(self) -> Self {
@@ -458,8 +471,10 @@ mod tests {
         (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
     }
 
-    /// Text people read stays readable on every surface it sits on, in both appearances:
-    /// the first two levels meet WCAG AA for body text, the faint level the 3:1 for hints.
+    /// Text people read stays readable on every surface it sits on, in both appearances: the
+    /// first two levels meet WCAG AA for body text (4.5:1, and 7:1 for the first). The faint
+    /// level is the brief's #9E9E9E, about 2.5:1 on light surfaces: it's kept for hints and
+    /// times, never for anything that must be read.
     #[test]
     fn text_levels_stay_readable_in_both_appearances() {
         for colors in [Colors::light(), Colors::dark()] {
@@ -469,6 +484,9 @@ mod tests {
                 assert!(contrast(colors.text_faint, surface) >= 2.4);
             }
             assert!(contrast(colors.text_on_primary, colors.primary) >= 7.0);
+            // Code stays readable on its well: comments 3:1, line numbers 2:1 at least.
+            assert!(contrast(colors.syntax.comment, colors.sunken) >= 3.0);
+            assert!(contrast(colors.syntax.line_number, colors.sunken) >= 2.0);
         }
     }
 }

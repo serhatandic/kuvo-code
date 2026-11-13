@@ -223,7 +223,16 @@ pub fn parse(source: &str) -> Vec<Block> {
             }
             Event::End(TagEnd::Link) => {
                 if let (Some((start, url)), Some((_, text))) = (link.take(), inline.as_mut()) {
-                    text.links.push((start..text.text.len(), url));
+                    if opens(&url) {
+                        text.links.push((start..text.text.len(), url));
+                    } else {
+                        // Not a web or mail link: shown as the plain text it is, never opened.
+                        for (range, style) in text.spans.iter_mut() {
+                            if range.start >= start {
+                                style.link = false;
+                            }
+                        }
+                    }
                 }
             }
             Event::Rule => {
@@ -266,6 +275,14 @@ pub fn parse(source: &str) -> Vec<Block> {
         Some(Container::Root(blocks)) => blocks,
         _ => Vec::new(),
     }
+}
+
+/// Whether a link may be opened from a message: only the web and mail. A reply (possibly
+/// written by someone else's prompt) could otherwise hide `file://` or an app's own scheme
+/// behind harmless words.
+pub fn opens(url: &str) -> bool {
+    let scheme = url.split(':').next().unwrap_or("").to_ascii_lowercase();
+    url.contains(':') && matches!(scheme.as_str(), "http" | "https" | "mailto")
 }
 
 /// Markdown, drawn.
@@ -362,8 +379,27 @@ fn block(id: &ElementId, path: &mut Vec<usize>, block: &Block, c: &Colors, level
         }
         Block::Rule => div().h(px(1.)).my(space::S1).bg(c.border).into_any_element(),
         Block::Table { header, rows } => {
-            let cell = |path: &mut Vec<usize>, inline: &Inline, weight: FontWeight| {
-                div().flex_1().min_w_0().px(space::S3).py(space::S1_5).child(text(id, path, inline, c, c.text, weight))
+            // Columns share the width by how much they hold (a path column gets more than a
+            // count column), within limits so none collapses.
+            let columns = header.len().max(rows.iter().map(Vec::len).max().unwrap_or(0));
+            let shares: Vec<f32> = (0..columns)
+                .map(|col| {
+                    let longest = std::iter::once(header.get(col))
+                        .chain(rows.iter().map(|row| row.get(col)))
+                        .flatten()
+                        .map(|cell| cell.text.chars().count())
+                        .max()
+                        .unwrap_or(0);
+                    (longest as f32).clamp(6., 48.)
+                })
+                .collect();
+            let cell = |path: &mut Vec<usize>, col: usize, inline: &Inline, weight: FontWeight| {
+                let mut cell = div().min_w_0().px(space::S3).py(space::S1_5).child(text(id, path, inline, c, c.text, weight));
+                let style = cell.style();
+                style.flex_grow = Some(shares.get(col).copied().unwrap_or(6.));
+                style.flex_shrink = Some(1.);
+                style.flex_basis = Some(gpui::relative(0.).into());
+                cell
             };
             let mut table = div()
                 .flex()
@@ -377,7 +413,7 @@ fn block(id: &ElementId, path: &mut Vec<usize>, block: &Block, c: &Colors, level
             let mut head = div().flex().bg(c.sunken).border_b_1().border_color(c.border);
             for (ix, inline) in header.iter().enumerate() {
                 path.push(ix);
-                head = head.child(cell(path, inline, MEDIUM));
+                head = head.child(cell(path, ix, inline, MEDIUM));
                 path.pop();
             }
             path.pop();
@@ -387,7 +423,7 @@ fn block(id: &ElementId, path: &mut Vec<usize>, block: &Block, c: &Colors, level
                 let mut line = div().flex().when(r + 1 != rows.len(), |d| d.border_b_1().border_color(c.border));
                 for (ix, inline) in row.iter().enumerate() {
                     path.push(ix);
-                    line = line.child(cell(path, inline, REGULAR));
+                    line = line.child(cell(path, ix, inline, REGULAR));
                     path.pop();
                 }
                 path.pop();
@@ -469,8 +505,16 @@ fn text(id: &ElementId, path: &[usize], inline: &Inline, c: &Colors, color: Hsla
     }
     let ranges: Vec<Range<usize>> = inline.links.iter().map(|(r, _)| r.clone()).collect();
     let urls: Vec<String> = inline.links.iter().map(|(_, u)| u.clone()).collect();
+    let links = inline.links.clone();
     InteractiveText::new(element_id(id, path), styled)
         .on_click(ranges, move |ix, _, cx| cx.open_url(&urls[ix]))
+        // Where a link goes, shown before it's clicked.
+        .tooltip(move |ix, _, cx| {
+            links
+                .iter()
+                .find(|(range, _)| range.contains(&ix))
+                .map(|(_, url)| crate::menu::Tooltip::new(url.clone()).build(cx))
+        })
         .into_any_element()
 }
 
@@ -520,6 +564,17 @@ mod tests {
         let Block::Table { header, rows } = &blocks[3] else { panic!() };
         assert_eq!(header.iter().map(|i| i.text.as_str()).collect::<Vec<_>>(), vec!["File", "Change"]);
         assert_eq!(rows[0][1].text, "+17 −35");
+    }
+
+    #[test]
+    fn only_web_and_mail_links_open() {
+        let blocks = parse("[docs](https://kuvo.run) [mail](mailto:a@b.c) [app](file:///Applications/X.app) [x](myapp://do) [rel](./notes.md)");
+        let p = para(&blocks, 0);
+        let opened: Vec<&str> = p.links.iter().map(|(_, u)| u.as_str()).collect();
+        assert_eq!(opened, vec!["https://kuvo.run", "mailto:a@b.c"]);
+        // The others are drawn as plain text, not as links.
+        let start = p.text.find("app").unwrap();
+        assert!(!p.spans.iter().any(|(r, s)| r.start == start && s.link));
     }
 
     /// Half a message, as it arrives while streaming, still parses and shows what's there.

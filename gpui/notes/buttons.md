@@ -24,11 +24,14 @@ copy_button}.rs` (GPL-3.0), and GPUI's `elements/div.rs` (Apache-2.0) for `hover
 - Sizes 24 / 32 / 40 px tall; label 12 / 13 / 14 px medium; icons 14 px.
 - Hover and pressed: translucent washes over outlined and ghost buttons, fill shifts for filled
   ones. Disabled: 40 % opacity, no handlers, no tab stop.
-- Every button is a tab stop. Keyboard focus draws the accent edge, plus a halo outside when the
-  button has a fill to hide it behind (a halo under a transparent ghost button would show
-  through, so ghost buttons take the hover wash instead). Return and Space press the focused
-  button (GPUI sends a keyboard click).
+- Every button is a tab stop. Keyboard focus on a filled button draws a ring 2 px out with the
+  surface colour in between (so it shows on an accent fill too); a ghost button, which would
+  show a ring through itself, takes an accent edge and the hover wash. Return and Space press
+  the focused button (GPUI sends a keyboard click).
+- `loading(true)`: a spinner takes the icon's place and presses do nothing.
+- The accent has its own hover and pressed colours (darker in light, lighter-then-darker in
+  dark), not an opacity, which would lighten it on a light surface.
 - Icon-only buttons are square (or round as pills) and always carry a tooltip.
 - A keycap after the label shows the shortcut (↩, ⌘↩), as Capy's dialogs do.
 - `shown(..)` draws hover, pressed or focus without a pointer, for the gallery and tests.
-- Not yet: a loading state with a spinner (comes with block 10), split buttons.
+- Not yet: split buttons.

@@ -26,12 +26,14 @@ blocks in `crates/agent_ui/src/conversation_view/thread_view.rs` (all GPL-3.0).
 - A card: 16 px radius, sunken fill, hairline border; a header with the language and a Copy
   button that reads "✓ Copied" for two seconds (always visible: hover-only controls are hard
   to find and don't work on touch).
-- SF Mono at 13/20; long lines scroll sideways inside the block.
+- SF Mono at 13/20; long lines scroll sideways inside the block, keeping their margin at the
+  end. Comments and line numbers are checked for contrast on the block's fill (3:1 and 2:1).
+- Copy says "Copied" for two seconds after the latest click.
 - Line numbers are optional: on for files and diffs, off in messages, as in Zed.
 
 ## Not yet
 
-- Wrapping long lines as an option; a horizontal scrollbar.
+- Wrapping long lines as an option; a scrollbar or edge fade showing there's more to the right.
 - Highlighting runs on the UI thread (fast for message-sized code, cached); large files will
   want it on a background task.
 - More languages (Swift, CSS, HTML, YAML, TOML, Markdown) as their MIT grammars are added.

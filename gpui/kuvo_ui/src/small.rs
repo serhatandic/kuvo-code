@@ -53,7 +53,8 @@ impl Switch {
 impl RenderOnce for Switch {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let c = &cx.theme().colors;
-        let (track, thumb) = if self.on { (c.accent, c.text_on_accent) } else { (c.border_strong, c.surface) };
+        // The thumb stays white either way, as on macOS; only the track says on or off.
+        let (track, thumb) = if self.on { (c.accent, c.text_on_accent) } else { (c.border_strong, c.text_on_accent) };
         let ring = c.focus_ring;
         let on = self.on;
         let mut root = div()
@@ -136,7 +137,7 @@ impl RenderOnce for Checkbox {
             .items_center()
             .justify_center()
             .size(px(16.))
-            .rounded(px(5.))
+            .rounded(radius::SMALL)
             .map(|d| {
                 if checked {
                     d.bg(c.accent).child(Icon::new(IconName::Check).size(IconSize::Nav).color(c.text_on_accent))
@@ -160,7 +161,7 @@ impl RenderOnce for Checkbox {
             root = root
                 .cursor_pointer()
                 .tab_index(0)
-                .rounded(px(5.))
+                .rounded(radius::SMALL)
                 .focus_visible(move |s| s.shadow(crate::button::focus_ring(ring)))
                 .when(!checked, |d| d.hover(move |s| s.text_color(accent)));
             if let Some(handler) = self.on_change {
@@ -340,7 +341,14 @@ impl RenderOnce for Avatar {
         let c = &cx.theme().colors;
         let hash = self.name.bytes().fold(5381u32, |h, b| h.wrapping_mul(33) ^ b as u32);
         let fill = c.avatars[hash as usize % c.avatars.len()];
-        let small = self.size < px(28.);
+        // Initials in one of the type sizes, by how big the avatar is.
+        let type_size = if self.size < px(28.) {
+            TypeSize::Caption
+        } else if self.size < px(36.) {
+            TypeSize::Small
+        } else {
+            TypeSize::Body
+        };
         let ring = c.surface;
         div()
             .relative()
@@ -351,8 +359,7 @@ impl RenderOnce for Avatar {
             .size(self.size)
             .rounded(radius::PILL)
             .bg(fill)
-            .text_ui(if small { TypeSize::Caption } else { TypeSize::Small })
-            .text_size(self.size * 0.42)
+            .text_ui(type_size)
             .medium()
             .text_color(c.text)
             .child(Self::initials(&self.name))
@@ -390,7 +397,7 @@ mod tests {
     #[test]
     fn initials_take_the_first_two_words() {
         assert_eq!(Avatar::initials("Mira"), "M");
-        assert_eq!(Avatar::initials("serhat andic"), "SA");
+        assert_eq!(Avatar::initials("sam rivera"), "SR");
         assert_eq!(Avatar::initials("Kuvo Foreman Bot"), "KF");
         assert_eq!(Avatar::initials("  "), "");
     }

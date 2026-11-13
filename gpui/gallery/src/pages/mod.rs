@@ -38,13 +38,13 @@ pub(crate) fn shot_height(block: Block) -> f32 {
         Block::Theme => 1640.,
         Block::Icons => 1420.,
         Block::Buttons => 1100.,
-        Block::TextField => 900.,
+        Block::TextField => 1000.,
         Block::ChatList => 840.,
-        Block::Markdown => 800.,
-        Block::CodeBlocks => 1130.,
+        Block::Markdown => 900.,
+        Block::CodeBlocks => 1250.,
         Block::Menus => 900.,
         Block::Rows => 760.,
-        Block::SmallPieces => 860.,
+        Block::SmallPieces => 900.,
     }
 }
 

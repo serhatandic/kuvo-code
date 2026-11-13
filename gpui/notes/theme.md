@@ -30,6 +30,8 @@ Files read: `crates/ui/src/styles/{typography,spacing,units,elevation,color}.rs`
   type at 12 / 13 / 14 / 24 px with 16 / 18 / 20 / 30 line heights; text #292929 / #5D5D5D /
   #9E9E9E in light and #ECECEC / #A3A3A3 / #6E6E6E in dark; radii 8 (navigation), 16 (cards),
   pill (calls to action), and 6 for small inline things; spacing on a 4 px grid.
+- Dark surfaces step up with elevation: sunken wells #121212, the surface #181818, menus and
+  popovers #242424; the selected wash (10 %) is clearly stronger than hover (4–5 %).
 - The primary call to action is inverted neutral (dark on light, light on dark), as in the
   blueprint and OpenBot; the accent is kept for focus, links, the caret, switches and badges.
 - The dotted backdrop (Capy and OpenBot's calm empty pages) is ours: a seeded value-noise field
@@ -46,5 +48,8 @@ Files read: `crates/ui/src/styles/{typography,spacing,units,elevation,color}.rs`
   elsewhere). Found by probing `font_id` for each weight; worth upstreaming.
 - **Monospace:** SF Mono is reachable as `.AppleSystemUIFontMonospaced` on macOS; elsewhere we
   ask for `monospace`. Linux needs checking when the client runs there.
+- **Radii:** a fourth radius, 12 px for menus and popovers (`radius::POPOVER`), so their
+  corners nest around 8 px rows; small things (chips, keycaps, checkboxes) use 6 px. Both are
+  additions to the brief's 8 / 16 / pill, for the user to confirm.
 - **Accent:** the macOS system blue, which is also the Mac app's accent by default. Picking
   Kuvo's accent is a brand decision for the user.

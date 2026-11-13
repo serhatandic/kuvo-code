@@ -21,6 +21,13 @@ before adding. Nothing from Zed's GPL-3.0 crates is used or copied: only `gpui` 
 GPUI's `test-support` feature (Apache-2.0, same crate) is used only by the tests and the
 `shots` binary.
 
+GPUI also brings in other crates from Zed's repository, all Apache-2.0: `gpui_apple`,
+`gpui_macos`, `gpui_macros`, `gpui_shared_string`, `gpui_util`, `collections`, `refineable`,
+`sum_tree`, `http_client`, `scheduler` and the like (listed in full below).
+
+**Adapted code:** parts of `kuvo_ui/src/text_field/` are adapted from GPUI's
+`examples/input.rs` (Copyright Zed Industries, Inc., Apache-2.0), modified; the files say so.
+
 Assets: the icons in `assets/icons` are drawn for Kuvo and are Kuvo's own. No fonts are
 bundled: the UI uses the system's SF Pro and SF Mono.
 
@@ -37,6 +44,7 @@ was added by us. All are permissive, except two MPL-2.0 crates worth a decision:
 | tiny-skia, tiny-skia-path, exr, lebe, avif-serialize, ravif, sha1_smol | BSD-3-Clause | SVG and image decoding | Permissive; keep notices. |
 | arrayref, av1-grain, rav1e, v_frame | BSD-2-Clause | Image decoding | Permissive; keep notices. |
 | foldhash, slotmap, zlib-rs | Zlib | Hashing, GPUI's entity maps, compression | Permissive. |
+| unicode-ident | (MIT OR Apache-2.0) AND Unicode-3.0 | Parsing (proc macros) | Permissive. |
 
 When the client ships, these notices go into the app's third-party licences file, as the Mac
 app does today (`THIRD_PARTY_LICENSES.txt`).
@@ -44,7 +52,8 @@ app does today (`THIRD_PARTY_LICENSES.txt`).
 ## Every crate in the build
 
 Generated with `cargo metadata --format-version 1 --filter-platform aarch64-apple-darwin | scripts/deps-licenses.py`
-(on this Mac, test and build dependencies included).
+(on this Mac, test and build dependencies included; Linux and Windows will add their own
+platform crates, to be checked when the client is built there).
 
 | Crate | Version | Licence |
 |---|---|---|

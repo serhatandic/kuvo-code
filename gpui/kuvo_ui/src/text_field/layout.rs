@@ -1,5 +1,9 @@
 //! The text field's element: shapes and wraps the text, sizes the field to its lines (between
 //! a minimum and a maximum, scrolling past it), and paints selection, text and caret.
+//!
+//! The single-line shaping, the underlined run for marked text and the input-handler
+//! registration are adapted from GPUI's `examples/input.rs` (Copyright Zed Industries, Inc.,
+//! Apache-2.0), and modified: wrapping, many lines, scrolling and our look are ours.
 
 use std::ops::Range;
 
@@ -51,6 +55,10 @@ impl Layout {
 
     /// The caret position for an offset, relative to the text's top-left.
     pub fn position_for(&self, offset: usize) -> Point<Pixels> {
+        // An empty field (showing its placeholder) has no lines: the caret is at the start.
+        if self.lines.is_empty() {
+            return Point::default();
+        }
         let ix = self.line_of(offset);
         let local = offset.saturating_sub(self.starts[ix]).min(self.lines[ix].len());
         let at = self.lines[ix].position_for_index(local, self.line_height).unwrap_or_default();
@@ -239,7 +247,7 @@ impl Element for TextElement {
             let (text, color) = if showing_placeholder {
                 (field.placeholder.to_string(), colors.text_faint)
             } else {
-                (field.content.clone(), if field.disabled { colors.text_muted } else { colors.text })
+                (field.content.clone(), if field.disabled { colors.text_faint } else { colors.text })
             };
             let wrap = multi.then_some(bounds.size.width);
             let (lines, starts, tops, content_height) =

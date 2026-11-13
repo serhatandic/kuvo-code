@@ -73,6 +73,10 @@ fn toggles(settings: &Settings, cx: &mut Context<Gallery>) -> impl IntoElement +
                     .detail("Your organisation decides this")
                     .trailing(Switch::new("sw-locked", true).disabled(true))
                     .into_any_element(),
+                ListRow::new("s-beta", "Try features before they're finished")
+                    .detail("Not available on this plan")
+                    .trailing(Switch::new("sw-beta", false).disabled(true))
+                    .into_any_element(),
             ],
             cx,
         )))
@@ -86,7 +90,8 @@ fn toggles(settings: &Settings, cx: &mut Context<Gallery>) -> impl IntoElement +
                 .child(include(0, "Open issues"))
                 .child(include(1, "Pull requests waiting on you"))
                 .child(include(2, "Sessions that finished overnight"))
-                .child(Checkbox::new("include-x", false).label("Billing (needs admin)").disabled(true)),
+                .child(Checkbox::new("include-x", false).label("Billing (needs admin)").disabled(true))
+                .child(Checkbox::new("include-y", true).label("Security alerts (always on)").disabled(true)),
         )
 }
 
@@ -113,7 +118,7 @@ fn pieces(cx: &App) -> impl IntoElement {
                 .child(label("Avatars"))
                 .child(Avatar::new("Mira").size(px(18.)))
                 .child(Avatar::new("Kuvo Foreman").size(px(24.)).status(c.success))
-                .child(Avatar::new("serhat andic").size(px(32.)))
+                .child(Avatar::new("Sam Rivera").size(px(32.)))
                 .child(Avatar::new("Research Bot").size(px(40.)).status(c.warning))
                 .child(Avatar::new("Ops").size(px(40.))),
         )

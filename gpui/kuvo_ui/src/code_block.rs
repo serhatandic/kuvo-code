@@ -111,8 +111,9 @@ static CONFIGS: LazyLock<HashMap<&'static str, HighlightConfiguration>> = LazyLo
     .collect()
 });
 
-/// Highlights already worked out, by language and text, so a block redrawn every frame (or a
-/// streaming one, mostly unchanged) isn't parsed again each time.
+/// Highlights already worked out, by language and text, so a block drawn again unchanged isn't
+/// parsed again. (A streaming block is new text each time and is parsed each time; the cache
+/// is simply emptied when it grows past 256 entries.)
 static CACHE: LazyLock<Mutex<HashMap<(String, u64), Vec<(Range<usize>, Kind)>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -201,8 +202,12 @@ pub fn runs(code: &str, language: &str, syntax: &Syntax) -> Vec<TextRun> {
     runs
 }
 
-/// Whether a code block's Copy button has just been used.
-struct Copied(bool);
+/// Whether a code block's Copy button has just been used. Each click counts, so only the
+/// latest click's timer turns "Copied" back into "Copy".
+struct Copied {
+    shown: bool,
+    clicks: u64,
+}
 
 /// A code block.
 #[derive(IntoElement)]
@@ -254,8 +259,8 @@ impl RenderOnce for CodeBlock {
         let runs = runs(&code, &language, &c.syntax);
         let line_count = code.split('\n').count().max(1);
 
-        let copied = window.use_keyed_state(self.id.clone(), cx, |_, _| Copied(false));
-        let is_copied = copied.read(cx).0 || self.shown_copied;
+        let copied = window.use_keyed_state(self.id.clone(), cx, |_, _| Copied { shown: false, clicks: 0 });
+        let is_copied = copied.read(cx).shown || self.shown_copied;
         let copy_text = code.clone();
         let copy_state = copied.clone();
         let copy = Button::new(
@@ -267,16 +272,20 @@ impl RenderOnce for CodeBlock {
         .size(ButtonSize::Small)
         .on_click(move |_, _, cx| {
             cx.write_to_clipboard(ClipboardItem::new_string(copy_text.to_string()));
-            copy_state.update(cx, |state, cx| {
-                state.0 = true;
+            let click = copy_state.update(cx, |state, cx| {
+                state.shown = true;
+                state.clicks += 1;
                 cx.notify();
+                state.clicks
             });
             let state = copy_state.clone();
             cx.spawn(async move |cx| {
                 cx.background_executor().timer(Duration::from_secs(2)).await;
                 state.update(cx, |state, cx| {
-                    state.0 = false;
-                    cx.notify();
+                    if state.clicks == click {
+                        state.shown = false;
+                        cx.notify();
+                    }
                 });
             })
             .detach();
@@ -322,17 +331,24 @@ impl RenderOnce for CodeBlock {
             .overflow_hidden()
             .children(header)
             .child(
+                // The padding is on the content, not the scrolling area, so the last characters
+                // keep their margin when scrolled to the end.
                 div()
                     .id(self.id.clone())
                     .flex()
                     .w_full()
                     .overflow_x_scroll()
-                    .px(space::S4)
-                    .py(space::S3)
                     .text_mono(TypeSize::Body)
                     .whitespace_nowrap()
-                    .children(gutter)
-                    .child(div().flex_none().child(StyledText::new(code).with_runs(runs))),
+                    .child(
+                        div()
+                            .flex()
+                            .flex_none()
+                            .px(space::S4)
+                            .py(space::S3)
+                            .children(gutter)
+                            .child(div().flex_none().child(StyledText::new(code).with_runs(runs))),
+                    ),
             )
     }
 }

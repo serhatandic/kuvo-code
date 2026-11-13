@@ -94,7 +94,8 @@ fn sizes(cx: &App) -> impl IntoElement {
                 .child(Button::new("s-small", "Small").size(ButtonSize::Small))
                 .child(Button::new("s-medium", "Medium"))
                 .child(Button::new("s-large", "Large").size(ButtonSize::Large))
-                .child(Button::new("s-large-pill", "Get started").primary().pill().size(ButtonSize::Large)),
+                .child(Button::new("s-large-pill", "Get started").primary().pill().size(ButtonSize::Large))
+                .child(Button::new("s-loading", "Connecting").primary().pill().size(ButtonSize::Large).loading(true)),
         )
         .child(
             div()

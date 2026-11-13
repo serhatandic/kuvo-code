@@ -7,8 +7,14 @@ Gallery page: `gallery/src/pages/text_field.rs`. Shots: `shots/text-field-{light
 
 Files read: `crates/ui_input/src/input_field.rs`, `crates/editor/src/editor.rs` (its
 single-line and auto-height modes), `crates/editor/src/element.rs` (auto-height measuring),
-`crates/editor/src/input.rs` (IME), all GPL-3.0; and GPUI's own `examples/input.rs`,
-`src/input.rs`, `src/text_system/{line,line_layout}.rs` (Apache-2.0).
+`crates/editor/src/input.rs` (IME), all GPL-3.0, for behaviour only; and GPUI's own
+`examples/input.rs`, `src/input.rs`, `src/text_system/{line,line_layout}.rs` (Apache-2.0).
+
+**Adapted, with attribution:** parts of `text_field/mod.rs` and `layout.rs` are adapted from
+GPUI's `examples/input.rs` (Apache-2.0, Zed Industries): the selection model with its reversed
+flag, grapheme movement, copy/cut/paste, the UTF-16 helpers, the input-handler methods and the
+underlined run for marked text. Both files say so at the top. Nothing comes from Zed's GPL
+crates.
 
 - Zed's field is its whole code editor in single-line mode inside a bordered box (label above,
   focused border, error text below). We don't have, or want, an editor here.
@@ -38,8 +44,10 @@ single-line and auto-height modes), `crates/editor/src/element.rs` (auto-height 
 - Return submits (`TextFieldEvent::Submit`); Shift-Return adds a line. A field can be told to
   add a line on Return instead. Escape sends `Cancel`.
 - Look: 14 px text, 8 px radius, a strong hairline at rest, accent edge and halo when focused,
-  accent caret, faint placeholder, grey selection when another field has focus, half
-  opacity when disabled. `bare()` drops the box for use inside a composer card.
+  accent caret, faint placeholder, grey selection when another field has focus; disabled
+  fields sit on the sunken fill with faint text; `set_error` draws a red edge and the message
+  under the field (the message comes from the box). `bare()` drops the box for a composer.
+- Moving the caret ends a run of typing, so the next word is its own undo step (as on a Mac).
 
 ## Tests (through the window's key bindings)
 
@@ -49,9 +57,12 @@ the field was drawn), Up and Down keeping the column, and an IME composition mar
 and undone in one step. IME calls go straight to the entity's input handler, which is what
 GPUI's platform layer calls; the test platform has no input method to drive.
 
+Also: Up, Down and the input method's caret query in an empty field (a crash the review
+found), and moving the caret starting a new undo step.
+
 ## Not yet
 
 - The caret doesn't blink (Zed blinks it). Easy to add with a timer; left out to keep shots
   and tests deterministic until there's a way to turn it off for them.
 - No VoiceOver yet: GPUI has an accessibility layer (`examples/a11y.rs`) to wire in.
-- No inline error state; a page can draw its own message under the field for now.
+- A long placeholder in a growing field is cut to the field's minimum lines.

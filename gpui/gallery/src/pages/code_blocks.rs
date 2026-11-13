@@ -71,7 +71,14 @@ fn in_messages(cx: &App) -> impl IntoElement {
                 .min_w_0()
                 .gap(space::S3)
                 .child(CodeBlock::new("cb-json", JSON).language("json").shown_copied())
-                .child(CodeBlock::new("cb-sh", "bun test web/src/signup --watch").language("bash")),
+                .child(CodeBlock::new("cb-sh", "bun test web/src/signup --watch").language("bash"))
+                .child(
+                    div()
+                        .text_ui(TypeSize::Caption)
+                        .text_color(c.text_faint)
+                        .child("Compact, for a one-line command:"),
+                )
+                .child(CodeBlock::new("cb-compact", "git switch -c fix/sign-up-form").language("sh").compact()),
         )
         .child(
             div()

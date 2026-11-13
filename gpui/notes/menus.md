@@ -24,20 +24,26 @@ tooltip placement in `src/window.rs` (Apache-2.0).
 
 - `Menu`: headers, separators and entries (icon, detail text, shortcut, check, disabled,
   destructive). 30 px rows with 8 px radius inside 4 px padding, so the menu's 12 px radius
-  nests around them; elevated fill, hairline border, soft shadow.
+  (`radius::POPOVER`, an addition to the brief's radii for the user to confirm) nests around
+  them; elevated fill, hairline border, soft shadow. Checks and icons share one leading
+  column, so every label starts at the same place.
 - Keyboard as Zed and macOS: Up and Down wrap and skip headers, separators and disabled
   entries; Return or Space chooses; Escape closes; a press outside closes. The pointer
   highlights what it's over; leaving clears only a highlight the pointer made, so the
   keyboard's survives a resting pointer (found by a test).
-- `PopoverMenu` (a dropdown) with a `PopoverMenuHandle` so code can open one; focus returns to
-  where it was when it closes. `ContextMenuArea` opens at the pointer and stays inside the
+- `PopoverMenu` (a dropdown) with a `PopoverMenuHandle` so code can open one. Closing gives
+  focus back to what had it, but only if the menu still has it: an entry that moves focus on
+  purpose ("Rename" focusing a field) keeps it there, and a second right-click carries the
+  original place over rather than returning to the first menu. `ContextMenuArea` opens at the pointer and stays inside the
   window. `HoverCard` uses GPUI's hoverable tooltip. `Tooltip` gains a shortcut keycap.
 
 ## Tests
 
 The keyboard skips a disabled entry and choosing closes the menu and returns focus; Up wraps to
 the last entry; Escape and a click outside close without choosing, and a second press on the
-trigger closes; a right-click opens the menu at the pointer and a click chooses.
+trigger closes and gives focus back; a right-click opens the menu at the pointer and a click
+chooses; an entry that moves focus keeps it there; after a second right-click, Escape still
+gives focus back.
 
 ## Not yet
 

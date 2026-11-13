@@ -92,6 +92,7 @@ pub struct Button {
     pill: bool,
     square: bool,
     disabled: bool,
+    loading: bool,
     selected: bool,
     full_width: bool,
     shown: Option<ShownState>,
@@ -112,6 +113,7 @@ impl Button {
             pill: false,
             square: false,
             disabled: false,
+            loading: false,
             selected: false,
             full_width: false,
             shown: None,
@@ -180,6 +182,12 @@ impl Button {
         self
     }
 
+    /// Working: a spinner takes the icon's place and presses do nothing until it's done.
+    pub fn loading(mut self, loading: bool) -> Self {
+        self.loading = loading;
+        self
+    }
+
     /// On, for buttons that toggle (a segment that's chosen, a filter that's applied).
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
@@ -230,8 +238,8 @@ impl RenderOnce for Button {
             },
             ButtonStyle::Accent => Look {
                 fill: Some(c.accent),
-                hover: c.accent.opacity(0.9),
-                pressed: c.accent.opacity(0.8),
+                hover: c.accent_hover,
+                pressed: c.accent_pressed,
                 text: c.text_on_accent,
                 border: None,
             },
@@ -255,6 +263,7 @@ impl RenderOnce for Button {
         let rounding = if self.pill { radius::PILL } else { radius::NAV };
         let ring = c.focus_ring;
         let accent = c.accent;
+        let gap = c.surface;
         let faint = c.text_faint;
         let keycap_border = if matches!(self.style, ButtonStyle::Primary | ButtonStyle::Accent) {
             look.text.opacity(0.35)
@@ -303,12 +312,14 @@ impl RenderOnce for Button {
         let filled = look.fill.is_some();
         if disabled {
             button = button.opacity(0.4).cursor_default();
+        } else if self.loading {
+            button = button.cursor_default();
         } else {
             match self.shown {
                 Some(ShownState::Hovered) => button = button.bg(hover_fill),
                 Some(ShownState::Pressed) => button = button.bg(pressed_fill),
                 Some(ShownState::Focused) => {
-                    button = focus_style(button, accent, ring, look.fill.is_some(), hover_fill)
+                    button = focus_style(button, accent, ring, gap, look.fill.is_some(), hover_fill)
                 }
                 None => {}
             }
@@ -317,7 +328,7 @@ impl RenderOnce for Button {
                 .tab_index(0)
                 .hover(move |s| s.bg(hover_fill))
                 .active(move |s| s.bg(pressed_fill))
-                .focus_visible(move |s| focus_style(s, accent, ring, filled, hover_fill));
+                .focus_visible(move |s| focus_style(s, accent, ring, gap, filled, hover_fill));
             if let Some(handler) = self.on_click {
                 button = button.on_click(move |event, window, cx| handler(event, window, cx));
             }
@@ -327,8 +338,13 @@ impl RenderOnce for Button {
         }
 
         let size = IconSize::Nav;
+        let leading = if self.loading {
+            Some(crate::small::spinner("loading", size, icon_color).into_any_element())
+        } else {
+            self.icon.map(|i| Icon::new(i).size(size).color(icon_color).into_any_element())
+        };
         button
-            .children(self.icon.map(|i| Icon::new(i).size(size).color(icon_color)))
+            .children(leading)
             .children(self.label)
             .children(self.icon_after.map(|i| Icon::new(i).size(size).color(icon_color)))
             .children(self.shortcut.map(|keys| keycap(keys, keycap_border, if disabled { faint } else { icon_color }).into_any_element()))
@@ -344,7 +360,7 @@ pub fn keycap(keys: SharedString, border: Hsla, color: Hsla) -> impl IntoElement
         .min_w(px(18.))
         .h(px(18.))
         .px(space::S1)
-        .rounded(px(5.))
+        .rounded(radius::SMALL)
         .border_1()
         .border_color(border)
         .text_ui(TypeSize::Caption)
@@ -364,11 +380,28 @@ pub fn focus_ring(color: Hsla) -> Vec<gpui::BoxShadow> {
     }]
 }
 
-/// How a focused button looks: an accent edge, and a soft halo outside it when the button has a
-/// fill to hide the halo behind. A ghost button has none, so it takes the hover wash instead.
-fn focus_style<S: Styled>(style: S, accent: Hsla, ring: Hsla, filled: bool, hover_fill: Hsla) -> S {
-    let style = style.border_color(accent);
-    if filled { style.shadow(focus_ring(ring)) } else { style.bg(hover_fill) }
+/// How a focused button looks. A filled button gets a ring set off by a 2 px gap, so it shows
+/// even on an accent fill; a ghost button (which would show a halo through itself) gets an
+/// accent edge and the hover wash.
+fn focus_style<S: Styled>(style: S, accent: Hsla, ring: Hsla, gap: Hsla, filled: bool, hover_fill: Hsla) -> S {
+    if filled {
+        style.shadow(offset_focus_ring(gap, ring))
+    } else {
+        style.border_color(accent).bg(hover_fill)
+    }
+}
+
+/// A focus ring 2 px out from the edge, with the surface colour in between.
+pub fn offset_focus_ring(gap: Hsla, ring: Hsla) -> Vec<gpui::BoxShadow> {
+    let spread = |px_: f32, color| gpui::BoxShadow {
+        color,
+        offset: gpui::point(px(0.), px(0.)),
+        blur_radius: px(0.),
+        spread_radius: px(px_),
+        inset: false,
+    };
+    // Shadows paint in order, so the gap goes on top of the wider ring.
+    vec![spread(4., ring), spread(2., gap)]
 }
 
 /// Lays a translucent wash over an opaque fill.

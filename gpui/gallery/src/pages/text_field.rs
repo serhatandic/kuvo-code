@@ -15,6 +15,7 @@ pub struct Fields {
     pub search: Entity<TextField>,
     pub selected: Entity<TextField>,
     pub disabled: Entity<TextField>,
+    pub email: Entity<TextField>,
     pub composer: Entity<TextField>,
     pub empty_composer: Entity<TextField>,
     pub japanese: Entity<TextField>,
@@ -40,6 +41,12 @@ impl Fields {
             f.set_disabled(true, cx);
             f
         });
+        let email = cx.new(|cx| {
+            let mut f = TextField::new(cx).placeholder("you@example.com");
+            f.set_text("sam@example.com", cx);
+            f.set_error(Some("This email already has an account".into()), cx);
+            f
+        });
         let composer = cx.new(|cx| {
             let mut f = TextField::new(cx)
                 .multi_line(1, 8)
@@ -62,7 +69,7 @@ impl Fields {
             f.set_text("東京の天気を", cx);
             f
         });
-        Self { name, search, selected, disabled, composer, empty_composer, japanese }
+        Self { name, search, selected, disabled, email, composer, empty_composer, japanese }
     }
 }
 
@@ -109,6 +116,13 @@ fn single(fields: &Fields, cx: &App) -> impl IntoElement {
                 .gap(space::S5)
                 .child(labelled("Title", "A selection, kept grey while another field has focus", &fields.selected, cx))
                 .child(labelled("Folder", "Disabled", &fields.disabled, cx)),
+        )
+        .child(
+            div()
+                .flex()
+                .gap(space::S5)
+                .child(labelled("Email", "With an error from the box", &fields.email, cx))
+                .child(div().flex_1()),
         )
 }
 

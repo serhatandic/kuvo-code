@@ -5,6 +5,11 @@
 //! text for Japanese and Chinese, the character palette). Multi-line fields grow from a
 //! minimum to a maximum number of lines, then scroll. Return submits (or adds a line, if the
 //! field is told to), Shift-Return always adds a line.
+//!
+//! Adapted in part from GPUI's `examples/input.rs` (Copyright Zed Industries, Inc., Apache-2.0),
+//! and modified: the selection model, grapheme movement, clipboard actions, UTF-16 helpers and
+//! the input-handler methods follow that example; words, lines, many lines, undo, the mouse
+//! beyond single clicks, events and the look are ours.
 
 mod layout;
 
@@ -179,6 +184,8 @@ pub struct TextField {
     /// Drawn without its own border and fill (inside a composer card).
     bare: bool,
     disabled: bool,
+    /// What's wrong with the text, shown under the field with a red edge.
+    error: Option<SharedString>,
     layout: Option<Layout>,
     /// Where Up and Down aim, so moving through short lines keeps the column.
     goal_x: Option<Pixels>,
@@ -211,6 +218,7 @@ impl TextField {
             submits: true,
             bare: false,
             disabled: false,
+            error: None,
             layout: None,
             goal_x: None,
             scroll: px(0.),
@@ -247,6 +255,12 @@ impl TextField {
 
     pub fn set_disabled(&mut self, disabled: bool, cx: &mut Context<Self>) {
         self.disabled = disabled;
+        cx.notify();
+    }
+
+    /// Shows what's wrong with the text under the field, or clears it with `None`.
+    pub fn set_error(&mut self, error: Option<SharedString>, cx: &mut Context<Self>) {
+        self.error = error;
         cx.notify();
     }
 
@@ -294,6 +308,8 @@ impl TextField {
 
     fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
         let offset = offset.min(self.content.len());
+        // Moving the caret ends a run of typing: the next word is its own undo step.
+        self.last_edit = EditKind::Other;
         self.selection = offset..offset;
         self.reversed = false;
         self.reveal_caret = true;
@@ -302,6 +318,7 @@ impl TextField {
 
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
         let offset = offset.min(self.content.len());
+        self.last_edit = EditKind::Other;
         if self.reversed {
             self.selection.start = offset;
         } else {
@@ -461,16 +478,20 @@ impl TextField {
         self.move_to(self.line_around(self.cursor()).start, cx);
     }
 
-    fn line_end(&mut self, _: &LineEnd, _: &mut Window, cx: &mut Context<Self>) {
-        self.goal_x = None;
+    /// Where the line the caret is on ends. At a soft wrap, the row's end is the next row's
+    /// start, so stop just before it (on the space a wrap usually breaks at).
+    fn line_end_offset(&self) -> usize {
         let end = self.line_around(self.cursor()).end;
-        // At a wrap, the row's end is the next row's start; stop just before the space.
-        let end = if end < self.content.len() && !self.content[end..].starts_with('\n') {
+        if end < self.content.len() && !self.content[end..].starts_with('\n') {
             self.previous_grapheme(end).max(self.cursor())
         } else {
             end
-        };
-        self.move_to(end, cx);
+        }
+    }
+
+    fn line_end(&mut self, _: &LineEnd, _: &mut Window, cx: &mut Context<Self>) {
+        self.goal_x = None;
+        self.move_to(self.line_end_offset(), cx);
     }
 
     fn select_line_start(&mut self, _: &SelectLineStart, _: &mut Window, cx: &mut Context<Self>) {
@@ -478,7 +499,7 @@ impl TextField {
     }
 
     fn select_line_end(&mut self, _: &SelectLineEnd, _: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(self.line_around(self.cursor()).end, cx);
+        self.select_to(self.line_end_offset(), cx);
     }
 
     fn doc_start(&mut self, _: &DocStart, _: &mut Window, cx: &mut Context<Self>) {
@@ -519,10 +540,7 @@ impl TextField {
             && range.is_empty()
             && !text.contains(char::is_whitespace);
         if !coalesce && kind != EditKind::Commit {
-            self.undo.push(Snapshot { content: self.content.clone(), selection: self.selection.clone() });
-            if self.undo.len() > 200 {
-                self.undo.remove(0);
-            }
+            self.push_undo();
         }
         self.redo.clear();
         self.last_edit = if kind == EditKind::Commit { EditKind::Other } else { kind };
@@ -535,6 +553,13 @@ impl TextField {
         self.reveal_caret = true;
         cx.emit(TextFieldEvent::Changed);
         cx.notify();
+    }
+
+    fn push_undo(&mut self) {
+        self.undo.push(Snapshot { content: self.content.clone(), selection: self.selection.clone() });
+        if self.undo.len() > 200 {
+            self.undo.remove(0);
+        }
     }
 
     fn delete_or(&mut self, fallback: impl FnOnce(&Self) -> Range<usize>, cx: &mut Context<Self>) {
@@ -654,6 +679,7 @@ impl TextField {
         window.focus(&self.focus, cx);
         let offset = self.offset_at(event.position);
         self.goal_x = None;
+        self.last_edit = EditKind::Other;
         match event.click_count {
             2 => {
                 let word = self.word_around(offset);
@@ -775,9 +801,16 @@ impl EntityInputHandler for TextField {
             .map(|r| self.range_from_utf16(&r))
             .or(self.marked.clone())
             .unwrap_or(self.selection.clone());
+        let flattened;
+        let text = if self.lines.is_none() && text.contains(['\n', '\r']) {
+            flattened = text.replace(['\n', '\r'], " ");
+            flattened.as_str()
+        } else {
+            text
+        };
         // Composition is one undo step: keep the state from before it started.
         if self.marked.is_none() {
-            self.undo.push(Snapshot { content: self.content.clone(), selection: self.selection.clone() });
+            self.push_undo();
             self.redo.clear();
         }
         self.content.replace_range(range.clone(), text);
@@ -819,7 +852,7 @@ impl EntityInputHandler for TextField {
 
 impl Render for TextField {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
+        let theme = cx.theme().clone();
         let c = &theme.colors;
         let focused = self.focus.is_focused(_window);
         let mut field = div()
@@ -870,21 +903,40 @@ impl Render for TextField {
             .text_ui(FIELD_TYPE)
             .text_color(c.text);
 
+        let edge = if self.error.is_some() {
+            c.danger
+        } else if focused {
+            c.accent
+        } else {
+            c.border_strong
+        };
         if !self.bare {
             field = field
                 .px(space::S3)
                 .py(space::S1_5)
                 .rounded(radius::NAV)
-                .bg(c.surface)
+                .bg(if self.disabled { c.sunken } else { c.surface })
                 .border_1()
-                .border_color(if focused { c.accent } else { c.border_strong });
+                .border_color(if self.disabled { c.border } else { edge });
             if focused {
-                field = field.shadow(crate::button::focus_ring(c.focus_ring));
+                let ring = if self.error.is_some() { c.danger.opacity(0.3) } else { c.focus_ring };
+                field = field.shadow(crate::button::focus_ring(ring));
             }
         }
         if self.disabled {
-            field = field.opacity(0.5).cursor_default();
+            field = field.cursor_default();
         }
-        field.child(TextElement { field: cx.entity() })
+        let field = field.child(TextElement { field: cx.entity() });
+        match self.error.clone() {
+            None => field.into_any_element(),
+            Some(error) => div()
+                .flex()
+                .flex_col()
+                .w_full()
+                .gap(space::S1)
+                .child(field)
+                .child(div().text_ui(crate::theme::TypeSize::Caption).text_color(c.danger).child(error))
+                .into_any_element(),
+        }
     }
 }

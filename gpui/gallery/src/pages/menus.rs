@@ -114,8 +114,8 @@ fn menus_row(menus: &Menus, cx: &App) -> impl IntoElement {
                                 .child(NavRow::new("cm-3", "Check the other forms").icon(IconName::Message)),
                             |_, cx| session_menu(cx),
                         ))
-                        // As it looks just after a right-click on the second session.
-                        .child(div().absolute().top(px(46.)).left(px(150.)).child(menus.context.clone())),
+                        // As it looks just after a right-click at the end of the second session.
+                        .child(div().absolute().top(px(44.)).left(px(268.)).child(menus.context.clone())),
                 ),
         )
 }

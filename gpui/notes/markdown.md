@@ -27,7 +27,10 @@ Files read: `crates/markdown/src/{markdown.rs,parser.rs,selection.rs}` (GPL-3.0)
   indent. Quotes: a 2 px bar and muted text. Tables: hairline grid, sunken header row.
   Rules: a hairline. Code: block 7's `CodeBlock`.
 - Links: accent colour, pointing hand, open on click (GPUI's `InteractiveText`, which, like Zed,
-  only fires when the press and release land on the same link).
+  only fires when the press and release land on the same link), and the address shows on hover
+  before you click. Only `http`, `https` and `mailto` links open; anything else (`file://`, an
+  app's own scheme), which a reply could hide behind harmless words, is drawn as plain text.
+- Tables share their width by how much each column holds, so paths get the room.
 - Streaming: half-written markup shows as typed until it closes (tested).
 
 ## Not yet

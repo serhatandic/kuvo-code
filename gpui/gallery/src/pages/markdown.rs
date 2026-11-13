@@ -3,7 +3,9 @@ use kuvo_ui::{ActiveTheme, markdown::Markdown, theme::space};
 
 use crate::{Gallery, page as frame, section};
 
-const REPLY: &str = r#"## What changed
+const REPLY: &str = r#"# Sign-up form fix
+
+## What changed
 
 The sign-up form kept failing on a **taken email** because the error path called `reset()` before it showed the message. Everything the person typed was gone by the time they read it.
 
