@@ -70,10 +70,30 @@ test("helper install: the launch agent starts Kuvo Code Box at login, with this 
   const uid = process.getuid();
   assert.deepEqual(read(path.join(where.home, "launchctl")).trim().split("\n"), [
     `bootout gui/${uid}/run.kuvo.code.machine`,
+    // (Gone before it's started again.)
+    `print gui/${uid}/run.kuvo.code.machine`,
     `bootstrap gui/${uid} ${plistOf(where)}`,
   ]);
   assert.match(read(plistOf(where)), /<string>run\.kuvo\.code<\/string>/, "the app's ID by default");
   assert.deepEqual(helper(where, ["status"]).said, { helper: true, agent: true, loaded: true });
+});
+
+test("helper install --load waits for launchd to let go of the one before, and starts it again once it has", { skip: process.platform !== "darwin" && "only a Mac's box has the helper" }, () => {
+  const where = home("mac");
+  // launchd still stopping the helper before (two looks), and refusing the first start meanwhile.
+  write(path.join(where.tools, "launchctl"), `#!/bin/sh
+echo "$*" >>"${where.home}/launchctl"
+n=$(cat "${where.home}/looks" 2>/dev/null || echo 0)
+case "$1" in
+print) echo $((n + 1)) >"${where.home}/looks"; [ "$n" -lt 2 ] ;;
+bootstrap) if [ -f "${where.home}/refused" ]; then exit 0; fi; touch "${where.home}/refused"; echo "5: Input/output error" >&2; exit 5 ;;
+esac
+`, 0o755);
+  const done = helper(where, ["install", "--load"]);
+  assert.equal(done.status, 0, done.stderr);
+  assert.equal(done.said.loaded, true);
+  const asked = read(path.join(where.home, "launchctl")).trim().split("\n").map(line => line.split(" ")[0]);
+  assert.deepEqual(asked, ["bootout", "print", "print", "print", "bootstrap", "bootstrap"]);
 });
 
 test("helper install: a path with characters XML reserves is written as launchd reads it", { skip: process.platform !== "darwin" && "only a Mac's box has the helper" }, () => {

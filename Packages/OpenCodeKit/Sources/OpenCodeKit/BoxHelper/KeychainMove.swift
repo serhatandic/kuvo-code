@@ -171,24 +171,52 @@ public struct KeychainMove: Sendable {
 
     /// The helper's (the copies trust it alone, and only a program an item trusts may delete it):
     /// each journaled copy taken away, then the journal, after a move that went back before it
-    /// cleared the old place. The originals are never touched, and a copy goes only while its
-    /// original is there: one whose original is gone is the box's only one, and stays.
+    /// cleared the old place (`copying`, `copied`). The originals are never touched. (One gone
+    /// meanwhile was taken away on purpose, as the box ran in the app's folder again: nothing of ours
+    /// deletes an original before `settling`, which this refuses.) A Keychain that can't say what's
+    /// there (locked) changes nothing.
     public func uncopy() throws {
         guard let journal = try journal() else { return }
         guard journal.state == .copying || journal.state == .copied else {
             throw Failure.journal("The box’s keys were moved already: its copies stay.")
         }
+        guard !keychain.isLocked else { throw Failure.refused(helper, errSecInteractionNotAllowed) }
         for entry in journal.items {
-            guard keychain.exists("\(helper).\(entry.service)", entry.account) == true else { continue }
-            switch keychain.exists("\(app).\(entry.service)", entry.account) {
-            case true?: break
-            case false?: throw Failure.journal("Kuvo Code’s own \(entry.name) is gone from your Keychain, so the box’s copy, now its only one, stays.")
+            switch keychain.exists("\(helper).\(entry.service)", entry.account) {
+            case false?: continue
             case nil: throw Failure.refused(entry.name, errSecInteractionNotAllowed)
+            case true?: break
             }
             let status = keychain.delete("\(helper).\(entry.service)", entry.account)
             guard status == errSecSuccess || status == errSecItemNotFound else { throw Failure.unchanged(entry.name, status) }
         }
         try forgetJournal()
+    }
+
+    /// The helper's: what's under its names with no move of this box's behind it (no journal), left
+    /// by an earlier box (removed, or set aside), taken away where the app has its own of each, so
+    /// the box can move. One the app has no item of is kept (a box's own, made in its home): said.
+    public func clearLeftovers() throws -> [String] {
+        guard try journal() == nil else { throw Failure.journal("A move of this box’s keys is under way or done: its items stay.") }
+        // (A box in this home that has had keys of its own: they're its, whatever the app has.)
+        guard !FileManager.default.fileExists(atPath: home.appending(path: "box/keychain.json").path(percentEncoded: false)) else {
+            throw Failure.journal("This box has keys of its own: they stay.")
+        }
+        guard !keychain.isLocked else { throw Failure.refused(helper, errSecInteractionNotAllowed) }
+        var kept: [String] = []
+        for service in Self.services {
+            guard let items = keychain.items("\(helper).\(service)") else { throw Failure.refused("\(helper).\(service)", errSecInteractionNotAllowed) }
+            for item in items {
+                switch keychain.exists("\(app).\(service)", item.account) {
+                case true?:
+                    let status = keychain.delete("\(helper).\(service)", item.account)
+                    guard status == errSecSuccess || status == errSecItemNotFound else { throw Failure.unchanged("\(service)/\(item.account)", status) }
+                case false?: kept.append("\(service)/\(item.account)")
+                case nil: throw Failure.refused("\(service)/\(item.account)", errSecInteractionNotAllowed)
+                }
+            }
+        }
+        return kept
     }
 
     /// The helper's, as the move checks it: the journaled copies it can't read (none: all well).

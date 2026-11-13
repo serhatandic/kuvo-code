@@ -77,16 +77,38 @@ public final class BoxHelper {
         guard let prefix = Bundle.main.bundleIdentifier, let app = BoxHelperBundle.appID(ofHelper: prefix) else {
             fail("\(BoxHelperBundle.name) runs from its bundle, whose ID is Kuvo Code’s with .box after it.")
         }
-        guard let home = given.map({ URL(filePath: $0) }) ?? derivedHome(), home.path(percentEncoded: false).hasPrefix("/"),
-              FileManager.default.fileExists(atPath: home.path(percentEncoded: false)) else {
-            fail("Say which box: --home <its folder>.")
+        let command = words.first ?? "keep"
+        #if DEBUG
+        let pinned = false
+        #else
+        let pinned = true
+        #endif
+        let home: URL
+        switch box(given: given, bundle: Bundle.main.bundleURL, accountHome: accountHome(), pinned: pinned, keeping: command == "keep") {
+        case .success(let found): home = found
+        case .failure(let refused):
+            // (Kept by launchd, a box it won't run ends cleanly: it isn't started again and again.)
+            if command == "keep" {
+                log.error("\(refused.why, privacy: .public)")
+                FileHandle.standardError.write(Data((refused.why + "\n").utf8))
+                exit(0)
+            }
+            fail(refused.why)
         }
-        switch words.first ?? "keep" {
+        switch command {
         case "keep" where words.count <= 1:
             MainActor.assumeIsolated { keep(home: home, keychain: keychain, prefix: prefix, app: app) }
             dispatchMain()
         case "keys" where words.count == 2:
             let move = KeychainMove(keychain: keychain, home: home, app: app, helper: prefix)
+            // What changes the box's keys never runs beside the helper keeping it (its lock), whose
+            // host interface may be changing them meanwhile.
+            if words[1] != "check" {
+                let run = home.appending(path: "run")
+                try? FileManager.default.createDirectory(at: run, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                let lock = open(run.appending(path: "helper.lock").path(percentEncoded: false), O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+                guard lock >= 0, flock(lock, LOCK_EX | LOCK_NB) == 0 else { fail("\(BoxHelperBundle.name) is running this box: it’s stopped first.") }
+            }
             do {
                 switch words[1] {
                 case "check":
@@ -95,6 +117,9 @@ public final class BoxHelper {
                     exit(unreadable.isEmpty ? 0 : 1)
                 case "uncopy":
                     try move.uncopy()
+                case "clear":
+                    say(["kept": try move.clearLeftovers()])
+                    exit(0)
                 case "back":
                     // Kuvo Code itself is given every key: never one signed ad hoc (anything could be),
                     // but in the tests' own build.
@@ -108,7 +133,7 @@ public final class BoxHelper {
                     }
                     try move.back(trusting: URL(filePath: appBundle))
                 default:
-                    fail("Usage: \(BoxHelperBundle.name) keys check|uncopy|back")
+                    fail("Usage: \(BoxHelperBundle.name) keys check|uncopy|clear|back")
                 }
                 say([:])
                 exit(0)
@@ -116,15 +141,63 @@ public final class BoxHelper {
                 fail(error.localizedDescription)
             }
         default:
-            fail("Usage: \(BoxHelperBundle.name) [keep] [--home <box>] | keys check|uncopy|back [--app <Kuvo Code.app>]")
+            fail("Usage: \(BoxHelperBundle.name) [keep] [--home <box>] | keys check|uncopy|clear|back [--app <Kuvo Code.app>]")
         }
     }
 
-    /// The box this bundle is installed in (`<box>/bin/Kuvo Code Box.app`), for one opened with no
-    /// `--home`.
-    nonisolated static func derivedHome() -> URL? {
-        let bin = Bundle.main.bundleURL.deletingLastPathComponent()
-        return bin.lastPathComponent == "bin" ? bin.deletingLastPathComponent() : nil
+    struct Refused: Error, Equatable {
+        let why: String
+    }
+
+    /// Your account's own home folder, as the system has it (never `$HOME`, which whatever starts
+    /// it sets).
+    nonisolated static func accountHome() -> URL? {
+        guard let entry = getpwuid(getuid()), let directory = entry.pointee.pw_dir else { return nil }
+        return URL(filePath: String(cString: directory))
+    }
+
+    /// The box this helper runs or changes the keys of. Its own build (`pinned`) only ever your
+    /// account's `~/.kuvo-code` (`--home` may only name that), and keeps it only from the bundle
+    /// installed there (`keeping`): a copy anywhere else, or a folder of anyone's making, would
+    /// otherwise be handed the vault's secrets and serve your keys. The tests' build takes the box
+    /// it's given. Either way the box and its `bin` are yours alone to change (not anyone else's,
+    /// nor open to others' writes).
+    nonisolated static func box(given: String?, bundle: URL, accountHome: URL?, pinned: Bool, keeping: Bool) -> Result<URL, Refused> {
+        // (Where it really is, links and all, as the kernel says; as written where it isn't there.)
+        func place(_ url: URL) -> String {
+            let path = url.standardizedFileURL.path(percentEncoded: false)
+            guard let real = realpath(path, nil) else { return path.hasSuffix("/") && path.count > 1 ? String(path.dropLast()) : path }
+            defer { free(real) }
+            return String(cString: real)
+        }
+        let home: URL
+        if pinned {
+            guard let accountHome else { return .failure(Refused(why: "Your home folder can’t be found.")) }
+            home = accountHome.appending(path: RemoteEngineInstaller.root)
+            if let given, place(URL(filePath: given)) != place(home) {
+                return .failure(Refused(why: "\(BoxHelperBundle.name) runs only this Mac’s box, \(home.path(percentEncoded: false))."))
+            }
+            if keeping, place(bundle) != place(BoxHelperBundle.installed(in: home)) {
+                return .failure(Refused(why: "\(BoxHelperBundle.name) runs this Mac’s box only from its place in it, \(BoxHelperBundle.installed(in: home).path(percentEncoded: false))."))
+            }
+        } else {
+            guard let given, given.hasPrefix("/") else { return .failure(Refused(why: "Say which box: --home <its folder>.")) }
+            home = URL(filePath: given)
+        }
+        // (Its `bin` too, where its keeper is: there by the time it's kept, maybe not yet as a move
+        // copies its keys.)
+        for folder in [home, home.appending(path: "bin")] {
+            guard let attributes = try? FileManager.default.attributesOfItem(atPath: folder.path(percentEncoded: false)) else {
+                if folder != home, !keeping { continue }
+                return .failure(Refused(why: "There’s no box at \(home.path(percentEncoded: false))."))
+            }
+            let owner = (attributes[.ownerAccountID] as? NSNumber)?.uint32Value
+            let mode = (attributes[.posixPermissions] as? NSNumber)?.intValue ?? 0o777
+            guard owner == getuid(), mode & 0o022 == 0 else {
+                return .failure(Refused(why: "\(folder.path(percentEncoded: false)) can be changed by someone other than you, so \(BoxHelperBundle.name) doesn’t run it."))
+            }
+        }
+        return .success(home)
     }
 
     private nonisolated static func say(_ answer: [String: Any]) {
@@ -312,6 +385,7 @@ public final class BoxHelper {
             noteAsking(asking())
             if serveLacksFileKey, let serve, serve.isRunning, host.vaultFileKey().key != nil {
                 log.info("The vault's key can be read now: the box's server starts again with it")
+                serve.planned = true
                 serve.terminate()
             }
             if isOff, keeper?.isRunning != true { return finish(0) }
@@ -368,8 +442,10 @@ final class Child {
     /// How many times in a row it ended soon after it started.
     var failures = 0
 
-    /// Whether it ran under ten minutes before it ended.
-    var endedSoon: Bool { endedAt.map { started.duration(to: $0) < .seconds(600) } ?? false }
+    /// Ended because the helper asked it to (started again at once, not counted as failing).
+    var planned = false
+    /// Whether it ran under ten minutes before it ended, by itself.
+    var endedSoon: Bool { !planned && (endedAt.map { started.duration(to: $0) < .seconds(600) } ?? false) }
 
     private init(pid: pid_t) {
         self.pid = pid
@@ -380,7 +456,11 @@ final class Child {
     static func spawn(_ executable: String, _ arguments: [String], environment: [String: String], directory: URL, session: Bool,
                       input: Data? = nil, previous: Child? = nil, ended: @escaping (Child) -> Void) -> Child? {
         var pipe: [Int32] = [-1, -1]
-        if input != nil, Darwin.pipe(&pipe) != 0 { return nil }
+        if input != nil {
+            guard Darwin.pipe(&pipe) == 0 else { return nil }
+            // (Neither end for anything else started meanwhile: only this child's stdin, given below.)
+            for end in pipe { _ = fcntl(end, F_SETFD, FD_CLOEXEC) }
+        }
         let null = open("/dev/null", O_RDWR | O_CLOEXEC)
         defer {
             if null >= 0 { close(null) }
@@ -423,7 +503,6 @@ final class Child {
         // (The one before it ended soon after it started: one more in a row.)
         if let previous { child.failures = previous.endedSoon ? previous.failures + 1 : 0 }
         if let input {
-            _ = fcntl(pipe[1], F_SETFD, FD_CLOEXEC)
             input.withUnsafeBytes { _ = Darwin.write(pipe[1], $0.baseAddress, $0.count) }
             child.input = pipe[1]
         }
@@ -431,8 +510,11 @@ final class Child {
         source.setEventHandler { [weak child] in
             MainActor.assumeIsolated {
                 guard let child, child.isRunning else { return }
+                // (It has exited: collected now, however soon the notice came.)
                 var status: Int32 = 0
-                guard waitpid(child.pid, &status, WNOHANG) == child.pid else { return }
+                var collected: pid_t
+                repeat { collected = waitpid(child.pid, &status, 0) } while collected < 0 && errno == EINTR
+                guard collected == child.pid else { return }
                 child.status = status
                 child.isRunning = false
                 child.endedAt = .now

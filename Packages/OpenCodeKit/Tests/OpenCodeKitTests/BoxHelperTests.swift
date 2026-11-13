@@ -14,8 +14,8 @@ import Testing
 ///   bundle changed since it was signed;
 /// - opening it from the app.
 ///
-/// Every Keychain call goes to a keychain file the test makes (`security create-keychain`, never
-/// added to your search list) and deletes; nothing reads your login keychain, and nothing here can
+/// Every Keychain call goes to a keychain file the test makes (`security create-keychain`, which
+/// leaves your search list as it was: `AccountUntouched` checks) and deletes; nothing reads your login keychain, and nothing here can
 /// ask you anything (`HostKeychain.neverAsk`). The box's keeper (`kuvo-start`) and `open` are
 /// stand-ins; launchd is never asked.
 @Suite(.serialized, AccountUntouched()) struct BoxHelperTests {
@@ -42,7 +42,13 @@ import Testing
         guard made.status == 0 else { throw CocoaError(.fileWriteUnknown, userInfo: [NSLocalizedDescriptionKey: "security create-keychain: \(made.errors)"]) }
         keychain = HostKeychain(testFile: keychainFile.path, password: "trial4")
         appBundle = folder.appending(path: "Kuvo Code.app")
-        try Self.makeApp(appBundle, helper: try Self.builtHelper())
+        do {
+            try Self.makeApp(appBundle, helper: try Self.builtHelper())
+        } catch {
+            _ = try? Self.ran("/usr/bin/security", ["delete-keychain", keychainFile.path])
+            try? FileManager.default.removeItem(at: folder)
+            throw error
+        }
         try FileManager.default.createDirectory(at: run, withIntermediateDirectories: true)
     }
 
@@ -256,10 +262,6 @@ import Testing
         try move.write(journal)
         #expect(keychain.delete("\(Self.app).phone-link", "key") == errSecSuccess)
         #expect(try helper(["keys", "uncopy"]).status != 0, "a move past the point of going back keeps its copies")
-        // And had the journal still said `copied`: the copy whose original is gone stays.
-        journal.state = .copied
-        try move.write(journal)
-        #expect(try helper(["keys", "uncopy"]).status != 0)
         #expect(keychain.exists("\(Self.helperID).phone-link", "key") == true, "the box's only link key")
         // The deletion finishes forward.
         journal.state = .settling
@@ -267,6 +269,32 @@ import Testing
         try move.deleteOriginals()
         #expect(try move.journal()?.state == .settled)
         #expect(keychain.items("\(Self.app).integrations") == [])
+    }
+
+    @Test func aKeyTakenAwayAfterAMoveWentBackGoesFromTheCopiesToo() throws {
+        defer { cleanUp() }
+        addOriginals()
+        try move.copy(trusting: helperInApp)
+        // The box ran in the app's folder again, and an integration's key was taken away there.
+        #expect(keychain.delete("\(Self.app).integrations", "KUVO_KEY_GITHUB_TOKEN") == errSecSuccess)
+        #expect(try helper(["keys", "uncopy"]).status == 0)
+        #expect(keychain.items("\(Self.helperID).integrations") == [])
+        #expect(try move.journal() == nil)
+    }
+
+    @Test func leftoversFromAnEarlierBoxAreClearedWhereTheAppHasItsOwn() throws {
+        defer { cleanUp() }
+        addOriginals()
+        #expect(keychain.add("\(Self.helperID).integrations", "KUVO_KEY_GITHUB_TOKEN", Data("ghp_old".utf8), label: nil, trusting: [helperInApp]) == errSecSuccess)
+        #expect(keychain.add("\(Self.helperID).integrations", "KUVO_KEY_ONLY_THERE", Data("x".utf8), label: nil, trusting: [helperInApp]) == errSecSuccess)
+        let cleared = try helper(["keys", "clear"])
+        #expect(cleared.status == 0, "\(cleared.errors)")
+        #expect(cleared.output.contains(#""kept":["integrations\/KUVO_KEY_ONLY_THERE"]"#) || cleared.output.contains(#""kept":["integrations/KUVO_KEY_ONLY_THERE"]"#))
+        #expect(keychain.items("\(Self.helperID).integrations")?.map(\.account) == ["KUVO_KEY_ONLY_THERE"])
+        // A box with keys of its own here keeps them all.
+        try write(box.appending(path: "box/keychain.json"), #"{"has":["phone-link/key"]}"#)
+        #expect(try helper(["keys", "clear"]).status != 0)
+        #expect(keychain.items("\(Self.helperID).integrations")?.count == 1)
     }
 
     @Test func theOriginalsGoOnlyOnceTheMoveIsDoneAndTheirCopiesAreThere() throws {
@@ -524,6 +552,50 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: home.appending(path: "serve.stdin").path))
     }
 
+    @Test func itsOwnBuildRunsOnlyYourBoxFromItsPlaceInIt() throws {
+        defer { cleanUp() }
+        let account = folder.appending(path: "account")
+        let real = account.appending(path: ".kuvo-code")
+        let installed = BoxHelperBundle.installed(in: real)
+        try FileManager.default.createDirectory(at: installed, withIntermediateDirectories: true)
+        func box(_ given: String?, bundle: URL, keeping: Bool = true) -> Result<URL, BoxHelper.Refused> {
+            BoxHelper.box(given: given, bundle: bundle, accountHome: account, pinned: true, keeping: keeping)
+        }
+        #expect(try box(nil, bundle: installed).get() == real)
+        #expect(try box(real.path, bundle: installed).get() == real)
+        // A folder of anyone's making, or a copy of the helper anywhere else: nothing.
+        let elsewhere = folder.appending(path: "x")
+        try FileManager.default.createDirectory(at: elsewhere.appending(path: "bin"), withIntermediateDirectories: true)
+        #expect(throws: BoxHelper.Refused.self) { try box(elsewhere.path, bundle: installed).get() }
+        #expect(throws: BoxHelper.Refused.self) { try box(nil, bundle: helperInApp).get() }
+        #expect(throws: BoxHelper.Refused.self) { try box(nil, bundle: BoxHelperBundle.installed(in: elsewhere)).get() }
+        // The keys' short runs from the app's copy, for your box alone.
+        #expect(try box(nil, bundle: helperInApp, keeping: false).get() == real)
+        #expect(throws: BoxHelper.Refused.self) { try box(elsewhere.path, bundle: helperInApp, keeping: false).get() }
+        // A box others could change: not run.
+        try FileManager.default.setAttributes([.posixPermissions: 0o777], ofItemAtPath: real.appending(path: "bin").path)
+        #expect(throws: BoxHelper.Refused.self) { try box(nil, bundle: installed).get() }
+    }
+
+    @Test func itsKeysAreNeverChangedBesideTheHelperKeepingTheBox() async throws {
+        try standIns()
+        addOriginals()
+        try move.copy(trusting: helperInApp)
+        let helper = try keeping()
+        defer { cleanUp([helper]) }
+        until { FileManager.default.fileExists(atPath: run.appending(path: "host.json").path) || !helper.isRunning }
+        // (A move that didn't finish: it starts nothing, and lets go of its lock.)
+        until { !helper.isRunning }
+        try write(box.appending(path: "updates/rehome/state.json"), #"{"state":"done","way":"move"}"#)
+        let again = try keeping()
+        defer { cleanUp([again]) }
+        until { FileManager.default.fileExists(atPath: run.appending(path: "host.json").path) }
+        let refused = try self.helper(["keys", "uncopy"])
+        #expect(refused.status != 0)
+        #expect(refused.errors.contains("is running this box"))
+        #expect(keychain.items("\(Self.helperID).phone-link")?.count == 3)
+    }
+
     @Test func itStartsNoKeeperThatNamesAnotherBox() throws {
         try standIns()
         defer { cleanUp() }
@@ -559,10 +631,10 @@ import Testing
     }
 
     @Test func aHelperChangedSinceItWasSignedStartsNothing() throws {
+        defer { cleanUp() }
         try standIns()
         try write(helperInApp.appending(path: "Contents/Resources/extra"), "changed")
         let ran = try helper(["keep"])
-        defer { cleanUp() }
         #expect(ran.status == 0, "cleanly, so launchd doesn't start it again and again")
         #expect(text(run.appending(path: "helper-trouble")).contains("was changed since it was installed"))
         #expect(!FileManager.default.fileExists(atPath: run.appending(path: "box.pid").path))

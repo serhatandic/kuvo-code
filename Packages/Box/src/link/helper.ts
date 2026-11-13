@@ -80,8 +80,18 @@ export function installHelperAgent({ load, app }: { load: boolean; app: string }
   if (!load) return { written: true, loaded: false, message: `${HELPER_NAME} starts this Mac's box at login.` };
   const domain = `gui/${process.getuid?.() ?? 0}`;
   const run = (args: string[]) => spawnSync(tools.launchctl, args, { encoding: "utf8", timeout: 30_000, stdio: ["ignore", "pipe", "pipe"] });
-  run(["bootout", `${domain}/${LAUNCH_AGENT}`]);
-  const started = run(["bootstrap", domain, plist]);
+  // What had the label let go of first, and waited for (its helper takes a few seconds to stop
+  // what it runs): bootstrapping it before it's gone fails.
+  if (run(["bootout", `${domain}/${LAUNCH_AGENT}`]).status === 0) {
+    const pause = new Int32Array(new SharedArrayBuffer(4));
+    for (let waited = 0; waited < 100 && run(["print", `${domain}/${LAUNCH_AGENT}`]).status === 0; waited++) Atomics.wait(pause, 0, 0, 100);
+  }
+  let started = run(["bootstrap", domain, plist]);
+  // (launchd still letting go of it: once more, a moment on.)
+  for (let tries = 0; tries < 3 && started.status !== 0; tries++) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
+    started = run(["bootstrap", domain, plist]);
+  }
   const loaded = started.status === 0;
   return {
     written: true,

@@ -65,6 +65,12 @@ import Testing
         #expect((try? String(contentsOf: root.appending(path: "run/serve.log"), encoding: .utf8)) == "listening\nsaid\n")
     }
 
+    @Test func itsKeeperNamesItsOwnBoxAsTheHelperChecks() {
+        defer { try? FileManager.default.removeItem(at: home) }
+        #expect(BoxHelper.ownKeeper(of: root))
+        #expect(!BoxHelper.ownKeeper(of: home.appending(path: ".kuvo-code-other")))
+    }
+
     @Test func notOnAMachinesBoxNorOneTurnedOff() throws {
         defer { try? FileManager.default.removeItem(at: home) }
         try write(root.appending(path: "box/kind"), "machine\n")

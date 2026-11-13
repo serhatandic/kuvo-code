@@ -5402,7 +5402,8 @@ place, which is what macOS keeps your permissions and its Keychain items by.
   `~/Library/LaunchAgents/run.kuvo.code.machine.plist` (`ProgramArguments`: the helper, `keep
   --home <box>`; `RunAtLoad`; `KeepAlive {SuccessfulExit: false}`; `AbandonProcessGroup`;
   `AssociatedBundleIdentifiers: [<the app's ID>]`, by default `run.kuvo.code`), and with `--load`
-  lets go of whatever had the label and bootstraps it (`gui/<uid>`). It prints `{written, loaded,
+  lets go of whatever had the label, waits (ten seconds at most) until launchd has, and bootstraps
+  it (`gui/<uid>`), three more times a second apart while launchd refuses. It prints `{written, loaded,
   message}`, exiting 0 once done, 1 when refused (not a Mac, not a Mac's own box in a home of its
   own, not the real `~/.kuvo-code`, or no helper in `bin`) or launchd didn't start it, 2 for what it
   doesn't know. `helper status` says `{helper, agent, loaded}` (`loaded` null where launchd couldn't
@@ -5412,7 +5413,12 @@ place, which is what macOS keeps your permissions and its Keychain items by.
   its signature whole, its ID the app's with `.box`, signed by the app's team (an ad hoc build: the
   very helper the app carries; who signed the app can't be told, none). Never as the app's child,
   which would make the app what macOS asks about.
-- **Runs**: one per box (`run/helper.lock`; a second goes at once, exit 0). It checks first that
+- **Runs**: only your account's `~/.kuvo-code` (from its home folder as the system has it, not
+  `$HOME`; `--home` may name only that), kept only from the bundle installed there
+  (`bin/Kuvo Code Box.app`), the box and its `bin` yours alone to change: a copy of the helper
+  elsewhere, or a folder of anyone's making, would otherwise be handed the vault's secrets and serve
+  your keys (the tests' own build takes the box it's given). One per box (`run/helper.lock`; a
+  second goes at once, exit 0). What it won't run, it says on stderr and exits 0. It checks first that
   its bundle on disk is the very one it was started from (its code directory's hash, as the app
   checks itself); changed, it starts nothing, writes why in `run/helper-trouble`, and exits 0 so
   launchd doesn't start it again. Nor does it start anything (the same note, exit 0) while a move
@@ -5470,15 +5476,20 @@ place, which is what macOS keeps your permissions and its Keychain items by.
   - `Kuvo Code Box keys check --home <box>` (the move's check, a short run of the helper's own)
     prints `{"unreadable": [...]}`, exiting 0 when it reads every copy, 1 when it doesn't;
   - `keys uncopy` (the move went back before it cleared the old place) takes the journaled copies
-    away, then the journal; the app's own are never touched, and a copy whose original is gone
-    (the box's only one) stops it;
+    away, then the journal; the app's own are never touched (one gone meanwhile was taken away on
+    purpose, as the box ran in the app's folder again: its copy goes too), and a Keychain that can't
+    say what's there (locked) changes nothing;
+  - `keys clear` (no journal, and no `box/keychain.json`): items under the helper's names left by
+    an earlier box, taken away where the app has its own of each; `{"kept": [...]}` says those it
+    kept;
   - once the move can't go back, the keeper takes the app's own away (each once its copy is
     there): `settling` first, which `uncopy` refuses, then `settled`;
   - `keys back --app <Kuvo Code.app>` (moving back, before the helper goes): every item the helper
     has, those made since too, made again under the app's names trusting the app, then its own
     taken away, and the journal. It refuses (exit 2) while the app's own are still there.
   Each of these prints JSON and exits 0 once done (`check`: 1 for a copy it can't read), 2 with why
-  on stderr. `back` takes only Kuvo Code itself for `--app`, signed by the helper's team: a helper
+  on stderr. All but `check` take the box's `run/helper.lock`, refusing while the helper keeps the
+  box (its host interface may be changing those keys). `back` takes only Kuvo Code itself for `--app`, signed by the helper's team: a helper
   signed ad hoc (a local build) refuses, as anything can be signed so (the tests' own build aside).
 
 #### The relay, on this Mac's box

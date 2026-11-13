@@ -39139,7 +39139,7 @@ import fs123 from "node:fs";
 import path126 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "f86dce070469";
+var BRIDGE_VERSION = "c8fe79516321";
 
 // Packages/Box/src/link/rehome/rewrite.ts
 var NO_REWRITE = {
@@ -47383,8 +47383,16 @@ function installHelperAgent({ load, app }) {
     return { written: true, loaded: false, message: `${HELPER_NAME} starts this Mac's box at login.` };
   const domain = `gui/${process.getuid?.() ?? 0}`;
   const run = (args) => spawnSync11(tools.launchctl, args, { encoding: "utf8", timeout: 30000, stdio: ["ignore", "pipe", "pipe"] });
-  run(["bootout", `${domain}/${LAUNCH_AGENT}`]);
-  const started = run(["bootstrap", domain, plist]);
+  if (run(["bootout", `${domain}/${LAUNCH_AGENT}`]).status === 0) {
+    const pause = new Int32Array(new SharedArrayBuffer(4));
+    for (let waited = 0;waited < 100 && run(["print", `${domain}/${LAUNCH_AGENT}`]).status === 0; waited++)
+      Atomics.wait(pause, 0, 0, 100);
+  }
+  let started = run(["bootstrap", domain, plist]);
+  for (let tries = 0;tries < 3 && started.status !== 0; tries++) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
+    started = run(["bootstrap", domain, plist]);
+  }
   const loaded = started.status === 0;
   return {
     written: true,
