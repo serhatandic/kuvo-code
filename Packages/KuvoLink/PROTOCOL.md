@@ -1110,7 +1110,8 @@ browser's tools (`browser_…`), which work in a client's own browser, aren't th
     worktree of; none in one of those other folders) are allowed to it and named in its instructions, one in
     a worktree is told so, one filed under another folder than its own (a worktree, a project's
     other folder) carries that project from the first (`kuvo.filed`, "Projects"), and a folder
-    that's no project yet, nor one of a project's, becomes one.
+    that's no project yet, nor one of a project's, becomes one (once the box keeps its projects),
+    marked `addedByBox: true` until a client sets its `folders` (`PUT kuvo/projects`).
   - 400 `{message}` (no task, not a folder here), 403 (a group chat's seat), 404 (`startedBy`
     isn't a conversation here), 409 `{message, reason}` (Full Access from a client where it can't
     be had: `fullAccessOff`), 429 (too many lately), 502 `{message, session?}` (not made, or
@@ -5062,12 +5063,14 @@ while a box is away goes there when it's back.
   first step may go without them). Each is
   written only where they changed, the instruction also where an earlier write lost it (a write
   makes a session the newest). One filed under a project that's the same place by another name
-  (`kuvo.filed`, a link) has that project's. A folder Settings › Permissions names is Settings' to
-  say, as when a session's rules are made: its rule stays as it is, and the project's adds none
-  for it (no second copy in Auto; a Don't Allow there holds); Don't Allows a lead brought from
-  another computer (`kuvo.held`) stay last. Only for a project the box lists: a session of one it
-  doesn't (its Mac keeps them, or hasn't handed them over yet) keeps the rules and instruction it
-  has. Not a subagent's, nor a hidden run's (a group chat's seat, an engine run, a review's part).
+  (`kuvo.filed`, a link) has that project's; one in a project's other folder, none (it works there
+  alone). A folder Settings › Permissions names is Settings' to say, as when a session's rules are
+  made: the project adds no rule for it (no second copy in Auto; a Don't Allow there holds), and an
+  allow a session has for it stays only while Settings' last rule for it asks (Auto and Full Access
+  allow what it asks about); Don't Allows a lead brought from another computer (`kuvo.held`) stay
+  last. Only for a project the box lists with folders a client set: a session of one it doesn't
+  list (its Mac keeps them, or hasn't handed them over yet), or of one it added itself
+  (`addedByBox`, as a session started there), keeps the rules and instruction it has. Not a subagent's, nor a hidden run's (a group chat's seat, an engine run, a review's part).
   A box from before doesn't: a client gives each session it opens its folders then.
 - `POST kuvo/sessions/<id>/move` `{directory}` (`sessions.move`, #341) moves a conversation into the
   project at `directory` here, as a chat that turns into work is: the engine moves it (one at work at

@@ -6826,7 +6826,8 @@
            "name": "string",
            "at": "number"
           }
-         }
+         },
+         "addedByBox?": "bool"
         }
        }
       },
@@ -6858,7 +6859,8 @@
           "name": "string",
           "at": "number"
          }
-        }
+        },
+        "addedByBox?": "bool"
        }
       }
      }
@@ -9562,7 +9564,8 @@
            "name": "string",
            "at": "number"
           }
-         }
+         },
+         "addedByBox?": "bool"
         }
        }
       }
@@ -10935,7 +10938,8 @@
           "name": "string",
           "at": "number"
          }
-        }
+        },
+        "addedByBox?": "bool"
        }
       },
       "text": "string"

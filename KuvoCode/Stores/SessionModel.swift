@@ -2079,8 +2079,13 @@ final class SessionModel {
         guard let box = box() else { return nil }
         if BoxClient.hasEveryFeature(box.box) { return ["queue", "queue.waits"] }
         struct Info: Decodable { var features: [String]? }
-        guard let info = try? await box.value(Info.self, "GET", "kuvo/info") else { return nil }
-        readFeatures = Set(info.features ?? [])
+        // (One that answers without `kuvo/info` is from before: none. One whose link is away, 502
+        // or 503, or that couldn't be asked: can't tell.)
+        guard let answer = try? await box.send("GET", "kuvo/info") else { return nil }
+        let (status, data) = answer
+        let info = (200..<300).contains(status) ? try? JSONDecoder().decode(Info.self, from: data) : nil
+        if info == nil, status == 502 || status == 503 { return nil }
+        readFeatures = Set(info?.features ?? [])
         return readFeatures
     }
 

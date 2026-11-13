@@ -522,6 +522,15 @@ import Testing
         #expect(link.setupFailed[id] == nil)
     }
 
+    /// The machine's box from before `kuvo/info` (and so `sessions.start.empty`, `sessions.move`):
+    /// it answers its routes, without that one, so this Mac makes and moves its sessions itself.
+    private func machinesBoxIsFromBefore() {
+        SSHConnection.standIn = { [ssh] address, script in
+            ssh.note(script, to: address)
+            return script.contains(" box route") ? #"{"status":404,"body":"{}"}"# : nil
+        }
+    }
+
     /// A chat on a machine moved into one of its projects that has other folders works in them
     /// there: its rules and what its agent is told name the machine's own paths, never this Mac's
     /// names for them (`ssh://…`), which nothing on the machine matches.
@@ -537,6 +546,7 @@ import Testing
         machine.on("POST", "/api/session/ses_mchat/move", json: [:])
         machine.on("PATCH", "/api/session/ses_mchat", json: ["data": [:]])
         machine.on("PUT", "/api/experimental/session/ses_mchat/instructions/entries/*", json: [:])
+        machinesBoxIsFromBefore()
         try await app.workspace.move("ses_mchat", toProject: prefix + "/home/tests/app")
 
         let rules = try #require(machine.requests("PATCH", "/api/session/ses_mchat").last?.body["permissions"] as? [[String: Any]])
@@ -1011,6 +1021,7 @@ import Testing
         app.workspace.saveProject(prefix + "/home/tests/app", settings: Workspace.ProjectSettings(folders: [prefix + "/home/tests/shared"]))
         machine.on("POST", "/api/session", json: ["data": StubEngine.session("ses_mnew", title: "New", directory: "/home/tests/app")])
         machine.on("PUT", "/api/experimental/session/ses_mnew/instructions/entries/*", json: [:])
+        machinesBoxIsFromBefore()
         _ = try await app.workspace.createSession(in: prefix + "/home/tests/app", model: nil, agent: nil)
 
         let rules = try #require(machine.requests("POST", "/api/session").last?.body["permissions"] as? [[String: Any]])

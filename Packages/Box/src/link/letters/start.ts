@@ -258,9 +258,11 @@ function projectOf(folder: string): { name: string; folders: readonly string[] }
   // (A worktree's, removed ones too, as every client files its sessions: `worktreeProjects`.)
   const directory = projectOfFolder(folder);
   const known = readProjects().find(each => each.directory === directory);
-  // (Only once the box keeps its projects: before, they're its Mac's.)
+  // (Only once the box keeps its projects: before, they're its Mac's. Marked as the box's own
+  // adding, so the folders a Mac from before gives its sessions stay theirs until a client sets
+  // the project's: `addedByBox`.)
   if (!known && directory === folder && fs.existsSync(PROJECTS_FILE)) {
-    try { changeProjects(projects => (projects.some(each => each.directory === directory) ? projects : [{ directory, folders: [] }, ...projects])); } catch {}
+    try { changeProjects(projects => (projects.some(each => each.directory === directory) ? projects : [{ directory, folders: [], addedByBox: true }, ...projects])); } catch {}
   }
   return { name: known?.name ?? path.basename(directory), folders: directory !== folder ? [] : (known?.folders ?? []) };
 }

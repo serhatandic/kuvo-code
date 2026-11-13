@@ -248,3 +248,24 @@ test("a session whose project the box doesn't list (its Mac keeps them, or hasn'
   for (const id of ["ses_shop", "ses_chat"]) assert.deepEqual(sessions.get(id).permissions, [asks, assets], id);
   assert.equal(told.size, 0);
 });
+
+test("a project the box adds as an agent starts a session there keeps the folders a Mac from before gives its sessions, until a client sets its own", async () => {
+  const assets = { action: "external_directory", resource: path.join(home, "work", "assets", "*"), effect: "allow" };
+  sessions.get("ses_shop").permissions = [asks, assets];
+  // (Only the project a bot made, as make_project writes it; the shop is the Mac's own.)
+  const file = path.join(home, "box", "projects.json");
+  write(file, JSON.stringify({ version: 1, projects: [{ directory: blog, folders: [] }] }));
+  const started = await route("POST", "kuvo/sessions", { folder: shop, task: "Look at the README.", startedBy: "ses_blog" });
+  assert.equal(started.status, 200, JSON.stringify(started.body));
+  const added = JSON.parse(fs.readFileSync(file, "utf8")).projects.find(each => each.directory === shop);
+  assert.deepEqual(added, { directory: shop, folders: [], addedByBox: true });
+  assert.equal((await route("POST", "kuvo/sessions/ses_shop/folders")).status, 200);
+  assert.deepEqual(sessions.get("ses_shop").permissions, [asks, assets], "what its Mac gave it stays");
+
+  // Set by a client (a Mac that keeps its projects on the box): the box's to give from then on.
+  assert.equal((await route("PUT", `kuvo/projects?directory=${encodeURIComponent(shop)}`, { folders: [docs] })).status, 200);
+  assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).projects.find(each => each.directory === shop).addedByBox, undefined);
+  assert.equal((await route("POST", "kuvo/sessions/ses_shop/folders")).status, 200);
+  assert.ok(allows("ses_shop", docsRule));
+  assert.ok(!allows("ses_shop", assets));
+});

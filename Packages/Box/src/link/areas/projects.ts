@@ -64,14 +64,23 @@ export function foldersFor(folder: string, projects: Project[] = readProjects())
   return listedFolders(folder, projects) ?? [];
 }
 
-/** As `foldersFor`, but null where the box doesn't list the project `folder` is (or is a worktree
- * of): one it doesn't know yet (a Mac from before keeps its projects itself, or hasn't handed them
- * over yet), whose folders aren't the box's to say. */
+/** The folders of a project the box lists as a client set them; null for one it added itself as a
+ * session started there, which no client has set yet (`addedByBox`). */
+const setFolders = (project: Project | undefined): readonly string[] | null => (project && !project.addedByBox ? project.folders : null);
+
+/** As `foldersFor`, but null where the box doesn't list the project `folder` is in (or a worktree
+ * of), or no client has set its folders yet (`addedByBox`): one it doesn't know (a Mac from before
+ * keeps its projects itself, or hasn't handed them over yet), whose folders aren't the box's to
+ * say. */
 function listedFolders(folder: string, projects: Project[] = readProjects()): readonly string[] | null {
   const directory = worktreeProjects()[folder] ?? folder;
-  const folders = projects.find(each => each.directory === directory)?.folders;
-  if (!folders) return null;
-  return folders.includes(folder) ? [] : folders;
+  const own = projects.find(each => each.directory === directory);
+  if (own) {
+    const folders = setFolders(own);
+    return folders && (folders.includes(folder) ? [] : folders);
+  }
+  // (One of a listed project's other folders, or a worktree of one: it works there alone.)
+  return projects.some(each => setFolders(each)?.includes(directory)) ? [] : null;
 }
 
 /** The rules allowing a project's other folders, symlinks resolved too (`/var` is `/private/var`):
@@ -100,8 +109,11 @@ export function withFolders(rules: readonly KitRule[], folders: readonly string[
   const named = (permissionsHere() ?? rules.filter(holdsBack)).filter(rule => rule.action === "external_directory");
   const adding = folderRules(folders).filter(rule => !named.some(each => same(each, rule)));
   const last = rules.filter(rule => held.some(each => same(each, rule) && each.effect === rule.effect));
+  // (A folder allowed because Settings asks about it: Auto and Full Access allow what it asks
+  // about. Not one Settings doesn't allow (now), which an allow from before would let past it.)
+  const asked = (rule: KitRule) => named.findLast(each => each.resource === rule.resource)?.effect === "ask";
   const kept = rules.filter(rule => !last.includes(rule) && !(rule.effect === "allow" && adding.some(each => same(each, rule)))
-    && (!isFolderRule(rule) || rule.resource.includes("/bots/bot_") || named.some(each => each.resource === rule.resource)));
+    && (!isFolderRule(rule) || rule.resource.includes("/bots/bot_") || asked(rule)));
   return [...kept, ...adding, ...last];
 }
 
@@ -112,7 +124,7 @@ function foldersOf(session: EngineSession, at: string): readonly string[] | null
   const filed = session.metadata?.kuvo?.filed;
   const project = isObject(filed) && filed.folder === at && typeof filed.project === "string" ? filed.project : null;
   if (!project || project === at || realish(project) !== realish(at)) return listedFolders(at);
-  const folders = readProjects().find(each => each.directory === project)?.folders;
+  const folders = setFolders(readProjects().find(each => each.directory === project));
   if (!folders) return null;
   return folders.includes(at) ? [] : folders;
 }
@@ -238,6 +250,8 @@ function keptProject(directory: string, given: Record<string, unknown>, before: 
   else delete project.removed;
   const text = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : undefined);
   if ("name" in given) project.name = text(given.name) === path.basename(directory) ? undefined : text(given.name);
+  // (Its folders set by a client: from now on the box's to give.)
+  if ("folders" in given) delete project.addedByBox;
   if ("folders" in given) project.folders = [...new Set((Array.isArray(given.folders) ? given.folders : []).filter(folder => typeof folder === "string" && path.isAbsolute(folder) && folder !== directory))];
   if ("run" in given) project.run = text(given.run);
   if ("terminal" in given) project.terminal = text(given.terminal);

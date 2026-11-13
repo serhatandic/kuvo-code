@@ -10389,7 +10389,8 @@ var PROJECT = object({
   "run?": string,
   "terminal?": string,
   "removed?": bool,
-  "madeBy?": object({ bot: string, name: string, at: number })
+  "madeBy?": object({ bot: string, name: string, at: number }),
+  "addedByBox?": bool
 });
 var PROJECTS = object({ projects: list(PROJECT), worktrees: map(string) });
 var PROJECT_ROUTES = [
@@ -18484,7 +18485,7 @@ function projectOf3(folder) {
   const known = readProjects().find((each) => each.directory === directory);
   if (!known && directory === folder && fs70.existsSync(PROJECTS_FILE)) {
     try {
-      changeProjects((projects) => projects.some((each) => each.directory === directory) ? projects : [{ directory, folders: [] }, ...projects]);
+      changeProjects((projects) => projects.some((each) => each.directory === directory) ? projects : [{ directory, folders: [], addedByBox: true }, ...projects]);
     } catch {}
   }
   return { name: known?.name ?? path70.basename(directory), folders: directory !== folder ? [] : known?.folders ?? [] };
@@ -30416,12 +30417,15 @@ When the user mentions one of these folders by name, they mean that folder.`;
 function foldersFor(folder, projects = readProjects()) {
   return listedFolders(folder, projects) ?? [];
 }
+var setFolders = (project) => project && !project.addedByBox ? project.folders : null;
 function listedFolders(folder, projects = readProjects()) {
   const directory = worktreeProjects()[folder] ?? folder;
-  const folders = projects.find((each) => each.directory === directory)?.folders;
-  if (!folders)
-    return null;
-  return folders.includes(folder) ? [] : folders;
+  const own = projects.find((each) => each.directory === directory);
+  if (own) {
+    const folders = setFolders(own);
+    return folders && (folders.includes(folder) ? [] : folders);
+  }
+  return projects.some((each) => setFolders(each)?.includes(directory)) ? [] : null;
 }
 function folderRules(folders) {
   const paths = [];
@@ -30442,7 +30446,8 @@ function withFolders(rules, folders, held = []) {
   const named = (permissionsHere() ?? rules.filter(holdsBack)).filter((rule) => rule.action === "external_directory");
   const adding = folderRules(folders).filter((rule) => !named.some((each) => same(each, rule)));
   const last = rules.filter((rule) => held.some((each) => same(each, rule) && each.effect === rule.effect));
-  const kept = rules.filter((rule) => !last.includes(rule) && !(rule.effect === "allow" && adding.some((each) => same(each, rule))) && (!isFolderRule(rule) || rule.resource.includes("/bots/bot_") || named.some((each) => each.resource === rule.resource)));
+  const asked = (rule) => named.findLast((each) => each.resource === rule.resource)?.effect === "ask";
+  const kept = rules.filter((rule) => !last.includes(rule) && !(rule.effect === "allow" && adding.some((each) => same(each, rule))) && (!isFolderRule(rule) || rule.resource.includes("/bots/bot_") || asked(rule)));
   return [...kept, ...adding, ...last];
 }
 function foldersOf(session, at) {
@@ -30450,7 +30455,7 @@ function foldersOf(session, at) {
   const project = isObject(filed) && filed.folder === at && typeof filed.project === "string" ? filed.project : null;
   if (!project || project === at || realish(project) !== realish(at))
     return listedFolders(at);
-  const folders = readProjects().find((each) => each.directory === project)?.folders;
+  const folders = setFolders(readProjects().find((each) => each.directory === project));
   if (!folders)
     return null;
   return folders.includes(at) ? [] : folders;
@@ -30561,6 +30566,8 @@ function keptProject(directory, given, before = {}) {
   const text = (value) => typeof value === "string" && value.trim() ? value.trim() : undefined;
   if ("name" in given)
     project.name = text(given.name) === path103.basename(directory) ? undefined : text(given.name);
+  if ("folders" in given)
+    delete project.addedByBox;
   if ("folders" in given)
     project.folders = [...new Set((Array.isArray(given.folders) ? given.folders : []).filter((folder) => typeof folder === "string" && path103.isAbsolute(folder) && folder !== directory))];
   if ("run" in given)
@@ -40812,7 +40819,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "b7b0cfeae7d0";
+var BRIDGE_VERSION = "ebe60ea4aded";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

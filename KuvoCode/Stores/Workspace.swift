@@ -397,7 +397,7 @@ final class Workspace {
         // Its box moves it and gives it the project's folders (PROTOCOL.md, "Projects"); it says
         // why where it can't (a coding agent's, one moving to another computer).
         let boxID = Self.box(of: directory)
-        if let box = boxes?(boxID), await boxHas(SessionMove.feature, on: boxID) {
+        if let box = boxes?(boxID), try await goesThroughBox(SessionMove.feature, on: boxID) {
             _ = try await box.value(SessionMove.Moved.self, "POST", SessionMove.route(id), body: SessionMove.Asked(directory: Self.onBox(directory)))
             await reload(id)
             Analytics.shared.track("chat_moved")
@@ -1040,7 +1040,7 @@ final class Workspace {
         // Its box makes it (PROTOCOL.md, `kuvo/sessions`): its worktree, its project's folders, its
         // approval and Autopilot, all there.
         let boxID = Self.box(of: directory)
-        if let box = boxes?(boxID), await boxHas(SessionStart.feature, on: boxID) {
+        if let box = boxes?(boxID), try await goesThroughBox(SessionStart.feature, on: boxID) {
             let asked = SessionStart.Asked(folder: Self.onBox(directory), chat: !worktree && Self.isChat(directory), worktree: worktree, agent: agent, model: model, approval: approval?.rawValue, autopilot: autopilot)
             let started = try await box.value(SessionStart.Started.self, "POST", SessionStart.route, body: asked)
             let session: Session
@@ -1125,16 +1125,34 @@ final class Workspace {
     /// project and a project's folders go through it there. Read once a run.
     @ObservationIgnored private var featuresHere: [String: Set<String>] = [:]
 
-    /// Whether the box `id` has `feature`: the app's own always, a machine's as it says.
-    func boxHas(_ feature: String, on id: String) async -> Bool {
+    /// Whether the box `id` has `feature`: the app's own always, a machine's as it says (one that
+    /// answers without `kuvo/info` is from before: none). Nil where it couldn't be asked just now.
+    func boxSays(_ feature: String, on id: String) async -> Bool? {
         if BoxClient.hasEveryFeature(id) { return true }
         if let known = featuresHere[id] { return known.contains(feature) }
         guard let box = boxes?(id) else { return false }
         struct Info: Decodable { var features: [String]? }
-        guard let info = try? await box.value(Info.self, "GET", "kuvo/info") else { return false }
-        let features = Set(info.features ?? [])
+        let features: Set<String>
+        do {
+            let (status, data) = try await box.send("GET", "kuvo/info")
+            let info = (200..<300).contains(status) ? try? JSONDecoder().decode(Info.self, from: data) : nil
+            // (A box's link that's away answers 502 or 503 for it: can't tell.)
+            if info == nil, status == 502 || status == 503 { return nil }
+            features = Set(info?.features ?? [])
+        } catch {
+            return nil
+        }
         featuresHere[id] = features
         return features.contains(feature)
+    }
+
+    /// Whether `feature` goes through the box `id`, as `boxSays`: where that can't be told now,
+    /// nothing is done (the app making it itself would write its own rules, not its box's).
+    private func goesThroughBox(_ feature: String, on id: String) async throws -> Bool {
+        guard let says = await boxSays(feature, on: id) else {
+            throw BoxRefusal(status: 503, message: "Its computer can’t be reached now. Try again once it’s connected.")
+        }
+        return says
     }
 
     // MARK: Worktrees

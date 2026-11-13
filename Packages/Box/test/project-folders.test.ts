@@ -193,3 +193,42 @@ test("a Don't Allow its lead brought from another computer still holds after the
   expect(await giveFolders(target, "ses_led", { whenChanged: true })).toBe(true)
   expect(sessions.ses_led!.permissions).toEqual([asks, docsRule, held])
 })
+
+test("a Don't Allow in Settings › Permissions on one of the project's folders wins over an allow a Mac gave it before", async () => {
+  const { giveFolders } = await import("../src/link/areas/projects")
+  const settings = join(home, "box", "opencode.json")
+  const denied = { action: "external_directory", resource: join(docs, "*"), effect: "deny" }
+  writeFileSync(settings, JSON.stringify({ permissions: [denied] }))
+  sessions.ses_denied = { id: "ses_denied", location: { directory: shop }, permissions: [asks, denied, docsRule], metadata: {} }
+  try {
+    expect(await giveFolders(target, "ses_denied", { whenChanged: true })).toBe(true)
+    expect(sessions.ses_denied!.permissions).toEqual([asks, denied])
+  } finally {
+    rmSync(settings, { force: true })
+  }
+})
+
+test("a project the box added itself as a session started there keeps the folders its Mac gives its sessions, until a client sets its own", async () => {
+  const { giveFolders } = await import("../src/link/areas/projects")
+  const assets = { action: "external_directory", resource: join(home, "work", "assets", "*"), effect: "allow" }
+  const file = join(home, "box", "projects.json")
+  sessions.ses_added = { id: "ses_added", location: { directory: shop }, permissions: [asks, assets], metadata: {} }
+  try {
+    writeFileSync(file, JSON.stringify({ version: 1, projects: [{ directory: shop, folders: [], addedByBox: true }] }))
+    written.length = 0
+    expect(await giveFolders(target, "ses_added", { whenChanged: true })).toBe(true)
+    expect(written).toEqual([])
+    expect(sessions.ses_added!.permissions).toEqual([asks, assets])
+  } finally {
+    keep([docs])
+  }
+})
+
+test("a session moved into one of a listed project's other folders works there alone: the project's folders and their note go", async () => {
+  const { giveFolders, projectFoldersNote } = await import("../src/link/areas/projects")
+  sessions.ses_docs = { id: "ses_docs", location: { directory: docs }, permissions: [asks, docsRule], metadata: {} }
+  notes.ses_docs = projectFoldersNote(shop, [docs])
+  expect(await giveFolders(target, "ses_docs", { whenChanged: true })).toBe(true)
+  expect(sessions.ses_docs!.permissions).toEqual([asks])
+  expect(notes.ses_docs).toBeNull()
+})
