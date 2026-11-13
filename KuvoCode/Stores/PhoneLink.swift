@@ -1113,10 +1113,17 @@ final class PhoneLink {
         continuation.finish()
     }
 
-    nonisolated private static func boxUnavailable() -> AsyncThrowingStream<LinkResponsePart, Error> {
+    /// This Mac's box as its process last said it (`BoxProcess`): what `boxUnavailable` goes by.
+    nonisolated static let boxAvailability = BoxAvailability()
+
+    /// What a route of this Mac's box answers while it isn't up: `starting` (`reason`), as it
+    /// starts with the app or again after an update, until it says why it isn't running.
+    nonisolated static func boxUnavailable(starting: Bool = boxAvailability.isStarting()) -> AsyncThrowingStream<LinkResponsePart, Error> {
         AsyncThrowingStream { continuation in
+            var said = ["message": "Kuvo Code’s background service on this Mac isn’t running. Try again in a moment."]
+            if starting { said["reason"] = "starting" }
             continuation.yield(.head(status: 503, headers: ["content-type": "application/json"]))
-            continuation.yield(.body(Self.message("Kuvo Code’s background service on this Mac isn’t running. Try again in a moment.")))
+            continuation.yield(.body((try? JSONEncoder().encode(said)) ?? Data()))
             continuation.finish()
         }
     }
@@ -1476,4 +1483,31 @@ final class PhoneLink {
 extension UserDefaults {
     /// `phoneLink` (`PhoneLink.isEnabled`), for following a change to it.
     @objc dynamic var phoneLink: Bool { bool(forKey: "phoneLink") }
+}
+
+/// Whether this Mac's box, not up, is starting (with the app, or again after an update): until
+/// it says why it isn't running (it couldn't start, it keeps stopping), and for a minute at most,
+/// so one that never says (its keeper hung) reads as out of reach in the end.
+nonisolated final class BoxAvailability: Sendable {
+    private enum State { case up, starting(since: ContinuousClock.Instant), failing }
+    private let state = OSAllocatedUnfairLock<State>(initialState: .starting(since: .now))
+    /// How long one that isn't up, with nothing said of why, reads as starting.
+    static let startsWithin: Duration = .seconds(60)
+
+    /// What its process says now: up (where it answers), or why not (`failing`).
+    func note(up: Bool, failing: Bool, now: ContinuousClock.Instant = .now) {
+        state.withLock {
+            if up { $0 = .up } else if failing { $0 = .failing } else if case .starting = $0 {} else { $0 = .starting(since: now) }
+        }
+    }
+
+    func isStarting(now: ContinuousClock.Instant = .now) -> Bool {
+        state.withLock {
+            switch $0 {
+            case .up: true
+            case .starting(let since): now - since < Self.startsWithin
+            case .failing: false
+            }
+        }
+    }
 }

@@ -547,7 +547,9 @@ struct BottomStack: View {
                                 }
                                 if !backgroundJobs.isEmpty {
                                     BackgroundBar(jobs: backgroundJobs, api: workspace.api(forSession: model.id), directory: model.session.location.directory, isHidden: hidden(.background, $model.hidesBackgroundJobs)) { job in
-                                        Task { await workspace.stopShellJob(job, in: model.id) }
+                                        Task {
+                                            do { try await workspace.stopShellJob(job, in: model.id) } catch { model.failure = error.localizedDescription }
+                                        }
                                     }
                                     .modifier(CardRow())
                                     .transition(.fold)

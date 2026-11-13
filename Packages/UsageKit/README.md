@@ -40,6 +40,11 @@ here.
   under them; the reading keeps its age (Outdated in the panel, left out of `PlanLimits`), and a
   window that started over since goes.
 
+- **The host's usage history** (`Embedding/HostHistory.swift`): Kuvo Code's boxes read their
+  accounts' logs, price them and add them up across your computers (Claude's, so far); for each
+  provider the host says it covers, its main card's spend tiles, trend and model breakdown take the
+  host's days in place of its own scan of the logs here (and Pi's), so nothing is read twice. Its
+  other cards, and the providers the host doesn't cover yet, scan as before.
 - **The host's plan limits, one row per account** (`Embedding/HostLimits.swift`): Kuvo Code's boxes
   read each account's limits with their own sign-ins, and the Bars view draws a bar for each
   account however many boxes have it (named "Claude · Work"; the host names them) in place of the

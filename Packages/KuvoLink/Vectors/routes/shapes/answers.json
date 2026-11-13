@@ -3074,6 +3074,9 @@
             "literal": "bots.make"
            },
            {
+            "literal": "box.ownHome"
+           },
+           {
             "literal": "branch"
            },
            {
@@ -3218,6 +3221,9 @@
             "literal": "queue"
            },
            {
+            "literal": "queue.once"
+           },
+           {
             "literal": "queue.waits"
            },
            {
@@ -3272,6 +3278,9 @@
             "literal": "setup"
            },
            {
+            "literal": "setup.mainOnly"
+           },
+           {
             "literal": "shell.stop"
            },
            {
@@ -3285,6 +3294,9 @@
            },
            {
             "literal": "update"
+           },
+           {
+            "literal": "usage.history"
            },
            {
             "literal": "vault"
@@ -3306,6 +3318,9 @@
            },
            {
             "literal": "work-queue.elsewhere"
+           },
+           {
+            "literal": "work-queue.forward"
            },
            {
             "literal": "work.elsewhere"
@@ -3460,6 +3475,9 @@
             "literal": "bots.make"
            },
            {
+            "literal": "box.ownHome"
+           },
+           {
             "literal": "branch"
            },
            {
@@ -3604,6 +3622,9 @@
             "literal": "queue"
            },
            {
+            "literal": "queue.once"
+           },
+           {
             "literal": "queue.waits"
            },
            {
@@ -3658,6 +3679,9 @@
             "literal": "setup"
            },
            {
+            "literal": "setup.mainOnly"
+           },
+           {
             "literal": "shell.stop"
            },
            {
@@ -3671,6 +3695,9 @@
            },
            {
             "literal": "update"
+           },
+           {
+            "literal": "usage.history"
            },
            {
             "literal": "vault"
@@ -3692,6 +3719,9 @@
            },
            {
             "literal": "work-queue.elsewhere"
+           },
+           {
+            "literal": "work-queue.forward"
            },
            {
             "literal": "work.elsewhere"
@@ -5014,14 +5044,17 @@
    "route": "POST kuvo/git/merge",
    "answers": {
     "200": {
-     "object": {}
+     "object": {
+      "into?": "string"
+     }
     },
     "409": {
      "object": {
       "message": "string",
       "conflicts?": {
        "list": "string"
-      }
+      },
+      "into?": "string"
      }
     }
    }
@@ -9829,7 +9862,9 @@
         "null"
        ]
       },
-      "suggested?": "string"
+      "suggested?": "string",
+      "keepsAwake?": "bool",
+      "awakeNow?": "bool"
      }
     }
    }
@@ -9845,7 +9880,9 @@
         "null"
        ]
       },
-      "suggested?": "string"
+      "suggested?": "string",
+      "keepsAwake?": "bool",
+      "awakeNow?": "bool"
      }
     },
     "400": {
@@ -11017,6 +11054,7 @@
          "keptIn?": "string",
          "struck?": "bool",
          "closesOn?": "string",
+         "doneAs?": "string",
          "handing?": {
           "object": {
            "to": "string",
@@ -11221,6 +11259,7 @@
          "keptIn?": "string",
          "struck?": "bool",
          "closesOn?": "string",
+         "doneAs?": "string",
          "handing?": {
           "object": {
            "to": "string",
@@ -11432,6 +11471,7 @@
          "keptIn?": "string",
          "struck?": "bool",
          "closesOn?": "string",
+         "doneAs?": "string",
          "handing?": {
           "object": {
            "to": "string",
@@ -11636,6 +11676,7 @@
          "keptIn?": "string",
          "struck?": "bool",
          "closesOn?": "string",
+         "doneAs?": "string",
          "handing?": {
           "object": {
            "to": "string",
@@ -12042,6 +12083,7 @@
         "keptIn?": "string",
         "struck?": "bool",
         "closesOn?": "string",
+        "doneAs?": "string",
         "handing?": {
          "object": {
           "to": "string",
@@ -12135,6 +12177,7 @@
           }
          }
         },
+        "told?": "bool",
         "body": "string",
         "notes": {
          "list": {
@@ -12229,7 +12272,95 @@
   {
    "route": "GET kuvo/work-queue/items/:item/files/:name",
    "answers": {
-    "200": "bytes"
+    "200": "bytes",
+    "409": {
+     "object": {
+      "message": "string",
+      "computer": {
+       "object": {
+        "key": "string",
+        "name": "string",
+        "kind": {
+         "oneOf": [
+          {
+           "literal": "mac"
+          },
+          {
+           "literal": "machine"
+          }
+         ]
+        },
+        "id?": "string"
+       }
+      }
+     }
+    },
+    "413": {
+     "object": {
+      "message": "string",
+      "computer?": {
+       "object": {
+        "key": "string",
+        "name": "string",
+        "kind": {
+         "oneOf": [
+          {
+           "literal": "mac"
+          },
+          {
+           "literal": "machine"
+          }
+         ]
+        },
+        "id?": "string"
+       }
+      }
+     }
+    },
+    "502": {
+     "object": {
+      "message": "string",
+      "computer": {
+       "object": {
+        "key": "string",
+        "name": "string",
+        "kind": {
+         "oneOf": [
+          {
+           "literal": "mac"
+          },
+          {
+           "literal": "machine"
+          }
+         ]
+        },
+        "id?": "string"
+       }
+      }
+     }
+    },
+    "503": {
+     "object": {
+      "message": "string",
+      "computer": {
+       "object": {
+        "key": "string",
+        "name": "string",
+        "kind": {
+         "oneOf": [
+          {
+           "literal": "mac"
+          },
+          {
+           "literal": "machine"
+          }
+         ]
+        },
+        "id?": "string"
+       }
+      }
+     }
+    }
    }
   },
   {
@@ -12311,6 +12442,7 @@
         "keptIn?": "string",
         "struck?": "bool",
         "closesOn?": "string",
+        "doneAs?": "string",
         "handing?": {
          "object": {
           "to": "string",
@@ -12409,6 +12541,28 @@
      }
     },
     "409": {
+     "object": {
+      "message": "string",
+      "computer": {
+       "object": {
+        "key": "string",
+        "name": "string",
+        "kind": {
+         "oneOf": [
+          {
+           "literal": "mac"
+          },
+          {
+           "literal": "machine"
+          }
+         ]
+        },
+        "id?": "string"
+       }
+      }
+     }
+    },
+    "503": {
      "object": {
       "message": "string",
       "computer": {
@@ -12511,6 +12665,7 @@
         "keptIn?": "string",
         "struck?": "bool",
         "closesOn?": "string",
+        "doneAs?": "string",
         "handing?": {
          "object": {
           "to": "string",
@@ -12629,6 +12784,28 @@
        }
       }
      }
+    },
+    "503": {
+     "object": {
+      "message": "string",
+      "computer": {
+       "object": {
+        "key": "string",
+        "name": "string",
+        "kind": {
+         "oneOf": [
+          {
+           "literal": "mac"
+          },
+          {
+           "literal": "machine"
+          }
+         ]
+        },
+        "id?": "string"
+       }
+      }
+     }
     }
    }
   },
@@ -12711,6 +12888,7 @@
         "keptIn?": "string",
         "struck?": "bool",
         "closesOn?": "string",
+        "doneAs?": "string",
         "handing?": {
          "object": {
           "to": "string",
@@ -12809,6 +12987,28 @@
      }
     },
     "409": {
+     "object": {
+      "message": "string",
+      "computer": {
+       "object": {
+        "key": "string",
+        "name": "string",
+        "kind": {
+         "oneOf": [
+          {
+           "literal": "mac"
+          },
+          {
+           "literal": "machine"
+          }
+         ]
+        },
+        "id?": "string"
+       }
+      }
+     }
+    },
+    "503": {
      "object": {
       "message": "string",
       "computer": {

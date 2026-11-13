@@ -171,14 +171,26 @@ export function updatesBlocked(link: LinkState | null = readLink(), now = Date.n
 // Whether something runs on the box: a conversation working (the engine's, the coding agents'),
 // or an agent's browser waiting on you.
 async function boxBusy(readEngine: () => EngineRecord = readEngineFile, readBridge: () => BridgeRecord = readBridgeFile): Promise<boolean> {
-  for (const read of [readEngine, readBridge]) {
+  return await agentsWorking(readEngine, readBridge) === true || readAsks().length > 0;
+}
+
+/** Whether a conversation is working on the box now: the engine's, or the coding agents'; null when
+ * that can't be told (one that's recorded as running didn't answer, a moment's restart). */
+export async function agentsWorking(readEngine: () => EngineRecord = readEngineFile, readBridge: () => BridgeRecord = readBridgeFile): Promise<boolean | null> {
+  let unknown = false;
+  for (const [read, program] of [[readEngine, "opencode"], [readBridge, "kuvo-agents"]] as const) {
     let target: Target | null = null;
     try { target = read(); } catch {}
     if (!target?.port || !target?.password) continue;
-    const active = (await asked(target, "GET", "api/session/active").catch(() => null) as UncheckedAnswer)?.data;
+    // (A record its process left as it went, killed: nothing works there.)
+    const pid = (target as { pid?: unknown }).pid;
+    if (pid !== undefined && !runs(pid, program)) continue;
+    const answer = await asked(target, "GET", "api/session/active").catch(() => null) as UncheckedAnswer | null;
+    const active = answer?.data;
     if (Array.isArray(active) ? active.length : isObject(active) && Object.keys(active).length) return true;
+    if (!Array.isArray(active) && !isObject(active)) unknown = true;
   }
-  return readAsks().length > 0;
+  return unknown ? null : false;
 }
 
 

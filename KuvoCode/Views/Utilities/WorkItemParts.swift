@@ -232,7 +232,7 @@ struct WorkItemRow: View {
                     WorkItemStatusMark(mark, size: 10)
                     HStack(spacing: 4) {
                         // An issue's or a pull request's mark, before its name.
-                        if let brand = item.brand { BrandMarkView(brand, size: 11) }
+                        if let brand = item.brand { BrandMarkView(brand, size: 11).opacity(item.isGone ? WorkItemChip.goneOpacity : 1) }
                         Text(item.name)
                             .font(.system(size: 11.5, weight: .semibold).monospacedDigit())
                             .foregroundStyle(.secondary)

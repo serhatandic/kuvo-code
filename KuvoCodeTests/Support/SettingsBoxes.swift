@@ -56,7 +56,7 @@ final class MachineTestBox {
     let folder: URL
     /// Its machine's id, as this Mac names it.
     let name: String
-    private let server: ServerProcess
+    let server: ServerProcess
     /// Where it answers.
     var endpoint: ServerEndpoint { server.endpoint }
 

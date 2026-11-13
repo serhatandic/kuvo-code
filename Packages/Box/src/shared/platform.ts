@@ -134,22 +134,54 @@ export function joinPath(...folders: (string | undefined)[]): string {
  * read it once and keep it (`saveLoginPath`). Nor does it outlive the box's process (`WATCHED`).
  */
 export async function loginPath(env: Record<string, string | undefined> = process.env, wait = { interactive: 6_000, login: 2_000 }): Promise<string | undefined> {
+  const found = await fromLogin(env, wait, `"$PATH"`, text => joinPath(text.trim()) || undefined);
+  return found && joinPath(found, env.PATH);
+}
+
+/**
+ * Your login shell's whole environment, read as `loginPath` reads its PATH (a terminal's, then a
+ * login shell's), in a login's environment from `env`; undefined when neither answers in time. As
+ * it is now: what you've added to your startup files since the box started (a PATH, `GPG_TTY`)
+ * included. Nothing in it is taken out: what's let through is the caller's to say. Its PATH has
+ * the folders `env`'s had after its own.
+ */
+export async function loginEnvironment(env: Record<string, string | undefined> = process.env, wait = { interactive: 6_000, login: 2_000 }): Promise<Record<string, string> | undefined> {
+  return fromLogin(env, wait, "; env -0; printf ''", text => {
+    const found: Record<string, string> = {}
+    for (const line of text.split("\0")) {
+      const at = line.indexOf("=");
+      if (at > 0) found[line.slice(0, at)] = line.slice(at + 1);
+    }
+    if (!found.PATH) return undefined;
+    found.PATH = joinPath(found.PATH, env.PATH);
+    return found;
+  });
+}
+
+/** What a login shell prints between the markers (`printed`, after `printf '%s%s%s' <start>`, a
+ * shell word or more), made into a value by `parse`: an interactive login shell's, then a login
+ * shell's only. Undefined when neither answers in time, or with a shell that takes no POSIX flags. */
+async function fromLogin<T>(env: Record<string, string | undefined>, wait: { interactive: number; login: number }, printed: string, parse: (text: string) => T | undefined): Promise<T | undefined> {
   const shell = loginShell(env);
   if (/\/(nu|csh|tcsh)$/.test(shell)) return undefined;
   const kept = Object.entries(env).filter(([name, value]) => value !== undefined && (/^(HOME|USER|LOGNAME|LANG|LC_[A-Z_]+|TERM|TMPDIR|PATH|SSH_AUTH_SOCK)$/.test(name)));
   const login: Record<string, string> = { ...Object.fromEntries(kept as [string, string][]), SHELL: shell, DISABLE_AUTO_UPDATE: "true" };
+  // `printed` a word to printf, or (starting with ";") commands of its own between the markers.
+  const command = printed.startsWith(";")
+    ? `printf '%s' ${LOGIN_PATH_MARKERS[0]}${printed}; printf '%s' ${LOGIN_PATH_MARKERS[1]}`
+    : `printf '%s%s%s' ${LOGIN_PATH_MARKERS[0]} ${printed} ${LOGIN_PATH_MARKERS[1]}`;
   for (const [flags, timeout] of [["-ilc", wait.interactive], ["-lc", wait.login]] as const) {
-    const found = await new Promise<string | undefined>(resolve => {
+    const found = await new Promise<T | undefined>(resolve => {
       let output = "";
       let child: ReturnType<typeof spawn>;
       try {
-        child = spawn("/bin/sh", ["-c", WATCHED, shell, flags, `printf '%s%s%s' ${LOGIN_PATH_MARKERS[0]} "$PATH" ${LOGIN_PATH_MARKERS[1]}`], { cwd: login.HOME, env: login, detached: true, stdio: ["pipe", "pipe", "ignore"] });
+        child = spawn("/bin/sh", ["-c", WATCHED, shell, flags, command], { cwd: login.HOME, env: login, detached: true, stdio: ["pipe", "pipe", "ignore"] });
       } catch {
         return resolve(undefined);
       }
       let settled = false;
       let gone: ReturnType<typeof setTimeout> | undefined;
-      const done = (value: string | undefined) => {
+      const done = (value: T | undefined) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
@@ -172,7 +204,7 @@ export async function loginPath(env: Record<string, string | undefined> = proces
         output += chunk;
         const at = output.indexOf(LOGIN_PATH_MARKERS[0]);
         const end = at < 0 ? -1 : output.indexOf(LOGIN_PATH_MARKERS[1], at);
-        if (end >= 0) done(joinPath(output.slice(at + LOGIN_PATH_MARKERS[0].length, end).trim()) || undefined);
+        if (end >= 0) done(parse(output.slice(at + LOGIN_PATH_MARKERS[0].length, end)));
       });
       child.on("error", () => done(undefined));
       child.on("close", () => done(undefined));
@@ -180,7 +212,7 @@ export async function loginPath(env: Record<string, string | undefined> = proces
       // its output: what it printed is read by a moment after.
       child.on("exit", () => { if (!settled) gone = setTimeout(() => done(undefined), 300); });
     });
-    if (found) return joinPath(found, env.PATH);
+    if (found !== undefined) return found;
   }
   return undefined;
 }

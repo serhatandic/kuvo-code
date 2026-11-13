@@ -59,6 +59,9 @@ const trashed = () => (fs.existsSync(trash) ? fs.readdirSync(trash, { recursive:
 test("what changed: an edit as git's diff with the whole file around it, and a new file with its stamp", async () => {
   write("README.md", "Hello\nWorld\n");
   write("notes/todo.txt", "one\n");
+  // Just written, however long the box takes to answer: a time it has yet to reach.
+  const soon = new Date(Date.now() + 3_600_000);
+  fs.utimesSync(path.join(repo, "notes/todo.txt"), soon, soon);
   const { status: code, json } = await changes();
   assert.equal(code, 200);
   assert.equal(json.repository, true);
@@ -83,6 +86,9 @@ test("every new file has a stamp, the same until it changes, also after an insta
   const again = (await changes()).json;
   assert.deepEqual(again.hashes, first.hashes);
   write("node_modules/pkg7/index.js", "module.exports = 'seven'\n");
+  // Just changed, however long the box takes to answer: a time it has yet to reach.
+  const soon = new Date(Date.now() + 3_600_000);
+  fs.utimesSync(path.join(repo, "node_modules/pkg7/index.js"), soon, soon);
   const after = (await changes()).json;
   assert.equal(after.hashes["node_modules/pkg7/index.js"], undefined, "just changed: read each look for now");
   fs.utimesSync(path.join(repo, "node_modules/pkg7/index.js"), new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
@@ -293,6 +299,37 @@ test("Commit with nothing staged takes the folder's changes, new files too; what
   assert.match(refused.json.message, /nothing to commit/);
 });
 
+test("a commit's hooks run with none of the box's own variables, and on a Mac with your login shell's environment as it is now, as a new terminal window has it", async () => {
+  // A login shell of the test's own, whose startup file says what it sets, and a hook that writes
+  // down what it ran with.
+  const shellFolder = fs.mkdtempSync(path.join(root, "shell-"));
+  const profile = path.join(shellFolder, "profile");
+  const shell = path.join(shellFolder, "shell");
+  const seen = path.join(shellFolder, "seen");
+  fs.writeFileSync(shell, `#!/bin/sh\n. "${profile}"\nshift\nexec /bin/sh -c "$1"\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(repo, ".git/hooks/pre-commit"), `#!/bin/sh\nenv > "${seen}"\n`, { mode: 0o755 });
+  const startup = tty => `export GPG_TTY=${tty}\nexport DYLD_INSERT_LIBRARIES=/nowhere\nexport NODE_OPTIONS=--require=/nowhere\nexport KUVO_HOST_PASSWORD=secret\nexport BUN_BE_BUN=1\n`;
+  const ranWith = () => Object.fromEntries(fs.readFileSync(seen, "utf8").split("\n").filter(line => line.includes("=")).map(line => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]));
+  // The box as the engine's Bun runs it, started with a GPG_TTY of its own (whatever the runner's).
+  const env = { SHELL: shell, BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", GPG_TTY: "/dev/ttys000" };
+
+  fs.writeFileSync(profile, startup("/dev/ttys041"));
+  write("README.md", "Hello\nWorld\n");
+  assert.equal((await route("POST", "kuvo/git/commit", { directory: repo, message: "World", push: false }, env)).status, 200);
+  let vars = ranWith();
+  for (const name of ["BUN_BE_BUN", "BUN_RUNTIME_TRANSPILER_CACHE_PATH", "DYLD_INSERT_LIBRARIES", "KUVO_HOST_PASSWORD", "KUVO_HOME", "KUVO_CHANGES_TRASH"]) assert.equal(vars[name], undefined, name);
+  assert.notEqual(vars.NODE_OPTIONS, "--require=/nowhere");
+  assert.equal(vars.GPG_TTY, process.platform === "darwin" ? "/dev/ttys041" : "/dev/ttys000");
+
+  // Your startup file changed since: what the next commit's hooks get, on a Mac.
+  fs.writeFileSync(profile, startup("/dev/ttys042"));
+  write("README.md", "Hello\nWorld, again\n");
+  assert.equal((await route("POST", "kuvo/git/commit", { directory: repo, message: "Again", push: false }, env)).status, 200);
+  vars = ranWith();
+  assert.equal(vars.GPG_TTY, process.platform === "darwin" ? "/dev/ttys042" : "/dev/ttys000");
+  assert.equal(vars.BUN_BE_BUN, undefined);
+});
+
 test("Discard with a folder where a committed file was: the file comes back, the folder and what's in it go to the trash", async () => {
   fs.rmSync(path.join(repo, "README.md"));
   write("README.md/kept.txt", "precious\n");
@@ -422,10 +459,10 @@ test("Commit and Push whose push doesn't go through says it committed, and Push 
 });
 
 /** A worktree of the project on a branch of its own, as a session in one has, kept by the box. */
-async function worktree(branch = "kuvo/feature") {
+async function worktree(branch = "kuvo/feature", recorded = true) {
   const folder = path.join(fs.mkdtempSync(path.join(root, "tree-")), "app");
   git("worktree", "add", "-q", "-b", branch, folder);
-  assert.equal((await route("POST", "kuvo/worktrees/record", { project: repo, root: folder, branch, base: "main" })).status, 200);
+  if (recorded) assert.equal((await route("POST", "kuvo/worktrees/record", { project: repo, root: folder, branch, base: "main" })).status, 200);
   const there = (...args) => execFileSync("git", args, { cwd: folder, encoding: "utf8", env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
   return { folder, there, write: (name, text) => fs.writeFileSync(path.join(folder, name), text) };
 }
@@ -486,6 +523,42 @@ test("Merge into…: a worktree's commits go into the project's branch; work not
   assert.equal(answer.status, 409);
   assert.equal(answer.json.message, "The project’s folder is on main now. Switch it back to elsewhere to merge, or create a pull request.");
   assert.equal((await route("POST", "kuvo/git/merge", { directory: tree.folder, into: "--abort" })).status, 400);
+});
+
+test("Merge into… with no branch named goes into the one the worktree was made from, and says which, as a conflict does", async () => {
+  const tree = await worktree();
+  tree.write("README.md", "Hello\nFrom the worktree\n");
+  tree.there("commit", "-q", "-am", "From the worktree");
+  let answer = await route("POST", "kuvo/git/merge", { directory: tree.folder });
+  assert.equal(answer.status, 200);
+  assert.deepEqual(answer.json, { into: "main" });
+  assert.equal(git("log", "-1", "--format=%s", "main").trim(), "From the worktree");
+
+  write("src/app.js", "let a = 2\n");
+  git("commit", "-q", "-am", "Two on main");
+  tree.write("src/app.js", "let a = 3\n");
+  tree.there("commit", "-q", "-am", "Three on the branch");
+  answer = await route("POST", "kuvo/git/merge", { directory: tree.folder });
+  assert.equal(answer.status, 409);
+  assert.deepEqual(answer.json, { message: "main changed some of the same lines: src/app.js. Nothing was merged.", conflicts: ["src/app.js"], into: "main" });
+
+  // The project's folder on another branch now: refused, the branch it was made from named.
+  git("checkout", "-q", "-b", "elsewhere");
+  answer = await route("POST", "kuvo/git/merge", { directory: tree.folder });
+  assert.equal(answer.status, 409);
+  assert.equal(answer.json.message, "The project’s folder is on elsewhere now. Switch it back to main to merge, or create a pull request.");
+});
+
+test("Merge into… from a worktree this box has no record of (one made with git, or by the app's own box before it attached to this one) goes into its repository's folder", async () => {
+  const tree = await worktree("kuvo/unrecorded", false);
+  tree.write("README.md", "Hello\nFrom elsewhere\n");
+  tree.there("commit", "-q", "-am", "From elsewhere");
+  const answer = await route("POST", "kuvo/git/merge", { directory: tree.folder });
+  assert.equal(answer.status, 200);
+  assert.deepEqual(answer.json, { into: "main" });
+  assert.equal(git("log", "-1", "--format=%s", "main").trim(), "From elsewhere");
+  // The project's own folder isn't a worktree's.
+  assert.equal((await route("POST", "kuvo/git/merge", { directory: repo, into: "main" })).json.message, "Only a worktree’s branch is merged here. Create a pull request instead.");
 });
 
 test("Create Pull Request pushes the branch and makes it with gh against the worktree's base, or gives the host's page without gh", async () => {

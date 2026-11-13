@@ -59,6 +59,8 @@ final class AppModel {
     let usage = UsageAccounts()
     /// Each box's plan limits, one row per login in the usage panel.
     let planLimits = BoxPlanLimits()
+    /// What your accounts used, as this Mac's box states it, for the usage panel.
+    let usageHistory = BoxUsageHistory()
     /// Bots: named agents with one job each, on this Mac or a machine.
     let bots = Bots()
     /// Bots' and sessions' wake-ups and watches.
@@ -349,6 +351,7 @@ final class AppModel {
     /// Also what the route scenarios run with (RouteContractTests).
     func wireStores() {
         workspace.boxes = { [weak self] id in self?.box(id) }
+        BoxClient.routes = { [weak self] id in self?.box(id) ?? .unwired(id) }
         // Your personalities, one library on every computer, kept by this Mac's box. However one
         // changed there (here, from a phone, taken from a machine's copy), the machines take it,
         // and this Mac's bots with it are told what it is now, by its box.
@@ -743,6 +746,10 @@ final class AppModel {
     /// so, which the window shows instead of starting (with a state of its own, not `.starting`,
     /// which it stays in meanwhile); the tests' until then.
     nonisolated(unsafe) static var attachesInPlace = false
+    /// Whether this Mac's box moves out of the app's folder to a home of its own, `~/.kuvo-code`,
+    /// laid out as a machine's (#333; its box says it can with `box.ownHome`). Off until the move
+    /// and the app's side of it are built: nothing turns it on yet.
+    nonisolated(unsafe) static var movesOwnBox = false
     /// The home folder `here` looks in: a folder of the tests' own while they run, which they set.
     nonisolated(unsafe) static var hereHome = defaultHereHome
     nonisolated static var defaultHereHome: URL {
@@ -1077,6 +1084,7 @@ final class AppModel {
             // This Mac's group chats, as it runs them.
             if event.type.hasPrefix("kuvo.group.") { self?.boxGroups.handle(event, machine: nil); return }
             self?.planLimits.handle(event, machine: nil)
+            self?.usageHistory.handle(event)
             self?.catalog.handle(event)
             self?.workspace.handleAgents(event)
         }
@@ -1084,6 +1092,7 @@ final class AppModel {
         agents.onHandoff = { [weak self] handoff in Task { await self?.workspace.openHandoff(handoff) } }
         agents.onStopped = { [weak self] in
             self?.planLimits.stopped(nil)
+            self?.usageHistory.stopped()
             self?.catalog.forgetAgents()
             self?.workspace.agentsStopped()
             self?.boxGroups.disconnected(nil)
@@ -1095,6 +1104,7 @@ final class AppModel {
                 // before this Mac's engine (it usually is), they're read once the stores are told
                 // of each other (`wireStores`).
                 planLimits.connected(nil, api: agents.api)
+                usageHistory.connected(api: agents.api)
                 if boxGroups.app == nil { chatsWaitForStores = true } else { await boxGroups.connected(nil) }
                 await catalog.refreshAgents()
                 await workspace.refreshAgents()

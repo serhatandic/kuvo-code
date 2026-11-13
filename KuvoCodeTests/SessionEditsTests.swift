@@ -119,7 +119,8 @@ import Testing
     /// as they show (added and removed ones, with their marks).
     @MainActor
     private func listed(_ steps: [Step]) async throws -> [String: [String]] {
-        let panel = ProjectChanges(directory: path)
+        let box = try await GitTestBox()
+        let panel = box.changes(path)
         await panel.refresh(fallback: [], edits: try changes(steps))
         #expect(!panel.isRepository)
         return Dictionary(uniqueKeysWithValues: panel.files.map { file in

@@ -10,13 +10,16 @@ import Testing
 @Suite struct ChangesDiscardTests {
     let repo: TestRepository
     let changes: ProjectChanges
+    /// This Mac's box, which runs git for it.
+    let box: GitTestBox
 
-    init() throws {
+    init() async throws {
         repo = try TestRepository()
         try repo.write("README.md", "Hello\n")
         try repo.write("src/app.swift", "let a = 1\n")
         try repo.commitAll("Start")
-        changes = ProjectChanges(directory: repo.path)
+        box = try await GitTestBox()
+        changes = box.changes(repo.path)
     }
 
     /// The panel's row for `path`, as it lists it now.

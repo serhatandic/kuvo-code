@@ -32,8 +32,9 @@ export const COMMIT_DIFF = object({ diff: string, staged: bool, "prompt?": strin
 
 /** A commit whose push didn't go through: committed all the same, for a client to offer Push. */
 const NOT_PUSHED = object({ message: string, "committed?": literal(true), "pushed?": literal(false) });
-/** A merge that would conflict (nothing merged; the files it stopped on), or that can't go yet. */
-const NOT_MERGED = object({ message: string, "conflicts?": list(string) });
+/** A merge that would conflict (nothing merged; the files it stopped on, and the branch it would
+ * have gone into), or that can't go yet. */
+const NOT_MERGED = object({ message: string, "conflicts?": list(string), "into?": string });
 /** A pull request made (`url`), or the page to make one on (`compareURL`); neither on a host the
  * box doesn't know, where the branch is pushed. */
 export const PULL_REQUEST = object({ "url?": string, "compareURL?": string });
@@ -80,7 +81,7 @@ export const CHANGES_ROUTES: RouteShape[] = [
   { route: "GET kuvo/git/show", answers: { 200: BYTES } },
   { route: "POST kuvo/git/commit", answers: { 200: NOTHING, 422: NOT_PUSHED } },
   { route: "POST kuvo/git/push", answers: { 200: NOTHING } },
-  { route: "POST kuvo/git/merge", answers: { 200: NOTHING, 409: NOT_MERGED } },
+  { route: "POST kuvo/git/merge", answers: { 200: object({ "into?": string }), 409: NOT_MERGED } },
   { route: "POST kuvo/git/pull-request", answers: { 200: PULL_REQUEST } },
   { route: "POST kuvo/git/pull-request/draft", answers: { 200: PULL_REQUEST_DRAFT } },
   { route: "POST kuvo/git/commit-diff", answers: { 200: COMMIT_DIFF } },

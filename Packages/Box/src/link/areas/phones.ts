@@ -8,6 +8,7 @@ import type { Infer } from "../../shared/shape";
 import { noteDocsChanged } from "../documents/changed";
 import { IS_MAC } from "../home";
 import { newPairingToken, pairingLink, removeAsMac, removePhones } from "../phones";
+import { mainElsewhere, pairElsewhere } from "../setup/main-only";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import { macLink, readLink, updateLink } from "../state";
 import type { LinkState, Pairing } from "../state";
@@ -65,6 +66,9 @@ export async function* pairingRoute(context: RouteContext): AsyncGenerator<Answe
     return yield* json(200, {});
   }
   if (method !== "POST") return yield* json(405, {});
+  // Only your setup's main computer pairs phones: a member names it (PROTOCOL.md, "Your setup").
+  const main = mainElsewhere(readLink());
+  if (main) return yield* json(409, pairElsewhere(main));
   if (IS_MAC && !macLink.config?.phones) return yield* json(409, { message: "The phone link is off on this Mac." });
   const link = updateLink(current => current?.relay && current?.secret ? { ...current, [slot]: newPairingToken() } : null);
   if (!link) return yield* json(409, { message: IS_MAC ? "The phone link isn't ready yet. Try again in a moment." : "This machine has no relay to pair through." });

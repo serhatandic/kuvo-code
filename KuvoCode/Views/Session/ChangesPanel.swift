@@ -349,9 +349,9 @@ struct ChangesPanel: View {
 
     // MARK: Files
 
-    /// The machine the project is on, as the app names it.
+    /// The machine the project is on, as the app names it; on this Mac, its box, which runs git.
     private var machineName: String {
-        RemoteFolder.machine(of: changes.directory).map { app.machines.engine($0)?.machine.name ?? $0 } ?? "the Machine"
+        RemoteFolder.machine(of: changes.directory).map { app.machines.engine($0)?.machine.name ?? $0 } ?? "Kuvo Code’s background service"
     }
 
     @ViewBuilder private var content: some View {
@@ -360,7 +360,7 @@ struct ChangesPanel: View {
             MachineWaitingView(engine: machine, note: "Its changes show here once it’s connected.")
         } else if changes.shown == .waiting {
             ContentUnavailableView {
-                Label("Can’t Reach \(machineName)", systemImage: "network.slash")
+                Label(RemoteFolder.isRemote(changes.directory) ? "Can’t Reach \(machineName)" : "Can’t Reach Kuvo Code’s Background Service", systemImage: "network.slash")
             } description: {
                 Text("Its changes show once it’s back.")
             }
@@ -678,16 +678,14 @@ private struct BranchMenu: View {
     }
 
     private func merge() {
-        let tree = tree, directory = directory, environment = environment
+        let tree = tree, place = GitPlace.of(directory, box: app.box), author = Git.author(of: environment)
         isWorking = true
         Task {
-            outcome = await Task.detached { () -> Outcome in
-                switch tree.mergeBack(from: directory, environment: environment) {
-                case .merged(let target): .merged(into: target)
-                case .conflict(let files, let target): .conflict(files, into: target)
-                case .failed(let message): .failed(title: "Couldn’t Merge", message: message)
-                }
-            }.value
+            outcome = switch await tree.mergeBack(at: place, author: author) {
+            case .merged(let target): .merged(into: target)
+            case .conflict(let files, let target): .conflict(files, into: target)
+            case .failed(let message): .failed(title: "Couldn’t Merge", message: message)
+            }
             isWorking = false
             let result = switch outcome {
             case .merged: "merged"
@@ -1174,12 +1172,13 @@ private struct ImageDiff: View {
         }
     }
 
-    /// Each side from git when it's committed or staged, otherwise from disk.
+    /// Each side from git (on its box) when it's committed or staged, otherwise from disk.
     private static func load(_ file: ChangedFile) async -> Pair {
-        await Task.detached {
+        let repository = file.root.map { GitPlace.of($0) }
+        return await Task.detached {
             // A machine's file from disk comes from its box, as a phone reads it.
             func read(_ object: String?, disk: URL?) async -> NSImage? {
-                if let object, let root = file.root, let data = await Git.shown(object, in: root) { return NSImage(data: data) }
+                if let object, let repository, let data = await Git.shown(object, at: repository) { return NSImage(data: data) }
                 if let disk, let (machine, path) = RemoteFolder.parse(disk) {
                     return (try? await BoxClient.machine(machine).file(path)).flatMap(NSImage.init(data:))
                 }

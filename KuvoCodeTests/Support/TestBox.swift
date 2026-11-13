@@ -45,6 +45,8 @@ final class TestBox {
         environment["KUVO_WAKES"] = WakeUps.root.path
         environment["KUVO_WAKE_COMMAND"] = WakeUps.command.path
         environment["KUVO_KEYS_ON_HOST"] = "1"
+        // A commit's hooks never get the shell's startup files of whoever runs the tests.
+        environment["KUVO_TEST_LOGIN_ENV"] = "off"
         // As the app gives them (MacBoxRunner.boxEnvironment): the vault's secrets.
         environment["KUVO_HOST_VAULT_SECRET"] = host.vaultSecret
         environment["KUVO_VAULT_FILE_KEY"] = VaultValues.fileKey()

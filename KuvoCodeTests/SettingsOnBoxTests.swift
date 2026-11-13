@@ -184,8 +184,9 @@ import Testing
     /// the rest of Settings is the app's (General, Machines, Storage…), and Engine says so in a group.
     @Test func onlyTheEngineSettingsPagesWaitForThem() {
         let waiting = SettingsPage.allCases.filter(\.isEngineSettings)
-        #expect(waiting == [.agents, .permissions, .commands, .skills, .integrations, .mcp])
-        #expect(!SettingsPage.engine.isEngineSettings && !SettingsPage.general.isEngineSettings && !SettingsPage.machines.isEngineSettings)
+        // (Git too: its branch prefix and instructions are each computer's settings, and nothing else.)
+        #expect(waiting == [.agents, .permissions, .commands, .skills, .integrations, .mcp, .git])
+        #expect(!SettingsPage.engine.isEngineSettings && !SettingsPage.general.isEngineSettings && !SettingsPage.machines.isEngineSettings && !SettingsPage.worktrees.isEngineSettings)
     }
 
     /// The box stopped: Settings can't read this Mac's settings and says why, changes nothing,
