@@ -260,6 +260,11 @@ describe("Cursor's usage history", () => {
     const folder = mkdtempSync(join(base, "history-"))
     const history = new CursorHistory(folder, { deadline: instant, pageSize: 2, log: () => {} })
     const before = await history.read(agent.cursor, now)
+    // Asked again within the minute (a refresh, a peer's): what was just read stands, nothing asked.
+    const asked = cursor.asked.length
+    expect(await history.read(agent.cursor, now + 30_000)).toBe(before)
+    expect(cursor.asked).toHaveLength(asked)
+    now += 2 * 60_000
     const yesterday = Date.parse("2026-11-11T00:00:00Z")
     // More came in yesterday while it was asked (its total moved): not whole, so as known.
     cursor.events.push(cursorEvent(yesterday + 20 * 60 * 60_000, "composer-2", 5_000_000, 0))
@@ -268,6 +273,7 @@ describe("Cursor's usage history", () => {
     expect(kept.get("2026-11-11")).toEqual(before.get("2026-11-11"))
     // Fine again: its new event counted.
     cursor.growing = undefined
+    now += 2 * 60_000
     const whole = await history.read(agent.cursor, now)
     expect(whole.get("2026-11-11")!.uses.some((use) => use[2] === 5_000_000)).toBe(true)
 
@@ -335,6 +341,48 @@ describe("Cursor's usage history", () => {
     await usage.refresh()
     const after = ((await (await usageRoutes(usage, "GET", [], new URLSearchParams({ zone: "Asia/Tokyo" }))).json()) as any).data
     expect(JSON.stringify(after.totals.cursor)).toBe(before)
+  })
+
+  test("a plan Cursor can't state (no subscription): the account is still known as itself, so two computers' rows of it are one, never added up", async () => {
+    cursor.keys.set("key_work", "auth0|user_abc")
+    cursor.usage = { enabled: false }
+    cursor.events = eventsEachDay(1)
+    const agent = account("key_work") as unknown as Agent
+    const limits = limitsOf([agent])
+    await limits.refresh()
+    expect(limits.list()[0]!.problem?.message).toBe("No active Cursor subscription.")
+    expect(limits.identity("cursor@work")).toBe(identityOf("cursor:user_abc"))
+    const sources = cursorSources(undefined, (provider) => limits.readsElsewhere(provider), new CursorHistory(undefined, { deadline: instant, log: () => {} }), () => now)
+    const usage = new Usage(() => sources([agent]), store(cursorPricing()), (provider) => limits.identity(provider), undefined, () => now)
+    await usage.refresh()
+    const [mine] = usage.own()
+    expect(mine!.identity).toBe(identityOf("cursor:user_abc"))
+    const rows = usageRows([
+      { key: "mac", name: "Mac", here: true, away: false, accounts: [mine!] },
+      { key: "dev", name: "devbox", here: false, away: false, accounts: [{ ...mine!, scanned: mine!.scanned! - 60_000 }] },
+    ])
+    expect(rows.map((row) => row.id)).toEqual([`cursor#${identityOf("cursor:user_abc")}`])
+    const tokens = (slots: Slots) => [...slots.used.values()].flatMap((models) => [...models.values()]).reduce((sum, [each]) => sum + each, 0)
+    expect(tokens(rows[0]!.yours)).toBe(tokens(mine!.slots))
+  })
+
+  test("a sign-in file that can't be read just now (being rewritten) isn't a sign-out: what the box had stays", async () => {
+    cursor.keys.set("key_work", "auth0|user_abc")
+    cursor.events = eventsEachDay(1)
+    const agent = account("key_work") as unknown as Agent
+    const sources = cursorSources(undefined, () => false, new CursorHistory(undefined, { deadline: instant, log: () => {} }), () => now)
+    const usage = new Usage(() => sources([agent]), store(cursorPricing()), () => "aaaaaaaaaaaaaaaa", undefined, () => now)
+    await usage.refresh()
+    const before = usage.own()[0]!
+    writeFileSync(join((agent as unknown as CursorAgent).folder, "auth.json"), '{"apiKey": "key_wo')
+    now += 6 * 60_000
+    await usage.refresh()
+    expect(usage.own()[0]!.slots).toEqual(before.slots)
+    // Signed out (the file gone): its row from this box goes.
+    rmSync(join((agent as unknown as CursorAgent).folder, "auth.json"))
+    now += 6 * 60_000
+    await usage.refresh()
+    expect(usage.own()).toEqual([])
   })
 
   test("signed out of Cursor here: no Cursor row from this box", async () => {

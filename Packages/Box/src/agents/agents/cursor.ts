@@ -23,7 +23,7 @@ import type { Model, OAuthStatus, Session } from "../wire"
 import { CursorWorker, cursorWorker } from "./cursor-worker"
 import { privateFolder } from "../../shared/files"
 import type { LimitsSource } from "../limits"
-import { CursorClient, cursorKey } from "../usage/cursor-api"
+import { CursorClient, cursorKey, cursorKeyUnreadable } from "../usage/cursor-api"
 import { readCursorPlan, readingOf } from "../usage/cursor-plan"
 
 /** A file's bytes as base64, or nothing when it can't be read. */
@@ -66,13 +66,20 @@ export class CursorAgent implements Agent {
    */
   readonly cursor = new CursorClient(() => cursorKey(this.folder, !this.instance.home))
 
+  /** Its sign-in file is there but can't be read just now: not signed out. */
+  cursorKeyUnreadable(): boolean {
+    return cursorKeyUnreadable(this.folder)
+  }
+
   /**
    * Its plan's limits (limits.ts): its total usage, its model pools, Grok Bot's week, on-demand
-   * spend and credits, as Cursor states them to its sign-in (cursor-plan.ts), every five minutes.
-   * Who the account is, Cursor's answer says (its access token's user).
+   * spend and credits, as Cursor states them to its sign-in (cursor-plan.ts), every ten minutes.
+   * Who the account is, the access token its key was exchanged for says (its user), once Cursor
+   * has answered the exchange, whether or not its plan could be read.
    */
   readonly limits: LimitsSource = {
-    every: 5 * 60_000,
+    every: 10 * 60_000,
+    identity: () => this.cursor.identity(),
     read: async () => {
       const { mapped, identity } = await readCursorPlan(this.cursor)
       return readingOf(mapped, identity)

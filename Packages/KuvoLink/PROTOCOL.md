@@ -3849,7 +3849,8 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     Mac, whose token doesn't say who it's for, as Anthropic says in the signed policy record Claude
     Code fetches with that token and keeps in its settings folder, once it has run with it there),
     ChatGPT's account and workspace member, xAI's user, GitHub's login (from Copilot's
-    answer), Cursor's user (from the access token Cursor exchanges its key for), and an API key
+    answer), Cursor's user (from the access token Cursor exchanges its key for, known once Cursor
+    has answered the exchange, whether or not its plan could be read), and an API key
     for OpenRouter, Z.ai and OpenCode Go. Absent where it isn't known, and
     from a box from before it: list that row as its box's own. Where it changes (signed in
     as another account there), the box drops what it kept of the one before, and the row says so
@@ -3908,7 +3909,7 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     said.
   - **One read per account**: before asking a maker, a box looks for a peer's reading of the same
     account (`service` and `identity`) that its maker answered without a problem within the
-    account's time between reads (15 minutes for Claude's, 5 for Cursor's, 10 for the rest). Then it doesn't ask,
+    account's time between reads (15 minutes for Claude's, 10 for the rest). Then it doesn't ask,
     lists the account as its own still (with no numbers of its own, if it never read it), and looks
     again past that peer's next read and two minutes more: a peer that's off, or turned away, is
     taken over then. Computers that read at the same moment settle on one by the next round (the
@@ -3973,7 +3974,7 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   (grants and prepaid balance) as `balance` in `usd`. Each window's `name` is that label. Only a real
   box's bridge asks Cursor, never a test's. Not yet: Antigravity's (the usage panel still shows it on a
   Mac), nor Ollama's, which ollama.com tells only the Ollama app's own signing key.
-- How often: Claude's each 15 minutes, Cursor's each 5, the rest each 10. Anthropic limits these reads for the whole
+- How often: Claude's each 15 minutes, the rest each 10. Anthropic limits these reads for the whole
   computer, not a sign-in, and holds a reader off longer each time it asks too soon: Claude's
   accounts are read one a minute (counted before the request goes, through a restart too), and a
   429 holds every one of them on the box for as long as its `Retry-After` says (an hour with no
@@ -4122,14 +4123,16 @@ your totals). A client reaches them as
   - Cursor's (OpenUsage's `CursorSpendHistoryFetcher` and `CursorUsageEvents`): Cursor's usage
     events (`/api/dashboard/get-filtered-usage-events` with the access token's session), a UTC day
     at a time, today and the 31 days before, a thousand to a page, four days at once, for 20 seconds
-    a round at most (the days that came are kept, the rest asked next round). A day is whole when
+    a round at most (no page is asked after that; the days that came are kept, the rest asked next
+    round). A whole read stands for a minute: a refresh or a peer's within it asks Cursor nothing. A day is whole when
     every page came with one total, as many events as it says, each inside the day; otherwise it's
     as it was known before. Today and yesterday are asked every round, an older day until Cursor
     answered it after it ended. An event with no `tokenUsage` used none; one whose time, model or
     token counts (whole numbers, not negative) aren't readable counts nowhere. Priced without
     long-context rates (an event isn't a request's whole prompt). What came is kept per Cursor user
     (`usage/cursor-history/<a hash of the user>.json`, never the user's ID); a read with a day still
-    not known leaves what this box had as it was, never a day of nothing.
+    not known leaves what this box had as it was, never a day of nothing, as does a sign-in file
+    that can't be read just now (being rewritten); signed out, the account's use from this box goes.
 - `PUT kuvo/agents/api/kuvo/usage/pricing[?zone=]` `{"codex": {"fallback": <model> | null}}`: Codex's
   fallback model, whose rates estimate what a Codex model with no known price used (in this box's
   own Codex logs, not the engine's ChatGPT slice: each box prices its own with its own); one of `choices` (the supplement's

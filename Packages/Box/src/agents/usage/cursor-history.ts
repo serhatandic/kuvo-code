@@ -19,6 +19,8 @@ import { totalTokens, type Pricing, type Tokens } from "./pricing"
 const DAY = 24 * 60 * 60_000
 /** UTC days asked for: today and the 31 before, so any time zone's today and 30 days before are whole. */
 export const CURSOR_DAYS = 32
+/** A user's whole read stands for this long: rounds, refreshes and peers' refreshes don't ask Cursor again sooner. */
+const MIN_BETWEEN = 60_000
 
 /** One request, as Cursor's usage events state it. */
 export interface CursorEvent {
@@ -97,6 +99,8 @@ const dayKey = (start: number) => new Date(start).toISOString().slice(0, 10)
 export class CursorHistory {
   private kept = new Map<string, Map<string, CursorDay>>()
   private reading = new Map<string, Promise<Map<string, CursorDay>>>()
+  /** Each user's last whole read, and when: asked again within a minute (a refresh, a peer's), it stands. */
+  private last = new Map<string, { at: number; days: Map<string, CursorDay> }>()
 
   constructor(
     /** Where each user's days are kept (`usage/cursor-history`); none in a test that doesn't. */
@@ -122,7 +126,14 @@ export class CursorHistory {
     const key = createHash("sha256").update("kuvo-code cursor history v1\n").update(user).digest("hex").slice(0, 16)
     const under = this.reading.get(key)
     if (under) return under
-    const read = this.readFor(client, access, key, now).finally(() => this.reading.delete(key))
+    const last = this.last.get(key)
+    if (last && now >= last.at && now - last.at < MIN_BETWEEN && Math.floor(now / DAY) === Math.floor(last.at / DAY)) return last.days
+    const read = this.readFor(client, access, key, now)
+      .then((days) => {
+        this.last.set(key, { at: now, days })
+        return days
+      })
+      .finally(() => this.reading.delete(key))
     this.reading.set(key, read)
     return read
   }
@@ -145,7 +156,7 @@ export class CursorHistory {
     const queue = [...due]
     const worker = async () => {
       for (let day = queue.shift(); day && !stopped; day = queue.shift()) {
-        const result = await this.fetchDay(client, access, day)
+        const result = await this.fetchDay(client, access, day, () => stopped)
         if (stopped) return
         if (typeof result === "string") {
           failures++
@@ -174,13 +185,15 @@ export class CursorHistory {
   }
 
   /** One UTC day, page after page until Cursor has said all of it; what it didn't say whole is a failure. */
-  private async fetchDay(client: CursorClient, access: string, day: { key: string; start: number; end: number; complete: boolean }): Promise<CursorDay | Failure> {
+  private async fetchDay(client: CursorClient, access: string, day: { key: string; start: number; end: number; complete: boolean }, stopped: () => boolean): Promise<CursorDay | Failure> {
     const pageSize = this.options.pageSize ?? 1000
     let page = 1
     let expected: number | undefined
     let received = 0
     const uses = new Map<string, [number, string, number, number, number, number]>()
     for (;;) {
+      // (Out of time: no page more, as UsageKit's task group was cancelled.)
+      if (stopped()) return "request"
       let answer
       try {
         answer = await client.website("/api/dashboard/get-filtered-usage-events", access, { method: "POST", body: { startDate: String(day.start), endDate: String(day.end - 1), page, pageSize } }, 15_000)

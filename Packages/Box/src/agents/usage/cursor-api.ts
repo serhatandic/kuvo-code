@@ -4,7 +4,7 @@
 // access token as Cursor's own SDK does, kept in memory only while it lasts. UsageKit's
 // `CursorUsageClient`, ported (#631 piece D1).
 
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { fingerprint, LimitsProblem, retryAt, tokenClaims } from "../limits"
 
@@ -63,6 +63,21 @@ export function cursorKey(folder: string, own: boolean, env: NodeJS.ProcessEnv =
 }
 
 /**
+ * Whether the account's sign-in file is there but can't be read just now (the SDK rewriting it, say):
+ * not signed out, so what the box has of the account stays.
+ */
+export function cursorKeyUnreadable(folder: string): boolean {
+  const file = join(folder, "auth.json")
+  if (!existsSync(file)) return false
+  try {
+    JSON.parse(readFileSync(file, "utf8"))
+    return false
+  } catch {
+    return true
+  }
+}
+
+/**
  * Asks Cursor for one account (`key`, its sign-in now): exchanges its key for an access token, kept
  * until five minutes before it lapses, and again when Cursor turns it away.
  */
@@ -77,6 +92,18 @@ export class CursorClient {
   /** The sign-in's fingerprint (never the key). */
   signIn(): string | undefined {
     return fingerprint(this.key())
+  }
+
+  /**
+   * Who the account is (`cursor:<user>`), as the access token its key was last exchanged for says,
+   * while the key is the one it was exchanged with: known once Cursor has answered the exchange,
+   * whatever came of the reads after it. Never sent anywhere but hashed (`identityOf`).
+   */
+  identity(): string | undefined {
+    const kept = this.token
+    if (!kept || kept.key !== this.key()) return undefined
+    const user = cursorSession(kept.access)?.user
+    return user ? `cursor:${user.toLowerCase()}` : undefined
   }
 
   /** An access token for the sign-in now; `fresh`, exchanged again whatever's kept. */

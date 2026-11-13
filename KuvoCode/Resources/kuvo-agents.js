@@ -11763,6 +11763,8 @@ class Limits {
       return true;
     } catch (caught) {
       const at = this.now();
+      if (!entry.identity)
+        this.identify(entry, source.identity?.());
       entry.checked = at;
       const problem = caught instanceof LimitsProblem ? caught : new LimitsProblem("failed", `Couldn't read its limits: ${caught instanceof Error ? caught.message : String(caught)}`);
       entry.problem = { kind: problem.kind, message: problem.message, ...problem.until ? { until: problem.until } : {} };
@@ -16947,7 +16949,7 @@ function codexPlan(type) {
 }
 
 // Packages/Box/src/agents/agents/cursor.ts
-import { existsSync as existsSync16, mkdirSync as mkdirSync16, readFileSync as readFileSync25, rmSync as rmSync13 } from "fs";
+import { existsSync as existsSync17, mkdirSync as mkdirSync16, readFileSync as readFileSync25, rmSync as rmSync13 } from "fs";
 import { homedir as homedir3 } from "os";
 import { dirname as dirname14, join as join28 } from "path";
 
@@ -17122,7 +17124,7 @@ class CursorWorker {
 }
 
 // Packages/Box/src/agents/usage/cursor-api.ts
-import { readFileSync as readFileSync24 } from "fs";
+import { existsSync as existsSync16, readFileSync as readFileSync24 } from "fs";
 import { join as join27 } from "path";
 var cursorEndpoints = {
   api2: "https://api2.cursor.sh",
@@ -17159,6 +17161,17 @@ function cursorKey(folder, own, env = process.env, now = Date.now()) {
     return;
   }
 }
+function cursorKeyUnreadable(folder) {
+  const file = join27(folder, "auth.json");
+  if (!existsSync16(file))
+    return false;
+  try {
+    JSON.parse(readFileSync24(file, "utf8"));
+    return false;
+  } catch {
+    return true;
+  }
+}
 
 class CursorClient {
   key;
@@ -17170,6 +17183,13 @@ class CursorClient {
   }
   signIn() {
     return fingerprint(this.key());
+  }
+  identity() {
+    const kept = this.token;
+    if (!kept || kept.key !== this.key())
+      return;
+    const user = cursorSession(kept.access)?.user;
+    return user ? `cursor:${user.toLowerCase()}` : undefined;
   }
   async accessToken(fresh = false) {
     if (!cursorReachable())
@@ -17729,8 +17749,12 @@ class CursorAgent {
     this.providerID = providerID("cursor", instance.id);
   }
   cursor = new CursorClient(() => cursorKey(this.folder, !this.instance.home));
+  cursorKeyUnreadable() {
+    return cursorKeyUnreadable(this.folder);
+  }
   limits = {
-    every: 5 * 60000,
+    every: 10 * 60000,
+    identity: () => this.cursor.identity(),
     read: async () => {
       const { mapped, identity } = await readCursorPlan(this.cursor);
       return readingOf(mapped, identity);
@@ -17772,7 +17796,7 @@ class CursorAgent {
     const fromEnvironment = this.instance.home ? undefined : process.env.CURSOR_API_KEY?.trim();
     if (fromEnvironment)
       return fromEnvironment;
-    if (!existsSync16(this.authFile))
+    if (!existsSync17(this.authFile))
       return;
     const loaded = await (await this.store(sdk ?? await this.sdk())).load();
     if (!loaded?.apiKey)
@@ -17782,7 +17806,7 @@ class CursorAgent {
     return loaded.apiKey;
   }
   async account(fresh = false) {
-    if ((this.instance.home || !process.env.CURSOR_API_KEY) && !existsSync16(this.authFile)) {
+    if ((this.instance.home || !process.env.CURSOR_API_KEY) && !existsSync17(this.authFile)) {
       return { installed: true, signedIn: false, message: "Sign in with your Cursor account. Kuvo Code downloads Cursor's agent the first time." };
     }
     return this.known.read(fresh, async () => {
@@ -21231,6 +21255,7 @@ import { mkdirSync as mkdirSync19, readFileSync as readFileSync28, renameSync as
 import { join as join32 } from "path";
 var DAY2 = 24 * 60 * 60000;
 var CURSOR_DAYS = 32;
+var MIN_BETWEEN = 60000;
 var integer = (value) => typeof value === "number" && Number.isSafeInteger(value) ? value : undefined;
 function tokenValue(usage, key) {
   if (!(key in usage) || usage[key] === undefined)
@@ -21286,6 +21311,7 @@ class CursorHistory {
   options;
   kept = new Map;
   reading = new Map;
+  last = new Map;
   constructor(folder, options = {}) {
     this.folder = folder;
     this.options = options;
@@ -21300,7 +21326,13 @@ class CursorHistory {
     const under = this.reading.get(key);
     if (under)
       return under;
-    const read = this.readFor(client, access, key, now).finally(() => this.reading.delete(key));
+    const last = this.last.get(key);
+    if (last && now >= last.at && now - last.at < MIN_BETWEEN && Math.floor(now / DAY2) === Math.floor(last.at / DAY2))
+      return last.days;
+    const read = this.readFor(client, access, key, now).then((days) => {
+      this.last.set(key, { at: now, days });
+      return days;
+    }).finally(() => this.reading.delete(key));
     this.reading.set(key, read);
     return read;
   }
@@ -21322,7 +21354,7 @@ class CursorHistory {
     const queue = [...due];
     const worker = async () => {
       for (let day = queue.shift();day && !stopped; day = queue.shift()) {
-        const result = await this.fetchDay(client, access, day);
+        const result = await this.fetchDay(client, access, day, () => stopped);
         if (stopped)
           return;
         if (typeof result === "string") {
@@ -21353,13 +21385,15 @@ class CursorHistory {
       throw new Error(`Cursor's usage events: ${window.filter((day) => !cached.has(day.key)).length} of ${window.length} days aren't known yet.`);
     return new Map(window.map((day) => [day.key, cached.get(day.key)]));
   }
-  async fetchDay(client, access, day) {
+  async fetchDay(client, access, day, stopped) {
     const pageSize = this.options.pageSize ?? 1000;
     let page = 1;
     let expected;
     let received = 0;
     const uses = new Map;
     for (;; ) {
+      if (stopped())
+        return "request";
       let answer;
       try {
         answer = await client.website("/api/dashboard/get-filtered-usage-events", access, { method: "POST", body: { startDate: String(day.start), endDate: String(day.end - 1), page, pageSize } }, 15000);
@@ -22593,17 +22627,25 @@ function engineHostedSources(folder, computer = ownComputer, log = (line) => con
   return () => sources;
 }
 function cursorClientOf(agent) {
-  return parseProvider(agent.providerID)?.kind === "cursor" ? agent.cursor : undefined;
+  if (parseProvider(agent.providerID)?.kind !== "cursor")
+    return;
+  const cursor = agent;
+  return cursor.cursor ? { client: cursor.cursor, unreadable: () => cursor.cursorKeyUnreadable?.() ?? false } : undefined;
 }
 function cursorSources(folder, elsewhere, history = new CursorHistory(folder ? join35(folder, "cursor-history") : undefined), now = Date.now) {
   const last = new Map;
   return (agents) => {
     if (!cursorReachable())
       return [];
+    const here = new Set(agents.map((agent) => agent.providerID));
+    for (const provider of [...last.keys()])
+      if (!here.has(provider))
+        last.delete(provider);
     return agents.flatMap((agent) => {
-      const client = cursorClientOf(agent);
-      if (!client || !client.key())
+      const found = cursorClientOf(agent);
+      if (!found || !found.client.key() && !found.unreadable())
         return [];
+      const client = found.client;
       const parsed = parseProvider(agent.providerID);
       const source = {
         provider: agent.providerID,
@@ -22614,6 +22656,8 @@ function cursorSources(folder, elsewhere, history = new CursorHistory(folder ? j
         slots: async (pricing, since) => {
           if (elsewhere(agent.providerID))
             return null;
+          if (!client.key())
+            throw new Error("Cursor's sign-in can't be read just now.");
           const days = await history.read(client, now());
           const said = createHash12("sha256").update(JSON.stringify([...days])).digest("hex");
           const before = last.get(agent.providerID);
@@ -27511,7 +27555,7 @@ function seatRules(folder, askFirst, denies) {
 }
 
 // Packages/Box/src/agents/groups/store.ts
-import { existsSync as existsSync17, mkdirSync as mkdirSync22, readdirSync as readdirSync18, readFileSync as readFileSync31, renameSync as renameSync18, rmSync as rmSync15, writeFileSync as writeFileSync23 } from "fs";
+import { existsSync as existsSync18, mkdirSync as mkdirSync22, readdirSync as readdirSync18, readFileSync as readFileSync31, renameSync as renameSync18, rmSync as rmSync15, writeFileSync as writeFileSync23 } from "fs";
 import { join as join38 } from "path";
 var version2 = 1;
 function isTurning(value) {
@@ -27618,13 +27662,13 @@ class GroupStore {
   }
   setAwake(id, awake) {
     const file = join38(this.folder(id), "awake");
-    if (awake && !existsSync17(file) && existsSync17(this.folder(id)))
+    if (awake && !existsSync18(file) && existsSync18(this.folder(id)))
       writeFileSync23(file, "");
     if (!awake)
       rmSync15(file, { force: true });
   }
   trash(id, trash) {
-    if (!existsSync17(this.folder(id)))
+    if (!existsSync18(this.folder(id)))
       return;
     const into = join38(trash, `${new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "")}-group-${id}`);
     mkdirSync22(into, { recursive: true, mode: 448 });
@@ -28374,7 +28418,7 @@ async function make(runner, store, given, here) {
 }
 
 // Packages/Box/src/agents/groups/post.ts
-import { existsSync as existsSync18, readFileSync as readFileSync34, renameSync as renameSync20, writeFileSync as writeFileSync25 } from "fs";
+import { existsSync as existsSync19, readFileSync as readFileSync34, renameSync as renameSync20, writeFileSync as writeFileSync25 } from "fs";
 
 // Packages/Box/src/shared/seats.ts
 var SEAT_MAIL_KINDS = ["turn", "state", "result", "steer", "stop", "drop", "work", "held", "report", "memory"];
@@ -31465,7 +31509,7 @@ class PeerPost {
     this.clock = clock;
     let kept = [];
     try {
-      if (file && existsSync18(file))
+      if (file && existsSync19(file))
         kept = JSON.parse(readFileSync34(file, "utf8"));
     } catch {}
     this.kept = Array.isArray(kept) ? kept.filter((line) => line && typeof line.id === "string" && typeof line.to === "string" && isSeatMail(line.mail)) : [];
@@ -33453,4 +33497,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 758bdd38ececfba042814a84baa9490f04b54ec316c8504b9f005634f824dbc8
+// Built from Packages/Box/src/agents 6ff62c68a3c0017ccec708cf695ef6aa2611359b276b71ef5fc778e14926607e

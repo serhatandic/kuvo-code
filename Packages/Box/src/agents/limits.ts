@@ -468,6 +468,8 @@ export class Limits {
       return true
     } catch (caught) {
       const at = this.now()
+      // (Who it is may be known by now though its limits weren't: its sign-in says, as the read went.)
+      if (!entry.identity) this.identify(entry, source.identity?.())
       entry.checked = at
       const problem = caught instanceof LimitsProblem ? caught : new LimitsProblem("failed", `Couldn't read its limits: ${caught instanceof Error ? caught.message : String(caught)}`)
       entry.problem = { kind: problem.kind, message: problem.message, ...(problem.until ? { until: problem.until } : {}) }

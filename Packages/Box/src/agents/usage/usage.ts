@@ -982,9 +982,11 @@ export function engineHostedSources(folder: string | undefined, computer = ownCo
   return () => sources
 }
 
-/** A Cursor account's client (`CursorAgent.cursor`), where the agent is one of Cursor's. */
-function cursorClientOf(agent: Agent): CursorClient | undefined {
-  return parseProvider(agent.providerID)?.kind === "cursor" ? (agent as Agent & { cursor?: CursorClient }).cursor : undefined
+/** A Cursor account's client (`CursorAgent.cursor`), where the agent is one of Cursor's, and whether its sign-in file can't be read just now. */
+function cursorClientOf(agent: Agent): { client: CursorClient; unreadable: () => boolean } | undefined {
+  if (parseProvider(agent.providerID)?.kind !== "cursor") return undefined
+  const cursor = agent as Agent & { cursor?: CursorClient; cursorKeyUnreadable?: () => boolean }
+  return cursor.cursor ? { client: cursor.cursor, unreadable: () => cursor.cursorKeyUnreadable?.() ?? false } : undefined
 }
 
 /**
@@ -999,9 +1001,14 @@ export function cursorSources(folder: string | undefined, elsewhere: (provider: 
   const last = new Map<string, { days: string; pricing: Pricing; since: number; slots: Slots }>()
   return (agents) => {
     if (!cursorReachable()) return []
+    // (What's kept of an account no longer here goes.)
+    const here = new Set(agents.map((agent) => agent.providerID))
+    for (const provider of [...last.keys()]) if (!here.has(provider)) last.delete(provider)
     return agents.flatMap((agent) => {
-      const client = cursorClientOf(agent)
-      if (!client || !client.key()) return []
+      const found = cursorClientOf(agent)
+      // Signed out: no source (what it had goes). A sign-in file that can't be read just now isn't that.
+      if (!found || (!found.client.key() && !found.unreadable())) return []
+      const client = found.client
       const parsed = parseProvider(agent.providerID)!
       const source: UsageSource = {
         provider: agent.providerID,
@@ -1011,6 +1018,7 @@ export function cursorSources(folder: string | undefined, elsewhere: (provider: 
         accountWide: true,
         slots: async (pricing, since) => {
           if (elsewhere(agent.providerID)) return null
+          if (!client.key()) throw new Error("Cursor's sign-in can't be read just now.")
           const days = await history.read(client, now())
           const said = createHash("sha256").update(JSON.stringify([...days] satisfies [string, CursorDay][])).digest("hex")
           const before = last.get(agent.providerID)
