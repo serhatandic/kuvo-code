@@ -698,6 +698,7 @@ extension AppModel {
         workspace.forget(machine)
         boxGroups.disconnected(machine)
         planLimits.stopped(machine)
+        if machine == SSHConnection.thisMac { usageHistory.stopped() }
     }
 
     /// Stops a machine's engine and forgets the machine, and its sessions' tabs with it. Its

@@ -114,7 +114,10 @@ final class UsageBoxParityTests: XCTestCase {
     @MainActor
     func testWhileTheHostCoversClaudeNoCardReadsTheLogsAndOnlyTheMainOneShowsItsDays() {
         let history = HostHistory.shared
-        defer { history.update(days: [:], covered: []) }
+        defer {
+            history.update(days: [:], covered: [])
+            history.setAway(false)
+        }
         let day = HostHistoryDay(date: "2026-11-12", models: [.init(name: "claude-opus-4-5", tokens: 10, cost: 0.5)])
         history.update(days: ["claude": [day]], covered: ["claude"], answered: false)
         XCTAssertNotNil(history.scan(for: "claude"))
@@ -123,6 +126,13 @@ final class UsageBoxParityTests: XCTestCase {
         XCTAssertEqual(history.scan(for: "claude")??.series.daily.map(\.totalTokens), [10])
         XCTAssertEqual(history.scan(for: "claude@1a2b3c4d")??.series.daily, [], "another login's card: none, what it had before gone")
         XCTAssertNil(history.scan(for: "codex"), "not covered: it reads its own")
+        // The host stops answering: its days stay, as of when it last did; back, they're current.
+        XCTAssertNil(history.asOfNote(for: "claude"))
+        history.setAway(true)
+        XCTAssertEqual(history.asOfNote(for: "claude")?.hasPrefix("as of "), true)
+        XCTAssertEqual(history.scan(for: "claude")??.series.daily.map(\.totalTokens), [10])
+        history.update(days: ["claude": [day]], covered: ["claude"])
+        XCTAssertNil(history.asOfNote(for: "claude"))
         // Covered, with nothing in the window: an empty history, not the last one kept.
         history.update(days: [:], covered: ["claude"])
         XCTAssertEqual(history.scan(for: "claude")??.series.daily, [])

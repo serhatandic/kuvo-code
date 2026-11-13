@@ -23,7 +23,8 @@ struct UsageHistoryTests {
       "totals": {"claude": [
         {"date": "2026-11-12", "tokens": 1307, "cost": 0.006535, "models": [{"model": "claude-opus-4-5", "tokens": 1307, "cost": 0.006535}]},
         {"date": "2026-11-11", "tokens": 0, "cost": 0, "models": [], "unknown": ["mystery-model-9"]}
-      ]}
+      ]},
+      "partial": {"claude": {"away": true}}
     }}
     """
 
@@ -39,5 +40,7 @@ struct UsageHistoryTests {
         #expect(usage.rows[1].away)
         #expect(!usage.rows[0].away)
         #expect(usage.totals["claude"]?.map(\.tokens) == [1307, 0])
+        #expect(usage.partial["claude"]?.away == true)
+        #expect(usage.partial["claude"]?.cut == false)
     }
 }

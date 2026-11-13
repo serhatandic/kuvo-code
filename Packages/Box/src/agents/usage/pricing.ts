@@ -383,7 +383,8 @@ export class PricingStore {
   constructor(
     /** Where the fetched feeds are kept (`usage/pricing` in the bridge's folder); none: only the snapshots. */
     private readonly folder?: string,
-    private readonly fetcher: PricingFetch | undefined = (url, init) => fetch(url, init),
+    /** What fetches the feeds; null: none is (tests). */
+    private readonly fetcher: PricingFetch | null = (url, init) => fetch(url, init),
     private readonly now: () => number = Date.now,
   ) {
     if (folder) {
@@ -424,7 +425,9 @@ export class PricingStore {
   private async fetchOne(source: Source): Promise<boolean> {
     const state = this.states[source] ?? {}
     try {
-      const response = await this.fetcher!(PRICING_FEEDS[source], { headers: state.etag ? { "If-None-Match": state.etag } : {}, signal: AbortSignal.timeout(30_000) })
+      // (What it was last sent, only while that's still kept here: else all of it again.)
+      const cached = state.etag !== undefined && this.read(`${source}.json`) !== undefined
+      const response = await this.fetcher!(PRICING_FEEDS[source], { headers: cached ? { "If-None-Match": state.etag! } : {}, signal: AbortSignal.timeout(30_000) })
       if (response.status === 304) {
         this.states[source] = { ...state, fetchedAt: this.now(), failedAt: undefined }
         return false
@@ -492,5 +495,5 @@ export class PricingStore {
 
 /** The bundled prices alone (tests; and a box with no folder). */
 export function bundledPricing(): Pricing {
-  return new PricingStore(undefined, undefined).current()
+  return new PricingStore(undefined, null).current()
 }

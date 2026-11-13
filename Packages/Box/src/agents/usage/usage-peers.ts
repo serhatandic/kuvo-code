@@ -105,7 +105,7 @@ export class UsagePeers {
     const self = this.directory.own()
     const boxes: UsageBox[] = [{ key: self?.key ?? "", name: self?.name ?? "", here: true, away: false, accounts: own }]
     const peers = [...this.peers.entries()].sort(([, a], [, b]) => a.name.localeCompare(b.name))
-    for (const [key, kept] of peers) boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY, accounts: kept.accounts.map((account) => ({ ...account, slots: trimmed(account.slots, now) })) })
+    for (const [key, kept] of peers) boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY, vouched: this.directory.isPeer ? !this.directory.isPeer(key) : false, accounts: kept.accounts.map((account) => ({ ...account, slots: trimmed(account.slots, now) })) })
     return usageRows(boxes)
   }
 
@@ -284,7 +284,7 @@ export class UsagePeers {
  * together what it was told (each account's fields in one order, its slots as kept: `keptSlots`).
  */
 export function digestOf(accounts: ToldUsage[]): string {
-  const canonical = accounts.map((account) => [account.provider, account.service, account.agent ?? null, account.account ?? null, account.label ?? null, account.identity ?? null, account.cut === true, account.slots.models, account.slots.used, account.slots.unknown ?? []])
+  const canonical = accounts.map((account) => [account.provider, account.service, account.agent ?? null, account.account ?? null, account.label ?? null, account.identity ?? null, account.cut === true, account.places ?? [], account.slots.models, account.slots.used, account.slots.unknown ?? []])
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex").slice(0, 32)
 }
 
@@ -333,5 +333,6 @@ function takenAccount(given: unknown, off: number, now: number): OwnUsage | null
     slots: slotsFrom(account.slots, MOST_USES),
     ...(account.cut === true ? { cut: true as const } : {}),
     ...(Number.isSafeInteger(account.whole) && account.whole > 0 ? { whole: account.whole } : {}),
+    ...(Array.isArray(account.places) && account.places.length ? { places: account.places.filter((place: unknown): place is string => typeof place === "string" && /^[0-9a-f]{16}$/.test(place)).slice(0, 20) } : {}),
   }
 }

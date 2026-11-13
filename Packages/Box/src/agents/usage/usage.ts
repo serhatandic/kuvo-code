@@ -7,8 +7,10 @@
 //
 // Nothing here reads a sign-in: an account is named as its plan limits name it (`Limits.identity`).
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { createHash } from "node:crypto"
+import { mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs"
+import { homedir, hostname } from "node:os"
+import { basename, dirname, join } from "node:path"
 import type { AgentKind } from "../accounts"
 import { parseProvider } from "../accounts"
 import type { Agent } from "../agent"
@@ -36,6 +38,8 @@ export interface UsageSource {
   label?: string
   /** Its slots from `since` (ms) on, priced (throws when its logs can't be read now). */
   slots(pricing: Pricing, since: number): Promise<Slots>
+  /** The folders its logs are in, hashed (`placeOf`). */
+  places?(): string[]
   /** What it keeps of the logs it read, shared by the accounts of its kind: told once a round is over. */
   files?: { endRound(complete: boolean): void }
 }
@@ -56,6 +60,11 @@ export interface OwnUsage {
   cut?: true
   /** A peer's: its slots are all there from this one (quarter hours since 1970) on, none before. */
   whole?: number
+  /**
+   * The folders its logs are in, each as a hash of its computer's name and the folder's real path
+   * (`placeOf`): two boxes on one computer reading one folder are counted once.
+   */
+  places?: string[]
 }
 
 /** A computer an account's usage comes from, as a row names it. */
@@ -69,9 +78,13 @@ export interface UsageRowBox {
   scanned?: number
   here?: true
   away?: true
+  /** A box a peer vouches for (another Mac beside a machine you share): not one of your computers. */
+  vouched?: true
+  /** It reads a folder another of these boxes already does (two boxes on one computer): not added again. */
+  same?: true
 }
 
-/** One account across your computers: every box's hours of it, added up. */
+/** One account across your computers: every box's slots of it, added up. */
 export interface UsageRow {
   /** As plan limits' `rows` have it: `<service>#<identity>`, or `<box key>/<provider>`. */
   id: string
@@ -88,7 +101,14 @@ export interface UsageRow {
   away?: true
   /** One of its computers told less than all of its use (`OwnUsage.cut`): its oldest days are short. */
   cut?: true
+  /** It's only on boxes a peer vouches for: not yours, and in no total. */
+  vouched?: true
   slots: Slots
+  /** Its slots from your own computers only (not a vouched box's): what the totals add up. */
+  yours: Slots
+  /** Your own computers' share of it: one is away, or told less than all. */
+  yoursAway?: true
+  yoursCut?: true
 }
 
 /** A box's accounts, as `rows` takes them: this one's, or what a peer last told. */
@@ -97,21 +117,27 @@ export interface UsageBox {
   name: string
   here: boolean
   away: boolean
+  /** A box a peer vouches for, not one of yours. */
+  vouched?: boolean
   accounts: OwnUsage[]
 }
 
 /** One row per account across the boxes, this box's first: one `service` with one `identity` is one account. */
 export function usageRows(boxes: UsageBox[]): UsageRow[] {
-  const groups: { id: string; members: { box: UsageBox; account: OwnUsage }[] }[] = []
+  const groups: { id: string; members: { box: UsageBox; account: OwnUsage; same: boolean }[] }[] = []
   const found = new Map<string, number>()
+  // Folders already counted, this box's first: one read again by another box on that computer isn't.
+  const counted = new Set<string>()
   for (const box of boxes) {
     for (const account of box.accounts) {
+      const same = (account.places ?? []).some((place) => counted.has(place))
+      if (!same) for (const place of account.places ?? []) counted.add(place)
       const id = account.identity ? `${account.service}#${account.identity}` : `${box.key}/${account.provider}`
       const index = found.get(id)
-      if (index !== undefined) groups[index]!.members.push({ box, account })
+      if (index !== undefined) groups[index]!.members.push({ box, account, same })
       else {
         found.set(id, groups.length)
-        groups.push({ id, members: [{ box, account }] })
+        groups.push({ id, members: [{ box, account, same }] })
       }
     }
   }
@@ -129,7 +155,7 @@ export function usageRows(boxes: UsageBox[]): UsageRow[] {
       ...(label ? { label } : {}),
       ...(base.identity ? { identity: base.identity } : {}),
       ...(scanned ? { scanned } : {}),
-      boxes: members.map(({ box, account }) => ({
+      boxes: members.map(({ box, account, same }) => ({
         key: box.key,
         name: box.name,
         provider: account.provider,
@@ -139,11 +165,18 @@ export function usageRows(boxes: UsageBox[]): UsageRow[] {
         ...(account.scanned ? { scanned: account.scanned } : {}),
         ...(box.here ? { here: true as const } : {}),
         ...(box.away ? { away: true as const } : {}),
+        ...(box.vouched ? { vouched: true as const } : {}),
+        ...(same ? { same: true as const } : {}),
       })),
-      slots: summed(members.map((member) => member.account.slots)),
+      slots: summed(members.filter((member) => !member.same).map((member) => member.account.slots)),
+      yours: summed(members.filter((member) => !member.same && !member.box.vouched).map((member) => member.account.slots)),
     }
+    const yours = members.filter((member) => !member.same && !member.box.vouched)
     if (members.every((member) => member.box.away)) row.away = true
     if (members.some((member) => member.account.cut)) row.cut = true
+    if (members.every((member) => member.box.vouched)) row.vouched = true
+    if (yours.some((member) => member.box.away)) row.yoursAway = true
+    if (yours.some((member) => member.account.cut)) row.yoursCut = true
     return row
   })
 }
@@ -261,6 +294,7 @@ export class Usage {
           ...(identity ? { identity } : {}),
           ...(entry.scanned ? { scanned: entry.scanned } : {}),
           slots: entry.slots,
+          ...(source.places ? { places: source.places() } : {}),
         },
       ]
     })
@@ -285,18 +319,24 @@ export class Usage {
     const asked = knownZone(zone) ?? ownZone()
     const now = this.now()
     const rows = this.rows()
-    const services: Record<string, Day[]> = {}
+    // Each service's days: your own computers' accounts only (a box a peer vouches for may be
+    // another person's), each folder once. And whether one of them is away or told less than all.
+    const totals: Record<string, Day[]> = {}
+    const partial: Record<string, { away?: true; cut?: true }> = {}
     for (const service of USAGE_SERVICES) {
-      const of = rows.filter((row) => row.service === service)
-      if (of.length) services[service] = daysIn(summed(of.map((row) => row.slots)), asked, now)
+      const of = rows.filter((row) => row.service === service && !row.vouched)
+      if (!of.length) continue
+      totals[service] = daysIn(summed(of.map((row) => row.yours)), asked, now)
+      if (of.some((row) => row.yoursAway || row.yoursCut)) partial[service] = { ...(of.some((row) => row.yoursAway) ? { away: true as const } : {}), ...(of.some((row) => row.yoursCut) ? { cut: true as const } : {}) }
     }
     const scanned = Math.max(0, ...this.own().map((account) => account.scanned ?? 0))
     return {
       zone: asked,
       services: USAGE_SERVICES,
       ...(scanned ? { scanned } : {}),
-      rows: rows.map(({ slots, ...row }) => ({ ...row, days: daysIn(slots, asked, now) })),
-      totals: services,
+      rows: rows.map(({ slots, yours: _, yoursAway: _away, yoursCut: _cut, ...row }) => ({ ...row, days: daysIn(slots, asked, now) })),
+      totals,
+      ...(Object.keys(partial).length ? { partial } : {}),
     }
   }
 
@@ -315,7 +355,7 @@ export class Usage {
       this.peers?.tell(mine !== this.ownSaid)
       this.ownSaid = mine
     }
-    const now = JSON.stringify(this.rows().map(({ scanned: _, slots, boxes, ...row }) => ({ ...row, boxes: boxes.map(({ scanned: _, ...box }) => box), slots: keptSlots(slots) })))
+    const now = JSON.stringify(this.rows().map(({ scanned: _, slots, yours, boxes, ...row }) => ({ ...row, boxes: boxes.map(({ scanned: _, ...box }) => box), slots: keptSlots(slots), yours: keptSlots(yours) })))
     if (now === this.said) return
     this.said = now
     emit("kuvo.usage.updated", { services: USAGE_SERVICES })
@@ -369,30 +409,76 @@ export async function usageRoutes(usage: Usage | undefined, method: string, rest
 }
 
 /**
- * The Claude Code accounts whose usage is read here, from the folders each runs Claude Code with
- * (`conversationRoots`, each a `projects` folder): an added account's own, Kuvo Code's on a
- * machine, and on a Mac its own sign-in's (your `~/.claude`, where Claude Code runs with it).
- * `folder`: where what was read of the logs is kept (`claude-files`, a file a log).
+ * Where a folder of logs is, as boxes tell each other: a hash of this computer's name and the
+ * folder's real path, so two boxes on one computer reading the same folder count it once.
  */
-export function claudeSources(folder?: string): (agents: Agent[]) => UsageSource[] {
-  const files = new JSONLFiles<KeptClaudeEntry>((line) => claudeLine(line).map(keptClaude), (entry) => entry[0], folder ? join(folder, "claude-files") : undefined, 1)
-  return (agents) => agents.flatMap((agent) => {
-    const parsed = parseProvider(agent.providerID)
-    if (parsed?.kind !== "claude" || !agent.conversationRoots) return []
-    const roots = () => agent.conversationRoots!()
-    const source: UsageSource = {
-      provider: agent.providerID,
-      service: "claude",
-      agent: { kind: "claude", account: parsed.id },
-      ...(agent.instance.label ? { label: agent.instance.label } : {}),
-      slots: async (pricing, since) => {
-        const found = new Map<string, Awaited<ReturnType<typeof jsonlFiles>>[number]>()
-        for (const root of roots()) for (const file of await jsonlFiles(root)) found.set(file.path, file)
-        const ordered = [...found.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
-        return claudeSlots(dedupClaude((await files.items(ordered, since)).map(fromKeptClaude)), pricing, since)
-      },
-      files,
-    }
-    return [source]
-  })
+export function placeOf(host: string, folder: string): string {
+  let real = folder
+  try {
+    real = realpathSync(folder)
+  } catch {}
+  return createHash("sha256").update("kuvo-code usage place v1\n").update(host).update("\n").update(real).digest("hex").slice(0, 16)
+}
+
+/**
+ * The `projects` folders an account's Claude Code conversations are in: those it runs with
+ * (`conversationRoots`: an added account's own folder, Kuvo Code's on a machine), and for one that
+ * runs in your own settings folder (a Mac's own sign-in), every folder Claude Code uses as UsageKit
+ * read them: each of a comma-separated `CLAUDE_CONFIG_DIR`, else `$XDG_CONFIG_HOME/claude` (or
+ * `~/.config/claude`) and `~/.claude`.
+ */
+export function claudeRoots(agent: Agent, env: NodeJS.ProcessEnv = process.env, home = homedir()): string[] {
+  const roots = [...(agent.conversationRoots?.() ?? [])]
+  if (!agent.instance.home) {
+    const configured = env.CLAUDE_CONFIG_DIR?.trim()
+    const folders = configured
+      ? configured.split(",").map((part) => part.trim()).filter(Boolean).map((part) => (part.startsWith("~/") ? join(home, part.slice(2)) : part))
+      : [join(env.XDG_CONFIG_HOME?.trim() || join(home, ".config"), "claude"), join(home, ".claude")]
+    for (const folder of folders) roots.push(basename(folder) === "projects" ? folder : join(folder, "projects"))
+  }
+  return [...new Set(roots)]
+}
+
+/**
+ * The Claude Code accounts whose usage is read here, from the folders each runs Claude Code with
+ * (`claudeRoots`). `folder`: where what was read of the logs is kept (`claude-files`, a file a log).
+ * A round that read nothing new, with the same prices, works nothing out again.
+ */
+export function claudeSources(folder?: string, host = hostname()): (agents: Agent[]) => UsageSource[] {
+  const files = new JSONLFiles<KeptClaudeEntry>(
+    (line) => claudeLine(line).map(keptClaude),
+    (entry) => entry[0],
+    folder ? join(folder, "claude-files") : undefined,
+    1,
+    // (The same reply's usage written again for each of its parts: kept once. One without a message ID is always kept.)
+    (entry) => (entry[1] === null ? undefined : JSON.stringify(entry.slice(1))),
+  )
+  const last = new Map<string, { version: number; pricing: Pricing; since: number; listed: string; slots: Slots }>()
+  return (agents) =>
+    agents.flatMap((agent) => {
+      const parsed = parseProvider(agent.providerID)
+      if (parsed?.kind !== "claude" || !agent.conversationRoots) return []
+      const roots = () => claudeRoots(agent)
+      const source: UsageSource = {
+        provider: agent.providerID,
+        service: "claude",
+        agent: { kind: "claude", account: parsed.id },
+        ...(agent.instance.label ? { label: agent.instance.label } : {}),
+        places: () => roots().map((root) => placeOf(host, root)),
+        slots: async (pricing, since) => {
+          const found = new Map<string, Awaited<ReturnType<typeof jsonlFiles>>[number]>()
+          for (const root of roots()) for (const file of await jsonlFiles(root)) found.set(file.path, file)
+          const ordered = [...found.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+          await files.refresh(ordered, since)
+          const listed = createHash("sha256").update(ordered.map((file) => file.path).join("\n")).digest("hex")
+          const before = last.get(agent.providerID)
+          if (before && before.version === files.version && before.pricing === pricing && before.since === since && before.listed === listed) return before.slots
+          const slots = claudeSlots(dedupClaude(files.itemsOf(ordered, since).map(fromKeptClaude)), pricing, since)
+          last.set(agent.providerID, { version: files.version, pricing, since, listed, slots })
+          return slots
+        },
+        files,
+      }
+      return [source]
+    })
 }

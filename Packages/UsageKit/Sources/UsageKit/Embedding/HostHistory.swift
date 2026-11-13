@@ -46,12 +46,17 @@ public final class HostHistory {
     public private(set) var days: [String: [HostHistoryDay]] = [:]
     /// Whether the host has said them since launch (until then, what the cards last had stays).
     private var answered = false
+    /// When the host last said them, and whether it isn't answering now (its days are as of then).
+    public private(set) var asOf: Date?
+    public private(set) var away = false
     /// Has the host's boxes read their logs again now (the panel's Refresh).
     @ObservationIgnored public var refresh: (() -> Void)?
 
     /// `answered`: what the host said (else what it last said, kept from before, while it starts).
-    public func update(days: [String: [HostHistoryDay]], covered: Set<String>, answered: Bool = true) {
-        guard days != self.days || covered != self.covered || answered != self.answered else { return }
+    public func update(days: [String: [HostHistoryDay]], covered: Set<String>, answered: Bool = true, now: Date = .now) {
+        if answered { asOf = now }
+        guard days != self.days || covered != self.covered || answered != self.answered || (answered && away) else { return }
+        if answered { away = false }
         self.answered = answered
         let touched = Set(self.days.keys).union(days.keys).union(self.covered).union(covered)
         self.days = days
@@ -61,6 +66,20 @@ public final class HostHistory {
         // refresh.
         let quiet = touched.filter { HostLimits.limitsOnlyFromHost.contains($0) && HostLimits.shared.covers($0) }
         UsageMenuBar.shared.refresh(providerIDs: quiet.sorted())
+    }
+
+    /// The host stopped answering (its days stay, as of when it last did), or answers again.
+    public func setAway(_ away: Bool) {
+        guard away != self.away else { return }
+        self.away = away
+        let quiet = covered.filter { HostLimits.limitsOnlyFromHost.contains($0) && HostLimits.shared.covers($0) }
+        UsageMenuBar.shared.refresh(providerIDs: quiet.sorted())
+    }
+
+    /// What a covered card's history note adds while the host isn't answering: "as of 14:05".
+    func asOfNote(for providerID: String) -> String? {
+        guard away, let asOf, covered.contains(ProviderAccountID.family(of: providerID)) else { return nil }
+        return "as of \(asOf.formatted(date: Calendar.current.isDateInToday(asOf) ? .omitted : .abbreviated, time: .shortened))"
     }
 
     /// A covered provider's history as the panel's own scan of its logs would have been, or nil for

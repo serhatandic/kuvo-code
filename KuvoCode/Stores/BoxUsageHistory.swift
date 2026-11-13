@@ -37,6 +37,8 @@ final class BoxUsageHistory {
     func connected(api: OpenCodeAPI?) {
         guard let api else { return }
         self.api = api
+        fallback?.cancel()
+        fallback = nil
         read()
     }
 
@@ -46,12 +48,23 @@ final class BoxUsageHistory {
         read()
     }
 
-    /// Its bridge stopped: what it said stays until it's back (it keeps the same).
+    /// Its bridge stopped: what it said stays, as of when it said it, until it's back (it keeps the
+    /// same); one that doesn't come back is let go (`read`'s last try).
     func stopped() {
         reading?.cancel()
         reading = nil
         api = nil
+        HostHistory.shared.setAway(true)
+        // Not back in two minutes: the panel reads the logs here again meanwhile.
+        fallback?.cancel()
+        fallback = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(120))
+            guard !Task.isCancelled, let self, self.api == nil else { return }
+            self.cover([], days: [:])
+        }
     }
+
+    private var fallback: Task<Void, Never>?
 
     /// Has the box read its logs now (the panel's Refresh), and your other computers theirs.
     func refresh() {
@@ -81,7 +94,10 @@ final class BoxUsageHistory {
                     self.read(path, method: method, tries: tries - 1)
                     return
                 }
-                if !Task.isCancelled { log.info("usage history: \(String(describing: error), privacy: .public)") }
+                // Still no answer: the panel reads the logs here again, as it did, until the box answers.
+                guard !Task.isCancelled, let self else { return }
+                log.info("usage history: \(String(describing: error), privacy: .public)")
+                self.cover([], days: [:])
             }
         }
     }

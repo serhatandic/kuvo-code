@@ -104,7 +104,7 @@ describe("one box", () => {
   const now = () => at
   const make = (folder = join(home, "usage")) => {
     const sources = claudeSources(folder)
-    return new Usage(() => sources([agent as unknown as Agent]), new PricingStore(undefined, undefined), () => identity, join(folder, "usage.json"), now)
+    return new Usage(() => sources([agent as unknown as Agent]), new PricingStore(undefined, null), () => identity, join(folder, "usage.json"), now)
   }
   const route = async (usage: Usage, zone?: string, method = "GET", rest: string[] = []) => ((await (await usageRoutes(usage, method, rest, new URLSearchParams(zone ? { zone } : {}))).json()) as any).data
 
@@ -187,7 +187,7 @@ describe("one box", () => {
     identity = undefined
     let agents: Agent[] = [agent as unknown as Agent]
     const sources = claudeSources(join(home, "usage"))
-    const usage = new Usage(() => sources(agents), new PricingStore(undefined, undefined), () => identity, join(home, "usage", "usage.json"), now)
+    const usage = new Usage(() => sources(agents), new PricingStore(undefined, null), () => identity, join(home, "usage", "usage.json"), now)
     await usage.refresh()
     const row = (await route(usage, "UTC")).rows[0]
     expect(row.id).toBe("/claude-code@work")
@@ -240,7 +240,7 @@ describe("prices kept current", () => {
     expect(store.current().resolve("brand-new-model")?.input).toBe(2)
 
     // The next start: what was fetched, without asking.
-    store = new PricingStore(folder, undefined, () => at)
+    store = new PricingStore(folder, null, () => at)
     expect(store.current().resolve("brand-new-model")?.input).toBe(2)
     rmSync(folder, { recursive: true, force: true })
   })
@@ -330,7 +330,7 @@ class PeerBox {
     this.post = new Post(() => relay.posted++)
     this.directory = new LinkDirectory(this.post, still)
     const sources = claudeSources(join(home, "usage"))
-    this.usage = new Usage(() => sources(this.agents), new PricingStore(undefined, undefined), identity, join(home, "usage", "usage.json"), now)
+    this.usage = new Usage(() => sources(this.agents), new PricingStore(undefined, null), identity, join(home, "usage", "usage.json"), now)
     this.peers = new UsagePeers(this.usage, this.post, this.directory, join(home, "usage", "peers.json"), now, most)
     this.parts = { post: this.post, directory: this.directory, usage: this.peers }
     relay.boxes.set(key, this)
@@ -491,6 +491,33 @@ describe("across your computers", () => {
     two.stop()
   })
 
+  test("two boxes on one computer reading one folder count it once; a reply written again for each of its parts is kept once", async () => {
+    const shared = mkdtempSync(join(base, "shared-"))
+    const folder = join(shared, "claude")
+    mkdirSync(join(folder, "projects", "p"), { recursive: true })
+    const line = reply("2026-11-12T09:00:00Z", "s1", "claude-opus-4-5", 100, 0)
+    writeFileSync(join(folder, "projects", "p", "log.jsonl"), line + line + line)
+    const firstHome = mkdtempSync(join(base, "first-"))
+    const secondHome = mkdtempSync(join(base, "second-"))
+    const first = new PeerBox("first-key", "app's box", relay, firstHome, [new TestClaude(firstHome, { id: "default", home: folder })], () => "dddddddddddddddd", now)
+    const second = new PeerBox("second-key", "keeper's box", relay, secondHome, [new TestClaude(secondHome, { id: "default", home: folder })], () => "dddddddddddddddd", now)
+    await first.meet([second])
+    await second.meet([first])
+    await first.usage.refresh()
+    await second.usage.refresh()
+    await relay.settled()
+    for (const box of [first, second]) {
+      const view = box.usage.view("UTC")
+      expect(view.rows.map((row) => [row.id, row.days[0]!.tokens, row.boxes.map((each) => each.same ?? false)])).toEqual([["claude#dddddddddddddddd", 100, [false, true]]])
+      expect(view.totals.claude!.map((day) => day.tokens)).toEqual([100])
+    }
+    // (Its three lines, one reply: one item kept for the log.)
+    const kept = readdirSync(join(firstHome, "usage", "claude-files"))
+    expect(JSON.parse(readFileSync(join(firstHome, "usage", "claude-files", kept[0]!), "utf8")).record.items).toHaveLength(1)
+    first.stop()
+    second.stop()
+  })
+
   test("a box a peer vouches for (another Mac beside a shared machine) shares usage too; a refresh asks the others to read now; a restart keeps what peers said", async () => {
     const aHome = mkdtempSync(join(base, "a-"))
     const bHome = mkdtempSync(join(base, "b-"))
@@ -503,6 +530,9 @@ describe("across your computers", () => {
     await b.usage.refresh()
     await relay.settled()
     expect(a.usage.view("UTC").rows.map((row) => [row.id, row.days[0]!.tokens])).toEqual([["a-key/claude-code", 20], ["b-key/claude-code", 50]])
+    // The Pro may be another person's: its account is a row of its own, in none of the Air's totals.
+    expect(a.usage.view("UTC").rows[1]!.vouched).toBe(true)
+    expect(a.usage.view("UTC").totals.claude!.map((day) => day.tokens)).toEqual([20])
 
     // The Pro's Claude writes more; a refresh on the Air asks it to read now.
     appendFileSync(join(bHome, "accounts", "default", "projects", "p", "log.jsonl"), reply("2026-11-12T11:00:00Z", "b2", "claude-opus-4-5", 5, 0))

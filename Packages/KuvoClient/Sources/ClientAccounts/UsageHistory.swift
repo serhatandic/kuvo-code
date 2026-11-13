@@ -12,8 +12,25 @@ public struct BoxUsage: Decodable, Hashable, Sendable {
     /// When this box last read its own accounts' logs, in ms.
     public var scanned: Double?
     public var rows: [Row]
-    /// Each service's days, every account of it added up.
+    /// Each service's days, every account of it on your own computers added up (not a box a peer
+    /// vouches for: another Mac beside a machine you share may be another person's).
     public var totals: [String: [Day]]
+    /// A service whose totals are short: one of your computers is away (its share as of then), or
+    /// told less than all of it (`cut`: its oldest days).
+    public var partial: [String: Partial]
+
+    public struct Partial: Decodable, Hashable, Sendable {
+        public var away: Bool
+        public var cut: Bool
+
+        private enum CodingKeys: String, CodingKey { case away, cut }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            away = (try? container.decodeIfPresent(Bool.self, forKey: .away)) ?? false
+            cut = (try? container.decodeIfPresent(Bool.self, forKey: .cut)) ?? false
+        }
+    }
 
     public struct Day: Decodable, Hashable, Sendable {
         /// `yyyy-MM-dd` in `zone`.
@@ -83,7 +100,7 @@ public struct BoxUsage: Decodable, Hashable, Sendable {
         }
     }
 
-    private enum CodingKeys: String, CodingKey { case zone, services, scanned, rows, totals }
+    private enum CodingKeys: String, CodingKey { case zone, services, scanned, rows, totals, partial }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -96,6 +113,7 @@ public struct BoxUsage: Decodable, Hashable, Sendable {
             for (service, days) in given { totals[service] = days.items }
         }
         self.totals = totals
+        partial = (try? container.decodeIfPresent([String: Partial].self, forKey: .partial)) ?? [:]
     }
 
     /// Where a box's bridge answers it (with `zone`, the client's time zone, as a query), and reads it again.

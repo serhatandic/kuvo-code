@@ -3742,28 +3742,38 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
 What each account signed in to Kuvo Code used, and what that cost, by the day (#631: OpenUsage's
 history, moving to the box). Each box reads its own accounts' agents' logs on its computer, a
 machine's with the Mac closed too: so far Claude Code's, in the folders Kuvo Code runs it with (an
-account you added: its own folder; a machine: Kuvo Code's; a Mac's own sign-in: your `~/.claude`,
-where Claude Code runs with it: Claude Code's conversations there count whoever ran them, your
-Terminal or Claude's desktop app), never another tool's folders (Cowork's, claude-swap's, Pi's). It prices them as OpenUsage does (its supplement,
+account you added: its own folder; a machine: Kuvo Code's, not your `~/.claude` there; a Mac's own
+sign-in: your Claude Code settings folders, where Claude Code runs with it, as OpenUsage read them,
+each of a comma-separated `CLAUDE_CONFIG_DIR`, else `~/.config/claude` and `~/.claude`: Claude
+Code's conversations there count whoever ran them, your Terminal or Claude's desktop app), never
+another tool's folders (Cowork's, claude-swap's, Pi's). It prices them as OpenUsage does (its supplement,
 LiteLLM's catalog, models.dev's; snapshots ship with the bridge, and each feed is fetched again
 hourly, kept in the bridge's `usage/pricing`): estimates, not your bill. A client reaches them as
 `kuvo/agents/api/kuvo/usage…` (the Mac app at `api/kuvo/usage…` on the bridge itself), where
 `features` has `usage.history`.
 
 - `GET kuvo/agents/api/kuvo/usage?zone=<IANA time zone>` → `{data: {zone, services, scanned?, rows:
-  [row], totals: {<service>: [day]}}}`. The box works out the days in `zone` (the client's, so a
+  [row], totals: {<service>: [day]}, partial?: {<service>: {away?, cut?}}}}`. The box works out the days in `zone` (the client's, so a
   Mac in Istanbul reading a machine in UTC gets its own days); one it doesn't know is its own,
   `zone` says which. `services`: what this box states the usage of (`claude`): a client shows those
   from here, and reads the rest as it did. `scanned`: when this box last read its logs.
   - A `row` is one account across your computers, with the same `id` as its plan limits row
     (`<service>#<identity>`, or `<box key>/<provider>` for one that can't say who it is), so a
     client puts an account's limits and its usage side by side: `{id, service, provider, agent?,
-    account?, label?, identity?, scanned?, boxes, away?, cut?, days}`, `boxes` as limits' rows have them
-    (`{key, name, provider, agent?, account?, label?, scanned?, here?, away?}`). Its `days` are the
-    **sum** of every box's own (each box reads only its own logs). A conversation moved to another
+    account?, label?, identity?, scanned?, boxes, away?, cut?, vouched?, days}`, `boxes` as limits'
+    rows have them (`{key, name, provider, agent?, account?, label?, scanned?, here?, away?,
+    vouched?, same?}`): `vouched`, a box a peer vouches for (another Mac beside a machine you
+    share), not one of your computers, and the row `vouched` when all of them are; `same`, a box
+    that reads a folder another of them already does (two boxes on one computer), not added again.
+    Its `days` are the **sum** of every box's own (each box reads only its own logs), each folder
+    once. A conversation moved to another
     computer (`kuvo/moves`) is copied there, and the one it left keeps its copy for a while: its
     past use counts on both meanwhile.
-  - `totals`: each service's days, every row of it added up: what the Mac's Claude card shows.
+  - `totals`: each service's days, the accounts on your own computers added up (this box and its
+    peers, not a box a peer vouches for, whose accounts may be another person's: their rows show,
+    in no total), each folder once: what the Mac's Claude card shows. `partial`: a service whose
+    totals are short, `away` (one of your computers isn't answering: its share is as of then) or
+    `cut` (one told less than all: its oldest days).
   - A `day`: `{date, tokens, cost, models: [{model, tokens, cost}], unknown?}`, newest first, for
     today and the 30 days before it in `zone`; `date` is `yyyy-MM-dd`, `cost` US dollars,
     `models` by name; `unknown`, models used that day that couldn't be priced, which count
@@ -3800,8 +3810,9 @@ hourly, kept in the bridge's `usage/pricing`): estimates, not your bill. A clien
   `provider`, `service`, `agent`, `account`, `label`, `identity`, `cut` and slots as kept); a
   receiver whose own, put together, isn't that asks for all of it (`ask`, at most once a minute),
   and is answered at once. Each account is `{provider, service, agent?, account?, label?,
-  identity?, scanned?, cut?, whole, slots: {models, used: [[slot, model, tokens, dollars]],
-  unknown?: [[slot, model]]}}`: `slot`, quarter hours since 1970 (UTC), `model`, an index into
+  identity?, scanned?, cut?, whole, places?, slots: {models, used: [[slot, model, tokens,
+  dollars]], unknown?: [[slot, model]]}}`: `places`, the folders its logs are in, each 16 hex
+  characters of a hash of its computer's name and the folder's real path (never the path); `slot`, quarter hours since 1970 (UTC), `model`, an index into
   `models`, `tokens` a whole number; `whole`, the first slot the sender has all of (a UTC midnight
   35 days back, or past what it cut): the receiver keeps none older. Told as the receiver keeps it
   (`label` 100 characters, `provider` and model names 200), so the digests agree. As many as fit in

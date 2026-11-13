@@ -412,6 +412,9 @@ const withoutAgents = given => String(given).split(path.delimiter).filter(Boolea
 if (process.env.PATH) process.env.PATH = withoutAgents(process.env.PATH);
 // And the bridge a test starts looks for them only on that PATH (agents/proc.ts).
 process.env.KUVO_TEST_PATH_ONLY = "1";
+// Nor does a bridge a test starts fetch models' prices from the web (its usage history prices with
+// what it ships).
+process.env.KUVO_TEST_PRICE_FEEDS = "off";
 
 /**
  * The environment a test hands what it starts, as this run's own is: its PATH without the agents'

@@ -345,9 +345,11 @@ final class ClaudeProvider: ProviderRuntime {
         // Cancellation can land between the native and pi scans. Treat the pair as one unit so a
         // partial result cannot replace the last-good combined history in WidgetDataStore.
         if !Task.isCancelled, let scan = DailyUsageAccumulator.merged([nativeScan, piScan]) {
-            let note = piScan == nil
+            var note = piScan == nil
                 ? "From your Claude usage history (estimated)"
                 : "From your Claude usage history and pi (estimated)"
+            // (The host's, while it isn't answering: as of when it last did.)
+            if let asOf = HostHistory.shared.asOfNote(for: provider.id) { note += ", \(asOf)" }
             usageHistory = ProviderUsageHistory(
                 series: scan.series,
                 modelUsage: scan.modelUsage,

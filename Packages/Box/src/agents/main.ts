@@ -289,10 +289,13 @@ const limits = new Limits(() => [...agentAccounts(roster.all()), ...engineAccoun
 limits.alsoServices = ENGINE_SERVICES
 // Shared with your other computers' boxes: each account read once across them, and listed on each.
 peers.limits = new LimitsPeers(limits, post, directory, join(home, "limits-peers.json"))
-// What each account used, by the hour, from its agent's logs here, priced; shared the same way.
+// What each account used, by the quarter hour, from its agent's logs here, priced; shared the same
+// way. (Tests never fetch the price feeds: KUVO_TEST_PRICE_FEEDS=off, test-safety.js.)
+const noPriceFeeds = process.env.KUVO_TEST_PRICE_FEEDS === "off"
+delete process.env.KUVO_TEST_PRICE_FEEDS
 const usageFolder = join(home, "usage")
 const claudeUsage = claudeSources(usageFolder)
-const usage = new Usage(() => claudeUsage(roster.all()), new PricingStore(join(usageFolder, "pricing")), (provider) => limits.identity(provider), join(usageFolder, "usage.json"))
+const usage = new Usage(() => claudeUsage(roster.all()), new PricingStore(join(usageFolder, "pricing"), noPriceFeeds ? null : undefined), (provider) => limits.identity(provider), join(usageFolder, "usage.json"))
 peers.usage = new UsagePeers(usage, post, directory, join(usageFolder, "peers.json"))
 
 // What every conversation here makes, recorded as it's made: the engine's and this bridge's own.
