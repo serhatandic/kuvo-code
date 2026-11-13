@@ -50,30 +50,69 @@ public enum BoxHelperBundle {
         return code
     }
 
+    /// Who signed a program: a team (Developer ID), or no one (ad hoc, a contributor's build).
+    public enum Signer: Equatable, Sendable {
+        case team(String)
+        case adHoc
+
+        /// This running program's, or nil when that can't be told (its signing can't be read, or
+        /// it's signed by no team without being ad hoc): then nothing is taken for genuine.
+        public static var ofThisProgram: Signer? {
+            if let team = BoxHelperBundle.team() { return .team(team) }
+            var running: SecCode?
+            var code: SecStaticCode?
+            var information: CFDictionary?
+            guard SecCodeCopySelf([], &running) == errSecSuccess, let running, SecCodeCopyStaticCode(running, [], &code) == errSecSuccess, let code,
+                  SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &information) == errSecSuccess,
+                  let flags = (information as? [String: Any])?[kSecCodeInfoFlags as String] as? UInt32 else { return nil }
+            return flags & SecCodeSignatureFlags.adhoc.rawValue != 0 ? .adHoc : nil
+        }
+    }
+
     /// Whether the bundle at `url` is the program `identifier` names, its signature whole and made by
-    /// the team that signed this running program (`team`; a build signed ad hoc, by no team, only
-    /// whole and named so).
-    public static func isGenuine(_ url: URL, identifier: String, team: String? = BoxHelperBundle.team()) -> Bool {
-        guard identifier.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" }),
+    /// the team that signed this running program (`signer`). For a build signed ad hoc there's no
+    /// team to go by (anything can be signed ad hoc with any identifier): only what the caller proved
+    /// is this very build's (`adHocMatch`) passes, else nothing.
+    public static func isGenuine(_ url: URL, identifier: String, signer: Signer? = .ofThisProgram, adHocMatch: Bool = false) -> Bool {
+        guard let signer, identifier.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" }),
               Bundle(url: url)?.bundleIdentifier == identifier, let code = staticCode(url) else { return false }
         var text = "identifier \"\(identifier)\""
-        if let team {
+        switch signer {
+        case .team(let team):
             guard team.allSatisfy({ $0.isLetter || $0.isNumber }) else { return false }
             text += " and anchor apple generic and certificate leaf[subject.OU] = \"\(team)\""
+        case .adHoc:
+            guard adHocMatch else { return false }
         }
         var requirement: SecRequirement?
         guard SecRequirementCreateWithString(text as CFString, [], &requirement) == errSecSuccess, let requirement else { return false }
         return SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: kSecCSCheckAllArchitectures | kSecCSCheckNestedCode | kSecCSStrictValidate), requirement) == errSecSuccess
     }
 
+    /// Kuvo Code itself at `url`, as the helper running now trusts it: signed by its team, or, for an
+    /// ad hoc build, one carrying this very helper.
+    public static func isKuvoCode(_ url: URL, identifier: String) -> Bool {
+        isGenuine(url, identifier: identifier, adHocMatch: CodeSeal.isSealed(bundled(in: url)))
+    }
+
+    /// The code directory's hash of the code at `url` (what a `cdhash` requirement names).
+    static func cdhash(_ url: URL) -> Data? {
+        guard let code = staticCode(url) else { return nil }
+        var information: CFDictionary?
+        guard SecCodeCopySigningInformation(code, [], &information) == errSecSuccess else { return nil }
+        return (information as? [String: Any])?[kSecCodeInfoUnique as String] as? Data
+    }
+
     /// Why the helper installed in `home` won't be opened: missing, or not Kuvo Code Box as the app
     /// asking (`app`, its bundle ID) carries it. Nil: it's well.
-    public static func trouble(installedIn home: URL, app: String) -> String? {
+    public static func trouble(installedIn home: URL, app: String, signer: Signer? = .ofThisProgram, carrier: URL = Bundle.main.bundleURL) -> String? {
         let bundle = installed(in: home)
         guard FileManager.default.fileExists(atPath: executable(of: bundle).path(percentEncoded: false)) else {
             return "\(name) isn’t in this Mac’s box. Open Kuvo Code again to put it back."
         }
-        guard isGenuine(bundle, identifier: helperID(ofApp: app)) else {
+        // (Ad hoc: the very one the app running now carries.)
+        let carried = cdhash(bundled(in: carrier))
+        guard isGenuine(bundle, identifier: helperID(ofApp: app), signer: signer, adHocMatch: carried != nil && cdhash(bundle) == carried) else {
             return "\(name) in this Mac’s box was changed since it was installed, so it didn’t start. Open Kuvo Code again to put it back."
         }
         return nil
@@ -85,8 +124,8 @@ public enum BoxHelperBundle {
     /// for the box to run while Login Items doesn't start it: never started as the app's child,
     /// which would make the app what macOS asks about, and leave it without its Keychain. One that
     /// runs already stays (it holds the box's lock). Checked first (`trouble`).
-    public static func open(home: URL, app: String, opener: String = "/usr/bin/open") async throws {
-        if let trouble = trouble(installedIn: home, app: app) { throw Refused(trouble) }
+    public static func open(home: URL, app: String, opener: String = "/usr/bin/open", signer: Signer? = .ofThisProgram, carrier: URL = Bundle.main.bundleURL) async throws {
+        if let trouble = trouble(installedIn: home, app: app, signer: signer, carrier: carrier) { throw Refused(trouble) }
         let result = try await ChildProcess.run(opener, ["-g", "-j", "-n", installed(in: home).path(percentEncoded: false), "--args", "keep", "--home", home.path(percentEncoded: false)],
                                                 output: .discard, errors: .collect, limit: .seconds(20), cancellable: false)
         guard result.succeeded else {

@@ -96,7 +96,7 @@ public final class BoxHelper {
                 case "uncopy":
                     try move.uncopy()
                 case "back":
-                    guard let appBundle, appBundle.hasPrefix("/"), BoxHelperBundle.isGenuine(URL(filePath: appBundle), identifier: app) else {
+                    guard let appBundle, appBundle.hasPrefix("/"), BoxHelperBundle.isKuvoCode(URL(filePath: appBundle), identifier: app) else {
                         fail("Moving back needs Kuvo Code itself: --app <its bundle>.")
                     }
                     try move.back(trusting: URL(filePath: appBundle))
@@ -150,10 +150,61 @@ public final class BoxHelper {
             // (Exiting cleanly: launchd doesn't start it again and again.)
             exit(0)
         }
+        // Nor while a move of the box is unfinished, or its keys are half moved: the old box may
+        // start too, with the same keys (two boxes as one), and the app's keeper finishes it.
+        if let why = unsettled(home: home, keychain: keychain, prefix: prefix, app: app) {
+            try? PrivateFile.write(Data(why.utf8), to: run.appending(path: "helper-trouble"))
+            log.notice("\(why, privacy: .public)")
+            exit(0)
+        }
+        // Its keeper names its box from HOME (`K="$HOME/<name>"`): only one that names this very
+        // box, run with HOME the folder around it, so another box is never what runs.
+        guard ownKeeper(of: home) else {
+            let why = "This Mac’s box’s keeper isn’t its own, so \(BoxHelperBundle.name) didn’t start it."
+            try? PrivateFile.write(Data(why.utf8), to: run.appending(path: "helper-trouble"))
+            log.error("\(why, privacy: .public)")
+            exit(0)
+        }
         try? FileManager.default.removeItem(at: run.appending(path: "helper-trouble"))
-        let helper = BoxHelper(home: home, host: BoxHelperHost(home: home, keychain: keychain, prefix: prefix, app: app),
-                               environment: childEnvironment(ProcessInfo.processInfo.environment))
+        var environment = childEnvironment(ProcessInfo.processInfo.environment)
+        environment["HOME"] = home.deletingLastPathComponent().path(percentEncoded: false)
+        let helper = BoxHelper(home: home, host: BoxHelperHost(home: home, keychain: keychain, prefix: prefix, app: app), environment: environment)
         helper.begin()
+    }
+
+    /// Why the box shouldn't run now, or nil: a move of it under way (its journal not done), or its
+    /// keys copied by a move that hasn't finished (`copying`, `returning`; `copied` before the move
+    /// cleared the old place).
+    nonisolated static func unsettled(home: URL, keychain: HostKeychain, prefix: String, app: String) -> String? {
+        let folder = home.appending(path: "updates/rehome")
+        func object(_ name: String) -> [String: Any]? {
+            guard let data = try? Data(contentsOf: folder.appending(path: name)) else { return nil }
+            return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? ["unreadable": true]
+        }
+        if let journal = object("journal.json"), journal["step"] as? String != "done" {
+            return "This Mac’s box is moving: Kuvo Code Box starts it once the move’s finished."
+        }
+        let journal: KeychainMove.Journal?
+        do {
+            journal = try KeychainMove(keychain: keychain, home: home, app: app, helper: prefix).journal()
+        } catch {
+            return error.localizedDescription
+        }
+        guard let journal else { return nil }
+        let state = object("state.json")
+        let moved = state?["state"] as? String == "done" && state?["way"] as? String == "move"
+        switch journal.state {
+        case .settled: return nil
+        case .copied, .settling: return moved ? nil : "This Mac’s box’s keys are copied for a move that didn’t finish: Kuvo Code finishes it."
+        case .copying, .returning: return "This Mac’s box’s keys are moving: Kuvo Code finishes that first."
+        }
+    }
+
+    /// Whether the box's keeper names this very box (`K="$HOME/<its folder's name>"`).
+    nonisolated static func ownKeeper(of home: URL) -> Bool {
+        guard let text = try? String(contentsOf: home.appending(path: "bin/kuvo-start"), encoding: .utf8),
+              let named = text.firstMatch(of: /(?m)^K="\$HOME\/([^"\/]+)"/)?.1 else { return false }
+        return String(named) == home.lastPathComponent
     }
 
     /// What its children start with: a shell's few, from its own (launchd's, or a test's).
@@ -220,8 +271,8 @@ public final class BoxHelper {
 
     private func startServe() {
         guard !finishing else { return }
-        let fileKey = host.vaultFileKey()
-        serveLacksFileKey = fileKey == nil
+        let (fileKey, retry) = host.vaultFileKey()
+        serveLacksFileKey = fileKey == nil && retry
         var secrets = ["password": HostProof.secret(), "hostVaultSecret": host.vaultSecret]
         if let fileKey { secrets["vaultFileKey"] = fileKey }
         let first = ((try? JSONSerialization.data(withJSONObject: secrets)) ?? Data()) + Data("\n".utf8)
@@ -252,7 +303,7 @@ public final class BoxHelper {
     private func look() async {
         while !finishing, !Task.isCancelled {
             noteAsking(asking())
-            if serveLacksFileKey, let serve, serve.isRunning, host.vaultFileKey() != nil {
+            if serveLacksFileKey, let serve, serve.isRunning, host.vaultFileKey().key != nil {
                 log.info("The vault's key can be read now: the box's server starts again with it")
                 serve.terminate()
             }
@@ -305,8 +356,13 @@ final class Child {
     private var input: Int32 = -1
     private var source: DispatchSourceProcess?
     let started = ContinuousClock.now
+    /// When it ended (its run, not the wait before the next).
+    private(set) var endedAt: ContinuousClock.Instant?
     /// How many times in a row it ended soon after it started.
     var failures = 0
+
+    /// Whether it ran under ten minutes before it ended.
+    var endedSoon: Bool { endedAt.map { started.duration(to: $0) < .seconds(600) } ?? false }
 
     private init(pid: pid_t) {
         self.pid = pid
@@ -358,7 +414,7 @@ final class Child {
         }
         let child = Child(pid: pid)
         // (The one before it ended soon after it started: one more in a row.)
-        if let previous { child.failures = previous.started.duration(to: .now) < .seconds(600) ? previous.failures + 1 : 0 }
+        if let previous { child.failures = previous.endedSoon ? previous.failures + 1 : 0 }
         if let input {
             _ = fcntl(pipe[1], F_SETFD, FD_CLOEXEC)
             input.withUnsafeBytes { _ = Darwin.write(pipe[1], $0.baseAddress, $0.count) }
@@ -372,6 +428,7 @@ final class Child {
                 guard waitpid(child.pid, &status, WNOHANG) == child.pid else { return }
                 child.status = status
                 child.isRunning = false
+            child.endedAt = .now
                 child.closeInput()
                 child.source?.cancel()
                 child.source = nil
@@ -385,6 +442,7 @@ final class Child {
         if waitpid(pid, &status, WNOHANG) == pid {
             child.status = status
             child.isRunning = false
+            child.endedAt = .now
             child.closeInput()
             source.cancel()
             child.source = nil
@@ -396,8 +454,7 @@ final class Child {
     /// How long before it's started again: none the first time it ends after running a while, then
     /// longer for each time in a row it ended soon after it started, up to ten minutes.
     func nextWait() -> Int {
-        let ranLong = started.duration(to: .now) >= .seconds(600)
-        let tries = ranLong ? 0 : failures + 1
+        let tries = endedSoon ? failures + 1 : 0
         return [1, 2, 5, 15, 30, 60, 120, 300, 600][min(tries, 8)]
     }
 

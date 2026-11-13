@@ -143,14 +143,26 @@ public final class BoxHelperHost {
     }
 
     /// The key the box signs its vault's files with, for `serve`'s stdin: made the first time only.
-    public func vaultFileKey() -> String? {
+    /// `retry`: the Keychain couldn't be read now (locked), so it's worth asking again; one that's
+    /// missing for good isn't.
+    public func vaultFileKey() -> (key: String?, retry: Bool) {
+        adoptBareFileKey()
         let kept = keep("vault", "files", label: "Kuvo Code vault",
                         valid: { (try? JSONDecoder().decode(VaultFiles.self, from: $0)) != nil },
                         make: { (try? JSONEncoder().encode(VaultFiles(key: Data((0..<32).map { _ in UInt8.random(in: 0...255) }).base64URLText))) ?? Data() })
         switch kept {
-        case .found(let data), .made(let data): return (try? JSONDecoder().decode(VaultFiles.self, from: data))?.key
-        case .missing, .refused: return nil
+        case .found(let data), .made(let data): return ((try? JSONDecoder().decode(VaultFiles.self, from: data))?.key, false)
+        case .missing: return (nil, false)
+        case .refused: return (nil, true)
         }
+    }
+
+    /// The key alone, as a build from before the generations kept it (32 bytes): kept with its
+    /// generations from now on, as the app does (`VaultValues`), its files' own taken once.
+    private func adoptBareFileKey() {
+        guard let data = keychain.read("\(prefix).vault", "files").data, data.count == 32,
+              (try? JSONDecoder().decode(VaultFiles.self, from: data)) == nil else { return }
+        _ = keepFiles(VaultFiles(key: data.base64URLText, adopt: true))
     }
 
     // MARK: Answers
@@ -264,11 +276,14 @@ public final class BoxHelperHost {
     }
 
     /// Kuvo Code at `bundle`, opened in the background for its box's browser (the box decides when,
-    /// PROTOCOL.md, `app/open`): only Kuvo Code, signed by this helper's team. 410 when it isn't
-    /// there, 403 for another app, 502 with why it couldn't be opened.
+    /// PROTOCOL.md, `app/open`): any copy of Kuvo Code signed by this helper's team (the box names
+    /// the one that registered with it; an ad hoc build, only one carrying this very helper), and
+    /// one running already is left as it is (opening it again would bring its window up). 410 when
+    /// it isn't there, 403 for another app, 502 with why it couldn't be opened.
     func openApp(_ bundle: URL) async -> HTTPResponse {
         guard FileManager.default.fileExists(atPath: bundle.path(percentEncoded: false)) else { return Self.said(410, "It isn’t there any more.") }
-        guard BoxHelperBundle.isGenuine(bundle, identifier: app) else { return Self.said(403, "That isn’t Kuvo Code.") }
+        guard BoxHelperBundle.isKuvoCode(bundle, identifier: app) else { return Self.said(403, "That isn’t Kuvo Code.") }
+        if let executable = Bundle(url: bundle)?.executableURL, RunningApp.runs(executable) { return .json([:]) }
         do {
             let result = try await ChildProcess.run(opener, ["-g", "-j", "-a", bundle.path(percentEncoded: false), "--args", "--in-background"],
                                                     output: .discard, errors: .collect, limit: .seconds(20), cancellable: false)

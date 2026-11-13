@@ -152,11 +152,17 @@ import Testing
 
     /// What the app keeps today, as it makes them: its link's keys, an integration's key, a vault
     /// item and the vault's file key, each trusting the app (here, this test's process).
+    static let linkKey = Curve25519.KeyAgreement.PrivateKey().rawRepresentation
+    static let relaySecret = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
+    static let signingKey = Curve25519.Signing.PrivateKey().rawRepresentation
+
     private func addOriginals() {
+        for (account, value) in [("key", Self.linkKey), ("secret", Self.relaySecret), ("sign", Self.signingKey)] {
+            #expect(keychain.add("\(Self.app).phone-link", account, value, label: "Kuvo Code phone link") == errSecSuccess)
+        }
         let items: [(String, String, String)] = [
-            ("phone-link", "key", "k"), ("phone-link", "secret", "s"), ("phone-link", "sign", "g"),
             ("integrations", "KUVO_KEY_GITHUB_TOKEN", "ghp_trial4"), ("vault", "v_abcdefghij", #"{"password":"hunter2"}"#),
-            ("vault", "files", #"{"key":"filekey"}"#),
+            ("vault", "files", #"{"key":"filekey","generations":{}}"#),
         ]
         for (service, account, value) in items {
             #expect(keychain.add("\(Self.app).\(service)", account, Data(value.utf8), label: "Kuvo Code \(service)") == errSecSuccess)
@@ -189,8 +195,19 @@ import Testing
         try FileManager.default.createDirectory(at: installed.deletingLastPathComponent(), withIntermediateDirectories: true)
         #expect(try Self.ran("/usr/bin/ditto", [helperInApp.path, installed.path]).status == 0)
         #expect(try helper(["keys", "check"], bundle: installed).status == 0)
-        // Asked again (a keeper started again): nothing more is made.
-        #expect(try move.copy(trusting: helperInApp) == 6)
+        // Asked again before its copies were taken away (a move that went back, its `uncopy` not
+        // run): refused, never taken for the app's keys as they are now.
+        #expect(throws: KeychainMove.Failure.self) { try move.copy(trusting: helperInApp) }
+    }
+
+    @Test func itemsAlreadyUnderTheHelpersNamesAreNeverTakenForCopies() throws {
+        defer { cleanUp() }
+        addOriginals()
+        // Left by an earlier box (removed, or set aside), with an older value.
+        #expect(keychain.add("\(Self.helperID).integrations", "KUVO_KEY_GITHUB_TOKEN", Data("ghp_old".utf8), label: nil, trusting: [helperInApp]) == errSecSuccess)
+        #expect(throws: KeychainMove.Failure.leftovers("integrations/KUVO_KEY_GITHUB_TOKEN")) { try move.copy(trusting: helperInApp) }
+        #expect(try move.journal() == nil, "nothing journaled, nothing made")
+        #expect(keychain.items("\(Self.helperID).phone-link") == [])
     }
 
     @Test func aMoveThatWentBackTakesTheCopiesAwayAndLeavesTheOriginals() throws {
@@ -204,7 +221,7 @@ import Testing
         for service in KeychainMove.services {
             #expect(keychain.items("\(Self.helperID).\(service)") == [], "no copy left in \(service)")
         }
-        #expect(keychain.read("\(Self.app).phone-link", "key") == .found(Data("k".utf8)))
+        #expect(keychain.read("\(Self.app).phone-link", "key") == .found(Self.linkKey))
         #expect(keychain.items("\(Self.app).vault")?.count == 2)
         #expect(try move.journal() == nil)
     }
@@ -219,9 +236,35 @@ import Testing
         try move.write(journal)
         #expect(throws: KeychainMove.Failure.self) { try move.deleteOriginals() }
         #expect(keychain.exists("\(Self.app).phone-link", "key") == true, "the originals stay while the copies may not all be there")
+        // Resumed, it makes what's missing, taking only what it listed for made.
+        #expect(try move.copy(trusting: helperInApp) == 6)
+        #expect(try move.journal()?.state == .copied)
         #expect(try helper(["keys", "uncopy"]).status == 0)
         #expect(keychain.items("\(Self.helperID).phone-link") == [])
         #expect(keychain.exists("\(Self.app).phone-link", "key") == true)
+    }
+
+    @Test func aCopyWhoseOriginalIsGoneIsNeverTakenAway() throws {
+        defer { cleanUp() }
+        addOriginals()
+        try move.copy(trusting: helperInApp)
+        // The originals' deletion cut off after its first (the journal says so before it begins).
+        var journal = try #require(try move.journal())
+        journal.state = .settling
+        try move.write(journal)
+        #expect(keychain.delete("\(Self.app).phone-link", "key") == errSecSuccess)
+        #expect(try helper(["keys", "uncopy"]).status != 0, "a move past the point of going back keeps its copies")
+        // And had the journal still said `copied`: the copy whose original is gone stays.
+        journal.state = .copied
+        try move.write(journal)
+        #expect(try helper(["keys", "uncopy"]).status != 0)
+        #expect(keychain.exists("\(Self.helperID).phone-link", "key") == true, "the box's only link key")
+        // The deletion finishes forward.
+        journal.state = .settling
+        try move.write(journal)
+        try move.deleteOriginals()
+        #expect(try move.journal()?.state == .settled)
+        #expect(keychain.items("\(Self.app).integrations") == [])
     }
 
     @Test func theOriginalsGoOnlyOnceTheMoveIsDoneAndTheirCopiesAreThere() throws {
@@ -278,7 +321,8 @@ import Testing
         try write(box.appending(path: "box/kind"), "mac\n")
         let script = """
         #!/bin/sh
-        R="$HOME/\(RemoteEngineInstaller.root)/run"
+        K="$HOME/\(RemoteEngineInstaller.root)"
+        R="$K/run"
         case "$1" in
         keep)
           echo $$ >"$R/box.pid"
@@ -428,6 +472,66 @@ import Testing
         #expect(keychain.items("\(Self.helperID).vault") == [])
     }
 
+    @Test func afterTheMoveTheHelperReadsAndChangesTheKeysTheAppHad() async throws {
+        try standIns()
+        addOriginals()
+        try move.copy(trusting: helperInApp)
+        try move.deleteOriginals()
+        let helper = try keeping()
+        defer { cleanUp([helper]) }
+        let hostFile = run.appending(path: "host.json"), stdin = home.appending(path: "serve.stdin")
+        until { FileManager.default.fileExists(atPath: hostFile.path) && !text(stdin).isEmpty }
+        let host = json(hostFile)
+        let vaultSecret = try #require((try JSONSerialization.jsonObject(with: Data(text(stdin).utf8)) as? [String: String])?["hostVaultSecret"])
+        // The vault's file key the app kept, given to the box as it was.
+        #expect(text(stdin).contains(#""vaultFileKey":"filekey""#))
+        // Its copies, read and changed through the helper (their list names it alone).
+        #expect(try await post(host, "/keys/get", ["name": "KUVO_KEY_GITHUB_TOKEN"]).json["value"] as? String == "ghp_trial4")
+        #expect(try await post(host, "/keys/set", ["name": "KUVO_KEY_GITHUB_TOKEN", "value": "ghp_rotated"]).status == 200)
+        #expect(try await post(host, "/keys/get", ["name": "KUVO_KEY_GITHUB_TOKEN"]).json["value"] as? String == "ghp_rotated")
+        #expect(try await post(host, "/vault/get", ["id": "v_abcdefghij"], vault: vaultSecret).json["values"] as? [String: String] == ["password": "hunter2"])
+        #expect(try await post(host, "/vault/set", ["id": "v_abcdefghij", "values": ["password": "rotated"]], vault: vaultSecret).status == 200)
+        #expect(try await post(host, "/vault/get", ["id": "v_abcdefghij"], vault: vaultSecret).json["values"] as? [String: String] == ["password": "rotated"])
+        #expect(try await post(host, "/vault/generations", ["file": "items", "generation": 3], vault: vaultSecret).json["generations"] as? [String: Int] == ["items": 3])
+        // Its link keys, as the app had them: the same box to every phone and computer.
+        #expect(try await post(host, "/link/identity", [:]).json as? [String: String] == [
+            "key": Self.linkKey.base64URLText, "secret": Self.relaySecret.base64URLText, "sign": Self.signingKey.base64URLText,
+        ])
+        // What the box let go of, from its trash only, to the Finder's Trash (a test's own folder
+        // elsewhere stays where it is).
+        let outside = folder.appending(path: "outside")
+        try write(outside.appending(path: "x"), "x")
+        #expect(try await post(host, "/trash", ["path": outside.path]).status == 200)
+        #expect(FileManager.default.fileExists(atPath: outside.path))
+    }
+
+    @Test func itStartsNoBoxWhileAMoveIsUnfinished() throws {
+        try standIns()
+        defer { cleanUp() }
+        // The move's journal, part way.
+        try write(box.appending(path: "updates/rehome/journal.json"), #"{"v":1,"step":"clone"}"#)
+        #expect(try helper(["keep"]).status == 0)
+        #expect(text(run.appending(path: "helper-trouble")).contains("is moving"))
+        #expect(!FileManager.default.fileExists(atPath: run.appending(path: "box.pid").path))
+        // Done, but its keys copied for a move that went back (the old box may run with them).
+        try write(box.appending(path: "updates/rehome/journal.json"), #"{"v":1,"step":"done"}"#)
+        addOriginals()
+        try move.copy(trusting: helperInApp)
+        #expect(try helper(["keep"]).status == 0)
+        #expect(text(run.appending(path: "helper-trouble")).contains("didn’t finish"))
+        #expect(!FileManager.default.fileExists(atPath: home.appending(path: "serve.stdin").path))
+    }
+
+    @Test func itStartsNoKeeperThatNamesAnotherBox() throws {
+        try standIns()
+        defer { cleanUp() }
+        let script = text(box.appending(path: "bin/kuvo-start")).replacingOccurrences(of: "K=\"$HOME/\(RemoteEngineInstaller.root)\"", with: "K=\"$HOME/.kuvo-code-elsewhere\"")
+        try write(box.appending(path: "bin/kuvo-start"), script, executable: true)
+        #expect(try helper(["keep"]).status == 0)
+        #expect(text(run.appending(path: "helper-trouble")).contains("isn’t its own"))
+        #expect(!FileManager.default.fileExists(atPath: run.appending(path: "box.pid").path))
+    }
+
     @Test func aBoxTurnedOffTakesItsHelperWithIt() throws {
         try standIns()
         let helper = try keeping()
@@ -480,9 +584,11 @@ import Testing
         #expect(signature.errors.contains("Identifier=\(Self.helperID)"))
         #expect(signature.errors.contains("runtime"), "the hardened runtime, as notarizing asks")
         #expect(signature.output.contains("com.apple.security.personal-information.calendars"))
-        #expect(BoxHelperBundle.isGenuine(helperInApp, identifier: Self.helperID, team: nil))
-        #expect(!BoxHelperBundle.isGenuine(helperInApp, identifier: "run.kuvo.code.trial4.other", team: nil))
-        #expect(!BoxHelperBundle.isGenuine(helperInApp, identifier: Self.helperID, team: "ABCDE12345"), "another team's isn't")
+        #expect(BoxHelperBundle.isGenuine(helperInApp, identifier: Self.helperID, signer: .adHoc, adHocMatch: true))
+        #expect(!BoxHelperBundle.isGenuine(helperInApp, identifier: Self.helperID, signer: .adHoc), "ad hoc, only what's proved this very build")
+        #expect(!BoxHelperBundle.isGenuine(helperInApp, identifier: Self.helperID, signer: nil), "nothing when who signed this can't be told")
+        #expect(!BoxHelperBundle.isGenuine(helperInApp, identifier: "run.kuvo.code.trial4.other", signer: .adHoc, adHocMatch: true))
+        #expect(!BoxHelperBundle.isGenuine(helperInApp, identifier: Self.helperID, signer: .team("ABCDE12345")), "another team's isn't")
     }
 
     @Test func theAppOpensTheHelperInstalledInTheBoxAsItsOwnProgram() async throws {
@@ -490,19 +596,19 @@ import Testing
         let opener = folder.appending(path: "open")
         try write(opener, "#!/bin/sh\nprintf '%s\\n' \"$@\" >\"\(folder.path)/opened\"\n", executable: true)
         // Not installed yet: said, nothing opened.
-        await #expect(throws: BoxHelperBundle.Refused.self) { try await BoxHelperBundle.open(home: box, app: Self.app, opener: opener.path) }
-        #expect(BoxHelperBundle.trouble(installedIn: box, app: Self.app)?.contains("isn’t in this Mac’s box") == true)
+        await #expect(throws: BoxHelperBundle.Refused.self) { try await BoxHelperBundle.open(home: box, app: Self.app, opener: opener.path, signer: .adHoc, carrier: appBundle) }
+        #expect(BoxHelperBundle.trouble(installedIn: box, app: Self.app, signer: .adHoc, carrier: appBundle)?.contains("isn’t in this Mac’s box") == true)
         let installed = BoxHelperBundle.installed(in: box)
         try FileManager.default.createDirectory(at: installed.deletingLastPathComponent(), withIntermediateDirectories: true)
         #expect(try Self.ran("/usr/bin/ditto", [helperInApp.path, installed.path]).status == 0)
-        #expect(BoxHelperBundle.trouble(installedIn: box, app: Self.app) == nil)
-        try await BoxHelperBundle.open(home: box, app: Self.app, opener: opener.path)
+        #expect(BoxHelperBundle.trouble(installedIn: box, app: Self.app, signer: .adHoc, carrier: appBundle) == nil)
+        try await BoxHelperBundle.open(home: box, app: Self.app, opener: opener.path, signer: .adHoc, carrier: appBundle)
         #expect(text(folder.appending(path: "opened")).split(separator: "\n") == ["-g", "-j", "-n", Substring(installed.path), "--args", "keep", "--home", Substring(box.path)])
         // Changed since it was signed: not opened.
         try FileManager.default.removeItem(at: folder.appending(path: "opened"))
         try write(installed.appending(path: "Contents/Resources/extra"), "changed")
-        #expect(BoxHelperBundle.trouble(installedIn: box, app: Self.app)?.contains("was changed") == true)
-        await #expect(throws: BoxHelperBundle.Refused.self) { try await BoxHelperBundle.open(home: box, app: Self.app, opener: opener.path) }
+        #expect(BoxHelperBundle.trouble(installedIn: box, app: Self.app, signer: .adHoc, carrier: appBundle)?.contains("was changed") == true)
+        await #expect(throws: BoxHelperBundle.Refused.self) { try await BoxHelperBundle.open(home: box, app: Self.app, opener: opener.path, signer: .adHoc, carrier: appBundle) }
         #expect(!FileManager.default.fileExists(atPath: folder.appending(path: "opened").path))
     }
 }
