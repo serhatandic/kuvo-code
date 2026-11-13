@@ -142,12 +142,23 @@ const stamp = (date: Date) => date.toISOString()
 const kindsKeptWhole = new Set<Kind>(["memory", "skill"])
 
 /** What waits its turn in the record at a path (`ArtifactStore.waiting`). */
-type Looked = { size: number; mtime: number; bytes?: Buffer } | undefined | null
+/** What says a file changed without reading it: its size, its times, which file it is. (Its change
+ * time too: a copy that keeps its time, `cp -p`, can't keep that.) */
+type Stamp = { size: number; mtime: number; ctime: number; ino: number }
+type Looked = (Stamp & { bytes?: Buffer }) | undefined | null
 type Waiting = "read" | { seen: Looked; at: number } | { before: Buffer }
 
-/** How close (in ms) a file's time is to when it was looked at for a second write then to keep the
- * same time: a time to the second (HFS+) at most; APFS and Linux's tell much less apart. */
-const SAME_TIME = 1000
+const stampOf = (stat: { size: number; mtimeMs: number; ctimeMs: number; ino: number }): Stamp =>
+  ({ size: stat.size, mtime: stat.mtimeMs, ctime: stat.ctimeMs, ino: stat.ino })
+const sameStamp = (a: Stamp, b: Stamp) => a.size === b.size && a.mtime === b.mtime && a.ctime === b.ctime && a.ino === b.ino
+
+/**
+ * Whether a file looked at `at` could have been written again since with the same stamp: its times
+ * too close to `at` for its file system to tell apart. Whole seconds (HFS+; FAT's two), within 2 s;
+ * finer (APFS, Linux's), within a tenth of one, past the coarse clock Linux stamps with.
+ */
+const couldBeRewritten = (stamp: Stamp, at: number) =>
+  at - Math.max(stamp.mtime, stamp.ctime) < (stamp.mtime % 1000 === 0 && stamp.ctime % 1000 === 0 ? 2000 : 100)
 
 export class ArtifactStore {
   private artifacts = new Map<string, Artifact>()
@@ -246,10 +257,10 @@ export class ArtifactStore {
   asSeen(path: string): boolean {
     const last = this.waiting.get(path)?.at(-1)
     if (last === "read") return true
-    let now: { size: number; mtime: number } | undefined | null
+    let now: Stamp | undefined | null
     try {
       const stat = statSync(path)
-      now = stat.isFile() ? { size: stat.size, mtime: stat.mtimeMs } : undefined
+      now = stat.isFile() ? stampOf(stat) : undefined
     } catch (error: any) {
       now = error?.code === "ENOENT" || error?.code === "ENOTDIR" ? undefined : null
     }
@@ -263,23 +274,23 @@ export class ArtifactStore {
       // As it was when the change was asked, which is what it records.
       const { seen, at } = last
       if (!seen || !now) return seen === undefined && now === undefined
-      if (seen.size !== now.size || seen.mtime !== now.mtime) return false
-      // The same size and time: the same file, unless written again in the moment it was looked at,
-      // within what its time can tell apart. Then by what it holds.
-      if (at - seen.mtime >= SAME_TIME) return true
-      const read = this.read(path)
-      return !!read && read.hash === this.read(path, seen)?.hash
+      if (!sameStamp(seen, now)) return false
+      // The same: the same file, unless written again in the moment it was looked at, within what
+      // its times can tell apart. Then by what it holds (too big to read: as its stamp says).
+      if (!couldBeRewritten(seen, at)) return true
+      const read = this.look(path)
+      return !!read && (read.bytes && seen.bytes ? read.bytes.equals(seen.bytes) : sameStamp(read, seen))
     }
     const artifact = this.at(path)
     const latest = artifact?.versions.at(-1)
     if (now === null) return true
     if (!now) return !artifact || artifact.gone !== null
-    // Another size, or time than when it was recorded: changed, without reading it. The same: as
-    // recorded, unless it could have been written again as it was looked at.
+    // Another size, or stamp than its newest version was read with: changed, without reading it.
+    // The same stamp: as recorded, unless it could have been written again as it was looked at.
     if (!artifact || artifact.gone || !latest || latest.size !== now.size) return false
     const recorded = this.recorded.get(path)
-    if (recorded && recorded.mtime !== now.mtime) return false
-    if (recorded && recorded.at - recorded.mtime >= SAME_TIME) return true
+    if (recorded && !sameStamp(recorded, now)) return false
+    if (recorded && !couldBeRewritten(recorded, recorded.at)) return true
     const read = this.read(path)
     if (read === null) return true
     return !!read && latest.hash === read.hash
@@ -290,8 +301,8 @@ export class ArtifactStore {
   /** What waits its turn at each path, in order: a read then ("read"), the file as it was looked at
    * when asked (`seen`, at `at`), or what it was before the record first saw it (`before`). */
   private waiting = new Map<string, Waiting[]>()
-  /** The size and time of each file as its newest version was read (`at`), this run. */
-  private recorded = new Map<string, { size: number; mtime: number; at: number }>()
+  /** Each file's stamp as its newest version was read (`at`), this run. */
+  private recorded = new Map<string, Stamp & { at: number }>()
 
   private inTurn<T>(paths: string[], work: () => T, waits: Waiting | null = "read"): Promise<T | undefined> {
     const recording = waits ? paths : []
@@ -387,8 +398,6 @@ export class ArtifactStore {
       this.note(artifact, made)
       return this.add(artifact, { status: "deleted", hash: null, size: 0, kept: false }, made, now)
     }
-    // (Its newest version, once this is done.)
-    this.recorded.set(path, { size: seen!.size, mtime: seen!.mtime, at })
     if (!artifact) {
       const kind = this.refine(kindOf(path, { bots: this.options.bots, download: made.download }), read.bytes)
       artifact = { id: ArtifactStore.idOf(path), path, name: basename(path), kind, type: typeOf(path, !!read.bytes && isBinary(read.bytes)), where: { bots: [], sessions: [], groups: [] }, pinned: null, gone: null, updated: stamp(now), versions: [], ...(this.policy.inGit(path) ? { git: true as const } : {}) }
@@ -397,6 +406,8 @@ export class ArtifactStore {
     const latest = artifact.versions.at(-1)
     // (Gone but not deleted: taken away unseen, and back as it was.)
     if (latest && latest.hash === read.hash && (!artifact.gone || latest.status !== "deleted")) {
+      // (Its newest version: what the record has of it.)
+      this.recorded.set(path, { size: seen!.size, mtime: seen!.mtime, ctime: seen!.ctime, ino: seen!.ino, at })
       const back = artifact.gone !== null
       artifact.gone = null
       // Unchanged: only who touched it, and how; and a copy kept now, if one's needed and allowed.
@@ -426,7 +437,10 @@ export class ArtifactStore {
     const reason = read.private ?? (made.keep ? (read.bytes ? undefined : "too-big") : this.noCopy(artifact, read.size, Boolean(read.bytes)))
     if (!reason) this.keep(read.hash, read.bytes!)
     const patch = reason === "git" && made.patch ? made.patch.slice(0, patchLimit) : undefined
-    return this.add(artifact, { status: latest && latest.status !== "deleted" ? "modified" : "added", hash: read.hash, size: read.size, kept: !reason, ...(reason ? { reason } : {}), ...(patch ? { patch } : {}) }, made, now, reason ? undefined : read.bytes)
+    const added = this.add(artifact, { status: latest && latest.status !== "deleted" ? "modified" : "added", hash: read.hash, size: read.size, kept: !reason, ...(reason ? { reason } : {}), ...(patch ? { patch } : {}) }, made, now, reason ? undefined : read.bytes)
+    // (Once its version is in: a copy that couldn't be kept leaves the stamp it had.)
+    this.recorded.set(path, { size: seen!.size, mtime: seen!.mtime, ctime: seen!.ctime, ino: seen!.ino, at })
+    return added
   }
 
   /** Why a new version of `artifact` gets no copy, if it gets none (`readable`: its bytes were read). */
@@ -785,7 +799,7 @@ export class ArtifactStore {
    * The file as it is now: its bytes up to the copy limit, its size and time either way;
    * undefined when it isn't there (or isn't a file), null when it is but can't be read now.
    */
-  private look(path: string): { size: number; mtime: number; bytes?: Buffer } | undefined | null {
+  private look(path: string): Looked {
     let stat
     try {
       stat = statSync(path)
@@ -793,10 +807,10 @@ export class ArtifactStore {
       return error?.code === "ENOENT" || error?.code === "ENOTDIR" ? undefined : null
     }
     if (!stat.isFile()) return undefined
-    if (stat.size > copyLimit) return { size: stat.size, mtime: stat.mtimeMs }
+    if (stat.size > copyLimit) return stampOf(stat)
     try {
       const bytes = readFileSync(path)
-      return { size: bytes.length, mtime: stat.mtimeMs, bytes }
+      return { ...stampOf(stat), size: bytes.length, bytes }
     } catch (error: any) {
       return error?.code === "ENOENT" ? undefined : null
     }

@@ -1,5 +1,5 @@
 import "../safety"
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, setSystemTime, spyOn, test } from "bun:test"
 import fs from "node:fs"
 import { EventEmitter } from "node:events"
 import { watchTree } from "../../src/agents/artifacts/folders"
@@ -357,27 +357,46 @@ describe("a bot's folder", () => {
     }
   })
 
-  // What the watch told of, on its way to the record and unchanged since, isn't read again as the
-  // turn ends: its size and time say so (#604).
-  test("a file already on its way to the record isn't read again as the turn ends", async () => {
+  // What the watch told of and is still settling as the turn ends goes with the turn's end, and
+  // is read once, at its turn (#604).
+  test("a file still settling as the turn ends is read once", async () => {
     const folder = bot("bot_ada", "m\n")
     const folders = watched()
     const look = spyOn(store as any, "look")
     try {
       const report = join(folder, "workspace", "report.csv")
       writeFileSync(report, "a,b\n1,2\n")
-      // (Written a while ago: its time can't be that of another write as it's looked at.)
-      utimesSync(report, new Date(Date.now() - 10_000), new Date(Date.now() - 10_000))
       folders.changed(report)
-      folders.flush()
       look.mockClear()
       folders.turnEnded("bot_ada", Date.now() - 60_000, (via) => ({ by: { kind: "outside" }, via }))
       await store.settled()
-      expect(look.mock.calls.filter(([path]) => path === report)).toEqual([])
+      expect(look.mock.calls.filter(([path]) => path === report).length).toBe(1)
       expect(store.bytes(store.at(report)!.id, store.at(report)!.versions.at(-1)!.n)?.toString()).toBe("a,b\n1,2\n")
     } finally {
       look.mockRestore()
       folders.stop()
+    }
+  })
+
+  // A change whose copy couldn't be kept (a full disk) adds no version: the file isn't taken as the
+  // newest version's afterwards, however long ago it was written (#604).
+  test("a save whose copy couldn't be kept is still not what the Shelf has", async () => {
+    const folder = bot("bot_ada", "m\n")
+    const notes = join(folder, "workspace", "notes.md")
+    writeFileSync(notes, "aaaa")
+    await store.change(notes, { by: { kind: "outside" }, via: "outside" })
+    const copies = join(root, "artifacts", "copies")
+    chmodSync(copies, 0o500)
+    try {
+      writeFileSync(notes, "bbbb")
+      // (Looked at long after it was written: nothing could have been written again in that moment.)
+      setSystemTime(new Date(Date.now() + 60_000))
+      await store.change(notes, { by: { kind: "outside" }, via: "outside" })
+      expect(store.bytes(store.at(notes)!.id, store.at(notes)!.versions.at(-1)!.n)?.toString()).toBe("aaaa")
+      expect(store.asSeen(notes)).toBe(false)
+    } finally {
+      setSystemTime()
+      chmodSync(copies, 0o700)
     }
   })
 

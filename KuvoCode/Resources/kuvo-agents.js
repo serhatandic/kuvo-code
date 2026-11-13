@@ -1458,7 +1458,9 @@ var patchLimit = 1e5;
 var outsideWindow = 5 * 60000;
 var stamp = (date) => date.toISOString();
 var kindsKeptWhole = new Set(["memory", "skill"]);
-var SAME_TIME = 1000;
+var stampOf = (stat) => ({ size: stat.size, mtime: stat.mtimeMs, ctime: stat.ctimeMs, ino: stat.ino });
+var sameStamp = (a, b) => a.size === b.size && a.mtime === b.mtime && a.ctime === b.ctime && a.ino === b.ino;
+var couldBeRewritten = (stamp, at) => at - Math.max(stamp.mtime, stamp.ctime) < (stamp.mtime % 1000 === 0 && stamp.ctime % 1000 === 0 ? 2000 : 100);
 
 class ArtifactStore {
   root;
@@ -1537,7 +1539,7 @@ class ArtifactStore {
     let now;
     try {
       const stat = statSync3(path);
-      now = stat.isFile() ? { size: stat.size, mtime: stat.mtimeMs } : undefined;
+      now = stat.isFile() ? stampOf(stat) : undefined;
     } catch (error) {
       now = error?.code === "ENOENT" || error?.code === "ENOTDIR" ? undefined : null;
     }
@@ -1551,12 +1553,12 @@ class ArtifactStore {
       const { seen, at } = last;
       if (!seen || !now)
         return seen === undefined && now === undefined;
-      if (seen.size !== now.size || seen.mtime !== now.mtime)
+      if (!sameStamp(seen, now))
         return false;
-      if (at - seen.mtime >= SAME_TIME)
+      if (!couldBeRewritten(seen, at))
         return true;
-      const read = this.read(path);
-      return !!read && read.hash === this.read(path, seen)?.hash;
+      const read = this.look(path);
+      return !!read && (read.bytes && seen.bytes ? read.bytes.equals(seen.bytes) : sameStamp(read, seen));
     }
     const artifact = this.at(path);
     const latest = artifact?.versions.at(-1);
@@ -1567,9 +1569,9 @@ class ArtifactStore {
     if (!artifact || artifact.gone || !latest || latest.size !== now.size)
       return false;
     const recorded = this.recorded.get(path);
-    if (recorded && recorded.mtime !== now.mtime)
+    if (recorded && !sameStamp(recorded, now))
       return false;
-    if (recorded && recorded.at - recorded.mtime >= SAME_TIME)
+    if (recorded && !couldBeRewritten(recorded, recorded.at))
       return true;
     const read = this.read(path);
     if (read === null)
@@ -1649,7 +1651,6 @@ class ArtifactStore {
       this.note(artifact, made);
       return this.add(artifact, { status: "deleted", hash: null, size: 0, kept: false }, made, now);
     }
-    this.recorded.set(path, { size: seen.size, mtime: seen.mtime, at });
     if (!artifact) {
       const kind = this.refine(kindOf(path, { bots: this.options.bots, download: made.download }), read.bytes);
       artifact = { id: ArtifactStore.idOf(path), path, name: basename4(path), kind, type: typeOf(path, !!read.bytes && isBinary(read.bytes)), where: { bots: [], sessions: [], groups: [] }, pinned: null, gone: null, updated: stamp(now), versions: [], ...this.policy.inGit(path) ? { git: true } : {} };
@@ -1657,6 +1658,7 @@ class ArtifactStore {
     }
     const latest = artifact.versions.at(-1);
     if (latest && latest.hash === read.hash && (!artifact.gone || latest.status !== "deleted")) {
+      this.recorded.set(path, { size: seen.size, mtime: seen.mtime, ctime: seen.ctime, ino: seen.ino, at });
       const back = artifact.gone !== null;
       artifact.gone = null;
       if (made.keep && !latest.kept && read.bytes && !(latest.reason && privateReasons.has(latest.reason))) {
@@ -1685,7 +1687,9 @@ class ArtifactStore {
     if (!reason)
       this.keep(read.hash, read.bytes);
     const patch = reason === "git" && made.patch ? made.patch.slice(0, patchLimit) : undefined;
-    return this.add(artifact, { status: latest && latest.status !== "deleted" ? "modified" : "added", hash: read.hash, size: read.size, kept: !reason, ...reason ? { reason } : {}, ...patch ? { patch } : {} }, made, now, reason ? undefined : read.bytes);
+    const added = this.add(artifact, { status: latest && latest.status !== "deleted" ? "modified" : "added", hash: read.hash, size: read.size, kept: !reason, ...reason ? { reason } : {}, ...patch ? { patch } : {} }, made, now, reason ? undefined : read.bytes);
+    this.recorded.set(path, { size: seen.size, mtime: seen.mtime, ctime: seen.ctime, ino: seen.ino, at });
+    return added;
   }
   noCopy(artifact, size, readable) {
     if (!readable)
@@ -2025,10 +2029,10 @@ class ArtifactStore {
     if (!stat.isFile())
       return;
     if (stat.size > copyLimit)
-      return { size: stat.size, mtime: stat.mtimeMs };
+      return stampOf(stat);
     try {
       const bytes = readFileSync3(path);
-      return { size: bytes.length, mtime: stat.mtimeMs, bytes };
+      return { ...stampOf(stat), size: bytes.length, bytes };
     } catch (error) {
       return error?.code === "ENOENT" ? undefined : null;
     }
@@ -2349,17 +2353,22 @@ class BotFolders {
     this.pending.set(path, setTimeout(() => this.record(path), this.settle));
   }
   turnEnded(bot, since, made) {
-    this.flush(bot);
+    const settling = this.settling(bot);
     const folder = join7(this.bots, bot);
-    const found = changedSince(folder, since, (inside) => recordable(join7(bot, inside)));
-    this.store.changeAll(this.watching ? found.filter((path) => !this.store.asSeen(path)) : found, made("shell"));
+    const found = changedSince(folder, since, (inside) => recordable(join7(bot, inside))).filter((path) => !settling.includes(path));
+    this.store.changeAll([...settling, ...this.watching ? found.filter((path) => !this.store.asSeen(path)) : found], made("shell"));
   }
   flush(bot) {
-    for (const path of [...this.pending.keys()]) {
-      if (bot && !relative2(this.bots, path).startsWith(bot + sep5))
-        continue;
+    for (const path of this.settling(bot))
       this.record(path);
+  }
+  settling(bot) {
+    const paths = [...this.pending.keys()].filter((path) => !bot || relative2(this.bots, path).startsWith(bot + sep5));
+    for (const path of paths) {
+      clearTimeout(this.pending.get(path));
+      this.pending.delete(path);
     }
+    return paths;
   }
   record(path) {
     clearTimeout(this.pending.get(path));
@@ -31189,4 +31198,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 463e369157660700616a74fb19beea48912335b955202044f66d1c68735605da
+// Built from Packages/Box/src/agents 77b58fb73b7259fbf480c9be2e11e1f8d0d38fbd47e725a694d1d845b5c09343
