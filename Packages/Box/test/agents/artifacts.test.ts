@@ -334,6 +334,53 @@ describe("a bot's folder", () => {
     }
   })
 
+  // A save the watch told of goes to the record as it was then, waiting its turn behind git; one
+  // after it that the watch never told (macOS's stream made anew, #588) is still found as the turn
+  // ends, though both are the same size (#604).
+  test("a newer save the watch didn't tell, made while an earlier one waits its turn, is what the Shelf keeps", async () => {
+    const folder = bot("bot_ada", "m\n")
+    const folders = watched()
+    try {
+      const notes = join(folder, "workspace", "notes.md")
+      writeFileSync(notes, "draft 1")
+      folders.changed(notes)
+      folders.flush()
+      writeFileSync(notes, "draft 2")
+      // (At once, before the watch could tell of it.)
+      folders.turnEnded("bot_ada", Date.now() - 60_000, (via) => ({ by: { kind: "outside" }, via }))
+      await store.settled()
+      const { value } = await route("GET", "kuvo/artifacts?bot=bot_ada")
+      const shelf = value.artifacts.find((artifact: any) => artifact.name === "notes.md")
+      expect(store.bytes(shelf.id, shelf.latest.n)?.toString()).toBe("draft 2")
+    } finally {
+      folders.stop()
+    }
+  })
+
+  // What the watch told of, on its way to the record and unchanged since, isn't read again as the
+  // turn ends: its size and time say so (#604).
+  test("a file already on its way to the record isn't read again as the turn ends", async () => {
+    const folder = bot("bot_ada", "m\n")
+    const folders = watched()
+    const look = spyOn(store as any, "look")
+    try {
+      const report = join(folder, "workspace", "report.csv")
+      writeFileSync(report, "a,b\n1,2\n")
+      // (Written a while ago: its time can't be that of another write as it's looked at.)
+      utimesSync(report, new Date(Date.now() - 10_000), new Date(Date.now() - 10_000))
+      folders.changed(report)
+      folders.flush()
+      look.mockClear()
+      folders.turnEnded("bot_ada", Date.now() - 60_000, (via) => ({ by: { kind: "outside" }, via }))
+      await store.settled()
+      expect(look.mock.calls.filter(([path]) => path === report)).toEqual([])
+      expect(store.bytes(store.at(report)!.id, store.at(report)!.versions.at(-1)!.n)?.toString()).toBe("a,b\n1,2\n")
+    } finally {
+      look.mockRestore()
+      folders.stop()
+    }
+  })
+
   test("a picture a command made and removed in the same turn keeps what it was, then its deletion", async () => {
     const folder = bot("bot_ada", "m\n")
     const folders = watched()

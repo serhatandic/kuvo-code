@@ -16,8 +16,6 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
-- A bot’s Shelf now catches a newer file saved while an earlier version is still being recorded, and finishing a turn avoids reading changed files twice.
-
 - Claude's spend and 30-day trend in the usage panel now count every Claude account Kuvo Code runs, on all your computers: each computer reads its own Claude conversations, prices them and tells the others, as it does with plan limits, so a machine's use shows on your Mac too. On a Mac they still count every Claude Code conversation in `~/.claude` (your Terminal's, and those Claude's desktop app runs there); Cowork and Pi no longer count, and the panel's cards for your other Claude logins (Claude's desktop app's, claude-swap's) no longer show spend of their own. Another Mac that shares one of your machines gets your Claude spend, as it gets plan limits, but doesn't add it into its own, and its spend isn't added into yours.
 - What you do to a Work Queue item on another of your computers (move it, delete it, Undo) now works from any of your computers, an item on another Mac included: your computers pass it on to the one that keeps it, and its page and files open the same way. If that computer is off or asleep, Kuvo Code says so; if it stops answering midway, Kuvo Code says it can't tell whether the change was made.
 - A message your iPhone sends again after its connection dropped (a picture on a slow mobile connection, say) now reaches the conversation on your Mac or machine once, however many times it came.

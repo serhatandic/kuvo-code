@@ -141,6 +141,14 @@ type Line = { a: Header; v?: Version }
 const stamp = (date: Date) => date.toISOString()
 const kindsKeptWhole = new Set<Kind>(["memory", "skill"])
 
+/** What waits its turn in the record at a path (`ArtifactStore.waiting`). */
+type Looked = { size: number; mtime: number; bytes?: Buffer } | undefined | null
+type Waiting = "read" | { seen: Looked; at: number } | { before: Buffer }
+
+/** How close (in ms) a file's time is to when it was looked at for a second write then to keep the
+ * same time: a time to the second (HFS+) at most; APFS and Linux's tell much less apart. */
+const SAME_TIME = 1000
+
 export class ArtifactStore {
   private artifacts = new Map<string, Artifact>()
   /** How many kept versions use each copy, and its size. */
@@ -234,38 +242,60 @@ export class ArtifactStore {
   }
 
   /** Whether `path` is as the record last saw it: its newest version, or gone (or never there) as it
-   * says; or about to be, a change of it waiting its turn. */
+   * says; or as what waits its turn will record it (a turn's end, read then, always is). */
   asSeen(path: string): boolean {
-    const waiting = this.waiting.get(path)
-    if (waiting?.length && waiting.at(-1) === undefined) return true
-    const expected = waiting ? waiting.at(-1) : this.at(path)?.versions.at(-1)?.hash
-    const observed = this.observed.get(path)
-    if (observed && observed.hash === expected) {
-      try {
-        const stat = statSync(path)
-        if (!stat.isFile() || stat.size !== observed.size || stat.mtimeMs !== observed.mtime) return false
-      } catch {}
-    }
-    const artifact = this.at(path)
+    const last = this.waiting.get(path)?.at(-1)
+    if (last === "read") return true
+    let now: { size: number; mtime: number } | undefined | null
     try {
       const stat = statSync(path)
-      if (stat.isFile() && (!expected || (!waiting && artifact?.versions.at(-1)?.size !== stat.size))) return false
-    } catch {}
+      now = stat.isFile() ? { size: stat.size, mtime: stat.mtimeMs } : undefined
+    } catch (error: any) {
+      now = error?.code === "ENOENT" || error?.code === "ENOTDIR" ? undefined : null
+    }
+    if (last) {
+      if ("before" in last) {
+        // (Recorded as it was before: seen only if that's what's there now.)
+        if (!now || now.size !== last.before.length) return false
+        const read = this.look(path)
+        return !!read?.bytes && read.bytes.equals(last.before)
+      }
+      // As it was when the change was asked, which is what it records.
+      const { seen, at } = last
+      if (!seen || !now) return seen === undefined && now === undefined
+      if (seen.size !== now.size || seen.mtime !== now.mtime) return false
+      // The same size and time: the same file, unless written again in the moment it was looked at,
+      // within what its time can tell apart. Then by what it holds.
+      if (at - seen.mtime >= SAME_TIME) return true
+      const read = this.read(path)
+      return !!read && read.hash === this.read(path, seen)?.hash
+    }
+    const artifact = this.at(path)
+    const latest = artifact?.versions.at(-1)
+    if (now === null) return true
+    if (!now) return !artifact || artifact.gone !== null
+    // Another size, or time than when it was recorded: changed, without reading it. The same: as
+    // recorded, unless it could have been written again as it was looked at.
+    if (!artifact || artifact.gone || !latest || latest.size !== now.size) return false
+    const recorded = this.recorded.get(path)
+    if (recorded && recorded.mtime !== now.mtime) return false
+    if (recorded && recorded.at - recorded.mtime >= SAME_TIME) return true
     const read = this.read(path)
     if (read === null) return true
-    if (!read) return !artifact || artifact.gone !== null
-    return waiting ? waiting.at(-1) === read.hash : !!artifact && !artifact.gone && artifact.versions.at(-1)?.hash === read.hash
+    return !!read && latest.hash === read.hash
   }
 
   /** What's being recorded: one at a time, in the order asked, each once git has said what it ignores. */
   private queue: Promise<unknown> = Promise.resolve()
-  /** Captured hashes waiting their turn; undefined means it will read when its turn comes. */
-  private waiting = new Map<string, (string | null | undefined)[]>()
-  private observed = new Map<string, { hash: string; size: number; mtime: number }>()
+  /** What waits its turn at each path, in order: a read then ("read"), the file as it was looked at
+   * when asked (`seen`, at `at`), or what it was before the record first saw it (`before`). */
+  private waiting = new Map<string, Waiting[]>()
+  /** The size and time of each file as its newest version was read (`at`), this run. */
+  private recorded = new Map<string, { size: number; mtime: number; at: number }>()
 
-  private inTurn<T>(paths: string[], work: () => T, hash?: string | null, records = true): Promise<T | undefined> {
-    const recording = records ? paths : []
-    for (const path of recording) this.waiting.set(path, [...(this.waiting.get(path) ?? []), hash])
+  private inTurn<T>(paths: string[], work: () => T, waits: Waiting | null = "read"): Promise<T | undefined> {
+    const recording = waits ? paths : []
+    for (const path of recording) this.waiting.set(path, [...(this.waiting.get(path) ?? []), waits!])
     const next = this.queue.then(async () => {
       await this.policy.learn(paths)
       return work()
@@ -291,8 +321,10 @@ export class ArtifactStore {
   /** The file at `path` as it is now, recorded as `made` it (`changeNow`). */
   change(path: string, made: Made): Promise<Artifact | undefined> {
     // As it is now, not once git has answered (another change may come meanwhile).
+    // (When, first: what's written after it may keep the time it has.)
+    const at = Date.now()
     const seen = this.look(path)
-    return this.inTurn([path], () => this.changeNow(path, made, seen), this.read(path, seen)?.hash ?? null)
+    return this.inTurn([path], () => this.changeNow(path, made, { seen, at }), { seen, at })
   }
 
   /** Each of `paths` as it is now, recorded as `made` it, git asked about them all at once. */
@@ -311,19 +343,22 @@ export class ArtifactStore {
 
   /** What a file was before the record first saw it change (`beforeNow`). */
   before(path: string, bytes: Buffer, where: { bot?: string } = {}, at = this.now()): Promise<void> {
-    return this.inTurn([path], () => this.beforeNow(path, bytes, where, at), "sha256:" + createHash("sha256").update(bytes).digest("hex"), !this.at(path) && !this.waiting.has(path))
+    // (Recorded only as the first the record has of it.)
+    return this.inTurn([path], () => this.beforeNow(path, bytes, where, at), !this.at(path) && !this.waiting.has(path) ? { before: bytes } : null)
   }
 
   /** Pinned (marked final) or not (`pinNow`). */
   pin(id: string, pinned: { by: "bot" | "you"; note?: string } | null): Promise<Artifact | undefined> {
     const path = this.artifacts.get(id)?.path
-    return this.inTurn(path ? [path] : [], () => this.pinNow(id, pinned), undefined, false)
+    // (Records no file: nothing of it waits.)
+    return this.inTurn(path ? [path] : [], () => this.pinNow(id, pinned), null)
   }
 
   /** Version `n` put back on disk (`restoreNow`): the artifact, or why not. */
   async restore(id: string, n: number, at = this.now()): Promise<Artifact | string> {
     const path = this.artifacts.get(id)?.path
-    return (await this.inTurn(path ? [path] : [], () => this.restoreNow(id, n, at))) ?? "It couldn't be put back."
+    // (Nothing of it waits: one turned down records nothing, and one put back is read at its turn.)
+    return (await this.inTurn(path ? [path] : [], () => this.restoreNow(id, n, at), null)) ?? "It couldn't be put back."
   }
 
   /** Shown in a panel just now (`shownNow`). */
@@ -336,19 +371,24 @@ export class ArtifactStore {
    * brought up to date, or (unchanged since its newest version) only who touched it noted. Returns
    * the artifact when anything changed.
    */
-  private changeNow(path: string, made: Made, seen = this.look(path)): Artifact | undefined {
+  private changeNow(path: string, made: Made, looked?: { seen: Looked; at: number }): Artifact | undefined {
     const now = made.at ?? this.now()
+    const at = looked?.at ?? Date.now()
+    const seen = looked ? looked.seen : this.look(path)
     const read = this.read(path, seen)
     let artifact = this.at(path)
     // There, but it couldn't be read now (no permission, too many files open): nothing to say.
     if (read === null) return undefined
     if (!read) {
+      this.recorded.delete(path)
       // Gone: its last version says so, once.
       if (!artifact || artifact.gone) return undefined
       artifact.gone = stamp(now)
       this.note(artifact, made)
       return this.add(artifact, { status: "deleted", hash: null, size: 0, kept: false }, made, now)
     }
+    // (Its newest version, once this is done.)
+    this.recorded.set(path, { size: seen!.size, mtime: seen!.mtime, at })
     if (!artifact) {
       const kind = this.refine(kindOf(path, { bots: this.options.bots, download: made.download }), read.bytes)
       artifact = { id: ArtifactStore.idOf(path), path, name: basename(path), kind, type: typeOf(path, !!read.bytes && isBinary(read.bytes)), where: { bots: [], sessions: [], groups: [] }, pinned: null, gone: null, updated: stamp(now), versions: [], ...(this.policy.inGit(path) ? { git: true as const } : {}) }
@@ -414,6 +454,8 @@ export class ArtifactStore {
     }
     const version: Version = { n: 0, at: stamp(at), by: { kind: "outside" }, via: [], status: "added", edits: 0, size: bytes.length, hash, kept: true, before: true }
     this.keep(hash, bytes)
+    // (What was there before, not the file now.)
+    this.recorded.delete(path)
     artifact.versions.push(version)
     this.artifacts.set(artifact.id, artifact)
     this.use(hash, bytes.length, 1)
@@ -732,12 +774,6 @@ export class ArtifactStore {
    */
   private read(path: string, seen = this.look(path)): { hash: string; size: number; bytes?: Buffer; private?: NoCopy } | undefined | null {
     if (!seen) return seen
-    const read = this.hash(path, seen)
-    this.observed.set(path, { hash: read.hash, size: seen.size, mtime: seen.mtime })
-    return read
-  }
-
-  private hash(path: string, seen: { size: number; mtime: number; bytes?: Buffer }): { hash: string; size: number; bytes?: Buffer; private?: NoCopy } {
     const privacy = this.policy.privacy(path)
     if (!seen.bytes) return { hash: `stat:${seen.size}:${seen.mtime}`, size: seen.size, ...(privacy ? { private: privacy } : {}) }
     // What's private: keyed, so the record says when it changed and nothing of what it holds.

@@ -1458,6 +1458,7 @@ var patchLimit = 1e5;
 var outsideWindow = 5 * 60000;
 var stamp = (date) => date.toISOString();
 var kindsKeptWhole = new Set(["memory", "skill"]);
+var SAME_TIME = 1000;
 
 class ArtifactStore {
   root;
@@ -1530,38 +1531,58 @@ class ArtifactStore {
     return this.artifacts.get(ArtifactStore.idOf(path));
   }
   asSeen(path) {
-    const waiting = this.waiting.get(path);
-    if (waiting?.length && waiting.at(-1) === undefined)
+    const last = this.waiting.get(path)?.at(-1);
+    if (last === "read")
       return true;
-    const expected = waiting ? waiting.at(-1) : this.at(path)?.versions.at(-1)?.hash;
-    const observed = this.observed.get(path);
-    if (observed && observed.hash === expected) {
-      try {
-        const stat = statSync3(path);
-        if (!stat.isFile() || stat.size !== observed.size || stat.mtimeMs !== observed.mtime)
-          return false;
-      } catch {}
-    }
-    const artifact = this.at(path);
+    let now;
     try {
       const stat = statSync3(path);
-      if (stat.isFile() && (!expected || !waiting && artifact?.versions.at(-1)?.size !== stat.size))
+      now = stat.isFile() ? { size: stat.size, mtime: stat.mtimeMs } : undefined;
+    } catch (error) {
+      now = error?.code === "ENOENT" || error?.code === "ENOTDIR" ? undefined : null;
+    }
+    if (last) {
+      if ("before" in last) {
+        if (!now || now.size !== last.before.length)
+          return false;
+        const read = this.look(path);
+        return !!read?.bytes && read.bytes.equals(last.before);
+      }
+      const { seen, at } = last;
+      if (!seen || !now)
+        return seen === undefined && now === undefined;
+      if (seen.size !== now.size || seen.mtime !== now.mtime)
         return false;
-    } catch {}
+      if (at - seen.mtime >= SAME_TIME)
+        return true;
+      const read = this.read(path);
+      return !!read && read.hash === this.read(path, seen)?.hash;
+    }
+    const artifact = this.at(path);
+    const latest = artifact?.versions.at(-1);
+    if (now === null)
+      return true;
+    if (!now)
+      return !artifact || artifact.gone !== null;
+    if (!artifact || artifact.gone || !latest || latest.size !== now.size)
+      return false;
+    const recorded = this.recorded.get(path);
+    if (recorded && recorded.mtime !== now.mtime)
+      return false;
+    if (recorded && recorded.at - recorded.mtime >= SAME_TIME)
+      return true;
     const read = this.read(path);
     if (read === null)
       return true;
-    if (!read)
-      return !artifact || artifact.gone !== null;
-    return waiting ? waiting.at(-1) === read.hash : !!artifact && !artifact.gone && artifact.versions.at(-1)?.hash === read.hash;
+    return !!read && latest.hash === read.hash;
   }
   queue = Promise.resolve();
   waiting = new Map;
-  observed = new Map;
-  inTurn(paths, work, hash, records = true) {
-    const recording = records ? paths : [];
+  recorded = new Map;
+  inTurn(paths, work, waits = "read") {
+    const recording = waits ? paths : [];
     for (const path of recording)
-      this.waiting.set(path, [...this.waiting.get(path) ?? [], hash]);
+      this.waiting.set(path, [...this.waiting.get(path) ?? [], waits]);
     const next = this.queue.then(async () => {
       await this.policy.learn(paths);
       return work();
@@ -1583,8 +1604,9 @@ class ArtifactStore {
     await this.queue;
   }
   change(path, made) {
+    const at = Date.now();
     const seen = this.look(path);
-    return this.inTurn([path], () => this.changeNow(path, made, seen), this.read(path, seen)?.hash ?? null);
+    return this.inTurn([path], () => this.changeNow(path, made, { seen, at }), { seen, at });
   }
   changeAll(paths, made) {
     return this.inTurn(paths, () => {
@@ -1598,32 +1620,36 @@ class ArtifactStore {
     });
   }
   before(path, bytes, where = {}, at = this.now()) {
-    return this.inTurn([path], () => this.beforeNow(path, bytes, where, at), "sha256:" + createHash("sha256").update(bytes).digest("hex"), !this.at(path) && !this.waiting.has(path));
+    return this.inTurn([path], () => this.beforeNow(path, bytes, where, at), !this.at(path) && !this.waiting.has(path) ? { before: bytes } : null);
   }
   pin(id, pinned) {
     const path = this.artifacts.get(id)?.path;
-    return this.inTurn(path ? [path] : [], () => this.pinNow(id, pinned), undefined, false);
+    return this.inTurn(path ? [path] : [], () => this.pinNow(id, pinned), null);
   }
   async restore(id, n, at = this.now()) {
     const path = this.artifacts.get(id)?.path;
-    return await this.inTurn(path ? [path] : [], () => this.restoreNow(id, n, at)) ?? "It couldn't be put back.";
+    return await this.inTurn(path ? [path] : [], () => this.restoreNow(id, n, at), null) ?? "It couldn't be put back.";
   }
   shown(path, made) {
     return this.inTurn([path], () => this.shownNow(path, made));
   }
-  changeNow(path, made, seen = this.look(path)) {
+  changeNow(path, made, looked) {
     const now = made.at ?? this.now();
+    const at = looked?.at ?? Date.now();
+    const seen = looked ? looked.seen : this.look(path);
     const read = this.read(path, seen);
     let artifact = this.at(path);
     if (read === null)
       return;
     if (!read) {
+      this.recorded.delete(path);
       if (!artifact || artifact.gone)
         return;
       artifact.gone = stamp(now);
       this.note(artifact, made);
       return this.add(artifact, { status: "deleted", hash: null, size: 0, kept: false }, made, now);
     }
+    this.recorded.set(path, { size: seen.size, mtime: seen.mtime, at });
     if (!artifact) {
       const kind = this.refine(kindOf(path, { bots: this.options.bots, download: made.download }), read.bytes);
       artifact = { id: ArtifactStore.idOf(path), path, name: basename4(path), kind, type: typeOf(path, !!read.bytes && isBinary(read.bytes)), where: { bots: [], sessions: [], groups: [] }, pinned: null, gone: null, updated: stamp(now), versions: [], ...this.policy.inGit(path) ? { git: true } : {} };
@@ -1690,6 +1716,7 @@ class ArtifactStore {
     };
     const version = { n: 0, at: stamp(at), by: { kind: "outside" }, via: [], status: "added", edits: 0, size: bytes.length, hash, kept: true, before: true };
     this.keep(hash, bytes);
+    this.recorded.delete(path);
     artifact.versions.push(version);
     this.artifacts.set(artifact.id, artifact);
     this.use(hash, bytes.length, 1);
@@ -1981,11 +2008,6 @@ class ArtifactStore {
   read(path, seen = this.look(path)) {
     if (!seen)
       return seen;
-    const read = this.hash(path, seen);
-    this.observed.set(path, { hash: read.hash, size: seen.size, mtime: seen.mtime });
-    return read;
-  }
-  hash(path, seen) {
     const privacy = this.policy.privacy(path);
     if (!seen.bytes)
       return { hash: `stat:${seen.size}:${seen.mtime}`, size: seen.size, ...privacy ? { private: privacy } : {} };
@@ -31167,4 +31189,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents fa95f2dba324a1b14faf86bb0f269e142ca03aa4d2c0e659152c5e04ddb4f504
+// Built from Packages/Box/src/agents 463e369157660700616a74fb19beea48912335b955202044f66d1c68735605da
