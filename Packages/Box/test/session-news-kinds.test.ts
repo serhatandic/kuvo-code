@@ -20,17 +20,29 @@ test("a finish is 'finished', and never says what still runs", async () => {
   expect(boxNoteOf(line, undefined)?.line).toBe("“Tests” finished")
 })
 
-// What a session said goes to its lead, and onto the card both apps draw of it, as a few plain
-// words: a reply that opens with a Markdown heading isn't drawn as one big heading there (#606).
-test("a finish says the start of what the session said in plain words, its Markdown taken off", async () => {
-  const reply = "## Review of #144: merge after fixes\n\nThe core design is **sound**: see [the PR](https://example.com/144).\n\n- One `fix` left\n1. Then merge\n> Quoted"
+// What a session said goes to its lead, and onto the card both apps draw of it, as Markdown on one
+// line: a reply that opens with a heading (a quote, a list) isn't drawn as one big heading there,
+// and what's inline in it (a path in code, a link) reaches its lead as it was written (#606).
+test("a finish says the start of what the session said on one line, its block marks taken off and the rest as written", async () => {
+  let reply = ""
   const engine = Bun.serve({
     port: 0,
     fetch: () => Response.json({ data: [{ id: "msg_1", type: "assistant", time: { created: 1, completed: 2 }, content: [{ type: "text", text: reply }] }] }),
   })
-  try {
+  const said = async (text: string) => {
+    reply = text
     const line = (await wakeLine(done, session, { port: engine.port, password: "x" } as never))!
-    expect(line.slice(line.indexOf(":\n") + 2)).toBe("Review of #144: merge after fixes The core design is sound: see the PR. One fix left Then merge Quoted")
+    return line.slice(line.indexOf(":\n") + 2)
+  }
+  try {
+    expect(await said("## Review of #144: merge after fixes\n\nThe core design is **sound**: see [the PR](https://example.com/144).\n\n- Fixed `src/__tests__/a.ts`\n1. Then merge\n> Quoted"))
+      .toBe("Review of #144: merge after fixes The core design is **sound**: see [the PR](https://example.com/144). Fixed `src/__tests__/a.ts` Then merge Quoted")
+    expect(await said("> ## Summary\nFixed it")).toBe("Summary Fixed it")
+    expect(await said("- ## Done\nok")).toBe("Done ok")
+    expect(await said("#\nFoo bar")).toBe("Foo bar")
+    expect(await said(">Note: all good\n\n---\n\n```ts\nconst a = 1\n```\nDone")).toBe("Note: all good const a = 1 Done")
+    // Not marks: a number, an issue, a minus.
+    expect(await said("#144 is merged\n-1 failing test left")).toBe("#144 is merged -1 failing test left")
   } finally {
     engine.stop(true)
   }

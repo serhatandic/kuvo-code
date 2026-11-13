@@ -9,7 +9,6 @@ import { cut } from "../../shared/text";
 import { call, engineGet } from "../engine/client";
 import { CHATS } from "../home";
 import { answersYou, describePermission, projectNameOf, turnFor } from "../notices/news";
-import { plain } from "../notices/sentence";
 import { readTold } from "../notices/told";
 import { isHiddenRun } from "../engine/sessions";
 import { lastTurn, lastTurnEnd, summaryAtEnd, summaryRowAtEnd, workOutcome } from "../../shared/summaries";
@@ -137,13 +136,29 @@ export async function askingNow(listed: Listed, signal?: AbortSignal): Promise<{
   return null;
 }
 
+// A line's Markdown block marks at its start (a heading's, a quote's, a list item's), however many.
+const blockMarks = /^\s*(?:#{1,6}(?=\s|$)|>|[-*+](?=\s)|\d{1,9}[.)](?=\s))\s*/;
+const unmarked = (line: string) => {
+  for (let was = ""; was !== line;) [was, line] = [line, line.replace(blockMarks, "")];
+  return line;
+};
+
+/**
+ * `text` on one line, its lines' block marks taken off and code fences, rules and underlines left
+ * out; what's inline (code, emphasis, a link) kept, as its lead reads it. Both apps draw it as
+ * Markdown on its card: a heading's marks left at the start of that one line made all of it a
+ * heading (#606).
+ */
+export function oneLine(text: string): string {
+  const lines = text.split("\n").filter((line) => !/^\s*(?:`{3,}|~{3,})/.test(line) && !/^\s*(?:[-*_=]\s*)+$/.test(line));
+  return unmarked(lines.map(unmarked).join(" ").replace(/\s+/g, " ").trim());
+}
+
 /** The first lines of what the latest of `messages` (newest first) to say something said, or null. */
 function replyIn(messages: unknown): string | null {
   for (const message of Array.isArray(messages) ? messages : []) {
     if (!isObject(message) || message.type !== "assistant" || !Array.isArray(message.content)) continue;
-    // On one line, as plain words: its lead reads them, and both apps draw them as Markdown on its
-    // card, where a heading's marks left on that one line made all of it a heading (#606).
-    const text = plain(message.content.filter((part: unknown) => isObject(part) && part.type === "text").map((part: { text?: unknown }) => String(part.text ?? "")).join("\n"));
+    const text = oneLine(message.content.filter((part: unknown) => isObject(part) && part.type === "text").map((part: { text?: unknown }) => String(part.text ?? "")).join("\n"));
     if (text) return cut(text, 280);
   }
   return null;

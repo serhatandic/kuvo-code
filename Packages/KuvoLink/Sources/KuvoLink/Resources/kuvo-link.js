@@ -8627,73 +8627,6 @@ async function fromProc(groups, proc) {
 // Packages/Box/src/link/work/tree.ts
 import path44 from "node:path";
 
-// Packages/Box/src/link/notices/sentence.ts
-var plain2 = (text) => String(text ?? "").replace(/^[ \t]{0,3}(#{1,6}|>+)[ \t]+/gm, "").replace(/^[ \t]*([-*+]|\d{1,9}[.)])[ \t]+/gm, "").replace(/!?\[([^\]]*)\]\([^)\s]*\)/g, "$1").replace(/(?<![\w*_])[*_]{1,3}(?=\S)|(?<=\S)[*_]{1,3}(?![\w*_])/g, "").replace(/`/g, "").replace(/\s+/g, " ").trim();
-var SENTENCE_LONGEST = 160;
-var ABBREVIATIONS = /(?:^|\s)(?:e\.g|i\.e|vs|cf|approx|incl|Mr|Mrs|Ms|Dr|Fig)\.$/i;
-function firstOf(words) {
-  const ending = /[.!?…]+["”’)\]]*(?=\s|$)/g;
-  for (let found = ending.exec(words);found; found = ending.exec(words)) {
-    const end = found.index + found[0].length;
-    if (ABBREVIATIONS.test(words.slice(0, found.index + 1)))
-      continue;
-    return words.slice(0, end);
-  }
-  return words;
-}
-function cutAtWord(text, longest) {
-  const characters = Array.from(text);
-  if (characters.length <= longest)
-    return text;
-  const room = characters.slice(0, longest - 1).join("");
-  const space = room.lastIndexOf(" ");
-  return (space > longest / 2 ? room.slice(0, space) : room).replace(/[\s,;:–—-]+$/, "") + "…";
-}
-function oneSentence(text, longest = SENTENCE_LONGEST) {
-  const lines = String(text ?? "").replace(/```[\s\S]*?(?:```|$)/g, `
-
-`).split(`
-`);
-  const paragraphs = [];
-  let current = [];
-  let heading = "";
-  const close = () => {
-    if (current.length)
-      paragraphs.push(plain2(current.join(" ")));
-    current = [];
-  };
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line || /^#{1,6}\s/.test(line) || line.startsWith("|") || /^([-*_])(\s*\1){2,}$/.test(line) || /^(\*\*|__)[^*_]+\1:?$/.test(line) || /^<\/?[a-z][^>]*>$/i.test(line)) {
-      close();
-      if (!heading && /^(#{1,6}\s|\*\*|__)/.test(line))
-        heading = plain2(line.replace(/^#{1,6}\s+/, ""));
-      continue;
-    }
-    const item = /^(?:[-*+]|\d+[.)])\s+(.*)$/.exec(line);
-    if (item) {
-      close();
-      current.push(item[1]);
-      close();
-      continue;
-    }
-    current.push(line);
-  }
-  close();
-  const found = paragraphs.filter(Boolean);
-  if (!found.length)
-    return heading ? cutAtWord(firstOf(heading), longest) : "";
-  let sentence = firstOf(found[0]);
-  if (sentence === found[0] && sentence.endsWith(":") && found[1])
-    sentence = `${sentence} ${firstOf(found[1])}`;
-  return cutAtWord(sentence, longest);
-}
-var reasonLine = (reason, longest = 120) => {
-  const line = String(reason ?? "").split(`
-`).map((each) => each.trim()).find(Boolean) ?? "";
-  return line ? cut(line, longest) : "";
-};
-
 // Packages/Box/src/link/notices/told.ts
 import path43 from "node:path";
 
@@ -10201,11 +10134,22 @@ async function askingNow(listed, signal) {
     return { id: questions[0].id, what: `Asks: ${questions[0].text}` };
   return null;
 }
+var blockMarks = /^\s*(?:#{1,6}(?=\s|$)|>|[-*+](?=\s)|\d{1,9}[.)](?=\s))\s*/;
+var unmarked = (line) => {
+  for (let was = "";was !== line; )
+    [was, line] = [line, line.replace(blockMarks, "")];
+  return line;
+};
+function oneLine2(text) {
+  const lines = text.split(`
+`).filter((line) => !/^\s*(?:`{3,}|~{3,})/.test(line) && !/^\s*(?:[-*_=]\s*)+$/.test(line));
+  return unmarked(lines.map(unmarked).join(" ").replace(/\s+/g, " ").trim());
+}
 function replyIn(messages) {
   for (const message of Array.isArray(messages) ? messages : []) {
     if (!isObject(message) || message.type !== "assistant" || !Array.isArray(message.content))
       continue;
-    const text = plain2(message.content.filter((part) => isObject(part) && part.type === "text").map((part) => String(part.text ?? "")).join(`
+    const text = oneLine2(message.content.filter((part) => isObject(part) && part.type === "text").map((part) => String(part.text ?? "")).join(`
 `));
     if (text)
       return cut(text, 280);
@@ -19148,6 +19092,73 @@ function startedWords(outcome, waits) {
 
 ${answer}` : "It hasn't answered yet; it may still write back with send_message.") + warned, isError: false };
 }
+
+// Packages/Box/src/link/notices/sentence.ts
+var plain2 = (text) => String(text ?? "").replace(/^[ \t]{0,3}(#{1,6}|>+)[ \t]+/gm, "").replace(/!?\[([^\]]*)\]\([^)\s]*\)/g, "$1").replace(/(?<![\w*_])[*_]{1,3}(?=\S)|(?<=\S)[*_]{1,3}(?![\w*_])/g, "").replace(/`/g, "").replace(/\s+/g, " ").trim();
+var SENTENCE_LONGEST = 160;
+var ABBREVIATIONS = /(?:^|\s)(?:e\.g|i\.e|vs|cf|approx|incl|Mr|Mrs|Ms|Dr|Fig)\.$/i;
+function firstOf(words) {
+  const ending = /[.!?…]+["”’)\]]*(?=\s|$)/g;
+  for (let found = ending.exec(words);found; found = ending.exec(words)) {
+    const end = found.index + found[0].length;
+    if (ABBREVIATIONS.test(words.slice(0, found.index + 1)))
+      continue;
+    return words.slice(0, end);
+  }
+  return words;
+}
+function cutAtWord(text, longest) {
+  const characters = Array.from(text);
+  if (characters.length <= longest)
+    return text;
+  const room = characters.slice(0, longest - 1).join("");
+  const space = room.lastIndexOf(" ");
+  return (space > longest / 2 ? room.slice(0, space) : room).replace(/[\s,;:–—-]+$/, "") + "…";
+}
+function oneSentence(text, longest = SENTENCE_LONGEST) {
+  const lines = String(text ?? "").replace(/```[\s\S]*?(?:```|$)/g, `
+
+`).split(`
+`);
+  const paragraphs = [];
+  let current = [];
+  let heading = "";
+  const close = () => {
+    if (current.length)
+      paragraphs.push(plain2(current.join(" ")));
+    current = [];
+  };
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line || /^#{1,6}\s/.test(line) || line.startsWith("|") || /^([-*_])(\s*\1){2,}$/.test(line) || /^(\*\*|__)[^*_]+\1:?$/.test(line) || /^<\/?[a-z][^>]*>$/i.test(line)) {
+      close();
+      if (!heading && /^(#{1,6}\s|\*\*|__)/.test(line))
+        heading = plain2(line.replace(/^#{1,6}\s+/, ""));
+      continue;
+    }
+    const item = /^(?:[-*+]|\d+[.)])\s+(.*)$/.exec(line);
+    if (item) {
+      close();
+      current.push(item[1]);
+      close();
+      continue;
+    }
+    current.push(line);
+  }
+  close();
+  const found = paragraphs.filter(Boolean);
+  if (!found.length)
+    return heading ? cutAtWord(firstOf(heading), longest) : "";
+  let sentence = firstOf(found[0]);
+  if (sentence === found[0] && sentence.endsWith(":") && found[1])
+    sentence = `${sentence} ${firstOf(found[1])}`;
+  return cutAtWord(sentence, longest);
+}
+var reasonLine = (reason, longest = 120) => {
+  const line = String(reason ?? "").split(`
+`).map((each) => each.trim()).find(Boolean) ?? "";
+  return line ? cut(line, longest) : "";
+};
 
 // Packages/Box/src/link/notices/notify.ts
 var NOTIFY_LIMITS = { hour: 3, day: 12, apart: 2 * 60000, boxHour: 10 };
@@ -29368,7 +29379,7 @@ async function callOf(target, permission, signal) {
 var CHOICE_MOST = 2000;
 var RECOMMENDED = /\s*\(recommended\)\s*/i;
 var short2 = (words, most) => words.replace(/\s+/g, " ").trim().slice(0, most);
-var unmarked = (label) => short2(label.replace(RECOMMENDED, " "), 200);
+var unmarked2 = (label) => short2(label.replace(RECOMMENDED, " "), 200);
 function recommendationOf(form) {
   if (!isObject(form.metadata) || form.metadata.kind !== "question")
     return null;
@@ -29390,11 +29401,11 @@ function recommendationOf(form) {
     else
       return null;
     const why = marked.length === 1 && typeof marked[0].description === "string" ? short2(marked[0].description, 300) : "";
-    const labels = options.map((option) => unmarked(option.label)).filter(Boolean);
+    const labels = options.map((option) => unmarked2(option.label)).filter(Boolean);
     calls.push({
       key: field.key,
       text: short2(String(field.description || field.title || form.title || "A question"), 300),
-      choice: marked.map((option) => unmarked(option.label)).join(", "),
+      choice: marked.map((option) => unmarked2(option.label)).join(", "),
       ...why ? { why } : {},
       ...labels.length ? { options: labels } : {},
       ...multiple ? { multiple } : {}
@@ -40099,7 +40110,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "3b306595fd3a";
+var BRIDGE_VERSION = "b2a4a2d45272";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
