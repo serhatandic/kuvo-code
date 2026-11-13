@@ -22,6 +22,8 @@ import Testing
         engine.on("GET", "/api/session/ses_lead", json: ["data": lead])
         engine.on("GET", "/api/session/ses_notes", json: ["data": StubEngine.session("ses_notes", title: "Release notes", directory: folder)])
         engine.on("POST", "/api/session", json: ["data": ["id": "ses_new1"]])
+        // Read by the box just before it marks it, as the engine has it once made.
+        engine.on("GET", "/api/session/ses_new1", json: ["data": StubEngine.session("ses_new1", title: "Review docs", directory: folder)])
         engine.on("PATCH", "/api/session/*", json: ["data": [:]])
         engine.on("POST", "/api/session/*", json: [:])
     }
