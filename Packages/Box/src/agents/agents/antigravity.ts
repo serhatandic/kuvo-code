@@ -19,6 +19,7 @@ import { fenceAgent, fenceRules } from "../fence"
 import { emit } from "../events"
 import { withOwnFolders } from "../machine"
 import { newID } from "../ids"
+import { AntigravityPlan } from "../usage/antigravity-plan"
 import { run, which } from "../proc"
 import { RPC, RPCError } from "../rpc"
 import { catcher } from "../signin"
@@ -389,6 +390,9 @@ export class AntigravityAgent implements Agent {
   get profile() {
     return this.instance.home ? join(this.instance.home, "profile") : join(this.root, "profile")
   }
+
+  readonly antigravity = new AntigravityPlan(() => this.profile)
+  readonly limits = this.antigravity.limits
 
   private get tokenFile() {
     return join(this.profile, "antigravity-acp", "acp_token.json")

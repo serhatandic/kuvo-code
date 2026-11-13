@@ -69,6 +69,8 @@ export interface LimitExtra {
 
 /** What an agent read of its plan just now. */
 export interface LimitReading {
+  /** Incomplete response: missing windows keep their last successful readings. */
+  partial?: boolean
   windows: Omit<LimitWindow, "read" | "source">[]
   /** The plan, in its maker's words ("Max 20x", "Pro"), when it says. */
   plan?: string
@@ -484,7 +486,7 @@ export class Limits {
       entry.extras = reading.extras?.length ? reading.extras : undefined
       // What it says now, in place of all it said before; a window a turn told of since it was
       // asked, or that only turns tell, stays as heard.
-      const heard = entry.windows.filter((window) => window.source === "turn" && (window.read >= started || !reading.windows.some((each) => each.id === window.id)))
+      const heard = entry.windows.filter((window) => (reading.partial && !reading.windows.some((each) => each.id === window.id)) || (window.source === "turn" && (window.read >= started || !reading.windows.some((each) => each.id === window.id))))
       entry.windows = [...reading.windows.filter((window) => !heard.some((each) => each.id === window.id)).map((window) => ({ ...window, used: clamp(window.used), read: at, source: "usage" as const })), ...heard]
       entry.problem = undefined
       entry.signIn = undefined
