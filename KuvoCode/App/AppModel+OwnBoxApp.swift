@@ -1,4 +1,5 @@
 import Foundation
+import OpenCodeKit
 import os
 
 nonisolated private let log = Logger(subsystem: "run.kuvo.code", category: "app")
