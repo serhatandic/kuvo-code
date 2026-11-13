@@ -610,6 +610,8 @@ import Testing
             BackgroundWork.launchctlForTests = nil
             BackgroundWork.shared.refresh()
             try? FileManager.default.removeItem(at: folder)
+            // (Its stand-ins answer for 127.0.0.1 until stopped, the next suite's loopback servers too.)
+            engine.stop()
         }
         let ticks = Ticks()
         let ticking = Task { @MainActor in

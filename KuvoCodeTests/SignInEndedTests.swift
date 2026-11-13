@@ -13,6 +13,8 @@ import Testing
 
     /// The engine's plans: GitHub Copilot signed in with `credential`, OpenAI with a key.
     private func plans(copilot credential: String) {
+        // (Its plugins set up: the box asks before it trusts its list.)
+        engine.on("GET", "/api/provider", json: ["data": []])
         engine.on("GET", "/api/integration", json: ["location": ["directory": "/"], "data": [
             ["id": "github-copilot", "name": "GitHub Copilot", "methods": [["type": "oauth", "id": "github", "label": "Sign in with GitHub"]],
              "connections": [["type": "credential", "id": credential, "label": "GitHub", "method": "oauth"]]],
