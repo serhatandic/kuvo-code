@@ -207,14 +207,6 @@ import UsageKit
         #expect(sent.all.last?.contains(#""always":false"#) == true)
     }
 
-    /// What a stand-in was sent, in order.
-    final class Sent: @unchecked Sendable {
-        private let lock = NSLock()
-        private var items: [String] = []
-        func add(_ item: String) { lock.withLock { items.append(item) } }
-        var all: [String] { lock.withLock { items } }
-    }
-
     @Test func aBoxFromBeforeThemCoversNothing() async throws {
         defer { StubWeb.stop(); HostLimits.shared.update(rows: [], covered: []); UserDefaults.standard.removeObject(forKey: "usage.boxServices") }
         try StubWeb.answer(Self.mac + "/api/kuvo/limits", json: Self.limits([Self.account("claude-code", "claude", agent: "claude", used: 0.42)]))
@@ -228,4 +220,12 @@ import UsageKit
         try await until { HostLimits.shared.covered.isEmpty }
         #expect(HostLimits.shared.rows.isEmpty)
     }
+}
+
+/// What a stand-in was sent, in order.
+nonisolated final class Sent: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [String] = []
+    func add(_ item: String) { lock.withLock { items.append(item) } }
+    var all: [String] { lock.withLock { items } }
 }
