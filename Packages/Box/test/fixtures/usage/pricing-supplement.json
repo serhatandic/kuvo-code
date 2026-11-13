@@ -1,0 +1,17 @@
+{
+ "updated_at": "2026-11-01T00:00:00Z",
+ "pricing": {},
+ "fast_multipliers": {
+  "claude-opus-5": 6
+ },
+ "alias_rules": [
+  {
+   "pattern": "^claude-opus-5-thinking$",
+   "canonical": "claude-opus-5"
+  },
+  {
+   "pattern": "(?i)^OPUS FIVE$",
+   "canonical": "claude-opus-5"
+  }
+ ]
+}

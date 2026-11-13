@@ -42,6 +42,7 @@ import { finishDeletes, forgetLeftKeys } from "./bots/edit";
 import { keepJobs } from "./bots/jobs";
 import { forgetOldKit, readKit } from "./bots/kit";
 import { adoptBox } from "./compat/adopt-settings";
+import { LaunchLockBusy } from "./compat/launch-lock";
 import { forgetPhones } from "./compat/leave-running";
 import { addressOf, newKey, publicOf } from "./crypto/keys";
 import { IKInitiator, IKResponder, openOneWay, PROLOGUE, sealOneWay } from "./crypto/noise";
@@ -66,6 +67,7 @@ import { watchFolders } from "./follow";
 import { pushRows } from "./work/elsewhere";
 import { pushNumbers } from "./work-queue/numbers";
 import { noteSetupNow } from "./setup/lead";
+import { macName, mainElsewhere, pairElsewhere } from "./setup/main-only";
 import { writeCard } from "./setup/card";
 import { hereNow } from "./setup/judge";
 import { pushQueues } from "./work-queue/across";
@@ -95,7 +97,9 @@ import { LinkHost } from "./relay/host";
 import { engineHandler } from "./server/router";
 import { serveBox } from "./server/serve";
 import { macLink, macSign, onLinkWritten, readLink, updateLink } from "./state";
-import { checkDrift, confirmUpdate, isUpdating, noteLauncher, noteOlderMacs, noteUpdate, startUpdate, update, UPDATE_KEYS, updateNight, updatesBlocked, updateState, updateStatus } from "./updates/update";
+import { keepKeyFiles } from "./keys";
+import { keepAwakeWhileWorking } from "./work/awake";
+import { agentsWorking, checkDrift, confirmUpdate, isUpdating, noteLauncher, noteOlderMacs, noteUpdate, startUpdate, update, UPDATE_KEYS, updateNight, updatesBlocked, updateState, updateStatus } from "./updates/update";
 import { BRIDGE_VERSION } from "./version";
 import type { AddressInfo } from "node:net";
 import type { SignedDoc } from "../shared/documents";
@@ -117,6 +121,7 @@ export { decodeMessage, encodeMessage, Frame, frame, pieces, readFrame, readRela
 export { isSecretName, markingHashes, masked, maskedHexValues, maskedNamed, namesHash, showsAll } from "./notices/mask";
 export { docBytes, MOST_DOC, newSigningSeed, ownSign, readDoc, signDoc, signingKeyOf } from "./documents/format";
 export { IS_MAC, LINK_FILE } from "./home";
+export { boxPlaces } from "./places";
 export { BRIDGE_VERSION } from "./version";
 export { FEATURES } from "../shared/features";
 export { macFeatures } from "../shared/routes/mac";
@@ -127,6 +132,7 @@ export { applyCompatibility, COMPATIBILITY_FILE, ENGINE_LAYER_FILE, engineConfig
 export { MODELS_DUE_FILE, refreshModels, settleDueModels } from "./engine/models";
 export { queueOf, queueWatcher, readQueues, scanQueues, stopSession } from "./engine/queue";
 export { PLACE_TRIES } from "./letters/letter";
+export { forgetEverythingSent, SENDING_PATIENCE } from "./server/sent-once";
 export { keepReadThroughSummary, keepWorkRead, settleWorkRead, under } from "./work/tree";
 export { readAllOn, readGroups } from "./areas/read-all";
 export { glances, Unreached } from "./areas/glance";
@@ -139,7 +145,7 @@ export { FIRST_LOOK, WAITING_LOOK, workWatcher } from "./work/wakes";
 export { forgetOldHomes } from "./work/homes";
 export { AT_WORK_LIMIT, atWorkNow, noteStopped, readBackground, readStopped, stopWork } from "./work/background";
 export { goalFollowers, goalHolds, settleGoalHolds, lookAtGoals, periodOf, periodEnd, pauseGoal, REVIEW_PAUSE } from "./work/goals";
-export { keptAwake, letGo } from "./work/awake";
+export { awakeForWork, holdForWork, keptAwake, letGo, lookAtWork, UNTOLD_FOR, WORK_AWAKE_FILE } from "./work/awake";
 export { macLink, readLink, updateLink, writeLink } from "./state";
 export { searchPlugins } from "./areas/plugins";
 export { listFolders, makeFolder } from "./areas/folders";
@@ -166,8 +172,8 @@ export { agentsAllowed, allowed, canonicalPath, signInReturn, socketAllowed } fr
 export { KEEP_FOR, SEEN_FILE, forgetPhones, phoneSeenLately } from "./compat/leave-running";
 export { engineConnect, engineControl, toolRun } from "./areas/engine";
 export { botPersonalities, changePersonalities, mergePersonalities, personalitiesDocument, readPersonalities } from "./personalities/library";
-export { botVariable } from "./keys";
-export { UPDATE_KEYS, boxVersion, checkDrift, confirmUpdate, isUpdating, newerVersion, noteLauncher, noteOlderMacs, startUpdate, update, updateNight, updateStatus, updatesBlocked, verifyBoxes, versionOrder } from "./updates/update";
+export { botVariable, keyFilesWait, syncKeyFiles } from "./keys";
+export { UPDATE_KEYS, agentsWorking, boxVersion, checkDrift, confirmUpdate, isUpdating, newerVersion, noteLauncher, noteOlderMacs, startUpdate, update, updateNight, updateStatus, updatesBlocked, verifyBoxes, versionOrder } from "./updates/update";
 export { FILE_LIMIT } from "./areas/file";
 export { firstMessageOf, jobInMemory, jobLine, keepJobs } from "./bots/jobs";
 export { listBots } from "./bots/list";
@@ -493,7 +499,16 @@ async function box(command: string): Promise<void> {
     case "adopt": {
       let seed: { settings?: unknown; keys?: unknown } | null = null;
       try { seed = JSON.parse((await input()) || "null"); } catch {}
-      const adopted = adoptBox(seed);
+      let adopted: ReturnType<typeof adoptBox>;
+      try {
+        adopted = adoptBox(seed);
+      } catch (error) {
+        // Said as it is, for the Mac to show.
+        if (!(error instanceof LaunchLockBusy)) throw error;
+        console.error(error.message);
+        process.exitCode = 1;
+        return;
+      }
       // Its settings its own now: the branch prefix it kept before, taken into them.
       keepOldBranchPrefix();
       // As its catalogs have them now: a Mac runs this as it connects, having just put newer ones here,
@@ -690,6 +705,11 @@ async function serve(): Promise<void> {
   // as it starts; where its keys can't be reached yet, they stay as they were.
   upgradeIntegrations().catch(() => {});
   refreshBotsKeys().catch(() => {});
+  // A Mac's box in a home of its own: the files its engine reads its keys from, kept as its host
+  // keeps them (its app did that in its folder), and its Mac kept awake while agents work, as its
+  // setting says (its app's keeper did, by the app's).
+  keepKeyFiles();
+  keepAwakeWhileWorking(() => agentsWorking());
   // Keys of bots deleted while they couldn't be reached.
   forgetLeftKeys().catch(() => {});
   // And their conversations and places in group chats, where those weren't answering.
@@ -890,6 +910,16 @@ export function leave(mac: unknown): boolean {
 }
 
 function pair(relay: string | undefined): void {
+  // Only your setup's main computer pairs phones: a member names it, and pairs none (exit 3).
+  const main = mainElsewhere(readLink());
+  if (main) {
+    console.error(pairElsewhere(main).message);
+    // (Until a takeover can be made: a main computer that's gone for good is let go here, as
+    // removing this computer from it would. What that costs is said with it.)
+    const name = main.name || "it";
+    console.error(`If ${name} is gone for good, \`kuvo-link.js leave ${main.key}\` takes this computer out of its setup: your other computers, and phones paired with ${name}, no longer reach it here. Then it pairs phones itself, or names another main computer.`);
+    process.exit(3);
+  }
   const link = updateLink(current => {
     const next = current ?? { secret: crypto.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), name: os.hostname(), phones: [] };
     next.sign ??= newSigningSeed();
@@ -930,7 +960,15 @@ if (main) {
   else if (mode === "pair") pair(argument);
   else if (mode === "box") await box(argument);
   else if (mode === "serve") await serve();
-  else if (mode === "leave") leave(argument);
+  else if (mode === "leave") {
+    // (A Mac removing this machine runs it over SSH, and reads nothing it says.)
+    const name = typeof argument === "string" ? macName(readLink(), argument) : "";
+    if (!leave(argument)) {
+      console.error("That isn't one of the Macs that set this computer up.");
+      process.exit(1);
+    }
+    console.error(`${name || "That Mac"} is let go: this computer is no longer one of its computers.`);
+  }
   // Kuvo Code as it opens on a Mac, before it starts a box (PROTOCOL.md, "Your setup", "Already in a
   // setup?"): whether it uses its own box, or the one already on this Mac, in place. `here <root>`,
   // root the machines' folder's name in the home folder (`.kuvo-code`, or a test's own), with

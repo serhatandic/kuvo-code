@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../shared/json";
 import { oneLine } from "../shared/text";
-import { HOST_VAULT_SECRET, KEYS_ON_HOST, LAUNCH_HOST, RUN } from "./home";
+import { HOST_VAULT_SECRET, KEYS_ON_HOST, LAUNCH_HOST, OWN_HOME_MAC, RUN } from "./home";
 
 /** A key store's trouble, said in plain words: the caller answers `503 {"message"}` with it. */
 export class KeysUnavailable extends Error {}
@@ -90,7 +90,11 @@ export async function proveHost(host: HostAddress, signal?: AbortSignal): Promis
  * where we reached it, with the vault's secret, which only the app and this box hold (the password
  * is in a file an agent's command can read, and rewrite to send this box elsewhere). */
 async function proveVaultHost(host: HostAddress): Promise<void> {
-  if (!HOST_VAULT_SECRET) throw new KeysUnavailable("Kuvo Code on this Mac didn't give its vault its secret. Quit Kuvo Code and open it again.");
+  if (!HOST_VAULT_SECRET) {
+    // A Mac's box in a home of its own: only its service (`serve`) is given the vault's secret, so a
+    // command of its own (`box route`) can't reach its vault.
+    throw new KeysUnavailable(OWN_HOME_MAC ? "This Mac's vault can only be reached by its running box, not by a one-off command." : "Kuvo Code on this Mac didn't give its vault its secret. Quit Kuvo Code and open it again.");
+  }
   if (vaultProvenBy === host.said) return;
   const nonce = crypto.randomBytes(32).toString("hex");
   let proof: Buffer | null = null;

@@ -18,7 +18,7 @@ import { macSign, readLink, updateLink } from "../state";
 import { announce, toldPeers, writeAgents } from "./agents";
 import { takeAgents, vouchedOf } from "./directory";
 import { forgetOldMacs, macsOf, mailFor, openMail, takeLegacyPeers } from "./known";
-import { takeLimits, takeSeat } from "./seats";
+import { bridgeAsk, takeLimits, takeSeat } from "./seats";
 import { queuesBack, takeWorkQueueMail, tellQueuesAgain } from "../work-queue/across";
 import type { PeerPlaces } from "../engine/client";
 import type { DocsMail } from "../documents/work";
@@ -94,9 +94,10 @@ export function receiveMail(
   const opened = openMail(body, link, () => vouchedOf(link));
   if (!opened) return;
   const { sender, payload } = opened;
-  // A box a peer vouches for, not one of this box's own: its plan limits, nothing else.
+  // A box a peer vouches for, not one of this box's own: its plan limits and usage, nothing else.
   if (opened.vouched) {
     if (isObject(payload.limits)) takeLimits(sender, payload.limits).catch(() => {});
+    if (isObject(payload.seat) || isObject(payload.seatPart)) takeSeat(sender, payload, () => {}, bridgeAsk, ["usage"]).catch(() => {});
     return;
   }
   // It answers: whatever this box's tools last heard of it (PROTOCOL.md, "Peers", `run/peer-reach.json`).

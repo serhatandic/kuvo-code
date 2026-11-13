@@ -11,7 +11,10 @@ import { RUN } from "../home";
 import { followed } from "../follow";
 import { writeCard } from "../setup/card";
 import { appsOf, ATTACHED_FILE, foundOf, judgeComputer, oursNow } from "../setup/judge";
+import { addElsewhere, mainElsewhere, memberHosts } from "../setup/main-only";
+import { sharedMachine } from "../setup/settle";
 import { setupView } from "../setup/view";
+import { engineRoute } from "../server/forward";
 import { onLinkWritten, readLink } from "../state";
 import type { AnswerPiece, RouteContext } from "../server/context";
 
@@ -49,4 +52,30 @@ export async function* setupRoute(context: RouteContext): AsyncGenerator<AnswerP
     return yield* followed(() => setupView(readLink()), followers, signal);
   }
   return yield* json(200, setupView(readLink()));
+}
+
+// What adds or removes a computer, as a Mac's app takes it (`POST kuvo/machines`, `DELETE
+// kuvo/machines/<id>`, `POST kuvo/machines/<id>/uninstall`, `DELETE kuvo/hosts/<id>`): on a
+// member, its main computer's to do.
+const ADDS_OR_REMOVES = (method: string, route: string) =>
+  (method === "POST" && (route === "kuvo/machines" || /^kuvo\/machines\/[^/]+\/uninstall$/.test(route)))
+  || (method === "DELETE" && /^kuvo\/(machines|hosts)\/[^/]+$/.test(route));
+
+/** A machine's `kuvo/machines…` and `kuvo/hosts…` (a Mac's box answers them with its app,
+ * `mac/machines.ts`): on a member of a setup, `GET kuvo/hosts` lists the setup's machines from its
+ * document, as a Mac lists its own, and adding or removing one is its main computer's, named in a
+ * 409. The rest go on to the engine, as before (which has none of them). */
+export async function* memberComputersRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
+  const { request, route, json } = context;
+  const method = request.method.toUpperCase();
+  const link = readLink();
+  const main = mainElsewhere(link);
+  if (!main) return yield* engineRoute(context);
+  if (ADDS_OR_REMOVES(method, route)) return yield* json(409, addElsewhere(main));
+  if (method !== "GET" || route !== "kuvo/hosts") return yield* engineRoute(context);
+  const hosts = memberHosts(link);
+  if (hosts) return yield* json(200, hosts);
+  // Shared (more than one Mac set it up): which computers are yours is your own Mac's to say.
+  if (sharedMachine(link)) return yield* json(503, { message: "This computer is shared with more than one Mac: see your computers on the Mac you paired with." });
+  return yield* json(503, { message: "This computer can't list your computers yet. Try again in a moment." });
 }

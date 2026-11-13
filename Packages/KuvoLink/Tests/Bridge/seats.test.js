@@ -427,6 +427,53 @@ test("plan limits with a box only a peer knows (another Mac's, beside a machine 
   }
 });
 
+test("usage history (PROTOCOL.md, \"Usage history\") goes to a box only a peer knows, in parts when it's big; from it, its usage reaches the bridge and its group chats' mail doesn't", async () => {
+  fresh();
+  const air = box("mac", "air");
+  link.takeAgents(second.peer, { at: Date.now(), list: [], boxes: [here.peer, air.peer] });
+  const sent = [];
+  const host = { send: bytes => sent.push(bytes) };
+  // A month of hours is bigger than a mail: it goes in parts, kept nowhere.
+  const used = Array.from({ length: 4000 }, (_, i) => [490000 + i, 0, 123456, 1.234567]);
+  const mail = { kind: "usage", at: 7, accounts: [{ provider: "claude-code", service: "claude", identity: "0123456789abcdef", hours: { models: ["claude-opus-5"], used } }] };
+  assert.equal(link.carrySeat(host, { id: "sm_usage0001", to: air.pub, durable: false, mail }, link.readLink()), true);
+  assert.ok(sent.length > 1, "in parts");
+  const parts = sent.map(bytes => opened(bytes, air).payload.seatPart);
+  assert.ok(parts.every(Boolean));
+  const sending = path.join(run, "outbox", "sending");
+  assert.deepEqual(fs.existsSync(sending) ? fs.readdirSync(sending) : [], [], "nothing kept to send again");
+
+  const posted = [];
+  let heard;
+  const got = new Promise(resolve => { heard = resolve; });
+  const server = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", chunk => { body += chunk; });
+    request.on("end", () => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{}");
+      posted.push(JSON.parse(body));
+      heard();
+    });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  fs.writeFileSync(path.join(run, "bridge.json"), JSON.stringify({ port: server.address().port, password: "bridge-pw" }));
+  try {
+    // A group chat's turn from it first: dropped.
+    const turn = link.mailFor(here.peer, { seat: { kind: "turn", turn: { id: "trn_air" } }, at: Date.now() }, { key: k(air.key) });
+    link.receiveMail(link.readFrame(turn.subarray(17)).body, host, (sender, given) => link.peerMail(sender, given, host));
+    // Its usage, in parts: put together, and to the bridge.
+    for (const part of parts) {
+      const bytes = link.mailFor(here.peer, { seatPart: part, at: Date.now() }, { key: k(air.key) });
+      link.receiveMail(link.readFrame(bytes.subarray(17)).body, host, (sender, given) => link.peerMail(sender, given, host));
+    }
+    await got;
+    assert.deepEqual(posted, [{ from: air.pub, mail }]);
+  } finally {
+    server.close();
+  }
+});
+
 test("a box only a peer knew is forgotten once no peer names it: nothing goes to it, and its mail isn't opened", () => {
   fresh();
   const air = box("mac", "air");

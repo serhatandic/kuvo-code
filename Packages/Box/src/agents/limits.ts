@@ -308,6 +308,11 @@ export class Limits {
     return listed
   }
 
+  /** Who an account here is (`identityOf`), as last known: what its usage rows go by too. */
+  identity(provider: string): string | undefined {
+    return this.entries.get(provider)?.identity
+  }
+
   /** The accounts this box reads from their makers itself (not only from what turns hear), by provider. */
   reads(): Set<string> {
     return new Set(this.accounts().filter((account) => account.limits.read).map((account) => account.provider))

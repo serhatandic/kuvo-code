@@ -9,6 +9,7 @@
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { SEAT_MAIL_KINDS, type SeatLine, type SeatMailKind } from "../../shared/seats"
 import type { LimitsDirectory, LimitsMail, LimitsPeers } from "../limits-peers"
+import { isUsageMail, type UsageMail, type UsagePeers } from "../usage/usage-peers"
 import { RemoteHome, type Clock, type PeerBot, type PeerDirectory, type PeerTransport, type SeatMail, type SeatServer, realClock } from "./peer"
 import type { GroupRunner } from "./runner"
 
@@ -21,7 +22,7 @@ export const isSeatMail = (value: any): value is SeatMail => value !== null && t
 /** Two of what a bot remembers of a chat, for the same bot and chat. */
 const sameMemory = (one: SeatMail, other: SeatMail) => one.kind === "memory" && other.kind === "memory" && one.memory.bot === other.memory.bot && one.memory.chat === other.memory.chat
 
-type Line = SeatLine<SeatMail | LimitsMail>
+type Line = SeatLine<SeatMail | LimitsMail | UsageMail>
 
 /** How often what goes says it's still there while nothing goes: an empty line, so the link, which
  * follows it, can tell a bridge that's alive from one that's stuck (it follows anew after a minute
@@ -44,7 +45,7 @@ export class PeerPost implements PeerTransport {
     this.kept = Array.isArray(kept) ? kept.filter((line) => line && typeof line.id === "string" && typeof line.to === "string" && isSeatMail(line.mail)) : []
   }
 
-  send(to: string, mail: SeatMail | LimitsMail, durable: boolean) {
+  send(to: string, mail: SeatMail | LimitsMail | UsageMail, durable: boolean) {
     const line: Line = { id: "sm_" + crypto.randomUUID().replaceAll("-", ""), to, mail, durable }
     if (durable) {
       // What a bot remembers of a chat, the newest only: one the link hasn't taken yet goes for it.
@@ -139,6 +140,7 @@ export interface PeerParts {
   server?: SeatServer
   runner?: GroupRunner
   limits?: LimitsPeers
+  usage?: UsagePeers
 }
 
 const isLimitsMail = (value: any): value is LimitsMail => value !== null && typeof value === "object" && value.kind === "limits"
@@ -193,6 +195,11 @@ export async function peerRoutes(parts: PeerParts | undefined, method: string, p
     const given = await body().catch(() => undefined)
     if (typeof given?.from === "string" && given.from && isLimitsMail(given.mail)) {
       parts.limits?.take(given.from, given.mail)
+      return json({})
+    }
+    // What its accounts used (PROTOCOL.md, "Usage history").
+    if (typeof given?.from === "string" && given.from && isUsageMail(given.mail)) {
+      parts.usage?.take(given.from, given.mail)
       return json({})
     }
     // Group chats that didn't start here: the link says not now, so what mustn't be lost comes again.

@@ -10,6 +10,7 @@ import crypto from "node:crypto";
 import { isObject } from "../shared/json";
 import { addressOf, publicOf } from "./crypto/keys";
 import { noteDocsChanged } from "./documents/changed";
+import { mainElsewhere } from "./setup/main-only";
 import { held } from "./documents/format";
 import { ADDRESS, KEY, macDoc, macsOf } from "./peers/known";
 import { readLink, updateLink } from "./state";
@@ -36,6 +37,11 @@ export function authorizePhone(key: Buffer, hello: PhoneHello | null | undefined
       return given.length === expected.length && crypto.timingSafeEqual(given, expected);
     });
     if (!slot) return null;
+    // (A link made before this box joined a setup as a member: only its main computer pairs now.)
+    if (mainElsewhere(link)) {
+      delete link![slot];
+      return link;
+    }
     pairPhone(link!, { key: encoded, name: String(hello!.name ?? "").slice(0, 100), added: Math.floor(Date.now() / 1000), from: "pair", address: address?.toString("base64url"), pairing: newPairing() });
     delete link![slot];
     paired = true;
