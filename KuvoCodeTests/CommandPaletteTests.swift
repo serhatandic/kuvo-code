@@ -33,6 +33,7 @@ import Testing
         // The project's files as this Mac's box lists them.
         let box = try await GitTestBox(), client = box.client
         let files = await ProjectFiles.mentionable([repo.url]) { _ in client }
+        withExtendedLifetime(box) {}
         var opened: URL?
         func listed(_ query: String) -> [String: [String]] {
             titles(CommandPalette.sections(for: query, actions: actions, sessions: sessions, files: files) { opened = $0 })

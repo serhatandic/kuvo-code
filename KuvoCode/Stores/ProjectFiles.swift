@@ -55,22 +55,22 @@ nonisolated enum ProjectFiles {
         roots.map { GitPlace.of(RemoteFolder.folder(of: $0), box: box) }
     }
 
-    /// Off the main thread: thousands of files, and for this Mac's, when each last changed.
+    /// Off the main thread: thousands of files.
     @concurrent private static func read(_ roots: [URL], at places: [GitPlace], dated: Bool, sorted: Bool) async -> (files: [File], failure: FolderFailure?) {
         var failure: FolderFailure?
         var files: [File] = []
         for (index, root) in roots.enumerated() {
             let prefix = roots.count > 1 ? root.lastPathComponent + "/" : ""
             let paths: [String]
-            switch await listFiles(in: root, at: places[index]) {
-            case .success(let listed): paths = listed
-            case .failure(let reason): paths = []; failure = failure ?? reason
+            let dates: [Double?]
+            switch await listFiles(in: root, at: places[index], dated: dated) {
+            case .success(let listed): (paths, dates) = (listed.files, listed.modified ?? [])
+            case .failure(let reason): (paths, dates) = ([], []); failure = failure ?? reason
             }
-            files += paths.map { path in
-                let url = root.appending(path: path)
-                // (A machine's files go without: a date each would be a round trip each.)
-                let modified = dated && url.isFileURL ? (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate : nil
-                return File(path: prefix + path, url: url, folder: index, mention: index == 0 ? path : prefix + path, modified: modified)
+            files += paths.enumerated().map { at, path in
+                // When it last changed, as its box says.
+                let modified = at < dates.count ? dates[at].map { Date(timeIntervalSince1970: $0 / 1000) } : nil
+                return File(path: prefix + path, url: root.appending(path: path), folder: index, mention: index == 0 ? path : prefix + path, modified: modified)
             }
         }
         return (sorted ? newestFirst(files) : files, failure)
@@ -78,12 +78,10 @@ nonisolated enum ProjectFiles {
 
     /// The files under one root, as the box it's on lists them (`kuvo/folders/tree`): git's list
     /// (tracked and new, without ignored files) in a repository; otherwise, and where git lists
-    /// nothing (a folder its repository ignores), a walk that skips the usual heavy folders.
-    private static func listFiles(in root: URL, at place: GitPlace) async -> Result<[String], FolderFailure> {
-        struct Tree: Decodable { let files: [String] }
-        var query = URLComponents()
-        query.queryItems = [URLQueryItem(name: "path", value: place.path)]
-        let asked = "kuvo/folders/tree?" + (query.percentEncodedQuery ?? "").replacingOccurrences(of: "+", with: "%2B")
+    /// nothing (a folder its repository ignores), a walk that skips the usual heavy folders;
+    /// `dated`, with when each last changed.
+    private static func listFiles(in root: URL, at place: GitPlace, dated: Bool) async -> Result<FolderTree, FolderFailure> {
+        let asked = "kuvo/folders/tree?path=" + Workspace.queryValue(place.path) + (dated ? "&dated=1" : "")
         let status: Int, data: Data
         do {
             (status, data) = try await place.client.send("GET", asked)
@@ -91,24 +89,31 @@ nonisolated enum ProjectFiles {
             return .failure(place.machine.map(FolderFailure.unreached) ?? FolderFailure(reason: "Kuvo Code’s background service on this Mac didn’t answer", said: false))
         }
         if (200..<300).contains(status) {
-            guard let tree = try? JSONDecoder().decode(Tree.self, from: data) else { return .failure(FolderFailure(reason: "Its list of files couldn’t be read", said: false)) }
-            return .success(tree.files)
+            guard let tree = try? JSONDecoder().decode(FolderTree.self, from: data) else { return .failure(FolderFailure(reason: "Its list of files couldn’t be read", said: false)) }
+            return .success(tree)
         }
         if Git.lacksRoute(status, data) {
-            // COMPAT(beta.1 git-older-box): this Mac's older box, running on after an update, says the list waits for it; a machine's box from before `kuvo/folders/tree` lists them with its git or a walk over SSH, as before. Goes when 0.8.0 ships.
-            guard place.machine != nil else { return .failure(FolderFailure(reason: "Kuvo Code on this Mac is finishing an update. Try again once the work that’s running now ends", said: false)) }
+            // COMPAT(beta.1 git-older-box): this Mac's older box says the list waits for it (running on after an update) or needs a newer version (one attached in place); a machine's box from before `kuvo/folders/tree` lists them with its git or a walk over SSH, as before. Goes when 0.8.0 ships.
+            guard place.machine != nil else { return .failure(place.client.box == BoxClient.mac ? .updating : .olderService) }
             if let listed = Git.run(["-c", "core.quotepath=off", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], in: RemoteFolder.folder(of: root)), !listed.isEmpty {
                 var seen = Set<String>()
-                return .success(listed.split(separator: "\0").map(String.init).filter { seen.insert($0).inserted }.prefix(20_000).map { $0 })
+                return .success(FolderTree(files: listed.split(separator: "\0").map(String.init).filter { seen.insert($0).inserted }.prefix(20_000).map { $0 }))
             }
-            return RemoteShell.files(in: root, skipping: [".git", "node_modules", "build", "DerivedData", ".build", "Pods", "dist", ".next"], limit: 20_000)
+            return RemoteShell.files(in: root, skipping: [".git", "node_modules", "build", "DerivedData", ".build", "Pods", "dist", ".next"], limit: 20_000).map { FolderTree(files: $0) }
         }
         let refusal = BoxRefusal(status: status, data: data)
         // This Mac's box starting (with the app, or again after an update), or not up.
-        if status == 503 { return .failure(FolderFailure(reason: refusal.reason == "starting" ? "Kuvo Code’s background service on this Mac is starting" : refusal.message, said: false)) }
+        if status == 503 { return .failure(refusal.reason == "starting" ? .starting : FolderFailure(reason: refusal.message, said: false)) }
         // What the computer said ("Permission denied").
         return .failure(FolderFailure(reason: refusal.reason ?? refusal.message))
     }
+}
+
+/// A folder's files as its box lists them (`kuvo/folders/tree`): when each last changed, asked for,
+/// in milliseconds since 1970.
+nonisolated struct FolderTree: Decodable, Sendable {
+    var files: [String]
+    var modified: [Double?]? = nil
 }
 
 /// Why a folder couldn't be read, as the computer puts it ("Permission denied"), so it never looks
@@ -123,6 +128,13 @@ nonisolated struct FolderFailure: Error, Hashable, Sendable {
     static let missing = FolderFailure(reason: "No such folder")
     static let notFolder = FolderFailure(reason: "Not a folder")
     static func unreached(_ machine: String) -> FolderFailure { FolderFailure(reason: "Couldn't reach \(machine)", said: false) }
+    /// This Mac's box starting (with the app, or again after an update): a list keeps loading, and
+    /// reads again.
+    static let starting = FolderFailure(reason: "Kuvo Code’s background service on this Mac is starting", said: false)
+    /// This Mac's box from before the list, running on after an update until the work under way ends.
+    static let updating = FolderFailure(reason: "Kuvo Code on this Mac is finishing an update. Try again once the work that’s running now ends", said: false)
+    /// The box this Mac is attached to in place, from before the list.
+    static let olderService = FolderFailure(reason: "Kuvo Code’s background service on this Mac needs a newer version to list these files. It updates by itself overnight", said: false)
 
     /// One of this Mac's folders, by what reading it threw.
     init(_ error: Error) {

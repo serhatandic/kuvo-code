@@ -766,6 +766,7 @@ test("switching branches: to one there, or a new one with the changes not commit
   assert.equal(git("symbolic-ref", "--short", "HEAD").trim(), "idea");
   // A name that's an option, or none, is no branch.
   for (const branch of ["-f", "--orphan=x", "", "  ", "a\nb", undefined]) assert.equal((await route("POST", "kuvo/git/switch", { directory: repo, branch })).status, 400, String(branch));
+  assert.equal((await route("POST", "kuvo/git/switch", { directory: repo, branch: "-wip", create: true })).json.message, "A branch’s name can’t start with “-”.");
   assert.equal((await route("POST", "kuvo/git/switch", { directory: repo, branch: "nowhere" })).status, 422);
 });
 
@@ -814,6 +815,12 @@ test("every file under a folder, for the file filter and @: git's list without w
   assert.equal(json.git, true);
   assert.deepEqual(json.files.sort(), [".gitignore", "README.md", "café notes.md", "logo.png", "new.swift", "src/app.js"]);
   assert.deepEqual((await tree(path.join(repo, "src"))).json.files, ["app.js"]);
+  // Asked for, when each last changed, in the same order, for a list that puts the newest first.
+  fs.utimesSync(path.join(repo, "new.swift"), new Date(1_700_000_000_000), new Date(1_700_000_000_000));
+  const dated = (await route("GET", `kuvo/folders/tree?path=${encodeURIComponent(repo)}&dated=1`)).json;
+  assert.equal(dated.modified.length, dated.files.length);
+  assert.equal(dated.modified[dated.files.indexOf("new.swift")], 1_700_000_000_000);
+  assert.equal(json.modified, undefined, "not unless asked");
 
   // A folder its repository ignores (a dotfiles repository at home that ignores everything).
   write(".gitignore", "*\n!.gitignore\n");

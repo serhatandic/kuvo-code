@@ -6752,7 +6752,15 @@
       "files": {
        "list": "string"
       },
-      "git": "bool"
+      "git": "bool",
+      "modified?": {
+       "list": {
+        "oneOf": [
+         "number",
+         "null"
+        ]
+       }
+      }
      }
     },
     "400": {

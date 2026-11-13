@@ -134,6 +134,8 @@ final class FileTree {
     private(set) var allFiles: [ProjectFiles.File]?
     /// Why filtering found nothing, when a folder couldn't be read.
     private(set) var allFilesFailure: FolderFailure?
+    /// The list a filter searches waits for this Mac's box, which is starting.
+    @ObservationIgnored private var waitsForBox = false
 
     init(roots: [URL]) {
         self.roots = roots
@@ -288,8 +290,12 @@ final class FileTree {
         } else if allFiles != nil {
             let roots = roots
             let listing = await ProjectFiles.listing(roots)
+            // This Mac's box starting again (after an update): what showed stays until it answers.
+            guard listing.failure != .starting else { return }
             if listing.files != allFiles { allFiles = listing.files }
             if listing.failure != allFilesFailure { allFilesFailure = listing.failure }
+        } else if waitsForBox {
+            await loadAllFiles()
         }
     }
 
@@ -330,6 +336,10 @@ final class FileTree {
         guard allFiles == nil else { return }
         let roots = roots
         let listing = await ProjectFiles.listing(roots)
+        // This Mac's box starting (with the app, or again after an update): still loading, and read
+        // again as the panel looks again (`refresh`), rather than said it couldn't be read.
+        waitsForBox = listing.failure == .starting
+        guard !waitsForBox, allFiles == nil else { return }
         allFiles = listing.files
         allFilesFailure = listing.failure
     }

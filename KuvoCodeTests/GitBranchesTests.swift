@@ -123,7 +123,7 @@ import Testing
         #expect(await Git.branches(at: place)?.current == "main")
         #expect(repo.read("a.txt") == "one\n")
         #expect(await Git.switching(to: "nowhere", creating: false, at: place, environment: [:]) != nil)
-        #expect(await Git.switching(to: "-f", creating: false, at: place, environment: [:]) == "Name the branch.")
+        #expect(await Git.switching(to: "-f", creating: false, at: place, environment: [:]) == "A branch’s name can’t start with “-”.")
 
         let plain = AppInfo.testRoot.appending(path: "Folders/plain-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: plain, withIntermediateDirectories: true)

@@ -35080,8 +35080,12 @@ async function* changesRoute(context) {
       return yield* json(404, { message: "That folder isn’t there." });
     if (route === "kuvo/git/switch") {
       const branch = typeof body.branch === "string" ? body.branch : "";
-      if (!branch.trim() || branch.startsWith("-") || /[\0\n\r]/.test(branch))
+      if (!branch.trim())
         return yield* json(400, { message: "Name the branch." });
+      if (branch.startsWith("-"))
+        return yield* json(400, { message: "A branch’s name can’t start with “-”." });
+      if (/[\0\n\r]/.test(branch))
+        return yield* json(400, { message: "A branch’s name is one line." });
       const failed = await switchBranch(directory, branch, body.create === true);
       return yield* failed ? json(422, { message: failed }) : json(200, {});
     }
@@ -40783,8 +40787,9 @@ async function listTree(requestPath, limit = TREE_LIMIT) {
   }
   const listed = await gitOutLater(at, ["-c", "core.quotepath=off", "ls-files", "-z", "--cached", "--others", "--exclude-standard"]);
   const named = [...new Set((listed ?? "").split("\x00").filter(Boolean))];
+  const dated = query.get("dated") === "1";
   if (named.length)
-    return { status: 200, value: { path: at, files: named.slice(0, limit), git: true } };
+    return { status: 200, value: await withDates({ path: at, files: named.slice(0, limit), git: true }, dated) };
   const asks = at === home ? promptedFolders() : new Set;
   const files = [];
   const walk = async (inside) => {
@@ -40807,7 +40812,20 @@ async function listTree(requestPath, limit = TREE_LIMIT) {
     }
   };
   await walk("");
-  return { status: 200, value: { path: at, files, git: false } };
+  return { status: 200, value: await withDates({ path: at, files, git: false }, dated) };
+}
+async function withDates(tree, dated) {
+  if (!dated)
+    return tree;
+  const modified = new Array(tree.files.length).fill(null);
+  for (let at = 0;at < tree.files.length; at += 64) {
+    await Promise.all(tree.files.slice(at, at + 64).map(async (name, offset) => {
+      try {
+        modified[at + offset] = Math.round((await fs130.promises.stat(path132.join(tree.path, name))).mtimeMs);
+      } catch {}
+    }));
+  }
+  return { ...tree, modified };
 }
 function listFolders(requestPath) {
   const query = new URLSearchParams(requestPath.split("?")[1] ?? "");
@@ -40978,7 +40996,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "cffd4c4b8a59";
+var BRIDGE_VERSION = "813400d386cb";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

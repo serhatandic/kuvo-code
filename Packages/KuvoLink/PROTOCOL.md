@@ -3132,8 +3132,8 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     repository to `branch`, or with `"create": true` to a new branch of that name from where it is,
     the changes not committed coming along, as `git switch [-c]` does in your terminal (its hooks
     run, with your environment as a commit's) → `200 {}`, or `422 {"message"}` with git's words (a
-    change in the way, no such branch, a name git won't take). `400` for no name, one starting with
-    `-`, or one with a line break.
+    change in the way, no such branch, a name git won't take). `400 {"message"}` for no name, one
+    starting with `-`, or one with a line break, saying which.
   - `POST kuvo/git/status {"directory"}` (`git.status`, #660): whether anything in the repository
     isn't committed, as removing a worktree would delete it (what a client's Delete says goes with
     one) → `{"repository": false}`, or `{"repository": true, root, uncommitted}`: a change, a new
@@ -3233,8 +3233,10 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   git lists none there (a folder its repository ignores), a walk that skips `.git`,
   `node_modules`, `build`, `DerivedData`, `.build`, `Pods`, `dist` and `.next`, follows no links,
   and on a Mac leaves out the home folder's Desktop, Documents, Downloads, Library, Movies, Music
-  and Pictures (macOS would ask for them). `path` is needed (`~/` starts at the home folder);
-  refused as `kuvo/folders` refuses, with `reason`.
+  and Pictures (macOS would ask for them). With `dated=1`, `modified` too: when each file last
+  changed, in milliseconds since 1970, in the same order (null where it can't be read), for a
+  list that puts the newest first. `path` is needed (`~/` starts at the home folder); refused as
+  `kuvo/folders` refuses, with `reason`.
 - `GET kuvo/programs?name=<program>` (`programs`): whether the box has a program an MCP server's
   command names, found on its PATH as its engine finds it (a name like `npx`, or a path, `~/`
   from the home folder) → `{"name", "path"}`, `path` null when it hasn't; `"unknown": true` (and
@@ -6903,4 +6905,5 @@ can go three months after 0.8.0 ships.
   running on after an update until the work under way ends, it runs no git of its own: the title
   bar's branch menu lists no branches and Switch says it works again then, the file filter says
   so too, Delete says changes not committed may go with a worktree, and Edit Project leaves out
-  the worktree setup. <!-- compat: beta.1 git-older-box -->
+  the worktree setup. A box the app is attached to in place, from before, gets the same, but
+  Switch and the file filter say it needs a newer version. <!-- compat: beta.1 git-older-box -->

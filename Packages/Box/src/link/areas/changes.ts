@@ -415,7 +415,7 @@ export async function statusIn(directory: string): Promise<GitStatus | null> {
 }
 
 /** The branch `directory` has checked out, or null. */
-const branchOf =async (directory: string) => (await text(directory, ["symbolic-ref", "--quiet", "--short", "HEAD"]))?.trim() || null;
+const branchOf = async (directory: string) => (await text(directory, ["symbolic-ref", "--quiet", "--short", "HEAD"]))?.trim() || null;
 
 /** Why `directory`'s branch can't go into `target` yet, if it can't: changes not committed (only
  * what's committed goes), or nothing `target` doesn't have. */
@@ -701,7 +701,9 @@ export async function* changesRoute(context: RouteContext): AsyncGenerator<Answe
     if (route === "kuvo/git/switch") {
       // A branch's name, never an option, nor more than one line.
       const branch = typeof body.branch === "string" ? body.branch : "";
-      if (!branch.trim() || branch.startsWith("-") || /[\0\n\r]/.test(branch)) return yield* json(400, { message: "Name the branch." });
+      if (!branch.trim()) return yield* json(400, { message: "Name the branch." });
+      if (branch.startsWith("-")) return yield* json(400, { message: "A branch’s name can’t start with “-”." });
+      if (/[\0\n\r]/.test(branch)) return yield* json(400, { message: "A branch’s name is one line." });
       const failed = await switchBranch(directory, branch, body.create === true);
       return yield* failed ? json(422, { message: failed }) : json(200, {});
     }

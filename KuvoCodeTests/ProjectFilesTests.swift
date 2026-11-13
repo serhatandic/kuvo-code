@@ -1,4 +1,5 @@
 import Foundation
+import KuvoLink
 import Testing
 @testable import KuvoCode
 
@@ -95,5 +96,44 @@ import Testing
         // Not a mention: an address, or once the word has ended.
         #expect(Mentions.query(in: "write to me@example.com") == nil)
         #expect(Mentions.query(in: "see @src/App.swift ") == nil)
+    }
+
+    /// A box answering every request with `status` and `body`.
+    private func answering(_ status: Int, _ body: String, box id: String = BoxClient.mac) -> BoxClient {
+        BoxClient(box: id, transport: LocalBox { _ in
+            AsyncThrowingStream { continuation in
+                continuation.yield(.head(status: status, headers: [:]))
+                continuation.yield(.body(Data(body.utf8)))
+                continuation.finish()
+            }
+        })
+    }
+
+    /// What the filter says when the list can't be read: this Mac's box starting keeps it loading
+    /// (`starting`, read again); one from before the list says to wait for its update, or, one
+    /// attached in place, that it needs a newer version; a folder its box can't read, why.
+    @Test(arguments: [
+        (503, #"{"message":"Starting.","reason":"starting"}"#, BoxClient.mac, FolderFailure.starting),
+        (404, "{}", BoxClient.mac, FolderFailure.updating),
+        (404, "{}", "attached", FolderFailure.olderService),
+        (403, #"{"message":"It can't be read here.","reason":"Permission denied"}"#, BoxClient.mac, FolderFailure.denied),
+    ])
+    func whyTheListIsntThere(status: Int, body: String, box id: String, failure: FolderFailure) async throws {
+        let repo = try TestRepository()
+        let client = answering(status, body, box: id)
+        let listing = await ProjectFiles.listing([repo.url]) { _ in client }
+        #expect(listing.files.isEmpty)
+        #expect(listing.failure == failure)
+    }
+
+    /// Newest first, by when its box says each last changed.
+    @Test func newestFirstByWhatItsBoxSays() async throws {
+        let repo = try TestRepository()
+        for (name, seconds) in [("old.txt", 1_600_000_000.0), ("new.txt", 1_700_000_000.0), ("middle.txt", 1_650_000_000.0)] {
+            try repo.write(name, "x\n")
+            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: seconds)], ofItemAtPath: repo.url.appending(path: name).path(percentEncoded: false))
+        }
+        let client = box.client
+        #expect(await ProjectFiles.newestFirst([repo.url]) { _ in client }.map(\.path) == ["new.txt", "middle.txt", "old.txt"])
     }
 }

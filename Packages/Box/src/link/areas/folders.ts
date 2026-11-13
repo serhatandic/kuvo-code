@@ -53,6 +53,7 @@ export interface FolderTree {
   path: string;
   files: string[];
   git: boolean;
+  modified?: (number | null)[];
 }
 
 /** How many files a tree lists at most. */
@@ -64,8 +65,10 @@ const HEAVY = new Set([".git", "node_modules", "build", "DerivedData", ".build",
  * folder), by its path there, at most
  * `limit`: in a repository git's list (tracked and new, without what it ignores, each once, names as
  * they are), `git` true; otherwise, and where git lists nothing there (a folder its repository
- * ignores), a walk that skips the usual heavy folders and doesn't follow links. Refused as
- * `kuvo/folders` refuses a folder it can't read. */
+ * ignores), a walk that skips the usual heavy folders and doesn't follow links. With `dated=1`,
+ * when each last changed (`modified`, milliseconds since 1970, in the same order; null where it
+ * can't be read), for a list that puts the newest first. Refused as `kuvo/folders` refuses a
+ * folder it can't read. */
 export async function listTree(requestPath: string, limit = TREE_LIMIT): Promise<JSONAnswer<FolderTree | FolderRefused | { message: string }>> {
   const query = new URLSearchParams(requestPath.split("?")[1] ?? "");
   const home = homeFolder();
@@ -81,7 +84,8 @@ export async function listTree(requestPath: string, limit = TREE_LIMIT): Promise
   // conflict is listed for each side).
   const listed = await gitOutLater(at, ["-c", "core.quotepath=off", "ls-files", "-z", "--cached", "--others", "--exclude-standard"]);
   const named = [...new Set((listed ?? "").split("\0").filter(Boolean))];
-  if (named.length) return { status: 200, value: { path: at, files: named.slice(0, limit), git: true } };
+  const dated = query.get("dated") === "1";
+  if (named.length) return { status: 200, value: await withDates({ path: at, files: named.slice(0, limit), git: true }, dated) };
   // Platform: on a Mac, looking into these from the home folder would have macOS ask you for them.
   const asks = at === home ? promptedFolders() : new Set<string>();
   const files: string[] = [];
@@ -101,7 +105,22 @@ export async function listTree(requestPath: string, limit = TREE_LIMIT): Promise
     }
   };
   await walk("");
-  return { status: 200, value: { path: at, files, git: false } };
+  return { status: 200, value: await withDates({ path: at, files, git: false }, dated) };
+}
+
+/** `tree` with when each of its files last changed, when `dated`: read a few at a time, so the box
+ * goes on answering meanwhile. */
+async function withDates(tree: FolderTree, dated: boolean): Promise<FolderTree> {
+  if (!dated) return tree;
+  const modified: (number | null)[] = new Array(tree.files.length).fill(null);
+  for (let at = 0; at < tree.files.length; at += 64) {
+    await Promise.all(tree.files.slice(at, at + 64).map(async (name, offset) => {
+      try {
+        modified[at + offset] = Math.round((await fs.promises.stat(path.join(tree.path, name))).mtimeMs);
+      } catch {}
+    }));
+  }
+  return { ...tree, modified };
 }
 
 /** `kuvo/folders?path=`: the folders in one of this box's folders (none: the home folder; `~/`

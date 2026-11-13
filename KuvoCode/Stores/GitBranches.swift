@@ -31,6 +31,8 @@ nonisolated extension Git {
     /// Switching branches on this Mac while Kuvo Code finishes an update: its background service
     /// moves to the new version once the work that's running ends.
     static let switchAfterUpdate = "Kuvo Code on this Mac is finishing an update. Switching branches works again once the work that’s running now ends; try again then."
+    /// Switching branches where this Mac is attached in place to a box from before it.
+    static let switchNeedsNewerService = "Kuvo Code’s background service on this Mac needs a newer version to switch branches. It updates by itself overnight."
 
     /// Whether a box answered as one from before the route: `404` with nothing to say (a folder
     /// that isn't there says why).
@@ -61,8 +63,8 @@ nonisolated extension Git {
             let (status, data) = try await place.client.send("POST", "kuvo/git/switch", body: JSONEncoder().encode(Asked(directory: place.path, branch: branch, create: creating)))
             if (200..<300).contains(status) { return nil }
             guard lacksRoute(status, data) else { return BoxRefusal(status: status, data: data).message }
-            // COMPAT(beta.1 git-older-box): this Mac's older box, running on after an update, says Switch waits for it; a machine's box from before `kuvo/git/switch` switches with its git over SSH, as before. Goes when 0.8.0 ships.
-            guard place.machine != nil else { return switchAfterUpdate }
+            // COMPAT(beta.1 git-older-box): this Mac's older box says Switch waits for it (running on after an update) or needs a newer version (one attached in place); a machine's box from before `kuvo/git/switch` switches with its git over SSH, as before. Goes when 0.8.0 ships.
+            guard place.machine != nil else { return place.client.box == BoxClient.mac ? switchAfterUpdate : switchNeedsNewerService }
             return report(["switch"] + (creating ? ["-c"] : []) + [branch], in: place.here(place.path), environment: environment)
         } catch {
             return place.unreachable(error)

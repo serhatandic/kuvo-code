@@ -17,8 +17,9 @@ export const FOLDER_LIST = object({
   "files?": list(string),
 });
 /** Every file under one of this box's folders, by its path there, as a project's file filter and
- * "@" list them: git's list in a repository (`git`), else a walk that skips the usual heavy folders. */
-export const FOLDER_TREE = object({ path: string, files: list(string), git: bool });
+ * "@" list them: git's list in a repository (`git`), else a walk that skips the usual heavy folders;
+ * asked with `dated=1`, when each last changed (milliseconds since 1970, null where it can't say). */
+export const FOLDER_TREE = object({ path: string, files: list(string), git: bool, "modified?": list(nullable(number)) });
 /** Why a folder couldn't be read, as the computer says it ("Permission denied"). */
 export const FOLDER_REFUSED = object({ message: string, "reason?": string });
 /** A new folder, made where it was asked. */
