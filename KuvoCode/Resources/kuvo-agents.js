@@ -1,7 +1,7 @@
 // @bun
 // Packages/Box/src/agents/main.ts
-import { mkdirSync as mkdirSync26, readdirSync as readdirSync20, readFileSync as readFileSync37, rmSync as rmSync17 } from "fs";
-import { basename as basename13, dirname as dirname22, join as join40 } from "path";
+import { mkdirSync as mkdirSync26, readdirSync as readdirSync22, readFileSync as readFileSync38, rmSync as rmSync17 } from "fs";
+import { basename as basename13, dirname as dirname22, join as join42 } from "path";
 
 // Packages/Box/src/agents/accounts.ts
 import { randomBytes } from "crypto";
@@ -7126,9 +7126,9 @@ function ancestors(path) {
 }
 
 // Packages/Box/src/agents/agents/antigravity.ts
-import { createHash as createHash6 } from "crypto";
-import { chmodSync, existsSync as existsSync12, mkdirSync as mkdirSync12, readdirSync as readdirSync13, readFileSync as readFileSync18, renameSync as renameSync10, rmSync as rmSync10, statSync as statSync8, writeFileSync as writeFileSync14 } from "fs";
-import { dirname as dirname11, join as join21 } from "path";
+import { createHash as createHash7 } from "crypto";
+import { chmodSync, existsSync as existsSync13, mkdirSync as mkdirSync13, readdirSync as readdirSync14, readFileSync as readFileSync21, renameSync as renameSync11, rmSync as rmSync10, statSync as statSync8, writeFileSync as writeFileSync15 } from "fs";
+import { dirname as dirname12, join as join23 } from "path";
 import { pathToFileURL as pathToFileURL2 } from "url";
 
 // Packages/Box/src/agents/acp.ts
@@ -9514,9 +9514,1670 @@ function questionFields(questions) {
   }));
 }
 
-// Packages/Box/src/agents/signin.ts
-import { existsSync as existsSync9, lstatSync as lstatSync5, mkdtempSync, readdirSync as readdirSync10, readFileSync as readFileSync15, rmSync as rmSync7 } from "fs";
+// Packages/Box/src/agents/usage/antigravity-plan.ts
+import { readFileSync as readFileSync17, readdirSync as readdirSync10, readlinkSync } from "fs";
+import { join as join19 } from "path";
+
+// Packages/Box/src/agents/limits.ts
+import { createHash as createHash4 } from "crypto";
+import { mkdirSync as mkdirSync10, readFileSync as readFileSync15, renameSync as renameSync8, writeFileSync as writeFileSync12 } from "fs";
+import { dirname as dirname10 } from "path";
+
+// Packages/Box/src/agents/limits-rows.ts
+function limitRows(boxes) {
+  const groups = [];
+  const found = new Map;
+  for (const box of boxes) {
+    for (const account of box.accounts) {
+      const id = account.identity ? `${account.service}#${account.identity}` : `${box.key}/${account.provider}`;
+      const index = found.get(id);
+      if (index !== undefined)
+        groups[index].members.push({ box, account });
+      else {
+        found.set(id, groups.length);
+        groups.push({ id, members: [{ box, account }] });
+      }
+    }
+  }
+  return groups.map(({ id, members }) => {
+    const row = {
+      ...merged(members.map((member) => member.account)),
+      id,
+      boxes: members.map(({ box, account }) => ({
+        key: box.key,
+        name: box.name,
+        provider: account.provider,
+        ...account.agent ? { agent: account.agent } : {},
+        ...account.account ? { account: account.account } : {},
+        ...account.label ? { label: account.label } : {},
+        ...account.checked ? { checked: account.checked } : {},
+        ...box.here ? { here: true } : {},
+        ...box.away ? { away: true } : {}
+      }))
+    };
+    if (members.every((member) => member.box.away))
+      row.away = true;
+    return row;
+  });
+}
+var newestOf = (account) => account.checked ?? Math.max(0, ...account.windows.map((window) => window.read));
+function merged(members) {
+  const base = members.find((member) => member.agent) ?? members[0];
+  if (members.length === 1)
+    return base;
+  const account = { ...base };
+  const label = members.map((member) => member.label?.trim()).find(Boolean);
+  if (label)
+    account.label = label;
+  else
+    delete account.label;
+  const windows = [];
+  for (const member of members) {
+    for (const window of member.windows) {
+      const index = windows.findIndex((each) => limitOf2(each) === limitOf2(window));
+      if (index < 0)
+        windows.push(window);
+      else if (window.read > windows[index].read)
+        windows[index] = window;
+    }
+  }
+  account.windows = windows;
+  const newest = [...members].sort((a, b) => newestOf(b) - newestOf(a));
+  const plan = newest.find((member) => member.plan)?.plan;
+  const balance = newest.find((member) => member.balance)?.balance;
+  const extras = newest.find((member) => member.checked && !member.problem)?.extras;
+  const checked = Math.max(0, ...members.map((member) => member.checked ?? 0));
+  const next = Math.min(...members.map((member) => member.next ?? Infinity));
+  for (const key of ["plan", "balance", "extras", "checked", "next", "problem"])
+    delete account[key];
+  if (plan)
+    account.plan = plan;
+  if (balance)
+    account.balance = balance;
+  if (extras?.length)
+    account.extras = extras;
+  if (checked)
+    account.checked = checked;
+  if (Number.isFinite(next))
+    account.next = next;
+  if (members.every((member) => member.problem))
+    account.problem = newest[0].problem;
+  return account;
+}
+function limitOf2(window) {
+  if (window.model === undefined && window.name === undefined && window.minutes === undefined)
+    return "id:" + window.id;
+  return `${window.model?.toLowerCase() ?? ""}|${window.name ?? ""}|${window.minutes ?? ""}`;
+}
+
+// Packages/Box/src/agents/limits.ts
+class LimitsProblem extends Error {
+  kind;
+  until;
+  sent;
+  constructor(kind, message, until, sent = true) {
+    super(message);
+    this.kind = kind;
+    this.until = until;
+    this.sent = sent;
+  }
+}
+var MINUTE = 60000;
+var FIRST_HOLD = 60 * MINUTE;
+var LONGEST_HOLD = 6 * 60 * MINUTE;
+var FIRST_RETRY = 5 * MINUTE;
+var LONGEST_RETRY = 30 * MINUTE;
+var NOTHING_AGAIN = 30 * MINUTE;
+var FRESH_ENOUGH = MINUTE;
+var SHARED_SLACK = 2 * MINUTE;
+
+class Limits {
+  accounts;
+  file;
+  now;
+  prepare;
+  settled;
+  entries = new Map;
+  holds = new Map;
+  asked = new Map;
+  refusals = new Map;
+  reading;
+  timer;
+  said = "";
+  constructor(accounts, file, now = Date.now, prepare, settled = () => true) {
+    this.accounts = accounts;
+    this.file = file;
+    this.now = now;
+    this.prepare = prepare;
+    this.settled = settled;
+    this.load();
+    this.said = this.saying();
+  }
+  peers;
+  rows() {
+    const own = this.list(false);
+    return this.peers ? this.peers.rows(own) : limitRows([{ key: "", name: "", here: true, away: false, accounts: own }]);
+  }
+  peersChanged() {
+    this.changed(true, false);
+  }
+  saying() {
+    return JSON.stringify([this.list(), this.rows()]);
+  }
+  start() {
+    this.timer ??= setInterval(() => void this.tick(), MINUTE);
+    this.timer.unref?.();
+    this.tick();
+  }
+  stop() {
+    if (this.timer)
+      clearInterval(this.timer);
+    this.timer = undefined;
+  }
+  list(borrowed = true) {
+    const listed = [];
+    for (const account of this.accounts()) {
+      const entry = this.entries.get(account.provider);
+      if (!entry || entry.problem?.kind === "none")
+        continue;
+      if (!entry.checked && !entry.windows.length && !entry.problem && !entry.elsewhere)
+        continue;
+      const problem = entry.problem ? { kind: entry.problem.kind, message: entry.problem.message, ...entry.problem.until ? { until: entry.problem.until } : {} } : undefined;
+      const peer = borrowed && entry.elsewhere && entry.identity ? this.peers?.freshest(account.service, entry.identity) : undefined;
+      if (peer?.checked && peer.checked > (entry.checked ?? 0)) {
+        listed.push({
+          provider: account.provider,
+          service: account.service,
+          ...account.agent ? { agent: account.agent.kind, account: account.agent.account } : {},
+          ...account.label ? { label: account.label } : {},
+          identity: entry.identity,
+          ...peer.plan ?? entry.plan ? { plan: peer.plan ?? entry.plan } : {},
+          windows: peer.windows,
+          ...peer.balance ?? entry.balance ? { balance: peer.balance ?? entry.balance } : {},
+          ...peer.extras?.length ? { extras: peer.extras } : {},
+          ...entry.checked ? { checked: entry.checked } : {},
+          ...account.limits.read ? { next: entry.next } : {}
+        });
+        continue;
+      }
+      listed.push({
+        provider: account.provider,
+        service: account.service,
+        ...account.agent ? { agent: account.agent.kind, account: account.agent.account } : {},
+        ...account.label ? { label: account.label } : {},
+        ...entry.identity ? { identity: entry.identity } : {},
+        ...entry.plan ? { plan: entry.plan } : {},
+        windows: entry.windows,
+        ...entry.balance ? { balance: entry.balance } : {},
+        ...entry.extras?.length ? { extras: entry.extras } : {},
+        ...entry.checked ? { checked: entry.checked } : {},
+        ...account.limits.read ? { next: entry.next } : {},
+        ...problem ? { problem } : {}
+      });
+    }
+    return listed;
+  }
+  identity(provider) {
+    return this.entries.get(provider)?.identity;
+  }
+  held(provider) {
+    const entry = this.entries.get(provider);
+    const source = this.accounts().find((each) => each.provider === provider)?.limits;
+    if (!entry || !source)
+      return false;
+    if (entry.problem?.kind === "expired" && entry.signIn !== undefined && entry.signIn === source.signIn?.())
+      return true;
+    return this.heldBack(source, entry, this.now());
+  }
+  reads() {
+    return new Set(this.accounts().filter((account) => account.limits.read).map((account) => account.provider));
+  }
+  services() {
+    return [...new Set([...this.accounts().map((account) => account.service), ...this.alsoServices])];
+  }
+  alsoServices = [];
+  async refresh(only) {
+    const at = this.now();
+    for (const account of this.accounts()) {
+      const source = account.limits;
+      const entry = this.entries.get(account.provider);
+      if (!source.read || !entry || this.heldBack(source, entry, at))
+        continue;
+      if (only && !only(account, entry.identity))
+        continue;
+      if (entry.checked && at - entry.checked < Math.max(FRESH_ENOUGH, source.every))
+        continue;
+      entry.next = Math.min(entry.next, at);
+    }
+    await this.tick();
+  }
+  tick() {
+    this.reading ??= this.readDue().finally(() => this.reading = undefined);
+    return this.reading;
+  }
+  heldBack(source, entry, at) {
+    const hold = source.bucket ? this.holds.get(source.bucket) ?? 0 : 0;
+    return at < hold || entry.problem?.kind === "rate-limited" && at < (entry.problem.until ?? entry.next);
+  }
+  async readDue() {
+    await this.prepare?.();
+    for (const account of this.accounts()) {
+      const source = account.limits;
+      this.listen(account.provider, source);
+      let entry = this.entries.get(account.provider);
+      if (!entry) {
+        entry = { windows: [], next: 0 };
+        this.entries.set(account.provider, entry);
+      }
+      this.switched(entry, source);
+      const says = source.identity?.();
+      this.identify(entry, says);
+      const as = source.account?.() ?? source.signIn?.();
+      if (!says && entry.identityAs !== undefined && as !== undefined && as !== entry.identityAs) {
+        this.forget(entry);
+        entry.identity = undefined;
+        entry.identityAs = undefined;
+      }
+      if (!source.read)
+        continue;
+      const at = this.now();
+      if (at < entry.next)
+        continue;
+      const hold = source.bucket ? this.holds.get(source.bucket) ?? 0 : 0;
+      if (at < hold) {
+        entry.next = hold;
+        continue;
+      }
+      const known = says || entry.identityAs !== undefined && entry.identityAs === as ? entry.identity : undefined;
+      const elsewhere = known ? this.peers?.fresh(account.service, known) : undefined;
+      if (elsewhere !== undefined && at - elsewhere < source.every) {
+        entry.elsewhere = elsewhere;
+        entry.next = elsewhere + source.every + SHARED_SLACK;
+        continue;
+      }
+      const last = source.bucket ? this.asked.get(source.bucket) ?? 0 : 0;
+      if (source.bucket && at - last < MINUTE) {
+        entry.next = last + MINUTE;
+        continue;
+      }
+      if ((entry.problem?.kind === "expired" || entry.problem?.kind === "unreadable") && entry.signIn !== undefined && entry.signIn === source.signIn?.()) {
+        entry.next = at + Math.max(source.every, FIRST_RETRY);
+        continue;
+      }
+      const before = source.bucket ? this.asked.get(source.bucket) : undefined;
+      if (source.bucket)
+        this.asked.set(source.bucket, at);
+      const sent = await this.readOne(source, entry);
+      if (source.bucket && !sent) {
+        if (before === undefined)
+          this.asked.delete(source.bucket);
+        else
+          this.asked.set(source.bucket, before);
+      }
+      this.changed();
+    }
+    this.forgetGone();
+    this.changed();
+  }
+  async readOne(source, entry) {
+    const started = this.now();
+    entry.next = Math.max(entry.next, started + source.every);
+    this.save();
+    try {
+      const reading = await source.read(started);
+      const at = this.now();
+      if (reading)
+        this.identify(entry, reading.identity);
+      if (reading?.identity)
+        entry.identityAs = source.account?.() ?? source.signIn?.();
+      entry.next = at + source.every;
+      if (!reading)
+        return false;
+      entry.checked = at;
+      entry.plan = reading.plan ?? entry.plan;
+      entry.balance = reading.balance;
+      entry.extras = reading.extras?.length ? reading.extras : undefined;
+      const heard = entry.windows.filter((window) => reading.partial && !reading.windows.some((each) => each.id === window.id) || window.source === "turn" && (window.read >= started || !reading.windows.some((each) => each.id === window.id)));
+      entry.windows = [...reading.windows.filter((window) => !heard.some((each) => each.id === window.id)).map((window) => ({ ...window, used: clamp(window.used), read: at, source: "usage" })), ...heard];
+      entry.problem = undefined;
+      entry.signIn = undefined;
+      entry.refusals = 0;
+      entry.failures = 0;
+      if (source.bucket)
+        this.refusals.delete(source.bucket);
+      return true;
+    } catch (caught) {
+      const at = this.now();
+      if (!entry.identity)
+        this.identify(entry, source.identity?.());
+      entry.checked = at;
+      const problem = caught instanceof LimitsProblem ? caught : new LimitsProblem("failed", `Couldn't read its limits: ${caught instanceof Error ? caught.message : String(caught)}`);
+      entry.problem = { kind: problem.kind, message: problem.message, ...problem.until ? { until: problem.until } : {} };
+      switch (problem.kind) {
+        case "rate-limited": {
+          const refusals = (source.bucket ? this.refusals.get(source.bucket) ?? 0 : entry.refusals ?? 0) + 1;
+          entry.refusals = refusals;
+          if (source.bucket)
+            this.refusals.set(source.bucket, refusals);
+          const wait = problem.until ? Math.max(problem.until, at + source.every) : at + Math.min(FIRST_HOLD * 2 ** (refusals - 1), LONGEST_HOLD);
+          entry.next = wait;
+          entry.problem.until = wait;
+          if (source.bucket)
+            this.holds.set(source.bucket, Math.max(this.holds.get(source.bucket) ?? 0, wait));
+          break;
+        }
+        case "none":
+          entry.windows = [];
+          entry.plan = undefined;
+          entry.balance = undefined;
+          entry.extras = undefined;
+          entry.next = at + NOTHING_AGAIN;
+          break;
+        case "expired":
+        case "unreadable":
+          entry.signIn = source.signIn?.();
+          entry.next = at + Math.max(source.every, FIRST_RETRY);
+          break;
+        default:
+          entry.failures = (entry.failures ?? 0) + 1;
+          entry.next = at + Math.max(source.every, Math.min(FIRST_RETRY * 2 ** (entry.failures - 1), LONGEST_RETRY));
+      }
+      return problem.sent;
+    }
+  }
+  identify(entry, raw) {
+    if (!raw)
+      return;
+    const identity = identityOf(raw);
+    if (entry.identity === identity)
+      return;
+    if (entry.identity)
+      this.forget(entry);
+    entry.identity = identity;
+  }
+  forget(entry) {
+    entry.windows = [];
+    entry.plan = undefined;
+    entry.balance = undefined;
+    entry.extras = undefined;
+    entry.checked = undefined;
+    entry.problem = { kind: "failed", message: "Signed in to another account here: its limits show once they're read." };
+    entry.signIn = undefined;
+    entry.elsewhere = undefined;
+    entry.refusals = 0;
+    entry.failures = 0;
+    entry.next = 0;
+  }
+  switched(entry, source) {
+    if (source.read || !source.signIn)
+      return;
+    const now = source.signIn();
+    if (now === undefined)
+      return;
+    if (entry.heardAs !== undefined && entry.heardAs !== now) {
+      entry.windows = [];
+      entry.plan = undefined;
+      entry.balance = undefined;
+      entry.extras = undefined;
+      entry.checked = undefined;
+      entry.problem = undefined;
+      entry.identity = undefined;
+      entry.elsewhere = undefined;
+    }
+    entry.heardAs = now;
+  }
+  listen(provider, source) {
+    if (source.heard)
+      return;
+    source.heard = (window) => {
+      let entry = this.entries.get(provider);
+      if (!entry) {
+        entry = { windows: [], next: 0 };
+        this.entries.set(provider, entry);
+      }
+      this.switched(entry, source);
+      if (entry.problem?.kind === "none" || !source.read)
+        entry.problem = undefined;
+      const before = entry.windows.find((each) => each.id === window.id);
+      const heard = {
+        ...before,
+        ...window,
+        minutes: window.minutes ?? before?.minutes,
+        model: window.model ?? before?.model,
+        used: clamp(window.used),
+        read: this.now(),
+        source: "turn"
+      };
+      if (heard.minutes === undefined)
+        delete heard.minutes;
+      if (heard.model === undefined)
+        delete heard.model;
+      if (heard.name === undefined)
+        delete heard.name;
+      if (heard.resetsAt === undefined)
+        delete heard.resetsAt;
+      entry.windows = before ? entry.windows.map((each) => each.id === window.id ? heard : each) : [...entry.windows, heard];
+      this.changed(true);
+    };
+  }
+  forgetGone() {
+    if (!this.settled())
+      return;
+    const here = new Set(this.accounts().map((account) => account.provider));
+    for (const provider of this.entries.keys())
+      if (!here.has(provider))
+        this.entries.delete(provider);
+  }
+  lastHeardSave = 0;
+  changed(heard = false, own = true) {
+    const list = this.list();
+    const rows = this.rows();
+    const now = JSON.stringify([list, rows]);
+    if (own && (!heard || this.now() - this.lastHeardSave >= 30000)) {
+      if (heard)
+        this.lastHeardSave = this.now();
+      this.save();
+    }
+    if (own)
+      this.peers?.tell(!heard);
+    if (now === this.said)
+      return;
+    this.said = now;
+    emit("kuvo.limits.updated", { accounts: list, rows });
+  }
+  load() {
+    if (!this.file)
+      return;
+    try {
+      const saved = JSON.parse(readFileSync15(this.file, "utf8"));
+      for (const [provider, entry] of Object.entries(saved.accounts ?? {})) {
+        if (!entry || !Array.isArray(entry.windows) || typeof entry.next !== "number")
+          continue;
+        this.entries.set(provider, entry);
+      }
+      for (const [bucket, until] of Object.entries(saved.holds ?? {}))
+        if (typeof until === "number")
+          this.holds.set(bucket, until);
+      for (const [bucket, at] of Object.entries(saved.asked ?? {}))
+        if (typeof at === "number")
+          this.asked.set(bucket, at);
+      for (const [bucket, count] of Object.entries(saved.refusals ?? {}))
+        if (typeof count === "number")
+          this.refusals.set(bucket, count);
+    } catch {}
+  }
+  kept = "";
+  save() {
+    if (!this.file)
+      return;
+    const saved = JSON.stringify({ accounts: Object.fromEntries(this.entries), holds: Object.fromEntries(this.holds), asked: Object.fromEntries(this.asked), refusals: Object.fromEntries(this.refusals) });
+    if (saved === this.kept)
+      return;
+    try {
+      mkdirSync10(dirname10(this.file), { recursive: true });
+      writeFileSync12(this.file + ".new", saved);
+      this.kept = saved;
+      renameSync8(this.file + ".new", this.file);
+    } catch {}
+  }
+}
+function clamp(used) {
+  return Number.isFinite(used) ? Math.min(Math.max(used, 0), 1) : 0;
+}
+function retryAt(header, now = Date.now()) {
+  const raw = header?.trim();
+  if (!raw)
+    return;
+  if (/^\d+$/.test(raw))
+    return now + Number(raw) * 1000;
+  const date = Date.parse(raw);
+  return Number.isFinite(date) ? Math.max(date, now) : undefined;
+}
+var json6 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+async function limitsRoutes(limits, method, rest) {
+  if (!limits)
+    return json6({ message: "Plan limits aren't read on this computer." }, 503);
+  const answer = () => json6({ data: { accounts: limits.list(), services: limits.services(), rows: limits.rows() } });
+  if (!rest.length && method === "GET")
+    return answer();
+  if (rest.length === 1 && rest[0] === "refresh" && method === "POST") {
+    const reading = limits.refresh().finally(() => limits.peers?.refreshElsewhere(limits.rows(), limits.reads()));
+    await Promise.race([reading, new Promise((resolve) => setTimeout(resolve, 2000).unref?.())]);
+    return answer();
+  }
+  return json6({ message: "Not available for this agent." }, 404);
+}
+var AGENT_SERVICES = { claude: "claude", codex: "codex", grok: "grok", cursor: "cursor", antigravity: "antigravity" };
+function agentAccounts(agents) {
+  return agents.flatMap((agent) => {
+    const parsed = parseProvider(agent.providerID);
+    if (!agent.limits || !parsed)
+      return [];
+    return [{ provider: agent.providerID, service: AGENT_SERVICES[parsed.kind], agent: { kind: parsed.kind, account: parsed.id }, ...agent.instance.label ? { label: agent.instance.label } : {}, limits: agent.limits }];
+  });
+}
+function fingerprint(secret) {
+  return secret ? createHash4("sha256").update(secret).digest("hex").slice(0, 16) : undefined;
+}
+function identityOf(raw) {
+  return createHash4("sha256").update(`kuvo-code plan limits account v1
+`).update(raw).digest("hex").slice(0, 16);
+}
+function tokenClaims(token) {
+  const part = token?.trim().split(".")[1];
+  if (!part)
+    return;
+  try {
+    const claims = JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
+    return claims && typeof claims === "object" ? claims : undefined;
+  } catch {
+    return;
+  }
+}
+function chatGPTIdentity(access, accountID) {
+  const auth = tokenClaims(access)?.["https://api.openai.com/auth"];
+  const account = text2(auth?.chatgpt_account_id) ?? text2(accountID);
+  if (!account)
+    return;
+  const user = text2(auth?.chatgpt_user_id) ?? text2(auth?.user_id);
+  return `chatgpt:${account}${user ? `/${user}` : ""}`;
+}
+function xaiIdentity(...tokens) {
+  for (const token of tokens) {
+    const user = text2(tokenClaims(token)?.sub);
+    if (user)
+      return `xai:${user}`;
+  }
+  return;
+}
+var text2 = (value) => typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+
+// Packages/Box/src/agents/usage/numbers.ts
+function numberOf(value) {
+  if (typeof value === "number")
+    return Number.isFinite(value) ? value : undefined;
+  if (typeof value === "string" && /^\s*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?\s*$/.test(value)) {
+    const found = Number(value);
+    return Number.isFinite(found) ? found : undefined;
+  }
+  return;
+}
+
+// Packages/Box/src/agents/usage/cursor-api.ts
+import { existsSync as existsSync9, readFileSync as readFileSync16 } from "fs";
 import { join as join18 } from "path";
+var cursorEndpoints = {
+  api2: "https://api2.cursor.sh",
+  web: "https://cursor.com",
+  live: false
+};
+function cursorReachable() {
+  return cursorEndpoints.live || cursorEndpoints.api2 !== "https://api2.cursor.sh" && cursorEndpoints.web !== "https://cursor.com";
+}
+var CONNECT = { "Content-Type": "application/json", "Connect-Protocol-Version": "1" };
+function cursorSession(accessToken) {
+  const subject = tokenClaims(accessToken)?.sub;
+  if (typeof subject !== "string" || !subject.trim())
+    return;
+  const parts = subject.trim().split("|");
+  const user = parts.length > 1 ? parts[1] : parts[0];
+  if (!user)
+    return;
+  return { user, cookie: `WorkosCursorSessionToken=${user}%3A%3A${accessToken}` };
+}
+function cursorKey(folder, own, env = process.env, now = Date.now()) {
+  const fromEnvironment = own ? env.CURSOR_API_KEY?.trim() : undefined;
+  if (fromEnvironment)
+    return fromEnvironment;
+  try {
+    const saved = JSON.parse(readFileSync16(join18(folder, "auth.json"), "utf8"));
+    const key = typeof saved?.apiKey === "string" ? saved.apiKey.trim() : "";
+    if (!key)
+      return;
+    if (typeof saved.apiKeyExpiresAtMs === "number" && saved.apiKeyExpiresAtMs < now)
+      return;
+    return key;
+  } catch {
+    return;
+  }
+}
+function cursorKeyUnreadable(folder) {
+  const file = join18(folder, "auth.json");
+  if (!existsSync9(file))
+    return false;
+  try {
+    JSON.parse(readFileSync16(file, "utf8"));
+    return false;
+  } catch {
+    return true;
+  }
+}
+var HOLD_WITHOUT_WORD = 15 * 60000;
+
+class CursorClient {
+  key;
+  now;
+  unreadable;
+  token;
+  refused;
+  holdUntil = 0;
+  exchanging;
+  constructor(key, now = Date.now, unreadable = () => false) {
+    this.key = key;
+    this.now = now;
+    this.unreadable = unreadable;
+  }
+  signIn() {
+    return fingerprint(this.key());
+  }
+  identity() {
+    const kept = this.token;
+    if (!kept || kept.key !== this.key())
+      return;
+    const user = cursorSession(kept.access)?.user;
+    return user ? `cursor:${user.toLowerCase()}` : undefined;
+  }
+  hold(until) {
+    this.holdUntil = Math.max(this.holdUntil, until ?? this.now() + HOLD_WITHOUT_WORD);
+  }
+  holdFor(header) {
+    const until = retryAt(header, this.now());
+    this.hold(until);
+    return until;
+  }
+  heldUntil() {
+    return this.now() < this.holdUntil ? this.holdUntil : undefined;
+  }
+  async accessToken(fresh = false) {
+    if (!cursorReachable())
+      throw new LimitsProblem("none", "Cursor isn't asked from this box.", undefined, false);
+    const key = this.key();
+    if (!key && this.unreadable())
+      throw new LimitsProblem("failed", "Cursor's sign-in here can't be read just now.", undefined, false);
+    if (!key)
+      throw new LimitsProblem("none", "Not signed in to Cursor here.", undefined, false);
+    if (this.refused === fingerprint(key))
+      throw new LimitsProblem("expired", "Cursor turned its sign-in away: sign in to Cursor again in Settings \u203A Accounts.", undefined, false);
+    const held = this.heldUntil();
+    if (held)
+      throw new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", held, false);
+    const kept = this.token;
+    if (!fresh && kept && kept.key === key && this.now() < kept.until)
+      return kept.access;
+    if (this.exchanging?.key === key)
+      return this.exchanging.answer;
+    const answer = this.exchange(key).finally(() => {
+      if (this.exchanging?.answer === answer)
+        this.exchanging = undefined;
+    });
+    this.exchanging = { key, answer };
+    return answer;
+  }
+  async exchange(key) {
+    let answer;
+    try {
+      answer = await send(`${cursorEndpoints.api2}/auth/exchange_user_api_key`, { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: "{}" }, 1e4);
+    } catch {
+      throw new LimitsProblem("failed", "Couldn't reach Cursor. Check your connection.");
+    }
+    if (answer.status === 400 || answer.status === 401) {
+      this.refused = fingerprint(key);
+      throw new LimitsProblem("expired", "Cursor turned its sign-in away: sign in to Cursor again in Settings \u203A Accounts.");
+    }
+    if (answer.status === 429)
+      throw new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", this.holdFor(answer.headers.get("retry-after")));
+    if (answer.status < 200 || answer.status >= 300)
+      throw new LimitsProblem("failed", `Cursor answered ${answer.status}.`);
+    const access = typeof answer.body?.accessToken === "string" ? answer.body.accessToken.trim() : "";
+    if (!access)
+      throw new LimitsProblem("failed", "Cursor's answer wasn't one it gives.");
+    const exp = Number(tokenClaims(access)?.exp);
+    this.token = { key, access, until: Number.isFinite(exp) ? exp * 1000 - 5 * 60000 : 0 };
+    return access;
+  }
+  refuses() {
+    if (this.refused !== undefined && this.refused === fingerprint(this.key()))
+      return new LimitsProblem("expired", "Cursor turned its sign-in away: sign in to Cursor again in Settings \u203A Accounts.", undefined, false);
+    const held = this.heldUntil();
+    return held ? new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", held, false) : undefined;
+  }
+  dashboard(method, access) {
+    const refused = this.refuses();
+    if (refused)
+      return Promise.reject(refused);
+    return send(`${cursorEndpoints.api2}/aiserver.v1.DashboardService/${method}`, { method: "POST", headers: { Authorization: `Bearer ${access}`, ...CONNECT }, body: "{}" }, 1e4);
+  }
+  website(path, access, init = {}, timeout = 1e4) {
+    const session = cursorSession(access);
+    if (!session)
+      return;
+    const refused = this.refuses();
+    if (refused)
+      return Promise.reject(refused);
+    const url = new URL(`${cursorEndpoints.web}${path}`);
+    for (const [name, value] of Object.entries(init.query ?? {}))
+      url.searchParams.set(name, value);
+    const headers = { Cookie: session.cookie };
+    if (init.body !== undefined)
+      Object.assign(headers, { "Content-Type": "application/json", Origin: "https://cursor.com" });
+    return send(url.toString(), { method: init.method ?? "GET", headers, ...init.body !== undefined ? { body: JSON.stringify(init.body) } : {} }, timeout);
+  }
+}
+async function send(url, init, timeout) {
+  if (!cursorReachable())
+    throw new Error("Cursor isn't asked from this box.");
+  const response = await fetch(url, { ...init, redirect: "manual", signal: AbortSignal.timeout(timeout) });
+  const text = await response.text();
+  let body;
+  try {
+    body = text ? JSON.parse(text) : undefined;
+  } catch {}
+  return { status: response.status, body, headers: response.headers };
+}
+
+// Packages/Box/src/agents/usage/cursor-plan.ts
+var DAY_MS = 24 * 60 * 60000;
+var BILLING_PERIOD_MS = 30 * DAY_MS;
+var WEEK_MS = 7 * DAY_MS;
+
+class CursorPlanError extends Error {
+}
+var ORG = new Set(["enterprise", "team"]);
+var text3 = (value) => typeof value === "string" ? value : undefined;
+var trimmed = (value) => {
+  const found = text3(value)?.trim();
+  return found ? found : undefined;
+};
+var object = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
+var clampPercent = (value) => Number.isFinite(value) ? Math.min(Math.max(value, 0), 100) : 0;
+var dollars = (cents) => Math.round(cents) / 100;
+var titled = (value) => value.split(/\s+/).filter(Boolean).map((word) => word.slice(0, 1).toUpperCase() + word.slice(1)).join(" ");
+function isoTime(value) {
+  let s = text3(value)?.trim();
+  if (!s)
+    return;
+  if (s.includes(" ") && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(s))
+    s = s.slice(0, 10) + "T" + s.slice(11);
+  if (s.endsWith(" UTC"))
+    s = s.slice(0, -4) + "Z";
+  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})?$/.exec(s);
+  if (!match)
+    return;
+  const fraction = match[2] ? "." + match[2].slice(1, 4).padEnd(3, "0") : "";
+  const at = Date.parse(match[1] + fraction + (match[3] ?? "Z"));
+  return Number.isFinite(at) ? at : undefined;
+}
+function planFacts(usage) {
+  const isEnabled = usage.enabled !== false;
+  const planUsage = object(usage.planUsage);
+  const limit = planUsage ? numberOf(planUsage.limit) : undefined;
+  const totalPercentUsed = planUsage ? numberOf(planUsage.totalPercentUsed) : undefined;
+  const auto = planUsage ? numberOf(planUsage.autoPercentUsed) : undefined;
+  const api = planUsage ? numberOf(planUsage.apiPercentUsed) : undefined;
+  const spent = (planUsage ? numberOf(planUsage.totalSpend) : undefined) ?? (limit ?? 0) - ((planUsage ? numberOf(planUsage.remaining) : undefined) ?? limit ?? 0);
+  const hasModelPools = auto !== undefined && api !== undefined && auto >= 0 && api >= 0 ? auto > 0 || api > 0 || spent === 0 : false;
+  const spendLimitUsage = object(usage.spendLimitUsage);
+  const spendLimitType = text3(spendLimitUsage?.limitType)?.toLowerCase();
+  const pooledLimit = numberOf(spendLimitUsage?.pooledLimit) ?? 0;
+  const hasPlanUsage = planUsage !== undefined;
+  const hasLimit = limit !== undefined;
+  const hasTotalUsagePercent = totalPercentUsed !== undefined;
+  const planUsageLimitMissing = hasPlanUsage && !hasLimit;
+  return {
+    isEnabled,
+    hasPlanUsage,
+    limit,
+    totalPercentUsed,
+    hasModelPools,
+    hasLimit,
+    hasTotalUsagePercent,
+    planUsageLimitMissing,
+    planUsageUnusable: !hasPlanUsage || planUsageLimitMissing && !hasModelPools,
+    isTeamByShape: spendLimitType === "team" || pooledLimit > 0,
+    shouldTryGenericRequestFallback: isEnabled && hasPlanUsage && !hasLimit && !hasTotalUsagePercent && !hasModelPools
+  };
+}
+var progress = (label, used, limit, format, resetsAt, periodMs, suffix) => ({
+  label,
+  kind: "progress",
+  used,
+  limit,
+  format,
+  ...suffix !== undefined ? { suffix } : {},
+  ...resetsAt !== undefined ? { resetsAt } : {},
+  ...periodMs !== undefined ? { periodMs } : {}
+});
+function grokBotLine(usage) {
+  if (usage.usesPooledEnterpriseAllowance === true || usage.hasNonZeroIncludedLimit === false || usage.includedLimitZero === true)
+    return;
+  const percent = numberOf(usage.usagePercent);
+  if (percent === undefined || percent < 0)
+    return;
+  const reset = isoTime(usage.nextResetTimestampUtc);
+  const start = isoTime(usage.currentPeriodStart);
+  const period = start !== undefined && reset !== undefined && reset > start ? reset - start : WEEK_MS;
+  return progress("Grok Bot usage", clampPercent(percent), 100, "percent", reset, period);
+}
+function billingCycle(usage) {
+  const start = numberOf(usage.billingCycleStart);
+  const end = numberOf(usage.billingCycleEnd);
+  if (start === undefined || end === undefined || !(end > start))
+    return { ...end !== undefined ? { resetsAt: end } : {}, periodMs: BILLING_PERIOD_MS };
+  return { resetsAt: end, periodMs: end - start };
+}
+function onDemandSpendCents(spendLimitUsage, limit, remaining) {
+  const reported = [numberOf(spendLimitUsage.individualUsed), numberOf(spendLimitUsage.pooledUsed), numberOf(spendLimitUsage.totalSpend)].filter((each) => each !== undefined);
+  const positive = reported.find((each) => each > 0);
+  if (positive !== undefined)
+    return positive;
+  const inferred = Math.max(0, limit - remaining);
+  return inferred > 0 ? inferred : reported[0] ?? 0;
+}
+function creditsLine(creditGrants, stripeBalanceCents) {
+  const hasCreditGrants = creditGrants?.hasCreditGrants === true;
+  const grantTotal = hasCreditGrants ? numberOf(creditGrants?.totalCents) ?? 0 : 0;
+  const grantUsed = hasCreditGrants ? numberOf(creditGrants?.usedCents) ?? 0 : 0;
+  const valid = hasCreditGrants && grantTotal > 0;
+  const total = (valid ? grantTotal : 0) + stripeBalanceCents;
+  if (!(total > 0))
+    return;
+  return { label: "Credits", kind: "dollars", amount: dollars(Math.max(0, total - (valid ? grantUsed : 0))) };
+}
+function mapUsage(usage, planName, creditGrants, stripeBalanceCents) {
+  const facts = planFacts(usage);
+  const planUsage = object(usage.planUsage);
+  if (!facts.isEnabled || !planUsage)
+    throw new CursorPlanError("No active Cursor subscription.");
+  const normalizedPlan = planName?.trim().toLowerCase() ?? "";
+  if (!facts.hasLimit && !facts.hasTotalUsagePercent && !facts.hasModelPools)
+    throw new CursorPlanError("Total usage limit missing from API response.");
+  const lines = [];
+  const credits = creditsLine(creditGrants, stripeBalanceCents);
+  if (credits)
+    lines.push(credits);
+  const planUsedCents = numberOf(planUsage.totalSpend) ?? (facts.limit ?? 0) - (numberOf(planUsage.remaining) ?? 0);
+  const computedPercentUsed = facts.limit !== undefined && facts.limit > 0 ? planUsedCents / facts.limit * 100 : 0;
+  const totalUsagePercent = facts.totalPercentUsed ?? computedPercentUsed;
+  const cycle = billingCycle(usage);
+  const spendLimitUsage = object(usage.spendLimitUsage);
+  const isTeam = normalizedPlan === "team" || facts.isTeamByShape;
+  if (isTeam && facts.hasModelPools) {
+    if (facts.totalPercentUsed !== undefined)
+      lines.push(progress("Total usage", facts.totalPercentUsed, 100, "percent", cycle.resetsAt, cycle.periodMs));
+  } else if (isTeam) {
+    if (facts.limit !== undefined)
+      lines.push(progress("Total usage", dollars(planUsedCents), dollars(facts.limit), "dollars", cycle.resetsAt, cycle.periodMs));
+    else if (facts.totalPercentUsed !== undefined)
+      lines.push(progress("Total usage", facts.totalPercentUsed, 100, "percent", cycle.resetsAt, cycle.periodMs));
+    else
+      throw new CursorPlanError("Cursor request-based usage data unavailable. Try again later.");
+  } else {
+    lines.push(progress("Total usage", totalUsagePercent, 100, "percent", cycle.resetsAt, cycle.periodMs));
+  }
+  const auto = numberOf(planUsage.autoPercentUsed);
+  if (auto !== undefined)
+    lines.push(progress("Cursor Models", auto, 100, "percent", cycle.resetsAt, cycle.periodMs));
+  const api = numberOf(planUsage.apiPercentUsed);
+  if (api !== undefined)
+    lines.push(progress("Other Models", api, 100, "percent", cycle.resetsAt, cycle.periodMs));
+  if (spendLimitUsage) {
+    const limit = numberOf(spendLimitUsage.individualLimit) ?? numberOf(spendLimitUsage.pooledLimit) ?? 0;
+    const remaining = numberOf(spendLimitUsage.individualRemaining) ?? numberOf(spendLimitUsage.pooledRemaining) ?? 0;
+    const spent = onDemandSpendCents(spendLimitUsage, limit, remaining);
+    if (limit > 0)
+      lines.push(progress("On-demand", dollars(spent), dollars(limit), "dollars"));
+    else if (spent > 0)
+      lines.push({ label: "On-demand", kind: "dollars", amount: dollars(spent) });
+  }
+  return { ...planLabel(planName) ? { plan: planLabel(planName) } : {}, lines };
+}
+function mapRequestBasedUsage(usage, planName, unavailable) {
+  const lines = [];
+  const gpt4 = object(usage?.["gpt-4"]);
+  const limit = numberOf(gpt4?.maxRequestUsage);
+  if (gpt4 && limit !== undefined && limit > 0) {
+    const cycleStart = isoTime(usage?.startOfMonth);
+    lines.push(progress("Requests", numberOf(gpt4.numRequests) ?? 0, limit, "count", cycleStart !== undefined ? cycleStart + BILLING_PERIOD_MS : undefined, BILLING_PERIOD_MS, "requests"));
+  }
+  if (!lines.length)
+    throw new CursorPlanError(unavailable);
+  return { ...planLabel(planName) ? { plan: planLabel(planName) } : {}, lines };
+}
+function requestBasedFallback(usage, planName, planInfoUnavailable) {
+  const facts = planFacts(usage);
+  if (!facts.isEnabled)
+    return;
+  const plan = planName?.trim().toLowerCase() ?? "";
+  const unusable = facts.planUsageUnusable && !facts.hasTotalUsagePercent;
+  if (unusable && plan === "enterprise")
+    return "Enterprise usage data unavailable. Try again later.";
+  if (unusable && plan === "team")
+    return "Team request-based usage data unavailable. Try again later.";
+  if (unusable && plan === "" && planInfoUnavailable)
+    return "Cursor request-based usage data unavailable. Try again later.";
+  if (facts.isTeamByShape && facts.planUsageLimitMissing && !facts.hasModelPools)
+    return "Cursor request-based usage data unavailable. Try again later.";
+  return;
+}
+function stripeBalanceCents(body) {
+  const balance = numberOf(body?.customerBalance);
+  return balance !== undefined && balance < 0 ? Math.abs(balance) : 0;
+}
+var normalizedMembership = (value) => value?.trim().toLowerCase() || undefined;
+function routingPlanName(planInfoName, membership) {
+  const member = normalizedMembership(membership);
+  if (member && ORG.has(member))
+    return member;
+  return planInfoName?.trim() || undefined;
+}
+function resolvedPlanName(planInfoName, membership) {
+  const member = normalizedMembership(membership);
+  const planInfo = planInfoName?.trim() || undefined;
+  if (member && ORG.has(member) && (planInfo === undefined || ["pro", "pro plan"].includes(planInfo.toLowerCase())))
+    return member;
+  return planInfo ?? member;
+}
+function preferredMembership(local, summary) {
+  const mine = normalizedMembership(local);
+  const theirs = normalizedMembership(summary);
+  if (mine && ORG.has(mine))
+    return mine;
+  if (theirs && ORG.has(theirs))
+    return theirs;
+  return mine ?? theirs;
+}
+function planLabel(value) {
+  const found = value?.trim();
+  return found ? titled(found) : undefined;
+}
+var resolvedPlanLabel = (planInfoName, membership) => planLabel(resolvedPlanName(planInfoName, membership));
+function summaryCycle(summary, requestUsage) {
+  const start = isoTime(summary?.billingCycleStart);
+  const end = isoTime(summary?.billingCycleEnd);
+  if (start !== undefined && end !== undefined && end > start)
+    return { resetsAt: end, periodMs: end - start };
+  const requestStart = isoTime(requestUsage?.startOfMonth);
+  return { ...requestStart !== undefined ? { resetsAt: requestStart + BILLING_PERIOD_MS } : {}, periodMs: BILLING_PERIOD_MS };
+}
+function dollarMeter(value) {
+  const bucket = object(value);
+  if (!bucket || bucket.enabled === false)
+    return;
+  const limit = numberOf(bucket.limit);
+  if (limit === undefined || !(limit > 0))
+    return;
+  const reported = numberOf(bucket.used);
+  const inferred = Math.max(0, limit - (numberOf(bucket.remaining) ?? limit));
+  const used = reported !== undefined && reported > 0 ? reported : inferred;
+  return { used: Math.max(0, used), limit };
+}
+function usableDollarBucket(value) {
+  const bucket = object(value);
+  if (!bucket || bucket.enabled === false)
+    return false;
+  return dollarMeter(bucket) !== undefined || (numberOf(bucket.used) ?? 0) > 0;
+}
+function hasUsableSummary(summary) {
+  const start = isoTime(summary.billingCycleStart);
+  const end = isoTime(summary.billingCycleEnd);
+  if (start !== undefined && end !== undefined && end > start)
+    return true;
+  const individual = object(summary.individualUsage);
+  const team = object(summary.teamUsage);
+  const plan = object(individual?.plan);
+  if (["totalPercentUsed", "autoPercentUsed", "apiPercentUsed"].some((key) => numberOf(plan?.[key]) !== undefined))
+    return true;
+  return [individual?.onDemand, individual?.overall, team?.onDemand, team?.pooled].some(usableDollarBucket);
+}
+function onDemandBucket(value, cycle, lines) {
+  const bucket = object(value);
+  if (!bucket || bucket.enabled === false)
+    return false;
+  const meter = dollarMeter(bucket);
+  if (meter) {
+    lines.push(progress("On-demand", dollars(meter.used), dollars(meter.limit), "dollars", cycle.resetsAt, cycle.periodMs));
+    return true;
+  }
+  const used = numberOf(bucket.used);
+  if (used !== undefined && used > 0) {
+    lines.push({ label: "On-demand", kind: "dollars", amount: dollars(used) });
+    return true;
+  }
+  return false;
+}
+function summaryOnDemand(summary, cycle, lines) {
+  if (onDemandBucket(object(summary?.individualUsage)?.onDemand, cycle, lines))
+    return;
+  onDemandBucket(object(summary?.teamUsage)?.onDemand, cycle, lines);
+}
+function appendMissingOnDemand(summary, lines) {
+  if (lines.some((line) => line.label === "On-demand"))
+    return;
+  summaryOnDemand(summary, summaryCycle(summary, undefined), lines);
+}
+function mapSummary(summary, requestUsage, planName, unavailable) {
+  const cycle = summaryCycle(summary, requestUsage);
+  const lines = [];
+  const requests = object(requestUsage?.["gpt-4"]);
+  const limit = numberOf(requests?.maxRequestUsage);
+  const hasRequests = !!requests && limit !== undefined && limit > 0;
+  if (hasRequests) {
+    const used = Math.max(0, numberOf(requests.numRequests) ?? numberOf(requests.numRequestsTotal) ?? 0);
+    for (const label of ["Total usage", "Requests"])
+      lines.push(progress(label, used, limit, "count", cycle.resetsAt, cycle.periodMs, "requests"));
+  } else {
+    const individual = object(summary?.individualUsage);
+    const team = object(summary?.teamUsage);
+    const limitType = text3(summary?.limitType)?.toLowerCase();
+    const dollarTotal = (meter) => lines.push(progress("Total usage", dollars(meter.used), dollars(meter.limit), "dollars", cycle.resetsAt, cycle.periodMs));
+    const pooled = dollarMeter(team?.pooled);
+    const percent = numberOf(object(individual?.plan)?.totalPercentUsed);
+    const overall = dollarMeter(individual?.overall);
+    if (limitType === "team" && pooled)
+      dollarTotal(pooled);
+    else if (percent !== undefined)
+      lines.push(progress("Total usage", percent, 100, "percent", cycle.resetsAt, cycle.periodMs));
+    else if (overall)
+      dollarTotal(overall);
+    else if (pooled)
+      dollarTotal(pooled);
+  }
+  const plan = object(object(summary?.individualUsage)?.plan);
+  for (const [key, label] of [
+    ["autoPercentUsed", "Cursor Models"],
+    ["apiPercentUsed", "Other Models"]
+  ]) {
+    const percent = numberOf(plan?.[key]);
+    if (percent !== undefined)
+      lines.push(progress(label, percent, 100, "percent", cycle.resetsAt, cycle.periodMs));
+  }
+  summaryOnDemand(summary, cycle, lines);
+  if (!lines.length)
+    throw new CursorPlanError(unavailable);
+  const summaryMembership = text3(summary?.membershipType);
+  const label = resolvedPlanLabel(planName, preferredMembership(undefined, summaryMembership)) ?? planLabel(planName) ?? planLabel(summaryMembership);
+  return { ...label ? { plan: label } : {}, lines };
+}
+var WINDOWS = {
+  "Total usage": "total",
+  "Cursor Models": "auto",
+  "Other Models": "api",
+  "Grok Bot usage": "grok_bot",
+  "On-demand": "on_demand",
+  Requests: "requests"
+};
+function readingOf(mapped, identity) {
+  const windows = [];
+  let balance;
+  const extras = [];
+  for (const line of mapped.lines) {
+    if (line.kind === "dollars") {
+      if (line.label === "Credits")
+        balance = { left: line.amount, unit: "usd" };
+      if (line.label === "On-demand")
+        extras.push({ id: "on_demand", name: line.label, kind: "spent", amount: line.amount, unit: "usd" });
+      continue;
+    }
+    const id = WINDOWS[line.label];
+    if (!id)
+      continue;
+    const window = { id, used: line.limit > 0 ? line.used / line.limit : 0, name: line.label };
+    if (line.resetsAt !== undefined)
+      window.resetsAt = line.resetsAt;
+    if (line.periodMs !== undefined)
+      window.minutes = Math.round(line.periodMs / 60000);
+    if (line.format === "dollars")
+      window.amount = { used: line.used, limit: line.limit, unit: "usd" };
+    if (line.format === "count")
+      window.amount = { used: line.used, limit: line.limit, unit: "requests" };
+    if (id === "requests" && windows.some((each) => each.id === "total" && each.amount?.unit === "requests" && each.amount.used === line.used && each.amount.limit === line.limit))
+      continue;
+    windows.push(window);
+  }
+  const cycleEnd = mapped.lines.find((line) => line.kind === "progress" && line.label === "Total usage" && line.resetsAt !== undefined);
+  if (cycleEnd?.kind === "progress")
+    for (const extra of extras)
+      extra.resetsAt ??= cycleEnd.resetsAt;
+  return { windows, ...mapped.plan ? { plan: mapped.plan } : {}, ...balance ? { balance } : {}, ...extras.length ? { extras } : {}, ...identity ? { identity } : {} };
+}
+async function optional(client, request) {
+  let answer;
+  try {
+    answer = await request();
+  } catch (error) {
+    if (error instanceof LimitsProblem)
+      throw error;
+    return;
+  }
+  if (answer?.status === 429)
+    throw new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", client.holdFor(answer.headers.get("retry-after")) ?? client.heldUntil());
+  if (!answer || answer.status < 200 || answer.status >= 300)
+    return;
+  return object(answer.body);
+}
+async function readCursorPlan(client, now = Date.now) {
+  let access = await client.accessToken();
+  const attempt = async (token) => {
+    try {
+      return await client.dashboard("GetCurrentPeriodUsage", token);
+    } catch (error) {
+      if (error instanceof LimitsProblem)
+        throw error;
+      throw new LimitsProblem("failed", "Couldn't reach Cursor. Check your connection.");
+    }
+  };
+  let answer = await attempt(access);
+  if (answer.status === 401 || answer.status === 403) {
+    access = await client.accessToken(true);
+    answer = await attempt(access);
+    if (answer.status === 401 || answer.status === 403)
+      throw new LimitsProblem("expired", "Cursor turned its sign-in away: sign in to Cursor again in Settings \u203A Accounts.");
+  }
+  if (answer.status === 429)
+    throw new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", client.holdFor(answer.headers.get("retry-after")));
+  if (answer.status < 200 || answer.status >= 300)
+    throw new LimitsProblem("failed", `Cursor answered ${answer.status}.`);
+  const usage = object(answer.body);
+  if (!usage)
+    throw new LimitsProblem("failed", "Cursor's answer wasn't one it gives.");
+  const user = cursorSession(access)?.user;
+  const identity = user ? `cursor:${user.toLowerCase()}` : undefined;
+  const membership = undefined;
+  const planBody = await optional(client, () => client.dashboard("GetPlanInfo", access));
+  const planInfoName = trimmed(object(planBody?.planInfo)?.planName);
+  const planInfoUnavailable = planInfoName === undefined;
+  const routing = routingPlanName(planInfoName, membership);
+  const display = resolvedPlanName(planInfoName, membership);
+  const grokBot = async (lines) => {
+    const body = await optional(client, () => client.dashboard("GetSandUsageStatus", access));
+    const line = body ? grokBotLine(body) : undefined;
+    if (line)
+      lines.push(line);
+  };
+  const fallback = requestBasedFallback(usage, routing, planInfoUnavailable);
+  const summary = () => optional(client, () => client.website("/api/usage-summary", access));
+  const requests = () => {
+    const who = cursorSession(access)?.user;
+    return optional(client, () => who ? client.website("/api/usage", access, { query: { user: who } }) : undefined);
+  };
+  try {
+    if (fallback !== undefined) {
+      const found = await summary();
+      const mapped = mapSummary(found, await requests(), display ?? routing, fallback);
+      await grokBot(mapped.lines);
+      return { mapped, ...identity ? { identity } : {} };
+    }
+    if (planFacts(usage).shouldTryGenericRequestFallback) {
+      try {
+        const body = await requests();
+        if (!body)
+          throw new CursorPlanError("Cursor request-based usage data unavailable. Try again later.");
+        const mapped = mapRequestBasedUsage(body, display ?? routing, "Cursor request-based usage data unavailable. Try again later.");
+        await grokBot(mapped.lines);
+        return { mapped, ...identity ? { identity } : {} };
+      } catch {}
+    }
+    const grants = await optional(client, () => client.dashboard("GetCreditGrantsBalance", access));
+    const credits = grants && typeof grants.hasCreditGrants === "boolean" && (!grants.hasCreditGrants || (numberOf(grants.totalCents) ?? 0) > 0 && (numberOf(grants.usedCents) ?? -1) >= 0) ? grants : undefined;
+    const stripe = await optional(client, () => client.website("/api/auth/stripe", access));
+    const mapped = mapUsage(usage, planInfoName, credits, stripe && numberOf(stripe.customerBalance) !== undefined ? stripeBalanceCents(stripe) : 0);
+    const label = resolvedPlanLabel(planInfoName, membership);
+    if (label)
+      mapped.plan = label;
+    else
+      delete mapped.plan;
+    const facts = planFacts(usage);
+    const localIsOrg = membership !== undefined && ORG.has(membership);
+    if (localIsOrg || facts.isTeamByShape) {
+      const needsOnDemand = !mapped.lines.some((line) => line.label === "On-demand");
+      if (!(localIsOrg && !needsOnDemand)) {
+        const found = await summary();
+        if (found && hasUsableSummary(found)) {
+          if (needsOnDemand)
+            appendMissingOnDemand(found, mapped.lines);
+          const summaryMembership = text3(found.membershipType)?.trim().toLowerCase();
+          const better = resolvedPlanLabel(planInfoName, preferredMembership(membership, summaryMembership));
+          if (better)
+            mapped.plan = better;
+        }
+      }
+    }
+    await grokBot(mapped.lines);
+    return { mapped, ...identity ? { identity } : {} };
+  } catch (error) {
+    if (error instanceof CursorPlanError)
+      throw new LimitsProblem("failed", error.message);
+    throw error;
+  }
+}
+
+// Packages/Box/src/agents/usage/antigravity-plan.ts
+var specs = [
+  ["gemini-5h", "Session", 300],
+  ["gemini-weekly", "Weekly", 10080],
+  ["3p-5h", "Claude", 300],
+  ["3p-weekly", "Claude Weekly", 10080]
+];
+var finite = (v) => typeof v === "number" && Number.isFinite(v);
+var text4 = (v) => typeof v === "string" && v.trim() ? v.trim() : undefined;
+var groupsOf = (body) => Array.isArray(body?.response?.groups) ? body.response.groups : Array.isArray(body?.groups) ? body.groups : undefined;
+var windowOf = (id, name, minutes, fraction, reset) => ({ id, name, minutes, used: Math.round((1 - Math.min(1, Math.max(0, fraction))) * 100) / 100, ...isoTime(reset) !== undefined ? { resetsAt: isoTime(reset) } : {} });
+function antigravitySummary(bodies) {
+  const lists = bodies.map(groupsOf).filter((g) => g !== undefined);
+  if (!lists.length)
+    return;
+  const found = new Map;
+  for (const groups of lists)
+    for (const group of groups) {
+      if (group?.displayName === "Gemini 4 Argon")
+        continue;
+      for (const b of Array.isArray(group?.buckets) ? group.buckets : []) {
+        if (specs.some(([id]) => id === b?.bucketId) && finite(b?.remainingFraction) && !found.has(b.bucketId))
+          found.set(b.bucketId, b);
+      }
+    }
+  const windows = specs.flatMap(([id, name, minutes]) => {
+    const b = found.get(id);
+    return b ? [windowOf(id, name, minutes, b.remainingFraction, b.resetTime)] : [];
+  });
+  for (const groups of lists) {
+    const weekly = groups.filter((g) => g?.displayName === "Gemini 4 Argon").flatMap((g) => Array.isArray(g?.buckets) ? g.buckets : []).filter((b) => b?.window === "weekly");
+    const b = weekly[0];
+    if (weekly.length !== 1 || !text4(b?.bucketId) || specs.some(([id]) => id === b.bucketId) || b.disabled != null && typeof b.disabled !== "boolean" || b.disabled === true || !finite(b.remainingFraction))
+      continue;
+    const index = windows.findIndex((w) => w.id === "3p-5h" || w.id === "3p-weekly");
+    windows.splice(index < 0 ? windows.length : index, 0, windowOf("argon-weekly", "Argon Weekly", 10080, b.remainingFraction, b.resetTime));
+    break;
+  }
+  return windows;
+}
+function antigravityPlanName(raw) {
+  const name = text4(raw);
+  if (!name)
+    return;
+  if (name.startsWith("Google AI "))
+    return name.slice(10).split(/\s+/).map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
+  for (const word of ["Ultra", "Pro", "Free"])
+    if (name.toLowerCase().includes(word.toLowerCase()))
+      return word;
+  return name.split(/\s+/).map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
+}
+var blacklist = new Set(["MODEL_CHAT_20706", "MODEL_CHAT_23310", "MODEL_GOOGLE_GEMINI_2_5_FLASH", "MODEL_GOOGLE_GEMINI_2_5_FLASH_THINKING", "MODEL_GOOGLE_GEMINI_2_5_FLASH_LITE", "MODEL_GOOGLE_GEMINI_2_5_PRO", "MODEL_PLACEHOLDER_M19", "MODEL_PLACEHOLDER_M9", "MODEL_PLACEHOLDER_M12"]);
+function antigravityLegacy(configs) {
+  const pools = new Map;
+  for (const c of configs) {
+    const label = text4(c?.label ?? c?.displayName);
+    const id = text4(c?.modelOrAlias?.model ?? c?.model ?? c?.modelID);
+    if (!label || c.isInternal === true || blacklist.has(id ?? "") || id === "MODEL_PLACEHOLDER_M421" || [label, id ?? ""].some((s) => /^gemini-4-argon(?:-|$)/.test(s.toLowerCase().replaceAll(" ", "-"))))
+      continue;
+    const pool = label.toLowerCase().includes("gemini") ? "gemini-5h" : "3p-5h";
+    const b = { remainingFraction: finite(c.quotaInfo?.remainingFraction) ? c.quotaInfo.remainingFraction : 0, resetTime: c.quotaInfo?.resetTime };
+    if (!pools.has(pool) || b.remainingFraction < pools.get(pool).remainingFraction)
+      pools.set(pool, b);
+  }
+  return specs.filter(([, , minutes]) => minutes === 300).flatMap(([id, name, minutes]) => {
+    const b = pools.get(id);
+    return b ? [windowOf(id, name, minutes, b.remainingFraction, b.resetTime)] : [];
+  });
+}
+var flagValue = (argv, flag) => {
+  const i = argv.indexOf(flag);
+  return i >= 0 ? argv[i + 1] : argv.find((a) => a.startsWith(flag + "="))?.slice(flag.length + 1);
+};
+var port = (s) => s && /^\d+$/.test(s) && +s > 0 && +s < 65536 ? +s : undefined;
+function antigravityProcPorts(tables, inodes) {
+  const ports = new Set;
+  for (const table of tables)
+    for (const line of table.split(`
+`)) {
+      const cols = line.trim().split(/\s+/);
+      if (cols[3] !== "0A" || !inodes.has(cols[9] ?? ""))
+        continue;
+      const found = parseInt(cols[1]?.split(":")[1] ?? "", 16);
+      if (found > 0 && found < 65536)
+        ports.add(found);
+    }
+  return [...ports].sort((a, b) => a - b);
+}
+var regexEscape = (value) => value.split("").map((c) => "\\^$.*+?()[]{}|".includes(c) ? "\\" + c : c).join("");
+function antigravityMacOwns(command, profile) {
+  const value = regexEscape(profile);
+  return new RegExp(`(?:^|\\s)GEMINI_HOME=${value}(?=$|\\s+[A-Za-z_][A-Za-z_0-9]*=)`).test(command) || new RegExp(`(?:^|\\s)--app_data_dir(?:=|\\s+)["']?${value}["']?(?=$|\\s+--|\\s+[A-Za-z_][A-Za-z_0-9]*=)`).test(command);
+}
+function antigravityEndpoints(argv, ports) {
+  const csrf = flagValue(argv, "--csrf_token");
+  if (!csrf)
+    return [];
+  const endpoints = ports.flatMap((p) => [{ scheme: "https", port: p, csrf }, { scheme: "http", port: p, csrf }]);
+  const extension = port(flagValue(argv, "--extension_server_port"));
+  if (extension)
+    endpoints.push({ scheme: "http", port: extension, csrf });
+  return endpoints;
+}
+async function discoverAntigravity(profile, platform = process.platform, procRoot = "/proc", runner = run) {
+  if (platform === "linux") {
+    let names;
+    try {
+      names = readdirSync10(procRoot);
+    } catch {
+      return [];
+    }
+    for (const pid of names.filter((n) => /^\d+$/.test(n))) {
+      try {
+        const argv = readFileSync17(join19(procRoot, pid, "cmdline"), "utf8").split("\x00").filter(Boolean);
+        if (!argv[0]?.includes("language_server") && !argv[0]?.endsWith("/agy"))
+          continue;
+        const env = readFileSync17(join19(procRoot, pid, "environ"), "utf8").split("\x00");
+        if (!env.includes(`GEMINI_HOME=${profile}`) && flagValue(argv, "--app_data_dir") !== profile)
+          continue;
+        const inodes = new Set(readdirSync10(join19(procRoot, pid, "fd")).flatMap((fd) => {
+          try {
+            const m = /^socket:\[(\d+)\]$/.exec(readlinkSync(join19(procRoot, pid, "fd", fd)));
+            return m ? [m[1]] : [];
+          } catch {
+            return [];
+          }
+        }));
+        const tables = ["tcp", "tcp6"].flatMap((name) => {
+          try {
+            return [readFileSync17(join19(procRoot, pid, "net", name), "utf8")];
+          } catch {
+            return [];
+          }
+        });
+        const endpoints = antigravityEndpoints(argv, antigravityProcPorts(tables, inodes));
+        if (endpoints.length)
+          return endpoints;
+      } catch {}
+    }
+    return [];
+  }
+  if (platform !== "darwin")
+    return [];
+  const ps = await runner("/bin/ps", ["axeww", "-o", "pid=,command="], { timeout: 5000 });
+  if (ps.code)
+    return [];
+  for (const line of ps.stdout.split(`
+`)) {
+    const match = /^\s*(\d+)\s+(.+)$/.exec(line);
+    if (!match || !/language_server|\/agy\b/.test(match[2]))
+      continue;
+    const argv = match[2].split(/\s+/);
+    if (!antigravityMacOwns(match[2], profile))
+      continue;
+    const result = await runner("/usr/sbin/lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-a", "-p", match[1]], { timeout: 5000 });
+    const ports = [...new Set(result.stdout.split(`
+`).filter((l) => l.includes("LISTEN")).flatMap((l) => {
+      const p = port(/:(\d+)\s+\(LISTEN\)/.exec(l)?.[1]);
+      return p ? [p] : [];
+    }))].sort((a, b) => a - b);
+    const endpoints = antigravityEndpoints(argv, ports);
+    if (endpoints.length)
+      return endpoints;
+  }
+  return [];
+}
+function antigravityCredential(raw) {
+  const source = raw?.token && typeof raw.token === "object" ? raw.token : raw;
+  const access = text4(source?.access_token ?? source?.accessToken);
+  const refresh = text4(source?.refresh_token ?? source?.refreshToken);
+  if (!access && !refresh)
+    return;
+  const claims = tokenClaims(source?.id_token ?? source?.idToken) ?? tokenClaims(access);
+  return { access, refresh, identity: text4(claims?.sub) ? `google:${claims.sub}` : undefined, expires: finite(source?.expires_at) ? source.expires_at * 1000 : isoTime(source?.expiry ?? source?.expiresAt), clientID: text4(source?.client_id), clientSecret: text4(source?.client_secret) };
+}
+var antigravityTransport = { live: false };
+var productionBases = ["https://cloudcode-pa.googleapis.com", "https://daily-cloudcode-pa.googleapis.com"];
+
+class AntigravityPlan {
+  profile;
+  fetcher;
+  discover;
+  bases;
+  oauth;
+  denied = new Set;
+  deniedAccess = new Set;
+  deniedCSRF = new Set;
+  lastCredential;
+  lastSignIn;
+  lastAccount;
+  access;
+  limits;
+  constructor(profile, fetcher = (url, init) => fetch(url, init), discover = discoverAntigravity, bases = productionBases, oauth = "https://oauth2.googleapis.com/token") {
+    this.profile = profile;
+    this.fetcher = fetcher;
+    this.discover = discover;
+    this.bases = bases;
+    this.oauth = oauth;
+    this.limits = { every: 10 * 60000, bucket: "antigravity", read: (now) => this.read(now), signIn: () => this.signIn(), account: () => this.account(), identity: () => this.credential()?.identity };
+  }
+  raw() {
+    if (!antigravityTransport.live && this.bases === productionBases)
+      return;
+    try {
+      return readFileSync17(join19(this.profile(), "antigravity-acp", "acp_token.json"), "utf8");
+    } catch (e) {
+      if (e?.code === "ENOENT")
+        return;
+      throw new LimitsProblem("failed", "Antigravity's own sign-in cannot be read here.", undefined, false);
+    }
+  }
+  credential() {
+    try {
+      const raw = this.raw();
+      if (raw === undefined) {
+        this.lastCredential = undefined;
+        this.lastSignIn = undefined;
+        this.lastAccount = undefined;
+        return;
+      }
+      const credential = antigravityCredential(JSON.parse(raw));
+      if (credential) {
+        this.lastCredential = credential;
+        this.lastSignIn = fingerprint(raw);
+        this.lastAccount = fingerprint(credential.refresh ?? credential.access);
+      }
+    } catch {}
+    return this.lastCredential;
+  }
+  signIn() {
+    this.credential();
+    return this.lastSignIn;
+  }
+  account() {
+    this.credential();
+    return this.lastAccount;
+  }
+  async request(url, init, now, allowMissing = false) {
+    let response;
+    try {
+      response = await this.fetcher(url, { ...init, redirect: "error", signal: AbortSignal.timeout(15000) });
+    } catch {
+      throw new LimitsProblem("failed", "Antigravity's quota service is unavailable.");
+    }
+    if (allowMissing && response.status === 404)
+      return;
+    if (url === this.oauth && response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429)
+      throw new LimitsProblem("expired", "Antigravity refused this refresh token. Sign in again.");
+    if (response.status === 429)
+      throw new LimitsProblem("rate-limited", "Antigravity asked this computer to wait.", retryAt(response.headers.get("retry-after"), now));
+    if (response.status === 401 || response.status === 403)
+      throw new LimitsProblem("expired", "Antigravity refused this sign-in. Sign in again.");
+    if (!response.ok)
+      throw new LimitsProblem("failed", `Antigravity quota service returned HTTP ${response.status}.`);
+    try {
+      return await response.json();
+    } catch {
+      throw new LimitsProblem("failed", "Antigravity returned an unreadable quota response.");
+    }
+  }
+  async read(now) {
+    if (!antigravityTransport.live && this.bases === productionBases)
+      return Promise.reject(new LimitsProblem("failed", "Antigravity quotas are disabled outside a real box folder.", undefined, false));
+    const raw = this.raw();
+    if (!raw)
+      throw new LimitsProblem("none", "Sign in to Antigravity in Kuvo Code.", undefined, false);
+    let c;
+    try {
+      c = antigravityCredential(JSON.parse(raw));
+    } catch {}
+    if (!c)
+      throw new LimitsProblem("failed", "Antigravity's own sign-in is unreadable.", undefined, false);
+    const signIn = fingerprint(c.refresh ?? c.access);
+    if (this.denied.has(signIn))
+      throw new LimitsProblem("expired", "Antigravity refused this sign-in. Sign in again.", undefined, false);
+    try {
+      const endpoints = await this.discover(this.profile());
+      for (const e of endpoints) {
+        if (this.deniedCSRF.has(fingerprint(e.csrf)))
+          continue;
+        const call = (method) => this.request(`${e.scheme}://127.0.0.1:${e.port}/exa.language_server_pb.LanguageServerService/${method}`, { method: "POST", headers: { "Content-Type": "application/json", "Connect-Protocol-Version": "1", "x-codeium-csrf-token": e.csrf }, body: JSON.stringify({ metadata: { ideName: "antigravity", extensionName: "antigravity", ideVersion: "unknown", locale: "en" } }), ...e.scheme === "https" ? { tls: { rejectUnauthorized: false } } : {} }, now, true);
+        let summary;
+        try {
+          summary = await call("RetrieveUserQuotaSummary");
+        } catch (error) {
+          if (error instanceof LimitsProblem && error.kind === "rate-limited")
+            throw error;
+          if (error instanceof LimitsProblem && error.kind === "expired")
+            this.deniedCSRF.add(fingerprint(e.csrf));
+          continue;
+        }
+        const windows = antigravitySummary([summary]);
+        if (windows !== undefined) {
+          if (!windows.length)
+            throw new LimitsProblem("failed", "Antigravity's quota summary has no readable buckets.");
+          let plan;
+          try {
+            const status = await call("GetUserStatus");
+            plan = antigravityPlanName(status?.userStatus?.userTier?.name ?? status?.userStatus?.planStatus?.planInfo?.planName);
+          } catch (error) {
+            if (error instanceof LimitsProblem && error.kind === "rate-limited")
+              throw error;
+            if (error instanceof LimitsProblem && error.kind === "expired")
+              this.deniedCSRF.add(fingerprint(e.csrf));
+          }
+          return { windows, plan, partial: windows.filter((w) => w.id !== "argon-weekly").length < 4, identity: c.identity };
+        }
+        try {
+          const status = await call("GetUserStatus");
+          let legacy = antigravityLegacy(status?.userStatus?.cascadeModelConfigData?.clientModelConfigs ?? []);
+          if (!legacy.length) {
+            const configs = await call("GetCommandModelConfigs");
+            legacy = antigravityLegacy(configs?.clientModelConfigs ?? []);
+          }
+          if (legacy.length)
+            return { windows: legacy, partial: true, plan: antigravityPlanName(status?.userStatus?.userTier?.name ?? status?.userStatus?.planStatus?.planInfo?.planName), identity: c.identity };
+        } catch (error) {
+          if (error instanceof LimitsProblem && error.kind === "rate-limited")
+            throw error;
+          if (error instanceof LimitsProblem && error.kind === "expired")
+            this.deniedCSRF.add(fingerprint(e.csrf));
+        }
+      }
+      const cached = this.access && this.access.credential === this.account() && this.access.expires > now + 60000 ? this.access : undefined;
+      let access = cached?.token ?? c.access;
+      if (access && this.deniedAccess.has(fingerprint(access)))
+        access = undefined;
+      if ((!access || !cached && c.expires !== undefined && c.expires <= now + 60000) && c.refresh) {
+        const body = new URLSearchParams({ grant_type: "refresh_token", refresh_token: c.refresh, client_id: c.clientID ?? "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com", client_secret: c.clientSecret ?? "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" });
+        const refreshed = await this.request(this.oauth, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: body.toString() }, now);
+        access = text4(refreshed.access_token);
+        if (!access)
+          throw new LimitsProblem("failed", "Antigravity token refresh returned no access token.");
+        this.access = { credential: this.account(), token: access, expires: now + (finite(refreshed.expires_in) ? refreshed.expires_in : 3600) * 1000 };
+      }
+      if (!access)
+        throw new LimitsProblem("failed", "Antigravity's language server isn't available on this computer and its sign-in has no usable access token.", undefined, false);
+      const headers = { "Content-Type": "application/json", Authorization: `Bearer ${access}`, "User-Agent": `antigravity/2.24.0 (aidev_client; os_type=${process.platform}; arch=${process.arch === "arm64" ? "arm64" : "amd64"})` };
+      const cloudRequest = async (url, body) => {
+        try {
+          return await this.request(url, { method: "POST", headers, body: JSON.stringify(body) }, now);
+        } catch (error) {
+          if (!(error instanceof LimitsProblem) || error.kind !== "expired")
+            throw error;
+          this.deniedAccess.add(fingerprint(access));
+          if (!c.refresh || this.denied.has(fingerprint(c.refresh)))
+            throw error;
+          const form = new URLSearchParams({ grant_type: "refresh_token", refresh_token: c.refresh, client_id: c.clientID ?? "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com", client_secret: c.clientSecret ?? "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" });
+          const refreshed = await this.request(this.oauth, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: form.toString() }, now);
+          const token = text4(refreshed.access_token);
+          if (!token || this.deniedAccess.has(fingerprint(token)))
+            throw new LimitsProblem("expired", "Antigravity did not renew its refused access token.", undefined, false);
+          access = token;
+          this.access = { credential: this.account(), token, expires: now + (finite(refreshed.expires_in) ? refreshed.expires_in : 3600) * 1000 };
+          headers.Authorization = `Bearer ${token}`;
+          try {
+            return await this.request(url, { method: "POST", headers, body: JSON.stringify(body) }, now);
+          } catch (second) {
+            if (second instanceof LimitsProblem && second.kind === "expired")
+              this.deniedAccess.add(fingerprint(token));
+            throw second;
+          }
+        }
+      };
+      const call = async (path, body) => {
+        let last;
+        for (const base of this.bases) {
+          try {
+            return await cloudRequest(base + path, body);
+          } catch (e) {
+            if (e instanceof LimitsProblem && ["expired", "rate-limited"].includes(e.kind))
+              throw e;
+            last = e;
+          }
+        }
+        throw last;
+      };
+      const summaries = [];
+      for (const base of this.bases) {
+        try {
+          summaries.push(await cloudRequest(base + "/v1internal:retrieveUserQuotaSummary", {}));
+        } catch (e) {
+          if (e instanceof LimitsProblem && ["expired", "rate-limited"].includes(e.kind))
+            throw e;
+        }
+        if (antigravitySummary(summaries)?.filter((w) => w.id !== "argon-weekly").length === 4)
+          break;
+      }
+      let windows = antigravitySummary(summaries);
+      if (windows === undefined) {
+        try {
+          const models = await call("/v1internal:fetchAvailableModels", {});
+          windows = antigravityLegacy(Object.entries(models?.models ?? {}).map(([id, value]) => ({ ...value, modelID: value?.model ?? id })));
+        } catch (error) {
+          if (error instanceof LimitsProblem && ["expired", "rate-limited"].includes(error.kind))
+            throw error;
+        }
+        if (!windows?.length) {
+          const status = await call("/v1internal:loadCodeAssist", { metadata: { ideType: "ANTIGRAVITY", platform: "PLATFORM_UNSPECIFIED", pluginType: "GEMINI" } });
+          let quota = await call("/v1internal:retrieveUserQuota", text4(status?.cloudaicompanionProject) ? { project: status.cloudaicompanionProject } : {});
+          if (!quota?.buckets?.length && status?.cloudaicompanionProject)
+            quota = await call("/v1internal:retrieveUserQuota", {});
+          windows = antigravityLegacy((Array.isArray(quota?.buckets) ? quota.buckets : []).filter((b) => text4(b?.modelId)).map((b) => ({ label: b.modelId, modelID: b.modelId, quotaInfo: b })));
+        }
+      }
+      if (!windows?.length)
+        throw new LimitsProblem("failed", "Antigravity's quota response has no readable buckets; the last reading is kept.");
+      let plan;
+      try {
+        const status = await call("/v1internal:loadCodeAssist", { metadata: { ideType: "ANTIGRAVITY", platform: "PLATFORM_UNSPECIFIED", pluginType: "GEMINI" } });
+        plan = { "g1-pro-tier": "Pro", "g1-ultra-tier": "Ultra", "g1-ultra-lite-tier": "Ultra Lite" }[status?.paidTier?.id] ?? antigravityPlanName(status?.paidTier?.name ?? status?.currentTier?.name);
+      } catch (e) {
+        if (e instanceof LimitsProblem && ["expired", "rate-limited"].includes(e.kind))
+          throw e;
+      }
+      return { windows, plan, partial: windows.filter((w) => w.id !== "argon-weekly").length < 4, identity: c.identity };
+    } catch (e) {
+      if (e instanceof LimitsProblem && e.kind === "expired")
+        this.denied.add(signIn);
+      throw e;
+    }
+  }
+}
+
+// Packages/Box/src/agents/signin.ts
+import { existsSync as existsSync10, lstatSync as lstatSync5, mkdtempSync, readdirSync as readdirSync11, readFileSync as readFileSync18, rmSync as rmSync7 } from "fs";
+import { join as join20 } from "path";
 
 // Packages/Box/src/agents/screen.ts
 class Screen {
@@ -9844,7 +11505,7 @@ function sequenceEnd(text, at) {
 
 // Packages/Box/src/agents/signin.ts
 function catcher(temporary) {
-  const path = join18(privateFolder(join18(temporary, "bin")), "kuvo-catch-url");
+  const path = join20(privateFolder(join20(temporary, "bin")), "kuvo-catch-url");
   const script = `#!/bin/sh
 umask 077
 printf '%s\\n' "$1" >> "$KUVO_URL_FILE"
@@ -9856,7 +11517,7 @@ printf '%s\\n' "$1" >> "$KUVO_URL_FILE"
 function ownScript(path, script) {
   try {
     const there = lstatSync5(path);
-    return there.isFile() && there.uid === process.getuid?.() && (there.mode & 511) === 448 && readFileSync15(path, "utf8") === script;
+    return there.isFile() && there.uid === process.getuid?.() && (there.mode & 511) === 448 && readFileSync18(path, "utf8") === script;
   } catch {
     return false;
   }
@@ -9865,7 +11526,7 @@ var SIGN_IN_FOLDER = /^kuvo-signin-(\d+)-/;
 function leftSignIns(temporary) {
   let names = [];
   try {
-    names = readdirSync10(temporary);
+    names = readdirSync11(temporary);
   } catch {}
   for (const name of names) {
     const pid = Number(SIGN_IN_FOLDER.exec(name)?.[1]);
@@ -9875,14 +11536,14 @@ function leftSignIns(temporary) {
       process.kill(pid, 0);
     } catch (error) {
       if (error.code === "ESRCH")
-        rmSync7(join18(temporary, name), { recursive: true, force: true });
+        rmSync7(join20(temporary, name), { recursive: true, force: true });
     }
   }
 }
 async function commandSignIn(options) {
   const browser = catcher(options.temporary);
-  const own = mkdtempSync(join18(options.temporary, `kuvo-signin-${process.pid}-`));
-  const urlFile = join18(own, "url");
+  const own = mkdtempSync(join20(options.temporary, `kuvo-signin-${process.pid}-`));
+  const urlFile = join20(own, "url");
   const env = { ...process.env, ...options.env, BROWSER: browser, KUVO_URL_FILE: urlFile };
   for (const name of Object.keys(env))
     if (env[name] === undefined)
@@ -10010,8 +11671,8 @@ async function commandSignIn(options) {
     const printed = firstURL(output);
     if (options.printedPage)
       return printed ?? "";
-    if (existsSync9(urlFile))
-      return readFileSync15(urlFile, "utf8").split(`
+    if (existsSync10(urlFile))
+      return readFileSync18(urlFile, "utf8").split(`
 `)[0].trim();
     if (printed)
       printedAt ??= waited;
@@ -10085,16 +11746,16 @@ function lastLines(text) {
 }
 
 // Packages/Box/src/agents/skills.ts
-import { createHash as createHash4 } from "crypto";
-import { cpSync, existsSync as existsSync10, mkdirSync as mkdirSync10, readdirSync as readdirSync11, readFileSync as readFileSync16, renameSync as renameSync8, rmSync as rmSync8, statSync as statSync6, symlinkSync, utimesSync, writeFileSync as writeFileSync12 } from "fs";
-import { dirname as dirname10, join as join19, resolve as resolve6, sep as sep10 } from "path";
+import { createHash as createHash5 } from "crypto";
+import { cpSync, existsSync as existsSync11, mkdirSync as mkdirSync11, readdirSync as readdirSync12, readFileSync as readFileSync19, renameSync as renameSync9, rmSync as rmSync8, statSync as statSync6, symlinkSync, utimesSync, writeFileSync as writeFileSync13 } from "fs";
+import { dirname as dirname11, join as join21, resolve as resolve6, sep as sep10 } from "path";
 var link2;
 var home;
 function setSkillSource(engine, folder) {
   link2 = engine;
   home = folder;
 }
-var skillsRoot = () => home ? join19(home, "skills") : undefined;
+var skillsRoot = () => home ? join21(home, "skills") : undefined;
 var listed = new Map;
 var said = new Map;
 function skillFolders() {
@@ -10115,9 +11776,9 @@ function engineSkills(directory) {
       for (const skill of list) {
         const name = typeof skill?.name === "string" ? skill.name : typeof skill?.id === "string" ? skill.id : undefined;
         const path = typeof skill?.path === "string" ? skill.path : undefined;
-        if (!name || !path || path.startsWith("/builtin/") || !path.endsWith("SKILL.md") || !existsSync10(path))
+        if (!name || !path || path.startsWith("/builtin/") || !path.endsWith("SKILL.md") || !existsSync11(path))
           continue;
-        found.push({ name, folder: dirname10(path) });
+        found.push({ name, folder: dirname11(path) });
       }
       if (!list.length)
         listed.delete(directory);
@@ -10136,7 +11797,7 @@ function upward(directory) {
   let at = resolve6(directory);
   while (true) {
     folders.push(at);
-    const up = dirname10(at);
+    const up = dirname11(at);
     if (up === at)
       return folders;
     at = up;
@@ -10168,8 +11829,8 @@ function stamp2(folder) {
   let size = 0;
   let changed = 0;
   const visit = (at, depth) => {
-    for (const name of readdirSync11(at)) {
-      const path = join19(at, name);
+    for (const name of readdirSync12(at)) {
+      const path = join21(at, name);
       const info = statSync6(path);
       changed = Math.max(changed, info.mtimeMs);
       if (info.isDirectory()) {
@@ -10220,30 +11881,30 @@ function skillsFolder(skills) {
   const list = named2(skills);
   if (!list.length)
     return;
-  const set = createHash4("sha256").update(list.map((entry) => `${entry.name}\x00${entry.skill.folder}\x00${entry.stamp}`).join(`
+  const set = createHash5("sha256").update(list.map((entry) => `${entry.name}\x00${entry.skill.folder}\x00${entry.stamp}`).join(`
 `)).digest("hex").slice(0, 16);
-  const root = join19(home, "skills");
-  const folder = join19(root, set);
+  const root = join21(home, "skills");
+  const folder = join21(root, set);
   const now = new Date;
-  if (existsSync10(join19(folder, ".claude-plugin", "plugin.json"))) {
+  if (existsSync11(join21(folder, ".claude-plugin", "plugin.json"))) {
     try {
       utimesSync(folder, now, now);
     } catch {}
     return folder;
   }
   tidy(root);
-  const making = join19(root, `.${set}-${process.pid}`);
+  const making = join21(root, `.${set}-${process.pid}`);
   rmSync8(making, { recursive: true, force: true });
-  mkdirSync10(join19(making, "skills"), { recursive: true, mode: 448 });
-  mkdirSync10(join19(making, ".claude-plugin"), { recursive: true });
-  mkdirSync10(join19(making, ".cursor"), { recursive: true });
+  mkdirSync11(join21(making, "skills"), { recursive: true, mode: 448 });
+  mkdirSync11(join21(making, ".claude-plugin"), { recursive: true });
+  mkdirSync11(join21(making, ".cursor"), { recursive: true });
   for (const entry of list)
-    copy(entry.skill.folder, join19(making, "skills", entry.name));
-  writeFileSync12(join19(making, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "kuvo-code", description: "The skills in Kuvo Code's Settings \u203A Skills.", version: "1.0.0" }, null, 2) + `
+    copy(entry.skill.folder, join21(making, "skills", entry.name));
+  writeFileSync13(join21(making, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "kuvo-code", description: "The skills in Kuvo Code's Settings \u203A Skills.", version: "1.0.0" }, null, 2) + `
 `);
-  symlinkSync(join19("..", "skills"), join19(making, ".cursor", "skills"));
+  symlinkSync(join21("..", "skills"), join21(making, ".cursor", "skills"));
   try {
-    renameSync8(making, folder);
+    renameSync9(making, folder);
   } catch {
     rmSync8(making, { recursive: true, force: true });
   }
@@ -10252,12 +11913,12 @@ function skillsFolder(skills) {
 function tidy(root) {
   let names = [];
   try {
-    names = readdirSync11(root);
+    names = readdirSync12(root);
   } catch {
     return;
   }
   for (const name of names) {
-    const path = join19(root, name);
+    const path = join21(root, name);
     try {
       if (Date.now() - statSync6(path).mtimeMs > 86400000)
         rmSync8(path, { recursive: true, force: true });
@@ -10266,34 +11927,34 @@ function tidy(root) {
 }
 function copySkillsInto(folder, skills) {
   const list = named2(skills);
-  const record = join19(folder, ".kuvo-code");
+  const record = join21(folder, ".kuvo-code");
   let before = {};
   try {
-    before = JSON.parse(readFileSync16(record, "utf8"));
+    before = JSON.parse(readFileSync19(record, "utf8"));
   } catch {}
   const after = {};
   for (const entry of list)
     after[entry.name] = `${entry.skill.folder}\x00${entry.stamp}`;
   if (JSON.stringify(before) !== JSON.stringify(after)) {
-    mkdirSync10(folder, { recursive: true, mode: 448 });
+    mkdirSync11(folder, { recursive: true, mode: 448 });
     for (const name of Object.keys(before))
       if (before[name] !== after[name])
-        rmSync8(join19(folder, folderName(name)), { recursive: true, force: true });
+        rmSync8(join21(folder, folderName(name)), { recursive: true, force: true });
     for (const entry of list) {
-      if (before[entry.name] === after[entry.name] && existsSync10(join19(folder, entry.name)))
+      if (before[entry.name] === after[entry.name] && existsSync11(join21(folder, entry.name)))
         continue;
-      if (!existsSync10(join19(folder, entry.name)) && !copy(entry.skill.folder, join19(folder, entry.name)))
+      if (!existsSync11(join21(folder, entry.name)) && !copy(entry.skill.folder, join21(folder, entry.name)))
         delete after[entry.name];
     }
-    writeFileSync12(record, JSON.stringify(after));
+    writeFileSync13(record, JSON.stringify(after));
   }
-  return list.length ? createHash4("sha256").update(JSON.stringify(after)).digest("hex").slice(0, 16) : undefined;
+  return list.length ? createHash5("sha256").update(JSON.stringify(after)).digest("hex").slice(0, 16) : undefined;
 }
 
 // Packages/Box/src/agents/subagents.ts
-import { createHash as createHash5 } from "crypto";
-import { existsSync as existsSync11, lstatSync as lstatSync6, mkdirSync as mkdirSync11, readdirSync as readdirSync12, readFileSync as readFileSync17, realpathSync as realpathSync5, renameSync as renameSync9, rmSync as rmSync9, statSync as statSync7, utimesSync as utimesSync2, writeFileSync as writeFileSync13 } from "fs";
-import { join as join20 } from "path";
+import { createHash as createHash6 } from "crypto";
+import { existsSync as existsSync12, lstatSync as lstatSync6, mkdirSync as mkdirSync12, readdirSync as readdirSync13, readFileSync as readFileSync20, realpathSync as realpathSync5, renameSync as renameSync10, rmSync as rmSync9, statSync as statSync7, utimesSync as utimesSync2, writeFileSync as writeFileSync14 } from "fs";
+import { join as join22 } from "path";
 
 // Packages/Box/src/shared/subagents.ts
 var SUBAGENT_MODEL = ["subagent_model"];
@@ -10324,16 +11985,16 @@ function setSubagentSource(engine, folder, settings = settingsFile()) {
 }
 function settingsFile(env = process.env) {
   if (env.KUVO_ENGINE_CONFIG)
-    return join20(env.KUVO_ENGINE_CONFIG, "opencode", "opencode.json");
+    return join22(env.KUVO_ENGINE_CONFIG, "opencode", "opencode.json");
   if (onMachine && machineHome)
-    return join20(machineHome, "box", "opencode.json");
+    return join22(machineHome, "box", "opencode.json");
   return;
 }
 function readSetting() {
   if (!file)
     return;
   try {
-    const settings = JSON.parse(readFileSync17(file, "utf8"));
+    const settings = JSON.parse(readFileSync20(file, "utf8"));
     const agents = settings?.agents && typeof settings.agents === "object" && !Array.isArray(settings.agents) ? settings.agents : {};
     return { model: modelRef(subagentModel(settings)), agents };
   } catch {
@@ -10451,7 +12112,7 @@ function codexSubagents(subagents) {
   if (folder) {
     for (const { role, agent } of roles) {
       config[`agents.${role}.description`] = agent.description;
-      config[`agents.${role}.config_file`] = join20(folder, `${role}.toml`);
+      config[`agents.${role}.config_file`] = join22(folder, `${role}.toml`);
     }
   }
   const model = nativeModel("codex", subagents.model);
@@ -10463,11 +12124,11 @@ function grokSubagents(subagents) {
   const files = {};
   for (const { agent, slug: file } of named3(subagents.agents)) {
     const model = nativeModel("grok", agent.model);
-    files[join20("agents", `${file}.md`)] = frontMatter({ name: agent.name, description: agent.description, ...model ? { model } : {} }, agent.prompt);
+    files[join22("agents", `${file}.md`)] = frontMatter({ name: agent.name, description: agent.description, ...model ? { model } : {} }, agent.prompt);
   }
   if (!Object.keys(files).length)
     return;
-  files[join20(".claude-plugin", "plugin.json")] = JSON.stringify({ name: "kuvo", description: "The subagents in Kuvo Code's Settings \u203A Agents.", version: "1.0.0" }, null, 2) + `
+  files[join22(".claude-plugin", "plugin.json")] = JSON.stringify({ name: "kuvo", description: "The subagents in Kuvo Code's Settings \u203A Agents.", version: "1.0.0" }, null, 2) + `
 `;
   return setFolder("grok", files);
 }
@@ -10478,37 +12139,37 @@ function antigravityCustomAgents(home, subagents) {
     const tier = antigravityTier(agent.model);
     after[`${file}.md`] = frontMatter({ name: agent.name, description: agent.description, subagent: true, mainAgent: false, ...tier ? { model: tier } : {} }, agent.prompt);
   }
-  const stamps = Object.fromEntries(Object.entries(after).map(([name, text]) => [name, createHash5("sha256").update(text).digest("hex").slice(0, 16)]));
+  const stamps = Object.fromEntries(Object.entries(after).map(([name, text]) => [name, createHash6("sha256").update(text).digest("hex").slice(0, 16)]));
   try {
-    const config = join20(home, "config");
-    const folder = join20(config, "agents");
-    mkdirSync11(folder, { recursive: true, mode: 448 });
-    if (lstatSync6(config).isSymbolicLink() || lstatSync6(folder).isSymbolicLink() || realpathSync5(folder) !== join20(realpathSync5(home), "config", "agents")) {
+    const config = join22(home, "config");
+    const folder = join22(config, "agents");
+    mkdirSync12(folder, { recursive: true, mode: 448 });
+    if (lstatSync6(config).isSymbolicLink() || lstatSync6(folder).isSymbolicLink() || realpathSync5(folder) !== join22(realpathSync5(home), "config", "agents")) {
       throw new Error("its agents folder isn't its own");
     }
-    const record = join20(folder, ".kuvo-code");
+    const record = join22(folder, ".kuvo-code");
     let before = {};
     try {
-      const read = lstatSync6(record).isFile() ? JSON.parse(readFileSync17(record, "utf8")) : {};
+      const read = lstatSync6(record).isFile() ? JSON.parse(readFileSync20(record, "utf8")) : {};
       if (read && typeof read === "object" && !Array.isArray(read))
         before = read;
     } catch {}
     if (JSON.stringify(before) !== JSON.stringify(stamps)) {
       for (const name of Object.keys(before))
         if (ownFile.test(name) && !(name in after))
-          rmSync9(join20(folder, name), { force: true });
+          rmSync9(join22(folder, name), { force: true });
       for (const [name, text] of Object.entries({ ...after, ".kuvo-code": JSON.stringify(stamps) })) {
-        const making = join20(folder, `.${name}.${process.pid}.tmp`);
+        const making = join22(folder, `.${name}.${process.pid}.tmp`);
         rmSync9(making, { force: true });
-        writeFileSync13(making, text, { mode: 384, flag: "wx" });
-        renameSync9(making, join20(folder, name));
+        writeFileSync14(making, text, { mode: 384, flag: "wx" });
+        renameSync10(making, join22(folder, name));
       }
     }
   } catch (error) {
     console.error(`Antigravity's custom agents couldn't be written: ${error.message}`);
     return;
   }
-  return Object.keys(after).length ? createHash5("sha256").update(JSON.stringify(stamps)).digest("hex").slice(0, 16) : undefined;
+  return Object.keys(after).length ? createHash6("sha256").update(JSON.stringify(stamps)).digest("hex").slice(0, 16) : undefined;
 }
 function frontMatter(fields, body) {
   const lines = Object.entries(fields).map(([key, value]) => `${key}: ${typeof value === "string" ? quoted(value) : value}`);
@@ -10520,31 +12181,31 @@ function subagentRules(subagents, name) {
     return;
   return subagents?.agents.find((agent) => agent.name === name)?.permissions;
 }
-var subagentsRoot = () => home2 ? join20(home2, "subagents") : undefined;
+var subagentsRoot = () => home2 ? join22(home2, "subagents") : undefined;
 function setFolder(kind, files) {
   const root = subagentsRoot();
   if (!root || !Object.keys(files).length)
     return;
   const names = Object.keys(files).sort();
-  const set = createHash5("sha256").update(names.map((name) => `${name}\x00${files[name]}`).join("\x00\x00")).digest("hex").slice(0, 16);
-  const folder = join20(root, `${kind}-${set}`);
+  const set = createHash6("sha256").update(names.map((name) => `${name}\x00${files[name]}`).join("\x00\x00")).digest("hex").slice(0, 16);
+  const folder = join22(root, `${kind}-${set}`);
   const now = new Date;
-  if (existsSync11(join20(folder, ".complete"))) {
+  if (existsSync12(join22(folder, ".complete"))) {
     try {
       utimesSync2(folder, now, now);
     } catch {}
     return folder;
   }
   tidy2(root);
-  const making = join20(root, `.${kind}-${set}-${process.pid}`);
+  const making = join22(root, `.${kind}-${set}-${process.pid}`);
   rmSync9(making, { recursive: true, force: true });
   for (const name of names) {
-    mkdirSync11(join20(making, name, ".."), { recursive: true, mode: 448 });
-    writeFileSync13(join20(making, name), files[name]);
+    mkdirSync12(join22(making, name, ".."), { recursive: true, mode: 448 });
+    writeFileSync14(join22(making, name), files[name]);
   }
-  writeFileSync13(join20(making, ".complete"), "");
+  writeFileSync14(join22(making, ".complete"), "");
   try {
-    renameSync9(making, folder);
+    renameSync10(making, folder);
   } catch {
     rmSync9(making, { recursive: true, force: true });
   }
@@ -10553,12 +12214,12 @@ function setFolder(kind, files) {
 function tidy2(root) {
   let names = [];
   try {
-    names = readdirSync12(root);
+    names = readdirSync13(root);
   } catch {
     return;
   }
   for (const name of names) {
-    const path = join20(root, name);
+    const path = join22(root, name);
     try {
       if (Date.now() - statSync7(path).mtimeMs > 86400000)
         rmSync9(path, { recursive: true, force: true });
@@ -10645,20 +12306,20 @@ function generatedImages(folder, input, since) {
     return [];
   let names;
   try {
-    names = readdirSync13(folder);
+    names = readdirSync14(folder);
   } catch {
     return [];
   }
   const types = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif" };
   const images = names.map((name) => ({ name, type: types[name.split(".").pop()?.toLowerCase() ?? ""] })).filter((file) => file.type && (!stem || file.name.startsWith(`${stem}_`) || file.name.startsWith(`${stem}.`))).map((file) => ({ ...file, at: (() => {
     try {
-      return statSync8(join21(folder, file.name)).mtimeMs;
+      return statSync8(join23(folder, file.name)).mtimeMs;
     } catch {
       return 0;
     }
   })() })).filter((file) => stem || file.at >= since).sort((a, b) => b.at - a.at);
   const newest = images[0];
-  return newest ? [{ type: "file", uri: pathToFileURL2(join21(folder, newest.name)).href, mime: newest.type, name: newest.name }] : [];
+  return newest ? [{ type: "file", uri: pathToFileURL2(join23(folder, newest.name)).href, mime: newest.type, name: newest.name }] : [];
 }
 
 class AntigravityFollower {
@@ -10698,7 +12359,7 @@ class AntigravityFollower {
   }
   steps(conversation) {
     try {
-      return readFileSync18(join21(this.brain, conversation, ".system_generated", "logs", "transcript.jsonl"), "utf8").split(`
+      return readFileSync21(join23(this.brain, conversation, ".system_generated", "logs", "transcript.jsonl"), "utf8").split(`
 `).flatMap((line) => {
         try {
           const step = JSON.parse(line);
@@ -10876,22 +12537,24 @@ class AntigravityAgent {
     this.providerID = providerID("antigravity", instance.id);
   }
   get root() {
-    return join21(this.context.home, "antigravity");
+    return join23(this.context.home, "antigravity");
   }
   get folder() {
-    return join21(this.root, version);
+    return join23(this.root, version);
   }
   get profile() {
-    return this.instance.home ? join21(this.instance.home, "profile") : join21(this.root, "profile");
+    return this.instance.home ? join23(this.instance.home, "profile") : join23(this.root, "profile");
   }
+  antigravity = new AntigravityPlan(() => this.profile);
+  limits = this.antigravity.limits;
   get tokenFile() {
-    return join21(this.profile, "antigravity-acp", "acp_token.json");
+    return join23(this.profile, "antigravity-acp", "acp_token.json");
   }
   get modelsFile() {
-    return join21(this.profile, "kuvo-models.json");
+    return join23(this.profile, "kuvo-models.json");
   }
   get isInstalled() {
-    return existsSync12(join21(this.folder, ".complete"));
+    return existsSync13(join23(this.folder, ".complete"));
   }
   methods() {
     return [{ type: "oauth", id: "oauth-personal", label: "Sign in with Google" }];
@@ -10916,7 +12579,7 @@ class AntigravityAgent {
         return { installed: this.isInstalled, signedIn: false, ended: true, message: "Google ended this sign-in. Sign in again." };
       this.endedSignIn = undefined;
     }
-    if (!existsSync12(this.tokenFile)) {
+    if (!existsSync13(this.tokenFile)) {
       return {
         installed: this.isInstalled,
         signedIn: false,
@@ -10935,14 +12598,14 @@ class AntigravityAgent {
     const release = releases[`${process.platform}-${process.arch}`];
     if (!release)
       throw new Error("Google doesn't make Antigravity's agent for this computer.");
-    const staging = join21(this.root, `.install-${newID("att")}`);
-    mkdirSync12(staging, { recursive: true });
+    const staging = join23(this.root, `.install-${newID("att")}`);
+    mkdirSync13(staging, { recursive: true });
     try {
-      const archive = join21(staging, "download.zip");
+      const archive = join23(staging, "download.zip");
       const response = await fetch(release.url);
       if (!response.ok || !response.body)
         throw new Error(`Couldn't download Antigravity's agent (HTTP ${response.status}).`);
-      const hash = createHash6("sha256");
+      const hash = createHash7("sha256");
       const writer = Bun.file(archive).writer();
       let bytes = 0;
       this.downloaded = { bytes, total: release.bytes };
@@ -10966,13 +12629,13 @@ class AntigravityAgent {
         throw new Error(`Couldn't unpack Antigravity's agent: ${unzipped.stderr.trim()}`);
       rmSync10(archive, { force: true });
       for (const name of [executableName, harnessName])
-        chmodSync(join21(staging, name), 493);
-      writeFileSync14(join21(staging, ".complete"), JSON.stringify({ version, sha256: release.sha256 }));
+        chmodSync(join23(staging, name), 493);
+      writeFileSync15(join23(staging, ".complete"), JSON.stringify({ version, sha256: release.sha256 }));
       rmSync10(this.folder, { recursive: true, force: true });
-      renameSync10(staging, this.folder);
-      for (const name of readdirSync13(this.root)) {
+      renameSync11(staging, this.folder);
+      for (const name of readdirSync14(this.root)) {
         if (name !== version && name !== "profile" && /^\d/.test(name))
-          rmSync10(join21(this.root, name), { recursive: true, force: true });
+          rmSync10(join23(this.root, name), { recursive: true, force: true });
       }
     } finally {
       this.downloaded = undefined;
@@ -10980,21 +12643,21 @@ class AntigravityAgent {
     }
   }
   ownSkillFolders(directory) {
-    return [join21(this.profile, "antigravity-cli", "skills"), join21(directory, ".agents", "skills"), join21(directory, ".gemini", "skills")];
+    return [join23(this.profile, "antigravity-cli", "skills"), join23(directory, ".agents", "skills"), join23(directory, ".gemini", "skills")];
   }
   places(env) {
     return { homes: [env.GEMINI_HOME, env.TMPDIR].filter((place) => Boolean(place)), state: ["*"], kept: [] };
   }
   reads(env) {
-    return [env.ANTIGRAVITY_HARNESS_PATH, env.BROWSER].filter((place) => Boolean(place)).map((place) => dirname11(place));
+    return [env.ANTIGRAVITY_HARNESS_PATH, env.BROWSER].filter((place) => Boolean(place)).map((place) => dirname12(place));
   }
   launch() {
-    mkdirSync12(join21(this.profile, "antigravity-acp", "tmp"), { recursive: true, mode: 448 });
-    const settings = join21(this.profile, "antigravity-acp", "settings.json");
-    if (!existsSync12(settings))
-      writeFileSync14(settings, JSON.stringify({ auth: { type: "oauth-personal" } }));
-    const temporary = join21(this.context.temporary, "antigravity", newID("att"));
-    mkdirSync12(temporary, { recursive: true, mode: 448 });
+    mkdirSync13(join23(this.profile, "antigravity-acp", "tmp"), { recursive: true, mode: 448 });
+    const settings = join23(this.profile, "antigravity-acp", "settings.json");
+    if (!existsSync13(settings))
+      writeFileSync15(settings, JSON.stringify({ auth: { type: "oauth-personal" } }));
+    const temporary = join23(this.context.temporary, "antigravity", newID("att"));
+    mkdirSync13(temporary, { recursive: true, mode: 448 });
     let env = {};
     for (const [key, value] of Object.entries(process.env))
       if (!scrubbed.includes(key.toUpperCase()))
@@ -11004,13 +12667,13 @@ class AntigravityAgent {
       GEMINI_HOME: this.profile,
       AGY_ACP_FORCE_FILE_STORAGE: "1",
       BROWSER: catcher(this.context.temporary),
-      KUVO_URL_FILE: join21(temporary, "url"),
+      KUVO_URL_FILE: join23(temporary, "url"),
       PYTHONUNBUFFERED: "1",
       TMPDIR: temporary,
-      ANTIGRAVITY_HARNESS_PATH: join21(this.folder, harnessName)
+      ANTIGRAVITY_HARNESS_PATH: join23(this.folder, harnessName)
     });
-    const argv = [join21(this.folder, executableName), "--nosyslog_on_start", ...process.platform === "linux" ? ["--uid="] : []];
-    return { argv, env, cleanEnv: true, onExit: () => rmSync10(temporary, { recursive: true, force: true }), signInFile: join21(temporary, "url"), temporary };
+    const argv = [join23(this.folder, executableName), "--nosyslog_on_start", ...process.platform === "linux" ? ["--uid="] : []];
+    return { argv, env, cleanEnv: true, onExit: () => rmSync10(temporary, { recursive: true, force: true }), signInFile: join23(temporary, "url"), temporary };
   }
   signsInRemotely = true;
   async signIn() {
@@ -11027,10 +12690,10 @@ class AntigravityAgent {
       if (cancelled)
         return;
       const launch = this.launch();
-      const cwd = join21(launch.temporary, "work");
+      const cwd = join23(launch.temporary, "work");
       let whole;
       try {
-        mkdirSync12(cwd);
+        mkdirSync13(cwd);
         whole = fenceRules() ? fenceAgent(launch.argv[0], cwd, { ...this.places(launch.env), read: this.reads(launch.env) }) : undefined;
         if (fenceRules() && !whole)
           throw new Error("Antigravity runs in the sandbox here, and it isn't ready: restart Kuvo Code.");
@@ -11059,7 +12722,7 @@ class AntigravityAgent {
       };
       const watch = setInterval(() => {
         try {
-          found(readFileSync18(launch.env.KUVO_URL_FILE, "utf8").split(`
+          found(readFileSync21(launch.env.KUVO_URL_FILE, "utf8").split(`
 `)[0].trim());
         } catch {}
       }, 300);
@@ -11137,7 +12800,7 @@ ${rpc.stderr.trim()}`);
         flat.push({ value: info.modelId, name: info.name ?? info.modelId });
     }
     if (flat.length) {
-      writeFileSync14(this.modelsFile, JSON.stringify({ current: option?.currentValue, models: flat }));
+      writeFileSync15(this.modelsFile, JSON.stringify({ current: option?.currentValue, models: flat }));
       this.listedHere = true;
     }
   }
@@ -11146,14 +12809,14 @@ ${rpc.stderr.trim()}`);
     return this.listedHere;
   }
   removeSessionFiles(sessionID) {
-    const folder = join21(this.profile, "antigravity-acp");
+    const folder = join23(this.profile, "antigravity-acp");
     for (const suffix of [".db", ".db-wal", ".db-shm", ".db-journal", ".meta"])
-      rmSync10(join21(folder, "conversations", sessionID + suffix), { force: true });
-    rmSync10(join21(folder, "brain", sessionID), { recursive: true, force: true });
+      rmSync10(join23(folder, "conversations", sessionID + suffix), { force: true });
+    rmSync10(join23(folder, "brain", sessionID), { recursive: true, force: true });
   }
   async models() {
     try {
-      const saved = JSON.parse(readFileSync18(this.modelsFile, "utf8"));
+      const saved = JSON.parse(readFileSync21(this.modelsFile, "utf8"));
       return saved.models.map((info, index) => model(this.providerID, info.value, info.name, { images: true, released: info.value === saved.current ? 2000 : 1000 - index, context: this.windows.get(info.value) ?? 1e6 }));
     } catch {
       return [];
@@ -11176,11 +12839,11 @@ ${rpc.stderr.trim()}`);
       follow: (sessionId, turn, hooks) => {
         let follower = followers.get(sessionId);
         if (!follower)
-          followers.set(sessionId, follower = new AntigravityFollower(join21(agent.profile, "antigravity-acp", "brain"), sessionId));
+          followers.set(sessionId, follower = new AntigravityFollower(join23(agent.profile, "antigravity-acp", "brain"), sessionId));
         return follower.follow(turn, hooks);
       },
       hides: (call) => /\b(start_subagent|invoke_subagent)\b/.test(`${call?.title ?? ""} ${call?.rawInput?.name ?? ""}`),
-      madeFiles: (call, sessionId, since) => /\bgenerate_image\b/.test(String(call?.title ?? "")) ? generatedImages(join21(agent.profile, "antigravity-acp", "brain", sessionId), call?.rawInput ?? {}, since) : [],
+      madeFiles: (call, sessionId, since) => /\bgenerate_image\b/.test(String(call?.title ?? "")) ? generatedImages(join23(agent.profile, "antigravity-acp", "brain", sessionId), call?.rawInput ?? {}, since) : [],
       authMethod: () => "oauth-personal",
       async command() {
         if (!agent.isInstalled)
@@ -11188,7 +12851,7 @@ ${rpc.stderr.trim()}`);
         return agent.launch();
       },
       async skills(directory, hooks) {
-        return copySkillsInto(join21(agent.profile, "config", "skills"), await skillsFor(directory, agent.ownSkillFolders(directory), turnedOff(hooks)));
+        return copySkillsInto(join23(agent.profile, "config", "skills"), await skillsFor(directory, agent.ownSkillFolders(directory), turnedOff(hooks)));
       },
       async subagents(directory) {
         return antigravityCustomAgents(agent.profile, await subagentsFor(directory));
@@ -11248,14 +12911,14 @@ function unzipper() {
 // Packages/Box/src/agents/agents/claude.ts
 import { spawn as spawn5 } from "child_process";
 import { createHash as createHash9, randomUUID } from "crypto";
-import { existsSync as existsSync14, mkdirSync as mkdirSync14, readdirSync as readdirSync14, readFileSync as readFileSync21, rmdirSync as rmdirSync2, rmSync as rmSync11, statSync as statSync10 } from "fs";
+import { existsSync as existsSync15, mkdirSync as mkdirSync14, readdirSync as readdirSync15, readFileSync as readFileSync23, rmdirSync as rmdirSync2, rmSync as rmSync11, statSync as statSync10 } from "fs";
 import { homedir } from "os";
-import { basename as basename8, dirname as dirname13, join as join24, resolve as resolve7 } from "path";
+import { basename as basename8, dirname as dirname13, join as join26, resolve as resolve7 } from "path";
 import { pathToFileURL as pathToFileURL3 } from "url";
 
 // Packages/Box/src/agents/maintenance.ts
-import { existsSync as existsSync13, realpathSync as realpathSync6 } from "fs";
-import { basename as basename7, join as join22 } from "path";
+import { existsSync as existsSync14, realpathSync as realpathSync6 } from "fs";
+import { basename as basename7, join as join24 } from "path";
 var checked = new Map;
 var newest = new Map;
 var underWay = new Map;
@@ -11384,16 +13047,16 @@ async function resolveUpdater(definition) {
     return nativeUpdater;
   const prefix = npmGlobalPrefix(realPath, definition.npmPackage);
   if (prefix) {
-    const npm = existsSync13(join22(prefix, "bin", "npm")) ? join22(prefix, "bin", "npm") : "npm";
+    const npm = existsSync14(join24(prefix, "bin", "npm")) ? join24(prefix, "bin", "npm") : "npm";
     return {
       command: [npm, "install", "-g", "--prefix", prefix, `--allow-scripts=${definition.npmPackage}`, `${definition.npmPackage}@latest`],
       shown: `npm install -g ${definition.npmPackage}@latest`,
-      env: { PATH: `${join22(prefix, "bin")}:${process.env.PATH ?? ""}` }
+      env: { PATH: `${join24(prefix, "bin")}:${process.env.PATH ?? ""}` }
     };
   }
   const keg = homebrewKeg(realPath);
   if (keg && keg.name.toLowerCase() !== "mise") {
-    const brew = existsSync13(join22(keg.prefix, "bin", "brew")) ? join22(keg.prefix, "bin", "brew") : which("brew");
+    const brew = existsSync14(join24(keg.prefix, "bin", "brew")) ? join24(keg.prefix, "bin", "brew") : which("brew");
     if (brew) {
       const said = (await run(brew, ["--prefix"], { timeout: 15000 }).catch(() => {
         return;
@@ -11447,589 +13110,15 @@ function homebrewLatest(json, cask) {
   }
 }
 
-// Packages/Box/src/agents/limits.ts
-import { createHash as createHash7 } from "crypto";
-import { mkdirSync as mkdirSync13, readFileSync as readFileSync19, renameSync as renameSync11, writeFileSync as writeFileSync15 } from "fs";
-import { dirname as dirname12 } from "path";
-
-// Packages/Box/src/agents/limits-rows.ts
-function limitRows(boxes) {
-  const groups = [];
-  const found = new Map;
-  for (const box of boxes) {
-    for (const account of box.accounts) {
-      const id = account.identity ? `${account.service}#${account.identity}` : `${box.key}/${account.provider}`;
-      const index = found.get(id);
-      if (index !== undefined)
-        groups[index].members.push({ box, account });
-      else {
-        found.set(id, groups.length);
-        groups.push({ id, members: [{ box, account }] });
-      }
-    }
-  }
-  return groups.map(({ id, members }) => {
-    const row = {
-      ...merged(members.map((member) => member.account)),
-      id,
-      boxes: members.map(({ box, account }) => ({
-        key: box.key,
-        name: box.name,
-        provider: account.provider,
-        ...account.agent ? { agent: account.agent } : {},
-        ...account.account ? { account: account.account } : {},
-        ...account.label ? { label: account.label } : {},
-        ...account.checked ? { checked: account.checked } : {},
-        ...box.here ? { here: true } : {},
-        ...box.away ? { away: true } : {}
-      }))
-    };
-    if (members.every((member) => member.box.away))
-      row.away = true;
-    return row;
-  });
-}
-var newestOf = (account) => account.checked ?? Math.max(0, ...account.windows.map((window) => window.read));
-function merged(members) {
-  const base = members.find((member) => member.agent) ?? members[0];
-  if (members.length === 1)
-    return base;
-  const account = { ...base };
-  const label = members.map((member) => member.label?.trim()).find(Boolean);
-  if (label)
-    account.label = label;
-  else
-    delete account.label;
-  const windows = [];
-  for (const member of members) {
-    for (const window of member.windows) {
-      const index = windows.findIndex((each) => limitOf2(each) === limitOf2(window));
-      if (index < 0)
-        windows.push(window);
-      else if (window.read > windows[index].read)
-        windows[index] = window;
-    }
-  }
-  account.windows = windows;
-  const newest = [...members].sort((a, b) => newestOf(b) - newestOf(a));
-  const plan = newest.find((member) => member.plan)?.plan;
-  const balance = newest.find((member) => member.balance)?.balance;
-  const extras = newest.find((member) => member.checked && !member.problem)?.extras;
-  const checked = Math.max(0, ...members.map((member) => member.checked ?? 0));
-  const next = Math.min(...members.map((member) => member.next ?? Infinity));
-  for (const key of ["plan", "balance", "extras", "checked", "next", "problem"])
-    delete account[key];
-  if (plan)
-    account.plan = plan;
-  if (balance)
-    account.balance = balance;
-  if (extras?.length)
-    account.extras = extras;
-  if (checked)
-    account.checked = checked;
-  if (Number.isFinite(next))
-    account.next = next;
-  if (members.every((member) => member.problem))
-    account.problem = newest[0].problem;
-  return account;
-}
-function limitOf2(window) {
-  if (window.model === undefined && window.name === undefined && window.minutes === undefined)
-    return "id:" + window.id;
-  return `${window.model?.toLowerCase() ?? ""}|${window.name ?? ""}|${window.minutes ?? ""}`;
-}
-
-// Packages/Box/src/agents/limits.ts
-class LimitsProblem extends Error {
-  kind;
-  until;
-  sent;
-  constructor(kind, message, until, sent = true) {
-    super(message);
-    this.kind = kind;
-    this.until = until;
-    this.sent = sent;
-  }
-}
-var MINUTE = 60000;
-var FIRST_HOLD = 60 * MINUTE;
-var LONGEST_HOLD = 6 * 60 * MINUTE;
-var FIRST_RETRY = 5 * MINUTE;
-var LONGEST_RETRY = 30 * MINUTE;
-var NOTHING_AGAIN = 30 * MINUTE;
-var FRESH_ENOUGH = MINUTE;
-var SHARED_SLACK = 2 * MINUTE;
-
-class Limits {
-  accounts;
-  file;
-  now;
-  prepare;
-  settled;
-  entries = new Map;
-  holds = new Map;
-  asked = new Map;
-  refusals = new Map;
-  reading;
-  timer;
-  said = "";
-  constructor(accounts, file, now = Date.now, prepare, settled = () => true) {
-    this.accounts = accounts;
-    this.file = file;
-    this.now = now;
-    this.prepare = prepare;
-    this.settled = settled;
-    this.load();
-    this.said = this.saying();
-  }
-  peers;
-  rows() {
-    const own = this.list(false);
-    return this.peers ? this.peers.rows(own) : limitRows([{ key: "", name: "", here: true, away: false, accounts: own }]);
-  }
-  peersChanged() {
-    this.changed(true, false);
-  }
-  saying() {
-    return JSON.stringify([this.list(), this.rows()]);
-  }
-  start() {
-    this.timer ??= setInterval(() => void this.tick(), MINUTE);
-    this.timer.unref?.();
-    this.tick();
-  }
-  stop() {
-    if (this.timer)
-      clearInterval(this.timer);
-    this.timer = undefined;
-  }
-  list(borrowed = true) {
-    const listed = [];
-    for (const account of this.accounts()) {
-      const entry = this.entries.get(account.provider);
-      if (!entry || entry.problem?.kind === "none")
-        continue;
-      if (!entry.checked && !entry.windows.length && !entry.problem && !entry.elsewhere)
-        continue;
-      const problem = entry.problem ? { kind: entry.problem.kind, message: entry.problem.message, ...entry.problem.until ? { until: entry.problem.until } : {} } : undefined;
-      const peer = borrowed && entry.elsewhere && entry.identity ? this.peers?.freshest(account.service, entry.identity) : undefined;
-      if (peer?.checked && peer.checked > (entry.checked ?? 0)) {
-        listed.push({
-          provider: account.provider,
-          service: account.service,
-          ...account.agent ? { agent: account.agent.kind, account: account.agent.account } : {},
-          ...account.label ? { label: account.label } : {},
-          identity: entry.identity,
-          ...peer.plan ?? entry.plan ? { plan: peer.plan ?? entry.plan } : {},
-          windows: peer.windows,
-          ...peer.balance ?? entry.balance ? { balance: peer.balance ?? entry.balance } : {},
-          ...peer.extras?.length ? { extras: peer.extras } : {},
-          ...entry.checked ? { checked: entry.checked } : {},
-          ...account.limits.read ? { next: entry.next } : {}
-        });
-        continue;
-      }
-      listed.push({
-        provider: account.provider,
-        service: account.service,
-        ...account.agent ? { agent: account.agent.kind, account: account.agent.account } : {},
-        ...account.label ? { label: account.label } : {},
-        ...entry.identity ? { identity: entry.identity } : {},
-        ...entry.plan ? { plan: entry.plan } : {},
-        windows: entry.windows,
-        ...entry.balance ? { balance: entry.balance } : {},
-        ...entry.extras?.length ? { extras: entry.extras } : {},
-        ...entry.checked ? { checked: entry.checked } : {},
-        ...account.limits.read ? { next: entry.next } : {},
-        ...problem ? { problem } : {}
-      });
-    }
-    return listed;
-  }
-  identity(provider) {
-    return this.entries.get(provider)?.identity;
-  }
-  held(provider) {
-    const entry = this.entries.get(provider);
-    const source = this.accounts().find((each) => each.provider === provider)?.limits;
-    if (!entry || !source)
-      return false;
-    if (entry.problem?.kind === "expired" && entry.signIn !== undefined && entry.signIn === source.signIn?.())
-      return true;
-    return this.heldBack(source, entry, this.now());
-  }
-  reads() {
-    return new Set(this.accounts().filter((account) => account.limits.read).map((account) => account.provider));
-  }
-  services() {
-    return [...new Set([...this.accounts().map((account) => account.service), ...this.alsoServices])];
-  }
-  alsoServices = [];
-  async refresh(only) {
-    const at = this.now();
-    for (const account of this.accounts()) {
-      const source = account.limits;
-      const entry = this.entries.get(account.provider);
-      if (!source.read || !entry || this.heldBack(source, entry, at))
-        continue;
-      if (only && !only(account, entry.identity))
-        continue;
-      if (entry.checked && at - entry.checked < Math.max(FRESH_ENOUGH, source.every))
-        continue;
-      entry.next = Math.min(entry.next, at);
-    }
-    await this.tick();
-  }
-  tick() {
-    this.reading ??= this.readDue().finally(() => this.reading = undefined);
-    return this.reading;
-  }
-  heldBack(source, entry, at) {
-    const hold = source.bucket ? this.holds.get(source.bucket) ?? 0 : 0;
-    return at < hold || entry.problem?.kind === "rate-limited" && at < (entry.problem.until ?? entry.next);
-  }
-  async readDue() {
-    await this.prepare?.();
-    for (const account of this.accounts()) {
-      const source = account.limits;
-      this.listen(account.provider, source);
-      let entry = this.entries.get(account.provider);
-      if (!entry) {
-        entry = { windows: [], next: 0 };
-        this.entries.set(account.provider, entry);
-      }
-      this.switched(entry, source);
-      const says = source.identity?.();
-      this.identify(entry, says);
-      const as = source.account?.() ?? source.signIn?.();
-      if (!says && entry.identityAs !== undefined && as !== undefined && as !== entry.identityAs) {
-        this.forget(entry);
-        entry.identity = undefined;
-        entry.identityAs = undefined;
-      }
-      if (!source.read)
-        continue;
-      const at = this.now();
-      if (at < entry.next)
-        continue;
-      const hold = source.bucket ? this.holds.get(source.bucket) ?? 0 : 0;
-      if (at < hold) {
-        entry.next = hold;
-        continue;
-      }
-      const known = says || entry.identityAs !== undefined && entry.identityAs === as ? entry.identity : undefined;
-      const elsewhere = known ? this.peers?.fresh(account.service, known) : undefined;
-      if (elsewhere !== undefined && at - elsewhere < source.every) {
-        entry.elsewhere = elsewhere;
-        entry.next = elsewhere + source.every + SHARED_SLACK;
-        continue;
-      }
-      const last = source.bucket ? this.asked.get(source.bucket) ?? 0 : 0;
-      if (source.bucket && at - last < MINUTE) {
-        entry.next = last + MINUTE;
-        continue;
-      }
-      if ((entry.problem?.kind === "expired" || entry.problem?.kind === "unreadable") && entry.signIn !== undefined && entry.signIn === source.signIn?.()) {
-        entry.next = at + Math.max(source.every, FIRST_RETRY);
-        continue;
-      }
-      const before = source.bucket ? this.asked.get(source.bucket) : undefined;
-      if (source.bucket)
-        this.asked.set(source.bucket, at);
-      const sent = await this.readOne(source, entry);
-      if (source.bucket && !sent) {
-        if (before === undefined)
-          this.asked.delete(source.bucket);
-        else
-          this.asked.set(source.bucket, before);
-      }
-      this.changed();
-    }
-    this.forgetGone();
-    this.changed();
-  }
-  async readOne(source, entry) {
-    const started = this.now();
-    entry.next = Math.max(entry.next, started + source.every);
-    this.save();
-    try {
-      const reading = await source.read(started);
-      const at = this.now();
-      if (reading)
-        this.identify(entry, reading.identity);
-      if (reading?.identity)
-        entry.identityAs = source.account?.() ?? source.signIn?.();
-      entry.next = at + source.every;
-      if (!reading)
-        return false;
-      entry.checked = at;
-      entry.plan = reading.plan ?? entry.plan;
-      entry.balance = reading.balance;
-      entry.extras = reading.extras?.length ? reading.extras : undefined;
-      const heard = entry.windows.filter((window) => window.source === "turn" && (window.read >= started || !reading.windows.some((each) => each.id === window.id)));
-      entry.windows = [...reading.windows.filter((window) => !heard.some((each) => each.id === window.id)).map((window) => ({ ...window, used: clamp(window.used), read: at, source: "usage" })), ...heard];
-      entry.problem = undefined;
-      entry.signIn = undefined;
-      entry.refusals = 0;
-      entry.failures = 0;
-      if (source.bucket)
-        this.refusals.delete(source.bucket);
-      return true;
-    } catch (caught) {
-      const at = this.now();
-      if (!entry.identity)
-        this.identify(entry, source.identity?.());
-      entry.checked = at;
-      const problem = caught instanceof LimitsProblem ? caught : new LimitsProblem("failed", `Couldn't read its limits: ${caught instanceof Error ? caught.message : String(caught)}`);
-      entry.problem = { kind: problem.kind, message: problem.message, ...problem.until ? { until: problem.until } : {} };
-      switch (problem.kind) {
-        case "rate-limited": {
-          const refusals = (source.bucket ? this.refusals.get(source.bucket) ?? 0 : entry.refusals ?? 0) + 1;
-          entry.refusals = refusals;
-          if (source.bucket)
-            this.refusals.set(source.bucket, refusals);
-          const wait = problem.until ? Math.max(problem.until, at + source.every) : at + Math.min(FIRST_HOLD * 2 ** (refusals - 1), LONGEST_HOLD);
-          entry.next = wait;
-          entry.problem.until = wait;
-          if (source.bucket)
-            this.holds.set(source.bucket, Math.max(this.holds.get(source.bucket) ?? 0, wait));
-          break;
-        }
-        case "none":
-          entry.windows = [];
-          entry.plan = undefined;
-          entry.balance = undefined;
-          entry.extras = undefined;
-          entry.next = at + NOTHING_AGAIN;
-          break;
-        case "expired":
-        case "unreadable":
-          entry.signIn = source.signIn?.();
-          entry.next = at + Math.max(source.every, FIRST_RETRY);
-          break;
-        default:
-          entry.failures = (entry.failures ?? 0) + 1;
-          entry.next = at + Math.max(source.every, Math.min(FIRST_RETRY * 2 ** (entry.failures - 1), LONGEST_RETRY));
-      }
-      return problem.sent;
-    }
-  }
-  identify(entry, raw) {
-    if (!raw)
-      return;
-    const identity = identityOf(raw);
-    if (entry.identity === identity)
-      return;
-    if (entry.identity)
-      this.forget(entry);
-    entry.identity = identity;
-  }
-  forget(entry) {
-    entry.windows = [];
-    entry.plan = undefined;
-    entry.balance = undefined;
-    entry.extras = undefined;
-    entry.checked = undefined;
-    entry.problem = { kind: "failed", message: "Signed in to another account here: its limits show once they're read." };
-    entry.signIn = undefined;
-    entry.elsewhere = undefined;
-    entry.refusals = 0;
-    entry.failures = 0;
-    entry.next = 0;
-  }
-  switched(entry, source) {
-    if (source.read || !source.signIn)
-      return;
-    const now = source.signIn();
-    if (now === undefined)
-      return;
-    if (entry.heardAs !== undefined && entry.heardAs !== now) {
-      entry.windows = [];
-      entry.plan = undefined;
-      entry.balance = undefined;
-      entry.extras = undefined;
-      entry.checked = undefined;
-      entry.problem = undefined;
-      entry.identity = undefined;
-      entry.elsewhere = undefined;
-    }
-    entry.heardAs = now;
-  }
-  listen(provider, source) {
-    if (source.heard)
-      return;
-    source.heard = (window) => {
-      let entry = this.entries.get(provider);
-      if (!entry) {
-        entry = { windows: [], next: 0 };
-        this.entries.set(provider, entry);
-      }
-      this.switched(entry, source);
-      if (entry.problem?.kind === "none" || !source.read)
-        entry.problem = undefined;
-      const before = entry.windows.find((each) => each.id === window.id);
-      const heard = {
-        ...before,
-        ...window,
-        minutes: window.minutes ?? before?.minutes,
-        model: window.model ?? before?.model,
-        used: clamp(window.used),
-        read: this.now(),
-        source: "turn"
-      };
-      if (heard.minutes === undefined)
-        delete heard.minutes;
-      if (heard.model === undefined)
-        delete heard.model;
-      if (heard.name === undefined)
-        delete heard.name;
-      if (heard.resetsAt === undefined)
-        delete heard.resetsAt;
-      entry.windows = before ? entry.windows.map((each) => each.id === window.id ? heard : each) : [...entry.windows, heard];
-      this.changed(true);
-    };
-  }
-  forgetGone() {
-    if (!this.settled())
-      return;
-    const here = new Set(this.accounts().map((account) => account.provider));
-    for (const provider of this.entries.keys())
-      if (!here.has(provider))
-        this.entries.delete(provider);
-  }
-  lastHeardSave = 0;
-  changed(heard = false, own = true) {
-    const list = this.list();
-    const rows = this.rows();
-    const now = JSON.stringify([list, rows]);
-    if (own && (!heard || this.now() - this.lastHeardSave >= 30000)) {
-      if (heard)
-        this.lastHeardSave = this.now();
-      this.save();
-    }
-    if (own)
-      this.peers?.tell(!heard);
-    if (now === this.said)
-      return;
-    this.said = now;
-    emit("kuvo.limits.updated", { accounts: list, rows });
-  }
-  load() {
-    if (!this.file)
-      return;
-    try {
-      const saved = JSON.parse(readFileSync19(this.file, "utf8"));
-      for (const [provider, entry] of Object.entries(saved.accounts ?? {})) {
-        if (!entry || !Array.isArray(entry.windows) || typeof entry.next !== "number")
-          continue;
-        this.entries.set(provider, entry);
-      }
-      for (const [bucket, until] of Object.entries(saved.holds ?? {}))
-        if (typeof until === "number")
-          this.holds.set(bucket, until);
-      for (const [bucket, at] of Object.entries(saved.asked ?? {}))
-        if (typeof at === "number")
-          this.asked.set(bucket, at);
-      for (const [bucket, count] of Object.entries(saved.refusals ?? {}))
-        if (typeof count === "number")
-          this.refusals.set(bucket, count);
-    } catch {}
-  }
-  kept = "";
-  save() {
-    if (!this.file)
-      return;
-    const saved = JSON.stringify({ accounts: Object.fromEntries(this.entries), holds: Object.fromEntries(this.holds), asked: Object.fromEntries(this.asked), refusals: Object.fromEntries(this.refusals) });
-    if (saved === this.kept)
-      return;
-    try {
-      mkdirSync13(dirname12(this.file), { recursive: true });
-      writeFileSync15(this.file + ".new", saved);
-      this.kept = saved;
-      renameSync11(this.file + ".new", this.file);
-    } catch {}
-  }
-}
-function clamp(used) {
-  return Number.isFinite(used) ? Math.min(Math.max(used, 0), 1) : 0;
-}
-function retryAt(header, now = Date.now()) {
-  const raw = header?.trim();
-  if (!raw)
-    return;
-  if (/^\d+$/.test(raw))
-    return now + Number(raw) * 1000;
-  const date = Date.parse(raw);
-  return Number.isFinite(date) ? Math.max(date, now) : undefined;
-}
-var json6 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
-async function limitsRoutes(limits, method, rest) {
-  if (!limits)
-    return json6({ message: "Plan limits aren't read on this computer." }, 503);
-  const answer = () => json6({ data: { accounts: limits.list(), services: limits.services(), rows: limits.rows() } });
-  if (!rest.length && method === "GET")
-    return answer();
-  if (rest.length === 1 && rest[0] === "refresh" && method === "POST") {
-    const reading = limits.refresh().finally(() => limits.peers?.refreshElsewhere(limits.rows(), limits.reads()));
-    await Promise.race([reading, new Promise((resolve) => setTimeout(resolve, 2000).unref?.())]);
-    return answer();
-  }
-  return json6({ message: "Not available for this agent." }, 404);
-}
-var AGENT_SERVICES = { claude: "claude", codex: "codex", grok: "grok", cursor: "cursor", antigravity: "antigravity" };
-function agentAccounts(agents) {
-  return agents.flatMap((agent) => {
-    const parsed = parseProvider(agent.providerID);
-    if (!agent.limits || !parsed)
-      return [];
-    return [{ provider: agent.providerID, service: AGENT_SERVICES[parsed.kind], agent: { kind: parsed.kind, account: parsed.id }, ...agent.instance.label ? { label: agent.instance.label } : {}, limits: agent.limits }];
-  });
-}
-function fingerprint(secret) {
-  return secret ? createHash7("sha256").update(secret).digest("hex").slice(0, 16) : undefined;
-}
-function identityOf(raw) {
-  return createHash7("sha256").update(`kuvo-code plan limits account v1
-`).update(raw).digest("hex").slice(0, 16);
-}
-function tokenClaims(token) {
-  const part = token?.trim().split(".")[1];
-  if (!part)
-    return;
-  try {
-    const claims = JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
-    return claims && typeof claims === "object" ? claims : undefined;
-  } catch {
-    return;
-  }
-}
-function chatGPTIdentity(access, accountID) {
-  const auth = tokenClaims(access)?.["https://api.openai.com/auth"];
-  const account = text2(auth?.chatgpt_account_id) ?? text2(accountID);
-  if (!account)
-    return;
-  const user = text2(auth?.chatgpt_user_id) ?? text2(auth?.user_id);
-  return `chatgpt:${account}${user ? `/${user}` : ""}`;
-}
-function xaiIdentity(...tokens) {
-  for (const token of tokens) {
-    const user = text2(tokenClaims(token)?.sub);
-    if (user)
-      return `xai:${user}`;
-  }
-  return;
-}
-var text2 = (value) => typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
-
 // Packages/Box/src/agents/agents/claude-limits.ts
 import { createHash as createHash8 } from "crypto";
-import { readFileSync as readFileSync20, statSync as statSync9 } from "fs";
-import { join as join23 } from "path";
+import { readFileSync as readFileSync22, statSync as statSync9 } from "fs";
+import { join as join25 } from "path";
 var claudeUsage = { url: "https://api.anthropic.com/api/oauth/usage" };
 var CLAUDE_LIMITS_EVERY = 15 * 60000;
 function credentialsIn(configHome) {
   try {
-    const oauth = JSON.parse(readFileSync20(join23(configHome, ".credentials.json"), "utf8"))?.claudeAiOauth;
+    const oauth = JSON.parse(readFileSync22(join25(configHome, ".credentials.json"), "utf8"))?.claudeAiOauth;
     if (typeof oauth?.accessToken !== "string" || !oauth.accessToken)
       return;
     return {
@@ -12046,13 +13135,13 @@ function credentialsIn(configHome) {
 function claudeIdentity(configHome, token) {
   if (token !== undefined)
     return tokenIdentity(configHome, token);
-  const file = join23(configHome, ".claude.json");
+  const file = join25(configHome, ".claude.json");
   try {
     const { mtimeMs, size } = statSync9(file);
     const known = identities.get(file);
     if (known && known.mtimeMs === mtimeMs && known.size === size)
       return known.identity;
-    const identity = identityIn(readFileSync20(file, "utf8"));
+    const identity = identityIn(readFileSync22(file, "utf8"));
     identities.set(file, { mtimeMs, size, identity });
     return identity;
   } catch {
@@ -12074,7 +13163,7 @@ function identityIn(text) {
 }
 function tokenIdentity(configHome, token) {
   try {
-    return recordIdentity(configHome, readFileSync20(join23(configHome, "policy-limits.json.stamp.json"), "utf8"), readFileSync20(join23(configHome, "policy-limits.json.signature.json"), "utf8"), token);
+    return recordIdentity(configHome, readFileSync22(join25(configHome, "policy-limits.json.stamp.json"), "utf8"), readFileSync22(join25(configHome, "policy-limits.json.signature.json"), "utf8"), token);
   } catch {
     return;
   }
@@ -12377,7 +13466,7 @@ ${parts.join(`
 
 // Packages/Box/src/agents/agents/claude.ts
 var SDK = [{ name: "@anthropic-ai/claude-agent-sdk", version: "0.3.303" }];
-var places2 = [join24(homedir(), ".local/bin"), join24(homedir(), ".claude/local"), "/opt/homebrew/bin", "/usr/local/bin"];
+var places2 = [join26(homedir(), ".local/bin"), join26(homedir(), ".claude/local"), "/opt/homebrew/bin", "/usr/local/bin"];
 var outputLimit3 = 30000;
 var STATE_IN_HOME = [
   "projects",
@@ -12411,7 +13500,7 @@ function botMemory(session) {
   const directory = session.location.directory;
   if (typeof bot !== "string" || basename8(directory) !== "workspace" || basename8(dirname13(directory)) !== bot)
     return;
-  return join24(dirname13(directory), "memory");
+  return join26(dirname13(directory), "memory");
 }
 var KEPT_IN_HOME = ["settings*.json", "hooks", ".mcp.json"];
 var PRINTED_TOKEN = /sk-ant-oat\d+-[A-Za-z0-9_-]{60,}(?=[^A-Za-z0-9_-])/;
@@ -12629,7 +13718,7 @@ class ClaudeAgent {
     const own = this.instance.home ?? process.env.CLAUDE_CONFIG_DIR;
     let written = 0;
     try {
-      written = statSync10(join24(own ?? join24(homedir(), ".claude"), ".credentials.json")).mtimeMs;
+      written = statSync10(join26(own ?? join26(homedir(), ".claude"), ".credentials.json")).mtimeMs;
     } catch {}
     if (process.platform === "darwin")
       written = Math.max(written, await keychainWritten(`Claude Code-credentials${own ? `-${createHash9("sha256").update(own).digest("hex").slice(0, 8)}` : ""}`));
@@ -12637,20 +13726,20 @@ class ClaudeAgent {
   }
   signsInRemotely = true;
   get consoleHome() {
-    return this.instance.home ?? join24(this.context.home, "claude", "console");
+    return this.instance.home ?? join26(this.context.home, "claude", "console");
   }
   get configHome() {
     if (this.instance.home)
       return this.instance.home;
     if (ClaudeAgent.keychain && !this.token())
       return this.consoleHome;
-    return process.env.CLAUDE_CONFIG_DIR ?? join24(homedir(), ".claude");
+    return process.env.CLAUDE_CONFIG_DIR ?? join26(homedir(), ".claude");
   }
   consoleEnv() {
     return { ...this.env({ ownToken: false }), CLAUDE_CONFIG_DIR: this.consoleHome };
   }
   get tokenFile() {
-    return join24(this.context.home, "claude", "tokens", `${this.instance.id}.json`);
+    return join26(this.context.home, "claude", "tokens", `${this.instance.id}.json`);
   }
   limits = ClaudeAgent.keychain ? {
     every: CLAUDE_LIMITS_EVERY,
@@ -12689,7 +13778,7 @@ class ClaudeAgent {
   }
   token() {
     try {
-      const token = JSON.parse(readFileSync21(this.tokenFile, "utf8"))?.token;
+      const token = JSON.parse(readFileSync23(this.tokenFile, "utf8"))?.token;
       return typeof token === "string" && token ? token : undefined;
     } catch {
       return;
@@ -12773,10 +13862,10 @@ class ClaudeAgent {
     return uid !== undefined && ["/tmp", "/private/tmp"].some((tmp) => file.startsWith(`${tmp}/claude-${uid}/`) && /^[^/]+\/[^/]+\/tasks\/[^/]+$/.test(file.slice(`${tmp}/claude-${uid}/`.length)));
   }
   projectFolder(directory, home = this.configHome) {
-    return join24(home, "projects", projectSlug(directory));
+    return join26(home, "projects", projectSlug(directory));
   }
   homesItMayUse() {
-    return [...new Set([this.configHome, ...this.instance.home ? [] : [this.consoleHome, process.env.CLAUDE_CONFIG_DIR ?? join24(homedir(), ".claude")]])];
+    return [...new Set([this.configHome, ...this.instance.home ? [] : [this.consoleHome, process.env.CLAUDE_CONFIG_DIR ?? join26(homedir(), ".claude")]])];
   }
   conversationFiles(state, session) {
     const id = state.claudeSession;
@@ -12787,55 +13876,55 @@ class ClaudeAgent {
     let folder;
     for (const home of this.homesItMayUse()) {
       const named = this.projectFolder(session.location.directory, home);
-      if (existsSync14(join24(named, `${id}.jsonl`))) {
+      if (existsSync15(join26(named, `${id}.jsonl`))) {
         folder = named;
         break;
       }
     }
     if (!folder) {
       for (const home of this.homesItMayUse()) {
-        const projects = join24(home, "projects");
+        const projects = join26(home, "projects");
         const found = (() => {
           try {
-            return readdirSync14(projects).find((name) => existsSync14(join24(projects, name, `${id}.jsonl`)));
+            return readdirSync15(projects).find((name) => existsSync15(join26(projects, name, `${id}.jsonl`)));
           } catch {
             return;
           }
         })();
         if (found) {
-          folder = join24(projects, found);
+          folder = join26(projects, found);
           break;
         }
       }
     }
     if (!folder)
       return { items: [], missing: true };
-    const beside = join24(folder, id);
+    const beside = join26(folder, id);
     const ownMemory = botMemory(session);
-    const memory = ownMemory && existsSync14(ownMemory) ? undefined : join24(this.homesItMayUse().find((home) => folder.startsWith(home + "/")) ?? this.configHome, "projects", projectSlug(session.location.directory), "memory");
+    const memory = ownMemory && existsSync15(ownMemory) ? undefined : join26(this.homesItMayUse().find((home) => folder.startsWith(home + "/")) ?? this.configHome, "projects", projectSlug(session.location.directory), "memory");
     return {
-      items: [{ path: join24(folder, `${id}.jsonl`), name: `${id}.jsonl` }, ...existsSync14(beside) ? [{ path: beside, name: id }] : []],
-      ...memory && existsSync14(memory) ? { memory, ...ownMemory ? {} : { memoryShared: true } } : {}
+      items: [{ path: join26(folder, `${id}.jsonl`), name: `${id}.jsonl` }, ...existsSync15(beside) ? [{ path: beside, name: id }] : []],
+      ...memory && existsSync15(memory) ? { memory, ...ownMemory ? {} : { memoryShared: true } } : {}
     };
   }
   conversationPlace(_state, session) {
     const folder = this.projectFolder(session.location.directory);
     const own = botMemory(session);
     return {
-      item: (name) => CONVERSATION_ITEM.test(name) ? join24(folder, name) : null,
-      memory: own ?? join24(folder, "memory"),
+      item: (name) => CONVERSATION_ITEM.test(name) ? join26(folder, name) : null,
+      memory: own ?? join26(folder, "memory"),
       memoryMerges: !own
     };
   }
   conversationRoots() {
-    return this.homesItMayUse().map((home) => join24(home, "projects"));
+    return this.homesItMayUse().map((home) => join26(home, "projects"));
   }
   ownSkillFolders(directory) {
     const settings = this.configHome;
-    return [join24(settings, "skills"), ...upward(directory).map((folder) => join24(folder, ".claude", "skills"))];
+    return [join26(settings, "skills"), ...upward(directory).map((folder) => join26(folder, ".claude", "skills"))];
   }
   env({ ownToken = true } = {}) {
-    const env = { ...process.env, CLAUDE_CODE_TMPDIR: join24(this.context.temporary, "claude"), CLAUDE_CODE_OAUTH_TOKEN: undefined };
+    const env = { ...process.env, CLAUDE_CODE_TMPDIR: join26(this.context.temporary, "claude"), CLAUDE_CODE_OAUTH_TOKEN: undefined };
     if (this.instance.home)
       env.CLAUDE_CONFIG_DIR = this.instance.home;
     const token = ownToken && ClaudeAgent.keychain ? this.token() : undefined;
@@ -13043,8 +14132,8 @@ function family(name) {
 }
 function updateChannel() {
   try {
-    const folder = process.env.CLAUDE_CONFIG_DIR ?? join24(homedir(), ".claude");
-    const settings = JSON.parse(readFileSync21(join24(folder, "settings.json"), "utf8"));
+    const folder = process.env.CLAUDE_CONFIG_DIR ?? join26(homedir(), ".claude");
+    const settings = JSON.parse(readFileSync23(join26(folder, "settings.json"), "utf8"));
     return settings?.autoUpdatesChannel === "stable" ? "stable" : "latest";
   } catch {
     return "latest";
@@ -13397,7 +14486,7 @@ ${input.text}` } : input, this.copies());
     } catch {}
     if (task?.outputFile) {
       try {
-        const bytes = readFileSync21(task.outputFile);
+        const bytes = readFileSync23(task.outputFile);
         return { output: bytes.subarray(Math.max(0, bytes.length - 64000)).toString("utf8"), total: bytes.length };
       } catch {}
     }
@@ -13452,7 +14541,7 @@ ${input.text}` } : input, this.copies());
     }
     const whole = this.whole(skills, id);
     const named = botMemory(this.session);
-    const ownMemory = named && existsSync14(named) ? named : undefined;
+    const ownMemory = named && existsSync15(named) ? named : undefined;
     this.input = new Queue;
     const tools = fenceOn() ? relayedTools(this.session.id, this) : kuvoTools(this.session.id);
     this.opened = { model: modelID, effort, plan, append, program: this.agent.program, tools: tools?.key, skills, fence: fenceKey() + fullAccessMark(this.session.id), subagents: JSON.stringify(subagents) };
@@ -13532,7 +14621,7 @@ ${input.text}` } : input, this.copies());
   environment(conversation) {
     if (!/^[A-Za-z0-9-]+$/.test(conversation))
       return;
-    const folder = join24(this.agent.configHome, "session-env", conversation);
+    const folder = join26(this.agent.configHome, "session-env", conversation);
     try {
       mkdirSync14(folder, { recursive: true });
       this.environments.add(folder);
@@ -14394,7 +15483,7 @@ function previewDiff(name, input) {
   const path = String(input.file_path ?? "");
   if (!path)
     return;
-  const before = existsSync14(path) ? safeRead(path) : undefined;
+  const before = existsSync15(path) ? safeRead(path) : undefined;
   if (name === "Write")
     return fileDiff(path, before, String(input.content ?? ""));
   if (before === undefined)
@@ -14424,7 +15513,7 @@ function diffs(name, input, structured) {
 `).join("");
     return [fromPatch(path, patch)];
   }
-  if (typeof structured?.originalFile === "string" && existsSync14(path))
+  if (typeof structured?.originalFile === "string" && existsSync15(path))
     return [fileDiff(path, structured.originalFile, safeRead(path) ?? "")];
   if (name === "NotebookEdit" && (typeof structured?.old_source === "string" || typeof structured?.new_source === "string"))
     return [fileDiff(path, structured.old_source ?? "", structured.new_source ?? "")];
@@ -14432,7 +15521,7 @@ function diffs(name, input, structured) {
 }
 function safeRead(path) {
   try {
-    return readFileSync21(path, "utf8");
+    return readFileSync23(path, "utf8");
   } catch {
     return;
   }
@@ -14539,7 +15628,7 @@ ${others.map((path) => `- ${path}`).join(`
 }
 function safeBase642(path) {
   try {
-    return readFileSync21(path).toString("base64");
+    return readFileSync23(path).toString("base64");
   } catch {
     return;
   }
@@ -14558,9 +15647,9 @@ function describe(status) {
 }
 
 // Packages/Box/src/agents/agents/codex.ts
-import { existsSync as existsSync15, lstatSync as lstatSync7, mkdirSync as mkdirSync15, readdirSync as readdirSync15, readFileSync as readFileSync22, readlinkSync, rmSync as rmSync12, symlinkSync as symlinkSync2 } from "fs";
+import { existsSync as existsSync16, lstatSync as lstatSync7, mkdirSync as mkdirSync15, readdirSync as readdirSync16, readFileSync as readFileSync24, readlinkSync as readlinkSync2, rmSync as rmSync12, symlinkSync as symlinkSync2 } from "fs";
 import { homedir as homedir2 } from "os";
-import { basename as basename10, join as join25 } from "path";
+import { basename as basename10, join as join27 } from "path";
 
 // Packages/Box/src/agents/agents/codex-citations.ts
 import { basename as basename9 } from "path";
@@ -14693,7 +15782,7 @@ function parse2(directive) {
 }
 
 // Packages/Box/src/agents/agents/codex.ts
-var places3 = ["/opt/homebrew/bin", "/usr/local/bin", join25(homedir2(), ".local/bin"), join25(homedir2(), ".codex/bin")];
+var places3 = ["/opt/homebrew/bin", "/usr/local/bin", join27(homedir2(), ".local/bin"), join27(homedir2(), ".codex/bin")];
 var outputLimit4 = 30000;
 var STATE_IN_HOME2 = [
   "sessions",
@@ -14729,30 +15818,30 @@ function rolloutOf(home, id) {
   const named = (name) => name.startsWith("rollout-") && name.endsWith(`-${id}.jsonl`);
   const list = (folder) => {
     try {
-      return readdirSync15(folder);
+      return readdirSync16(folder);
     } catch {
       return [];
     }
   };
-  const sessions = join25(home, "sessions");
+  const sessions = join27(home, "sessions");
   const made = /^[0-9a-f]{8}-[0-9a-f]{4}-7/i.test(id) ? parseInt(id.replace(/-/g, "").slice(0, 12), 16) : NaN;
   if (Number.isFinite(made))
     for (const off of [0, -1, 1]) {
       const day = new Date(made + off * 86400000);
-      const folder = join25(sessions, String(day.getFullYear()), String(day.getMonth() + 1).padStart(2, "0"), String(day.getDate()).padStart(2, "0"));
+      const folder = join27(sessions, String(day.getFullYear()), String(day.getMonth() + 1).padStart(2, "0"), String(day.getDate()).padStart(2, "0"));
       const found = list(folder).find(named);
       if (found)
-        return join25(folder, found);
+        return join27(folder, found);
     }
-  const archived = list(join25(home, "archived_sessions")).find(named);
+  const archived = list(join27(home, "archived_sessions")).find(named);
   if (archived)
-    return join25(home, "archived_sessions", archived);
+    return join27(home, "archived_sessions", archived);
   for (const year of list(sessions).sort().reverse())
-    for (const month of list(join25(sessions, year)).sort().reverse())
-      for (const day of list(join25(sessions, year, month)).sort().reverse()) {
-        const found = list(join25(sessions, year, month, day)).find(named);
+    for (const month of list(join27(sessions, year)).sort().reverse())
+      for (const day of list(join27(sessions, year, month)).sort().reverse()) {
+        const found = list(join27(sessions, year, month, day)).find(named);
         if (found)
-          return join25(sessions, year, month, day, found);
+          return join27(sessions, year, month, day, found);
       }
 }
 
@@ -14783,7 +15872,7 @@ class CodexAgent {
   };
   chatGPTAccount() {
     try {
-      const tokens = JSON.parse(readFileSync22(join25(this.home, "auth.json"), "utf8"))?.tokens;
+      const tokens = JSON.parse(readFileSync24(join27(this.home, "auth.json"), "utf8"))?.tokens;
       return chatGPTIdentity(tokens?.access_token, tokens?.account_id);
     } catch {
       return;
@@ -15299,7 +16388,7 @@ class CodexAgent {
     return thread;
   }
   ownSkillFolders(directory) {
-    return [join25(this.home, "skills"), join25(homedir2(), ".agents", "skills"), ...upward(directory).map((folder) => join25(folder, ".agents", "skills"))];
+    return [join27(this.home, "skills"), join27(homedir2(), ".agents", "skills"), ...upward(directory).map((folder) => join27(folder, ".agents", "skills"))];
   }
   get home() {
     return this.instance.home ?? process.env.CODEX_HOME ?? this.yourCodex;
@@ -15314,26 +16403,26 @@ class CodexAgent {
     if (!file)
       return { items: [], missing: true };
     const day = /^rollout-(\d{4})-(\d{2})-(\d{2})T/.exec(basename10(file));
-    return { items: [{ path: file, name: day ? join25(day[1], day[2], day[3], basename10(file)) : basename10(file) }] };
+    return { items: [{ path: file, name: day ? join27(day[1], day[2], day[3], basename10(file)) : basename10(file) }] };
   }
   conversationPlace() {
-    const sessions = join25(this.home, "sessions");
-    return { item: (name) => ROLLOUT.test(name) ? join25(sessions, name) : null };
+    const sessions = join27(this.home, "sessions");
+    return { item: (name) => ROLLOUT.test(name) ? join27(sessions, name) : null };
   }
   conversationRoots() {
-    return [join25(this.home, "sessions"), join25(this.home, "archived_sessions")];
+    return [join27(this.home, "sessions"), join27(this.home, "archived_sessions")];
   }
   accountFolder() {
-    const folder = join25(this.home, "sessions");
+    const folder = join27(this.home, "sessions");
     mkdirSync15(folder, { recursive: true, mode: 448 });
     return folder;
   }
   get yourCodex() {
-    return join25(homedir2(), ".codex");
+    return join27(homedir2(), ".codex");
   }
   async useSkills(sessionID, folder, rpc) {
     if (folder)
-      this.skillRoots.set(sessionID, join25(folder, "skills"));
+      this.skillRoots.set(sessionID, join27(folder, "skills"));
     else
       this.skillRoots.delete(sessionID);
     const roots = [...new Set(this.skillRoots.values())].sort();
@@ -15344,7 +16433,7 @@ class CodexAgent {
   }
   ownSkillSettings() {
     try {
-      const settings = Bun.TOML.parse(readFileSync22(join25(this.home, "config.toml"), "utf8"));
+      const settings = Bun.TOML.parse(readFileSync24(join27(this.home, "config.toml"), "utf8"));
       return Array.isArray(settings?.skills?.config) ? settings.skills.config : [];
     } catch {
       return [];
@@ -15497,7 +16586,7 @@ class CodexThread {
     const off = turnedOff(hooks);
     const skills = skillsFolder(await skillsFor(directory, own, off));
     await this.agent.useSkills(this.session.id, skills, rpc);
-    const turnedOffHere = (await engineSkills(directory)).filter((skill) => within2(skill.folder, own) && off(skill.name)).map((skill) => ({ path: join25(skill.folder, "SKILL.md"), enabled: false }));
+    const turnedOffHere = (await engineSkills(directory)).filter((skill) => within2(skill.folder, own) && off(skill.name)).map((skill) => ({ path: join27(skill.folder, "SKILL.md"), enabled: false }));
     const skillsKey = JSON.stringify([skills, turnedOffHere]);
     const computer = await computerServers(directory);
     const serversNow = await serversKey(this.session.id, computer);
@@ -16885,13 +17974,13 @@ function agentTitle(path) {
 function shadowHome(home, own) {
   const kept = new Set(["auth.json", "models_cache.json"]);
   mkdirSync15(home, { recursive: true, mode: 448 });
-  const wanted = existsSync15(own) ? readdirSync15(own).filter((name) => !kept.has(name)) : [];
+  const wanted = existsSync16(own) ? readdirSync16(own).filter((name) => !kept.has(name)) : [];
   for (const name of wanted) {
-    const link = join25(home, name);
-    const target = join25(own, name);
+    const link = join27(home, name);
+    const target = join27(own, name);
     try {
       const stat = lstatSync7(link, { throwIfNoEntry: false });
-      if (stat?.isSymbolicLink() && readlinkSync(link) === target)
+      if (stat?.isSymbolicLink() && readlinkSync2(link) === target)
         continue;
       if (stat && !stat.isSymbolicLink())
         continue;
@@ -16900,8 +17989,8 @@ function shadowHome(home, own) {
       symlinkSync2(target, link);
     } catch {}
   }
-  for (const name of readdirSync15(home)) {
-    const link = join25(home, name);
+  for (const name of readdirSync16(home)) {
+    const link = join27(home, name);
     try {
       if (lstatSync7(link).isSymbolicLink() && !wanted.includes(name))
         rmSync12(link, { force: true });
@@ -16966,13 +18055,13 @@ function codexPlan(type) {
 }
 
 // Packages/Box/src/agents/agents/cursor.ts
-import { existsSync as existsSync17, mkdirSync as mkdirSync16, readFileSync as readFileSync25, rmSync as rmSync13 } from "fs";
+import { existsSync as existsSync17, mkdirSync as mkdirSync16, readFileSync as readFileSync26, rmSync as rmSync13 } from "fs";
 import { homedir as homedir3 } from "os";
-import { dirname as dirname14, join as join28 } from "path";
+import { dirname as dirname14, join as join29 } from "path";
 
 // Packages/Box/src/agents/agents/cursor-worker.ts
-import { readFileSync as readFileSync23, renameSync as renameSync13, writeFileSync as writeFileSync17 } from "fs";
-import { join as join26 } from "path";
+import { readFileSync as readFileSync25, renameSync as renameSync13, writeFileSync as writeFileSync17 } from "fs";
+import { join as join28 } from "path";
 var WORKER = `// Kuvo Code's agents bridge's Cursor, run in the box's sandbox (cursor-worker.ts).
 console.log = console.error
 // What ran it as Bun, never what Cursor's commands run with.
@@ -17044,9 +18133,9 @@ process.stdin.on("data", (chunk) => {
 process.stdin.on("end", () => process.exit(0))
 `;
 function cursorWorker(folder) {
-  const file = join26(folder, "kuvo-cursor-worker.mjs");
+  const file = join28(folder, "kuvo-cursor-worker.mjs");
   try {
-    if (readFileSync23(file, "utf8") === WORKER)
+    if (readFileSync25(file, "utf8") === WORKER)
       return file;
   } catch {}
   const written = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}`;
@@ -17140,669 +18229,10 @@ class CursorWorker {
   }
 }
 
-// Packages/Box/src/agents/usage/cursor-api.ts
-import { existsSync as existsSync16, readFileSync as readFileSync24 } from "fs";
-import { join as join27 } from "path";
-var cursorEndpoints = {
-  api2: "https://api2.cursor.sh",
-  web: "https://cursor.com",
-  live: false
-};
-function cursorReachable() {
-  return cursorEndpoints.live || cursorEndpoints.api2 !== "https://api2.cursor.sh" && cursorEndpoints.web !== "https://cursor.com";
-}
-var CONNECT = { "Content-Type": "application/json", "Connect-Protocol-Version": "1" };
-function cursorSession(accessToken) {
-  const subject = tokenClaims(accessToken)?.sub;
-  if (typeof subject !== "string" || !subject.trim())
-    return;
-  const parts = subject.trim().split("|");
-  const user = parts.length > 1 ? parts[1] : parts[0];
-  if (!user)
-    return;
-  return { user, cookie: `WorkosCursorSessionToken=${user}%3A%3A${accessToken}` };
-}
-function cursorKey(folder, own, env = process.env, now = Date.now()) {
-  const fromEnvironment = own ? env.CURSOR_API_KEY?.trim() : undefined;
-  if (fromEnvironment)
-    return fromEnvironment;
-  try {
-    const saved = JSON.parse(readFileSync24(join27(folder, "auth.json"), "utf8"));
-    const key = typeof saved?.apiKey === "string" ? saved.apiKey.trim() : "";
-    if (!key)
-      return;
-    if (typeof saved.apiKeyExpiresAtMs === "number" && saved.apiKeyExpiresAtMs < now)
-      return;
-    return key;
-  } catch {
-    return;
-  }
-}
-function cursorKeyUnreadable(folder) {
-  const file = join27(folder, "auth.json");
-  if (!existsSync16(file))
-    return false;
-  try {
-    JSON.parse(readFileSync24(file, "utf8"));
-    return false;
-  } catch {
-    return true;
-  }
-}
-var HOLD_WITHOUT_WORD = 15 * 60000;
-
-class CursorClient {
-  key;
-  now;
-  unreadable;
-  token;
-  refused;
-  holdUntil = 0;
-  exchanging;
-  constructor(key, now = Date.now, unreadable = () => false) {
-    this.key = key;
-    this.now = now;
-    this.unreadable = unreadable;
-  }
-  signIn() {
-    return fingerprint(this.key());
-  }
-  identity() {
-    const kept = this.token;
-    if (!kept || kept.key !== this.key())
-      return;
-    const user = cursorSession(kept.access)?.user;
-    return user ? `cursor:${user.toLowerCase()}` : undefined;
-  }
-  hold(until) {
-    this.holdUntil = Math.max(this.holdUntil, until ?? this.now() + HOLD_WITHOUT_WORD);
-  }
-  holdFor(header) {
-    const until = retryAt(header, this.now());
-    this.hold(until);
-    return until;
-  }
-  heldUntil() {
-    return this.now() < this.holdUntil ? this.holdUntil : undefined;
-  }
-  async accessToken(fresh = false) {
-    if (!cursorReachable())
-      throw new LimitsProblem("none", "Cursor isn't asked from this box.", undefined, false);
-    const key = this.key();
-    if (!key && this.unreadable())
-      throw new LimitsProblem("failed", "Cursor's sign-in here can't be read just now.", undefined, false);
-    if (!key)
-      throw new LimitsProblem("none", "Not signed in to Cursor here.", undefined, false);
-    if (this.refused === fingerprint(key))
-      throw new LimitsProblem("expired", "Cursor turned its sign-in away: sign in to Cursor again in Settings \u203A Accounts.", undefined, false);
-    const held = this.heldUntil();
-    if (held)
-      throw new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", held, false);
-    const kept = this.token;
-    if (!fresh && kept && kept.key === key && this.now() < kept.until)
-      return kept.access;
-    if (this.exchanging?.key === key)
-      return this.exchanging.answer;
-    const answer = this.exchange(key).finally(() => {
-      if (this.exchanging?.answer === answer)
-        this.exchanging = undefined;
-    });
-    this.exchanging = { key, answer };
-    return answer;
-  }
-  async exchange(key) {
-    let answer;
-    try {
-      answer = await send(`${cursorEndpoints.api2}/auth/exchange_user_api_key`, { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: "{}" }, 1e4);
-    } catch {
-      throw new LimitsProblem("failed", "Couldn't reach Cursor. Check your connection.");
-    }
-    if (answer.status === 400 || answer.status === 401) {
-      this.refused = fingerprint(key);
-      throw new LimitsProblem("expired", "Cursor turned its sign-in away: sign in to Cursor again in Settings \u203A Accounts.");
-    }
-    if (answer.status === 429)
-      throw new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", this.holdFor(answer.headers.get("retry-after")));
-    if (answer.status < 200 || answer.status >= 300)
-      throw new LimitsProblem("failed", `Cursor answered ${answer.status}.`);
-    const access = typeof answer.body?.accessToken === "string" ? answer.body.accessToken.trim() : "";
-    if (!access)
-      throw new LimitsProblem("failed", "Cursor's answer wasn't one it gives.");
-    const exp = Number(tokenClaims(access)?.exp);
-    this.token = { key, access, until: Number.isFinite(exp) ? exp * 1000 - 5 * 60000 : 0 };
-    return access;
-  }
-  refuses() {
-    if (this.refused !== undefined && this.refused === fingerprint(this.key()))
-      return new LimitsProblem("expired", "Cursor turned its sign-in away: sign in to Cursor again in Settings \u203A Accounts.", undefined, false);
-    const held = this.heldUntil();
-    return held ? new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", held, false) : undefined;
-  }
-  dashboard(method, access) {
-    const refused = this.refuses();
-    if (refused)
-      return Promise.reject(refused);
-    return send(`${cursorEndpoints.api2}/aiserver.v1.DashboardService/${method}`, { method: "POST", headers: { Authorization: `Bearer ${access}`, ...CONNECT }, body: "{}" }, 1e4);
-  }
-  website(path, access, init = {}, timeout = 1e4) {
-    const session = cursorSession(access);
-    if (!session)
-      return;
-    const refused = this.refuses();
-    if (refused)
-      return Promise.reject(refused);
-    const url = new URL(`${cursorEndpoints.web}${path}`);
-    for (const [name, value] of Object.entries(init.query ?? {}))
-      url.searchParams.set(name, value);
-    const headers = { Cookie: session.cookie };
-    if (init.body !== undefined)
-      Object.assign(headers, { "Content-Type": "application/json", Origin: "https://cursor.com" });
-    return send(url.toString(), { method: init.method ?? "GET", headers, ...init.body !== undefined ? { body: JSON.stringify(init.body) } : {} }, timeout);
-  }
-}
-async function send(url, init, timeout) {
-  if (!cursorReachable())
-    throw new Error("Cursor isn't asked from this box.");
-  const response = await fetch(url, { ...init, redirect: "manual", signal: AbortSignal.timeout(timeout) });
-  const text = await response.text();
-  let body;
-  try {
-    body = text ? JSON.parse(text) : undefined;
-  } catch {}
-  return { status: response.status, body, headers: response.headers };
-}
-
-// Packages/Box/src/agents/usage/numbers.ts
-function numberOf(value) {
-  if (typeof value === "number")
-    return Number.isFinite(value) ? value : undefined;
-  if (typeof value === "string" && /^\s*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?\s*$/.test(value)) {
-    const found = Number(value);
-    return Number.isFinite(found) ? found : undefined;
-  }
-  return;
-}
-
-// Packages/Box/src/agents/usage/cursor-plan.ts
-var DAY_MS = 24 * 60 * 60000;
-var BILLING_PERIOD_MS = 30 * DAY_MS;
-var WEEK_MS = 7 * DAY_MS;
-
-class CursorPlanError extends Error {
-}
-var ORG = new Set(["enterprise", "team"]);
-var text3 = (value) => typeof value === "string" ? value : undefined;
-var trimmed = (value) => {
-  const found = text3(value)?.trim();
-  return found ? found : undefined;
-};
-var object = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
-var clampPercent = (value) => Number.isFinite(value) ? Math.min(Math.max(value, 0), 100) : 0;
-var dollars = (cents) => Math.round(cents) / 100;
-var titled = (value) => value.split(/\s+/).filter(Boolean).map((word) => word.slice(0, 1).toUpperCase() + word.slice(1)).join(" ");
-function isoTime(value) {
-  let s = text3(value)?.trim();
-  if (!s)
-    return;
-  if (s.includes(" ") && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(s))
-    s = s.slice(0, 10) + "T" + s.slice(11);
-  if (s.endsWith(" UTC"))
-    s = s.slice(0, -4) + "Z";
-  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})?$/.exec(s);
-  if (!match)
-    return;
-  const fraction = match[2] ? "." + match[2].slice(1, 4).padEnd(3, "0") : "";
-  const at = Date.parse(match[1] + fraction + (match[3] ?? "Z"));
-  return Number.isFinite(at) ? at : undefined;
-}
-function planFacts(usage) {
-  const isEnabled = usage.enabled !== false;
-  const planUsage = object(usage.planUsage);
-  const limit = planUsage ? numberOf(planUsage.limit) : undefined;
-  const totalPercentUsed = planUsage ? numberOf(planUsage.totalPercentUsed) : undefined;
-  const auto = planUsage ? numberOf(planUsage.autoPercentUsed) : undefined;
-  const api = planUsage ? numberOf(planUsage.apiPercentUsed) : undefined;
-  const spent = (planUsage ? numberOf(planUsage.totalSpend) : undefined) ?? (limit ?? 0) - ((planUsage ? numberOf(planUsage.remaining) : undefined) ?? limit ?? 0);
-  const hasModelPools = auto !== undefined && api !== undefined && auto >= 0 && api >= 0 ? auto > 0 || api > 0 || spent === 0 : false;
-  const spendLimitUsage = object(usage.spendLimitUsage);
-  const spendLimitType = text3(spendLimitUsage?.limitType)?.toLowerCase();
-  const pooledLimit = numberOf(spendLimitUsage?.pooledLimit) ?? 0;
-  const hasPlanUsage = planUsage !== undefined;
-  const hasLimit = limit !== undefined;
-  const hasTotalUsagePercent = totalPercentUsed !== undefined;
-  const planUsageLimitMissing = hasPlanUsage && !hasLimit;
-  return {
-    isEnabled,
-    hasPlanUsage,
-    limit,
-    totalPercentUsed,
-    hasModelPools,
-    hasLimit,
-    hasTotalUsagePercent,
-    planUsageLimitMissing,
-    planUsageUnusable: !hasPlanUsage || planUsageLimitMissing && !hasModelPools,
-    isTeamByShape: spendLimitType === "team" || pooledLimit > 0,
-    shouldTryGenericRequestFallback: isEnabled && hasPlanUsage && !hasLimit && !hasTotalUsagePercent && !hasModelPools
-  };
-}
-var progress = (label, used, limit, format, resetsAt, periodMs, suffix) => ({
-  label,
-  kind: "progress",
-  used,
-  limit,
-  format,
-  ...suffix !== undefined ? { suffix } : {},
-  ...resetsAt !== undefined ? { resetsAt } : {},
-  ...periodMs !== undefined ? { periodMs } : {}
-});
-function grokBotLine(usage) {
-  if (usage.usesPooledEnterpriseAllowance === true || usage.hasNonZeroIncludedLimit === false || usage.includedLimitZero === true)
-    return;
-  const percent = numberOf(usage.usagePercent);
-  if (percent === undefined || percent < 0)
-    return;
-  const reset = isoTime(usage.nextResetTimestampUtc);
-  const start = isoTime(usage.currentPeriodStart);
-  const period = start !== undefined && reset !== undefined && reset > start ? reset - start : WEEK_MS;
-  return progress("Grok Bot usage", clampPercent(percent), 100, "percent", reset, period);
-}
-function billingCycle(usage) {
-  const start = numberOf(usage.billingCycleStart);
-  const end = numberOf(usage.billingCycleEnd);
-  if (start === undefined || end === undefined || !(end > start))
-    return { ...end !== undefined ? { resetsAt: end } : {}, periodMs: BILLING_PERIOD_MS };
-  return { resetsAt: end, periodMs: end - start };
-}
-function onDemandSpendCents(spendLimitUsage, limit, remaining) {
-  const reported = [numberOf(spendLimitUsage.individualUsed), numberOf(spendLimitUsage.pooledUsed), numberOf(spendLimitUsage.totalSpend)].filter((each) => each !== undefined);
-  const positive = reported.find((each) => each > 0);
-  if (positive !== undefined)
-    return positive;
-  const inferred = Math.max(0, limit - remaining);
-  return inferred > 0 ? inferred : reported[0] ?? 0;
-}
-function creditsLine(creditGrants, stripeBalanceCents) {
-  const hasCreditGrants = creditGrants?.hasCreditGrants === true;
-  const grantTotal = hasCreditGrants ? numberOf(creditGrants?.totalCents) ?? 0 : 0;
-  const grantUsed = hasCreditGrants ? numberOf(creditGrants?.usedCents) ?? 0 : 0;
-  const valid = hasCreditGrants && grantTotal > 0;
-  const total = (valid ? grantTotal : 0) + stripeBalanceCents;
-  if (!(total > 0))
-    return;
-  return { label: "Credits", kind: "dollars", amount: dollars(Math.max(0, total - (valid ? grantUsed : 0))) };
-}
-function mapUsage(usage, planName, creditGrants, stripeBalanceCents) {
-  const facts = planFacts(usage);
-  const planUsage = object(usage.planUsage);
-  if (!facts.isEnabled || !planUsage)
-    throw new CursorPlanError("No active Cursor subscription.");
-  const normalizedPlan = planName?.trim().toLowerCase() ?? "";
-  if (!facts.hasLimit && !facts.hasTotalUsagePercent && !facts.hasModelPools)
-    throw new CursorPlanError("Total usage limit missing from API response.");
-  const lines = [];
-  const credits = creditsLine(creditGrants, stripeBalanceCents);
-  if (credits)
-    lines.push(credits);
-  const planUsedCents = numberOf(planUsage.totalSpend) ?? (facts.limit ?? 0) - (numberOf(planUsage.remaining) ?? 0);
-  const computedPercentUsed = facts.limit !== undefined && facts.limit > 0 ? planUsedCents / facts.limit * 100 : 0;
-  const totalUsagePercent = facts.totalPercentUsed ?? computedPercentUsed;
-  const cycle = billingCycle(usage);
-  const spendLimitUsage = object(usage.spendLimitUsage);
-  const isTeam = normalizedPlan === "team" || facts.isTeamByShape;
-  if (isTeam && facts.hasModelPools) {
-    if (facts.totalPercentUsed !== undefined)
-      lines.push(progress("Total usage", facts.totalPercentUsed, 100, "percent", cycle.resetsAt, cycle.periodMs));
-  } else if (isTeam) {
-    if (facts.limit !== undefined)
-      lines.push(progress("Total usage", dollars(planUsedCents), dollars(facts.limit), "dollars", cycle.resetsAt, cycle.periodMs));
-    else if (facts.totalPercentUsed !== undefined)
-      lines.push(progress("Total usage", facts.totalPercentUsed, 100, "percent", cycle.resetsAt, cycle.periodMs));
-    else
-      throw new CursorPlanError("Cursor request-based usage data unavailable. Try again later.");
-  } else {
-    lines.push(progress("Total usage", totalUsagePercent, 100, "percent", cycle.resetsAt, cycle.periodMs));
-  }
-  const auto = numberOf(planUsage.autoPercentUsed);
-  if (auto !== undefined)
-    lines.push(progress("Cursor Models", auto, 100, "percent", cycle.resetsAt, cycle.periodMs));
-  const api = numberOf(planUsage.apiPercentUsed);
-  if (api !== undefined)
-    lines.push(progress("Other Models", api, 100, "percent", cycle.resetsAt, cycle.periodMs));
-  if (spendLimitUsage) {
-    const limit = numberOf(spendLimitUsage.individualLimit) ?? numberOf(spendLimitUsage.pooledLimit) ?? 0;
-    const remaining = numberOf(spendLimitUsage.individualRemaining) ?? numberOf(spendLimitUsage.pooledRemaining) ?? 0;
-    const spent = onDemandSpendCents(spendLimitUsage, limit, remaining);
-    if (limit > 0)
-      lines.push(progress("On-demand", dollars(spent), dollars(limit), "dollars"));
-    else if (spent > 0)
-      lines.push({ label: "On-demand", kind: "dollars", amount: dollars(spent) });
-  }
-  return { ...planLabel(planName) ? { plan: planLabel(planName) } : {}, lines };
-}
-function mapRequestBasedUsage(usage, planName, unavailable) {
-  const lines = [];
-  const gpt4 = object(usage?.["gpt-4"]);
-  const limit = numberOf(gpt4?.maxRequestUsage);
-  if (gpt4 && limit !== undefined && limit > 0) {
-    const cycleStart = isoTime(usage?.startOfMonth);
-    lines.push(progress("Requests", numberOf(gpt4.numRequests) ?? 0, limit, "count", cycleStart !== undefined ? cycleStart + BILLING_PERIOD_MS : undefined, BILLING_PERIOD_MS, "requests"));
-  }
-  if (!lines.length)
-    throw new CursorPlanError(unavailable);
-  return { ...planLabel(planName) ? { plan: planLabel(planName) } : {}, lines };
-}
-function requestBasedFallback(usage, planName, planInfoUnavailable) {
-  const facts = planFacts(usage);
-  if (!facts.isEnabled)
-    return;
-  const plan = planName?.trim().toLowerCase() ?? "";
-  const unusable = facts.planUsageUnusable && !facts.hasTotalUsagePercent;
-  if (unusable && plan === "enterprise")
-    return "Enterprise usage data unavailable. Try again later.";
-  if (unusable && plan === "team")
-    return "Team request-based usage data unavailable. Try again later.";
-  if (unusable && plan === "" && planInfoUnavailable)
-    return "Cursor request-based usage data unavailable. Try again later.";
-  if (facts.isTeamByShape && facts.planUsageLimitMissing && !facts.hasModelPools)
-    return "Cursor request-based usage data unavailable. Try again later.";
-  return;
-}
-function stripeBalanceCents(body) {
-  const balance = numberOf(body?.customerBalance);
-  return balance !== undefined && balance < 0 ? Math.abs(balance) : 0;
-}
-var normalizedMembership = (value) => value?.trim().toLowerCase() || undefined;
-function routingPlanName(planInfoName, membership) {
-  const member = normalizedMembership(membership);
-  if (member && ORG.has(member))
-    return member;
-  return planInfoName?.trim() || undefined;
-}
-function resolvedPlanName(planInfoName, membership) {
-  const member = normalizedMembership(membership);
-  const planInfo = planInfoName?.trim() || undefined;
-  if (member && ORG.has(member) && (planInfo === undefined || ["pro", "pro plan"].includes(planInfo.toLowerCase())))
-    return member;
-  return planInfo ?? member;
-}
-function preferredMembership(local, summary) {
-  const mine = normalizedMembership(local);
-  const theirs = normalizedMembership(summary);
-  if (mine && ORG.has(mine))
-    return mine;
-  if (theirs && ORG.has(theirs))
-    return theirs;
-  return mine ?? theirs;
-}
-function planLabel(value) {
-  const found = value?.trim();
-  return found ? titled(found) : undefined;
-}
-var resolvedPlanLabel = (planInfoName, membership) => planLabel(resolvedPlanName(planInfoName, membership));
-function summaryCycle(summary, requestUsage) {
-  const start = isoTime(summary?.billingCycleStart);
-  const end = isoTime(summary?.billingCycleEnd);
-  if (start !== undefined && end !== undefined && end > start)
-    return { resetsAt: end, periodMs: end - start };
-  const requestStart = isoTime(requestUsage?.startOfMonth);
-  return { ...requestStart !== undefined ? { resetsAt: requestStart + BILLING_PERIOD_MS } : {}, periodMs: BILLING_PERIOD_MS };
-}
-function dollarMeter(value) {
-  const bucket = object(value);
-  if (!bucket || bucket.enabled === false)
-    return;
-  const limit = numberOf(bucket.limit);
-  if (limit === undefined || !(limit > 0))
-    return;
-  const reported = numberOf(bucket.used);
-  const inferred = Math.max(0, limit - (numberOf(bucket.remaining) ?? limit));
-  const used = reported !== undefined && reported > 0 ? reported : inferred;
-  return { used: Math.max(0, used), limit };
-}
-function usableDollarBucket(value) {
-  const bucket = object(value);
-  if (!bucket || bucket.enabled === false)
-    return false;
-  return dollarMeter(bucket) !== undefined || (numberOf(bucket.used) ?? 0) > 0;
-}
-function hasUsableSummary(summary) {
-  const start = isoTime(summary.billingCycleStart);
-  const end = isoTime(summary.billingCycleEnd);
-  if (start !== undefined && end !== undefined && end > start)
-    return true;
-  const individual = object(summary.individualUsage);
-  const team = object(summary.teamUsage);
-  const plan = object(individual?.plan);
-  if (["totalPercentUsed", "autoPercentUsed", "apiPercentUsed"].some((key) => numberOf(plan?.[key]) !== undefined))
-    return true;
-  return [individual?.onDemand, individual?.overall, team?.onDemand, team?.pooled].some(usableDollarBucket);
-}
-function onDemandBucket(value, cycle, lines) {
-  const bucket = object(value);
-  if (!bucket || bucket.enabled === false)
-    return false;
-  const meter = dollarMeter(bucket);
-  if (meter) {
-    lines.push(progress("On-demand", dollars(meter.used), dollars(meter.limit), "dollars", cycle.resetsAt, cycle.periodMs));
-    return true;
-  }
-  const used = numberOf(bucket.used);
-  if (used !== undefined && used > 0) {
-    lines.push({ label: "On-demand", kind: "dollars", amount: dollars(used) });
-    return true;
-  }
-  return false;
-}
-function summaryOnDemand(summary, cycle, lines) {
-  if (onDemandBucket(object(summary?.individualUsage)?.onDemand, cycle, lines))
-    return;
-  onDemandBucket(object(summary?.teamUsage)?.onDemand, cycle, lines);
-}
-function appendMissingOnDemand(summary, lines) {
-  if (lines.some((line) => line.label === "On-demand"))
-    return;
-  summaryOnDemand(summary, summaryCycle(summary, undefined), lines);
-}
-function mapSummary(summary, requestUsage, planName, unavailable) {
-  const cycle = summaryCycle(summary, requestUsage);
-  const lines = [];
-  const requests = object(requestUsage?.["gpt-4"]);
-  const limit = numberOf(requests?.maxRequestUsage);
-  const hasRequests = !!requests && limit !== undefined && limit > 0;
-  if (hasRequests) {
-    const used = Math.max(0, numberOf(requests.numRequests) ?? numberOf(requests.numRequestsTotal) ?? 0);
-    for (const label of ["Total usage", "Requests"])
-      lines.push(progress(label, used, limit, "count", cycle.resetsAt, cycle.periodMs, "requests"));
-  } else {
-    const individual = object(summary?.individualUsage);
-    const team = object(summary?.teamUsage);
-    const limitType = text3(summary?.limitType)?.toLowerCase();
-    const dollarTotal = (meter) => lines.push(progress("Total usage", dollars(meter.used), dollars(meter.limit), "dollars", cycle.resetsAt, cycle.periodMs));
-    const pooled = dollarMeter(team?.pooled);
-    const percent = numberOf(object(individual?.plan)?.totalPercentUsed);
-    const overall = dollarMeter(individual?.overall);
-    if (limitType === "team" && pooled)
-      dollarTotal(pooled);
-    else if (percent !== undefined)
-      lines.push(progress("Total usage", percent, 100, "percent", cycle.resetsAt, cycle.periodMs));
-    else if (overall)
-      dollarTotal(overall);
-    else if (pooled)
-      dollarTotal(pooled);
-  }
-  const plan = object(object(summary?.individualUsage)?.plan);
-  for (const [key, label] of [
-    ["autoPercentUsed", "Cursor Models"],
-    ["apiPercentUsed", "Other Models"]
-  ]) {
-    const percent = numberOf(plan?.[key]);
-    if (percent !== undefined)
-      lines.push(progress(label, percent, 100, "percent", cycle.resetsAt, cycle.periodMs));
-  }
-  summaryOnDemand(summary, cycle, lines);
-  if (!lines.length)
-    throw new CursorPlanError(unavailable);
-  const summaryMembership = text3(summary?.membershipType);
-  const label = resolvedPlanLabel(planName, preferredMembership(undefined, summaryMembership)) ?? planLabel(planName) ?? planLabel(summaryMembership);
-  return { ...label ? { plan: label } : {}, lines };
-}
-var WINDOWS = {
-  "Total usage": "total",
-  "Cursor Models": "auto",
-  "Other Models": "api",
-  "Grok Bot usage": "grok_bot",
-  "On-demand": "on_demand",
-  Requests: "requests"
-};
-function readingOf(mapped, identity) {
-  const windows = [];
-  let balance;
-  const extras = [];
-  for (const line of mapped.lines) {
-    if (line.kind === "dollars") {
-      if (line.label === "Credits")
-        balance = { left: line.amount, unit: "usd" };
-      if (line.label === "On-demand")
-        extras.push({ id: "on_demand", name: line.label, kind: "spent", amount: line.amount, unit: "usd" });
-      continue;
-    }
-    const id = WINDOWS[line.label];
-    if (!id)
-      continue;
-    const window = { id, used: line.limit > 0 ? line.used / line.limit : 0, name: line.label };
-    if (line.resetsAt !== undefined)
-      window.resetsAt = line.resetsAt;
-    if (line.periodMs !== undefined)
-      window.minutes = Math.round(line.periodMs / 60000);
-    if (line.format === "dollars")
-      window.amount = { used: line.used, limit: line.limit, unit: "usd" };
-    if (line.format === "count")
-      window.amount = { used: line.used, limit: line.limit, unit: "requests" };
-    if (id === "requests" && windows.some((each) => each.id === "total" && each.amount?.unit === "requests" && each.amount.used === line.used && each.amount.limit === line.limit))
-      continue;
-    windows.push(window);
-  }
-  const cycleEnd = mapped.lines.find((line) => line.kind === "progress" && line.label === "Total usage" && line.resetsAt !== undefined);
-  if (cycleEnd?.kind === "progress")
-    for (const extra of extras)
-      extra.resetsAt ??= cycleEnd.resetsAt;
-  return { windows, ...mapped.plan ? { plan: mapped.plan } : {}, ...balance ? { balance } : {}, ...extras.length ? { extras } : {}, ...identity ? { identity } : {} };
-}
-async function optional(client, request) {
-  let answer;
-  try {
-    answer = await request();
-  } catch (error) {
-    if (error instanceof LimitsProblem)
-      throw error;
-    return;
-  }
-  if (answer?.status === 429)
-    throw new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", client.holdFor(answer.headers.get("retry-after")) ?? client.heldUntil());
-  if (!answer || answer.status < 200 || answer.status >= 300)
-    return;
-  return object(answer.body);
-}
-async function readCursorPlan(client, now = Date.now) {
-  let access = await client.accessToken();
-  const attempt = async (token) => {
-    try {
-      return await client.dashboard("GetCurrentPeriodUsage", token);
-    } catch (error) {
-      if (error instanceof LimitsProblem)
-        throw error;
-      throw new LimitsProblem("failed", "Couldn't reach Cursor. Check your connection.");
-    }
-  };
-  let answer = await attempt(access);
-  if (answer.status === 401 || answer.status === 403) {
-    access = await client.accessToken(true);
-    answer = await attempt(access);
-    if (answer.status === 401 || answer.status === 403)
-      throw new LimitsProblem("expired", "Cursor turned its sign-in away: sign in to Cursor again in Settings \u203A Accounts.");
-  }
-  if (answer.status === 429)
-    throw new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", client.holdFor(answer.headers.get("retry-after")));
-  if (answer.status < 200 || answer.status >= 300)
-    throw new LimitsProblem("failed", `Cursor answered ${answer.status}.`);
-  const usage = object(answer.body);
-  if (!usage)
-    throw new LimitsProblem("failed", "Cursor's answer wasn't one it gives.");
-  const user = cursorSession(access)?.user;
-  const identity = user ? `cursor:${user.toLowerCase()}` : undefined;
-  const membership = undefined;
-  const planBody = await optional(client, () => client.dashboard("GetPlanInfo", access));
-  const planInfoName = trimmed(object(planBody?.planInfo)?.planName);
-  const planInfoUnavailable = planInfoName === undefined;
-  const routing = routingPlanName(planInfoName, membership);
-  const display = resolvedPlanName(planInfoName, membership);
-  const grokBot = async (lines) => {
-    const body = await optional(client, () => client.dashboard("GetSandUsageStatus", access));
-    const line = body ? grokBotLine(body) : undefined;
-    if (line)
-      lines.push(line);
-  };
-  const fallback = requestBasedFallback(usage, routing, planInfoUnavailable);
-  const summary = () => optional(client, () => client.website("/api/usage-summary", access));
-  const requests = () => {
-    const who = cursorSession(access)?.user;
-    return optional(client, () => who ? client.website("/api/usage", access, { query: { user: who } }) : undefined);
-  };
-  try {
-    if (fallback !== undefined) {
-      const found = await summary();
-      const mapped = mapSummary(found, await requests(), display ?? routing, fallback);
-      await grokBot(mapped.lines);
-      return { mapped, ...identity ? { identity } : {} };
-    }
-    if (planFacts(usage).shouldTryGenericRequestFallback) {
-      try {
-        const body = await requests();
-        if (!body)
-          throw new CursorPlanError("Cursor request-based usage data unavailable. Try again later.");
-        const mapped = mapRequestBasedUsage(body, display ?? routing, "Cursor request-based usage data unavailable. Try again later.");
-        await grokBot(mapped.lines);
-        return { mapped, ...identity ? { identity } : {} };
-      } catch {}
-    }
-    const grants = await optional(client, () => client.dashboard("GetCreditGrantsBalance", access));
-    const credits = grants && typeof grants.hasCreditGrants === "boolean" && (!grants.hasCreditGrants || (numberOf(grants.totalCents) ?? 0) > 0 && (numberOf(grants.usedCents) ?? -1) >= 0) ? grants : undefined;
-    const stripe = await optional(client, () => client.website("/api/auth/stripe", access));
-    const mapped = mapUsage(usage, planInfoName, credits, stripe && numberOf(stripe.customerBalance) !== undefined ? stripeBalanceCents(stripe) : 0);
-    const label = resolvedPlanLabel(planInfoName, membership);
-    if (label)
-      mapped.plan = label;
-    else
-      delete mapped.plan;
-    const facts = planFacts(usage);
-    const localIsOrg = membership !== undefined && ORG.has(membership);
-    if (localIsOrg || facts.isTeamByShape) {
-      const needsOnDemand = !mapped.lines.some((line) => line.label === "On-demand");
-      if (!(localIsOrg && !needsOnDemand)) {
-        const found = await summary();
-        if (found && hasUsableSummary(found)) {
-          if (needsOnDemand)
-            appendMissingOnDemand(found, mapped.lines);
-          const summaryMembership = text3(found.membershipType)?.trim().toLowerCase();
-          const better = resolvedPlanLabel(planInfoName, preferredMembership(membership, summaryMembership));
-          if (better)
-            mapped.plan = better;
-        }
-      }
-    }
-    await grokBot(mapped.lines);
-    return { mapped, ...identity ? { identity } : {} };
-  } catch (error) {
-    if (error instanceof CursorPlanError)
-      throw new LimitsProblem("failed", error.message);
-    throw error;
-  }
-}
-
 // Packages/Box/src/agents/agents/cursor.ts
 function readable(path) {
   try {
-    return readFileSync25(path).toString("base64");
+    return readFileSync26(path).toString("base64");
   } catch {
     return;
   }
@@ -17842,13 +18272,13 @@ class CursorAgent {
     account: () => this.cursor.signIn()
   };
   ownSkillFolders(directory) {
-    return [homedir3(), ...upward(directory)].flatMap((folder) => [".cursor", ".claude", ".codex", ".grok", ".agents"].map((name) => join28(folder, name, "skills")));
+    return [homedir3(), ...upward(directory)].flatMap((folder) => [".cursor", ".claude", ".codex", ".grok", ".agents"].map((name) => join29(folder, name, "skills")));
   }
   get folder() {
-    return this.instance.home ?? join28(this.context.home, "cursor");
+    return this.instance.home ?? join29(this.context.home, "cursor");
   }
   get authFile() {
-    return join28(this.folder, "auth.json");
+    return join29(this.folder, "auth.json");
   }
   methods() {
     return [
@@ -17861,10 +18291,10 @@ class CursorAgent {
   }
   async sdk() {
     const folder = await this.runtime();
-    process.argv[1] = join28(folder, "package.json");
-    process.env.CURSOR_DATA_DIR ??= join28(this.context.home, "cursor", "data");
-    process.env.CURSOR_SANDBOX_POLICY_DIR ??= join28(this.context.home, "cursor", "sandbox-policies");
-    process.env.CUA_APP_SUPPORT_DIR ??= join28(this.context.home, "cursor", "computer-use");
+    process.argv[1] = join29(folder, "package.json");
+    process.env.CURSOR_DATA_DIR ??= join29(this.context.home, "cursor", "data");
+    process.env.CURSOR_SANDBOX_POLICY_DIR ??= join29(this.context.home, "cursor", "sandbox-policies");
+    process.env.CUA_APP_SUPPORT_DIR ??= join29(this.context.home, "cursor", "computer-use");
     return this.context.deps.load(this.id, SDK2[0].name);
   }
   async store(sdk) {
@@ -18002,7 +18432,7 @@ class CursorAgent {
     } catch {}
   }
   agentStore(sdk) {
-    const root = join28(this.folder, "agents");
+    const root = join29(this.folder, "agents");
     mkdirSync16(root, { recursive: true });
     return new sdk.JsonlLocalAgentStore(root);
   }
@@ -18351,7 +18781,7 @@ ${text}`;
     const directory = this.session.location.directory;
     const attached = fenceAttachments(directory);
     const conversations = options.local.store.root;
-    const own = join28(this.owner.context.home, "cursor", "in-sandbox");
+    const own = join29(this.owner.context.home, "cursor", "in-sandbox");
     for (const folder of [conversations, own])
       mkdirSync16(folder, { recursive: true, mode: 448 });
     const fence = fenceAgent(process.execPath, directory, {
@@ -18371,9 +18801,9 @@ ${text}`;
         ...fence.env,
         KUVO_FENCE_BUN: "1",
         OPENCODE_SESSION_ID: this.session.id,
-        CURSOR_DATA_DIR: join28(own, "data"),
-        CURSOR_SANDBOX_POLICY_DIR: join28(own, "sandbox-policies"),
-        CUA_APP_SUPPORT_DIR: join28(own, "computer-use")
+        CURSOR_DATA_DIR: join29(own, "data"),
+        CURSOR_SANDBOX_POLICY_DIR: join29(own, "sandbox-policies"),
+        CUA_APP_SUPPORT_DIR: join29(own, "computer-use")
       },
       ended: fence.ended
     });
@@ -18565,8 +18995,8 @@ function withTimeout2(promise, milliseconds) {
 
 // Packages/Box/src/agents/agents/grok.ts
 import { homedir as homedir4 } from "os";
-import { mkdirSync as mkdirSync17, readFileSync as readFileSync26, writeFileSync as writeFileSync18 } from "fs";
-import { dirname as dirname15, join as join29 } from "path";
+import { mkdirSync as mkdirSync17, readFileSync as readFileSync27, writeFileSync as writeFileSync18 } from "fs";
+import { dirname as dirname15, join as join30 } from "path";
 
 // Packages/Box/src/agents/engine-limits.ts
 var engineEndpoints = {
@@ -18842,7 +19272,7 @@ async function readOpenCodeGo(secret, _credential, now) {
 }
 
 // Packages/Box/src/agents/agents/grok.ts
-var places4 = [join29(homedir4(), ".grok/bin"), join29(homedir4(), ".local/bin"), "/opt/homebrew/bin", "/usr/local/bin"];
+var places4 = [join30(homedir4(), ".grok/bin"), join30(homedir4(), ".local/bin"), "/opt/homebrew/bin", "/usr/local/bin"];
 var STATE_IN_HOME3 = [
   "sessions",
   "logs",
@@ -18877,11 +19307,11 @@ class GrokAgent {
   status;
   promptCount = 0;
   get effortsFile() {
-    return join29(this.context.home, "grok", `efforts-${this.instance.id}.json`);
+    return join30(this.context.home, "grok", `efforts-${this.instance.id}.json`);
   }
   efforts() {
     try {
-      return JSON.parse(readFileSync26(this.effortsFile, "utf8"));
+      return JSON.parse(readFileSync27(this.effortsFile, "utf8"));
     } catch {
       return {};
     }
@@ -18951,16 +19381,16 @@ class GrokAgent {
       return this.instance.home;
     const set = process.env.GROK_HOME?.trim();
     if (set)
-      return set === "~" ? homedir4() : set.startsWith("~/") ? join29(homedir4(), set.slice(2)) : set;
-    return join29(homedir4(), ".grok");
+      return set === "~" ? homedir4() : set.startsWith("~/") ? join30(homedir4(), set.slice(2)) : set;
+    return join30(homedir4(), ".grok");
   }
   conversationRoots() {
-    return [join29(this.grokHome, "sessions")];
+    return [join30(this.grokHome, "sessions")];
   }
   ownSkillFolders(directory) {
     const home = this.grokHome;
-    const projects = upward(directory).flatMap((folder) => [".grok", ".claude", ".cursor", ".agents"].map((name) => join29(folder, name, "skills")));
-    return [join29(home, "skills"), join29(homedir4(), ".claude", "skills"), join29(homedir4(), ".cursor", "skills"), ...projects];
+    const projects = upward(directory).flatMap((folder) => [".grok", ".claude", ".cursor", ".agents"].map((name) => join30(folder, name, "skills")));
+    return [join30(home, "skills"), join30(homedir4(), ".claude", "skills"), join30(homedir4(), ".cursor", "skills"), ...projects];
   }
   limits = {
     every: 10 * 60000,
@@ -18984,7 +19414,7 @@ class GrokAgent {
   grokSignIn() {
     const home = this.grokHome;
     try {
-      const entries = JSON.parse(readFileSync26(join29(home, "auth.json"), "utf8")) ?? {};
+      const entries = JSON.parse(readFileSync27(join30(home, "auth.json"), "utf8")) ?? {};
       return Object.values(entries).find((each) => typeof each?.key === "string" && each.key.trim());
     } catch {
       return;
@@ -19065,7 +19495,7 @@ class GrokAgent {
       authMethod: () => process.env.XAI_API_KEY ? "xai.api_key" : "cached_token",
       restartAfterInterrupt: true,
       program: () => agent.program,
-      whole: { homes: (env) => [env.GROK_HOME ?? join29(homedir4(), ".grok")], state: STATE_IN_HOME3, kept: KEPT_IN_HOME3, env: { GROK_SANDBOX: "off", GROK_MEMORY: "0" } },
+      whole: { homes: (env) => [env.GROK_HOME ?? join30(homedir4(), ".grok")], state: STATE_IN_HOME3, kept: KEPT_IN_HOME3, env: { GROK_SANDBOX: "off", GROK_MEMORY: "0" } },
       async command({ approvesAll, plan, skills, subagents, whole }) {
         const executable = agent.executable();
         if (!executable)
@@ -19270,9 +19700,9 @@ async function branchRoutes(places, method, parts, body) {
 // Packages/Box/src/agents/usage/usage.ts
 import { execFileSync as execFileSync2 } from "child_process";
 import { createHash as createHash12 } from "crypto";
-import { lstatSync as lstatSync8, mkdirSync as mkdirSync21, readFileSync as readFileSync29, realpathSync as realpathSync7, renameSync as renameSync17, statSync as statSync13, writeFileSync as writeFileSync22 } from "fs";
+import { lstatSync as lstatSync8, mkdirSync as mkdirSync21, readFileSync as readFileSync30, realpathSync as realpathSync8, renameSync as renameSync17, statSync as statSync14, writeFileSync as writeFileSync22 } from "fs";
 import { homedir as homedir5, hostname } from "os";
-import { basename as basename11, dirname as dirname16, join as join35 } from "path";
+import { basename as basename11, dirname as dirname16, join as join37 } from "path";
 
 // Packages/Box/src/agents/usage/claude-log.ts
 var USAGE = Buffer.from('"usage":{');
@@ -19443,8 +19873,8 @@ function fromKeptClaude(kept) {
 }
 
 // Packages/Box/src/agents/usage/pricing.ts
-import { mkdirSync as mkdirSync18, readFileSync as readFileSync27, renameSync as renameSync14, writeFileSync as writeFileSync19 } from "fs";
-import { join as join30 } from "path";
+import { mkdirSync as mkdirSync18, readFileSync as readFileSync28, renameSync as renameSync14, writeFileSync as writeFileSync19 } from "fs";
+import { join as join31 } from "path";
 // Packages/Box/src/agents/usage/pricing/pricing_litellm_snapshot.json
 var pricing_litellm_snapshot_default = {
   models: { "ai21.j2-mid-v1": { cr: 1.25, cw: 12.5, i: 12.5, o: 12.5 }, "ai21.j2-ultra-v1": { cr: 1.88, cw: 18.8, i: 18.8, o: 18.8 }, "ai21.jamba-1-5-large-v1:0": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "ai21.jamba-1-5-mini-v1:0": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.39999999999999997 }, "ai21.jamba-instruct-v1:0": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.7 }, "amazon-nova/nova-lite-v1": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.24 }, "amazon-nova/nova-micro-v1": { cr: 0.0035000000000000005, cw: 0.035, i: 0.035, o: 0.14 }, "amazon-nova/nova-premier-v1": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 12.5 }, "amazon-nova/nova-pro-v1": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 3.1999999999999997 }, "amazon.nova-2-lite-v1:0": { cr: 0.075, cw: 0.3, i: 0.3, o: 2.5 }, "amazon.nova-2-multimodal-embeddings-v1:0": { cr: 0.013500000000000002, cw: 0.135, i: 0.135, o: 0 }, "amazon.nova-2-pro-preview-20251202-v1:0": { cr: 0.546875, cw: 2.1875, i: 2.1875, o: 17.5 }, "amazon.nova-lite-v1:0": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.24 }, "amazon.nova-micro-v1:0": { cr: 0.0035000000000000005, cw: 0.035, i: 0.035, o: 0.14 }, "amazon.nova-pro-v1:0": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 3.1999999999999997 }, "amazon.rerank-v1:0": { cr: 0, cw: 0, i: 0, o: 0 }, "amazon.titan-embed-g1-text-02": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "amazon.titan-embed-image-v1": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 0 }, "amazon.titan-embed-text-v1": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "amazon.titan-embed-text-v2:0": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "amazon.titan-text-express-v1": { cr: 0.13, cw: 1.3, i: 1.3, o: 1.7 }, "amazon.titan-text-lite-v1": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.39999999999999997 }, "amazon.titan-text-premier-v1:0": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "anthropic.claude-3-5-haiku-20241022-v1:0": { cr: 0.08, cw: 1, i: 0.7999999999999999, o: 4 }, "anthropic.claude-3-5-sonnet-20240620-v1:0": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 30 }, "anthropic.claude-3-5-sonnet-20241022-v2:0": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 30 }, "anthropic.claude-3-7-sonnet-20240620-v1:0": { cr: 0.36, cw: 4.5, i: 3.5999999999999996, o: 18 }, "anthropic.claude-3-7-sonnet-20250219-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic.claude-3-haiku-20240307-v1:0": { cr: 0.024999999999999998, cw: 0.3125, i: 0.25, o: 1.25 }, "anthropic.claude-3-opus-20240229-v1:0": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "anthropic.claude-3-sonnet-20240229-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic.claude-fable-5": { cr: 1, cw: 12.5, i: 10, o: 50 }, "anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "anthropic.claude-haiku-4-5@20251001": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "anthropic.claude-instant-v1": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 2.4 }, "anthropic.claude-mythos-preview": { cr: 0, cw: 0, i: 0, o: 0 }, "anthropic.claude-opus-4-1-20250805-v1:0": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "anthropic.claude-opus-4-20250514-v1:0": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "anthropic.claude-opus-4-5-20251101-v1:0": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "anthropic.claude-opus-4-6-v1": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "anthropic.claude-opus-4-7": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "anthropic.claude-opus-4-8": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "anthropic.claude-sonnet-4-20250514-v1:0": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "anthropic.claude-sonnet-4-6": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic.claude-sonnet-5": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic.claude-v1": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "anthropic.claude-v2:1": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "anyscale/HuggingFaceH4/zephyr-7b-beta": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "anyscale/codellama/CodeLlama-34b-Instruct-hf": { cr: 0.09999999999999999, cw: 1, i: 1, o: 1 }, "anyscale/codellama/CodeLlama-70b-Instruct-hf": { cr: 0.09999999999999999, cw: 1, i: 1, o: 1 }, "anyscale/google/gemma-7b-it": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "anyscale/meta-llama/Llama-2-13b-chat-hf": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.25 }, "anyscale/meta-llama/Llama-2-70b-chat-hf": { cr: 0.09999999999999999, cw: 1, i: 1, o: 1 }, "anyscale/meta-llama/Llama-2-7b-chat-hf": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "anyscale/meta-llama/Meta-Llama-3-70B-Instruct": { cr: 0.09999999999999999, cw: 1, i: 1, o: 1 }, "anyscale/meta-llama/Meta-Llama-3-8B-Instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "anyscale/mistralai/Mistral-7B-Instruct-v0.1": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "anyscale/mistralai/Mixtral-8x22B-Instruct-v0.1": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "anyscale/mistralai/Mixtral-8x7B-Instruct-v0.1": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "apac.amazon.nova-2-lite-v1:0": { cr: 0.0825, cw: 0.33, i: 0.33, o: 2.75 }, "apac.amazon.nova-2-pro-preview-20251202-v1:0": { cr: 0.546875, cw: 2.1875, i: 2.1875, o: 17.5 }, "apac.amazon.nova-lite-v1:0": { cr: 0.0063, cw: 0.063, i: 0.063, o: 0.252 }, "apac.amazon.nova-micro-v1:0": { cr: 0.0037, cw: 0.037, i: 0.037, o: 0.148 }, "apac.amazon.nova-pro-v1:0": { cr: 0.084, cw: 0.84, i: 0.84, o: 3.36 }, "apac.anthropic.claude-3-5-sonnet-20240620-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "apac.anthropic.claude-3-5-sonnet-20241022-v2:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "apac.anthropic.claude-3-haiku-20240307-v1:0": { cr: 0.024999999999999998, cw: 0.3125, i: 0.25, o: 1.25 }, "apac.anthropic.claude-3-sonnet-20240229-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "apac.anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.11, cw: 1.375, i: 1.1, o: 5.5 }, "apac.anthropic.claude-sonnet-4-20250514-v1:0": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "au.anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.11, cw: 1.375, i: 1.1, o: 5.5 }, "au.anthropic.claude-opus-4-6-v1": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "au.anthropic.claude-opus-4-7": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "au.anthropic.claude-opus-4-8": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "au.anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.33, cra: 0.66, cw: 4.125, cwa: 8.25, i: 3.3000000000000003, ia: 6.6000000000000005, o: 16.5, oa: 24.75 }, "au.anthropic.claude-sonnet-4-6": { cr: 0.33, cw: 4.125, i: 3.3000000000000003, o: 16.5 }, "au.anthropic.claude-sonnet-5": { cr: 0.33, cw: 4.125, i: 3.3000000000000003, o: 16.5 }, "azure/ada": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "azure/codex-mini": { cr: 0.375, cw: 1.5, i: 1.5, o: 6 }, "azure/command-r-plus": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "azure/computer-use-preview": { cr: 0.30000000000000004, cw: 3, i: 3, o: 12 }, "azure/eu/gpt-4o-2024-08-06": { cr: 1.375, cw: 2.75, i: 2.75, o: 11 }, "azure/eu/gpt-4o-2024-11-20": { cr: 0.275, cw: 1.38, i: 2.75, o: 11 }, "azure/eu/gpt-4o-mini-2024-07-18": { cr: 0.083, cw: 0.165, i: 0.165, o: 0.66 }, "azure/eu/gpt-4o-mini-realtime-preview-2024-12-17": { cr: 0.33, cw: 0.66, i: 0.66, o: 2.64 }, "azure/eu/gpt-4o-realtime-preview-2024-10-01": { cr: 2.75, cw: 5.5, i: 5.5, o: 22 }, "azure/eu/gpt-4o-realtime-preview-2024-12-17": { cr: 2.75, cw: 5.5, i: 5.5, o: 22 }, "azure/eu/gpt-5-2025-08-07": { cr: 0.1375, cw: 1.375, i: 1.375, o: 11 }, "azure/eu/gpt-5-mini-2025-08-07": { cr: 0.0275, cw: 0.275, i: 0.275, o: 2.2 }, "azure/eu/gpt-5-nano-2025-08-07": { cr: 0.0055, cw: 0.055, i: 0.055, o: 0.44 }, "azure/eu/gpt-5.1": { cr: 0.14, cw: 1.38, i: 1.38, o: 11 }, "azure/eu/gpt-5.1-chat": { cr: 0.14, cw: 1.38, i: 1.38, o: 11 }, "azure/eu/gpt-5.1-codex": { cr: 0.14, cw: 1.38, i: 1.38, o: 11 }, "azure/eu/gpt-5.1-codex-mini": { cr: 0.028, cw: 0.275, i: 0.275, o: 2.2 }, "azure/eu/o1-2024-12-17": { cr: 8.25, cw: 16.5, i: 16.5, o: 66 }, "azure/eu/o1-mini-2024-09-12": { cr: 0.605, cw: 1.21, i: 1.21, o: 4.84 }, "azure/eu/o1-preview-2024-09-12": { cr: 8.25, cw: 16.5, i: 16.5, o: 66 }, "azure/eu/o3-mini-2025-01-31": { cr: 0.605, cw: 1.21, i: 1.21, o: 4.84 }, "azure/global-standard/gpt-4o-2024-08-06": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "azure/global-standard/gpt-4o-2024-11-20": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "azure/global-standard/gpt-4o-mini": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "azure/global/gpt-4o-2024-08-06": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "azure/global/gpt-4o-2024-11-20": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "azure/global/gpt-5.1": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/global/gpt-5.1-chat": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/global/gpt-5.1-codex": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/global/gpt-5.1-codex-mini": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "azure/gpt-3.5-turbo": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "azure/gpt-3.5-turbo-0125": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "azure/gpt-3.5-turbo-instruct-0914": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 2 }, "azure/gpt-35-turbo": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "azure/gpt-35-turbo-0125": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "azure/gpt-35-turbo-1106": { cr: 0.09999999999999999, cw: 1, i: 1, o: 2 }, "azure/gpt-35-turbo-16k": { cr: 0.30000000000000004, cw: 3, i: 3, o: 4 }, "azure/gpt-35-turbo-16k-0613": { cr: 0.30000000000000004, cw: 3, i: 3, o: 4 }, "azure/gpt-35-turbo-instruct": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 2 }, "azure/gpt-35-turbo-instruct-0914": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 2 }, "azure/gpt-4": { cr: 3, cw: 30, i: 30, o: 60 }, "azure/gpt-4-0125-preview": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "azure/gpt-4-0613": { cr: 3, cw: 30, i: 30, o: 60 }, "azure/gpt-4-1106-preview": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "azure/gpt-4-32k": { cr: 6, cw: 60, i: 60, o: 120 }, "azure/gpt-4-32k-0613": { cr: 6, cw: 60, i: 60, o: 120 }, "azure/gpt-4-turbo": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "azure/gpt-4-turbo-2024-04-09": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "azure/gpt-4-turbo-vision-preview": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "azure/gpt-4.1": { cr: 0.5, cw: 2, i: 2, o: 8 }, "azure/gpt-4.1-2025-04-14": { cr: 0.5, cw: 2, i: 2, o: 8 }, "azure/gpt-4.1-mini": { cr: 0.09999999999999999, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "azure/gpt-4.1-mini-2025-04-14": { cr: 0.09999999999999999, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "azure/gpt-4.1-nano": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "azure/gpt-4.1-nano-2025-04-14": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "azure/gpt-4.5-preview": { cr: 37.5, cw: 75, i: 75, o: 150 }, "azure/gpt-4o": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "azure/gpt-4o-2024-05-13": { cr: 0.5000000000000001, cw: 5, i: 5, o: 15 }, "azure/gpt-4o-2024-08-06": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "azure/gpt-4o-2024-11-20": { cr: 1.25, cw: 2.75, i: 2.75, o: 11 }, "azure/gpt-4o-audio-preview-2024-12-17": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "azure/gpt-4o-mini": { cr: 0.075, cw: 0.165, i: 0.165, o: 0.66 }, "azure/gpt-4o-mini-2024-07-18": { cr: 0.075, cw: 0.165, i: 0.165, o: 0.66 }, "azure/gpt-4o-mini-audio-preview-2024-12-17": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "azure/gpt-4o-mini-realtime-preview-2024-12-17": { cr: 0.3, cw: 0.6, i: 0.6, o: 2.4 }, "azure/gpt-4o-mini-transcribe": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 5 }, "azure/gpt-4o-mini-tts": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "azure/gpt-4o-realtime-preview-2024-10-01": { cr: 2.5, cw: 5, i: 5, o: 20 }, "azure/gpt-4o-realtime-preview-2024-12-17": { cr: 2.5, cw: 5, i: 5, o: 20 }, "azure/gpt-4o-transcribe": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "azure/gpt-4o-transcribe-diarize": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "azure/gpt-5": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5-2025-08-07": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5-chat": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5-chat-latest": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5-codex": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5-mini": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "azure/gpt-5-mini-2025-08-07": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "azure/gpt-5-nano": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.39999999999999997 }, "azure/gpt-5-nano-2025-08-07": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.39999999999999997 }, "azure/gpt-5-pro": { cr: 1.5, cw: 15, i: 15, o: 120 }, "azure/gpt-5.1": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5.1-2025-11-13": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5.1-chat": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5.1-chat-2025-11-13": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5.1-codex": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5.1-codex-2025-11-13": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5.1-codex-max": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5.1-codex-mini": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "azure/gpt-5.1-codex-mini-2025-11-13": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "azure/gpt-5.2": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "azure/gpt-5.2-2025-12-11": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "azure/gpt-5.2-chat": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "azure/gpt-5.2-chat-2025-12-11": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "azure/gpt-5.2-codex": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "azure/gpt-5.2-pro": { cr: 2.0999999999999996, cw: 21, i: 21, o: 168 }, "azure/gpt-5.2-pro-2025-12-11": { cr: 2.0999999999999996, cw: 21, i: 21, o: 168 }, "azure/gpt-5.3-chat": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "azure/gpt-5.3-codex": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "azure/gpt-5.4": { cr: 0.25, cw: 2.5, i: 2.5, o: 15 }, "azure/gpt-5.4-2026-03-05": { cr: 0.25, cw: 2.5, i: 2.5, o: 15 }, "azure/gpt-5.4-mini": { cr: 0.075, cw: 0.75, i: 0.75, o: 4.5 }, "azure/gpt-5.4-mini-2026-03-17": { cr: 0.075, cw: 0.75, i: 0.75, o: 4.5 }, "azure/gpt-5.4-nano": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.25 }, "azure/gpt-5.4-nano-2026-03-17": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.25 }, "azure/gpt-5.4-pro": { cr: 3, cw: 30, i: 30, o: 180 }, "azure/gpt-5.4-pro-2026-03-05": { cr: 3, cw: 30, i: 30, o: 180 }, "azure/gpt-5.5": { cr: 0.5, cw: 5, i: 5, o: 30 }, "azure/gpt-5.5-2026-04-23": { cr: 0.5, cw: 5, i: 5, o: 30 }, "azure/gpt-5.5-pro": { cr: 3, cw: 30, i: 30, o: 180 }, "azure/gpt-5.5-pro-2026-04-23": { cr: 3, cw: 30, i: 30, o: 180 }, "azure/gpt-audio-1.5-2026-02-23": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "azure/gpt-audio-2025-08-28": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "azure/gpt-audio-mini-2025-10-06": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "azure/gpt-image-2": { cr: 1.25, cw: 5, i: 5, o: 10 }, "azure/gpt-image-2-2026-04-21": { cr: 1.25, cw: 5, i: 5, o: 10 }, "azure/gpt-realtime-1.5-2026-02-23": { cr: 4, cw: 4, i: 4, o: 16 }, "azure/gpt-realtime-2025-08-28": { cr: 4, cw: 4, i: 4, o: 16 }, "azure/gpt-realtime-mini-2025-10-06": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "azure/mistral-large-2402": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "azure/mistral-large-latest": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "azure/o1": { cr: 7.5, cw: 15, i: 15, o: 60 }, "azure/o1-2024-12-17": { cr: 7.5, cw: 15, i: 15, o: 60 }, "azure/o1-mini": { cr: 0.605, cw: 1.21, i: 1.21, o: 4.84 }, "azure/o1-mini-2024-09-12": { cr: 0.55, cw: 1.1, i: 1.1, o: 4.4 }, "azure/o1-preview": { cr: 7.5, cw: 15, i: 15, o: 60 }, "azure/o1-preview-2024-09-12": { cr: 7.5, cw: 15, i: 15, o: 60 }, "azure/o3": { cr: 0.5, cw: 2, i: 2, o: 8 }, "azure/o3-2025-04-16": { cr: 0.5, cw: 2, i: 2, o: 8 }, "azure/o3-deep-research": { cr: 2.5, cw: 10, i: 10, o: 40 }, "azure/o3-mini": { cr: 0.55, cw: 1.1, i: 1.1, o: 4.4 }, "azure/o3-mini-2025-01-31": { cr: 0.55, cw: 1.1, i: 1.1, o: 4.4 }, "azure/o3-pro": { cr: 2.0000000000000004, cw: 20, i: 20, o: 80 }, "azure/o3-pro-2025-06-10": { cr: 2.0000000000000004, cw: 20, i: 20, o: 80 }, "azure/o4-mini": { cr: 0.275, cw: 1.1, i: 1.1, o: 4.4 }, "azure/o4-mini-2025-04-16": { cr: 0.275, cw: 1.1, i: 1.1, o: 4.4 }, "azure/text-embedding-3-large": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0 }, "azure/text-embedding-3-small": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "azure/text-embedding-ada-002": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "azure/us/gpt-4.1-2025-04-14": { cr: 0.55, cw: 2.2, i: 2.2, o: 8.8 }, "azure/us/gpt-4.1-mini-2025-04-14": { cr: 0.11, cw: 0.44, i: 0.44, o: 1.76 }, "azure/us/gpt-4.1-nano-2025-04-14": { cr: 0.024999999999999998, cw: 0.11, i: 0.11, o: 0.44 }, "azure/us/gpt-4o-2024-08-06": { cr: 1.375, cw: 2.75, i: 2.75, o: 11 }, "azure/us/gpt-4o-2024-11-20": { cr: 0.275, cw: 1.38, i: 2.75, o: 11 }, "azure/us/gpt-4o-mini-2024-07-18": { cr: 0.083, cw: 0.165, i: 0.165, o: 0.66 }, "azure/us/gpt-4o-mini-realtime-preview-2024-12-17": { cr: 0.33, cw: 0.66, i: 0.66, o: 2.64 }, "azure/us/gpt-4o-realtime-preview-2024-10-01": { cr: 2.75, cw: 5.5, i: 5.5, o: 22 }, "azure/us/gpt-4o-realtime-preview-2024-12-17": { cr: 2.75, cw: 5.5, i: 5.5, o: 22 }, "azure/us/gpt-5-2025-08-07": { cr: 0.1375, cw: 1.375, i: 1.375, o: 11 }, "azure/us/gpt-5-mini-2025-08-07": { cr: 0.0275, cw: 0.275, i: 0.275, o: 2.2 }, "azure/us/gpt-5-nano-2025-08-07": { cr: 0.0055, cw: 0.055, i: 0.055, o: 0.44 }, "azure/us/gpt-5.1": { cr: 0.14, cw: 1.38, i: 1.38, o: 11 }, "azure/us/gpt-5.1-chat": { cr: 0.14, cw: 1.38, i: 1.38, o: 11 }, "azure/us/gpt-5.1-codex": { cr: 0.14, cw: 1.38, i: 1.38, o: 11 }, "azure/us/gpt-5.1-codex-mini": { cr: 0.028, cw: 0.275, i: 0.275, o: 2.2 }, "azure/us/o1-2024-12-17": { cr: 8.25, cw: 16.5, i: 16.5, o: 66 }, "azure/us/o1-mini-2024-09-12": { cr: 0.605, cw: 1.21, i: 1.21, o: 4.84 }, "azure/us/o1-preview-2024-09-12": { cr: 8.25, cw: 16.5, i: 16.5, o: 66 }, "azure/us/o3-2025-04-16": { cr: 0.55, cw: 2.2, i: 2.2, o: 8.8 }, "azure/us/o3-mini-2025-01-31": { cr: 0.605, cw: 1.21, i: 1.21, o: 4.84 }, "azure/us/o4-mini-2025-04-16": { cr: 0.31, cw: 1.21, i: 1.21, o: 4.84 }, "azure_ai/Cohere-embed-v3-english": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "azure_ai/Cohere-embed-v3-multilingual": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "azure_ai/Llama-3.2-11B-Vision-Instruct": { cr: 0.037, cw: 0.37, i: 0.37, o: 0.37 }, "azure_ai/Llama-3.2-90B-Vision-Instruct": { cr: 0.204, cw: 2.04, i: 2.04, o: 2.04 }, "azure_ai/Llama-3.3-70B-Instruct": { cr: 0.071, cw: 0.71, i: 0.71, o: 0.71 }, "azure_ai/Llama-4-Maverick-17B-128E-Instruct-FP8": { cr: 0.14100000000000001, cw: 1.4100000000000001, i: 1.4100000000000001, o: 0.35 }, "azure_ai/Llama-4-Scout-17B-16E-Instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.78 }, "azure_ai/MAI-DS-R1": { cr: 0.135, cw: 1.35, i: 1.35, o: 5.4 }, "azure_ai/Meta-Llama-3-70B-Instruct": { cr: 0.11, cw: 1.1, i: 1.1, o: 0.37 }, "azure_ai/Meta-Llama-3.1-405B-Instruct": { cr: 0.533, cw: 5.33, i: 5.33, o: 16 }, "azure_ai/Meta-Llama-3.1-70B-Instruct": { cr: 0.268, cw: 2.68, i: 2.68, o: 3.54 }, "azure_ai/Meta-Llama-3.1-8B-Instruct": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.61 }, "azure_ai/Phi-3-medium-128k-instruct": { cr: 0.017, cw: 0.16999999999999998, i: 0.16999999999999998, o: 0.6799999999999999 }, "azure_ai/Phi-3-medium-4k-instruct": { cr: 0.017, cw: 0.16999999999999998, i: 0.16999999999999998, o: 0.6799999999999999 }, "azure_ai/Phi-3-mini-128k-instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.52 }, "azure_ai/Phi-3-mini-4k-instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.52 }, "azure_ai/Phi-3-small-128k-instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "azure_ai/Phi-3-small-8k-instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "azure_ai/Phi-3.5-MoE-instruct": { cr: 0.016, cw: 0.16, i: 0.16, o: 0.64 }, "azure_ai/Phi-3.5-mini-instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.52 }, "azure_ai/Phi-3.5-vision-instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.52 }, "azure_ai/Phi-4": { cr: 0.012499999999999999, cw: 0.125, i: 0.125, o: 0.5 }, "azure_ai/Phi-4-mini-instruct": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0.3 }, "azure_ai/Phi-4-mini-reasoning": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.32 }, "azure_ai/Phi-4-multimodal-instruct": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.32 }, "azure_ai/Phi-4-reasoning": { cr: 0.012499999999999999, cw: 0.125, i: 0.125, o: 0.5 }, "azure_ai/claude-fable-5": { cr: 1, cw: 12.5, i: 10, o: 50 }, "azure_ai/claude-haiku-4-5": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "azure_ai/claude-opus-4-1": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "azure_ai/claude-opus-4-5": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "azure_ai/claude-opus-4-6": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "azure_ai/claude-opus-4-7": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "azure_ai/claude-opus-4-8": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "azure_ai/claude-sonnet-4-5": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "azure_ai/claude-sonnet-4-6": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "azure_ai/claude-sonnet-5": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "azure_ai/cohere-rerank-v3-english": { cr: 0, cw: 0, i: 0, o: 0 }, "azure_ai/cohere-rerank-v3-multilingual": { cr: 0, cw: 0, i: 0, o: 0 }, "azure_ai/cohere-rerank-v3.5": { cr: 0, cw: 0, i: 0, o: 0 }, "azure_ai/cohere-rerank-v4.0-fast": { cr: 0, cw: 0, i: 0, o: 0 }, "azure_ai/cohere-rerank-v4.0-pro": { cr: 0, cw: 0, i: 0, o: 0 }, "azure_ai/deepseek-r1": { cr: 0.135, cw: 1.35, i: 1.35, o: 5.4 }, "azure_ai/deepseek-v3": { cr: 0.11400000000000002, cw: 1.1400000000000001, i: 1.1400000000000001, o: 4.5600000000000005 }, "azure_ai/deepseek-v3-0324": { cr: 0.11400000000000002, cw: 1.1400000000000001, i: 1.1400000000000001, o: 4.5600000000000005 }, "azure_ai/deepseek-v3.1": { cr: 0.123, cw: 1.23, i: 1.23, o: 4.94 }, "azure_ai/deepseek-v3.2": { cr: 0.057999999999999996, cw: 0.58, i: 0.58, o: 1.68 }, "azure_ai/deepseek-v3.2-speciale": { cr: 0.057999999999999996, cw: 0.58, i: 0.58, o: 1.68 }, "azure_ai/deepseek-v4-flash": { cr: 0.019000000000000003, cw: 0.19, i: 0.19, o: 0.51 }, "azure_ai/deepseek-v4-pro": { cr: 0.17400000000000002, cw: 1.74, i: 1.74, o: 3.48 }, "azure_ai/embed-v-4-0": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, "azure_ai/global/grok-3": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "azure_ai/global/grok-3-mini": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.27 }, "azure_ai/gpt-5.4": { cr: 0.25, cw: 2.5, i: 2.5, o: 15 }, "azure_ai/gpt-5.4-2026-03-05": { cr: 0.25, cw: 2.5, i: 2.5, o: 15 }, "azure_ai/gpt-5.4-mini": { cr: 0.075, cw: 0.75, i: 0.75, o: 4.5 }, "azure_ai/gpt-5.4-mini-2026-03-17": { cr: 0.075, cw: 0.75, i: 0.75, o: 4.5 }, "azure_ai/gpt-5.4-nano": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.25 }, "azure_ai/gpt-5.4-nano-2026-03-17": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.25 }, "azure_ai/gpt-5.4-pro": { cr: 3, cw: 30, i: 30, o: 180 }, "azure_ai/gpt-5.4-pro-2026-03-05": { cr: 3, cw: 30, i: 30, o: 180 }, "azure_ai/gpt-5.5": { cr: 0.5, cw: 5, i: 5, o: 30 }, "azure_ai/gpt-5.5-2026-04-23": { cr: 0.5, cw: 5, i: 5, o: 30 }, "azure_ai/gpt-oss-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "azure_ai/grok-3": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "azure_ai/grok-3-mini": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.27 }, "azure_ai/grok-4": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "azure_ai/grok-4-1-fast-non-reasoning": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "azure_ai/grok-4-1-fast-reasoning": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "azure_ai/grok-4-fast-non-reasoning": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "azure_ai/grok-4-fast-reasoning": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "azure_ai/grok-code-fast-1": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.5 }, "azure_ai/jais-30b-chat": { cr: 320, cw: 3200, i: 3200, o: 9710 }, "azure_ai/jamba-instruct": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.7 }, "azure_ai/kimi-k2.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 3 }, "azure_ai/kimi-k2.6": { cr: 0.095, cw: 0.95, i: 0.95, o: 4 }, "azure_ai/ministral-3b": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.04 }, "azure_ai/mistral-large": { cr: 0.39999999999999997, cw: 4, i: 4, o: 12 }, "azure_ai/mistral-large-2407": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "azure_ai/mistral-large-3": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "azure_ai/mistral-large-latest": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "azure_ai/mistral-medium-2505": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "azure_ai/mistral-nemo": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "azure_ai/mistral-small": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "azure_ai/mistral-small-2503": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "azure_ai/model_router": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0 }, "babbage-002": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 0.39999999999999997 }, "baseten/MiniMaxAI/MiniMax-M2.5": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "baseten/deepseek-ai/DeepSeek-V3-0324": { cr: 0.07700000000000001, cw: 0.77, i: 0.77, o: 0.77 }, "baseten/deepseek-ai/DeepSeek-V3.1": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "baseten/moonshotai/Kimi-K2-Instruct-0905": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "baseten/moonshotai/Kimi-K2-Thinking": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "baseten/moonshotai/Kimi-K2.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 3 }, "baseten/nvidia/Nemotron-120B-A12B": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.75 }, "baseten/openai/gpt-oss-120b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.5 }, "baseten/zai-org/GLM-4.6": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.2 }, "baseten/zai-org/GLM-4.7": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.2 }, "baseten/zai-org/GLM-5": { cr: 0.095, cw: 0.95, i: 0.95, o: 3.15 }, "bedrock/ap-northeast-1/anthropic.claude-instant-v1": { cr: 0.223, cw: 2.23, i: 2.23, o: 7.55 }, "bedrock/ap-northeast-1/anthropic.claude-v1": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "bedrock/ap-northeast-1/anthropic.claude-v2:1": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "bedrock/ap-northeast-1/deepseek.v3.2": { cr: 0.074, cw: 0.74, i: 0.74, o: 2.2199999999999998 }, "bedrock/ap-northeast-1/minimax.minimax-m2.1": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/ap-northeast-1/minimax.minimax-m2.5": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/ap-northeast-1/moonshotai.kimi-k2-thinking": { cr: 0.07300000000000001, cw: 0.73, i: 0.73, o: 3.03 }, "bedrock/ap-northeast-1/moonshotai.kimi-k2.5": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 3.5999999999999996 }, "bedrock/ap-northeast-1/qwen.qwen3-coder-next": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.44 }, "bedrock/ap-south-1/deepseek.v3.2": { cr: 0.074, cw: 0.74, i: 0.74, o: 2.2199999999999998 }, "bedrock/ap-south-1/meta.llama3-70b-instruct-v1:0": { cr: 0.318, cw: 3.18, i: 3.18, o: 4.199999999999999 }, "bedrock/ap-south-1/meta.llama3-8b-instruct-v1:0": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 0.72 }, "bedrock/ap-south-1/minimax.minimax-m2.1": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/ap-south-1/minimax.minimax-m2.5": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/ap-south-1/moonshotai.kimi-k2-thinking": { cr: 0.071, cw: 0.71, i: 0.71, o: 2.94 }, "bedrock/ap-south-1/moonshotai.kimi-k2.5": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 3.5999999999999996 }, "bedrock/ap-south-1/qwen.qwen3-coder-next": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.44 }, "bedrock/ap-southeast-2/minimax.minimax-m2.5": { cr: 0.0309, cw: 0.309, i: 0.309, o: 1.236 }, "bedrock/ap-southeast-3/deepseek.v3.2": { cr: 0.074, cw: 0.74, i: 0.74, o: 2.2199999999999998 }, "bedrock/ap-southeast-3/minimax.minimax-m2.1": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/ap-southeast-3/minimax.minimax-m2.5": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/ap-southeast-3/moonshotai.kimi-k2.5": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 3.5999999999999996 }, "bedrock/ap-southeast-3/qwen.qwen3-coder-next": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.44 }, "bedrock/ca-central-1/meta.llama3-70b-instruct-v1:0": { cr: 0.30500000000000005, cw: 3.05, i: 3.05, o: 4.03 }, "bedrock/ca-central-1/meta.llama3-8b-instruct-v1:0": { cr: 0.035, cw: 0.35, i: 0.35, o: 0.69 }, "bedrock/eu-central-1/anthropic.claude-instant-v1": { cr: 0.248, cw: 2.48, i: 2.48, o: 8.379999999999999 }, "bedrock/eu-central-1/anthropic.claude-v1": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "bedrock/eu-central-1/anthropic.claude-v2:1": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "bedrock/eu-central-1/minimax.minimax-m2.1": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/eu-central-1/minimax.minimax-m2.5": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/eu-central-1/qwen.qwen3-coder-next": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.44 }, "bedrock/eu-north-1/deepseek.v3.2": { cr: 0.074, cw: 0.74, i: 0.74, o: 2.2199999999999998 }, "bedrock/eu-north-1/minimax.minimax-m2.1": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/eu-north-1/minimax.minimax-m2.5": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/eu-north-1/moonshotai.kimi-k2.5": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 3.5999999999999996 }, "bedrock/eu-south-1/minimax.minimax-m2.1": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/eu-south-1/minimax.minimax-m2.5": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/eu-south-1/qwen.qwen3-coder-next": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.44 }, "bedrock/eu-west-1/meta.llama3-70b-instruct-v1:0": { cr: 0.28600000000000003, cw: 2.8600000000000003, i: 2.8600000000000003, o: 3.78 }, "bedrock/eu-west-1/meta.llama3-8b-instruct-v1:0": { cr: 0.032, cw: 0.32, i: 0.32, o: 0.65 }, "bedrock/eu-west-1/minimax.minimax-m2.1": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/eu-west-1/minimax.minimax-m2.5": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/eu-west-1/qwen.qwen3-coder-next": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.44 }, "bedrock/eu-west-2/meta.llama3-70b-instruct-v1:0": { cr: 0.34500000000000003, cw: 3.45, i: 3.45, o: 4.55 }, "bedrock/eu-west-2/meta.llama3-8b-instruct-v1:0": { cr: 0.03900000000000001, cw: 0.39, i: 0.39, o: 0.78 }, "bedrock/eu-west-2/minimax.minimax-m2.1": { cr: 0.04700000000000001, cw: 0.47, i: 0.47, o: 1.8599999999999999 }, "bedrock/eu-west-2/minimax.minimax-m2.5": { cr: 0.04700000000000001, cw: 0.47, i: 0.47, o: 1.8599999999999999 }, "bedrock/eu-west-2/qwen.qwen3-coder-next": { cr: 0.07800000000000001, cw: 0.78, i: 0.78, o: 1.8599999999999999 }, "bedrock/eu-west-3/mistral.mistral-7b-instruct-v0:2": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.26 }, "bedrock/eu-west-3/mistral.mistral-large-2402-v1:0": { cr: 1.04, cw: 10.4, i: 10.4, o: 31.2 }, "bedrock/eu-west-3/mistral.mixtral-8x7b-instruct-v0:1": { cr: 0.059, cw: 0.59, i: 0.59, o: 0.9099999999999999 }, "bedrock/invoke/anthropic.claude-3-5-sonnet-20240620-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "bedrock/moonshotai.kimi-k2-thinking": { cr: 0.07300000000000001, cw: 0.73, i: 0.73, o: 3.03 }, "bedrock/moonshotai.kimi-k2.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 3.03 }, "bedrock/sa-east-1/deepseek.v3.2": { cr: 0.074, cw: 0.74, i: 0.74, o: 2.2199999999999998 }, "bedrock/sa-east-1/meta.llama3-70b-instruct-v1:0": { cr: 0.44499999999999995, cw: 4.45, i: 4.45, o: 5.88 }, "bedrock/sa-east-1/meta.llama3-8b-instruct-v1:0": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.01 }, "bedrock/sa-east-1/minimax.minimax-m2.1": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/sa-east-1/minimax.minimax-m2.5": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/sa-east-1/moonshotai.kimi-k2-thinking": { cr: 0.07300000000000001, cw: 0.73, i: 0.73, o: 3.03 }, "bedrock/sa-east-1/moonshotai.kimi-k2.5": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 3.5999999999999996 }, "bedrock/sa-east-1/qwen.qwen3-coder-next": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.44 }, "bedrock/us-east-1/anthropic.claude-instant-v1": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 2.4 }, "bedrock/us-east-1/anthropic.claude-v1": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "bedrock/us-east-1/anthropic.claude-v2:1": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "bedrock/us-east-1/deepseek.v3.2": { cr: 0.062, cw: 0.62, i: 0.62, o: 1.85 }, "bedrock/us-east-1/meta.llama3-70b-instruct-v1:0": { cr: 0.265, cw: 2.65, i: 2.65, o: 3.5 }, "bedrock/us-east-1/meta.llama3-8b-instruct-v1:0": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.6 }, "bedrock/us-east-1/minimax.minimax-m2.1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "bedrock/us-east-1/minimax.minimax-m2.5": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "bedrock/us-east-1/mistral.mistral-7b-instruct-v0:2": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.19999999999999998 }, "bedrock/us-east-1/mistral.mistral-large-2402-v1:0": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "bedrock/us-east-1/mistral.mixtral-8x7b-instruct-v0:1": { cr: 0.045, cw: 0.44999999999999996, i: 0.44999999999999996, o: 0.7 }, "bedrock/us-east-1/moonshotai.kimi-k2-thinking": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "bedrock/us-east-1/moonshotai.kimi-k2.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 3 }, "bedrock/us-east-1/qwen.qwen3-coder-next": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.2 }, "bedrock/us-east-1/zai.glm-5": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3.1999999999999997 }, "bedrock/us-east-2/deepseek.v3.2": { cr: 0.062, cw: 0.62, i: 0.62, o: 1.85 }, "bedrock/us-east-2/minimax.minimax-m2.1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "bedrock/us-east-2/minimax.minimax-m2.5": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "bedrock/us-east-2/moonshotai.kimi-k2-thinking": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "bedrock/us-east-2/moonshotai.kimi-k2.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 3 }, "bedrock/us-east-2/qwen.qwen3-coder-next": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.2 }, "bedrock/us-gov-east-1/amazon.nova-pro-v1:0": { cr: 0.096, cw: 0.96, i: 0.96, o: 3.84 }, "bedrock/us-gov-east-1/amazon.titan-embed-text-v1": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "bedrock/us-gov-east-1/amazon.titan-embed-text-v2:0": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0 }, "bedrock/us-gov-east-1/amazon.titan-text-express-v1": { cr: 0.13, cw: 1.3, i: 1.3, o: 1.7 }, "bedrock/us-gov-east-1/amazon.titan-text-lite-v1": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.39999999999999997 }, "bedrock/us-gov-east-1/amazon.titan-text-premier-v1:0": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "bedrock/us-gov-east-1/anthropic.claude-3-5-sonnet-20240620-v1:0": { cr: 0.36, cw: 4.5, i: 3.5999999999999996, o: 18 }, "bedrock/us-gov-east-1/anthropic.claude-3-haiku-20240307-v1:0": { cr: 0.03, cw: 0.375, i: 0.3, o: 1.5 }, "bedrock/us-gov-east-1/anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.12, cw: 1.5, i: 1.2, o: 6 }, "bedrock/us-gov-east-1/anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.36, cw: 4.5, i: 3.5999999999999996, o: 18 }, "bedrock/us-gov-east-1/claude-sonnet-4-5-20250929-v1:0": { cr: 0.36, cw: 4.5, i: 3.5999999999999996, o: 18 }, "bedrock/us-gov-east-1/meta.llama3-70b-instruct-v1:0": { cr: 0.265, cw: 2.65, i: 2.65, o: 3.5 }, "bedrock/us-gov-east-1/meta.llama3-8b-instruct-v1:0": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.65 }, "bedrock/us-gov-west-1/amazon.nova-pro-v1:0": { cr: 0.096, cw: 0.96, i: 0.96, o: 3.84 }, "bedrock/us-gov-west-1/amazon.titan-embed-text-v1": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "bedrock/us-gov-west-1/amazon.titan-embed-text-v2:0": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0 }, "bedrock/us-gov-west-1/amazon.titan-text-express-v1": { cr: 0.13, cw: 1.3, i: 1.3, o: 1.7 }, "bedrock/us-gov-west-1/amazon.titan-text-lite-v1": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.39999999999999997 }, "bedrock/us-gov-west-1/amazon.titan-text-premier-v1:0": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "bedrock/us-gov-west-1/anthropic.claude-3-5-sonnet-20240620-v1:0": { cr: 0.36, cw: 4.5, i: 3.5999999999999996, o: 18 }, "bedrock/us-gov-west-1/anthropic.claude-3-7-sonnet-20250219-v1:0": { cr: 0.36, cw: 4.5, i: 3.5999999999999996, o: 18 }, "bedrock/us-gov-west-1/anthropic.claude-3-haiku-20240307-v1:0": { cr: 0.03, cw: 0.375, i: 0.3, o: 1.5 }, "bedrock/us-gov-west-1/anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.12, cw: 1.5, i: 1.2, o: 6 }, "bedrock/us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.36, cw: 4.5, i: 3.5999999999999996, o: 18 }, "bedrock/us-gov-west-1/claude-sonnet-4-5-20250929-v1:0": { cr: 0.36, cw: 4.5, i: 3.5999999999999996, o: 18 }, "bedrock/us-gov-west-1/meta.llama3-70b-instruct-v1:0": { cr: 0.265, cw: 2.65, i: 2.65, o: 3.5 }, "bedrock/us-gov-west-1/meta.llama3-8b-instruct-v1:0": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.65 }, "bedrock/us-west-1/meta.llama3-70b-instruct-v1:0": { cr: 0.265, cw: 2.65, i: 2.65, o: 3.5 }, "bedrock/us-west-1/meta.llama3-8b-instruct-v1:0": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.6 }, "bedrock/us-west-2/anthropic.claude-instant-v1": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 2.4 }, "bedrock/us-west-2/anthropic.claude-v1": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "bedrock/us-west-2/anthropic.claude-v2:1": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "bedrock/us-west-2/deepseek.v3.2": { cr: 0.062, cw: 0.62, i: 0.62, o: 1.85 }, "bedrock/us-west-2/minimax.minimax-m2.1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "bedrock/us-west-2/minimax.minimax-m2.5": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "bedrock/us-west-2/mistral.mistral-7b-instruct-v0:2": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.19999999999999998 }, "bedrock/us-west-2/mistral.mistral-large-2402-v1:0": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "bedrock/us-west-2/mistral.mixtral-8x7b-instruct-v0:1": { cr: 0.045, cw: 0.44999999999999996, i: 0.44999999999999996, o: 0.7 }, "bedrock/us-west-2/moonshotai.kimi-k2-thinking": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "bedrock/us-west-2/moonshotai.kimi-k2.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 3 }, "bedrock/us-west-2/qwen.qwen3-coder-next": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.2 }, "bedrock/us-west-2/zai.glm-5": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3.1999999999999997 }, "bedrock/us.anthropic.claude-3-5-haiku-20241022-v1:0": { cr: 0.08, cw: 1, i: 0.7999999999999999, o: 4 }, "bedrock_mantle/google.gemma-4-26b-a4b": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.39999999999999997 }, "bedrock_mantle/google.gemma-4-31b": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.39999999999999997 }, "bedrock_mantle/google.gemma-4-e2b": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.08 }, "bedrock_mantle/openai.gpt-5.4": { cr: 0.275, cw: 2.75, i: 2.75, o: 16.5 }, "bedrock_mantle/openai.gpt-5.5": { cr: 0.55, cw: 5.5, i: 5.5, o: 33 }, "bedrock_mantle/openai.gpt-oss-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "bedrock_mantle/openai.gpt-oss-20b": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0.3 }, "bedrock_mantle/openai.gpt-oss-safeguard-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "bedrock_mantle/openai.gpt-oss-safeguard-20b": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0.3 }, "cerebras/gpt-oss-120b": { cr: 0.035, cw: 0.35, i: 0.35, o: 0.75 }, "cerebras/llama-3.3-70b": { cr: 0.085, cw: 0.85, i: 0.85, o: 1.2 }, "cerebras/llama3.1-70b": { cr: 0.06, cw: 0.6, i: 0.6, o: 0.6 }, "cerebras/llama3.1-8b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "cerebras/qwen-3-32b": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 0.7999999999999999 }, "cerebras/zai-glm-4.6": { cr: 0.225, cw: 2.25, i: 2.25, o: 2.75 }, "cerebras/zai-glm-4.7": { cr: 0.225, cw: 2.25, i: 2.25, o: 2.75 }, chatdolphin: { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "chatgpt-4o-latest": { cr: 0.5000000000000001, cw: 5, i: 5, o: 15 }, "claude-3-7-sonnet-20250219": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "claude-3-haiku-20240307": { cr: 0.03, cw: 0.3, i: 0.25, o: 1.25 }, "claude-3-opus-20240229": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "claude-4-opus-20250514": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "claude-4-sonnet-20250514": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "claude-fable-5": { cr: 1, cw: 12.5, i: 10, o: 50 }, "claude-haiku-4-5": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "claude-haiku-4-5-20251001": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "claude-opus-4-1": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "claude-opus-4-1-20250805": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "claude-opus-4-20250514": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "claude-opus-4-5": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "claude-opus-4-5-20251101": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "claude-opus-4-6": { cr: 0.5, cw: 6.25, fast: 6, i: 5, o: 25 }, "claude-opus-4-6-20260205": { cr: 0.5, cw: 6.25, fast: 6, i: 5, o: 25 }, "claude-opus-4-7": { cr: 0.5, cw: 6.25, fast: 6, i: 5, o: 25 }, "claude-opus-4-7-20260416": { cr: 0.5, cw: 6.25, fast: 6, i: 5, o: 25 }, "claude-opus-4-8": { cr: 0.5, cw: 6.25, fast: 2, i: 5, o: 25 }, "claude-sonnet-4-20250514": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "claude-sonnet-4-5": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "claude-sonnet-4-5-20250929": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "claude-sonnet-4-5-20250929-v1:0": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "claude-sonnet-4-6": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "claude-sonnet-5": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "cloudflare/@cf/aisingapore/gemma-sea-lion-v4-27b-it": { cr: 0.035100000000000006, cw: 0.351, i: 0.351, o: 0.5549999999999999 }, "cloudflare/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b": { cr: 0.0497, cw: 0.49699999999999994, i: 0.49699999999999994, o: 4.881 }, "cloudflare/@cf/google/gemma-2b-it-lora": { cr: 0, cw: 0, i: 0, o: 0 }, "cloudflare/@cf/google/gemma-4-26b-a4b-it": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "cloudflare/@cf/google/gemma-7b-it-lora": { cr: 0, cw: 0, i: 0, o: 0 }, "cloudflare/@cf/ibm-granite/granite-4.0-h-micro": { cr: 0.0017000000000000001, cw: 0.017, i: 0.017, o: 0.112 }, "cloudflare/@cf/meta-llama/llama-2-7b-chat-hf-lora": { cr: 0, cw: 0, i: 0, o: 0 }, "cloudflare/@cf/meta/llama-2-7b-chat-fp16": { cr: 0.19230000000000003, cw: 1.923, i: 1.923, o: 1.923 }, "cloudflare/@cf/meta/llama-2-7b-chat-int8": { cr: 0.19230000000000003, cw: 1.923, i: 1.923, o: 1.923 }, "cloudflare/@cf/meta/llama-3.1-8b-instruct-fp8": { cr: 0.0152, cw: 0.15200000000000002, i: 0.15200000000000002, o: 0.28700000000000003 }, "cloudflare/@cf/meta/llama-3.2-11b-vision-instruct": { cr: 0.00485, cw: 0.048499999999999995, i: 0.048499999999999995, o: 0.6759999999999999 }, "cloudflare/@cf/meta/llama-3.2-1b-instruct": { cr: 0.0027, cw: 0.027, i: 0.027, o: 0.201 }, "cloudflare/@cf/meta/llama-3.2-3b-instruct": { cr: 0.005090000000000001, cw: 0.0509, i: 0.0509, o: 0.335 }, "cloudflare/@cf/meta/llama-3.3-70b-instruct-fp8-fast": { cr: 0.0293, cw: 0.293, i: 0.293, o: 2.2529999999999997 }, "cloudflare/@cf/meta/llama-4-scout-17b-16e-instruct": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 0.85 }, "cloudflare/@cf/meta/llama-guard-3-8b": { cr: 0.04840000000000001, cw: 0.48400000000000004, i: 0.48400000000000004, o: 0.03 }, "cloudflare/@cf/mistral/mistral-7b-instruct-v0.1": { cr: 0.19230000000000003, cw: 1.923, i: 1.923, o: 1.923 }, "cloudflare/@cf/mistral/mistral-7b-instruct-v0.2-lora": { cr: 0, cw: 0, i: 0, o: 0 }, "cloudflare/@cf/mistralai/mistral-small-3.1-24b-instruct": { cr: 0.035100000000000006, cw: 0.351, i: 0.351, o: 0.5549999999999999 }, "cloudflare/@cf/moonshotai/kimi-k2.6": { cr: 0.16, cw: 0.95, i: 0.95, o: 4 }, "cloudflare/@cf/moonshotai/kimi-k2.7-code": { cr: 0.19, cw: 0.95, i: 0.95, o: 4 }, "cloudflare/@cf/nvidia/nemotron-3-120b-a12b": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "cloudflare/@cf/openai/gpt-oss-120b": { cr: 0.035, cw: 0.35, i: 0.35, o: 0.75 }, "cloudflare/@cf/openai/gpt-oss-20b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.3 }, "cloudflare/@cf/qwen/qwen2.5-coder-32b-instruct": { cr: 0.066, cw: 0.66, i: 0.66, o: 1 }, "cloudflare/@cf/qwen/qwen3-30b-a3b-fp8": { cr: 0.005090000000000001, cw: 0.0509, i: 0.0509, o: 0.335 }, "cloudflare/@cf/qwen/qwq-32b": { cr: 0.066, cw: 0.66, i: 0.66, o: 1 }, "cloudflare/@cf/zai-org/glm-4.7-flash": { cr: 0.0060500000000000016, cw: 0.060500000000000005, i: 0.060500000000000005, o: 0.39999999999999997 }, "cloudflare/@cf/zai-org/glm-5.2": { cr: 0.26, cw: 1.4, i: 1.4, o: 4.4 }, "cloudflare/@hf/thebloke/codellama-7b-instruct-awq": { cr: 0.19230000000000003, cw: 1.923, i: 1.923, o: 1.923 }, "codestral/codestral-2405": { cr: 0, cw: 0, i: 0, o: 0 }, "codestral/codestral-latest": { cr: 0, cw: 0, i: 0, o: 0 }, "codex-mini-latest": { cr: 0.375, cw: 1.5, i: 1.5, o: 6 }, "cohere.command-light-text-v14": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.6 }, "cohere.command-r-plus-v1:0": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "cohere.command-r-v1:0": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "cohere.command-text-v14": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 2 }, "cohere.embed-english-v3": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "cohere.embed-multilingual-v3": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "cohere.embed-v4:0": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, "cohere.rerank-v3-5:0": { cr: 0, cw: 0, i: 0, o: 0 }, "cohere/embed-v4.0": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, command: { cr: 0.09999999999999999, cw: 1, i: 1, o: 2 }, "command-a-03-2025": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "command-light": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.6 }, "command-nightly": { cr: 0.09999999999999999, cw: 1, i: 1, o: 2 }, "command-r": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "command-r-08-2024": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "command-r-plus": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "command-r-plus-08-2024": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "command-r7b-12-2024": { cr: 0.00375, cw: 0.0375, i: 0.0375, o: 0.15 }, "computer-use-preview": { cr: 0.30000000000000004, cw: 3, i: 3, o: 12 }, "crusoe/Qwen/Qwen3-235B-A22B-Instruct-2507": { cr: 0.30000000000000004, cw: 3, i: 3, o: 3 }, "crusoe/deepseek-ai/DeepSeek-R1-0528": { cr: 0.30000000000000004, cw: 3, i: 3, o: 7 }, "crusoe/deepseek-ai/DeepSeek-V3-0324": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 1.5 }, "crusoe/google/gemma-3-12b-it": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "crusoe/meta-llama/Llama-3.3-70B-Instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "crusoe/moonshotai/Kimi-K2-Thinking": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 2.5 }, "crusoe/openai/gpt-oss-120b": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 0.7999999999999999 }, "darkbloom/gemma-4-26b": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.165 }, "darkbloom/gpt-oss-20b": { cr: 0.0014500000000000001, cw: 0.0145, i: 0.0145, o: 0.07 }, "dashscope/qwen-coder": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.5 }, "dashscope/qwen-max": { cr: 0.16, cw: 1.5999999999999999, i: 1.5999999999999999, o: 6.3999999999999995 }, "dashscope/qwen-plus": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.2 }, "dashscope/qwen-plus-2025-01-25": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.2 }, "dashscope/qwen-plus-2025-04-28": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.2 }, "dashscope/qwen-plus-2025-07-14": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.2 }, "dashscope/qwen-turbo": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.19999999999999998 }, "dashscope/qwen-turbo-2024-11-01": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.19999999999999998 }, "dashscope/qwen-turbo-2025-04-28": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.19999999999999998 }, "dashscope/qwen-turbo-latest": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.19999999999999998 }, "dashscope/qwen3-next-80b-a3b-instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.2 }, "dashscope/qwen3-next-80b-a3b-thinking": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.2 }, "dashscope/qwen3-vl-235b-a22b-instruct": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "dashscope/qwen3-vl-235b-a22b-thinking": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 4 }, "dashscope/qwen3-vl-32b-instruct": { cr: 0.016, cw: 0.16, i: 0.16, o: 0.64 }, "dashscope/qwen3-vl-32b-thinking": { cr: 0.016, cw: 0.16, i: 0.16, o: 2.87 }, "dashscope/qwq-plus": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 2.4 }, "databricks/databricks-bge-large-en": { cr: 0.010003, cw: 0.10003000000000001, i: 0.10003000000000001, o: 0 }, "databricks/databricks-claude-3-7-sonnet": { cr: 0.29999900000000007, cw: 2.9999900000000004, i: 2.9999900000000004, o: 15.000020000000001 }, "databricks/databricks-claude-haiku-4-5": { cr: 0.10000200000000001, cw: 1.0000200000000001, i: 1.0000200000000001, o: 5.00003 }, "databricks/databricks-claude-opus-4": { cr: 1.5000020000000003, cw: 15.000020000000001, i: 15.000020000000001, o: 75.00003000000001 }, "databricks/databricks-claude-opus-4-1": { cr: 1.5000020000000003, cw: 15.000020000000001, i: 15.000020000000001, o: 75.00003000000001 }, "databricks/databricks-claude-opus-4-5": { cr: 0.5000030000000001, cw: 5.00003, i: 5.00003, o: 25.000010000000003 }, "databricks/databricks-claude-sonnet-4": { cr: 0.29999900000000007, cw: 2.9999900000000004, i: 2.9999900000000004, o: 15.000020000000001 }, "databricks/databricks-claude-sonnet-4-1": { cr: 0.29999900000000007, cw: 2.9999900000000004, i: 2.9999900000000004, o: 15.000020000000001 }, "databricks/databricks-claude-sonnet-4-5": { cr: 0.29999900000000007, cw: 2.9999900000000004, i: 2.9999900000000004, o: 15.000020000000001 }, "databricks/databricks-gemini-2-5-flash": { cr: 0.030002, cw: 0.30001999999999995, i: 0.30001999999999995, o: 2.49998 }, "databricks/databricks-gemini-2-5-pro": { cr: 0.12499900000000001, cw: 1.24999, i: 1.24999, o: 9.999990000000002 }, "databricks/databricks-gemma-3-12b": { cr: 0.015001, cw: 0.15000999999999998, i: 0.15000999999999998, o: 0.5000100000000001 }, "databricks/databricks-gpt-5": { cr: 0.12499900000000001, cw: 1.24999, i: 1.24999, o: 9.999990000000002 }, "databricks/databricks-gpt-5-1": { cr: 0.12499900000000001, cw: 1.24999, i: 1.24999, o: 9.999990000000002 }, "databricks/databricks-gpt-5-mini": { cr: 0.02499700000000001, cw: 0.24997000000000005, i: 0.24997000000000005, o: 1.9999700000000002 }, "databricks/databricks-gpt-5-nano": { cr: 0.004998000000000001, cw: 0.049980000000000004, i: 0.049980000000000004, o: 0.39998000000000006 }, "databricks/databricks-gpt-oss-120b": { cr: 0.015001, cw: 0.15000999999999998, i: 0.15000999999999998, o: 0.59997 }, "databricks/databricks-gpt-oss-20b": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.30001999999999995 }, "databricks/databricks-gte-large-en": { cr: 0.012999000000000004, cw: 0.12999000000000002, i: 0.12999000000000002, o: 0 }, "databricks/databricks-llama-2-70b-chat": { cr: 0.050001000000000004, cw: 0.5000100000000001, i: 0.5000100000000001, o: 1.5000300000000002 }, "databricks/databricks-llama-4-maverick": { cr: 0.050001000000000004, cw: 0.5000100000000001, i: 0.5000100000000001, o: 1.5000300000000002 }, "databricks/databricks-meta-llama-3-1-405b-instruct": { cr: 0.5000030000000001, cw: 5.00003, i: 5.00003, o: 15.000020000000001 }, "databricks/databricks-meta-llama-3-1-8b-instruct": { cr: 0.015001, cw: 0.15000999999999998, i: 0.15000999999999998, o: 0.45003000000000004 }, "databricks/databricks-meta-llama-3-3-70b-instruct": { cr: 0.050001000000000004, cw: 0.5000100000000001, i: 0.5000100000000001, o: 1.5000300000000002 }, "databricks/databricks-meta-llama-3-70b-instruct": { cr: 0.10000200000000001, cw: 1.0000200000000001, i: 1.0000200000000001, o: 2.9999900000000004 }, "databricks/databricks-mixtral-8x7b-instruct": { cr: 0.050001000000000004, cw: 0.5000100000000001, i: 0.5000100000000001, o: 1.0000200000000001 }, "databricks/databricks-mpt-30b-instruct": { cr: 0.10000200000000001, cw: 1.0000200000000001, i: 1.0000200000000001, o: 1.0000200000000001 }, "databricks/databricks-mpt-7b-instruct": { cr: 0.050001000000000004, cw: 0.5000100000000001, i: 0.5000100000000001, o: 0 }, "davinci-002": { cr: 0.19999999999999998, cw: 2, i: 2, o: 2 }, "deep-research-pro-preview-12-2025": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "deepinfra/Gryphe/MythoMax-L2-13b": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.09 }, "deepinfra/NousResearch/Hermes-3-Llama-3.1-405B": { cr: 0.09999999999999999, cw: 1, i: 1, o: 1 }, "deepinfra/NousResearch/Hermes-3-Llama-3.1-70B": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.3 }, "deepinfra/Qwen/QwQ-32B": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.39999999999999997 }, "deepinfra/Qwen/Qwen2.5-72B-Instruct": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.39 }, "deepinfra/Qwen/Qwen2.5-7B-Instruct": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.09999999999999999 }, "deepinfra/Qwen/Qwen2.5-VL-32B-Instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "deepinfra/Qwen/Qwen3-14B": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.24 }, "deepinfra/Qwen/Qwen3-235B-A22B": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0.54 }, "deepinfra/Qwen/Qwen3-235B-A22B-Instruct-2507": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.6 }, "deepinfra/Qwen/Qwen3-235B-A22B-Thinking-2507": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.9000000000000004 }, "deepinfra/Qwen/Qwen3-30B-A3B": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.29 }, "deepinfra/Qwen/Qwen3-32B": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.28 }, "deepinfra/Qwen/Qwen3-Coder-480B-A35B-Instruct": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "deepinfra/Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo": { cr: 0.028999999999999998, cw: 0.29, i: 0.29, o: 1.2 }, "deepinfra/Qwen/Qwen3-Next-80B-A3B-Instruct": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 1.4 }, "deepinfra/Qwen/Qwen3-Next-80B-A3B-Thinking": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 1.4 }, "deepinfra/Sao10K/L3-8B-Lunaris-v1-Turbo": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.049999999999999996 }, "deepinfra/Sao10K/L3.1-70B-Euryale-v2.2": { cr: 0.065, cw: 0.65, i: 0.65, o: 0.75 }, "deepinfra/Sao10K/L3.3-70B-Euryale-v2.3": { cr: 0.065, cw: 0.65, i: 0.65, o: 0.75 }, "deepinfra/allenai/olmOCR-7B-0725-FP8": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 1.5 }, "deepinfra/anthropic/claude-3-7-sonnet-latest": { cr: 0.33, cw: 3.3000000000000003, i: 3.3000000000000003, o: 16.5 }, "deepinfra/anthropic/claude-4-opus": { cr: 1.6500000000000004, cw: 16.5, i: 16.5, o: 82.5 }, "deepinfra/anthropic/claude-4-sonnet": { cr: 0.33, cw: 3.3000000000000003, i: 3.3000000000000003, o: 16.5 }, "deepinfra/deepseek-ai/DeepSeek-R1": { cr: 0.07, cw: 0.7, i: 0.7, o: 2.4 }, "deepinfra/deepseek-ai/DeepSeek-R1-0528": { cr: 0.39999999999999997, cw: 0.5, i: 0.5, o: 2.1500000000000004 }, "deepinfra/deepseek-ai/DeepSeek-R1-0528-Turbo": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "deepinfra/deepseek-ai/DeepSeek-R1-Distill-Llama-70B": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "deepinfra/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 0.27 }, "deepinfra/deepseek-ai/DeepSeek-R1-Turbo": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "deepinfra/deepseek-ai/DeepSeek-V3": { cr: 0.038000000000000006, cw: 0.38, i: 0.38, o: 0.8899999999999999 }, "deepinfra/deepseek-ai/DeepSeek-V3-0324": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.88 }, "deepinfra/deepseek-ai/DeepSeek-V3.1": { cr: 0.216, cw: 0.27, i: 0.27, o: 1 }, "deepinfra/deepseek-ai/DeepSeek-V3.1-Terminus": { cr: 0.216, cw: 0.27, i: 0.27, o: 1 }, "deepinfra/google/gemini-2.0-flash-001": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "deepinfra/google/gemini-2.5-flash": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "deepinfra/google/gemini-2.5-pro": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 10 }, "deepinfra/google/gemma-3-12b-it": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.09999999999999999 }, "deepinfra/google/gemma-3-27b-it": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.16 }, "deepinfra/google/gemma-3-4b-it": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.08 }, "deepinfra/meta-llama/Llama-3.2-11B-Vision-Instruct": { cr: 0.004900000000000001, cw: 0.049, i: 0.049, o: 0.049 }, "deepinfra/meta-llama/Llama-3.2-3B-Instruct": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.02 }, "deepinfra/meta-llama/Llama-3.3-70B-Instruct": { cr: 0.023, cw: 0.22999999999999998, i: 0.22999999999999998, o: 0.39999999999999997 }, "deepinfra/meta-llama/Llama-3.3-70B-Instruct-Turbo": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.39 }, "deepinfra/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "deepinfra/meta-llama/Llama-4-Scout-17B-16E-Instruct": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.3 }, "deepinfra/meta-llama/Llama-Guard-3-8B": { cr: 0.0055000000000000005, cw: 0.055, i: 0.055, o: 0.055 }, "deepinfra/meta-llama/Llama-Guard-4-12B": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0.18 }, "deepinfra/meta-llama/Meta-Llama-3-8B-Instruct": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.06 }, "deepinfra/meta-llama/Meta-Llama-3.1-70B-Instruct": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 0.39999999999999997 }, "deepinfra/meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.28 }, "deepinfra/meta-llama/Meta-Llama-3.1-8B-Instruct": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.049999999999999996 }, "deepinfra/meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.03 }, "deepinfra/microsoft/WizardLM-2-8x22B": { cr: 0.048, cw: 0.48, i: 0.48, o: 0.48 }, "deepinfra/microsoft/phi-4": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.14 }, "deepinfra/mistralai/Mistral-Nemo-Instruct-2407": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.04 }, "deepinfra/mistralai/Mistral-Small-24B-Instruct-2501": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.08 }, "deepinfra/mistralai/Mistral-Small-3.2-24B-Instruct-2506": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0.19999999999999998 }, "deepinfra/mistralai/Mixtral-8x7B-Instruct-v0.1": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 0.39999999999999997 }, "deepinfra/moonshotai/Kimi-K2-Instruct": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 2 }, "deepinfra/moonshotai/Kimi-K2-Instruct-0905": { cr: 0.39999999999999997, cw: 0.5, i: 0.5, o: 2 }, "deepinfra/nvidia/Llama-3.1-Nemotron-70B-Instruct": { cr: 0.06, cw: 0.6, i: 0.6, o: 0.6 }, "deepinfra/nvidia/Llama-3.3-Nemotron-Super-49B-v1.5": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "deepinfra/nvidia/NVIDIA-Nemotron-Nano-9B-v2": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.16 }, "deepinfra/openai/gpt-oss-120b": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.44999999999999996 }, "deepinfra/openai/gpt-oss-20b": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.15 }, "deepinfra/zai-org/GLM-4.5": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "deepseek-chat": { cr: 0.028, cw: 0.28, i: 0.28, o: 0.42 }, "deepseek-reasoner": { cr: 0.028, cw: 0.28, i: 0.28, o: 0.42 }, "deepseek-v3-2-251201": { cr: 0, cw: 0, i: 0, o: 0 }, "deepseek-v4-flash": { cr: 0.0028, cw: 0, i: 0.14, o: 0.28 }, "deepseek-v4-pro": { cr: 0.003625, cw: 0, i: 0.435, o: 0.87 }, "deepseek.v3-v1:0": { cr: 0.057999999999999996, cw: 0.58, i: 0.58, o: 1.68 }, "deepseek.v3.2": { cr: 0.062, cw: 0.62, i: 0.62, o: 1.85 }, "deepseek/deepseek-chat": { cr: 0.028, cw: 0, i: 0.28, o: 0.42 }, "deepseek/deepseek-coder": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.28 }, "deepseek/deepseek-r1": { cr: 0.055, cw: 0.55, i: 0.55, o: 2.1900000000000004 }, "deepseek/deepseek-reasoner": { cr: 0.028, cw: 0.28, i: 0.28, o: 0.42 }, "deepseek/deepseek-v3": { cr: 0.07, cw: 0, i: 0.27, o: 1.1 }, "deepseek/deepseek-v3.2": { cr: 0.028000000000000004, cw: 0.28, i: 0.28, o: 0.39999999999999997 }, "deepseek/deepseek-v4-flash": { cr: 0.0028, cw: 0, i: 0.14, o: 0.28 }, "deepseek/deepseek-v4-pro": { cr: 0.003625, cw: 0, i: 0.435, o: 0.87 }, dolphin: { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "doubao-embedding": { cr: 0, cw: 0, i: 0, o: 0 }, "doubao-embedding-large": { cr: 0, cw: 0, i: 0, o: 0 }, "doubao-embedding-large-text-240915": { cr: 0, cw: 0, i: 0, o: 0 }, "doubao-embedding-large-text-250515": { cr: 0, cw: 0, i: 0, o: 0 }, "doubao-embedding-text-240715": { cr: 0, cw: 0, i: 0, o: 0 }, "embed-english-light-v2.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "embed-english-light-v3.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "embed-english-v2.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "embed-english-v3.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "embed-multilingual-light-v3.0": { cr: 10, cw: 100, i: 100, o: 0 }, "embed-multilingual-v2.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "embed-multilingual-v3.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "eu.amazon.nova-2-lite-v1:0": { cr: 0.0825, cw: 0.33, i: 0.33, o: 2.75 }, "eu.amazon.nova-2-pro-preview-20251202-v1:0": { cr: 0.546875, cw: 2.1875, i: 2.1875, o: 17.5 }, "eu.amazon.nova-lite-v1:0": { cr: 0.0078000000000000005, cw: 0.078, i: 0.078, o: 0.312 }, "eu.amazon.nova-micro-v1:0": { cr: 0.004600000000000001, cw: 0.046, i: 0.046, o: 0.184 }, "eu.amazon.nova-pro-v1:0": { cr: 0.105, cw: 1.0499999999999998, i: 1.0499999999999998, o: 4.199999999999999 }, "eu.anthropic.claude-3-5-haiku-20241022-v1:0": { cr: 0.024999999999999998, cw: 0.3125, i: 0.25, o: 1.25 }, "eu.anthropic.claude-3-5-sonnet-20240620-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "eu.anthropic.claude-3-5-sonnet-20241022-v2:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "eu.anthropic.claude-3-7-sonnet-20250219-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "eu.anthropic.claude-3-haiku-20240307-v1:0": { cr: 0.024999999999999998, cw: 0.3125, i: 0.25, o: 1.25 }, "eu.anthropic.claude-3-opus-20240229-v1:0": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "eu.anthropic.claude-3-sonnet-20240229-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "eu.anthropic.claude-fable-5": { cr: 1.1, cw: 13.75, i: 11, o: 55 }, "eu.anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.11, cw: 1.375, i: 1.1, o: 5.5 }, "eu.anthropic.claude-opus-4-1-20250805-v1:0": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "eu.anthropic.claude-opus-4-20250514-v1:0": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "eu.anthropic.claude-opus-4-5-20251101-v1:0": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "eu.anthropic.claude-opus-4-6-v1": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "eu.anthropic.claude-opus-4-7": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "eu.anthropic.claude-opus-4-8": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "eu.anthropic.claude-sonnet-4-20250514-v1:0": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "eu.anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.33, cra: 0.66, cw: 4.125, cwa: 8.25, i: 3.3000000000000003, ia: 6.6000000000000005, o: 16.5, oa: 24.75 }, "eu.anthropic.claude-sonnet-4-6": { cr: 0.33, cw: 4.125, i: 3.3000000000000003, o: 16.5 }, "eu.anthropic.claude-sonnet-5": { cr: 0.33, cw: 4.125, i: 3.3000000000000003, o: 16.5 }, "eu.deepseek.v3.2": { cr: 0.074, cw: 0.74, i: 0.74, o: 2.2199999999999998 }, "eu.meta.llama3-2-1b-instruct-v1:0": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.13 }, "eu.meta.llama3-2-3b-instruct-v1:0": { cr: 0.019000000000000003, cw: 0.19, i: 0.19, o: 0.19 }, "eu.mistral.pixtral-large-2502-v1:0": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "eu.twelvelabs.marengo-embed-2-7-v1:0": { cr: 7, cw: 70, i: 70, o: 0 }, "fireworks-ai-4.1b-to-16b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks-ai-56b-to-176b": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks-ai-above-16b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks-ai-default": { cr: 0, cw: 0, i: 0, o: 0 }, "fireworks-ai-embedding-150m-to-350m": { cr: 0.0016000000000000003, cw: 0.016, i: 0.016, o: 0 }, "fireworks-ai-embedding-up-to-150m": { cr: 0.0008000000000000001, cw: 0.008, i: 0.008, o: 0 }, "fireworks-ai-moe-up-to-56b": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks-ai-up-to-4b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/WhereIsAI/UAE-Large-V1": { cr: 0.0016000000000000003, cw: 0.016, i: 0.016, o: 0 }, "fireworks_ai/accounts/fireworks/models/": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "fireworks_ai/accounts/fireworks/models/SSD-1B": { cr: 0.000013000000000000001, cw: 0.00013, i: 0.00013, o: 0.00013 }, "fireworks_ai/accounts/fireworks/models/chronos-hermes-13b-v2": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/code-llama-13b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/code-llama-13b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/code-llama-13b-python": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/code-llama-34b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/code-llama-34b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/code-llama-34b-python": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/code-llama-70b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/code-llama-70b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/code-llama-70b-python": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/code-llama-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/code-llama-7b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/code-llama-7b-python": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/code-qwen-1p5-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/codegemma-2b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/codegemma-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/cogito-671b-v2-p1": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/cogito-v1-preview-llama-3b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/cogito-v1-preview-llama-70b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/cogito-v1-preview-llama-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/cogito-v1-preview-qwen-14b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/cogito-v1-preview-qwen-32b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/dbrx-instruct": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/deepseek-coder-1b-base": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/deepseek-coder-33b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/deepseek-coder-7b-base": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/deepseek-coder-7b-base-v1p5": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/deepseek-coder-7b-instruct-v1p5": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/deepseek-coder-v2-instruct": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/deepseek-coder-v2-lite-base": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/deepseek-coder-v2-lite-instruct": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/deepseek-prover-v2": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/deepseek-r1": { cr: 0.30000000000000004, cw: 3, i: 3, o: 8 }, "fireworks_ai/accounts/fireworks/models/deepseek-r1-0528": { cr: 0.30000000000000004, cw: 3, i: 3, o: 8 }, "fireworks_ai/accounts/fireworks/models/deepseek-r1-0528-distill-qwen3-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/deepseek-r1-basic": { cr: 0.055, cw: 0.55, i: 0.55, o: 2.1900000000000004 }, "fireworks_ai/accounts/fireworks/models/deepseek-r1-distill-llama-70b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/deepseek-r1-distill-llama-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/deepseek-r1-distill-qwen-14b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/deepseek-r1-distill-qwen-1p5b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/deepseek-r1-distill-qwen-32b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/deepseek-r1-distill-qwen-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/deepseek-v2-lite-chat": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/deepseek-v2p5": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/deepseek-v3": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/deepseek-v3-0324": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/deepseek-v3p1": { cr: 0.05600000000000001, cw: 0.56, i: 0.56, o: 1.68 }, "fireworks_ai/accounts/fireworks/models/deepseek-v3p1-terminus": { cr: 0.05600000000000001, cw: 0.56, i: 0.56, o: 1.68 }, "fireworks_ai/accounts/fireworks/models/deepseek-v3p2": { cr: 0.05600000000000001, cw: 0.56, i: 0.56, o: 1.68 }, "fireworks_ai/accounts/fireworks/models/deepseek-v4-flash": { cr: 0.028, cw: 0.14, i: 0.14, o: 0.28 }, "fireworks_ai/accounts/fireworks/models/deepseek-v4-pro": { cr: 0.145, cw: 1.74, i: 1.74, o: 3.48 }, "fireworks_ai/accounts/fireworks/models/devstral-small-2505": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/dobby-mini-unhinged-plus-llama-3-1-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/dobby-unhinged-llama-3-3-70b-new": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/dolphin-2-9-2-qwen2-72b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/dolphin-2p6-mixtral-8x7b": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/ernie-4p5-21b-a3b-pt": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/ernie-4p5-300b-a47b-pt": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/fare-20b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/firefunction-v1": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/firefunction-v2": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/firellava-13b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/firesearch-ocr-v6": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/fireworks-asr-large": { cr: 0, cw: 0, i: 0, o: 0 }, "fireworks_ai/accounts/fireworks/models/fireworks-asr-v2": { cr: 0, cw: 0, i: 0, o: 0 }, "fireworks_ai/accounts/fireworks/models/flux-1-dev": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/flux-1-dev-controlnet-union": { cr: 0.00010000000000000002, cw: 0.001, i: 0.001, o: 0.001 }, "fireworks_ai/accounts/fireworks/models/flux-1-dev-fp8": { cr: 0.00005000000000000001, cw: 0.0005, i: 0.0005, o: 0.0005 }, "fireworks_ai/accounts/fireworks/models/flux-1-schnell": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/flux-1-schnell-fp8": { cr: 0.000035000000000000004, cw: 0.00035, i: 0.00035, o: 0.00035 }, "fireworks_ai/accounts/fireworks/models/flux-kontext-max": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.08 }, "fireworks_ai/accounts/fireworks/models/flux-kontext-pro": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.04 }, "fireworks_ai/accounts/fireworks/models/gemma-2b-it": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/gemma-3-27b-it": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/gemma-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/gemma-7b-it": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/gemma2-9b-it": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/glm-4p5": { cr: 0.055, cw: 0.55, i: 0.55, o: 2.1900000000000004 }, "fireworks_ai/accounts/fireworks/models/glm-4p5-air": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.88 }, "fireworks_ai/accounts/fireworks/models/glm-4p5v": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/glm-4p6": { cr: 0.055, cw: 0.55, i: 0.55, o: 2.1900000000000004 }, "fireworks_ai/accounts/fireworks/models/glm-4p7": { cr: 0.3, cw: 0.6, i: 0.6, o: 2.2 }, "fireworks_ai/accounts/fireworks/models/glm-5p1": { cr: 0.26, cw: 1.4, i: 1.4, o: 4.4 }, "fireworks_ai/accounts/fireworks/models/glm-5p2": { cr: 0.26, cw: 1.4, i: 1.4, o: 4.4 }, "fireworks_ai/accounts/fireworks/models/gpt-oss-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "fireworks_ai/accounts/fireworks/models/gpt-oss-20b": { cr: 0.035, cw: 0.07, i: 0.07, o: 0.3 }, "fireworks_ai/accounts/fireworks/models/gpt-oss-safeguard-120b": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/gpt-oss-safeguard-20b": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/hermes-2-pro-mistral-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/internvl3-38b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/internvl3-78b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/internvl3-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/japanese-stable-diffusion-xl": { cr: 0.000013000000000000001, cw: 0.00013, i: 0.00013, o: 0.00013 }, "fireworks_ai/accounts/fireworks/models/kat-coder": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/kat-dev-32b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/kat-dev-72b-exp": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/kimi-k2-instruct": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "fireworks_ai/accounts/fireworks/models/kimi-k2-instruct-0905": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "fireworks_ai/accounts/fireworks/models/kimi-k2-thinking": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "fireworks_ai/accounts/fireworks/models/kimi-k2p5": { cr: 0.09999999999999999, cw: 0.6, i: 0.6, o: 3 }, "fireworks_ai/accounts/fireworks/models/kimi-k2p6": { cr: 0.16, cw: 0.95, i: 0.95, o: 4 }, "fireworks_ai/accounts/fireworks/models/kimi-k2p7-code": { cr: 0.19, cw: 0.95, i: 0.95, o: 4 }, "fireworks_ai/accounts/fireworks/models/llama-guard-2-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/llama-guard-3-1b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-guard-3-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/llama-v2-13b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/llama-v2-13b-chat": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/llama-v2-70b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v2-70b-chat": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v2-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/llama-v2-7b-chat": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct-hf": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/llama-v3-8b-instruct-hf": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/llama-v3p1-405b-instruct": { cr: 0.30000000000000004, cw: 3, i: 3, o: 3 }, "fireworks_ai/accounts/fireworks/models/llama-v3p1-405b-instruct-long": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3p1-70b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3p1-70b-instruct-1b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3p1-8b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3p1-nemotron-70b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3p2-11b-vision-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/llama-v3p2-1b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3p2-1b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3p2-3b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3p2-3b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3p2-90b-vision-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama4-maverick-instruct-basic": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.88 }, "fireworks_ai/accounts/fireworks/models/llama4-scout-instruct-basic": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "fireworks_ai/accounts/fireworks/models/llamaguard-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/llava-yi-34b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/minimax-m1-80k": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/minimax-m2": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/minimax-m2p1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/minimax-m2p7": { cr: 0.06, cw: 0.3, i: 0.3, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/minimax-m3": { cr: 0.06, cw: 0.3, i: 0.3, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/ministral-3-14b-instruct-2512": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/ministral-3-3b-instruct-2512": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/ministral-3-8b-instruct-2512": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/mistral-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/mistral-7b-instruct-4k": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/mistral-7b-instruct-v0p2": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/mistral-7b-instruct-v3": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/mistral-7b-v0p2": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/mistral-large-3-fp8": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/mistral-nemo-base-2407": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/mistral-nemo-instruct-2407": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/mistral-small-24b-instruct-2501": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/mixtral-8x22b": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/mixtral-8x22b-instruct": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/mixtral-8x22b-instruct-hf": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/mixtral-8x7b": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/mixtral-8x7b-instruct": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/mixtral-8x7b-instruct-hf": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/mythomax-l2-13b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/nemotron-nano-v2-12b-vl": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/nous-capybara-7b-v1p9": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/nous-hermes-2-mixtral-8x7b-dpo": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/nous-hermes-2-yi-34b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/nous-hermes-llama2-13b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/nous-hermes-llama2-70b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/nous-hermes-llama2-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/nvidia-nemotron-nano-12b-v2": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/nvidia-nemotron-nano-9b-v2": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/openchat-3p5-0106-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/openhermes-2-mistral-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/openhermes-2p5-mistral-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/openorca-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/phi-2-3b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/phi-3-mini-128k-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/phi-3-vision-128k-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/phind-code-llama-34b-python-v1": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/phind-code-llama-34b-v1": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/phind-code-llama-34b-v2": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/playground-v2-1024px-aesthetic": { cr: 0.000013000000000000001, cw: 0.00013, i: 0.00013, o: 0.00013 }, "fireworks_ai/accounts/fireworks/models/playground-v2-5-1024px-aesthetic": { cr: 0.000013000000000000001, cw: 0.00013, i: 0.00013, o: 0.00013 }, "fireworks_ai/accounts/fireworks/models/pythia-12b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen-qwq-32b-preview": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen-v2p5-14b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen-v2p5-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen1p5-72b-chat": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2-72b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2-7b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen2-vl-2b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2-vl-72b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2-vl-7b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-0p5b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-14b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-1p5b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-32b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-32b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-72b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-72b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-7b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-0p5b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-0p5b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-14b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-14b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-1p5b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-1p5b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-32b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-32b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-32b-instruct-128k": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-32b-instruct-32k-rope": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-32b-instruct-64k": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-3b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-3b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-7b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-math-72b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-vl-32b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-vl-3b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-vl-72b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-vl-7b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen3-0p6b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-14b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen3-1p7b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-1p7b-fp8-draft": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-1p7b-fp8-draft-131072": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-1p7b-fp8-draft-40960": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-235b-a22b": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.88 }, "fireworks_ai/accounts/fireworks/models/qwen3-235b-a22b-instruct-2507": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.88 }, "fireworks_ai/accounts/fireworks/models/qwen3-235b-a22b-thinking-2507": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.88 }, "fireworks_ai/accounts/fireworks/models/qwen3-30b-a3b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "fireworks_ai/accounts/fireworks/models/qwen3-30b-a3b-instruct-2507": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/qwen3-30b-a3b-thinking-2507": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-32b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-4b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen3-4b-instruct-2507": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen3-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen3-coder-30b-a3b-instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "fireworks_ai/accounts/fireworks/models/qwen3-coder-480b-a35b-instruct": { cr: 0.045, cw: 0.44999999999999996, i: 0.44999999999999996, o: 1.7999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen3-coder-480b-instruct-bf16": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-embedding-0p6b": { cr: 0, cw: 0, i: 0, o: 0 }, "fireworks_ai/accounts/fireworks/models/qwen3-embedding-4b": { cr: 0, cw: 0, i: 0, o: 0 }, "fireworks_ai/accounts/fireworks/models/qwen3-next-80b-a3b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-next-80b-a3b-thinking": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-reranker-0p6b": { cr: 0, cw: 0, i: 0, o: 0 }, "fireworks_ai/accounts/fireworks/models/qwen3-reranker-4b": { cr: 0, cw: 0, i: 0, o: 0 }, "fireworks_ai/accounts/fireworks/models/qwen3-reranker-8b": { cr: 0, cw: 0, i: 0, o: 0 }, "fireworks_ai/accounts/fireworks/models/qwen3-vl-235b-a22b-instruct": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.88 }, "fireworks_ai/accounts/fireworks/models/qwen3-vl-235b-a22b-thinking": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.88 }, "fireworks_ai/accounts/fireworks/models/qwen3-vl-30b-a3b-instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "fireworks_ai/accounts/fireworks/models/qwen3-vl-30b-a3b-thinking": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "fireworks_ai/accounts/fireworks/models/qwen3-vl-32b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-vl-8b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen3p7-plus": { cr: 0.08, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwq-32b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/rolm-ocr": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/snorkel-mistral-7b-pairrm-dpo": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/stable-diffusion-xl-1024-v1-0": { cr: 0.000013000000000000001, cw: 0.00013, i: 0.00013, o: 0.00013 }, "fireworks_ai/accounts/fireworks/models/stablecode-3b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/starcoder-16b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/starcoder-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/starcoder2-15b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/starcoder2-3b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/starcoder2-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/toppy-m-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/yi-34b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/yi-34b-200k-capybara": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/yi-34b-chat": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/yi-6b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/yi-large": { cr: 0.30000000000000004, cw: 3, i: 3, o: 3 }, "fireworks_ai/accounts/fireworks/models/zephyr-7b-beta": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/routers/glm-5p1-fast": { cr: 0.52, cw: 2.8, i: 2.8, o: 8.8 }, "fireworks_ai/accounts/fireworks/routers/kimi-k2p6-fast": { cr: 0.3, cw: 2, i: 2, o: 8 }, "fireworks_ai/accounts/fireworks/routers/kimi-k2p7-code-fast": { cr: 0.38, cw: 1.9, i: 1.9, o: 8 }, "fireworks_ai/deepseek-v4-flash": { cr: 0.028, cw: 0.14, i: 0.14, o: 0.28 }, "fireworks_ai/deepseek-v4-pro": { cr: 0.145, cw: 1.74, i: 1.74, o: 3.48 }, "fireworks_ai/glm-4p7": { cr: 0.3, cw: 0.6, i: 0.6, o: 2.2 }, "fireworks_ai/glm-5p1": { cr: 0.26, cw: 1.4, i: 1.4, o: 4.4 }, "fireworks_ai/glm-5p1-fast": { cr: 0.52, cw: 2.8, i: 2.8, o: 8.8 }, "fireworks_ai/glm-5p2": { cr: 0.26, cw: 1.4, i: 1.4, o: 4.4 }, "fireworks_ai/gpt-oss-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "fireworks_ai/gpt-oss-20b": { cr: 0.035, cw: 0.07, i: 0.07, o: 0.3 }, "fireworks_ai/kimi-k2p5": { cr: 0.09999999999999999, cw: 0.6, i: 0.6, o: 3 }, "fireworks_ai/kimi-k2p6": { cr: 0.16, cw: 0.95, i: 0.95, o: 4 }, "fireworks_ai/kimi-k2p6-fast": { cr: 0.3, cw: 2, i: 2, o: 8 }, "fireworks_ai/kimi-k2p7-code": { cr: 0.19, cw: 0.95, i: 0.95, o: 4 }, "fireworks_ai/kimi-k2p7-code-fast": { cr: 0.38, cw: 1.9, i: 1.9, o: 8 }, "fireworks_ai/minimax-m2p1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "fireworks_ai/minimax-m2p7": { cr: 0.06, cw: 0.3, i: 0.3, o: 1.2 }, "fireworks_ai/minimax-m3": { cr: 0.06, cw: 0.3, i: 0.3, o: 1.2 }, "fireworks_ai/nomic-ai/nomic-embed-text-v1": { cr: 0.0008000000000000001, cw: 0.008, i: 0.008, o: 0 }, "fireworks_ai/nomic-ai/nomic-embed-text-v1.5": { cr: 0.0008000000000000001, cw: 0.008, i: 0.008, o: 0 }, "fireworks_ai/qwen3p7-plus": { cr: 0.08, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "fireworks_ai/thenlper/gte-base": { cr: 0.0008000000000000001, cw: 0.008, i: 0.008, o: 0 }, "fireworks_ai/thenlper/gte-large": { cr: 0.0016000000000000003, cw: 0.016, i: 0.016, o: 0 }, "friendliai/meta-llama-3.1-70b-instruct": { cr: 0.06, cw: 0.6, i: 0.6, o: 0.6 }, "friendliai/meta-llama-3.1-8b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "ft:babbage-002": { cr: 0.16, cw: 1.5999999999999999, i: 1.5999999999999999, o: 1.5999999999999999 }, "ft:davinci-002": { cr: 1.2000000000000002, cw: 12, i: 12, o: 12 }, "ft:gpt-3.5-turbo": { cr: 0.30000000000000004, cw: 3, i: 3, o: 6 }, "ft:gpt-3.5-turbo-0125": { cr: 0.30000000000000004, cw: 3, i: 3, o: 6 }, "ft:gpt-3.5-turbo-0613": { cr: 0.30000000000000004, cw: 3, i: 3, o: 6 }, "ft:gpt-3.5-turbo-1106": { cr: 0.30000000000000004, cw: 3, i: 3, o: 6 }, "ft:gpt-4-0613": { cr: 3, cw: 30, i: 30, o: 60 }, "ft:gpt-4.1-2025-04-14": { cr: 0.75, cw: 3, i: 3, o: 12 }, "ft:gpt-4.1-mini-2025-04-14": { cr: 0.19999999999999998, cw: 0.7999999999999999, i: 0.7999999999999999, o: 3.1999999999999997 }, "ft:gpt-4.1-nano-2025-04-14": { cr: 0.049999999999999996, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.7999999999999999 }, "ft:gpt-4o-2024-08-06": { cr: 1.875, cw: 3.75, i: 3.75, o: 15 }, "ft:gpt-4o-2024-11-20": { cr: 0.375, cw: 1.875, i: 3.75, o: 15 }, "ft:gpt-4o-mini-2024-07-18": { cr: 0.15, cw: 0.3, i: 0.3, o: 1.2 }, "ft:o4-mini-2025-04-16": { cr: 1, cw: 4, i: 4, o: 16 }, "gemini-2.0-flash": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini-2.0-flash-001": { cr: 0.0375, cw: 0.15, i: 0.15, o: 0.6 }, "gemini-2.0-flash-exp-image-generation": { cr: 0, cw: 0, i: 0, o: 0 }, "gemini-2.0-flash-lite": { cr: 0.01875, cw: 0.075, i: 0.075, o: 0.3 }, "gemini-2.0-flash-lite-001": { cr: 0.01875, cw: 0.075, i: 0.075, o: 0.3 }, "gemini-2.5-computer-use-preview-10-2025": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, ia: 2.5, o: 10, oa: 15 }, "gemini-2.5-flash": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-2.5-flash-image": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-2.5-flash-lite": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini-2.5-flash-lite-preview-06-17": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini-2.5-flash-lite-preview-09-2025": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini-2.5-flash-native-audio-latest": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-2.5-flash-native-audio-preview-09-2025": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-2.5-flash-native-audio-preview-12-2025": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-2.5-flash-preview-09-2025": { cr: 0.075, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-2.5-flash-preview-tts": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-2.5-pro": { cr: 0.125, cra: 0.25, cw: 1.25, cwa: 0.25, i: 1.25, ia: 2.5, o: 10, oa: 15 }, "gemini-2.5-pro-preview-tts": { cr: 0.125, cra: 0.25, cw: 1.25, i: 1.25, ia: 2.5, o: 10, oa: 15 }, "gemini-3-flash-preview": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 3 }, "gemini-3-pro-image": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "gemini-3-pro-image-preview": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "gemini-3-pro-preview": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, cwa: 0.25, i: 2, ia: 4, o: 12, oa: 18 }, "gemini-3.1-flash-image": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 3 }, "gemini-3.1-flash-image-preview": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 3 }, "gemini-3.1-flash-lite": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "gemini-3.1-flash-lite-preview": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "gemini-3.1-flash-live-preview": { cr: 0.07500000000000001, cw: 0.75, i: 0.75, o: 4.5 }, "gemini-3.1-pro-preview": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, cwa: 0.25, i: 2, ia: 4, o: 12, oa: 18 }, "gemini-3.1-pro-preview-customtools": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, cwa: 0.25, i: 2, ia: 4, o: 12, oa: 18 }, "gemini-3.5-flash": { cr: 0.15, cw: 1.5, i: 1.5, o: 9 }, "gemini-embedding-001": { cr: 0.015, cw: 0.15, i: 0.15, o: 0 }, "gemini-embedding-2": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0 }, "gemini-embedding-2-preview": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0 }, "gemini-exp-1206": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-flash-experimental": { cr: 0, cw: 0, i: 0, o: 0 }, "gemini-flash-latest": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-flash-lite-latest": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini-live-2.5-flash-preview-native-audio-09-2025": { cr: 0.075, cw: 0.3, i: 0.3, o: 2 }, "gemini-pro-latest": { cr: 0.125, cra: 0.25, cw: 1.25, i: 1.25, ia: 2.5, o: 10, oa: 15 }, "gemini-robotics-er-1.5-preview": { cr: 0, cw: 0.3, i: 0.3, o: 2.5 }, "gemini/deep-research-pro-preview-12-2025": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "gemini/gemini-1.5-flash": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0 }, "gemini/gemini-2.0-flash": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini/gemini-2.0-flash-001": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini/gemini-2.0-flash-exp-image-generation": { cr: 0, cw: 0, i: 0, o: 0 }, "gemini/gemini-2.0-flash-lite": { cr: 0.01875, cw: 0.075, i: 0.075, o: 0.3 }, "gemini/gemini-2.0-flash-lite-001": { cr: 0.01875, cw: 0.075, i: 0.075, o: 0.3 }, "gemini/gemini-2.5-computer-use-preview-10-2025": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, ia: 2.5, o: 10, oa: 15 }, "gemini/gemini-2.5-flash": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini/gemini-2.5-flash-image": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini/gemini-2.5-flash-lite": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini/gemini-2.5-flash-lite-preview-06-17": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini/gemini-2.5-flash-lite-preview-09-2025": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini/gemini-2.5-flash-native-audio-latest": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini/gemini-2.5-flash-native-audio-preview-09-2025": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini/gemini-2.5-flash-native-audio-preview-12-2025": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini/gemini-2.5-flash-preview-09-2025": { cr: 0.075, cw: 0.3, i: 0.3, o: 2.5 }, "gemini/gemini-2.5-flash-preview-tts": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini/gemini-2.5-pro": { cr: 0.125, cra: 0.25, cw: 1.25, i: 1.25, ia: 2.5, o: 10, oa: 15 }, "gemini/gemini-2.5-pro-preview-tts": { cr: 0.125, cra: 0.25, cw: 1.25, i: 1.25, ia: 2.5, o: 10, oa: 15 }, "gemini/gemini-3-flash-preview": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 3 }, "gemini/gemini-3-pro-image": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "gemini/gemini-3-pro-image-preview": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "gemini/gemini-3-pro-preview": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, i: 2, ia: 4, o: 12, oa: 18 }, "gemini/gemini-3.1-flash-image": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "gemini/gemini-3.1-flash-image-preview": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "gemini/gemini-3.1-flash-lite": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "gemini/gemini-3.1-flash-lite-preview": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "gemini/gemini-3.1-flash-live-preview": { cr: 0.07500000000000001, cw: 0.75, i: 0.75, o: 4.5 }, "gemini/gemini-3.1-pro-preview": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, i: 2, ia: 4, o: 12, oa: 18 }, "gemini/gemini-3.1-pro-preview-customtools": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, i: 2, ia: 4, o: 12, oa: 18 }, "gemini/gemini-3.5-flash": { cr: 0.15, cw: 1.5, i: 1.5, o: 9 }, "gemini/gemini-embedding-001": { cr: 0.015, cw: 0.15, i: 0.15, o: 0 }, "gemini/gemini-embedding-2": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0 }, "gemini/gemini-embedding-2-preview": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0 }, "gemini/gemini-exp-1114": { cr: 0, cw: 0, i: 0, o: 0 }, "gemini/gemini-exp-1206": { cr: 0, cw: 0, i: 0, o: 0 }, "gemini/gemini-flash-latest": { cr: 0.075, cw: 0.3, i: 0.3, o: 2.5 }, "gemini/gemini-flash-lite-latest": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini/gemini-gemma-2-27b-it": { cr: 0.035, cw: 0.35, i: 0.35, o: 1.0499999999999998 }, "gemini/gemini-gemma-2-9b-it": { cr: 0.035, cw: 0.35, i: 0.35, o: 1.0499999999999998 }, "gemini/gemini-live-2.5-flash-preview-native-audio-09-2025": { cr: 0.075, cw: 0.3, i: 0.3, o: 2 }, "gemini/gemini-pro-latest": { cr: 0.125, cra: 0.25, cw: 1.25, i: 1.25, ia: 2.5, o: 10, oa: 15 }, "gemini/gemini-robotics-er-1.5-preview": { cr: 0, cw: 0.3, i: 0.3, o: 2.5 }, "gemini/gemma-3-27b-it": { cr: 0, cw: 0, i: 0, o: 0 }, "gemini/learnlm-1.5-pro-experimental": { cr: 0, cw: 0, i: 0, o: 0 }, "gemini/lyria-3-clip-preview": { cr: 0, cw: 0, i: 0, o: 0 }, "gemini/lyria-3-pro-preview": { cr: 0, cw: 0, i: 0, o: 0 }, "gigachat/Embeddings": { cr: 0, cw: 0, i: 0, o: 0 }, "gigachat/Embeddings-2": { cr: 0, cw: 0, i: 0, o: 0 }, "gigachat/EmbeddingsGigaR": { cr: 0, cw: 0, i: 0, o: 0 }, "gigachat/GigaChat-2-Lite": { cr: 0, cw: 0, i: 0, o: 0 }, "gigachat/GigaChat-2-Max": { cr: 0, cw: 0, i: 0, o: 0 }, "gigachat/GigaChat-2-Pro": { cr: 0, cw: 0, i: 0, o: 0 }, "github_copilot/mai-code-1-flash": { cr: 0.075, cw: 0.75, i: 0.75, o: 4.5 }, "github_copilot/mai-code-1-flash-internal": { cr: 0.075, cw: 0.75, i: 0.75, o: 4.5 }, "glm-4-7-251222": { cr: 0, cw: 0, i: 0, o: 0 }, "global.amazon.nova-2-lite-v1:0": { cr: 0.075, cw: 0.3, i: 0.3, o: 2.5 }, "global.anthropic.claude-fable-5": { cr: 1, cw: 12.5, i: 10, o: 50 }, "global.anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "global.anthropic.claude-opus-4-5-20251101-v1:0": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "global.anthropic.claude-opus-4-6-v1": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "global.anthropic.claude-opus-4-7": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "global.anthropic.claude-opus-4-8": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "global.anthropic.claude-sonnet-4-20250514-v1:0": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "global.anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "global.anthropic.claude-sonnet-4-6": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "global.anthropic.claude-sonnet-5": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "gmi/MiniMaxAI/MiniMax-M2.1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "gmi/Qwen/Qwen3-VL-235B-A22B-Instruct-FP8": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.4 }, "gmi/anthropic/claude-opus-4": { cr: 1.5, cw: 15, i: 15, o: 75 }, "gmi/anthropic/claude-opus-4.5": { cr: 0.5000000000000001, cw: 5, i: 5, o: 25 }, "gmi/anthropic/claude-sonnet-4": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "gmi/anthropic/claude-sonnet-4.5": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "gmi/deepseek-ai/DeepSeek-V3-0324": { cr: 0.028000000000000004, cw: 0.28, i: 0.28, o: 0.88 }, "gmi/deepseek-ai/DeepSeek-V3.2": { cr: 0.028000000000000004, cw: 0.28, i: 0.28, o: 0.39999999999999997 }, "gmi/google/gemini-3-flash-preview": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 3 }, "gmi/google/gemini-3-pro-preview": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "gmi/moonshotai/Kimi-K2-Thinking": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 1.2 }, "gmi/openai/gpt-4o": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gmi/openai/gpt-4o-mini": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "gmi/openai/gpt-5": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 10 }, "gmi/openai/gpt-5.1": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 10 }, "gmi/openai/gpt-5.2": { cr: 0.17500000000000002, cw: 1.75, i: 1.75, o: 14 }, "gmi/zai-org/GLM-4.7-FP8": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "google.gemma-3-12b-it": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.29 }, "google.gemma-3-27b-it": { cr: 0.023, cw: 0.22999999999999998, i: 0.22999999999999998, o: 0.38 }, "google.gemma-3-4b-it": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.08 }, "gpt-3.5-turbo": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "gpt-3.5-turbo-0125": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "gpt-3.5-turbo-1106": { cr: 0.09999999999999999, cw: 1, i: 1, o: 2 }, "gpt-3.5-turbo-16k": { cr: 0.30000000000000004, cw: 3, i: 3, o: 4 }, "gpt-3.5-turbo-instruct": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 2 }, "gpt-3.5-turbo-instruct-0914": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 2 }, "gpt-4": { cr: 3, cw: 30, i: 30, o: 60 }, "gpt-4-0125-preview": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "gpt-4-0314": { cr: 3, cw: 30, i: 30, o: 60 }, "gpt-4-0613": { cr: 3, cw: 30, i: 30, o: 60 }, "gpt-4-1106-preview": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "gpt-4-turbo": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "gpt-4-turbo-2024-04-09": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "gpt-4-turbo-preview": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "gpt-4.1": { cr: 0.5, cw: 2, i: 2, o: 8 }, "gpt-4.1-2025-04-14": { cr: 0.5, cw: 2, i: 2, o: 8 }, "gpt-4.1-mini": { cr: 0.09999999999999999, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "gpt-4.1-mini-2025-04-14": { cr: 0.09999999999999999, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "gpt-4.1-nano": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gpt-4.1-nano-2025-04-14": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gpt-4o": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-2024-05-13": { cr: 0.5000000000000001, cw: 5, i: 5, o: 15 }, "gpt-4o-2024-08-06": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-2024-11-20": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-audio-preview": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-audio-preview-2024-12-17": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-audio-preview-2025-06-03": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-mini": { cr: 0.075, cw: 0.15, i: 0.15, o: 0.6 }, "gpt-4o-mini-2024-07-18": { cr: 0.075, cw: 0.15, i: 0.15, o: 0.6 }, "gpt-4o-mini-audio-preview": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "gpt-4o-mini-audio-preview-2024-12-17": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "gpt-4o-mini-realtime-preview": { cr: 0.3, cw: 0.6, i: 0.6, o: 2.4 }, "gpt-4o-mini-realtime-preview-2024-12-17": { cr: 0.3, cw: 0.6, i: 0.6, o: 2.4 }, "gpt-4o-mini-search-preview": { cr: 0.075, cw: 0.15, i: 0.15, o: 0.6 }, "gpt-4o-mini-search-preview-2025-03-11": { cr: 0.075, cw: 0.15, i: 0.15, o: 0.6 }, "gpt-4o-mini-transcribe": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 5 }, "gpt-4o-mini-transcribe-2025-03-20": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 5 }, "gpt-4o-mini-transcribe-2025-12-15": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 5 }, "gpt-4o-mini-tts": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-mini-tts-2025-03-20": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-mini-tts-2025-12-15": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-realtime-preview": { cr: 2.5, cw: 5, i: 5, o: 20 }, "gpt-4o-realtime-preview-2024-12-17": { cr: 2.5, cw: 5, i: 5, o: 20 }, "gpt-4o-realtime-preview-2025-06-03": { cr: 2.5, cw: 5, i: 5, o: 20 }, "gpt-4o-search-preview": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-search-preview-2025-03-11": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-transcribe": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-transcribe-diarize": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-5": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5-2025-08-07": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5-chat": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5-chat-latest": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5-codex": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5-mini": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "gpt-5-mini-2025-08-07": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "gpt-5-nano": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.39999999999999997 }, "gpt-5-nano-2025-08-07": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.39999999999999997 }, "gpt-5-pro": { cr: 1.5, cw: 15, i: 15, o: 120 }, "gpt-5-pro-2025-10-06": { cr: 1.5, cw: 15, i: 15, o: 120 }, "gpt-5-search-api": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5-search-api-2025-10-14": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5.1": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5.1-2025-11-13": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5.1-chat-latest": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5.1-codex": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5.1-codex-max": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5.1-codex-mini": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "gpt-5.2": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "gpt-5.2-2025-12-11": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "gpt-5.2-chat-latest": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "gpt-5.2-codex": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "gpt-5.2-pro": { cr: 2.0999999999999996, cw: 21, i: 21, o: 168 }, "gpt-5.2-pro-2025-12-11": { cr: 2.0999999999999996, cw: 21, i: 21, o: 168 }, "gpt-5.3-chat-latest": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "gpt-5.3-codex": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "gpt-5.4": { cr: 0.25, cw: 2.5, i: 2.5, o: 15 }, "gpt-5.4-2026-03-05": { cr: 0.25, cw: 2.5, i: 2.5, o: 15 }, "gpt-5.4-mini": { cr: 0.075, cw: 0.75, i: 0.75, o: 4.5 }, "gpt-5.4-mini-2026-03-17": { cr: 0.075, cw: 0.75, i: 0.75, o: 4.5 }, "gpt-5.4-nano": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.25 }, "gpt-5.4-nano-2026-03-17": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.25 }, "gpt-5.4-pro": { cr: 3, cw: 30, i: 30, o: 180 }, "gpt-5.4-pro-2026-03-05": { cr: 3, cw: 30, i: 30, o: 180 }, "gpt-5.5": { cr: 0.5, cw: 5, i: 5, o: 30 }, "gpt-5.5-2026-04-23": { cr: 0.5, cw: 5, i: 5, o: 30 }, "gpt-5.5-pro": { cr: 3, cw: 30, i: 30, o: 180 }, "gpt-5.5-pro-2026-04-23": { cr: 3, cw: 30, i: 30, o: 180 }, "gpt-audio": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-audio-1.5": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-audio-2025-08-28": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-audio-mini": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "gpt-audio-mini-2025-10-06": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "gpt-audio-mini-2025-12-15": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "gpt-image-1.5": { cr: 1.25, cw: 5, i: 5, o: 10 }, "gpt-image-1.5-2025-12-16": { cr: 1.25, cw: 5, i: 5, o: 10 }, "gpt-image-2": { cr: 1.25, cw: 5, i: 5, o: 10 }, "gpt-image-2-2026-04-21": { cr: 1.25, cw: 5, i: 5, o: 10 }, "gpt-realtime": { cr: 0.39999999999999997, cw: 4, i: 4, o: 16 }, "gpt-realtime-1.5": { cr: 0.39999999999999997, cw: 4, i: 4, o: 16 }, "gpt-realtime-2": { cr: 0.39999999999999997, cw: 4, i: 4, o: 16 }, "gpt-realtime-2025-08-28": { cr: 0.39999999999999997, cw: 4, i: 4, o: 16 }, "gpt-realtime-mini": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "gpt-realtime-mini-2025-10-06": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "gpt-realtime-mini-2025-12-15": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "gradient_ai/anthropic-claude-3-opus": { cr: 1.5, cw: 15, i: 15, o: 75 }, "gradient_ai/anthropic-claude-3.5-haiku": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 4 }, "gradient_ai/anthropic-claude-3.5-sonnet": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "gradient_ai/anthropic-claude-3.7-sonnet": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "gradient_ai/deepseek-r1-distill-llama-70b": { cr: 0.09900000000000002, cw: 0.9900000000000001, i: 0.9900000000000001, o: 0.9900000000000001 }, "gradient_ai/llama3-8b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "gradient_ai/llama3.3-70b-instruct": { cr: 0.065, cw: 0.65, i: 0.65, o: 0.65 }, "gradient_ai/mistral-nemo-instruct-2407": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.3 }, "gradient_ai/openai-o3": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "gradient_ai/openai-o3-mini": { cr: 0.11, cw: 1.1, i: 1.1, o: 4.4 }, "groq/gemma-7b-it": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.08 }, "groq/llama-3.1-8b-instant": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.08 }, "groq/llama-3.3-70b-versatile": { cr: 0.059, cw: 0.59, i: 0.59, o: 0.7899999999999999 }, "groq/meta-llama/llama-4-maverick-17b-128e-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "groq/meta-llama/llama-4-scout-17b-16e-instruct": { cr: 0.011000000000000001, cw: 0.11, i: 0.11, o: 0.33999999999999997 }, "groq/meta-llama/llama-guard-4-12b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "groq/moonshotai/kimi-k2-instruct-0905": { cr: 0.5, cw: 1, i: 1, o: 3 }, "groq/openai/gpt-oss-120b": { cr: 0.075, cw: 0.15, i: 0.15, o: 0.6 }, "groq/openai/gpt-oss-20b": { cr: 0.0375, cw: 0.075, i: 0.075, o: 0.3 }, "groq/openai/gpt-oss-safeguard-20b": { cr: 0.037, cw: 0.075, i: 0.075, o: 0.3 }, "groq/qwen/qwen3-32b": { cr: 0.028999999999999998, cw: 0.29, i: 0.29, o: 0.59 }, "hyperbolic/NousResearch/Hermes-3-Llama-3.1-70B": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "hyperbolic/Qwen/QwQ-32B": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "hyperbolic/Qwen/Qwen2.5-72B-Instruct": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "hyperbolic/Qwen/Qwen2.5-Coder-32B-Instruct": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "hyperbolic/Qwen/Qwen3-235B-A22B": { cr: 0.19999999999999998, cw: 2, i: 2, o: 2 }, "hyperbolic/deepseek-ai/DeepSeek-R1": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 0.39999999999999997 }, "hyperbolic/deepseek-ai/DeepSeek-R1-0528": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.25 }, "hyperbolic/deepseek-ai/DeepSeek-V3": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "hyperbolic/deepseek-ai/DeepSeek-V3-0324": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 0.39999999999999997 }, "hyperbolic/meta-llama/Llama-3.2-3B-Instruct": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "hyperbolic/meta-llama/Llama-3.3-70B-Instruct": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "hyperbolic/meta-llama/Meta-Llama-3-70B-Instruct": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "hyperbolic/meta-llama/Meta-Llama-3.1-405B-Instruct": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "hyperbolic/meta-llama/Meta-Llama-3.1-70B-Instruct": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "hyperbolic/meta-llama/Meta-Llama-3.1-8B-Instruct": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "hyperbolic/moonshotai/Kimi-K2-Instruct": { cr: 0.19999999999999998, cw: 2, i: 2, o: 2 }, "inception/mercury-2": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.75 }, "j2-light": { cr: 0.30000000000000004, cw: 3, i: 3, o: 3 }, "j2-mid": { cr: 1.0000000000000002, cw: 10, i: 10, o: 10 }, "j2-ultra": { cr: 1.5, cw: 15, i: 15, o: 15 }, "jamba-1.5": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.39999999999999997 }, "jamba-1.5-large": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "jamba-1.5-large@001": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "jamba-1.5-mini": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.39999999999999997 }, "jamba-1.5-mini@001": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.39999999999999997 }, "jamba-large-1.6": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "jamba-large-1.7": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "jamba-mini-1.6": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.39999999999999997 }, "jamba-mini-1.7": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.39999999999999997 }, "jina-reranker-v2-base-multilingual": { cr: 0.0018, cw: 0.018, i: 0.018, o: 0.018 }, "jp.anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.11, cw: 1.375, i: 1.1, o: 5.5 }, "jp.anthropic.claude-opus-4-7": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "jp.anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.33, cra: 0.66, cw: 4.125, cwa: 8.25, i: 3.3000000000000003, ia: 6.6000000000000005, o: 16.5, oa: 24.75 }, "jp.anthropic.claude-sonnet-4-6": { cr: 0.33, cw: 4.125, i: 3.3000000000000003, o: 16.5 }, "jp.anthropic.claude-sonnet-5": { cr: 0.33, cw: 4.125, i: 3.3000000000000003, o: 16.5 }, "kimi-k2-thinking-251104": { cr: 0, cw: 0, i: 0, o: 0 }, "lambda_ai/deepseek-llama3.3-70b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "lambda_ai/deepseek-r1-0528": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "lambda_ai/deepseek-r1-671b": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 0.7999999999999999 }, "lambda_ai/deepseek-v3-0324": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "lambda_ai/hermes3-405b": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 0.7999999999999999 }, "lambda_ai/hermes3-70b": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "lambda_ai/hermes3-8b": { cr: 0.0025, cw: 0.024999999999999998, i: 0.024999999999999998, o: 0.04 }, "lambda_ai/lfm-40b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.19999999999999998 }, "lambda_ai/lfm-7b": { cr: 0.0025, cw: 0.024999999999999998, i: 0.024999999999999998, o: 0.04 }, "lambda_ai/llama-4-maverick-17b-128e-instruct-fp8": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.09999999999999999 }, "lambda_ai/llama-4-scout-17b-16e-instruct": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.09999999999999999 }, "lambda_ai/llama3.1-405b-instruct-fp8": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 0.7999999999999999 }, "lambda_ai/llama3.1-70b-instruct-fp8": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "lambda_ai/llama3.1-8b-instruct": { cr: 0.0025, cw: 0.024999999999999998, i: 0.024999999999999998, o: 0.04 }, "lambda_ai/llama3.1-nemotron-70b-instruct-fp8": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "lambda_ai/llama3.2-11b-vision-instruct": { cr: 0.0015, cw: 0.015, i: 0.015, o: 0.024999999999999998 }, "lambda_ai/llama3.2-3b-instruct": { cr: 0.0015, cw: 0.015, i: 0.015, o: 0.024999999999999998 }, "lambda_ai/llama3.3-70b-instruct-fp8": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "lambda_ai/qwen25-coder-32b-instruct": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.09999999999999999 }, "lambda_ai/qwen3-32b-fp8": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.09999999999999999 }, "lemonade/Gemma-3-4b-it-GGUF": { cr: 0, cw: 0, i: 0, o: 0 }, "lemonade/Qwen3-4B-Instruct-2507-GGUF": { cr: 0, cw: 0, i: 0, o: 0 }, "lemonade/Qwen3-Coder-30B-A3B-Instruct-GGUF": { cr: 0, cw: 0, i: 0, o: 0 }, "lemonade/gpt-oss-120b-mxfp-GGUF": { cr: 0, cw: 0, i: 0, o: 0 }, "lemonade/gpt-oss-20b-mxfp4-GGUF": { cr: 0, cw: 0, i: 0, o: 0 }, "libertai/bge-m3": { cr: 0.001, cw: 0.01, i: 0.01, o: 0 }, "libertai/deepseek-v4-flash": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.75 }, "libertai/deepseek-v4-flash-thinking": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.75 }, "libertai/gemma-4-31b-it": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.39999999999999997 }, "libertai/gemma-4-31b-it-thinking": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.39999999999999997 }, "libertai/hermes-3-8b-tee": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "libertai/qwen3.5-122b-a10b": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.75 }, "libertai/qwen3.5-122b-a10b-thinking": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.75 }, "libertai/qwen3.6-27b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.5 }, "libertai/qwen3.6-27b-thinking": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.5 }, "libertai/qwen3.6-35b-a3b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.5 }, "libertai/qwen3.6-35b-a3b-thinking": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.5 }, "llamagate/codellama-7b": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.12 }, "llamagate/deepseek-coder-6.7b": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.12 }, "llamagate/deepseek-r1-7b-qwen": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.15 }, "llamagate/deepseek-r1-8b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.19999999999999998 }, "llamagate/dolphin3-8b": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.15 }, "llamagate/gemma3-4b": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.08 }, "llamagate/llama-3.1-8b": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.049999999999999996 }, "llamagate/llama-3.2-3b": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.08 }, "llamagate/llava-7b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.19999999999999998 }, "llamagate/mistral-7b-v0.3": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.15 }, "llamagate/nomic-embed-text": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "llamagate/openthinker-7b": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.15 }, "llamagate/qwen2.5-coder-7b": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.12 }, "llamagate/qwen3-8b": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.14 }, "llamagate/qwen3-embedding-8b": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "llamagate/qwen3-vl-8b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.55 }, "meta.llama2-13b-chat-v1": { cr: 0.07500000000000001, cw: 0.75, i: 0.75, o: 1 }, "meta.llama2-70b-chat-v1": { cr: 0.195, cw: 1.95, i: 1.95, o: 2.56 }, "meta.llama3-1-405b-instruct-v1:0": { cr: 0.532, cw: 5.32, i: 5.32, o: 16 }, "meta.llama3-1-70b-instruct-v1:0": { cr: 0.09900000000000002, cw: 0.9900000000000001, i: 0.9900000000000001, o: 0.9900000000000001 }, "meta.llama3-1-8b-instruct-v1:0": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.22 }, "meta.llama3-2-11b-instruct-v1:0": { cr: 0.035, cw: 0.35, i: 0.35, o: 0.35 }, "meta.llama3-2-1b-instruct-v1:0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "meta.llama3-2-3b-instruct-v1:0": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "meta.llama3-2-90b-instruct-v1:0": { cr: 0.19999999999999998, cw: 2, i: 2, o: 2 }, "meta.llama3-3-70b-instruct-v1:0": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "meta.llama3-70b-instruct-v1:0": { cr: 0.265, cw: 2.65, i: 2.65, o: 3.5 }, "meta.llama3-8b-instruct-v1:0": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.6 }, "meta.llama4-maverick-17b-instruct-v1:0": { cr: 0.024, cw: 0.24, i: 0.24, o: 0.9700000000000001 }, "meta.llama4-scout-17b-instruct-v1:0": { cr: 0.017, cw: 0.16999999999999998, i: 0.16999999999999998, o: 0.66 }, "minimax.minimax-m2": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "minimax.minimax-m2.1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "minimax.minimax-m2.5": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "minimax/MiniMax-M2": { cr: 0.03, cw: 0.375, i: 0.3, o: 1.2 }, "minimax/MiniMax-M2.1": { cr: 0.03, cw: 0.375, i: 0.3, o: 1.2 }, "minimax/MiniMax-M2.1-lightning": { cr: 0.03, cw: 0.375, i: 0.3, o: 2.4 }, "minimax/MiniMax-M2.5": { cr: 0.03, cw: 0.375, i: 0.3, o: 1.2 }, "minimax/MiniMax-M2.5-lightning": { cr: 0.03, cw: 0.375, i: 0.3, o: 2.4 }, "minimax/MiniMax-M3": { cr: 0.06, cw: 0.3, i: 0.3, o: 1.2 }, "mistral.devstral-2-123b": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "mistral.magistral-small-2509": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "mistral.ministral-3-14b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "mistral.ministral-3-3b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "mistral.ministral-3-8b-instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "mistral.mistral-7b-instruct-v0:2": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.19999999999999998 }, "mistral.mistral-large-2402-v1:0": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "mistral.mistral-large-2407-v1:0": { cr: 0.30000000000000004, cw: 3, i: 3, o: 9 }, "mistral.mistral-large-3-675b-instruct": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "mistral.mistral-small-2402-v1:0": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "mistral.mixtral-8x7b-instruct-v0:1": { cr: 0.045, cw: 0.44999999999999996, i: 0.44999999999999996, o: 0.7 }, "mistral.voxtral-mini-3b-2507": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.04 }, "mistral.voxtral-small-24b-2507": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "mistral/codestral-2405": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "mistral/codestral-2508": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.8999999999999999 }, "mistral/codestral-latest": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "mistral/codestral-mamba-latest": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.25 }, "mistral/devstral-2512": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "mistral/devstral-latest": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "mistral/devstral-medium-2507": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "mistral/devstral-medium-latest": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "mistral/devstral-small-2505": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "mistral/devstral-small-2507": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "mistral/devstral-small-latest": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "mistral/labs-devstral-small-2512": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "mistral/magistral-medium-1-2-2509": { cr: 0.19999999999999998, cw: 2, i: 2, o: 5 }, "mistral/magistral-medium-2506": { cr: 0.19999999999999998, cw: 2, i: 2, o: 5 }, "mistral/magistral-medium-2509": { cr: 0.19999999999999998, cw: 2, i: 2, o: 5 }, "mistral/magistral-medium-latest": { cr: 0.19999999999999998, cw: 2, i: 2, o: 5 }, "mistral/magistral-small-1-2-2509": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "mistral/magistral-small-2506": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "mistral/magistral-small-latest": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "mistral/ministral-3-14b-2512": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "mistral/ministral-3-3b-2512": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "mistral/ministral-3-8b-2512": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "mistral/ministral-8b-2512": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "mistral/ministral-8b-latest": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "mistral/mistral-large-2402": { cr: 0.39999999999999997, cw: 4, i: 4, o: 12 }, "mistral/mistral-large-2407": { cr: 0.30000000000000004, cw: 3, i: 3, o: 9 }, "mistral/mistral-large-2411": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "mistral/mistral-large-2512": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "mistral/mistral-large-3": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "mistral/mistral-large-latest": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "mistral/mistral-medium": { cr: 0.27, cw: 2.7, i: 2.7, o: 8.1 }, "mistral/mistral-medium-2312": { cr: 0.27, cw: 2.7, i: 2.7, o: 8.1 }, "mistral/mistral-medium-2505": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "mistral/mistral-medium-2508": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "mistral/mistral-medium-2604": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 7.5 }, "mistral/mistral-medium-3-1-2508": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "mistral/mistral-medium-3-5": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 7.5 }, "mistral/mistral-medium-latest": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 7.5 }, "mistral/mistral-small": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "mistral/mistral-small-3-2-2506": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.18 }, "mistral/mistral-small-latest": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.18 }, "mistral/mistral-tiny": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.25 }, "mistral/open-codestral-mamba": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.25 }, "mistral/open-mistral-7b": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.25 }, "mistral/open-mistral-nemo": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.3 }, "mistral/open-mistral-nemo-2407": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.3 }, "mistral/open-mixtral-8x22b": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "mistral/open-mixtral-8x7b": { cr: 0.07, cw: 0.7, i: 0.7, o: 0.7 }, "mistral/pixtral-12b-2409": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "mistral/pixtral-large-2411": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "mistral/pixtral-large-latest": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "moonshot.kimi-k2-thinking": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "moonshot/kimi-k2-0711-preview": { cr: 0.15, cw: 0.6, i: 0.6, o: 2.5 }, "moonshot/kimi-k2-0905-preview": { cr: 0.15, cw: 0.6, i: 0.6, o: 2.5 }, "moonshot/kimi-k2-thinking": { cr: 0.15, cw: 0.6, i: 0.6, o: 2.5 }, "moonshot/kimi-k2-thinking-turbo": { cr: 0.15, cw: 1.15, i: 1.15, o: 8 }, "moonshot/kimi-k2-turbo-preview": { cr: 0.15, cw: 1.15, i: 1.15, o: 8 }, "moonshot/kimi-k2.5": { cr: 0.09999999999999999, cw: 0.6, i: 0.6, o: 3 }, "moonshot/kimi-k2.6": { cr: 0.16, cw: 0.95, i: 0.95, o: 4 }, "moonshot/kimi-latest": { cr: 0.15, cw: 2, i: 2, o: 5 }, "moonshot/kimi-latest-128k": { cr: 0.15, cw: 2, i: 2, o: 5 }, "moonshot/kimi-latest-32k": { cr: 0.15, cw: 1, i: 1, o: 3 }, "moonshot/kimi-latest-8k": { cr: 0.15, cw: 0.19999999999999998, i: 0.19999999999999998, o: 2 }, "moonshot/kimi-thinking-preview": { cr: 0.15, cw: 0.6, i: 0.6, o: 2.5 }, "moonshot/moonshot-v1-128k": { cr: 0.19999999999999998, cw: 2, i: 2, o: 5 }, "moonshot/moonshot-v1-128k-0430": { cr: 0.19999999999999998, cw: 2, i: 2, o: 5 }, "moonshot/moonshot-v1-128k-vision-preview": { cr: 0.19999999999999998, cw: 2, i: 2, o: 5 }, "moonshot/moonshot-v1-32k": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "moonshot/moonshot-v1-32k-0430": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "moonshot/moonshot-v1-32k-vision-preview": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "moonshot/moonshot-v1-8k": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 2 }, "moonshot/moonshot-v1-8k-0430": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 2 }, "moonshot/moonshot-v1-8k-vision-preview": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 2 }, "moonshot/moonshot-v1-auto": { cr: 0.19999999999999998, cw: 2, i: 2, o: 5 }, "moonshotai.kimi-k2.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 3 }, "morph/morph-v3-fast": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 1.2 }, "morph/morph-v3-large": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 1.9 }, multimodalembedding: { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 0 }, "multimodalembedding@001": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 0 }, "nebius/BAAI/bge-en-icl": { cr: 0.001, cw: 0.01, i: 0.01, o: 0 }, "nebius/BAAI/bge-multilingual-gemma2": { cr: 0.001, cw: 0.01, i: 0.01, o: 0 }, "nebius/NousResearch/Hermes-3-Llama-3.1-405B": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "nebius/Qwen/QwQ-32B": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.44999999999999996 }, "nebius/Qwen/Qwen2-VL-72B-Instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.39999999999999997 }, "nebius/Qwen/Qwen2-VL-7B-Instruct": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.06 }, "nebius/Qwen/Qwen2.5-32B-Instruct": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.19999999999999998 }, "nebius/Qwen/Qwen2.5-72B-Instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.39999999999999997 }, "nebius/Qwen/Qwen2.5-Coder-7B": { cr: 0.001, cw: 0.01, i: 0.01, o: 0.03 }, "nebius/Qwen/Qwen2.5-VL-72B-Instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.39999999999999997 }, "nebius/Qwen/Qwen3-14B": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.24 }, "nebius/Qwen/Qwen3-235B-A22B": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "nebius/Qwen/Qwen3-30B-A3B": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "nebius/Qwen/Qwen3-32B": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "nebius/Qwen/Qwen3-4B": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.24 }, "nebius/deepseek-ai/DeepSeek-R1": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 2.4 }, "nebius/deepseek-ai/DeepSeek-R1-0528": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 2.4 }, "nebius/deepseek-ai/DeepSeek-R1-Distill-Llama-70B": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.75 }, "nebius/deepseek-ai/DeepSeek-V3": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "nebius/deepseek-ai/DeepSeek-V3-0324": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "nebius/google/gemma-3-27b-it": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.19999999999999998 }, "nebius/intfloat/e5-mistral-7b-instruct": { cr: 0.001, cw: 0.01, i: 0.01, o: 0 }, "nebius/meta-llama/Llama-3.3-70B-Instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.39999999999999997 }, "nebius/meta-llama/Llama-Guard-3-8B": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.06 }, "nebius/meta-llama/Meta-Llama-3.1-405B-Instruct": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "nebius/meta-llama/Meta-Llama-3.1-70B-Instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.39999999999999997 }, "nebius/meta-llama/Meta-Llama-3.1-8B-Instruct": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.06 }, "nebius/mistralai/Mistral-Nemo-Instruct-2407": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.12 }, "nebius/nvidia/Llama-3.1-Nemotron-Ultra-253B-v1": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.7999999999999998 }, "nebius/nvidia/Llama-3.3-Nemotron-Super-49B-v1": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "novita/Sao10K/L3-8B-Stheno-v3.2": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.049999999999999996 }, "novita/baai/bge-m3": { cr: 0.001, cw: 0.01, i: 0.01, o: 0.01 }, "novita/baai/bge-reranker-v2-m3": { cr: 0.001, cw: 0.01, i: 0.01, o: 0.01 }, "novita/baichuan/baichuan-m2-32b": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.07 }, "novita/baidu/ernie-4.5-21B-a3b": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.28 }, "novita/baidu/ernie-4.5-21B-a3b-thinking": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.28 }, "novita/baidu/ernie-4.5-300b-a47b-paddle": { cr: 0.028000000000000004, cw: 0.28, i: 0.28, o: 1.1 }, "novita/baidu/ernie-4.5-vl-28b-a3b": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.56 }, "novita/baidu/ernie-4.5-vl-28b-a3b-thinking": { cr: 0.03900000000000001, cw: 0.39, i: 0.39, o: 0.39 }, "novita/baidu/ernie-4.5-vl-424b-a47b": { cr: 0.042, cw: 0.42, i: 0.42, o: 1.25 }, "novita/deepseek/deepseek-ocr": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.03 }, "novita/deepseek/deepseek-prover-v2-671b": { cr: 0.07, cw: 0.7, i: 0.7, o: 2.5 }, "novita/deepseek/deepseek-r1-0528": { cr: 0.35, cw: 0.7, i: 0.7, o: 2.5 }, "novita/deepseek/deepseek-r1-0528-qwen3-8b": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.09 }, "novita/deepseek/deepseek-r1-distill-llama-70b": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 0.7999999999999999 }, "novita/deepseek/deepseek-r1-distill-qwen-14b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "novita/deepseek/deepseek-r1-distill-qwen-32b": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.3 }, "novita/deepseek/deepseek-r1-turbo": { cr: 0.07, cw: 0.7, i: 0.7, o: 2.5 }, "novita/deepseek/deepseek-v3-0324": { cr: 0.135, cw: 0.27, i: 0.27, o: 1.12 }, "novita/deepseek/deepseek-v3-turbo": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.3 }, "novita/deepseek/deepseek-v3.1": { cr: 0.135, cw: 0.27, i: 0.27, o: 1 }, "novita/deepseek/deepseek-v3.1-terminus": { cr: 0.135, cw: 0.27, i: 0.27, o: 1 }, "novita/deepseek/deepseek-v3.2": { cr: 0.13449999999999998, cw: 0.26899999999999996, i: 0.26899999999999996, o: 0.39999999999999997 }, "novita/deepseek/deepseek-v3.2-exp": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 0.41 }, "novita/google/gemma-3-12b-it": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.09999999999999999 }, "novita/google/gemma-3-27b-it": { cr: 0.0119, cw: 0.119, i: 0.119, o: 0.19999999999999998 }, "novita/gryphe/mythomax-l2-13b": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.09 }, "novita/kwaipilot/kat-coder-pro": { cr: 0.06, cw: 0.3, i: 0.3, o: 1.2 }, "novita/meta-llama/llama-3-70b-instruct": { cr: 0.051, cw: 0.51, i: 0.51, o: 0.74 }, "novita/meta-llama/llama-3-8b-instruct": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.04 }, "novita/meta-llama/llama-3.1-8b-instruct": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.049999999999999996 }, "novita/meta-llama/llama-3.2-3b-instruct": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.049999999999999996 }, "novita/meta-llama/llama-3.3-70b-instruct": { cr: 0.013500000000000002, cw: 0.135, i: 0.135, o: 0.39999999999999997 }, "novita/meta-llama/llama-4-maverick-17b-128e-instruct-fp8": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 0.85 }, "novita/meta-llama/llama-4-scout-17b-16e-instruct": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0.59 }, "novita/microsoft/wizardlm-2-8x22b": { cr: 0.062, cw: 0.62, i: 0.62, o: 0.62 }, "novita/minimax/minimax-m2": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "novita/minimax/minimax-m2.1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "novita/minimaxai/minimax-m1-80k": { cr: 0.055, cw: 0.55, i: 0.55, o: 2.2 }, "novita/mistralai/mistral-nemo": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.16999999999999998 }, "novita/moonshotai/kimi-k2-0905": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "novita/moonshotai/kimi-k2-instruct": { cr: 0.05700000000000001, cw: 0.5700000000000001, i: 0.5700000000000001, o: 2.3 }, "novita/moonshotai/kimi-k2-thinking": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "novita/nousresearch/hermes-2-pro-llama-3-8b": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.14 }, "novita/openai/gpt-oss-120b": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.25 }, "novita/openai/gpt-oss-20b": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.15 }, "novita/paddlepaddle/paddleocr-vl": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.02 }, "novita/qwen/qwen-2.5-72b-instruct": { cr: 0.038000000000000006, cw: 0.38, i: 0.38, o: 0.39999999999999997 }, "novita/qwen/qwen-mt-plus": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.75 }, "novita/qwen/qwen2.5-7b-instruct": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.07 }, "novita/qwen/qwen2.5-vl-72b-instruct": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 0.7999999999999999 }, "novita/qwen/qwen3-235b-a22b-fp8": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.7999999999999999 }, "novita/qwen/qwen3-235b-a22b-instruct-2507": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.58 }, "novita/qwen/qwen3-235b-a22b-thinking-2507": { cr: 0.03, cw: 0.3, i: 0.3, o: 3 }, "novita/qwen/qwen3-30b-a3b-fp8": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.44999999999999996 }, "novita/qwen/qwen3-32b-fp8": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.44999999999999996 }, "novita/qwen/qwen3-4b-fp8": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.03 }, "novita/qwen/qwen3-8b-fp8": { cr: 0.0035000000000000005, cw: 0.035, i: 0.035, o: 0.13799999999999998 }, "novita/qwen/qwen3-coder-30b-a3b-instruct": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.27 }, "novita/qwen/qwen3-coder-480b-a35b-instruct": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.3 }, "novita/qwen/qwen3-embedding-0.6b": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0 }, "novita/qwen/qwen3-embedding-8b": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0 }, "novita/qwen/qwen3-max": { cr: 0.21100000000000002, cw: 2.1100000000000003, i: 2.1100000000000003, o: 8.450000000000001 }, "novita/qwen/qwen3-next-80b-a3b-instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.5 }, "novita/qwen/qwen3-next-80b-a3b-thinking": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.5 }, "novita/qwen/qwen3-omni-30b-a3b-instruct": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.9700000000000001 }, "novita/qwen/qwen3-omni-30b-a3b-thinking": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.9700000000000001 }, "novita/qwen/qwen3-reranker-8b": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.049999999999999996 }, "novita/qwen/qwen3-vl-235b-a22b-instruct": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.5 }, "novita/qwen/qwen3-vl-235b-a22b-thinking": { cr: 0.098, cw: 0.98, i: 0.98, o: 3.95 }, "novita/qwen/qwen3-vl-30b-a3b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.7 }, "novita/qwen/qwen3-vl-30b-a3b-thinking": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1 }, "novita/qwen/qwen3-vl-8b-instruct": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.5 }, "novita/sao10k/l3-70b-euryale-v2.1": { cr: 0.148, cw: 1.48, i: 1.48, o: 1.48 }, "novita/sao10k/l3-8b-lunaris": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.049999999999999996 }, "novita/sao10k/l31-70b-euryale-v2.2": { cr: 0.148, cw: 1.48, i: 1.48, o: 1.48 }, "novita/skywork/r1v4-lite": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "novita/xiaomimimo/mimo-v2-flash": { cr: 0.02, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "novita/zai-org/autoglm-phone-9b-multilingual": { cr: 0.0035000000000000005, cw: 0.035, i: 0.035, o: 0.13799999999999998 }, "novita/zai-org/glm-4.5": { cr: 0.11, cw: 0.6, i: 0.6, o: 2.2 }, "novita/zai-org/glm-4.5-air": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.85 }, "novita/zai-org/glm-4.5v": { cr: 0.11, cw: 0.6, i: 0.6, o: 1.7999999999999998 }, "novita/zai-org/glm-4.6": { cr: 0.11, cw: 0.55, i: 0.55, o: 2.2 }, "novita/zai-org/glm-4.6v": { cr: 0.055, cw: 0.3, i: 0.3, o: 0.8999999999999999 }, "novita/zai-org/glm-4.7": { cr: 0.11, cw: 0.6, i: 0.6, o: 2.2 }, "nscale/Qwen/QwQ-32B": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0.19999999999999998 }, "nscale/Qwen/Qwen2.5-Coder-32B-Instruct": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.19999999999999998 }, "nscale/Qwen/Qwen2.5-Coder-3B-Instruct": { cr: 0.001, cw: 0.01, i: 0.01, o: 0.03 }, "nscale/Qwen/Qwen2.5-Coder-7B-Instruct": { cr: 0.001, cw: 0.01, i: 0.01, o: 0.03 }, "nscale/deepseek-ai/DeepSeek-R1-Distill-Llama-70B": { cr: 0.037500000000000006, cw: 0.375, i: 0.375, o: 0.375 }, "nscale/deepseek-ai/DeepSeek-R1-Distill-Llama-8B": { cr: 0.0025, cw: 0.024999999999999998, i: 0.024999999999999998, o: 0.024999999999999998 }, "nscale/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.09 }, "nscale/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.07 }, "nscale/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "nscale/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "nscale/meta-llama/Llama-3.1-8B-Instruct": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.03 }, "nscale/meta-llama/Llama-3.3-70B-Instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "nscale/meta-llama/Llama-4-Scout-17B-16E-Instruct": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.29 }, "nscale/mistralai/mixtral-8x22b-instruct-v0.1": { cr: 0.06, cw: 0.6, i: 0.6, o: 0.6 }, "nvidia.nemotron-nano-12b-v2": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "nvidia.nemotron-nano-3-30b": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.24 }, "nvidia.nemotron-nano-9b-v2": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.22999999999999998 }, "nvidia.nemotron-super-3-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.65 }, "nvidia_nim/nvidia/llama-3_2-nv-rerankqa-1b-v2": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia_nim/nvidia/nv-rerankqa-mistral-4b-v3": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia_nim/ranking/nvidia/llama-3.2-nv-rerankqa-1b-v2": { cr: 0, cw: 0, i: 0, o: 0 }, o1: { cr: 7.5, cw: 15, i: 15, o: 60 }, "o1-2024-12-17": { cr: 7.5, cw: 15, i: 15, o: 60 }, "o1-pro": { cr: 14.999999999999998, cw: 150, i: 150, o: 600 }, "o1-pro-2025-03-19": { cr: 14.999999999999998, cw: 150, i: 150, o: 600 }, o3: { cr: 0.5, cw: 2, i: 2, o: 8 }, "o3-2025-04-16": { cr: 0.5, cw: 2, i: 2, o: 8 }, "o3-deep-research": { cr: 2.5, cw: 10, i: 10, o: 40 }, "o3-deep-research-2025-06-26": { cr: 2.5, cw: 10, i: 10, o: 40 }, "o3-mini": { cr: 0.55, cw: 1.1, i: 1.1, o: 4.4 }, "o3-mini-2025-01-31": { cr: 0.55, cw: 1.1, i: 1.1, o: 4.4 }, "o3-pro": { cr: 2.0000000000000004, cw: 20, i: 20, o: 80 }, "o3-pro-2025-06-10": { cr: 2.0000000000000004, cw: 20, i: 20, o: 80 }, "o4-mini": { cr: 0.275, cw: 1.1, i: 1.1, o: 4.4 }, "o4-mini-2025-04-16": { cr: 0.275, cw: 1.1, i: 1.1, o: 4.4 }, "o4-mini-deep-research": { cr: 0.5, cw: 2, i: 2, o: 8 }, "o4-mini-deep-research-2025-06-26": { cr: 0.5, cw: 2, i: 2, o: 8 }, "oci/cohere.command-a-03-2025": { cr: 0.15600000000000003, cw: 1.56, i: 1.56, o: 1.56 }, "oci/cohere.command-a-reasoning": { cr: 0.15600000000000003, cw: 1.56, i: 1.56, o: 1.56 }, "oci/cohere.command-a-reasoning-08-2025": { cr: 0.15600000000000003, cw: 1.56, i: 1.56, o: 1.56 }, "oci/cohere.command-a-translate-08-2025": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.09 }, "oci/cohere.command-a-vision": { cr: 0.15600000000000003, cw: 1.56, i: 1.56, o: 1.56 }, "oci/cohere.command-a-vision-07-2025": { cr: 0.15600000000000003, cw: 1.56, i: 1.56, o: 1.56 }, "oci/cohere.command-latest": { cr: 0.15600000000000003, cw: 1.56, i: 1.56, o: 1.56 }, "oci/cohere.command-plus-latest": { cr: 0.15600000000000003, cw: 1.56, i: 1.56, o: 1.56 }, "oci/cohere.command-r-08-2024": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "oci/cohere.command-r-plus-08-2024": { cr: 0.15600000000000003, cw: 1.56, i: 1.56, o: 1.56 }, "oci/cohere.embed-english-image-v3.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "oci/cohere.embed-english-light-image-v3.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "oci/cohere.embed-english-light-v3.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "oci/cohere.embed-english-v3.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "oci/cohere.embed-multilingual-light-image-v3.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "oci/cohere.embed-multilingual-light-v3.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "oci/cohere.embed-multilingual-v3.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "oci/cohere.embed-v4.0": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, "oci/google.gemini-2.5-flash": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "oci/google.gemini-2.5-flash-lite": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0.3 }, "oci/google.gemini-2.5-pro": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 10 }, "oci/meta.llama-3.1-405b-instruct": { cr: 1.068, cw: 10.68, i: 10.68, o: 10.68 }, "oci/meta.llama-3.1-70b-instruct": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "oci/meta.llama-3.1-8b-instruct": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "oci/meta.llama-3.2-11b-vision-instruct": { cr: 0.19999999999999998, cw: 2, i: 2, o: 2 }, "oci/meta.llama-3.2-90b-vision-instruct": { cr: 0.19999999999999998, cw: 2, i: 2, o: 2 }, "oci/meta.llama-3.3-70b-instruct": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "oci/meta.llama-3.3-70b-instruct-fp8-dynamic": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "oci/meta.llama-4-maverick-17b-128e-instruct-fp8": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "oci/meta.llama-4-scout-17b-16e-instruct": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "oci/openai.gpt-5": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 10 }, "oci/openai.gpt-5-mini": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "oci/openai.gpt-5-nano": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.39999999999999997 }, "oci/xai.grok-3": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "oci/xai.grok-3-fast": { cr: 0.5000000000000001, cw: 5, i: 5, o: 25 }, "oci/xai.grok-3-mini": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.5 }, "oci/xai.grok-3-mini-fast": { cr: 0.06, cw: 0.6, i: 0.6, o: 4 }, "oci/xai.grok-4": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "oci/xai.grok-4-fast": { cr: 0.5000000000000001, cw: 5, i: 5, o: 25 }, "oci/xai.grok-4.1-fast": { cr: 0.5000000000000001, cw: 5, i: 5, o: 25 }, "oci/xai.grok-4.20": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "oci/xai.grok-4.20-multi-agent": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "oci/xai.grok-code-fast-1": { cr: 0.5000000000000001, cw: 5, i: 5, o: 25 }, "ollama/codegeex4": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/codegemma": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/codellama": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/deepseek-coder-v2-base": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/deepseek-coder-v2-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/deepseek-coder-v2-lite-base": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/deepseek-coder-v2-lite-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/deepseek-v3.1:671b-cloud": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/gpt-oss:120b-cloud": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/gpt-oss:20b-cloud": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/internlm2_5-20b-chat": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/llama2": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/llama2-uncensored": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/llama2:13b": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/llama2:70b": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/llama2:7b": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/llama3": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/llama3.1": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/llama3:70b": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/llama3:8b": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/mistral": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/mistral-7B-Instruct-v0.1": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/mistral-7B-Instruct-v0.2": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/mistral-large-instruct-2407": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/mixtral-8x22B-Instruct-v0.1": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/mixtral-8x7B-Instruct-v0.1": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/orca-mini": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/qwen3-coder:480b-cloud": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/vicuna": { cr: 0, cw: 0, i: 0, o: 0 }, "omni-moderation-2024-09-26": { cr: 0, cw: 0, i: 0, o: 0 }, "omni-moderation-latest": { cr: 0, cw: 0, i: 0, o: 0 }, "openai.gpt-oss-120b-1:0": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "openai.gpt-oss-20b-1:0": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.3 }, "openai.gpt-oss-safeguard-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "openai.gpt-oss-safeguard-20b": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.19999999999999998 }, "openrouter/anthropic/claude-3-haiku": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.25 }, "openrouter/anthropic/claude-3.5-sonnet": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "openrouter/anthropic/claude-3.7-sonnet": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "openrouter/anthropic/claude-haiku-4.5": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "openrouter/anthropic/claude-opus-4": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "openrouter/anthropic/claude-opus-4.1": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "openrouter/anthropic/claude-opus-4.5": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "openrouter/anthropic/claude-opus-4.6": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "openrouter/anthropic/claude-opus-4.7": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "openrouter/anthropic/claude-sonnet-4": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "openrouter/anthropic/claude-sonnet-4.5": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "openrouter/anthropic/claude-sonnet-4.6": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "openrouter/bytedance/ui-tars-1.5-7b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.19999999999999998 }, "openrouter/deepseek/deepseek-chat": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.28 }, "openrouter/deepseek/deepseek-chat-v3-0324": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.28 }, "openrouter/deepseek/deepseek-chat-v3.1": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.7999999999999999 }, "openrouter/deepseek/deepseek-r1": { cr: 0.055, cw: 0.55, i: 0.55, o: 2.1900000000000004 }, "openrouter/deepseek/deepseek-r1-0528": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 2.1500000000000004 }, "openrouter/deepseek/deepseek-v3.2": { cr: 0.028000000000000004, cw: 0.28, i: 0.28, o: 0.39999999999999997 }, "openrouter/deepseek/deepseek-v3.2-exp": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.39999999999999997 }, "openrouter/google/gemini-2.0-flash-001": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "openrouter/google/gemini-2.5-flash": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "openrouter/google/gemini-2.5-pro": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 10 }, "openrouter/google/gemini-3-flash-preview": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 3 }, "openrouter/google/gemini-3-pro-preview": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, cwa: 0.25, i: 2, ia: 4, o: 12, oa: 18 }, "openrouter/google/gemini-3.1-flash-lite": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "openrouter/google/gemini-3.1-flash-lite-preview": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "openrouter/google/gemini-3.1-pro-preview": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, cwa: 0.25, i: 2, ia: 4, o: 12, oa: 18 }, "openrouter/gryphe/mythomax-l2-13b": { cr: 0.1875, cw: 1.875, i: 1.875, o: 1.875 }, "openrouter/mancer/weaver": { cr: 0.5625, cw: 5.625, i: 5.625, o: 5.625 }, "openrouter/meta-llama/llama-3-70b-instruct": { cr: 0.059, cw: 0.59, i: 0.59, o: 0.7899999999999999 }, "openrouter/minimax/minimax-m2": { cr: 0.0255, cw: 0.255, i: 0.255, o: 1.02 }, "openrouter/minimax/minimax-m2.1": { cr: 0, cw: 0, i: 0.27, o: 1.2 }, "openrouter/minimax/minimax-m2.5": { cr: 0.15, cw: 0.3, i: 0.3, o: 1.1 }, "openrouter/mistralai/devstral-2512": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "openrouter/mistralai/ministral-14b-2512": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "openrouter/mistralai/ministral-3b-2512": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "openrouter/mistralai/ministral-8b-2512": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "openrouter/mistralai/mistral-7b-instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.13 }, "openrouter/mistralai/mistral-large": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "openrouter/mistralai/mistral-large-2512": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "openrouter/mistralai/mistral-small-3.1-24b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "openrouter/mistralai/mistral-small-3.2-24b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "openrouter/mistralai/mixtral-8x22b-instruct": { cr: 0.065, cw: 0.65, i: 0.65, o: 0.65 }, "openrouter/moonshotai/kimi-k2.5": { cr: 0.09999999999999999, cw: 0.6, i: 0.6, o: 3 }, "openrouter/openai/gpt-3.5-turbo": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 2 }, "openrouter/openai/gpt-3.5-turbo-16k": { cr: 0.30000000000000004, cw: 3, i: 3, o: 4 }, "openrouter/openai/gpt-4": { cr: 3, cw: 30, i: 30, o: 60 }, "openrouter/openai/gpt-4.1": { cr: 0.5, cw: 2, i: 2, o: 8 }, "openrouter/openai/gpt-4.1-mini": { cr: 0.09999999999999999, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "openrouter/openai/gpt-4.1-nano": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "openrouter/openai/gpt-4o": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "openrouter/openai/gpt-4o-2024-05-13": { cr: 0.5000000000000001, cw: 5, i: 5, o: 15 }, "openrouter/openai/gpt-5": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "openrouter/openai/gpt-5-chat": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "openrouter/openai/gpt-5-codex": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "openrouter/openai/gpt-5-mini": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "openrouter/openai/gpt-5-nano": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.39999999999999997 }, "openrouter/openai/gpt-5.1-codex-max": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "openrouter/openai/gpt-5.2": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "openrouter/openai/gpt-5.2-chat": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "openrouter/openai/gpt-5.2-codex": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "openrouter/openai/gpt-5.2-pro": { cr: 2.0999999999999996, cw: 21, i: 21, o: 168 }, "openrouter/openai/gpt-oss-120b": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0.7999999999999999 }, "openrouter/openai/gpt-oss-20b": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.09999999999999999 }, "openrouter/openai/o1": { cr: 7.5, cw: 15, i: 15, o: 60 }, "openrouter/openai/o3-mini": { cr: 0.11, cw: 1.1, i: 1.1, o: 4.4 }, "openrouter/openai/o3-mini-high": { cr: 0.11, cw: 1.1, i: 1.1, o: 4.4 }, "openrouter/openrouter/auto": { cr: 0, cw: 0, i: 0, o: 0 }, "openrouter/openrouter/bodybuilder": { cr: 0, cw: 0, i: 0, o: 0 }, "openrouter/openrouter/free": { cr: 0, cw: 0, i: 0, o: 0 }, "openrouter/qwen/qwen-2.5-coder-32b-instruct": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0.18 }, "openrouter/qwen/qwen-vl-plus": { cr: 0.021, cw: 0.21, i: 0.21, o: 0.63 }, "openrouter/qwen/qwen3-235b-a22b-2507": { cr: 0.0071, cw: 0.071, i: 0.071, o: 0.09999999999999999 }, "openrouter/qwen/qwen3-235b-a22b-thinking-2507": { cr: 0.011000000000000001, cw: 0.11, i: 0.11, o: 0.6 }, "openrouter/qwen/qwen3-coder": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.95 }, "openrouter/qwen/qwen3-coder-plus": { cr: 0.09999999999999999, cw: 1, i: 1, o: 5 }, "openrouter/qwen/qwen3.5-122b-a10b": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "openrouter/qwen/qwen3.5-27b": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.4 }, "openrouter/qwen/qwen3.5-35b-a3b": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "openrouter/qwen/qwen3.5-397b-a17b": { cr: 0.06, cw: 0.6, i: 0.6, o: 3.5999999999999996 }, "openrouter/qwen/qwen3.5-flash-02-23": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "openrouter/qwen/qwen3.5-plus-02-15": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2.4 }, "openrouter/qwen/qwen3.6-plus": { cr: 0.0325, cw: 0.325, i: 0.325, o: 1.95 }, "openrouter/switchpoint/router": { cr: 0.085, cw: 0.85, i: 0.85, o: 3.4 }, "openrouter/undi95/remm-slerp-l2-13b": { cr: 0.1875, cw: 1.875, i: 1.875, o: 1.875 }, "openrouter/x-ai/grok-4": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "openrouter/xiaomi/mimo-v2-flash": { cr: 0.01, cw: 0, i: 0.09999999999999999, o: 0.3 }, "openrouter/xiaomi/mimo-v2.5": { cr: 0.08, cw: 0, i: 0.39999999999999997, o: 2 }, "openrouter/xiaomi/mimo-v2.5-pro": { cr: 0.19999999999999998, cw: 0, i: 1, o: 3 }, "openrouter/z-ai/glm-4.6": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.75 }, "openrouter/z-ai/glm-4.6:exacto": { cr: 0.045, cw: 0.44999999999999996, i: 0.44999999999999996, o: 1.9 }, "openrouter/z-ai/glm-4.7": { cr: 0, cw: 0, i: 0.39999999999999997, o: 1.5 }, "openrouter/z-ai/glm-4.7-flash": { cr: 0, cw: 0, i: 0.07, o: 0.39999999999999997 }, "openrouter/z-ai/glm-5": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 2.56 }, "openrouter/z-ai/glm-5.1": { cr: 0.5249999999999999, cw: 0, i: 1.0499999999999998, o: 3.5 }, "ovhcloud/DeepSeek-R1-Distill-Llama-70B": { cr: 0.067, cw: 0.67, i: 0.67, o: 0.67 }, "ovhcloud/Llama-3.1-8B-Instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "ovhcloud/Meta-Llama-3_1-70B-Instruct": { cr: 0.067, cw: 0.67, i: 0.67, o: 0.67 }, "ovhcloud/Meta-Llama-3_3-70B-Instruct": { cr: 0.067, cw: 0.67, i: 0.67, o: 0.67 }, "ovhcloud/Mistral-7B-Instruct-v0.3": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "ovhcloud/Mistral-Nemo-Instruct-2407": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.13 }, "ovhcloud/Mistral-Small-3.2-24B-Instruct-2506": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.28 }, "ovhcloud/Mixtral-8x7B-Instruct-v0.1": { cr: 0.06300000000000001, cw: 0.63, i: 0.63, o: 0.63 }, "ovhcloud/Qwen2.5-Coder-32B-Instruct": { cr: 0.08700000000000001, cw: 0.87, i: 0.87, o: 0.87 }, "ovhcloud/Qwen2.5-VL-72B-Instruct": { cr: 0.09100000000000001, cw: 0.9099999999999999, i: 0.9099999999999999, o: 0.9099999999999999 }, "ovhcloud/Qwen3-32B": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.22999999999999998 }, "ovhcloud/gpt-oss-120b": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.39999999999999997 }, "ovhcloud/gpt-oss-20b": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.15 }, "ovhcloud/llava-v1.6-mistral-7b-hf": { cr: 0.028999999999999998, cw: 0.29, i: 0.29, o: 0.29 }, "ovhcloud/mamba-codestral-7B-v0.1": { cr: 0.019000000000000003, cw: 0.19, i: 0.19, o: 0.19 }, "palm/chat-bison": { cr: 0.012499999999999999, cw: 0.125, i: 0.125, o: 0.125 }, "palm/chat-bison-001": { cr: 0.012499999999999999, cw: 0.125, i: 0.125, o: 0.125 }, "palm/text-bison": { cr: 0.012499999999999999, cw: 0.125, i: 0.125, o: 0.125 }, "palm/text-bison-001": { cr: 0.012499999999999999, cw: 0.125, i: 0.125, o: 0.125 }, "palm/text-bison-safety-off": { cr: 0.012499999999999999, cw: 0.125, i: 0.125, o: 0.125 }, "palm/text-bison-safety-recitation-off": { cr: 0.012499999999999999, cw: 0.125, i: 0.125, o: 0.125 }, "perplexity/codellama-34b-instruct": { cr: 0.035, cw: 0.35, i: 0.35, o: 1.4 }, "perplexity/codellama-70b-instruct": { cr: 0.07, cw: 0.7, i: 0.7, o: 2.8 }, "perplexity/llama-2-70b-chat": { cr: 0.07, cw: 0.7, i: 0.7, o: 2.8 }, "perplexity/llama-3.1-70b-instruct": { cr: 0.09999999999999999, cw: 1, i: 1, o: 1 }, "perplexity/llama-3.1-8b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "perplexity/mistral-7b-instruct": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.28 }, "perplexity/mixtral-8x7b-instruct": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.28 }, "perplexity/pplx-70b-chat": { cr: 0.07, cw: 0.7, i: 0.7, o: 2.8 }, "perplexity/pplx-70b-online": { cr: 0, cw: 0, i: 0, o: 2.8 }, "perplexity/pplx-7b-chat": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.28 }, "perplexity/pplx-7b-online": { cr: 0, cw: 0, i: 0, o: 0.28 }, "perplexity/pplx-embed-v1-0.6b": { cr: 0.0004000000000000001, cw: 0.004, i: 0.004, o: 0 }, "perplexity/pplx-embed-v1-4b": { cr: 0.003, cw: 0.03, i: 0.03, o: 0 }, "perplexity/sonar": { cr: 0.09999999999999999, cw: 1, i: 1, o: 1 }, "perplexity/sonar-deep-research": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "perplexity/sonar-medium-chat": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.7999999999999998 }, "perplexity/sonar-medium-online": { cr: 0, cw: 0, i: 0, o: 1.7999999999999998 }, "perplexity/sonar-pro": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "perplexity/sonar-reasoning": { cr: 0.09999999999999999, cw: 1, i: 1, o: 5 }, "perplexity/sonar-reasoning-pro": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "perplexity/sonar-small-chat": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.28 }, "perplexity/sonar-small-online": { cr: 0, cw: 0, i: 0, o: 0.28 }, "pinstripes/ps/deepseek-v4-flash": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.19999999999999998 }, "pinstripes/ps/glm-4.5-air": { cr: 0.012499999999999999, cw: 0.125, i: 0.125, o: 0.44999999999999996 }, "pinstripes/ps/minimax-m2.7": { cr: 0.0255, cw: 0.255, i: 0.255, o: 0.55 }, "pinstripes/ps/qwen3-30b-a3b": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.19999999999999998 }, "pinstripes/ps/qwen3-coder-30b-a3b": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.6 }, "pinstripes/ps/qwen3.6-35b-a3b": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.44999999999999996 }, "publicai/BSC-LT/ALIA-40b-instruct_Q8_0": { cr: 0, cw: 0, i: 0, o: 0 }, "publicai/BSC-LT/salamandra-7b-instruct-tools-16k": { cr: 0, cw: 0, i: 0, o: 0 }, "publicai/aisingapore/Gemma-SEA-LION-v4-27B-IT": { cr: 0, cw: 0, i: 0, o: 0 }, "publicai/aisingapore/Qwen-SEA-LION-v4-32B-IT": { cr: 0, cw: 0, i: 0, o: 0 }, "publicai/allenai/Olmo-3-32B-Think": { cr: 0, cw: 0, i: 0, o: 0 }, "publicai/allenai/Olmo-3-7B-Instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "publicai/allenai/Olmo-3-7B-Think": { cr: 0, cw: 0, i: 0, o: 0 }, "publicai/swiss-ai/apertus-70b-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "publicai/swiss-ai/apertus-8b-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "qwen.qwen3-235b-a22b-2507-v1:0": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.88 }, "qwen.qwen3-32b-v1:0": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "qwen.qwen3-coder-30b-a3b-v1:0": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "qwen.qwen3-coder-480b-a35b-v1:0": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 1.7999999999999998 }, "qwen.qwen3-coder-next": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.2 }, "qwen.qwen3-next-80b-a3b": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.2 }, "qwen.qwen3-vl-235b-a22b": { cr: 0.053000000000000005, cw: 0.53, i: 0.53, o: 2.66 }, "replicate/anthropic/claude-3.5-haiku": { cr: 0.09999999999999999, cw: 1, i: 1, o: 5 }, "replicate/anthropic/claude-3.5-sonnet": { cr: 0.375, cw: 3.75, i: 3.75, o: 18.75 }, "replicate/anthropic/claude-3.7-sonnet": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "replicate/anthropic/claude-4-sonnet": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "replicate/anthropic/claude-4.5-haiku": { cr: 0.09999999999999999, cw: 1, i: 1, o: 5 }, "replicate/anthropic/claude-4.5-sonnet": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "replicate/deepseek-ai/deepseek-r1": { cr: 0.375, cw: 3.75, i: 3.75, o: 10 }, "replicate/deepseek-ai/deepseek-v3": { cr: 0.14500000000000002, cw: 1.4500000000000002, i: 1.4500000000000002, o: 1.4500000000000002 }, "replicate/deepseek-ai/deepseek-v3.1": { cr: 0.06720000000000001, cw: 0.6719999999999999, i: 0.6719999999999999, o: 2.016 }, "replicate/google/gemini-2.5-flash": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 2.5 }, "replicate/google/gemini-3-pro": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "replicate/ibm-granite/granite-3.3-8b-instruct": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.25 }, "replicate/meta/llama-2-13b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.5 }, "replicate/meta/llama-2-13b-chat": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.5 }, "replicate/meta/llama-2-70b": { cr: 0.065, cw: 0.65, i: 0.65, o: 2.75 }, "replicate/meta/llama-2-70b-chat": { cr: 0.065, cw: 0.65, i: 0.65, o: 2.75 }, "replicate/meta/llama-2-7b": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.25 }, "replicate/meta/llama-2-7b-chat": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.25 }, "replicate/meta/llama-3-70b": { cr: 0.065, cw: 0.65, i: 0.65, o: 2.75 }, "replicate/meta/llama-3-70b-instruct": { cr: 0.065, cw: 0.65, i: 0.65, o: 2.75 }, "replicate/meta/llama-3-8b": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.25 }, "replicate/meta/llama-3-8b-instruct": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.25 }, "replicate/mistralai/mistral-7b-instruct-v0.2": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.25 }, "replicate/mistralai/mistral-7b-v0.1": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.25 }, "replicate/mistralai/mixtral-8x7b-instruct-v0.1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1 }, "replicate/openai/gpt-4.1": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "replicate/openai/gpt-4.1-mini": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "replicate/openai/gpt-4.1-nano": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "replicate/openai/gpt-4o": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "replicate/openai/gpt-4o-mini": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "replicate/openai/gpt-5": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 10 }, "replicate/openai/gpt-5-mini": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "replicate/openai/gpt-5-nano": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.39999999999999997 }, "replicate/openai/gpt-oss-120b": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0.72 }, "replicate/openai/o1": { cr: 1.5, cw: 15, i: 15, o: 60 }, "replicate/openai/o1-mini": { cr: 0.11, cw: 1.1, i: 1.1, o: 4.4 }, "replicate/openai/o4-mini": { cr: 0.09999999999999999, cw: 1, i: 1, o: 4 }, "replicate/qwen/qwen3-235b-a22b-instruct-2507": { cr: 0.0264, cw: 0.26399999999999996, i: 0.26399999999999996, o: 1.06 }, "replicate/xai/grok-4": { cr: 0.72, cw: 7.199999999999999, i: 7.199999999999999, o: 36 }, "replicateopenai/gpt-oss-20b": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.36 }, "rerank-english-v2.0": { cr: 0, cw: 0, i: 0, o: 0 }, "rerank-english-v3.0": { cr: 0, cw: 0, i: 0, o: 0 }, "rerank-multilingual-v2.0": { cr: 0, cw: 0, i: 0, o: 0 }, "rerank-multilingual-v3.0": { cr: 0, cw: 0, i: 0, o: 0 }, "rerank-v3.5": { cr: 0, cw: 0, i: 0, o: 0 }, "sagemaker/meta-textgeneration-llama-2-13b": { cr: 0, cw: 0, i: 0, o: 0 }, "sagemaker/meta-textgeneration-llama-2-13b-f": { cr: 0, cw: 0, i: 0, o: 0 }, "sagemaker/meta-textgeneration-llama-2-70b": { cr: 0, cw: 0, i: 0, o: 0 }, "sagemaker/meta-textgeneration-llama-2-70b-b-f": { cr: 0, cw: 0, i: 0, o: 0 }, "sagemaker/meta-textgeneration-llama-2-7b": { cr: 0, cw: 0, i: 0, o: 0 }, "sagemaker/meta-textgeneration-llama-2-7b-f": { cr: 0, cw: 0, i: 0, o: 0 }, "sambanova/DeepSeek-R1": { cr: 0.5000000000000001, cw: 5, i: 5, o: 7 }, "sambanova/DeepSeek-R1-Distill-Llama-70B": { cr: 0.07, cw: 0.7, i: 0.7, o: 1.4 }, "sambanova/DeepSeek-V3-0324": { cr: 0.30000000000000004, cw: 3, i: 3, o: 4.5 }, "sambanova/DeepSeek-V3.1": { cr: 0.30000000000000004, cw: 3, i: 3, o: 4.5 }, "sambanova/DeepSeek-V3.2": { cr: 0.30000000000000004, cw: 3, i: 3, o: 4.5 }, "sambanova/Llama-4-Maverick-17B-128E-Instruct": { cr: 0.06300000000000001, cw: 0.63, i: 0.63, o: 1.7999999999999998 }, "sambanova/Llama-4-Scout-17B-16E-Instruct": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 0.7 }, "sambanova/Meta-Llama-3.1-405B-Instruct": { cr: 0.5000000000000001, cw: 5, i: 5, o: 10 }, "sambanova/Meta-Llama-3.1-8B-Instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.19999999999999998 }, "sambanova/Meta-Llama-3.2-1B-Instruct": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.08 }, "sambanova/Meta-Llama-3.2-3B-Instruct": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.16 }, "sambanova/Meta-Llama-3.3-70B-Instruct": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.2 }, "sambanova/Meta-Llama-Guard-3-8B": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.3 }, "sambanova/MiniMax-M2.7": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "sambanova/QwQ-32B": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1 }, "sambanova/Qwen2-Audio-7B-Instruct": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 100 }, "sambanova/Qwen3-32B": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 0.7999999999999999 }, "sambanova/gemma-4-31B-it": { cr: 0.038000000000000006, cw: 0.38, i: 0.38, o: 1.15 }, "sambanova/gpt-oss-120b": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.59 }, sample_spec: { cr: 0, cw: 0, i: 0, o: 0 }, "sarvam/sarvam-m": { cr: 0, cw: 0, i: 0, o: 0 }, "scaleway/BAAI/bge-multilingual-gemma2": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "scaleway/google/gemma-3-27b-it": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.5 }, "scaleway/google/gemma-4-26b-a4b-it": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.5 }, "scaleway/hcompany/holo2-30b-a3b": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.7 }, "scaleway/meta/llama-3.3-70b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "scaleway/mistralai/devstral-2-123b-instruct-2512": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "scaleway/mistralai/mistral-medium-3.5-128b": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 7.5 }, "scaleway/mistralai/mistral-small-3.2-24b-instruct-2506": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.35 }, "scaleway/mistralai/pixtral-12b-2409": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "scaleway/mistralai/voxtral-small-24b-2507": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.35 }, "scaleway/openai/gpt-oss-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "scaleway/qwen/qwen3-235b-a22b-instruct-2507": { cr: 0.07500000000000001, cw: 0.75, i: 0.75, o: 2.25 }, "scaleway/qwen/qwen3-coder-30b-a3b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.7999999999999999 }, "scaleway/qwen/qwen3-embedding-8b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "scaleway/qwen/qwen3.5-397b-a17b": { cr: 0.06, cw: 0.6, i: 0.6, o: 3.5999999999999996 }, "scaleway/qwen/qwen3.6-35b-a3b": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "snowflake/claude-3-5-sonnet": { cr: 0.3, cw: 3, i: 3, o: 15 }, "snowflake/claude-3-7-sonnet": { cr: 0.3, cw: 3, i: 3, o: 15 }, "snowflake/claude-4-opus": { cr: 0.5, cw: 5, i: 5, o: 25 }, "snowflake/claude-4-sonnet": { cr: 0.3, cw: 3, i: 3, o: 15 }, "snowflake/claude-haiku-4-5": { cr: 0.09999999999999999, cw: 1, i: 1, o: 5 }, "snowflake/claude-sonnet-4-5": { cr: 0.3, cw: 3, i: 3, o: 15 }, "snowflake/claude-sonnet-4-6": { cr: 0.3, cw: 3, i: 3, o: 15 }, "snowflake/deepseek-r1": { cr: 0.135, cw: 1.35, i: 1.35, o: 5.4 }, "snowflake/llama3.1-405b": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "snowflake/llama3.1-70b": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "snowflake/llama3.1-8b": { cr: 0.024, cw: 0.24, i: 0.24, o: 0.24 }, "snowflake/llama3.3-70b": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "snowflake/llama4-maverick": { cr: 0.024, cw: 0.24, i: 0.24, o: 0.9700000000000001 }, "snowflake/mistral-large2": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "snowflake/openai-gpt-4.1": { cr: 0.5, cw: 2, i: 2, o: 8 }, "snowflake/openai-gpt-5": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "snowflake/openai-gpt-5-mini": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "snowflake/openai-gpt-5-nano": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "snowflake/snowflake-arctic-embed-l-v2.0": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0 }, "snowflake/snowflake-arctic-embed-m-v2.0": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0 }, "snowflake/snowflake-llama-3.3-70b": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "tensormesh/MiniMaxAI/MiniMax-M2.5": { cr: 0, cw: 0.3, i: 0.3, o: 1.2 }, "tensormesh/Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8": { cr: 0, cw: 0.44999999999999996, i: 0.44999999999999996, o: 1.7999999999999998 }, "tensormesh/Qwen/Qwen3.5-397B-A17B-FP8": { cr: 0, cw: 0.6, i: 0.6, o: 3.5999999999999996 }, "tensormesh/Qwen/Qwen3.6-27B-FP8": { cr: 0, cw: 0.32, i: 0.32, o: 3.1999999999999997 }, "tensormesh/deepseek-ai/DeepSeek-V4-Flash": { cr: 0, cw: 0.14, i: 0.14, o: 0.28 }, "tensormesh/google/gemma-4-31B-it": { cr: 0, cw: 0.14, i: 0.14, o: 0.56 }, "tensormesh/lukealonso/GLM-5.1-NVFP4-MTP": { cr: 0, cw: 1.4, i: 1.4, o: 4.4 }, "tensormesh/moonshotai/Kimi-K2.6": { cr: 0, cw: 0.96, i: 0.96, o: 4 }, "tensormesh/openai/gpt-oss-120b": { cr: 0, cw: 0.15, i: 0.15, o: 0.6 }, "tensormesh/openai/gpt-oss-20b": { cr: 0, cw: 0.07, i: 0.07, o: 0.28 }, "text-completion-codestral/codestral-2405": { cr: 0, cw: 0, i: 0, o: 0 }, "text-completion-codestral/codestral-latest": { cr: 0, cw: 0, i: 0, o: 0 }, "text-completion-inception/mercury-edit-2": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.75 }, "text-embedding-004": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "text-embedding-005": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "text-embedding-3-large": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0 }, "text-embedding-3-small": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "text-embedding-ada-002": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "text-embedding-ada-002-v2": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "text-embedding-large-exp-03-07": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "text-embedding-preview-0409": { cr: 0.000625, cw: 0.0062499999999999995, i: 0.0062499999999999995, o: 0 }, "text-moderation-007": { cr: 0, cw: 0, i: 0, o: 0 }, "text-moderation-latest": { cr: 0, cw: 0, i: 0, o: 0 }, "text-moderation-stable": { cr: 0, cw: 0, i: 0, o: 0 }, "text-multilingual-embedding-002": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "text-unicorn": { cr: 1.0000000000000002, cw: 10, i: 10, o: 28 }, "text-unicorn@001": { cr: 1.0000000000000002, cw: 10, i: 10, o: 28 }, "together-ai-21.1b-41b": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 0.7999999999999999 }, "together-ai-4.1b-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "together-ai-41.1b-80b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "together-ai-8.1b-21b": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.3 }, "together-ai-81.1b-110b": { cr: 0.18, cw: 1.7999999999999998, i: 1.7999999999999998, o: 1.7999999999999998 }, "together-ai-embedding-151m-to-350m": { cr: 0.0016000000000000003, cw: 0.016, i: 0.016, o: 0 }, "together-ai-embedding-up-to-150m": { cr: 0.0008000000000000001, cw: 0.008, i: 0.008, o: 0 }, "together-ai-up-to-4b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "together_ai/BAAI/bge-base-en-v1.5": { cr: 0.0008000000000000001, cw: 0.008, i: 0.008, o: 0 }, "together_ai/Qwen/Qwen3-235B-A22B-Instruct-2507-tput": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 6 }, "together_ai/Qwen/Qwen3-235B-A22B-Thinking-2507": { cr: 0.065, cw: 0.65, i: 0.65, o: 3 }, "together_ai/Qwen/Qwen3-235B-A22B-fp8-tput": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "together_ai/Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8": { cr: 0.19999999999999998, cw: 2, i: 2, o: 2 }, "together_ai/Qwen/Qwen3-Next-80B-A3B-Instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.5 }, "together_ai/Qwen/Qwen3-Next-80B-A3B-Thinking": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.5 }, "together_ai/Qwen/Qwen3.5-397B-A17B": { cr: 0.06, cw: 0.6, i: 0.6, o: 3.5999999999999996 }, "together_ai/baai/bge-base-en-v1.5": { cr: 0.0008000000000000001, cw: 0.008, i: 0.008, o: 0 }, "together_ai/deepseek-ai/DeepSeek-R1": { cr: 0.30000000000000004, cw: 3, i: 3, o: 7 }, "together_ai/deepseek-ai/DeepSeek-R1-0528-tput": { cr: 0.055, cw: 0.55, i: 0.55, o: 2.1900000000000004 }, "together_ai/deepseek-ai/DeepSeek-V3": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 1.25 }, "together_ai/deepseek-ai/DeepSeek-V3.1": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.7 }, "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo": { cr: 0.08800000000000001, cw: 0.88, i: 0.88, o: 0.88 }, "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo-Free": { cr: 0, cw: 0, i: 0, o: 0 }, "together_ai/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 0.85 }, "together_ai/meta-llama/Llama-4-Scout-17B-16E-Instruct": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0.59 }, "together_ai/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo": { cr: 0.35000000000000003, cw: 3.5, i: 3.5, o: 3.5 }, "together_ai/meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo": { cr: 0.08800000000000001, cw: 0.88, i: 0.88, o: 0.88 }, "together_ai/meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0.18 }, "together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1": { cr: 0.06, cw: 0.6, i: 0.6, o: 0.6 }, "together_ai/moonshotai/Kimi-K2-Instruct": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "together_ai/moonshotai/Kimi-K2-Instruct-0905": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "together_ai/moonshotai/Kimi-K2.5": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 2.8 }, "together_ai/openai/gpt-oss-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "together_ai/openai/gpt-oss-20b": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.19999999999999998 }, "together_ai/zai-org/GLM-4.5-Air-FP8": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.1 }, "together_ai/zai-org/GLM-4.6": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.2 }, "together_ai/zai-org/GLM-4.7": { cr: 0.045, cw: 0.44999999999999996, i: 0.44999999999999996, o: 2 }, "twelvelabs.marengo-embed-2-7-v1:0": { cr: 7, cw: 70, i: 70, o: 0 }, "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.36, cra: 0.72, cw: 4.5, cwa: 9, i: 3.5999999999999996, ia: 7.199999999999999, o: 18, oa: 27 }, "us.amazon.nova-2-lite-v1:0": { cr: 0.0825, cw: 0.33, i: 0.33, o: 2.75 }, "us.amazon.nova-2-pro-preview-20251202-v1:0": { cr: 0.546875, cw: 2.1875, i: 2.1875, o: 17.5 }, "us.amazon.nova-lite-v1:0": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.24 }, "us.amazon.nova-micro-v1:0": { cr: 0.0035000000000000005, cw: 0.035, i: 0.035, o: 0.14 }, "us.amazon.nova-premier-v1:0": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 12.5 }, "us.amazon.nova-pro-v1:0": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 3.1999999999999997 }, "us.anthropic.claude-3-5-haiku-20241022-v1:0": { cr: 0.08, cw: 1, i: 0.7999999999999999, o: 4 }, "us.anthropic.claude-3-5-sonnet-20240620-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "us.anthropic.claude-3-5-sonnet-20241022-v2:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "us.anthropic.claude-3-7-sonnet-20250219-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "us.anthropic.claude-3-haiku-20240307-v1:0": { cr: 0.024999999999999998, cw: 0.3125, i: 0.25, o: 1.25 }, "us.anthropic.claude-3-opus-20240229-v1:0": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "us.anthropic.claude-3-sonnet-20240229-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "us.anthropic.claude-fable-5": { cr: 1.1, cw: 13.75, i: 11, o: 55 }, "us.anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.11, cw: 1.375, i: 1.1, o: 5.5 }, "us.anthropic.claude-opus-4-1-20250805-v1:0": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "us.anthropic.claude-opus-4-20250514-v1:0": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "us.anthropic.claude-opus-4-5-20251101-v1:0": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "us.anthropic.claude-opus-4-6-v1": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "us.anthropic.claude-opus-4-7": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "us.anthropic.claude-opus-4-8": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "us.anthropic.claude-sonnet-4-20250514-v1:0": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "us.anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.33, cra: 0.66, cw: 4.125, cwa: 8.25, i: 3.3000000000000003, ia: 6.6000000000000005, o: 16.5, oa: 24.75 }, "us.anthropic.claude-sonnet-4-6": { cr: 0.33, cw: 4.125, i: 3.3000000000000003, o: 16.5 }, "us.anthropic.claude-sonnet-5": { cr: 0.33, cw: 4.125, i: 3.3000000000000003, o: 16.5 }, "us.deepseek.r1-v1:0": { cr: 0.135, cw: 1.35, i: 1.35, o: 5.4 }, "us.deepseek.v3.2": { cr: 0.062, cw: 0.62, i: 0.62, o: 1.85 }, "us.meta.llama3-1-405b-instruct-v1:0": { cr: 0.532, cw: 5.32, i: 5.32, o: 16 }, "us.meta.llama3-1-70b-instruct-v1:0": { cr: 0.09900000000000002, cw: 0.9900000000000001, i: 0.9900000000000001, o: 0.9900000000000001 }, "us.meta.llama3-1-8b-instruct-v1:0": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.22 }, "us.meta.llama3-2-11b-instruct-v1:0": { cr: 0.035, cw: 0.35, i: 0.35, o: 0.35 }, "us.meta.llama3-2-1b-instruct-v1:0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "us.meta.llama3-2-3b-instruct-v1:0": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "us.meta.llama3-2-90b-instruct-v1:0": { cr: 0.19999999999999998, cw: 2, i: 2, o: 2 }, "us.meta.llama3-3-70b-instruct-v1:0": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "us.meta.llama4-maverick-17b-instruct-v1:0": { cr: 0.024, cw: 0.24, i: 0.24, o: 0.9700000000000001 }, "us.meta.llama4-scout-17b-instruct-v1:0": { cr: 0.017, cw: 0.16999999999999998, i: 0.16999999999999998, o: 0.66 }, "us.mistral.pixtral-large-2502-v1:0": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "us.twelvelabs.marengo-embed-2-7-v1:0": { cr: 7, cw: 70, i: 70, o: 0 }, "us.writer.palmyra-x4-v1:0": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "us.writer.palmyra-x5-v1:0": { cr: 0.06, cw: 0.6, i: 0.6, o: 6 }, "v0/v0-1.0-md": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "v0/v0-1.5-lg": { cr: 1.5, cw: 15, i: 15, o: 75 }, "v0/v0-1.5-md": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "vercel_ai_gateway/alibaba/qwen-3-14b": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.24 }, "vercel_ai_gateway/alibaba/qwen-3-235b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "vercel_ai_gateway/alibaba/qwen-3-30b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "vercel_ai_gateway/alibaba/qwen-3-32b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "vercel_ai_gateway/alibaba/qwen3-coder": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "vercel_ai_gateway/amazon/nova-lite": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.24 }, "vercel_ai_gateway/amazon/nova-micro": { cr: 0.0035000000000000005, cw: 0.035, i: 0.035, o: 0.14 }, "vercel_ai_gateway/amazon/nova-pro": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 3.1999999999999997 }, "vercel_ai_gateway/amazon/titan-embed-text-v2": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "vercel_ai_gateway/anthropic/claude-3-5-sonnet": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vercel_ai_gateway/anthropic/claude-3-5-sonnet-20241022": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vercel_ai_gateway/anthropic/claude-3-7-sonnet": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vercel_ai_gateway/anthropic/claude-3-haiku": { cr: 0.03, cw: 0.3, i: 0.25, o: 1.25 }, "vercel_ai_gateway/anthropic/claude-3-opus": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "vercel_ai_gateway/anthropic/claude-3.5-haiku": { cr: 0.08, cw: 1, i: 0.7999999999999999, o: 4 }, "vercel_ai_gateway/anthropic/claude-3.5-sonnet": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vercel_ai_gateway/anthropic/claude-3.7-sonnet": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vercel_ai_gateway/anthropic/claude-4-opus": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "vercel_ai_gateway/anthropic/claude-4-sonnet": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vercel_ai_gateway/anthropic/claude-haiku-4.5": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "vercel_ai_gateway/anthropic/claude-opus-4": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "vercel_ai_gateway/anthropic/claude-opus-4.1": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "vercel_ai_gateway/anthropic/claude-opus-4.5": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "vercel_ai_gateway/anthropic/claude-opus-4.6": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "vercel_ai_gateway/anthropic/claude-sonnet-4": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vercel_ai_gateway/anthropic/claude-sonnet-4.5": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vercel_ai_gateway/cohere/command-a": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "vercel_ai_gateway/cohere/command-r": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "vercel_ai_gateway/cohere/command-r-plus": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "vercel_ai_gateway/cohere/embed-v4.0": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, "vercel_ai_gateway/deepseek/deepseek-r1": { cr: 0.055, cw: 0.55, i: 0.55, o: 2.1900000000000004 }, "vercel_ai_gateway/deepseek/deepseek-r1-distill-llama-70b": { cr: 0.07500000000000001, cw: 0.75, i: 0.75, o: 0.9900000000000001 }, "vercel_ai_gateway/deepseek/deepseek-v3": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "vercel_ai_gateway/google/gemini-2.0-flash": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "vercel_ai_gateway/google/gemini-2.0-flash-lite": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0.3 }, "vercel_ai_gateway/google/gemini-2.5-flash": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "vercel_ai_gateway/google/gemini-2.5-pro": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "vercel_ai_gateway/google/gemini-embedding-001": { cr: 0.015, cw: 0.15, i: 0.15, o: 0 }, "vercel_ai_gateway/google/gemma-2-9b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "vercel_ai_gateway/google/text-embedding-005": { cr: 0.0025, cw: 0.024999999999999998, i: 0.024999999999999998, o: 0 }, "vercel_ai_gateway/google/text-multilingual-embedding-002": { cr: 0.0025, cw: 0.024999999999999998, i: 0.024999999999999998, o: 0 }, "vercel_ai_gateway/inception/mercury-coder-small": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1 }, "vercel_ai_gateway/meta/llama-3-70b": { cr: 0.059, cw: 0.59, i: 0.59, o: 0.7899999999999999 }, "vercel_ai_gateway/meta/llama-3-8b": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.08 }, "vercel_ai_gateway/meta/llama-3.1-70b": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "vercel_ai_gateway/meta/llama-3.1-8b": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.08 }, "vercel_ai_gateway/meta/llama-3.2-11b": { cr: 0.016, cw: 0.16, i: 0.16, o: 0.16 }, "vercel_ai_gateway/meta/llama-3.2-1b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "vercel_ai_gateway/meta/llama-3.2-3b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "vercel_ai_gateway/meta/llama-3.2-90b": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "vercel_ai_gateway/meta/llama-3.3-70b": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "vercel_ai_gateway/meta/llama-4-maverick": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "vercel_ai_gateway/meta/llama-4-scout": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "vercel_ai_gateway/mistral/codestral": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.8999999999999999 }, "vercel_ai_gateway/mistral/codestral-embed": { cr: 0.015, cw: 0.15, i: 0.15, o: 0 }, "vercel_ai_gateway/mistral/devstral-small": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.28 }, "vercel_ai_gateway/mistral/magistral-medium": { cr: 0.19999999999999998, cw: 2, i: 2, o: 5 }, "vercel_ai_gateway/mistral/magistral-small": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "vercel_ai_gateway/mistral/ministral-3b": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.04 }, "vercel_ai_gateway/mistral/ministral-8b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "vercel_ai_gateway/mistral/mistral-embed": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "vercel_ai_gateway/mistral/mistral-large": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "vercel_ai_gateway/mistral/mistral-saba-24b": { cr: 0.079, cw: 0.7899999999999999, i: 0.7899999999999999, o: 0.7899999999999999 }, "vercel_ai_gateway/mistral/mistral-small": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "vercel_ai_gateway/mistral/mixtral-8x22b-instruct": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "vercel_ai_gateway/mistral/pixtral-12b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "vercel_ai_gateway/mistral/pixtral-large": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "vercel_ai_gateway/moonshotai/kimi-k2": { cr: 0.055, cw: 0.55, i: 0.55, o: 2.2 }, "vercel_ai_gateway/morph/morph-v3-fast": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 1.2 }, "vercel_ai_gateway/morph/morph-v3-large": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 1.9 }, "vercel_ai_gateway/openai/gpt-3.5-turbo": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "vercel_ai_gateway/openai/gpt-3.5-turbo-instruct": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 2 }, "vercel_ai_gateway/openai/gpt-4-turbo": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "vercel_ai_gateway/openai/gpt-4.1": { cr: 0.5, cw: 0, i: 2, o: 8 }, "vercel_ai_gateway/openai/gpt-4.1-mini": { cr: 0.09999999999999999, cw: 0, i: 0.39999999999999997, o: 1.5999999999999999 }, "vercel_ai_gateway/openai/gpt-4.1-nano": { cr: 0.024999999999999998, cw: 0, i: 0.09999999999999999, o: 0.39999999999999997 }, "vercel_ai_gateway/openai/gpt-4o": { cr: 1.25, cw: 0, i: 2.5, o: 10 }, "vercel_ai_gateway/openai/gpt-4o-mini": { cr: 0.075, cw: 0, i: 0.15, o: 0.6 }, "vercel_ai_gateway/openai/o1": { cr: 7.5, cw: 0, i: 15, o: 60 }, "vercel_ai_gateway/openai/o3": { cr: 0.5, cw: 0, i: 2, o: 8 }, "vercel_ai_gateway/openai/o3-mini": { cr: 0.55, cw: 0, i: 1.1, o: 4.4 }, "vercel_ai_gateway/openai/o4-mini": { cr: 0.275, cw: 0, i: 1.1, o: 4.4 }, "vercel_ai_gateway/openai/text-embedding-3-large": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0 }, "vercel_ai_gateway/openai/text-embedding-3-small": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "vercel_ai_gateway/openai/text-embedding-ada-002": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "vercel_ai_gateway/perplexity/sonar": { cr: 0.09999999999999999, cw: 1, i: 1, o: 1 }, "vercel_ai_gateway/perplexity/sonar-pro": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "vercel_ai_gateway/perplexity/sonar-reasoning": { cr: 0.09999999999999999, cw: 1, i: 1, o: 5 }, "vercel_ai_gateway/perplexity/sonar-reasoning-pro": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "vercel_ai_gateway/vercel/v0-1.0-md": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "vercel_ai_gateway/vercel/v0-1.5-md": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "vercel_ai_gateway/xai/grok-2": { cr: 0.19999999999999998, cw: 2, i: 2, o: 10 }, "vercel_ai_gateway/xai/grok-2-vision": { cr: 0.19999999999999998, cw: 2, i: 2, o: 10 }, "vercel_ai_gateway/xai/grok-3": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "vercel_ai_gateway/xai/grok-3-fast": { cr: 0.5000000000000001, cw: 5, i: 5, o: 25 }, "vercel_ai_gateway/xai/grok-3-mini": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.5 }, "vercel_ai_gateway/xai/grok-3-mini-fast": { cr: 0.06, cw: 0.6, i: 0.6, o: 4 }, "vercel_ai_gateway/xai/grok-4": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "vercel_ai_gateway/zai/glm-4.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.2 }, "vercel_ai_gateway/zai/glm-4.5-air": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.1 }, "vercel_ai_gateway/zai/glm-4.6": { cr: 0.11, cw: 0.44999999999999996, i: 0.44999999999999996, o: 1.7999999999999998 }, "vertex_ai/claude-3-5-haiku": { cr: 0.09999999999999999, cw: 1, i: 1, o: 5 }, "vertex_ai/claude-3-5-haiku@20241022": { cr: 0.09999999999999999, cw: 1, i: 1, o: 5 }, "vertex_ai/claude-3-5-sonnet": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "vertex_ai/claude-3-5-sonnet@20240620": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "vertex_ai/claude-3-7-sonnet@20250219": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vertex_ai/claude-3-haiku": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.25 }, "vertex_ai/claude-3-haiku@20240307": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.25 }, "vertex_ai/claude-3-opus": { cr: 1.5, cw: 15, i: 15, o: 75 }, "vertex_ai/claude-3-opus@20240229": { cr: 1.5, cw: 15, i: 15, o: 75 }, "vertex_ai/claude-3-sonnet": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "vertex_ai/claude-3-sonnet@20240229": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "vertex_ai/claude-fable-5": { cr: 1, cw: 12.5, i: 10, o: 50 }, "vertex_ai/claude-fable-5@default": { cr: 1, cw: 12.5, i: 10, o: 50 }, "vertex_ai/claude-haiku-4-5": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "vertex_ai/claude-haiku-4-5@20251001": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "vertex_ai/claude-opus-4": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "vertex_ai/claude-opus-4-1": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "vertex_ai/claude-opus-4-1@20250805": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "vertex_ai/claude-opus-4-5": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "vertex_ai/claude-opus-4-5@20251101": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "vertex_ai/claude-opus-4-6": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "vertex_ai/claude-opus-4-6@default": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "vertex_ai/claude-opus-4-7": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "vertex_ai/claude-opus-4-7@default": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "vertex_ai/claude-opus-4-8": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "vertex_ai/claude-opus-4-8@default": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "vertex_ai/claude-opus-4@20250514": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "vertex_ai/claude-sonnet-4": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "vertex_ai/claude-sonnet-4-5": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "vertex_ai/claude-sonnet-4-5@20250929": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "vertex_ai/claude-sonnet-4-6": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vertex_ai/claude-sonnet-4-6@default": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vertex_ai/claude-sonnet-4@20250514": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "vertex_ai/claude-sonnet-5": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vertex_ai/claude-sonnet-5@default": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vertex_ai/codestral-2": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.8999999999999999 }, "vertex_ai/codestral-2501": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "vertex_ai/codestral-2@001": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.8999999999999999 }, "vertex_ai/codestral@2405": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "vertex_ai/codestral@latest": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "vertex_ai/deep-research-pro-preview-12-2025": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "vertex_ai/deepseek-ai/deepseek-ocr-maas": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "vertex_ai/deepseek-ai/deepseek-r1-0528-maas": { cr: 0.135, cw: 1.35, i: 1.35, o: 5.4 }, "vertex_ai/deepseek-ai/deepseek-v3.1-maas": { cr: 0.135, cw: 1.35, i: 1.35, o: 5.4 }, "vertex_ai/deepseek-ai/deepseek-v3.2-maas": { cr: 0.05600000000000001, cw: 0.56, i: 0.56, o: 1.68 }, "vertex_ai/gemini-2.5-flash-image": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "vertex_ai/gemini-3-flash-preview": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 3 }, "vertex_ai/gemini-3-pro-image": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "vertex_ai/gemini-3-pro-image-preview": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "vertex_ai/gemini-3-pro-preview": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, cwa: 0.25, i: 2, ia: 4, o: 12, oa: 18 }, "vertex_ai/gemini-3.1-flash-image": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 3 }, "vertex_ai/gemini-3.1-flash-image-preview": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 3 }, "vertex_ai/gemini-3.1-flash-lite": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "vertex_ai/gemini-3.1-flash-lite-preview": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "vertex_ai/gemini-3.1-pro-preview": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, cwa: 0.25, i: 2, ia: 4, o: 12, oa: 18 }, "vertex_ai/gemini-3.1-pro-preview-customtools": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, cwa: 0.25, i: 2, ia: 4, o: 12, oa: 18 }, "vertex_ai/gemini-3.5-flash": { cr: 0.15, cw: 1.5, i: 1.5, o: 9 }, "vertex_ai/gemini-embedding-2": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0 }, "vertex_ai/gemini-embedding-2-preview": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0 }, "vertex_ai/google/gemma-4-26b-a4b-it-maas": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "vertex_ai/jamba-1.5": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.39999999999999997 }, "vertex_ai/jamba-1.5-large": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "vertex_ai/jamba-1.5-large@001": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "vertex_ai/jamba-1.5-mini": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.39999999999999997 }, "vertex_ai/jamba-1.5-mini@001": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.39999999999999997 }, "vertex_ai/meta/llama-3.1-405b-instruct-maas": { cr: 0.5000000000000001, cw: 5, i: 5, o: 16 }, "vertex_ai/meta/llama-3.1-70b-instruct-maas": { cr: 0, cw: 0, i: 0, o: 0 }, "vertex_ai/meta/llama-3.1-8b-instruct-maas": { cr: 0, cw: 0, i: 0, o: 0 }, "vertex_ai/meta/llama-3.2-90b-vision-instruct-maas": { cr: 0, cw: 0, i: 0, o: 0 }, "vertex_ai/meta/llama-4-maverick-17b-128e-instruct-maas": { cr: 0.035, cw: 0.35, i: 0.35, o: 1.15 }, "vertex_ai/meta/llama-4-maverick-17b-16e-instruct-maas": { cr: 0.035, cw: 0.35, i: 0.35, o: 1.15 }, "vertex_ai/meta/llama-4-scout-17b-128e-instruct-maas": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.7 }, "vertex_ai/meta/llama-4-scout-17b-16e-instruct-maas": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.7 }, "vertex_ai/meta/llama3-405b-instruct-maas": { cr: 0, cw: 0, i: 0, o: 0 }, "vertex_ai/meta/llama3-70b-instruct-maas": { cr: 0, cw: 0, i: 0, o: 0 }, "vertex_ai/meta/llama3-8b-instruct-maas": { cr: 0, cw: 0, i: 0, o: 0 }, "vertex_ai/minimaxai/minimax-m2-maas": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "vertex_ai/mistral-large-2411": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "vertex_ai/mistral-large@2407": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "vertex_ai/mistral-large@2411-001": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "vertex_ai/mistral-large@latest": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "vertex_ai/mistral-medium-3": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "vertex_ai/mistral-medium-3@001": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "vertex_ai/mistral-nemo@2407": { cr: 0.30000000000000004, cw: 3, i: 3, o: 3 }, "vertex_ai/mistral-nemo@latest": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "vertex_ai/mistral-small-2503": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "vertex_ai/mistral-small-2503@001": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "vertex_ai/mistralai/codestral-2": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.8999999999999999 }, "vertex_ai/mistralai/codestral-2@001": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.8999999999999999 }, "vertex_ai/mistralai/mistral-medium-3": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "vertex_ai/mistralai/mistral-medium-3@001": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "vertex_ai/moonshotai/kimi-k2-thinking-maas": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "vertex_ai/openai/gpt-oss-120b-maas": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "vertex_ai/openai/gpt-oss-20b-maas": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0.3 }, "vertex_ai/qwen/qwen3-235b-a22b-instruct-2507-maas": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1 }, "vertex_ai/qwen/qwen3-coder-480b-a35b-instruct-maas": { cr: 0.09999999999999999, cw: 1, i: 1, o: 4 }, "vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.2 }, "vertex_ai/qwen/qwen3-next-80b-a3b-thinking-maas": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.2 }, "vertex_ai/xai/grok-4.1-fast-non-reasoning": { cr: 0.049999999999999996, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "vertex_ai/xai/grok-4.1-fast-reasoning": { cr: 0.049999999999999996, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "vertex_ai/xai/grok-4.20-non-reasoning": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "vertex_ai/xai/grok-4.20-reasoning": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "vertex_ai/zai-org/glm-4.7-maas": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.2 }, "vertex_ai/zai-org/glm-5-maas": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3.1999999999999997 }, "voyage/rerank-2": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0 }, "voyage/rerank-2-lite": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "voyage/rerank-2.5": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0 }, "voyage/rerank-2.5-lite": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "voyage/voyage-2": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "voyage/voyage-3": { cr: 0.006, cw: 0.06, i: 0.06, o: 0 }, "voyage/voyage-3-large": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0 }, "voyage/voyage-3-lite": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "voyage/voyage-3.5": { cr: 0.006, cw: 0.06, i: 0.06, o: 0 }, "voyage/voyage-3.5-lite": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "voyage/voyage-code-2": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, "voyage/voyage-code-3": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0 }, "voyage/voyage-context-3": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0 }, "voyage/voyage-finance-2": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, "voyage/voyage-large-2": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, "voyage/voyage-law-2": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, "voyage/voyage-lite-01": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "voyage/voyage-lite-02-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "voyage/voyage-multimodal-3": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, "wandb/MiniMaxAI/MiniMax-M2.5": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "wandb/Qwen/Qwen3-235B-A22B-Instruct-2507": { cr: 1000, cw: 1e4, i: 1e4, o: 1e4 }, "wandb/Qwen/Qwen3-235B-A22B-Thinking-2507": { cr: 1000, cw: 1e4, i: 1e4, o: 1e4 }, "wandb/Qwen/Qwen3-Coder-480B-A35B-Instruct": { cr: 10000.000000000002, cw: 1e5, i: 1e5, o: 150000 }, "wandb/deepseek-ai/DeepSeek-R1-0528": { cr: 13500.000000000002, cw: 135000, i: 135000, o: 540000 }, "wandb/deepseek-ai/DeepSeek-V3-0324": { cr: 11400, cw: 114000, i: 114000, o: 275000 }, "wandb/deepseek-ai/DeepSeek-V3.1": { cr: 5500.000000000001, cw: 55000, i: 55000, o: 165000 }, "wandb/meta-llama/Llama-3.1-8B-Instruct": { cr: 2200, cw: 22000, i: 22000, o: 22000 }, "wandb/meta-llama/Llama-3.3-70B-Instruct": { cr: 7099.999999999999, cw: 71000, i: 71000, o: 71000 }, "wandb/meta-llama/Llama-4-Scout-17B-16E-Instruct": { cr: 1700.0000000000002, cw: 17000, i: 17000, o: 66000 }, "wandb/microsoft/Phi-4-mini-instruct": { cr: 800, cw: 8000, i: 8000, o: 35000 }, "wandb/moonshotai/Kimi-K2-Instruct": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "wandb/moonshotai/Kimi-K2.5": { cr: 0.09999999999999999, cw: 0.6, i: 0.6, o: 3 }, "wandb/openai/gpt-oss-120b": { cr: 1500, cw: 15000, i: 15000, o: 60000 }, "wandb/openai/gpt-oss-20b": { cr: 500, cw: 5000, i: 5000, o: 20000 }, "wandb/zai-org/GLM-4.5": { cr: 5500.000000000001, cw: 55000, i: 55000, o: 200000 }, "watsonx/bigscience/mt0-xxl-13b": { cr: 50, cw: 500, i: 500, o: 2000 }, "watsonx/core42/jais-13b-chat": { cr: 50, cw: 500, i: 500, o: 2000 }, "watsonx/google/flan-t5-xl-3b": { cr: 0.06, cw: 0.6, i: 0.6, o: 0.6 }, "watsonx/ibm/granite-13b-chat-v2": { cr: 0.06, cw: 0.6, i: 0.6, o: 0.6 }, "watsonx/ibm/granite-13b-instruct-v2": { cr: 0.06, cw: 0.6, i: 0.6, o: 0.6 }, "watsonx/ibm/granite-3-3-8b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "watsonx/ibm/granite-3-8b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "watsonx/ibm/granite-4-h-small": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.25 }, "watsonx/ibm/granite-guardian-3-2-2b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "watsonx/ibm/granite-guardian-3-3-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "watsonx/ibm/granite-ttm-1024-96-r2": { cr: 0.038000000000000006, cw: 0.38, i: 0.38, o: 0.38 }, "watsonx/ibm/granite-ttm-1536-96-r2": { cr: 0.038000000000000006, cw: 0.38, i: 0.38, o: 0.38 }, "watsonx/ibm/granite-ttm-512-96-r2": { cr: 0.038000000000000006, cw: 0.38, i: 0.38, o: 0.38 }, "watsonx/ibm/granite-vision-3-2-2b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "watsonx/meta-llama/llama-3-2-11b-vision-instruct": { cr: 0.035, cw: 0.35, i: 0.35, o: 0.35 }, "watsonx/meta-llama/llama-3-2-1b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "watsonx/meta-llama/llama-3-2-3b-instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "watsonx/meta-llama/llama-3-2-90b-vision-instruct": { cr: 0.19999999999999998, cw: 2, i: 2, o: 2 }, "watsonx/meta-llama/llama-3-3-70b-instruct": { cr: 0.071, cw: 0.71, i: 0.71, o: 0.71 }, "watsonx/meta-llama/llama-4-maverick-17b": { cr: 0.035, cw: 0.35, i: 0.35, o: 1.4 }, "watsonx/meta-llama/llama-guard-3-11b-vision": { cr: 0.035, cw: 0.35, i: 0.35, o: 0.35 }, "watsonx/mistralai/mistral-large": { cr: 0.30000000000000004, cw: 3, i: 3, o: 10 }, "watsonx/mistralai/mistral-medium-2505": { cr: 0.30000000000000004, cw: 3, i: 3, o: 10 }, "watsonx/mistralai/mistral-small-2503": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "watsonx/mistralai/mistral-small-3-1-24b-instruct-2503": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "watsonx/mistralai/pixtral-12b-2409": { cr: 0.035, cw: 0.35, i: 0.35, o: 0.35 }, "watsonx/openai/gpt-oss-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "watsonx/sdaia/allam-1-13b-instruct": { cr: 0.18, cw: 1.7999999999999998, i: 1.7999999999999998, o: 1.7999999999999998 }, "writer.palmyra-x4-v1:0": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "writer.palmyra-x5-v1:0": { cr: 0.06, cw: 0.6, i: 0.6, o: 6 }, "xai/grok-2": { cr: 0.19999999999999998, cw: 2, i: 2, o: 10 }, "xai/grok-2-1212": { cr: 0.19999999999999998, cw: 2, i: 2, o: 10 }, "xai/grok-2-latest": { cr: 0.19999999999999998, cw: 2, i: 2, o: 10 }, "xai/grok-2-vision": { cr: 0.19999999999999998, cw: 2, i: 2, o: 10 }, "xai/grok-2-vision-1212": { cr: 0.19999999999999998, cw: 2, i: 2, o: 10 }, "xai/grok-2-vision-latest": { cr: 0.19999999999999998, cw: 2, i: 2, o: 10 }, "xai/grok-3": { cr: 0.75, cw: 3, i: 3, o: 15 }, "xai/grok-3-beta": { cr: 0.75, cw: 3, i: 3, o: 15 }, "xai/grok-3-fast-beta": { cr: 1.25, cw: 5, i: 5, o: 25 }, "xai/grok-3-fast-latest": { cr: 1.25, cw: 5, i: 5, o: 25 }, "xai/grok-3-latest": { cr: 0.75, cw: 3, i: 3, o: 15 }, "xai/grok-3-mini": { cr: 0.075, cw: 0.3, i: 0.3, o: 0.5 }, "xai/grok-3-mini-beta": { cr: 0.075, cw: 0.3, i: 0.3, o: 0.5 }, "xai/grok-3-mini-fast": { cr: 0.15, cw: 0.6, i: 0.6, o: 4 }, "xai/grok-3-mini-fast-beta": { cr: 0.15, cw: 0.6, i: 0.6, o: 4 }, "xai/grok-3-mini-fast-latest": { cr: 0.15, cw: 0.6, i: 0.6, o: 4 }, "xai/grok-3-mini-latest": { cr: 0.075, cw: 0.3, i: 0.3, o: 0.5 }, "xai/grok-4": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "xai/grok-4-0709": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "xai/grok-4-1-fast": { cr: 0.049999999999999996, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "xai/grok-4-1-fast-non-reasoning": { cr: 0.049999999999999996, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "xai/grok-4-1-fast-non-reasoning-latest": { cr: 0.049999999999999996, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "xai/grok-4-1-fast-reasoning": { cr: 0.049999999999999996, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "xai/grok-4-1-fast-reasoning-latest": { cr: 0.049999999999999996, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "xai/grok-4-fast-non-reasoning": { cr: 0.049999999999999996, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "xai/grok-4-fast-reasoning": { cr: 0.049999999999999996, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "xai/grok-4-latest": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "xai/grok-4.20-0309-reasoning": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "xai/grok-4.20-beta-0309-non-reasoning": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "xai/grok-4.20-beta-0309-reasoning": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "xai/grok-4.20-multi-agent-beta-0309": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "xai/grok-4.3": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 1.25, i: 1.25, ia: 2.5, o: 2.5, oa: 5 }, "xai/grok-4.3-latest": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 1.25, i: 1.25, ia: 2.5, o: 2.5, oa: 5 }, "xai/grok-beta": { cr: 0.5000000000000001, cw: 5, i: 5, o: 15 }, "xai/grok-code-fast": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.5 }, "xai/grok-code-fast-1": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.5 }, "xai/grok-code-fast-1-0825": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.5 }, "xai/grok-vision-beta": { cr: 0.5000000000000001, cw: 5, i: 5, o: 15 }, "zai.glm-4.7": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.2 }, "zai.glm-4.7-flash": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.39999999999999997 }, "zai.glm-5": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3.1999999999999997 }, "zai/glm-4-32b-0414-128k": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "zai/glm-4.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.2 }, "zai/glm-4.5-air": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.1 }, "zai/glm-4.5-airx": { cr: 0.11, cw: 1.1, i: 1.1, o: 4.5 }, "zai/glm-4.5-flash": { cr: 0, cw: 0, i: 0, o: 0 }, "zai/glm-4.5-x": { cr: 0.22, cw: 2.2, i: 2.2, o: 8.9 }, "zai/glm-4.5v": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.7999999999999998 }, "zai/glm-4.6": { cr: 0.11, cw: 0, i: 0.6, o: 2.2 }, "zai/glm-4.7": { cr: 0.11, cw: 0, i: 0.6, o: 2.2 }, "zai/glm-4.7-flash": { cr: 0, cw: 0, i: 0, o: 0 }, "zai/glm-5": { cr: 0.19999999999999998, cw: 0, i: 1, o: 3.1999999999999997 }, "zai/glm-5-code": { cr: 0.3, cw: 0, i: 1.2, o: 5 }, "zai/glm-5.1": { cr: 0.26, cw: 0, i: 1.4, o: 4.4 } },
@@ -20309,7 +20739,7 @@ class PricingStore {
     this.now = now;
     if (folder) {
       try {
-        this.states = JSON.parse(readFileSync27(join30(folder, "state.json"), "utf8"));
+        this.states = JSON.parse(readFileSync28(join31(folder, "state.json"), "utf8"));
       } catch {}
     }
   }
@@ -20372,7 +20802,7 @@ class PricingStore {
     if (!this.folder)
       return;
     try {
-      return JSON.parse(readFileSync27(join30(this.folder, name), "utf8"));
+      return JSON.parse(readFileSync28(join31(this.folder, name), "utf8"));
     } catch {
       return;
     }
@@ -20382,8 +20812,8 @@ class PricingStore {
       return;
     try {
       mkdirSync18(this.folder, { recursive: true });
-      writeFileSync19(join30(this.folder, name + ".new"), text);
-      renameSync14(join30(this.folder, name + ".new"), join30(this.folder, name));
+      writeFileSync19(join31(this.folder, name + ".new"), text);
+      renameSync14(join31(this.folder, name + ".new"), join31(this.folder, name));
     } catch {}
   }
   build() {
@@ -20958,18 +21388,18 @@ function codexStateFrom(value) {
 }
 
 // Packages/Box/src/agents/usage/engine-codex.ts
-import { readdirSync as readdirSync16, statSync as statSync11 } from "fs";
-import { join as join31 } from "path";
+import { readdirSync as readdirSync17, statSync as statSync11 } from "fs";
+import { join as join32 } from "path";
 function engineDatabases(folder) {
   let names;
   try {
-    names = readdirSync16(folder);
+    names = readdirSync17(folder);
   } catch (error) {
     if (error.code === "ENOENT")
       return [];
     throw error;
   }
-  return names.filter((name) => name.startsWith("opencode") && name.endsWith(".db")).sort().map((name) => join31(folder, name));
+  return names.filter((name) => name.startsWith("opencode") && name.endsWith(".db")).sort().map((name) => join32(folder, name));
 }
 var IMPORTED = "SELECT 1 FROM migration WHERE id = '20260805200742_import_legacy_credentials' LIMIT 1;";
 var SIGN_IN = `SELECT json_extract(doc,'$.type') = 'oauth' AND (length(trim(COALESCE(json_extract(doc,'$.access'),''))) > 0 OR length(trim(COALESCE(json_extract(doc,'$.refresh'),''))) > 0), time_created
@@ -21207,7 +21637,7 @@ function engineCodexSlots(rows, pricing, since) {
 }
 function engineStamp(folder) {
   const parts = [];
-  for (const path of [...engineDatabases(folder).flatMap((db) => [db, db + "-wal"]), join31(folder, "auth.json")]) {
+  for (const path of [...engineDatabases(folder).flatMap((db) => [db, db + "-wal"]), join32(folder, "auth.json")]) {
     try {
       const info = statSync11(path);
       parts.push(`${path}:${info.size}:${info.mtimeMs}`);
@@ -21328,10 +21758,248 @@ function fromKeptGrok(kept) {
   return { at, ...event !== null ? { event } : {}, model, tokens: { input, cacheWrite5m, cacheWrite1h: 0, cacheRead, output }, ...cost !== null ? { cost } : {} };
 }
 
+// Packages/Box/src/agents/usage/antigravity-history.ts
+import { readdirSync as readdirSync18, realpathSync as realpathSync7, statSync as statSync12 } from "fs";
+import { join as join33 } from "path";
+function generationEvent(blob, stepMetadata) {
+  function varint(bytes, start) {
+    let value = 0n;
+    for (let i = 0;i < 10; i++) {
+      const byte = bytes[start + i];
+      if (byte === undefined || i === 9 && (byte & 127) > 1)
+        return;
+      value |= BigInt(byte & 127) << BigInt(i * 7);
+      if (!(byte & 128))
+        return { value, next: start + i + 1 };
+    }
+    return;
+  }
+  function field(bytes, wanted) {
+    let offset = 0;
+    while (offset < bytes.length) {
+      const tag = varint(bytes, offset);
+      if (!tag || tag.value >> 3n === 0n || tag.value >> 3n > 0xffffffffn)
+        return;
+      const number = Number(tag.value >> 3n);
+      const wire = Number(tag.value & 7n);
+      if (wire === 0) {
+        const value = varint(bytes, tag.next);
+        if (!value)
+          return;
+        if (number === wanted)
+          return value.value;
+        offset = value.next;
+      } else if (wire === 2) {
+        const length = varint(bytes, tag.next);
+        if (!length || length.value > BigInt(bytes.length - length.next))
+          return;
+        const end = length.next + Number(length.value);
+        if (number === wanted)
+          return bytes.subarray(length.next, end);
+        offset = end;
+      } else if (wire === 1 || wire === 5) {
+        offset = tag.next + (wire === 1 ? 8 : 4);
+        if (offset > bytes.length)
+          return;
+      } else
+        return;
+    }
+    return;
+  }
+  const bytes = (from, n) => {
+    const value = field(from, n);
+    return value instanceof Uint8Array ? value : undefined;
+  };
+  const integer = (from, n) => {
+    const value = field(from, n);
+    return typeof value === "bigint" ? value : undefined;
+  };
+  const text = (from, n) => {
+    const value = bytes(from, n);
+    if (!value)
+      return;
+    try {
+      return new TextDecoder("utf-8", { fatal: true }).decode(value).trim() || undefined;
+    } catch {
+      return;
+    }
+  };
+  const timestamp = (value) => {
+    const seconds = value && integer(value, 1);
+    return seconds !== undefined && seconds > 0n && seconds <= BigInt(Math.floor(Number.MAX_SAFE_INTEGER / 1000)) ? Number(seconds) : undefined;
+  };
+  const wrapped = bytes(blob, 1);
+  if (!wrapped)
+    return;
+  const modelID = text(wrapped, 19), label = text(wrapped, 21);
+  const usage = bytes(wrapped, 4);
+  if (!usage)
+    return;
+  const system = integer(usage, 1) ?? 0n, input = integer(usage, 2) ?? 0n;
+  const output = integer(usage, 3) ?? 0n, cache = integer(usage, 5) ?? 0n;
+  const safe = BigInt(Number.MAX_SAFE_INTEGER);
+  if ([system, input, output, cache, system + input, system + input + output + cache].some((n) => n > safe))
+    return;
+  const generated = input !== 0n || output !== 0n || cache !== 0n;
+  if (!modelID && !label && !generated || !generated && system + input === 0n)
+    return;
+  const timing = bytes(wrapped, 9);
+  const timestampSeconds = timestamp(timing && bytes(timing, 4)) ?? timestamp(stepMetadata && bytes(stepMetadata, 1));
+  if (timestampSeconds === undefined)
+    return;
+  return { ...modelID ? { modelID } : {}, ...label ? { label } : {}, inputTokens: Number(system + input), outputTokens: Number(output), cacheReadTokens: Number(cache), timestampSeconds };
+}
+function modelCandidates(id, label) {
+  id = id?.replace(/-tiered$/, "");
+  return ((id?.endsWith("-default")) ? [label, id] : [id, label]).filter((name) => name !== undefined);
+}
+function antigravitySlots(events, pricing, since) {
+  const slots = noSlots();
+  for (const event of events) {
+    const at = event.timestampSeconds * 1000;
+    if (at < since)
+      continue;
+    const tokens = { input: event.inputTokens, output: event.outputTokens, cacheRead: event.cacheReadTokens, cacheWrite5m: 0, cacheWrite1h: 0 };
+    const total = tokens.input + tokens.output + tokens.cacheRead;
+    if (!Number.isSafeInteger(total) || total <= 0)
+      continue;
+    const candidates = modelCandidates(event.modelID, event.label);
+    let priced = false;
+    for (const model of candidates) {
+      const cost = pricing.cost(model, tokens);
+      if (cost === undefined)
+        continue;
+      add(slots, slotOf(at), pricing.familyName(model, ["-preview"]), total, cost);
+      priced = true;
+      break;
+    }
+    if (!priced)
+      addUnknown(slots, slotOf(at), candidates[0] ?? "Unknown Antigravity Model");
+  }
+  return slots;
+}
+function names(folder) {
+  try {
+    return readdirSync18(folder).sort();
+  } catch (error) {
+    if (error.code === "ENOENT")
+      return [];
+    throw error;
+  }
+}
+function antigravityDatabases(geminiHome) {
+  return [...new Set(names(geminiHome).filter((name) => name.startsWith("antigravity")).flatMap((name) => {
+    const folder = join33(geminiHome, name, "conversations");
+    return names(folder).filter((file) => file.endsWith(".db")).map((file) => realpathSync7(join33(folder, file)));
+  }))].sort();
+}
+function antigravityStamp(geminiHome) {
+  return antigravityDatabases(geminiHome).flatMap((path) => [path, path + "-wal"]).map((path) => {
+    try {
+      const s = statSync12(path);
+      return `${path}:${s.ino}:${s.size}:${s.mtimeMs}:${s.ctimeMs}`;
+    } catch (error) {
+      if (error.code === "ENOENT" && path.endsWith("-wal"))
+        return `${path}:-`;
+      throw error;
+    }
+  }).join(`
+`);
+}
+var READER2 = `
+import { Database } from "bun:sqlite"
+import { statSync } from "node:fs"
+const generationEvent = ${generationEvent.toString()}
+function open(path) {
+  let db
+  try {
+    db = new Database(path, { readonly: true })
+    db.query("SELECT count(*) FROM sqlite_master").values()
+    return db
+  } catch (error) {
+    db?.close()
+    let wal = 0
+    try { wal = statSync(path + "-wal").size } catch {}
+    if (wal > 0 || !/unable to open/i.test(String(error))) throw error
+    return new Database("file:" + path.replace(/[%?#]/g, c => "%" + c.charCodeAt(0).toString(16)) + "?immutable=1", { readonly: true })
+  }
+}
+self.onmessage = ({ data: { paths } }) => {
+  const events = []
+  try {
+    for (const path of paths) {
+      let db
+      try {
+        db = open(path)
+        db.exec("PRAGMA busy_timeout=2000")
+        db.exec("BEGIN")
+        const steps = db.query("SELECT 1 FROM pragma_table_info('steps') WHERE name='metadata'").values().length > 0
+        const step = steps ? ", (SELECT CASE WHEN length(metadata) <= 1048576 THEN metadata ELSE NULL END FROM steps WHERE idx = g.idx) AS step, (SELECT length(metadata) FROM steps WHERE idx = g.idx) AS stepLength" : ", NULL AS step, NULL AS stepLength"
+        const query = db.query("SELECT idx, CASE WHEN length(data) <= 1048576 THEN data ELSE NULL END AS data" + step + " FROM gen_metadata g WHERE idx > ? AND data IS NOT NULL ORDER BY idx LIMIT 8")
+        let index = -1
+        while (true) {
+          const rows = query.all(index)
+          for (const row of rows) {
+            if (!Number.isSafeInteger(row.idx) || row.idx <= index) throw new Error("Invalid Antigravity generation index")
+            index = row.idx
+            if (row.data === null || row.stepLength > 1048576) throw new Error("Antigravity generation exceeds the 1 MiB limit")
+            const event = generationEvent(row.data, row.step ?? undefined)
+            if (event) events.push(event)
+          }
+          if (rows.length < 8) break
+        }
+      } finally { db?.close() }
+    }
+    postMessage({ events })
+  } catch (error) { postMessage({ failed: String(error) }) }
+}
+`;
+var readerURL2;
+
+class AntigravityHistory {
+  cached = new Map;
+  async scan(geminiHome, since) {
+    const stamp = antigravityStamp(geminiHome);
+    const before = this.cached.get(geminiHome);
+    const paths = antigravityDatabases(geminiHome);
+    if (before?.paths.some((path) => !paths.includes(path)))
+      throw new Error("An Antigravity database is missing; keeping the last complete reading");
+    if (before?.stamp === stamp) {
+      if (before.since !== since) {
+        before.since = since;
+        before.filtered = before.events.filter((event) => event.timestampSeconds * 1000 >= since);
+      }
+      return before.filtered;
+    }
+    const events = paths.length ? await this.read(paths) : [];
+    if (antigravityStamp(geminiHome) !== stamp)
+      throw new Error("Antigravity databases changed during the read");
+    const filtered = events.filter((event) => event.timestampSeconds * 1000 >= since);
+    this.cached.set(geminiHome, { stamp, paths, events, since, filtered });
+    return filtered;
+  }
+  read(paths) {
+    readerURL2 ??= URL.createObjectURL(new Blob([READER2], { type: "application/javascript" }));
+    const worker = new Worker(readerURL2);
+    worker.unref?.();
+    let timer;
+    return new Promise((resolve, reject) => {
+      timer = setTimeout(() => reject(new Error("Antigravity databases took too long to read")), 120000);
+      timer.unref?.();
+      worker.onmessage = ({ data }) => data.failed ? reject(new Error(data.failed)) : resolve(data.events);
+      worker.onerror = (event) => reject(new Error(event.message));
+      worker.postMessage({ paths });
+    }).finally(() => {
+      clearTimeout(timer);
+      worker.terminate();
+    });
+  }
+}
+
 // Packages/Box/src/agents/usage/cursor-history.ts
 import { createHash as createHash10 } from "crypto";
-import { mkdirSync as mkdirSync19, readFileSync as readFileSync28, renameSync as renameSync15, writeFileSync as writeFileSync20 } from "fs";
-import { join as join32 } from "path";
+import { mkdirSync as mkdirSync19, readFileSync as readFileSync29, renameSync as renameSync15, writeFileSync as writeFileSync20 } from "fs";
+import { join as join34 } from "path";
 var DAY2 = 24 * 60 * 60000;
 var CURSOR_DAYS = 32;
 var MIN_BETWEEN = 60000;
@@ -21552,7 +22220,7 @@ ${event.model}`;
     const days = new Map;
     if (this.folder) {
       try {
-        const saved = JSON.parse(readFileSync28(join32(this.folder, `${key}.json`), "utf8"));
+        const saved = JSON.parse(readFileSync29(join34(this.folder, `${key}.json`), "utf8"));
         if (saved?.version === 1 && saved.user === key && saved.days && typeof saved.days === "object") {
           for (const [day, value] of Object.entries(saved.days)) {
             if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !value || typeof value !== "object" || !Array.isArray(value.uses))
@@ -21572,7 +22240,7 @@ ${event.model}`;
       return;
     try {
       mkdirSync19(this.folder, { recursive: true, mode: 448 });
-      const file = join32(this.folder, `${key}.json`);
+      const file = join34(this.folder, `${key}.json`);
       writeFileSync20(file + ".new", JSON.stringify({ version: 1, user: key, days: Object.fromEntries(days) }), { mode: 384 });
       renameSync15(file + ".new", file);
     } catch {
@@ -21609,24 +22277,24 @@ function cursorSlots(days, pricing, since) {
 }
 
 // Packages/Box/src/agents/usage/engine-db.ts
-import { readdirSync as readdirSync17, statSync as statSync12 } from "fs";
-import { join as join33 } from "path";
+import { readdirSync as readdirSync19, statSync as statSync13 } from "fs";
+import { join as join35 } from "path";
 function engineDatabases2(folder) {
   let names;
   try {
-    names = readdirSync17(folder);
+    names = readdirSync19(folder);
   } catch (error) {
     if (error?.code === "ENOENT")
       return [];
     throw error;
   }
-  return names.filter((name) => name.startsWith("opencode") && name.endsWith(".db")).sort().map((name) => join33(folder, name));
+  return names.filter((name) => name.startsWith("opencode") && name.endsWith(".db")).sort().map((name) => join35(folder, name));
 }
 function databasesStamp(folder) {
   const parts = [];
   for (const path of engineDatabases2(folder).flatMap((db) => [db, db + "-wal"])) {
     try {
-      const info = statSync12(path);
+      const info = statSync13(path);
       parts.push(`${path}:${info.size}:${info.mtimeMs}`);
     } catch {
       parts.push(`${path}:-`);
@@ -21635,7 +22303,7 @@ function databasesStamp(folder) {
   return parts.join(`
 `);
 }
-var READER2 = `
+var READER3 = `
 import { Database } from "bun:sqlite"
 import { statSync } from "node:fs"
 // (A database the engine is recovering or checkpointing is waited for a little, from the first query on.)
@@ -21681,7 +22349,7 @@ self.onmessage = (event) => {
   postMessage(answers)
 }
 `;
-var readerURL2;
+var readerURL3;
 var READ_FOR2 = 120000;
 var TABLES_SQL = "SELECT group_concat(name) FROM sqlite_master WHERE type='table' AND name IN ('message','session_message');";
 function readEngineDatabases(folder, sql) {
@@ -21693,8 +22361,8 @@ function readEngineDatabases(folder, sql) {
   }
   if (!paths.length)
     return Promise.resolve(undefined);
-  readerURL2 ??= URL.createObjectURL(new Blob([READER2], { type: "application/javascript" }));
-  const worker = new Worker(readerURL2);
+  readerURL3 ??= URL.createObjectURL(new Blob([READER3], { type: "application/javascript" }));
+  const worker = new Worker(readerURL3);
   worker.unref?.();
   let timer;
   return new Promise((resolve, reject) => {
@@ -21801,7 +22469,7 @@ function hostedSlots(rows, provider, since) {
 import { createHash as createHash11 } from "crypto";
 import { mkdirSync as mkdirSync20, renameSync as renameSync16, rmSync as rmSync14, writeFileSync as writeFileSync21 } from "fs";
 import { open, readdir, readFile as readFile3, stat as stat2 } from "fs/promises";
-import { join as join34 } from "path";
+import { join as join36 } from "path";
 var CHUNK = 1 << 20;
 var LONGEST_LINE = 64 << 20;
 var HEAD = 4096;
@@ -21819,7 +22487,7 @@ async function jsonlFiles(folder) {
     for (const entry of entries) {
       if (found.length >= MOST_WALKED)
         return;
-      const path = join34(dir, entry.name);
+      const path = join36(dir, entry.name);
       if (entry.isDirectory())
         await walk(path);
       else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
@@ -21869,13 +22537,13 @@ class JSONLFiles {
         if (!/^[0-9a-f]{32}\.json$/.test(name))
           continue;
         try {
-          const saved = JSON.parse(await readFile3(join34(this.folder, name), "utf8"));
+          const saved = JSON.parse(await readFile3(join36(this.folder, name), "utf8"));
           const record = saved?.record;
           const state = this.state && record ? this.state.from(record.state) : undefined;
           if (saved?.version === this.format && typeof saved.path === "string" && keptName(saved.path) === name && record && Array.isArray(record.items) && typeof record.offset === "number" && typeof record.size === "number" && (!this.state || state !== undefined))
             this.records.set(saved.path, { ...record, state });
           else
-            rmSync14(join34(this.folder, name), { force: true });
+            rmSync14(join36(this.folder, name), { force: true });
         } catch {}
       }
     })();
@@ -21926,12 +22594,12 @@ class JSONLFiles {
     }
     for (const path of this.forgotten) {
       try {
-        rmSync14(join34(this.folder, keptName(path)), { force: true });
+        rmSync14(join36(this.folder, keptName(path)), { force: true });
       } catch {}
     }
     this.forgotten.clear();
     for (const path of this.changed) {
-      const file = join34(this.folder, keptName(path));
+      const file = join36(this.folder, keptName(path));
       try {
         writeFileSync21(file + ".new", JSON.stringify({ version: this.format, path, record: this.records.get(path) }), { mode: 384 });
         renameSync16(file + ".new", file);
@@ -22035,7 +22703,7 @@ async function headOf(handle, length) {
 }
 
 // Packages/Box/src/agents/usage/usage.ts
-var USAGE_SERVICES = ["claude", "codex", "grok", "opencode", "cursor"];
+var USAGE_SERVICES = ["claude", "codex", "grok", "opencode", "cursor", "antigravity"];
 var MINUTE2 = 60000;
 var DAY3 = 24 * 60 * MINUTE2;
 var SCAN_EVERY = 5 * MINUTE2;
@@ -22314,7 +22982,7 @@ class Usage {
     if (!this.file)
       return;
     try {
-      const saved = JSON.parse(readFileSync29(this.file, "utf8"));
+      const saved = JSON.parse(readFileSync30(this.file, "utf8"));
       for (const [provider, kept] of Object.entries(saved?.accounts ?? {})) {
         if (!kept || typeof kept !== "object")
           continue;
@@ -22365,7 +23033,7 @@ async function usageRoutes(usage, method, rest, params, body = async () => ({}))
 function placeOf(computer, folder, part) {
   let real = folder;
   try {
-    real = realpathSync7(folder);
+    real = realpathSync8(folder);
   } catch {}
   const hash = createHash12("sha256").update(`kuvo-code usage place v2
 `).update(computer).update(`
@@ -22375,7 +23043,7 @@ function placeOf(computer, folder, part) {
 `).update(part);
   return hash.digest("hex").slice(0, 16);
 }
-function thisComputer(platform = process.platform, read = (path) => readFileSync29(path, "utf8"), macUUID = () => uuidOf(ioreg()), name = hostname) {
+function thisComputer(platform = process.platform, read = (path) => readFileSync30(path, "utf8"), macUUID = () => uuidOf(ioreg()), name = hostname) {
   if (platform === "darwin") {
     const uuid = macUUID();
     if (uuid)
@@ -22414,14 +23082,14 @@ function claudeRoots(agent, env = process.env, home = homedir5()) {
   const roots = [...agent.conversationRoots?.() ?? []];
   if (!agent.instance.home) {
     const configured = env.CLAUDE_CONFIG_DIR?.trim();
-    const folders = configured ? configured.split(",").map((part) => part.trim()).filter(Boolean).map((part) => part.startsWith("~/") ? join35(home, part.slice(2)) : part) : [join35(env.XDG_CONFIG_HOME?.trim() || join35(home, ".config"), "claude"), join35(home, ".claude")];
+    const folders = configured ? configured.split(",").map((part) => part.trim()).filter(Boolean).map((part) => part.startsWith("~/") ? join37(home, part.slice(2)) : part) : [join37(env.XDG_CONFIG_HOME?.trim() || join37(home, ".config"), "claude"), join37(home, ".claude")];
     for (const folder of folders)
-      roots.push(basename11(folder) === "projects" ? folder : join35(folder, "projects"));
+      roots.push(basename11(folder) === "projects" ? folder : join37(folder, "projects"));
   }
   return [...new Set(roots)];
 }
 function claudeSources(folder, computer = ownComputer) {
-  const files = new JSONLFiles((line) => claudeLine(line).map(keptClaude), (entry) => entry[0], folder ? join35(folder, "claude-files") : undefined, 1, (entry) => entry[1] === null ? undefined : JSON.stringify(entry.slice(1)));
+  const files = new JSONLFiles((line) => claudeLine(line).map(keptClaude), (entry) => entry[0], folder ? join37(folder, "claude-files") : undefined, 1, (entry) => entry[1] === null ? undefined : JSON.stringify(entry.slice(1)));
   const last = new Map;
   return (agents) => agents.flatMap((agent) => {
     const parsed = parseProvider(agent.providerID);
@@ -22468,7 +23136,7 @@ class UsageSettings {
     if (!file)
       return;
     try {
-      const saved = JSON.parse(readFileSync29(file, "utf8"))?.codex;
+      const saved = JSON.parse(readFileSync30(file, "utf8"))?.codex;
       if (saved && typeof saved === "object" && "fallback" in saved) {
         this.chosen = true;
         if (typeof saved.fallback === "string" && saved.fallback && saved.fallback.length <= 200)
@@ -22490,7 +23158,7 @@ class UsageSettings {
 }
 function realOf(folder) {
   try {
-    return realpathSync7(folder);
+    return realpathSync8(folder);
   } catch {
     return folder;
   }
@@ -22504,16 +23172,16 @@ function isLink(path) {
 }
 function codexHomes(agent, env = process.env, home = homedir5()) {
   const configured = env.CODEX_HOME?.trim();
-  const homes = agent.instance.home ? [agent.instance.home] : configured ? configured.split(",").map((part) => part.trim()).filter(Boolean).map((part) => part.startsWith("~/") ? join35(home, part.slice(2)) : part) : [join35(home, ".codex")];
+  const homes = agent.instance.home ? [agent.instance.home] : configured ? configured.split(",").map((part) => part.trim()).filter(Boolean).map((part) => part.startsWith("~/") ? join37(home, part.slice(2)) : part) : [join37(home, ".codex")];
   const real = new Set;
   return homes.filter((each) => !real.has(realOf(each)) && !!real.add(realOf(each))).map((each) => {
-    const folders = ["sessions", "archived_sessions"].map((name) => join35(each, name)).filter(isFolder);
+    const folders = ["sessions", "archived_sessions"].map((name) => join37(each, name)).filter(isFolder);
     return folders.length ? folders : [each];
   });
 }
 function isFolder(path) {
   try {
-    return statSync13(path).isDirectory();
+    return statSync14(path).isDirectory();
   } catch {
     return false;
   }
@@ -22521,7 +23189,7 @@ function isFolder(path) {
 function codexSources(folder, fallback = () => {
   return;
 }, computer = ownComputer) {
-  const files = new JSONLFiles((line, state) => codexLine(line, state).map(keptCodex), (entry) => entry[0], folder ? join35(folder, "codex-files") : undefined, 1, (entry) => JSON.stringify(entry.slice(0, 8)), { initial: codexState, from: codexStateFrom });
+  const files = new JSONLFiles((line, state) => codexLine(line, state).map(keptCodex), (entry) => entry[0], folder ? join37(folder, "codex-files") : undefined, 1, (entry) => JSON.stringify(entry.slice(0, 8)), { initial: codexState, from: codexStateFrom });
   const last = new Map;
   return (agents) => {
     const codex = agents.filter((agent) => parseProvider(agent.providerID)?.kind === "codex");
@@ -22621,7 +23289,7 @@ function ownerOf(grok) {
   return owner;
 }
 function grokSources(folder, computer = ownComputer) {
-  const files = new JSONLFiles((line) => grokLine(line).map(keptGrok), (entry) => entry[0], folder ? join35(folder, "grok-files") : undefined, 1);
+  const files = new JSONLFiles((line) => grokLine(line).map(keptGrok), (entry) => entry[0], folder ? join37(folder, "grok-files") : undefined, 1);
   const last = new Map;
   return (agents) => {
     const owner = ownerOf(agents.filter((agent) => parseProvider(agent.providerID)?.kind === "grok" && agent.conversationRoots));
@@ -22738,7 +23406,7 @@ function cursorClientOf(agent) {
   const cursor = agent;
   return cursor.cursor ? { client: cursor.cursor, unreadable: () => cursor.cursorKeyUnreadable?.() ?? false } : undefined;
 }
-function cursorSources(folder, elsewhere, history = new CursorHistory(folder ? join35(folder, "cursor-history") : undefined), now = Date.now) {
+function cursorSources(folder, elsewhere, history = new CursorHistory(folder ? join37(folder, "cursor-history") : undefined), now = Date.now) {
   const last = new Map;
   const wholeAt = new Map;
   return (agents) => {
@@ -22790,6 +23458,32 @@ function cursorSources(folder, elsewhere, history = new CursorHistory(folder ? j
       return [source];
     });
   };
+}
+function antigravitySources(computer = ownComputer) {
+  const history = new AntigravityHistory;
+  const last = new Map;
+  return (agents) => agents.flatMap((agent) => {
+    const parsed = parseProvider(agent.providerID);
+    const profile = agent.profile;
+    if (parsed?.kind !== "antigravity" || !profile)
+      return [];
+    return [{
+      provider: agent.providerID,
+      service: "antigravity",
+      agent: { kind: "antigravity", account: parsed.id },
+      ...agent.instance.label ? { label: agent.instance.label } : {},
+      places: () => [placeOf(computer(), profile)],
+      slots: async (pricing, since) => {
+        const events = await history.scan(profile, since);
+        const before = last.get(agent.providerID);
+        if (before && before.events === events && before.pricing === pricing && before.since === since)
+          return before.slots;
+        const slots = antigravitySlots(events, pricing, since);
+        last.set(agent.providerID, { events, pricing, since, slots });
+        return slots;
+      }
+    }];
+  });
 }
 
 // Packages/Box/src/agents/updates.ts
@@ -22910,9 +23604,9 @@ async function updateAll(agents, accounts, noted, known) {
 // Packages/Box/src/agents/sessions.ts
 import { createHash as createHash13 } from "crypto";
 import { spawn as spawnProcess } from "child_process";
-import { readFileSync as readFileSync30, realpathSync as realpathSync8, statSync as statSync14 } from "fs";
+import { readFileSync as readFileSync31, realpathSync as realpathSync9, statSync as statSync15 } from "fs";
 import { homedir as homedir6 } from "os";
-import { dirname as dirname17, join as join36, resolve as resolve8 } from "path";
+import { dirname as dirname17, join as join38, resolve as resolve8 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
 
 // Packages/Box/src/agents/handover.ts
@@ -23955,34 +24649,34 @@ function hidesFromBlocks(blocks, ask) {
 }
 var fileActions = new Set(["read", "edit", "write", "patch", "list", "grep", "glob"]);
 function ownPlaces() {
-  const places = [process.env.KUVO_AGENTS_HOME, process.env.TMPDIR?.replace(/\/$/, ""), join36(homedir6(), ".claude", "plans")].filter((place) => Boolean(place));
+  const places = [process.env.KUVO_AGENTS_HOME, process.env.TMPDIR?.replace(/\/$/, ""), join38(homedir6(), ".claude", "plans")].filter((place) => Boolean(place));
   if (process.env.KUVO_AGENTS_HOME && !onMachine)
-    places.push(join36(dirname17(process.env.KUVO_AGENTS_HOME), "Attachments"));
+    places.push(join38(dirname17(process.env.KUVO_AGENTS_HOME), "Attachments"));
   return [...places, ...skillFolders()];
 }
 function outsidePaths(ask, directory, attached, own = ownPlaces(), owns) {
   if (!fileActions.has(ask.action))
     return [];
-  const paths = ask.resources.filter((resource) => resource && resource !== "*" && (resource.startsWith("/") || resource.startsWith("~/") || !/[*?[]/.test(resource))).map((resource) => resolve8(directory, resource.startsWith("~/") ? join36(homedir6(), resource.slice(2)) : resource));
+  const paths = ask.resources.filter((resource) => resource && resource !== "*" && (resource.startsWith("/") || resource.startsWith("~/") || !/[*?[]/.test(resource))).map((resource) => resolve8(directory, resource.startsWith("~/") ? join38(homedir6(), resource.slice(2)) : resource));
   const places = [directory, realFolder(directory), ...own];
   return paths.filter((path) => !within2(path, places) && !attached.has(path) && !owns?.(path));
 }
 function realFolder(folder) {
   try {
-    return realpathSync8(folder);
+    return realpathSync9(folder);
   } catch {
     return folder;
   }
 }
 function outsideFolders(ask, paths) {
-  return [...new Set(paths.map((path) => join36(isFolder2(path, ask.action) ? path : dirname17(path), "*")))];
+  return [...new Set(paths.map((path) => join38(isFolder2(path, ask.action) ? path : dirname17(path), "*")))];
 }
 function outsideRefusable(ask, paths, folders) {
   return [...paths.filter((path) => !isFolder2(path, ask.action)), ...folders];
 }
 function isFolder2(path, action) {
   try {
-    return statSync14(path).isDirectory();
+    return statSync15(path).isDirectory();
   } catch {
     return action === "list" || action === "glob";
   }
@@ -26244,7 +26938,7 @@ function withTextFiles(text, files) {
     let contents;
     if (!file.mime.startsWith("image/") && file.mime !== "application/pdf") {
       try {
-        const bytes = file.data ? Buffer.from(file.data, "base64") : file.path && statSync14(file.path).isFile() && statSync14(file.path).size <= textFileLimit ? readFileSync30(file.path) : undefined;
+        const bytes = file.data ? Buffer.from(file.data, "base64") : file.path && statSync15(file.path).isFile() && statSync15(file.path).size <= textFileLimit ? readFileSync31(file.path) : undefined;
         if (bytes && !bytes.includes(0))
           contents = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
       } catch {}
@@ -26544,7 +27238,7 @@ function followed(store, read, signal) {
 import { createHash as createHash14 } from "crypto";
 import { createReadStream } from "fs";
 import { copyFile, lstat as lstat2, mkdir, readFile as readFile4, readdir as readdir2, rename, rm, stat as stat3, writeFile } from "fs/promises";
-import { basename as basename12, dirname as dirname18, isAbsolute as isAbsolute3, join as join37, normalize, sep as sep11 } from "path";
+import { basename as basename12, dirname as dirname18, isAbsolute as isAbsolute3, join as join39, normalize, sep as sep11 } from "path";
 var WORKING = 423;
 
 class CantCarry extends Error {
@@ -26561,7 +27255,7 @@ async function hashOf(file) {
   return hash.digest("hex");
 }
 async function plainFiles(from, link, at = "") {
-  const whole = at ? join37(from, at) : from;
+  const whole = at ? join39(from, at) : from;
   const kind = await lstat2(whole);
   if (kind.isFile())
     return [{ path: at, size: kind.size }];
@@ -26569,7 +27263,7 @@ async function plainFiles(from, link, at = "") {
     throw link(whole);
   const files = [];
   for (const name of (await readdir2(whole)).sort())
-    files.push(...await plainFiles(from, link, at ? join37(at, name) : name));
+    files.push(...await plainFiles(from, link, at ? join39(at, name) : name));
   return files;
 }
 var digestOf = (records, lanes, said = []) => {
@@ -26638,14 +27332,14 @@ class Carrying {
     const out = [];
     const take = async (from, into) => {
       for (const { path, size } of await plainFiles(from, link)) {
-        const whole = path ? join37(from, path) : from;
-        out.push({ from: whole, file: { path: path ? join37(into, path) : into, size, sha256: await hashOf(whole) } });
+        const whole = path ? join39(from, path) : from;
+        out.push({ from: whole, file: { path: path ? join39(into, path) : into, size, sha256: await hashOf(whole) } });
       }
     };
     for (const item of files.items)
-      await take(item.path, join37("lanes", String(at), "conversation", item.name));
+      await take(item.path, join39("lanes", String(at), "conversation", item.name));
     if (files.memory)
-      await take(files.memory, join37("lanes", String(at), "memory"));
+      await take(files.memory, join39("lanes", String(at), "memory"));
     return out;
   }
   async read(root, conversation, into) {
@@ -26663,12 +27357,12 @@ class Carrying {
       said.push(JSON.stringify([id, record.session.title ?? null, record.session.model ?? null, archived]));
       for (const name of ["session.json", "messages.json", "agent.json"]) {
         const file = this.store.fileOf(id, name);
-        const path = join37("sessions", id, name);
+        const path = join39("sessions", id, name);
         if (name === "messages.json")
           records.push({ path, size: (await stat3(file)).size, sha256: await hashOf(file) });
         if (into) {
-          await mkdir(dirname18(join37(into, path)), { recursive: true });
-          await copyFile(file, join37(into, path));
+          await mkdir(dirname18(join39(into, path)), { recursive: true });
+          await copyFile(file, join39(into, path));
         }
       }
       const slots = this.sessions.slotsOf(id);
@@ -26695,8 +27389,8 @@ class Carrying {
           left.push({ provider, paths: files.items.map((item) => item.path), ...files.memory && !files.memoryShared ? { memory: files.memory } : {}, directory: record.session.location.directory });
         if (into) {
           for (const { from, file } of list) {
-            await mkdir(dirname18(join37(into, file.path)), { recursive: true });
-            await copyFile(from, join37(into, file.path));
+            await mkdir(dirname18(join39(into, file.path)), { recursive: true });
+            await copyFile(from, join39(into, file.path));
           }
         }
         at++;
@@ -26756,7 +27450,7 @@ class Carrying {
       if (concrete)
         each.model = concrete;
     }
-    await writeFile(join37(into, "carry.json"), JSON.stringify(manifest), { mode: 384 });
+    await writeFile(join39(into, "carry.json"), JSON.stringify(manifest), { mode: 384 });
     return { sessions: manifest.sessions, lanes: manifest.lanes.map(({ list: _, ...lane }) => lane), digest: manifest.digest, left };
   }
   async concreteOf(model) {
@@ -26774,10 +27468,10 @@ class Carrying {
   async keep(root, into) {
     for (const { session } of this.family(root)) {
       this.store.save(session.id, true);
-      const folder = join37(into, session.id);
+      const folder = join39(into, session.id);
       await mkdir(folder, { recursive: true });
       for (const name of ["session.json", "messages.json"])
-        await copyFile(this.store.fileOf(session.id, name), join37(folder, name));
+        await copyFile(this.store.fileOf(session.id, name), join39(folder, name));
     }
   }
   async hostOf(provider) {
@@ -26846,7 +27540,7 @@ class Carrying {
         stillOn();
         const read = async (name, or) => {
           try {
-            return JSON.parse(await readFile4(join37(from, "sessions", id, name), "utf8"));
+            return JSON.parse(await readFile4(join39(from, "sessions", id, name), "utf8"));
           } catch (error) {
             if (or !== undefined)
               return or;
@@ -26879,15 +27573,15 @@ class Carrying {
             kept[here] = slot;
             const where = host.conversationPlace(slot.state, session);
             for (const file of lane.list) {
-              const conversation = join37("lanes", String(manifest.lanes.indexOf(lane)), "conversation") + sep11;
-              const memory = join37("lanes", String(manifest.lanes.indexOf(lane)), "memory");
-              const dest = file.path.startsWith(conversation) ? where.item(file.path.slice(conversation.length)) : file.path === memory ? where.memory ?? null : file.path.startsWith(memory + sep11) && where.memory ? join37(where.memory, file.path.slice(memory.length + 1)) : null;
+              const conversation = join39("lanes", String(manifest.lanes.indexOf(lane)), "conversation") + sep11;
+              const memory = join39("lanes", String(manifest.lanes.indexOf(lane)), "memory");
+              const dest = file.path.startsWith(conversation) ? where.item(file.path.slice(conversation.length)) : file.path === memory ? where.memory ?? null : file.path.startsWith(memory + sep11) && where.memory ? join39(where.memory, file.path.slice(memory.length + 1)) : null;
               if (!dest)
                 throw new CantCarry("its conversation didn't come whole");
               if (inUse.some((path) => dest === path || dest.startsWith(path + sep11)))
                 throw new CantCarry("its conversation is one here already");
               stillOn();
-              await undo.put(join37(from, file.path), dest, file, Boolean(where.memoryMerges && !file.path.startsWith(conversation)));
+              await undo.put(join39(from, file.path), dest, file, Boolean(where.memoryMerges && !file.path.startsWith(conversation)));
             }
             placed.push(lane);
           } else {
@@ -26919,7 +27613,7 @@ class Carrying {
   async readManifest(from) {
     let manifest;
     try {
-      manifest = JSON.parse(await readFile4(join37(from, "carry.json"), "utf8"));
+      manifest = JSON.parse(await readFile4(join39(from, "carry.json"), "utf8"));
     } catch {
       throw new CantCarry("its conversation didn't come whole");
     }
@@ -26937,11 +27631,11 @@ class Carrying {
   async checked(from, file) {
     let found;
     try {
-      found = await lstat2(join37(from, file.path));
+      found = await lstat2(join39(from, file.path));
     } catch {
       throw new CantCarry("a file of its conversation didn't come with it");
     }
-    if (!found.isFile() || found.size !== file.size || await hashOf(join37(from, file.path)) !== file.sha256)
+    if (!found.isFile() || found.size !== file.size || await hashOf(join39(from, file.path)) !== file.sha256)
       throw new CantCarry("a file of its conversation didn't come whole");
   }
   async undo(keep) {
@@ -27000,7 +27694,7 @@ class Undo {
     this.keep = keep;
   }
   get file() {
-    return join37(this.keep, "placed.json");
+    return join39(this.keep, "placed.json");
   }
   async read() {
     try {
@@ -27022,14 +27716,14 @@ class Undo {
     if (there && merges) {
       if (await hashOf(dest).catch(() => "") === file.sha256)
         return;
-      dest = join37(dirname18(dest), `moved-${file.sha256.slice(0, 8)}-${basename12(dest)}`);
+      dest = join39(dirname18(dest), `moved-${file.sha256.slice(0, 8)}-${basename12(dest)}`);
       there = await lstat2(dest).then(() => true, () => false);
       if (there)
         return;
     }
     const placed = merges ? { dest, sha256: file.sha256 } : { dest };
     if (there)
-      placed.replaced = join37(this.keep, "replaced", String(this.count++));
+      placed.replaced = join39(this.keep, "replaced", String(this.count++));
     this.list.placed.push(placed);
     await this.write();
     if (placed.replaced) {
@@ -27674,8 +28368,8 @@ function seatRules(folder, askFirst, denies) {
 }
 
 // Packages/Box/src/agents/groups/store.ts
-import { existsSync as existsSync18, mkdirSync as mkdirSync22, readdirSync as readdirSync18, readFileSync as readFileSync31, renameSync as renameSync18, rmSync as rmSync15, writeFileSync as writeFileSync23 } from "fs";
-import { join as join38 } from "path";
+import { existsSync as existsSync18, mkdirSync as mkdirSync22, readdirSync as readdirSync20, readFileSync as readFileSync32, renameSync as renameSync18, rmSync as rmSync15, writeFileSync as writeFileSync23 } from "fs";
+import { join as join40 } from "path";
 var version2 = 1;
 function isTurning(value) {
   return value && typeof value.bot === "string" && typeof value.seat === "string" && typeof value.agents === "boolean" && typeof value.prompt === "string" && typeof value.sent === "number" && (value.wrapUp === undefined || typeof value.wrapUp === "boolean");
@@ -27717,14 +28411,14 @@ function isMessages(value) {
 var forgottenFor = 3 * 86400000;
 var read2 = (file) => {
   try {
-    return JSON.parse(readFileSync31(file, "utf8"));
+    return JSON.parse(readFileSync32(file, "utf8"));
   } catch {
     return;
   }
 };
-var text4 = (file) => {
+var text5 = (file) => {
   try {
-    return readFileSync31(file, "utf8");
+    return readFileSync32(file, "utf8");
   } catch {
     return;
   }
@@ -27745,13 +28439,13 @@ class GroupStore {
     mkdirSync22(root, { recursive: true, mode: 448 });
   }
   folder(id) {
-    return join38(this.root, id);
+    return join40(this.root, id);
   }
   load() {
     const all = new Map;
     let names = [];
     try {
-      names = readdirSync18(this.root);
+      names = readdirSync20(this.root);
     } catch {}
     for (const id of names) {
       if (!/^grp_[a-z0-9]+$/.test(id))
@@ -27763,24 +28457,24 @@ class GroupStore {
     return all;
   }
   read(id) {
-    const record = read2(join38(this.folder(id), "group.json"));
+    const record = read2(join40(this.folder(id), "group.json"));
     if (!record || typeof record.kuvo !== "number" || record.kuvo > version2 || !isGroup(record.group, id))
       return;
-    const messages = read2(join38(this.folder(id), "messages.json")) ?? [];
+    const messages = read2(join40(this.folder(id), "messages.json")) ?? [];
     if (!isMessages(messages))
       return;
     return { group: record.group, status: record.status === "held" ? "held" : "active", talking: record.talking === true, paused: record.paused === true, ...isTurning(record.turning) ? { turning: record.turning } : {}, messages };
   }
   saveGroup(kept) {
     mkdirSync22(this.folder(kept.group.id), { recursive: true, mode: 448 });
-    write(join38(this.folder(kept.group.id), "group.json"), { kuvo: version2, status: kept.status, ...kept.talking ? { talking: true } : {}, ...kept.paused ? { paused: true } : {}, ...kept.turning ? { turning: kept.turning } : {}, group: kept.group });
+    write(join40(this.folder(kept.group.id), "group.json"), { kuvo: version2, status: kept.status, ...kept.talking ? { talking: true } : {}, ...kept.paused ? { paused: true } : {}, ...kept.turning ? { turning: kept.turning } : {}, group: kept.group });
   }
   saveMessages(kept) {
     mkdirSync22(this.folder(kept.group.id), { recursive: true, mode: 448 });
-    write(join38(this.folder(kept.group.id), "messages.json"), kept.messages);
+    write(join40(this.folder(kept.group.id), "messages.json"), kept.messages);
   }
   setAwake(id, awake) {
-    const file = join38(this.folder(id), "awake");
+    const file = join40(this.folder(id), "awake");
     if (awake && !existsSync18(file) && existsSync18(this.folder(id)))
       writeFileSync23(file, "");
     if (!awake)
@@ -27789,13 +28483,13 @@ class GroupStore {
   trash(id, trash) {
     if (!existsSync18(this.folder(id)))
       return;
-    const into = join38(trash, `${new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "")}-group-${id}`);
+    const into = join40(trash, `${new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "")}-group-${id}`);
     mkdirSync22(into, { recursive: true, mode: 448 });
-    renameSync18(this.folder(id), join38(into, id));
+    renameSync18(this.folder(id), join40(into, id));
     emit("kuvo.group.trashed", { id, path: into });
   }
   settings() {
-    const value = read2(join38(this.root, "settings.json"));
+    const value = read2(join40(this.root, "settings.json"));
     if (!value || typeof value !== "object")
       return;
     return {
@@ -27808,41 +28502,41 @@ class GroupStore {
     };
   }
   writeSettings(settings) {
-    const kept = read2(join38(this.root, "settings.json"));
-    write(join38(this.root, "settings.json"), { ...kept && typeof kept === "object" ? kept : {}, kuvo: version2, ...settings });
+    const kept = read2(join40(this.root, "settings.json"));
+    write(join40(this.root, "settings.json"), { ...kept && typeof kept === "object" ? kept : {}, kuvo: version2, ...settings });
   }
   allBots() {
     let names = [];
     try {
-      names = readdirSync18(this.bots);
+      names = readdirSync20(this.bots);
     } catch {}
     return names.flatMap((name) => this.bot(name) ?? []);
   }
   bot(id) {
     if (!/^bot_[A-Za-z0-9]+$/.test(id))
       return;
-    const folder = join38(this.bots, id);
-    const described = read2(join38(folder, "bot.json"));
-    const sessionID = text4(join38(folder, "session"))?.trim();
+    const folder = join40(this.bots, id);
+    const described = read2(join40(folder, "bot.json"));
+    const sessionID = text5(join40(folder, "session"))?.trim();
     if (!described?.name || !sessionID)
       return;
-    const job = read2(join38(folder, "job.json"));
-    const directory = text4(join38(folder, "directory"))?.trim() || join38(folder, "workspace");
+    const job = read2(join40(folder, "job.json"));
+    const directory = text5(join40(folder, "directory"))?.trim() || join40(folder, "workspace");
     return {
       id,
       name: String(described.name),
       job: typeof job?.line === "string" ? job.line : String(described.job ?? ""),
       instructions: typeof job?.details === "string" ? job.details : "",
-      memoryFile: join38(folder, "MEMORY.md"),
+      memoryFile: join40(folder, "MEMORY.md"),
       folder,
       sessionID,
       directory,
       model: described.model?.id && described.model?.providerID ? described.model : undefined,
       personality: typeof described.personality === "string" ? described.personality : undefined,
-      agents: text4(join38(folder, "via"))?.trim() === "bridge",
+      agents: text5(join40(folder, "via"))?.trim() === "bridge",
       ...described.look !== undefined ? { look: described.look } : {},
       ...typeof described.created === "string" ? { created: described.created } : {},
-      ...text4(join38(folder, "paused"))?.trim() === "moving" ? { moving: true } : {}
+      ...text5(join40(folder, "paused"))?.trim() === "moving" ? { moving: true } : {}
     };
   }
   peerMemory(bot) {
@@ -27854,7 +28548,7 @@ class GroupStore {
     return typeof at === "number" ? at : 0;
   }
   peerEntries(bot) {
-    const all = read2(join38(this.root, "peer-memory.json"));
+    const all = read2(join40(this.root, "peer-memory.json"));
     const entries = all && typeof all === "object" ? all[bot] : undefined;
     return entries && typeof entries === "object" ? entries : {};
   }
@@ -27870,7 +28564,7 @@ class GroupStore {
     });
   }
   changePeerMemory(bot, change) {
-    const all = read2(join38(this.root, "peer-memory.json")) ?? {};
+    const all = read2(join40(this.root, "peer-memory.json")) ?? {};
     const entries = { ...all[bot] ?? {} };
     change(entries);
     for (const [key, entry] of Object.entries(entries))
@@ -27880,10 +28574,10 @@ class GroupStore {
       delete all[bot];
     else
       all[bot] = entries;
-    write(join38(this.root, "peer-memory.json"), all);
+    write(join40(this.root, "peer-memory.json"), all);
   }
   peerWork() {
-    const all = read2(join38(this.root, "peer-work.json"));
+    const all = read2(join40(this.root, "peer-work.json"));
     return all && typeof all === "object" ? all : {};
   }
   keepPeerWork(task, work) {
@@ -27897,29 +28591,29 @@ class GroupStore {
   changePeerWork(change) {
     const all = this.peerWork();
     change(all);
-    write(join38(this.root, "peer-work.json"), all);
+    write(join40(this.root, "peer-work.json"), all);
   }
   pendingMemory() {
-    const value = read2(join38(this.root, "pending-memory.json"));
+    const value = read2(join40(this.root, "pending-memory.json"));
     if (!value || typeof value !== "object" || Array.isArray(value))
       return {};
     return Object.fromEntries(Object.entries(value).filter(([bot, chats]) => /^bot_[A-Za-z0-9]+$/.test(bot) && strings2(chats)));
   }
   setPendingMemory(pending) {
     if (Object.keys(pending).length === 0)
-      rmSync15(join38(this.root, "pending-memory.json"), { force: true });
+      rmSync15(join40(this.root, "pending-memory.json"), { force: true });
     else
-      write(join38(this.root, "pending-memory.json"), pending);
+      write(join40(this.root, "pending-memory.json"), pending);
   }
   peerTurns() {
-    const all = read2(join38(this.root, "peer-turns.json"));
+    const all = read2(join40(this.root, "peer-turns.json"));
     return all && typeof all === "object" ? all : {};
   }
   keepPeerTurns(turns) {
-    write(join38(this.root, "peer-turns.json"), turns);
+    write(join40(this.root, "peer-turns.json"), turns);
   }
   writeFile(path, contents) {
-    mkdirSync22(join38(path, ".."), { recursive: true });
+    mkdirSync22(join40(path, ".."), { recursive: true });
     writeFileSync23(path + ".new", contents, { mode: 384 });
     renameSync18(path + ".new", path);
   }
@@ -27929,7 +28623,7 @@ class GroupStore {
 }
 
 // Packages/Box/src/agents/groups/named.ts
-import { readFileSync as readFileSync32 } from "fs";
+import { readFileSync as readFileSync33 } from "fs";
 var start = "<named-agents>";
 var end = "</named-agents>";
 var heading = "Agents the user named with & in this message, by their address. Read one's conversation with read_conversation only when what the user asks needs what it knows or did, and write to it with send_message only to ask it something or hand it work; when the user only mentions one, do neither:";
@@ -27937,7 +28631,7 @@ function readDirectory(file) {
   if (!file)
     return { machine: null, agents: [] };
   try {
-    const value = JSON.parse(readFileSync32(file, "utf8"));
+    const value = JSON.parse(readFileSync33(file, "utf8"));
     const agents = Array.isArray(value?.agents) ? value.agents.filter((agent) => agent && typeof agent.session === "string" && agent.session.startsWith("ses_") && typeof agent.name === "string" && agent.name) : [];
     return { machine: typeof value?.machine === "string" ? value.machine : null, agents };
   } catch {
@@ -28537,14 +29231,14 @@ async function make(runner, store, given, here) {
 }
 
 // Packages/Box/src/agents/groups/post.ts
-import { existsSync as existsSync19, readFileSync as readFileSync34, renameSync as renameSync20, writeFileSync as writeFileSync25 } from "fs";
+import { existsSync as existsSync19, readFileSync as readFileSync35, renameSync as renameSync20, writeFileSync as writeFileSync25 } from "fs";
 
 // Packages/Box/src/shared/seats.ts
 var SEAT_MAIL_KINDS = ["turn", "state", "result", "steer", "stop", "drop", "work", "held", "report", "memory"];
 
 // Packages/Box/src/agents/usage/usage-peers.ts
 import { createHash as createHash15 } from "crypto";
-import { mkdirSync as mkdirSync23, readFileSync as readFileSync33, renameSync as renameSync19, writeFileSync as writeFileSync24 } from "fs";
+import { mkdirSync as mkdirSync23, readFileSync as readFileSync34, renameSync as renameSync19, writeFileSync as writeFileSync24 } from "fs";
 import { dirname as dirname19 } from "path";
 var isUsageMail = (value) => value !== null && typeof value === "object" && value.kind === "usage";
 var MINUTE3 = 60000;
@@ -28558,7 +29252,7 @@ var MOST_BYTES2 = 400000;
 var RECENT = 2 * 24 * 60 * MINUTE3;
 var SERVICE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 var WHOLE_FRESH = 25 * MINUTE3;
-var text5 = (value, most = 200) => typeof value === "string" && value ? value.slice(0, most) : undefined;
+var text6 = (value, most = 200) => typeof value === "string" && value ? value.slice(0, most) : undefined;
 
 class UsagePeers {
   usage;
@@ -28671,7 +29365,7 @@ class UsagePeers {
     const now = this.now();
     const before = this.peers.get(from);
     const name = this.directory.peerBoxes().find((box) => box.key === from)?.name ?? before?.name ?? "another computer";
-    const digest = text5(mail.digest, 64);
+    const digest = text6(mail.digest, 64);
     const wasAway = !!before && now - before.heard > PEER_AWAY;
     const skew = typeof mail.at === "number" && Number.isFinite(mail.at) && Math.abs(now - mail.at) >= SKEW ? now - mail.at : 0;
     let whole = !!before && !!digest && before.digest === digest;
@@ -28796,11 +29490,11 @@ class UsagePeers {
     if (!this.file)
       return;
     try {
-      const saved = JSON.parse(readFileSync33(this.file, "utf8"));
+      const saved = JSON.parse(readFileSync34(this.file, "utf8"));
       for (const [key, kept] of Object.entries(saved.peers ?? {})) {
         if (!kept || typeof kept.heard !== "number" || !Array.isArray(kept.accounts))
           continue;
-        const digest = text5(kept.digest, 64);
+        const digest = text6(kept.digest, 64);
         this.peers.set(key, { name: typeof kept.name === "string" ? kept.name : "another computer", heard: kept.heard, ...digest ? { digest } : {}, ...kept.vouched === true ? { vouched: true } : {}, accounts: kept.accounts.flatMap((account) => takenAccount(account, 0, Infinity) ?? []) });
       }
     } catch {}
@@ -28857,15 +29551,15 @@ function takenAccount(given, off, now) {
   if (!given || typeof given !== "object")
     return null;
   const account = given;
-  const provider = text5(account.provider);
+  const provider = text6(account.provider);
   if (!provider || typeof account.service !== "string" || !SERVICE.test(account.service))
     return null;
   const scanned = typeof account.scanned === "number" && Number.isFinite(account.scanned) && account.scanned > 0 ? Math.min(account.scanned + off, now) : undefined;
   return {
     provider,
     service: account.service,
-    ...kinds.includes(account.agent) ? { agent: account.agent, ...text5(account.account) ? { account: text5(account.account) } : {} } : {},
-    ...text5(account.label, 100) ? { label: text5(account.label, 100) } : {},
+    ...kinds.includes(account.agent) ? { agent: account.agent, ...text6(account.account) ? { account: text6(account.account) } : {} } : {},
+    ...text6(account.label, 100) ? { label: text6(account.label, 100) } : {},
     ...typeof account.identity === "string" && /^[0-9a-f]{16}$/.test(account.identity) ? { identity: account.identity } : {},
     ...scanned ? { scanned } : {},
     slots: slotsFrom(account.slots, MOST_USES),
@@ -31663,7 +32357,7 @@ class PeerPost {
     let kept = [];
     try {
       if (file && existsSync19(file))
-        kept = JSON.parse(readFileSync34(file, "utf8"));
+        kept = JSON.parse(readFileSync35(file, "utf8"));
     } catch {}
     this.kept = Array.isArray(kept) ? kept.filter((line) => line && typeof line.id === "string" && typeof line.to === "string" && isSeatMail(line.mail)) : [];
   }
@@ -32460,7 +33154,7 @@ ${all}`;
 }
 
 // Packages/Box/src/agents/renewal.ts
-import { statSync as statSync15 } from "fs";
+import { statSync as statSync16 } from "fs";
 import { dirname as dirname20 } from "path";
 
 // Packages/Box/src/shared/bundle.ts
@@ -32655,7 +33349,7 @@ class Renewal {
   newerInPlace() {
     let stat;
     try {
-      stat = statSync15(this.options.script);
+      stat = statSync16(this.options.script);
     } catch {
       return this.newer;
     }
@@ -32781,8 +33475,8 @@ function updateUnderWay(run) {
 import { spawn as spawn6 } from "child_process";
 
 // Packages/Box/src/agents/store.ts
-import { mkdirSync as mkdirSync24, readdirSync as readdirSync19, readFileSync as readFileSync35, renameSync as renameSync21, rmSync as rmSync16, statSync as statSync16, writeFileSync as writeFileSync26 } from "fs";
-import { join as join39 } from "path";
+import { mkdirSync as mkdirSync24, readdirSync as readdirSync21, readFileSync as readFileSync36, renameSync as renameSync21, rmSync as rmSync16, statSync as statSync17, writeFileSync as writeFileSync26 } from "fs";
+import { join as join41 } from "path";
 
 class Store {
   root;
@@ -32791,17 +33485,17 @@ class Store {
   constructor(root) {
     this.root = root;
     mkdirSync24(root, { recursive: true });
-    for (const id of readdirSync19(root)) {
+    for (const id of readdirSync21(root)) {
       try {
-        const folder = join39(root, id);
-        const session = JSON.parse(readFileSync35(join39(folder, "session.json"), "utf8"));
+        const folder = join41(root, id);
+        const session = JSON.parse(readFileSync36(join41(folder, "session.json"), "utf8"));
         let messages = [];
         try {
-          messages = JSON.parse(readFileSync35(join39(folder, "messages.json"), "utf8"));
+          messages = JSON.parse(readFileSync36(join41(folder, "messages.json"), "utf8"));
         } catch {}
         let agent = {};
         try {
-          agent = JSON.parse(readFileSync35(join39(folder, "agent.json"), "utf8"));
+          agent = JSON.parse(readFileSync36(join41(folder, "agent.json"), "utf8"));
         } catch {}
         this.records.set(session.id, { session, messages, agent });
       } catch {}
@@ -32814,7 +33508,7 @@ class Store {
     return this.records.get(id);
   }
   fileOf(id, name) {
-    return join39(this.root, id, name);
+    return join41(this.root, id, name);
   }
   addWhole(record) {
     this.records.set(record.session.id, record);
@@ -32822,7 +33516,7 @@ class Store {
   }
   writtenAt(id) {
     try {
-      return statSync16(join39(this.root, id, "messages.json")).mtimeMs;
+      return statSync17(join41(this.root, id, "messages.json")).mtimeMs;
     } catch {
       return;
     }
@@ -32835,7 +33529,7 @@ class Store {
     this.records.delete(id);
     clearTimeout(this.pending.get(id));
     this.pending.delete(id);
-    rmSync16(join39(this.root, id), { recursive: true, force: true });
+    rmSync16(join41(this.root, id), { recursive: true, force: true });
   }
   save(id, now = false) {
     clearTimeout(this.pending.get(id));
@@ -32858,14 +33552,14 @@ class Store {
     if (!record)
       return;
     try {
-      const folder = join39(this.root, id);
+      const folder = join41(this.root, id);
       mkdirSync24(folder, { recursive: true });
       for (const [name, value] of [
         ["session.json", record.session],
         ["messages.json", record.messages],
         ["agent.json", record.agent]
       ]) {
-        const file = join39(folder, name);
+        const file = join41(folder, name);
         writeFileSync26(file + ".new", JSON.stringify(value));
         renameSync21(file + ".new", file);
       }
@@ -33047,7 +33741,7 @@ class HangWatch {
 var isEngine = (command) => /\bserve\b/.test(command) && !command.includes("kuvo-link");
 
 // Packages/Box/src/agents/limits-peers.ts
-import { mkdirSync as mkdirSync25, readFileSync as readFileSync36, renameSync as renameSync22, writeFileSync as writeFileSync27 } from "fs";
+import { mkdirSync as mkdirSync25, readFileSync as readFileSync37, renameSync as renameSync22, writeFileSync as writeFileSync27 } from "fs";
 import { dirname as dirname21 } from "path";
 var MINUTE4 = 60000;
 var TELL_AGAIN2 = 10 * MINUTE4;
@@ -33208,7 +33902,7 @@ class LimitsPeers {
     if (!this.file)
       return;
     try {
-      const saved = JSON.parse(readFileSync36(this.file, "utf8"));
+      const saved = JSON.parse(readFileSync37(this.file, "utf8"));
       for (const [key, kept] of Object.entries(saved.peers ?? {})) {
         if (!kept || typeof kept.heard !== "number" || !Array.isArray(kept.accounts))
           continue;
@@ -33226,26 +33920,26 @@ class LimitsPeers {
     } catch {}
   }
 }
-var text6 = (value, most = 200) => typeof value === "string" && value ? value.slice(0, most) : undefined;
+var text7 = (value, most = 200) => typeof value === "string" && value ? value.slice(0, most) : undefined;
 var time = (value) => typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 var MOST_EXTRA = 1000;
 function takenExtra(extra) {
-  if (!extra || typeof extra !== "object" || Array.isArray(extra) || !text6(extra.id) || !text6(extra.name, 100) || !text6(extra.kind, 40))
+  if (!extra || typeof extra !== "object" || Array.isArray(extra) || !text7(extra.id) || !text7(extra.name, 100) || !text7(extra.kind, 40))
     return [];
   if (extra.kind === "spent") {
     if (typeof extra.amount !== "number" || !Number.isFinite(extra.amount) || !["usd", "credits", "requests"].includes(extra.unit))
       return [];
-    return [{ id: text6(extra.id), name: text6(extra.name, 100), kind: "spent", amount: extra.amount, unit: extra.unit, ...time(extra.resetsAt) ? { resetsAt: extra.resetsAt } : {} }];
+    return [{ id: text7(extra.id), name: text7(extra.name, 100), kind: "spent", amount: extra.amount, unit: extra.unit, ...time(extra.resetsAt) ? { resetsAt: extra.resetsAt } : {} }];
   }
   const plain = Object.fromEntries(Object.entries(extra).slice(0, 20).filter(([, value]) => typeof value === "string" && value.length <= 200 || typeof value === "number" && Number.isFinite(value) || typeof value === "boolean"));
-  const taken = { ...plain, id: text6(extra.id), name: text6(extra.name, 100), kind: text6(extra.kind, 40) };
+  const taken = { ...plain, id: text7(extra.id), name: text7(extra.name, 100), kind: text7(extra.kind, 40) };
   return Buffer.byteLength(JSON.stringify(taken)) > MOST_EXTRA ? [] : [taken];
 }
 function takenAccount2(given, off, now) {
   if (!given || typeof given !== "object")
     return null;
   const account = given;
-  const provider = text6(account.provider);
+  const provider = text7(account.provider);
   if (!provider || typeof account.service !== "string" || !SERVICE2.test(account.service))
     return null;
   const moved = (value) => {
@@ -33254,17 +33948,17 @@ function takenAccount2(given, off, now) {
   };
   const windows = (Array.isArray(account.windows) ? account.windows : []).slice(0, 30).flatMap((window) => {
     const read = moved(window?.read);
-    if (!window || typeof window !== "object" || !text6(window.id) || typeof window.used !== "number" || !Number.isFinite(window.used) || read === undefined)
+    if (!window || typeof window !== "object" || !text7(window.id) || typeof window.used !== "number" || !Number.isFinite(window.used) || read === undefined)
       return [];
     const amount = window.amount;
     return [
       {
-        id: text6(window.id),
+        id: text7(window.id),
         used: Math.min(Math.max(window.used, 0), 1),
         ...time(window.resetsAt) ? { resetsAt: window.resetsAt } : {},
         ...time(window.minutes) ? { minutes: window.minutes } : {},
-        ...text6(window.model) ? { model: text6(window.model) } : {},
-        ...text6(window.name) ? { name: text6(window.name) } : {},
+        ...text7(window.model) ? { model: text7(window.model) } : {},
+        ...text7(window.name) ? { name: text7(window.name) } : {},
         ...amount && typeof amount === "object" && typeof amount.used === "number" && typeof amount.limit === "number" && ["requests", "usd", "credits"].includes(amount.unit) ? { amount: { used: amount.used, limit: amount.limit, unit: amount.unit } } : {},
         read,
         source: window.source === "turn" ? "turn" : "usage"
@@ -33279,16 +33973,16 @@ function takenAccount2(given, off, now) {
   return {
     provider,
     service: account.service,
-    ...kinds.includes(account.agent) ? { agent: account.agent, ...text6(account.account) ? { account: text6(account.account) } : {} } : {},
-    ...text6(account.label, 100) ? { label: text6(account.label, 100) } : {},
+    ...kinds.includes(account.agent) ? { agent: account.agent, ...text7(account.account) ? { account: text7(account.account) } : {} } : {},
+    ...text7(account.label, 100) ? { label: text7(account.label, 100) } : {},
     ...typeof account.identity === "string" && /^[0-9a-f]{16}$/.test(account.identity) ? { identity: account.identity } : {},
-    ...text6(account.plan, 100) ? { plan: text6(account.plan, 100) } : {},
+    ...text7(account.plan, 100) ? { plan: text7(account.plan, 100) } : {},
     windows,
     ...balance && typeof balance === "object" && typeof balance.left === "number" && (balance.unit === "usd" || balance.unit === "credits") ? { balance: { left: balance.left, ...typeof balance.limit === "number" ? { limit: balance.limit } : {}, unit: balance.unit } } : {},
     ...extras.length ? { extras } : {},
     ...checked ? { checked } : {},
     ...next ? { next } : {},
-    ...problem && typeof problem === "object" && PROBLEMS.has(problem.kind) && text6(problem.message, 500) ? { problem: { kind: problem.kind, message: text6(problem.message, 500), ...time(problem.until) ? { until: problem.until + off } : {} } } : {}
+    ...problem && typeof problem === "object" && PROBLEMS.has(problem.kind) && text7(problem.message, 500) ? { problem: { kind: problem.kind, message: text7(problem.message, 500), ...time(problem.until) ? { until: problem.until + off } : {} } } : {}
   };
 }
 
@@ -33308,15 +34002,15 @@ if (!home3 || !password || onMachine && (!machineHome || !Number(process.env.KUV
   process.exit(2);
 }
 var machineEngine = onMachine ? { url: `http://127.0.0.1:${process.env.KUVO_ENGINE_PORT}`, password: process.env.OPENCODE_PASSWORD } : undefined;
-var port = onMachine ? Number(process.env.KUVO_AGENTS_PORT) : 0;
+var port2 = onMachine ? Number(process.env.KUVO_AGENTS_PORT) : 0;
 if (onMachine) {
   setToolProgram(process.env.OPENCODE_CONFIG_CONTENT);
   takeOwnFolders();
   if (home3)
     dropCarriedSignIns(home3);
-  process.env.KUVO_BIN = join40(machineHome, "bin");
-  process.env.KUVO_BOTS ??= join40(machineHome, "bots");
-  process.env.KUVO_WAKES ??= join40(machineHome, "wakes");
+  process.env.KUVO_BIN = join42(machineHome, "bin");
+  process.env.KUVO_BOTS ??= join42(machineHome, "bots");
+  process.env.KUVO_WAKES ??= join42(machineHome, "wakes");
   for (const name of ["OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG", "OPENCODE_CLIENT", "KUVO_AGENTS_PASSWORD", "KUVO_AGENTS_PORT", "KUVO_ENGINE_PORT", "KUVO_ENGINE_PID"])
     delete process.env[name];
 }
@@ -33325,14 +34019,14 @@ var renewSettle = process.env.KUVO_TEST_RENEW_SETTLE ? Number(process.env.KUVO_T
 var renewUptime = process.env.KUVO_TEST_RENEW_UPTIME ? Number(process.env.KUVO_TEST_RENEW_UPTIME) : undefined;
 for (const name of ["KUVO_TEST_RENEW_HOLD", "KUVO_TEST_RENEW_SETTLE", "KUVO_TEST_RENEW_UPTIME"])
   delete process.env[name];
-var temporary = process.env.TMPDIR?.replace(/\/$/, "") || join40(home3, "tmp");
+var temporary = process.env.TMPDIR?.replace(/\/$/, "") || join42(home3, "tmp");
 mkdirSync26(temporary, { recursive: true });
-rmSync17(join40(temporary, "antigravity"), { recursive: true, force: true });
+rmSync17(join42(temporary, "antigravity"), { recursive: true, force: true });
 leftSignIns(temporary);
 try {
-  for (const name of readdirSync20(join40(home3, "antigravity")))
+  for (const name of readdirSync22(join42(home3, "antigravity")))
     if (name.startsWith(".install-"))
-      rmSync17(join40(home3, "antigravity", name), { recursive: true, force: true });
+      rmSync17(join42(home3, "antigravity", name), { recursive: true, force: true });
 } catch {}
 delete process.env.BUN_BE_BUN;
 process.env.KUVO_WAKE_VIA = "bridge";
@@ -33342,15 +34036,15 @@ process.on("uncaughtException", (error) => {
   console.error("uncaught:", error);
   process.exit(1);
 });
-var deps = new Deps(join40(home3, "runtime"), join40(home3, "cache"));
+var deps = new Deps(join42(home3, "runtime"), join42(home3, "cache"));
 if (onMachine) {
-  dropOwnPrograms(join40(home3, "runtime"));
+  dropOwnPrograms(join42(home3, "runtime"));
   useSavedLoginPath();
 }
-rmSync17(join40(home3, "cache", "install"), { recursive: true, force: true });
+rmSync17(join42(home3, "cache", "install"), { recursive: true, force: true });
 var context = { home: home3, temporary, deps };
 var roster = new Roster(new Accounts(home3), context);
-var store = new Store(join40(home3, "sessions"));
+var store = new Store(join42(home3, "sessions"));
 var auto = new Auto(home3);
 var link4 = new EngineLink;
 if (machineEngine)
@@ -33367,7 +34061,7 @@ function engineAgent(providerID) {
     engineAgents.set(providerID, agent = new EngineAgent(link4, providerID));
   return agent;
 }
-var sessions = new Sessions(store, roster, auto, engineAgent, (directory) => link4.policies(directory), (name, directory) => link4.agent(name, directory), new Snapshots(join40(home3, "snapshots")), (directory) => link4.titleModel(directory));
+var sessions = new Sessions(store, roster, auto, engineAgent, (directory) => link4.policies(directory), (name, directory) => link4.agent(name, directory), new Snapshots(join42(home3, "snapshots")), (directory) => link4.titleModel(directory));
 var restarting = false;
 var noteInside = () => {
   if (restarting)
@@ -33383,15 +34077,15 @@ setInterval(noteInside, 5000).unref?.();
 var self;
 var partGiven;
 var groups;
-var groupFolders = onMachine ? { root: join40(machineHome, "groups"), bots: process.env.KUVO_BOTS ?? join40(machineHome, "bots"), trash: join40(machineHome, "trash") } : process.env.KUVO_GROUPS && process.env.KUVO_BOTS && process.env.KUVO_TRASH ? { root: process.env.KUVO_GROUPS, bots: process.env.KUVO_BOTS, trash: process.env.KUVO_TRASH } : undefined;
+var groupFolders = onMachine ? { root: join42(machineHome, "groups"), bots: process.env.KUVO_BOTS ?? join42(machineHome, "bots"), trash: join42(machineHome, "trash") } : process.env.KUVO_GROUPS && process.env.KUVO_BOTS && process.env.KUVO_TRASH ? { root: process.env.KUVO_GROUPS, bots: process.env.KUVO_BOTS, trash: process.env.KUVO_TRASH } : undefined;
 var groupMemoryKey = process.env.KUVO_GROUPS_MEMORY_KEY || undefined;
-var post = new PeerPost(groupFolders ? join40(groupFolders.root, "peer-outbox.json") : undefined);
+var post = new PeerPost(groupFolders ? join42(groupFolders.root, "peer-outbox.json") : undefined);
 var directory = new LinkDirectory(post);
 var peers = { post, directory };
-var artifactsFolder = onMachine ? join40(machineHome, "artifacts") : process.env.KUVO_ARTIFACTS || undefined;
-var botsFolder = groupFolders?.bots ?? (onMachine ? join40(machineHome, "bots") : process.env.KUVO_BOTS || undefined);
-var agentsFile = onMachine ? join40(machineHome, "run", "agents.json") : process.env.KUVO_AGENTS_FILE || undefined;
-var runFolder = onMachine ? join40(machineHome, "run") : process.env.KUVO_RUN || undefined;
+var artifactsFolder = onMachine ? join42(machineHome, "artifacts") : process.env.KUVO_ARTIFACTS || undefined;
+var botsFolder = groupFolders?.bots ?? (onMachine ? join42(machineHome, "bots") : process.env.KUVO_BOTS || undefined);
+var agentsFile = onMachine ? join42(machineHome, "run", "agents.json") : process.env.KUVO_AGENTS_FILE || undefined;
+var runFolder = onMachine ? join42(machineHome, "run") : process.env.KUVO_RUN || undefined;
 notesBeside(runFolder);
 for (const name of ["KUVO_GROUPS", "KUVO_TRASH", "KUVO_GROUPS_MEMORY_KEY", "KUVO_AGENTS_FILE", "KUVO_ARTIFACTS", "KUVO_RUN", ...onMachine ? [] : ["KUVO_BOTS"]])
   delete process.env[name];
@@ -33443,34 +34137,36 @@ var places5 = {
     }
   }
 };
-var goals = new Goals(join40(home3, "goals.json"), places5);
+var goals = new Goals(join42(home3, "goals.json"), places5);
 setInterval(() => goals.resumeDue(), 60000).unref?.();
-var sideQuestions = new SideQuestions(join40(home3, "side-questions.json"), places5);
+var sideQuestions = new SideQuestions(join42(home3, "side-questions.json"), places5);
 var handoffs = new Handoffs(places5);
-var reviews = new Reviews(join40(home3, "reviews.json"), places5);
+var reviews = new Reviews(join42(home3, "reviews.json"), places5);
 var voice = new VoiceWords(places5);
 var engineAccounts = new EngineAccounts(() => link4.request("GET", "/api/credential"));
-var limits = new Limits(() => [...agentAccounts(roster.all()), ...engineAccounts.accounts()], join40(home3, "limits.json"), Date.now, () => engineAccounts.refresh(), () => engineAccounts.answered);
+var limits = new Limits(() => [...agentAccounts(roster.all()), ...engineAccounts.accounts()], join42(home3, "limits.json"), Date.now, () => engineAccounts.refresh(), () => engineAccounts.answered);
 limits.alsoServices = ENGINE_SERVICES;
-peers.limits = new LimitsPeers(limits, post, directory, join40(home3, "limits-peers.json"));
+peers.limits = new LimitsPeers(limits, post, directory, join42(home3, "limits-peers.json"));
 var noPriceFeeds = process.env.KUVO_TEST_PRICE_FEEDS === "off" || !isRealBridgeFolder(home3);
 delete process.env.KUVO_TEST_PRICE_FEEDS;
-var usageFolder = join40(home3, "usage");
-var usageSettings = new UsageSettings(join40(usageFolder, "settings.json"));
+var usageFolder = join42(home3, "usage");
+var usageSettings = new UsageSettings(join42(usageFolder, "settings.json"));
 var claudeUsage2 = claudeSources(usageFolder);
 var codexUsage = codexSources(usageFolder, () => usageSettings.codexFallback);
-var engineData = process.env.KUVO_ENGINE_DB_FOLDER || (onMachine && machineHome ? process.env.KUVO_ENGINE_DATA || join40(machineHome, "data", "opencode") : undefined);
+var engineData = process.env.KUVO_ENGINE_DB_FOLDER || (onMachine && machineHome ? process.env.KUVO_ENGINE_DATA || join42(machineHome, "data", "opencode") : undefined);
 var engineCodexUsage = engineCodexSource(engineData, () => engineAccounts.answered ? engineAccounts.accounts().some((account) => account.provider === "openai") : undefined, () => usage.has("openai"));
+var antigravityUsage = antigravitySources();
 var grokUsage = grokSources(usageFolder);
 var engineHostedUsage = engineHostedSources(engineData);
 cursorEndpoints.live = !noPriceFeeds;
+antigravityTransport.live = !noPriceFeeds;
 var cursorUsage = cursorSources(usageFolder, (provider, identity) => limits.held(provider) || identity !== undefined && !!usage.peers?.readsWhole("cursor", identity));
-var usage = new Usage(() => [...claudeUsage2(roster.all()), ...codexUsage(roster.all()), ...grokUsage(roster.all()), ...engineCodexUsage(), ...engineHostedUsage(), ...cursorUsage(roster.all())], new PricingStore(join40(usageFolder, "pricing"), noPriceFeeds ? null : undefined), (provider) => limits.identity(provider), join40(usageFolder, "usage.json"));
+var usage = new Usage(() => [...claudeUsage2(roster.all()), ...codexUsage(roster.all()), ...grokUsage(roster.all()), ...engineCodexUsage(), ...engineHostedUsage(), ...cursorUsage(roster.all()), ...antigravityUsage(roster.all())], new PricingStore(join42(usageFolder, "pricing"), noPriceFeeds ? null : undefined), (provider) => limits.identity(provider), join42(usageFolder, "usage.json"));
 usage.settings = usageSettings;
 engineAccounts.onAnswered = () => void usage.tick();
 if (!engineData)
   usage.services = USAGE_SERVICES.filter((service) => service !== "opencode");
-peers.usage = new UsagePeers(usage, post, directory, join40(usageFolder, "peers.json"));
+peers.usage = new UsagePeers(usage, post, directory, join42(usageFolder, "peers.json"));
 var artifacts;
 var noted2;
 if (artifactsFolder) {
@@ -33522,7 +34218,7 @@ var answering = 0;
 try {
   server4 = Bun.serve({
     hostname: "127.0.0.1",
-    port,
+    port: port2,
     idleTimeout: 0,
     fetch: (request) => {
       if (new URL(request.url).pathname === "/api/event")
@@ -33557,7 +34253,7 @@ link4.whenReady().then(() => {
     console.error("group chats:", error);
   }
 });
-var record2 = onMachine ? join40(machineHome, "run", "bridge.json") : undefined;
+var record2 = onMachine ? join42(machineHome, "run", "bridge.json") : undefined;
 var writeRecord = (renewal, first = false) => {
   if (!record2)
     return;
@@ -33585,7 +34281,7 @@ renewal = onMachine && build ? new Renewal({
     stop();
   },
   told: (state) => writeRecord(state),
-  paused: () => updateUnderWay(join40(machineHome, "run")),
+  paused: () => updateUnderWay(join42(machineHome, "run")),
   ready: () => {
     const kept = keeperEngine(machineHome);
     return !kept || kept === basename13(dirname22(process.execPath));
@@ -33596,7 +34292,7 @@ renewal = onMachine && build ? new Renewal({
       return launchSaid.lets;
     const lets = launchLets(commandLineOf(process.ppid), () => {
       try {
-        return readFileSync37(join40(machineHome, "run", "agents.log"), "utf8");
+        return readFileSync38(join42(machineHome, "run", "agents.log"), "utf8");
       } catch {
         return;
       }
@@ -33632,7 +34328,7 @@ if (renewing)
     renewing.look();
   });
 if (runFolder)
-  new HangWatch({ name: "engine", run: runFolder, record: join40(runFolder, "engine.json"), isIt: isEngine }).start();
+  new HangWatch({ name: "engine", run: runFolder, record: join42(runFolder, "engine.json"), isIt: isEngine }).start();
 var stopping = false;
 function stop() {
   if (stopping)
@@ -33643,7 +34339,7 @@ function stop() {
   reviews.stopAll();
   cancelSignIns();
   try {
-    if (record2 && JSON.parse(readFileSync37(record2, "utf8")).pid === process.pid)
+    if (record2 && JSON.parse(readFileSync38(record2, "utf8")).pid === process.pid)
       rmSync17(record2, { force: true });
   } catch {}
   sessions.closeAll();
@@ -33666,4 +34362,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 1d8668a500c1897d27e7a4a6cc8eccbee303ec0d08de289d47476d60371b603b
+// Built from Packages/Box/src/agents 7f22661bc633baf36746ec270caa077990e1ab37cf7a9df68da20208d8fed61f

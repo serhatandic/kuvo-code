@@ -23,7 +23,7 @@ final class UsageBoxParityAntigravityQuotaTests: XCTestCase {
                 }
                 XCTAssertEqual(label, row["label"] as? String, name)
                 XCTAssertEqual(used, (row["used"] as? NSNumber)?.doubleValue, name)
-                XCTAssertEqual(period, (row["periodMs"] as? NSNumber)?.doubleValue, name)
+                XCTAssertEqual(period, (row["periodMs"] as? NSNumber)?.intValue, name)
             }
         }
     }
