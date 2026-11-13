@@ -20117,7 +20117,7 @@ function heldOf2(data, errors) {
         missing.add(alias);
       continue;
     }
-    said ??= typeof error.message === "string" ? error.message : undefined;
+    said ??= typeof error.message === "string" ? error.message.slice(0, 300) : undefined;
     if (alias)
       held.add(alias);
     else
@@ -20665,9 +20665,16 @@ async function ownersOf(owner, items, facts, targets, cache) {
   });
   return { owners, titles: named };
 }
-async function titlesHere(owners, targets, signal) {
-  const named = await sessionsNamed(owners, await factsOf(targets, signal), targets).catch(() => new Map);
-  return (owner) => named.get(owner)?.title;
+async function titlesHere(owners, targets) {
+  const bots = listBots();
+  const titles = new Map;
+  for (const owner of new Set(owners)) {
+    const bot = bots.find((each) => each.session === owner)?.name;
+    const title = bot ?? (owner.startsWith("ses_") ? (await placeOfSession(owner, targets).catch(() => null))?.data.title : undefined);
+    if (title)
+      titles.set(owner, title);
+  }
+  return (owner) => titles.get(owner);
 }
 function agoWords(at, now = Date.now()) {
   const minutes = Math.max(0, Math.round((now - at) / 60000));
@@ -39380,7 +39387,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "01590f1039ab";
+var BRIDGE_VERSION = "4a6d1ce0a548";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -42427,7 +42434,9 @@ async function* workQueueRoute(context, match) {
     }, { handing: true }), json);
   }
   if (action === "restore" && method === "POST") {
-    const titled = await titlesHere(new Set(allItems().filter((each) => each.source && !each.removed).map((each) => each.owner)), targets, signal ?? undefined);
+    const deleted = find(allItems());
+    const twin = deleted?.removed ? twinOf(deleted) : null;
+    const titled = twin && !("computer" in twin) ? await titlesHere([twin.owner], targets) : undefined;
     return yield* changed2(inBook((item, book) => {
       if (!item.removed)
         throw new Refusal("It isn't deleted.");

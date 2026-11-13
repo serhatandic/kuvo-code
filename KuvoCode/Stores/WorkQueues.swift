@@ -182,13 +182,13 @@ final class WorkQueues {
                         wait = .seconds(300)
                     } else {
                         var fell = false
-                        if failed >= 2 { fell = await fallBack(key, glance: glance) }
+                        if failed >= 2 { fell = await fallBack(key, glance: glance, stream: me) }
                         if !fell, views[key] == nil { failures[key] = refusal.message }
                     }
                 } catch {
                     failed += 1
                     var fell = false
-                    if failed >= 2 { fell = await fallBack(key, glance: glance) }
+                    if failed >= 2 { fell = await fallBack(key, glance: glance, stream: me) }
                     if !fell, views[key] == nil { failures[key] = error.localizedDescription }
                 }
             }
@@ -199,7 +199,9 @@ final class WorkQueues {
     /// Reads a view once more now (after you change something on a box that doesn't stream).
     func read(_ key: Key) async {
         guard let client = client(key.box) else { return }
-        if let view = try? await client.value(WorkQueueView.self, "GET", "kuvo/work-queue?owner=\(query(key.owner))") {
+        // (As it's followed: a glance where only chips and counts follow it.)
+        let glance = glances[key] ?? false
+        if let view = try? await client.value(WorkQueueView.self, "GET", "kuvo/work-queue?owner=\(query(key.owner))" + (glance ? "&glance=1" : "")) {
             take(view, for: key)
         }
     }
@@ -208,10 +210,12 @@ final class WorkQueues {
     /// which every computer tells what it keeps, rather than what it said last as if it were now.
     /// This Mac's own items in it say so ("on" this Mac), as another box's view says of them: what
     /// you do to them goes to this Mac's box, and they're never taken for the machine's.
-    private func fallBack(_ key: Key, glance: Bool) async -> Bool {
+    private func fallBack(_ key: Key, glance: Bool, stream: UUID) async -> Bool {
         let thisMac = BoxClient.thisMac
-        guard !BoxClient.isThisMac(key.box), following[key] != nil, let client = client(thisMac),
-              var view = try? await client.value(WorkQueueView.self, "GET", "kuvo/work-queue?owner=\(query(key.owner))" + (glance ? "&glance=1" : "")) else { return false }
+        guard !BoxClient.isThisMac(key.box), following[key] == stream, let client = client(thisMac),
+              var view = try? await client.value(WorkQueueView.self, "GET", "kuvo/work-queue?owner=\(query(key.owner))" + (glance ? "&glance=1" : "")),
+              // (Still this stream's: one started again meanwhile, glance or whole, has its own.)
+              following[key] == stream else { return false }
         let here = WorkComputer(key: known.mac ?? "", name: PhoneLink.computerName, kind: "mac", id: thisMac)
         for index in view.items.indices where view.items[index].computer == nil { view.items[index].computer = here }
         for index in view.removed.indices where view.removed[index].computer == nil { view.removed[index].computer = here }

@@ -15,7 +15,7 @@ import { importItems, importWords, parseBacklog, readBacklogFiles } from "../wor
 import { numberWaiting, primaryOf } from "../work-queue/numbers";
 import { itemElsewhere, itemsElsewhere, tellQueuesAgain } from "../work-queue/across";
 import { changeItem, Refusal, refuseHanding, refuseMoving, removeItem, restoreItem } from "../work-queue/ops";
-import { callOffHanding, refuseLiveElsewhere } from "../work-queue/hand";
+import { callOffHanding, refuseLiveElsewhere, twinOf } from "../work-queue/hand";
 import { TOLD } from "../work-queue/told";
 import { readLink } from "../state";
 import { allItems, changeQueues, FILE_NAME, filesOf, matching, OWNER, queueFollowers, readAll, WORK_QUEUE, type Item } from "../work-queue/store";
@@ -270,8 +270,11 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
     }, { handing: true }), json);
   }
   if (action === "restore" && method === "POST") {
-    // (Another item its issue: named by its conversation's title, as you know it.)
-    const titled = await titlesHere(new Set(allItems().filter(each => each.source && !each.removed).map(each => each.owner)), targets, signal ?? undefined);
+    // (Another item here its issue: named by its conversation's title, as you know it, looked up
+    // only then.)
+    const deleted = find(allItems());
+    const twin = deleted?.removed ? twinOf(deleted) : null;
+    const titled = twin && !("computer" in twin) ? await titlesHere([twin.owner], targets) : undefined;
     return yield* changed(inBook((item, book) => {
       if (!item.removed) throw new Refusal("It isn't deleted.");
       refuseLiveElsewhere(item, book.items(), titled);

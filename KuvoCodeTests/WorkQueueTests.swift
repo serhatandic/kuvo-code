@@ -358,12 +358,13 @@ import Textual
     /// them however long it's open; the Work Queue tab showing it reads GitHub for what you see
     /// (#541).
     @Test func chipsFollowTheQueueWithoutReadingGitHubAndTheTabReadsIt() async throws {
-        // GitHub's `gh`, standing in: it says each time it's asked, and answers nothing.
+        // GitHub's `gh`, standing in: it says each time it's asked, and answers the issue retitled.
         let bin = AppInfo.testRoot.appending(path: "gh-\(UUID().uuidString.prefix(8))")
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: bin) }
         let asked = bin.appending(path: "asked")
-        try "#!/bin/sh\necho asked >> '\(asked.path)'\nexit 1\n".write(to: bin.appending(path: "gh"), atomically: true, encoding: .utf8)
+        let retitled = #"{"data":{"p0":{"issueOrPullRequest":{"__typename":"Issue","id":"I_kw12","number":12,"title":"Retitled on GitHub","url":"https://github.com/kuvo-test/app/issues/12","state":"OPEN","stateReason":null,"closedAt":null,"body":""}}}}"#
+        try "#!/bin/sh\necho asked >> '\(asked.path)'\ncat <<'EOF'\n\(retitled)\nEOF\n".write(to: bin.appending(path: "gh"), atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bin.appending(path: "gh").path)
         let machine = try await MachineTestBox(name: "lab", environment: ["PATH": "\(bin.path):/usr/bin:/bin"])
         defer { machine.stop() }
@@ -385,7 +386,9 @@ import Textual
 
         let tab = Task { await app.workQueues.follow(key) }
         defer { tab.cancel() }
-        try await until { FileManager.default.fileExists(atPath: asked.path) }
+        // GitHub read for what the tab shows: its word comes as a line of its own.
+        try await until { app.workQueues.views[key]?.items.first?.title == "Retitled on GitHub" }
+        #expect(FileManager.default.fileExists(atPath: asked.path))
     }
 
     @Test func anItemOnAnotherComputerSaysWhereItIsAndItsPageAndWhatYouDoToItGoThere() async throws {

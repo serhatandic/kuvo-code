@@ -43,8 +43,10 @@ export interface Answered { data: Record<string, unknown>; held?: Set<string>; s
 
 /** The aliases of `data` GitHub's answer says nothing of whether they're there: only one its
  * `errors` say it didn't find (`NOT_FOUND`), or that came back as something (not what was asked
- * for: an issue that's a discussion now), is missing; one named for anything else, or null with no
- * word why, is held, and every one is when an error names none (a timeout, GitHub's own trouble). */
+ * for: an issue that's a discussion now, or a repository with no such number in it, a nested null),
+ * is missing; one named for anything else, or null itself with no word why, is held, and every one
+ * is when an error names none (a timeout, GitHub's own trouble). One missing where it was is asked
+ * by its id before it's gone (`Reader.again`), where a null with no word why is held. */
 function heldOf(data: Record<string, unknown>, errors: unknown): Pick<Answered, "held" | "said"> {
   const held = new Set<string>();
   const missing = new Set<string>();
@@ -57,7 +59,7 @@ function heldOf(data: Record<string, unknown>, errors: unknown): Pick<Answered, 
       if (alias) missing.add(alias);
       continue;
     }
-    said ??= typeof error.message === "string" ? error.message : undefined;
+    said ??= typeof error.message === "string" ? error.message.slice(0, 300) : undefined;
     if (alias) held.add(alias);
     else all = true;
   }
