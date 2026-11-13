@@ -8,13 +8,13 @@
 import "../safety"
 import { afterAll, beforeEach, describe, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
-import { appendFileSync, chmodSync, cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { appendFileSync, chmodSync, cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { GrokAgent } from "../../src/agents/agents/grok"
 import type { Agent } from "../../src/agents/agent"
 import { dedupGrok, grokLine, grokSlots } from "../../src/agents/usage/grok-log"
-import { hostedRows, hostedSlots } from "../../src/agents/usage/engine-hosted"
+import { hostedAnswers, hostedRows, hostedSlots } from "../../src/agents/usage/engine-hosted"
 import { daysIn, summed, type Day } from "../../src/agents/usage/history"
 import { catalogFromCompact, Pricing, supplementFrom, type PricingStore } from "../../src/agents/usage/pricing"
 import { engineHostedSources, grokSources, Usage, usageRoutes } from "../../src/agents/usage/usage"
@@ -137,13 +137,40 @@ describe("Grok's accounts", () => {
   })
 })
 
+describe("your own Grok on a Mac", () => {
+  test("the default account reads your GROK_HOME (your Terminal's sessions too); an added account whose home is the same folder doesn't count it again", async () => {
+    const home = mkdtempSync(join(base, "box-"))
+    const own = join(home, "your-grok")
+    cpSync(join(fixtures, "grok"), own, { recursive: true })
+    const linked = join(home, "grok", "accounts", "linked")
+    mkdirSync(join(home, "grok", "accounts"), { recursive: true })
+    symlinkSync(own, linked)
+    const was = process.env.GROK_HOME
+    process.env.GROK_HOME = own
+    try {
+      const yours = new GrokAgent({ home, temporary: home, deps: {} as any })
+      expect(yours.conversationRoots()).toEqual([join(own, "sessions")])
+      const added = new TestGrok(home, { id: "linked", home: linked })
+      const sources = grokSources(join(home, "usage"))
+      const usage = new Usage(() => sources([yours, added] as unknown as Agent[]), store(grokPricing()), (provider) => (provider === "grok-cli" ? "1111111111111111" : "2222222222222222"), undefined, () => Date.parse("2026-11-12T14:00:00Z"))
+      await usage.refresh()
+      const view = await route(usage)
+      expect(view.rows.map((row: any) => [row.id, row.days.reduce((sum: number, day: Day) => sum + day.tokens, 0) > 0])).toEqual([["grok#1111111111111111", true], ["grok#2222222222222222", false]])
+      expectDays(view.totals.grok, fixture("grok-expected.json").days)
+    } finally {
+      if (was === undefined) delete process.env.GROK_HOME
+      else process.env.GROK_HOME = was
+    }
+  })
+})
+
 describe("the engine's hosted models", () => {
   let at: number
   beforeEach(() => {
     at = Date.parse("2026-11-12T14:00:00Z")
   })
-  const make = (folder: string | undefined, identity: (provider: string) => string | undefined = (provider) => (provider === "opencode-go" ? "fedcba9876543210" : undefined)) => {
-    const sources = engineHostedSources(folder)
+  const make = (folder: string | undefined, identity: (provider: string) => string | undefined = (provider) => (provider === "opencode-go" ? "fedcba9876543210" : undefined), log: (line: string) => void = () => {}, answers = hostedAnswers) => {
+    const sources = engineHostedSources(folder, undefined, log, answers)
     return new Usage(sources, store(grokPricing()), identity, undefined, () => at)
   }
 
@@ -204,7 +231,7 @@ describe("the engine's hosted models", () => {
     expect((await route(usage)).rows.map((row: any) => row.provider)).toEqual(["opencode-go"])
   })
 
-  test("one database that can't be read while another can: the other counts; none readable: what it had stays; unchanged databases aren't read again", async () => {
+  test("one database that never could be read while another can: the other counts; none readable: what it had stays; unchanged databases aren't read again", async () => {
     const folder = engineFolder()
     writeFileSync(join(folder, "opencode-broken.db"), "not a database at all, but long enough to look like one".repeat(100))
     const usage = make(folder)
@@ -213,8 +240,12 @@ describe("the engine's hosted models", () => {
     expect(first.rows.map((row: any) => row.provider)).toEqual(["opencode-go", "opencode"])
     expectDays(first.totals.opencode, fixture("opencode-hosted-expected.json").days)
 
-    // Unchanged: what it read stands, without opening them again (one it couldn't open now is no matter).
+    // Unchanged, every one read: what it read stands, without opening them again (one it couldn't
+    // open now is no matter). (A read with one that failed is read again each round.)
     if (process.getuid?.() !== 0) {
+      rmSync(join(folder, "opencode-broken.db"))
+      at += 5 * 60_000
+      await usage.refresh()
       for (const name of ["opencode.db", "opencode-next.db"]) chmodSync(join(folder, name), 0)
       at += 5 * 60_000
       await usage.refresh()
@@ -229,6 +260,73 @@ describe("the engine's hosted models", () => {
       expect(failed.scanned).toBe(at - 5 * 60_000)
       expect(failed.totals).toEqual(first.totals)
       for (const name of ["opencode.db", "opencode-next.db"]) chmodSync(join(folder, name), 0o644)
+    }
+  })
+
+  // (Root reads what it may not: these need a user's permissions.)
+  const asUser = process.getuid?.() !== 0
+
+  test("a database that can't be read now, after it was, gives what it last did: never less, logged once, and read again whole next round", async () => {
+    if (!asUser) return
+    const folder = engineFolder()
+    const logged: string[] = []
+    const usage = make(folder, undefined, (line) => logged.push(line))
+    await usage.refresh()
+    const total = (view: any) => view.totals.opencode.reduce((sum: number, day: Day) => sum + day.cost, 0)
+    const whole = total(await route(usage))
+    expect(whole).toBeCloseTo(3.34375, 9)
+
+    // The next channel's can't be read for a while; a new Go reply in the other.
+    chmodSync(join(folder, "opencode-next.db"), 0)
+    const db = new Database(join(folder, "opencode.db"))
+    db.exec(`INSERT INTO session_message VALUES ('m-new','s2','assistant',99,${Date.parse("2026-11-12T13:00:00Z")},0,'{"model":{"id":"glm-5.2","providerID":"opencode-go"},"cost":1,"tokens":{"input":10}}')`)
+    db.close()
+    for (const _ of [1, 2]) {
+      at += 5 * 60_000
+      await usage.refresh()
+      expect(total(await route(usage))).toBeCloseTo(whole + 1, 9)
+    }
+    expect(logged).toHaveLength(1)
+    expect(logged[0]).toContain("opencode-next.db")
+
+    // Back: read whole again, as before.
+    chmodSync(join(folder, "opencode-next.db"), 0o644)
+    at += 5 * 60_000
+    await usage.refresh()
+    expect(total(await route(usage))).toBeCloseTo(whole + 1, 9)
+    expect(logged).toHaveLength(1)
+  })
+
+  test("both providers' rows come from one read a round, though the engine writes while it's read", async () => {
+    const folder = engineFolder()
+    let reads = 0
+    const usage = make(folder, undefined, undefined, async (path, since) => {
+      reads++
+      const answers = await hostedAnswers(path, since)
+      // (The engine writes meanwhile: its write-ahead log changes.)
+      writeFileSync(join(folder, "opencode.db-wal"), "x".repeat(reads))
+      return answers
+    })
+    await usage.refresh()
+    expect(reads).toBe(1)
+    expect((await route(usage)).rows.map((row: any) => row.provider)).toEqual(["opencode-go", "opencode"])
+  })
+
+  test("an engine folder that's there but can't be listed: not known now, what the box had stays", async () => {
+    if (!asUser) return
+    const folder = engineFolder()
+    const usage = make(folder)
+    await usage.refresh()
+    const before = await route(usage)
+    chmodSync(folder, 0)
+    try {
+      at += 5 * 60_000
+      await usage.refresh()
+      const after = await route(usage)
+      expect(after.totals).toEqual(before.totals)
+      expect(after.scanned).toBe(before.scanned)
+    } finally {
+      chmodSync(folder, 0o755)
     }
   })
 

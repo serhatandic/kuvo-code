@@ -20632,8 +20632,10 @@ function engineDatabases2(folder) {
   let names;
   try {
     names = readdirSync17(folder);
-  } catch {
-    return [];
+  } catch (error) {
+    if (error?.code === "ENOENT")
+      return [];
+    throw error;
   }
   return names.filter((name) => name.startsWith("opencode") && name.endsWith(".db")).sort().map((name) => join31(folder, name));
 }
@@ -20653,10 +20655,15 @@ function databasesStamp(folder) {
 var READER2 = `
 import { Database } from "bun:sqlite"
 import { statSync } from "node:fs"
+// (A database the engine is recovering or checkpointing is waited for a little, from the first query on.)
+function opened(db) {
+  db.exec("PRAGMA busy_timeout = 2000")
+  return db
+}
 function open(path) {
   let db
   try {
-    db = new Database(path, { readonly: true })
+    db = opened(new Database(path, { readonly: true }))
     db.query("SELECT count(*) FROM sqlite_master").values()
     return db
   } catch (error) {
@@ -20666,42 +20673,41 @@ function open(path) {
       wal = statSync(path + "-wal").size
     } catch {}
     if (wal > 0 || !/unable to open/i.test(error instanceof Error ? error.message : String(error))) throw error
-    return new Database("file:" + path.replace(/[%?#]/g, (character) => "%" + character.charCodeAt(0).toString(16)) + "?immutable=1", { readonly: true })
+    return opened(new Database("file:" + path.replace(/[%?#]/g, (character) => "%" + character.charCodeAt(0).toString(16)) + "?immutable=1", { readonly: true }))
   }
 }
 self.onmessage = (event) => {
   const { paths, sql } = event.data
-  const jsons = []
-  let checked = 0
-  const failed = []
+  const answers = []
   for (const path of paths) {
     let db
     try {
       db = open(path)
-      // (The engine may be writing: wait a little for it.)
-      db.exec("PRAGMA busy_timeout = 2000")
       const names = String(db.query(sql.tables).values()[0]?.[0] ?? "").split(",").map((name) => name.trim())
       const v1 = names.includes("message")
       const v2 = names.includes("session_message")
       if (!v1 && !v2) continue
-      checked++
       const json = db.query(v1 && v2 ? sql.both : v1 ? sql.v1 : sql.v2).values()[0]?.[0]
-      if (typeof json === "string") jsons.push(json)
+      answers.push(typeof json === "string" ? { path, json } : { path })
     } catch (error) {
-      checked++
-      failed.push(error instanceof Error ? error.message : String(error))
+      answers.push({ path, failed: error instanceof Error ? error.message : String(error) })
     } finally {
       db?.close()
     }
   }
-  postMessage({ checked, failed, jsons })
+  postMessage(answers)
 }
 `;
 var readerURL2;
 var READ_FOR2 = 120000;
 var TABLES_SQL = "SELECT group_concat(name) FROM sqlite_master WHERE type='table' AND name IN ('message','session_message');";
 function readEngineDatabases(folder, sql) {
-  const paths = engineDatabases2(folder);
+  let paths;
+  try {
+    paths = engineDatabases2(folder);
+  } catch (error) {
+    return Promise.reject(error);
+  }
   if (!paths.length)
     return Promise.resolve(undefined);
   readerURL2 ??= URL.createObjectURL(new Blob([READER2], { type: "application/javascript" }));
@@ -20710,6 +20716,7 @@ function readEngineDatabases(folder, sql) {
   let timer;
   return new Promise((resolve, reject) => {
     timer = setTimeout(() => reject(new Error("The engine's database took too long to read.")), READ_FOR2);
+    timer.unref?.();
     worker.onmessage = (event) => resolve(event.data);
     worker.onerror = (event) => reject(new Error(event.message));
     worker.postMessage({ paths, sql });
@@ -20782,13 +20789,9 @@ function parseHostedRows(json) {
   }
   return rows;
 }
-async function hostedRows(folder, since) {
+async function hostedAnswers(folder, since) {
   const answers = await readEngineDatabases(folder, { tables: TABLES_SQL, v1: hostedSQL(since, { v1: true, v2: false }), v2: hostedSQL(since, { v1: false, v2: true }), both: hostedSQL(since, { v1: true, v2: true }) });
-  if (!answers)
-    return;
-  if (answers.checked > 0 && answers.failed.length === answers.checked)
-    throw new Error(answers.failed[0]);
-  return answers.jsons.flatMap(parseHostedRows);
+  return answers?.map(({ path, json, failed }) => failed !== undefined ? { path, failed } : { path, rows: json ? parseHostedRows(json) : [] });
 }
 function dedupHosted(rows) {
   const seen = new Set;
@@ -21583,65 +21586,111 @@ function engineCodexSource(folder, signedIn, kept, computer = ownComputer) {
     ];
   };
 }
+function ownerOf(grok) {
+  const owner = new Map;
+  for (const agent of grok)
+    for (const root of agent.conversationRoots())
+      if (!isLink(root) && !owner.has(realOf(root)))
+        owner.set(realOf(root), agent.providerID);
+  for (const agent of grok)
+    for (const root of agent.conversationRoots())
+      if (!owner.has(realOf(root)))
+        owner.set(realOf(root), agent.providerID);
+  return owner;
+}
 function grokSources(folder, computer = ownComputer) {
   const files = new JSONLFiles((line) => grokLine(line).map(keptGrok), (entry) => entry[0], folder ? join33(folder, "grok-files") : undefined, 1);
   const last = new Map;
-  return (agents) => agents.flatMap((agent) => {
-    const parsed = parseProvider(agent.providerID);
-    if (parsed?.kind !== "grok" || !agent.conversationRoots)
-      return [];
-    const roots = () => [...new Set(agent.conversationRoots())];
-    const source = {
-      provider: agent.providerID,
-      service: "grok",
-      agent: { kind: "grok", account: parsed.id },
-      ...agent.instance.label ? { label: agent.instance.label } : {},
-      places: () => {
-        const here = computer();
-        return roots().map((root) => placeOf(here, root));
-      },
-      slots: async (pricing, since) => {
-        const found = new Map;
-        for (const root of roots())
-          for (const file of await jsonlFiles(root))
-            if (basename11(file.path) === "updates.jsonl")
-              found.set(file.path, file);
-        const ordered = [...found.values()].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
-        await files.refresh(ordered, since);
-        const listed = createHash11("sha256").update(ordered.map((file) => file.path).join(`
+  return (agents) => {
+    const owner = ownerOf(agents.filter((agent) => parseProvider(agent.providerID)?.kind === "grok" && agent.conversationRoots));
+    return agents.flatMap((agent) => {
+      const parsed = parseProvider(agent.providerID);
+      if (parsed?.kind !== "grok" || !agent.conversationRoots)
+        return [];
+      const roots = () => [...new Set(agent.conversationRoots())].filter((root) => (owner.get(realOf(root)) ?? agent.providerID) === agent.providerID);
+      const source = {
+        provider: agent.providerID,
+        service: "grok",
+        agent: { kind: "grok", account: parsed.id },
+        ...agent.instance.label ? { label: agent.instance.label } : {},
+        places: () => {
+          const here = computer();
+          return roots().map((root) => placeOf(here, root));
+        },
+        slots: async (pricing, since) => {
+          const found = new Map;
+          for (const root of roots())
+            for (const file of await jsonlFiles(root))
+              if (basename11(file.path) === "updates.jsonl")
+                found.set(file.path, file);
+          const ordered = [...found.values()].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+          await files.refresh(ordered, since);
+          const listed = createHash11("sha256").update(ordered.map((file) => file.path).join(`
 `)).digest("hex");
-        const before = last.get(agent.providerID);
-        if (before && before.version === files.version && before.pricing === pricing && before.since === since && before.listed === listed)
-          return before.slots;
-        const slots = grokSlots(dedupGrok(files.itemsOf(ordered, since).map(fromKeptGrok)), pricing, since);
-        last.set(agent.providerID, { version: files.version, pricing, since, listed, slots });
-        return slots;
-      },
-      files
-    };
-    return [source];
-  });
+          const before = last.get(agent.providerID);
+          if (before && before.version === files.version && before.pricing === pricing && before.since === since && before.listed === listed)
+            return before.slots;
+          const slots = grokSlots(dedupGrok(files.itemsOf(ordered, since).map(fromKeptGrok)), pricing, since);
+          last.set(agent.providerID, { version: files.version, pricing, since, listed, slots });
+          return slots;
+        },
+        files
+      };
+      return [source];
+    });
+  };
 }
-function engineHostedSources(folder, computer = ownComputer) {
+function engineHostedSources(folder, computer = ownComputer, log = (line) => console.error(line), answersOf = hostedAnswers) {
   if (!folder)
     return () => [];
-  let last;
-  let failed;
-  const rows = async (since) => {
+  let full;
+  const kept = new Map;
+  const failing = new Set;
+  const read = async (since) => {
     const stamp = databasesStamp(folder);
-    if (last && last.stamp === stamp && last.since === since)
-      return last.rows;
-    if (failed && failed.stamp === stamp && failed.since === since && Date.now() - failed.at < 60000)
-      throw failed.error;
-    try {
-      const found = await hostedRows(folder, since);
-      last = { stamp, since, rows: found };
-      failed = undefined;
-      return found;
-    } catch (error) {
-      failed = { stamp, since, at: Date.now(), error };
-      throw error;
+    if (full && full.stamp === stamp && full.since === since)
+      return full.rows;
+    const answers = await answersOf(folder, since);
+    if (!answers) {
+      kept.clear();
+      failing.clear();
+      full = { stamp, since, rows: undefined };
+      return;
     }
+    for (const path of [...kept.keys()])
+      if (!answers.some((answer) => answer.path === path))
+        kept.delete(path);
+    for (const path of [...failing])
+      if (!answers.some((answer) => answer.path === path && answer.failed !== undefined))
+        failing.delete(path);
+    const rows = [];
+    for (const answer of answers) {
+      if (answer.failed === undefined) {
+        kept.set(answer.path, answer.rows);
+        rows.push(...answer.rows);
+        continue;
+      }
+      if (!failing.has(answer.path))
+        log(`usage: the engine's database ${answer.path} couldn't be read: ${answer.failed}`);
+      failing.add(answer.path);
+      rows.push(...kept.get(answer.path) ?? []);
+    }
+    const failed = answers.filter((answer) => answer.failed !== undefined);
+    if (answers.length && failed.length === answers.length)
+      throw new Error(failed[0].failed);
+    full = failed.length ? undefined : { stamp, since, rows };
+    return rows;
+  };
+  let round;
+  const shared = {
+    endRound() {
+      round = undefined;
+    }
+  };
+  const rowsOf = (since) => {
+    if (!round || round.since !== since)
+      round = { since, rows: read(since) };
+    return round.rows;
   };
   const sources = HOSTED_PROVIDERS.map((provider) => ({
     provider,
@@ -21650,9 +21699,10 @@ function engineHostedSources(folder, computer = ownComputer) {
     billed: true,
     places: () => [placeOf(computer(), folder, `opencode:${provider}`)],
     slots: async (_pricing, since) => {
-      const found = await rows(since);
+      const found = await rowsOf(since);
       return found ? hostedSlots(found, provider, since) : noSlots();
-    }
+    },
+    files: shared
   }));
   return () => sources;
 }
@@ -32476,4 +32526,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 605287baf8138bacce334b7be1eeef2e4f04b95cd694ebe6ab3fbb24974ffa9a
+// Built from Packages/Box/src/agents 018b240a8b32c0f194d3349ea95a403e7b6febff1d3d9d99c3416a1f9a9997bc

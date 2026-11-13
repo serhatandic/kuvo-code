@@ -93,15 +93,21 @@ export function parseHostedRows(json: string): HostedRow[] {
   return rows
 }
 
+/** Each database's hosted rows from `since` (ms) on, or why it couldn't be read, by path; undefined when there's no database there. */
+export async function hostedAnswers(folder: string, since: number): Promise<{ path: string; rows?: HostedRow[]; failed?: string }[] | undefined> {
+  const answers = await readEngineDatabases(folder, { tables: TABLES_SQL, v1: hostedSQL(since, { v1: true, v2: false }), v2: hostedSQL(since, { v1: false, v2: true }), both: hostedSQL(since, { v1: true, v2: true }) })
+  return answers?.map(({ path, json, failed }) => (failed !== undefined ? { path, failed } : { path, rows: json ? parseHostedRows(json) : [] }))
+}
+
 /**
- * The hosted rows of every database in `folder` from `since` (ms) on; undefined when there's no
- * database there. Fails when every one with message tables failed to be read.
+ * The hosted rows of every database in `folder` from `since` (ms) on, of those that could be read;
+ * undefined when there's no database there. Fails when every one with message tables failed.
  */
 export async function hostedRows(folder: string, since: number): Promise<HostedRow[] | undefined> {
-  const answers = await readEngineDatabases(folder, { tables: TABLES_SQL, v1: hostedSQL(since, { v1: true, v2: false }), v2: hostedSQL(since, { v1: false, v2: true }), both: hostedSQL(since, { v1: true, v2: true }) })
+  const answers = await hostedAnswers(folder, since)
   if (!answers) return undefined
-  if (answers.checked > 0 && answers.failed.length === answers.checked) throw new Error(answers.failed[0])
-  return answers.jsons.flatMap(parseHostedRows)
+  if (answers.length && answers.every((answer) => answer.failed !== undefined)) throw new Error(answers[0]!.failed)
+  return answers.flatMap((answer) => answer.rows ?? [])
 }
 
 /** A message in two tables or two databases once: the first. Rows without an ID all count. */

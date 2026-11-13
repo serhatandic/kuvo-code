@@ -6,13 +6,17 @@
 import { readdirSync, statSync } from "node:fs"
 import { join } from "node:path"
 
-/** Every channel's database in the engine's data folder, path-sorted; none when there's none. */
+/**
+ * Every channel's database in the engine's data folder, path-sorted; none when the folder isn't
+ * there (no engine has run). A folder that is there but can't be listed throws: not known now.
+ */
 export function engineDatabases(folder: string): string[] {
   let names: string[]
   try {
     names = readdirSync(folder)
-  } catch {
-    return []
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return []
+    throw error
   }
   return names
     .filter((name) => name.startsWith("opencode") && name.endsWith(".db"))
@@ -20,7 +24,7 @@ export function engineDatabases(folder: string): string[] {
     .map((name) => join(folder, name))
 }
 
-/** What the databases are now (each with its write-ahead log), to read them again only when one changed. */
+/** What the databases are now (each with its write-ahead log), to read them again only when one changed; throws as `engineDatabases` does. */
 export function databasesStamp(folder: string): string {
   const parts: string[] = []
   for (const path of engineDatabases(folder).flatMap((db) => [db, db + "-wal"])) {
@@ -42,12 +46,8 @@ export interface EngineSQL {
   both: string
 }
 
-/** What the databases answered: each one's JSON; how many had message tables, and why each of those that failed did. */
-export interface EngineAnswers {
-  checked: number
-  failed: string[]
-  jsons: string[]
-}
+/** What one database answered: its JSON, or why it couldn't be read. One without message tables answers nothing. */
+export type EngineAnswer = { path: string; json?: string; failed?: string }
 
 /**
  * The worker: each database read-only. A database in WAL mode whose side files are gone (Linux's
@@ -58,10 +58,15 @@ export interface EngineAnswers {
 const READER = `
 import { Database } from "bun:sqlite"
 import { statSync } from "node:fs"
+// (A database the engine is recovering or checkpointing is waited for a little, from the first query on.)
+function opened(db) {
+  db.exec("PRAGMA busy_timeout = 2000")
+  return db
+}
 function open(path) {
   let db
   try {
-    db = new Database(path, { readonly: true })
+    db = opened(new Database(path, { readonly: true }))
     db.query("SELECT count(*) FROM sqlite_master").values()
     return db
   } catch (error) {
@@ -71,35 +76,29 @@ function open(path) {
       wal = statSync(path + "-wal").size
     } catch {}
     if (wal > 0 || !/unable to open/i.test(error instanceof Error ? error.message : String(error))) throw error
-    return new Database("file:" + path.replace(/[%?#]/g, (character) => "%" + character.charCodeAt(0).toString(16)) + "?immutable=1", { readonly: true })
+    return opened(new Database("file:" + path.replace(/[%?#]/g, (character) => "%" + character.charCodeAt(0).toString(16)) + "?immutable=1", { readonly: true }))
   }
 }
 self.onmessage = (event) => {
   const { paths, sql } = event.data
-  const jsons = []
-  let checked = 0
-  const failed = []
+  const answers = []
   for (const path of paths) {
     let db
     try {
       db = open(path)
-      // (The engine may be writing: wait a little for it.)
-      db.exec("PRAGMA busy_timeout = 2000")
       const names = String(db.query(sql.tables).values()[0]?.[0] ?? "").split(",").map((name) => name.trim())
       const v1 = names.includes("message")
       const v2 = names.includes("session_message")
       if (!v1 && !v2) continue
-      checked++
       const json = db.query(v1 && v2 ? sql.both : v1 ? sql.v1 : sql.v2).values()[0]?.[0]
-      if (typeof json === "string") jsons.push(json)
+      answers.push(typeof json === "string" ? { path, json } : { path })
     } catch (error) {
-      checked++
-      failed.push(error instanceof Error ? error.message : String(error))
+      answers.push({ path, failed: error instanceof Error ? error.message : String(error) })
     } finally {
       db?.close()
     }
   }
-  postMessage({ checked, failed, jsons })
+  postMessage(answers)
 }
 `
 let readerURL: string | undefined
@@ -110,18 +109,27 @@ const READ_FOR = 120_000
 /** The tables query every reader starts with. */
 export const TABLES_SQL = "SELECT group_concat(name) FROM sqlite_master WHERE type='table' AND name IN ('message','session_message');"
 
-/** What every database in `folder` answers `sql`; undefined when there's no database there. */
-export function readEngineDatabases(folder: string, sql: EngineSQL): Promise<EngineAnswers | undefined> {
-  const paths = engineDatabases(folder)
+/**
+ * What each database in `folder` with message tables answers `sql`, by path; undefined when
+ * there's no database there. Fails when the folder can't be listed.
+ */
+export function readEngineDatabases(folder: string, sql: EngineSQL): Promise<EngineAnswer[] | undefined> {
+  let paths: string[]
+  try {
+    paths = engineDatabases(folder)
+  } catch (error) {
+    return Promise.reject(error)
+  }
   if (!paths.length) return Promise.resolve(undefined)
   readerURL ??= URL.createObjectURL(new Blob([READER], { type: "application/javascript" }))
   const worker = new Worker(readerURL)
   // (It never keeps the bridge from ending.)
   worker.unref?.()
   let timer: ReturnType<typeof setTimeout> | undefined
-  return new Promise<EngineAnswers>((resolve, reject) => {
+  return new Promise<EngineAnswer[]>((resolve, reject) => {
     timer = setTimeout(() => reject(new Error("The engine's database took too long to read.")), READ_FOR)
-    worker.onmessage = (event: MessageEvent<EngineAnswers>) => resolve(event.data)
+    timer.unref?.()
+    worker.onmessage = (event: MessageEvent<EngineAnswer[]>) => resolve(event.data)
     worker.onerror = (event) => reject(new Error(event.message))
     worker.postMessage({ paths, sql })
   }).finally(() => {

@@ -24,7 +24,7 @@ import { codexLine, codexSlots, codexState, codexStateFrom, fromKeptCodex, keptC
 import { engineCodexRows, engineCodexSlots, engineStamp } from "./engine-codex"
 import { dedupGrok, fromKeptGrok, grokLine, grokSlots, keptGrok, type KeptGrokEntry } from "./grok-log"
 import { databasesStamp } from "./engine-db"
-import { HOSTED_PROVIDERS, hostedRows, hostedSlots, type HostedRow } from "./engine-hosted"
+import { HOSTED_PROVIDERS, hostedAnswers, hostedSlots, type HostedRow } from "./engine-hosted"
 import { claudeSlots, daysIn, slotsFrom, keptSlots, knownZone, noSlots, ownZone, summed, trimmed, type Day, type Slots, KEPT_DAYS } from "./history"
 import { JSONLFiles, jsonlFiles } from "./jsonl"
 import type { Pricing, PricingStore } from "./pricing"
@@ -777,10 +777,22 @@ export function engineCodexSource(folder: string | undefined, signedIn: () => bo
 }
 
 /**
+ * Whose each of the Grok accounts' session folders is (by its real path): the account it's really
+ * in, not one that links to it; else the first that names it. A folder two accounts name (your
+ * `GROK_HOME` that is an added account's home too) is read with that one only, never twice.
+ */
+function ownerOf(grok: Agent[]): Map<string, string> {
+  const owner = new Map<string, string>()
+  for (const agent of grok) for (const root of agent.conversationRoots!()) if (!isLink(root) && !owner.has(realOf(root))) owner.set(realOf(root), agent.providerID)
+  for (const agent of grok) for (const root of agent.conversationRoots!()) if (!owner.has(realOf(root))) owner.set(realOf(root), agent.providerID)
+  return owner
+}
+
+/**
  * The Grok accounts whose usage is read here, from the `sessions` folder of each one's Grok home
- * (`conversationRoots`: an added account's own, Kuvo Code's on a machine, your `~/.grok` or
- * `GROK_HOME` on a Mac, where Grok runs with Kuvo Code's sign-in), only its sessions'
- * `updates.jsonl`. `folder`: where what was read of them is kept (`grok-files`, a file a log). A
+ * (`conversationRoots`: an added account's own, Kuvo Code's on a machine; on a Mac, your own
+ * Grok's, `GROK_HOME` or `~/.grok`, as the default account runs there, your Terminal's sessions
+ * counted too), only its sessions' `updates.jsonl`; a folder two accounts name, once (`ownerOf`). `folder`: where what was read of them is kept (`grok-files`, a file a log). A
  * round that read nothing new, with the same prices, works nothing out again.
  */
 export function grokSources(folder?: string, computer = ownComputer): (agents: Agent[]) => UsageSource[] {
@@ -791,11 +803,12 @@ export function grokSources(folder?: string, computer = ownComputer): (agents: A
     1,
   )
   const last = new Map<string, { version: number; pricing: Pricing; since: number; listed: string; slots: Slots }>()
-  return (agents) =>
-    agents.flatMap((agent) => {
+  return (agents) => {
+    const owner = ownerOf(agents.filter((agent) => parseProvider(agent.providerID)?.kind === "grok" && agent.conversationRoots))
+    return agents.flatMap((agent) => {
       const parsed = parseProvider(agent.providerID)
       if (parsed?.kind !== "grok" || !agent.conversationRoots) return []
-      const roots = () => [...new Set(agent.conversationRoots!())]
+      const roots = () => [...new Set(agent.conversationRoots!())].filter((root) => (owner.get(realOf(root)) ?? agent.providerID) === agent.providerID)
       const source: UsageSource = {
         provider: agent.providerID,
         service: "grok",
@@ -821,33 +834,64 @@ export function grokSources(folder?: string, computer = ownComputer): (agents: A
       }
       return [source]
     })
+  }
 }
 
 /**
  * What the engine's own hosted models cost here (engine-hosted.ts): OpenCode Go's and Zen's, each a
  * row of its own (`opencode-go` the same row as its plan limits'), from the engine's databases in
- * its data folder (`folder`), read once a round for both and again only when a database changed.
- * Billed by OpenCode, so never priced here. A provider with no use in the window has no row.
+ * its data folder (`folder`), read once a round for both, and again only when a database changed.
+ * A database that can't be read now gives what it last did (never less), and the read is tried
+ * again next round; each newly failing one is logged. Billed by OpenCode, so never priced here. A
+ * provider with no use in the window has no row.
  */
-export function engineHostedSources(folder: string | undefined, computer = ownComputer): () => UsageSource[] {
+export function engineHostedSources(folder: string | undefined, computer = ownComputer, log: (line: string) => void = (line) => console.error(line), answersOf = hostedAnswers): () => UsageSource[] {
   if (!folder) return () => []
-  // (Rounds are one at a time, their sources one after another: both providers' in a round share one
-  // read, and one that failed fails the other too, rather than waiting on the databases again.)
-  let last: { stamp: string; since: number; rows: HostedRow[] | undefined } | undefined
-  let failed: { stamp: string; since: number; at: number; error: unknown } | undefined
-  const rows = async (since: number) => {
+  /** The last read in which every database answered, to read them again only when one changed. */
+  let full: { stamp: string; since: number; rows: HostedRow[] | undefined } | undefined
+  /** Each database's rows as it last answered them, and those failing now (logged once). */
+  const kept = new Map<string, HostedRow[]>()
+  const failing = new Set<string>()
+  const read = async (since: number): Promise<HostedRow[] | undefined> => {
     const stamp = databasesStamp(folder)
-    if (last && last.stamp === stamp && last.since === since) return last.rows
-    if (failed && failed.stamp === stamp && failed.since === since && Date.now() - failed.at < 60_000) throw failed.error
-    try {
-      const found = await hostedRows(folder, since)
-      last = { stamp, since, rows: found }
-      failed = undefined
-      return found
-    } catch (error) {
-      failed = { stamp, since, at: Date.now(), error }
-      throw error
+    if (full && full.stamp === stamp && full.since === since) return full.rows
+    const answers = await answersOf(folder, since)
+    if (!answers) {
+      kept.clear()
+      failing.clear()
+      full = { stamp, since, rows: undefined }
+      return undefined
     }
+    for (const path of [...kept.keys()]) if (!answers.some((answer) => answer.path === path)) kept.delete(path)
+    for (const path of [...failing]) if (!answers.some((answer) => answer.path === path && answer.failed !== undefined)) failing.delete(path)
+    // (In path order, a database's kept rows in its place: a message in two is the first's, as always.)
+    const rows: HostedRow[] = []
+    for (const answer of answers) {
+      if (answer.failed === undefined) {
+        kept.set(answer.path, answer.rows!)
+        rows.push(...answer.rows!)
+        continue
+      }
+      if (!failing.has(answer.path)) log(`usage: the engine's database ${answer.path} couldn't be read: ${answer.failed}`)
+      failing.add(answer.path)
+      rows.push(...(kept.get(answer.path) ?? []))
+    }
+    const failed = answers.filter((answer) => answer.failed !== undefined)
+    // None answered: not known now (what this box had stays).
+    if (answers.length && failed.length === answers.length) throw new Error(failed[0]!.failed)
+    full = failed.length ? undefined : { stamp, since, rows }
+    return rows
+  }
+  // Both providers' sources in one round share its one read (or its failure); the round's end lets it go.
+  let round: { since: number; rows: Promise<HostedRow[] | undefined> } | undefined
+  const shared = {
+    endRound() {
+      round = undefined
+    },
+  }
+  const rowsOf = (since: number) => {
+    if (!round || round.since !== since) round = { since, rows: read(since) }
+    return round.rows
   }
   const sources = HOSTED_PROVIDERS.map(
     (provider): UsageSource => ({
@@ -857,9 +901,10 @@ export function engineHostedSources(folder: string | undefined, computer = ownCo
       billed: true,
       places: () => [placeOf(computer(), folder, `opencode:${provider}`)],
       slots: async (_pricing, since) => {
-        const found = await rows(since)
+        const found = await rowsOf(since)
         return found ? hostedSlots(found, provider, since) : noSlots()
       },
+      files: shared,
     }),
   )
   return () => sources
