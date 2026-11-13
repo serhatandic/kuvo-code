@@ -5432,7 +5432,8 @@ refused anything but `--status` on the real `~/.kuvo-code`.
   the disk can't clone; the app's stays), Keep This Mac Awake off where it's off in the app, then
   `box/kind` (`mac`), last, saying it's being made meanwhile (`updates/rehome/new`, written before
   anything's set aside): one cut short is made again from the start, what it left set aside in the
-  trash like the rest, nothing deleted. The mark counts only where no move has been (no
+  trash like the rest, nothing deleted (but its own scratch copies, `bin.new` and `engine.new`).
+  The mark counts only where no move has been (no
   `state.json` state, no journal); a move's install step sets it aside, journaled, so a box moved
   there later is never taken for a making cut short. `done` (exit 0); made already,
   `nothing`. No `state.json`: nothing moved, so there's nothing to move back. **`--new --check`**,
@@ -5487,11 +5488,13 @@ and the keeper is as "The keeper" says). Everything above it asks of the box wit
   keeper finishes what the move left, as above.
 - **The app**, with `movesOwnBox` on, asks `here` before it starts a box (the keeper too, with either
   flag on). While `here` says `moving` it starts nothing and says so in its starting text (why it
-  holds on, from `--status`'s `failed`, where it stopped part way), looking again every few
-  seconds. On a new Mac it asks `--new --check`, makes the box with `--new` where it's `ready`,
+  holds on, from `--status`'s `failed`, which a move under way has only once it's stuck), asking
+  `here` again, less often as it goes on (5 seconds, up to a minute); a copy that attaches in place
+  but doesn't move boxes says so once, as a failure. On a new Mac it asks `--new --check`, makes the box with `--new` where it's `ready`,
   and has its helper load; where the box says it's `made`, it registers no keeper of its own
   (`BackgroundWork`). Finding this Mac's box in its home stopped, it starts it through its helper
-  (`helper start`, else `helper install --load`), never by running its `kuvo-start`.
+  (`helper start`, else `helper install --load`), never by running its `kuvo-start` (where the box
+  can't say whether it's a Mac's, nothing).
 - **What piece 8 adds** (drafts first): the move's own view (waiting, moving, done, didn't finish,
   Move Now…), Settings' "This Mac's box" (starts at login, where it is, Move Back, Uninstall…),
   permissions for the helper, the `two` state, and the phone drawing `moving` (and the Mac away
@@ -5504,7 +5507,7 @@ the app's box keeps them: only on a machine are they in the bridge's folder (`<a
 `kuvo/box/rehome`: `GET` answers `{state, way, step, tries, nextTry, waitingSince, overdue,
 failed, movedAt, keptUntil, owed, asked, from, to}`. `state`: null before anything, `waiting`,
 `moving` or `clearing` (under way, at `step`, or a journal that can't be read: `plan`, `install`, `clone`, `rewrite`, `check`,
-`place`, `fix`, `clear`, `done`), `done`, `failed` (gone back; `failed` says `{at, step,
+`place`, `fix`, `clear`, `done`), `done`, `failed` (gone back; `failed` (cleared as a move begins: while one's under way, why it's stuck) says `{at, step,
 message}`), or `back`; `way`, `move` or `back`; `nextTry`, `waitingSince`, `movedAt` and
 `keptUntil` in ms; `asked`, `now` or `back`, until it's acted on. The app's box in its folder
 answers for the `~/.kuvo-code` it moves to (the real app's folder alone, `run.kuvo.code`; a copy,

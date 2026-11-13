@@ -232,7 +232,11 @@ final class OwnBoxMove {
         if state == "done", said.answer["way"] as? String == "move" { return await finish(owed: said.answer["owed"] as? [String] ?? []) }
         // A new Mac's box made there, with nothing moved, as the box says: its helper starts it,
         // never this keeper (switched off in Login Items, its helper stays off).
-        if state == nil, await rehome(["--new", "--check"])?.answer["made"] as? Bool == true { return await finish(owed: [], helperOnlyIfMissing: true) }
+        if state == nil {
+            // (One that can't say: nothing started meanwhile, rather than a second box.)
+            guard let made = await rehome(["--new", "--check"])?.answer["made"] as? Bool else { return .wait }
+            if made { return await finish(owed: [], helperOnlyIfMissing: true) }
+        }
         return await wentBack()
     }
 
@@ -257,6 +261,12 @@ final class OwnBoxMove {
 
     /// What the box's `rehome` said it did, acted on.
     private func after(_ said: Said) async -> Next {
+        let next = await acted(said)
+        if next != .wait { holdsOnBecause = nil }
+        return next
+    }
+
+    private func acted(_ said: Said) async -> Next {
         switch said.result {
         case "done":
             return await finish(owed: said.status_["owed"] as? [String] ?? [])
@@ -375,14 +385,12 @@ final class OwnBoxMove {
     func makeNew() async -> Bool {
         // The box says whether it's made already, or could be now (never while a move's under way,
         // whose kind it writes before it's done), before its files are made for it.
-        BackgroundWork.boxStartsOnItsOwn = false
-        guard let asked = await rehome(["--new", "--check"]) else { return false }
+        guard let asked = await rehome(["--new", "--check"]), let made = asked.answer["made"] as? Bool else { return false }
+        // (As the box says it, once it has: never cleared while it's asked.)
+        BackgroundWork.boxStartsOnItsOwn = made
         // Made already (a start cut short before its helper was put in place: put there now; one in
         // place is left as it is, switched off in Login Items say).
-        if asked.answer["made"] as? Bool == true {
-            BackgroundWork.boxStartsOnItsOwn = true
-            return await helperRuns(onlyIfMissing: true)
-        }
+        if made { return await helperRuns(onlyIfMissing: true) }
         guard asked.answer["ready"] as? Bool == true else { return false }
         let release: URL
         do {
@@ -404,6 +412,7 @@ final class OwnBoxMove {
     /// The move with `release` (`due`), the old box stopped (its lock still held): what's next.
     func move(_ release: URL) async -> Next {
         defer { try? FileManager.default.removeItem(at: release) }
+        holdsOnBecause = nil
         if stop(.stopped) { return .wait }
         // Copies an earlier try left, taken away first: a copy starts afresh.
         if identity.copiesLeft(), let why = await identity.helper("uncopy") {

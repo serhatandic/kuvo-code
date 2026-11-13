@@ -370,7 +370,8 @@ import Testing
         let gone = Gone()
         try ranInItsFolder()
         let identity = Identity()
-        if ends == .wentBack { identity.checkFails = "unreadable: vault/files" }
+        // (Stopped part way, it goes back too: the keeper of before started its box again then.)
+        if ends != .moved { identity.checkFails = "unreadable: vault/files" }
         final class Holder { var keeper: Keeper? }
         let holder = Holder()
         var saidMeanwhile: (moving: Bool?, restart: String?)?
@@ -389,9 +390,8 @@ import Testing
                 do { try await KeeperControl.send(.restartEngine) } catch { refused = error.localizedDescription }
                 saidMeanwhile = (status?["moving"] as? Bool, refused)
                 if ends == .stoppedPartWay {
-                    // Logging out: launchd's SIGTERM, then nothing more of this process (as a kill).
+                    // Logging out: launchd's SIGTERM as the move goes on.
                     holder.keeper?.finish(.stopped)
-                    OwnBoxMove.stopsAt = .checked
                 }
             }
             return await stands.identity.helper(keys)

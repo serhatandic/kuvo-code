@@ -577,10 +577,12 @@ test.if(mac)("a new Mac's box whose making was cut short is made again, what it 
   expect(rehome(w, ["--new", "--check"]).said).toEqual({ ready: true, made: false })
   expect(rehome(w, ["--new", "--release", w.release]).said).toMatchObject({ result: "done" })
   expect(readFileSync(join(w.K, "box", "kind"), "utf8")).toBe("mac\n")
+  // (Its own scratch copy gone: never piling up in the trash, try after try.)
   expect(existsSync(join(w.K, "engine.new"))).toBe(false)
   const [aside] = readdirSync(join(w.K, "trash")).filter(name => name.startsWith("earlier-box-"))
-  expect(readFileSync(join(w.K, "trash", aside, "engine.new", "2.2.6", "opencode"), "utf8")).toBe("part")
+  expect(existsSync(join(w.K, "trash", aside, "engine.new"))).toBe(false)
   expect(existsSync(join(w.K, "trash", aside, "box", "work.json"))).toBe(true)
+  expect(existsSync(join(w.K, "trash", aside, "bin", "kuvo-start"))).toBe(true)
   expect(existsSync(join(w.K, "updates", "rehome", "new"))).toBe(false)
 }, 60_000)
 

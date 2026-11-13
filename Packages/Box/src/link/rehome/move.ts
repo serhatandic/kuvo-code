@@ -772,8 +772,9 @@ export async function rehomeNew(folders: Folders, options: MoveOptions & { engin
     const now = Date.now();
     // Said first: whatever stops it from here, it's made again from the start. What's there that
     // isn't a box (one its Mac removed, or what a making cut short left) is set aside in its
-    // trash, nothing deleted.
+    // trash, nothing deleted; but a making's own scratch copies, which are only ever its own.
     writePrivate(newMarker(home), `${now}\n`);
+    for (const scratch of ["bin.new", "engine.new"]) fs.rmSync(path.join(home, scratch), { recursive: true, force: true });
     const aside = path.join(home, "trash", `earlier-box-${stamp(now)}`);
     const there = listOf(home).filter(name => name !== "updates" && name !== "trash").map(name => path.join(home, name))
       .concat(listOf(path.join(home, "updates")).filter(name => name !== "rehome").map(name => path.join(home, "updates", name)))
@@ -842,7 +843,8 @@ function run(journal: Journal, rewriter: Rewriter): Promise<RehomeOutcome> {
   // (Anything left from a move that ended before it began.)
   forgetJournal(home);
   writeJournal(home, journal);
-  noteRecord(home, { state: "moving", way: journal.way, from: foldersOf(journal).appFolder, to: home });
+  // (Why one before failed isn't this one's: `failed` while it moves is why it's stuck.)
+  noteRecord(home, { state: "moving", way: journal.way, from: foldersOf(journal).appFolder, to: home, failed: null });
   stopPoint("after-plan");
   return carried(journal, rewriter);
 }

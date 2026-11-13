@@ -205,7 +205,9 @@ nonisolated struct Here: Decodable, Equatable, Sendable {
             let line = result.outputText.split(separator: "\n").last.map(String.init) ?? ""
             return (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any]
         }
-        guard let said = await helper(["start"]), said["mac"] as? Bool == true else { return false }
+        // (Only where the box says it isn't a Mac's: one that couldn't say starts nothing.)
+        guard let said = await helper(["start"]) else { return true }
+        guard said["mac"] as? Bool == true else { return false }
         if said["started"] as? Bool != true, let installed = await helper(["install", "--load", "--app", AppInfo.bundleID]), installed["loaded"] as? Bool != true {
             log.error("This Mac's box in its own home didn't start: \(installed["message"] as? String ?? "", privacy: .public)")
         }

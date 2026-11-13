@@ -571,6 +571,21 @@ final class AppModel {
                     outcome = await Here.gate(engine: binary, script: BoxProcess.script, appBox: BoxProcess.home, engineData: engineFolders.dataDirectory,
                                               home: Self.hereHome, checked: false)
                 }
+                // Moving into its home of its own (the keeper does it): nothing starts here meanwhile.
+                // The window says it's moving (and why it's held up, as the box says), still
+                // starting, and only `here` is asked again, less often as it goes on.
+                var wait = 5
+                while outcome == .wait, Self.movesOwnBox, launch == self.launch {
+                    detachHere()
+                    BackgroundWork.heldBack = "This Mac’s box is moving into its own home."
+                    boxMoving = await OwnBoxMove.forThisMac()?.movingNow() ?? ""
+                    try? await Task.sleep(for: .seconds(wait))
+                    wait = min(wait * 2, 60)
+                    guard launch == self.launch else { return }
+                    outcome = await Here.gate(engine: binary, script: BoxProcess.script, appBox: BoxProcess.home, engineData: engineFolders.dataDirectory,
+                                              home: Self.hereHome, checked: false)
+                }
+                boxMoving = nil
                 guard launch == self.launch else { return }
                 switch outcome {
                 case .attach(var here):
@@ -589,7 +604,9 @@ final class AppModel {
                     // One that won't start is said so, to try again, rather than waited on.
                     guard here.runs == .running else {
                         // Its login item there, which launchd wouldn't start: turned off, it stays off.
-                        throw MachineFailure(message: Here.startsByLaunchd(home: Self.hereHome)
+                        throw MachineFailure(message: BackgroundWork.boxStartsOnItsOwn
+                            ? "This Mac’s box didn’t start. If Kuvo Code Box is turned off in System Settings › General › Login Items, turn it on, then try again."
+                            : Here.startsByLaunchd(home: Self.hereHome)
                             ? "The box already on this Mac didn’t start. If its login item (“sh”) is turned off in System Settings › General › Login Items, turn it on, then try again."
                             : "The box already on this Mac didn’t start. Try again in a moment.")
                     }
@@ -604,19 +621,11 @@ final class AppModel {
                     BackgroundWork.heldBack = couldnt
                     throw MachineFailure(message: why ?? couldnt)
                 case .wait:
-                    // Moving into its home of its own (the keeper does it): nothing starts here
-                    // meanwhile. The window says it's moving (and why it holds on, where it went
-                    // wrong part way), still starting, and looks again in a moment.
+                    // (Only a copy that doesn't move boxes, attaching in place: nothing of its own
+                    // finishes the move, so it says so, once.)
                     detachHere()
                     BackgroundWork.heldBack = "This Mac’s box is moving into its own home."
-                    boxMoving = await OwnBoxMove.forThisMac()?.movingNow() ?? ""
-                    Task { [weak self] in
-                        try? await Task.sleep(for: .seconds(5))
-                        guard let self, launch == self.launch, engine == .starting, boxMoving != nil else { return }
-                        engine = .preparing
-                        await self.start()
-                    }
-                    return
+                    throw MachineFailure(message: "This Mac’s box is moving into its own home. Try again in a minute.")
                 case .own, .two:
                     // None here now: the box that was is no longer this Mac's.
                     detachHere()
@@ -625,11 +634,10 @@ final class AppModel {
                     if BackgroundWork.boxStartsOnItsOwn {
                         BackgroundWork.heldBack = "This Mac’s box starts on its own."
                         throw MachineFailure(message: outcome == .two
-                            ? "This Mac has two boxes: Kuvo Code’s own, in its folder, and the one in its own home, ~/.kuvo-code. Kuvo Code starts neither until one of them is removed."
+                            ? "This Mac has two boxes: Kuvo Code’s own, in its folder, and the one in ~/.kuvo-code, which runs on its own. Kuvo Code doesn’t start its own beside it."
                             : "This Mac’s box is starting in its own home. Try again in a moment.")
                     }
                 }
-                boxMoving = nil
             }
             guard launch == self.launch else { return }
             followAgents()

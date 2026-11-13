@@ -39855,7 +39855,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "d30baf173baf";
+var BRIDGE_VERSION = "8436bdf62bb9";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -42150,6 +42150,8 @@ async function rehomeNew(folders, options = {}) {
     const now = Date.now();
     writePrivate(newMarker(home), `${now}
 `);
+    for (const scratch of ["bin.new", "engine.new"])
+      fs130.rmSync(path135.join(home, scratch), { recursive: true, force: true });
     const aside = path135.join(home, "trash", `earlier-box-${stamp4(now)}`);
     const there = listOf(home).filter((name) => name !== "updates" && name !== "trash").map((name) => path135.join(home, name)).concat(listOf(path135.join(home, "updates")).filter((name) => name !== "rehome").map((name) => path135.join(home, "updates", name))).concat(listOf(path135.join(home, "trash")).filter((name) => !name.startsWith("earlier-box-")).map((name) => path135.join(home, "trash", name)));
     for (const file of there.sort()) {
@@ -42216,7 +42218,7 @@ function run3(journal, rewriter) {
   const home = homeOf(journal);
   forgetJournal(home);
   writeJournal(home, journal);
-  noteRecord(home, { state: "moving", way: journal.way, from: foldersOf2(journal).appFolder, to: home });
+  noteRecord(home, { state: "moving", way: journal.way, from: foldersOf2(journal).appFolder, to: home, failed: null });
   stopPoint("after-plan");
   return carried(journal, rewriter);
 }
