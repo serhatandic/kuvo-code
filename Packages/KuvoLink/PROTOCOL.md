@@ -1094,10 +1094,25 @@ browser's tools (`browser_…`), which work in a client's own browser, aren't th
   - From a client (no `startedBy`): in `folder`, in Auto unless `approval` says (which asks first
     where the sandbox doesn't run, "Approval"), with Settings › Permissions, the task as the user's
     own first message.
-  - Either way its project's other folders are allowed to it and named in its instructions, one in
+  - A client's New Session (`sessions.start.empty`, #341): `task` left out, the session is made as
+    above and nothing is sent to it, for the user's own first message. It may name `agent` (any of
+    its engine's agents, as its picker has them; `mode` stays build or plan) and `model` as
+    `{providerID, id, variant?}`, taken as named: on the coding agents' bridge for one of theirs or
+    Auto (503 while it isn't running), else on the engine. Its answer adds `info`, the session as
+    its engine (or the bridge) lists it then, and with `worktree: true`, `worktree`, the worktree made
+    for it as `POST kuvo/worktrees` makes one (`{project, root, folder, branch, base?}`); the box
+    takes that away again, branch and all, should the session not be made (also where the client
+    goes away meanwhile). Asked for `autopilot` but its agent couldn't be told how to work on it,
+    the session goes again: 502, so it never starts asking you instead. With `wait`, or from a conversation, a
+    task is still needed (400). A box from before needs a task: a client makes the session with its
+    engine then, and gives it its project's folders, approval and Autopilot itself.
+  - Either way its project's other folders (those of the project whose folder it's in, or a
+    worktree of; none in one of those other folders) are allowed to it and named in its instructions, one in
     a worktree is told so, one filed under another folder than its own (a worktree, a project's
     other folder) carries that project from the first (`kuvo.filed`, "Projects"), and a folder
-    that's no project yet, nor one of a project's, becomes one.
+    that's no project yet, nor one of a project's, becomes one (once the box keeps its projects),
+    marked `addedByBox: true` until a client sets its `folders` (`PUT kuvo/projects`), as one
+    `make_project` makes is.
   - 400 `{message}` (no task, not a folder here), 403 (a group chat's seat), 404 (`startedBy`
     isn't a conversation here), 409 `{message, reason}` (Full Access from a client where it can't
     be had: `fullAccessOff`), 429 (too many lately), 502 `{message, session?}` (not made, or
@@ -4603,6 +4618,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `pieces` | a machine only: `kuvo/info`'s `pieces`, which version its link, coding agents' bridge and engine run ("Updates", "A new version while it works") |
 | `plugins.search` | `kuvo/plugins/search` |
 | `programs` | `kuvo/programs` |
+| `projects.folders` | A project's `folders` reach each of its sessions as it's started or moved there, opened (`POST kuvo/sessions/<id>/folders`) and as each run starts where they changed ("Projects", #341) |
 | `providers.models` | `POST kuvo/providers/models` |
 | `queue` | `kuvo/sessions/<id>/queue…`, `…/stop` and `kuvo/sessions/queues/events`: the box carries the queue (bridge 0.9.100) |
 | `queue.once` | `…/queue/add` sent again under its `id` adds it once ("Sending again"): a phone sends it with `idempotency-key` only to a box that says this (#144) |
@@ -4620,7 +4636,9 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `sessions.chat` | A chat made, moved or with its metadata written since carries `kuvo.chat` in its metadata, naming the chats folder it's in; older ones go by their folder ("Chats") |
 | `sessions.glance` | `kuvo/sessions/glance`, `…/events`, and `session` in `POST kuvo/git/pull-request` ("A session at a glance") |
 | `sessions.models` | `GET kuvo/sessions/models` ("A session's model") |
+| `sessions.move` | `POST kuvo/sessions/<id>/move`: a conversation moved into a project, given its folders ("Projects", #341) |
 | `sessions.start` | `POST kuvo/sessions`: a session started with a task (bridge 0.9.100) |
+| `sessions.start.empty` | `POST kuvo/sessions` from a client without a task, `agent`, `model` as `{providerID, id, variant?}`, and `info` and `worktree` in its answer (#341) |
 | `setup` | `kuvo/setup`, `…/events`: your setup and its main computer ("Your setup") |
 | `setup.mainOnly` | a member refuses pairing and adding with `409 {message, primary}`, and answers `GET kuvo/hosts` from its setup ("Your setup", Only the main computer adds and pairs) |
 | `shell.stop` | `POST kuvo/shell/<id>/stop` |
@@ -5009,10 +5027,12 @@ names it (a `/` can't be in a part of the path). A Mac answers from its box; a m
 there, with the settings of those it removed, the first time the machine answers; what it changes
 while a box is away goes there when it's back.
 
-- `GET kuvo/projects`: `{projects: [{directory, name?, folders, run?, terminal?, removed?}]}`,
-  newest first. `name` only when it isn't the folder's own; `folders`, the project's other folders;
-  `removed`, one Remove Project took off the list, kept with its settings for when one of its
-  sessions is brought back (a client shows it then, and not before).
+- `GET kuvo/projects`: `{projects: [{directory, name?, folders, run?, terminal?, removed?, madeBy?,
+  addedByBox?}]}`, newest first. `name` only when it isn't the folder's own; `folders`, the
+  project's other folders; `removed`, one Remove Project took off the list, kept with its settings
+  for when one of its sessions is brought back (a client shows it then, and not before); `madeBy`,
+  the bot that made it ("Work"); `addedByBox`, one the box added itself (a session started in a
+  folder it didn't list, `make_project`) whose folders no client has set yet (#341).
   `worktrees` (bridge 0.9.207), `{"<folder>": "<project>"}`: the project each of the box's worktrees
   belongs to, by the folder its sessions run in (and its top folder), for those it keeps, those it
   removed that can come back and those removed before; and each project's git worktrees made
@@ -5033,10 +5053,39 @@ while a box is away goes there when it's back.
   folder its `kuvo.filed` names, is filed under that project (#311).
 - `PUT kuvo/projects?directory=<folder>` with any of `{name, folders, run, terminal, removed}`
   adds the project or changes what's given (an empty string is none), and brings a removed one
-  back unless `removed` is true (a client's copy of one it removed, with its settings):
-  `200 {project}`; 400 for a folder that isn't a whole path. The folder is kept as it's named,
+  back unless `removed` is true (a client's copy of one it removed, with its settings); one with
+  `folders` takes away `addedByBox`: `200 {project}`; 400 for a folder that isn't a whole path. The folder is kept as it's named,
   as its sessions run there (a link isn't followed), and whether it's there now or not (a drive
   that's away).
+  Its `folders` reach each of its sessions (`projects.folders`, #341), whichever client changed
+  them: on the engine and the coding agents' bridge, in its folder or one of its worktrees, a
+  session gets a rule allowing each folder (`external_directory` `<folder>/*`, and where a link
+  leads, after its approval's rules; a bot's own folder's rule stays) and the instruction
+  `kuvo.project-folders` naming them, or neither once there are none: as it's started or moved
+  there, as a client opens it (`POST kuvo/sessions/<id>/folders` → `200 {session}`, 404 for none
+  here, 502 where the engine didn't take it: so it has them before you write to it), and as each of
+  its runs starts where they changed since (for one nobody opens: a wake-up's, a letter's; that run's
+  first step may go without them). Each is
+  written only where they changed, the instruction also where an earlier write lost it (a write
+  makes a session the newest). One filed under a project that's the same place by another name
+  (`kuvo.filed`, a link) has that project's; one in a project's other folder, none (it works there
+  alone). A folder Settings › Permissions names is Settings' to say, as when a session's rules are
+  made, by where it really is (a link and where it leads are one folder): the project adds no rule
+  for it (no second copy in Auto; a Don't Allow there holds), and an allow a session has for it
+  stays only in Auto and Full Access, which allow what Settings asks about, while Settings' last rule
+  for it asks; Don't Allows a lead brought from another computer (`kuvo.held`) stay
+  last. Only for a project the box lists with folders a client set: a session of one it doesn't
+  list (its Mac keeps them, or hasn't handed them over yet), or of one it added itself
+  (`addedByBox`), keeps the rules and instruction it has; one moved into one it added gets none. Not a subagent's, nor a hidden run's (a group chat's seat, an engine run, a review's part).
+  A box from before doesn't: a client gives each session it opens its folders then.
+- `POST kuvo/sessions/<id>/move` `{directory}` (`sessions.move`, #341) moves a conversation into the
+  project at `directory` here, as a chat that turns into work is: the engine moves it (one at work at
+  its next step), and it gets that project's other folders as above. `200 {session, directory,
+  info?}` (`info`, the session as its engine lists it now); 400 for a folder that isn't here; 404
+  for no such conversation; 409 for a coding agent's session (their sessions keep the folder they
+  started in), one moving to another computer, and a subagent's or hidden run's; 502 where the engine didn't take it; 503 with no
+  engine. A box from before: a client moves it with the engine's `POST api/session/<id>/move` and
+  gives it the project's folders itself.
 - `DELETE kuvo/projects?directory=<folder>` is Remove Project: every session of it, its worktrees' and
   other folders' too, and those filed under it from elsewhere (`kuvo.filed`) (removed worktrees included, and the folders an optional body `{folders}` names: those a client
   shows under it that the box doesn't know, worktrees removed before it kept them), archived on

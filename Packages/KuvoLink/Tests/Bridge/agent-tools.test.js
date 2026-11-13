@@ -354,7 +354,8 @@ test("a client starts a session with a task, as the user's own first message", a
   assert.equal(byAgent.status, 200);
   assert.deepEqual(marked.get(byAgent.body.session), { kuvo: { startedBy: "ses_lead" } });
 
-  assert.deepEqual(await route("POST", "kuvo/sessions", { folder: other }), { status: 400, body: { message: "Say what it's to do (task)." } });
+  // (A client's start with no task makes a new session: "start-folders.test.js". One waited for needs one.)
+  assert.deepEqual(await route("POST", "kuvo/sessions", { folder: other, wait: true }), { status: 400, body: { message: "Say what it's to do (task)." } });
   assert.deepEqual(await route("POST", "kuvo/sessions", { task: "Hi.", folder: path.join(home, "nowhere") }),
     { status: 400, body: { message: `${path.join(home, "nowhere")} isn't a folder on this machine. Give a full path to one.` } });
   assert.deepEqual(await route("POST", "kuvo/sessions", { task: "Hi.", startedBy: "ses_gone" }), { status: 404, body: { message: "There's no such conversation here." } });

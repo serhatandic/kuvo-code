@@ -2059,19 +2059,38 @@ final class SessionModel {
     }
     /// Whether its box answers `feature` (`kuvo/info`'s `features`); this Mac's answers them all.
     func boxHas(_ feature: String) async -> Bool {
+        await boxSays(feature) == true
+    }
+
+    /// Whether its box answers `feature`, as `boxHas`; nil where it has one whose features couldn't
+    /// be read just now (its link still starting, say).
+    func boxSays(_ feature: String) async -> Bool? {
         guard let box = box() else { return false }
         guard !BoxClient.hasEveryFeature(box.box) else { return true }
-        return await boxFeatures().contains(feature)
+        return await readBoxFeatures()?.contains(feature)
     }
 
     private func boxFeatures() async -> Set<String> {
+        await readBoxFeatures() ?? []
+    }
+
+    private func readBoxFeatures() async -> Set<String>? {
         if let readFeatures { return readFeatures }
-        guard let box = box() else { return [] }
+        guard let box = box() else { return nil }
         if BoxClient.hasEveryFeature(box.box) { return ["queue", "queue.waits"] }
         struct Info: Decodable { var features: [String]? }
-        guard let info = try? await box.value(Info.self, "GET", "kuvo/info") else { return [] }
-        readFeatures = Set(info.features ?? [])
-        return readFeatures ?? []
+        // (One that answers it hasn't `kuvo/info`, 404 or 405, is from before: none. Any other
+        // answer but its features, or none: can't tell, and asked again next time.)
+        guard let answer = try? await box.send("GET", "kuvo/info") else { return nil }
+        let (status, data) = answer
+        if status == 404 || status == 405 {
+            readFeatures = []
+        } else if (200..<300).contains(status), let info = try? JSONDecoder().decode(Info.self, from: data) {
+            readFeatures = Set(info.features ?? [])
+        } else {
+            return nil
+        }
+        return readFeatures
     }
 
     // A box that doesn't carry the queue: this Mac carries it, as before. Once a run ends, a moment
@@ -2592,6 +2611,23 @@ final class SessionModel {
     /// Gives the agent the project's folders as they're set now, if it doesn't have them yet:
     /// allowed in its permissions, and named in its instructions.
     func syncFolders() async {
+        // Its box gives them (where they've changed), now it's opened, before you write to it.
+        // (Where it can't be told whether it does, nothing: its next opening or run gives them,
+        // never rules this app makes without its box's Settings.)
+        let onBox = await boxSays(ProjectFoldersOnBox.feature)
+        guard let onBox else { return }
+        if onBox {
+            struct Given: Decodable { var session: String }
+            do {
+                _ = try await box()?.value(Given.self, "POST", ProjectFoldersOnBox.route(id))
+            } catch is CancellationError {
+            } catch {
+                fail(error)
+            }
+            return
+        }
+        // A box from before `projects.folders` doesn't give its sessions their project's folders:
+        // the app gives an open one them.
         // As the engine knows them: a machine's folders are plain paths there.
         let folders = projectFolders().map(api.enginePath)
         let machine = RemoteFolder.machine(of: session.location.directory)

@@ -18,8 +18,9 @@ import { macLink, readLink } from "../state";
 import { plainName } from "../../shared/text";
 import { withNotes } from "../../shared/session-notes";
 import { askedAbout, realish } from "../fence/policy";
-import { changeProjects, filedUnder, PROJECT_FOLDERS_ENTRY, PROJECTS_FILE, projectFoldersNote, readProjects } from "../areas/projects";
-import { projectOf as projectOfFolder, readWorktrees } from "../areas/worktree-records";
+import { changeProjects, filedUnder, foldersFor, isFolderRule, namedFolders, PROJECT_FOLDERS_ENTRY, projectFolderRules, PROJECTS_FILE, projectFoldersNote, readProjects } from "../areas/projects";
+import { runsWithAgents } from "../bots/kit";
+import { projectOf as projectOfFolder, readWorktrees, worktreeProjects } from "../areas/worktree-records";
 import { answerWorktrees, settleNewSession } from "../areas/worktrees";
 import { composeLetter } from "./letter";
 import { allowed, noteStarting, startedAs, startsBefore, takeBack } from "./limits";
@@ -64,6 +65,8 @@ export interface StartGiven {
   model?: unknown;
   effort?: unknown;
   mode?: unknown;
+  /** A client's: any of its engine's agents, by name (`mode` is build or plan). */
+  agent?: unknown;
   approval?: unknown;
   autopilot?: unknown;
   wake?: unknown;
@@ -142,6 +145,8 @@ export interface Making {
   folders: string[];
   folder: string;
   started: Omit<Started, "session">;
+  /** Whether its agent was told how to work on Autopilot, once that's been tried. */
+  autopilotTold?: boolean;
 }
 
 /** An agent's call from no conversation this box has: counted together, its task from "another
@@ -171,6 +176,10 @@ export interface Started {
   model?: string;
   /** For a lead on another computer, why it got less than asked (`got`): this computer's. */
   held?: string;
+  /** A client's start with no task: the session as the engine (or bridge) has it once it's made. */
+  info?: Record<string, unknown>;
+  /** A client's start with no task, in a worktree made for it: that worktree's record. */
+  worktree?: Record<string, unknown>;
 }
 
 /** Why one wasn't started (a 502 was, but its task didn't reach it: `session`). */
@@ -234,25 +243,13 @@ export const seatRefusal = (): StartRefusal => ({ status: 403, message: SEAT });
 // A bot's own folder, whose sessions would be listed nowhere: one it starts there is a chat.
 const isBotFolder = (folder: string) => folder.startsWith(path.resolve(BOTS) + "/");
 
-// Its project's other folders, allowed to it as the Mac allows them (ProjectFolders): symlinks
-// resolved too, after its approval's rules (the last that matches wins).
-function folderRules(folders: readonly string[]): KitRule[] {
-  const paths: string[] = [];
-  for (const folder of folders) {
-    let real = folder;
-    try { real = fs.realpathSync(folder); } catch {}
-    for (const each of [folder, real]) if (!paths.includes(each)) paths.push(each);
-  }
-  return paths.map(each => ({ action: "external_directory", resource: path.join(each, "*"), effect: "allow" }));
-}
-const isFolderRule = (rule: KitRule) => rule.action === "external_directory" && rule.effect === "allow" && rule.resource.endsWith("/*");
-
 // Its rules: made for its approval with Settings › Permissions as they are now (where they're this
 // box's own; else the starting conversation's Don't Allows), its project's folders after (a bot's
 // own folder stays allowed).
 function rulesFor(approval: Approval, parent: Partial<EngineSession> | null, folders: readonly string[], held: readonly KitRule[] = []): KitRule[] {
   const own = Array.isArray(parent?.permissions) ? parent.permissions.filter(rule => !isFolderRule(rule) || rule.resource.includes("/bots/bot_")) : [];
-  return approvalRules(approval, [...own, ...folderRules(folders)], held);
+  // (Not one Settings › Permissions names, by its link or where it leads: Settings' to say.)
+  return approvalRules(approval, [...own, ...projectFolderRules(folders, own)], held);
 }
 
 // The project a folder is (one of its worktrees is its project's), its name and other folders; a
@@ -262,9 +259,11 @@ function projectOf(folder: string): { name: string; folders: readonly string[] }
   // (A worktree's, removed ones too, as every client files its sessions: `worktreeProjects`.)
   const directory = projectOfFolder(folder);
   const known = readProjects().find(each => each.directory === directory);
-  // (Only once the box keeps its projects: before, they're its Mac's.)
+  // (Only once the box keeps its projects: before, they're its Mac's. Marked as the box's own
+  // adding, so the folders a Mac from before gives its sessions stay theirs until a client sets
+  // the project's: `addedByBox`.)
   if (!known && directory === folder && fs.existsSync(PROJECTS_FILE)) {
-    try { changeProjects(projects => (projects.some(each => each.directory === directory) ? projects : [{ directory, folders: [] }, ...projects])); } catch {}
+    try { changeProjects(projects => (projects.some(each => each.directory === directory) ? projects : [{ directory, folders: [], addedByBox: true }, ...projects])); } catch {}
   }
   return { name: known?.name ?? path.basename(directory), folders: directory !== folder ? [] : (known?.folders ?? []) };
 }
@@ -332,7 +331,8 @@ async function answersYou(target: Target, session: string): Promise<boolean> {
 export async function startSession(given: StartGiven, by: Starter | null, place: StartPlace): Promise<{ started: Started } | { refused: StartRefusal }> {
   const no = (status: StartRefusal["status"], message: string, session?: string) => ({ refused: { status, message, ...(session ? { session } : {}) } });
   const task = typeof given.task === "string" ? given.task.trim() : "";
-  if (!task) return no(400, "Say what it's to do (task).");
+  // (A client's start may give none: a new session, for the user's own first message.)
+  if (!task && (by || given.wait === true)) return no(400, "Say what it's to do (task).");
   if (by?.place?.data.metadata?.kuvo?.seat) return { refused: seatRefusal() };
   if (given.computer !== undefined && given.computer !== null && given.computer !== "" && given.computer !== "here") return no(400, `Starting work on another computer isn't here yet: start it on ${HERE}, or ask the user to start it there.`);
   const remote = by?.remote ?? null;
@@ -410,7 +410,16 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   let picked: string[] = [];
   let warning: string | undefined;
   let free: boolean | undefined;
-  if ((given.model !== undefined && given.model !== null && given.model !== "") || (given.effort !== undefined && given.effort !== null && given.effort !== "")) {
+  // A client's model, as its picker has it (`{providerID, id, variant?}`): taken as it's named, on
+  // the coding agents' bridge for one of theirs (or Auto), else the engine, as the client would
+  // have made it there.
+  const exact = !by && isObject(given.model) && typeof given.model.providerID === "string" && given.model.providerID && typeof given.model.id === "string" && given.model.id ? given.model : null;
+  if (exact) {
+    const variant = typeof exact.variant === "string" && exact.variant ? exact.variant : null;
+    model = { providerID: exact.providerID as string, id: exact.id as string, ...(variant ? { variant } : {}) };
+    target = runsWithAgents(model) ? bridge : engine;
+    if (!target) return no(503, runsWithAgents(model) ? `The coding agents aren't running on ${HERE}.` : `The engine on ${HERE} isn't running.`);
+  } else if ((given.model !== undefined && given.model !== null && given.model !== "") || (given.effort !== undefined && given.effort !== null && given.effort !== "")) {
     const models = await usableModels(engine, bridge, place.signal);
     const choice = pickModel(given.model ?? (model ? { providerID: model.providerID, id: model.id } : null), given.effort, models);
     if ("refused" in choice) return no(400, choice.refused);
@@ -468,8 +477,12 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   // In a worktree of its project's, on a branch of its own (taken away again should the session not
   // start).
   let madeTree: string | null = null;
+  // (For a client: the worktree's record, as `kuvo/worktrees` gives it, to show it at once.)
+  let treeMade: Record<string, unknown> | null = null;
   const removeTree = async () => {
-    if (madeTree) await answerWorktrees("POST", "kuvo/worktrees/remove", { path: madeTree, discard: true }, engine, place.signal).catch(() => {});
+    // (Never to restore: no session ran in it. Not cut short with a start that was: it's what's
+    // left of one.)
+    if (madeTree) await answerWorktrees("POST", "kuvo/worktrees/remove", { path: madeTree, discard: true, forget: true }, engine, undefined).catch(() => {});
   };
   // (A worktree of its own is made from the project: one given a folder too would leave that.)
   if (given.worktree === true && named && folder && realish(folder) !== realish(named.directory)) {
@@ -497,6 +510,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
       }
       folder = tree.folder;
       madeTree = typeof (tree as { root?: unknown }).root === "string" ? (tree as { root: string }).root : null;
+      if (!by) treeMade = made.value as Record<string, unknown>;
       if (typeof tree.branch === "string") picked.push(`worktree ${tree.branch}`);
       place.steps?.tree?.({ folder, root: madeTree, ...(typeof tree.branch === "string" ? { branch: tree.branch } : {}) });
     }
@@ -521,8 +535,10 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   // here for something else. Auto stays Auto, asking while the sandbox isn't running, as here.)
   const kept: Approval = remote && wanted === "fullAccess" && unavailable("fullAccess") ? "auto" : wanted;
   const got = applied !== (requested ?? wanted) && lowerOf(applied, requested ?? wanted) === applied ? applied : undefined;
-  // (A worktree made elsewhere is its project's, as the projects' worktrees are found now.)
-  if (folder !== CHATS) await inTime(findLinkedTrees(), undefined, 3_000);
+  // (A worktree made elsewhere is its project's, as the projects' worktrees are found now: not
+  // looked for in a project's own folder, which is no other's, nor one whose project is known, so
+  // New Session there waits for no git.)
+  if (folder !== CHATS && !readProjects().some(each => each.directory === folder && !each.removed) && !(folder in worktreeProjects())) await inTime(findLinkedTrees(), undefined, 3_000);
   // The project it's filed under: the one named; else its folder's (a worktree's, or a project's
   // other folder's); else, in its starter's folder, the one its starter is filed under there. One
   // filed under another folder than its own carries it from the first (`kuvo.filed`), so every
@@ -533,13 +549,18 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const its = mapped === null || mapped !== folder || named ? mapped : await keptAs(folder) ?? folder;
   const under = its === null ? null : named?.directory ?? (its !== folder ? its : startersFiled?.folder === folder ? startersFiled.project : folder);
   const filed = under && under !== folder ? { folder, project: under } : null;
-  const project = !under ? null : realish(under) !== realish(folder) ? { name: projectName(under), folders: [] as readonly string[] } : projectOf(under);
+  const project = !under ? null : realish(under) !== realish(folder) ? { name: projectName(under), folders: foldersFor(folder) as readonly string[] } : projectOf(under);
   const title = typeof given.title === "string" && given.title.trim() ? given.title.trim() : null;
   // (A lead's Don't Allows from its own computer: kept with it, so they hold here however its rules are made again.)
   const brought = remote ? remote.held.filter(holdsBack) : [];
+  // (Its project's folders and those Settings names, looked at where they really are: asked about
+  // off the box's thread first.)
+  await askedAbout([...(project?.folders ?? []), ...namedFolders(Array.isArray(parent?.permissions) ? parent.permissions : [])]);
   const rules = rulesFor(applied, parent, project?.folders ?? [], brought);
   // Its mode: the one asked for, else the conversation's (one that plans starts sessions that plan).
-  const agent = given.mode === "plan" || given.mode === "build" ? given.mode : parent?.agent ?? null;
+  // (A client may name any of its engine's agents: `agent`, as its picker has them.)
+  const ownAgent = !by && typeof given.agent === "string" && given.agent.trim() ? given.agent.trim() : null;
+  const agent = given.mode === "plan" || given.mode === "build" ? given.mode : ownAgent ?? parent?.agent ?? null;
   // On Autopilot where its starter is, or where a client asked. An agent's word isn't enough: one
   // the box can't place starts it asking.
   const autopilot = remote ? remote.autopilot : by ? Boolean(by.place && isAutopilot(by.place.data)) : given.autopilot === true;
@@ -596,6 +617,19 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   // a wait for its answer, so it shows before the session finishes.
   if (marked && by?.place && bot && botOfConversation(by.session)?.bot === bot.bot) noteOversight(bot.bot, session, "started");
   if (bot && goal && given.step !== undefined && given.step !== null) linkSession(bot.bot, given.step, session);
+  // None to give it (a client's new session): the session as it's made now, for the client to show
+  // at once, and the worktree made for it.
+  if (!task) {
+    // (Asked to start on Autopilot, it doesn't start asking you instead: it goes, and the client
+    // says why.)
+    if (making.autopilotTold === false) {
+      await call(target, "DELETE", `/api/session/${encodeURIComponent(session)}`).catch(() => {});
+      await removeTree();
+      return no(502, `Couldn't start the session in ${folder} on Autopilot: its agent couldn't be told how to work on it.`);
+    }
+    const info = await call(target, "GET", `/api/session/${encodeURIComponent(session)}`, undefined, place.signal).catch(() => null);
+    return { started: { session, ...making.started, ...(isObject(info) ? { info } : {}), ...(treeMade ? { worktree: treeMade } : {}) } };
+  }
   const id = making.prompt.id;
   try {
     await promptMade(making, target, session);
@@ -664,7 +698,7 @@ export async function markMade(making: Making, target: Target, session: string, 
   if (making.folders.length) {
     await call(target, "PUT", `/api/experimental/session/${address}/instructions/entries/${PROJECT_FOLDERS_ENTRY}`, { value: projectFoldersNote(making.folder, making.folders) }).catch(() => {});
   }
-  if (making.autopilot) await tellAutopilot(target, session, true).catch(() => {});
+  if (making.autopilot) making.autopilotTold = await tellAutopilot(target, session, true).then(() => true, () => false);
   await settleNewSession(target, session).catch(() => {});
   // (In its turn, onto its notes as they are then: what was written since it was made stays.)
   const marked = await rewriteOn(target, session, now => ({ metadata: withNotes(now.metadata, making.kuvo) })).then(done => Boolean(done), () => false);

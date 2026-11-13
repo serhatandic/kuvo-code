@@ -394,6 +394,17 @@ final class Workspace {
     /// it works in that project's folders. If it's working, the move comes at its next step.
     func move(_ id: String, toProject directory: String) async throws {
         guard let session = session(id) else { return }
+        // Its box moves it and gives it the project's folders (PROTOCOL.md, "Projects"); it says
+        // why where it can't (a coding agent's, one moving to another computer).
+        let boxID = Self.box(of: directory)
+        if let box = boxes?(boxID), try await goesThroughBox(SessionMove.feature, on: boxID) {
+            _ = try await box.value(SessionMove.Moved.self, "POST", SessionMove.route(id), body: SessionMove.Asked(directory: Self.onBox(directory)))
+            await reload(id)
+            Analytics.shared.track("chat_moved")
+            return
+        }
+        // A box from before `sessions.move`: the app moves it with the engine and gives it the
+        // project's folders itself.
         if OutsideAgents.isAgentSession(session) { throw OutsideAgents.Failure.unavailable("Moving a chat into a project") }
         // Moving to another computer: what changes it waits until it's there.
         if Moves.isFrozen(id) { throw Moves.Failure.moving }
@@ -921,8 +932,10 @@ final class Workspace {
     }
 
     /// Adds a project, or updates one, and gives its open sessions the new folders.
+    /// `shown`: the sessions open in a tab, given the project's new folders by its box at once (you
+    /// may write to one next).
     @discardableResult
-    func saveProject(_ directory: String, settings project: ProjectSettings) -> String {
+    func saveProject(_ directory: String, settings project: ProjectSettings, shown: Set<String> = []) -> String {
         let directory = addFolder(directory)
         var project = project
         project.name = project.name?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -935,18 +948,35 @@ final class Workspace {
         settings[directory] = project == ProjectSettings() ? nil : project
         saveSettings()
         keepOnBox(directory)
-        // Sessions not open yet catch up when they open.
-        for model in models.values where projectDirectory(of: model.session) == directory {
-            Task { await model.syncFolders() }
+        // Sessions not open yet catch up when they open. A box with `projects.folders` gives each
+        // its folders as it next runs or opens, never all at once at rest, which would make each
+        // the newest: only those open in a tab now. A box from before: the app gives each loaded
+        // one them now.
+        givingFolders = models.values.filter { projectDirectory(of: $0.session) == directory }.map { model in
+            let isShown = shown.contains(model.id)
+            return Task {
+                if !isShown, await model.boxHas(ProjectFoldersOnBox.feature) { return }
+                // (Once its box has them.)
+                await projectsWritten()
+                await model.syncFolders()
+            }
         }
         return directory
     }
 
+    /// The project's folders being given to its loaded sessions after Edit Project (what a test
+    /// waits for).
+    @ObservationIgnored private(set) var givingFolders: [Task<Void, Never>] = []
+
     /// Settings › Permissions changed: each box makes its conversations' rules again with them
-    /// (PROTOCOL.md, "Approval"); open sessions' folders follow here.
+    /// (PROTOCOL.md, "Approval"); open sessions' folders follow here where their box is from
+    /// before `projects.folders` (one with it keeps them itself).
     func syncPermissions() {
         for model in models.values {
-            Task { await model.syncFolders() }
+            Task {
+                if await model.boxHas(ProjectFoldersOnBox.feature) { return }
+                await model.syncFolders()
+            }
         }
     }
 
@@ -1006,7 +1036,35 @@ final class Workspace {
         let bridge = agents(forFolder: directory)
         if isAgents, bridge?.api == nil { throw OutsideAgents.Failure.notRunning(bridge?.failure) }
         guard let api = isAgents ? bridge?.api : api(forFolder: directory) else { throw CancellationError() }
+        // Its box makes it (PROTOCOL.md, `kuvo/sessions`): its worktree, its project's folders, its
+        // approval and Autopilot, all there. (Told before the folder's added, as one that can't be
+        // told adds nothing.)
+        let boxID = Self.box(of: directory)
+        let throughBox = boxes?(boxID) != nil ? try await goesThroughBox(SessionStart.feature, on: boxID) : false
         let directory = addFolder(directory)
+        if throughBox, let box = boxes?(boxID) {
+            let asked = SessionStart.Asked(folder: Self.onBox(directory), chat: !worktree && Self.isChat(directory), worktree: worktree, agent: agent, model: model, approval: approval?.rawValue, autopilot: autopilot)
+            let started = try await box.value(SessionStart.Started.self, "POST", SessionStart.route, body: asked)
+            let session: Session
+            if var made = started.info {
+                made.location.directory = api.appFolder(made.location.directory)
+                session = made
+            } else {
+                session = try await api.session(started.session)
+            }
+            if let tree = started.worktree {
+                let folder = Self.here(tree.folder ?? tree.root, on: boxID)
+                worktrees[folder] = Worktree(project: directory, root: Self.here(tree.root, on: boxID), branch: tree.branch, base: tree.base)
+                saveWorktrees()
+                // (Its box told it it works there.)
+                toldWorktree.insert(session.id)
+            }
+            upsert(session)
+            trackCreated(session, model: model, agent: agent, approval: session.metadata?["kuvo"]?["applied"]?.string ?? "default", worktree: worktree)
+            return session
+        }
+        // A box from before `sessions.start.empty` makes no session without a task: the app makes it
+        // here, with the project's folders, approval and Autopilot itself.
         let folder = worktree ? try await makeWorktree(of: directory) : directory
         // As its engine knows them: a machine's folders are plain paths there.
         let extra = (settings[directory]?.folders ?? []).map(api.enginePath)
@@ -1051,14 +1109,56 @@ final class Workspace {
             try? await api.setInstruction(session: session.id, key: Self.worktreeInstructionKey, text: Self.instructions(for: tree))
         }
         upsert(session)
+        trackCreated(session, model: model, agent: agent, approval: starting.rawValue, worktree: worktree)
+        return session
+    }
+
+    private func trackCreated(_ session: Session, model: ModelRef?, agent: String?, approval: String, worktree: Bool) {
         let used = model ?? session.model
         var props = Analytics.model(provider: used?.providerID, model: used?.id)
         props["mode"] = Analytics.mode(agent)
-        props["approval"] = starting.rawValue
+        props["approval"] = approval
         props["worktree"] = worktree
         if let since = Analytics.shared.sinceInstall { props["since_install"] = since }
         Analytics.shared.track("session_created", props)
-        return session
+    }
+
+    /// Each box's features, by box, as last read (`kuvo/info`): whether a new session, a move into a
+    /// project and a project's folders go through it there. Read once a run.
+    @ObservationIgnored private var featuresHere: [String: Set<String>] = [:]
+
+    /// Whether the box `id` has `feature`: the app's own always, a machine's as it says (one that
+    /// answers it hasn't `kuvo/info`, 404 or 405, is from before: none). Nil where that can't be told
+    /// just now (it couldn't be asked, or didn't answer as either).
+    func boxSays(_ feature: String, on id: String) async -> Bool? {
+        if BoxClient.hasEveryFeature(id) { return true }
+        if let known = featuresHere[id] { return known.contains(feature) }
+        guard let box = boxes?(id) else { return false }
+        struct Info: Decodable { var features: [String]? }
+        let features: Set<String>
+        do {
+            let (status, data) = try await box.send("GET", "kuvo/info")
+            if status == 404 || status == 405 {
+                features = []
+            } else if (200..<300).contains(status), let info = try? JSONDecoder().decode(Info.self, from: data) {
+                features = Set(info.features ?? [])
+            } else {
+                return nil
+            }
+        } catch {
+            return nil
+        }
+        featuresHere[id] = features
+        return features.contains(feature)
+    }
+
+    /// Whether `feature` goes through the box `id`, as `boxSays`: where that can't be told now,
+    /// nothing is done (the app making it itself would write its own rules, not its box's).
+    private func goesThroughBox(_ feature: String, on id: String) async throws -> Bool {
+        guard let says = await boxSays(feature, on: id) else {
+            throw BoxRefusal(status: 503, message: "Its computer can’t be reached now. Try again once it’s connected.")
+        }
+        return says
     }
 
     // MARK: Worktrees
