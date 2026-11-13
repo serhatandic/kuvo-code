@@ -188,6 +188,7 @@ import Testing
         try await start([StubEngine.session("ses_open", title: "Open", directory: project)])
         let made = StubEngine.session("ses_new", title: "New session", directory: project)
         engine.on("POST", "/api/session", json: ["data": made])
+        engine.on("GET", "/api/session/ses_new", json: ["data": made])
         engine.conversation("ses_new", [])
         let session = try await workspace.createSession(in: project, model: nil, agent: "build")
         // The window, showing a conversation, looks again whenever what it read changes.
