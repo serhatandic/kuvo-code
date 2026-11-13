@@ -5334,8 +5334,11 @@ into a home of its own, its keys are its helper's copies in your Keychain ("This
 helper"), which the app can't read, and must never make anew: a key made by the app would be
 another Mac to every phone, machine and peer. So the app reads none of them, and asks the box for
 what it did with them. Both routes answer only Kuvo Code on this Mac (`x-kuvo-from: app` over the
-box's own server, `run/serve.json`), `403` to anyone else (a phone, or `box route`, which anything
-you run on this Mac can use), and `409` on any other box.
+box's own server, to the password in `run/serve.json`), `403` to anyone else (a phone, or `box
+route`), and `409` on any other box. That password is in a file only you can read, which the sandbox
+keeps agents' commands from, as it keeps them from `run/host.json`, whose host interface gives the
+same keys (`link/identity`): what runs as you outside the sandbox can reach either, as it could the
+app's keeper's before the move.
 
 - **`POST kuvo/box/proof`**: this Mac's proof for one of your machines' vaults ("Vault"), signed with
   the Mac's signing key: `{machine}` for its vault's key (`kuvo-vault-key\0<machine>\0<at>\0<nonce>`),
@@ -5352,7 +5355,8 @@ you run on this Mac can use), and `409` on any other box.
   Keychain can't be reached. Goes 3 months after 0.8.0.
 - **The app's other uses**, through the routes every client has: the vault's values it fills or
   shows (`kuvo/vault/items/<id>/values`, noted `shown` in the vault's activity, as Kuvo Code on this
-  Mac), and the integrations' keys a new machine starts with (`kuvo/keys`).
+  Mac), whether a password you signed in with is the saved one (`kuvo/vault/items/<id>/same`, which
+  neither gives nor notes it), and the integrations' keys a new machine starts with (`kuvo/keys`).
 - **What the app still writes there**, as it wrote them beside the box in its folder: your machines'
   list (`machines.json`) and their bridges (`phone-link.json`), in the box's home; the box reads both
   ("Machines").
@@ -6101,6 +6105,9 @@ what runs as you on a machine (its `bin/kuvo-link.js`, its engine) could take it
   `vault_run`, nor `browser_fill`. `PATCH kuvo/vault/items/<id>` with any of those (a value `null` takes it away) →
   `{item}`; `DELETE` → `{}`, with its values and grants.
 - `GET kuvo/vault/items/<id>/values` → `{values}`.
+- `POST kuvo/vault/items/<id>/same {values}` → `{same}` (`vault.same`): whether each value given is the
+  one kept, without giving them or noting anything (a password you signed in with, to offer to save it
+  or not).
 - `POST kuvo/vault/grants {item, who, how}` (`how: null` takes it away) → `{grants}`;
   `GET kuvo/vault/grants` → `{grants}`.
 - `POST kuvo/vault/pause {paused, bot?}` → the state: every agent's use, or one bot's (or, by its

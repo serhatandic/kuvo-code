@@ -2293,6 +2293,7 @@ var FEATURES = [
   "update",
   "usage.history",
   "vault",
+  "vault.same",
   "wakes",
   "wakes.edit",
   "wakes.events",
@@ -39142,7 +39143,7 @@ import fs123 from "node:fs";
 import path126 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "1502029c8dc8";
+var BRIDGE_VERSION = "98e1b20ecbaf";
 
 // Packages/Box/src/link/rehome/rewrite.ts
 var NO_REWRITE = {
@@ -44371,6 +44372,18 @@ async function* answerVault(context) {
       const values = await valuesOf(id);
       note3({ what: "shown", client: client.name, by: client.by, item: item.id, itemName: item.name, kind: item.kind });
       return yield* json(200, { values });
+    }
+    if (parts.length === 5 && parts[4] === "same") {
+      if (method !== "POST")
+        return yield* json(405, {});
+      const item = itemByID(id);
+      if (!item)
+        return yield* json(404, { message: "That item isn't in this vault." });
+      const asked = isObject(given) && isObject(given.values) ? given.values : null;
+      if (!asked || !Object.keys(asked).length || !Object.values(asked).every((value) => typeof value === "string"))
+        return yield* json(400, { message: 'Send {"values": {…}}.' });
+      const values = await valuesOf(id);
+      return yield* json(200, { same: Object.entries(asked).every(([name, value]) => typeof values?.[name] === "string" && values[name] === value) });
     }
     if (parts.length !== 4)
       return yield* json(404, {});

@@ -173,7 +173,8 @@ final class MachineEngine {
         agents = OutsideAgents(machine: machine.id)
         catalog.outsideAgents = agents
         catalog.machine = machine.id
-        let box = BoxClient(box: machine.id, transport: MachineBoxTransport(connection: machine.connection))
+        // (This Mac's own box, moved into a home of its own: reached as its app, `OwnBoxHome`.)
+        let box = machine.isThisMac && OwnBoxHome.hasMoved ? OwnBoxHome.client : BoxClient(box: machine.id, transport: MachineBoxTransport(connection: machine.connection))
         catalog.box = box
         // This Mac's own box, moved into a home of its own: its settings file there, to open.
         config = EngineConfig(remote: BoxSettings(client: box), file: machine.isThisMac && OwnBoxHome.hasMoved ? OwnBoxHome.folder.map { EngineFolders(root: $0).configFile } : nil)

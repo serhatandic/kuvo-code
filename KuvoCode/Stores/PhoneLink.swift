@@ -147,7 +147,9 @@ final class PhoneLink {
     /// Where the phones and machines are kept: phone-link.json (a test's own, for a test), in the
     /// app's folder, or in this Mac's box's home once it has moved, where the box reads your
     /// machines' bridges from (`OwnBoxHome`).
-    private let savedFile: URL
+    private var savedFile: URL { testFile ?? OwnBoxHome.file("phone-link.json", inSupport: "phone-link.json") }
+    /// A test's own file, if it gave one.
+    private let testFile: URL?
 
     /// This Mac's keys are its box's (it moved into a home of its own, `OwnBoxHome.hasMoved`): the app
     /// reads none of them, and has no identity of its own; what's signed with them, its box signs
@@ -165,9 +167,9 @@ final class PhoneLink {
     /// `file`, `identity`, `signing` and `keychain`: a test's own, kept apart from the app's file
     /// and Keychain (one giving an identity and no signing key gets a new one).
     init(file: URL? = nil, identity: (key: LinkKey, secret: RelaySecret)? = nil, signing: Documents.SigningKey? = nil, keychain: String = PhoneLink.keychainService) {
-        savedFile = file ?? OwnBoxHome.file("phone-link.json", inSupport: "phone-link.json")
+        testFile = file
         service = keychain
-        let saved = (try? JSONDecoder().decode(Saved.self, from: Data(contentsOf: savedFile))) ?? Saved()
+        let saved = (try? JSONDecoder().decode(Saved.self, from: Data(contentsOf: file ?? OwnBoxHome.file("phone-link.json", inSupport: "phone-link.json")))) ?? Saved()
         // Only what names a phone (an earlier build kept anything a document named).
         toRemove = saved.toRemove.filter { PairedPhones.fits($0, macs: []) }
         paired = Self.without(toRemove, PairedPhones(phones: saved.phones, removed: saved.removed))
@@ -1323,7 +1325,7 @@ final class PhoneLink {
                 password = given.password.flatMap { $0.isEmpty ? nil : $0 }
                 // A saved account's password typed anew is kept too, as the card keeps it.
                 let savedLogin = Passwords.logins(for: host).first { $0.account == (username ?? "") }
-                savedPassword = if let savedLogin { await Passwords.password(for: savedLogin) } else { nil }
+                savedPassword = await Passwords.savedForComparing(password ?? "", savedLogin)
                 guard username != nil || password != nil else { return (400, Data()) }
             }
             asks.answer(id, .signIn(username: username, password: password))

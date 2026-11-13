@@ -245,7 +245,14 @@ struct BrowserAskCard: View {
 
     private func use(_ login: Passwords.Login) {
         username = login.account
-        Task { password = await Passwords.password(for: login) ?? "" }
+        // (Read through this Mac's box once it has moved: kept only while it's still the account
+        // picked, and you haven't typed meanwhile.)
+        let before = password
+        Task {
+            let saved = await Passwords.password(for: login) ?? ""
+            guard username == login.account, password == before else { return }
+            password = saved
+        }
     }
 
     private func send() {
@@ -261,7 +268,7 @@ struct BrowserAskCard: View {
             let conversation = ask.session.flatMap { app.workspace.model(for: $0) }
             let secure = BrowserAsks.isSecure(ask.host)
             Task {
-                let savedPassword = if let savedLogin { await Passwords.password(for: savedLogin) } else { String?.none }
+                let savedPassword = await Passwords.savedForComparing(answerPassword, savedLogin)
                 let typed = BrowserAsks.handling(password: answerPassword, saving: saving, secure: secure, savedPassword: savedPassword).typedNow
                 let allowed = wantsAgents ? (typed ? true : await Passwords.authenticate(reason: "let agents sign in to \(host) with its saved password")) : false
                 asks.answer(id, answer)

@@ -123,6 +123,7 @@ export const FEATURES = [
   "update",
   "usage.history",
   "vault",
+  "vault.same",
   "wakes",
   "wakes.edit",
   "wakes.events",

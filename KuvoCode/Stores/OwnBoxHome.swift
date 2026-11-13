@@ -1,6 +1,7 @@
 import Foundation
 import KuvoLink
 import OpenCodeKit
+import os
 
 /// Where this Mac's own box is once it has moved out of the app's folder into a home of its own,
 /// `~/.kuvo-code`, laid out as a machine's (#333; KuvoLink's PROTOCOL.md, "Moving this Mac's box"):
@@ -21,9 +22,22 @@ nonisolated enum OwnBoxHome {
 
     /// Whether this Mac's box lives in its own home now (`movesOwnBox`, and the box there says it's
     /// this Mac's): the app writes nothing in its own folder for it, and reads none of its keys.
+    /// Read once for where it looks (views ask it often), and again after `recheck` (the app
+    /// attaching to a box, or no longer).
     static var hasMoved: Bool {
         guard AppModel.movesOwnBox, let folder else { return false }
-        return kind(in: folder) == "mac"
+        return seen.withLock { seen in
+            if let seen = seen, seen.folder == folder { return seen.moved }
+            let moved = kind(in: folder) == "mac"
+            seen = (folder, moved)
+            return moved
+        }
+    }
+    private static let seen = OSAllocatedUnfairLock<(folder: URL, moved: Bool)?>(initialState: nil)
+
+    /// Looks again whether the box has moved, the next time it's asked.
+    static func recheck() {
+        seen.withLock { $0 = nil }
     }
 
     /// Where the app keeps `name` for this Mac's box: in its home once it has moved, else beside it in
@@ -39,11 +53,22 @@ nonisolated enum OwnBoxHome {
     /// keys kept for a machine's bots, its vault's values to show) is the app's there. Read again for
     /// each request, so a server started again is found; while there's none, as any box attached in
     /// place (`box route`), which answers those as it would anyone on this Mac: refused.
-    @MainActor static var client: BoxClient {
-        guard let folder, served(in: folder) != nil else { return .machine(SSHConnection.thisMac) }
+    static var client: BoxClient {
+        let folder = folder
         return BoxClient(box: SSHConnection.thisMac, transport: LocalBox { request in
-            guard let served = served(in: folder) else {
-                return AsyncThrowingStream { $0.finish(throwing: URLError(.cannotConnectToHost)) }
+            guard let folder, let served = served(in: folder) else {
+                // (`box route`'s transport is the main actor's.)
+                return AsyncThrowingStream { answer in
+                    let task = Task { @MainActor in
+                        do {
+                            for try await part in MachineBoxTransport(connection: SSHConnection(destination: SSHConnection.thisMac)).send(request) { answer.yield(part) }
+                            answer.finish()
+                        } catch {
+                            answer.finish(throwing: error)
+                        }
+                    }
+                    answer.onTermination = { _ in task.cancel() }
+                }
             }
             return EngineRoutes.forward(request, to: served.base, password: served.password, session: PhoneLink.boxSession, adding: ["x-kuvo-from": "app"],
                                         allowing: { path, _ in path.hasPrefix("kuvo/") })
@@ -70,8 +95,10 @@ nonisolated enum OwnBoxHome {
         if kind(in: folder) == "mac" { return true }
         let rehome = folder.appending(path: "updates/rehome")
         if FileManager.default.fileExists(atPath: rehome.appending(path: "keychain.json").path) { return true }
-        guard let journal = try? Data(contentsOf: rehome.appending(path: "journal.json")) else { return false }
+        let journal = rehome.appending(path: "journal.json")
+        guard FileManager.default.fileExists(atPath: journal.path) else { return false }
         // (One that can't be read is under way, as `here` takes it.)
-        return ((try? JSONSerialization.jsonObject(with: journal)) as? [String: Any])?["step"] as? String != "done"
+        guard let data = try? Data(contentsOf: journal) else { return true }
+        return ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["step"] as? String != "done"
     }
 }

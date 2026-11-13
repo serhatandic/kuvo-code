@@ -1540,6 +1540,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "bots.make": ["GET", "kuvo/bots/templates"],
     // (This Mac's app, registered with a Mac's box in a home of its own: a machine says it has none.)
     "box.app": ["GET", "kuvo/box/app"],
+    // (What this Mac's app asks of a Mac's box's keys: a GET is the wrong method, here as there.)
+    "box.appKeys": ["GET", "kuvo/box/proof"],
     // (A command, `kuvo-link.js helper`, not a route: kuvo/info names it.)
     "box.helper": ["GET", "kuvo/info"],
     // (A box in a home of its own: on a Mac's, kuvo/work/settings's keepsAwake.)
@@ -1648,6 +1650,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     update: ["GET", "kuvo/update"],
     "usage.history": ["GET", "kuvo/agents/api/kuvo/usage"],
     vault: ["GET", "kuvo/vault/tools"],
+    // (Whether a value is what's kept, without giving it: an item this vault doesn't have.)
+    "vault.same": ["POST", "kuvo/vault/items/item_none/same"],
     wakes: ["GET", "kuvo/wakes"],
     "wakes.edit": ["POST", "kuvo/wakes/ses_none/pause"],
     "wakes.events": ["POST", "kuvo/wakes/events"],

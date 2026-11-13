@@ -22,6 +22,8 @@ import Testing
 
     init() {
         TestEnvironment.prepare()
+        // (Made as the app's own box's, for every test after: before any moves here.)
+        _ = Workspace.chatsFolder
         AppModel.hereHome = home
     }
 
@@ -77,6 +79,7 @@ import Testing
         try write(#"{"step":"done"}"#, at: "updates/rehome/journal.json")
         let link = PhoneLink(file: file, keychain: service)
         link.hasMachines = { true }
+        #expect(await link.boxIdentity() != nil)
         #expect(link.macKey != nil)
         #expect(items() == 3)
     }
@@ -161,6 +164,72 @@ import Testing
         #expect((asked.puts.first?.body?["keys"] as? [String: String]) == [name: "tok_scout"])
         let deleted = try #require(standIn.asked.first { $0.method == "DELETE" })
         #expect((try JSONSerialization.jsonObject(with: deleted.body) as? [String: [String]]) == ["names": [variable]], "gone from the box once the machine has it")
+        #expect(standIn.asked.allSatisfy { $0.fromApp })
+    }
+
+    /// A saved password, once the box has moved: filled from the box's vault as Kuvo Code on this Mac
+    /// (noted there as shown), and compared there without being read or noted (a sign-in you made
+    /// with it isn't offered to be saved again).
+    @Test func savedPasswordsComeFromTheBoxOnceMoved() async throws {
+        defer { done() }
+        try moved()
+        let app = AppModel()
+        Vaults.shared.client = { [weak app] box in app?.box(box) }
+        defer { Vaults.shared.client = { _ in nil } }
+        let standIn = try await StandInBox.start(at: box) { request in
+            switch (request.method, request.path) {
+            case ("GET", "/kuvo/vault/items/item_gh/values"): return .json(["values": ["username": "me", "password": "kept-in-the-keychain"]])
+            case ("POST", "/kuvo/vault/items/item_gh/same"):
+                let given = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: [String: String]]
+                return .json(["same": given?["values"]?["password"] == "kept-in-the-keychain"])
+            default: return HTTPResponse(status: 404)
+            }
+        }
+        defer { standIn.stop() }
+        let login = Passwords.Login(host: "github.com", account: "me", item: "item_gh")
+        #expect(await Passwords.password(for: login) == "kept-in-the-keychain")
+        #expect(await Passwords.matches("kept-in-the-keychain", login) == true)
+        #expect(await Passwords.matches("typed-anew", login) == false)
+        // A sign-in answered with it is the saved one; one typed anew isn't (so it's saved).
+        let same = BrowserAsks.handling(password: "kept-in-the-keychain", saving: false, secure: true, savedPassword: await Passwords.savedForComparing("kept-in-the-keychain", login))
+        #expect(!same.saves && !same.typedNow)
+        let anew = BrowserAsks.handling(password: "typed-anew", saving: false, secure: true, savedPassword: await Passwords.savedForComparing("typed-anew", login))
+        #expect(anew.saves && anew.typedNow)
+        #expect(standIn.asked.filter { $0.path.hasSuffix("/values") }.count == 1, "read only to fill it")
+        #expect(standIn.asked.allSatisfy { $0.fromApp })
+    }
+
+    /// A new machine starts with this Mac's settings and integrations' keys: once the box has moved,
+    /// its own, read through it (none from the app's Keychain), bots' own and Mac-only ones left out.
+    @Test func aNewMachineStartsWithTheBoxsSettingsAndKeysOnceMoved() async throws {
+        defer { done() }
+        try moved()
+        let macOnly = try #require(Integrations.macOnly.first)
+        let mine = IntegrationKeys.variable("github", "TOKEN")
+        let botsOwn = IntegrationKeys.variable("github", "TOKEN", bot: "bot_scout00001")
+        let stays = IntegrationKeys.variable(macOnly, "KEY")
+        let standIn = try await StandInBox.start(at: box) { request in
+            switch (request.method, request.path) {
+            case ("GET", "/kuvo/config"): return .json(["compaction": ["auto": true], "shell": "/bin/zsh"])
+            case ("GET", "/kuvo/keys"): return .json(["keys": [mine, stays]])
+            case ("GET", "/kuvo/keys/\(mine)"): return .json(["value": "ghp_mine"])
+            case ("GET", "/kuvo/keys/\(stays)"): return .json(["value": "only-here"])
+            case ("GET", "/kuvo/keys/\(botsOwn)"): return .json(["value": "never-asked"])
+            default: return HTTPResponse(status: 404)
+            }
+        }
+        defer { standIn.stop() }
+        // One the app kept in its own Keychain before: never read for this box.
+        let kept = IntegrationKeys.variable("linear", "TOKEN")
+        #expect(IntegrationKeys.set("from-the-apps-keychain", for: kept))
+        defer { IntegrationKeys.set(nil, for: kept) }
+        let app = AppModel()
+        app.machines.attachHere()
+        defer { app.machines.detachHere() }
+        let seed = try await app.machineSeed()
+        #expect(seed.keys == [mine: "ghp_mine"])
+        #expect(seed.settings["compaction"] != nil)
+        #expect(seed.settings["shell"] == nil, "a shell on this Mac means nothing there")
         #expect(standIn.asked.allSatisfy { $0.fromApp })
     }
 

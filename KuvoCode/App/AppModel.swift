@@ -740,6 +740,8 @@ final class AppModel {
         // What has no computer of its own is on this box from now on (`BoxClient.thisMac`), and
         // Settings' pages on this Mac go with it.
         didSet {
+            // (Whether this Mac's box has moved into a home of its own, looked at again.)
+            OwnBoxHome.recheck()
             BoxClient.thisMac = thisMacsBox.id
             settingsTabs.thisMac = thisMacsBox
         }

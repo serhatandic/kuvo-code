@@ -51,8 +51,27 @@ enum Passwords {
     static func password(for login: Login) async -> String? {
         guard !login.item.isEmpty else { return nil }
         guard OwnBoxHome.hasMoved else { return VaultValues.values(login.item)?["password"] }
-        guard let item = vault?.items.first(where: { $0.id == login.item }) else { return nil }
-        return try? await Vaults.shared.values(of: item, on: BoxClient.thisMac)["password"]
+        struct Values: Decodable { var values: [String: String] }
+        return try? await Vaults.shared.ask(Values.self, "GET", VaultRoutes.values(login.item), on: BoxClient.thisMac).values["password"]
+    }
+
+    /// Whether `password` is the one saved for `login`; nil when that can't be told (none saved, or
+    /// not read now). Once this Mac's box has moved, its box tells (`kuvo/vault/items/<id>/same`),
+    /// never giving the saved one, nor noting it as shown: nothing was.
+    static func matches(_ password: String, _ login: Login) async -> Bool? {
+        guard !login.item.isEmpty else { return nil }
+        guard OwnBoxHome.hasMoved else { return VaultValues.values(login.item)?["password"].map { $0 == password } }
+        struct Same: Decodable { var same: Bool }
+        return try? await Vaults.shared.ask(Same.self, "POST", VaultRoutes.same(login.item), body: ["values": ["password": password]], on: BoxClient.thisMac).same
+    }
+
+    /// What a sign-in answered with `password` is compared with (`BrowserAsks.handling`): the password
+    /// saved for `login`, or, once this Mac's box has moved, one that's the same exactly when they
+    /// are (`matches`), so the saved one is never read just to compare it. Nil with none saved.
+    static func savedForComparing(_ password: String, _ login: Login?) async -> String? {
+        guard let login else { return nil }
+        guard OwnBoxHome.hasMoved else { return await self.password(for: login) }
+        return await matches(password, login).map { $0 ? password : "\u{0}" + password }
     }
 
     /// Lets every agent sign in to `host` with the saved login for `account` on their own (or not),
@@ -327,9 +346,9 @@ final class PasswordCapture: NSObject, WKScriptMessageHandler {
         guard !Passwords.neverSites.contains(host) else { return }
         let account = (body["username"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let saved = Passwords.logins(for: host).first { $0.account == account }
-        Task {
-            if let saved, await Passwords.password(for: saved) == password { return }
-            session.offerToSave(PendingLogin(host: host, account: account, password: password, isUpdate: saved != nil))
+        Task { [weak session] in
+            if let saved, await Passwords.matches(password, saved) == true { return }
+            session?.offerToSave(PendingLogin(host: host, account: account, password: password, isUpdate: saved != nil))
         }
     }
 }

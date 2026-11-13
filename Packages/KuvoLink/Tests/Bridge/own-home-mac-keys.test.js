@@ -13,7 +13,7 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { script } from "./bot-keys-scenarios.js";
+import { boxRoute, script, served } from "./bot-keys-scenarios.js";
 import { atEnd, removeAtEnd } from "./at-end.js";
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-own-home-keys-")));
@@ -104,6 +104,37 @@ test("a proof for one request covers that request alone: its method, path and bo
     { machine: "" }, { machine: "a\0b" }, {}]) {
     assert.equal((await ask("POST", "kuvo/box/proof", asked)).status, 400, JSON.stringify(asked));
   }
+});
+
+test("a machine this Mac set up takes the proofs its box signs: its vault's key, then a request with that request's proof alone", async () => {
+  // The machine's box, in a process of its own (as the app reaches it over SSH), its link naming this
+  // Mac as the one that set it up: its link key and its signing key's public half.
+  const mac = raw(publicOf(X_PKCS8, identity.key));
+  const machine = path.join(root, "mini", ".kuvo-code");
+  fs.mkdirSync(path.join(machine, "run"), { recursive: true });
+  fs.writeFileSync(path.join(machine, "run", "link.json"), JSON.stringify({ id: "mini.local", macs: [mac], mac, macSigns: { [mac]: raw(publicOf(ED_PKCS8, identity.sign)) } }));
+  const env = { PATH: process.env.PATH, HOME: path.dirname(machine), KUVO_HOME: machine, TMPDIR: process.env.TMPDIR ?? os.tmpdir() };
+  // Its server running, which holds its vault (a request over SSH is passed to it).
+  const machineServer = await served(env);
+  atEnd(() => machineServer.stop());
+  const forKey = (await ask("POST", "kuvo/box/proof", { machine: "mini.local" })).value;
+  const given = await boxRoute({ method: "POST", path: "kuvo/vault/key", body: forKey }, env);
+  assert.equal(given.status, 200, JSON.stringify(given.value));
+  assert.match(given.value.key, /^[A-Za-z0-9_-]{20,}$/, "its vault's key, given to the Mac that set it up");
+  assert.equal((await boxRoute({ method: "POST", path: "kuvo/vault/key", body: forKey }, env)).status, 403, "each proof once");
+
+  // A request with its own proof, never the key: covered by its body as sent.
+  const bodyText = JSON.stringify({ paused: true });
+  const hash = crypto.createHash("sha256").update(bodyText).digest("hex");
+  const forRequest = (await ask("POST", "kuvo/box/proof", { machine: "mini.local", method: "POST", path: "kuvo/vault/pause", hash })).value;
+  const header = Buffer.from(JSON.stringify(forRequest)).toString("base64url");
+  const paused = await boxRoute({ method: "POST", path: "kuvo/vault/pause", bodyText, headers: { "x-kuvo-vault-proof": header } }, env);
+  assert.equal(paused.status, 200, JSON.stringify(paused.value));
+  assert.equal(paused.value.paused, true);
+  // The same proof for another body: refused.
+  const other = await boxRoute({ method: "POST", path: "kuvo/vault/pause", bodyText: JSON.stringify({ paused: false }), headers: { "x-kuvo-vault-proof": header } }, env);
+  assert.equal(other.status, 403);
+  await machineServer.stop();
 });
 
 test("only Kuvo Code on this Mac gets one: never a phone, nor a command anyone on this Mac could run", async () => {
