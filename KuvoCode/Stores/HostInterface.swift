@@ -1,7 +1,7 @@
 import AppKit
-import CryptoKit
 import Foundation
 import KuvoLink
+import OpenCodeKit
 import Security
 
 /// What this Mac's box asks its app for, that only the app can do (KuvoLink's PROTOCOL.md, "Host
@@ -16,11 +16,13 @@ import Security
 /// asks you.
 @MainActor
 final class HostInterface {
-    private let password = (0..<32).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
+    private let password = HostProof.secret()
     /// What the vault's calls need besides the password, which is in a file an agent's command can
     /// read: given to this Mac's box alone, in its environment as it starts (`boxEnvironment`), which
     /// no other process can read, and never written down.
-    let vaultSecret = (0..<32).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
+    let vaultSecret = HostProof.secret()
+    /// The vault calls' proofs taken already (each works once).
+    private lazy var vaultProofs = VaultCallProofs(secret: vaultSecret)
     private lazy var server: LoopbackServer = {
         let server = LoopbackServer { [weak self] request in await self?.respond(to: request) ?? .init(status: 503) }
         // Gone by itself: started again, so the box's keys aren't out of reach until the app quits;
@@ -189,38 +191,20 @@ final class HostInterface {
         }
     }
 
-    /// The box's nonce, with where it reached it (`127.0.0.1:<port>`), signed with the password
-    /// (HMAC-SHA256, hex), as it checks it: relayed from another port, it's wrong there.
+    /// The box's nonce, with where it reached it, signed with the password (`HostProof`, which the
+    /// box's helper answers with too).
     nonisolated static func proof(of nonce: String, at address: String, password: String, tag: String = "kuvo-host-hello") -> String {
-        let signed = Data("\(tag)\u{0}\(nonce)\u{0}\(address)".utf8)
-        let code = HMAC<SHA256>.authenticationCode(for: signed, using: SymmetricKey(data: Data(password.utf8)))
-        return code.map { String(format: "%02x", $0) }.joined()
+        HostProof.proof(of: nonce, at: address, password: password, tag: tag)
     }
 
-    /// Vault calls' proofs taken already, until they'd be too old anyway: each works once.
-    private var usedVaultProofs: [String: Date] = [:]
-
-    /// Whether a vault call carries the box's proof of it: an HMAC with the vault's secret of the
-    /// call, its body and when it was made (within a minute), not used before.
+    /// Whether a vault call carries the box's proof of it, not used before (`VaultCallProofs`).
     private func vaultCallProved(_ request: HTTPRequest) -> Bool {
-        guard let auth = request.headers["x-kuvo-vault-auth"], let at = request.headers["x-kuvo-vault-at"].flatMap(Double.init),
-              abs(Date().timeIntervalSince1970 * 1000 - at) < 60_000 else { return false }
-        let call = String(request.path.dropFirst())
-        let body = SHA256.hash(data: request.body).map { String(format: "%02x", $0) }.joined()
-        let signed = Data("kuvo-host-vault-call\u{0}\(call)\u{0}\(body)\u{0}\(request.headers["x-kuvo-vault-at"] ?? "")".utf8)
-        let expected = HMAC<SHA256>.authenticationCode(for: signed, using: SymmetricKey(data: Data(vaultSecret.utf8))).map { String(format: "%02x", $0) }.joined()
-        guard samePassword(auth, expected) else { return false }
-        let now = Date()
-        usedVaultProofs = usedVaultProofs.filter { now.timeIntervalSince($0.value) < 120 }
-        guard usedVaultProofs[auth] == nil else { return false }
-        usedVaultProofs[auth] = now
-        return true
+        vaultProofs.proved(request)
     }
 
     /// The names it answers for: Kuvo Code's own keys.
     nonisolated static func isKey(_ name: String) -> Bool {
-        name.hasPrefix("KUVO_KEY_") && name.count > "KUVO_KEY_".count
-            && name.unicodeScalars.allSatisfy { ("A"..."Z").contains($0) || ("0"..."9").contains($0) || $0 == "_" }
+        HostProof.isKey(name)
     }
 
     /// An answer as it comes: its head, then its body as a stream (`…/events` routes follow), each
@@ -260,16 +244,12 @@ final class HostInterface {
         // password, so only the app that wrote `file`, here, can answer it.
         if request.path == "/hello" {
             guard request.method == "POST" else { return .init(status: 405, headers: ["Allow": "POST"]) }
-            let given = (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any]) ?? [:]
-            guard let nonce = given["nonce"] as? String, (16...256).contains(nonce.count) else { return .init(status: 400) }
             guard let port = server.port else { return .init(status: 503) }
-            var answer = ["proof": Self.proof(of: nonce, at: "127.0.0.1:\(port)", password: password)]
-            // For the vault's calls, the same with the vault's secret, which only the box was given.
-            if given["vault"] as? Bool == true { answer["vaultProof"] = Self.proof(of: nonce, at: "127.0.0.1:\(port)", password: vaultSecret, tag: "kuvo-host-vault") }
+            // (For the vault's calls, the same with the vault's secret, which only the box was given.)
+            guard let answer = HostProof.hello(request, port: port, password: password, vaultSecret: vaultSecret) else { return .init(status: 400) }
             return .json(answer)
         }
-        guard let authorization = request.headers["authorization"], authorization.hasPrefix("Bearer "),
-              samePassword(String(authorization.dropFirst(7)), password) else { return .init(status: 401) }
+        guard HostProof.authorized(request, password: password) else { return .init(status: 401) }
         guard request.method == "POST" else { return .init(status: 405, headers: ["Allow": "POST"]) }
         let given = (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any]) ?? [:]
         let name = given["name"] as? String

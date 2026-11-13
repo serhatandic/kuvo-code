@@ -37,6 +37,7 @@ export const FEATURES = [
   "bots.keys",
   "bots.make",
   "box.app",
+  "box.helper",
   "box.ownHome",
   "box.rehome",
   "box.serve",

@@ -1,5 +1,6 @@
 import Foundation
 import KuvoLink
+import OpenCodeKit
 import Security
 
 /// This Mac's vault's values (KuvoLink's PROTOCOL.md, "Vault"), in the Keychain: one item each, by
@@ -11,7 +12,7 @@ nonisolated enum VaultValues {
 
     /// An item's id, as the box makes them.
     static func isItem(_ id: String) -> Bool {
-        id.hasPrefix("v_") && id.count == 12 && id.dropFirst(2).allSatisfy { ("a"..."z").contains($0) || ("0"..."9").contains($0) }
+        HostProof.isVaultItem(id)
     }
 
     private static func query(_ id: String) -> [String: Any] {
