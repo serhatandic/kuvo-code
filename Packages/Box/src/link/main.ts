@@ -66,7 +66,7 @@ import { watchFolders } from "./follow";
 import { pushRows } from "./work/elsewhere";
 import { pushNumbers } from "./work-queue/numbers";
 import { noteSetupNow } from "./setup/lead";
-import { mainElsewhere, pairElsewhere } from "./setup/main-only";
+import { macName, mainElsewhere, pairElsewhere } from "./setup/main-only";
 import { writeCard } from "./setup/card";
 import { hereNow } from "./setup/judge";
 import { pushQueues } from "./work-queue/across";
@@ -943,7 +943,7 @@ if (main) {
   else if (mode === "serve") await serve();
   else if (mode === "leave") {
     // (A Mac removing this machine runs it over SSH, and reads nothing it says.)
-    const name = typeof argument === "string" ? readLink()?.macNames?.[argument] : undefined;
+    const name = typeof argument === "string" ? macName(readLink(), argument) : "";
     if (!leave(argument)) {
       console.error("That isn't one of the Macs that set this computer up.");
       process.exit(1);

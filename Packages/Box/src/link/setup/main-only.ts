@@ -16,10 +16,15 @@ import { setupDoc } from "./record";
 export function mainElsewhere(link: LinkState | null | undefined): { key: string; name: string } | null {
   const setup = link?.setup;
   if (!setup || setup.role !== "member" || typeof setup.primary !== "string") return null;
-  const doc = macDoc(link, setup.primary, "peers") ?? setupDoc(link);
-  const named = (Array.isArray(doc?.body.boxes) ? doc.body.boxes : []).find(box => isObject(box) && box.key === setup.primary);
-  const name = String((isObject(named) && typeof named.name === "string" && named.name) || link?.macNames?.[setup.primary] || "").slice(0, 100);
-  return { key: setup.primary, name };
+  return { key: setup.primary, name: macName(link, setup.primary) };
+}
+
+/** What a Mac that set this box up is called: as its own peers document names it (or the setup's,
+ * for its main computer), else as it said over SSH; "" when neither does. */
+export function macName(link: LinkState | null | undefined, mac: string): string {
+  const doc = macDoc(link, mac, "peers") ?? (link?.setup?.primary === mac ? setupDoc(link) : null);
+  const named = (Array.isArray(doc?.body.boxes) ? doc.body.boxes : []).find(box => isObject(box) && box.key === mac);
+  return String((isObject(named) && typeof named.name === "string" && named.name) || link?.macNames?.[mac] || "").slice(0, 100);
 }
 
 const named = (main: { name: string }) => main.name || "your main computer";
@@ -31,13 +36,14 @@ export const pairElsewhere = (main: { key: string; name: string }) => ({ message
  * and `kuvo/link/peers` from an app beside it that isn't the main computer's). */
 export const addElsewhere = (main: { key: string; name: string }) => ({ message: `Add and remove computers from ${named(main)}.`, primary: main.key });
 
-/** `kuvo/hosts` as a member says it, from its setup's document: every machine in the setup a phone
- * reaches directly (itself too), as a Mac lists its machines; the main computer's Mac isn't one (a
- * phone pairs with it). Null where this box is no member, has no relay to name, or holds no document
- * of its setup yet. */
+/** `kuvo/hosts` as a member says it, from the document of the setup it follows: every machine in
+ * the setup a phone reaches directly (itself too), as a Mac lists its machines; the main computer's
+ * Mac isn't one (a phone pairs with it). Null where this box is no member, has no relay to name, or
+ * follows no setup's document now: one set aside (its Macs' phones aren't all that setup's, so no
+ * one Mac's list is theirs to read) or holding none yet. */
 export function memberHosts(link: LinkState | null | undefined): Hosts | null {
   if (IS_MAC || !mainElsewhere(link) || !link?.relay) return null;
-  const doc = setupDoc(link) ?? macDoc(link, link.setup!.primary, "peers");
+  const doc = setupDoc(link);
   if (!doc) return null;
   const hosts: Hosts["hosts"][number][] = [];
   for (const box of Array.isArray(doc.body.boxes) ? doc.body.boxes.slice(0, 64) : []) {

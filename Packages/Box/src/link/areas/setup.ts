@@ -53,17 +53,26 @@ export async function* setupRoute(context: RouteContext): AsyncGenerator<AnswerP
   return yield* json(200, setupView(readLink()));
 }
 
+// What adds or removes a computer, as a Mac's app takes it (`POST kuvo/machines`, `DELETE
+// kuvo/machines/<id>`, `DELETE kuvo/hosts/<id>`): on a member, its main computer's to do.
+const ADDS_OR_REMOVES = (method: string, route: string) =>
+  (method === "POST" && route === "kuvo/machines") || (method === "DELETE" && /^kuvo\/(machines|hosts)\/[^/]+$/.test(route));
+
 /** A machine's `kuvo/machines…` and `kuvo/hosts…` (a Mac's box answers them with its app,
  * `mac/machines.ts`): on a member of a setup, `GET kuvo/hosts` lists the setup's machines from its
- * document, as a Mac lists its own, and adding, changing or removing any is its main computer's,
- * named in a 409. Elsewhere they go on to the engine, as before. */
+ * document, as a Mac lists its own, and adding or removing one is its main computer's, named in a
+ * 409. The rest go on to the engine, as before (which has none of them). */
 export async function* memberComputersRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
   const { request, route, json } = context;
+  const method = request.method.toUpperCase();
   const link = readLink();
   const main = mainElsewhere(link);
   if (!main) return yield* engineRoute(context);
-  if (request.method.toUpperCase() !== "GET") return yield* json(409, addElsewhere(main));
-  if (route !== "kuvo/hosts") return yield* engineRoute(context);
+  if (ADDS_OR_REMOVES(method, route)) return yield* json(409, addElsewhere(main));
+  if (method !== "GET" || route !== "kuvo/hosts") return yield* engineRoute(context);
   const hosts = memberHosts(link);
-  return yield* json(hosts ? 200 : 503, hosts ?? { message: "This computer can't list your computers yet. Try again in a moment." });
+  if (hosts) return yield* json(200, hosts);
+  // Set aside (more than one Mac set it up): which computers are yours is a Mac's to say.
+  if (link?.setup?.aside) return yield* json(503, { message: `This computer is shared with more than one Mac: see your computers on ${main.name || "your main computer"}.` });
+  return yield* json(503, { message: "This computer can't list your computers yet. Try again in a moment." });
 }

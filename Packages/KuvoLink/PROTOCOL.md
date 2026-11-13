@@ -294,13 +294,24 @@ computer. Changing the main computer and joining two setups come later: #183.)
     computer, no longer reach it; then it pairs by itself, or names another Mac's setup's main
     computer. `leave` says what it did, or exits 1 for a key that isn't one of its Macs. A
     pairing link made before the box became a member pairs no one;
-  - adding, changing or removing computers, `kuvo/machines…` and `kuvo/hosts/…` but `GET`, and
-    `kuvo/link/peers` from an app or `box route` there: `409 {"message": "Add and remove
-    computers from <main>.", primary}`, so only the main computer's app says who's in the setup;
-  - `GET kuvo/hosts`, as a Mac answers it: the machines the setup's document names (itself too),
-    each `{kind: "machine", name, address, key, relay, machine, anotherMac: false, removed:
-    false}` (`machine`, the id the main computer's app knows it by), by name; `503 {"message"}`
-    before it holds that document (or while it has no relay). Not the main computer's Mac: a phone pairs with it.
+  - adding or removing computers as a Mac's app takes them (`POST kuvo/machines`, `DELETE
+    kuvo/machines/<id>`, `DELETE kuvo/hosts/<id>`), and any method on `kuvo/link/peers` from an
+    app or `box route` there: `409 {"message": "Add and remove computers from <main>.", primary}`,
+    so only the main computer's app says who's in the setup. The rest of `kuvo/machines…` and
+    `kuvo/hosts…` but `GET kuvo/hosts` go to the engine as before (`404`);
+  - `GET kuvo/hosts`, as a Mac answers it: the machines the document of the setup it follows names
+    (itself too), each `{kind: "machine", name, address, key, relay, machine, anotherMac: false,
+    removed: false}` (`machine`, the id the main computer's app knows it by), by name. Only what
+    that document says: a machine it leaves out isn't listed, and `anotherMac` and `removed` are
+    always false. Not the main computer's Mac: a phone pairs with it. `503 {"message"}` before it
+    holds that document, while it has no relay, and while its setup is set aside: a shared
+    machine's phones aren't all one Mac's, so it gives none of them a Mac's list.
+
+  Known gap until setups can be joined (#183's phase 7): a member set aside refuses all this in its
+  main computer's name, but it still takes what each Mac that set it up gives over SSH, as before
+  setups ("second app" COMPAT): that Mac's phones reach it, and that Mac's `kuvo-link.js setup`
+  isn't refused, so its `replaces` can name the main computer's key and drop the setup there. SSH
+  is the trust root for both.
 
   The main computer (a box you run alone is its own setup's) and a box in no setup (one whose Mac
   is older, a shared machine whose Macs never led one) pair and add as before; with the main computer's app closed, adding says to open it (`kuvo/machines`, above).

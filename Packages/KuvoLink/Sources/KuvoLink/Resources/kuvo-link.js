@@ -13349,10 +13349,12 @@ function mainElsewhere(link) {
   const setup = link?.setup;
   if (!setup || setup.role !== "member" || typeof setup.primary !== "string")
     return null;
-  const doc = macDoc(link, setup.primary, "peers") ?? setupDoc(link);
-  const named = (Array.isArray(doc?.body.boxes) ? doc.body.boxes : []).find((box) => isObject(box) && box.key === setup.primary);
-  const name = String(isObject(named) && typeof named.name === "string" && named.name || link?.macNames?.[setup.primary] || "").slice(0, 100);
-  return { key: setup.primary, name };
+  return { key: setup.primary, name: macName(link, setup.primary) };
+}
+function macName(link, mac) {
+  const doc = macDoc(link, mac, "peers") ?? (link?.setup?.primary === mac ? setupDoc(link) : null);
+  const named = (Array.isArray(doc?.body.boxes) ? doc.body.boxes : []).find((box) => isObject(box) && box.key === mac);
+  return String(isObject(named) && typeof named.name === "string" && named.name || link?.macNames?.[mac] || "").slice(0, 100);
 }
 var named = (main) => main.name || "your main computer";
 var pairElsewhere = (main) => ({ message: `Pair new phones from ${named(main)}.`, primary: main.key });
@@ -13360,7 +13362,7 @@ var addElsewhere = (main) => ({ message: `Add and remove computers from ${named(
 function memberHosts(link) {
   if (IS_MAC || !mainElsewhere(link) || !link?.relay)
     return null;
-  const doc = setupDoc(link) ?? macDoc(link, link.setup.primary, "peers");
+  const doc = setupDoc(link);
   if (!doc)
     return null;
   const hosts = [];
@@ -37563,8 +37565,8 @@ var LIST_FILE = path120.join(K, "machines.json");
 var PHONE_LINK_FILE = path120.join(path120.dirname(K), "phone-link.json");
 var HEARD_LATELY = 30 * 60000;
 var TIMING = { wait: 5000, look: 1e4 };
-var macName = () => macLink.config?.name || "this Mac";
-var notOpen = () => `Kuvo Code isn’t open on ${macName()}`;
+var macName2 = () => macLink.config?.name || "this Mac";
+var notOpen = () => `Kuvo Code isn’t open on ${macName2()}`;
 var UNREADABLE = "This Mac’s list of machines can’t be read right now.";
 function keptHosts() {
   try {
@@ -38983,18 +38985,24 @@ async function* setupRoute(context) {
   }
   return yield* json(200, setupView(readLink()));
 }
+var ADDS_OR_REMOVES = (method, route) => method === "POST" && route === "kuvo/machines" || method === "DELETE" && /^kuvo\/(machines|hosts)\/[^/]+$/.test(route);
 async function* memberComputersRoute(context) {
   const { request, route, json } = context;
+  const method = request.method.toUpperCase();
   const link = readLink();
   const main = mainElsewhere(link);
   if (!main)
     return yield* engineRoute(context);
-  if (request.method.toUpperCase() !== "GET")
+  if (ADDS_OR_REMOVES(method, route))
     return yield* json(409, addElsewhere(main));
-  if (route !== "kuvo/hosts")
+  if (method !== "GET" || route !== "kuvo/hosts")
     return yield* engineRoute(context);
   const hosts = memberHosts(link);
-  return yield* json(hosts ? 200 : 503, hosts ?? { message: "This computer can't list your computers yet. Try again in a moment." });
+  if (hosts)
+    return yield* json(200, hosts);
+  if (link?.setup?.aside)
+    return yield* json(503, { message: `This computer is shared with more than one Mac: see your computers on ${main.name || "your main computer"}.` });
+  return yield* json(503, { message: "This computer can't list your computers yet. Try again in a moment." });
 }
 
 // Packages/Box/src/link/areas/attention.ts
@@ -39498,7 +39506,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0326cbceffcb";
+var BRIDGE_VERSION = "4f65ed1da2ae";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -44485,7 +44493,7 @@ if (main) {
   else if (mode === "serve")
     await serve();
   else if (mode === "leave") {
-    const name = typeof argument === "string" ? readLink()?.macNames?.[argument] : undefined;
+    const name = typeof argument === "string" ? macName(readLink(), argument) : "";
     if (!leave(argument)) {
       console.error("That isn't one of the Macs that set this computer up.");
       process.exit(1);
