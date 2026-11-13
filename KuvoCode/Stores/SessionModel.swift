@@ -626,7 +626,7 @@ final class SessionModel {
     private var hasQueue: Bool { transcript.pending.contains { $0.delivery == .queue } || !waitingOnBox.isEmpty }
 
     /// Running, or about to: a message for the next step starts a run as soon as it lands.
-    private var isBusy: Bool { transcript.isRunning || transcript.pending.contains { $0.delivery == .steer } }
+    private var isBusy: Bool { transcript.isRunning || transcript.pending.contains { $0.delivery == .steer && !typedRows.contains($0.id) } }
 
     private var isRetrying = false
 
@@ -1247,6 +1247,7 @@ final class SessionModel {
         // means (then what that is shows instead).
         let shown = Identifier.message()
         outgoing[shown] = Outgoing(state: .sending, isOurs: true, startsRun: true)
+        typedRows.insert(shown)
         editTranscript { $0.addLocal(id: shown, text: text, delivery: .steer) }
         let ask = Typed.Ask(id: shown, text: text, files: !files.isEmpty, side: side, refusal: refusal, reviewer: Catalog.lastReviewer)
         let route = Typed.route(id)
@@ -1257,6 +1258,7 @@ final class SessionModel {
             defer {
                 editTranscript { $0.removeLocal(id: shown) }
                 outgoing[shown] = nil
+                typedRows.remove(shown)
             }
             // A computer whose Kuvo Code is from before: it can't say, and nothing goes.
             guard await boxHas(Typed.feature) else {
@@ -1269,16 +1271,24 @@ final class SessionModel {
                 // One it couldn't answer for (the conversation isn't there): back as it says.
                 let answer = status == 200 ? try JSONDecoder().decode(Typed.Answer<AutopilotShown>.self, from: body)
                     : Typed.Answer<AutopilotShown>(refused: body, status: status, written: text)
-                // What it means shows in its place.
+                // What it means shows in its place; cancelled meanwhile (its row's Cancel), only what
+                // its box did already.
+                let cancelled = outgoing[shown]?.state == .cancelled
                 editTranscript { $0.removeLocal(id: shown) }
                 outgoing[shown] = nil
-                await took(answer, written: text, files: files, quotes: quotes, for: model, queue: queue, keptElsewhere: keptElsewhere)
+                typedRows.remove(shown)
+                await took(answer, written: text, files: files, quotes: quotes, for: model, queue: queue, keptElsewhere: keptElsewhere, cancelled: cancelled)
             } catch {
+                // (Cancelled meanwhile: it's gone as asked.)
+                guard outgoing[shown]?.state != .cancelled else { return }
                 restore(text: text, files: files)
                 fail(error)
             }
         }
     }
+
+    /// "/" and "!" texts shown while their box says what they mean: they start nothing yet.
+    @ObservationIgnored private var typedRows: Set<String> = []
 
     private func sendMessage(_ text: String, files: [URL], for model: Model?, queue: Bool, typed: String? = nil, keptElsewhere: Bool) {
         sendsKeptElsewhere = keptElsewhere
@@ -1292,7 +1302,7 @@ final class SessionModel {
 
     /// What its box said a typed text means, done: what the box did, shown at once, before its
     /// events come; then what's left to do here; then what goes back to the composer.
-    private func took(_ answer: Typed.Answer<AutopilotShown>, written: String, files: [URL], quotes: [Drafts.Quote], for model: Model?, queue: Bool, keptElsewhere: Bool) async {
+    private func took(_ answer: Typed.Answer<AutopilotShown>, written: String, files: [URL], quotes: [Drafts.Quote], for model: Model?, queue: Bool, keptElsewhere: Bool, cancelled: Bool = false) async {
         if let keyword = answer.keyword { Analytics.shared.track("keyword_run", ["keyword": keyword]) }
         let bridge = goalBridge()
         if let goal = answer.goal {
@@ -1318,6 +1328,11 @@ final class SessionModel {
         }
         if let handoff = answer.handoff { bridge?.startedHandoff(handoff) }
         if let review = answer.review { bridge?.took(review) }
+        // Cancelled while its box was asked: what it did shows, nothing more is done, nothing comes back.
+        if cancelled {
+            restore(text: "", files: files)
+            return
+        }
         if answer.showGoal == true { hidesGoal = false }
         if answer.plan == .toggle { togglePlan() }
         if answer.plan == .on { selectAgent("plan") }
@@ -1777,7 +1792,7 @@ final class SessionModel {
             guard item.delivery == .steer, let record = outgoing[item.id], !(item.isLocal && record.startsRun) else { return false }
             return record.state == .sending || record.request == .steer
         }
-        if hasQueue || !transcript.pending.filter({ $0.delivery == .steer }).isEmpty { isQueuePaused = true }
+        if hasQueue || !transcript.pending.filter({ $0.delivery == .steer && !typedRows.contains($0.id) }).isEmpty { isQueuePaused = true }
         // Ahead of those held before.
         let first = (outgoing.values.compactMap(\.heldAt).min() ?? 0) - held.count
         var inFlight: [String] = []

@@ -39140,7 +39140,7 @@ import fs129 from "node:fs";
 import path133 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "85f3ca8eac96";
+var BRIDGE_VERSION = "9d889eae67c7";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -47805,7 +47805,7 @@ async function doStep(step, session, place, context) {
       return { goalCleared: true };
     }
     case "askBot": {
-      const outcome = await inTime2(askGoal(session, step.words, () => targetsOf({ readEngine, bridge })), STEP_PATIENCE);
+      const outcome = await askGoal(session, step.words, () => targetsOf({ readEngine, bridge }));
       if ("refused" in outcome)
         throw new Error(outcome.refused.message);
       return { askedBot: true };
@@ -47846,32 +47846,18 @@ function answerOf3(decision, done, failure) {
     return { ...decision.keyword ? { keyword: decision.keyword } : {}, restore: failure.restore, error: failure.error };
   return { ...steps, ...done, ...command ? { command } : {}, ...send ? { send } : {}, ...restore ? { restore } : {}, ...error ? { error } : {} };
 }
-var KEPT_FOR4 = 10 * 60000;
-var answered5 = new Map;
 async function* typedRoute(context, match) {
-  const { request, json } = context;
+  const { request } = context;
   const given = parsed(request.body);
   const header = request.headers["idempotency-key"];
   const named = isObject(given) && typeof given.id === "string" && given.id.trim() ? given.id : typeof header === "string" ? header : "";
   const id = request.method.toUpperCase() === "POST" && named.trim() ? named.trim().slice(0, 200) : null;
   if (!id)
     return yield* typedAnswer(context, match);
-  const now = Date.now();
-  for (const [key, kept] of answered5)
-    if (kept.until < now)
-      answered5.delete(key);
-  const key = `${match[1]}
-${id}`;
-  let kept = answered5.get(key);
-  if (!kept) {
-    kept = { until: now + KEPT_FOR4, answer: collected(typedAnswer(context, match)).then((answer) => ({ status: answer.status, value: parsed(answer.body) ?? {} }), (error) => {
-      answered5.delete(key);
-      throw error;
-    }) };
-    answered5.set(key, kept);
-  }
-  const { status, value } = await kept.answer;
-  return yield* json(status, value);
+  const answer = await sentOnce(`typed
+${match[1]}
+${id}`, () => collected(typedAnswer({ ...context, signal: undefined }, match)));
+  return yield* answering(answer);
 }
 async function* typedAnswer(context, match) {
   const { request, readEngine, bridge, signal, json } = context;

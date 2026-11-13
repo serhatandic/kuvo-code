@@ -4841,8 +4841,9 @@ client does with the rest; a client keeps the draft, puts back what it's told to
   opens and as its agents bridge comes or goes.
 - `POST` with `{"id"?, "text", "files"?, "side"?, "refusal"?, "reviewer"?}`: the send's own id
   (or `idempotency-key`, with which the phone's link sends it again after its session drops: "Sending
-  again"), under which the box answers the same send again as it did, for ten minutes, never doing
-  it twice; the text as typed; whether
+  again"), under which the box answers the same send again as it did (for an hour, until it starts
+  again), never doing it twice, whatever became of the first request; one that didn't go (refused,
+  the engine not there) is tried again; the text as typed; whether
   pictures or files are attached; whether the side thread's tag is on the composer; why the
   conversation's model can't run, as the client says it; the model picked last in "Who reads it"
   (`{providerID, id}`, which wins a tie between two of the same name). It answers `200` with what it

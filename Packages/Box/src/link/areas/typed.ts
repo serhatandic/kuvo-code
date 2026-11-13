@@ -14,7 +14,7 @@ import { call } from "../engine/client";
 import type { EngineSession } from "../engine/sessions";
 import { isRefused, placeOfSessionPatiently } from "../letters/letter";
 import { targetsOf } from "../letters/tools";
-import { BUSY, collected } from "../server/sent-once";
+import { answering, BUSY, collected, sentOnce } from "../server/sent-once";
 import { askGoal } from "../work/goals";
 import { isAutopilot } from "../work/autopilot";
 import { listsHere, offeredHere } from "../work/model-rule";
@@ -110,7 +110,9 @@ async function doStep(step: BoxStep, session: string, place: { target: Target; d
       return { goalCleared: true };
     }
     case "askBot": {
-      const outcome = await inTime(askGoal(session, step.words, () => targetsOf({ readEngine, bridge })), STEP_PATIENCE);
+      // (In its own time: at most 10 s to find the conversation and 30 s for its engine to take
+      // the words, so what it says is what happened.)
+      const outcome = await askGoal(session, step.words, () => targetsOf({ readEngine, bridge }));
       if ("refused" in outcome) throw new Error(outcome.refused.message);
       return { askedBot: true };
     }
@@ -148,33 +150,21 @@ function answerOf(decision: Decision, done: Done, failure: { restore: Restore; e
   return { ...steps, ...done, ...(command ? { command } : {}), ...(send ? { send } : {}), ...(restore ? { restore } : {}), ...(error ? { error } : {}) };
 }
 
-/** How long a send's answer is kept by its `id`, so the same send again (a link that resent it
- * after its connection dropped) is answered as it was, never done twice. */
-const KEPT_FOR = 10 * 60_000;
-const answered = new Map<string, { until: number; answer: Promise<{ status: number; value: unknown }> }>();
-
+// `kuvo/sessions/<id>/typed`. A send with its own id (in its body, or the link's
+// `idempotency-key`, with which a phone's link sends it again after its session drops) is answered
+// once (`sentOnce`, as a message sent again is): the same send again gets the first's answer, the
+// box's step never done twice; one that didn't go (refused, the engine not there) is tried again.
 export async function* typedRoute(context: RouteContext, match: RegExpMatchArray): AsyncGenerator<AnswerPiece> {
-  const { request, json } = context;
+  const { request } = context;
   const given = parsed(request.body);
-  // Its own id, in its body or as the link's `idempotency-key` (a send the link may send again).
   const header = request.headers["idempotency-key"];
   const named = isObject(given) && typeof given.id === "string" && given.id.trim() ? given.id : typeof header === "string" ? header : "";
   const id = request.method.toUpperCase() === "POST" && named.trim() ? named.trim().slice(0, 200) : null;
   if (!id) return yield* typedAnswer(context, match);
-  const now = Date.now();
-  for (const [key, kept] of answered) if (kept.until < now) answered.delete(key);
-  const key = `${match[1]}\n${id}`;
-  let kept = answered.get(key);
-  if (!kept) {
-    // (One that broke off is forgotten: asked again, it's done then.)
-    kept = { until: now + KEPT_FOR, answer: collected(typedAnswer(context, match)).then(answer => ({ status: answer.status, value: parsed(answer.body) ?? {} }), error => {
-      answered.delete(key);
-      throw error;
-    }) };
-    answered.set(key, kept);
-  }
-  const { status, value } = await kept.answer;
-  return yield* json(status, value);
+  // Done whatever becomes of this request: its link dropping (which ends its signal) is what the
+  // same send again is for, and it gets this answer (as a prompt sent with its id is, forward.ts).
+  const answer = await sentOnce(`typed\n${match[1]}\n${id}`, () => collected(typedAnswer({ ...context, signal: undefined }, match)));
+  return yield* answering(answer);
 }
 
 async function* typedAnswer(context: RouteContext, match: RegExpMatchArray): AsyncGenerator<AnswerPiece> {

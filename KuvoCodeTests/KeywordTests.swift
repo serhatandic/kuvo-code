@@ -663,4 +663,49 @@ import Testing
         #expect(model.failure?.hasPrefix("Write what to do each time") == true)
         #expect(told == 0)
     }
+
+    /// A "/" text shows at once, as a message waiting to go, until its box has said what it means;
+    /// a message sent meanwhile shows and goes at once, not after it.
+    @Test func aSlashTextShowsAtOnceAndAMessageSentMeanwhileDoesntWait() async throws {
+        defer { clean() }
+        serve(directory: "/tmp", answers: ["In `onBlur`."])
+        engine.on("POST", "/api/session/\(id)/prompt", json: ["data": [:]])
+        let model = try session()
+        let bridge = try await start(model)
+        defer { bridge.stop() }
+
+        model.draftText = "/btw where does it pause?"
+        model.submitDraft(for: nil, queue: false)
+        #expect(model.transcript.pending.map(\.text) == ["/btw where does it pause?"])
+        model.draftText = "Pause it on blur then."
+        model.submitDraft(for: nil, queue: false)
+        #expect(model.transcript.pending.map(\.text) == ["/btw where does it pause?", "Pause it on blur then."], "the message shows at once")
+        await model.messagesSent()
+        #expect(!model.transcript.pending.contains { $0.text.hasPrefix("/btw") }, "its row gives way to what it means")
+        try await until { model.sideQuestions.first?.question == "where does it pause?" && told == 1 }
+    }
+
+    /// What you're replying to goes with one message: a "/" text that turns out to be a message
+    /// takes it only if it's still in the composer, not after a message sent meanwhile took it.
+    @Test func aQuoteGoesWithOneMessageOnly() async throws {
+        defer { clean() }
+        serve(directory: "/tmp", answers: [])
+        engine.on("POST", "/api/session/\(id)/prompt", json: ["data": [:]])
+        let model = try session()
+        let bridge = try await start(model)
+        defer { bridge.stop() }
+        let quote = Drafts.Quote(text: "The timer stops at zero.")
+
+        model.draftQuotes = [quote]
+        model.draftText = "/tmp/timer.log says why"
+        model.submitDraft(for: nil, queue: false)
+        #expect(model.draftQuotes.map(\.text) == ["The timer stops at zero."], "it waits for what the box says")
+        model.draftText = "Fix it."
+        model.submitDraft(for: nil, queue: false)
+        #expect(model.draftQuotes.isEmpty)
+        await model.messagesSent()
+        try await until { engine.requests("POST", "/api/session/\(id)/prompt").count == 2 }
+        let sent = engine.requests("POST", "/api/session/\(id)/prompt").compactMap { $0.body["text"] as? String }
+        #expect(sent.filter { $0.contains("The timer stops at zero.") }.count == 1, "\(sent)")
+    }
 }

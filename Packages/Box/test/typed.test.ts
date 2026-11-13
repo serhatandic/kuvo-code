@@ -74,6 +74,10 @@ let conversations: Record<string, Conversation> = {}
 let bridgeRuns = true
 const COMMANDS = { status: 200, body: { data: [{ name: "init", description: "Set it up" }, { name: "review", description: "Review" }, { name: "goal", description: "Goal" }] } as unknown }
 let commandsAnswer = COMMANDS
+/** What the engine lists of its providers, models and accounts (by path), where a test says. */
+let engineLists: Record<string, unknown> = {}
+/** Held: the bridge answers once it's let go (`release`), and says when it's asked (`reached`). */
+let held: { reached: () => void; release: Promise<void> } | null = null
 /** What the bridge answers a goal, side question, handoff or review: its status and body. */
 let bridgeSays: (asked: Asked) => { status: number; body: unknown } = () => ({ status: 200, body: {} })
 let typedRoute: typeof import("../src/link/areas/typed").typedRoute
@@ -92,6 +96,10 @@ function startBridge() {
     async fetch(request) {
       const each = await asked(request)
       bridgeAsked.push(each)
+      if (held && each.method === "POST") {
+        held.reached()
+        await held.release
+      }
       // (It has none of the engine's conversations.)
       if (/^\/api\/session\//.test(each.path)) return Response.json({ message: "Not here." }, { status: 404 })
       const said = bridgeSays(each)
@@ -115,6 +123,8 @@ beforeAll(async () => {
         return Response.json({ data: conversation })
       }
       if (each.path === "/api/command") return Response.json(commandsAnswer.body, { status: commandsAnswer.status })
+      const listed = engineLists[each.path]
+      if (listed !== undefined) return Response.json({ data: listed })
       return Response.json({ data: {} })
     },
   })
@@ -131,6 +141,8 @@ beforeEach(() => {
   bridgeAsked = []
   bridgeRuns = true
   commandsAnswer = COMMANDS
+  engineLists = {}
+  held = null
   bridgeSays = () => ({ status: 200, body: {} })
   conversations = {
     ses_main: { id: "ses_main", location: { directory: "/srv/app" }, time: { created: 1, updated: 1 }, metadata: {} },
@@ -139,13 +151,13 @@ beforeEach(() => {
 })
 
 /** The route's answer to `method kuvo/sessions/<session>/typed` with `body`: its status and JSON. */
-async function ask(method: string, session: string, body?: unknown): Promise<{ status: number; json: any }> {
+async function ask(method: string, session: string, body?: unknown, signal?: AbortSignal): Promise<{ status: number; json: any }> {
   const route = `kuvo/sessions/${session}/typed`
   const json = (status: number, value: unknown): AnswerPiece[] => [{ head: { status, headers: { "content-type": "application/json" } } }, { body: Buffer.from(JSON.stringify(value)) }]
   const record = (server: ReturnType<typeof Bun.serve>) => ({ pid: process.pid, port: server.port!, password: "pw", version: "test" })
   const context = {
     request: { method, path: route, headers: {}, body: body === undefined ? undefined : Buffer.from(JSON.stringify(body)) },
-    phone: undefined, signal: undefined, route,
+    phone: undefined, signal, route,
     readEngine: () => record(engine), readBridge: () => record(bridge), bridge: () => (bridgeRuns ? record(bridge) : null),
     info: { name: "Test" }, phonesChanged: () => {}, hold: null, json,
     text: (status: number, words: string): AnswerPiece[] => [{ head: { status, headers: {} } }, { body: Buffer.from(words) }],
@@ -253,6 +265,40 @@ describe("kuvo/sessions/<id>/typed", () => {
     // Another send, another question.
     await ask("POST", "ses_main", { text: "/btw why this way?", id: "snd_2" })
     expect(bridgeAsked.filter(each => each.method === "POST" && each.path === "/api/kuvo/btw/ses_main")).toHaveLength(2)
+  })
+
+  test("its link dropping mid-step: the same send again gets the real answer, the bridge asked once", async () => {
+    const { forgetModelLists } = await import("../src/link/work/model-rule")
+    forgetModelLists()
+    let reached = () => {}
+    let release = () => {}
+    const asked = new Promise<void>(resolve => { reached = resolve })
+    held = { reached: () => reached(), release: new Promise<void>(resolve => { release = resolve }) }
+    bridgeSays = each => ({ status: 200, body: { data: { id: "q1", question: each.body.question } } })
+    const dropped = new AbortController()
+    const first = ask("POST", "ses_main", { text: "/btw why this way?", id: "snd_drop" }, dropped.signal)
+    await asked
+    // The phone's session drops: its request's signal ends; then the bridge answers.
+    dropped.abort()
+    release()
+    await first.catch(() => null)
+    const again = await ask("POST", "ses_main", { text: "/btw why this way?", id: "snd_drop" })
+    expect(again.json).toEqual({ keyword: "btw", sideQuestion: { id: "q1", question: "why this way?" } })
+    expect(bridgeAsked.filter(each => each.method === "POST" && each.path === "/api/kuvo/btw/ses_main")).toHaveLength(1)
+  })
+
+  test("a model its provider is retiring can still read a review: the composer offers it", async () => {
+    const { forgetModelLists } = await import("../src/link/work/model-rule")
+    forgetModelLists()
+    engineLists = {
+      "/api/provider": [{ id: "deepseek" }],
+      "/api/model": [{ id: "v3", providerID: "deepseek", name: "DeepSeek V3", status: "deprecated" }, { id: "v4", providerID: "deepseek", name: "DeepSeek V4" }],
+      "/api/integration": [{ id: "deepseek", name: "DeepSeek", methods: [{ type: "key" }], connections: [{ type: "credential" }] }],
+      "/api/model/default": null,
+    }
+    bridgeSays = each => ({ status: 200, body: { data: { id: "r1", model: each.body.model } } })
+    const { json } = await ask("POST", "ses_main", { text: "/review with DeepSeek V3 the parser" })
+    expect(json).toEqual({ keyword: "review", review: { id: "r1", model: { providerID: "deepseek", id: "v3" } } })
   })
 
   test("a model that can't run: said, all of it kept; a \"!\" command still runs", async () => {
