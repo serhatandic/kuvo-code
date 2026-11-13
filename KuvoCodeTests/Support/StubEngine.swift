@@ -24,6 +24,10 @@ nonisolated final class StubEngine: @unchecked Sendable {
     private var sessions: [[String: Any]] = []
     private var running: Set<String> = []
     private var answers: [String: (Request) -> StubWeb.Answer] = [:]
+    /// What this Mac's box says of the sessions it lists (`ListingBox`), told again as they're
+    /// listed or read: a test's workspace follows it with `listed(for:)`.
+    let listing: ListingBox
+    private var following: Task<Void, Never>?
 
     /// An engine on `port` (a port of the test's own; nothing listens there). `alongside`: another
     /// beside one made first (an agents bridge beside an engine), which keeps answering.
@@ -31,13 +35,28 @@ nonisolated final class StubEngine: @unchecked Sendable {
         TestEnvironment.prepare()
         url = "http://127.0.0.1:\(port)"
         api = OpenCodeAPI(endpoint: ServerEndpoint(url: URL(string: url)!, password: "test"))
+        listing = ListingBox(chats: Workspace.chatsFolder)
         if !alongside { StubWeb.start(hosts: ["127.0.0.1"]) }
+        let listing = listing
+        listing.list { [weak self] in self?.lock.withLock { self?.sessions } ?? [] }
         StubWeb.handle(url + "/api/") { [weak self] request, body in
             self?.answer(request, body) ?? StubWeb.Answer(status: 503)
         }
     }
 
-    func stop() { StubWeb.stop() }
+    func stop() {
+        lock.withLock { following }?.cancel()
+        StubWeb.stop()
+    }
+
+    /// `workspace` with this Mac's box's list of these sessions, followed as AppModel follows it,
+    /// once it has its first line.
+    @MainActor func listed(for workspace: Workspace) async throws {
+        // (Once: what it lists from then on is told as it changes.)
+        guard lock.withLock({ following }) == nil else { return }
+        let follows = try await listing.follow(workspace)
+        lock.withLock { following = follows }
+    }
 
     /// A session as the engine lists it.
     static func session(_ id: String, title: String = "Session", directory: String, created: Double = 1, extra: [String: Any] = [:]) -> [String: Any] {
@@ -54,6 +73,17 @@ nonisolated final class StubEngine: @unchecked Sendable {
             self.sessions = sessions
             self.running = running
         }
+        listing.push()
+    }
+
+    /// A session it lists now, in place of the one it listed (a session made, moved): its box's list
+    /// told again.
+    func lists(_ session: [String: Any]) {
+        lock.withLock {
+            sessions.removeAll { $0["id"] as? String == session["id"] as? String }
+            sessions.insert(session, at: 0)
+        }
+        listing.push()
     }
 
     /// A session's conversation, oldest first: answered as the engine pages it, newest first.
@@ -107,6 +137,8 @@ nonisolated final class StubEngine: @unchecked Sendable {
         TestPulse.beat()
         // Outside the lock: an answer may wait (see `Gate`) while other requests go on.
         if let answer { return answer(recorded) }
+        // (Its box hears of the sessions as they're read: its list told again, after.)
+        defer { if method == "GET", path == "/api/session" { listing.push() } }
         return lock.withLock {
             switch (method, path) {
             case ("GET", "/api/session"):

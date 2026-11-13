@@ -321,6 +321,8 @@ struct MainView: View {
             tabs.dropClosed()
             tabs.startIfEmpty()
         }
+        // And once this Mac's box has said where its sessions go, which may come after.
+        .onChange(of: workspace.isListed(BoxClient.thisMac)) { tabs.startIfEmpty() }
         .onAppear {
             // The sidebar as the window left it, from the start, not sliding there.
             var restoring = Transaction()
@@ -678,7 +680,7 @@ struct MainView: View {
                 Button("Edit Bot", systemImage: "slider.horizontal.3") { tabs.openBotEditor(bot: bot) }
                     .help("Edit Bot: its look, job, wake-ups and memory")
             }
-            if Workspace.isChat(model.session) {
+            if workspace.isInChats(model.session) {
                 MoveToProjectButton(sessionID: id)
             }
             // Its feed down for now: a quiet mark only, not an outage (that's the bar over the

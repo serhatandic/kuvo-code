@@ -129,6 +129,9 @@ struct TranscriptNotesShots {
         await app.catalog.refresh()
         engine.conversation(id, conversation)
         await app.workspace.refresh()
+        // (Its sidebar as this Mac's box lists these sessions.)
+        let follows = try await engine.listing.follow(app.workspace)
+        defer { follows.cancel() }
         let model = try #require(app.workspace.model(for: id))
         await model.load()
         let size = NSSize(width: 720, height: 760)

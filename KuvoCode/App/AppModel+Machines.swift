@@ -663,6 +663,8 @@ extension AppModel {
         connection.run("background") { [weak self] in await self?.workspace.followBackground(machine) }
         // Its projects as its box has them, changed from a phone too.
         connection.run("projects") { [weak self] in await self?.workspace.followProjects(on: machine) }
+        // What its sessions are and where they're filed, as its box says: the sidebar's projects and chats.
+        connection.run("session-list") { [weak self] in await self?.workspace.followSessionList(on: machine) }
         // This Mac's own box, attached in place: what the app's own box is followed for as it runs
         // is followed there too (its wake-ups and worktrees, and your personalities, which it keeps
         // for this Mac), read now and then as it answers once a read.

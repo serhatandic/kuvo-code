@@ -300,6 +300,8 @@ final class SessionModel {
     @ObservationIgnored var isReachable: () -> Bool = { true }
     /// Its computer's agents bridge, which runs goals there (the workspace sets it).
     @ObservationIgnored var goalBridge: () -> OutsideAgents? = { nil }
+    /// What it is, as its box says (the workspace sets it).
+    @ObservationIgnored var listKind: () -> SessionLists.Kind? = { nil }
     /// An ask found settled with no event for it (the workspace sets it).
     @ObservationIgnored var askSettled: (String) -> Void = { _ in }
     /// What's done here waits while its engine can't be reached: it would only fail.
@@ -1004,11 +1006,13 @@ final class SessionModel {
         toolsChecked = await api.waitForTools(in: session.location.directory)
     }
 
-    /// Where a conversation is, for anonymous usage: a bot's own folder (here or on a machine), a
-    /// chat, or a project.
-    private static func place(of session: Session) -> String {
-        if Workspace.isBotFolder(session.location.directory) { return "bot" }
-        return Workspace.isChat(session) ? "chat" : "project"
+    /// Where a conversation is, for anonymous usage, as its box says: a bot's, a chat, or a project.
+    private var place: String {
+        switch listKind() {
+        case .bot: "bot"
+        case .chat: "chat"
+        default: "project"
+        }
     }
 
     /// `withComments`: your review comments go with it; a message the app writes for you leaves
@@ -1032,7 +1036,7 @@ final class SessionModel {
         props["comments"] = !comments.isEmpty
         Analytics.shared.track("message_sent", props)
         Analytics.shared.noteMessage(in: session.id, chars: text.count)
-        Analytics.shared.messageSent(path: Self.place(of: session))
+        Analytics.shared.messageSent(path: place)
     }
 
     /// Undo for a removed message: back in the queue as it went (its words, what it names and its

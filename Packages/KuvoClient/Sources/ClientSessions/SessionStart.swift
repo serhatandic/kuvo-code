@@ -43,8 +43,10 @@ public enum SessionStart {
         public var info: Session?
         public var worktree: Worktree?
         public var got: String?
+        /// Whether its box made it a chat (`project` null), as it says before its list does.
+        public var isChat = false
 
-        private enum CodingKeys: String, CodingKey { case session, info, worktree, got }
+        private enum CodingKeys: String, CodingKey { case session, info, worktree, got, project }
 
         public init(from decoder: any Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -52,6 +54,7 @@ public enum SessionStart {
             info = try? container.decodeIfPresent(Session.self, forKey: .info)
             worktree = try? container.decodeIfPresent(Worktree.self, forKey: .worktree)
             got = try? container.decodeIfPresent(String.self, forKey: .got)
+            isChat = container.contains(.project) && (try? container.decodeNil(forKey: .project)) == true
         }
 
         /// A worktree made for it, as `kuvo/worktrees` makes one.
