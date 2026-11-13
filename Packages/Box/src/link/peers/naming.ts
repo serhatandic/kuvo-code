@@ -46,15 +46,16 @@ interface FoundBlock {
 }
 
 /** A kind of block at a message's end: its tag, and how to take it off and to escape one. */
-interface MessageBlock {
+export interface MessageBlock {
   start: string;
+  end: string;
   split: (text: string) => { before: string; lines: string[] } | null;
   escaping: (text: string) => string;
 }
 
 // A block the app adds to the end of a message (MessageBlock.swift): its tag on a line of its own,
 // its heading, what's in it, then its closing tag, with nothing after.
-function messageBlock(start: string, end: string, headings: string[]): MessageBlock {
+export function messageBlock(start: string, end: string, headings: string[]): MessageBlock {
   const find = (text: string): FoundBlock | null => {
     const body = text.replace(/\s+$/u, "");
     if (!body.endsWith(`\n${end}`)) return null;
@@ -72,6 +73,7 @@ function messageBlock(start: string, end: string, headings: string[]): MessageBl
   };
   return {
     start,
+    end,
     // The words before the block that ends `text` (trimmed), and its lines from its heading on.
     split: (text: string) => {
       const found = find(text);
@@ -87,13 +89,13 @@ function messageBlock(start: string, end: string, headings: string[]): MessageBl
   };
 }
 
-const FROM_PHONE_BLOCK = messageBlock("<from-phone>", "</from-phone>", ["The user sent this from Kuvo Code on their iPhone."]);
-const ATTACHED_HEADINGS = [
+export const FROM_PHONE_BLOCK = messageBlock("<from-phone>", "</from-phone>", ["The user sent this from Kuvo Code on their iPhone."]);
+export const ATTACHED_HEADINGS = [
   "The attached files are on disk here (what's in them is in this message already):",
   "Open these attached files with your tools if you need them:",
   "These attached files stayed on the user's Mac (they couldn't be read, or copied to this machine):",
 ] as const;
-const ATTACHED_BLOCK = messageBlock("<attached-files>", "</attached-files>", [...ATTACHED_HEADINGS]);
+export const ATTACHED_BLOCK = messageBlock("<attached-files>", "</attached-files>", [...ATTACHED_HEADINGS]);
 
 // A message's text with the note the Mac ends one that has files with (Attachments.swift): where
 // the files it sent with their contents are, and the ones the agent opens with its tools. The Mac's
@@ -106,9 +108,9 @@ export function withAttachedNote(text: string, included: string[], paths: string
   const words = found ? found.before : ATTACHED_BLOCK.escaping(text);
   return (words ? `${words}\n\n` : "") + ["<attached-files>", ...(found?.lines ?? []), ...lines, "</attached-files>"].join("\n");
 }
-const REVIEW_BLOCK = messageBlock("<review-comments>", "</review-comments>", ["Comments on lines of the current changes:"]);
-const NAMING_HEADING = "Agents the user named with & in this message, by their address. Read one's conversation with read_conversation only when what the user asks needs what it knows or did, and write to it with send_message only to ask it something or hand it work; when the user only mentions one, do neither:";
-const NAMED_BLOCK = messageBlock("<named-agents>", "</named-agents>", [NAMING_HEADING,
+export const REVIEW_BLOCK = messageBlock("<review-comments>", "</review-comments>", ["Comments on lines of the current changes:"]);
+export const NAMING_HEADING = "Agents the user named with & in this message, by their address. Read one's conversation with read_conversation only when what the user asks needs what it knows or did, and write to it with send_message only to ask it something or hand it work; when the user only mentions one, do neither:";
+export const NAMED_BLOCK = messageBlock("<named-agents>", "</named-agents>", [NAMING_HEADING,
   "Agents the user named with & in this message. Read one's conversation with read_conversation, or write to it with send_message, by its address:"]);
 
 // A name as it's compared: case and accents aside.
@@ -155,21 +157,22 @@ export function namesIn<R extends NameReference>(text: string, references: R[]):
 
 // What an agent is, for one `here` (null: the Mac) to read: "bot, on the Mac", "session, on lab,
 // in api" (AgentMail.what).
-const agentIs = (agent: NameableAgent, here: string | null | undefined) => {
+export const agentIs = (agent: NameableAgent, here: string | null | undefined) => {
   const machine = agent.machine ?? null;
   const place = machine === (here ?? null) ? (here == null ? "on the Mac" : "here") : machine == null ? "on the Mac" : `on ${machine}`;
   return `${agent.kind}, ${place}${typeof agent.project === "string" ? `, in ${agent.project}` : ""}`;
 };
 
 // The agents `texts` name, each once, in the order they're first named, not those `excluding`; of
-// two with the same name, the first `agents` has (bots, then the latest sessions).
-function agentsNamed(texts: string[], excluding: Set<string>, agents: NameableAgent[]): NameableAgent[] {
+// two with the same name, one `picked` from the list as it was written, else the first `agents` has
+// (bots, then the latest sessions).
+export function agentsNamed(texts: string[], excluding: Set<string>, agents: NameableAgent[], picked: Set<string> = new Set()): NameableAgent[] {
   if (!texts.some(text => text.includes("&"))) return [];
   const byName = new Map<string, NameableAgent>();
   for (const agent of agents) {
     if (excluding.has(agent.session)) continue;
     const name = foldName(agent.name);
-    if (!byName.has(name)) byName.set(name, agent);
+    if (!byName.has(name) || picked.has(agent.session)) byName.set(name, agent);
   }
   const references = [...byName.values()].map(agent => ({ name: agent.name, session: agent.session }));
   const named: NameableAgent[] = [];

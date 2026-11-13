@@ -12,6 +12,7 @@ import { inTurnOn } from "../engine/notes";
 import { NOTES_STEP } from "../../shared/session-notes";
 import { pause } from "../../shared/wait";
 import { stopIfWaiting } from "../work/answers";
+import { FROM_PHONE, partsOf, withParts } from "../messages/parts";
 import { attachedIn } from "./attached";
 import type { ModelInput } from "./attached";
 import { namedIn, namingHere } from "./naming";
@@ -25,9 +26,18 @@ import type { Naming } from "./naming";
 
 export const AGENTS = "kuvo/agents/";
 
-// The block a prompt from a phone ends with, for the agent, in the Mac's words (FromPhone.swift):
-// the user is on their iPhone, where a file is shown with show_file. Never shown.
-export const FROM_PHONE = ["<from-phone>", "The user sent this from Kuvo Code on their iPhone.", "They read your reply on a small screen, and can't open file paths, links to files on the computer or Kuvo Code's side panel there. Keep your reply short and easy to read on a phone. To show them a file (a picture, a chart, a PDF, a document you made or found), use show_file: it puts the file in this conversation, where they see it. A widget (show_widget) shows there too: keep it narrow, and make it work with taps rather than hovering.", "</from-phone>"].join("\n");
+// The block a prompt from a phone ends with, for the agent (messages/parts.ts): the user is on their
+// iPhone, where a file is shown with show_file. Never shown.
+export { FROM_PHONE };
+
+// A prompt's body with the parts of its text kept with it (`metadata.kuvo.parts`), for clients to
+// draw it by: one a client wrote the blocks of itself, the way before `kuvo/sessions/<id>/send`.
+function withPartsIn(body: Buffer | undefined): Buffer | undefined {
+  let prompt: { text?: unknown; metadata?: unknown } | null;
+  try { prompt = JSON.parse(Buffer.from(body ?? "").toString()); } catch { return body; }
+  if (typeof prompt?.text !== "string") return body;
+  return Buffer.from(JSON.stringify({ ...prompt, metadata: withParts(prompt.metadata, partsOf(prompt.text)) }));
+}
 
 // A prompt's body with the block at the end of its text, once; any other body as it is.
 export function fromPhone(body: Buffer | undefined): Buffer | undefined {
@@ -61,7 +71,7 @@ export function modelInput(base: URL, headers: Record<string, string>, signal: A
 }
 
 // The headers of an answer that go back to whoever asked.
-function answerHeaders(response: Response): Record<string, string> {
+export function answerHeaders(response: Response): Record<string, string> {
   const out: Record<string, string> = {};
   for (const name of RESPONSE_HEADERS) {
     const value = response.headers.get(name);
@@ -124,7 +134,7 @@ export async function* forward(target: Target, path: string, request: LinkReques
     if (!sending) return request.body;
     const session = decodeURIComponent(sending[1]!);
     const body = await attachedIn(request.body, session, modelInput(url, headers, delivering), request.fromMac === true, toAgents);
-    return prompt ? fromPhone(await namedIn(body, session, naming)) : body;
+    return sending[2] === "prompt" ? withPartsIn(prompt ? fromPhone(await namedIn(body, session, naming)) : body) : body;
   };
   // Not answering (starting again, say).
   const notAnswering = (): SentAnswer => ({ status: 503, headers: { "content-type": "application/json" }, body: Buffer.from(JSON.stringify({ message: down() })) });

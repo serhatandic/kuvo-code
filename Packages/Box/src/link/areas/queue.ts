@@ -15,6 +15,8 @@ import { forgetStopped } from "../work/background";
 import { stopConversation } from "../work/stopping";
 import { messageID } from "../engine/sessions";
 import { attachedIn } from "../server/attached";
+import { fieldsOf, keptParts, partsOf, withParts } from "../messages/parts";
+import { composed, isEmpty } from "./messages";
 import { fromPhone, modelInput } from "../server/forward";
 import { namedIn, namingHere } from "../server/naming";
 import { answering, BUSY, collected, forgetSent, SENDING_PATIENCE, sentKey, sentOnce } from "../server/sent-once";
@@ -105,15 +107,26 @@ export async function* queueRoute(context: RouteContext, match: RegExpMatchArray
 
 // A client's own message for the queue (Undo, or one sent after this run while it's paused): its
 // files kept on the box as a message's are (`attachedIn`), then waiting there while the queue is
-// paused, else to the engine as it asked. `{id?, text, files?, delivery?, from?, words?, before?, metadata?}`
-// (`words`: how it's shown, as you wrote it; `before`: Undo's, what came after it, which it goes
-// back ahead of; `metadata`: only a wake-up's mark, `wakeMark`, kept with it); `waits` says which. `kept`: one a DELETE gave back (Undo), as it was kept already.
+// paused, else to the engine as it asked. `{id?, words, files?, delivery?, from?, before?, metadata?}`
+// with a message's fields (`kuvo/sessions/<id>/send`'s), or, as a client wrote the text itself
+// before, `{id?, text, files?, delivery?, from?, words?, before?, metadata?}` (`words`: how it's
+// shown, as you wrote it). `before`: Undo's, what came after it, which it goes back ahead of;
+// `metadata`: only a wake-up's mark, `wakeMark`, kept with it (and, put back, its parts); `waits`
+// says which. `kept`: one a DELETE gave back (Undo), as it was kept already.
 async function* add({ request, bridge, readEngine, json, signal }: RouteContext, target: Target, session: string): AsyncGenerator<AnswerPiece> {
   const given = parsed(request.body);
+  // A message as fields (`{words, keyword?, widget?, comments?, named?, notes?}`, as
+  // `kuvo/sessions/<id>/send` takes them): the box writes what the agent reads.
+  const fields = isObject(given) && typeof given.text !== "string" && given.kept !== true ? fieldsOf(given) : null;
+  if (fields && isObject(given)) {
+    if (isEmpty(fields, Array.isArray(given.files) ? given.files : [])) return yield* json(400, { message: "There's nothing to send." });
+    const message = await composed(fields, Array.isArray(given.files) ? given.files : [], session, target, bridge()?.port === target.port, request, readEngine, signal, wakeMarkOf(given.metadata) ?? undefined);
+    const id = typeof given.id === "string" && /^msg_[A-Za-z0-9]{1,80}$/.test(given.id) ? given.id : messageID();
+    return yield* added({ json }, target, session, given, { id, text: message.text, files: message.files, metadata: message.metadata }, fields.words);
+  }
   if (!isObject(given) || typeof given.text !== "string" || (!given.text.trim() && !(Array.isArray(given.files) && given.files.length))) return yield* json(400, { message: "Send {\"text\": …}." });
   const id = typeof given.id === "string" && /^msg_[A-Za-z0-9]{1,80}$/.test(given.id) ? given.id : messageID();
   const delivery = given.delivery === "steer" ? "steer" : "queue";
-  const from = typeof given.from === "string" && given.from.trim() ? given.from.trim().slice(0, 80) : undefined;
   const base = new URL(`http://127.0.0.1:${target.port}/`);
   const headers = { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` };
   const toAgents = bridge()?.port === target.port;
@@ -125,8 +138,20 @@ async function* add({ request, bridge, readEngine, json, signal }: RouteContext,
   const body = given.kept !== true && fromPhoneToo ? fromPhone(await namedIn(attached, session, namingHere(readEngine))) : attached;
   const message = parsed(body) as { id: string; text: string; files?: unknown[]; delivery: "steer" | "queue"; metadata?: Record<string, unknown> };
   // Shown as written (`words`: without what the client added for the agent, like its files' notes),
-  // or, put back, as it was shown.
+  // or, put back, as it was shown; its parts kept with it, put back as they were.
   const words = typeof given.words === "string" ? given.words : given.kept !== true ? given.text : undefined;
+  const parts = given.kept === true ? keptParts(given.metadata) : null;
+  const metadata = withParts(message.metadata, parts ?? partsOf(message.text));
+  return yield* added({ json }, target, session, given, { id: message.id, text: message.text, files: message.files, metadata }, words);
+}
+
+// What `add` adds, its text written: waiting on the box while the queue is paused, else to the
+// engine, as `given` asked (its id, delivery, `from` and `before`); `words`, how it's shown.
+async function* added({ json }: Pick<RouteContext, "json">, target: Target, session: string, given: Record<string, unknown>, written: { id: string; text: string; files?: unknown[]; metadata: Record<string, unknown> }, words: string | undefined): AsyncGenerator<AnswerPiece> {
+  const { id } = written;
+  const delivery = given.delivery === "steer" ? "steer" : "queue";
+  const from = typeof given.from === "string" && given.from.trim() ? given.from.trim().slice(0, 80) : undefined;
+  const message = { id, text: written.text, ...(written.files?.length ? { files: written.files } : {}), delivery, metadata: written.metadata } as { id: string; text: string; files?: unknown[]; delivery: "steer" | "queue"; metadata?: Record<string, unknown> };
   const before = typeof given.before === "string" && /^[A-Za-z0-9_]{1,100}$/.test(given.before) ? given.before : undefined;
   if (await keepWaitingBefore(target, session, message, { from, words }, before)) return yield* json(200, { ...shownQueue(queueOf(session)), waits: true });
   // (A busy engine takes the message late, and has it then: waited for, not given up on at the

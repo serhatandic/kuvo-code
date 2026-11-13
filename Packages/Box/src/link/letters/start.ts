@@ -5,6 +5,7 @@
 // conversation, so it knows who to report to, and its metadata says who started it, for every client
 // to show it beside them. From a client (no `startedBy`): the task as the user's own first message.
 
+import { partsOf, withParts } from "../messages/parts";
 import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
@@ -746,7 +747,7 @@ export async function markMade(making: Making, target: Target, session: string, 
 
 /** A session just made on `target`, given its task (it throws where that didn't reach it). */
 export async function promptMade(making: Making, target: Target, session: string): Promise<void> {
-  await asked(target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, { id: making.prompt.id, text: making.prompt.text, delivery: "steer" });
+  await asked(target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, { id: making.prompt.id, text: making.prompt.text, delivery: "steer", metadata: withParts(undefined, partsOf(making.prompt.text)) });
 }
 
 // The rows your other computers last told of `bot`'s work: of its own conversation, and of its
