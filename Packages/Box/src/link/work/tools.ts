@@ -26,7 +26,7 @@ import { HERE } from "../home";
 import { answerOf, askWork, botAllows, doWork } from "./asks";
 import { cloneable, folderName, isEmptyFolder, namedPlace, projectPlace, shownPath } from "./projects";
 import { projectsFolder } from "./settings";
-import { describeModels, usableModels } from "./models";
+import { describeModels, modelsHere } from "./models";
 import { atWorkNow, stopWork } from "./background";
 import { botOfConversation, contextOf, describeWork, placeWords, under, workingNow, workSessions, worksFor } from "./tree";
 import type { Target } from "../../shared/records";
@@ -294,9 +294,11 @@ export async function answerAskTool(caller: Lead, args: Record<string, unknown>,
   return said(args.decision === "allow" ? `Allowed: ${shown}.` : `Denied: ${shown}. "${title}" is told why.`);
 }
 
-/** list_models: the models there's an account for here. */
+/** list_models: the models that run here, by the one rule every client's picker offers by
+ * (`modelsHere`, model-rule.ts). */
 export async function listModelsTool(engine: Target | null, bridge: Target | null, signal?: AbortSignal, where = HERE): Promise<ToolAnswer> {
-  return said(describeModels(await usableModels(engine, bridge, signal), undefined, where));
+  const here = await modelsHere(engine, bridge, undefined, where, signal);
+  return said(describeModels(here.models, undefined, where, here));
 }
 
 /** make_project: a new project, in the projects folder you picked (or the folder you named for it),

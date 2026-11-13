@@ -92,6 +92,8 @@ async function engine(sessions, lists = {}) {
       if (listed !== undefined) return reply(listed);
       if (url.pathname === "/api/provider") return reply([{ id: "p" }]);
       if (url.pathname === "/api/model") return reply([{ id: "m1", providerID: "p", name: "Model One" }]);
+      // (Its accounts, as Settings › Accounts lists them: p is one of your own, with nothing to sign in to.)
+      if (url.pathname === "/api/integration") return reply([]);
       if (url.pathname.startsWith("/api/experimental/")) return reply({});
       const one = url.pathname.match(/^\/api\/session\/([^/]+)(\/.*)?$/);
       const id = one && decodeURIComponent(one[1]);

@@ -3077,6 +3077,9 @@
             "literal": "box.ownHome"
            },
            {
+            "literal": "box.rehome"
+           },
+           {
             "literal": "branch"
            },
            {
@@ -3488,6 +3491,9 @@
            },
            {
             "literal": "box.ownHome"
+           },
+           {
+            "literal": "box.rehome"
            },
            {
             "literal": "branch"
@@ -4090,6 +4096,404 @@
        ]
       },
       "blocked": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/box/rehome",
+   "answers": {
+    "200": {
+     "object": {
+      "state": {
+       "oneOf": [
+        {
+         "oneOf": [
+          {
+           "literal": "waiting"
+          },
+          {
+           "literal": "moving"
+          },
+          {
+           "literal": "clearing"
+          },
+          {
+           "literal": "done"
+          },
+          {
+           "literal": "failed"
+          },
+          {
+           "literal": "back"
+          }
+         ]
+        },
+        "null"
+       ]
+      },
+      "way": {
+       "oneOf": [
+        {
+         "oneOf": [
+          {
+           "literal": "move"
+          },
+          {
+           "literal": "back"
+          }
+         ]
+        },
+        "null"
+       ]
+      },
+      "step": {
+       "oneOf": [
+        {
+         "oneOf": [
+          {
+           "literal": "plan"
+          },
+          {
+           "literal": "install"
+          },
+          {
+           "literal": "clone"
+          },
+          {
+           "literal": "rewrite"
+          },
+          {
+           "literal": "check"
+          },
+          {
+           "literal": "place"
+          },
+          {
+           "literal": "fix"
+          },
+          {
+           "literal": "clear"
+          },
+          {
+           "literal": "done"
+          }
+         ]
+        },
+        "null"
+       ]
+      },
+      "tries": "number",
+      "nextTry": {
+       "oneOf": [
+        "number",
+        "null"
+       ]
+      },
+      "waitingSince": {
+       "oneOf": [
+        "number",
+        "null"
+       ]
+      },
+      "overdue": "bool",
+      "failed": {
+       "oneOf": [
+        {
+         "object": {
+          "at": "number",
+          "step": {
+           "oneOf": [
+            {
+             "oneOf": [
+              {
+               "literal": "plan"
+              },
+              {
+               "literal": "install"
+              },
+              {
+               "literal": "clone"
+              },
+              {
+               "literal": "rewrite"
+              },
+              {
+               "literal": "check"
+              },
+              {
+               "literal": "place"
+              },
+              {
+               "literal": "fix"
+              },
+              {
+               "literal": "clear"
+              },
+              {
+               "literal": "done"
+              }
+             ]
+            },
+            "null"
+           ]
+          },
+          "message": "string"
+         }
+        },
+        "null"
+       ]
+      },
+      "movedAt": {
+       "oneOf": [
+        "number",
+        "null"
+       ]
+      },
+      "keptUntil": {
+       "oneOf": [
+        "number",
+        "null"
+       ]
+      },
+      "owed": {
+       "list": {
+        "oneOf": [
+         {
+          "literal": "keychain"
+         },
+         {
+          "literal": "agent"
+         }
+        ]
+       }
+      },
+      "asked": {
+       "oneOf": [
+        {
+         "oneOf": [
+          {
+           "literal": "now"
+          },
+          {
+           "literal": "back"
+          }
+         ]
+        },
+        "null"
+       ]
+      },
+      "from": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "to": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/box/rehome",
+   "answers": {
+    "200": {
+     "object": {
+      "state": {
+       "oneOf": [
+        {
+         "oneOf": [
+          {
+           "literal": "waiting"
+          },
+          {
+           "literal": "moving"
+          },
+          {
+           "literal": "clearing"
+          },
+          {
+           "literal": "done"
+          },
+          {
+           "literal": "failed"
+          },
+          {
+           "literal": "back"
+          }
+         ]
+        },
+        "null"
+       ]
+      },
+      "way": {
+       "oneOf": [
+        {
+         "oneOf": [
+          {
+           "literal": "move"
+          },
+          {
+           "literal": "back"
+          }
+         ]
+        },
+        "null"
+       ]
+      },
+      "step": {
+       "oneOf": [
+        {
+         "oneOf": [
+          {
+           "literal": "plan"
+          },
+          {
+           "literal": "install"
+          },
+          {
+           "literal": "clone"
+          },
+          {
+           "literal": "rewrite"
+          },
+          {
+           "literal": "check"
+          },
+          {
+           "literal": "place"
+          },
+          {
+           "literal": "fix"
+          },
+          {
+           "literal": "clear"
+          },
+          {
+           "literal": "done"
+          }
+         ]
+        },
+        "null"
+       ]
+      },
+      "tries": "number",
+      "nextTry": {
+       "oneOf": [
+        "number",
+        "null"
+       ]
+      },
+      "waitingSince": {
+       "oneOf": [
+        "number",
+        "null"
+       ]
+      },
+      "overdue": "bool",
+      "failed": {
+       "oneOf": [
+        {
+         "object": {
+          "at": "number",
+          "step": {
+           "oneOf": [
+            {
+             "oneOf": [
+              {
+               "literal": "plan"
+              },
+              {
+               "literal": "install"
+              },
+              {
+               "literal": "clone"
+              },
+              {
+               "literal": "rewrite"
+              },
+              {
+               "literal": "check"
+              },
+              {
+               "literal": "place"
+              },
+              {
+               "literal": "fix"
+              },
+              {
+               "literal": "clear"
+              },
+              {
+               "literal": "done"
+              }
+             ]
+            },
+            "null"
+           ]
+          },
+          "message": "string"
+         }
+        },
+        "null"
+       ]
+      },
+      "movedAt": {
+       "oneOf": [
+        "number",
+        "null"
+       ]
+      },
+      "keptUntil": {
+       "oneOf": [
+        "number",
+        "null"
+       ]
+      },
+      "owed": {
+       "list": {
+        "oneOf": [
+         {
+          "literal": "keychain"
+         },
+         {
+          "literal": "agent"
+         }
+        ]
+       }
+      },
+      "asked": {
+       "oneOf": [
+        {
+         "oneOf": [
+          {
+           "literal": "now"
+          },
+          {
+           "literal": "back"
+          }
+         ]
+        },
+        "null"
+       ]
+      },
+      "from": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "to": {
        "oneOf": [
         "string",
         "null"
