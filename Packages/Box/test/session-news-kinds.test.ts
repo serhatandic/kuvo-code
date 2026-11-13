@@ -20,6 +20,22 @@ test("a finish is 'finished', and never says what still runs", async () => {
   expect(boxNoteOf(line, undefined)?.line).toBe("“Tests” finished")
 })
 
+// What a session said goes to its lead, and onto the card both apps draw of it, as a few plain
+// words: a reply that opens with a Markdown heading isn't drawn as one big heading there (#606).
+test("a finish says the start of what the session said in plain words, its Markdown taken off", async () => {
+  const reply = "## Review of #144: merge after fixes\n\nThe core design is **sound**: see [the PR](https://example.com/144).\n\n- One `fix` left\n1. Then merge\n> Quoted"
+  const engine = Bun.serve({
+    port: 0,
+    fetch: () => Response.json({ data: [{ id: "msg_1", type: "assistant", time: { created: 1, completed: 2 }, content: [{ type: "text", text: reply }] }] }),
+  })
+  try {
+    const line = (await wakeLine(done, session, { port: engine.port, password: "x" } as never))!
+    expect(line.slice(line.indexOf(":\n") + 2)).toBe("Review of #144: merge after fixes The core design is sound: see the PR. One fix left Then merge Quoted")
+  } finally {
+    engine.stop(true)
+  }
+})
+
 test("one the user stopped reads as that, for its lead and on its card", () => {
   const line = stoppedLine(session)
   expect(line).toStartWith('[Session stopped] "Tests"')

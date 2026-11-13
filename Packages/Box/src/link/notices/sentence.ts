@@ -3,10 +3,11 @@
 
 import { cut } from "../../shared/text";
 
-// Markdown's marks taken off, not the words (as ReplyPreview does on the Mac): headings and
-// quotes at a line's start, emphasis around words, code ticks, a link's address.
+// Markdown's marks taken off, not the words (as ReplyPreview does on the Mac): headings, quotes
+// and list items' marks at a line's start, emphasis around words, code ticks, a link's address.
 export const plain = (text: unknown): string => String(text ?? "")
   .replace(/^[ \t]{0,3}(#{1,6}|>+)[ \t]+/gm, "")
+  .replace(/^[ \t]*([-*+]|\d{1,9}[.)])[ \t]+/gm, "")
   .replace(/!?\[([^\]]*)\]\([^)\s]*\)/g, "$1")
   .replace(/(?<![\w*_])[*_]{1,3}(?=\S)|(?<=\S)[*_]{1,3}(?![\w*_])/g, "")
   .replace(/`/g, "")

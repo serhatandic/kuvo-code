@@ -9,6 +9,7 @@ import { cut } from "../../shared/text";
 import { call, engineGet } from "../engine/client";
 import { CHATS } from "../home";
 import { answersYou, describePermission, projectNameOf, turnFor } from "../notices/news";
+import { plain } from "../notices/sentence";
 import { readTold } from "../notices/told";
 import { isHiddenRun } from "../engine/sessions";
 import { lastTurn, lastTurnEnd, summaryAtEnd, summaryRowAtEnd, workOutcome } from "../../shared/summaries";
@@ -140,7 +141,9 @@ export async function askingNow(listed: Listed, signal?: AbortSignal): Promise<{
 function replyIn(messages: unknown): string | null {
   for (const message of Array.isArray(messages) ? messages : []) {
     if (!isObject(message) || message.type !== "assistant" || !Array.isArray(message.content)) continue;
-    const text = message.content.filter((part: unknown) => isObject(part) && part.type === "text").map((part: { text?: unknown }) => String(part.text ?? "")).join(" ").replace(/\s+/g, " ").trim();
+    // On one line, as plain words: its lead reads them, and both apps draw them as Markdown on its
+    // card, where a heading's marks left on that one line made all of it a heading (#606).
+    const text = plain(message.content.filter((part: unknown) => isObject(part) && part.type === "text").map((part: { text?: unknown }) => String(part.text ?? "")).join("\n"));
     if (text) return cut(text, 280);
   }
   return null;
