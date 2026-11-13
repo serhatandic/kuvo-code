@@ -6,7 +6,7 @@
 import "./safety"
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
-import { decide } from "../src/link/typed/decide"
+import { decide, KEYWORD_UNAVAILABLE } from "../src/link/typed/decide"
 import { commandsOffered, firstWake, focusAsked, parseCommand, parseGoal, parseKeyword, parseLoop, parseReview, repeatText, reviewUnfinished, scopeAsked, shellCommand, splitCommand } from "../src/link/typed/words"
 import type { AnswerPiece, RouteContext } from "../src/link/server/context"
 
@@ -72,6 +72,8 @@ let engineAsked: Asked[] = []
 let bridgeAsked: Asked[] = []
 let conversations: Record<string, Conversation> = {}
 let bridgeRuns = true
+const COMMANDS = { status: 200, body: { data: [{ name: "init", description: "Set it up" }, { name: "review", description: "Review" }, { name: "goal", description: "Goal" }] } as unknown }
+let commandsAnswer = COMMANDS
 /** What the bridge answers a goal, side question, handoff or review: its status and body. */
 let bridgeSays: (asked: Asked) => { status: number; body: unknown } = () => ({ status: 200, body: {} })
 let typedRoute: typeof import("../src/link/areas/typed").typedRoute
@@ -112,7 +114,7 @@ beforeAll(async () => {
         if (each.method === "PATCH") Object.assign(conversation, each.body)
         return Response.json({ data: conversation })
       }
-      if (each.path === "/api/command") return Response.json({ data: [{ name: "init", description: "Set it up" }, { name: "review", description: "Review" }, { name: "goal", description: "Goal" }] })
+      if (each.path === "/api/command") return Response.json(commandsAnswer.body, { status: commandsAnswer.status })
       return Response.json({ data: {} })
     },
   })
@@ -128,6 +130,7 @@ beforeEach(() => {
   engineAsked = []
   bridgeAsked = []
   bridgeRuns = true
+  commandsAnswer = COMMANDS
   bridgeSays = () => ({ status: 200, body: {} })
   conversations = {
     ses_main: { id: "ses_main", location: { directory: "/srv/app" }, time: { created: 1, updated: 1 }, metadata: {} },
@@ -184,6 +187,14 @@ describe("kuvo/sessions/<id>/typed", () => {
     expect((await ask("POST", "ses_main", { text: "/review-quick main" })).json).toEqual({ command: { name: "review", arguments: "main" } })
   })
 
+  test("the engine's commands unread: a keyword still runs; what might be one of them waits, saying so", async () => {
+    commandsAnswer = { status: 500, body: { message: "Restarting." } }
+    expect((await ask("POST", "ses_main", { text: "/plan" })).json).toEqual({ keyword: "plan", plan: "toggle" })
+    const { status, json } = await ask("POST", "ses_main", { text: "/deploy prod" })
+    expect(status).toBe(503)
+    expect(json.message).toBeString()
+  })
+
   test("/goal sets the goal on the bridge, and the answer shows it before its event comes", async () => {
     bridgeSays = each => ({ status: 200, body: { data: { session: "ses_main", condition: each.body.condition, state: "working" } } })
     const { json } = await ask("POST", "ses_main", { text: "/goal all tests pass" })
@@ -210,8 +221,7 @@ describe("kuvo/sessions/<id>/typed", () => {
     bridge.stop(true)
     try {
       const { json } = await ask("POST", "ses_main", { text: "/handoff write the docs" })
-      expect(json.restore).toEqual({ text: "/handoff write the docs", beside: "write the docs" })
-      expect(typeof json.error).toBe("string")
+      expect(json).toEqual({ keyword: "handoff", restore: { text: "/handoff write the docs" }, error: KEYWORD_UNAVAILABLE })
     } finally {
       startBridge()
     }

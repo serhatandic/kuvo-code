@@ -12,15 +12,15 @@ import type { Target } from "../../shared/records";
 import type { SessionAutopilot } from "../../shared/routes/autopilot";
 import { call } from "../engine/client";
 import type { EngineSession } from "../engine/sessions";
-import { isRefused, placeOfSession } from "../letters/letter";
+import { isRefused, placeOfSessionPatiently } from "../letters/letter";
 import { targetsOf } from "../letters/tools";
-import { collected } from "../server/sent-once";
+import { BUSY, collected } from "../server/sent-once";
 import { askGoal } from "../work/goals";
 import { isAutopilot } from "../work/autopilot";
 import { listsHere, offeredHere } from "../work/model-rule";
 import { botOfConversation } from "../work/tree";
 import { zone } from "../work/clock";
-import { decide, type BoxStep, type Decision, type Restore } from "../typed/decide";
+import { decide, GOALS_NOT_RUNNING, KEYWORD_UNAVAILABLE, type BoxStep, type Decision, type Restore } from "../typed/decide";
 import { KEYWORD_WORDS, KEYWORDS, commandsOffered, splitCommand, parseGoal, parseKeyword, type Command, type Keyword, type ModelRef, type Reader } from "../typed/words";
 import { autopilotRoute } from "./autopilot";
 import { answerWakes } from "./wakes";
@@ -40,7 +40,7 @@ export function keywordsOffered(session: Pick<EngineSession, "parentID">, bridge
 async function engineCommands(engine: Target | null, folder: string | undefined, signal?: AbortSignal): Promise<Command[] | null> {
   if (!engine) return [];
   try {
-    const listed = await call(engine, "GET", "/api/command", undefined, signal ?? AbortSignal.timeout(10_000), folder);
+    const listed = await call(engine, "GET", "/api/command", undefined, within(signal, 10_000), folder);
     return Array.isArray(listed) ? listed.flatMap(each => (isObject(each) && typeof each.name === "string" ? [{ name: each.name, ...(typeof each.description === "string" ? { description: each.description } : {}) }] : [])) : [];
   } catch {
     return null;
@@ -63,6 +63,12 @@ async function reviewReaders(engine: Target | null, folder: string | undefined):
 const refOf = (value: unknown): ModelRef | null =>
   isObject(value) && typeof value.providerID === "string" && typeof value.id === "string" ? { providerID: value.providerID, id: value.id } : null;
 
+/** The request's own signal, and at most `ms` more: a stalled engine or bridge never holds the
+ * composer's next message (each client sends it after this answer). */
+const within = (signal: AbortSignal | undefined, ms: number): AbortSignal => (signal ? AbortSignal.any([signal, AbortSignal.timeout(ms)]) : AbortSignal.timeout(ms));
+/** How long the box waits on its engine or bridge for one step. */
+const STEP_PATIENCE = 30_000;
+
 /** A message the bridge (or a route) answered with, as words to show. */
 const said = (error: unknown, otherwise: string) => (error instanceof Error && error.message ? error.message : otherwise);
 
@@ -77,12 +83,13 @@ async function routeAnswer(pieces: AsyncIterable<AnswerPiece>): Promise<{ status
 }
 
 async function doStep(step: BoxStep, session: string, place: { target: Target; data: Partial<EngineSession> }, context: RouteContext): Promise<Done> {
-  const { request, readEngine, bridge, signal } = context;
+  const { request, readEngine, bridge } = context;
+  const signal = within(context.signal, STEP_PATIENCE);
   const agents = bridge();
   const at = (path: string) => `/api/kuvo/${path}/${encodeURIComponent(session)}`;
   switch (step.do) {
     case "goal": {
-      if (!agents) throw new Error("Goals run in the agents bridge beside the engine on this conversation’s computer, and it isn’t running now. Try again in a moment.");
+      if (!agents) throw new Error(GOALS_NOT_RUNNING);
       const { command } = step;
       if (command.kind === "set") return { goal: await call(agents, "PUT", at("goals"), { condition: command.words }, signal) };
       if (command.kind === "pause") return { goal: await call(agents, "POST", `${at("goals")}/pause`, undefined, signal) };
@@ -141,11 +148,12 @@ export async function* typedRoute(context: RouteContext, match: RegExpMatchArray
   if (method === "POST" && typeof body.text !== "string") return yield* json(400, { message: "Send what was typed (text)." });
   const targets = targetsOf({ readEngine, bridge });
   if (!targets.length) return yield* json(503, { message: "The engine isn't running." });
-  let place: Awaited<ReturnType<typeof placeOfSession>>;
+  // (Patiently, as a message's send is: a busy computer's engine can take a while to answer.)
+  let place: Awaited<ReturnType<typeof placeOfSessionPatiently>>;
   try {
-    place = await placeOfSession(session, targets);
+    place = await placeOfSessionPatiently(session, targets);
   } catch (error) {
-    return yield* json(503, { message: isRefused(error) ? "The engine isn't running." : "The engine didn't answer. Try again in a moment." });
+    return yield* json(503, { message: isRefused(error) ? "The engine isn't running." : BUSY });
   }
   if (!place) return yield* json(404, { message: "There's no such conversation here." });
   let engine: Target | null = null;
@@ -169,14 +177,13 @@ export async function* typedRoute(context: RouteContext, match: RegExpMatchArray
   // review can be read by, whether a goal is there to show.
   const slash = splitCommand(text) !== null;
   const commands = slash ? await engineCommands(engine, folder, signal) : [];
-  if (commands === null) return yield* json(503, { message: "The engine didn't answer. Try again in a moment." });
   const typed = parseKeyword(text);
   const onAgents = agents !== null && place.target.port === agents.port;
   const readers = typed?.keyword === "review" && !onAgents ? await reviewReaders(engine, folder) : [];
-  const hasGoal = parseGoal(text)?.kind === "show" && agents ? await call(agents, "GET", `/api/kuvo/goals/${encodeURIComponent(session)}`, undefined, signal).then(() => true, () => false) : false;
+  const hasGoal = parseGoal(text)?.kind === "show" && agents ? await call(agents, "GET", `/api/kuvo/goals/${encodeURIComponent(session)}`, undefined, within(signal, 10_000)).then(() => true, () => false) : false;
   const decision = decide(text, {
     keywords,
-    commands,
+    commands: commands ?? [],
     files: body.files === true,
     side: body.side === true,
     refusal: typeof body.refusal === "string" && body.refusal.trim() ? body.refusal : null,
@@ -189,15 +196,23 @@ export async function* typedRoute(context: RouteContext, match: RegExpMatchArray
     now: Date.now(),
     timeZone: zone(),
   });
+  // The engine's commands unread: a keyword or goal goes on without them; what might have been one
+  // of them can't be told from a message, and waits.
+  if (commands === null && (decision.send || decision.sideThread)) return yield* json(503, { message: "The engine didn't answer. Try again in a moment." });
   let done: Done = {};
   let failure: { restore: Restore; error: string } | null = null;
   if (decision.box) {
     try {
       done = await doStep(decision.box, session, place, context);
     } catch (error) {
-      const unavailable = isObject(error) && error.unavailable === true;
+      // The bridge not reached (its record there, and nothing answering, or no answer in time),
+      // rather than one that said no: as it isn't running, not in the runtime's words.
+      const step = decision.box.do;
+      const unreached = !(isObject(error) && typeof error.status === "number");
+      const unavailable = (isObject(error) && error.unavailable === true) || ((step === "btw" || step === "handoff" || step === "review") && unreached);
+      if (step === "goal" && unreached) error = new Error(GOALS_NOT_RUNNING);
       failure = unavailable
-        ? { restore: { text }, error: "This runs in the agents bridge beside the engine on this conversation’s computer, and it isn’t running now. Try again in a moment." }
+        ? { restore: { text }, error: KEYWORD_UNAVAILABLE }
         : { restore: decision.failed ?? { text }, error: said(error, "It couldn’t be done. Try again.") };
     }
   }

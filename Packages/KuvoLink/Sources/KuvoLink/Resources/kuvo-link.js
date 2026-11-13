@@ -39139,7 +39139,7 @@ import fs123 from "node:fs";
 import path126 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "28d1ba618f7f";
+var BRIDGE_VERSION = "eccc82cb8904";
 
 // Packages/Box/src/link/rehome/rewrite.ts
 var NO_REWRITE = {
@@ -46135,7 +46135,7 @@ function decideKeyword(keyword, rest, written, facts) {
       return {
         box: { do: "wake", due, every: repeatText2(loop.schedule.every), note: loop.message },
         failed: writtenBack(written),
-        ...keepsTimeOfDay(loop.schedule.every) ? {} : { send: { text: loop.message, typed: `/loop ${loop.scheduleText}` } }
+        ...keepsTimeOfDay(loop.schedule.every) ? {} : { send: { text: loop.message, typed: `/loop ${loop.scheduleText}`, steer: true } }
       };
     }
     case "btw":
@@ -46174,7 +46174,7 @@ async function engineCommands(engine, folder, signal) {
   if (!engine)
     return [];
   try {
-    const listed = await call(engine, "GET", "/api/command", undefined, signal ?? AbortSignal.timeout(1e4), folder);
+    const listed = await call(engine, "GET", "/api/command", undefined, within6(signal, 1e4), folder);
     return Array.isArray(listed) ? listed.flatMap((each) => isObject(each) && typeof each.name === "string" ? [{ name: each.name, ...typeof each.description === "string" ? { description: each.description } : {} }] : []) : [];
   } catch {
     return null;
@@ -46194,6 +46194,8 @@ async function reviewReaders(engine, folder) {
   }));
 }
 var refOf2 = (value) => isObject(value) && typeof value.providerID === "string" && typeof value.id === "string" ? { providerID: value.providerID, id: value.id } : null;
+var within6 = (signal, ms) => signal ? AbortSignal.any([signal, AbortSignal.timeout(ms)]) : AbortSignal.timeout(ms);
+var STEP_PATIENCE = 30000;
 var said6 = (error, otherwise) => error instanceof Error && error.message ? error.message : otherwise;
 async function routeAnswer(pieces) {
   const answer = await collected(pieces);
@@ -46201,13 +46203,14 @@ async function routeAnswer(pieces) {
   return { status: answer.status, value: isObject(value) ? value : {} };
 }
 async function doStep(step, session, place, context) {
-  const { request, readEngine, bridge, signal } = context;
+  const { request, readEngine, bridge } = context;
+  const signal = within6(context.signal, STEP_PATIENCE);
   const agents = bridge();
   const at = (path) => `/api/kuvo/${path}/${encodeURIComponent(session)}`;
   switch (step.do) {
     case "goal": {
       if (!agents)
-        throw new Error("Goals run in the agents bridge beside the engine on this conversation’s computer, and it isn’t running now. Try again in a moment.");
+        throw new Error(GOALS_NOT_RUNNING);
       const { command } = step;
       if (command.kind === "set")
         return { goal: await call(agents, "PUT", at("goals"), { condition: command.words }, signal) };
@@ -46280,9 +46283,9 @@ async function* typedRoute(context, match) {
     return yield* json(503, { message: "The engine isn't running." });
   let place;
   try {
-    place = await placeOfSession(session, targets);
+    place = await placeOfSessionPatiently(session, targets);
   } catch (error) {
-    return yield* json(503, { message: isRefused(error) ? "The engine isn't running." : "The engine didn't answer. Try again in a moment." });
+    return yield* json(503, { message: isRefused(error) ? "The engine isn't running." : BUSY });
   }
   if (!place)
     return yield* json(404, { message: "There's no such conversation here." });
@@ -46306,15 +46309,13 @@ async function* typedRoute(context, match) {
   const text = body.text;
   const slash = splitCommand(text) !== null;
   const commands = slash ? await engineCommands(engine, folder, signal) : [];
-  if (commands === null)
-    return yield* json(503, { message: "The engine didn't answer. Try again in a moment." });
   const typed = parseKeyword(text);
   const onAgents = agents !== null && place.target.port === agents.port;
   const readers = typed?.keyword === "review" && !onAgents ? await reviewReaders(engine, folder) : [];
-  const hasGoal = parseGoal(text)?.kind === "show" && agents ? await call(agents, "GET", `/api/kuvo/goals/${encodeURIComponent(session)}`, undefined, signal).then(() => true, () => false) : false;
+  const hasGoal = parseGoal(text)?.kind === "show" && agents ? await call(agents, "GET", `/api/kuvo/goals/${encodeURIComponent(session)}`, undefined, within6(signal, 1e4)).then(() => true, () => false) : false;
   const decision = decide2(text, {
     keywords,
-    commands,
+    commands: commands ?? [],
     files: body.files === true,
     side: body.side === true,
     refusal: typeof body.refusal === "string" && body.refusal.trim() ? body.refusal : null,
@@ -46327,14 +46328,20 @@ async function* typedRoute(context, match) {
     now: Date.now(),
     timeZone: zone2()
   });
+  if (commands === null && (decision.send || decision.sideThread))
+    return yield* json(503, { message: "The engine didn't answer. Try again in a moment." });
   let done = {};
   let failure = null;
   if (decision.box) {
     try {
       done = await doStep(decision.box, session, place, context);
     } catch (error) {
-      const unavailable = isObject(error) && error.unavailable === true;
-      failure = unavailable ? { restore: { text }, error: "This runs in the agents bridge beside the engine on this conversation’s computer, and it isn’t running now. Try again in a moment." } : { restore: decision.failed ?? { text }, error: said6(error, "It couldn’t be done. Try again.") };
+      const step = decision.box.do;
+      const unreached = !(isObject(error) && typeof error.status === "number");
+      const unavailable = isObject(error) && error.unavailable === true || (step === "btw" || step === "handoff" || step === "review") && unreached;
+      if (step === "goal" && unreached)
+        error = new Error(GOALS_NOT_RUNNING);
+      failure = unavailable ? { restore: { text }, error: KEYWORD_UNAVAILABLE } : { restore: decision.failed ?? { text }, error: said6(error, "It couldn’t be done. Try again.") };
     }
   }
   return yield* json(200, answerOf3(decision, done, failure));

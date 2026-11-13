@@ -55,7 +55,8 @@ export type BoxStep =
   | { do: "review"; model: ModelRef | null; focus: string | null; scope: ReviewScope | null };
 
 /** What the client does, in this order, once the box has done its step: with `send` and `command`
- * the composer's files go too (else they stay), and with `send.quoted` its quotes (else they stay). */
+ * the composer's files go too (else they stay), and with `send.quoted` its quotes (else they stay);
+ * `send.steer`: to the agent now, whatever it's doing (a /loop's first), never to wait in the queue. */
 export interface ClientSteps {
   showGoal?: true;
   plan?: "toggle" | "on";
@@ -63,7 +64,7 @@ export interface ClientSteps {
   compact?: true;
   shell?: string;
   command?: { name: string; arguments: string };
-  send?: { text: string; typed?: string; quoted?: true };
+  send?: { text: string; typed?: string; quoted?: true; steer?: true };
   sideThread?: true;
 }
 
@@ -172,7 +173,7 @@ function decideKeyword(keyword: Keyword, rest: string, written: string, facts: F
         box: { do: "wake", due, every: repeatText(loop.schedule.every), note: loop.message },
         failed: writtenBack(written),
         // A wake-up sends words: what's attached goes with the message sent now, or stays.
-        ...(keepsTimeOfDay(loop.schedule.every) ? {} : { send: { text: loop.message, typed: `/loop ${loop.scheduleText}` } }),
+        ...(keepsTimeOfDay(loop.schedule.every) ? {} : { send: { text: loop.message, typed: `/loop ${loop.scheduleText}`, steer: true } }),
       };
     }
     case "btw":

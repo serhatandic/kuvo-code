@@ -9694,7 +9694,8 @@
        "object": {
         "text": "string",
         "typed?": "string",
-        "quoted?": "bool"
+        "quoted?": "bool",
+        "steer?": "bool"
        }
       },
       "sideThread?": "bool",

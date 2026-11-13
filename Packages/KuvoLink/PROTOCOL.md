@@ -4821,13 +4821,15 @@ for one with no folder.
 ### What a typed message means
 
 What a conversation's composer sends is its box's to read: `kuvo/sessions/<session>/typed` on the
-box the conversation lives on. A client needs a box whose `features` has `typed`: there's no other
-way, and Kuvo Code updates a box before it uses it. The box decides what the text means, does what's its own, and says what the
+box the conversation lives on. A client needs a box whose `features` has `typed`, and has no other
+way: with one from before, it keeps what was written and says that computer needs a newer Kuvo
+Code (a Mac updates its machines before it uses them; a phone can meet a Mac not updated yet). The box decides what the text means, does what's its own, and says what the
 client does with the rest; a client keeps the draft, puts back what it's told to, and draws.
 
 - **The order a text is tried in:** a goal ("/goal …"), a keyword this conversation offers, the
   engine's own review ("/review-quick …"), a "!" command ("!" first, then words), one of the
-  engine's commands in the conversation's folder ("/name arguments"), else a message. A text whose
+  engine's commands in the conversation's folder ("/name arguments"), else a message. With the
+  engine's commands unread, a goal or keyword still goes; anything else answers `503`. A text whose
   first character that isn't a space is neither "/" nor "!" is always a message: a client sends it
   without asking (with a model that can't run, it says why and keeps it, as the box would).
 - `GET` → what "/" offers there: `{keywords: [{name, title, summary, argument}], commands:
@@ -4848,12 +4850,14 @@ client does with the rest; a client keeps the draft, puts back what it's told to
     `goalCleared`, `askedBot` (a bot's chat: the bot was asked to plan it, "Work › Goals"),
     `autopilot` (on, as `kuvo/sessions/<id>/autopilot` answers), `wakeUp` (`{due, every, note}`, a
     /loop's, `due` in seconds), `sideQuestion`, `handoff`, `review` (as the agents bridge answers
-    them, "Side questions, handoffs and reviews"). `keyword` names the keyword it ran.
+    them, "Side questions, handoffs and reviews"). `keyword` names the keyword it ran (not
+    "/goal", which is a goal's).
   - What the client does: `showGoal` (show the goal bar), `plan` (`toggle`: Plan on or back off;
     `on`), `toggleAutopilot`, `compact`, `shell` (run it in the conversation's folder), `command`
-    (`{name, arguments}`, run with the composer's files), `send` (`{text, typed?, quoted?}`: send it
-    as a message with the composer's files; `typed` is the keyword as typed, "/plan", to send it
-    with; `quoted`: what the composer replies to goes with it), `sideThread` (a follow-up in the side
+    (`{name, arguments}`, run with the composer's files), `send` (`{text, typed?, quoted?, steer?}`:
+    send it as a message with the composer's files; `typed` is the keyword as typed, "/plan", to
+    send it with; `quoted`: what the composer replies to goes with it; `steer`: to the agent now,
+    never to wait in the queue, whatever Send asked: a /loop's first), `sideThread` (a follow-up in the side
     thread that shows, as one without "/" is: one at a time, and none with files attached).
   - What goes back: the composer's files stay unless `send` or `command` took them, and what it
     replies to unless `send.quoted` did; `restore` `{text, beside?}` goes back ahead of anything

@@ -1255,6 +1255,12 @@ final class SessionModel {
         let route = Typed.route(id)
         typedAsks = Task {
             await previous?.value
+            // A computer whose Kuvo Code is from before: it can't say, and nothing goes.
+            guard await boxHas(Typed.feature) else {
+                restore(text: text, files: files)
+                failure = "This conversation’s computer needs a newer Kuvo Code for “/” and “!”. Update it, then send this again."
+                return
+            }
             do {
                 let answer = try await box.value(Typed.Answer<AutopilotShown>.self, "POST", route, body: ask)
                 await took(answer, written: text, files: files, quotes: quotes, for: model, queue: queue, keptElsewhere: keptElsewhere)
@@ -1312,11 +1318,13 @@ final class SessionModel {
         if let message = answer.send {
             var text = message.text
             // A message takes what it replies to with it.
+            // (Those still in the composer: one sent meanwhile took any it had.)
+            let quotes = quotes.filter { quote in draftQuotes.contains { $0.id == quote.id } }
             if message.quoted == true, !quotes.isEmpty {
                 text = Quoting.message(quotes: quotes, text: text)
                 draftQuotes.removeAll { quote in quotes.contains { $0.id == quote.id } }
             }
-            sendMessage(text, files: files, for: model, queue: queue, typed: message.typed, keptElsewhere: keptElsewhere)
+            sendMessage(text, files: files, for: model, queue: message.queues(queue), typed: message.typed, keptElsewhere: keptElsewhere)
         }
         if answer.sideThread == true { return askInSideThread(written, files: files, quotes: quotes) }
         // What stays (files nothing took), and what goes back, saying why.
@@ -1356,7 +1364,7 @@ final class SessionModel {
 
     /// Reads what "/" offers here from its box (again as its agents bridge comes or goes).
     func readKeywords() async {
-        guard let box = box(), let offers = try? await box.value(Typed.Offers.self, "GET", Typed.route(id)), !Task.isCancelled else { return }
+        guard let box = box(), await boxHas(Typed.feature), let offers = try? await box.value(Typed.Offers.self, "GET", Typed.route(id)), !Task.isCancelled else { return }
         if typedOffers != offers { typedOffers = offers }
     }
 

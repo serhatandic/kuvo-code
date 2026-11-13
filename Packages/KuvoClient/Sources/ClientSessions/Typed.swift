@@ -6,6 +6,9 @@ import OpenCodeKit
 /// question, a handoff, a review, a /loop's wake-up, Autopilot on) and says what the client does
 /// with the rest. A client keeps the draft, puts back what it's told to, and draws.
 public enum Typed {
+    /// What a box answers the route with in `kuvo/info`'s `features`: a box without it can't say.
+    public static let feature = "typed"
+
     /// The route that answers for `session` (its path part escaped).
     public static func route(_ session: String) -> String {
         "kuvo/sessions/" + (session.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/?#+"))) ?? session) + "/typed"
@@ -53,12 +56,17 @@ public enum Typed {
         public var arguments: String
     }
 
-    /// A message to send: its words, the keyword it was sent with as typed ("/plan"), and whether
-    /// the composer's quotes go with it (they stay otherwise).
+    /// A message to send: its words, the keyword it was sent with as typed ("/plan"), whether the
+    /// composer's quotes go with it (they stay otherwise), and whether it goes to the agent now,
+    /// never to wait in the queue (a /loop's first).
     public struct Send: Decodable, Equatable, Sendable {
         public var text: String
         public var typed: String?
         public var quoted: Bool?
+        public var steer: Bool?
+
+        /// Whether it waits for the agent's run, as `queue` asks (Send's long press, ⌘Return).
+        public func queues(_ queue: Bool) -> Bool { steer == true ? false : queue }
     }
 
     public struct WakeUp: Decodable, Equatable, Sendable {

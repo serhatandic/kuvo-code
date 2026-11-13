@@ -120,4 +120,17 @@ struct TypedVectorsTests {
         let parsed: Any = SlashCommands.parse(text, commands: offered).map { ["name": $0.name, "arguments": $0.arguments] } ?? NSNull()
         #expect(Self.same(parsed, each["parsed"]), "\(text)")
     }
+
+    /// A text a client sends without asking (`Typed.asksBox` false) is one the box would only say to
+    /// send as a message, ask in the side thread, or keep with the model's refusal: so skipping the
+    /// ask changes nothing.
+    @Test(arguments: cases("decide").indices) func plainTextsNeedNoAsk(_ at: Int) {
+        let each = Self.cases("decide")[at]
+        let text = each["text"] as! String
+        guard !Typed.asksBox(text) else { return }
+        let decision = each["decision"] as! [String: Any]
+        let plain: [[String: Any]] = [["send": ["text": text, "quoted": true]], ["sideThread": true]]
+        let refused = Set(decision.keys) == ["restore", "error"] && Self.same(decision["restore"], ["text": text])
+        #expect(refused || plain.contains { Self.same($0, decision) }, "\(text)")
+    }
 }

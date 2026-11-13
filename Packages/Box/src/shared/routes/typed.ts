@@ -28,7 +28,7 @@ export const TYPED = object({
   "sideQuestion?": any, "handoff?": any, "review?": any,
   "showGoal?": bool, "plan?": words("toggle", "on"), "toggleAutopilot?": bool, "compact?": bool,
   "shell?": string, "command?": object({ name: string, arguments: string }),
-  "send?": object({ text: string, "typed?": string, "quoted?": bool }),
+  "send?": object({ text: string, "typed?": string, "quoted?": bool, "steer?": bool }),
   "sideThread?": bool,
   "restore?": TYPED_RESTORE, "error?": string,
 });
