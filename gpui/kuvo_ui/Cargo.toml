@@ -9,6 +9,8 @@ publish.workspace = true
 [dependencies]
 gpui.workspace = true
 anyhow = "1"
+smallvec = "1"
+unicode-segmentation = "1"
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
