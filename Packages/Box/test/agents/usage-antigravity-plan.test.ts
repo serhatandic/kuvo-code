@@ -57,6 +57,24 @@ describe("Antigravity discovery", () => {
     expect(antigravityMacOwns(`language_server GEMINI_HOME=${profile}-outside PATH=/fixture`, profile)).toBe(false)
     expect(antigravityMacOwns(`language_server GEMINI_HOME=${profile} outside PATH=/fixture`, profile)).toBe(false)
   })
+  test("Mac agy stand-in permits no CSRF and language_server still requires it", async () => {
+    for (const executable of ["agy", "language_server"]) {
+      const runner: any = async (program: string) => ({ code: 0, stdout: program.endsWith("ps") ? `10 /fixture/${executable} GEMINI_HOME=/fixture/profile` : "agy 10 TCP 127.0.0.1:12345 (LISTEN)\n", stderr: "" })
+      const endpoints = await discoverAntigravity("/fixture/profile", "darwin", "/unused", runner)
+      expect(endpoints.length).toBe(executable === "agy" ? 2 : 0)
+      if (executable === "agy") expect(endpoints[0]?.csrf).toBe("")
+    }
+  })
+  test("Linux agy own-profile stand-in permits no CSRF", async () => {
+    const root = temp()
+    try {
+      const proc = join(root, "proc")
+      mkdirSync(join(proc, "10", "fd"), { recursive: true }); mkdirSync(join(proc, "10", "net"), { recursive: true })
+      writeFileSync(join(proc, "10", "cmdline"), "/fixture/agy\0--extension_server_port=12345\0")
+      writeFileSync(join(proc, "10", "environ"), "GEMINI_HOME=/fixture/profile\0")
+      expect(await discoverAntigravity("/fixture/profile", "linux", proc)).toEqual([{ scheme: "http", port: 12345, csrf: "" }])
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  })
   test("Mac ps/lsof stand-ins require own profile", async () => {
     const calls: string[] = []
     const runner: any = async (program: string) => { calls.push(program); return { code: 0, stdout: program.endsWith("ps") ? "10 /fixture/language_server --csrf_token fixture GEMINI_HOME=/fixture/profile\n" : "agy 10 TCP 127.0.0.1:12345 (LISTEN)\n", stderr: "" } }
@@ -109,6 +127,25 @@ describe("Antigravity own-account stand-in service", () => {
       expect(limits.list()[0]?.identity).toBe(before.identity)
       expect(limits.list()[0]?.windows).toEqual(before.windows)
       ;(plan as any).raw = raw
+    } finally { server.stop(true); rmSync(root, { recursive: true, force: true }) }
+  })
+  test("persisted refusal survives restart and metadata-only credential rewrites", async () => {
+    const root = temp(); credential(root)
+    let at = 10_000_000, calls = 0
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch() { calls++; return new Response("{}", { status: 401 }) } })
+    const saved = join(root, "limits.json")
+    const start = () => {
+      const plan = new AntigravityPlan(() => root, undefined, async () => [], [server.url.origin])
+      return new Limits(() => [{ provider: "antigravity", service: "antigravity", limits: plan.limits }], saved, () => at)
+    }
+    try {
+      await start().tick(); expect(calls).toBe(1)
+      writeFileSync(join(root, "antigravity-acp/acp_token.json"), JSON.stringify({ expiry: "2099-01-01T00:00:00Z", access_token: "fixture-token", unrelated: true }, null, 2))
+      at += 610_000; const restarted = start(); await restarted.tick()
+      expect(calls).toBe(1)
+      credential(root, "new-fixture-token")
+      at += 610_000; await restarted.tick()
+      expect(calls).toBe(2)
     } finally { server.stop(true); rmSync(root, { recursive: true, force: true }) }
   })
   test("holds stop further endpoints; a refusal never resends unchanged credential", async () => {

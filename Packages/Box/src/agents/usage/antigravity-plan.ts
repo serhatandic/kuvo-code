@@ -80,8 +80,8 @@ export function antigravityMacOwns(command: string, profile: string): boolean {
     || new RegExp(`(?:^|\\s)--app_data_dir(?:=|\\s+)["']?${value}["']?(?=$|\\s+--|\\s+[A-Za-z_][A-Za-z_0-9]*=)`).test(command)
 }
 export function antigravityEndpoints(argv: string[], ports: number[]): AntigravityEndpoint[] {
-  const csrf = flagValue(argv, "--csrf_token")
-  if (!csrf) return []
+  const csrf = flagValue(argv, "--csrf_token") || (/(?:^|\/)agy$/.test(argv[0] ?? "") ? "" : undefined)
+  if (csrf === undefined) return []
   const endpoints = ports.flatMap(p => [{ scheme: "https" as const, port: p, csrf }, { scheme: "http" as const, port: p, csrf }])
   const extension = port(flagValue(argv, "--extension_server_port"))
   if (extension) endpoints.push({ scheme: "http", port: extension, csrf })
@@ -131,6 +131,7 @@ export function antigravityCredential(raw: any): Credential | undefined {
   const claims = tokenClaims(source?.id_token ?? source?.idToken) ?? tokenClaims(access)
   return { access, refresh, identity: text(claims?.sub) ? `google:${claims!.sub}` : undefined, expires: finite(source?.expires_at) ? source.expires_at * 1000 : isoTime(source?.expiry ?? source?.expiresAt), clientID: text(source?.client_id), clientSecret: text(source?.client_secret) }
 }
+const credentialGeneration = (credential: Credential) => fingerprint(JSON.stringify([credential.access ?? null, credential.refresh ?? null]))!
 export type AntigravityFetch = (url: string, init: RequestInit & { tls?: { rejectUnauthorized: boolean } }) => Promise<Response>
 /** Enabled only by main.ts in a real box folder; test constructors supply stand-in bases. */
 export const antigravityTransport = { live: false }
@@ -153,7 +154,7 @@ export class AntigravityPlan {
       const raw = this.raw()
       if (raw === undefined) { this.lastCredential = undefined; this.lastSignIn = undefined; this.lastAccount = undefined; return undefined }
       const credential = antigravityCredential(JSON.parse(raw))
-      if (credential) { this.lastCredential = credential; this.lastSignIn = fingerprint(raw); this.lastAccount = fingerprint(credential.refresh ?? credential.access) }
+      if (credential) { this.lastCredential = credential; this.lastSignIn = credentialGeneration(credential); this.lastAccount = fingerprint(credential.refresh ?? credential.access) }
     } catch { /* An indeterminate read never changes the known account or its sign-in generation. */ }
     return this.lastCredential
   }
@@ -176,7 +177,7 @@ export class AntigravityPlan {
     let c: Credential | undefined
     try { c = antigravityCredential(JSON.parse(raw)) } catch {}
     if (!c) throw new LimitsProblem("failed", "Antigravity's own sign-in is unreadable.", undefined, false)
-    const signIn = fingerprint(c.refresh ?? c.access)!
+    const signIn = credentialGeneration(c)
     if (this.denied.has(signIn)) throw new LimitsProblem("expired", "Antigravity refused this sign-in. Sign in again.", undefined, false)
     try {
       // Own-account local LS is useful while the agent is running. Its certificate exception is
@@ -218,7 +219,7 @@ export class AntigravityPlan {
         catch (error) {
           if (!(error instanceof LimitsProblem) || error.kind !== "expired") throw error
           this.deniedAccess.add(fingerprint(access)!)
-          if (!c.refresh || this.denied.has(fingerprint(c.refresh)!)) throw error
+          if (!c.refresh) throw error
           const form = new URLSearchParams({ grant_type: "refresh_token", refresh_token: c.refresh, client_id: c.clientID ?? "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com", client_secret: c.clientSecret ?? "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" })
           const refreshed = await this.request(this.oauth, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: form.toString() }, now)
           const token = text(refreshed.access_token)
