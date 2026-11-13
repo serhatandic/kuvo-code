@@ -3,9 +3,9 @@
 // Packages/Box/src/link/main.ts
 import { spawn as spawn14 } from "node:child_process";
 import crypto55 from "node:crypto";
-import fs149 from "node:fs";
+import fs152 from "node:fs";
 import os21 from "node:os";
-import path151 from "node:path";
+import path154 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // Packages/Box/src/shared/text.ts
@@ -2191,8 +2191,11 @@ var FEATURES = [
   "bots.job",
   "bots.keys",
   "bots.make",
+  "box.app",
   "box.ownHome",
   "box.rehome",
+  "box.serve",
+  "box.uninstall",
   "branch",
   "browser",
   "btw",
@@ -5310,6 +5313,9 @@ function kuvoPorts() {
   } catch {}
   try {
     add(JSON.parse(fs20.readFileSync(path21.join(RUN, "tools.json"), "utf8")).port);
+  } catch {}
+  try {
+    add(JSON.parse(fs20.readFileSync(path21.join(RUN, "serve.json"), "utf8")).port);
   } catch {}
   add(ownPort);
   return [...ports].sort((a, b) => a - b);
@@ -38770,7 +38776,7 @@ import fs123 from "node:fs";
 import path126 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "fd41fe81059f";
+var BRIDGE_VERSION = "ee17a69a27d8";
 
 // Packages/Box/src/link/rehome/rewrite.ts
 var NO_REWRITE = {
@@ -40022,9 +40028,9 @@ function macTell(notice) {
 }
 
 // Packages/Box/src/link/mac/relay.ts
-import fs148 from "node:fs";
+import fs150 from "node:fs";
 import os19 from "node:os";
-import path149 from "node:path";
+import path151 from "node:path";
 
 // Packages/Box/src/link/peers/mail.ts
 var answeringAsk = null;
@@ -46103,6 +46109,311 @@ async function* rehomeRoute({ request, json }) {
   return yield* refused ? json(409, { message: refused }) : json(200, rehomeStatus(home));
 }
 
+// Packages/Box/src/link/mac/app.ts
+import fs148 from "node:fs";
+import path149 from "node:path";
+var APP_FILE = () => path149.join(RUN, "app.json");
+var OPENING_FILE = () => path149.join(RUN, "app-opening.json");
+var FAILED_FILE = () => path149.join(RUN, "app-open-failed.json");
+var UPDATING_FILE = () => path149.join(RUN, "app-updating");
+var WAIT = 30000;
+var REST = 5 * 60000;
+var UPDATING_FOR = 2 * 60000;
+var OPEN_WITHIN = 25000;
+var GONE2 = "Kuvo Code isn't where it was installed on this Mac any more (it was moved or deleted), so its browser can't be opened. Ask the user to open Kuvo Code, then try again.";
+var couldntOpen = (why) => `Kuvo Code couldn't be opened in the background on this Mac for its browser (${why.trim()}). Ask the user to open Kuvo Code, then try again.`;
+var NOT_READY = `Kuvo Code was opened in the background on this Mac, but its browser wasn't ready within ${WAIT / 1000} seconds. Try again in a few minutes; if it still isn't ready, ask the user to open Kuvo Code.`;
+var NEEDS_APP = "This tool needs Kuvo Code open on this Mac, and it isn't open now. Ask the user to open Kuvo Code, then try again.";
+var NO_OPENER = "nothing that opens it is running on this Mac";
+function readJSON2(file) {
+  try {
+    return JSON.parse(fs148.readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
+}
+function bundleOf2(given) {
+  if (typeof given !== "string" || given.length > 1024 || given.includes("\x00") || !path149.isAbsolute(given))
+    return null;
+  const bundle = given.replace(/\/+$/, "");
+  return bundle.endsWith(".app") && path149.normalize(bundle) === bundle ? bundle : null;
+}
+function toolsOf(given) {
+  if (!isObject(given) || typeof given.url !== "string" || typeof given.token !== "string")
+    return null;
+  if (given.token.length < 16 || given.token.length > 512)
+    return null;
+  let url;
+  try {
+    url = new URL(given.url);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" || !["127.0.0.1", "[::1]", "localhost"].includes(url.hostname) || url.username || url.password)
+    return null;
+  return { url: url.toString(), token: given.token };
+}
+function readApp() {
+  const said = readJSON2(APP_FILE());
+  if (!isObject(said))
+    return null;
+  return { bundle: bundleOf2(said.bundle), tools: toolsOf(said.tools), at: typeof said.at === "number" ? said.at : 0 };
+}
+var isOpen = () => readApp()?.tools != null;
+function readFailed() {
+  const said = readJSON2(FAILED_FILE());
+  return isObject(said) && typeof said.at === "number" && typeof said.message === "string" ? { at: said.at, message: said.message } : null;
+}
+function readOpening() {
+  const said = readJSON2(OPENING_FILE());
+  return isObject(said) && typeof said.at === "number" && typeof said.by === "number" ? { at: said.at, by: said.by } : null;
+}
+function updating2(now = Date.now()) {
+  try {
+    return Math.abs(now - fs148.statSync(UPDATING_FILE()).mtimeMs) < UPDATING_FOR;
+  } catch {
+    return false;
+  }
+}
+function registerApp(given, now = Date.now()) {
+  const before = readApp();
+  const record = { bundle: given.bundle ?? before?.bundle ?? null, tools: given.tools, at: now };
+  writePrivate(APP_FILE(), JSON.stringify(record));
+  if (record.tools) {
+    fs148.rmSync(FAILED_FILE(), { force: true });
+    fs148.rmSync(UPDATING_FILE(), { force: true });
+  }
+  return record;
+}
+function noteUpdating(now = Date.now()) {
+  registerApp({ tools: null }, now);
+  writePrivate(UPDATING_FILE(), String(now));
+  const at = new Date(now);
+  try {
+    fs148.utimesSync(UPDATING_FILE(), at, at);
+  } catch {}
+}
+function appStatus(now = Date.now()) {
+  const app = readApp();
+  const failed = readFailed();
+  const opening = readOpening();
+  return {
+    bundle: app?.bundle ?? null,
+    open: app?.tools != null,
+    updating: updating2(now),
+    opening: opening !== null && !stale(opening, now),
+    failed: failed && now - failed.at < REST ? failed : null
+  };
+}
+function stale(opening, now) {
+  return opening.by !== process.pid && !alive(opening.by) || now - opening.at > WAIT + OPEN_WITHIN;
+}
+async function openApp(signal, ways = OPEN_WAYS) {
+  if (isOpen())
+    return null;
+  for (let tries = 0;tries < 3; tries++) {
+    const now = ways.now();
+    let opening = readOpening();
+    if (opening && stale(opening, now)) {
+      if (JSON.stringify(readOpening()) === JSON.stringify(opening))
+        fs148.rmSync(OPENING_FILE(), { force: true });
+      opening = null;
+    }
+    if (!opening) {
+      const failed = readFailed();
+      if (failed && now - failed.at < REST && now >= failed.at)
+        return failed.message;
+      const mine = { at: now, by: process.pid };
+      try {
+        fs148.mkdirSync(RUN, { recursive: true, mode: 448 });
+        fs148.writeFileSync(OPENING_FILE(), JSON.stringify(mine), { flag: "wx", mode: 384 });
+      } catch {
+        continue;
+      }
+      return await openAndWait(mine, ways);
+    }
+    const theirs = opening;
+    const still = () => JSON.stringify(readOpening()) === JSON.stringify(theirs);
+    await ways.until(() => isOpen() || !still(), theirs.at + WAIT, signal);
+    if (isOpen())
+      return null;
+    if (signal?.aborted)
+      return "The call was stopped.";
+    if (still())
+      return NOT_READY;
+    const failed = readFailed();
+    if (failed && failed.at >= theirs.at)
+      return failed.message;
+  }
+  return NOT_READY;
+}
+async function openAndWait(mine, ways) {
+  let said = null;
+  try {
+    if (!updating2(ways.now())) {
+      const bundle = readApp()?.bundle;
+      said = bundle ? await ways.open(bundle) : NEEDS_APP;
+    }
+    if (said === null && !isOpen())
+      await ways.until(isOpen, mine.at + WAIT);
+    if (said === null && !isOpen())
+      said = NOT_READY;
+    if (said !== null)
+      writePrivate(FAILED_FILE(), JSON.stringify({ at: ways.now(), message: said }));
+    return said;
+  } finally {
+    if (JSON.stringify(readOpening()) === JSON.stringify(mine))
+      fs148.rmSync(OPENING_FILE(), { force: true });
+  }
+}
+async function hostOpens(bundle) {
+  const host = appHost();
+  if (!host)
+    return couldntOpen(NO_OPENER);
+  try {
+    await proveHost(host, AbortSignal.timeout(1e4));
+  } catch {
+    return couldntOpen(NO_OPENER);
+  }
+  try {
+    const response = await fetch(`${host.url}/app/open`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${host.password}`, "content-type": "application/json" },
+      body: JSON.stringify({ bundle }),
+      signal: AbortSignal.timeout(OPEN_WITHIN)
+    });
+    let answer = null;
+    try {
+      answer = await response.json();
+    } catch {}
+    if (response.ok)
+      return null;
+    if (response.status === 410)
+      return GONE2;
+    if (response.status === 404)
+      return couldntOpen("what runs this box can't open it yet");
+    const why = isObject(answer) && typeof answer.message === "string" && answer.message.trim() ? answer.message.slice(0, 300) : `it said ${response.status}`;
+    return couldntOpen(why);
+  } catch (error) {
+    return couldntOpen(error instanceof Error && error.name === "TimeoutError" ? "macOS didn't open it in time" : NO_OPENER);
+  }
+}
+function waitUntil(ready, deadline, signal) {
+  return new Promise((resolve) => {
+    let watcher = null;
+    const done = () => {
+      clearInterval(every);
+      clearTimeout(timer);
+      watcher?.close();
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const look = () => {
+      if (ready())
+        done();
+    };
+    const every = setInterval(look, 1000);
+    const timer = setTimeout(done, Math.max(0, deadline - Date.now()));
+    try {
+      watcher = fs148.watch(RUN, look);
+      watcher.on("error", () => {});
+    } catch {}
+    signal?.addEventListener("abort", done, { once: true });
+    if (signal?.aborted)
+      done();
+    else
+      look();
+  });
+}
+var OPEN_WAYS = { open: hostOpens, now: () => Date.now(), until: waitUntil };
+var ONLY_MAC = "Only a Mac's box in a home of its own has its app register with it.";
+async function* appRoute({ request, json }) {
+  const method = request.method.toUpperCase();
+  if (method !== "GET" && method !== "POST")
+    return yield* json(405, {});
+  if (!request.fromApp && !request.fromMac)
+    return yield* json(403, { message: "Only Kuvo Code on this Mac registers its app." });
+  if (!OWN_HOME_MAC)
+    return yield* json(409, { message: ONLY_MAC });
+  if (method === "GET")
+    return yield* json(200, appStatus());
+  const given = parsed(request.body);
+  if (!isObject(given))
+    return yield* json(400, { message: "Say where its tools answer (tools), or that it quits (tools: null)." });
+  if (given.updating === true) {
+    noteUpdating();
+    return yield* json(200, appStatus());
+  }
+  if (!("tools" in given))
+    return yield* json(400, { message: "Say where its tools answer (tools), or that it quits (tools: null)." });
+  const tools = given.tools === null ? null : toolsOf(given.tools);
+  if (given.tools !== null && !tools)
+    return yield* json(400, { message: "Its tools answer on this Mac, at an http address, with a token." });
+  const bundle = given.bundle === undefined ? undefined : bundleOf2(given.bundle);
+  if (given.bundle !== undefined && !bundle)
+    return yield* json(400, { message: "Its bundle is a whole path to the app (…/Kuvo Code.app)." });
+  registerApp({ tools, bundle });
+  return yield* json(200, appStatus());
+}
+async function* appOpenRoute({ request, json, signal }) {
+  if (request.method.toUpperCase() !== "POST")
+    return yield* json(405, {});
+  if (!request.fromApp && !request.fromMac)
+    return yield* json(403, { message: "Only Kuvo Code on this Mac opens its app." });
+  if (!OWN_HOME_MAC)
+    return yield* json(409, { message: ONLY_MAC });
+  const given = parsed(request.body);
+  const app = readApp();
+  if (isObject(given) && typeof given.gone === "string" && app?.tools && app.tools.token === given.gone)
+    registerApp({ tools: null });
+  const said = await openApp(signal);
+  return yield* said === null ? json(200, appStatus()) : json(503, { message: said });
+}
+
+// Packages/Box/src/link/serve-kept.ts
+import fs149 from "node:fs";
+import path150 from "node:path";
+var SERVE_NEEDED = () => path150.join(RUN, "serve.needed");
+var SERVE_FILE = () => path150.join(RUN, "serve.json");
+function runningServe() {
+  try {
+    const record = JSON.parse(fs149.readFileSync(SERVE_FILE(), "utf8"));
+    if (isObject(record) && Number.isInteger(record.pid) && processRuns(record.pid, "kuvo-link")) {
+      return { pid: record.pid, port: Number(record.port), kept: record.kept === true };
+    }
+  } catch {}
+  return null;
+}
+function stopKeptServe() {
+  const running = runningServe();
+  if (running?.kept && running.pid !== process.pid)
+    try {
+      process.kill(running.pid, "SIGTERM");
+    } catch {}
+}
+async function* serveRoute({ request, json }) {
+  const method = request.method.toUpperCase();
+  if (method !== "GET" && method !== "POST")
+    return yield* json(405, {});
+  if (!request.fromApp && !request.fromMac)
+    return yield* json(403, { message: "Only Kuvo Code asks for the box's server." });
+  if (IS_MAC)
+    return yield* json(409, { message: "This Mac's box has its server run by Kuvo Code itself." });
+  if (method === "POST") {
+    const given = parsed(request.body);
+    if (!isObject(given) || typeof given.needed !== "boolean")
+      return yield* json(400, { message: "Say whether it's needed (needed: true or false)." });
+    if (given.needed) {
+      writePrivate(SERVE_NEEDED(), "");
+      keepKeeper();
+    } else {
+      fs149.rmSync(SERVE_NEEDED(), { force: true });
+    }
+  }
+  const running = runningServe();
+  return yield* json(200, { needed: fs149.existsSync(SERVE_NEEDED()), serving: running !== null });
+}
+
 // Packages/Box/src/link/server/router.ts
 var ROUTES = [
   { when: (route) => route === "kuvo/info", answer: infoRoute },
@@ -46111,6 +46422,9 @@ var ROUTES = [
   { when: (route) => route === "kuvo/file", answer: ({ request, json }) => fileAt(request.path, json) },
   { when: (route) => route === "kuvo/update", answer: updateRoute },
   { when: (route) => route === "kuvo/box/rehome", answer: rehomeRoute },
+  { when: (route) => route === "kuvo/box/app", answer: appRoute },
+  { when: (route) => route === "kuvo/box/app/open", answer: appOpenRoute },
+  { when: (route) => route === "kuvo/box/serve", answer: serveRoute },
   { when: (route) => !IS_MAC && route === "kuvo/browser", answer: browserRoute },
   { when: (route, request) => /^kuvo\/integrations(\/|\?|$)/.test(request.path), answer: integrationsRoute },
   { when: (route) => route === "kuvo/folders", answer: foldersRoute },
@@ -46215,7 +46529,7 @@ var boxAnswers = (route) => route === "kuvo/engine/restart" && keeperRuns();
 function keeperRuns() {
   let pid = 0;
   try {
-    pid = Number(JSON.parse(fs148.readFileSync(path149.join(RUN, "keeper.json"), "utf8"))?.pid);
+    pid = Number(JSON.parse(fs150.readFileSync(path151.join(RUN, "keeper.json"), "utf8"))?.pid);
   } catch {
     return false;
   }
@@ -46385,6 +46699,155 @@ function serveBox(password, handle = engineHandler(readEngineFile, { name: os20.
   });
 }
 
+// Packages/Box/src/link/uninstall.ts
+import { spawnSync as spawnSync10 } from "node:child_process";
+import fs151 from "node:fs";
+import path152 from "node:path";
+var LAUNCH_AGENT = "run.kuvo.code.machine";
+var REBOOT_TAG = "# kuvo-code: starts its engine again after a restart";
+function outside() {
+  if (REAL_BOX && !APP_FOLDER) {
+    return { launchctl: "/bin/launchctl", crontab: "crontab", agents: path152.join(accountHome(), "Library", "LaunchAgents") };
+  }
+  const tools = IN_TEST_FOLDER ? process.env.KUVO_TEST_UNINSTALL_TOOLS : undefined;
+  if (!tools || !path152.isAbsolute(tools))
+    return null;
+  return { launchctl: path152.join(tools, "launchctl"), crontab: path152.join(tools, "crontab"), agents: path152.join(homeFolder(), "Library", "LaunchAgents") };
+}
+var run5 = (program, args, input) => spawnSync10(program, args, { input, encoding: "utf8", timeout: 30000, stdio: ["pipe", "pipe", "pipe"] });
+function crontab(tools) {
+  const listed = run5(tools.crontab, ["-l"]);
+  if (listed.error)
+    return null;
+  if (listed.status === 0)
+    return listed.stdout;
+  return /no crontab/i.test(listed.stderr ?? "") ? "" : null;
+}
+function starts() {
+  const tools = outside();
+  if (!tools)
+    return { launchAgent: false, crontab: false, checked: false };
+  const table = crontab(tools);
+  return {
+    launchAgent: process.platform === "darwin" && fs151.existsSync(path152.join(tools.agents, `${LAUNCH_AGENT}.plist`)),
+    crontab: table !== null && table.includes(REBOOT_TAG),
+    checked: true
+  };
+}
+function recorded(file, name) {
+  let text = "";
+  try {
+    text = fs151.readFileSync(path152.join(RUN, file), "utf8");
+  } catch {
+    return null;
+  }
+  let pid = Number(text.trim());
+  if (!Number.isInteger(pid))
+    try {
+      pid = JSON.parse(text)?.pid;
+    } catch {}
+  return processRuns(pid, name) ? pid : null;
+}
+function running4() {
+  const records = [
+    ["box.pid", "kuvo-start", "keeper"],
+    ["engine.json", path152.join(K, "engine"), "engine"],
+    ["agents.pid", "kuvo-agents", "coding agents"],
+    ["link.pid", "kuvo-link", "link"],
+    ["serve.json", "kuvo-link", "server"],
+    ["browser.pid", "kuvo-browser", "browser"]
+  ];
+  return records.filter(([file, name]) => recorded(file, name) !== null).map(([, , what]) => what);
+}
+function uninstallCheck() {
+  const link = readLink();
+  const wakes = allWakes().reduce((count, each) => count + each.wakes.length + each.watches.length, 0);
+  return {
+    folder: K,
+    kind: recordedKind() ?? "machine",
+    running: running4(),
+    starts: starts(),
+    bots: listBots().length,
+    wakes,
+    phones: (link?.phones ?? []).length,
+    computers: peersOf(link).length
+  };
+}
+function uninstall() {
+  const tools = outside();
+  let launchAgent = false;
+  let crontabLine = false;
+  if (tools && process.platform === "darwin") {
+    const plist = path152.join(tools.agents, `${LAUNCH_AGENT}.plist`);
+    if (fs151.existsSync(plist)) {
+      const uid = process.getuid?.() ?? 0;
+      run5(tools.launchctl, ["bootout", `gui/${uid}/${LAUNCH_AGENT}`]);
+      fs151.rmSync(plist, { force: true });
+      launchAgent = true;
+    }
+  }
+  if (tools) {
+    const table = crontab(tools);
+    if (table !== null && table.includes(REBOOT_TAG)) {
+      const kept = table.split(`
+`).filter((line) => !line.includes(REBOOT_TAG)).join(`
+`);
+      crontabLine = run5(tools.crontab, ["-"], kept.endsWith(`
+`) || !kept ? kept : `${kept}
+`).status === 0;
+    }
+  }
+  for (const file of ["serve.needed", "link.needed"])
+    fs151.rmSync(path152.join(RUN, file), { force: true });
+  const keeper = path152.join(K, "bin", "kuvo-start");
+  let stopped = true;
+  if (fs151.existsSync(keeper)) {
+    const off = spawnSync10("sh", [keeper, "off"], { cwd: K, encoding: "utf8", timeout: 120000, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, HOME: homeFolder() } });
+    stopped = off.status === 0;
+  } else {
+    fs151.mkdirSync(RUN, { recursive: true, mode: 448 });
+    fs151.writeFileSync(path152.join(RUN, "off"), "");
+  }
+  const told = [];
+  for (const [file, name] of [["serve.json", "kuvo-link"], ["browser.pid", "kuvo-browser"], ["link.pid", "kuvo-link"]]) {
+    const pid = recorded(file, name);
+    if (pid && pid !== process.pid)
+      try {
+        process.kill(pid, "SIGTERM");
+        told.push([pid, name]);
+      } catch {}
+  }
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  for (let waited = 0;waited < 200 && told.some(([pid, name]) => processRuns(pid, name)); waited++)
+    Atomics.wait(pause, 0, 0, 50);
+  const left = running4();
+  stopped &&= left.length === 0;
+  const where = K.startsWith(homeFolder() + "/") ? "~" + K.slice(homeFolder().length) : K;
+  const message = stopped ? `Kuvo Code is stopped on this computer and won't start again. Its folder stays, with your sessions and settings: remove ${where} to remove them too.` : `Kuvo Code won't start again on this computer, but ${left.length ? `its ${left.join(", ")} still ran` : "it couldn't stop everything"} just now. Run this again in a moment.`;
+  return { stopped, launchAgent, crontab: crontabLine, left: [K], message };
+}
+function uninstallCommand(args) {
+  const unknown = args.filter((arg) => arg !== "--check");
+  if (unknown.length) {
+    console.error("Usage: kuvo-link.js uninstall [--check]");
+    return 2;
+  }
+  if (APP_FOLDER) {
+    const message = "This Mac's box runs in Kuvo Code's own folder: remove Kuvo Code itself (its background work goes with it).";
+    console.log(JSON.stringify({ result: "refused", message }));
+    console.error(message);
+    return 1;
+  }
+  if (args.includes("--check")) {
+    console.log(JSON.stringify(uninstallCheck()));
+    return 0;
+  }
+  const done = uninstall();
+  console.log(JSON.stringify({ result: done.stopped ? "uninstalled" : "unfinished", ...done }));
+  console.error(done.message);
+  return done.stopped ? 0 : 1;
+}
+
 // Packages/Box/src/link/areas/group-settings.ts
 function rulesHere() {
   if (!ownsSettings())
@@ -46458,7 +46921,7 @@ function keepGroupSettings(bridge = bridgeTarget, every = (round) => {
   });
 }
 // Packages/Box/src/link/places.ts
-import path150 from "node:path";
+import path153 from "node:path";
 function boxPlaces() {
   return {
     layout: APP_FOLDER ? "app" : "own",
@@ -46474,11 +46937,11 @@ function boxPlaces() {
     updates: UPDATES,
     search: SEARCH,
     apps: APPS,
-    browser: path150.join(K, "browser"),
-    trash: path150.join(K, "trash"),
-    temporary: path150.join(K, "t"),
+    browser: path153.join(K, "browser"),
+    trash: path153.join(K, "trash"),
+    temporary: path153.join(K, "t"),
     engineData: ENGINE_DATA,
-    engineConfig: ENGINE_CONFIG ?? path150.join(K, "config"),
+    engineConfig: ENGINE_CONFIG ?? path153.join(K, "config"),
     settingsFile: CONFIG_FILE,
     engineLayerFile: ENGINE_LAYER_FILE,
     defaultsPlugin: DEFAULTS_PLUGIN,
@@ -46511,9 +46974,9 @@ onLinkWritten((link) => {
     return;
   }
   if (needed(link))
-    fs149.writeFileSync(NEEDED_FILE, "", { mode: 384 });
+    fs152.writeFileSync(NEEDED_FILE, "", { mode: 384 });
   else
-    fs149.rmSync(NEEDED_FILE, { force: true });
+    fs152.rmSync(NEEDED_FILE, { force: true });
 });
 function machineWelcomed(host) {
   announce(host, readEngineFile, undefined, undefined, true).catch(() => {});
@@ -46528,22 +46991,22 @@ function updateIsWell() {
       upgradeIntegrations().catch(() => {});
   } catch {}
 }
-async function run5() {
+async function run6() {
   let old = null;
   try {
-    old = Number(fs149.readFileSync(PID_FILE, "utf8"));
+    old = Number(fs152.readFileSync(PID_FILE, "utf8"));
     if (isBridge2(old))
       process.kill(old, "SIGTERM");
   } catch {}
-  fs149.mkdirSync(RUN, { recursive: true, mode: 448 });
+  fs152.mkdirSync(RUN, { recursive: true, mode: 448 });
   clearNotesLocks();
-  fs149.writeFileSync(PID_FILE, String(process.pid), { mode: 384 });
-  fs149.writeFileSync(VERSION_FILE, BRIDGE_VERSION, { mode: 384 });
+  fs152.writeFileSync(PID_FILE, String(process.pid), { mode: 384 });
+  fs152.writeFileSync(VERSION_FILE, BRIDGE_VERSION, { mode: 384 });
   const saved = savedLoginPath(K);
   if (saved)
-    process.env.PATH = joinPath(path151.join(K, "bin"), saved);
+    process.env.PATH = joinPath(path154.join(K, "bin"), saved);
   for (const folder of ["present", "connected"])
-    fs149.rmSync(path151.join(RUN, folder), { recursive: true, force: true });
+    fs152.rmSync(path154.join(RUN, folder), { recursive: true, force: true });
   try {
     keepJobs();
   } catch {}
@@ -46559,8 +47022,8 @@ async function run5() {
   });
   const cleanUp = () => {
     try {
-      if (fs149.readFileSync(PID_FILE, "utf8") === String(process.pid))
-        fs149.unlinkSync(PID_FILE);
+      if (fs152.readFileSync(PID_FILE, "utf8") === String(process.pid))
+        fs152.unlinkSync(PID_FILE);
     } catch {}
     process.exit(0);
   };
@@ -46571,7 +47034,7 @@ async function run5() {
   setInterval(() => {
     let owner = null;
     try {
-      owner = Number(fs149.readFileSync(PID_FILE, "utf8"));
+      owner = Number(fs152.readFileSync(PID_FILE, "utf8"));
     } catch {}
     const link = readLink();
     if (!needed(link)) {
@@ -46588,7 +47051,7 @@ async function run5() {
     await sleep(50);
   let held = [];
   try {
-    held = JSON.parse(fs149.readFileSync(HELD_FILE, "utf8"));
+    held = JSON.parse(fs152.readFileSync(HELD_FILE, "utf8"));
   } catch {}
   const hold = new NoticeHold({
     send: tellPhones,
@@ -46598,7 +47061,7 @@ async function run5() {
         if (entries.length)
           writePrivate(HELD_FILE, JSON.stringify(entries));
         else
-          fs149.rmSync(HELD_FILE, { force: true });
+          fs152.rmSync(HELD_FILE, { force: true });
       } catch {}
     }
   });
@@ -46668,7 +47131,7 @@ async function run5() {
     }, 50);
   };
   try {
-    fs149.mkdirSync(SENDING, { recursive: true, mode: 448 });
+    fs152.mkdirSync(SENDING, { recursive: true, mode: 448 });
   } catch {}
   let outboxWatch = watchFolders([SENDING], leftNow, { recursive: false });
   const forwardNow = () => {
@@ -46678,7 +47141,7 @@ async function run5() {
   };
   forwardsSoon.send = forwardNow;
   try {
-    fs149.mkdirSync(FORWARDS, { recursive: true, mode: 448 });
+    fs152.mkdirSync(FORWARDS, { recursive: true, mode: 448 });
   } catch {}
   let forwardsWatch = watchFolders([FORWARDS], forwardNow, { recursive: false });
   setInterval(() => {
@@ -46898,7 +47361,54 @@ function firstLine() {
 function keepBridgeAnswering() {
   new HangWatch({ name: "bridge", run: RUN, record: BRIDGE_FILE, isIt: isBridge }).start();
 }
+async function keptServe() {
+  const other = runningServe();
+  if (other && other.pid !== process.pid) {
+    console.error(`The box's server already runs (${other.pid}).`);
+    return;
+  }
+  if (!fs152.existsSync(SERVE_NEEDED())) {
+    console.error("No client wants the box's server here (run/serve.needed).");
+    return;
+  }
+  fs152.mkdirSync(RUN, { recursive: true, mode: 448 });
+  const password = crypto55.randomBytes(24).toString("hex");
+  const server = serveBox(password, engineHandler(readEngineFile, { name: os21.hostname() }, readBridgeFile));
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const port = server.address().port;
+  try {
+    socketKey();
+  } catch {}
+  const mine = () => {
+    try {
+      return JSON.parse(fs152.readFileSync(SERVE_FILE(), "utf8"))?.pid === process.pid;
+    } catch {
+      return false;
+    }
+  };
+  const leave = () => {
+    try {
+      if (mine())
+        fs152.rmSync(SERVE_FILE(), { force: true });
+    } catch {}
+    process.exit(0);
+  };
+  process.on("SIGTERM", leave);
+  process.on("SIGINT", leave);
+  writePrivate(SERVE_FILE(), JSON.stringify({ pid: process.pid, port, password, kept: true }));
+  console.log(JSON.stringify({ url: `http://127.0.0.1:${port}` }));
+  const every = !REAL_BOX && Number(process.env.KUVO_TEST_SERVE_EVERY) > 0 ? Number(process.env.KUVO_TEST_SERVE_EVERY) : 30000;
+  setInterval(() => {
+    if (!fs152.existsSync(SERVE_NEEDED()) || !mine())
+      leave();
+  }, every);
+}
 async function serve() {
+  if (process.argv.includes("--kept"))
+    return keptServe();
   let password = process.env.OPENCODE_PASSWORD;
   delete process.env.OPENCODE_PASSWORD;
   if (!password) {
@@ -46911,7 +47421,7 @@ async function serve() {
     console.error('serve answers only with a password: on its stdin, {"password"}, or in OPENCODE_PASSWORD.');
     process.exit(2);
   }
-  fs149.mkdirSync(RUN, { recursive: true, mode: 448 });
+  fs152.mkdirSync(RUN, { recursive: true, mode: 448 });
   clearNotesLocks();
   if (IS_MAC)
     addMacDefaults();
@@ -46970,7 +47480,7 @@ async function serve() {
     } catch {}
   try {
     if (APP_FOLDER)
-      writePrivate(path151.join(RUN, SERVED_FILE), JSON.stringify({ app: MAC_APP_VERSION, bridge: BRIDGE_VERSION, at: Date.now() }));
+      writePrivate(path154.join(RUN, SERVED_FILE), JSON.stringify({ app: MAC_APP_VERSION, bridge: BRIDGE_VERSION, at: Date.now() }));
     else
       clearKept(K);
   } catch {}
@@ -47064,7 +47574,7 @@ async function setup() {
   }
   let runningVersion = null;
   try {
-    runningVersion = fs149.readFileSync(VERSION_FILE, "utf8").trim();
+    runningVersion = fs152.readFileSync(VERSION_FILE, "utf8").trim();
   } catch {}
   const restart = old?.relay !== link.relay || old?.name !== link.name || runningVersion !== BRIDGE_VERSION;
   if (!isUpdating()) {
@@ -47153,11 +47663,11 @@ function selftest() {
   const ok = said.toString() === "hello" && payload.toString() === "welcome" && echoed.toString() === "ping" && mail.toString() === "mail" && responder.rs.equals(publicOf(phone)) && typeof WebSocket === "function" && typeof fetch === "function";
   return ok;
 }
-var main = process.argv[1] && fs149.realpathSync(process.argv[1]) === fs149.realpathSync(fileURLToPath3(import.meta.url));
+var main = process.argv[1] && fs152.realpathSync(process.argv[1]) === fs152.realpathSync(fileURLToPath3(import.meta.url));
 if (main) {
   const [mode, argument] = process.argv.slice(2);
   if (mode === "run")
-    await run5();
+    await run6();
   else if (mode === "setup")
     await setup();
   else if (mode === "pair")
@@ -47203,6 +47713,7 @@ if (main) {
       const pid = runningBridge();
       if (pid)
         process.kill(pid, "SIGTERM");
+      stopKeptServe();
       if (!needed(readLink())) {
         confirmUpdate();
         await upgradeIntegrations().catch(() => {});
@@ -47224,12 +47735,14 @@ if (main) {
     }
   } else if (mode === "rehome") {
     process.exitCode = await rehomeCommand(argument, process.argv.slice(4));
+  } else if (mode === "uninstall") {
+    process.exitCode = uninstallCommand(process.argv.slice(3));
   } else if (mode === "selftest") {
     const ok = selftest();
     console.log(ok ? "ok" : "failed");
     process.exit(ok ? 0 : 1);
   } else {
-    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | here <root> | rehome <root> | engine-config | login-path | update [--now] | browser install|start|status | selftest");
+    console.error("Usage: kuvo-link.js run | serve [--kept] | setup | pair [relay] | box <command> | leave <mac> | here <root> | rehome <root> | uninstall [--check] | engine-config | login-path | update [--now] | browser install|start|status | selftest");
     process.exit(2);
   }
 }

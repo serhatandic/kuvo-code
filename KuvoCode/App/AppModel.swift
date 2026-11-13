@@ -801,6 +801,8 @@ final class AppModel {
             usage.follow(here.catalog)
         }
         Task { await usage.sync() }
+        // Its browser's tools for this Mac's own box, there (only with `movesOwnBox` on).
+        Task { await registerWithOwnBox() }
         Analytics.shared.catalog = here.catalog
         if let started = attachStarted {
             Analytics.shared.trackOnce("engine_ready", ["seconds": Int((SuspendingClock.now - started.began).components.seconds),

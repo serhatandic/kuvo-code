@@ -334,6 +334,13 @@ final class HostInterface {
             let headers = (given["headers"] as? [String: Any])?.compactMapValues { $0 as? String } ?? [:]
             let phone = (given["phone"] as? String).flatMap { Data(base64URL: $0) }
             return await Self.answer(phoneLink.answerForBox(LinkRequest(method: method, path: path, headers: headers, body: body), phone: phone))
+        case "/app/open":
+            // Kuvo Code opened for its box's browser (#333 piece 3): the box decides when (one
+            // opening for every call waiting, its time, its rest), and only the act of opening is
+            // here, with what runs as the installed app (the keeper; the open app is open already).
+            guard let bundle = given["bundle"] as? String, bundle.hasPrefix("/") else { return .init(status: 400) }
+            if appAnswers { return .json([:]) }
+            return await Self.openApp(at: URL(filePath: bundle))
         case "/trash":
             // What the box let go of (a deleted bot's folder), from its own trash folder only, to
             // the Finder's Trash, where you look for what you deleted.
@@ -392,6 +399,26 @@ extension HostInterface {
             if let value = response.value(forHTTPHeaderField: name) { headers[name] = value }
         }
         return HTTPResponse(status: response.statusCode, headers: headers, stream: stream)
+    }
+
+    /// Kuvo Code at `bundle`, opened in the background as the keeper opens it for an agent's browser
+    /// (`AppOpener.openQuietly`: no window, out of the Dock, not taking focus; one running already
+    /// is left as it is). Only Kuvo Code itself, by its own bundle ID: never another app. 410 when
+    /// it isn't there any more, 502 with why it couldn't be opened.
+    static func openApp(at bundle: URL) async -> HTTPResponse {
+        func said(_ status: Int, _ message: String) -> HTTPResponse {
+            var answer = HTTPResponse.json(["message": message])
+            answer.status = status
+            return answer
+        }
+        guard FileManager.default.fileExists(atPath: bundle.path(percentEncoded: false)) else { return said(410, "It isn’t there any more.") }
+        guard let id = Bundle(url: bundle)?.bundleIdentifier, id == Bundle.main.bundleIdentifier else { return said(403, "That isn’t Kuvo Code.") }
+        do {
+            try await AppOpener.openQuietly(bundle)
+            return .json([:])
+        } catch {
+            return said(502, error.localizedDescription)
+        }
     }
 
     /// What only the open app answers, asked while it isn't.

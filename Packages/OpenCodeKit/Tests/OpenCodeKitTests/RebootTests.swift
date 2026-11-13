@@ -48,6 +48,9 @@ import Testing
               printf '{"learned":"%s","given":%s}' "$KUVO_HOME" "${OPENCODE_CONFIG_CONTENT:-null}"; exit 0 ;;
             *"kuvo-link.js browser")
               echo "$*" >>"$HOME/browser-setups"; exit 0 ;;
+            *"kuvo-link.js serve")
+              echo "$*" >>"$HOME/serves"; printf '{"pid":%s,"port":1,"password":"p","kept":true}\n' $$ >"$KUVO_HOME/run/serve.json"
+              while :; do /bin/sleep 1; done ;;
             *"kuvo-link.js login-path")
               [ -f "$KUVO_HOME/bin/.old-link" ] && { echo "Usage: kuvo-link.js run | serve" >&2; exit 2; }
               printf '%s' "$HOME/.nvm/bin:$PATH"; exit 0 ;;
@@ -418,6 +421,47 @@ import Testing
         let environment = try String(contentsOf: home.appending(path: "link.env"), encoding: .utf8)
         #expect(environment.contains("XDG_CACHE_HOME=\(root.path)/cache") && environment.contains("TMPDIR=\(root.path)/tmp"))
         #expect(environment.contains("LANG=tr_TR.UTF-8"), "as Kuvo Code last started it")
+    }
+
+    /// The box's server for clients (`serve --kept`, #333 piece 3), its process as `run/serve.json` names it.
+    private func serveProcess() -> Int? {
+        (try? String(contentsOf: run.appending(path: "serve.json"), encoding: .utf8))?.firstMatch(of: /"pid":(\d+)/).flatMap { Int($0.1) }
+    }
+
+    /// The box's server for clients, while one wants it (`run/serve.needed`): up, and up again should
+    /// it go, with or without a Mac; `off` stops it, and what wanted it goes with it.
+    @Test func theServerForClientsStaysUpWhileOneWantsIt() throws {
+        defer { cleanUp() }
+        try write(root.appending(path: "bin/kuvo-link.js"), "// the box\n")
+        try write(run.appending(path: "serve.needed"), "")
+        try start()
+        until { serveProcess().map(alive) ?? false }
+        let serve = try #require(serveProcess())
+        #expect(((try? String(contentsOf: home.appending(path: "serves"), encoding: .utf8)) ?? "").contains("kuvo-link.js serve --kept"))
+        kill(pid_t(serve), SIGKILL)
+        until { serveProcess().map { $0 != serve && alive($0) } ?? false }
+        let again = try #require(serveProcess())
+        #expect(again != serve && alive(again))
+        #expect(try start("off") == 0)
+        until { !alive(again) }
+        #expect(!alive(again))
+        #expect(!FileManager.default.fileExists(atPath: run.appending(path: "serve.needed").path))
+    }
+
+    /// Nobody wanting it, or a Mac's own box (whose server Kuvo Code runs itself): none is started.
+    @Test(arguments: [false, true]) func noServerForClientsUnlessOneWantsItOnABoxOfItsOwn(_ macs: Bool) throws {
+        defer { cleanUp() }
+        try write(root.appending(path: "bin/kuvo-link.js"), "// the box\n")
+        if macs {
+            try FileManager.default.createDirectory(at: root.appending(path: "box"), withIntermediateDirectories: true)
+            try write(root.appending(path: "box/kind"), "mac\n")
+            try write(run.appending(path: "serve.needed"), "")
+        }
+        try start()
+        // A few of its rounds (each wake-up round is four).
+        until { rounds() >= 2 }
+        #expect(rounds() >= 2)
+        #expect(!FileManager.default.fileExists(atPath: home.appending(path: "serves").path))
     }
 
     /// The browser agents use there: the box sets it up itself as its keeper starts (a newer Kuvo
