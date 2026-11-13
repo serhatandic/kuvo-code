@@ -2578,6 +2578,11 @@ function composeMessage(fields, naming, kept = {}, phone = false) {
 ${FROM_PHONE}`;
   return text;
 }
+function composeArguments(words, notes = {}, kept = {}) {
+  const text = ATTACHED_BLOCK.escaping(words);
+  const lines = [...noteLines(notes), ...noteLines(kept)];
+  return lines.length ? ending(text, [ATTACHED_BLOCK.start, ...lines, ATTACHED_BLOCK.end]) : text;
+}
 var noteLines = (note) => [
   ...note.included?.length ? [ATTACHED_HEADINGS[0], ...note.included] : [],
   ...note.paths?.length ? [ATTACHED_HEADINGS[1], ...note.paths] : [],
@@ -40105,7 +40110,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "22ff223ddf97";
+var BRIDGE_VERSION = "dcbb45710a11";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -45173,8 +45178,10 @@ async function composed(fields, files, session, target, toAgents, request, readE
   const base = new URL(`http://127.0.0.1:${target.port}/`);
   const headers = { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` };
   const kept = await keptFiles(files, session, modelInput(base, headers, signal), toAgents);
+  if (command)
+    return { text: composeArguments(fields.words, fields.notes, kept ?? {}), files: kept?.files ?? files, metadata: {} };
   const everyone = fields.words.includes("&") ? await everyoneFor(fields.words, readEngine) : listedAgents();
-  const phone = !command && request.fromMac !== true && request.fromApp !== true;
+  const phone = request.fromMac !== true && request.fromApp !== true;
   const text = composeMessage(fields, { excluding: session, here: everyone.machine, agents: everyone.agents }, kept ?? {}, phone);
   return { text, files: kept?.files ?? files, metadata: withParts(metadata, partsOf(text)) };
 }
@@ -45190,8 +45197,8 @@ async function* sendRoute(context, match) {
   if (!session)
     return yield* json(404, { message: "There's no such conversation here." });
   const given = parsed(request.body);
-  const again = isObject(given) && typeof given.words !== "string" && typeof given.text === "string" ? given.text : null;
-  const fields = isObject(given) ? fieldsOf(given) : null;
+  const again = isObject(given) && typeof given.text === "string" ? given.text : null;
+  const fields = isObject(given) && again === null ? fieldsOf(given) : null;
   if (!isObject(given) || !fields && again === null)
     return yield* json(400, { message: "Send what was written (words)." });
   const files = Array.isArray(given.files) ? given.files : [];

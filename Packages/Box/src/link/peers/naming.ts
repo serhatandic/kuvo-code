@@ -186,6 +186,7 @@ export function agentsNamed(texts: string[], excluding: Set<string>, agents: Nam
   return named;
 }
 
+// COMPAT(0.7 own-envelope): a phone's prompt that wrote its blocks itself (messages/parts.ts writes them now). Goes 3 months after 0.8.0.
 // A message from a phone with the block naming its agents among the others at its end: after its
 // words, before its comments on the changes and its note of attached files (and without the block
 // that says it's from the phone, which goes on again after). One sent again (Retry, Edit) with the

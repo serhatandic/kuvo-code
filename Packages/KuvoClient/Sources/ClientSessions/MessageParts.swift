@@ -111,8 +111,9 @@ public struct MessageParts: Codable, Hashable, Sendable {
             return Agent(name: name, session: session)
         }
         let comments = list(parts["comments"]).compactMap { each -> Comment? in
-            guard let file = string(each["file"]), case .number(let line)? = each["line"], let snippet = string(each["snippet"]), let text = string(each["text"]) else { return nil }
-            return Comment(file: file, line: Int(line), side: string(each["side"]) == "old" ? .old : .new, snippet: snippet, text: text)
+            guard let file = string(each["file"]), case .number(let number)? = each["line"], let line = Int(exactly: number),
+                  let snippet = string(each["snippet"]), let text = string(each["text"]) else { return nil }
+            return Comment(file: file, line: line, side: string(each["side"]) == "old" ? .old : .new, snippet: snippet, text: text)
         }
         let phone: Bool = if case .bool(true)? = parts["phone"] { true } else { false }
         return MessageParts(words: words, keyword: string(parts["keyword"]), widget: string(parts["widget"]), comments: comments,
@@ -148,6 +149,14 @@ public struct MessageParts: Codable, Hashable, Sendable {
     /// text under the same id isn't it).
     public static func known(_ id: String, text: String) -> MessageParts? {
         lock.withLock { read[id].flatMap { $0.text == text ? $0.parts : nil } }
+    }
+
+    /// Those waiting in the engine's queue (its inbox) whose parts are still to be read, as `unread`.
+    public static func unread(waiting items: [InboxItem]) -> [(id: String, text: String)] {
+        unread(items.compactMap { item in
+            guard item.type == "user", let text = item.text, BoxNote.of(text: text, metadata: item.payload["metadata"]) == nil else { return nil }
+            return (item.id, text, item.payload["metadata"])
+        })
     }
 
     /// The ones of `messages` (by id, with their text and metadata) whose parts are still to be read
@@ -239,6 +248,9 @@ public struct MessageParts: Codable, Hashable, Sendable {
         public var command: String?
         /// `queue/add`'s: how it's shown is its words; ahead of `before` (Undo's).
         public var before: String?
+        /// One sent before, sent again as the agent read it (another agent's letter put back):
+        /// its text goes as it is, and `words` is how it's shown.
+        public var text: String?
 
         public init(id: String? = nil, words: String, files: [OpenCodeAPI.PromptFile] = [], delivery: InboxItem.Delivery? = nil, keyword: String? = nil, widget: String? = nil,
                     comments: [Comment] = [], named: [String] = [], notes: Notes = Notes(), command: String? = nil, before: String? = nil) {

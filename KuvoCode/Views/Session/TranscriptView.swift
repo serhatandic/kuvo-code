@@ -293,7 +293,7 @@ struct TranscriptView: View {
                  whole: \.copiesWhole,
                  space: { row, index in index == 0 ? 0 : row.spacing(after: rows[index - 1]) },
                  pointer: { [hover] in hover.point(at: $0) }) { row, index in
-            RowView(row: row, scope: model.session.id, directory: model.session.location.directory, folders: model.folders, heard: model.heard, cancel: model.cancelPending, undo: model.undo(from:), redo: model.redo, fork: fork(_:), retry: model.retry(_:), switchModel: switchModel, buildPlan: model.agent == "plan" && !isOffline ? { model.buildPlan() } as () -> Void : nil, reply: model.reply(to:))
+            RowView(row: row, partsRead: model.partsRead, scope: model.session.id, directory: model.session.location.directory, folders: model.folders, heard: model.heard, cancel: model.cancelPending, undo: model.undo(from:), redo: model.redo, fork: fork(_:), retry: model.retry(_:), switchModel: switchModel, buildPlan: model.agent == "plan" && !isOffline ? { model.buildPlan() } as () -> Void : nil, reply: model.reply(to:))
                 .equatable()
                 .environment(\.findHighlight, find.highlight(for: row.id))
                 .padding(.top, index == 0 ? 0 : row.spacing(after: rows[index - 1]))
@@ -305,7 +305,7 @@ struct TranscriptView: View {
     /// The rows, in the lazy stack (KUVO_PERF_LAZY).
     @ViewBuilder private func stackRows(_ rows: [Row]) -> some View {
         ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-            RowView(row: row, scope: model.session.id, directory: model.session.location.directory, folders: model.folders, heard: model.heard, cancel: model.cancelPending, undo: model.undo(from:), redo: model.redo, fork: fork(_:), retry: model.retry(_:), switchModel: switchModel, buildPlan: model.agent == "plan" && !isOffline ? { model.buildPlan() } as () -> Void : nil, reply: model.reply(to:))
+            RowView(row: row, partsRead: model.partsRead, scope: model.session.id, directory: model.session.location.directory, folders: model.folders, heard: model.heard, cancel: model.cancelPending, undo: model.undo(from:), redo: model.redo, fork: fork(_:), retry: model.retry(_:), switchModel: switchModel, buildPlan: model.agent == "plan" && !isOffline ? { model.buildPlan() } as () -> Void : nil, reply: model.reply(to:))
                 .equatable()
                 .environment(\.findHighlight, find.highlight(for: row.id))
                 .conversationRow(row.id)
@@ -872,10 +872,12 @@ enum Row: Identifiable, Hashable {
 /// change to one row (the reply being written) draws only that row, not every one made so far.
 private struct RowView: View, Equatable {
     static func == (lhs: RowView, rhs: RowView) -> Bool {
-        lhs.row == rhs.row && lhs.directory == rhs.directory && (lhs.buildPlan == nil) == (rhs.buildPlan == nil)
+        lhs.row == rhs.row && lhs.partsRead == rhs.partsRead && lhs.directory == rhs.directory && (lhs.buildPlan == nil) == (rhs.buildPlan == nil)
     }
 
     let row: Row
+    /// Drawn again once parts read late come in (`SessionModel.partsRead`).
+    var partsRead = 0
     @Environment(\.bot) private var bot
     /// The conversation it's in, which what you open in it is kept under.
     let scope: String

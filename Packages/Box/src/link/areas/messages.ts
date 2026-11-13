@@ -7,7 +7,7 @@ import { MOVING } from "../bots/here";
 import { messageID } from "../engine/sessions";
 import { isRefused, placeOfSessionPatiently } from "../letters/letter";
 import { targetsOf } from "../letters/tools";
-import { composeMessage, fieldsOf, partsOf, withParts } from "../messages/parts";
+import { composeArguments, composeMessage, fieldsOf, partsOf, withParts } from "../messages/parts";
 import type { MessageFields } from "../messages/parts";
 import { frozen } from "../moves/records";
 import { keptFiles } from "../server/attached";
@@ -35,15 +35,17 @@ export interface Composed {
 
 /** `fields` (with the `files` it carries, as the engine takes them) as the message the conversation
  * `session` at `target` gets: its files kept here as `attachedIn` keeps them, and its text written
- * for the agent (`composeMessage`), from a phone unless `request` is a Kuvo Code app's (a command's
- * arguments never say so, as a phone's prompt passed on before didn't). */
+ * for the agent (`composeMessage`), from a phone unless `request` is a Kuvo Code app's; a
+ * `command`'s arguments as written with only its files' note (`composeArguments`). */
 export async function composed(fields: MessageFields, files: unknown[], session: string, target: Target, toAgents: boolean, request: LinkRequest, readEngine: () => Target, signal?: AbortSignal, metadata?: unknown, command = false): Promise<Composed> {
   const base = new URL(`http://127.0.0.1:${target.port}/`);
   const headers = { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` };
   const kept = await keptFiles(files, session, modelInput(base, headers, signal), toAgents);
+  // A command's arguments: as written, with its files' note alone.
+  if (command) return { text: composeArguments(fields.words, fields.notes, kept ?? {}), files: (kept?.files ?? files) as PromptFile[], metadata: {} };
   // (Everyone worked out again only for a message that names someone.)
   const everyone = fields.words.includes("&") ? await everyoneFor(fields.words, readEngine) : listedAgents();
-  const phone = !command && request.fromMac !== true && request.fromApp !== true;
+  const phone = request.fromMac !== true && request.fromApp !== true;
   const text = composeMessage(fields, { excluding: session, here: everyone.machine, agents: everyone.agents }, kept ?? {}, phone);
   return { text, files: (kept?.files ?? files) as PromptFile[], metadata: withParts(metadata, partsOf(text)) };
 }
@@ -66,8 +68,8 @@ export async function* sendRoute(context: RouteContext, match: RegExpMatchArray)
   try { session = decodeURIComponent(match[1]!); } catch {}
   if (!session) return yield* json(404, { message: "There's no such conversation here." });
   const given = parsed(request.body);
-  const again = isObject(given) && typeof given.words !== "string" && typeof given.text === "string" ? given.text : null;
-  const fields = isObject(given) ? fieldsOf(given) : null;
+  const again = isObject(given) && typeof given.text === "string" ? given.text : null;
+  const fields = isObject(given) && again === null ? fieldsOf(given) : null;
   if (!isObject(given) || (!fields && again === null)) return yield* json(400, { message: "Send what was written (words)." });
   const files = Array.isArray(given.files) ? given.files : [];
   const command = fields && typeof given.command === "string" && given.command.trim() ? given.command.trim() : null;

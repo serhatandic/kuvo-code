@@ -148,10 +148,12 @@ enum SentMessage {
     /// The parts of those of `messages` from before, which keep none, read by `box` (their
     /// conversation's): before they show, so none shows the blocks written for the agent. One its
     /// box can't read shows as it was written.
-    @MainActor static func read(_ messages: [Message], from box: BoxClient?) async {
-        let unread = MessageParts.unread(in: messages) { CommandMessages.shared[$0] != nil }
+    /// `waiting`: those in the engine's queue too. At most a few seconds: a box slow to answer leaves
+    /// the rest to show as written meanwhile, to be read again later.
+    @MainActor static func read(_ messages: [Message], waiting: [InboxItem] = [], from box: BoxClient?) async {
+        let unread = MessageParts.unread(in: messages) { CommandMessages.shared[$0] != nil } + MessageParts.unread(waiting: waiting)
         guard !unread.isEmpty, let box else { return }
-        await MessageParts.read(unread) { body in try await box.send("POST", MessageParts.partsRoute, body: body) }
+        _ = await AgentMail.within(3) { await MessageParts.read(unread) { body in try await box.send("POST", MessageParts.partsRoute, body: body) } }
     }
 }
 

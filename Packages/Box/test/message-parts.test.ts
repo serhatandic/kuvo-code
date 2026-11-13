@@ -186,9 +186,12 @@ describe("kuvo/sessions/<id>/send", () => {
     expect(ran.body.text).toBe("the tests\n\n<attached-files>\nOpen these attached files with your tools if you need them:\n/x/y.txt\n</attached-files>")
   })
 
-  test("a phone's command runs with its arguments alone, as its prompt passed on before did", async () => {
-    await send("ses_main", { words: "main", command: "review-quick" }, "phone")
-    expect(prompted(engineAsked)[0].body.text).toBe("main")
+  test("a command's arguments go as written, naming no one and saying nothing of a phone: only its files' note follows", async () => {
+    await send("ses_main", { words: " ask &Mira about it ", command: "review-quick" }, "phone")
+    await send("ses_main", { words: " main ", command: "review-quick", notes: { paths: ["/x/y.txt"] } })
+    const [phone, withFiles] = prompted(engineAsked)
+    expect(phone.body.text).toBe(" ask &Mira about it ")
+    expect(withFiles.body.text).toBe(" main \n\n<attached-files>\nOpen these attached files with your tools if you need them:\n/x/y.txt\n</attached-files>")
   })
 
   test("a command with nothing after its name runs", async () => {

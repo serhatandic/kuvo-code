@@ -116,6 +116,14 @@ export function composeMessage(fields: MessageFields, naming: Naming, kept: File
   return text;
 }
 
+/** A command's arguments as the engine's command gets them: as written, with only the note of its
+ * files after them (the client's lines, then `kept`), as Kuvo Code wrote it before. */
+export function composeArguments(words: string, notes: FilesNote = {}, kept: FilesNote = {}): string {
+  const text = ATTACHED_BLOCK.escaping(words);
+  const lines = [...noteLines(notes), ...noteLines(kept)];
+  return lines.length ? ending(text, [ATTACHED_BLOCK.start, ...lines, ATTACHED_BLOCK.end]) : text;
+}
+
 const noteLines = (note: FilesNote): string[] => [
   ...(note.included?.length ? [ATTACHED_HEADINGS[0], ...note.included] : []),
   ...(note.paths?.length ? [ATTACHED_HEADINGS[1], ...note.paths] : []),

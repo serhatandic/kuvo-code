@@ -30,6 +30,7 @@ export const AGENTS = "kuvo/agents/";
 // iPhone, where a file is shown with show_file. Never shown.
 export { FROM_PHONE };
 
+// COMPAT(0.7 own-envelope): a prompt a client wrote the blocks of itself: its parts kept, a phone's named and marked. Goes 3 months after 0.8.0.
 // A prompt's body with the parts of its text kept with it (`metadata.kuvo.parts`, `withPartsOf`),
 // for clients to draw it by: one a client wrote the blocks of itself, the way before
 // `kuvo/sessions/<id>/send`.

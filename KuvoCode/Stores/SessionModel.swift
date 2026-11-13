@@ -723,9 +723,13 @@ final class SessionModel {
         partsAsked.formUnion(unread.map(\.id))
         Task {
             guard await MessageParts.read(unread, ask: { body in try await box.send("POST", MessageParts.partsRoute, body: body) }) else { return }
-            editTranscript { _ in }
+            // Its rows drawn again, with what was read.
+            partsRead += 1
         }
     }
+
+    /// How many reads of parts came in after their messages showed: rows drawn again each time.
+    private(set) var partsRead = 0
     @ObservationIgnored private var partsAsked: Set<String> = []
 
     /// The code in replies read, colored ahead of time, so it shows colored as it's scrolled to
@@ -781,7 +785,7 @@ final class SessionModel {
             // the second, rather than in neither.
             let waiting = (try? await inbox) ?? []
             let page = try await api.messages(session: id, limit: Self.pageSize)
-            await SentMessage.read(page.data, from: box())
+            await SentMessage.read(page.data, waiting: waiting, from: box())
             // Nothing, where its copy has a conversation: an engine just started (a new version
             // setting itself up) can answer that for a moment. The copy stays; read again soon.
             if page.data.isEmpty, isCopy, !transcript.messages.isEmpty, emptyReads < 4 {
@@ -1073,7 +1077,9 @@ final class SessionModel {
         }
         let parts = SentMessage.parts(item)
         if paused { isQueuePaused = true }
-        let message = MessageParts.Sending(words: parts.words, keyword: parts.keyword, widget: parts.widget, comments: parts.comments, named: parts.agents.map(\.session))
+        var message = MessageParts.Sending(words: parts.words, keyword: parts.keyword, widget: parts.widget, comments: parts.comments, named: parts.agents.map(\.session))
+        // Another agent's letter goes back as the agent read it, still theirs.
+        if parts.mail != nil { message.text = item.text }
         post(message, files: Attachments.restored(item.files + Attachments.writeCarried(item.inlineFiles), noting: parts.paths), for: model, queue: true, holds: paused, before: paused ? before : nil,
              written: parts.words, comments: parts.reviewComments)
     }

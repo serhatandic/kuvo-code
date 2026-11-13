@@ -124,6 +124,7 @@ async function* add({ request, bridge, readEngine, json, signal }: RouteContext,
     const id = typeof given.id === "string" && /^msg_[A-Za-z0-9]{1,80}$/.test(given.id) ? given.id : messageID();
     return yield* added({ json }, target, session, given, { id, text: message.text, files: message.files, metadata: message.metadata }, fields.words);
   }
+  // COMPAT(0.7 own-envelope): one a client wrote the blocks of itself (`text`); `kept` (Undo) stays. Goes 3 months after 0.8.0.
   if (!isObject(given) || typeof given.text !== "string" || (!given.text.trim() && !(Array.isArray(given.files) && given.files.length))) return yield* json(400, { message: "Send {\"text\": …}." });
   const id = typeof given.id === "string" && /^msg_[A-Za-z0-9]{1,80}$/.test(given.id) ? given.id : messageID();
   const delivery = given.delivery === "steer" ? "steer" : "queue";

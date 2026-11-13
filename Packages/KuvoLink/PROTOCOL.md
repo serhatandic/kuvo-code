@@ -5189,9 +5189,9 @@ the box sends keeps its parts, which clients draw it by. No client writes or rea
   widget it answers (`""` for none), `comments` `[{file, line, side: "new"|"old", snippet, text}]`,
   `named` the sessions picked from the "&" list (of two agents with one name, these), `notes`
   `{included?, paths?, unsent?}` (files the client sent with their contents, by path, or couldn't
-  send). With `command`, that command runs with `words` as its arguments (only the files' note goes
-  with them). `{id, text, files?, delivery?}` sends one sent before again as the agent read it
-  (Retry). It goes to the engine or the coding agents' bridge, wherever the session is, once per
+  send). With `command`, that command runs with `words` as its arguments, as written, and only the
+  files' note after them. `{id, text, files?, delivery?}` sends one sent before again as the agent
+  read it (Retry; another agent's letter put back), `words` then only how it's shown. It goes to the engine or the coding agents' bridge, wherever the session is, once per
   `id` (`sentOnce`), and answers as they do; `400` nothing to send, `404` no such session, `409`
   moving, `503` not running. `queue/add` takes the same fields (without `text`).
 - **What the agent reads,** in this order (the words Kuvo Code wrote before, byte for byte): the
@@ -5203,14 +5203,16 @@ the box sends keeps its parts, which clients draw it by. No client writes or rea
   `[<file>:<line> (removed)]`, `> <the line>`, what was said), the files' note (`<attached-files>`,
   the client's `notes` then what the box keeps, each list under its heading), and from a phone
   (a request that isn't a Kuvo Code app's) `<from-phone>`. An `&` in a keyword or a title is written
-  `＆`; words ending like a block get a space after its tag, so they stay words.
+  `＆`; words ending like the named, comments' or files' block get a space after its tag, so they
+  stay words.
 - **Parts:** kept in the engine message's (and inbox item's) `metadata.kuvo.parts`: `{words,
   keyword?, widget?, comments?, paths?, agents?: [{name, session}], phone?: true, mail?: {name,
   session}}` (`paths`: files its note names that it doesn't carry; `mail`: another agent wrote it,
-  `"[Message from <name> · <session>] (…)"`, and `words` is what they wrote). Every message a box
-  sends that isn't its own note keeps them: those sent here, `queue/add`'s, a prompt passed on the
-  way before (`api/session/<id>/prompt`), letters between agents, a started session's task, a bot's
-  /goal.
+  `"[Message from <name> · <session>] (…)"`, and `words` is what they wrote). Those sent here and
+  `queue/add`'s with fields keep them, as do a started session's task and a bot's /goal; a letter
+  between agents, a prompt passed on the way before (`api/session/<id>/prompt`) and anything else
+  the box sends keep them where there's more to them than the text. The box's own notes keep none
+  (`kuvo.note`), nor does a plain message, which a client asks about once.
 - **Messages from before** keep no parts: `POST kuvo/messages/parts {texts}` (at most 500) answers
   `{parts}`, one for each, read from the text as the apps read it before (every block, a /goal
   sent as `[Goal] …`, a file listed with ` (on the user's Mac: …)`, the named block's earlier
@@ -7987,6 +7989,12 @@ before connects (the box notes one: `run/attached`).
   to the copy. Marking a box, a Mac puts its `kuvo-npx` there only with its own engine version
   there, which it runs.
   <!-- compat: 0.7 files -->
+- **Messages it writes itself**: such a Mac, and every Mac and phone from before `messages.send`,
+  writes a message's blocks itself and sends its text (`api/session/<id>/prompt`, `queue/add` with
+  `text`): the box still tells who a phone's names with "&", adds the phone's block and the files'
+  note for files it carries, and keeps the parts where there's more to them than the text ("A
+  message's parts").
+  <!-- compat: 0.7 own-envelope -->
 - **Its keeper**: such a Mac's `kuvo-start` only starts the engine after a restart, and its
   `kuvo-launch` knows neither Stop nor the box's settings. The keeper keeps a copy of both
   (`bin/.kuvo-start-keeper`, `bin/.kuvo-launch-keeper`), runs its starts from them, and puts them
