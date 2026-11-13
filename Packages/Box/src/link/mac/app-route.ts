@@ -1,20 +1,23 @@
 // What a phone asks of the Mac's own routes, passed to the app through its host (`link/route`).
 
 import { EMPTY } from "../crypto/keys";
-import { appHost, forgetHostProof, proveHost } from "../host-interface";
+import { forgetHostProof, openAppHost, proveHost } from "../host-interface";
 import type { AnswerPiece, Asker, LinkRequest } from "../server/context";
 
 /** The app's own answer to `request`, as it comes; null when the app isn't there to answer (gone,
  * starting again, closed with the keeper left to say so, or an older one): only an answer of its own
  * says it's its own (`x-kuvo-answer`), whatever its status. */
 export async function appAnswer(request: LinkRequest, phone: Asker | undefined, signal?: AbortSignal): Promise<Response | null> {
-  const host = appHost();
+  // (A Mac's box in a home of its own: the open app's own host, as it registered, `openAppHost`.)
+  const host = openAppHost();
   if (!host) return null;
   let response: Response;
   try {
     // Nothing goes until it's proved it's this Mac's app: once for each host.json, which is
     // enough because this box (`serve`) ends with its app (its stdin closes), so no other
-    // process can take the app's port while this box still trusts it, without the file changing.
+    // process can take the app's port while this box still trusts it, without the file changing;
+    // for each request where it's the open app's own host (a Mac's box in a home of its own,
+    // which outlives the app: `proveHost`).
     await proveHost(host, signal);
     response = await fetch(`${host.url}/link/route`, {
       method: "POST",

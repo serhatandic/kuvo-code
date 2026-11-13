@@ -81,6 +81,20 @@ test("the box's server for clients runs while one wants it, says where in serve.
   assert.equal((await info.json()).kind, "machine");
   assert.equal((await fetch(`${url}/kuvo/info`)).status, 401);
   assert.deepEqual(route(where, "GET", "kuvo/box/serve").body, { needed: true, serving: true });
+  // Kuvo Code on this computer, attached to this box in place, reaches it there as `box route`
+  // reaches it (`x-kuvo-from: mac`, `box.serve.mac`): what only Kuvo Code asks it takes; what only
+  // its own Mac's app does (its link) it still refuses, as it refuses `box route`. Without saying
+  // so, it's a client like any other.
+  const asKuvoCode = (method, routePath, from, sent) => fetch(`${url}/${routePath}`, {
+    method,
+    headers: { authorization: "Basic " + Buffer.from(`opencode:${record.password}`).toString("base64"), "content-type": "application/json", ...(from ? { "x-kuvo-from": from } : {}) },
+    ...(sent === undefined ? {} : { body: JSON.stringify(sent) }),
+  });
+  assert.ok((await (await asKuvoCode("GET", "kuvo/info")).json()).features.includes("box.serve.mac"));
+  assert.equal((await asKuvoCode("POST", "kuvo/box/serve", "mac", { needed: true })).status, 200);
+  assert.equal((await asKuvoCode("POST", "kuvo/box/serve", null, { needed: true })).status, 403);
+  assert.equal(route(where, "PUT", "kuvo/link/config", { phones: true }).status, 403);
+  for (const from of ["mac", "app"]) assert.equal((await asKuvoCode("PUT", "kuvo/link/config", from, { phones: true })).status, 403, from);
   // One at a time: a second leaves it be.
   const second = keptServe(where);
   assert.equal(await second.began, null);

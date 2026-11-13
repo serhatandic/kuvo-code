@@ -21,7 +21,8 @@ import { authorizePhone, confirmPhone } from "../phones";
 import { connectOnce, nextTry } from "../relay/connection";
 import { LinkHost } from "../relay/host";
 import { engineHandler } from "../server/router";
-import { RUN } from "../home";
+import { OWN_HOME_MAC, RUN } from "../home";
+import { openAppHost } from "../host-interface";
 import { macLink, readLink } from "../state";
 import { appAnswer, passedOn } from "./app-route";
 import { macKeys, macLinkCheck, macLinkWait, macNeeded, savedMacConfig, setLinkStatus, tellUntold } from "./link";
@@ -63,6 +64,8 @@ export function keeperRuns(): boolean {
 }
 
 const APP_NOT_ANSWERING = "Kuvo Code on this Mac isn't answering. Try again in a moment.";
+/** A Mac's box in a home of its own, its app closed (it said so, or never registered): as its helper says it. */
+const APP_CLOSED = "Kuvo Code isn't open on this Mac.";
 
 // What a phone asks of the Mac's own routes, answered by the app (`link/route`), as it comes; 503,
 // at once, when the app isn't answering, and a stream that ends when the app goes.
@@ -70,7 +73,7 @@ async function* toApp(request: LinkRequest, phone: Asker | undefined, signal?: A
   const response = await appAnswer(request, phone, signal);
   if (response) return yield* passedOn(response, signal);
   yield { head: { status: 503, headers: { "content-type": "application/json" } } };
-  yield { body: Buffer.from(JSON.stringify({ message: APP_NOT_ANSWERING })) };
+  yield { body: Buffer.from(JSON.stringify({ message: OWN_HOME_MAC && !openAppHost() ? APP_CLOSED : APP_NOT_ANSWERING })) };
 }
 
 // A phone's request on this Mac: the app's own areas from the app (its machines answered here too
