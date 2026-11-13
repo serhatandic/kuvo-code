@@ -1,0 +1,1752 @@
+{
+ "about": "What a typed message says, as every client and the box read it (PROTOCOL.md, \"What a typed message means\"): the keyword it starts with, /goal's, /loop's and /review's words, a \"!\" command, \"/name arguments\" for one of the engine's commands, when a /loop's wake-up is first due, and what the box decides a whole text means (`decide`). The box's test/typed.test.ts and KuvoClient's TypedVectorsTests hold both to these.",
+ "keywords": [
+  {
+   "text": "/goal all tests pass",
+   "parsed": {
+    "keyword": "goal",
+    "rest": "all tests pass"
+   }
+  },
+  {
+   "text": "/loop every 30 min check",
+   "parsed": {
+    "keyword": "loop",
+    "rest": "every 30 min check"
+   }
+  },
+  {
+   "text": "  /PLAN  sketch it  ",
+   "parsed": {
+    "keyword": "plan",
+    "rest": "sketch it"
+   }
+  },
+  {
+   "text": "/btw why?",
+   "parsed": {
+    "keyword": "btw",
+    "rest": "why?"
+   }
+  },
+  {
+   "text": "/plans",
+   "parsed": null
+  },
+  {
+   "text": "/review",
+   "parsed": {
+    "keyword": "review",
+    "rest": ""
+   }
+  },
+  {
+   "text": "hello /plan",
+   "parsed": null
+  },
+  {
+   "text": "/",
+   "parsed": null
+  },
+  {
+   "text": "/compact",
+   "parsed": {
+    "keyword": "compact",
+    "rest": ""
+   }
+  },
+  {
+   "text": "/handoff\nnext step",
+   "parsed": {
+    "keyword": "handoff",
+    "rest": "next step"
+   }
+  },
+  {
+   "text": "/autopilot",
+   "parsed": {
+    "keyword": "autopilot",
+    "rest": ""
+   }
+  }
+ ],
+ "goals": [
+  {
+   "text": "/goal",
+   "goal": {
+    "kind": "show"
+   }
+  },
+  {
+   "text": "/goal   ",
+   "goal": {
+    "kind": "show"
+   }
+  },
+  {
+   "text": "/goal pause",
+   "goal": {
+    "kind": "pause"
+   }
+  },
+  {
+   "text": "/goal RESUME",
+   "goal": {
+    "kind": "resume"
+   }
+  },
+  {
+   "text": "/goal stop",
+   "goal": {
+    "kind": "clear"
+   }
+  },
+  {
+   "text": "/goal cancel",
+   "goal": {
+    "kind": "clear"
+   }
+  },
+  {
+   "text": "/goal all tests pass",
+   "goal": {
+    "kind": "set",
+    "words": "all tests pass"
+   }
+  },
+  {
+   "text": "/goals done",
+   "goal": null
+  },
+  {
+   "text": "/GOAL Ship it",
+   "goal": {
+    "kind": "set",
+    "words": "Ship it"
+   }
+  },
+  {
+   "text": "  /goal  clear  ",
+   "goal": {
+    "kind": "clear"
+   }
+  },
+  {
+   "text": "/goal\tthe docs build",
+   "goal": {
+    "kind": "set",
+    "words": "the docs build"
+   }
+  }
+ ],
+ "loops": [
+  {
+   "rest": "every 30 min check the build",
+   "schedule": {
+    "every": "30m"
+   },
+   "message": "check the build",
+   "scheduleLength": 12,
+   "scheduleText": "every 30 min"
+  },
+  {
+   "rest": "30m check",
+   "schedule": {
+    "every": "30m"
+   },
+   "message": "check",
+   "scheduleLength": 3,
+   "scheduleText": "30m"
+  },
+  {
+   "rest": "every hour sum it up",
+   "schedule": {
+    "every": "1h"
+   },
+   "message": "sum it up",
+   "scheduleLength": 10,
+   "scheduleText": "every hour"
+  },
+  {
+   "rest": "hourly",
+   "schedule": {
+    "every": "1h"
+   },
+   "message": "",
+   "scheduleLength": 6,
+   "scheduleText": "hourly"
+  },
+  {
+   "rest": "every morning at 9 sum up the new issues",
+   "schedule": {
+    "every": "1d",
+    "hour": 9,
+    "minute": 0
+   },
+   "message": "sum up the new issues",
+   "scheduleLength": 18,
+   "scheduleText": "every morning at 9"
+  },
+  {
+   "rest": "every morning at 25 sum up",
+   "schedule": null,
+   "message": "every morning at 25 sum up",
+   "scheduleLength": 0,
+   "scheduleText": ""
+  },
+  {
+   "rest": "daily at 9am read mail",
+   "schedule": {
+    "every": "1d",
+    "hour": 9,
+    "minute": 0
+   },
+   "message": "read mail",
+   "scheduleLength": 12,
+   "scheduleText": "daily at 9am"
+  },
+  {
+   "rest": "weekdays at 8:30 stand-up\nnotes",
+   "schedule": {
+    "every": "weekdays",
+    "hour": 8,
+    "minute": 30
+   },
+   "message": "stand-up\nnotes",
+   "scheduleLength": 16,
+   "scheduleText": "weekdays at 8:30"
+  },
+  {
+   "rest": "every weekday at 2pm triage",
+   "schedule": {
+    "every": "weekdays",
+    "hour": 14,
+    "minute": 0
+   },
+   "message": "triage",
+   "scheduleLength": 20,
+   "scheduleText": "every weekday at 2pm"
+  },
+  {
+   "rest": "every 2 days at 14:30 back up",
+   "schedule": {
+    "every": "2d",
+    "hour": 14,
+    "minute": 30
+   },
+   "message": "back up",
+   "scheduleLength": 21,
+   "scheduleText": "every 2 days at 14:30"
+  },
+  {
+   "rest": "every 2 weeks at 9 plan",
+   "schedule": {
+    "every": "2w",
+    "hour": 9,
+    "minute": 0
+   },
+   "message": "plan",
+   "scheduleLength": 18,
+   "scheduleText": "every 2 weeks at 9"
+  },
+  {
+   "rest": "weekly review it",
+   "schedule": {
+    "every": "1w",
+    "hour": 9,
+    "minute": 0
+   },
+   "message": "review it",
+   "scheduleLength": 6,
+   "scheduleText": "weekly"
+  },
+  {
+   "rest": "2h",
+   "schedule": {
+    "every": "2h"
+   },
+   "message": "",
+   "scheduleLength": 2,
+   "scheduleText": "2h"
+  },
+  {
+   "rest": "every 4 min ping",
+   "schedule": null,
+   "message": "every 4 min ping",
+   "scheduleLength": 0,
+   "scheduleText": ""
+  },
+  {
+   "rest": "every 0 min ping",
+   "schedule": null,
+   "message": "every 0 min ping",
+   "scheduleLength": 0,
+   "scheduleText": ""
+  },
+  {
+   "rest": "do the thing",
+   "schedule": null,
+   "message": "do the thing",
+   "scheduleLength": 0,
+   "scheduleText": ""
+  },
+  {
+   "rest": "",
+   "schedule": null,
+   "message": "",
+   "scheduleLength": 0,
+   "scheduleText": ""
+  },
+  {
+   "rest": "every 3 hours at noon",
+   "schedule": null,
+   "message": "every 3 hours at noon",
+   "scheduleLength": 0,
+   "scheduleText": ""
+  },
+  {
+   "rest": "on weekdays at 12am check",
+   "schedule": {
+    "every": "weekdays",
+    "hour": 0,
+    "minute": 0
+   },
+   "message": "check",
+   "scheduleLength": 19,
+   "scheduleText": "on weekdays at 12am"
+  },
+  {
+   "rest": "every day at 12pm lunch",
+   "schedule": {
+    "every": "1d",
+    "hour": 12,
+    "minute": 0
+   },
+   "message": "lunch",
+   "scheduleLength": 17,
+   "scheduleText": "every day at 12pm"
+  },
+  {
+   "rest": "every   5   minutes  go",
+   "schedule": {
+    "every": "5m"
+   },
+   "message": "go",
+   "scheduleLength": 19,
+   "scheduleText": "every   5   minutes"
+  }
+ ],
+ "firstWakes": [
+  {
+   "rest": "every 30 min x",
+   "now": "2026-11-13T10:00:00Z",
+   "timeZone": "UTC",
+   "due": "2026-11-13T10:30:00.000Z"
+  },
+  {
+   "rest": "every 2 hours x",
+   "now": "2026-11-13T10:00:00Z",
+   "timeZone": "UTC",
+   "due": "2026-11-13T12:00:00.000Z"
+  },
+  {
+   "rest": "every morning at 9 x",
+   "now": "2026-11-13T08:00:00Z",
+   "timeZone": "UTC",
+   "due": "2026-11-13T09:00:00.000Z"
+  },
+  {
+   "rest": "every morning at 9 x",
+   "now": "2026-11-13T09:00:00Z",
+   "timeZone": "UTC",
+   "due": "2026-11-14T09:00:00.000Z"
+  },
+  {
+   "rest": "weekdays at 9 x",
+   "now": "2026-11-13T10:00:00Z",
+   "timeZone": "UTC",
+   "due": "2026-11-16T09:00:00.000Z"
+  },
+  {
+   "rest": "weekdays at 9 x",
+   "now": "2026-11-14T10:00:00Z",
+   "timeZone": "Europe/Berlin",
+   "due": "2026-11-16T08:00:00.000Z"
+  },
+  {
+   "rest": "every day at 14:30 x",
+   "now": "2026-11-13T12:00:00Z",
+   "timeZone": "America/New_York",
+   "due": "2026-11-13T19:30:00.000Z"
+  },
+  {
+   "rest": "every week at 9 x",
+   "now": "2026-11-13T10:00:00Z",
+   "timeZone": "Asia/Tokyo",
+   "due": "2026-11-14T00:00:00.000Z"
+  },
+  {
+   "rest": "every day at 2:30 x",
+   "now": "2026-03-08T05:00:00Z",
+   "timeZone": "America/New_York",
+   "due": "2026-03-08T07:00:00.000Z"
+  },
+  {
+   "rest": "every day at 1:30 x",
+   "now": "2026-11-01T04:00:00Z",
+   "timeZone": "America/New_York",
+   "due": "2026-11-01T05:30:00.000Z"
+  },
+  {
+   "rest": "weekdays at 7 x",
+   "now": "2026-11-13T23:30:00Z",
+   "timeZone": "Pacific/Auckland",
+   "due": "2026-11-15T18:00:00.000Z"
+  }
+ ],
+ "reviewReaders": [
+  {
+   "name": "Claude Sonnet 4.5",
+   "ref": {
+    "providerID": "anthropic",
+    "id": "claude-sonnet-4-5"
+   },
+   "provider": "Anthropic"
+  },
+  {
+   "name": "Claude",
+   "ref": {
+    "providerID": "anthropic",
+    "id": "claude"
+   },
+   "provider": "Anthropic"
+  },
+  {
+   "name": "GPT-5",
+   "ref": {
+    "providerID": "openai",
+    "id": "gpt-5"
+   },
+   "provider": "OpenAI"
+  },
+  {
+   "name": "GPT-5",
+   "ref": {
+    "providerID": "github-copilot",
+    "id": "gpt-5"
+   },
+   "provider": "GitHub Copilot"
+  },
+  {
+   "name": "GPT-5 Mini",
+   "ref": {
+    "providerID": "openai",
+    "id": "gpt-5-mini"
+   },
+   "provider": "OpenAI"
+  }
+ ],
+ "reviews": [
+  {
+   "rest": "",
+   "preferring": null,
+   "scope": null,
+   "described": null,
+   "preset": null,
+   "reader": null,
+   "focus": "",
+   "readerLength": 0,
+   "searching": null,
+   "asking": {
+    "list": "what",
+    "typed": ""
+   },
+   "head": "",
+   "scopeAsked": null,
+   "focusAsked": null,
+   "unfinished": null
+  },
+  {
+   "rest": "this branch",
+   "preferring": null,
+   "scope": {
+    "kind": "branch"
+   },
+   "described": null,
+   "preset": null,
+   "reader": null,
+   "focus": "",
+   "readerLength": 11,
+   "searching": null,
+   "asking": {
+    "list": "lookFor",
+    "typed": ""
+   },
+   "head": "this branch ",
+   "scopeAsked": {
+    "kind": "branch"
+   },
+   "focusAsked": null,
+   "unfinished": null
+  },
+  {
+   "rest": "since abc1234",
+   "preferring": null,
+   "scope": {
+    "kind": "commits",
+    "from": "abc1234^"
+   },
+   "described": null,
+   "preset": null,
+   "reader": null,
+   "focus": "",
+   "readerLength": 13,
+   "searching": null,
+   "asking": {
+    "list": "commit",
+    "typed": "abc1234"
+   },
+   "head": "",
+   "scopeAsked": {
+    "kind": "commits",
+    "from": "abc1234^"
+   },
+   "focusAsked": null,
+   "unfinished": null
+  },
+  {
+   "rest": "since",
+   "preferring": null,
+   "scope": null,
+   "described": null,
+   "preset": null,
+   "reader": null,
+   "focus": "",
+   "readerLength": 5,
+   "searching": null,
+   "asking": {
+    "list": "commit",
+    "typed": ""
+   },
+   "head": "",
+   "scopeAsked": null,
+   "focusAsked": null,
+   "unfinished": "Write the commit to start with after “since”."
+  },
+  {
+   "rest": "since -x",
+   "preferring": null,
+   "scope": null,
+   "described": "since -x",
+   "preset": null,
+   "reader": null,
+   "focus": "since -x",
+   "readerLength": 0,
+   "searching": null,
+   "asking": null,
+   "head": "",
+   "scopeAsked": {
+    "kind": "described",
+    "words": "since -x"
+   },
+   "focusAsked": null,
+   "unfinished": null
+  },
+  {
+   "rest": "folder src/auth",
+   "preferring": null,
+   "scope": {
+    "kind": "folder",
+    "path": "src/auth"
+   },
+   "described": null,
+   "preset": null,
+   "reader": null,
+   "focus": "",
+   "readerLength": 15,
+   "searching": null,
+   "asking": {
+    "list": "folder",
+    "typed": "src/auth"
+   },
+   "head": "",
+   "scopeAsked": {
+    "kind": "folder",
+    "path": "src/auth"
+   },
+   "focusAsked": null,
+   "unfinished": null
+  },
+  {
+   "rest": "folder",
+   "preferring": null,
+   "scope": null,
+   "described": null,
+   "preset": null,
+   "reader": null,
+   "focus": "",
+   "readerLength": 6,
+   "searching": null,
+   "asking": {
+    "list": "folder",
+    "typed": ""
+   },
+   "head": "",
+   "scopeAsked": null,
+   "focusAsked": null,
+   "unfinished": "Write the folder to review after “folder”."
+  },
+  {
+   "rest": "folder \"my stuff\" for security",
+   "preferring": null,
+   "scope": {
+    "kind": "folder",
+    "path": "my stuff"
+   },
+   "described": null,
+   "preset": "security",
+   "reader": null,
+   "focus": "",
+   "readerLength": 30,
+   "searching": null,
+   "asking": null,
+   "head": "folder \"my stuff\" for security ",
+   "scopeAsked": {
+    "kind": "folder",
+    "path": "my stuff"
+   },
+   "focusAsked": "security",
+   "unfinished": null
+  },
+  {
+   "rest": "folder “docs",
+   "preferring": null,
+   "scope": {
+    "kind": "folder",
+    "path": "docs"
+   },
+   "described": null,
+   "preset": null,
+   "reader": null,
+   "focus": "",
+   "readerLength": 12,
+   "searching": null,
+   "asking": {
+    "list": "folder",
+    "typed": "docs"
+   },
+   "head": "",
+   "scopeAsked": {
+    "kind": "folder",
+    "path": "docs"
+   },
+   "focusAsked": null,
+   "unfinished": null
+  },
+  {
+   "rest": "the whole project for performance",
+   "preferring": null,
+   "scope": {
+    "kind": "project"
+   },
+   "described": null,
+   "preset": "performance",
+   "reader": null,
+   "focus": "",
+   "readerLength": 33,
+   "searching": null,
+   "asking": null,
+   "head": "the whole project for performance ",
+   "scopeAsked": {
+    "kind": "project"
+   },
+   "focusAsked": "performance",
+   "unfinished": null
+  },
+  {
+   "rest": "for security",
+   "preferring": null,
+   "scope": null,
+   "described": null,
+   "preset": "security",
+   "reader": null,
+   "focus": "",
+   "readerLength": 12,
+   "searching": null,
+   "asking": {
+    "list": "what",
+    "typed": ""
+   },
+   "head": "for security ",
+   "scopeAsked": null,
+   "focusAsked": "security",
+   "unfinished": null
+  },
+  {
+   "rest": "for accessibility the forms",
+   "preferring": null,
+   "scope": null,
+   "described": null,
+   "preset": "accessibility",
+   "reader": null,
+   "focus": "the forms",
+   "readerLength": 17,
+   "searching": null,
+   "asking": null,
+   "head": "for accessibility ",
+   "scopeAsked": null,
+   "focusAsked": "accessibility: the forms",
+   "unfinished": null
+  },
+  {
+   "rest": "with Claude Sonnet 4.5",
+   "preferring": null,
+   "scope": null,
+   "described": null,
+   "preset": null,
+   "reader": {
+    "providerID": "anthropic",
+    "id": "claude-sonnet-4-5"
+   },
+   "focus": "",
+   "readerLength": 22,
+   "searching": null,
+   "asking": {
+    "list": "what",
+    "typed": ""
+   },
+   "head": "with Claude Sonnet 4.5 ",
+   "scopeAsked": null,
+   "focusAsked": null,
+   "unfinished": null
+  },
+  {
+   "rest": "with Claude",
+   "preferring": null,
+   "scope": null,
+   "described": null,
+   "preset": null,
+   "reader": {
+    "providerID": "anthropic",
+    "id": "claude"
+   },
+   "focus": "",
+   "readerLength": 11,
+   "searching": null,
+   "asking": {
+    "list": "what",
+    "typed": ""
+   },
+   "head": "with Claude ",
+   "scopeAsked": null,
+   "focusAsked": null,
+   "unfinished": null
+  },
+  {
+   "rest": "with GPT-5",
+   "preferring": {
+    "providerID": "github-copilot",
+    "id": "gpt-5"
+   },
+   "scope": null,
+   "described": null,
+   "preset": null,
+   "reader": {
+    "providerID": "github-copilot",
+    "id": "gpt-5"
+   },
+   "focus": "",
+   "readerLength": 10,
+   "searching": null,
+   "asking": {
+    "list": "what",
+    "typed": ""
+   },
+   "head": "with GPT-5 ",
+   "scopeAsked": null,
+   "focusAsked": null,
+   "unfinished": null
+  },
+  {
+   "rest": "with",
+   "preferring": null,
+   "scope": null,
+   "described": null,
+   "preset": null,
+   "reader": null,
+   "focus": "",
+   "readerLength": 0,
+   "searching": "",
+   "asking": null,
+   "head": "",
+   "scopeAsked": null,
+   "focusAsked": null,
+   "unfinished": null
+  },
+  {
+   "rest": "with gpt",
+   "preferring": null,
+   "scope": null,
+   "described": null,
+   "preset": null,
+   "reader": null,
+   "focus": "",
+   "readerLength": 0,
+   "searching": "gpt",
+   "asking": null,
+   "head": "",
+   "scopeAsked": null,
+   "focusAsked": null,
+   "unfinished": null
+  },
+  {
+   "rest": "with an eye on the tests",
+   "preferring": null,
+   "scope": null,
+   "described": "with an eye on the tests",
+   "preset": null,
+   "reader": null,
+   "focus": "with an eye on the tests",
+   "readerLength": 0,
+   "searching": null,
+   "asking": null,
+   "head": "",
+   "scopeAsked": {
+    "kind": "described",
+    "words": "with an eye on the tests"
+   },
+   "focusAsked": null,
+   "unfinished": null
+  },
+  {
+   "rest": "the sign-in and its tests",
+   "preferring": null,
+   "scope": null,
+   "described": "the sign-in and its tests",
+   "preset": null,
+   "reader": null,
+   "focus": "the sign-in and its tests",
+   "readerLength": 0,
+   "searching": null,
+   "asking": null,
+   "head": "",
+   "scopeAsked": {
+    "kind": "described",
+    "words": "the sign-in and its tests"
+   },
+   "focusAsked": null,
+   "unfinished": null
+  },
+  {
+   "rest": "the sign-in with Claude Sonnet 4.5",
+   "preferring": null,
+   "scope": null,
+   "described": null,
+   "preset": null,
+   "reader": {
+    "providerID": "anthropic",
+    "id": "claude-sonnet-4-5"
+   },
+   "focus": "the sign-in",
+   "readerLength": 0,
+   "searching": null,
+   "asking": null,
+   "head": "",
+   "scopeAsked": null,
+   "focusAsked": "the sign-in",
+   "unfinished": null
+  },
+  {
+   "rest": "for the cache",
+   "preferring": null,
+   "scope": null,
+   "described": null,
+   "preset": null,
+   "reader": null,
+   "focus": "the cache",
+   "readerLength": 0,
+   "searching": null,
+   "asking": null,
+   "head": "",
+   "scopeAsked": null,
+   "focusAsked": "the cache",
+   "unfinished": null
+  },
+  {
+   "rest": "branch for security with GPT-5 Mini look at locking",
+   "preferring": null,
+   "scope": {
+    "kind": "branch"
+   },
+   "described": null,
+   "preset": "security",
+   "reader": {
+    "providerID": "openai",
+    "id": "gpt-5-mini"
+   },
+   "focus": "look at locking",
+   "readerLength": 35,
+   "searching": null,
+   "asking": null,
+   "head": "branch for security with GPT-5 Mini ",
+   "scopeAsked": {
+    "kind": "branch"
+   },
+   "focusAsked": "security: look at locking",
+   "unfinished": null
+  },
+  {
+   "rest": "uncommitted",
+   "preferring": null,
+   "scope": {
+    "kind": "uncommitted"
+   },
+   "described": null,
+   "preset": null,
+   "reader": null,
+   "focus": "",
+   "readerLength": 11,
+   "searching": null,
+   "asking": {
+    "list": "lookFor",
+    "typed": ""
+   },
+   "head": "uncommitted ",
+   "scopeAsked": {
+    "kind": "uncommitted"
+   },
+   "focusAsked": null,
+   "unfinished": null
+  },
+  {
+   "rest": "th",
+   "preferring": null,
+   "scope": null,
+   "described": "th",
+   "preset": null,
+   "reader": null,
+   "focus": "th",
+   "readerLength": 0,
+   "searching": null,
+   "asking": {
+    "list": "what",
+    "typed": "th"
+   },
+   "head": "",
+   "scopeAsked": {
+    "kind": "described",
+    "words": "th"
+   },
+   "focusAsked": null,
+   "unfinished": null
+  },
+  {
+   "rest": "for ",
+   "preferring": null,
+   "scope": null,
+   "described": null,
+   "preset": null,
+   "reader": null,
+   "focus": "",
+   "readerLength": 0,
+   "searching": null,
+   "asking": null,
+   "head": "",
+   "scopeAsked": null,
+   "focusAsked": null,
+   "unfinished": null
+  },
+  {
+   "rest": "for sec",
+   "preferring": null,
+   "scope": null,
+   "described": null,
+   "preset": null,
+   "reader": null,
+   "focus": "sec",
+   "readerLength": 0,
+   "searching": null,
+   "asking": {
+    "list": "lookFor",
+    "typed": "for sec"
+   },
+   "head": "",
+   "scopeAsked": null,
+   "focusAsked": "sec",
+   "unfinished": null
+  },
+  {
+   "rest": "something else",
+   "preferring": null,
+   "scope": null,
+   "described": "something else",
+   "preset": null,
+   "reader": null,
+   "focus": "something else",
+   "readerLength": 0,
+   "searching": null,
+   "asking": {
+    "list": "what",
+    "typed": "something else"
+   },
+   "head": "",
+   "scopeAsked": {
+    "kind": "described",
+    "words": "something else"
+   },
+   "focusAsked": null,
+   "unfinished": null
+  }
+ ],
+ "commands": [
+  {
+   "text": "/init",
+   "commands": [
+    "init",
+    "review",
+    "goal"
+   ],
+   "keywords": [
+    "goal",
+    "review"
+   ],
+   "offered": [
+    "init",
+    "review-quick"
+   ],
+   "split": {
+    "name": "init",
+    "arguments": ""
+   },
+   "parsed": {
+    "name": "init",
+    "arguments": ""
+   }
+  },
+  {
+   "text": "/review main",
+   "commands": [
+    "init",
+    "review"
+   ],
+   "keywords": [
+    "review"
+   ],
+   "offered": [
+    "init",
+    "review-quick"
+   ],
+   "split": {
+    "name": "review",
+    "arguments": "main"
+   },
+   "parsed": null
+  },
+  {
+   "text": "/review-quick main",
+   "commands": [
+    "init",
+    "review"
+   ],
+   "keywords": [
+    "review"
+   ],
+   "offered": [
+    "init",
+    "review-quick"
+   ],
+   "split": {
+    "name": "review-quick",
+    "arguments": "main"
+   },
+   "parsed": {
+    "name": "review-quick",
+    "arguments": "main"
+   }
+  },
+  {
+   "text": "/review main",
+   "commands": [
+    "init",
+    "review"
+   ],
+   "keywords": [],
+   "offered": [
+    "init",
+    "review"
+   ],
+   "split": {
+    "name": "review",
+    "arguments": "main"
+   },
+   "parsed": {
+    "name": "review",
+    "arguments": "main"
+   }
+  },
+  {
+   "text": "  /deploy  prod now ",
+   "commands": [
+    "deploy"
+   ],
+   "keywords": [],
+   "offered": [
+    "deploy"
+   ],
+   "split": {
+    "name": "deploy",
+    "arguments": "prod now"
+   },
+   "parsed": {
+    "name": "deploy",
+    "arguments": "prod now"
+   }
+  },
+  {
+   "text": "/usr/bin is where?",
+   "commands": [
+    "init"
+   ],
+   "keywords": [],
+   "offered": [
+    "init"
+   ],
+   "split": {
+    "name": "usr/bin",
+    "arguments": "is where?"
+   },
+   "parsed": null
+  },
+  {
+   "text": "/goal x",
+   "commands": [
+    "goal"
+   ],
+   "keywords": [],
+   "offered": [],
+   "split": {
+    "name": "goal",
+    "arguments": "x"
+   },
+   "parsed": null
+  },
+  {
+   "text": "/ init",
+   "commands": [
+    "init"
+   ],
+   "keywords": [],
+   "offered": [
+    "init"
+   ],
+   "split": null,
+   "parsed": null
+  }
+ ],
+ "shell": [
+  {
+   "text": "!ls -la",
+   "command": "ls -la"
+  },
+  {
+   "text": "!",
+   "command": null
+  },
+  {
+   "text": "!   ",
+   "command": null
+  },
+  {
+   "text": " !ls",
+   "command": null
+  },
+  {
+   "text": "!!",
+   "command": "!"
+  },
+  {
+   "text": "!git status\n",
+   "command": "git status"
+  }
+ ],
+ "decide": [
+  {
+   "text": "fix the tests",
+   "facts": {},
+   "decision": {
+    "send": {
+     "text": "fix the tests",
+     "quoted": true
+    }
+   }
+  },
+  {
+   "text": "fix it",
+   "facts": {
+    "refusal": "Sign in to Anthropic again."
+   },
+   "decision": {
+    "restore": {
+     "text": "fix it"
+    },
+    "error": "Sign in to Anthropic again."
+   }
+  },
+  {
+   "text": "!ls",
+   "facts": {
+    "refusal": "Sign in to Anthropic again."
+   },
+   "decision": {
+    "shell": "ls"
+   }
+  },
+  {
+   "text": "/goal pause",
+   "facts": {
+    "refusal": "x"
+   },
+   "decision": {
+    "box": {
+     "do": "goal",
+     "command": {
+      "kind": "pause"
+     }
+    },
+    "failed": {
+     "text": "/goal pause",
+     "beside": ""
+    }
+   }
+  },
+  {
+   "text": "/goal ship it",
+   "facts": {
+    "refusal": "x"
+   },
+   "decision": {
+    "restore": {
+     "text": "/goal ship it"
+    },
+    "error": "x"
+   }
+  },
+  {
+   "text": "/plan",
+   "facts": {},
+   "decision": {
+    "keyword": "plan",
+    "plan": "toggle"
+   }
+  },
+  {
+   "text": "/plan",
+   "facts": {
+    "files": true
+   },
+   "decision": {
+    "keyword": "plan",
+    "plan": "on"
+   }
+  },
+  {
+   "text": "/plan sketch the API",
+   "facts": {
+    "files": true
+   },
+   "decision": {
+    "keyword": "plan",
+    "plan": "on",
+    "send": {
+     "text": "sketch the API",
+     "typed": "/plan"
+    }
+   }
+  },
+  {
+   "text": "/autopilot",
+   "facts": {},
+   "decision": {
+    "keyword": "autopilot",
+    "toggleAutopilot": true
+   }
+  },
+  {
+   "text": "/autopilot",
+   "facts": {
+    "files": true
+   },
+   "decision": {
+    "keyword": "autopilot",
+    "box": {
+     "do": "autopilot"
+    },
+    "failed": {
+     "text": "/autopilot",
+     "beside": ""
+    }
+   }
+  },
+  {
+   "text": "/autopilot do it all",
+   "facts": {},
+   "decision": {
+    "keyword": "autopilot",
+    "box": {
+     "do": "autopilot"
+    },
+    "failed": {
+     "text": "/autopilot do it all",
+     "beside": "do it all"
+    },
+    "send": {
+     "text": "do it all",
+     "typed": "/autopilot"
+    }
+   }
+  },
+  {
+   "text": "/compact",
+   "facts": {
+    "files": true
+   },
+   "decision": {
+    "keyword": "compact",
+    "compact": true
+   }
+  },
+  {
+   "text": "/loop every 30 min check the build",
+   "facts": {
+    "files": true
+   },
+   "decision": {
+    "keyword": "loop",
+    "box": {
+     "do": "wake",
+     "due": 1794565800,
+     "every": "30m",
+     "note": "check the build"
+    },
+    "failed": {
+     "text": "/loop every 30 min check the build",
+     "beside": "every 30 min check the build"
+    },
+    "send": {
+     "text": "check the build",
+     "typed": "/loop every 30 min",
+     "steer": true
+    }
+   }
+  },
+  {
+   "text": "/loop every morning at 9 sum up",
+   "facts": {
+    "files": true
+   },
+   "decision": {
+    "keyword": "loop",
+    "box": {
+     "do": "wake",
+     "due": 1794646800,
+     "every": "1d",
+     "note": "sum up"
+    },
+    "failed": {
+     "text": "/loop every morning at 9 sum up",
+     "beside": "every morning at 9 sum up"
+    }
+   }
+  },
+  {
+   "text": "/loop sometimes",
+   "facts": {},
+   "decision": {
+    "keyword": "loop",
+    "restore": {
+     "text": "/loop sometimes",
+     "beside": "sometimes"
+    },
+    "error": "Can’t tell how often from that. Start with one like “every 30 min” or “weekdays at 9”, or pick one from the list after /loop."
+   }
+  },
+  {
+   "text": "/loop every hour",
+   "facts": {},
+   "decision": {
+    "keyword": "loop",
+    "restore": {
+     "text": "/loop every hour",
+     "beside": "every hour"
+    },
+    "error": "Write what to do each time after how often, like “/loop every morning at 9 sum up the new issues”."
+   }
+  },
+  {
+   "text": "/btw",
+   "facts": {},
+   "decision": {
+    "keyword": "btw",
+    "restore": {
+     "text": "/btw "
+    }
+   }
+  },
+  {
+   "text": "/btw why this?",
+   "facts": {},
+   "decision": {
+    "keyword": "btw",
+    "box": {
+     "do": "btw",
+     "question": "why this?"
+    },
+    "failed": {
+     "text": "/btw why this?",
+     "beside": "why this?"
+    }
+   }
+  },
+  {
+   "text": "/handoff",
+   "facts": {},
+   "decision": {
+    "keyword": "handoff",
+    "box": {
+     "do": "handoff",
+     "next": null
+    },
+    "failed": {
+     "text": "/handoff",
+     "beside": ""
+    }
+   }
+  },
+  {
+   "text": "/handoff write the docs",
+   "facts": {},
+   "decision": {
+    "keyword": "handoff",
+    "box": {
+     "do": "handoff",
+     "next": "write the docs"
+    },
+    "failed": {
+     "text": "/handoff write the docs",
+     "beside": "write the docs"
+    }
+   }
+  },
+  {
+   "text": "/review",
+   "facts": {},
+   "decision": {
+    "keyword": "review",
+    "box": {
+     "do": "review",
+     "model": null,
+     "focus": null,
+     "scope": null
+    },
+    "failed": {
+     "text": "/review",
+     "beside": ""
+    }
+   }
+  },
+  {
+   "text": "/review with",
+   "facts": {},
+   "decision": {
+    "keyword": "review",
+    "restore": {
+     "text": "/review with",
+     "beside": "with"
+    },
+    "error": "Pick who reads it from the list, or write a model’s name after “with”."
+   }
+  },
+  {
+   "text": "/review since",
+   "facts": {},
+   "decision": {
+    "keyword": "review",
+    "restore": {
+     "text": "/review since",
+     "beside": "since"
+    },
+    "error": "Write the commit to start with after “since”."
+   }
+  },
+  {
+   "text": "/review this branch for security with GPT-5 Mini",
+   "facts": {},
+   "decision": {
+    "keyword": "review",
+    "box": {
+     "do": "review",
+     "model": {
+      "providerID": "openai",
+      "id": "gpt-5-mini"
+     },
+     "focus": "security",
+     "scope": {
+      "kind": "branch"
+     }
+    },
+    "failed": {
+     "text": "/review this branch for security with GPT-5 Mini",
+     "beside": "this branch for security with GPT-5 Mini"
+    }
+   }
+  },
+  {
+   "text": "/review-quick main",
+   "facts": {},
+   "decision": {
+    "command": {
+     "name": "review",
+     "arguments": "main"
+    }
+   }
+  },
+  {
+   "text": "/review main",
+   "facts": {
+    "keywords": [
+     "loop",
+     "plan",
+     "autopilot",
+     "compact"
+    ]
+   },
+   "decision": {
+    "command": {
+     "name": "review",
+     "arguments": "main"
+    }
+   }
+  },
+  {
+   "text": "/goal",
+   "facts": {},
+   "decision": {
+    "showGoal": true,
+    "restore": {
+     "text": "/goal "
+    }
+   }
+  },
+  {
+   "text": "/goal",
+   "facts": {
+    "hasGoal": true
+   },
+   "decision": {
+    "showGoal": true
+   }
+  },
+  {
+   "text": "/goal all tests pass",
+   "facts": {},
+   "decision": {
+    "box": {
+     "do": "goal",
+     "command": {
+      "kind": "set",
+      "words": "all tests pass"
+     }
+    },
+    "failed": {
+     "text": "/goal all tests pass",
+     "beside": "all tests pass"
+    }
+   }
+  },
+  {
+   "text": "/goal all tests pass",
+   "facts": {
+    "botChat": true
+   },
+   "decision": {
+    "box": {
+     "do": "askBot",
+     "words": "all tests pass"
+    },
+    "failed": {
+     "text": "/goal all tests pass",
+     "beside": "all tests pass"
+    }
+   }
+  },
+  {
+   "text": "/goal resume",
+   "facts": {
+    "subagent": true,
+    "keywords": []
+   },
+   "decision": {
+    "restore": {
+     "text": "/goal resume",
+     "beside": ""
+    },
+    "error": "A subagent’s conversation can’t have a goal of its own. Set it in the conversation it works for."
+   }
+  },
+  {
+   "text": "/goal clear",
+   "facts": {
+    "bridge": false
+   },
+   "decision": {
+    "restore": {
+     "text": "/goal clear",
+     "beside": ""
+    },
+    "error": "Goals run in the agents bridge beside the engine on this conversation’s computer, and it isn’t running now. Try again in a moment."
+   }
+  },
+  {
+   "text": "/btw why?",
+   "facts": {
+    "bridge": false,
+    "keywords": [
+     "goal",
+     "loop",
+     "plan",
+     "autopilot",
+     "compact"
+    ]
+   },
+   "decision": {
+    "send": {
+     "text": "/btw why?",
+     "quoted": true
+    }
+   }
+  },
+  {
+   "text": "!npm test",
+   "facts": {
+    "files": true
+   },
+   "decision": {
+    "shell": "npm test"
+   }
+  },
+  {
+   "text": "/init",
+   "facts": {
+    "files": true
+   },
+   "decision": {
+    "command": {
+     "name": "init",
+     "arguments": ""
+    }
+   }
+  },
+  {
+   "text": "/deploy prod",
+   "facts": {},
+   "decision": {
+    "command": {
+     "name": "deploy",
+     "arguments": "prod"
+    }
+   }
+  },
+  {
+   "text": "/nope here",
+   "facts": {},
+   "decision": {
+    "send": {
+     "text": "/nope here",
+     "quoted": true
+    }
+   }
+  },
+  {
+   "text": "/usr/local is where?",
+   "facts": {
+    "side": true
+   },
+   "decision": {
+    "sideThread": true
+   }
+  },
+  {
+   "text": "what now?",
+   "facts": {
+    "side": true
+   },
+   "decision": {
+    "sideThread": true
+   }
+  },
+  {
+   "text": "/plan x",
+   "facts": {
+    "side": true
+   },
+   "decision": {
+    "keyword": "plan",
+    "plan": "on",
+    "send": {
+     "text": "x",
+     "typed": "/plan"
+    }
+   }
+  },
+  {
+   "text": "!pwd",
+   "facts": {
+    "side": true
+   },
+   "decision": {
+    "shell": "pwd"
+   }
+  },
+  {
+   "text": "/plan x",
+   "facts": {
+    "subagent": true,
+    "keywords": []
+   },
+   "decision": {
+    "send": {
+     "text": "/plan x",
+     "quoted": true
+    }
+   }
+  }
+ ],
+ "decideFacts": {
+  "keywords": [
+   "goal",
+   "loop",
+   "plan",
+   "autopilot",
+   "review",
+   "btw",
+   "handoff",
+   "compact"
+  ],
+  "commands": [
+   "init",
+   "review",
+   "deploy"
+  ],
+  "files": false,
+  "side": false,
+  "refusal": null,
+  "subagent": false,
+  "hasGoal": false,
+  "botChat": false,
+  "bridge": true,
+  "now": "2026-11-13T10:00:00Z",
+  "timeZone": "UTC",
+  "reviewer": null,
+  "readers": "reviewReaders, when review is offered"
+ }
+}

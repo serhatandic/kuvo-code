@@ -38,12 +38,20 @@ interface SessionPage {
   cursor?: { next?: string };
 }
 
-/** The box's projects: `{directory, name?, folders, run?, terminal?, removed?}` each. One removed
- * (Remove Project) keeps its settings, for when one of its sessions is brought back. */
+/** The box's projects: `{directory, name?, folders, run?, removed?, madeBy?, addedByBox?}` each.
+ * Remove Project keeps its settings for when one of its sessions is brought back.
+ * Ignore the retired terminal setting while reading; the next project edit saves cleaned records.
+ * Reads never lock or write, including on a read-only disk. */
 export function readProjects(file = PROJECTS_FILE): Project[] {
   try {
     const list = JSON.parse(fs.readFileSync(file, "utf8")).projects;
-    return Array.isArray(list) ? list.filter(each => typeof each?.directory === "string" && path.isAbsolute(each.directory)).map(each => ({ ...each, folders: Array.isArray(each.folders) ? each.folders.filter((folder: unknown) => typeof folder === "string") : [] })) : [];
+    if (!Array.isArray(list)) return [];
+    return list.filter(each => typeof each?.directory === "string" && path.isAbsolute(each.directory)).map(each => {
+      const project = { ...each };
+      delete project.terminal;
+      project.folders = Array.isArray(each.folders) ? each.folders.filter((folder: unknown) => typeof folder === "string") : [];
+      return project;
+    });
   } catch {
     return [];
   }
@@ -287,8 +295,7 @@ function keptProject(directory: string, given: Record<string, unknown>, before: 
   if ("folders" in given) delete project.addedByBox;
   if ("folders" in given) project.folders = [...new Set((Array.isArray(given.folders) ? given.folders : []).filter(folder => typeof folder === "string" && path.isAbsolute(folder) && folder !== directory))];
   if ("run" in given) project.run = text(given.run);
-  if ("terminal" in given) project.terminal = text(given.terminal);
-  for (const key of ["name", "run", "terminal"] as const) if (project[key] === undefined) delete project[key];
+  for (const key of ["name", "run"] as const) if (project[key] === undefined) delete project[key];
   return project;
 }
 

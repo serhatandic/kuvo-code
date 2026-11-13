@@ -274,7 +274,7 @@ describe("one box", () => {
     expect((await view(usage)).rows[0].days[0].tokens).toBe(307)
   })
 
-  test("the fallback model is the box's: chosen through the route, kept through a restart, a model with no price estimated at its rates; one that isn't a choice is refused", async () => {
+  test("the fallback model is the box's (and your other computers'): chosen through the route, kept through a restart, a model with no price estimated at its rates; one that isn't a choice is refused", async () => {
     writeFileSync(join(added, "sessions", "2026", "11", "12", "rollout-a.jsonl"), context("2026-11-12T10:00:00Z", "gpt-mystery-9") + turn("2026-11-12T10:01:00Z", 1000, 100))
     let usage = make()
     await usage.refresh()
@@ -301,7 +301,10 @@ describe("one box", () => {
     const none = await route(usage, "PUT", ["pricing"], { codex: { fallback: null } })
     expect(none.body.data.pricing.codex).toMatchObject({ fallback: null, chosen: true })
     expect(none.body.data.totals.codex[0].cost).toBe(0)
-    expect(JSON.parse(readFileSync(join(root, "usage", "settings.json"), "utf8"))).toEqual({ codex: { fallback: null } })
+    // (Shared with your other computers as a usage setting; where a box from before reads it too.)
+    const kept = JSON.parse(readFileSync(join(root, "usage", "settings.json"), "utf8"))
+    expect(kept.codex).toEqual({ fallback: null })
+    expect(kept.units.codexFallback.value).toBeNull()
   })
 })
 

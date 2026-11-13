@@ -34,6 +34,9 @@ export interface Handoff {
   to?: string
   title?: string
   error?: string
+  /** When it was asked for, in ms since 1970: which handoff this is (a client tells a new one from
+   * an earlier one's end by it). */
+  started?: number
 }
 
 const notePrompt = `Write a handoff note for a new agent who takes over this conversation's work in a fresh conversation, without its history. Cover, in this order and briefly:
@@ -85,7 +88,7 @@ export class Handoffs {
     if (!info.directory || !info.model) throw new HandoffError(409, "That conversation has no model yet: there's nothing to hand off.")
     // Two agents at work in the same folder at once would get in each other's way.
     if (await this.isActive(session, place)) throw new HandoffError(409, "The agent is working now. Stop it or wait for its turn to end, then hand it off.")
-    const handoff: Handoff = { from: session, state: "writing" }
+    const handoff: Handoff = { from: session, state: "writing", started: Date.now() }
     this.kept.set(session, handoff)
     this.told(handoff)
     void this.carryOn(handoff, info, place, next?.trim() || undefined)

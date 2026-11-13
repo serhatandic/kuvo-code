@@ -57,13 +57,14 @@ import { GroupStore } from "./groups/store"
 import { queueFiles } from "../shared/queues"
 import { HangWatch, isEngine } from "../shared/hang"
 import { notesBeside } from "./notes"
-import { agentAccounts, Limits } from "./limits"
+import { agentAccounts, BOX_ONLY_SERVICES, Limits } from "./limits"
 import { LimitsPeers } from "./limits-peers"
 import { PricingStore } from "./usage/pricing"
 import { antigravitySources, claudeSources, codexSources, cursorSources, engineCodexSource, engineHostedSources, grokSources, Usage, USAGE_SERVICES, UsageSettings } from "./usage/usage"
 import { antigravityTransport } from "./usage/antigravity-plan"
 import { cursorEndpoints } from "./usage/cursor-api"
 import { UsagePeers } from "./usage/usage-peers"
+import { SettingsPeers } from "./usage/settings-peers"
 import { ENGINE_SERVICES, EngineAccounts } from "./engine-limits"
 
 const version = "1"
@@ -289,7 +290,8 @@ const voice = new VoiceWords(places)
 // The engine's sign-ins too (Settings › Accounts), as the engine lists them with their secrets.
 const engineAccounts = new EngineAccounts(() => link.request("GET", "/api/credential"))
 const limits = new Limits(() => [...agentAccounts(roster.all()), ...engineAccounts.accounts()], join(home, "limits.json"), Date.now, () => engineAccounts.refresh(), () => engineAccounts.answered)
-limits.alsoServices = ENGINE_SERVICES
+// (And Antigravity's, which only boxes read: covered here signed in or not.)
+limits.alsoServices = [...ENGINE_SERVICES, ...BOX_ONLY_SERVICES]
 // Shared with your other computers' boxes: each account read once across them, and listed on each.
 peers.limits = new LimitsPeers(limits, post, directory, join(home, "limits-peers.json"))
 // What each account used, by the quarter hour, from its agent's logs here, priced; shared the same
@@ -326,6 +328,10 @@ engineAccounts.onAnswered = () => void usage.tick()
 // (OpenCode's hosted spend only where this box knows its engine's folder: else a client reads it as before.)
 if (!engineData) usage.services = USAGE_SERVICES.filter((service) => service !== "opencode")
 peers.usage = new UsagePeers(usage, post, directory, join(usageFolder, "peers.json"))
+// The usage panel's settings, the same on your own computers: told as they change, and each minute
+// looked at to say every ten minutes what they are.
+peers.settings = new SettingsPeers(usageSettings, post, directory)
+setInterval(() => peers.settings?.tell(), 60_000).unref?.()
 
 // What every conversation here makes, recorded as it's made: the engine's and this bridge's own.
 // One that fails to start leaves the rest of the bridge as it is.

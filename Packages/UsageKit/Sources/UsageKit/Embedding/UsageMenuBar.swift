@@ -111,6 +111,9 @@ public final class UsageMenuBar {
     /// True once the menu bar item is up.
     public var isRunning: Bool { statusItemController != nil }
 
+    /// Started, its panel not up yet (it waits for the login shell and the accounts first).
+    var isStarting: Bool { started && container == nil }
+
     /// Where the panel can open.
     public enum Screen: Sendable {
         case dashboard, customize, settings
@@ -138,6 +141,8 @@ public final class UsageMenuBar {
         if showsWelcome { KeychainAccessGuard.holdPopups() }
         let container = await AppContainer(isFreshInstall: isFreshInstall || showsWelcome)
         self.container = container
+        // (Its layout, checked against this Mac's providers, is where a change starts from.)
+        HostSettings.shared.panelStarted()
         if let pendingConnected {
             self.pendingConnected = nil
             connectedProvidersDidChange(pendingConnected)

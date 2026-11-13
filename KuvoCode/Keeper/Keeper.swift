@@ -54,15 +54,31 @@ final class Keeper {
     /// setting, read as you change it): whether or not the app is open, after a restart too. An
     /// app following this keeper holds nothing of its own besides (`Awake.keeper`).
     private let awake = Awake()
+    /// Its part in this Mac's box moving into a home of its own (`movesOwnBox`; nil with it off,
+    /// and nothing about the keeper changes).
+    private let move: OwnBoxMove?
+    /// Whether what a move left was settled already, as launchd started it (`main`).
+    private var settled: Bool
+    /// The box moving now: it's stopped, and nothing it runs is asked of meanwhile.
+    private var moving = false
+    /// Looks since it last asked the box whether to move (it asks every 60th, ten minutes), and the
+    /// move's state as it was then (its `state.json` changed since, Move Now asked say, it asks
+    /// again at once).
+    private var looksSinceAsked: Int?
+    /// One keeper at a time settling or moving (`OwnBoxMove.takeLock`), where this one took it.
+    private var moveLock: Int32?
+    private var askedState: Date?
 
     init(box: MacBoxRunner = MacBoxRunner(box: BoxProcess(), agents: OutsideAgents(), host: HostInterface()),
          version: String = AppInfo.version, build: String = AppInfo.build, exits: @escaping (Exit) -> Void = { Darwin.exit($0.rawValue) },
-         installed: @escaping () -> String? = { Keeper.installedVersion() }) {
+         installed: @escaping () -> String? = { Keeper.installedVersion() }, move: OwnBoxMove? = OwnBoxMove.forThisMac(), settled: Bool = false) {
         self.box = box
         self.version = version
         self.build = build
         self.exits = exits
         self.installed = installed
+        self.move = move
+        self.settled = settled
     }
 
     /// `--box`: runs until launchd stops it, or it's told to stop. Never returns.
@@ -71,16 +87,43 @@ final class Keeper {
         // is the only one: a keeper registered before, or by Turn On, starts no second one, and
         // writes nothing first (its record would make it this Mac's box from then on). Nor does one
         // that couldn't tell, with a box there.
-        guard AppModel.attachesInPlace else {
+        guard AppModel.attachesInPlace || AppModel.movesOwnBox else {
             run()
             dispatchMain()
         }
         Task { @MainActor in
-            let engine = await Task.detached { EngineInstaller(root: AppInfo.supportDirectory.appending(path: "engine")).installed() }.value
-            if let exit = await gated(engine: engine, checked: true) { Darwin.exit(exit.rawValue) }
-            run()
+            // What a move of this Mac's box left, finished first, before anything is written in the
+            // app's folder: the box moved, this keeper only retires (its records there would say a
+            // box of the app's ran there again).
+            var settled = false
+            if let move = OwnBoxMove.forThisMac() {
+                // (One keeper at a time from here, before anything's settled: held for good.)
+                guard OwnBoxMove.takeLock() != nil else {
+                    log.info("Another keeper runs already")
+                    Darwin.exit(Exit.stopped.rawValue)
+                }
+                if await settledBeforeStart(move) == .retire { Darwin.exit(Exit.stopped.rawValue) }
+                settled = true
+            }
+            // (As the app checks `here`: with either on.)
+            if AppModel.attachesInPlace || AppModel.movesOwnBox {
+                let engine = await Task.detached { EngineInstaller(root: AppInfo.supportDirectory.appending(path: "engine")).installed() }.value
+                if let exit = await gated(engine: engine, checked: true) { Darwin.exit(exit.rawValue) }
+            }
+            run(settled: settled)
         }
         dispatchMain()
+    }
+
+    /// What a move left, settled before the keeper starts anything: looked at again every ten
+    /// minutes while it holds on (stuck part way, its owed steps not done yet), starting nothing
+    /// meanwhile. `startOld` or `retire`.
+    static func settledBeforeStart(_ move: OwnBoxMove) async -> OwnBoxMove.Next {
+        while true {
+            let next = await move.settle()
+            if next != .wait { return next }
+            await clock(600)
+        }
     }
 
     /// Whether this keeper may start this Mac's box (nil), or that it ends instead, as it should
@@ -89,10 +132,14 @@ final class Keeper {
     static func gated(engine: URL?, checked: Bool) async -> Exit? {
         switch await Here.gate(engine: engine, script: BoxProcess.script, appBox: BoxProcess.home, engineData: AppModel.engineFolders.dataDirectory,
                                home: AppModel.hereHome, checked: checked) {
-        case .own:
+        case .own, .two:
             return nil
         case .attach:
             log.notice("The box already on this Mac is its box: no keeper of the app's")
+            return .stopped
+        case .wait:
+            // (Moving: only a keeper that runs the move, `movesOwnBox`, finishes it; settled first.)
+            log.notice("This Mac's box is moving: nothing starts until it's moved")
             return .stopped
         case .unknown(let why):
             log.error("Couldn't tell whether the box already on this Mac is its box: \(why ?? "here didn't answer", privacy: .public)")
@@ -102,7 +149,7 @@ final class Keeper {
 
     /// The keeper's own start, once it's this Mac's box's (on the main thread, before or within
     /// `dispatchMain`).
-    private nonisolated static func run() {
+    private nonisolated static func run(settled: Bool = false) {
         try? FileManager.default.createDirectory(at: KeeperRecord.run, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         // One keeper at a time: one started while another runs (the app starting it while launchd
         // already has) goes at once, and cleanly, so launchd doesn't start it again.
@@ -111,7 +158,7 @@ final class Keeper {
             log.info("Another keeper runs already")
             exit(Exit.stopped.rawValue)
         }
-        let keeper = MainActor.assumeIsolated { Keeper() }
+        let keeper = MainActor.assumeIsolated { Keeper(settled: settled) }
         // launchd stopping it (you log out, or its launch agent was taken away): what runs stops
         // first, cleanly.
         signal(SIGTERM, SIG_IGN)
@@ -125,6 +172,19 @@ final class Keeper {
     private var terminate: DispatchSourceSignal?
 
     func start() async {
+        // (Settled as launchd started it, before its lock; a test's keeper, here.)
+        if let move, !settled {
+            settled = true
+            guard let lock = OwnBoxMove.takeLock() else { return finish(.stopped) }
+            moveLock = lock
+            switch await move.settle() {
+            case .retire: return finish(.stopped)
+            case .wait:
+                // (Nothing runs until it's settled: looked at again in ten minutes.)
+                if await Self.settledBeforeStart(move) == .retire { return finish(.stopped) }
+            case .startOld: break
+            }
+        }
         do {
             let port = try await server.start()
             try KeeperRecord(pid: getpid(), version: version, build: build, url: "http://127.0.0.1:\(port)",
@@ -166,6 +226,8 @@ final class Keeper {
         tools.stop()
         server.stop()
         KeeperRecord.forget(pid: getpid())
+        if let moveLock { close(moveLock) }
+        moveLock = nil
         if (try? String(contentsOf: KeeperRecord.run.appending(path: "box.pid"), encoding: .utf8)) == "\(getpid())" {
             try? FileManager.default.removeItem(at: KeeperRecord.run.appending(path: "box.pid"))
         }
@@ -180,6 +242,13 @@ final class Keeper {
               samePassword(String(authorization.dropFirst(7)), password) else { return .init(status: 401) }
         guard let command = KeeperControl.Command(rawValue: String(request.path.dropFirst())) else { return .init(status: 404) }
         guard request.method == (command == .status ? "GET" : "POST") else { return .init(status: 405) }
+        // (Moving, the box is stopped: nothing it runs is started or told anything meanwhile.)
+        // (Nor stopped: what the move's doing would be cut short, and the box down until the next
+        // start. Stop Background Work is refused, saying so, until it's done.)
+        if moving, command != .status {
+            let body = (try? JSONSerialization.data(withJSONObject: ["message": "This Mac’s box is moving into its own home: try again once that’s done."])) ?? Data()
+            return HTTPResponse(status: 503, headers: ["Content-Type": "application/json"], body: body)
+        }
         switch command {
         case .status:
             return .json(await status)
@@ -236,6 +305,11 @@ final class Keeper {
                 "started": started.timeIntervalSince1970 * 1000, "engine": engine, "busy": await box.isBusy(),
                 "updating": handingOver, "awake": awakeNow,
             ]
+            if moving {
+                answer["moving"] = true
+                // (Held on, stuck part way say: why, as the box said it.)
+                if let why = move?.holdsOnBecause { answer["movingWhy"] = why }
+            }
             if let failure = box.box.failure { answer["box"] = ["failure": failure] }
             if let failure = box.agents.failure { answer["agents"] = ["failure": failure] }
             return answer
@@ -269,9 +343,66 @@ final class Keeper {
             log.info("Kuvo Code \(installed, privacy: .public) is installed now")
             handingOver = true
         }
+        if !handingOver, !busy, let move, let release = await due(move) {
+            return await moveBox(move, release: release)
+        }
         guard handingOver, !busy else { return true }
         finish(.again)
         return false
+    }
+
+    /// Whether the box says to move now: asked at the first look and every ten minutes after, and at
+    /// once when the move's state changed (Move Now asked, say); never while an update waits.
+    private func due(_ move: OwnBoxMove) async -> URL? {
+        func changed() -> Date? {
+            (try? move.folder.appending(path: "updates/rehome/state.json").resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        }
+        if let looks = looksSinceAsked, looks < 59, changed() == askedState {
+            looksSinceAsked = looks + 1
+            return nil
+        }
+        looksSinceAsked = 0
+        let release = await move.due()
+        // (Its own noting it waits isn't a change to ask again for.)
+        askedState = changed()
+        guard let release else { return nil }
+        guard !finished else {
+            try? FileManager.default.removeItem(at: release)
+            return nil
+        }
+        return release
+    }
+
+    /// The move: the box stopped (its lock kept, so the app starts none meanwhile), moved by the
+    /// box, and then either the keeper retires (moved) or starts the box again as it was. Whether to
+    /// go on looking.
+    private func moveBox(_ move: OwnBoxMove, release: URL) async -> Bool {
+        moving = true
+        awake.agentsWork(false)
+        // (Its tools stay up: nothing calls them with the engine stopped, and the app isn't told
+        // anything meanwhile, so nothing is written where the box moves from.)
+        box.stop(keepingClaim: true)
+        var next = await move.move(release)
+        // (Stopped meanwhile, SIGTERM as you log out: gone, nothing started again; the next keeper
+        // finishes what the move left.)
+        guard !finished else { return false }
+        while next == .wait {
+            // (Stuck part way, or what's owed can't be done yet: nothing runs meanwhile.)
+            await Self.clock(600)
+            guard !finished else { return false }
+            next = await move.settle()
+        }
+        guard !finished else { return false }
+        moving = false
+        if next == .retire {
+            finish(.stopped)
+            return false
+        }
+        log.notice("This Mac's box stays in the app's folder: started again")
+        await box.start()
+        // (The bridge, stopped with it, isn't started by the box's start once it has been.)
+        await box.agents.startAgain()
+        return true
     }
 
     /// Gone the first moment nothing is under way on the engine or with the coding agents, however

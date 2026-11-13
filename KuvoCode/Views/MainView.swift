@@ -44,12 +44,10 @@ struct MainView: View {
     @State private var showsPalette = false
     /// The folder whose Branch Backups are showing, from the Session menu.
     @State private var backupsFolder: String?
-    /// Terminals open as tabs, standing in for a conversation.
-    private var terminals: MainTerminals { app.mainTerminals }
     /// A tab's session being renamed, and the title being typed.
     @State private var renaming: Session?
     /// The session last in the middle card, kept made (out of sight) under another tab's card, a
-    /// draft's, a group chat's or a terminal's: going back to a session finds the conversations
+    /// draft's or a group chat's: going back to a session finds the conversations
     /// it keeps, and its composer, as they were, rather than making them all again.
     @State private var keptSession: String?
     /// The group chat last in view, kept made under another card while a tab's way back goes
@@ -293,7 +291,6 @@ struct MainView: View {
                 settings.name = given(settings.name) ?? existing.name
                 settings.folders = existing.folders + settings.folders.filter { !existing.folders.contains($0) }
                 settings.run = given(settings.run) ?? existing.run
-                settings.terminal = given(settings.terminal) ?? existing.terminal
             }
             let primary = workspace.saveProject(primary, settings: settings, shown: Set(tabs.keys.compactMap(\.sessionID)))
             if request.project == nil { tabs.newSession(in: primary) }
@@ -314,8 +311,6 @@ struct MainView: View {
         }
         .onChange(of: workspace.sessions.map(\.id)) { tabs.dropClosed() }
         .onChange(of: groups.list.map(\.id)) { tabs.dropClosed() }
-        // A terminal ended for you (its machine removed): its tab goes.
-        .onChange(of: terminals.entries.count) { tabs.dropClosed() }
         .onChange(of: workspace.isLoaded) {
             // The list arrives just before loading counts as done, so check it again here.
             tabs.dropClosed()
@@ -331,7 +326,7 @@ struct MainView: View {
                 tabs.restore(savedTabs, older: .init(tabs: olderTabs, selection: olderSelection, pairs: olderPairs, showsPanel: olderShowsPanel, showsSidebar: olderShowsSidebar))
             }
             (olderTabs, olderSelection, olderPairs, olderShowsPanel) = ("", nil, "", false)
-            // Opened again after the window closed: the terminals went with it.
+            // Opened again after the window closed: remove sessions that have since gone.
             tabs.dropClosed()
             tabs.startIfEmpty()
             // What changed while the window was away, kept too.
@@ -448,9 +443,6 @@ struct MainView: View {
         switch key {
         case .draft(let directory):
             return TabItem(id: id, title: Workspace.isChat(directory) ? "New Chat" : "New Session", logo: nil, status: .idle)
-        case .terminal:
-            guard let entry = terminals.entry(id) else { return nil }
-            return TabItem(id: id, title: entry.session.title, logo: nil, status: .idle, symbol: "apple.terminal")
         case .group(let group):
             guard let group = groups.group(group) else { return nil }
             let status: TabItem.Status = groups.isDiscussing(group.id) ? .working : groups.isUnread(group) && groupID != group.id ? .unread : .idle
@@ -600,10 +592,9 @@ struct MainView: View {
         return workspace.model(for: id)
     }
 
-    /// The group chat in view, unless an editor or a terminal's card is over it.
+    /// The group chat in view, unless an editor is over it.
     private var groupInView: BotGroup? {
         guard tabs.groupEditor == nil, tabs.botEditor == nil else { return nil }
-        if let key = selection, terminals.entry(key.text) != nil { return nil }
         return groupID.flatMap { groups.group($0) }
     }
 
@@ -640,10 +631,9 @@ struct MainView: View {
     }
 
     /// The session whose card the tab in view shows, if that's what it shows: not with an editor
-    /// over it, nor for a terminal's, a group chat's or a subagent's conversation.
+    /// over it, nor for a group chat's or a subagent's conversation.
     private var sessionInView: SessionModel? {
         guard tabs.groupEditor == nil, tabs.botEditor == nil else { return nil }
-        if let key = selection, terminals.entry(key.text) != nil { return nil }
         if let id = groupID, groups.group(id) != nil { return nil }
         guard let id = sessionID, workspace.session(id) != nil || workspace.parent(of: id) == nil else { return nil }
         return workspace.model(for: id)
@@ -710,7 +700,7 @@ struct MainView: View {
         .environment(catalog(for: directory))
     }
 
-    /// Any other tab's card: an editor, a terminal, a subagent's conversation, a session waiting
+    /// Any other tab's card: an editor, a subagent's conversation, a session waiting
     /// for its machine, a new session, or the welcome (a group chat's is `groupCard`).
     @ViewBuilder private var otherCard: some View {
         Group {
@@ -744,16 +734,6 @@ struct MainView: View {
                     }
                 }
                 .id(request.id)
-            } else if let key = selection, let entry = terminals.entry(key.text) {
-                Card(title: entry.session.title, detail: workspace.projectName(entry.directory), isFocused: focus == .conversation) {
-                    Image(systemName: "apple.terminal")
-                } actions: {
-                    Button("Close Tab", systemImage: "xmark") { tabs.close(key) }
-                        .help("Close Tab")
-                } content: {
-                    TerminalHost(session: entry.session)
-                }
-                .id(key)
             } else if let id = sessionID, workspace.session(id) == nil, let parent = workspace.parent(of: id) {
                 // A sub-session: the conversation of a subagent its session's agent started.
                 let root = workspace.session(workspace.root(of: id))
@@ -799,7 +779,7 @@ struct MainView: View {
                     DraftSessionView(directory: directory, focusRequest: tabs.draftFocus) { session, text, files in
                         tabs.draftSent(.draft(directory), as: session.id)
                         // (Kept by the new-session composer until it's gone.)
-                        workspace.model(for: session.id)?.submit(text, files: files, for: catalog.model(session.model), queue: false, commands: catalog.commands(in: directory), keptElsewhere: true)
+                        workspace.model(for: session.id)?.submit(text, files: files, for: catalog.model(session.model), queue: false, keptElsewhere: true)
                     }
                 }
                 .environment(catalog)
@@ -981,7 +961,6 @@ struct MainView: View {
             canGoBack: tabs.canGoBack,
             goBack: tabs.goBack,
             newSession: { tabs.newSession(in: nil) },
-            newTerminalTab: { tabs.openTerminalTab(command: nil) },
             openFolder: openFolder,
             newProject: { tabs.openProjectEditor(ProjectEditorRequest(project: nil)) },
             newBot: { tabs.openBotEditor(bot: nil) },
@@ -1052,8 +1031,7 @@ struct MainView: View {
         if actions.hasProject {
             add("Run", "play", "⌘R", detail: runCommand, actions.run)
         }
-        add("New Terminal", "apple.terminal", "⌃⇧`", actions.newTerminalTab)
-        add("New Terminal in Panel", "terminal", "⌃`", actions.newTerminal)
+        add("New Terminal", "terminal", "⌃`", actions.newTerminal)
         add("New Browser Tab", "globe", "⌥⌘B", actions.newBrowser)
         add("Show Changes", "plusminus", "⌥⌘I", actions.showChanges)
         add("Show Work Queue", "checklist", "⌥⌘U", actions.showWorkQueue)
@@ -1626,7 +1604,7 @@ struct WelcomeView: View {
 }
 
 /// What had the keyboard last in the conversation and in the session beside it (a composer, a
-/// terminal tab, a field), to give it back to when what took it goes: the panel or the sidebar
+/// field), to give it back to when what took it goes: the panel or the sidebar
 /// closing, Settings put away. And where the panel's and the sidebar's cards are, to tell whether
 /// the one going has it.
 @MainActor private final class KeyboardReturn {

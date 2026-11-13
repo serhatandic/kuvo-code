@@ -148,6 +148,9 @@ final class KeeperFollower {
     /// The keeper isn't coming (switched off in Login Items & Extensions, or macOS doesn't let it
     /// run): the app runs this Mac's box itself instead.
     var onGone: () -> Void = {}
+    /// The keeper moving this Mac's box into its home of its own (`status.moving`): why it holds on,
+    /// "" while it just moves, nil otherwise.
+    var onMoving: (String?) -> Void = { _ in }
     /// A read under way, and whether the records changed while it was: one at a time, so an older
     /// one that waited on the keeper never says what a newer one already said otherwise.
     private var reading = false
@@ -213,6 +216,7 @@ final class KeeperFollower {
         } else if silentSince == nil {
             silentSince = .now
         }
+        onMoving(status["moving"] as? Bool == true ? status["movingWhy"] as? String ?? "" : nil)
         box.follow(serve, failure: (status["box"] as? [String: Any])?["failure"] as? String)
         agents.follow(bridge, failure: (status["agents"] as? [String: Any])?["failure"] as? String)
         // One making way with nothing under way (or already going, and not answering) goes this

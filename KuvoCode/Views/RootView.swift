@@ -51,13 +51,8 @@ struct RootView: View {
         // This Mac's models and accounts, where nothing names another computer: its own engine's,
         // or, attached to the box already here, that box's.
         .environment(app.catalog(for: app.thisMacsBox))
-        // The window closing ends the panel's terminals and pages, and the terminal tabs. (Not the
-        // sessions' view going away: that also happens while the engine restarts, and they should
-        // outlive that.)
-        .onDisappear {
-            app.utilities.closeAll()
-            app.mainTerminals.closeAll()
-        }
+        // Closing the window ends its panel; changing sessions keeps the panel running.
+        .onDisappear { app.utilities.closeAll() }
         .frame(minWidth: 620, minHeight: 520)
         // The window itself is frosted glass, tinted by what's behind it; cards float on it.
         .windowGlass()
@@ -140,7 +135,13 @@ struct EngineSetupView: View {
         case .failed(let message):
             message
         default:
-            app.calibration.isRunning ? "Getting your bots and settings ready for this version…" : "Getting the agent engine ready…"
+            if let moving = app.boxMoving {
+                // (#333: the move's own view is piece 8's.)
+                moving.isEmpty ? "Moving this Mac’s box into its own home. Nothing is lost; it starts again in a moment."
+                    : "Moving this Mac’s box into its own home is held up: \(moving)"
+            } else {
+                app.calibration.isRunning ? "Getting your bots and settings ready for this version…" : "Getting the agent engine ready…"
+            }
         }
     }
 }

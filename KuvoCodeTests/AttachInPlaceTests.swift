@@ -24,7 +24,7 @@ import Testing
         let script = """
             #!/bin/sh
             \(hereFails ? "[ \"$5\" = here ] && exit 3" : "")
-            case "$5" in here|box) shift 3; exec '\(node.path(percentEncoded: false))' "$@";; esac
+            case "$5" in here|box|helper) shift 3; exec '\(node.path(percentEncoded: false))' "$@";; esac
             [ "$1" = "run" ] && exit 1
             echo '{"url":"\(engine.url)"}'
             while [ -d '\(folder.path(percentEncoded: false))' ]; do sleep 0.05; done
@@ -287,7 +287,7 @@ import Testing
         #expect(model.settingsTabs.page == .accounts && model.settingsTabs.box == .attached)
         // Its chats where its box says they go.
         try await model.readChatsHere()
-        model.tabs.newSession(in: nil, conversation: true)
+        model.tabs.newSession(in: nil)
         let chats = RemoteFolder.folder(home.path(percentEncoded: false) + "/\(RemoteEngineInstaller.root)/box-chats", on: SSHConnection.thisMac)
         #expect(model.tabs.selection == .draft(chats))
         #expect(Workspace.onThisMac("/Users/me/project") == RemoteFolder.folder("/Users/me/project", on: SSHConnection.thisMac))
@@ -325,7 +325,7 @@ import Testing
         try await until { here.isReady && !onTheBoxHere(model.workspace.sessions.map(\.location.directory)).isEmpty }
         model.tabs.open(.session("ses_there"))
         try await model.readChatsHere()
-        model.tabs.newSession(in: nil, conversation: true)
+        model.tabs.newSession(in: nil)
         // Its Mac removed it: its way to start and its engine went, its card stayed. (The app's own
         // engine lists none.)
         engine.list([])

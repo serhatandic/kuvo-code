@@ -32,6 +32,9 @@ import { claudeSlots, daysIn, slotsFrom, keptSlots, knownZone, noSlots, ownZone,
 import { JSONLFiles, jsonlFiles } from "./jsonl"
 import type { Pricing, PricingStore } from "./pricing"
 import type { UsagePeers } from "./usage-peers"
+import { settingsRoutes, type UsageSettings } from "./settings"
+
+export { UsageSettings } from "./settings"
 
 /** The services whose usage history a box states, so far (`opencode` only where it knows its engine's folder). */
 export const USAGE_SERVICES: LimitsService[] = ["claude", "codex", "grok", "opencode", "cursor", "antigravity"]
@@ -247,8 +250,24 @@ export class Usage {
   peers?: UsagePeers
   /** The services this box states the usage of (`opencode` only where it reads its engine's databases). */
   services: LimitsService[] = USAGE_SERVICES
-  /** How this box prices what can't be priced by itself (Codex's fallback model). */
-  settings?: UsageSettings
+  private kept?: UsageSettings
+
+  /**
+   * The usage panel's settings this box keeps (`settings.ts`), Codex's fallback model among them,
+   * whose rates price what can't be priced by itself. Clients are told as they change; a new
+   * fallback model reads the logs again with it.
+   */
+  get settings(): UsageSettings | undefined {
+    return this.kept
+  }
+
+  set settings(settings: UsageSettings | undefined) {
+    this.kept = settings
+    settings?.listen((units) => {
+      emit("kuvo.usage.settings", { units })
+      if (units.includes("codexFallback")) void this.tick()
+    })
+  }
 
   constructor(
     private readonly sources: () => UsageSource[],
@@ -437,13 +456,18 @@ export class Usage {
     }
   }
 
+  /** The models Codex's fallback model may be, in order. */
+  codexChoices(): string[] {
+    return this.pricing.current().fallbackOptions("codex")
+  }
+
   /**
-   * Codex's fallback model, for this box's own logs (none: `null`): one of the choices
-   * (`fallbackOptions`), or false when it isn't. Its caller reads again with it (`refresh`).
+   * Codex's fallback model, for this box's own logs and your other computers' (none: `null`): one
+   * of the choices (`fallbackOptions`), or false when it isn't. Its caller reads again with it (`refresh`).
    */
   setCodexFallback(model: string | null): boolean {
     if (!this.settings) return false
-    if (model !== null && !this.pricing.current().fallbackOptions("codex").includes(model)) return false
+    if (model !== null && !this.codexChoices().includes(model)) return false
     this.settings.setCodexFallback(model)
     return true
   }
@@ -514,7 +538,7 @@ export async function usageRoutes(usage: Usage | undefined, method: string, rest
   if (!usage) return json({ message: "Usage isn't read on this computer." }, 503)
   const zone = params.get("zone")
   if (!rest.length && method === "GET") return json({ data: usage.view(zone) })
-  // `PUT api/kuvo/usage/pricing {codex: {fallback: <model> | null}}`: Codex's fallback model, this box's.
+  // `PUT api/kuvo/usage/pricing {codex: {fallback: <model> | null}}`: Codex's fallback model, shared with your other computers (`settings`).
   if (rest.length === 1 && rest[0] === "pricing" && method === "PUT") {
     const given = (await body())?.codex
     const model = given && typeof given === "object" ? given.fallback : undefined
@@ -523,6 +547,7 @@ export async function usageRoutes(usage: Usage | undefined, method: string, rest
     await Promise.race([usage.refresh(), new Promise((resolve) => setTimeout(resolve, 5_000).unref?.())])
     return json({ data: usage.view(zone) })
   }
+  if (rest[0] === "settings") return usage.settings ? settingsRoutes(usage.settings, () => usage.codexChoices(), method, rest.slice(1), body) : json({ message: "Usage settings aren't kept on this computer." }, 503)
   if (rest.length === 1 && rest[0] === "refresh" && method === "POST") {
     usage.peers?.refreshElsewhere()
     // What's read within a few seconds is in the answer; the rest comes as kuvo.usage.updated.
@@ -661,39 +686,6 @@ export function claudeSources(folder?: string, computer = ownComputer): (agents:
       }
       return [source]
     })
-}
-
-/**
- * How a box prices what can't be priced by itself, kept in its usage folder (`settings.json`):
- * Codex's fallback model, whose rates estimate a Codex model with no known price (none until
- * chosen). Each box's own, for its own logs.
- */
-export class UsageSettings {
-  codexFallback?: string
-  /** Whether it was ever chosen here (none counts): a Mac's own choice from before is brought over only until it is. */
-  chosen = false
-
-  constructor(private readonly file?: string) {
-    if (!file) return
-    try {
-      const saved = JSON.parse(readFileSync(file, "utf8"))?.codex
-      if (saved && typeof saved === "object" && "fallback" in saved) {
-        this.chosen = true
-        if (typeof saved.fallback === "string" && saved.fallback && saved.fallback.length <= 200) this.codexFallback = saved.fallback
-      }
-    } catch {}
-  }
-
-  setCodexFallback(model: string | null) {
-    this.codexFallback = model ?? undefined
-    this.chosen = true
-    if (!this.file) return
-    try {
-      mkdirSync(dirname(this.file), { recursive: true })
-      writeFileSync(this.file + ".new", JSON.stringify({ codex: { fallback: model } }), { mode: 0o600 })
-      renameSync(this.file + ".new", this.file)
-    } catch {}
-  }
 }
 
 /** A folder's real path (itself when it isn't there). */

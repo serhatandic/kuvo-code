@@ -171,13 +171,16 @@ public struct Handoff: Codable, Sendable, Hashable {
     public var title: String?
     /// Why it couldn't be, when it failed.
     public var error: String?
+    /// When it was asked for, in ms since 1970: which handoff this is (nil from a box from before).
+    public var started: Double?
 
-    public init(from: String, state: State, to: String? = nil, title: String? = nil, error: String? = nil) {
+    public init(from: String, state: State, to: String? = nil, title: String? = nil, error: String? = nil, started: Double? = nil) {
         self.from = from
         self.state = state
         self.to = to
         self.title = title
         self.error = error
+        self.started = started
     }
 }
 

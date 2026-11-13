@@ -579,6 +579,22 @@ final class OutsideAgents {
         sideQuestionCounts[question.session] = list.count
     }
 
+    /// A side question shown while its box says what the text sent means (`SessionModel.submit`):
+    /// in a list read already, and counted nowhere. Whether it shows.
+    @discardableResult
+    func showAsking(_ question: SideQuestion) -> Bool {
+        guard var list = sideQuestions[question.session] else { return false }
+        list.append(question)
+        sideQuestions[question.session] = list
+        return true
+    }
+
+    /// That one gone, once its box has said.
+    func dropAsking(_ id: String, of session: String) {
+        guard let list = sideQuestions[session], list.contains(where: { $0.id == id }) else { return }
+        sideQuestions[session] = list.filter { $0.id != id }
+    }
+
     func dropSideQuestion(_ id: String?, of session: String) {
         guard let id else {
             sideQuestions[session] = sideQuestions[session].map { _ in [] }
@@ -595,12 +611,23 @@ final class OutsideAgents {
         sideQuestionCounts[session] = left.isEmpty ? nil : left.count
     }
 
-    func took(_ review: Review) { reviews[review.session] = review }
+    func took(_ review: Review) {
+        // Its end can be told before the answer that started it (one that fails at once): that stays.
+        if let known = reviews[review.session], known.id == review.id, known.state != .reviewing, review.state == .reviewing { return }
+        reviews[review.session] = review
+    }
     func dropReview(_ session: String) { reviews[session] = nil }
     /// One just asked for here: the box's answer, before its events.
+    /// Its end, told before this answer (its note written quickly, or failing at once), stays, and
+    /// opens what it made: the same handoff, by when it was asked for (one asked again that ends
+    /// the same way is still another).
     func startedHandoff(_ handoff: Handoff) {
-        handoffs[handoff.from] = handoff
         opensWhenDone.insert(handoff.from)
+        if let known = handoffs[handoff.from], known.state != .writing, let started = handoff.started, known.started == started {
+            ended(known)
+            return
+        }
+        handoffs[handoff.from] = handoff
         ended(handoff)
     }
 
@@ -609,7 +636,8 @@ final class OutsideAgents {
         onHandoff?(handoff)
     }
 
-    private func keywordEvent(_ event: ServerEvent) {
+    /// What the bridge tells of side questions, reviews and handoffs, as it comes.
+    func keywordEvent(_ event: ServerEvent) {
         switch event.type {
         case "kuvo.btw.updated":
             if let update = try? event.payload(as: SideQuestionUpdate.self) { took(update.question) }
