@@ -1321,8 +1321,10 @@ final class SessionModel {
     /// it shows again, unless another took its place.
     private func dropSideShown(_ shown: String, before: String?) {
         guard let bridge = goalBridge(), bridge.sideQuestions[id]?.contains(where: { $0.id == shown }) == true else { return }
-        bridge.dropAsking(shown, of: id)
+        // (What showed first, while the row is still there to say it's the same thread: else the
+        // side tag would come back on, though its × was clicked meanwhile.)
         if shownSideQuestion == shown { shownSideQuestion = before }
+        bridge.dropAsking(shown, of: id)
     }
 
     /// "/" and "!" texts shown while their box says what they mean: they start nothing yet.
