@@ -179,6 +179,9 @@ pub struct Colors {
     pub warning: Hsla,
     pub danger: Hsla,
 
+    /// Fills for avatars without a picture, picked by name so a person keeps theirs.
+    pub avatars: [Hsla; 6],
+
     /// Syntax colours for code.
     pub syntax: Syntax,
 }
@@ -244,6 +247,8 @@ impl Colors {
             warning: hex(0xC7820E),
             danger: hex(0xD93B3B),
 
+            avatars: [hex(0xD9E4F5), hex(0xF5E1D3), hex(0xDCEFDF), hex(0xEDDDF3), hex(0xF3E9C9), hex(0xD7ECEE)],
+
             syntax: Syntax {
                 plain: hex(0x292929),
                 comment: hex(0x9E9E9E),
@@ -294,6 +299,8 @@ impl Colors {
             success: hex(0x4CC27A),
             warning: hex(0xE0A43A),
             danger: hex(0xF06363),
+
+            avatars: [hex(0x2B3A52), hex(0x4A3528), hex(0x2A4232), hex(0x3E2F4A), hex(0x463D24), hex(0x24404A)],
 
             syntax: Syntax {
                 plain: hex(0xE3E3E3),

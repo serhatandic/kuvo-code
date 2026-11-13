@@ -11,6 +11,7 @@ pub mod icon;
 pub mod markdown;
 pub mod menu;
 pub mod row;
+pub mod small;
 pub mod text_field;
 pub mod theme;
 
@@ -22,4 +23,5 @@ pub use theme::{ActiveTheme, Appearance, StyledType, Theme, TypeSize};
 /// Binds the keys the blocks use (text editing, menus). Call once at start-up.
 pub fn bind_keys(cx: &mut gpui::App) {
     text_field::bind_keys(cx);
+    menu::bind_keys(cx);
 }

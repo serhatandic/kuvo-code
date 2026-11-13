@@ -5,10 +5,13 @@ mod chat_list;
 mod code_blocks;
 mod icons;
 mod markdown;
+mod menus;
+mod rows;
+mod small;
 mod text_field;
 mod theme;
 
-use gpui::{AnyElement, Context, Window, px};
+use gpui::{AnyElement, Context, Window};
 
 use crate::{Block, Gallery};
 
@@ -16,16 +19,18 @@ use crate::{Block, Gallery};
 pub struct Demos {
     pub fields: text_field::Fields,
     pub chats: chat_list::Chats,
+    pub menus: menus::Menus,
+    pub settings: small::Settings,
 }
 
 impl Demos {
     pub fn new(_window: &mut Window, cx: &mut Context<Gallery>) -> Self {
-        Self { fields: text_field::Fields::new(cx), chats: chat_list::Chats::new(cx) }
+        Self { fields: text_field::Fields::new(cx), chats: chat_list::Chats::new(cx), menus: menus::Menus::new(cx), settings: Default::default() }
     }
 }
 
-pub(crate) fn is_built(block: Block) -> bool {
-    matches!(block, Block::Theme | Block::Icons | Block::Buttons | Block::TextField | Block::ChatList | Block::Markdown | Block::CodeBlocks)
+pub(crate) fn is_built(_block: Block) -> bool {
+    true
 }
 
 pub(crate) fn shot_height(block: Block) -> f32 {
@@ -37,7 +42,9 @@ pub(crate) fn shot_height(block: Block) -> f32 {
         Block::ChatList => 840.,
         Block::Markdown => 800.,
         Block::CodeBlocks => 1130.,
-        _ => 900.,
+        Block::Menus => 900.,
+        Block::Rows => 760.,
+        Block::SmallPieces => 860.,
     }
 }
 
@@ -55,7 +62,9 @@ pub(crate) fn render(
         Block::ChatList => chat_list::page(&demos.chats, window, cx),
         Block::Markdown => markdown::page(window, cx),
         Block::CodeBlocks => code_blocks::page(window, cx),
-        _ => crate::page(block.title(), "Not built yet.", [], cx),
+        Block::Menus => menus::page(&demos.menus, window, cx),
+        Block::Rows => rows::page(window, cx),
+        Block::SmallPieces => small::page(&demos.settings, window, cx),
     }
 }
 
@@ -85,10 +94,18 @@ pub(crate) fn prepare_shot(
         // Draw once so the list knows its heights, then scroll back and let a reply arrive.
         cx.update_window(window, |_, window, _| window.refresh())?;
         cx.run_until_parked();
-        cx.update(|cx| scrolled.update(cx, |c, _| c.list.scroll_by(px(-330.))));
+        cx.update(|cx| scrolled.update(cx, |c, _| c.list.scroll_by(gpui::px(-330.))));
         cx.update_window(window, |_, window, _| window.refresh())?;
         cx.run_until_parked();
         cx.update(|cx| scrolled.update(cx, |c, cx| c.add_exchange(cx)));
+    }
+    if block == Block::Menus {
+        let handle = cx.update(|cx| gallery.read(cx).expect("the gallery").demos().menus.model.clone());
+        cx.update_window(window, |_, window, cx| {
+            let menu = menus::model_menu(cx);
+            menu.update(cx, |menu, cx| menu.highlight_first(cx));
+            handle.open(menu, window, cx);
+        })?;
     }
     cx.run_until_parked();
     Ok(())

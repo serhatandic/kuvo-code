@@ -89,6 +89,7 @@ icons! {
     Sidebar => "sidebar",
     Sliders => "sliders",
     Sparkle => "sparkle",
+    Spinner => "spinner",
     Stop => "stop",
     Sun => "sun",
     Terminal => "terminal",

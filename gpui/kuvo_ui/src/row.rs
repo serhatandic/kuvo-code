@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, ClickEvent, ElementId, InteractiveElement, IntoElement, ParentElement, Pixels,
-    RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
+    RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder as _, px,
 };
 
 use crate::{
@@ -181,26 +181,43 @@ impl RenderOnce for NavRow {
             (None, None) => None,
         };
 
-        let has_hover_trailing = self.hover_trailing.is_some();
-        row.children(leading)
-            .child(div().flex_1().min_w_0().truncate().child(self.label))
-            .children(self.trailing.map(|t| {
-                let slot = div().flex().flex_none().items_center();
-                if has_hover_trailing {
-                    slot.group_hover(group.clone(), |s| s.opacity(0.)).child(t)
-                } else {
-                    slot.child(t)
-                }
-            }))
-            .children(self.hover_trailing.map(|t| {
+        // The end of the row: what it shows at rest, and what takes its place under the
+        // pointer (the hover action sits over the resting content, so nothing shifts).
+        let end = match (self.trailing, self.hover_trailing) {
+            (None, None) => None,
+            (Some(rest), None) => Some(div().flex().flex_none().items_center().child(rest)),
+            (rest, Some(action)) => Some(
                 div()
+                    .relative()
                     .flex()
                     .flex_none()
                     .items_center()
-                    .opacity(0.)
-                    .group_hover(group.clone(), |s| s.opacity(1.))
-                    .child(t)
-            }))
+                    .justify_end()
+                    .min_w(px(24.))
+                    .h_full()
+                    .children(rest.map(|rest| {
+                        div().flex().items_center().group_hover(group.clone(), |s| s.opacity(0.)).child(rest)
+                    }))
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .right(px(-4.))
+                            .flex()
+                            .items_center()
+                            .opacity(0.)
+                            .group_hover(group.clone(), |s| s.opacity(1.))
+                            .child(action),
+                    ),
+            ),
+        };
+        // Leading things narrower than an icon (status dots) are centred in an icon's width, so
+        // every label in a list starts at the same place.
+        let leading = leading.map(|l| div().flex().flex_none().justify_center().min_w(IconSize::Nav.pixels()).child(l));
+        row.children(leading)
+            .child(div().flex_1().min_w_0().truncate().child(self.label))
+            .children(end)
     }
 }
 
@@ -213,4 +230,195 @@ impl<E: InteractiveElement + Styled> RowHover for E {
     fn when_selected_or(self, selected: bool, selected_bg: gpui::Hsla, hover: gpui::Hsla) -> Self {
         if selected { self.hover(move |s| s.bg(selected_bg)) } else { self.hover(move |s| s.bg(hover)) }
     }
+}
+
+/// A section's header in a sidebar: a quiet label, with actions that show under the pointer.
+#[derive(IntoElement)]
+pub struct SectionHeader {
+    id: ElementId,
+    label: SharedString,
+    actions: Vec<AnyElement>,
+}
+
+impl SectionHeader {
+    pub fn new(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Self {
+        Self { id: id.into(), label: label.into(), actions: Vec::new() }
+    }
+
+    pub fn action(mut self, element: impl IntoElement) -> Self {
+        self.actions.push(element.into_any_element());
+        self
+    }
+}
+
+impl RenderOnce for SectionHeader {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let c = &cx.theme().colors;
+        let group: SharedString = format!("section-{:?}", self.id).into();
+        div()
+            .id(self.id)
+            .group(group.clone())
+            .flex()
+            .items_center()
+            .justify_between()
+            .h(px(28.))
+            .pl(space::S2)
+            .pt(space::S2)
+            .text_ui(TypeSize::Caption)
+            .text_color(c.text_faint)
+            .child(self.label)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .opacity(0.)
+                    .group_hover(group, |s| s.opacity(1.))
+                    .children(self.actions),
+            )
+    }
+}
+
+/// A row in a card's list: a leading tile, a title over a line of detail, and something at the
+/// end (a button, a chip, a value with a chevron). Rows in a list are divided by hairlines.
+#[derive(IntoElement)]
+pub struct ListRow {
+    id: ElementId,
+    title: SharedString,
+    title_extra: Option<AnyElement>,
+    detail: Option<SharedString>,
+    leading: Option<AnyElement>,
+    trailing: Option<AnyElement>,
+    shown: Option<RowState>,
+    on_click: Option<ClickHandler>,
+}
+
+impl ListRow {
+    pub fn new(id: impl Into<ElementId>, title: impl Into<SharedString>) -> Self {
+        Self {
+            id: id.into(),
+            title: title.into(),
+            title_extra: None,
+            detail: None,
+            leading: None,
+            trailing: None,
+            shown: None,
+            on_click: None,
+        }
+    }
+
+    pub fn detail(mut self, detail: impl Into<SharedString>) -> Self {
+        self.detail = Some(detail.into());
+        self
+    }
+
+    /// Something right after the title (a status chip).
+    pub fn title_extra(mut self, element: impl IntoElement) -> Self {
+        self.title_extra = Some(element.into_any_element());
+        self
+    }
+
+    /// An icon in a 36 px tile, at the card size.
+    pub fn icon(mut self, icon: IconName, cx: &App) -> Self {
+        let c = &cx.theme().colors;
+        self.leading = Some(
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .size(px(36.))
+                .rounded(radius::NAV)
+                .bg(c.sunken)
+                .border_1()
+                .border_color(c.border)
+                .child(Icon::new(icon).size(IconSize::Card).color(c.text_muted))
+                .into_any_element(),
+        );
+        self
+    }
+
+    pub fn leading(mut self, element: impl IntoElement) -> Self {
+        self.leading = Some(element.into_any_element());
+        self
+    }
+
+    pub fn trailing(mut self, element: impl IntoElement) -> Self {
+        self.trailing = Some(element.into_any_element());
+        self
+    }
+
+    pub fn shown(mut self, state: RowState) -> Self {
+        self.shown = Some(state);
+        self
+    }
+
+    /// Makes the whole row a target (a row that opens a page or a setting).
+    pub fn on_click(mut self, handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self {
+        self.on_click = Some(Rc::new(handler));
+        self
+    }
+}
+
+impl RenderOnce for ListRow {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let c = &cx.theme().colors;
+        let (hover, pressed) = (c.hover, c.pressed);
+        let mut row = div()
+            .id(self.id)
+            .flex()
+            .items_center()
+            .gap(space::S3)
+            .px(space::S4)
+            .py(space::S3)
+            .when(self.shown == Some(RowState::Hovered), |d| d.bg(hover))
+            .when(self.shown == Some(RowState::Pressed), |d| d.bg(pressed))
+            .children(self.leading)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(space::S2)
+                            .child(div().text_ui(TypeSize::Small).medium().text_color(c.text).truncate().child(self.title))
+                            .children(self.title_extra),
+                    )
+                    .children(self.detail.map(|d| {
+                        div().text_ui(TypeSize::Caption).text_color(c.text_muted).truncate().child(d)
+                    })),
+            )
+            .children(self.trailing.map(|t| div().flex().flex_none().items_center().child(t)));
+        if let Some(handler) = self.on_click {
+            row = row
+                .cursor_pointer()
+                .hover(move |s| s.bg(hover))
+                .active(move |s| s.bg(pressed))
+                .on_click(move |e, w, cx| handler(e, w, cx));
+        }
+        row
+    }
+}
+
+/// A card holding rows, divided by hairlines (settings, accounts, integrations).
+pub fn row_card(rows: impl IntoIterator<Item = AnyElement>, cx: &App) -> impl IntoElement {
+    let c = &cx.theme().colors;
+    let mut card = div()
+        .flex()
+        .flex_col()
+        .rounded(radius::CARD)
+        .border_1()
+        .border_color(c.border)
+        .bg(c.surface)
+        .overflow_hidden();
+    for (ix, row) in rows.into_iter().enumerate() {
+        if ix > 0 {
+            card = card.child(div().h(px(1.)).mx(space::S4).bg(c.border));
+        }
+        card = card.child(row);
+    }
+    card
 }
