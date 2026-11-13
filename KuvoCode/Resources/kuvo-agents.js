@@ -1,7 +1,7 @@
 // @bun
 // Packages/Box/src/agents/main.ts
-import { mkdirSync as mkdirSync25, readdirSync as readdirSync20, readFileSync as readFileSync35, rmSync as rmSync17 } from "fs";
-import { basename as basename13, dirname as dirname22, join as join38 } from "path";
+import { mkdirSync as mkdirSync26, readdirSync as readdirSync20, readFileSync as readFileSync37, rmSync as rmSync17 } from "fs";
+import { basename as basename13, dirname as dirname22, join as join40 } from "path";
 
 // Packages/Box/src/agents/accounts.ts
 import { randomBytes } from "crypto";
@@ -11506,14 +11506,17 @@ function merged(members) {
   const newest = [...members].sort((a, b) => newestOf(b) - newestOf(a));
   const plan = newest.find((member) => member.plan)?.plan;
   const balance = newest.find((member) => member.balance)?.balance;
+  const extras = newest.find((member) => member.checked && !member.problem)?.extras;
   const checked = Math.max(0, ...members.map((member) => member.checked ?? 0));
   const next = Math.min(...members.map((member) => member.next ?? Infinity));
-  for (const key of ["plan", "balance", "checked", "next", "problem"])
+  for (const key of ["plan", "balance", "extras", "checked", "next", "problem"])
     delete account[key];
   if (plan)
     account.plan = plan;
   if (balance)
     account.balance = balance;
+  if (extras?.length)
+    account.extras = extras;
   if (checked)
     account.checked = checked;
   if (Number.isFinite(next))
@@ -11612,6 +11615,7 @@ class Limits {
           ...peer.plan ?? entry.plan ? { plan: peer.plan ?? entry.plan } : {},
           windows: peer.windows,
           ...peer.balance ?? entry.balance ? { balance: peer.balance ?? entry.balance } : {},
+          ...peer.extras?.length ? { extras: peer.extras } : {},
           ...entry.checked ? { checked: entry.checked } : {},
           ...account.limits.read ? { next: entry.next } : {}
         });
@@ -11626,6 +11630,7 @@ class Limits {
         ...entry.plan ? { plan: entry.plan } : {},
         windows: entry.windows,
         ...entry.balance ? { balance: entry.balance } : {},
+        ...entry.extras?.length ? { extras: entry.extras } : {},
         ...entry.checked ? { checked: entry.checked } : {},
         ...account.limits.read ? { next: entry.next } : {},
         ...problem ? { problem } : {}
@@ -11635,6 +11640,15 @@ class Limits {
   }
   identity(provider) {
     return this.entries.get(provider)?.identity;
+  }
+  held(provider) {
+    const entry = this.entries.get(provider);
+    const source = this.accounts().find((each) => each.provider === provider)?.limits;
+    if (!entry || !source)
+      return false;
+    if (entry.problem?.kind === "expired" && entry.signIn !== undefined && entry.signIn === source.signIn?.())
+      return true;
+    return this.heldBack(source, entry, this.now());
   }
   reads() {
     return new Set(this.accounts().filter((account) => account.limits.read).map((account) => account.provider));
@@ -11743,6 +11757,7 @@ class Limits {
       entry.checked = at;
       entry.plan = reading.plan ?? entry.plan;
       entry.balance = reading.balance;
+      entry.extras = reading.extras?.length ? reading.extras : undefined;
       const heard = entry.windows.filter((window) => window.source === "turn" && (window.read >= started || !reading.windows.some((each) => each.id === window.id)));
       entry.windows = [...reading.windows.filter((window) => !heard.some((each) => each.id === window.id)).map((window) => ({ ...window, used: clamp(window.used), read: at, source: "usage" })), ...heard];
       entry.problem = undefined;
@@ -11754,6 +11769,8 @@ class Limits {
       return true;
     } catch (caught) {
       const at = this.now();
+      if (!entry.identity)
+        this.identify(entry, source.identity?.());
       entry.checked = at;
       const problem = caught instanceof LimitsProblem ? caught : new LimitsProblem("failed", `Couldn't read its limits: ${caught instanceof Error ? caught.message : String(caught)}`);
       entry.problem = { kind: problem.kind, message: problem.message, ...problem.until ? { until: problem.until } : {} };
@@ -11774,6 +11791,7 @@ class Limits {
           entry.windows = [];
           entry.plan = undefined;
           entry.balance = undefined;
+          entry.extras = undefined;
           entry.next = at + NOTHING_AGAIN;
           break;
         case "expired":
@@ -11802,6 +11820,7 @@ class Limits {
     entry.windows = [];
     entry.plan = undefined;
     entry.balance = undefined;
+    entry.extras = undefined;
     entry.checked = undefined;
     entry.problem = { kind: "failed", message: "Signed in to another account here: its limits show once they're read." };
     entry.signIn = undefined;
@@ -11820,6 +11839,7 @@ class Limits {
       entry.windows = [];
       entry.plan = undefined;
       entry.balance = undefined;
+      entry.extras = undefined;
       entry.checked = undefined;
       entry.problem = undefined;
       entry.identity = undefined;
@@ -16938,9 +16958,9 @@ function codexPlan(type) {
 }
 
 // Packages/Box/src/agents/agents/cursor.ts
-import { existsSync as existsSync16, mkdirSync as mkdirSync16, readFileSync as readFileSync24, rmSync as rmSync13 } from "fs";
+import { existsSync as existsSync17, mkdirSync as mkdirSync16, readFileSync as readFileSync25, rmSync as rmSync13 } from "fs";
 import { homedir as homedir3 } from "os";
-import { dirname as dirname14, join as join27 } from "path";
+import { dirname as dirname14, join as join28 } from "path";
 
 // Packages/Box/src/agents/agents/cursor-worker.ts
 import { readFileSync as readFileSync23, renameSync as renameSync13, writeFileSync as writeFileSync17 } from "fs";
@@ -17112,10 +17132,669 @@ class CursorWorker {
   }
 }
 
+// Packages/Box/src/agents/usage/cursor-api.ts
+import { existsSync as existsSync16, readFileSync as readFileSync24 } from "fs";
+import { join as join27 } from "path";
+var cursorEndpoints = {
+  api2: "https://api2.cursor.sh",
+  web: "https://cursor.com",
+  live: false
+};
+function cursorReachable() {
+  return cursorEndpoints.live || cursorEndpoints.api2 !== "https://api2.cursor.sh" && cursorEndpoints.web !== "https://cursor.com";
+}
+var CONNECT = { "Content-Type": "application/json", "Connect-Protocol-Version": "1" };
+function cursorSession(accessToken) {
+  const subject = tokenClaims(accessToken)?.sub;
+  if (typeof subject !== "string" || !subject.trim())
+    return;
+  const parts = subject.trim().split("|");
+  const user = parts.length > 1 ? parts[1] : parts[0];
+  if (!user)
+    return;
+  return { user, cookie: `WorkosCursorSessionToken=${user}%3A%3A${accessToken}` };
+}
+function cursorKey(folder, own, env = process.env, now = Date.now()) {
+  const fromEnvironment = own ? env.CURSOR_API_KEY?.trim() : undefined;
+  if (fromEnvironment)
+    return fromEnvironment;
+  try {
+    const saved = JSON.parse(readFileSync24(join27(folder, "auth.json"), "utf8"));
+    const key = typeof saved?.apiKey === "string" ? saved.apiKey.trim() : "";
+    if (!key)
+      return;
+    if (typeof saved.apiKeyExpiresAtMs === "number" && saved.apiKeyExpiresAtMs < now)
+      return;
+    return key;
+  } catch {
+    return;
+  }
+}
+function cursorKeyUnreadable(folder) {
+  const file = join27(folder, "auth.json");
+  if (!existsSync16(file))
+    return false;
+  try {
+    JSON.parse(readFileSync24(file, "utf8"));
+    return false;
+  } catch {
+    return true;
+  }
+}
+var HOLD_WITHOUT_WORD = 15 * 60000;
+
+class CursorClient {
+  key;
+  now;
+  unreadable;
+  token;
+  refused;
+  holdUntil = 0;
+  exchanging;
+  constructor(key, now = Date.now, unreadable = () => false) {
+    this.key = key;
+    this.now = now;
+    this.unreadable = unreadable;
+  }
+  signIn() {
+    return fingerprint(this.key());
+  }
+  identity() {
+    const kept = this.token;
+    if (!kept || kept.key !== this.key())
+      return;
+    const user = cursorSession(kept.access)?.user;
+    return user ? `cursor:${user.toLowerCase()}` : undefined;
+  }
+  hold(until) {
+    this.holdUntil = Math.max(this.holdUntil, until ?? this.now() + HOLD_WITHOUT_WORD);
+  }
+  holdFor(header) {
+    const until = retryAt(header, this.now());
+    this.hold(until);
+    return until;
+  }
+  heldUntil() {
+    return this.now() < this.holdUntil ? this.holdUntil : undefined;
+  }
+  async accessToken(fresh = false) {
+    if (!cursorReachable())
+      throw new LimitsProblem("none", "Cursor isn't asked from this box.", undefined, false);
+    const key = this.key();
+    if (!key && this.unreadable())
+      throw new LimitsProblem("failed", "Cursor's sign-in here can't be read just now.", undefined, false);
+    if (!key)
+      throw new LimitsProblem("none", "Not signed in to Cursor here.", undefined, false);
+    if (this.refused === fingerprint(key))
+      throw new LimitsProblem("expired", "Cursor turned its sign-in away: sign in to Cursor again in Settings \u203A Accounts.", undefined, false);
+    const held = this.heldUntil();
+    if (held)
+      throw new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", held, false);
+    const kept = this.token;
+    if (!fresh && kept && kept.key === key && this.now() < kept.until)
+      return kept.access;
+    if (this.exchanging?.key === key)
+      return this.exchanging.answer;
+    const answer = this.exchange(key).finally(() => {
+      if (this.exchanging?.answer === answer)
+        this.exchanging = undefined;
+    });
+    this.exchanging = { key, answer };
+    return answer;
+  }
+  async exchange(key) {
+    let answer;
+    try {
+      answer = await send(`${cursorEndpoints.api2}/auth/exchange_user_api_key`, { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: "{}" }, 1e4);
+    } catch {
+      throw new LimitsProblem("failed", "Couldn't reach Cursor. Check your connection.");
+    }
+    if (answer.status === 400 || answer.status === 401) {
+      this.refused = fingerprint(key);
+      throw new LimitsProblem("expired", "Cursor turned its sign-in away: sign in to Cursor again in Settings \u203A Accounts.");
+    }
+    if (answer.status === 429)
+      throw new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", this.holdFor(answer.headers.get("retry-after")));
+    if (answer.status < 200 || answer.status >= 300)
+      throw new LimitsProblem("failed", `Cursor answered ${answer.status}.`);
+    const access = typeof answer.body?.accessToken === "string" ? answer.body.accessToken.trim() : "";
+    if (!access)
+      throw new LimitsProblem("failed", "Cursor's answer wasn't one it gives.");
+    const exp = Number(tokenClaims(access)?.exp);
+    this.token = { key, access, until: Number.isFinite(exp) ? exp * 1000 - 5 * 60000 : 0 };
+    return access;
+  }
+  refuses() {
+    if (this.refused !== undefined && this.refused === fingerprint(this.key()))
+      return new LimitsProblem("expired", "Cursor turned its sign-in away: sign in to Cursor again in Settings \u203A Accounts.", undefined, false);
+    const held = this.heldUntil();
+    return held ? new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", held, false) : undefined;
+  }
+  dashboard(method, access) {
+    const refused = this.refuses();
+    if (refused)
+      return Promise.reject(refused);
+    return send(`${cursorEndpoints.api2}/aiserver.v1.DashboardService/${method}`, { method: "POST", headers: { Authorization: `Bearer ${access}`, ...CONNECT }, body: "{}" }, 1e4);
+  }
+  website(path, access, init = {}, timeout = 1e4) {
+    const session = cursorSession(access);
+    if (!session)
+      return;
+    const refused = this.refuses();
+    if (refused)
+      return Promise.reject(refused);
+    const url = new URL(`${cursorEndpoints.web}${path}`);
+    for (const [name, value] of Object.entries(init.query ?? {}))
+      url.searchParams.set(name, value);
+    const headers = { Cookie: session.cookie };
+    if (init.body !== undefined)
+      Object.assign(headers, { "Content-Type": "application/json", Origin: "https://cursor.com" });
+    return send(url.toString(), { method: init.method ?? "GET", headers, ...init.body !== undefined ? { body: JSON.stringify(init.body) } : {} }, timeout);
+  }
+}
+async function send(url, init, timeout) {
+  if (!cursorReachable())
+    throw new Error("Cursor isn't asked from this box.");
+  const response = await fetch(url, { ...init, redirect: "manual", signal: AbortSignal.timeout(timeout) });
+  const text = await response.text();
+  let body;
+  try {
+    body = text ? JSON.parse(text) : undefined;
+  } catch {}
+  return { status: response.status, body, headers: response.headers };
+}
+
+// Packages/Box/src/agents/usage/numbers.ts
+function numberOf(value) {
+  if (typeof value === "number")
+    return Number.isFinite(value) ? value : undefined;
+  if (typeof value === "string" && /^\s*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?\s*$/.test(value)) {
+    const found = Number(value);
+    return Number.isFinite(found) ? found : undefined;
+  }
+  return;
+}
+
+// Packages/Box/src/agents/usage/cursor-plan.ts
+var DAY_MS = 24 * 60 * 60000;
+var BILLING_PERIOD_MS = 30 * DAY_MS;
+var WEEK_MS = 7 * DAY_MS;
+
+class CursorPlanError extends Error {
+}
+var ORG = new Set(["enterprise", "team"]);
+var text3 = (value) => typeof value === "string" ? value : undefined;
+var trimmed = (value) => {
+  const found = text3(value)?.trim();
+  return found ? found : undefined;
+};
+var object = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
+var clampPercent = (value) => Number.isFinite(value) ? Math.min(Math.max(value, 0), 100) : 0;
+var dollars = (cents) => Math.round(cents) / 100;
+var titled = (value) => value.split(/\s+/).filter(Boolean).map((word) => word.slice(0, 1).toUpperCase() + word.slice(1)).join(" ");
+function isoTime(value) {
+  let s = text3(value)?.trim();
+  if (!s)
+    return;
+  if (s.includes(" ") && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(s))
+    s = s.slice(0, 10) + "T" + s.slice(11);
+  if (s.endsWith(" UTC"))
+    s = s.slice(0, -4) + "Z";
+  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})?$/.exec(s);
+  if (!match)
+    return;
+  const fraction = match[2] ? "." + match[2].slice(1, 4).padEnd(3, "0") : "";
+  const at = Date.parse(match[1] + fraction + (match[3] ?? "Z"));
+  return Number.isFinite(at) ? at : undefined;
+}
+function planFacts(usage) {
+  const isEnabled = usage.enabled !== false;
+  const planUsage = object(usage.planUsage);
+  const limit = planUsage ? numberOf(planUsage.limit) : undefined;
+  const totalPercentUsed = planUsage ? numberOf(planUsage.totalPercentUsed) : undefined;
+  const auto = planUsage ? numberOf(planUsage.autoPercentUsed) : undefined;
+  const api = planUsage ? numberOf(planUsage.apiPercentUsed) : undefined;
+  const spent = (planUsage ? numberOf(planUsage.totalSpend) : undefined) ?? (limit ?? 0) - ((planUsage ? numberOf(planUsage.remaining) : undefined) ?? limit ?? 0);
+  const hasModelPools = auto !== undefined && api !== undefined && auto >= 0 && api >= 0 ? auto > 0 || api > 0 || spent === 0 : false;
+  const spendLimitUsage = object(usage.spendLimitUsage);
+  const spendLimitType = text3(spendLimitUsage?.limitType)?.toLowerCase();
+  const pooledLimit = numberOf(spendLimitUsage?.pooledLimit) ?? 0;
+  const hasPlanUsage = planUsage !== undefined;
+  const hasLimit = limit !== undefined;
+  const hasTotalUsagePercent = totalPercentUsed !== undefined;
+  const planUsageLimitMissing = hasPlanUsage && !hasLimit;
+  return {
+    isEnabled,
+    hasPlanUsage,
+    limit,
+    totalPercentUsed,
+    hasModelPools,
+    hasLimit,
+    hasTotalUsagePercent,
+    planUsageLimitMissing,
+    planUsageUnusable: !hasPlanUsage || planUsageLimitMissing && !hasModelPools,
+    isTeamByShape: spendLimitType === "team" || pooledLimit > 0,
+    shouldTryGenericRequestFallback: isEnabled && hasPlanUsage && !hasLimit && !hasTotalUsagePercent && !hasModelPools
+  };
+}
+var progress = (label, used, limit, format, resetsAt, periodMs, suffix) => ({
+  label,
+  kind: "progress",
+  used,
+  limit,
+  format,
+  ...suffix !== undefined ? { suffix } : {},
+  ...resetsAt !== undefined ? { resetsAt } : {},
+  ...periodMs !== undefined ? { periodMs } : {}
+});
+function grokBotLine(usage) {
+  if (usage.usesPooledEnterpriseAllowance === true || usage.hasNonZeroIncludedLimit === false || usage.includedLimitZero === true)
+    return;
+  const percent = numberOf(usage.usagePercent);
+  if (percent === undefined || percent < 0)
+    return;
+  const reset = isoTime(usage.nextResetTimestampUtc);
+  const start = isoTime(usage.currentPeriodStart);
+  const period = start !== undefined && reset !== undefined && reset > start ? reset - start : WEEK_MS;
+  return progress("Grok Bot usage", clampPercent(percent), 100, "percent", reset, period);
+}
+function billingCycle(usage) {
+  const start = numberOf(usage.billingCycleStart);
+  const end = numberOf(usage.billingCycleEnd);
+  if (start === undefined || end === undefined || !(end > start))
+    return { ...end !== undefined ? { resetsAt: end } : {}, periodMs: BILLING_PERIOD_MS };
+  return { resetsAt: end, periodMs: end - start };
+}
+function onDemandSpendCents(spendLimitUsage, limit, remaining) {
+  const reported = [numberOf(spendLimitUsage.individualUsed), numberOf(spendLimitUsage.pooledUsed), numberOf(spendLimitUsage.totalSpend)].filter((each) => each !== undefined);
+  const positive = reported.find((each) => each > 0);
+  if (positive !== undefined)
+    return positive;
+  const inferred = Math.max(0, limit - remaining);
+  return inferred > 0 ? inferred : reported[0] ?? 0;
+}
+function creditsLine(creditGrants, stripeBalanceCents) {
+  const hasCreditGrants = creditGrants?.hasCreditGrants === true;
+  const grantTotal = hasCreditGrants ? numberOf(creditGrants?.totalCents) ?? 0 : 0;
+  const grantUsed = hasCreditGrants ? numberOf(creditGrants?.usedCents) ?? 0 : 0;
+  const valid = hasCreditGrants && grantTotal > 0;
+  const total = (valid ? grantTotal : 0) + stripeBalanceCents;
+  if (!(total > 0))
+    return;
+  return { label: "Credits", kind: "dollars", amount: dollars(Math.max(0, total - (valid ? grantUsed : 0))) };
+}
+function mapUsage(usage, planName, creditGrants, stripeBalanceCents) {
+  const facts = planFacts(usage);
+  const planUsage = object(usage.planUsage);
+  if (!facts.isEnabled || !planUsage)
+    throw new CursorPlanError("No active Cursor subscription.");
+  const normalizedPlan = planName?.trim().toLowerCase() ?? "";
+  if (!facts.hasLimit && !facts.hasTotalUsagePercent && !facts.hasModelPools)
+    throw new CursorPlanError("Total usage limit missing from API response.");
+  const lines = [];
+  const credits = creditsLine(creditGrants, stripeBalanceCents);
+  if (credits)
+    lines.push(credits);
+  const planUsedCents = numberOf(planUsage.totalSpend) ?? (facts.limit ?? 0) - (numberOf(planUsage.remaining) ?? 0);
+  const computedPercentUsed = facts.limit !== undefined && facts.limit > 0 ? planUsedCents / facts.limit * 100 : 0;
+  const totalUsagePercent = facts.totalPercentUsed ?? computedPercentUsed;
+  const cycle = billingCycle(usage);
+  const spendLimitUsage = object(usage.spendLimitUsage);
+  const isTeam = normalizedPlan === "team" || facts.isTeamByShape;
+  if (isTeam && facts.hasModelPools) {
+    if (facts.totalPercentUsed !== undefined)
+      lines.push(progress("Total usage", facts.totalPercentUsed, 100, "percent", cycle.resetsAt, cycle.periodMs));
+  } else if (isTeam) {
+    if (facts.limit !== undefined)
+      lines.push(progress("Total usage", dollars(planUsedCents), dollars(facts.limit), "dollars", cycle.resetsAt, cycle.periodMs));
+    else if (facts.totalPercentUsed !== undefined)
+      lines.push(progress("Total usage", facts.totalPercentUsed, 100, "percent", cycle.resetsAt, cycle.periodMs));
+    else
+      throw new CursorPlanError("Cursor request-based usage data unavailable. Try again later.");
+  } else {
+    lines.push(progress("Total usage", totalUsagePercent, 100, "percent", cycle.resetsAt, cycle.periodMs));
+  }
+  const auto = numberOf(planUsage.autoPercentUsed);
+  if (auto !== undefined)
+    lines.push(progress("Cursor Models", auto, 100, "percent", cycle.resetsAt, cycle.periodMs));
+  const api = numberOf(planUsage.apiPercentUsed);
+  if (api !== undefined)
+    lines.push(progress("Other Models", api, 100, "percent", cycle.resetsAt, cycle.periodMs));
+  if (spendLimitUsage) {
+    const limit = numberOf(spendLimitUsage.individualLimit) ?? numberOf(spendLimitUsage.pooledLimit) ?? 0;
+    const remaining = numberOf(spendLimitUsage.individualRemaining) ?? numberOf(spendLimitUsage.pooledRemaining) ?? 0;
+    const spent = onDemandSpendCents(spendLimitUsage, limit, remaining);
+    if (limit > 0)
+      lines.push(progress("On-demand", dollars(spent), dollars(limit), "dollars"));
+    else if (spent > 0)
+      lines.push({ label: "On-demand", kind: "dollars", amount: dollars(spent) });
+  }
+  return { ...planLabel(planName) ? { plan: planLabel(planName) } : {}, lines };
+}
+function mapRequestBasedUsage(usage, planName, unavailable) {
+  const lines = [];
+  const gpt4 = object(usage?.["gpt-4"]);
+  const limit = numberOf(gpt4?.maxRequestUsage);
+  if (gpt4 && limit !== undefined && limit > 0) {
+    const cycleStart = isoTime(usage?.startOfMonth);
+    lines.push(progress("Requests", numberOf(gpt4.numRequests) ?? 0, limit, "count", cycleStart !== undefined ? cycleStart + BILLING_PERIOD_MS : undefined, BILLING_PERIOD_MS, "requests"));
+  }
+  if (!lines.length)
+    throw new CursorPlanError(unavailable);
+  return { ...planLabel(planName) ? { plan: planLabel(planName) } : {}, lines };
+}
+function requestBasedFallback(usage, planName, planInfoUnavailable) {
+  const facts = planFacts(usage);
+  if (!facts.isEnabled)
+    return;
+  const plan = planName?.trim().toLowerCase() ?? "";
+  const unusable = facts.planUsageUnusable && !facts.hasTotalUsagePercent;
+  if (unusable && plan === "enterprise")
+    return "Enterprise usage data unavailable. Try again later.";
+  if (unusable && plan === "team")
+    return "Team request-based usage data unavailable. Try again later.";
+  if (unusable && plan === "" && planInfoUnavailable)
+    return "Cursor request-based usage data unavailable. Try again later.";
+  if (facts.isTeamByShape && facts.planUsageLimitMissing && !facts.hasModelPools)
+    return "Cursor request-based usage data unavailable. Try again later.";
+  return;
+}
+function stripeBalanceCents(body) {
+  const balance = numberOf(body?.customerBalance);
+  return balance !== undefined && balance < 0 ? Math.abs(balance) : 0;
+}
+var normalizedMembership = (value) => value?.trim().toLowerCase() || undefined;
+function routingPlanName(planInfoName, membership) {
+  const member = normalizedMembership(membership);
+  if (member && ORG.has(member))
+    return member;
+  return planInfoName?.trim() || undefined;
+}
+function resolvedPlanName(planInfoName, membership) {
+  const member = normalizedMembership(membership);
+  const planInfo = planInfoName?.trim() || undefined;
+  if (member && ORG.has(member) && (planInfo === undefined || ["pro", "pro plan"].includes(planInfo.toLowerCase())))
+    return member;
+  return planInfo ?? member;
+}
+function preferredMembership(local, summary) {
+  const mine = normalizedMembership(local);
+  const theirs = normalizedMembership(summary);
+  if (mine && ORG.has(mine))
+    return mine;
+  if (theirs && ORG.has(theirs))
+    return theirs;
+  return mine ?? theirs;
+}
+function planLabel(value) {
+  const found = value?.trim();
+  return found ? titled(found) : undefined;
+}
+var resolvedPlanLabel = (planInfoName, membership) => planLabel(resolvedPlanName(planInfoName, membership));
+function summaryCycle(summary, requestUsage) {
+  const start = isoTime(summary?.billingCycleStart);
+  const end = isoTime(summary?.billingCycleEnd);
+  if (start !== undefined && end !== undefined && end > start)
+    return { resetsAt: end, periodMs: end - start };
+  const requestStart = isoTime(requestUsage?.startOfMonth);
+  return { ...requestStart !== undefined ? { resetsAt: requestStart + BILLING_PERIOD_MS } : {}, periodMs: BILLING_PERIOD_MS };
+}
+function dollarMeter(value) {
+  const bucket = object(value);
+  if (!bucket || bucket.enabled === false)
+    return;
+  const limit = numberOf(bucket.limit);
+  if (limit === undefined || !(limit > 0))
+    return;
+  const reported = numberOf(bucket.used);
+  const inferred = Math.max(0, limit - (numberOf(bucket.remaining) ?? limit));
+  const used = reported !== undefined && reported > 0 ? reported : inferred;
+  return { used: Math.max(0, used), limit };
+}
+function usableDollarBucket(value) {
+  const bucket = object(value);
+  if (!bucket || bucket.enabled === false)
+    return false;
+  return dollarMeter(bucket) !== undefined || (numberOf(bucket.used) ?? 0) > 0;
+}
+function hasUsableSummary(summary) {
+  const start = isoTime(summary.billingCycleStart);
+  const end = isoTime(summary.billingCycleEnd);
+  if (start !== undefined && end !== undefined && end > start)
+    return true;
+  const individual = object(summary.individualUsage);
+  const team = object(summary.teamUsage);
+  const plan = object(individual?.plan);
+  if (["totalPercentUsed", "autoPercentUsed", "apiPercentUsed"].some((key) => numberOf(plan?.[key]) !== undefined))
+    return true;
+  return [individual?.onDemand, individual?.overall, team?.onDemand, team?.pooled].some(usableDollarBucket);
+}
+function onDemandBucket(value, cycle, lines) {
+  const bucket = object(value);
+  if (!bucket || bucket.enabled === false)
+    return false;
+  const meter = dollarMeter(bucket);
+  if (meter) {
+    lines.push(progress("On-demand", dollars(meter.used), dollars(meter.limit), "dollars", cycle.resetsAt, cycle.periodMs));
+    return true;
+  }
+  const used = numberOf(bucket.used);
+  if (used !== undefined && used > 0) {
+    lines.push({ label: "On-demand", kind: "dollars", amount: dollars(used) });
+    return true;
+  }
+  return false;
+}
+function summaryOnDemand(summary, cycle, lines) {
+  if (onDemandBucket(object(summary?.individualUsage)?.onDemand, cycle, lines))
+    return;
+  onDemandBucket(object(summary?.teamUsage)?.onDemand, cycle, lines);
+}
+function appendMissingOnDemand(summary, lines) {
+  if (lines.some((line) => line.label === "On-demand"))
+    return;
+  summaryOnDemand(summary, summaryCycle(summary, undefined), lines);
+}
+function mapSummary(summary, requestUsage, planName, unavailable) {
+  const cycle = summaryCycle(summary, requestUsage);
+  const lines = [];
+  const requests = object(requestUsage?.["gpt-4"]);
+  const limit = numberOf(requests?.maxRequestUsage);
+  const hasRequests = !!requests && limit !== undefined && limit > 0;
+  if (hasRequests) {
+    const used = Math.max(0, numberOf(requests.numRequests) ?? numberOf(requests.numRequestsTotal) ?? 0);
+    for (const label of ["Total usage", "Requests"])
+      lines.push(progress(label, used, limit, "count", cycle.resetsAt, cycle.periodMs, "requests"));
+  } else {
+    const individual = object(summary?.individualUsage);
+    const team = object(summary?.teamUsage);
+    const limitType = text3(summary?.limitType)?.toLowerCase();
+    const dollarTotal = (meter) => lines.push(progress("Total usage", dollars(meter.used), dollars(meter.limit), "dollars", cycle.resetsAt, cycle.periodMs));
+    const pooled = dollarMeter(team?.pooled);
+    const percent = numberOf(object(individual?.plan)?.totalPercentUsed);
+    const overall = dollarMeter(individual?.overall);
+    if (limitType === "team" && pooled)
+      dollarTotal(pooled);
+    else if (percent !== undefined)
+      lines.push(progress("Total usage", percent, 100, "percent", cycle.resetsAt, cycle.periodMs));
+    else if (overall)
+      dollarTotal(overall);
+    else if (pooled)
+      dollarTotal(pooled);
+  }
+  const plan = object(object(summary?.individualUsage)?.plan);
+  for (const [key, label] of [
+    ["autoPercentUsed", "Cursor Models"],
+    ["apiPercentUsed", "Other Models"]
+  ]) {
+    const percent = numberOf(plan?.[key]);
+    if (percent !== undefined)
+      lines.push(progress(label, percent, 100, "percent", cycle.resetsAt, cycle.periodMs));
+  }
+  summaryOnDemand(summary, cycle, lines);
+  if (!lines.length)
+    throw new CursorPlanError(unavailable);
+  const summaryMembership = text3(summary?.membershipType);
+  const label = resolvedPlanLabel(planName, preferredMembership(undefined, summaryMembership)) ?? planLabel(planName) ?? planLabel(summaryMembership);
+  return { ...label ? { plan: label } : {}, lines };
+}
+var WINDOWS = {
+  "Total usage": "total",
+  "Cursor Models": "auto",
+  "Other Models": "api",
+  "Grok Bot usage": "grok_bot",
+  "On-demand": "on_demand",
+  Requests: "requests"
+};
+function readingOf(mapped, identity) {
+  const windows = [];
+  let balance;
+  const extras = [];
+  for (const line of mapped.lines) {
+    if (line.kind === "dollars") {
+      if (line.label === "Credits")
+        balance = { left: line.amount, unit: "usd" };
+      if (line.label === "On-demand")
+        extras.push({ id: "on_demand", name: line.label, kind: "spent", amount: line.amount, unit: "usd" });
+      continue;
+    }
+    const id = WINDOWS[line.label];
+    if (!id)
+      continue;
+    const window = { id, used: line.limit > 0 ? line.used / line.limit : 0, name: line.label };
+    if (line.resetsAt !== undefined)
+      window.resetsAt = line.resetsAt;
+    if (line.periodMs !== undefined)
+      window.minutes = Math.round(line.periodMs / 60000);
+    if (line.format === "dollars")
+      window.amount = { used: line.used, limit: line.limit, unit: "usd" };
+    if (line.format === "count")
+      window.amount = { used: line.used, limit: line.limit, unit: "requests" };
+    if (id === "requests" && windows.some((each) => each.id === "total" && each.amount?.unit === "requests" && each.amount.used === line.used && each.amount.limit === line.limit))
+      continue;
+    windows.push(window);
+  }
+  const cycleEnd = mapped.lines.find((line) => line.kind === "progress" && line.label === "Total usage" && line.resetsAt !== undefined);
+  if (cycleEnd?.kind === "progress")
+    for (const extra of extras)
+      extra.resetsAt ??= cycleEnd.resetsAt;
+  return { windows, ...mapped.plan ? { plan: mapped.plan } : {}, ...balance ? { balance } : {}, ...extras.length ? { extras } : {}, ...identity ? { identity } : {} };
+}
+async function optional(client, request) {
+  let answer;
+  try {
+    answer = await request();
+  } catch (error) {
+    if (error instanceof LimitsProblem)
+      throw error;
+    return;
+  }
+  if (answer?.status === 429)
+    throw new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", client.holdFor(answer.headers.get("retry-after")) ?? client.heldUntil());
+  if (!answer || answer.status < 200 || answer.status >= 300)
+    return;
+  return object(answer.body);
+}
+async function readCursorPlan(client, now = Date.now) {
+  let access = await client.accessToken();
+  const attempt = async (token) => {
+    try {
+      return await client.dashboard("GetCurrentPeriodUsage", token);
+    } catch (error) {
+      if (error instanceof LimitsProblem)
+        throw error;
+      throw new LimitsProblem("failed", "Couldn't reach Cursor. Check your connection.");
+    }
+  };
+  let answer = await attempt(access);
+  if (answer.status === 401 || answer.status === 403) {
+    access = await client.accessToken(true);
+    answer = await attempt(access);
+    if (answer.status === 401 || answer.status === 403)
+      throw new LimitsProblem("expired", "Cursor turned its sign-in away: sign in to Cursor again in Settings \u203A Accounts.");
+  }
+  if (answer.status === 429)
+    throw new LimitsProblem("rate-limited", "Cursor is turning reads away for now.", client.holdFor(answer.headers.get("retry-after")));
+  if (answer.status < 200 || answer.status >= 300)
+    throw new LimitsProblem("failed", `Cursor answered ${answer.status}.`);
+  const usage = object(answer.body);
+  if (!usage)
+    throw new LimitsProblem("failed", "Cursor's answer wasn't one it gives.");
+  const user = cursorSession(access)?.user;
+  const identity = user ? `cursor:${user.toLowerCase()}` : undefined;
+  const membership = undefined;
+  const planBody = await optional(client, () => client.dashboard("GetPlanInfo", access));
+  const planInfoName = trimmed(object(planBody?.planInfo)?.planName);
+  const planInfoUnavailable = planInfoName === undefined;
+  const routing = routingPlanName(planInfoName, membership);
+  const display = resolvedPlanName(planInfoName, membership);
+  const grokBot = async (lines) => {
+    const body = await optional(client, () => client.dashboard("GetSandUsageStatus", access));
+    const line = body ? grokBotLine(body) : undefined;
+    if (line)
+      lines.push(line);
+  };
+  const fallback = requestBasedFallback(usage, routing, planInfoUnavailable);
+  const summary = () => optional(client, () => client.website("/api/usage-summary", access));
+  const requests = () => {
+    const who = cursorSession(access)?.user;
+    return optional(client, () => who ? client.website("/api/usage", access, { query: { user: who } }) : undefined);
+  };
+  try {
+    if (fallback !== undefined) {
+      const found = await summary();
+      const mapped = mapSummary(found, await requests(), display ?? routing, fallback);
+      await grokBot(mapped.lines);
+      return { mapped, ...identity ? { identity } : {} };
+    }
+    if (planFacts(usage).shouldTryGenericRequestFallback) {
+      try {
+        const body = await requests();
+        if (!body)
+          throw new CursorPlanError("Cursor request-based usage data unavailable. Try again later.");
+        const mapped = mapRequestBasedUsage(body, display ?? routing, "Cursor request-based usage data unavailable. Try again later.");
+        await grokBot(mapped.lines);
+        return { mapped, ...identity ? { identity } : {} };
+      } catch {}
+    }
+    const grants = await optional(client, () => client.dashboard("GetCreditGrantsBalance", access));
+    const credits = grants && typeof grants.hasCreditGrants === "boolean" && (!grants.hasCreditGrants || (numberOf(grants.totalCents) ?? 0) > 0 && (numberOf(grants.usedCents) ?? -1) >= 0) ? grants : undefined;
+    const stripe = await optional(client, () => client.website("/api/auth/stripe", access));
+    const mapped = mapUsage(usage, planInfoName, credits, stripe && numberOf(stripe.customerBalance) !== undefined ? stripeBalanceCents(stripe) : 0);
+    const label = resolvedPlanLabel(planInfoName, membership);
+    if (label)
+      mapped.plan = label;
+    else
+      delete mapped.plan;
+    const facts = planFacts(usage);
+    const localIsOrg = membership !== undefined && ORG.has(membership);
+    if (localIsOrg || facts.isTeamByShape) {
+      const needsOnDemand = !mapped.lines.some((line) => line.label === "On-demand");
+      if (!(localIsOrg && !needsOnDemand)) {
+        const found = await summary();
+        if (found && hasUsableSummary(found)) {
+          if (needsOnDemand)
+            appendMissingOnDemand(found, mapped.lines);
+          const summaryMembership = text3(found.membershipType)?.trim().toLowerCase();
+          const better = resolvedPlanLabel(planInfoName, preferredMembership(membership, summaryMembership));
+          if (better)
+            mapped.plan = better;
+        }
+      }
+    }
+    await grokBot(mapped.lines);
+    return { mapped, ...identity ? { identity } : {} };
+  } catch (error) {
+    if (error instanceof CursorPlanError)
+      throw new LimitsProblem("failed", error.message);
+    throw error;
+  }
+}
+
 // Packages/Box/src/agents/agents/cursor.ts
 function readable(path) {
   try {
-    return readFileSync24(path).toString("base64");
+    return readFileSync25(path).toString("base64");
   } catch {
     return;
   }
@@ -17140,14 +17819,28 @@ class CursorAgent {
     this.instance = instance;
     this.providerID = providerID("cursor", instance.id);
   }
+  cursor = new CursorClient(() => cursorKey(this.folder, !this.instance.home), Date.now, () => cursorKeyUnreadable(this.folder));
+  cursorKeyUnreadable() {
+    return cursorKeyUnreadable(this.folder);
+  }
+  limits = {
+    every: 10 * 60000,
+    identity: () => this.cursor.identity(),
+    read: async () => {
+      const { mapped, identity } = await readCursorPlan(this.cursor);
+      return readingOf(mapped, identity);
+    },
+    signIn: () => this.cursor.signIn(),
+    account: () => this.cursor.signIn()
+  };
   ownSkillFolders(directory) {
-    return [homedir3(), ...upward(directory)].flatMap((folder) => [".cursor", ".claude", ".codex", ".grok", ".agents"].map((name) => join27(folder, name, "skills")));
+    return [homedir3(), ...upward(directory)].flatMap((folder) => [".cursor", ".claude", ".codex", ".grok", ".agents"].map((name) => join28(folder, name, "skills")));
   }
   get folder() {
-    return this.instance.home ?? join27(this.context.home, "cursor");
+    return this.instance.home ?? join28(this.context.home, "cursor");
   }
   get authFile() {
-    return join27(this.folder, "auth.json");
+    return join28(this.folder, "auth.json");
   }
   methods() {
     return [
@@ -17160,10 +17853,10 @@ class CursorAgent {
   }
   async sdk() {
     const folder = await this.runtime();
-    process.argv[1] = join27(folder, "package.json");
-    process.env.CURSOR_DATA_DIR ??= join27(this.context.home, "cursor", "data");
-    process.env.CURSOR_SANDBOX_POLICY_DIR ??= join27(this.context.home, "cursor", "sandbox-policies");
-    process.env.CUA_APP_SUPPORT_DIR ??= join27(this.context.home, "cursor", "computer-use");
+    process.argv[1] = join28(folder, "package.json");
+    process.env.CURSOR_DATA_DIR ??= join28(this.context.home, "cursor", "data");
+    process.env.CURSOR_SANDBOX_POLICY_DIR ??= join28(this.context.home, "cursor", "sandbox-policies");
+    process.env.CUA_APP_SUPPORT_DIR ??= join28(this.context.home, "cursor", "computer-use");
     return this.context.deps.load(this.id, SDK2[0].name);
   }
   async store(sdk) {
@@ -17174,7 +17867,7 @@ class CursorAgent {
     const fromEnvironment = this.instance.home ? undefined : process.env.CURSOR_API_KEY?.trim();
     if (fromEnvironment)
       return fromEnvironment;
-    if (!existsSync16(this.authFile))
+    if (!existsSync17(this.authFile))
       return;
     const loaded = await (await this.store(sdk ?? await this.sdk())).load();
     if (!loaded?.apiKey)
@@ -17184,7 +17877,7 @@ class CursorAgent {
     return loaded.apiKey;
   }
   async account(fresh = false) {
-    if ((this.instance.home || !process.env.CURSOR_API_KEY) && !existsSync16(this.authFile)) {
+    if ((this.instance.home || !process.env.CURSOR_API_KEY) && !existsSync17(this.authFile)) {
       return { installed: true, signedIn: false, message: "Sign in with your Cursor account. Kuvo Code downloads Cursor's agent the first time." };
     }
     return this.known.read(fresh, async () => {
@@ -17301,7 +17994,7 @@ class CursorAgent {
     } catch {}
   }
   agentStore(sdk) {
-    const root = join27(this.folder, "agents");
+    const root = join28(this.folder, "agents");
     mkdirSync16(root, { recursive: true });
     return new sdk.JsonlLocalAgentStore(root);
   }
@@ -17650,7 +18343,7 @@ ${text}`;
     const directory = this.session.location.directory;
     const attached = fenceAttachments(directory);
     const conversations = options.local.store.root;
-    const own = join27(this.owner.context.home, "cursor", "in-sandbox");
+    const own = join28(this.owner.context.home, "cursor", "in-sandbox");
     for (const folder of [conversations, own])
       mkdirSync16(folder, { recursive: true, mode: 448 });
     const fence = fenceAgent(process.execPath, directory, {
@@ -17670,9 +18363,9 @@ ${text}`;
         ...fence.env,
         KUVO_FENCE_BUN: "1",
         OPENCODE_SESSION_ID: this.session.id,
-        CURSOR_DATA_DIR: join27(own, "data"),
-        CURSOR_SANDBOX_POLICY_DIR: join27(own, "sandbox-policies"),
-        CUA_APP_SUPPORT_DIR: join27(own, "computer-use")
+        CURSOR_DATA_DIR: join28(own, "data"),
+        CURSOR_SANDBOX_POLICY_DIR: join28(own, "sandbox-policies"),
+        CUA_APP_SUPPORT_DIR: join28(own, "computer-use")
       },
       ended: fence.ended
     });
@@ -17864,8 +18557,8 @@ function withTimeout2(promise, milliseconds) {
 
 // Packages/Box/src/agents/agents/grok.ts
 import { homedir as homedir4 } from "os";
-import { mkdirSync as mkdirSync17, readFileSync as readFileSync25, writeFileSync as writeFileSync18 } from "fs";
-import { dirname as dirname15, join as join28 } from "path";
+import { mkdirSync as mkdirSync17, readFileSync as readFileSync26, writeFileSync as writeFileSync18 } from "fs";
+import { dirname as dirname15, join as join29 } from "path";
 
 // Packages/Box/src/agents/engine-limits.ts
 var engineEndpoints = {
@@ -18141,7 +18834,7 @@ async function readOpenCodeGo(secret, _credential, now) {
 }
 
 // Packages/Box/src/agents/agents/grok.ts
-var places4 = [join28(homedir4(), ".grok/bin"), join28(homedir4(), ".local/bin"), "/opt/homebrew/bin", "/usr/local/bin"];
+var places4 = [join29(homedir4(), ".grok/bin"), join29(homedir4(), ".local/bin"), "/opt/homebrew/bin", "/usr/local/bin"];
 var STATE_IN_HOME3 = [
   "sessions",
   "logs",
@@ -18176,11 +18869,11 @@ class GrokAgent {
   status;
   promptCount = 0;
   get effortsFile() {
-    return join28(this.context.home, "grok", `efforts-${this.instance.id}.json`);
+    return join29(this.context.home, "grok", `efforts-${this.instance.id}.json`);
   }
   efforts() {
     try {
-      return JSON.parse(readFileSync25(this.effortsFile, "utf8"));
+      return JSON.parse(readFileSync26(this.effortsFile, "utf8"));
     } catch {
       return {};
     }
@@ -18250,16 +18943,16 @@ class GrokAgent {
       return this.instance.home;
     const set = process.env.GROK_HOME?.trim();
     if (set)
-      return set === "~" ? homedir4() : set.startsWith("~/") ? join28(homedir4(), set.slice(2)) : set;
-    return join28(homedir4(), ".grok");
+      return set === "~" ? homedir4() : set.startsWith("~/") ? join29(homedir4(), set.slice(2)) : set;
+    return join29(homedir4(), ".grok");
   }
   conversationRoots() {
-    return [join28(this.grokHome, "sessions")];
+    return [join29(this.grokHome, "sessions")];
   }
   ownSkillFolders(directory) {
     const home = this.grokHome;
-    const projects = upward(directory).flatMap((folder) => [".grok", ".claude", ".cursor", ".agents"].map((name) => join28(folder, name, "skills")));
-    return [join28(home, "skills"), join28(homedir4(), ".claude", "skills"), join28(homedir4(), ".cursor", "skills"), ...projects];
+    const projects = upward(directory).flatMap((folder) => [".grok", ".claude", ".cursor", ".agents"].map((name) => join29(folder, name, "skills")));
+    return [join29(home, "skills"), join29(homedir4(), ".claude", "skills"), join29(homedir4(), ".cursor", "skills"), ...projects];
   }
   limits = {
     every: 10 * 60000,
@@ -18283,7 +18976,7 @@ class GrokAgent {
   grokSignIn() {
     const home = this.grokHome;
     try {
-      const entries = JSON.parse(readFileSync25(join28(home, "auth.json"), "utf8")) ?? {};
+      const entries = JSON.parse(readFileSync26(join29(home, "auth.json"), "utf8")) ?? {};
       return Object.values(entries).find((each) => typeof each?.key === "string" && each.key.trim());
     } catch {
       return;
@@ -18364,7 +19057,7 @@ class GrokAgent {
       authMethod: () => process.env.XAI_API_KEY ? "xai.api_key" : "cached_token",
       restartAfterInterrupt: true,
       program: () => agent.program,
-      whole: { homes: (env) => [env.GROK_HOME ?? join28(homedir4(), ".grok")], state: STATE_IN_HOME3, kept: KEPT_IN_HOME3, env: { GROK_SANDBOX: "off", GROK_MEMORY: "0" } },
+      whole: { homes: (env) => [env.GROK_HOME ?? join29(homedir4(), ".grok")], state: STATE_IN_HOME3, kept: KEPT_IN_HOME3, env: { GROK_SANDBOX: "off", GROK_MEMORY: "0" } },
       async command({ approvesAll, plan, skills, subagents, whole }) {
         const executable = agent.executable();
         if (!executable)
@@ -18568,10 +19261,10 @@ async function branchRoutes(places, method, parts, body) {
 
 // Packages/Box/src/agents/usage/usage.ts
 import { execFileSync as execFileSync2 } from "child_process";
-import { createHash as createHash11 } from "crypto";
-import { lstatSync as lstatSync8, mkdirSync as mkdirSync20, readFileSync as readFileSync27, realpathSync as realpathSync7, renameSync as renameSync16, statSync as statSync13, writeFileSync as writeFileSync21 } from "fs";
+import { createHash as createHash12 } from "crypto";
+import { lstatSync as lstatSync8, mkdirSync as mkdirSync21, readFileSync as readFileSync29, realpathSync as realpathSync7, renameSync as renameSync17, statSync as statSync13, writeFileSync as writeFileSync22 } from "fs";
 import { homedir as homedir5, hostname } from "os";
-import { basename as basename11, dirname as dirname16, join as join33 } from "path";
+import { basename as basename11, dirname as dirname16, join as join35 } from "path";
 
 // Packages/Box/src/agents/usage/claude-log.ts
 var USAGE = Buffer.from('"usage":{');
@@ -18742,8 +19435,8 @@ function fromKeptClaude(kept) {
 }
 
 // Packages/Box/src/agents/usage/pricing.ts
-import { mkdirSync as mkdirSync18, readFileSync as readFileSync26, renameSync as renameSync14, writeFileSync as writeFileSync19 } from "fs";
-import { join as join29 } from "path";
+import { mkdirSync as mkdirSync18, readFileSync as readFileSync27, renameSync as renameSync14, writeFileSync as writeFileSync19 } from "fs";
+import { join as join30 } from "path";
 // Packages/Box/src/agents/usage/pricing/pricing_litellm_snapshot.json
 var pricing_litellm_snapshot_default = {
   models: { "ai21.j2-mid-v1": { cr: 1.25, cw: 12.5, i: 12.5, o: 12.5 }, "ai21.j2-ultra-v1": { cr: 1.88, cw: 18.8, i: 18.8, o: 18.8 }, "ai21.jamba-1-5-large-v1:0": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "ai21.jamba-1-5-mini-v1:0": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.39999999999999997 }, "ai21.jamba-instruct-v1:0": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.7 }, "amazon-nova/nova-lite-v1": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.24 }, "amazon-nova/nova-micro-v1": { cr: 0.0035000000000000005, cw: 0.035, i: 0.035, o: 0.14 }, "amazon-nova/nova-premier-v1": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 12.5 }, "amazon-nova/nova-pro-v1": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 3.1999999999999997 }, "amazon.nova-2-lite-v1:0": { cr: 0.075, cw: 0.3, i: 0.3, o: 2.5 }, "amazon.nova-2-multimodal-embeddings-v1:0": { cr: 0.013500000000000002, cw: 0.135, i: 0.135, o: 0 }, "amazon.nova-2-pro-preview-20251202-v1:0": { cr: 0.546875, cw: 2.1875, i: 2.1875, o: 17.5 }, "amazon.nova-lite-v1:0": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.24 }, "amazon.nova-micro-v1:0": { cr: 0.0035000000000000005, cw: 0.035, i: 0.035, o: 0.14 }, "amazon.nova-pro-v1:0": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 3.1999999999999997 }, "amazon.rerank-v1:0": { cr: 0, cw: 0, i: 0, o: 0 }, "amazon.titan-embed-g1-text-02": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "amazon.titan-embed-image-v1": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 0 }, "amazon.titan-embed-text-v1": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "amazon.titan-embed-text-v2:0": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "amazon.titan-text-express-v1": { cr: 0.13, cw: 1.3, i: 1.3, o: 1.7 }, "amazon.titan-text-lite-v1": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.39999999999999997 }, "amazon.titan-text-premier-v1:0": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "anthropic.claude-3-5-haiku-20241022-v1:0": { cr: 0.08, cw: 1, i: 0.7999999999999999, o: 4 }, "anthropic.claude-3-5-sonnet-20240620-v1:0": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 30 }, "anthropic.claude-3-5-sonnet-20241022-v2:0": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 30 }, "anthropic.claude-3-7-sonnet-20240620-v1:0": { cr: 0.36, cw: 4.5, i: 3.5999999999999996, o: 18 }, "anthropic.claude-3-7-sonnet-20250219-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic.claude-3-haiku-20240307-v1:0": { cr: 0.024999999999999998, cw: 0.3125, i: 0.25, o: 1.25 }, "anthropic.claude-3-opus-20240229-v1:0": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "anthropic.claude-3-sonnet-20240229-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic.claude-fable-5": { cr: 1, cw: 12.5, i: 10, o: 50 }, "anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "anthropic.claude-haiku-4-5@20251001": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "anthropic.claude-instant-v1": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 2.4 }, "anthropic.claude-mythos-preview": { cr: 0, cw: 0, i: 0, o: 0 }, "anthropic.claude-opus-4-1-20250805-v1:0": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "anthropic.claude-opus-4-20250514-v1:0": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "anthropic.claude-opus-4-5-20251101-v1:0": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "anthropic.claude-opus-4-6-v1": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "anthropic.claude-opus-4-7": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "anthropic.claude-opus-4-8": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "anthropic.claude-sonnet-4-20250514-v1:0": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "anthropic.claude-sonnet-4-6": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic.claude-sonnet-5": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "anthropic.claude-v1": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "anthropic.claude-v2:1": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "anyscale/HuggingFaceH4/zephyr-7b-beta": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "anyscale/codellama/CodeLlama-34b-Instruct-hf": { cr: 0.09999999999999999, cw: 1, i: 1, o: 1 }, "anyscale/codellama/CodeLlama-70b-Instruct-hf": { cr: 0.09999999999999999, cw: 1, i: 1, o: 1 }, "anyscale/google/gemma-7b-it": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "anyscale/meta-llama/Llama-2-13b-chat-hf": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.25 }, "anyscale/meta-llama/Llama-2-70b-chat-hf": { cr: 0.09999999999999999, cw: 1, i: 1, o: 1 }, "anyscale/meta-llama/Llama-2-7b-chat-hf": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "anyscale/meta-llama/Meta-Llama-3-70B-Instruct": { cr: 0.09999999999999999, cw: 1, i: 1, o: 1 }, "anyscale/meta-llama/Meta-Llama-3-8B-Instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "anyscale/mistralai/Mistral-7B-Instruct-v0.1": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "anyscale/mistralai/Mixtral-8x22B-Instruct-v0.1": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "anyscale/mistralai/Mixtral-8x7B-Instruct-v0.1": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "apac.amazon.nova-2-lite-v1:0": { cr: 0.0825, cw: 0.33, i: 0.33, o: 2.75 }, "apac.amazon.nova-2-pro-preview-20251202-v1:0": { cr: 0.546875, cw: 2.1875, i: 2.1875, o: 17.5 }, "apac.amazon.nova-lite-v1:0": { cr: 0.0063, cw: 0.063, i: 0.063, o: 0.252 }, "apac.amazon.nova-micro-v1:0": { cr: 0.0037, cw: 0.037, i: 0.037, o: 0.148 }, "apac.amazon.nova-pro-v1:0": { cr: 0.084, cw: 0.84, i: 0.84, o: 3.36 }, "apac.anthropic.claude-3-5-sonnet-20240620-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "apac.anthropic.claude-3-5-sonnet-20241022-v2:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "apac.anthropic.claude-3-haiku-20240307-v1:0": { cr: 0.024999999999999998, cw: 0.3125, i: 0.25, o: 1.25 }, "apac.anthropic.claude-3-sonnet-20240229-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "apac.anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.11, cw: 1.375, i: 1.1, o: 5.5 }, "apac.anthropic.claude-sonnet-4-20250514-v1:0": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "au.anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.11, cw: 1.375, i: 1.1, o: 5.5 }, "au.anthropic.claude-opus-4-6-v1": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "au.anthropic.claude-opus-4-7": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "au.anthropic.claude-opus-4-8": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "au.anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.33, cra: 0.66, cw: 4.125, cwa: 8.25, i: 3.3000000000000003, ia: 6.6000000000000005, o: 16.5, oa: 24.75 }, "au.anthropic.claude-sonnet-4-6": { cr: 0.33, cw: 4.125, i: 3.3000000000000003, o: 16.5 }, "au.anthropic.claude-sonnet-5": { cr: 0.33, cw: 4.125, i: 3.3000000000000003, o: 16.5 }, "azure/ada": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "azure/codex-mini": { cr: 0.375, cw: 1.5, i: 1.5, o: 6 }, "azure/command-r-plus": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "azure/computer-use-preview": { cr: 0.30000000000000004, cw: 3, i: 3, o: 12 }, "azure/eu/gpt-4o-2024-08-06": { cr: 1.375, cw: 2.75, i: 2.75, o: 11 }, "azure/eu/gpt-4o-2024-11-20": { cr: 0.275, cw: 1.38, i: 2.75, o: 11 }, "azure/eu/gpt-4o-mini-2024-07-18": { cr: 0.083, cw: 0.165, i: 0.165, o: 0.66 }, "azure/eu/gpt-4o-mini-realtime-preview-2024-12-17": { cr: 0.33, cw: 0.66, i: 0.66, o: 2.64 }, "azure/eu/gpt-4o-realtime-preview-2024-10-01": { cr: 2.75, cw: 5.5, i: 5.5, o: 22 }, "azure/eu/gpt-4o-realtime-preview-2024-12-17": { cr: 2.75, cw: 5.5, i: 5.5, o: 22 }, "azure/eu/gpt-5-2025-08-07": { cr: 0.1375, cw: 1.375, i: 1.375, o: 11 }, "azure/eu/gpt-5-mini-2025-08-07": { cr: 0.0275, cw: 0.275, i: 0.275, o: 2.2 }, "azure/eu/gpt-5-nano-2025-08-07": { cr: 0.0055, cw: 0.055, i: 0.055, o: 0.44 }, "azure/eu/gpt-5.1": { cr: 0.14, cw: 1.38, i: 1.38, o: 11 }, "azure/eu/gpt-5.1-chat": { cr: 0.14, cw: 1.38, i: 1.38, o: 11 }, "azure/eu/gpt-5.1-codex": { cr: 0.14, cw: 1.38, i: 1.38, o: 11 }, "azure/eu/gpt-5.1-codex-mini": { cr: 0.028, cw: 0.275, i: 0.275, o: 2.2 }, "azure/eu/o1-2024-12-17": { cr: 8.25, cw: 16.5, i: 16.5, o: 66 }, "azure/eu/o1-mini-2024-09-12": { cr: 0.605, cw: 1.21, i: 1.21, o: 4.84 }, "azure/eu/o1-preview-2024-09-12": { cr: 8.25, cw: 16.5, i: 16.5, o: 66 }, "azure/eu/o3-mini-2025-01-31": { cr: 0.605, cw: 1.21, i: 1.21, o: 4.84 }, "azure/global-standard/gpt-4o-2024-08-06": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "azure/global-standard/gpt-4o-2024-11-20": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "azure/global-standard/gpt-4o-mini": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "azure/global/gpt-4o-2024-08-06": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "azure/global/gpt-4o-2024-11-20": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "azure/global/gpt-5.1": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/global/gpt-5.1-chat": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/global/gpt-5.1-codex": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/global/gpt-5.1-codex-mini": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "azure/gpt-3.5-turbo": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "azure/gpt-3.5-turbo-0125": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "azure/gpt-3.5-turbo-instruct-0914": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 2 }, "azure/gpt-35-turbo": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "azure/gpt-35-turbo-0125": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "azure/gpt-35-turbo-1106": { cr: 0.09999999999999999, cw: 1, i: 1, o: 2 }, "azure/gpt-35-turbo-16k": { cr: 0.30000000000000004, cw: 3, i: 3, o: 4 }, "azure/gpt-35-turbo-16k-0613": { cr: 0.30000000000000004, cw: 3, i: 3, o: 4 }, "azure/gpt-35-turbo-instruct": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 2 }, "azure/gpt-35-turbo-instruct-0914": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 2 }, "azure/gpt-4": { cr: 3, cw: 30, i: 30, o: 60 }, "azure/gpt-4-0125-preview": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "azure/gpt-4-0613": { cr: 3, cw: 30, i: 30, o: 60 }, "azure/gpt-4-1106-preview": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "azure/gpt-4-32k": { cr: 6, cw: 60, i: 60, o: 120 }, "azure/gpt-4-32k-0613": { cr: 6, cw: 60, i: 60, o: 120 }, "azure/gpt-4-turbo": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "azure/gpt-4-turbo-2024-04-09": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "azure/gpt-4-turbo-vision-preview": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "azure/gpt-4.1": { cr: 0.5, cw: 2, i: 2, o: 8 }, "azure/gpt-4.1-2025-04-14": { cr: 0.5, cw: 2, i: 2, o: 8 }, "azure/gpt-4.1-mini": { cr: 0.09999999999999999, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "azure/gpt-4.1-mini-2025-04-14": { cr: 0.09999999999999999, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "azure/gpt-4.1-nano": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "azure/gpt-4.1-nano-2025-04-14": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "azure/gpt-4.5-preview": { cr: 37.5, cw: 75, i: 75, o: 150 }, "azure/gpt-4o": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "azure/gpt-4o-2024-05-13": { cr: 0.5000000000000001, cw: 5, i: 5, o: 15 }, "azure/gpt-4o-2024-08-06": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "azure/gpt-4o-2024-11-20": { cr: 1.25, cw: 2.75, i: 2.75, o: 11 }, "azure/gpt-4o-audio-preview-2024-12-17": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "azure/gpt-4o-mini": { cr: 0.075, cw: 0.165, i: 0.165, o: 0.66 }, "azure/gpt-4o-mini-2024-07-18": { cr: 0.075, cw: 0.165, i: 0.165, o: 0.66 }, "azure/gpt-4o-mini-audio-preview-2024-12-17": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "azure/gpt-4o-mini-realtime-preview-2024-12-17": { cr: 0.3, cw: 0.6, i: 0.6, o: 2.4 }, "azure/gpt-4o-mini-transcribe": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 5 }, "azure/gpt-4o-mini-tts": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "azure/gpt-4o-realtime-preview-2024-10-01": { cr: 2.5, cw: 5, i: 5, o: 20 }, "azure/gpt-4o-realtime-preview-2024-12-17": { cr: 2.5, cw: 5, i: 5, o: 20 }, "azure/gpt-4o-transcribe": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "azure/gpt-4o-transcribe-diarize": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "azure/gpt-5": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5-2025-08-07": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5-chat": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5-chat-latest": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5-codex": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5-mini": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "azure/gpt-5-mini-2025-08-07": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "azure/gpt-5-nano": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.39999999999999997 }, "azure/gpt-5-nano-2025-08-07": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.39999999999999997 }, "azure/gpt-5-pro": { cr: 1.5, cw: 15, i: 15, o: 120 }, "azure/gpt-5.1": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5.1-2025-11-13": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5.1-chat": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5.1-chat-2025-11-13": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5.1-codex": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5.1-codex-2025-11-13": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5.1-codex-max": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "azure/gpt-5.1-codex-mini": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "azure/gpt-5.1-codex-mini-2025-11-13": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "azure/gpt-5.2": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "azure/gpt-5.2-2025-12-11": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "azure/gpt-5.2-chat": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "azure/gpt-5.2-chat-2025-12-11": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "azure/gpt-5.2-codex": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "azure/gpt-5.2-pro": { cr: 2.0999999999999996, cw: 21, i: 21, o: 168 }, "azure/gpt-5.2-pro-2025-12-11": { cr: 2.0999999999999996, cw: 21, i: 21, o: 168 }, "azure/gpt-5.3-chat": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "azure/gpt-5.3-codex": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "azure/gpt-5.4": { cr: 0.25, cw: 2.5, i: 2.5, o: 15 }, "azure/gpt-5.4-2026-03-05": { cr: 0.25, cw: 2.5, i: 2.5, o: 15 }, "azure/gpt-5.4-mini": { cr: 0.075, cw: 0.75, i: 0.75, o: 4.5 }, "azure/gpt-5.4-mini-2026-03-17": { cr: 0.075, cw: 0.75, i: 0.75, o: 4.5 }, "azure/gpt-5.4-nano": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.25 }, "azure/gpt-5.4-nano-2026-03-17": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.25 }, "azure/gpt-5.4-pro": { cr: 3, cw: 30, i: 30, o: 180 }, "azure/gpt-5.4-pro-2026-03-05": { cr: 3, cw: 30, i: 30, o: 180 }, "azure/gpt-5.5": { cr: 0.5, cw: 5, i: 5, o: 30 }, "azure/gpt-5.5-2026-04-23": { cr: 0.5, cw: 5, i: 5, o: 30 }, "azure/gpt-5.5-pro": { cr: 3, cw: 30, i: 30, o: 180 }, "azure/gpt-5.5-pro-2026-04-23": { cr: 3, cw: 30, i: 30, o: 180 }, "azure/gpt-audio-1.5-2026-02-23": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "azure/gpt-audio-2025-08-28": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "azure/gpt-audio-mini-2025-10-06": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "azure/gpt-image-2": { cr: 1.25, cw: 5, i: 5, o: 10 }, "azure/gpt-image-2-2026-04-21": { cr: 1.25, cw: 5, i: 5, o: 10 }, "azure/gpt-realtime-1.5-2026-02-23": { cr: 4, cw: 4, i: 4, o: 16 }, "azure/gpt-realtime-2025-08-28": { cr: 4, cw: 4, i: 4, o: 16 }, "azure/gpt-realtime-mini-2025-10-06": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "azure/mistral-large-2402": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "azure/mistral-large-latest": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "azure/o1": { cr: 7.5, cw: 15, i: 15, o: 60 }, "azure/o1-2024-12-17": { cr: 7.5, cw: 15, i: 15, o: 60 }, "azure/o1-mini": { cr: 0.605, cw: 1.21, i: 1.21, o: 4.84 }, "azure/o1-mini-2024-09-12": { cr: 0.55, cw: 1.1, i: 1.1, o: 4.4 }, "azure/o1-preview": { cr: 7.5, cw: 15, i: 15, o: 60 }, "azure/o1-preview-2024-09-12": { cr: 7.5, cw: 15, i: 15, o: 60 }, "azure/o3": { cr: 0.5, cw: 2, i: 2, o: 8 }, "azure/o3-2025-04-16": { cr: 0.5, cw: 2, i: 2, o: 8 }, "azure/o3-deep-research": { cr: 2.5, cw: 10, i: 10, o: 40 }, "azure/o3-mini": { cr: 0.55, cw: 1.1, i: 1.1, o: 4.4 }, "azure/o3-mini-2025-01-31": { cr: 0.55, cw: 1.1, i: 1.1, o: 4.4 }, "azure/o3-pro": { cr: 2.0000000000000004, cw: 20, i: 20, o: 80 }, "azure/o3-pro-2025-06-10": { cr: 2.0000000000000004, cw: 20, i: 20, o: 80 }, "azure/o4-mini": { cr: 0.275, cw: 1.1, i: 1.1, o: 4.4 }, "azure/o4-mini-2025-04-16": { cr: 0.275, cw: 1.1, i: 1.1, o: 4.4 }, "azure/text-embedding-3-large": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0 }, "azure/text-embedding-3-small": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "azure/text-embedding-ada-002": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "azure/us/gpt-4.1-2025-04-14": { cr: 0.55, cw: 2.2, i: 2.2, o: 8.8 }, "azure/us/gpt-4.1-mini-2025-04-14": { cr: 0.11, cw: 0.44, i: 0.44, o: 1.76 }, "azure/us/gpt-4.1-nano-2025-04-14": { cr: 0.024999999999999998, cw: 0.11, i: 0.11, o: 0.44 }, "azure/us/gpt-4o-2024-08-06": { cr: 1.375, cw: 2.75, i: 2.75, o: 11 }, "azure/us/gpt-4o-2024-11-20": { cr: 0.275, cw: 1.38, i: 2.75, o: 11 }, "azure/us/gpt-4o-mini-2024-07-18": { cr: 0.083, cw: 0.165, i: 0.165, o: 0.66 }, "azure/us/gpt-4o-mini-realtime-preview-2024-12-17": { cr: 0.33, cw: 0.66, i: 0.66, o: 2.64 }, "azure/us/gpt-4o-realtime-preview-2024-10-01": { cr: 2.75, cw: 5.5, i: 5.5, o: 22 }, "azure/us/gpt-4o-realtime-preview-2024-12-17": { cr: 2.75, cw: 5.5, i: 5.5, o: 22 }, "azure/us/gpt-5-2025-08-07": { cr: 0.1375, cw: 1.375, i: 1.375, o: 11 }, "azure/us/gpt-5-mini-2025-08-07": { cr: 0.0275, cw: 0.275, i: 0.275, o: 2.2 }, "azure/us/gpt-5-nano-2025-08-07": { cr: 0.0055, cw: 0.055, i: 0.055, o: 0.44 }, "azure/us/gpt-5.1": { cr: 0.14, cw: 1.38, i: 1.38, o: 11 }, "azure/us/gpt-5.1-chat": { cr: 0.14, cw: 1.38, i: 1.38, o: 11 }, "azure/us/gpt-5.1-codex": { cr: 0.14, cw: 1.38, i: 1.38, o: 11 }, "azure/us/gpt-5.1-codex-mini": { cr: 0.028, cw: 0.275, i: 0.275, o: 2.2 }, "azure/us/o1-2024-12-17": { cr: 8.25, cw: 16.5, i: 16.5, o: 66 }, "azure/us/o1-mini-2024-09-12": { cr: 0.605, cw: 1.21, i: 1.21, o: 4.84 }, "azure/us/o1-preview-2024-09-12": { cr: 8.25, cw: 16.5, i: 16.5, o: 66 }, "azure/us/o3-2025-04-16": { cr: 0.55, cw: 2.2, i: 2.2, o: 8.8 }, "azure/us/o3-mini-2025-01-31": { cr: 0.605, cw: 1.21, i: 1.21, o: 4.84 }, "azure/us/o4-mini-2025-04-16": { cr: 0.31, cw: 1.21, i: 1.21, o: 4.84 }, "azure_ai/Cohere-embed-v3-english": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "azure_ai/Cohere-embed-v3-multilingual": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "azure_ai/Llama-3.2-11B-Vision-Instruct": { cr: 0.037, cw: 0.37, i: 0.37, o: 0.37 }, "azure_ai/Llama-3.2-90B-Vision-Instruct": { cr: 0.204, cw: 2.04, i: 2.04, o: 2.04 }, "azure_ai/Llama-3.3-70B-Instruct": { cr: 0.071, cw: 0.71, i: 0.71, o: 0.71 }, "azure_ai/Llama-4-Maverick-17B-128E-Instruct-FP8": { cr: 0.14100000000000001, cw: 1.4100000000000001, i: 1.4100000000000001, o: 0.35 }, "azure_ai/Llama-4-Scout-17B-16E-Instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.78 }, "azure_ai/MAI-DS-R1": { cr: 0.135, cw: 1.35, i: 1.35, o: 5.4 }, "azure_ai/Meta-Llama-3-70B-Instruct": { cr: 0.11, cw: 1.1, i: 1.1, o: 0.37 }, "azure_ai/Meta-Llama-3.1-405B-Instruct": { cr: 0.533, cw: 5.33, i: 5.33, o: 16 }, "azure_ai/Meta-Llama-3.1-70B-Instruct": { cr: 0.268, cw: 2.68, i: 2.68, o: 3.54 }, "azure_ai/Meta-Llama-3.1-8B-Instruct": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.61 }, "azure_ai/Phi-3-medium-128k-instruct": { cr: 0.017, cw: 0.16999999999999998, i: 0.16999999999999998, o: 0.6799999999999999 }, "azure_ai/Phi-3-medium-4k-instruct": { cr: 0.017, cw: 0.16999999999999998, i: 0.16999999999999998, o: 0.6799999999999999 }, "azure_ai/Phi-3-mini-128k-instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.52 }, "azure_ai/Phi-3-mini-4k-instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.52 }, "azure_ai/Phi-3-small-128k-instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "azure_ai/Phi-3-small-8k-instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "azure_ai/Phi-3.5-MoE-instruct": { cr: 0.016, cw: 0.16, i: 0.16, o: 0.64 }, "azure_ai/Phi-3.5-mini-instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.52 }, "azure_ai/Phi-3.5-vision-instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.52 }, "azure_ai/Phi-4": { cr: 0.012499999999999999, cw: 0.125, i: 0.125, o: 0.5 }, "azure_ai/Phi-4-mini-instruct": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0.3 }, "azure_ai/Phi-4-mini-reasoning": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.32 }, "azure_ai/Phi-4-multimodal-instruct": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.32 }, "azure_ai/Phi-4-reasoning": { cr: 0.012499999999999999, cw: 0.125, i: 0.125, o: 0.5 }, "azure_ai/claude-fable-5": { cr: 1, cw: 12.5, i: 10, o: 50 }, "azure_ai/claude-haiku-4-5": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "azure_ai/claude-opus-4-1": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "azure_ai/claude-opus-4-5": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "azure_ai/claude-opus-4-6": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "azure_ai/claude-opus-4-7": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "azure_ai/claude-opus-4-8": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "azure_ai/claude-sonnet-4-5": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "azure_ai/claude-sonnet-4-6": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "azure_ai/claude-sonnet-5": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "azure_ai/cohere-rerank-v3-english": { cr: 0, cw: 0, i: 0, o: 0 }, "azure_ai/cohere-rerank-v3-multilingual": { cr: 0, cw: 0, i: 0, o: 0 }, "azure_ai/cohere-rerank-v3.5": { cr: 0, cw: 0, i: 0, o: 0 }, "azure_ai/cohere-rerank-v4.0-fast": { cr: 0, cw: 0, i: 0, o: 0 }, "azure_ai/cohere-rerank-v4.0-pro": { cr: 0, cw: 0, i: 0, o: 0 }, "azure_ai/deepseek-r1": { cr: 0.135, cw: 1.35, i: 1.35, o: 5.4 }, "azure_ai/deepseek-v3": { cr: 0.11400000000000002, cw: 1.1400000000000001, i: 1.1400000000000001, o: 4.5600000000000005 }, "azure_ai/deepseek-v3-0324": { cr: 0.11400000000000002, cw: 1.1400000000000001, i: 1.1400000000000001, o: 4.5600000000000005 }, "azure_ai/deepseek-v3.1": { cr: 0.123, cw: 1.23, i: 1.23, o: 4.94 }, "azure_ai/deepseek-v3.2": { cr: 0.057999999999999996, cw: 0.58, i: 0.58, o: 1.68 }, "azure_ai/deepseek-v3.2-speciale": { cr: 0.057999999999999996, cw: 0.58, i: 0.58, o: 1.68 }, "azure_ai/deepseek-v4-flash": { cr: 0.019000000000000003, cw: 0.19, i: 0.19, o: 0.51 }, "azure_ai/deepseek-v4-pro": { cr: 0.17400000000000002, cw: 1.74, i: 1.74, o: 3.48 }, "azure_ai/embed-v-4-0": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, "azure_ai/global/grok-3": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "azure_ai/global/grok-3-mini": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.27 }, "azure_ai/gpt-5.4": { cr: 0.25, cw: 2.5, i: 2.5, o: 15 }, "azure_ai/gpt-5.4-2026-03-05": { cr: 0.25, cw: 2.5, i: 2.5, o: 15 }, "azure_ai/gpt-5.4-mini": { cr: 0.075, cw: 0.75, i: 0.75, o: 4.5 }, "azure_ai/gpt-5.4-mini-2026-03-17": { cr: 0.075, cw: 0.75, i: 0.75, o: 4.5 }, "azure_ai/gpt-5.4-nano": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.25 }, "azure_ai/gpt-5.4-nano-2026-03-17": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.25 }, "azure_ai/gpt-5.4-pro": { cr: 3, cw: 30, i: 30, o: 180 }, "azure_ai/gpt-5.4-pro-2026-03-05": { cr: 3, cw: 30, i: 30, o: 180 }, "azure_ai/gpt-5.5": { cr: 0.5, cw: 5, i: 5, o: 30 }, "azure_ai/gpt-5.5-2026-04-23": { cr: 0.5, cw: 5, i: 5, o: 30 }, "azure_ai/gpt-oss-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "azure_ai/grok-3": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "azure_ai/grok-3-mini": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.27 }, "azure_ai/grok-4": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "azure_ai/grok-4-1-fast-non-reasoning": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "azure_ai/grok-4-1-fast-reasoning": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "azure_ai/grok-4-fast-non-reasoning": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "azure_ai/grok-4-fast-reasoning": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "azure_ai/grok-code-fast-1": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.5 }, "azure_ai/jais-30b-chat": { cr: 320, cw: 3200, i: 3200, o: 9710 }, "azure_ai/jamba-instruct": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.7 }, "azure_ai/kimi-k2.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 3 }, "azure_ai/kimi-k2.6": { cr: 0.095, cw: 0.95, i: 0.95, o: 4 }, "azure_ai/ministral-3b": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.04 }, "azure_ai/mistral-large": { cr: 0.39999999999999997, cw: 4, i: 4, o: 12 }, "azure_ai/mistral-large-2407": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "azure_ai/mistral-large-3": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "azure_ai/mistral-large-latest": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "azure_ai/mistral-medium-2505": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "azure_ai/mistral-nemo": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "azure_ai/mistral-small": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "azure_ai/mistral-small-2503": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "azure_ai/model_router": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0 }, "babbage-002": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 0.39999999999999997 }, "baseten/MiniMaxAI/MiniMax-M2.5": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "baseten/deepseek-ai/DeepSeek-V3-0324": { cr: 0.07700000000000001, cw: 0.77, i: 0.77, o: 0.77 }, "baseten/deepseek-ai/DeepSeek-V3.1": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "baseten/moonshotai/Kimi-K2-Instruct-0905": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "baseten/moonshotai/Kimi-K2-Thinking": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "baseten/moonshotai/Kimi-K2.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 3 }, "baseten/nvidia/Nemotron-120B-A12B": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.75 }, "baseten/openai/gpt-oss-120b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.5 }, "baseten/zai-org/GLM-4.6": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.2 }, "baseten/zai-org/GLM-4.7": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.2 }, "baseten/zai-org/GLM-5": { cr: 0.095, cw: 0.95, i: 0.95, o: 3.15 }, "bedrock/ap-northeast-1/anthropic.claude-instant-v1": { cr: 0.223, cw: 2.23, i: 2.23, o: 7.55 }, "bedrock/ap-northeast-1/anthropic.claude-v1": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "bedrock/ap-northeast-1/anthropic.claude-v2:1": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "bedrock/ap-northeast-1/deepseek.v3.2": { cr: 0.074, cw: 0.74, i: 0.74, o: 2.2199999999999998 }, "bedrock/ap-northeast-1/minimax.minimax-m2.1": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/ap-northeast-1/minimax.minimax-m2.5": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/ap-northeast-1/moonshotai.kimi-k2-thinking": { cr: 0.07300000000000001, cw: 0.73, i: 0.73, o: 3.03 }, "bedrock/ap-northeast-1/moonshotai.kimi-k2.5": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 3.5999999999999996 }, "bedrock/ap-northeast-1/qwen.qwen3-coder-next": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.44 }, "bedrock/ap-south-1/deepseek.v3.2": { cr: 0.074, cw: 0.74, i: 0.74, o: 2.2199999999999998 }, "bedrock/ap-south-1/meta.llama3-70b-instruct-v1:0": { cr: 0.318, cw: 3.18, i: 3.18, o: 4.199999999999999 }, "bedrock/ap-south-1/meta.llama3-8b-instruct-v1:0": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 0.72 }, "bedrock/ap-south-1/minimax.minimax-m2.1": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/ap-south-1/minimax.minimax-m2.5": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/ap-south-1/moonshotai.kimi-k2-thinking": { cr: 0.071, cw: 0.71, i: 0.71, o: 2.94 }, "bedrock/ap-south-1/moonshotai.kimi-k2.5": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 3.5999999999999996 }, "bedrock/ap-south-1/qwen.qwen3-coder-next": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.44 }, "bedrock/ap-southeast-2/minimax.minimax-m2.5": { cr: 0.0309, cw: 0.309, i: 0.309, o: 1.236 }, "bedrock/ap-southeast-3/deepseek.v3.2": { cr: 0.074, cw: 0.74, i: 0.74, o: 2.2199999999999998 }, "bedrock/ap-southeast-3/minimax.minimax-m2.1": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/ap-southeast-3/minimax.minimax-m2.5": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/ap-southeast-3/moonshotai.kimi-k2.5": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 3.5999999999999996 }, "bedrock/ap-southeast-3/qwen.qwen3-coder-next": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.44 }, "bedrock/ca-central-1/meta.llama3-70b-instruct-v1:0": { cr: 0.30500000000000005, cw: 3.05, i: 3.05, o: 4.03 }, "bedrock/ca-central-1/meta.llama3-8b-instruct-v1:0": { cr: 0.035, cw: 0.35, i: 0.35, o: 0.69 }, "bedrock/eu-central-1/anthropic.claude-instant-v1": { cr: 0.248, cw: 2.48, i: 2.48, o: 8.379999999999999 }, "bedrock/eu-central-1/anthropic.claude-v1": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "bedrock/eu-central-1/anthropic.claude-v2:1": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "bedrock/eu-central-1/minimax.minimax-m2.1": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/eu-central-1/minimax.minimax-m2.5": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/eu-central-1/qwen.qwen3-coder-next": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.44 }, "bedrock/eu-north-1/deepseek.v3.2": { cr: 0.074, cw: 0.74, i: 0.74, o: 2.2199999999999998 }, "bedrock/eu-north-1/minimax.minimax-m2.1": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/eu-north-1/minimax.minimax-m2.5": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/eu-north-1/moonshotai.kimi-k2.5": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 3.5999999999999996 }, "bedrock/eu-south-1/minimax.minimax-m2.1": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/eu-south-1/minimax.minimax-m2.5": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/eu-south-1/qwen.qwen3-coder-next": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.44 }, "bedrock/eu-west-1/meta.llama3-70b-instruct-v1:0": { cr: 0.28600000000000003, cw: 2.8600000000000003, i: 2.8600000000000003, o: 3.78 }, "bedrock/eu-west-1/meta.llama3-8b-instruct-v1:0": { cr: 0.032, cw: 0.32, i: 0.32, o: 0.65 }, "bedrock/eu-west-1/minimax.minimax-m2.1": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/eu-west-1/minimax.minimax-m2.5": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/eu-west-1/qwen.qwen3-coder-next": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.44 }, "bedrock/eu-west-2/meta.llama3-70b-instruct-v1:0": { cr: 0.34500000000000003, cw: 3.45, i: 3.45, o: 4.55 }, "bedrock/eu-west-2/meta.llama3-8b-instruct-v1:0": { cr: 0.03900000000000001, cw: 0.39, i: 0.39, o: 0.78 }, "bedrock/eu-west-2/minimax.minimax-m2.1": { cr: 0.04700000000000001, cw: 0.47, i: 0.47, o: 1.8599999999999999 }, "bedrock/eu-west-2/minimax.minimax-m2.5": { cr: 0.04700000000000001, cw: 0.47, i: 0.47, o: 1.8599999999999999 }, "bedrock/eu-west-2/qwen.qwen3-coder-next": { cr: 0.07800000000000001, cw: 0.78, i: 0.78, o: 1.8599999999999999 }, "bedrock/eu-west-3/mistral.mistral-7b-instruct-v0:2": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.26 }, "bedrock/eu-west-3/mistral.mistral-large-2402-v1:0": { cr: 1.04, cw: 10.4, i: 10.4, o: 31.2 }, "bedrock/eu-west-3/mistral.mixtral-8x7b-instruct-v0:1": { cr: 0.059, cw: 0.59, i: 0.59, o: 0.9099999999999999 }, "bedrock/invoke/anthropic.claude-3-5-sonnet-20240620-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "bedrock/moonshotai.kimi-k2-thinking": { cr: 0.07300000000000001, cw: 0.73, i: 0.73, o: 3.03 }, "bedrock/moonshotai.kimi-k2.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 3.03 }, "bedrock/sa-east-1/deepseek.v3.2": { cr: 0.074, cw: 0.74, i: 0.74, o: 2.2199999999999998 }, "bedrock/sa-east-1/meta.llama3-70b-instruct-v1:0": { cr: 0.44499999999999995, cw: 4.45, i: 4.45, o: 5.88 }, "bedrock/sa-east-1/meta.llama3-8b-instruct-v1:0": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.01 }, "bedrock/sa-east-1/minimax.minimax-m2.1": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/sa-east-1/minimax.minimax-m2.5": { cr: 0.036000000000000004, cw: 0.36, i: 0.36, o: 1.44 }, "bedrock/sa-east-1/moonshotai.kimi-k2-thinking": { cr: 0.07300000000000001, cw: 0.73, i: 0.73, o: 3.03 }, "bedrock/sa-east-1/moonshotai.kimi-k2.5": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 3.5999999999999996 }, "bedrock/sa-east-1/qwen.qwen3-coder-next": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.44 }, "bedrock/us-east-1/anthropic.claude-instant-v1": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 2.4 }, "bedrock/us-east-1/anthropic.claude-v1": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "bedrock/us-east-1/anthropic.claude-v2:1": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "bedrock/us-east-1/deepseek.v3.2": { cr: 0.062, cw: 0.62, i: 0.62, o: 1.85 }, "bedrock/us-east-1/meta.llama3-70b-instruct-v1:0": { cr: 0.265, cw: 2.65, i: 2.65, o: 3.5 }, "bedrock/us-east-1/meta.llama3-8b-instruct-v1:0": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.6 }, "bedrock/us-east-1/minimax.minimax-m2.1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "bedrock/us-east-1/minimax.minimax-m2.5": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "bedrock/us-east-1/mistral.mistral-7b-instruct-v0:2": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.19999999999999998 }, "bedrock/us-east-1/mistral.mistral-large-2402-v1:0": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "bedrock/us-east-1/mistral.mixtral-8x7b-instruct-v0:1": { cr: 0.045, cw: 0.44999999999999996, i: 0.44999999999999996, o: 0.7 }, "bedrock/us-east-1/moonshotai.kimi-k2-thinking": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "bedrock/us-east-1/moonshotai.kimi-k2.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 3 }, "bedrock/us-east-1/qwen.qwen3-coder-next": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.2 }, "bedrock/us-east-1/zai.glm-5": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3.1999999999999997 }, "bedrock/us-east-2/deepseek.v3.2": { cr: 0.062, cw: 0.62, i: 0.62, o: 1.85 }, "bedrock/us-east-2/minimax.minimax-m2.1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "bedrock/us-east-2/minimax.minimax-m2.5": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "bedrock/us-east-2/moonshotai.kimi-k2-thinking": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "bedrock/us-east-2/moonshotai.kimi-k2.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 3 }, "bedrock/us-east-2/qwen.qwen3-coder-next": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.2 }, "bedrock/us-gov-east-1/amazon.nova-pro-v1:0": { cr: 0.096, cw: 0.96, i: 0.96, o: 3.84 }, "bedrock/us-gov-east-1/amazon.titan-embed-text-v1": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "bedrock/us-gov-east-1/amazon.titan-embed-text-v2:0": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0 }, "bedrock/us-gov-east-1/amazon.titan-text-express-v1": { cr: 0.13, cw: 1.3, i: 1.3, o: 1.7 }, "bedrock/us-gov-east-1/amazon.titan-text-lite-v1": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.39999999999999997 }, "bedrock/us-gov-east-1/amazon.titan-text-premier-v1:0": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "bedrock/us-gov-east-1/anthropic.claude-3-5-sonnet-20240620-v1:0": { cr: 0.36, cw: 4.5, i: 3.5999999999999996, o: 18 }, "bedrock/us-gov-east-1/anthropic.claude-3-haiku-20240307-v1:0": { cr: 0.03, cw: 0.375, i: 0.3, o: 1.5 }, "bedrock/us-gov-east-1/anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.12, cw: 1.5, i: 1.2, o: 6 }, "bedrock/us-gov-east-1/anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.36, cw: 4.5, i: 3.5999999999999996, o: 18 }, "bedrock/us-gov-east-1/claude-sonnet-4-5-20250929-v1:0": { cr: 0.36, cw: 4.5, i: 3.5999999999999996, o: 18 }, "bedrock/us-gov-east-1/meta.llama3-70b-instruct-v1:0": { cr: 0.265, cw: 2.65, i: 2.65, o: 3.5 }, "bedrock/us-gov-east-1/meta.llama3-8b-instruct-v1:0": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.65 }, "bedrock/us-gov-west-1/amazon.nova-pro-v1:0": { cr: 0.096, cw: 0.96, i: 0.96, o: 3.84 }, "bedrock/us-gov-west-1/amazon.titan-embed-text-v1": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "bedrock/us-gov-west-1/amazon.titan-embed-text-v2:0": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0 }, "bedrock/us-gov-west-1/amazon.titan-text-express-v1": { cr: 0.13, cw: 1.3, i: 1.3, o: 1.7 }, "bedrock/us-gov-west-1/amazon.titan-text-lite-v1": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.39999999999999997 }, "bedrock/us-gov-west-1/amazon.titan-text-premier-v1:0": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "bedrock/us-gov-west-1/anthropic.claude-3-5-sonnet-20240620-v1:0": { cr: 0.36, cw: 4.5, i: 3.5999999999999996, o: 18 }, "bedrock/us-gov-west-1/anthropic.claude-3-7-sonnet-20250219-v1:0": { cr: 0.36, cw: 4.5, i: 3.5999999999999996, o: 18 }, "bedrock/us-gov-west-1/anthropic.claude-3-haiku-20240307-v1:0": { cr: 0.03, cw: 0.375, i: 0.3, o: 1.5 }, "bedrock/us-gov-west-1/anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.12, cw: 1.5, i: 1.2, o: 6 }, "bedrock/us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.36, cw: 4.5, i: 3.5999999999999996, o: 18 }, "bedrock/us-gov-west-1/claude-sonnet-4-5-20250929-v1:0": { cr: 0.36, cw: 4.5, i: 3.5999999999999996, o: 18 }, "bedrock/us-gov-west-1/meta.llama3-70b-instruct-v1:0": { cr: 0.265, cw: 2.65, i: 2.65, o: 3.5 }, "bedrock/us-gov-west-1/meta.llama3-8b-instruct-v1:0": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.65 }, "bedrock/us-west-1/meta.llama3-70b-instruct-v1:0": { cr: 0.265, cw: 2.65, i: 2.65, o: 3.5 }, "bedrock/us-west-1/meta.llama3-8b-instruct-v1:0": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.6 }, "bedrock/us-west-2/anthropic.claude-instant-v1": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 2.4 }, "bedrock/us-west-2/anthropic.claude-v1": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "bedrock/us-west-2/anthropic.claude-v2:1": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "bedrock/us-west-2/deepseek.v3.2": { cr: 0.062, cw: 0.62, i: 0.62, o: 1.85 }, "bedrock/us-west-2/minimax.minimax-m2.1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "bedrock/us-west-2/minimax.minimax-m2.5": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "bedrock/us-west-2/mistral.mistral-7b-instruct-v0:2": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.19999999999999998 }, "bedrock/us-west-2/mistral.mistral-large-2402-v1:0": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "bedrock/us-west-2/mistral.mixtral-8x7b-instruct-v0:1": { cr: 0.045, cw: 0.44999999999999996, i: 0.44999999999999996, o: 0.7 }, "bedrock/us-west-2/moonshotai.kimi-k2-thinking": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "bedrock/us-west-2/moonshotai.kimi-k2.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 3 }, "bedrock/us-west-2/qwen.qwen3-coder-next": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.2 }, "bedrock/us-west-2/zai.glm-5": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3.1999999999999997 }, "bedrock/us.anthropic.claude-3-5-haiku-20241022-v1:0": { cr: 0.08, cw: 1, i: 0.7999999999999999, o: 4 }, "bedrock_mantle/google.gemma-4-26b-a4b": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.39999999999999997 }, "bedrock_mantle/google.gemma-4-31b": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.39999999999999997 }, "bedrock_mantle/google.gemma-4-e2b": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.08 }, "bedrock_mantle/openai.gpt-5.4": { cr: 0.275, cw: 2.75, i: 2.75, o: 16.5 }, "bedrock_mantle/openai.gpt-5.5": { cr: 0.55, cw: 5.5, i: 5.5, o: 33 }, "bedrock_mantle/openai.gpt-oss-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "bedrock_mantle/openai.gpt-oss-20b": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0.3 }, "bedrock_mantle/openai.gpt-oss-safeguard-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "bedrock_mantle/openai.gpt-oss-safeguard-20b": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0.3 }, "cerebras/gpt-oss-120b": { cr: 0.035, cw: 0.35, i: 0.35, o: 0.75 }, "cerebras/llama-3.3-70b": { cr: 0.085, cw: 0.85, i: 0.85, o: 1.2 }, "cerebras/llama3.1-70b": { cr: 0.06, cw: 0.6, i: 0.6, o: 0.6 }, "cerebras/llama3.1-8b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "cerebras/qwen-3-32b": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 0.7999999999999999 }, "cerebras/zai-glm-4.6": { cr: 0.225, cw: 2.25, i: 2.25, o: 2.75 }, "cerebras/zai-glm-4.7": { cr: 0.225, cw: 2.25, i: 2.25, o: 2.75 }, chatdolphin: { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "chatgpt-4o-latest": { cr: 0.5000000000000001, cw: 5, i: 5, o: 15 }, "claude-3-7-sonnet-20250219": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "claude-3-haiku-20240307": { cr: 0.03, cw: 0.3, i: 0.25, o: 1.25 }, "claude-3-opus-20240229": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "claude-4-opus-20250514": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "claude-4-sonnet-20250514": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "claude-fable-5": { cr: 1, cw: 12.5, i: 10, o: 50 }, "claude-haiku-4-5": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "claude-haiku-4-5-20251001": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "claude-opus-4-1": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "claude-opus-4-1-20250805": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "claude-opus-4-20250514": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "claude-opus-4-5": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "claude-opus-4-5-20251101": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "claude-opus-4-6": { cr: 0.5, cw: 6.25, fast: 6, i: 5, o: 25 }, "claude-opus-4-6-20260205": { cr: 0.5, cw: 6.25, fast: 6, i: 5, o: 25 }, "claude-opus-4-7": { cr: 0.5, cw: 6.25, fast: 6, i: 5, o: 25 }, "claude-opus-4-7-20260416": { cr: 0.5, cw: 6.25, fast: 6, i: 5, o: 25 }, "claude-opus-4-8": { cr: 0.5, cw: 6.25, fast: 2, i: 5, o: 25 }, "claude-sonnet-4-20250514": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "claude-sonnet-4-5": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "claude-sonnet-4-5-20250929": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "claude-sonnet-4-5-20250929-v1:0": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "claude-sonnet-4-6": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "claude-sonnet-5": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "cloudflare/@cf/aisingapore/gemma-sea-lion-v4-27b-it": { cr: 0.035100000000000006, cw: 0.351, i: 0.351, o: 0.5549999999999999 }, "cloudflare/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b": { cr: 0.0497, cw: 0.49699999999999994, i: 0.49699999999999994, o: 4.881 }, "cloudflare/@cf/google/gemma-2b-it-lora": { cr: 0, cw: 0, i: 0, o: 0 }, "cloudflare/@cf/google/gemma-4-26b-a4b-it": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "cloudflare/@cf/google/gemma-7b-it-lora": { cr: 0, cw: 0, i: 0, o: 0 }, "cloudflare/@cf/ibm-granite/granite-4.0-h-micro": { cr: 0.0017000000000000001, cw: 0.017, i: 0.017, o: 0.112 }, "cloudflare/@cf/meta-llama/llama-2-7b-chat-hf-lora": { cr: 0, cw: 0, i: 0, o: 0 }, "cloudflare/@cf/meta/llama-2-7b-chat-fp16": { cr: 0.19230000000000003, cw: 1.923, i: 1.923, o: 1.923 }, "cloudflare/@cf/meta/llama-2-7b-chat-int8": { cr: 0.19230000000000003, cw: 1.923, i: 1.923, o: 1.923 }, "cloudflare/@cf/meta/llama-3.1-8b-instruct-fp8": { cr: 0.0152, cw: 0.15200000000000002, i: 0.15200000000000002, o: 0.28700000000000003 }, "cloudflare/@cf/meta/llama-3.2-11b-vision-instruct": { cr: 0.00485, cw: 0.048499999999999995, i: 0.048499999999999995, o: 0.6759999999999999 }, "cloudflare/@cf/meta/llama-3.2-1b-instruct": { cr: 0.0027, cw: 0.027, i: 0.027, o: 0.201 }, "cloudflare/@cf/meta/llama-3.2-3b-instruct": { cr: 0.005090000000000001, cw: 0.0509, i: 0.0509, o: 0.335 }, "cloudflare/@cf/meta/llama-3.3-70b-instruct-fp8-fast": { cr: 0.0293, cw: 0.293, i: 0.293, o: 2.2529999999999997 }, "cloudflare/@cf/meta/llama-4-scout-17b-16e-instruct": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 0.85 }, "cloudflare/@cf/meta/llama-guard-3-8b": { cr: 0.04840000000000001, cw: 0.48400000000000004, i: 0.48400000000000004, o: 0.03 }, "cloudflare/@cf/mistral/mistral-7b-instruct-v0.1": { cr: 0.19230000000000003, cw: 1.923, i: 1.923, o: 1.923 }, "cloudflare/@cf/mistral/mistral-7b-instruct-v0.2-lora": { cr: 0, cw: 0, i: 0, o: 0 }, "cloudflare/@cf/mistralai/mistral-small-3.1-24b-instruct": { cr: 0.035100000000000006, cw: 0.351, i: 0.351, o: 0.5549999999999999 }, "cloudflare/@cf/moonshotai/kimi-k2.6": { cr: 0.16, cw: 0.95, i: 0.95, o: 4 }, "cloudflare/@cf/moonshotai/kimi-k2.7-code": { cr: 0.19, cw: 0.95, i: 0.95, o: 4 }, "cloudflare/@cf/nvidia/nemotron-3-120b-a12b": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "cloudflare/@cf/openai/gpt-oss-120b": { cr: 0.035, cw: 0.35, i: 0.35, o: 0.75 }, "cloudflare/@cf/openai/gpt-oss-20b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.3 }, "cloudflare/@cf/qwen/qwen2.5-coder-32b-instruct": { cr: 0.066, cw: 0.66, i: 0.66, o: 1 }, "cloudflare/@cf/qwen/qwen3-30b-a3b-fp8": { cr: 0.005090000000000001, cw: 0.0509, i: 0.0509, o: 0.335 }, "cloudflare/@cf/qwen/qwq-32b": { cr: 0.066, cw: 0.66, i: 0.66, o: 1 }, "cloudflare/@cf/zai-org/glm-4.7-flash": { cr: 0.0060500000000000016, cw: 0.060500000000000005, i: 0.060500000000000005, o: 0.39999999999999997 }, "cloudflare/@cf/zai-org/glm-5.2": { cr: 0.26, cw: 1.4, i: 1.4, o: 4.4 }, "cloudflare/@hf/thebloke/codellama-7b-instruct-awq": { cr: 0.19230000000000003, cw: 1.923, i: 1.923, o: 1.923 }, "codestral/codestral-2405": { cr: 0, cw: 0, i: 0, o: 0 }, "codestral/codestral-latest": { cr: 0, cw: 0, i: 0, o: 0 }, "codex-mini-latest": { cr: 0.375, cw: 1.5, i: 1.5, o: 6 }, "cohere.command-light-text-v14": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.6 }, "cohere.command-r-plus-v1:0": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "cohere.command-r-v1:0": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "cohere.command-text-v14": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 2 }, "cohere.embed-english-v3": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "cohere.embed-multilingual-v3": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "cohere.embed-v4:0": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, "cohere.rerank-v3-5:0": { cr: 0, cw: 0, i: 0, o: 0 }, "cohere/embed-v4.0": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, command: { cr: 0.09999999999999999, cw: 1, i: 1, o: 2 }, "command-a-03-2025": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "command-light": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.6 }, "command-nightly": { cr: 0.09999999999999999, cw: 1, i: 1, o: 2 }, "command-r": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "command-r-08-2024": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "command-r-plus": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "command-r-plus-08-2024": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "command-r7b-12-2024": { cr: 0.00375, cw: 0.0375, i: 0.0375, o: 0.15 }, "computer-use-preview": { cr: 0.30000000000000004, cw: 3, i: 3, o: 12 }, "crusoe/Qwen/Qwen3-235B-A22B-Instruct-2507": { cr: 0.30000000000000004, cw: 3, i: 3, o: 3 }, "crusoe/deepseek-ai/DeepSeek-R1-0528": { cr: 0.30000000000000004, cw: 3, i: 3, o: 7 }, "crusoe/deepseek-ai/DeepSeek-V3-0324": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 1.5 }, "crusoe/google/gemma-3-12b-it": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "crusoe/meta-llama/Llama-3.3-70B-Instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "crusoe/moonshotai/Kimi-K2-Thinking": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 2.5 }, "crusoe/openai/gpt-oss-120b": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 0.7999999999999999 }, "darkbloom/gemma-4-26b": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.165 }, "darkbloom/gpt-oss-20b": { cr: 0.0014500000000000001, cw: 0.0145, i: 0.0145, o: 0.07 }, "dashscope/qwen-coder": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.5 }, "dashscope/qwen-max": { cr: 0.16, cw: 1.5999999999999999, i: 1.5999999999999999, o: 6.3999999999999995 }, "dashscope/qwen-plus": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.2 }, "dashscope/qwen-plus-2025-01-25": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.2 }, "dashscope/qwen-plus-2025-04-28": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.2 }, "dashscope/qwen-plus-2025-07-14": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.2 }, "dashscope/qwen-turbo": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.19999999999999998 }, "dashscope/qwen-turbo-2024-11-01": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.19999999999999998 }, "dashscope/qwen-turbo-2025-04-28": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.19999999999999998 }, "dashscope/qwen-turbo-latest": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.19999999999999998 }, "dashscope/qwen3-next-80b-a3b-instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.2 }, "dashscope/qwen3-next-80b-a3b-thinking": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.2 }, "dashscope/qwen3-vl-235b-a22b-instruct": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "dashscope/qwen3-vl-235b-a22b-thinking": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 4 }, "dashscope/qwen3-vl-32b-instruct": { cr: 0.016, cw: 0.16, i: 0.16, o: 0.64 }, "dashscope/qwen3-vl-32b-thinking": { cr: 0.016, cw: 0.16, i: 0.16, o: 2.87 }, "dashscope/qwq-plus": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 2.4 }, "databricks/databricks-bge-large-en": { cr: 0.010003, cw: 0.10003000000000001, i: 0.10003000000000001, o: 0 }, "databricks/databricks-claude-3-7-sonnet": { cr: 0.29999900000000007, cw: 2.9999900000000004, i: 2.9999900000000004, o: 15.000020000000001 }, "databricks/databricks-claude-haiku-4-5": { cr: 0.10000200000000001, cw: 1.0000200000000001, i: 1.0000200000000001, o: 5.00003 }, "databricks/databricks-claude-opus-4": { cr: 1.5000020000000003, cw: 15.000020000000001, i: 15.000020000000001, o: 75.00003000000001 }, "databricks/databricks-claude-opus-4-1": { cr: 1.5000020000000003, cw: 15.000020000000001, i: 15.000020000000001, o: 75.00003000000001 }, "databricks/databricks-claude-opus-4-5": { cr: 0.5000030000000001, cw: 5.00003, i: 5.00003, o: 25.000010000000003 }, "databricks/databricks-claude-sonnet-4": { cr: 0.29999900000000007, cw: 2.9999900000000004, i: 2.9999900000000004, o: 15.000020000000001 }, "databricks/databricks-claude-sonnet-4-1": { cr: 0.29999900000000007, cw: 2.9999900000000004, i: 2.9999900000000004, o: 15.000020000000001 }, "databricks/databricks-claude-sonnet-4-5": { cr: 0.29999900000000007, cw: 2.9999900000000004, i: 2.9999900000000004, o: 15.000020000000001 }, "databricks/databricks-gemini-2-5-flash": { cr: 0.030002, cw: 0.30001999999999995, i: 0.30001999999999995, o: 2.49998 }, "databricks/databricks-gemini-2-5-pro": { cr: 0.12499900000000001, cw: 1.24999, i: 1.24999, o: 9.999990000000002 }, "databricks/databricks-gemma-3-12b": { cr: 0.015001, cw: 0.15000999999999998, i: 0.15000999999999998, o: 0.5000100000000001 }, "databricks/databricks-gpt-5": { cr: 0.12499900000000001, cw: 1.24999, i: 1.24999, o: 9.999990000000002 }, "databricks/databricks-gpt-5-1": { cr: 0.12499900000000001, cw: 1.24999, i: 1.24999, o: 9.999990000000002 }, "databricks/databricks-gpt-5-mini": { cr: 0.02499700000000001, cw: 0.24997000000000005, i: 0.24997000000000005, o: 1.9999700000000002 }, "databricks/databricks-gpt-5-nano": { cr: 0.004998000000000001, cw: 0.049980000000000004, i: 0.049980000000000004, o: 0.39998000000000006 }, "databricks/databricks-gpt-oss-120b": { cr: 0.015001, cw: 0.15000999999999998, i: 0.15000999999999998, o: 0.59997 }, "databricks/databricks-gpt-oss-20b": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.30001999999999995 }, "databricks/databricks-gte-large-en": { cr: 0.012999000000000004, cw: 0.12999000000000002, i: 0.12999000000000002, o: 0 }, "databricks/databricks-llama-2-70b-chat": { cr: 0.050001000000000004, cw: 0.5000100000000001, i: 0.5000100000000001, o: 1.5000300000000002 }, "databricks/databricks-llama-4-maverick": { cr: 0.050001000000000004, cw: 0.5000100000000001, i: 0.5000100000000001, o: 1.5000300000000002 }, "databricks/databricks-meta-llama-3-1-405b-instruct": { cr: 0.5000030000000001, cw: 5.00003, i: 5.00003, o: 15.000020000000001 }, "databricks/databricks-meta-llama-3-1-8b-instruct": { cr: 0.015001, cw: 0.15000999999999998, i: 0.15000999999999998, o: 0.45003000000000004 }, "databricks/databricks-meta-llama-3-3-70b-instruct": { cr: 0.050001000000000004, cw: 0.5000100000000001, i: 0.5000100000000001, o: 1.5000300000000002 }, "databricks/databricks-meta-llama-3-70b-instruct": { cr: 0.10000200000000001, cw: 1.0000200000000001, i: 1.0000200000000001, o: 2.9999900000000004 }, "databricks/databricks-mixtral-8x7b-instruct": { cr: 0.050001000000000004, cw: 0.5000100000000001, i: 0.5000100000000001, o: 1.0000200000000001 }, "databricks/databricks-mpt-30b-instruct": { cr: 0.10000200000000001, cw: 1.0000200000000001, i: 1.0000200000000001, o: 1.0000200000000001 }, "databricks/databricks-mpt-7b-instruct": { cr: 0.050001000000000004, cw: 0.5000100000000001, i: 0.5000100000000001, o: 0 }, "davinci-002": { cr: 0.19999999999999998, cw: 2, i: 2, o: 2 }, "deep-research-pro-preview-12-2025": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "deepinfra/Gryphe/MythoMax-L2-13b": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.09 }, "deepinfra/NousResearch/Hermes-3-Llama-3.1-405B": { cr: 0.09999999999999999, cw: 1, i: 1, o: 1 }, "deepinfra/NousResearch/Hermes-3-Llama-3.1-70B": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.3 }, "deepinfra/Qwen/QwQ-32B": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.39999999999999997 }, "deepinfra/Qwen/Qwen2.5-72B-Instruct": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.39 }, "deepinfra/Qwen/Qwen2.5-7B-Instruct": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.09999999999999999 }, "deepinfra/Qwen/Qwen2.5-VL-32B-Instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "deepinfra/Qwen/Qwen3-14B": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.24 }, "deepinfra/Qwen/Qwen3-235B-A22B": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0.54 }, "deepinfra/Qwen/Qwen3-235B-A22B-Instruct-2507": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.6 }, "deepinfra/Qwen/Qwen3-235B-A22B-Thinking-2507": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.9000000000000004 }, "deepinfra/Qwen/Qwen3-30B-A3B": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.29 }, "deepinfra/Qwen/Qwen3-32B": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.28 }, "deepinfra/Qwen/Qwen3-Coder-480B-A35B-Instruct": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "deepinfra/Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo": { cr: 0.028999999999999998, cw: 0.29, i: 0.29, o: 1.2 }, "deepinfra/Qwen/Qwen3-Next-80B-A3B-Instruct": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 1.4 }, "deepinfra/Qwen/Qwen3-Next-80B-A3B-Thinking": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 1.4 }, "deepinfra/Sao10K/L3-8B-Lunaris-v1-Turbo": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.049999999999999996 }, "deepinfra/Sao10K/L3.1-70B-Euryale-v2.2": { cr: 0.065, cw: 0.65, i: 0.65, o: 0.75 }, "deepinfra/Sao10K/L3.3-70B-Euryale-v2.3": { cr: 0.065, cw: 0.65, i: 0.65, o: 0.75 }, "deepinfra/allenai/olmOCR-7B-0725-FP8": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 1.5 }, "deepinfra/anthropic/claude-3-7-sonnet-latest": { cr: 0.33, cw: 3.3000000000000003, i: 3.3000000000000003, o: 16.5 }, "deepinfra/anthropic/claude-4-opus": { cr: 1.6500000000000004, cw: 16.5, i: 16.5, o: 82.5 }, "deepinfra/anthropic/claude-4-sonnet": { cr: 0.33, cw: 3.3000000000000003, i: 3.3000000000000003, o: 16.5 }, "deepinfra/deepseek-ai/DeepSeek-R1": { cr: 0.07, cw: 0.7, i: 0.7, o: 2.4 }, "deepinfra/deepseek-ai/DeepSeek-R1-0528": { cr: 0.39999999999999997, cw: 0.5, i: 0.5, o: 2.1500000000000004 }, "deepinfra/deepseek-ai/DeepSeek-R1-0528-Turbo": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "deepinfra/deepseek-ai/DeepSeek-R1-Distill-Llama-70B": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "deepinfra/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 0.27 }, "deepinfra/deepseek-ai/DeepSeek-R1-Turbo": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "deepinfra/deepseek-ai/DeepSeek-V3": { cr: 0.038000000000000006, cw: 0.38, i: 0.38, o: 0.8899999999999999 }, "deepinfra/deepseek-ai/DeepSeek-V3-0324": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.88 }, "deepinfra/deepseek-ai/DeepSeek-V3.1": { cr: 0.216, cw: 0.27, i: 0.27, o: 1 }, "deepinfra/deepseek-ai/DeepSeek-V3.1-Terminus": { cr: 0.216, cw: 0.27, i: 0.27, o: 1 }, "deepinfra/google/gemini-2.0-flash-001": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "deepinfra/google/gemini-2.5-flash": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "deepinfra/google/gemini-2.5-pro": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 10 }, "deepinfra/google/gemma-3-12b-it": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.09999999999999999 }, "deepinfra/google/gemma-3-27b-it": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.16 }, "deepinfra/google/gemma-3-4b-it": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.08 }, "deepinfra/meta-llama/Llama-3.2-11B-Vision-Instruct": { cr: 0.004900000000000001, cw: 0.049, i: 0.049, o: 0.049 }, "deepinfra/meta-llama/Llama-3.2-3B-Instruct": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.02 }, "deepinfra/meta-llama/Llama-3.3-70B-Instruct": { cr: 0.023, cw: 0.22999999999999998, i: 0.22999999999999998, o: 0.39999999999999997 }, "deepinfra/meta-llama/Llama-3.3-70B-Instruct-Turbo": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.39 }, "deepinfra/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "deepinfra/meta-llama/Llama-4-Scout-17B-16E-Instruct": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.3 }, "deepinfra/meta-llama/Llama-Guard-3-8B": { cr: 0.0055000000000000005, cw: 0.055, i: 0.055, o: 0.055 }, "deepinfra/meta-llama/Llama-Guard-4-12B": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0.18 }, "deepinfra/meta-llama/Meta-Llama-3-8B-Instruct": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.06 }, "deepinfra/meta-llama/Meta-Llama-3.1-70B-Instruct": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 0.39999999999999997 }, "deepinfra/meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.28 }, "deepinfra/meta-llama/Meta-Llama-3.1-8B-Instruct": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.049999999999999996 }, "deepinfra/meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.03 }, "deepinfra/microsoft/WizardLM-2-8x22B": { cr: 0.048, cw: 0.48, i: 0.48, o: 0.48 }, "deepinfra/microsoft/phi-4": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.14 }, "deepinfra/mistralai/Mistral-Nemo-Instruct-2407": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.04 }, "deepinfra/mistralai/Mistral-Small-24B-Instruct-2501": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.08 }, "deepinfra/mistralai/Mistral-Small-3.2-24B-Instruct-2506": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0.19999999999999998 }, "deepinfra/mistralai/Mixtral-8x7B-Instruct-v0.1": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 0.39999999999999997 }, "deepinfra/moonshotai/Kimi-K2-Instruct": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 2 }, "deepinfra/moonshotai/Kimi-K2-Instruct-0905": { cr: 0.39999999999999997, cw: 0.5, i: 0.5, o: 2 }, "deepinfra/nvidia/Llama-3.1-Nemotron-70B-Instruct": { cr: 0.06, cw: 0.6, i: 0.6, o: 0.6 }, "deepinfra/nvidia/Llama-3.3-Nemotron-Super-49B-v1.5": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "deepinfra/nvidia/NVIDIA-Nemotron-Nano-9B-v2": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.16 }, "deepinfra/openai/gpt-oss-120b": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.44999999999999996 }, "deepinfra/openai/gpt-oss-20b": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.15 }, "deepinfra/zai-org/GLM-4.5": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "deepseek-chat": { cr: 0.028, cw: 0.28, i: 0.28, o: 0.42 }, "deepseek-reasoner": { cr: 0.028, cw: 0.28, i: 0.28, o: 0.42 }, "deepseek-v3-2-251201": { cr: 0, cw: 0, i: 0, o: 0 }, "deepseek-v4-flash": { cr: 0.0028, cw: 0, i: 0.14, o: 0.28 }, "deepseek-v4-pro": { cr: 0.003625, cw: 0, i: 0.435, o: 0.87 }, "deepseek.v3-v1:0": { cr: 0.057999999999999996, cw: 0.58, i: 0.58, o: 1.68 }, "deepseek.v3.2": { cr: 0.062, cw: 0.62, i: 0.62, o: 1.85 }, "deepseek/deepseek-chat": { cr: 0.028, cw: 0, i: 0.28, o: 0.42 }, "deepseek/deepseek-coder": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.28 }, "deepseek/deepseek-r1": { cr: 0.055, cw: 0.55, i: 0.55, o: 2.1900000000000004 }, "deepseek/deepseek-reasoner": { cr: 0.028, cw: 0.28, i: 0.28, o: 0.42 }, "deepseek/deepseek-v3": { cr: 0.07, cw: 0, i: 0.27, o: 1.1 }, "deepseek/deepseek-v3.2": { cr: 0.028000000000000004, cw: 0.28, i: 0.28, o: 0.39999999999999997 }, "deepseek/deepseek-v4-flash": { cr: 0.0028, cw: 0, i: 0.14, o: 0.28 }, "deepseek/deepseek-v4-pro": { cr: 0.003625, cw: 0, i: 0.435, o: 0.87 }, dolphin: { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "doubao-embedding": { cr: 0, cw: 0, i: 0, o: 0 }, "doubao-embedding-large": { cr: 0, cw: 0, i: 0, o: 0 }, "doubao-embedding-large-text-240915": { cr: 0, cw: 0, i: 0, o: 0 }, "doubao-embedding-large-text-250515": { cr: 0, cw: 0, i: 0, o: 0 }, "doubao-embedding-text-240715": { cr: 0, cw: 0, i: 0, o: 0 }, "embed-english-light-v2.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "embed-english-light-v3.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "embed-english-v2.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "embed-english-v3.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "embed-multilingual-light-v3.0": { cr: 10, cw: 100, i: 100, o: 0 }, "embed-multilingual-v2.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "embed-multilingual-v3.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "eu.amazon.nova-2-lite-v1:0": { cr: 0.0825, cw: 0.33, i: 0.33, o: 2.75 }, "eu.amazon.nova-2-pro-preview-20251202-v1:0": { cr: 0.546875, cw: 2.1875, i: 2.1875, o: 17.5 }, "eu.amazon.nova-lite-v1:0": { cr: 0.0078000000000000005, cw: 0.078, i: 0.078, o: 0.312 }, "eu.amazon.nova-micro-v1:0": { cr: 0.004600000000000001, cw: 0.046, i: 0.046, o: 0.184 }, "eu.amazon.nova-pro-v1:0": { cr: 0.105, cw: 1.0499999999999998, i: 1.0499999999999998, o: 4.199999999999999 }, "eu.anthropic.claude-3-5-haiku-20241022-v1:0": { cr: 0.024999999999999998, cw: 0.3125, i: 0.25, o: 1.25 }, "eu.anthropic.claude-3-5-sonnet-20240620-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "eu.anthropic.claude-3-5-sonnet-20241022-v2:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "eu.anthropic.claude-3-7-sonnet-20250219-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "eu.anthropic.claude-3-haiku-20240307-v1:0": { cr: 0.024999999999999998, cw: 0.3125, i: 0.25, o: 1.25 }, "eu.anthropic.claude-3-opus-20240229-v1:0": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "eu.anthropic.claude-3-sonnet-20240229-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "eu.anthropic.claude-fable-5": { cr: 1.1, cw: 13.75, i: 11, o: 55 }, "eu.anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.11, cw: 1.375, i: 1.1, o: 5.5 }, "eu.anthropic.claude-opus-4-1-20250805-v1:0": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "eu.anthropic.claude-opus-4-20250514-v1:0": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "eu.anthropic.claude-opus-4-5-20251101-v1:0": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "eu.anthropic.claude-opus-4-6-v1": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "eu.anthropic.claude-opus-4-7": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "eu.anthropic.claude-opus-4-8": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "eu.anthropic.claude-sonnet-4-20250514-v1:0": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "eu.anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.33, cra: 0.66, cw: 4.125, cwa: 8.25, i: 3.3000000000000003, ia: 6.6000000000000005, o: 16.5, oa: 24.75 }, "eu.anthropic.claude-sonnet-4-6": { cr: 0.33, cw: 4.125, i: 3.3000000000000003, o: 16.5 }, "eu.anthropic.claude-sonnet-5": { cr: 0.33, cw: 4.125, i: 3.3000000000000003, o: 16.5 }, "eu.deepseek.v3.2": { cr: 0.074, cw: 0.74, i: 0.74, o: 2.2199999999999998 }, "eu.meta.llama3-2-1b-instruct-v1:0": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.13 }, "eu.meta.llama3-2-3b-instruct-v1:0": { cr: 0.019000000000000003, cw: 0.19, i: 0.19, o: 0.19 }, "eu.mistral.pixtral-large-2502-v1:0": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "eu.twelvelabs.marengo-embed-2-7-v1:0": { cr: 7, cw: 70, i: 70, o: 0 }, "fireworks-ai-4.1b-to-16b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks-ai-56b-to-176b": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks-ai-above-16b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks-ai-default": { cr: 0, cw: 0, i: 0, o: 0 }, "fireworks-ai-embedding-150m-to-350m": { cr: 0.0016000000000000003, cw: 0.016, i: 0.016, o: 0 }, "fireworks-ai-embedding-up-to-150m": { cr: 0.0008000000000000001, cw: 0.008, i: 0.008, o: 0 }, "fireworks-ai-moe-up-to-56b": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks-ai-up-to-4b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/WhereIsAI/UAE-Large-V1": { cr: 0.0016000000000000003, cw: 0.016, i: 0.016, o: 0 }, "fireworks_ai/accounts/fireworks/models/": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "fireworks_ai/accounts/fireworks/models/SSD-1B": { cr: 0.000013000000000000001, cw: 0.00013, i: 0.00013, o: 0.00013 }, "fireworks_ai/accounts/fireworks/models/chronos-hermes-13b-v2": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/code-llama-13b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/code-llama-13b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/code-llama-13b-python": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/code-llama-34b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/code-llama-34b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/code-llama-34b-python": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/code-llama-70b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/code-llama-70b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/code-llama-70b-python": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/code-llama-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/code-llama-7b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/code-llama-7b-python": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/code-qwen-1p5-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/codegemma-2b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/codegemma-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/cogito-671b-v2-p1": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/cogito-v1-preview-llama-3b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/cogito-v1-preview-llama-70b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/cogito-v1-preview-llama-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/cogito-v1-preview-qwen-14b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/cogito-v1-preview-qwen-32b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/dbrx-instruct": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/deepseek-coder-1b-base": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/deepseek-coder-33b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/deepseek-coder-7b-base": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/deepseek-coder-7b-base-v1p5": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/deepseek-coder-7b-instruct-v1p5": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/deepseek-coder-v2-instruct": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/deepseek-coder-v2-lite-base": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/deepseek-coder-v2-lite-instruct": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/deepseek-prover-v2": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/deepseek-r1": { cr: 0.30000000000000004, cw: 3, i: 3, o: 8 }, "fireworks_ai/accounts/fireworks/models/deepseek-r1-0528": { cr: 0.30000000000000004, cw: 3, i: 3, o: 8 }, "fireworks_ai/accounts/fireworks/models/deepseek-r1-0528-distill-qwen3-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/deepseek-r1-basic": { cr: 0.055, cw: 0.55, i: 0.55, o: 2.1900000000000004 }, "fireworks_ai/accounts/fireworks/models/deepseek-r1-distill-llama-70b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/deepseek-r1-distill-llama-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/deepseek-r1-distill-qwen-14b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/deepseek-r1-distill-qwen-1p5b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/deepseek-r1-distill-qwen-32b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/deepseek-r1-distill-qwen-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/deepseek-v2-lite-chat": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/deepseek-v2p5": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/deepseek-v3": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/deepseek-v3-0324": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/deepseek-v3p1": { cr: 0.05600000000000001, cw: 0.56, i: 0.56, o: 1.68 }, "fireworks_ai/accounts/fireworks/models/deepseek-v3p1-terminus": { cr: 0.05600000000000001, cw: 0.56, i: 0.56, o: 1.68 }, "fireworks_ai/accounts/fireworks/models/deepseek-v3p2": { cr: 0.05600000000000001, cw: 0.56, i: 0.56, o: 1.68 }, "fireworks_ai/accounts/fireworks/models/deepseek-v4-flash": { cr: 0.028, cw: 0.14, i: 0.14, o: 0.28 }, "fireworks_ai/accounts/fireworks/models/deepseek-v4-pro": { cr: 0.145, cw: 1.74, i: 1.74, o: 3.48 }, "fireworks_ai/accounts/fireworks/models/devstral-small-2505": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/dobby-mini-unhinged-plus-llama-3-1-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/dobby-unhinged-llama-3-3-70b-new": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/dolphin-2-9-2-qwen2-72b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/dolphin-2p6-mixtral-8x7b": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/ernie-4p5-21b-a3b-pt": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/ernie-4p5-300b-a47b-pt": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/fare-20b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/firefunction-v1": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/firefunction-v2": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/firellava-13b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/firesearch-ocr-v6": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/fireworks-asr-large": { cr: 0, cw: 0, i: 0, o: 0 }, "fireworks_ai/accounts/fireworks/models/fireworks-asr-v2": { cr: 0, cw: 0, i: 0, o: 0 }, "fireworks_ai/accounts/fireworks/models/flux-1-dev": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/flux-1-dev-controlnet-union": { cr: 0.00010000000000000002, cw: 0.001, i: 0.001, o: 0.001 }, "fireworks_ai/accounts/fireworks/models/flux-1-dev-fp8": { cr: 0.00005000000000000001, cw: 0.0005, i: 0.0005, o: 0.0005 }, "fireworks_ai/accounts/fireworks/models/flux-1-schnell": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/flux-1-schnell-fp8": { cr: 0.000035000000000000004, cw: 0.00035, i: 0.00035, o: 0.00035 }, "fireworks_ai/accounts/fireworks/models/flux-kontext-max": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.08 }, "fireworks_ai/accounts/fireworks/models/flux-kontext-pro": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.04 }, "fireworks_ai/accounts/fireworks/models/gemma-2b-it": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/gemma-3-27b-it": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/gemma-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/gemma-7b-it": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/gemma2-9b-it": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/glm-4p5": { cr: 0.055, cw: 0.55, i: 0.55, o: 2.1900000000000004 }, "fireworks_ai/accounts/fireworks/models/glm-4p5-air": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.88 }, "fireworks_ai/accounts/fireworks/models/glm-4p5v": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/glm-4p6": { cr: 0.055, cw: 0.55, i: 0.55, o: 2.1900000000000004 }, "fireworks_ai/accounts/fireworks/models/glm-4p7": { cr: 0.3, cw: 0.6, i: 0.6, o: 2.2 }, "fireworks_ai/accounts/fireworks/models/glm-5p1": { cr: 0.26, cw: 1.4, i: 1.4, o: 4.4 }, "fireworks_ai/accounts/fireworks/models/glm-5p2": { cr: 0.26, cw: 1.4, i: 1.4, o: 4.4 }, "fireworks_ai/accounts/fireworks/models/gpt-oss-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "fireworks_ai/accounts/fireworks/models/gpt-oss-20b": { cr: 0.035, cw: 0.07, i: 0.07, o: 0.3 }, "fireworks_ai/accounts/fireworks/models/gpt-oss-safeguard-120b": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/gpt-oss-safeguard-20b": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/hermes-2-pro-mistral-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/internvl3-38b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/internvl3-78b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/internvl3-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/japanese-stable-diffusion-xl": { cr: 0.000013000000000000001, cw: 0.00013, i: 0.00013, o: 0.00013 }, "fireworks_ai/accounts/fireworks/models/kat-coder": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/kat-dev-32b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/kat-dev-72b-exp": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/kimi-k2-instruct": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "fireworks_ai/accounts/fireworks/models/kimi-k2-instruct-0905": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "fireworks_ai/accounts/fireworks/models/kimi-k2-thinking": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "fireworks_ai/accounts/fireworks/models/kimi-k2p5": { cr: 0.09999999999999999, cw: 0.6, i: 0.6, o: 3 }, "fireworks_ai/accounts/fireworks/models/kimi-k2p6": { cr: 0.16, cw: 0.95, i: 0.95, o: 4 }, "fireworks_ai/accounts/fireworks/models/kimi-k2p7-code": { cr: 0.19, cw: 0.95, i: 0.95, o: 4 }, "fireworks_ai/accounts/fireworks/models/llama-guard-2-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/llama-guard-3-1b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-guard-3-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/llama-v2-13b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/llama-v2-13b-chat": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/llama-v2-70b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v2-70b-chat": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v2-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/llama-v2-7b-chat": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3-70b-instruct-hf": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/llama-v3-8b-instruct-hf": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/llama-v3p1-405b-instruct": { cr: 0.30000000000000004, cw: 3, i: 3, o: 3 }, "fireworks_ai/accounts/fireworks/models/llama-v3p1-405b-instruct-long": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3p1-70b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3p1-70b-instruct-1b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3p1-8b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3p1-nemotron-70b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3p2-11b-vision-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/llama-v3p2-1b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3p2-1b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3p2-3b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3p2-3b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3p2-90b-vision-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/llama4-maverick-instruct-basic": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.88 }, "fireworks_ai/accounts/fireworks/models/llama4-scout-instruct-basic": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "fireworks_ai/accounts/fireworks/models/llamaguard-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/llava-yi-34b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/minimax-m1-80k": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/minimax-m2": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/minimax-m2p1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/minimax-m2p7": { cr: 0.06, cw: 0.3, i: 0.3, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/minimax-m3": { cr: 0.06, cw: 0.3, i: 0.3, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/ministral-3-14b-instruct-2512": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/ministral-3-3b-instruct-2512": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/ministral-3-8b-instruct-2512": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/mistral-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/mistral-7b-instruct-4k": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/mistral-7b-instruct-v0p2": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/mistral-7b-instruct-v3": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/mistral-7b-v0p2": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/mistral-large-3-fp8": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/mistral-nemo-base-2407": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/mistral-nemo-instruct-2407": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/mistral-small-24b-instruct-2501": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/mixtral-8x22b": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/mixtral-8x22b-instruct": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/mixtral-8x22b-instruct-hf": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "fireworks_ai/accounts/fireworks/models/mixtral-8x7b": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/mixtral-8x7b-instruct": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/mixtral-8x7b-instruct-hf": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/mythomax-l2-13b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/nemotron-nano-v2-12b-vl": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/nous-capybara-7b-v1p9": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/nous-hermes-2-mixtral-8x7b-dpo": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/nous-hermes-2-yi-34b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/nous-hermes-llama2-13b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/nous-hermes-llama2-70b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/nous-hermes-llama2-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/nvidia-nemotron-nano-12b-v2": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/nvidia-nemotron-nano-9b-v2": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/openchat-3p5-0106-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/openhermes-2-mistral-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/openhermes-2p5-mistral-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/openorca-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/phi-2-3b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/phi-3-mini-128k-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/phi-3-vision-128k-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/phind-code-llama-34b-python-v1": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/phind-code-llama-34b-v1": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/phind-code-llama-34b-v2": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/playground-v2-1024px-aesthetic": { cr: 0.000013000000000000001, cw: 0.00013, i: 0.00013, o: 0.00013 }, "fireworks_ai/accounts/fireworks/models/playground-v2-5-1024px-aesthetic": { cr: 0.000013000000000000001, cw: 0.00013, i: 0.00013, o: 0.00013 }, "fireworks_ai/accounts/fireworks/models/pythia-12b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen-qwq-32b-preview": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen-v2p5-14b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen-v2p5-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen1p5-72b-chat": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2-72b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2-7b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen2-vl-2b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2-vl-72b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2-vl-7b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-0p5b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-14b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-1p5b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-32b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-32b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-72b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-72b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-7b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-0p5b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-0p5b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-14b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-14b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-1p5b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-1p5b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-32b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-32b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-32b-instruct-128k": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-32b-instruct-32k-rope": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-32b-instruct-64k": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-3b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-3b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-coder-7b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-math-72b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-vl-32b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-vl-3b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-vl-72b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen2p5-vl-7b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen3-0p6b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-14b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen3-1p7b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-1p7b-fp8-draft": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-1p7b-fp8-draft-131072": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-1p7b-fp8-draft-40960": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-235b-a22b": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.88 }, "fireworks_ai/accounts/fireworks/models/qwen3-235b-a22b-instruct-2507": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.88 }, "fireworks_ai/accounts/fireworks/models/qwen3-235b-a22b-thinking-2507": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.88 }, "fireworks_ai/accounts/fireworks/models/qwen3-30b-a3b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "fireworks_ai/accounts/fireworks/models/qwen3-30b-a3b-instruct-2507": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 0.5 }, "fireworks_ai/accounts/fireworks/models/qwen3-30b-a3b-thinking-2507": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-32b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-4b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen3-4b-instruct-2507": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen3-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen3-coder-30b-a3b-instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "fireworks_ai/accounts/fireworks/models/qwen3-coder-480b-a35b-instruct": { cr: 0.045, cw: 0.44999999999999996, i: 0.44999999999999996, o: 1.7999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen3-coder-480b-instruct-bf16": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-embedding-0p6b": { cr: 0, cw: 0, i: 0, o: 0 }, "fireworks_ai/accounts/fireworks/models/qwen3-embedding-4b": { cr: 0, cw: 0, i: 0, o: 0 }, "fireworks_ai/accounts/fireworks/models/qwen3-next-80b-a3b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-next-80b-a3b-thinking": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-reranker-0p6b": { cr: 0, cw: 0, i: 0, o: 0 }, "fireworks_ai/accounts/fireworks/models/qwen3-reranker-4b": { cr: 0, cw: 0, i: 0, o: 0 }, "fireworks_ai/accounts/fireworks/models/qwen3-reranker-8b": { cr: 0, cw: 0, i: 0, o: 0 }, "fireworks_ai/accounts/fireworks/models/qwen3-vl-235b-a22b-instruct": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.88 }, "fireworks_ai/accounts/fireworks/models/qwen3-vl-235b-a22b-thinking": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.88 }, "fireworks_ai/accounts/fireworks/models/qwen3-vl-30b-a3b-instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "fireworks_ai/accounts/fireworks/models/qwen3-vl-30b-a3b-thinking": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "fireworks_ai/accounts/fireworks/models/qwen3-vl-32b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwen3-vl-8b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/qwen3p7-plus": { cr: 0.08, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "fireworks_ai/accounts/fireworks/models/qwq-32b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/rolm-ocr": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/snorkel-mistral-7b-pairrm-dpo": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/stable-diffusion-xl-1024-v1-0": { cr: 0.000013000000000000001, cw: 0.00013, i: 0.00013, o: 0.00013 }, "fireworks_ai/accounts/fireworks/models/stablecode-3b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/starcoder-16b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/starcoder-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/starcoder2-15b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/starcoder2-3b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "fireworks_ai/accounts/fireworks/models/starcoder2-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/toppy-m-7b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/yi-34b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/yi-34b-200k-capybara": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/yi-34b-chat": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "fireworks_ai/accounts/fireworks/models/yi-6b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/models/yi-large": { cr: 0.30000000000000004, cw: 3, i: 3, o: 3 }, "fireworks_ai/accounts/fireworks/models/zephyr-7b-beta": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "fireworks_ai/accounts/fireworks/routers/glm-5p1-fast": { cr: 0.52, cw: 2.8, i: 2.8, o: 8.8 }, "fireworks_ai/accounts/fireworks/routers/kimi-k2p6-fast": { cr: 0.3, cw: 2, i: 2, o: 8 }, "fireworks_ai/accounts/fireworks/routers/kimi-k2p7-code-fast": { cr: 0.38, cw: 1.9, i: 1.9, o: 8 }, "fireworks_ai/deepseek-v4-flash": { cr: 0.028, cw: 0.14, i: 0.14, o: 0.28 }, "fireworks_ai/deepseek-v4-pro": { cr: 0.145, cw: 1.74, i: 1.74, o: 3.48 }, "fireworks_ai/glm-4p7": { cr: 0.3, cw: 0.6, i: 0.6, o: 2.2 }, "fireworks_ai/glm-5p1": { cr: 0.26, cw: 1.4, i: 1.4, o: 4.4 }, "fireworks_ai/glm-5p1-fast": { cr: 0.52, cw: 2.8, i: 2.8, o: 8.8 }, "fireworks_ai/glm-5p2": { cr: 0.26, cw: 1.4, i: 1.4, o: 4.4 }, "fireworks_ai/gpt-oss-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "fireworks_ai/gpt-oss-20b": { cr: 0.035, cw: 0.07, i: 0.07, o: 0.3 }, "fireworks_ai/kimi-k2p5": { cr: 0.09999999999999999, cw: 0.6, i: 0.6, o: 3 }, "fireworks_ai/kimi-k2p6": { cr: 0.16, cw: 0.95, i: 0.95, o: 4 }, "fireworks_ai/kimi-k2p6-fast": { cr: 0.3, cw: 2, i: 2, o: 8 }, "fireworks_ai/kimi-k2p7-code": { cr: 0.19, cw: 0.95, i: 0.95, o: 4 }, "fireworks_ai/kimi-k2p7-code-fast": { cr: 0.38, cw: 1.9, i: 1.9, o: 8 }, "fireworks_ai/minimax-m2p1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "fireworks_ai/minimax-m2p7": { cr: 0.06, cw: 0.3, i: 0.3, o: 1.2 }, "fireworks_ai/minimax-m3": { cr: 0.06, cw: 0.3, i: 0.3, o: 1.2 }, "fireworks_ai/nomic-ai/nomic-embed-text-v1": { cr: 0.0008000000000000001, cw: 0.008, i: 0.008, o: 0 }, "fireworks_ai/nomic-ai/nomic-embed-text-v1.5": { cr: 0.0008000000000000001, cw: 0.008, i: 0.008, o: 0 }, "fireworks_ai/qwen3p7-plus": { cr: 0.08, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "fireworks_ai/thenlper/gte-base": { cr: 0.0008000000000000001, cw: 0.008, i: 0.008, o: 0 }, "fireworks_ai/thenlper/gte-large": { cr: 0.0016000000000000003, cw: 0.016, i: 0.016, o: 0 }, "friendliai/meta-llama-3.1-70b-instruct": { cr: 0.06, cw: 0.6, i: 0.6, o: 0.6 }, "friendliai/meta-llama-3.1-8b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "ft:babbage-002": { cr: 0.16, cw: 1.5999999999999999, i: 1.5999999999999999, o: 1.5999999999999999 }, "ft:davinci-002": { cr: 1.2000000000000002, cw: 12, i: 12, o: 12 }, "ft:gpt-3.5-turbo": { cr: 0.30000000000000004, cw: 3, i: 3, o: 6 }, "ft:gpt-3.5-turbo-0125": { cr: 0.30000000000000004, cw: 3, i: 3, o: 6 }, "ft:gpt-3.5-turbo-0613": { cr: 0.30000000000000004, cw: 3, i: 3, o: 6 }, "ft:gpt-3.5-turbo-1106": { cr: 0.30000000000000004, cw: 3, i: 3, o: 6 }, "ft:gpt-4-0613": { cr: 3, cw: 30, i: 30, o: 60 }, "ft:gpt-4.1-2025-04-14": { cr: 0.75, cw: 3, i: 3, o: 12 }, "ft:gpt-4.1-mini-2025-04-14": { cr: 0.19999999999999998, cw: 0.7999999999999999, i: 0.7999999999999999, o: 3.1999999999999997 }, "ft:gpt-4.1-nano-2025-04-14": { cr: 0.049999999999999996, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.7999999999999999 }, "ft:gpt-4o-2024-08-06": { cr: 1.875, cw: 3.75, i: 3.75, o: 15 }, "ft:gpt-4o-2024-11-20": { cr: 0.375, cw: 1.875, i: 3.75, o: 15 }, "ft:gpt-4o-mini-2024-07-18": { cr: 0.15, cw: 0.3, i: 0.3, o: 1.2 }, "ft:o4-mini-2025-04-16": { cr: 1, cw: 4, i: 4, o: 16 }, "gemini-2.0-flash": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini-2.0-flash-001": { cr: 0.0375, cw: 0.15, i: 0.15, o: 0.6 }, "gemini-2.0-flash-exp-image-generation": { cr: 0, cw: 0, i: 0, o: 0 }, "gemini-2.0-flash-lite": { cr: 0.01875, cw: 0.075, i: 0.075, o: 0.3 }, "gemini-2.0-flash-lite-001": { cr: 0.01875, cw: 0.075, i: 0.075, o: 0.3 }, "gemini-2.5-computer-use-preview-10-2025": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, ia: 2.5, o: 10, oa: 15 }, "gemini-2.5-flash": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-2.5-flash-image": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-2.5-flash-lite": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini-2.5-flash-lite-preview-06-17": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini-2.5-flash-lite-preview-09-2025": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini-2.5-flash-native-audio-latest": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-2.5-flash-native-audio-preview-09-2025": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-2.5-flash-native-audio-preview-12-2025": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-2.5-flash-preview-09-2025": { cr: 0.075, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-2.5-flash-preview-tts": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-2.5-pro": { cr: 0.125, cra: 0.25, cw: 1.25, cwa: 0.25, i: 1.25, ia: 2.5, o: 10, oa: 15 }, "gemini-2.5-pro-preview-tts": { cr: 0.125, cra: 0.25, cw: 1.25, i: 1.25, ia: 2.5, o: 10, oa: 15 }, "gemini-3-flash-preview": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 3 }, "gemini-3-pro-image": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "gemini-3-pro-image-preview": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "gemini-3-pro-preview": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, cwa: 0.25, i: 2, ia: 4, o: 12, oa: 18 }, "gemini-3.1-flash-image": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 3 }, "gemini-3.1-flash-image-preview": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 3 }, "gemini-3.1-flash-lite": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "gemini-3.1-flash-lite-preview": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "gemini-3.1-flash-live-preview": { cr: 0.07500000000000001, cw: 0.75, i: 0.75, o: 4.5 }, "gemini-3.1-pro-preview": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, cwa: 0.25, i: 2, ia: 4, o: 12, oa: 18 }, "gemini-3.1-pro-preview-customtools": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, cwa: 0.25, i: 2, ia: 4, o: 12, oa: 18 }, "gemini-3.5-flash": { cr: 0.15, cw: 1.5, i: 1.5, o: 9 }, "gemini-embedding-001": { cr: 0.015, cw: 0.15, i: 0.15, o: 0 }, "gemini-embedding-2": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0 }, "gemini-embedding-2-preview": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0 }, "gemini-exp-1206": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-flash-experimental": { cr: 0, cw: 0, i: 0, o: 0 }, "gemini-flash-latest": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini-flash-lite-latest": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini-live-2.5-flash-preview-native-audio-09-2025": { cr: 0.075, cw: 0.3, i: 0.3, o: 2 }, "gemini-pro-latest": { cr: 0.125, cra: 0.25, cw: 1.25, i: 1.25, ia: 2.5, o: 10, oa: 15 }, "gemini-robotics-er-1.5-preview": { cr: 0, cw: 0.3, i: 0.3, o: 2.5 }, "gemini/deep-research-pro-preview-12-2025": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "gemini/gemini-1.5-flash": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0 }, "gemini/gemini-2.0-flash": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini/gemini-2.0-flash-001": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini/gemini-2.0-flash-exp-image-generation": { cr: 0, cw: 0, i: 0, o: 0 }, "gemini/gemini-2.0-flash-lite": { cr: 0.01875, cw: 0.075, i: 0.075, o: 0.3 }, "gemini/gemini-2.0-flash-lite-001": { cr: 0.01875, cw: 0.075, i: 0.075, o: 0.3 }, "gemini/gemini-2.5-computer-use-preview-10-2025": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, ia: 2.5, o: 10, oa: 15 }, "gemini/gemini-2.5-flash": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini/gemini-2.5-flash-image": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini/gemini-2.5-flash-lite": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini/gemini-2.5-flash-lite-preview-06-17": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini/gemini-2.5-flash-lite-preview-09-2025": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini/gemini-2.5-flash-native-audio-latest": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini/gemini-2.5-flash-native-audio-preview-09-2025": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini/gemini-2.5-flash-native-audio-preview-12-2025": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini/gemini-2.5-flash-preview-09-2025": { cr: 0.075, cw: 0.3, i: 0.3, o: 2.5 }, "gemini/gemini-2.5-flash-preview-tts": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "gemini/gemini-2.5-pro": { cr: 0.125, cra: 0.25, cw: 1.25, i: 1.25, ia: 2.5, o: 10, oa: 15 }, "gemini/gemini-2.5-pro-preview-tts": { cr: 0.125, cra: 0.25, cw: 1.25, i: 1.25, ia: 2.5, o: 10, oa: 15 }, "gemini/gemini-3-flash-preview": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 3 }, "gemini/gemini-3-pro-image": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "gemini/gemini-3-pro-image-preview": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "gemini/gemini-3-pro-preview": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, i: 2, ia: 4, o: 12, oa: 18 }, "gemini/gemini-3.1-flash-image": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "gemini/gemini-3.1-flash-image-preview": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "gemini/gemini-3.1-flash-lite": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "gemini/gemini-3.1-flash-lite-preview": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "gemini/gemini-3.1-flash-live-preview": { cr: 0.07500000000000001, cw: 0.75, i: 0.75, o: 4.5 }, "gemini/gemini-3.1-pro-preview": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, i: 2, ia: 4, o: 12, oa: 18 }, "gemini/gemini-3.1-pro-preview-customtools": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, i: 2, ia: 4, o: 12, oa: 18 }, "gemini/gemini-3.5-flash": { cr: 0.15, cw: 1.5, i: 1.5, o: 9 }, "gemini/gemini-embedding-001": { cr: 0.015, cw: 0.15, i: 0.15, o: 0 }, "gemini/gemini-embedding-2": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0 }, "gemini/gemini-embedding-2-preview": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0 }, "gemini/gemini-exp-1114": { cr: 0, cw: 0, i: 0, o: 0 }, "gemini/gemini-exp-1206": { cr: 0, cw: 0, i: 0, o: 0 }, "gemini/gemini-flash-latest": { cr: 0.075, cw: 0.3, i: 0.3, o: 2.5 }, "gemini/gemini-flash-lite-latest": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gemini/gemini-gemma-2-27b-it": { cr: 0.035, cw: 0.35, i: 0.35, o: 1.0499999999999998 }, "gemini/gemini-gemma-2-9b-it": { cr: 0.035, cw: 0.35, i: 0.35, o: 1.0499999999999998 }, "gemini/gemini-live-2.5-flash-preview-native-audio-09-2025": { cr: 0.075, cw: 0.3, i: 0.3, o: 2 }, "gemini/gemini-pro-latest": { cr: 0.125, cra: 0.25, cw: 1.25, i: 1.25, ia: 2.5, o: 10, oa: 15 }, "gemini/gemini-robotics-er-1.5-preview": { cr: 0, cw: 0.3, i: 0.3, o: 2.5 }, "gemini/gemma-3-27b-it": { cr: 0, cw: 0, i: 0, o: 0 }, "gemini/learnlm-1.5-pro-experimental": { cr: 0, cw: 0, i: 0, o: 0 }, "gemini/lyria-3-clip-preview": { cr: 0, cw: 0, i: 0, o: 0 }, "gemini/lyria-3-pro-preview": { cr: 0, cw: 0, i: 0, o: 0 }, "gigachat/Embeddings": { cr: 0, cw: 0, i: 0, o: 0 }, "gigachat/Embeddings-2": { cr: 0, cw: 0, i: 0, o: 0 }, "gigachat/EmbeddingsGigaR": { cr: 0, cw: 0, i: 0, o: 0 }, "gigachat/GigaChat-2-Lite": { cr: 0, cw: 0, i: 0, o: 0 }, "gigachat/GigaChat-2-Max": { cr: 0, cw: 0, i: 0, o: 0 }, "gigachat/GigaChat-2-Pro": { cr: 0, cw: 0, i: 0, o: 0 }, "github_copilot/mai-code-1-flash": { cr: 0.075, cw: 0.75, i: 0.75, o: 4.5 }, "github_copilot/mai-code-1-flash-internal": { cr: 0.075, cw: 0.75, i: 0.75, o: 4.5 }, "glm-4-7-251222": { cr: 0, cw: 0, i: 0, o: 0 }, "global.amazon.nova-2-lite-v1:0": { cr: 0.075, cw: 0.3, i: 0.3, o: 2.5 }, "global.anthropic.claude-fable-5": { cr: 1, cw: 12.5, i: 10, o: 50 }, "global.anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "global.anthropic.claude-opus-4-5-20251101-v1:0": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "global.anthropic.claude-opus-4-6-v1": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "global.anthropic.claude-opus-4-7": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "global.anthropic.claude-opus-4-8": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "global.anthropic.claude-sonnet-4-20250514-v1:0": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "global.anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "global.anthropic.claude-sonnet-4-6": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "global.anthropic.claude-sonnet-5": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "gmi/MiniMaxAI/MiniMax-M2.1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "gmi/Qwen/Qwen3-VL-235B-A22B-Instruct-FP8": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.4 }, "gmi/anthropic/claude-opus-4": { cr: 1.5, cw: 15, i: 15, o: 75 }, "gmi/anthropic/claude-opus-4.5": { cr: 0.5000000000000001, cw: 5, i: 5, o: 25 }, "gmi/anthropic/claude-sonnet-4": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "gmi/anthropic/claude-sonnet-4.5": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "gmi/deepseek-ai/DeepSeek-V3-0324": { cr: 0.028000000000000004, cw: 0.28, i: 0.28, o: 0.88 }, "gmi/deepseek-ai/DeepSeek-V3.2": { cr: 0.028000000000000004, cw: 0.28, i: 0.28, o: 0.39999999999999997 }, "gmi/google/gemini-3-flash-preview": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 3 }, "gmi/google/gemini-3-pro-preview": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "gmi/moonshotai/Kimi-K2-Thinking": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 1.2 }, "gmi/openai/gpt-4o": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gmi/openai/gpt-4o-mini": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "gmi/openai/gpt-5": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 10 }, "gmi/openai/gpt-5.1": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 10 }, "gmi/openai/gpt-5.2": { cr: 0.17500000000000002, cw: 1.75, i: 1.75, o: 14 }, "gmi/zai-org/GLM-4.7-FP8": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "google.gemma-3-12b-it": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.29 }, "google.gemma-3-27b-it": { cr: 0.023, cw: 0.22999999999999998, i: 0.22999999999999998, o: 0.38 }, "google.gemma-3-4b-it": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.08 }, "gpt-3.5-turbo": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "gpt-3.5-turbo-0125": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "gpt-3.5-turbo-1106": { cr: 0.09999999999999999, cw: 1, i: 1, o: 2 }, "gpt-3.5-turbo-16k": { cr: 0.30000000000000004, cw: 3, i: 3, o: 4 }, "gpt-3.5-turbo-instruct": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 2 }, "gpt-3.5-turbo-instruct-0914": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 2 }, "gpt-4": { cr: 3, cw: 30, i: 30, o: 60 }, "gpt-4-0125-preview": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "gpt-4-0314": { cr: 3, cw: 30, i: 30, o: 60 }, "gpt-4-0613": { cr: 3, cw: 30, i: 30, o: 60 }, "gpt-4-1106-preview": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "gpt-4-turbo": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "gpt-4-turbo-2024-04-09": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "gpt-4-turbo-preview": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "gpt-4.1": { cr: 0.5, cw: 2, i: 2, o: 8 }, "gpt-4.1-2025-04-14": { cr: 0.5, cw: 2, i: 2, o: 8 }, "gpt-4.1-mini": { cr: 0.09999999999999999, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "gpt-4.1-mini-2025-04-14": { cr: 0.09999999999999999, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "gpt-4.1-nano": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gpt-4.1-nano-2025-04-14": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "gpt-4o": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-2024-05-13": { cr: 0.5000000000000001, cw: 5, i: 5, o: 15 }, "gpt-4o-2024-08-06": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-2024-11-20": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-audio-preview": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-audio-preview-2024-12-17": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-audio-preview-2025-06-03": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-mini": { cr: 0.075, cw: 0.15, i: 0.15, o: 0.6 }, "gpt-4o-mini-2024-07-18": { cr: 0.075, cw: 0.15, i: 0.15, o: 0.6 }, "gpt-4o-mini-audio-preview": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "gpt-4o-mini-audio-preview-2024-12-17": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "gpt-4o-mini-realtime-preview": { cr: 0.3, cw: 0.6, i: 0.6, o: 2.4 }, "gpt-4o-mini-realtime-preview-2024-12-17": { cr: 0.3, cw: 0.6, i: 0.6, o: 2.4 }, "gpt-4o-mini-search-preview": { cr: 0.075, cw: 0.15, i: 0.15, o: 0.6 }, "gpt-4o-mini-search-preview-2025-03-11": { cr: 0.075, cw: 0.15, i: 0.15, o: 0.6 }, "gpt-4o-mini-transcribe": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 5 }, "gpt-4o-mini-transcribe-2025-03-20": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 5 }, "gpt-4o-mini-transcribe-2025-12-15": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 5 }, "gpt-4o-mini-tts": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-mini-tts-2025-03-20": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-mini-tts-2025-12-15": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-realtime-preview": { cr: 2.5, cw: 5, i: 5, o: 20 }, "gpt-4o-realtime-preview-2024-12-17": { cr: 2.5, cw: 5, i: 5, o: 20 }, "gpt-4o-realtime-preview-2025-06-03": { cr: 2.5, cw: 5, i: 5, o: 20 }, "gpt-4o-search-preview": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-search-preview-2025-03-11": { cr: 1.25, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-transcribe": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-4o-transcribe-diarize": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-5": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5-2025-08-07": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5-chat": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5-chat-latest": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5-codex": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5-mini": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "gpt-5-mini-2025-08-07": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "gpt-5-nano": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.39999999999999997 }, "gpt-5-nano-2025-08-07": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.39999999999999997 }, "gpt-5-pro": { cr: 1.5, cw: 15, i: 15, o: 120 }, "gpt-5-pro-2025-10-06": { cr: 1.5, cw: 15, i: 15, o: 120 }, "gpt-5-search-api": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5-search-api-2025-10-14": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5.1": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5.1-2025-11-13": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5.1-chat-latest": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5.1-codex": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5.1-codex-max": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "gpt-5.1-codex-mini": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "gpt-5.2": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "gpt-5.2-2025-12-11": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "gpt-5.2-chat-latest": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "gpt-5.2-codex": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "gpt-5.2-pro": { cr: 2.0999999999999996, cw: 21, i: 21, o: 168 }, "gpt-5.2-pro-2025-12-11": { cr: 2.0999999999999996, cw: 21, i: 21, o: 168 }, "gpt-5.3-chat-latest": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "gpt-5.3-codex": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "gpt-5.4": { cr: 0.25, cw: 2.5, i: 2.5, o: 15 }, "gpt-5.4-2026-03-05": { cr: 0.25, cw: 2.5, i: 2.5, o: 15 }, "gpt-5.4-mini": { cr: 0.075, cw: 0.75, i: 0.75, o: 4.5 }, "gpt-5.4-mini-2026-03-17": { cr: 0.075, cw: 0.75, i: 0.75, o: 4.5 }, "gpt-5.4-nano": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.25 }, "gpt-5.4-nano-2026-03-17": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.25 }, "gpt-5.4-pro": { cr: 3, cw: 30, i: 30, o: 180 }, "gpt-5.4-pro-2026-03-05": { cr: 3, cw: 30, i: 30, o: 180 }, "gpt-5.5": { cr: 0.5, cw: 5, i: 5, o: 30 }, "gpt-5.5-2026-04-23": { cr: 0.5, cw: 5, i: 5, o: 30 }, "gpt-5.5-pro": { cr: 3, cw: 30, i: 30, o: 180 }, "gpt-5.5-pro-2026-04-23": { cr: 3, cw: 30, i: 30, o: 180 }, "gpt-audio": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-audio-1.5": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-audio-2025-08-28": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "gpt-audio-mini": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "gpt-audio-mini-2025-10-06": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "gpt-audio-mini-2025-12-15": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "gpt-image-1.5": { cr: 1.25, cw: 5, i: 5, o: 10 }, "gpt-image-1.5-2025-12-16": { cr: 1.25, cw: 5, i: 5, o: 10 }, "gpt-image-2": { cr: 1.25, cw: 5, i: 5, o: 10 }, "gpt-image-2-2026-04-21": { cr: 1.25, cw: 5, i: 5, o: 10 }, "gpt-realtime": { cr: 0.39999999999999997, cw: 4, i: 4, o: 16 }, "gpt-realtime-1.5": { cr: 0.39999999999999997, cw: 4, i: 4, o: 16 }, "gpt-realtime-2": { cr: 0.39999999999999997, cw: 4, i: 4, o: 16 }, "gpt-realtime-2025-08-28": { cr: 0.39999999999999997, cw: 4, i: 4, o: 16 }, "gpt-realtime-mini": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "gpt-realtime-mini-2025-10-06": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "gpt-realtime-mini-2025-12-15": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "gradient_ai/anthropic-claude-3-opus": { cr: 1.5, cw: 15, i: 15, o: 75 }, "gradient_ai/anthropic-claude-3.5-haiku": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 4 }, "gradient_ai/anthropic-claude-3.5-sonnet": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "gradient_ai/anthropic-claude-3.7-sonnet": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "gradient_ai/deepseek-r1-distill-llama-70b": { cr: 0.09900000000000002, cw: 0.9900000000000001, i: 0.9900000000000001, o: 0.9900000000000001 }, "gradient_ai/llama3-8b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "gradient_ai/llama3.3-70b-instruct": { cr: 0.065, cw: 0.65, i: 0.65, o: 0.65 }, "gradient_ai/mistral-nemo-instruct-2407": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.3 }, "gradient_ai/openai-o3": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "gradient_ai/openai-o3-mini": { cr: 0.11, cw: 1.1, i: 1.1, o: 4.4 }, "groq/gemma-7b-it": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.08 }, "groq/llama-3.1-8b-instant": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.08 }, "groq/llama-3.3-70b-versatile": { cr: 0.059, cw: 0.59, i: 0.59, o: 0.7899999999999999 }, "groq/meta-llama/llama-4-maverick-17b-128e-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "groq/meta-llama/llama-4-scout-17b-16e-instruct": { cr: 0.011000000000000001, cw: 0.11, i: 0.11, o: 0.33999999999999997 }, "groq/meta-llama/llama-guard-4-12b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "groq/moonshotai/kimi-k2-instruct-0905": { cr: 0.5, cw: 1, i: 1, o: 3 }, "groq/openai/gpt-oss-120b": { cr: 0.075, cw: 0.15, i: 0.15, o: 0.6 }, "groq/openai/gpt-oss-20b": { cr: 0.0375, cw: 0.075, i: 0.075, o: 0.3 }, "groq/openai/gpt-oss-safeguard-20b": { cr: 0.037, cw: 0.075, i: 0.075, o: 0.3 }, "groq/qwen/qwen3-32b": { cr: 0.028999999999999998, cw: 0.29, i: 0.29, o: 0.59 }, "hyperbolic/NousResearch/Hermes-3-Llama-3.1-70B": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "hyperbolic/Qwen/QwQ-32B": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "hyperbolic/Qwen/Qwen2.5-72B-Instruct": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "hyperbolic/Qwen/Qwen2.5-Coder-32B-Instruct": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "hyperbolic/Qwen/Qwen3-235B-A22B": { cr: 0.19999999999999998, cw: 2, i: 2, o: 2 }, "hyperbolic/deepseek-ai/DeepSeek-R1": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 0.39999999999999997 }, "hyperbolic/deepseek-ai/DeepSeek-R1-0528": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.25 }, "hyperbolic/deepseek-ai/DeepSeek-V3": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "hyperbolic/deepseek-ai/DeepSeek-V3-0324": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 0.39999999999999997 }, "hyperbolic/meta-llama/Llama-3.2-3B-Instruct": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "hyperbolic/meta-llama/Llama-3.3-70B-Instruct": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "hyperbolic/meta-llama/Meta-Llama-3-70B-Instruct": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "hyperbolic/meta-llama/Meta-Llama-3.1-405B-Instruct": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "hyperbolic/meta-llama/Meta-Llama-3.1-70B-Instruct": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "hyperbolic/meta-llama/Meta-Llama-3.1-8B-Instruct": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "hyperbolic/moonshotai/Kimi-K2-Instruct": { cr: 0.19999999999999998, cw: 2, i: 2, o: 2 }, "inception/mercury-2": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.75 }, "j2-light": { cr: 0.30000000000000004, cw: 3, i: 3, o: 3 }, "j2-mid": { cr: 1.0000000000000002, cw: 10, i: 10, o: 10 }, "j2-ultra": { cr: 1.5, cw: 15, i: 15, o: 15 }, "jamba-1.5": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.39999999999999997 }, "jamba-1.5-large": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "jamba-1.5-large@001": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "jamba-1.5-mini": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.39999999999999997 }, "jamba-1.5-mini@001": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.39999999999999997 }, "jamba-large-1.6": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "jamba-large-1.7": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "jamba-mini-1.6": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.39999999999999997 }, "jamba-mini-1.7": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.39999999999999997 }, "jina-reranker-v2-base-multilingual": { cr: 0.0018, cw: 0.018, i: 0.018, o: 0.018 }, "jp.anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.11, cw: 1.375, i: 1.1, o: 5.5 }, "jp.anthropic.claude-opus-4-7": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "jp.anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.33, cra: 0.66, cw: 4.125, cwa: 8.25, i: 3.3000000000000003, ia: 6.6000000000000005, o: 16.5, oa: 24.75 }, "jp.anthropic.claude-sonnet-4-6": { cr: 0.33, cw: 4.125, i: 3.3000000000000003, o: 16.5 }, "jp.anthropic.claude-sonnet-5": { cr: 0.33, cw: 4.125, i: 3.3000000000000003, o: 16.5 }, "kimi-k2-thinking-251104": { cr: 0, cw: 0, i: 0, o: 0 }, "lambda_ai/deepseek-llama3.3-70b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "lambda_ai/deepseek-r1-0528": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "lambda_ai/deepseek-r1-671b": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 0.7999999999999999 }, "lambda_ai/deepseek-v3-0324": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "lambda_ai/hermes3-405b": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 0.7999999999999999 }, "lambda_ai/hermes3-70b": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "lambda_ai/hermes3-8b": { cr: 0.0025, cw: 0.024999999999999998, i: 0.024999999999999998, o: 0.04 }, "lambda_ai/lfm-40b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.19999999999999998 }, "lambda_ai/lfm-7b": { cr: 0.0025, cw: 0.024999999999999998, i: 0.024999999999999998, o: 0.04 }, "lambda_ai/llama-4-maverick-17b-128e-instruct-fp8": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.09999999999999999 }, "lambda_ai/llama-4-scout-17b-16e-instruct": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.09999999999999999 }, "lambda_ai/llama3.1-405b-instruct-fp8": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 0.7999999999999999 }, "lambda_ai/llama3.1-70b-instruct-fp8": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "lambda_ai/llama3.1-8b-instruct": { cr: 0.0025, cw: 0.024999999999999998, i: 0.024999999999999998, o: 0.04 }, "lambda_ai/llama3.1-nemotron-70b-instruct-fp8": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "lambda_ai/llama3.2-11b-vision-instruct": { cr: 0.0015, cw: 0.015, i: 0.015, o: 0.024999999999999998 }, "lambda_ai/llama3.2-3b-instruct": { cr: 0.0015, cw: 0.015, i: 0.015, o: 0.024999999999999998 }, "lambda_ai/llama3.3-70b-instruct-fp8": { cr: 0.012, cw: 0.12, i: 0.12, o: 0.3 }, "lambda_ai/qwen25-coder-32b-instruct": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.09999999999999999 }, "lambda_ai/qwen3-32b-fp8": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.09999999999999999 }, "lemonade/Gemma-3-4b-it-GGUF": { cr: 0, cw: 0, i: 0, o: 0 }, "lemonade/Qwen3-4B-Instruct-2507-GGUF": { cr: 0, cw: 0, i: 0, o: 0 }, "lemonade/Qwen3-Coder-30B-A3B-Instruct-GGUF": { cr: 0, cw: 0, i: 0, o: 0 }, "lemonade/gpt-oss-120b-mxfp-GGUF": { cr: 0, cw: 0, i: 0, o: 0 }, "lemonade/gpt-oss-20b-mxfp4-GGUF": { cr: 0, cw: 0, i: 0, o: 0 }, "libertai/bge-m3": { cr: 0.001, cw: 0.01, i: 0.01, o: 0 }, "libertai/deepseek-v4-flash": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.75 }, "libertai/deepseek-v4-flash-thinking": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.75 }, "libertai/gemma-4-31b-it": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.39999999999999997 }, "libertai/gemma-4-31b-it-thinking": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.39999999999999997 }, "libertai/hermes-3-8b-tee": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "libertai/qwen3.5-122b-a10b": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.75 }, "libertai/qwen3.5-122b-a10b-thinking": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.75 }, "libertai/qwen3.6-27b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.5 }, "libertai/qwen3.6-27b-thinking": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.5 }, "libertai/qwen3.6-35b-a3b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.5 }, "libertai/qwen3.6-35b-a3b-thinking": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.5 }, "llamagate/codellama-7b": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.12 }, "llamagate/deepseek-coder-6.7b": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.12 }, "llamagate/deepseek-r1-7b-qwen": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.15 }, "llamagate/deepseek-r1-8b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.19999999999999998 }, "llamagate/dolphin3-8b": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.15 }, "llamagate/gemma3-4b": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.08 }, "llamagate/llama-3.1-8b": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.049999999999999996 }, "llamagate/llama-3.2-3b": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.08 }, "llamagate/llava-7b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.19999999999999998 }, "llamagate/mistral-7b-v0.3": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.15 }, "llamagate/nomic-embed-text": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "llamagate/openthinker-7b": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.15 }, "llamagate/qwen2.5-coder-7b": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.12 }, "llamagate/qwen3-8b": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.14 }, "llamagate/qwen3-embedding-8b": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "llamagate/qwen3-vl-8b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.55 }, "meta.llama2-13b-chat-v1": { cr: 0.07500000000000001, cw: 0.75, i: 0.75, o: 1 }, "meta.llama2-70b-chat-v1": { cr: 0.195, cw: 1.95, i: 1.95, o: 2.56 }, "meta.llama3-1-405b-instruct-v1:0": { cr: 0.532, cw: 5.32, i: 5.32, o: 16 }, "meta.llama3-1-70b-instruct-v1:0": { cr: 0.09900000000000002, cw: 0.9900000000000001, i: 0.9900000000000001, o: 0.9900000000000001 }, "meta.llama3-1-8b-instruct-v1:0": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.22 }, "meta.llama3-2-11b-instruct-v1:0": { cr: 0.035, cw: 0.35, i: 0.35, o: 0.35 }, "meta.llama3-2-1b-instruct-v1:0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "meta.llama3-2-3b-instruct-v1:0": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "meta.llama3-2-90b-instruct-v1:0": { cr: 0.19999999999999998, cw: 2, i: 2, o: 2 }, "meta.llama3-3-70b-instruct-v1:0": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "meta.llama3-70b-instruct-v1:0": { cr: 0.265, cw: 2.65, i: 2.65, o: 3.5 }, "meta.llama3-8b-instruct-v1:0": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.6 }, "meta.llama4-maverick-17b-instruct-v1:0": { cr: 0.024, cw: 0.24, i: 0.24, o: 0.9700000000000001 }, "meta.llama4-scout-17b-instruct-v1:0": { cr: 0.017, cw: 0.16999999999999998, i: 0.16999999999999998, o: 0.66 }, "minimax.minimax-m2": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "minimax.minimax-m2.1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "minimax.minimax-m2.5": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "minimax/MiniMax-M2": { cr: 0.03, cw: 0.375, i: 0.3, o: 1.2 }, "minimax/MiniMax-M2.1": { cr: 0.03, cw: 0.375, i: 0.3, o: 1.2 }, "minimax/MiniMax-M2.1-lightning": { cr: 0.03, cw: 0.375, i: 0.3, o: 2.4 }, "minimax/MiniMax-M2.5": { cr: 0.03, cw: 0.375, i: 0.3, o: 1.2 }, "minimax/MiniMax-M2.5-lightning": { cr: 0.03, cw: 0.375, i: 0.3, o: 2.4 }, "minimax/MiniMax-M3": { cr: 0.06, cw: 0.3, i: 0.3, o: 1.2 }, "mistral.devstral-2-123b": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "mistral.magistral-small-2509": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "mistral.ministral-3-14b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "mistral.ministral-3-3b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "mistral.ministral-3-8b-instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "mistral.mistral-7b-instruct-v0:2": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.19999999999999998 }, "mistral.mistral-large-2402-v1:0": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "mistral.mistral-large-2407-v1:0": { cr: 0.30000000000000004, cw: 3, i: 3, o: 9 }, "mistral.mistral-large-3-675b-instruct": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "mistral.mistral-small-2402-v1:0": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "mistral.mixtral-8x7b-instruct-v0:1": { cr: 0.045, cw: 0.44999999999999996, i: 0.44999999999999996, o: 0.7 }, "mistral.voxtral-mini-3b-2507": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.04 }, "mistral.voxtral-small-24b-2507": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "mistral/codestral-2405": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "mistral/codestral-2508": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.8999999999999999 }, "mistral/codestral-latest": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "mistral/codestral-mamba-latest": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.25 }, "mistral/devstral-2512": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "mistral/devstral-latest": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "mistral/devstral-medium-2507": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "mistral/devstral-medium-latest": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "mistral/devstral-small-2505": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "mistral/devstral-small-2507": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "mistral/devstral-small-latest": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "mistral/labs-devstral-small-2512": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "mistral/magistral-medium-1-2-2509": { cr: 0.19999999999999998, cw: 2, i: 2, o: 5 }, "mistral/magistral-medium-2506": { cr: 0.19999999999999998, cw: 2, i: 2, o: 5 }, "mistral/magistral-medium-2509": { cr: 0.19999999999999998, cw: 2, i: 2, o: 5 }, "mistral/magistral-medium-latest": { cr: 0.19999999999999998, cw: 2, i: 2, o: 5 }, "mistral/magistral-small-1-2-2509": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "mistral/magistral-small-2506": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "mistral/magistral-small-latest": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "mistral/ministral-3-14b-2512": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "mistral/ministral-3-3b-2512": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "mistral/ministral-3-8b-2512": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "mistral/ministral-8b-2512": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "mistral/ministral-8b-latest": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "mistral/mistral-large-2402": { cr: 0.39999999999999997, cw: 4, i: 4, o: 12 }, "mistral/mistral-large-2407": { cr: 0.30000000000000004, cw: 3, i: 3, o: 9 }, "mistral/mistral-large-2411": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "mistral/mistral-large-2512": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "mistral/mistral-large-3": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "mistral/mistral-large-latest": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "mistral/mistral-medium": { cr: 0.27, cw: 2.7, i: 2.7, o: 8.1 }, "mistral/mistral-medium-2312": { cr: 0.27, cw: 2.7, i: 2.7, o: 8.1 }, "mistral/mistral-medium-2505": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "mistral/mistral-medium-2508": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "mistral/mistral-medium-2604": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 7.5 }, "mistral/mistral-medium-3-1-2508": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "mistral/mistral-medium-3-5": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 7.5 }, "mistral/mistral-medium-latest": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 7.5 }, "mistral/mistral-small": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "mistral/mistral-small-3-2-2506": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.18 }, "mistral/mistral-small-latest": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.18 }, "mistral/mistral-tiny": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.25 }, "mistral/open-codestral-mamba": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.25 }, "mistral/open-mistral-7b": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.25 }, "mistral/open-mistral-nemo": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.3 }, "mistral/open-mistral-nemo-2407": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.3 }, "mistral/open-mixtral-8x22b": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "mistral/open-mixtral-8x7b": { cr: 0.07, cw: 0.7, i: 0.7, o: 0.7 }, "mistral/pixtral-12b-2409": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "mistral/pixtral-large-2411": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "mistral/pixtral-large-latest": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "moonshot.kimi-k2-thinking": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "moonshot/kimi-k2-0711-preview": { cr: 0.15, cw: 0.6, i: 0.6, o: 2.5 }, "moonshot/kimi-k2-0905-preview": { cr: 0.15, cw: 0.6, i: 0.6, o: 2.5 }, "moonshot/kimi-k2-thinking": { cr: 0.15, cw: 0.6, i: 0.6, o: 2.5 }, "moonshot/kimi-k2-thinking-turbo": { cr: 0.15, cw: 1.15, i: 1.15, o: 8 }, "moonshot/kimi-k2-turbo-preview": { cr: 0.15, cw: 1.15, i: 1.15, o: 8 }, "moonshot/kimi-k2.5": { cr: 0.09999999999999999, cw: 0.6, i: 0.6, o: 3 }, "moonshot/kimi-k2.6": { cr: 0.16, cw: 0.95, i: 0.95, o: 4 }, "moonshot/kimi-latest": { cr: 0.15, cw: 2, i: 2, o: 5 }, "moonshot/kimi-latest-128k": { cr: 0.15, cw: 2, i: 2, o: 5 }, "moonshot/kimi-latest-32k": { cr: 0.15, cw: 1, i: 1, o: 3 }, "moonshot/kimi-latest-8k": { cr: 0.15, cw: 0.19999999999999998, i: 0.19999999999999998, o: 2 }, "moonshot/kimi-thinking-preview": { cr: 0.15, cw: 0.6, i: 0.6, o: 2.5 }, "moonshot/moonshot-v1-128k": { cr: 0.19999999999999998, cw: 2, i: 2, o: 5 }, "moonshot/moonshot-v1-128k-0430": { cr: 0.19999999999999998, cw: 2, i: 2, o: 5 }, "moonshot/moonshot-v1-128k-vision-preview": { cr: 0.19999999999999998, cw: 2, i: 2, o: 5 }, "moonshot/moonshot-v1-32k": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "moonshot/moonshot-v1-32k-0430": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "moonshot/moonshot-v1-32k-vision-preview": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "moonshot/moonshot-v1-8k": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 2 }, "moonshot/moonshot-v1-8k-0430": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 2 }, "moonshot/moonshot-v1-8k-vision-preview": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 2 }, "moonshot/moonshot-v1-auto": { cr: 0.19999999999999998, cw: 2, i: 2, o: 5 }, "moonshotai.kimi-k2.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 3 }, "morph/morph-v3-fast": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 1.2 }, "morph/morph-v3-large": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 1.9 }, multimodalembedding: { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 0 }, "multimodalembedding@001": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 0 }, "nebius/BAAI/bge-en-icl": { cr: 0.001, cw: 0.01, i: 0.01, o: 0 }, "nebius/BAAI/bge-multilingual-gemma2": { cr: 0.001, cw: 0.01, i: 0.01, o: 0 }, "nebius/NousResearch/Hermes-3-Llama-3.1-405B": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "nebius/Qwen/QwQ-32B": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.44999999999999996 }, "nebius/Qwen/Qwen2-VL-72B-Instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.39999999999999997 }, "nebius/Qwen/Qwen2-VL-7B-Instruct": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.06 }, "nebius/Qwen/Qwen2.5-32B-Instruct": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.19999999999999998 }, "nebius/Qwen/Qwen2.5-72B-Instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.39999999999999997 }, "nebius/Qwen/Qwen2.5-Coder-7B": { cr: 0.001, cw: 0.01, i: 0.01, o: 0.03 }, "nebius/Qwen/Qwen2.5-VL-72B-Instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.39999999999999997 }, "nebius/Qwen/Qwen3-14B": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.24 }, "nebius/Qwen/Qwen3-235B-A22B": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "nebius/Qwen/Qwen3-30B-A3B": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "nebius/Qwen/Qwen3-32B": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "nebius/Qwen/Qwen3-4B": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.24 }, "nebius/deepseek-ai/DeepSeek-R1": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 2.4 }, "nebius/deepseek-ai/DeepSeek-R1-0528": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 2.4 }, "nebius/deepseek-ai/DeepSeek-R1-Distill-Llama-70B": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.75 }, "nebius/deepseek-ai/DeepSeek-V3": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "nebius/deepseek-ai/DeepSeek-V3-0324": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "nebius/google/gemma-3-27b-it": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.19999999999999998 }, "nebius/intfloat/e5-mistral-7b-instruct": { cr: 0.001, cw: 0.01, i: 0.01, o: 0 }, "nebius/meta-llama/Llama-3.3-70B-Instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.39999999999999997 }, "nebius/meta-llama/Llama-Guard-3-8B": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.06 }, "nebius/meta-llama/Meta-Llama-3.1-405B-Instruct": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "nebius/meta-llama/Meta-Llama-3.1-70B-Instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.39999999999999997 }, "nebius/meta-llama/Meta-Llama-3.1-8B-Instruct": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.06 }, "nebius/mistralai/Mistral-Nemo-Instruct-2407": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.12 }, "nebius/nvidia/Llama-3.1-Nemotron-Ultra-253B-v1": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.7999999999999998 }, "nebius/nvidia/Llama-3.3-Nemotron-Super-49B-v1": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "novita/Sao10K/L3-8B-Stheno-v3.2": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.049999999999999996 }, "novita/baai/bge-m3": { cr: 0.001, cw: 0.01, i: 0.01, o: 0.01 }, "novita/baai/bge-reranker-v2-m3": { cr: 0.001, cw: 0.01, i: 0.01, o: 0.01 }, "novita/baichuan/baichuan-m2-32b": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.07 }, "novita/baidu/ernie-4.5-21B-a3b": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.28 }, "novita/baidu/ernie-4.5-21B-a3b-thinking": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.28 }, "novita/baidu/ernie-4.5-300b-a47b-paddle": { cr: 0.028000000000000004, cw: 0.28, i: 0.28, o: 1.1 }, "novita/baidu/ernie-4.5-vl-28b-a3b": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.56 }, "novita/baidu/ernie-4.5-vl-28b-a3b-thinking": { cr: 0.03900000000000001, cw: 0.39, i: 0.39, o: 0.39 }, "novita/baidu/ernie-4.5-vl-424b-a47b": { cr: 0.042, cw: 0.42, i: 0.42, o: 1.25 }, "novita/deepseek/deepseek-ocr": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.03 }, "novita/deepseek/deepseek-prover-v2-671b": { cr: 0.07, cw: 0.7, i: 0.7, o: 2.5 }, "novita/deepseek/deepseek-r1-0528": { cr: 0.35, cw: 0.7, i: 0.7, o: 2.5 }, "novita/deepseek/deepseek-r1-0528-qwen3-8b": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.09 }, "novita/deepseek/deepseek-r1-distill-llama-70b": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 0.7999999999999999 }, "novita/deepseek/deepseek-r1-distill-qwen-14b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "novita/deepseek/deepseek-r1-distill-qwen-32b": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.3 }, "novita/deepseek/deepseek-r1-turbo": { cr: 0.07, cw: 0.7, i: 0.7, o: 2.5 }, "novita/deepseek/deepseek-v3-0324": { cr: 0.135, cw: 0.27, i: 0.27, o: 1.12 }, "novita/deepseek/deepseek-v3-turbo": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.3 }, "novita/deepseek/deepseek-v3.1": { cr: 0.135, cw: 0.27, i: 0.27, o: 1 }, "novita/deepseek/deepseek-v3.1-terminus": { cr: 0.135, cw: 0.27, i: 0.27, o: 1 }, "novita/deepseek/deepseek-v3.2": { cr: 0.13449999999999998, cw: 0.26899999999999996, i: 0.26899999999999996, o: 0.39999999999999997 }, "novita/deepseek/deepseek-v3.2-exp": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 0.41 }, "novita/google/gemma-3-12b-it": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.09999999999999999 }, "novita/google/gemma-3-27b-it": { cr: 0.0119, cw: 0.119, i: 0.119, o: 0.19999999999999998 }, "novita/gryphe/mythomax-l2-13b": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.09 }, "novita/kwaipilot/kat-coder-pro": { cr: 0.06, cw: 0.3, i: 0.3, o: 1.2 }, "novita/meta-llama/llama-3-70b-instruct": { cr: 0.051, cw: 0.51, i: 0.51, o: 0.74 }, "novita/meta-llama/llama-3-8b-instruct": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.04 }, "novita/meta-llama/llama-3.1-8b-instruct": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.049999999999999996 }, "novita/meta-llama/llama-3.2-3b-instruct": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.049999999999999996 }, "novita/meta-llama/llama-3.3-70b-instruct": { cr: 0.013500000000000002, cw: 0.135, i: 0.135, o: 0.39999999999999997 }, "novita/meta-llama/llama-4-maverick-17b-128e-instruct-fp8": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 0.85 }, "novita/meta-llama/llama-4-scout-17b-16e-instruct": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0.59 }, "novita/microsoft/wizardlm-2-8x22b": { cr: 0.062, cw: 0.62, i: 0.62, o: 0.62 }, "novita/minimax/minimax-m2": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "novita/minimax/minimax-m2.1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "novita/minimaxai/minimax-m1-80k": { cr: 0.055, cw: 0.55, i: 0.55, o: 2.2 }, "novita/mistralai/mistral-nemo": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.16999999999999998 }, "novita/moonshotai/kimi-k2-0905": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "novita/moonshotai/kimi-k2-instruct": { cr: 0.05700000000000001, cw: 0.5700000000000001, i: 0.5700000000000001, o: 2.3 }, "novita/moonshotai/kimi-k2-thinking": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "novita/nousresearch/hermes-2-pro-llama-3-8b": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.14 }, "novita/openai/gpt-oss-120b": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.25 }, "novita/openai/gpt-oss-20b": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.15 }, "novita/paddlepaddle/paddleocr-vl": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.02 }, "novita/qwen/qwen-2.5-72b-instruct": { cr: 0.038000000000000006, cw: 0.38, i: 0.38, o: 0.39999999999999997 }, "novita/qwen/qwen-mt-plus": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.75 }, "novita/qwen/qwen2.5-7b-instruct": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.07 }, "novita/qwen/qwen2.5-vl-72b-instruct": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 0.7999999999999999 }, "novita/qwen/qwen3-235b-a22b-fp8": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.7999999999999999 }, "novita/qwen/qwen3-235b-a22b-instruct-2507": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.58 }, "novita/qwen/qwen3-235b-a22b-thinking-2507": { cr: 0.03, cw: 0.3, i: 0.3, o: 3 }, "novita/qwen/qwen3-30b-a3b-fp8": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.44999999999999996 }, "novita/qwen/qwen3-32b-fp8": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.44999999999999996 }, "novita/qwen/qwen3-4b-fp8": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.03 }, "novita/qwen/qwen3-8b-fp8": { cr: 0.0035000000000000005, cw: 0.035, i: 0.035, o: 0.13799999999999998 }, "novita/qwen/qwen3-coder-30b-a3b-instruct": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.27 }, "novita/qwen/qwen3-coder-480b-a35b-instruct": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.3 }, "novita/qwen/qwen3-embedding-0.6b": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0 }, "novita/qwen/qwen3-embedding-8b": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0 }, "novita/qwen/qwen3-max": { cr: 0.21100000000000002, cw: 2.1100000000000003, i: 2.1100000000000003, o: 8.450000000000001 }, "novita/qwen/qwen3-next-80b-a3b-instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.5 }, "novita/qwen/qwen3-next-80b-a3b-thinking": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.5 }, "novita/qwen/qwen3-omni-30b-a3b-instruct": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.9700000000000001 }, "novita/qwen/qwen3-omni-30b-a3b-thinking": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.9700000000000001 }, "novita/qwen/qwen3-reranker-8b": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.049999999999999996 }, "novita/qwen/qwen3-vl-235b-a22b-instruct": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.5 }, "novita/qwen/qwen3-vl-235b-a22b-thinking": { cr: 0.098, cw: 0.98, i: 0.98, o: 3.95 }, "novita/qwen/qwen3-vl-30b-a3b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.7 }, "novita/qwen/qwen3-vl-30b-a3b-thinking": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1 }, "novita/qwen/qwen3-vl-8b-instruct": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.5 }, "novita/sao10k/l3-70b-euryale-v2.1": { cr: 0.148, cw: 1.48, i: 1.48, o: 1.48 }, "novita/sao10k/l3-8b-lunaris": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.049999999999999996 }, "novita/sao10k/l31-70b-euryale-v2.2": { cr: 0.148, cw: 1.48, i: 1.48, o: 1.48 }, "novita/skywork/r1v4-lite": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "novita/xiaomimimo/mimo-v2-flash": { cr: 0.02, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "novita/zai-org/autoglm-phone-9b-multilingual": { cr: 0.0035000000000000005, cw: 0.035, i: 0.035, o: 0.13799999999999998 }, "novita/zai-org/glm-4.5": { cr: 0.11, cw: 0.6, i: 0.6, o: 2.2 }, "novita/zai-org/glm-4.5-air": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.85 }, "novita/zai-org/glm-4.5v": { cr: 0.11, cw: 0.6, i: 0.6, o: 1.7999999999999998 }, "novita/zai-org/glm-4.6": { cr: 0.11, cw: 0.55, i: 0.55, o: 2.2 }, "novita/zai-org/glm-4.6v": { cr: 0.055, cw: 0.3, i: 0.3, o: 0.8999999999999999 }, "novita/zai-org/glm-4.7": { cr: 0.11, cw: 0.6, i: 0.6, o: 2.2 }, "nscale/Qwen/QwQ-32B": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0.19999999999999998 }, "nscale/Qwen/Qwen2.5-Coder-32B-Instruct": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.19999999999999998 }, "nscale/Qwen/Qwen2.5-Coder-3B-Instruct": { cr: 0.001, cw: 0.01, i: 0.01, o: 0.03 }, "nscale/Qwen/Qwen2.5-Coder-7B-Instruct": { cr: 0.001, cw: 0.01, i: 0.01, o: 0.03 }, "nscale/deepseek-ai/DeepSeek-R1-Distill-Llama-70B": { cr: 0.037500000000000006, cw: 0.375, i: 0.375, o: 0.375 }, "nscale/deepseek-ai/DeepSeek-R1-Distill-Llama-8B": { cr: 0.0025, cw: 0.024999999999999998, i: 0.024999999999999998, o: 0.024999999999999998 }, "nscale/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.09 }, "nscale/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.07 }, "nscale/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "nscale/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "nscale/meta-llama/Llama-3.1-8B-Instruct": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.03 }, "nscale/meta-llama/Llama-3.3-70B-Instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "nscale/meta-llama/Llama-4-Scout-17B-16E-Instruct": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.29 }, "nscale/mistralai/mixtral-8x22b-instruct-v0.1": { cr: 0.06, cw: 0.6, i: 0.6, o: 0.6 }, "nvidia.nemotron-nano-12b-v2": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "nvidia.nemotron-nano-3-30b": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.24 }, "nvidia.nemotron-nano-9b-v2": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.22999999999999998 }, "nvidia.nemotron-super-3-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.65 }, "nvidia_nim/nvidia/llama-3_2-nv-rerankqa-1b-v2": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia_nim/nvidia/nv-rerankqa-mistral-4b-v3": { cr: 0, cw: 0, i: 0, o: 0 }, "nvidia_nim/ranking/nvidia/llama-3.2-nv-rerankqa-1b-v2": { cr: 0, cw: 0, i: 0, o: 0 }, o1: { cr: 7.5, cw: 15, i: 15, o: 60 }, "o1-2024-12-17": { cr: 7.5, cw: 15, i: 15, o: 60 }, "o1-pro": { cr: 14.999999999999998, cw: 150, i: 150, o: 600 }, "o1-pro-2025-03-19": { cr: 14.999999999999998, cw: 150, i: 150, o: 600 }, o3: { cr: 0.5, cw: 2, i: 2, o: 8 }, "o3-2025-04-16": { cr: 0.5, cw: 2, i: 2, o: 8 }, "o3-deep-research": { cr: 2.5, cw: 10, i: 10, o: 40 }, "o3-deep-research-2025-06-26": { cr: 2.5, cw: 10, i: 10, o: 40 }, "o3-mini": { cr: 0.55, cw: 1.1, i: 1.1, o: 4.4 }, "o3-mini-2025-01-31": { cr: 0.55, cw: 1.1, i: 1.1, o: 4.4 }, "o3-pro": { cr: 2.0000000000000004, cw: 20, i: 20, o: 80 }, "o3-pro-2025-06-10": { cr: 2.0000000000000004, cw: 20, i: 20, o: 80 }, "o4-mini": { cr: 0.275, cw: 1.1, i: 1.1, o: 4.4 }, "o4-mini-2025-04-16": { cr: 0.275, cw: 1.1, i: 1.1, o: 4.4 }, "o4-mini-deep-research": { cr: 0.5, cw: 2, i: 2, o: 8 }, "o4-mini-deep-research-2025-06-26": { cr: 0.5, cw: 2, i: 2, o: 8 }, "oci/cohere.command-a-03-2025": { cr: 0.15600000000000003, cw: 1.56, i: 1.56, o: 1.56 }, "oci/cohere.command-a-reasoning": { cr: 0.15600000000000003, cw: 1.56, i: 1.56, o: 1.56 }, "oci/cohere.command-a-reasoning-08-2025": { cr: 0.15600000000000003, cw: 1.56, i: 1.56, o: 1.56 }, "oci/cohere.command-a-translate-08-2025": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.09 }, "oci/cohere.command-a-vision": { cr: 0.15600000000000003, cw: 1.56, i: 1.56, o: 1.56 }, "oci/cohere.command-a-vision-07-2025": { cr: 0.15600000000000003, cw: 1.56, i: 1.56, o: 1.56 }, "oci/cohere.command-latest": { cr: 0.15600000000000003, cw: 1.56, i: 1.56, o: 1.56 }, "oci/cohere.command-plus-latest": { cr: 0.15600000000000003, cw: 1.56, i: 1.56, o: 1.56 }, "oci/cohere.command-r-08-2024": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "oci/cohere.command-r-plus-08-2024": { cr: 0.15600000000000003, cw: 1.56, i: 1.56, o: 1.56 }, "oci/cohere.embed-english-image-v3.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "oci/cohere.embed-english-light-image-v3.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "oci/cohere.embed-english-light-v3.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "oci/cohere.embed-english-v3.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "oci/cohere.embed-multilingual-light-image-v3.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "oci/cohere.embed-multilingual-light-v3.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "oci/cohere.embed-multilingual-v3.0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "oci/cohere.embed-v4.0": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, "oci/google.gemini-2.5-flash": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "oci/google.gemini-2.5-flash-lite": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0.3 }, "oci/google.gemini-2.5-pro": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 10 }, "oci/meta.llama-3.1-405b-instruct": { cr: 1.068, cw: 10.68, i: 10.68, o: 10.68 }, "oci/meta.llama-3.1-70b-instruct": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "oci/meta.llama-3.1-8b-instruct": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "oci/meta.llama-3.2-11b-vision-instruct": { cr: 0.19999999999999998, cw: 2, i: 2, o: 2 }, "oci/meta.llama-3.2-90b-vision-instruct": { cr: 0.19999999999999998, cw: 2, i: 2, o: 2 }, "oci/meta.llama-3.3-70b-instruct": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "oci/meta.llama-3.3-70b-instruct-fp8-dynamic": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "oci/meta.llama-4-maverick-17b-128e-instruct-fp8": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "oci/meta.llama-4-scout-17b-16e-instruct": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "oci/openai.gpt-5": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 10 }, "oci/openai.gpt-5-mini": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "oci/openai.gpt-5-nano": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.39999999999999997 }, "oci/xai.grok-3": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "oci/xai.grok-3-fast": { cr: 0.5000000000000001, cw: 5, i: 5, o: 25 }, "oci/xai.grok-3-mini": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.5 }, "oci/xai.grok-3-mini-fast": { cr: 0.06, cw: 0.6, i: 0.6, o: 4 }, "oci/xai.grok-4": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "oci/xai.grok-4-fast": { cr: 0.5000000000000001, cw: 5, i: 5, o: 25 }, "oci/xai.grok-4.1-fast": { cr: 0.5000000000000001, cw: 5, i: 5, o: 25 }, "oci/xai.grok-4.20": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "oci/xai.grok-4.20-multi-agent": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "oci/xai.grok-code-fast-1": { cr: 0.5000000000000001, cw: 5, i: 5, o: 25 }, "ollama/codegeex4": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/codegemma": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/codellama": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/deepseek-coder-v2-base": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/deepseek-coder-v2-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/deepseek-coder-v2-lite-base": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/deepseek-coder-v2-lite-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/deepseek-v3.1:671b-cloud": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/gpt-oss:120b-cloud": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/gpt-oss:20b-cloud": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/internlm2_5-20b-chat": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/llama2": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/llama2-uncensored": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/llama2:13b": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/llama2:70b": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/llama2:7b": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/llama3": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/llama3.1": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/llama3:70b": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/llama3:8b": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/mistral": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/mistral-7B-Instruct-v0.1": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/mistral-7B-Instruct-v0.2": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/mistral-large-instruct-2407": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/mixtral-8x22B-Instruct-v0.1": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/mixtral-8x7B-Instruct-v0.1": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/orca-mini": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/qwen3-coder:480b-cloud": { cr: 0, cw: 0, i: 0, o: 0 }, "ollama/vicuna": { cr: 0, cw: 0, i: 0, o: 0 }, "omni-moderation-2024-09-26": { cr: 0, cw: 0, i: 0, o: 0 }, "omni-moderation-latest": { cr: 0, cw: 0, i: 0, o: 0 }, "openai.gpt-oss-120b-1:0": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "openai.gpt-oss-20b-1:0": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.3 }, "openai.gpt-oss-safeguard-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "openai.gpt-oss-safeguard-20b": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.19999999999999998 }, "openrouter/anthropic/claude-3-haiku": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.25 }, "openrouter/anthropic/claude-3.5-sonnet": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "openrouter/anthropic/claude-3.7-sonnet": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "openrouter/anthropic/claude-haiku-4.5": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "openrouter/anthropic/claude-opus-4": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "openrouter/anthropic/claude-opus-4.1": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "openrouter/anthropic/claude-opus-4.5": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "openrouter/anthropic/claude-opus-4.6": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "openrouter/anthropic/claude-opus-4.7": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "openrouter/anthropic/claude-sonnet-4": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "openrouter/anthropic/claude-sonnet-4.5": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "openrouter/anthropic/claude-sonnet-4.6": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "openrouter/bytedance/ui-tars-1.5-7b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.19999999999999998 }, "openrouter/deepseek/deepseek-chat": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.28 }, "openrouter/deepseek/deepseek-chat-v3-0324": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.28 }, "openrouter/deepseek/deepseek-chat-v3.1": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.7999999999999999 }, "openrouter/deepseek/deepseek-r1": { cr: 0.055, cw: 0.55, i: 0.55, o: 2.1900000000000004 }, "openrouter/deepseek/deepseek-r1-0528": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 2.1500000000000004 }, "openrouter/deepseek/deepseek-v3.2": { cr: 0.028000000000000004, cw: 0.28, i: 0.28, o: 0.39999999999999997 }, "openrouter/deepseek/deepseek-v3.2-exp": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.39999999999999997 }, "openrouter/google/gemini-2.0-flash-001": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "openrouter/google/gemini-2.5-flash": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "openrouter/google/gemini-2.5-pro": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 10 }, "openrouter/google/gemini-3-flash-preview": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 3 }, "openrouter/google/gemini-3-pro-preview": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, cwa: 0.25, i: 2, ia: 4, o: 12, oa: 18 }, "openrouter/google/gemini-3.1-flash-lite": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "openrouter/google/gemini-3.1-flash-lite-preview": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "openrouter/google/gemini-3.1-pro-preview": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, cwa: 0.25, i: 2, ia: 4, o: 12, oa: 18 }, "openrouter/gryphe/mythomax-l2-13b": { cr: 0.1875, cw: 1.875, i: 1.875, o: 1.875 }, "openrouter/mancer/weaver": { cr: 0.5625, cw: 5.625, i: 5.625, o: 5.625 }, "openrouter/meta-llama/llama-3-70b-instruct": { cr: 0.059, cw: 0.59, i: 0.59, o: 0.7899999999999999 }, "openrouter/minimax/minimax-m2": { cr: 0.0255, cw: 0.255, i: 0.255, o: 1.02 }, "openrouter/minimax/minimax-m2.1": { cr: 0, cw: 0, i: 0.27, o: 1.2 }, "openrouter/minimax/minimax-m2.5": { cr: 0.15, cw: 0.3, i: 0.3, o: 1.1 }, "openrouter/mistralai/devstral-2512": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "openrouter/mistralai/ministral-14b-2512": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "openrouter/mistralai/ministral-3b-2512": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "openrouter/mistralai/ministral-8b-2512": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "openrouter/mistralai/mistral-7b-instruct": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.13 }, "openrouter/mistralai/mistral-large": { cr: 0.7999999999999999, cw: 8, i: 8, o: 24 }, "openrouter/mistralai/mistral-large-2512": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "openrouter/mistralai/mistral-small-3.1-24b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "openrouter/mistralai/mistral-small-3.2-24b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "openrouter/mistralai/mixtral-8x22b-instruct": { cr: 0.065, cw: 0.65, i: 0.65, o: 0.65 }, "openrouter/moonshotai/kimi-k2.5": { cr: 0.09999999999999999, cw: 0.6, i: 0.6, o: 3 }, "openrouter/openai/gpt-3.5-turbo": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 2 }, "openrouter/openai/gpt-3.5-turbo-16k": { cr: 0.30000000000000004, cw: 3, i: 3, o: 4 }, "openrouter/openai/gpt-4": { cr: 3, cw: 30, i: 30, o: 60 }, "openrouter/openai/gpt-4.1": { cr: 0.5, cw: 2, i: 2, o: 8 }, "openrouter/openai/gpt-4.1-mini": { cr: 0.09999999999999999, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "openrouter/openai/gpt-4.1-nano": { cr: 0.024999999999999998, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "openrouter/openai/gpt-4o": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "openrouter/openai/gpt-4o-2024-05-13": { cr: 0.5000000000000001, cw: 5, i: 5, o: 15 }, "openrouter/openai/gpt-5": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "openrouter/openai/gpt-5-chat": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "openrouter/openai/gpt-5-codex": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "openrouter/openai/gpt-5-mini": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "openrouter/openai/gpt-5-nano": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.39999999999999997 }, "openrouter/openai/gpt-5.1-codex-max": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "openrouter/openai/gpt-5.2": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "openrouter/openai/gpt-5.2-chat": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "openrouter/openai/gpt-5.2-codex": { cr: 0.175, cw: 1.75, i: 1.75, o: 14 }, "openrouter/openai/gpt-5.2-pro": { cr: 2.0999999999999996, cw: 21, i: 21, o: 168 }, "openrouter/openai/gpt-oss-120b": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0.7999999999999999 }, "openrouter/openai/gpt-oss-20b": { cr: 0.002, cw: 0.02, i: 0.02, o: 0.09999999999999999 }, "openrouter/openai/o1": { cr: 7.5, cw: 15, i: 15, o: 60 }, "openrouter/openai/o3-mini": { cr: 0.11, cw: 1.1, i: 1.1, o: 4.4 }, "openrouter/openai/o3-mini-high": { cr: 0.11, cw: 1.1, i: 1.1, o: 4.4 }, "openrouter/openrouter/auto": { cr: 0, cw: 0, i: 0, o: 0 }, "openrouter/openrouter/bodybuilder": { cr: 0, cw: 0, i: 0, o: 0 }, "openrouter/openrouter/free": { cr: 0, cw: 0, i: 0, o: 0 }, "openrouter/qwen/qwen-2.5-coder-32b-instruct": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0.18 }, "openrouter/qwen/qwen-vl-plus": { cr: 0.021, cw: 0.21, i: 0.21, o: 0.63 }, "openrouter/qwen/qwen3-235b-a22b-2507": { cr: 0.0071, cw: 0.071, i: 0.071, o: 0.09999999999999999 }, "openrouter/qwen/qwen3-235b-a22b-thinking-2507": { cr: 0.011000000000000001, cw: 0.11, i: 0.11, o: 0.6 }, "openrouter/qwen/qwen3-coder": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.95 }, "openrouter/qwen/qwen3-coder-plus": { cr: 0.09999999999999999, cw: 1, i: 1, o: 5 }, "openrouter/qwen/qwen3.5-122b-a10b": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "openrouter/qwen/qwen3.5-27b": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.4 }, "openrouter/qwen/qwen3.5-35b-a3b": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "openrouter/qwen/qwen3.5-397b-a17b": { cr: 0.06, cw: 0.6, i: 0.6, o: 3.5999999999999996 }, "openrouter/qwen/qwen3.5-flash-02-23": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "openrouter/qwen/qwen3.5-plus-02-15": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2.4 }, "openrouter/qwen/qwen3.6-plus": { cr: 0.0325, cw: 0.325, i: 0.325, o: 1.95 }, "openrouter/switchpoint/router": { cr: 0.085, cw: 0.85, i: 0.85, o: 3.4 }, "openrouter/undi95/remm-slerp-l2-13b": { cr: 0.1875, cw: 1.875, i: 1.875, o: 1.875 }, "openrouter/x-ai/grok-4": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "openrouter/xiaomi/mimo-v2-flash": { cr: 0.01, cw: 0, i: 0.09999999999999999, o: 0.3 }, "openrouter/xiaomi/mimo-v2.5": { cr: 0.08, cw: 0, i: 0.39999999999999997, o: 2 }, "openrouter/xiaomi/mimo-v2.5-pro": { cr: 0.19999999999999998, cw: 0, i: 1, o: 3 }, "openrouter/z-ai/glm-4.6": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.75 }, "openrouter/z-ai/glm-4.6:exacto": { cr: 0.045, cw: 0.44999999999999996, i: 0.44999999999999996, o: 1.9 }, "openrouter/z-ai/glm-4.7": { cr: 0, cw: 0, i: 0.39999999999999997, o: 1.5 }, "openrouter/z-ai/glm-4.7-flash": { cr: 0, cw: 0, i: 0.07, o: 0.39999999999999997 }, "openrouter/z-ai/glm-5": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 2.56 }, "openrouter/z-ai/glm-5.1": { cr: 0.5249999999999999, cw: 0, i: 1.0499999999999998, o: 3.5 }, "ovhcloud/DeepSeek-R1-Distill-Llama-70B": { cr: 0.067, cw: 0.67, i: 0.67, o: 0.67 }, "ovhcloud/Llama-3.1-8B-Instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "ovhcloud/Meta-Llama-3_1-70B-Instruct": { cr: 0.067, cw: 0.67, i: 0.67, o: 0.67 }, "ovhcloud/Meta-Llama-3_3-70B-Instruct": { cr: 0.067, cw: 0.67, i: 0.67, o: 0.67 }, "ovhcloud/Mistral-7B-Instruct-v0.3": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "ovhcloud/Mistral-Nemo-Instruct-2407": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0.13 }, "ovhcloud/Mistral-Small-3.2-24B-Instruct-2506": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.28 }, "ovhcloud/Mixtral-8x7B-Instruct-v0.1": { cr: 0.06300000000000001, cw: 0.63, i: 0.63, o: 0.63 }, "ovhcloud/Qwen2.5-Coder-32B-Instruct": { cr: 0.08700000000000001, cw: 0.87, i: 0.87, o: 0.87 }, "ovhcloud/Qwen2.5-VL-72B-Instruct": { cr: 0.09100000000000001, cw: 0.9099999999999999, i: 0.9099999999999999, o: 0.9099999999999999 }, "ovhcloud/Qwen3-32B": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.22999999999999998 }, "ovhcloud/gpt-oss-120b": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.39999999999999997 }, "ovhcloud/gpt-oss-20b": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.15 }, "ovhcloud/llava-v1.6-mistral-7b-hf": { cr: 0.028999999999999998, cw: 0.29, i: 0.29, o: 0.29 }, "ovhcloud/mamba-codestral-7B-v0.1": { cr: 0.019000000000000003, cw: 0.19, i: 0.19, o: 0.19 }, "palm/chat-bison": { cr: 0.012499999999999999, cw: 0.125, i: 0.125, o: 0.125 }, "palm/chat-bison-001": { cr: 0.012499999999999999, cw: 0.125, i: 0.125, o: 0.125 }, "palm/text-bison": { cr: 0.012499999999999999, cw: 0.125, i: 0.125, o: 0.125 }, "palm/text-bison-001": { cr: 0.012499999999999999, cw: 0.125, i: 0.125, o: 0.125 }, "palm/text-bison-safety-off": { cr: 0.012499999999999999, cw: 0.125, i: 0.125, o: 0.125 }, "palm/text-bison-safety-recitation-off": { cr: 0.012499999999999999, cw: 0.125, i: 0.125, o: 0.125 }, "perplexity/codellama-34b-instruct": { cr: 0.035, cw: 0.35, i: 0.35, o: 1.4 }, "perplexity/codellama-70b-instruct": { cr: 0.07, cw: 0.7, i: 0.7, o: 2.8 }, "perplexity/llama-2-70b-chat": { cr: 0.07, cw: 0.7, i: 0.7, o: 2.8 }, "perplexity/llama-3.1-70b-instruct": { cr: 0.09999999999999999, cw: 1, i: 1, o: 1 }, "perplexity/llama-3.1-8b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "perplexity/mistral-7b-instruct": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.28 }, "perplexity/mixtral-8x7b-instruct": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.28 }, "perplexity/pplx-70b-chat": { cr: 0.07, cw: 0.7, i: 0.7, o: 2.8 }, "perplexity/pplx-70b-online": { cr: 0, cw: 0, i: 0, o: 2.8 }, "perplexity/pplx-7b-chat": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.28 }, "perplexity/pplx-7b-online": { cr: 0, cw: 0, i: 0, o: 0.28 }, "perplexity/pplx-embed-v1-0.6b": { cr: 0.0004000000000000001, cw: 0.004, i: 0.004, o: 0 }, "perplexity/pplx-embed-v1-4b": { cr: 0.003, cw: 0.03, i: 0.03, o: 0 }, "perplexity/sonar": { cr: 0.09999999999999999, cw: 1, i: 1, o: 1 }, "perplexity/sonar-deep-research": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "perplexity/sonar-medium-chat": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.7999999999999998 }, "perplexity/sonar-medium-online": { cr: 0, cw: 0, i: 0, o: 1.7999999999999998 }, "perplexity/sonar-pro": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "perplexity/sonar-reasoning": { cr: 0.09999999999999999, cw: 1, i: 1, o: 5 }, "perplexity/sonar-reasoning-pro": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "perplexity/sonar-small-chat": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.28 }, "perplexity/sonar-small-online": { cr: 0, cw: 0, i: 0, o: 0.28 }, "pinstripes/ps/deepseek-v4-flash": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.19999999999999998 }, "pinstripes/ps/glm-4.5-air": { cr: 0.012499999999999999, cw: 0.125, i: 0.125, o: 0.44999999999999996 }, "pinstripes/ps/minimax-m2.7": { cr: 0.0255, cw: 0.255, i: 0.255, o: 0.55 }, "pinstripes/ps/qwen3-30b-a3b": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.19999999999999998 }, "pinstripes/ps/qwen3-coder-30b-a3b": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.6 }, "pinstripes/ps/qwen3.6-35b-a3b": { cr: 0.014000000000000002, cw: 0.14, i: 0.14, o: 0.44999999999999996 }, "publicai/BSC-LT/ALIA-40b-instruct_Q8_0": { cr: 0, cw: 0, i: 0, o: 0 }, "publicai/BSC-LT/salamandra-7b-instruct-tools-16k": { cr: 0, cw: 0, i: 0, o: 0 }, "publicai/aisingapore/Gemma-SEA-LION-v4-27B-IT": { cr: 0, cw: 0, i: 0, o: 0 }, "publicai/aisingapore/Qwen-SEA-LION-v4-32B-IT": { cr: 0, cw: 0, i: 0, o: 0 }, "publicai/allenai/Olmo-3-32B-Think": { cr: 0, cw: 0, i: 0, o: 0 }, "publicai/allenai/Olmo-3-7B-Instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "publicai/allenai/Olmo-3-7B-Think": { cr: 0, cw: 0, i: 0, o: 0 }, "publicai/swiss-ai/apertus-70b-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "publicai/swiss-ai/apertus-8b-instruct": { cr: 0, cw: 0, i: 0, o: 0 }, "qwen.qwen3-235b-a22b-2507-v1:0": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.88 }, "qwen.qwen3-32b-v1:0": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "qwen.qwen3-coder-30b-a3b-v1:0": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "qwen.qwen3-coder-480b-a35b-v1:0": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 1.7999999999999998 }, "qwen.qwen3-coder-next": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.2 }, "qwen.qwen3-next-80b-a3b": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.2 }, "qwen.qwen3-vl-235b-a22b": { cr: 0.053000000000000005, cw: 0.53, i: 0.53, o: 2.66 }, "replicate/anthropic/claude-3.5-haiku": { cr: 0.09999999999999999, cw: 1, i: 1, o: 5 }, "replicate/anthropic/claude-3.5-sonnet": { cr: 0.375, cw: 3.75, i: 3.75, o: 18.75 }, "replicate/anthropic/claude-3.7-sonnet": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "replicate/anthropic/claude-4-sonnet": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "replicate/anthropic/claude-4.5-haiku": { cr: 0.09999999999999999, cw: 1, i: 1, o: 5 }, "replicate/anthropic/claude-4.5-sonnet": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "replicate/deepseek-ai/deepseek-r1": { cr: 0.375, cw: 3.75, i: 3.75, o: 10 }, "replicate/deepseek-ai/deepseek-v3": { cr: 0.14500000000000002, cw: 1.4500000000000002, i: 1.4500000000000002, o: 1.4500000000000002 }, "replicate/deepseek-ai/deepseek-v3.1": { cr: 0.06720000000000001, cw: 0.6719999999999999, i: 0.6719999999999999, o: 2.016 }, "replicate/google/gemini-2.5-flash": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 2.5 }, "replicate/google/gemini-3-pro": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "replicate/ibm-granite/granite-3.3-8b-instruct": { cr: 0.003, cw: 0.03, i: 0.03, o: 0.25 }, "replicate/meta/llama-2-13b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.5 }, "replicate/meta/llama-2-13b-chat": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.5 }, "replicate/meta/llama-2-70b": { cr: 0.065, cw: 0.65, i: 0.65, o: 2.75 }, "replicate/meta/llama-2-70b-chat": { cr: 0.065, cw: 0.65, i: 0.65, o: 2.75 }, "replicate/meta/llama-2-7b": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.25 }, "replicate/meta/llama-2-7b-chat": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.25 }, "replicate/meta/llama-3-70b": { cr: 0.065, cw: 0.65, i: 0.65, o: 2.75 }, "replicate/meta/llama-3-70b-instruct": { cr: 0.065, cw: 0.65, i: 0.65, o: 2.75 }, "replicate/meta/llama-3-8b": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.25 }, "replicate/meta/llama-3-8b-instruct": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.25 }, "replicate/mistralai/mistral-7b-instruct-v0.2": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.25 }, "replicate/mistralai/mistral-7b-v0.1": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.25 }, "replicate/mistralai/mixtral-8x7b-instruct-v0.1": { cr: 0.03, cw: 0.3, i: 0.3, o: 1 }, "replicate/openai/gpt-4.1": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "replicate/openai/gpt-4.1-mini": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "replicate/openai/gpt-4.1-nano": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.39999999999999997 }, "replicate/openai/gpt-4o": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "replicate/openai/gpt-4o-mini": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "replicate/openai/gpt-5": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 10 }, "replicate/openai/gpt-5-mini": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 2 }, "replicate/openai/gpt-5-nano": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.39999999999999997 }, "replicate/openai/gpt-oss-120b": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0.72 }, "replicate/openai/o1": { cr: 1.5, cw: 15, i: 15, o: 60 }, "replicate/openai/o1-mini": { cr: 0.11, cw: 1.1, i: 1.1, o: 4.4 }, "replicate/openai/o4-mini": { cr: 0.09999999999999999, cw: 1, i: 1, o: 4 }, "replicate/qwen/qwen3-235b-a22b-instruct-2507": { cr: 0.0264, cw: 0.26399999999999996, i: 0.26399999999999996, o: 1.06 }, "replicate/xai/grok-4": { cr: 0.72, cw: 7.199999999999999, i: 7.199999999999999, o: 36 }, "replicateopenai/gpt-oss-20b": { cr: 0.009000000000000001, cw: 0.09, i: 0.09, o: 0.36 }, "rerank-english-v2.0": { cr: 0, cw: 0, i: 0, o: 0 }, "rerank-english-v3.0": { cr: 0, cw: 0, i: 0, o: 0 }, "rerank-multilingual-v2.0": { cr: 0, cw: 0, i: 0, o: 0 }, "rerank-multilingual-v3.0": { cr: 0, cw: 0, i: 0, o: 0 }, "rerank-v3.5": { cr: 0, cw: 0, i: 0, o: 0 }, "sagemaker/meta-textgeneration-llama-2-13b": { cr: 0, cw: 0, i: 0, o: 0 }, "sagemaker/meta-textgeneration-llama-2-13b-f": { cr: 0, cw: 0, i: 0, o: 0 }, "sagemaker/meta-textgeneration-llama-2-70b": { cr: 0, cw: 0, i: 0, o: 0 }, "sagemaker/meta-textgeneration-llama-2-70b-b-f": { cr: 0, cw: 0, i: 0, o: 0 }, "sagemaker/meta-textgeneration-llama-2-7b": { cr: 0, cw: 0, i: 0, o: 0 }, "sagemaker/meta-textgeneration-llama-2-7b-f": { cr: 0, cw: 0, i: 0, o: 0 }, "sambanova/DeepSeek-R1": { cr: 0.5000000000000001, cw: 5, i: 5, o: 7 }, "sambanova/DeepSeek-R1-Distill-Llama-70B": { cr: 0.07, cw: 0.7, i: 0.7, o: 1.4 }, "sambanova/DeepSeek-V3-0324": { cr: 0.30000000000000004, cw: 3, i: 3, o: 4.5 }, "sambanova/DeepSeek-V3.1": { cr: 0.30000000000000004, cw: 3, i: 3, o: 4.5 }, "sambanova/DeepSeek-V3.2": { cr: 0.30000000000000004, cw: 3, i: 3, o: 4.5 }, "sambanova/Llama-4-Maverick-17B-128E-Instruct": { cr: 0.06300000000000001, cw: 0.63, i: 0.63, o: 1.7999999999999998 }, "sambanova/Llama-4-Scout-17B-16E-Instruct": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 0.7 }, "sambanova/Meta-Llama-3.1-405B-Instruct": { cr: 0.5000000000000001, cw: 5, i: 5, o: 10 }, "sambanova/Meta-Llama-3.1-8B-Instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.19999999999999998 }, "sambanova/Meta-Llama-3.2-1B-Instruct": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.08 }, "sambanova/Meta-Llama-3.2-3B-Instruct": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.16 }, "sambanova/Meta-Llama-3.3-70B-Instruct": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.2 }, "sambanova/Meta-Llama-Guard-3-8B": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.3 }, "sambanova/MiniMax-M2.7": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.4 }, "sambanova/QwQ-32B": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1 }, "sambanova/Qwen2-Audio-7B-Instruct": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 100 }, "sambanova/Qwen3-32B": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 0.7999999999999999 }, "sambanova/gemma-4-31B-it": { cr: 0.038000000000000006, cw: 0.38, i: 0.38, o: 1.15 }, "sambanova/gpt-oss-120b": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.59 }, sample_spec: { cr: 0, cw: 0, i: 0, o: 0 }, "sarvam/sarvam-m": { cr: 0, cw: 0, i: 0, o: 0 }, "scaleway/BAAI/bge-multilingual-gemma2": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "scaleway/google/gemma-3-27b-it": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.5 }, "scaleway/google/gemma-4-26b-a4b-it": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.5 }, "scaleway/hcompany/holo2-30b-a3b": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.7 }, "scaleway/meta/llama-3.3-70b-instruct": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "scaleway/mistralai/devstral-2-123b-instruct-2512": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "scaleway/mistralai/mistral-medium-3.5-128b": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 7.5 }, "scaleway/mistralai/mistral-small-3.2-24b-instruct-2506": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.35 }, "scaleway/mistralai/pixtral-12b-2409": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "scaleway/mistralai/voxtral-small-24b-2507": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.35 }, "scaleway/openai/gpt-oss-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "scaleway/qwen/qwen3-235b-a22b-instruct-2507": { cr: 0.07500000000000001, cw: 0.75, i: 0.75, o: 2.25 }, "scaleway/qwen/qwen3-coder-30b-a3b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.7999999999999999 }, "scaleway/qwen/qwen3-embedding-8b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "scaleway/qwen/qwen3.5-397b-a17b": { cr: 0.06, cw: 0.6, i: 0.6, o: 3.5999999999999996 }, "scaleway/qwen/qwen3.6-35b-a3b": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "snowflake/claude-3-5-sonnet": { cr: 0.3, cw: 3, i: 3, o: 15 }, "snowflake/claude-3-7-sonnet": { cr: 0.3, cw: 3, i: 3, o: 15 }, "snowflake/claude-4-opus": { cr: 0.5, cw: 5, i: 5, o: 25 }, "snowflake/claude-4-sonnet": { cr: 0.3, cw: 3, i: 3, o: 15 }, "snowflake/claude-haiku-4-5": { cr: 0.09999999999999999, cw: 1, i: 1, o: 5 }, "snowflake/claude-sonnet-4-5": { cr: 0.3, cw: 3, i: 3, o: 15 }, "snowflake/claude-sonnet-4-6": { cr: 0.3, cw: 3, i: 3, o: 15 }, "snowflake/deepseek-r1": { cr: 0.135, cw: 1.35, i: 1.35, o: 5.4 }, "snowflake/llama3.1-405b": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "snowflake/llama3.1-70b": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "snowflake/llama3.1-8b": { cr: 0.024, cw: 0.24, i: 0.24, o: 0.24 }, "snowflake/llama3.3-70b": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "snowflake/llama4-maverick": { cr: 0.024, cw: 0.24, i: 0.24, o: 0.9700000000000001 }, "snowflake/mistral-large2": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "snowflake/openai-gpt-4.1": { cr: 0.5, cw: 2, i: 2, o: 8 }, "snowflake/openai-gpt-5": { cr: 0.125, cw: 1.25, i: 1.25, o: 10 }, "snowflake/openai-gpt-5-mini": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "snowflake/openai-gpt-5-nano": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "snowflake/snowflake-arctic-embed-l-v2.0": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0 }, "snowflake/snowflake-arctic-embed-m-v2.0": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0 }, "snowflake/snowflake-llama-3.3-70b": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "tensormesh/MiniMaxAI/MiniMax-M2.5": { cr: 0, cw: 0.3, i: 0.3, o: 1.2 }, "tensormesh/Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8": { cr: 0, cw: 0.44999999999999996, i: 0.44999999999999996, o: 1.7999999999999998 }, "tensormesh/Qwen/Qwen3.5-397B-A17B-FP8": { cr: 0, cw: 0.6, i: 0.6, o: 3.5999999999999996 }, "tensormesh/Qwen/Qwen3.6-27B-FP8": { cr: 0, cw: 0.32, i: 0.32, o: 3.1999999999999997 }, "tensormesh/deepseek-ai/DeepSeek-V4-Flash": { cr: 0, cw: 0.14, i: 0.14, o: 0.28 }, "tensormesh/google/gemma-4-31B-it": { cr: 0, cw: 0.14, i: 0.14, o: 0.56 }, "tensormesh/lukealonso/GLM-5.1-NVFP4-MTP": { cr: 0, cw: 1.4, i: 1.4, o: 4.4 }, "tensormesh/moonshotai/Kimi-K2.6": { cr: 0, cw: 0.96, i: 0.96, o: 4 }, "tensormesh/openai/gpt-oss-120b": { cr: 0, cw: 0.15, i: 0.15, o: 0.6 }, "tensormesh/openai/gpt-oss-20b": { cr: 0, cw: 0.07, i: 0.07, o: 0.28 }, "text-completion-codestral/codestral-2405": { cr: 0, cw: 0, i: 0, o: 0 }, "text-completion-codestral/codestral-latest": { cr: 0, cw: 0, i: 0, o: 0 }, "text-completion-inception/mercury-edit-2": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.75 }, "text-embedding-004": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "text-embedding-005": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "text-embedding-3-large": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0 }, "text-embedding-3-small": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "text-embedding-ada-002": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "text-embedding-ada-002-v2": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "text-embedding-large-exp-03-07": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "text-embedding-preview-0409": { cr: 0.000625, cw: 0.0062499999999999995, i: 0.0062499999999999995, o: 0 }, "text-moderation-007": { cr: 0, cw: 0, i: 0, o: 0 }, "text-moderation-latest": { cr: 0, cw: 0, i: 0, o: 0 }, "text-moderation-stable": { cr: 0, cw: 0, i: 0, o: 0 }, "text-multilingual-embedding-002": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "text-unicorn": { cr: 1.0000000000000002, cw: 10, i: 10, o: 28 }, "text-unicorn@001": { cr: 1.0000000000000002, cw: 10, i: 10, o: 28 }, "together-ai-21.1b-41b": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 0.7999999999999999 }, "together-ai-4.1b-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "together-ai-41.1b-80b": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "together-ai-8.1b-21b": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.3 }, "together-ai-81.1b-110b": { cr: 0.18, cw: 1.7999999999999998, i: 1.7999999999999998, o: 1.7999999999999998 }, "together-ai-embedding-151m-to-350m": { cr: 0.0016000000000000003, cw: 0.016, i: 0.016, o: 0 }, "together-ai-embedding-up-to-150m": { cr: 0.0008000000000000001, cw: 0.008, i: 0.008, o: 0 }, "together-ai-up-to-4b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "together_ai/BAAI/bge-base-en-v1.5": { cr: 0.0008000000000000001, cw: 0.008, i: 0.008, o: 0 }, "together_ai/Qwen/Qwen3-235B-A22B-Instruct-2507-tput": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 6 }, "together_ai/Qwen/Qwen3-235B-A22B-Thinking-2507": { cr: 0.065, cw: 0.65, i: 0.65, o: 3 }, "together_ai/Qwen/Qwen3-235B-A22B-fp8-tput": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "together_ai/Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8": { cr: 0.19999999999999998, cw: 2, i: 2, o: 2 }, "together_ai/Qwen/Qwen3-Next-80B-A3B-Instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.5 }, "together_ai/Qwen/Qwen3-Next-80B-A3B-Thinking": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.5 }, "together_ai/Qwen/Qwen3.5-397B-A17B": { cr: 0.06, cw: 0.6, i: 0.6, o: 3.5999999999999996 }, "together_ai/baai/bge-base-en-v1.5": { cr: 0.0008000000000000001, cw: 0.008, i: 0.008, o: 0 }, "together_ai/deepseek-ai/DeepSeek-R1": { cr: 0.30000000000000004, cw: 3, i: 3, o: 7 }, "together_ai/deepseek-ai/DeepSeek-R1-0528-tput": { cr: 0.055, cw: 0.55, i: 0.55, o: 2.1900000000000004 }, "together_ai/deepseek-ai/DeepSeek-V3": { cr: 0.12500000000000003, cw: 1.25, i: 1.25, o: 1.25 }, "together_ai/deepseek-ai/DeepSeek-V3.1": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.7 }, "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo": { cr: 0.08800000000000001, cw: 0.88, i: 0.88, o: 0.88 }, "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo-Free": { cr: 0, cw: 0, i: 0, o: 0 }, "together_ai/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8": { cr: 0.027000000000000003, cw: 0.27, i: 0.27, o: 0.85 }, "together_ai/meta-llama/Llama-4-Scout-17B-16E-Instruct": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0.59 }, "together_ai/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo": { cr: 0.35000000000000003, cw: 3.5, i: 3.5, o: 3.5 }, "together_ai/meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo": { cr: 0.08800000000000001, cw: 0.88, i: 0.88, o: 0.88 }, "together_ai/meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0.18 }, "together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1": { cr: 0.06, cw: 0.6, i: 0.6, o: 0.6 }, "together_ai/moonshotai/Kimi-K2-Instruct": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "together_ai/moonshotai/Kimi-K2-Instruct-0905": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "together_ai/moonshotai/Kimi-K2.5": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 2.8 }, "together_ai/openai/gpt-oss-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "together_ai/openai/gpt-oss-20b": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.19999999999999998 }, "together_ai/zai-org/GLM-4.5-Air-FP8": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.1 }, "together_ai/zai-org/GLM-4.6": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.2 }, "together_ai/zai-org/GLM-4.7": { cr: 0.045, cw: 0.44999999999999996, i: 0.44999999999999996, o: 2 }, "twelvelabs.marengo-embed-2-7-v1:0": { cr: 7, cw: 70, i: 70, o: 0 }, "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.36, cra: 0.72, cw: 4.5, cwa: 9, i: 3.5999999999999996, ia: 7.199999999999999, o: 18, oa: 27 }, "us.amazon.nova-2-lite-v1:0": { cr: 0.0825, cw: 0.33, i: 0.33, o: 2.75 }, "us.amazon.nova-2-pro-preview-20251202-v1:0": { cr: 0.546875, cw: 2.1875, i: 2.1875, o: 17.5 }, "us.amazon.nova-lite-v1:0": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.24 }, "us.amazon.nova-micro-v1:0": { cr: 0.0035000000000000005, cw: 0.035, i: 0.035, o: 0.14 }, "us.amazon.nova-premier-v1:0": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 12.5 }, "us.amazon.nova-pro-v1:0": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 3.1999999999999997 }, "us.anthropic.claude-3-5-haiku-20241022-v1:0": { cr: 0.08, cw: 1, i: 0.7999999999999999, o: 4 }, "us.anthropic.claude-3-5-sonnet-20240620-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "us.anthropic.claude-3-5-sonnet-20241022-v2:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "us.anthropic.claude-3-7-sonnet-20250219-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "us.anthropic.claude-3-haiku-20240307-v1:0": { cr: 0.024999999999999998, cw: 0.3125, i: 0.25, o: 1.25 }, "us.anthropic.claude-3-opus-20240229-v1:0": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "us.anthropic.claude-3-sonnet-20240229-v1:0": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "us.anthropic.claude-fable-5": { cr: 1.1, cw: 13.75, i: 11, o: 55 }, "us.anthropic.claude-haiku-4-5-20251001-v1:0": { cr: 0.11, cw: 1.375, i: 1.1, o: 5.5 }, "us.anthropic.claude-opus-4-1-20250805-v1:0": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "us.anthropic.claude-opus-4-20250514-v1:0": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "us.anthropic.claude-opus-4-5-20251101-v1:0": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "us.anthropic.claude-opus-4-6-v1": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "us.anthropic.claude-opus-4-7": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "us.anthropic.claude-opus-4-8": { cr: 0.55, cw: 6.875, i: 5.5, o: 27.5 }, "us.anthropic.claude-sonnet-4-20250514-v1:0": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "us.anthropic.claude-sonnet-4-5-20250929-v1:0": { cr: 0.33, cra: 0.66, cw: 4.125, cwa: 8.25, i: 3.3000000000000003, ia: 6.6000000000000005, o: 16.5, oa: 24.75 }, "us.anthropic.claude-sonnet-4-6": { cr: 0.33, cw: 4.125, i: 3.3000000000000003, o: 16.5 }, "us.anthropic.claude-sonnet-5": { cr: 0.33, cw: 4.125, i: 3.3000000000000003, o: 16.5 }, "us.deepseek.r1-v1:0": { cr: 0.135, cw: 1.35, i: 1.35, o: 5.4 }, "us.deepseek.v3.2": { cr: 0.062, cw: 0.62, i: 0.62, o: 1.85 }, "us.meta.llama3-1-405b-instruct-v1:0": { cr: 0.532, cw: 5.32, i: 5.32, o: 16 }, "us.meta.llama3-1-70b-instruct-v1:0": { cr: 0.09900000000000002, cw: 0.9900000000000001, i: 0.9900000000000001, o: 0.9900000000000001 }, "us.meta.llama3-1-8b-instruct-v1:0": { cr: 0.022000000000000002, cw: 0.22, i: 0.22, o: 0.22 }, "us.meta.llama3-2-11b-instruct-v1:0": { cr: 0.035, cw: 0.35, i: 0.35, o: 0.35 }, "us.meta.llama3-2-1b-instruct-v1:0": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "us.meta.llama3-2-3b-instruct-v1:0": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "us.meta.llama3-2-90b-instruct-v1:0": { cr: 0.19999999999999998, cw: 2, i: 2, o: 2 }, "us.meta.llama3-3-70b-instruct-v1:0": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "us.meta.llama4-maverick-17b-instruct-v1:0": { cr: 0.024, cw: 0.24, i: 0.24, o: 0.9700000000000001 }, "us.meta.llama4-scout-17b-instruct-v1:0": { cr: 0.017, cw: 0.16999999999999998, i: 0.16999999999999998, o: 0.66 }, "us.mistral.pixtral-large-2502-v1:0": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "us.twelvelabs.marengo-embed-2-7-v1:0": { cr: 7, cw: 70, i: 70, o: 0 }, "us.writer.palmyra-x4-v1:0": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "us.writer.palmyra-x5-v1:0": { cr: 0.06, cw: 0.6, i: 0.6, o: 6 }, "v0/v0-1.0-md": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "v0/v0-1.5-lg": { cr: 1.5, cw: 15, i: 15, o: 75 }, "v0/v0-1.5-md": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "vercel_ai_gateway/alibaba/qwen-3-14b": { cr: 0.008, cw: 0.08, i: 0.08, o: 0.24 }, "vercel_ai_gateway/alibaba/qwen-3-235b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "vercel_ai_gateway/alibaba/qwen-3-30b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "vercel_ai_gateway/alibaba/qwen-3-32b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "vercel_ai_gateway/alibaba/qwen3-coder": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 1.5999999999999999 }, "vercel_ai_gateway/amazon/nova-lite": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.24 }, "vercel_ai_gateway/amazon/nova-micro": { cr: 0.0035000000000000005, cw: 0.035, i: 0.035, o: 0.14 }, "vercel_ai_gateway/amazon/nova-pro": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 3.1999999999999997 }, "vercel_ai_gateway/amazon/titan-embed-text-v2": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "vercel_ai_gateway/anthropic/claude-3-5-sonnet": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vercel_ai_gateway/anthropic/claude-3-5-sonnet-20241022": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vercel_ai_gateway/anthropic/claude-3-7-sonnet": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vercel_ai_gateway/anthropic/claude-3-haiku": { cr: 0.03, cw: 0.3, i: 0.25, o: 1.25 }, "vercel_ai_gateway/anthropic/claude-3-opus": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "vercel_ai_gateway/anthropic/claude-3.5-haiku": { cr: 0.08, cw: 1, i: 0.7999999999999999, o: 4 }, "vercel_ai_gateway/anthropic/claude-3.5-sonnet": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vercel_ai_gateway/anthropic/claude-3.7-sonnet": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vercel_ai_gateway/anthropic/claude-4-opus": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "vercel_ai_gateway/anthropic/claude-4-sonnet": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vercel_ai_gateway/anthropic/claude-haiku-4.5": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "vercel_ai_gateway/anthropic/claude-opus-4": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "vercel_ai_gateway/anthropic/claude-opus-4.1": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "vercel_ai_gateway/anthropic/claude-opus-4.5": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "vercel_ai_gateway/anthropic/claude-opus-4.6": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "vercel_ai_gateway/anthropic/claude-sonnet-4": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vercel_ai_gateway/anthropic/claude-sonnet-4.5": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vercel_ai_gateway/cohere/command-a": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "vercel_ai_gateway/cohere/command-r": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "vercel_ai_gateway/cohere/command-r-plus": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "vercel_ai_gateway/cohere/embed-v4.0": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, "vercel_ai_gateway/deepseek/deepseek-r1": { cr: 0.055, cw: 0.55, i: 0.55, o: 2.1900000000000004 }, "vercel_ai_gateway/deepseek/deepseek-r1-distill-llama-70b": { cr: 0.07500000000000001, cw: 0.75, i: 0.75, o: 0.9900000000000001 }, "vercel_ai_gateway/deepseek/deepseek-v3": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 0.8999999999999999 }, "vercel_ai_gateway/google/gemini-2.0-flash": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "vercel_ai_gateway/google/gemini-2.0-flash-lite": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0.3 }, "vercel_ai_gateway/google/gemini-2.5-flash": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "vercel_ai_gateway/google/gemini-2.5-pro": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "vercel_ai_gateway/google/gemini-embedding-001": { cr: 0.015, cw: 0.15, i: 0.15, o: 0 }, "vercel_ai_gateway/google/gemma-2-9b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "vercel_ai_gateway/google/text-embedding-005": { cr: 0.0025, cw: 0.024999999999999998, i: 0.024999999999999998, o: 0 }, "vercel_ai_gateway/google/text-multilingual-embedding-002": { cr: 0.0025, cw: 0.024999999999999998, i: 0.024999999999999998, o: 0 }, "vercel_ai_gateway/inception/mercury-coder-small": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1 }, "vercel_ai_gateway/meta/llama-3-70b": { cr: 0.059, cw: 0.59, i: 0.59, o: 0.7899999999999999 }, "vercel_ai_gateway/meta/llama-3-8b": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.08 }, "vercel_ai_gateway/meta/llama-3.1-70b": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "vercel_ai_gateway/meta/llama-3.1-8b": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0.08 }, "vercel_ai_gateway/meta/llama-3.2-11b": { cr: 0.016, cw: 0.16, i: 0.16, o: 0.16 }, "vercel_ai_gateway/meta/llama-3.2-1b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "vercel_ai_gateway/meta/llama-3.2-3b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "vercel_ai_gateway/meta/llama-3.2-90b": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "vercel_ai_gateway/meta/llama-3.3-70b": { cr: 0.07200000000000001, cw: 0.72, i: 0.72, o: 0.72 }, "vercel_ai_gateway/meta/llama-4-maverick": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "vercel_ai_gateway/meta/llama-4-scout": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "vercel_ai_gateway/mistral/codestral": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.8999999999999999 }, "vercel_ai_gateway/mistral/codestral-embed": { cr: 0.015, cw: 0.15, i: 0.15, o: 0 }, "vercel_ai_gateway/mistral/devstral-small": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.28 }, "vercel_ai_gateway/mistral/magistral-medium": { cr: 0.19999999999999998, cw: 2, i: 2, o: 5 }, "vercel_ai_gateway/mistral/magistral-small": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "vercel_ai_gateway/mistral/ministral-3b": { cr: 0.004, cw: 0.04, i: 0.04, o: 0.04 }, "vercel_ai_gateway/mistral/ministral-8b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "vercel_ai_gateway/mistral/mistral-embed": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "vercel_ai_gateway/mistral/mistral-large": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "vercel_ai_gateway/mistral/mistral-saba-24b": { cr: 0.079, cw: 0.7899999999999999, i: 0.7899999999999999, o: 0.7899999999999999 }, "vercel_ai_gateway/mistral/mistral-small": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "vercel_ai_gateway/mistral/mixtral-8x22b-instruct": { cr: 0.12, cw: 1.2, i: 1.2, o: 1.2 }, "vercel_ai_gateway/mistral/pixtral-12b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "vercel_ai_gateway/mistral/pixtral-large": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "vercel_ai_gateway/moonshotai/kimi-k2": { cr: 0.055, cw: 0.55, i: 0.55, o: 2.2 }, "vercel_ai_gateway/morph/morph-v3-fast": { cr: 0.08, cw: 0.7999999999999999, i: 0.7999999999999999, o: 1.2 }, "vercel_ai_gateway/morph/morph-v3-large": { cr: 0.09, cw: 0.8999999999999999, i: 0.8999999999999999, o: 1.9 }, "vercel_ai_gateway/openai/gpt-3.5-turbo": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 1.5 }, "vercel_ai_gateway/openai/gpt-3.5-turbo-instruct": { cr: 0.15000000000000002, cw: 1.5, i: 1.5, o: 2 }, "vercel_ai_gateway/openai/gpt-4-turbo": { cr: 1.0000000000000002, cw: 10, i: 10, o: 30 }, "vercel_ai_gateway/openai/gpt-4.1": { cr: 0.5, cw: 0, i: 2, o: 8 }, "vercel_ai_gateway/openai/gpt-4.1-mini": { cr: 0.09999999999999999, cw: 0, i: 0.39999999999999997, o: 1.5999999999999999 }, "vercel_ai_gateway/openai/gpt-4.1-nano": { cr: 0.024999999999999998, cw: 0, i: 0.09999999999999999, o: 0.39999999999999997 }, "vercel_ai_gateway/openai/gpt-4o": { cr: 1.25, cw: 0, i: 2.5, o: 10 }, "vercel_ai_gateway/openai/gpt-4o-mini": { cr: 0.075, cw: 0, i: 0.15, o: 0.6 }, "vercel_ai_gateway/openai/o1": { cr: 7.5, cw: 0, i: 15, o: 60 }, "vercel_ai_gateway/openai/o3": { cr: 0.5, cw: 0, i: 2, o: 8 }, "vercel_ai_gateway/openai/o3-mini": { cr: 0.55, cw: 0, i: 1.1, o: 4.4 }, "vercel_ai_gateway/openai/o4-mini": { cr: 0.275, cw: 0, i: 1.1, o: 4.4 }, "vercel_ai_gateway/openai/text-embedding-3-large": { cr: 0.013000000000000001, cw: 0.13, i: 0.13, o: 0 }, "vercel_ai_gateway/openai/text-embedding-3-small": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "vercel_ai_gateway/openai/text-embedding-ada-002": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "vercel_ai_gateway/perplexity/sonar": { cr: 0.09999999999999999, cw: 1, i: 1, o: 1 }, "vercel_ai_gateway/perplexity/sonar-pro": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "vercel_ai_gateway/perplexity/sonar-reasoning": { cr: 0.09999999999999999, cw: 1, i: 1, o: 5 }, "vercel_ai_gateway/perplexity/sonar-reasoning-pro": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "vercel_ai_gateway/vercel/v0-1.0-md": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "vercel_ai_gateway/vercel/v0-1.5-md": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "vercel_ai_gateway/xai/grok-2": { cr: 0.19999999999999998, cw: 2, i: 2, o: 10 }, "vercel_ai_gateway/xai/grok-2-vision": { cr: 0.19999999999999998, cw: 2, i: 2, o: 10 }, "vercel_ai_gateway/xai/grok-3": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "vercel_ai_gateway/xai/grok-3-fast": { cr: 0.5000000000000001, cw: 5, i: 5, o: 25 }, "vercel_ai_gateway/xai/grok-3-mini": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.5 }, "vercel_ai_gateway/xai/grok-3-mini-fast": { cr: 0.06, cw: 0.6, i: 0.6, o: 4 }, "vercel_ai_gateway/xai/grok-4": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "vercel_ai_gateway/zai/glm-4.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.2 }, "vercel_ai_gateway/zai/glm-4.5-air": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.1 }, "vercel_ai_gateway/zai/glm-4.6": { cr: 0.11, cw: 0.44999999999999996, i: 0.44999999999999996, o: 1.7999999999999998 }, "vertex_ai/claude-3-5-haiku": { cr: 0.09999999999999999, cw: 1, i: 1, o: 5 }, "vertex_ai/claude-3-5-haiku@20241022": { cr: 0.09999999999999999, cw: 1, i: 1, o: 5 }, "vertex_ai/claude-3-5-sonnet": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "vertex_ai/claude-3-5-sonnet@20240620": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "vertex_ai/claude-3-7-sonnet@20250219": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vertex_ai/claude-3-haiku": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.25 }, "vertex_ai/claude-3-haiku@20240307": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.25 }, "vertex_ai/claude-3-opus": { cr: 1.5, cw: 15, i: 15, o: 75 }, "vertex_ai/claude-3-opus@20240229": { cr: 1.5, cw: 15, i: 15, o: 75 }, "vertex_ai/claude-3-sonnet": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "vertex_ai/claude-3-sonnet@20240229": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "vertex_ai/claude-fable-5": { cr: 1, cw: 12.5, i: 10, o: 50 }, "vertex_ai/claude-fable-5@default": { cr: 1, cw: 12.5, i: 10, o: 50 }, "vertex_ai/claude-haiku-4-5": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "vertex_ai/claude-haiku-4-5@20251001": { cr: 0.09999999999999999, cw: 1.25, i: 1, o: 5 }, "vertex_ai/claude-opus-4": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "vertex_ai/claude-opus-4-1": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "vertex_ai/claude-opus-4-1@20250805": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "vertex_ai/claude-opus-4-5": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "vertex_ai/claude-opus-4-5@20251101": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "vertex_ai/claude-opus-4-6": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "vertex_ai/claude-opus-4-6@default": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "vertex_ai/claude-opus-4-7": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "vertex_ai/claude-opus-4-7@default": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "vertex_ai/claude-opus-4-8": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "vertex_ai/claude-opus-4-8@default": { cr: 0.5, cw: 6.25, i: 5, o: 25 }, "vertex_ai/claude-opus-4@20250514": { cr: 1.5, cw: 18.75, i: 15, o: 75 }, "vertex_ai/claude-sonnet-4": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "vertex_ai/claude-sonnet-4-5": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "vertex_ai/claude-sonnet-4-5@20250929": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "vertex_ai/claude-sonnet-4-6": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vertex_ai/claude-sonnet-4-6@default": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vertex_ai/claude-sonnet-4@20250514": { cr: 0.3, cra: 0.6, cw: 3.75, cwa: 7.5, i: 3, ia: 6, o: 15, oa: 22.5 }, "vertex_ai/claude-sonnet-5": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vertex_ai/claude-sonnet-5@default": { cr: 0.3, cw: 3.75, i: 3, o: 15 }, "vertex_ai/codestral-2": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.8999999999999999 }, "vertex_ai/codestral-2501": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "vertex_ai/codestral-2@001": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.8999999999999999 }, "vertex_ai/codestral@2405": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "vertex_ai/codestral@latest": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.6 }, "vertex_ai/deep-research-pro-preview-12-2025": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "vertex_ai/deepseek-ai/deepseek-ocr-maas": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "vertex_ai/deepseek-ai/deepseek-r1-0528-maas": { cr: 0.135, cw: 1.35, i: 1.35, o: 5.4 }, "vertex_ai/deepseek-ai/deepseek-v3.1-maas": { cr: 0.135, cw: 1.35, i: 1.35, o: 5.4 }, "vertex_ai/deepseek-ai/deepseek-v3.2-maas": { cr: 0.05600000000000001, cw: 0.56, i: 0.56, o: 1.68 }, "vertex_ai/gemini-2.5-flash-image": { cr: 0.03, cw: 0.3, i: 0.3, o: 2.5 }, "vertex_ai/gemini-3-flash-preview": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 3 }, "vertex_ai/gemini-3-pro-image": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "vertex_ai/gemini-3-pro-image-preview": { cr: 0.19999999999999998, cw: 2, i: 2, o: 12 }, "vertex_ai/gemini-3-pro-preview": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, cwa: 0.25, i: 2, ia: 4, o: 12, oa: 18 }, "vertex_ai/gemini-3.1-flash-image": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 3 }, "vertex_ai/gemini-3.1-flash-image-preview": { cr: 0.049999999999999996, cw: 0.5, i: 0.5, o: 3 }, "vertex_ai/gemini-3.1-flash-lite": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "vertex_ai/gemini-3.1-flash-lite-preview": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1.5 }, "vertex_ai/gemini-3.1-pro-preview": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, cwa: 0.25, i: 2, ia: 4, o: 12, oa: 18 }, "vertex_ai/gemini-3.1-pro-preview-customtools": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 2, cwa: 0.25, i: 2, ia: 4, o: 12, oa: 18 }, "vertex_ai/gemini-3.5-flash": { cr: 0.15, cw: 1.5, i: 1.5, o: 9 }, "vertex_ai/gemini-embedding-2": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0 }, "vertex_ai/gemini-embedding-2-preview": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0 }, "vertex_ai/google/gemma-4-26b-a4b-it-maas": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "vertex_ai/jamba-1.5": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.39999999999999997 }, "vertex_ai/jamba-1.5-large": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "vertex_ai/jamba-1.5-large@001": { cr: 0.19999999999999998, cw: 2, i: 2, o: 8 }, "vertex_ai/jamba-1.5-mini": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.39999999999999997 }, "vertex_ai/jamba-1.5-mini@001": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.39999999999999997 }, "vertex_ai/meta/llama-3.1-405b-instruct-maas": { cr: 0.5000000000000001, cw: 5, i: 5, o: 16 }, "vertex_ai/meta/llama-3.1-70b-instruct-maas": { cr: 0, cw: 0, i: 0, o: 0 }, "vertex_ai/meta/llama-3.1-8b-instruct-maas": { cr: 0, cw: 0, i: 0, o: 0 }, "vertex_ai/meta/llama-3.2-90b-vision-instruct-maas": { cr: 0, cw: 0, i: 0, o: 0 }, "vertex_ai/meta/llama-4-maverick-17b-128e-instruct-maas": { cr: 0.035, cw: 0.35, i: 0.35, o: 1.15 }, "vertex_ai/meta/llama-4-maverick-17b-16e-instruct-maas": { cr: 0.035, cw: 0.35, i: 0.35, o: 1.15 }, "vertex_ai/meta/llama-4-scout-17b-128e-instruct-maas": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.7 }, "vertex_ai/meta/llama-4-scout-17b-16e-instruct-maas": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 0.7 }, "vertex_ai/meta/llama3-405b-instruct-maas": { cr: 0, cw: 0, i: 0, o: 0 }, "vertex_ai/meta/llama3-70b-instruct-maas": { cr: 0, cw: 0, i: 0, o: 0 }, "vertex_ai/meta/llama3-8b-instruct-maas": { cr: 0, cw: 0, i: 0, o: 0 }, "vertex_ai/minimaxai/minimax-m2-maas": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "vertex_ai/mistral-large-2411": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "vertex_ai/mistral-large@2407": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "vertex_ai/mistral-large@2411-001": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "vertex_ai/mistral-large@latest": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "vertex_ai/mistral-medium-3": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "vertex_ai/mistral-medium-3@001": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "vertex_ai/mistral-nemo@2407": { cr: 0.30000000000000004, cw: 3, i: 3, o: 3 }, "vertex_ai/mistral-nemo@latest": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "vertex_ai/mistral-small-2503": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "vertex_ai/mistral-small-2503@001": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3 }, "vertex_ai/mistralai/codestral-2": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.8999999999999999 }, "vertex_ai/mistralai/codestral-2@001": { cr: 0.03, cw: 0.3, i: 0.3, o: 0.8999999999999999 }, "vertex_ai/mistralai/mistral-medium-3": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "vertex_ai/mistralai/mistral-medium-3@001": { cr: 0.04, cw: 0.39999999999999997, i: 0.39999999999999997, o: 2 }, "vertex_ai/moonshotai/kimi-k2-thinking-maas": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "vertex_ai/openai/gpt-oss-120b-maas": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "vertex_ai/openai/gpt-oss-20b-maas": { cr: 0.0075, cw: 0.075, i: 0.075, o: 0.3 }, "vertex_ai/qwen/qwen3-235b-a22b-instruct-2507-maas": { cr: 0.024999999999999998, cw: 0.25, i: 0.25, o: 1 }, "vertex_ai/qwen/qwen3-coder-480b-a35b-instruct-maas": { cr: 0.09999999999999999, cw: 1, i: 1, o: 4 }, "vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.2 }, "vertex_ai/qwen/qwen3-next-80b-a3b-thinking-maas": { cr: 0.015, cw: 0.15, i: 0.15, o: 1.2 }, "vertex_ai/xai/grok-4.1-fast-non-reasoning": { cr: 0.049999999999999996, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "vertex_ai/xai/grok-4.1-fast-reasoning": { cr: 0.049999999999999996, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "vertex_ai/xai/grok-4.20-non-reasoning": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "vertex_ai/xai/grok-4.20-reasoning": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "vertex_ai/zai-org/glm-4.7-maas": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.2 }, "vertex_ai/zai-org/glm-5-maas": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3.1999999999999997 }, "voyage/rerank-2": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0 }, "voyage/rerank-2-lite": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "voyage/rerank-2.5": { cr: 0.005, cw: 0.049999999999999996, i: 0.049999999999999996, o: 0 }, "voyage/rerank-2.5-lite": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "voyage/voyage-2": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "voyage/voyage-3": { cr: 0.006, cw: 0.06, i: 0.06, o: 0 }, "voyage/voyage-3-large": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0 }, "voyage/voyage-3-lite": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "voyage/voyage-3.5": { cr: 0.006, cw: 0.06, i: 0.06, o: 0 }, "voyage/voyage-3.5-lite": { cr: 0.002, cw: 0.02, i: 0.02, o: 0 }, "voyage/voyage-code-2": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, "voyage/voyage-code-3": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0 }, "voyage/voyage-context-3": { cr: 0.018000000000000002, cw: 0.18, i: 0.18, o: 0 }, "voyage/voyage-finance-2": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, "voyage/voyage-large-2": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, "voyage/voyage-law-2": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, "voyage/voyage-lite-01": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "voyage/voyage-lite-02-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0 }, "voyage/voyage-multimodal-3": { cr: 0.012, cw: 0.12, i: 0.12, o: 0 }, "wandb/MiniMaxAI/MiniMax-M2.5": { cr: 0.03, cw: 0.3, i: 0.3, o: 1.2 }, "wandb/Qwen/Qwen3-235B-A22B-Instruct-2507": { cr: 1000, cw: 1e4, i: 1e4, o: 1e4 }, "wandb/Qwen/Qwen3-235B-A22B-Thinking-2507": { cr: 1000, cw: 1e4, i: 1e4, o: 1e4 }, "wandb/Qwen/Qwen3-Coder-480B-A35B-Instruct": { cr: 10000.000000000002, cw: 1e5, i: 1e5, o: 150000 }, "wandb/deepseek-ai/DeepSeek-R1-0528": { cr: 13500.000000000002, cw: 135000, i: 135000, o: 540000 }, "wandb/deepseek-ai/DeepSeek-V3-0324": { cr: 11400, cw: 114000, i: 114000, o: 275000 }, "wandb/deepseek-ai/DeepSeek-V3.1": { cr: 5500.000000000001, cw: 55000, i: 55000, o: 165000 }, "wandb/meta-llama/Llama-3.1-8B-Instruct": { cr: 2200, cw: 22000, i: 22000, o: 22000 }, "wandb/meta-llama/Llama-3.3-70B-Instruct": { cr: 7099.999999999999, cw: 71000, i: 71000, o: 71000 }, "wandb/meta-llama/Llama-4-Scout-17B-16E-Instruct": { cr: 1700.0000000000002, cw: 17000, i: 17000, o: 66000 }, "wandb/microsoft/Phi-4-mini-instruct": { cr: 800, cw: 8000, i: 8000, o: 35000 }, "wandb/moonshotai/Kimi-K2-Instruct": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.5 }, "wandb/moonshotai/Kimi-K2.5": { cr: 0.09999999999999999, cw: 0.6, i: 0.6, o: 3 }, "wandb/openai/gpt-oss-120b": { cr: 1500, cw: 15000, i: 15000, o: 60000 }, "wandb/openai/gpt-oss-20b": { cr: 500, cw: 5000, i: 5000, o: 20000 }, "wandb/zai-org/GLM-4.5": { cr: 5500.000000000001, cw: 55000, i: 55000, o: 200000 }, "watsonx/bigscience/mt0-xxl-13b": { cr: 50, cw: 500, i: 500, o: 2000 }, "watsonx/core42/jais-13b-chat": { cr: 50, cw: 500, i: 500, o: 2000 }, "watsonx/google/flan-t5-xl-3b": { cr: 0.06, cw: 0.6, i: 0.6, o: 0.6 }, "watsonx/ibm/granite-13b-chat-v2": { cr: 0.06, cw: 0.6, i: 0.6, o: 0.6 }, "watsonx/ibm/granite-13b-instruct-v2": { cr: 0.06, cw: 0.6, i: 0.6, o: 0.6 }, "watsonx/ibm/granite-3-3-8b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "watsonx/ibm/granite-3-8b-instruct": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "watsonx/ibm/granite-4-h-small": { cr: 0.006, cw: 0.06, i: 0.06, o: 0.25 }, "watsonx/ibm/granite-guardian-3-2-2b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "watsonx/ibm/granite-guardian-3-3-8b": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.19999999999999998 }, "watsonx/ibm/granite-ttm-1024-96-r2": { cr: 0.038000000000000006, cw: 0.38, i: 0.38, o: 0.38 }, "watsonx/ibm/granite-ttm-1536-96-r2": { cr: 0.038000000000000006, cw: 0.38, i: 0.38, o: 0.38 }, "watsonx/ibm/granite-ttm-512-96-r2": { cr: 0.038000000000000006, cw: 0.38, i: 0.38, o: 0.38 }, "watsonx/ibm/granite-vision-3-2-2b": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "watsonx/meta-llama/llama-3-2-11b-vision-instruct": { cr: 0.035, cw: 0.35, i: 0.35, o: 0.35 }, "watsonx/meta-llama/llama-3-2-1b-instruct": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "watsonx/meta-llama/llama-3-2-3b-instruct": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.15 }, "watsonx/meta-llama/llama-3-2-90b-vision-instruct": { cr: 0.19999999999999998, cw: 2, i: 2, o: 2 }, "watsonx/meta-llama/llama-3-3-70b-instruct": { cr: 0.071, cw: 0.71, i: 0.71, o: 0.71 }, "watsonx/meta-llama/llama-4-maverick-17b": { cr: 0.035, cw: 0.35, i: 0.35, o: 1.4 }, "watsonx/meta-llama/llama-guard-3-11b-vision": { cr: 0.035, cw: 0.35, i: 0.35, o: 0.35 }, "watsonx/mistralai/mistral-large": { cr: 0.30000000000000004, cw: 3, i: 3, o: 10 }, "watsonx/mistralai/mistral-medium-2505": { cr: 0.30000000000000004, cw: 3, i: 3, o: 10 }, "watsonx/mistralai/mistral-small-2503": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "watsonx/mistralai/mistral-small-3-1-24b-instruct-2503": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.3 }, "watsonx/mistralai/pixtral-12b-2409": { cr: 0.035, cw: 0.35, i: 0.35, o: 0.35 }, "watsonx/openai/gpt-oss-120b": { cr: 0.015, cw: 0.15, i: 0.15, o: 0.6 }, "watsonx/sdaia/allam-1-13b-instruct": { cr: 0.18, cw: 1.7999999999999998, i: 1.7999999999999998, o: 1.7999999999999998 }, "writer.palmyra-x4-v1:0": { cr: 0.25000000000000006, cw: 2.5, i: 2.5, o: 10 }, "writer.palmyra-x5-v1:0": { cr: 0.06, cw: 0.6, i: 0.6, o: 6 }, "xai/grok-2": { cr: 0.19999999999999998, cw: 2, i: 2, o: 10 }, "xai/grok-2-1212": { cr: 0.19999999999999998, cw: 2, i: 2, o: 10 }, "xai/grok-2-latest": { cr: 0.19999999999999998, cw: 2, i: 2, o: 10 }, "xai/grok-2-vision": { cr: 0.19999999999999998, cw: 2, i: 2, o: 10 }, "xai/grok-2-vision-1212": { cr: 0.19999999999999998, cw: 2, i: 2, o: 10 }, "xai/grok-2-vision-latest": { cr: 0.19999999999999998, cw: 2, i: 2, o: 10 }, "xai/grok-3": { cr: 0.75, cw: 3, i: 3, o: 15 }, "xai/grok-3-beta": { cr: 0.75, cw: 3, i: 3, o: 15 }, "xai/grok-3-fast-beta": { cr: 1.25, cw: 5, i: 5, o: 25 }, "xai/grok-3-fast-latest": { cr: 1.25, cw: 5, i: 5, o: 25 }, "xai/grok-3-latest": { cr: 0.75, cw: 3, i: 3, o: 15 }, "xai/grok-3-mini": { cr: 0.075, cw: 0.3, i: 0.3, o: 0.5 }, "xai/grok-3-mini-beta": { cr: 0.075, cw: 0.3, i: 0.3, o: 0.5 }, "xai/grok-3-mini-fast": { cr: 0.15, cw: 0.6, i: 0.6, o: 4 }, "xai/grok-3-mini-fast-beta": { cr: 0.15, cw: 0.6, i: 0.6, o: 4 }, "xai/grok-3-mini-fast-latest": { cr: 0.15, cw: 0.6, i: 0.6, o: 4 }, "xai/grok-3-mini-latest": { cr: 0.075, cw: 0.3, i: 0.3, o: 0.5 }, "xai/grok-4": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "xai/grok-4-0709": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "xai/grok-4-1-fast": { cr: 0.049999999999999996, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "xai/grok-4-1-fast-non-reasoning": { cr: 0.049999999999999996, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "xai/grok-4-1-fast-non-reasoning-latest": { cr: 0.049999999999999996, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "xai/grok-4-1-fast-reasoning": { cr: 0.049999999999999996, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "xai/grok-4-1-fast-reasoning-latest": { cr: 0.049999999999999996, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "xai/grok-4-fast-non-reasoning": { cr: 0.049999999999999996, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "xai/grok-4-fast-reasoning": { cr: 0.049999999999999996, cw: 0.19999999999999998, i: 0.19999999999999998, o: 0.5 }, "xai/grok-4-latest": { cr: 0.30000000000000004, cw: 3, i: 3, o: 15 }, "xai/grok-4.20-0309-reasoning": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "xai/grok-4.20-beta-0309-non-reasoning": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "xai/grok-4.20-beta-0309-reasoning": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "xai/grok-4.20-multi-agent-beta-0309": { cr: 0.19999999999999998, cw: 2, i: 2, o: 6 }, "xai/grok-4.3": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 1.25, i: 1.25, ia: 2.5, o: 2.5, oa: 5 }, "xai/grok-4.3-latest": { cr: 0.19999999999999998, cra: 0.39999999999999997, cw: 1.25, i: 1.25, ia: 2.5, o: 2.5, oa: 5 }, "xai/grok-beta": { cr: 0.5000000000000001, cw: 5, i: 5, o: 15 }, "xai/grok-code-fast": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.5 }, "xai/grok-code-fast-1": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.5 }, "xai/grok-code-fast-1-0825": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.5 }, "xai/grok-vision-beta": { cr: 0.5000000000000001, cw: 5, i: 5, o: 15 }, "zai.glm-4.7": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.2 }, "zai.glm-4.7-flash": { cr: 0.007000000000000001, cw: 0.07, i: 0.07, o: 0.39999999999999997 }, "zai.glm-5": { cr: 0.09999999999999999, cw: 1, i: 1, o: 3.1999999999999997 }, "zai/glm-4-32b-0414-128k": { cr: 0.01, cw: 0.09999999999999999, i: 0.09999999999999999, o: 0.09999999999999999 }, "zai/glm-4.5": { cr: 0.06, cw: 0.6, i: 0.6, o: 2.2 }, "zai/glm-4.5-air": { cr: 0.02, cw: 0.19999999999999998, i: 0.19999999999999998, o: 1.1 }, "zai/glm-4.5-airx": { cr: 0.11, cw: 1.1, i: 1.1, o: 4.5 }, "zai/glm-4.5-flash": { cr: 0, cw: 0, i: 0, o: 0 }, "zai/glm-4.5-x": { cr: 0.22, cw: 2.2, i: 2.2, o: 8.9 }, "zai/glm-4.5v": { cr: 0.06, cw: 0.6, i: 0.6, o: 1.7999999999999998 }, "zai/glm-4.6": { cr: 0.11, cw: 0, i: 0.6, o: 2.2 }, "zai/glm-4.7": { cr: 0.11, cw: 0, i: 0.6, o: 2.2 }, "zai/glm-4.7-flash": { cr: 0, cw: 0, i: 0, o: 0 }, "zai/glm-5": { cr: 0.19999999999999998, cw: 0, i: 1, o: 3.1999999999999997 }, "zai/glm-5-code": { cr: 0.3, cw: 0, i: 1.2, o: 5 }, "zai/glm-5.1": { cr: 0.26, cw: 0, i: 1.4, o: 4.4 } },
@@ -19531,6 +20224,13 @@ class Pricing {
       this.canonical.set(model, known = canonicalOf(this.supplement, model) ?? model);
     return known;
   }
+  familyName(model, suffixes) {
+    const canonical = this.canonicalName(model);
+    for (const suffix of suffixes)
+      if (canonical.endsWith(suffix) && canonical.length > suffix.length)
+        return canonical.slice(0, -suffix.length);
+    return canonical;
+  }
   fallbackRates(model, provider) {
     if (!this.supplement.fallbackModels.get(provider)?.includes(model))
       return;
@@ -19601,7 +20301,7 @@ class PricingStore {
     this.now = now;
     if (folder) {
       try {
-        this.states = JSON.parse(readFileSync26(join29(folder, "state.json"), "utf8"));
+        this.states = JSON.parse(readFileSync27(join30(folder, "state.json"), "utf8"));
       } catch {}
     }
   }
@@ -19664,7 +20364,7 @@ class PricingStore {
     if (!this.folder)
       return;
     try {
-      return JSON.parse(readFileSync26(join29(this.folder, name), "utf8"));
+      return JSON.parse(readFileSync27(join30(this.folder, name), "utf8"));
     } catch {
       return;
     }
@@ -19674,8 +20374,8 @@ class PricingStore {
       return;
     try {
       mkdirSync18(this.folder, { recursive: true });
-      writeFileSync19(join29(this.folder, name + ".new"), text);
-      renameSync14(join29(this.folder, name + ".new"), join29(this.folder, name));
+      writeFileSync19(join30(this.folder, name + ".new"), text);
+      renameSync14(join30(this.folder, name + ".new"), join30(this.folder, name));
     } catch {}
   }
   build() {
@@ -19864,7 +20564,7 @@ function summed(all) {
   }
   return sum;
 }
-function trimmed(slots, now) {
+function trimmed2(slots, now) {
   const since = now - KEPT_DAYS * DAY;
   const kept = noSlots();
   for (const [slot, models] of slots.used)
@@ -20046,11 +20746,11 @@ var minus = (a, b) => ({
   reasoning: Math.max(0, a.reasoning - (b?.reasoning ?? 0)),
   total: Math.max(0, a.total - (b?.total ?? 0))
 });
-var trimmed2 = (text) => text.replace(/^[ \t\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]+|[ \t\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]+$/g, "");
+var trimmed3 = (text) => text.replace(/^[ \t\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]+|[ \t\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]+$/g, "");
 function textOf(value) {
   if (typeof value !== "string")
     return;
-  const text = trimmed2(value);
+  const text = trimmed3(value);
   return text ? text : undefined;
 }
 function modelName2(json) {
@@ -20072,7 +20772,7 @@ function isChildMeta(payload) {
 var seconds = (raw) => {
   if (typeof raw !== "string")
     return;
-  const at = timestamp(trimmed2(raw));
+  const at = timestamp(trimmed3(raw));
   return at === undefined ? undefined : Math.floor(at / 1000);
 };
 var TYPE = Buffer.from('"type":"');
@@ -20136,7 +20836,7 @@ function codexLine(line, state) {
   }
   if (payload.type !== "token_count" || typeof object.timestamp !== "string")
     return [];
-  const at = timestamp(trimmed2(object.timestamp));
+  const at = timestamp(trimmed3(object.timestamp));
   if (at === undefined)
     return [];
   const info = isObject4(payload.info) ? payload.info : undefined;
@@ -20251,7 +20951,7 @@ function codexStateFrom(value) {
 
 // Packages/Box/src/agents/usage/engine-codex.ts
 import { readdirSync as readdirSync16, statSync as statSync11 } from "fs";
-import { join as join30 } from "path";
+import { join as join31 } from "path";
 function engineDatabases(folder) {
   let names;
   try {
@@ -20261,7 +20961,7 @@ function engineDatabases(folder) {
       return [];
     throw error;
   }
-  return names.filter((name) => name.startsWith("opencode") && name.endsWith(".db")).sort().map((name) => join30(folder, name));
+  return names.filter((name) => name.startsWith("opencode") && name.endsWith(".db")).sort().map((name) => join31(folder, name));
 }
 var IMPORTED = "SELECT 1 FROM migration WHERE id = '20260805200742_import_legacy_credentials' LIMIT 1;";
 var SIGN_IN = `SELECT json_extract(doc,'$.type') = 'oauth' AND (length(trim(COALESCE(json_extract(doc,'$.access'),''))) > 0 OR length(trim(COALESCE(json_extract(doc,'$.refresh'),''))) > 0), time_created
@@ -20398,7 +21098,7 @@ FROM (${bodies.join(`
 )
 WHERE COALESCE(json_extract(data,'$.time.completed'),time_created) >= ${Math.trunc(cutoff)};`;
 }
-function numberOf(value) {
+function numberOf2(value) {
   if (typeof value === "number")
     return Number.isFinite(value) ? value : undefined;
   if (typeof value === "string" && /^\s*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?\s*$/.test(value)) {
@@ -20407,7 +21107,7 @@ function numberOf(value) {
   }
   return;
 }
-var clamped = (value) => Math.trunc(Math.min(Math.max(numberOf(value) ?? 0, 0), 1000000000000000000));
+var clamped = (value) => Math.trunc(Math.min(Math.max(numberOf2(value) ?? 0, 0), 1000000000000000000));
 function parseRows(json) {
   let payload;
   try {
@@ -20421,8 +21121,8 @@ function parseRows(json) {
   for (const values of payload) {
     if (!Array.isArray(values) || values.length < 10)
       continue;
-    const at = numberOf(values[0]);
-    if (at === undefined || numberOf(values[1]) !== 0)
+    const at = numberOf2(values[0]);
+    if (at === undefined || numberOf2(values[1]) !== 0)
       continue;
     const [input, cacheRead, cacheWrite, output, reasoning] = [values[4], values[5], values[6], values[7], values[8]].map(clamped);
     const tokens = { input, cacheWrite5m: cacheWrite, cacheWrite1h: 0, cacheRead, output: output + reasoning };
@@ -20499,7 +21199,7 @@ function engineCodexSlots(rows, pricing, since) {
 }
 function engineStamp(folder) {
   const parts = [];
-  for (const path of [...engineDatabases(folder).flatMap((db) => [db, db + "-wal"]), join30(folder, "auth.json")]) {
+  for (const path of [...engineDatabases(folder).flatMap((db) => [db, db + "-wal"]), join31(folder, "auth.json")]) {
     try {
       const info = statSync11(path);
       parts.push(`${path}:${info.size}:${info.mtimeMs}`);
@@ -20511,23 +21211,12 @@ function engineStamp(folder) {
 `);
 }
 
-// Packages/Box/src/agents/usage/numbers.ts
-function numberOf2(value) {
-  if (typeof value === "number")
-    return Number.isFinite(value) ? value : undefined;
-  if (typeof value === "string" && /^\s*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?\s*$/.test(value)) {
-    const found = Number(value);
-    return Number.isFinite(found) ? found : undefined;
-  }
-  return;
-}
-
 // Packages/Box/src/agents/usage/grok-log.ts
 var MARKER = Buffer.from("turn_completed");
 var MOST_TOKENS = 1000000000000;
 var isObject5 = (value) => !!value && typeof value === "object" && !Array.isArray(value);
 function bounded(value) {
-  const found = numberOf2(value);
+  const found = numberOf(value);
   if (found === undefined || found <= 0)
     return 0;
   return found > MOST_TOKENS ? MOST_TOKENS : Math.trunc(found);
@@ -20557,18 +21246,18 @@ function grokEntries(object) {
   const meta = isObject5(params?._meta) ? params._meta : isObject5(object._meta) ? object._meta : undefined;
   const event = typeof meta?.eventId === "string" ? meta.eventId.trim() : undefined;
   const models = Object.keys(usage.modelUsage);
-  const turnTicks = numberOf2(usage.costUsdTicks);
+  const turnTicks = numberOf(usage.costUsdTicks);
   const entries = [];
   for (const raw of models.sort((a, b) => a < b ? -1 : a > b ? 1 : 0)) {
     const model = raw.trim();
     const values = usage.modelUsage[raw];
-    const inputValue = isObject5(values) ? numberOf2(values.inputTokens) : undefined;
+    const inputValue = isObject5(values) ? numberOf(values.inputTokens) : undefined;
     if (!model || !isObject5(values) || inputValue === undefined || inputValue < 0)
       continue;
     const input = bounded(inputValue);
     const cacheRead = Math.min(bounded(values.cachedReadTokens), input);
     const cacheWrite = Math.min(bounded(values.cacheCreationTokens), input - cacheRead);
-    const ticks = numberOf2(values.costUsdTicks) ?? (models.length === 1 ? turnTicks : undefined);
+    const ticks = numberOf(values.costUsdTicks) ?? (models.length === 1 ? turnTicks : undefined);
     entries.push({
       at,
       ...event ? { event } : {},
@@ -20583,14 +21272,14 @@ function timeOf(object, params) {
   for (const meta of [params?._meta, object._meta]) {
     if (!isObject5(meta))
       continue;
-    const ms = numberOf2(meta.agentTimestampMs);
+    const ms = numberOf(meta.agentTimestampMs);
     if (ms !== undefined && ms > 0)
       return ms;
   }
-  const seconds = numberOf2(object.timestamp);
+  const seconds = numberOf(object.timestamp);
   if (seconds !== undefined && seconds > 0)
     return seconds * 1000;
-  if (typeof object.timestamp === "string" && numberOf2(object.timestamp) === undefined)
+  if (typeof object.timestamp === "string" && numberOf(object.timestamp) === undefined)
     return timestamp(object.timestamp);
   return;
 }
@@ -20631,9 +21320,289 @@ function fromKeptGrok(kept) {
   return { at, ...event !== null ? { event } : {}, model, tokens: { input, cacheWrite5m, cacheWrite1h: 0, cacheRead, output }, ...cost !== null ? { cost } : {} };
 }
 
+// Packages/Box/src/agents/usage/cursor-history.ts
+import { createHash as createHash10 } from "crypto";
+import { mkdirSync as mkdirSync19, readFileSync as readFileSync28, renameSync as renameSync15, writeFileSync as writeFileSync20 } from "fs";
+import { join as join32 } from "path";
+var DAY2 = 24 * 60 * 60000;
+var CURSOR_DAYS = 32;
+var MIN_BETWEEN = 60000;
+var integer = (value) => typeof value === "number" && Number.isSafeInteger(value) ? value : undefined;
+function tokenValue(usage, key) {
+  if (!(key in usage) || usage[key] === undefined)
+    return 0;
+  const found = integer(usage[key]);
+  return found !== undefined && found >= 0 ? found : undefined;
+}
+function cursorEventsPage(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body))
+    return;
+  const page = body;
+  const total = integer(page.totalUsageEventsCount);
+  if (total === undefined || total < 0 || !Array.isArray(page.usageEventsDisplay))
+    return;
+  const events = [];
+  let rejected = 0;
+  for (const raw of page.usageEventsDisplay) {
+    const event = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : undefined;
+    const at = event ? timestamp2(event.timestamp) : undefined;
+    const model = typeof event?.model === "string" ? event.model : undefined;
+    const tokens = event ? breakdown(event, "tokenUsage") : undefined;
+    if (at === undefined || model === undefined || !tokens) {
+      rejected++;
+      continue;
+    }
+    events.push({ at, model: model.trim(), tokens });
+  }
+  return { events, total, rejected };
+}
+function breakdown(event, key) {
+  if (!(key in event) || event[key] === undefined)
+    return { input: 0, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: 0, output: 0 };
+  const usage = event[key];
+  if (!usage || typeof usage !== "object" || Array.isArray(usage))
+    return;
+  const fields = usage;
+  const input = tokenValue(fields, "inputTokens");
+  const output = tokenValue(fields, "outputTokens");
+  const cacheWrite = tokenValue(fields, "cacheWriteTokens");
+  const cacheRead = tokenValue(fields, "cacheReadTokens");
+  if (input === undefined || output === undefined || cacheWrite === undefined || cacheRead === undefined)
+    return;
+  return { input, cacheWrite5m: cacheWrite, cacheWrite1h: 0, cacheRead, output };
+}
+function timestamp2(value) {
+  const ms = typeof value === "string" ? /^[+-]?\d+$/.test(value) ? Number(value) : undefined : integer(value);
+  return ms !== undefined && Number.isSafeInteger(ms) && ms >= 0 ? ms : undefined;
+}
+var dayKey = (start) => new Date(start).toISOString().slice(0, 10);
+
+class CursorHistory {
+  folder;
+  options;
+  kept = new Map;
+  reading = new Map;
+  last = new Map;
+  constructor(folder, options = {}) {
+    this.folder = folder;
+    this.options = options;
+  }
+  async read(client, now) {
+    return (await this.readWhole(client, now)).days;
+  }
+  async readWhole(client, now) {
+    const access = await client.accessToken();
+    const user = cursorSession(access)?.user;
+    if (!user)
+      throw new LimitsProblem("failed", "Cursor's sign-in doesn't say whose it is.");
+    const key = createHash10("sha256").update(`kuvo-code cursor history v1
+`).update(user).digest("hex").slice(0, 16);
+    const under = this.reading.get(key);
+    if (under)
+      return under;
+    const last = this.last.get(key);
+    if (last && now >= last.at && now - last.at < MIN_BETWEEN && Math.floor(now / DAY2) === Math.floor(last.at / DAY2))
+      return { days: last.days, whole: true };
+    const read = this.readFor(client, access, key, now).then((result) => {
+      if (result.whole)
+        this.last.set(key, { at: now, days: result.days });
+      return result;
+    }).finally(() => this.reading.delete(key));
+    this.reading.set(key, read);
+    return read;
+  }
+  async readFor(client, access, key, now) {
+    const token = { access };
+    const today = Math.floor(now / DAY2) * DAY2;
+    const window = Array.from({ length: CURSOR_DAYS }, (_, back) => {
+      const start = today - back * DAY2;
+      const end = Math.min(start + DAY2, now);
+      return { key: dayKey(start), start, end, complete: end === start + DAY2 };
+    });
+    const keys = new Set(window.map((day) => day.key));
+    const cached = new Map([...this.load(key)].filter(([day]) => keys.has(day)));
+    const due = window.filter((day, index) => index < 2 || !cached.get(day.key)?.complete);
+    let failures = 0;
+    let first;
+    let succeeded = 0;
+    let stopped = false;
+    let hit = false;
+    const deadline = (this.options.deadline ?? defaultDeadline)();
+    const queue = [...due];
+    const worker = async () => {
+      for (let day = queue.shift();day && !stopped; day = queue.shift()) {
+        const result = await this.fetchDay(client, token, day, () => stopped);
+        if (stopped)
+          return;
+        if (typeof result === "string") {
+          failures++;
+          first ??= result;
+          if (result === "held")
+            stopped = true;
+        } else {
+          succeeded++;
+          cached.set(day.key, result);
+        }
+      }
+    };
+    const workers = Promise.all(Array.from({ length: Math.min(this.options.concurrency ?? 4, due.length) }, worker));
+    try {
+      hit = await Promise.race([workers.then(() => false), deadline.done.then(() => true)]);
+      if (hit) {
+        stopped = true;
+        const missing = window.filter((day) => !cached.has(day.key)).length;
+        this.log(`usage: Cursor's usage events: the time ran out with ${missing} of ${window.length} days still missing`);
+      }
+    } finally {
+      deadline.cancel();
+    }
+    if (failures)
+      this.log(`usage: Cursor's usage events: ${failures} day${failures === 1 ? "" : "s"} failed (${first})`);
+    if (succeeded)
+      this.save(key, cached);
+    if (!window.every((day) => cached.has(day.key)))
+      throw new Error(`Cursor's usage events: ${window.filter((day) => !cached.has(day.key)).length} of ${window.length} days aren't known yet.`);
+    return { days: new Map(window.map((day) => [day.key, cached.get(day.key)])), whole: !failures && !hit };
+  }
+  async fetchDay(client, token, day, stopped) {
+    let renewed = false;
+    const pageSize = this.options.pageSize ?? 1000;
+    let page = 1;
+    let expected;
+    let received = 0;
+    const uses = new Map;
+    for (;; ) {
+      if (stopped())
+        return "request";
+      let answer;
+      try {
+        answer = await client.website("/api/dashboard/get-filtered-usage-events", token.access, { method: "POST", body: { startDate: String(day.start), endDate: String(day.end - 1), page, pageSize } }, 15000);
+      } catch (error) {
+        return error instanceof LimitsProblem && (error.kind === "rate-limited" || error.kind === "expired") ? "held" : "request";
+      }
+      if (!answer)
+        return "request";
+      if (answer.status === 429) {
+        client.holdFor(answer.headers.get("retry-after"));
+        return "held";
+      }
+      if ((answer.status === 401 || answer.status === 403) && !renewed) {
+        renewed = true;
+        token.renewing ??= client.accessToken(true).then((access) => void (token.access = access));
+        try {
+          await token.renewing;
+        } catch (error) {
+          return error instanceof LimitsProblem && (error.kind === "rate-limited" || error.kind === "expired") ? "held" : "http";
+        }
+        continue;
+      }
+      if (answer.status < 200 || answer.status >= 300)
+        return "http";
+      const parsed = cursorEventsPage(answer.body);
+      if (!parsed)
+        return "invalid";
+      if (expected !== undefined && parsed.total !== expected)
+        return "incomplete";
+      expected = parsed.total;
+      const count = parsed.events.length + parsed.rejected;
+      received += count;
+      if (parsed.rejected)
+        this.log(`usage: Cursor's usage events: ${parsed.rejected} event${parsed.rejected === 1 ? "" : "s"} it couldn't read on one page`);
+      if (parsed.total === 0)
+        return count === 0 ? { complete: day.complete, uses: [...uses.values()] } : "incomplete";
+      if (count === 0 && received < parsed.total)
+        return "incomplete";
+      for (const event of parsed.events) {
+        if (event.at < day.start || event.at >= day.start + DAY2)
+          return "invalid";
+        const slot = Math.floor(event.at / SLOT);
+        const id = `${slot}
+${event.model}`;
+        const use = uses.get(id);
+        if (use) {
+          use[2] += event.tokens.input;
+          use[3] += event.tokens.output;
+          use[4] += event.tokens.cacheWrite5m;
+          use[5] += event.tokens.cacheRead;
+        } else
+          uses.set(id, [slot, event.model, event.tokens.input, event.tokens.output, event.tokens.cacheWrite5m, event.tokens.cacheRead]);
+      }
+      if (received === parsed.total)
+        return { complete: day.complete, uses: [...uses.values()] };
+      if (received > parsed.total)
+        return "incomplete";
+      page++;
+    }
+  }
+  log(line) {
+    (this.options.log ?? ((each) => console.error(each)))(line);
+  }
+  load(key) {
+    const kept = this.kept.get(key);
+    if (kept)
+      return kept;
+    const days = new Map;
+    if (this.folder) {
+      try {
+        const saved = JSON.parse(readFileSync28(join32(this.folder, `${key}.json`), "utf8"));
+        if (saved?.version === 1 && saved.user === key && saved.days && typeof saved.days === "object") {
+          for (const [day, value] of Object.entries(saved.days)) {
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !value || typeof value !== "object" || !Array.isArray(value.uses))
+              continue;
+            const uses = value.uses.filter((use) => Array.isArray(use) && use.length === 6 && Number.isSafeInteger(use[0]) && typeof use[1] === "string" && use.slice(2).every((each) => Number.isSafeInteger(each) && each >= 0));
+            days.set(day, { complete: value.complete === true, uses });
+          }
+        }
+      } catch {}
+    }
+    this.kept.set(key, days);
+    return days;
+  }
+  save(key, days) {
+    this.kept.set(key, days);
+    if (!this.folder)
+      return;
+    try {
+      mkdirSync19(this.folder, { recursive: true, mode: 448 });
+      const file = join32(this.folder, `${key}.json`);
+      writeFileSync20(file + ".new", JSON.stringify({ version: 1, user: key, days: Object.fromEntries(days) }), { mode: 384 });
+      renameSync15(file + ".new", file);
+    } catch {
+      this.log("usage: Cursor's usage history couldn't be kept");
+    }
+  }
+}
+function defaultDeadline() {
+  let timer;
+  const done = new Promise((resolve) => {
+    timer = setTimeout(resolve, 20000);
+    timer.unref?.();
+  });
+  return { done, cancel: () => clearTimeout(timer) };
+}
+function cursorSlots(days, pricing, since) {
+  const slots = noSlots();
+  for (const day of days) {
+    for (const [index, model, input, output, cacheWrite, cacheRead] of day.uses) {
+      const slot = index * SLOT;
+      if (slot < since)
+        continue;
+      const tokens = { input, cacheWrite5m: cacheWrite, cacheWrite1h: 0, cacheRead, output };
+      const cost = pricing.cost(model, tokens, false);
+      if (cost === undefined) {
+        if (totalTokens(tokens) > 0 && model)
+          addUnknown(slots, slot, model);
+        continue;
+      }
+      add(slots, slot, model || UNATTRIBUTED, totalTokens(tokens), cost);
+    }
+  }
+  return slots;
+}
+
 // Packages/Box/src/agents/usage/engine-db.ts
 import { readdirSync as readdirSync17, statSync as statSync12 } from "fs";
-import { join as join31 } from "path";
+import { join as join33 } from "path";
 function engineDatabases2(folder) {
   let names;
   try {
@@ -20643,7 +21612,7 @@ function engineDatabases2(folder) {
       return [];
     throw error;
   }
-  return names.filter((name) => name.startsWith("opencode") && name.endsWith(".db")).sort().map((name) => join31(folder, name));
+  return names.filter((name) => name.startsWith("opencode") && name.endsWith(".db")).sort().map((name) => join33(folder, name));
 }
 function databasesStamp(folder) {
   const parts = [];
@@ -20785,11 +21754,11 @@ function parseHostedRows(json) {
   for (const values of payload) {
     if (!Array.isArray(values) || values.length < 5)
       continue;
-    const at = numberOf2(values[0]);
-    const cost = numberOf2(values[1]);
+    const at = numberOf(values[0]);
+    const cost = numberOf(values[1]);
     if (at === undefined || cost === undefined || cost < 0 || typeof values[4] !== "string")
       continue;
-    const tokens = Math.trunc(Math.min(Math.max(numberOf2(values[2]) ?? 0, 0), 1000000000000000));
+    const tokens = Math.trunc(Math.min(Math.max(numberOf(values[2]) ?? 0, 0), 1000000000000000));
     const id = values.length >= 6 && typeof values[5] === "string" && values[5] ? values[5] : undefined;
     rows.push({ ...id ? { id } : {}, at, cost, tokens, model: typeof values[3] === "string" ? values[3] : "", provider: values[4] });
   }
@@ -20821,10 +21790,10 @@ function hostedSlots(rows, provider, since) {
 }
 
 // Packages/Box/src/agents/usage/jsonl.ts
-import { createHash as createHash10 } from "crypto";
-import { mkdirSync as mkdirSync19, renameSync as renameSync15, rmSync as rmSync14, writeFileSync as writeFileSync20 } from "fs";
+import { createHash as createHash11 } from "crypto";
+import { mkdirSync as mkdirSync20, renameSync as renameSync16, rmSync as rmSync14, writeFileSync as writeFileSync21 } from "fs";
 import { open, readdir, readFile as readFile3, stat as stat2 } from "fs/promises";
-import { join as join32 } from "path";
+import { join as join34 } from "path";
 var CHUNK = 1 << 20;
 var LONGEST_LINE = 64 << 20;
 var HEAD = 4096;
@@ -20842,7 +21811,7 @@ async function jsonlFiles(folder) {
     for (const entry of entries) {
       if (found.length >= MOST_WALKED)
         return;
-      const path = join32(dir, entry.name);
+      const path = join34(dir, entry.name);
       if (entry.isDirectory())
         await walk(path);
       else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
@@ -20892,13 +21861,13 @@ class JSONLFiles {
         if (!/^[0-9a-f]{32}\.json$/.test(name))
           continue;
         try {
-          const saved = JSON.parse(await readFile3(join32(this.folder, name), "utf8"));
+          const saved = JSON.parse(await readFile3(join34(this.folder, name), "utf8"));
           const record = saved?.record;
           const state = this.state && record ? this.state.from(record.state) : undefined;
           if (saved?.version === this.format && typeof saved.path === "string" && keptName(saved.path) === name && record && Array.isArray(record.items) && typeof record.offset === "number" && typeof record.size === "number" && (!this.state || state !== undefined))
             this.records.set(saved.path, { ...record, state });
           else
-            rmSync14(join32(this.folder, name), { force: true });
+            rmSync14(join34(this.folder, name), { force: true });
         } catch {}
       }
     })();
@@ -20943,21 +21912,21 @@ class JSONLFiles {
     if (!this.folder)
       return;
     try {
-      mkdirSync19(this.folder, { recursive: true, mode: 448 });
+      mkdirSync20(this.folder, { recursive: true, mode: 448 });
     } catch {
       return;
     }
     for (const path of this.forgotten) {
       try {
-        rmSync14(join32(this.folder, keptName(path)), { force: true });
+        rmSync14(join34(this.folder, keptName(path)), { force: true });
       } catch {}
     }
     this.forgotten.clear();
     for (const path of this.changed) {
-      const file = join32(this.folder, keptName(path));
+      const file = join34(this.folder, keptName(path));
       try {
-        writeFileSync20(file + ".new", JSON.stringify({ version: this.format, path, record: this.records.get(path) }), { mode: 384 });
-        renameSync15(file + ".new", file);
+        writeFileSync21(file + ".new", JSON.stringify({ version: this.format, path, record: this.records.get(path) }), { mode: 384 });
+        renameSync16(file + ".new", file);
       } catch {}
     }
     this.changed.clear();
@@ -21048,19 +22017,19 @@ class JSONLFiles {
     return consumed;
   }
 }
-var keptName = (path) => createHash10("sha256").update(path).digest("hex").slice(0, 32) + ".json";
+var keptName = (path) => createHash11("sha256").update(path).digest("hex").slice(0, 32) + ".json";
 async function headOf(handle, length) {
   if (!length)
     return "";
   const buffer = Buffer.alloc(length);
   const { bytesRead } = await handle.read(buffer, 0, length, 0);
-  return createHash10("sha256").update(buffer.subarray(0, bytesRead)).digest("hex").slice(0, 32);
+  return createHash11("sha256").update(buffer.subarray(0, bytesRead)).digest("hex").slice(0, 32);
 }
 
 // Packages/Box/src/agents/usage/usage.ts
-var USAGE_SERVICES = ["claude", "codex", "grok", "opencode"];
+var USAGE_SERVICES = ["claude", "codex", "grok", "opencode", "cursor"];
 var MINUTE2 = 60000;
-var DAY2 = 24 * 60 * MINUTE2;
+var DAY3 = 24 * 60 * MINUTE2;
 var SCAN_EVERY = 5 * MINUTE2;
 function usageRows(boxes) {
   const groups = [];
@@ -21086,6 +22055,10 @@ function usageRows(boxes) {
     const base = members.find((member) => member.account.agent)?.account ?? members[0].account;
     const label = members.map((member) => member.account.label?.trim()).find(Boolean);
     const scanned = Math.max(0, ...members.map((member) => member.account.scanned ?? 0));
+    const wide = members.some((member) => member.account.accountWide);
+    const newest = (of) => of.reduce((best, member) => !best || (member.account.scanned ?? 0) > (best.account.scanned ?? 0) ? member : best, undefined);
+    const counted = wide ? [newest(members.filter((member) => !member.same))].filter((member) => member !== undefined) : members.filter((member) => !member.same);
+    const yourCounted = wide ? [newest(members.filter((member) => !member.same && !member.box.vouched))].filter((member) => member !== undefined) : members.filter((member) => !member.same && !member.box.vouched);
     const row = {
       id,
       service: base.service,
@@ -21108,21 +22081,22 @@ function usageRows(boxes) {
         ...box.vouched ? { vouched: true } : {},
         ...same ? { same: true } : {}
       })),
-      slots: summed(members.filter((member) => !member.same).map((member) => member.account.slots)),
-      yours: summed(members.filter((member) => !member.same && !member.box.vouched).map((member) => member.account.slots))
+      slots: summed(counted.map((member) => member.account.slots)),
+      yours: summed(yourCounted.map((member) => member.account.slots))
     };
-    const yours = members.filter((member) => !member.same && !member.box.vouched);
     if (members.every((member) => member.box.away))
       row.away = true;
-    if (members.some((member) => member.account.cut))
+    if (counted.some((member) => member.account.cut))
       row.cut = true;
     if (members.every((member) => member.box.vouched))
       row.vouched = true;
     if (members.every((member) => member.account.estimated === false))
       row.estimated = false;
-    if (yours.some((member) => member.box.away))
+    if (wide)
+      row.accountWide = true;
+    if (yourCounted.some((member) => member.box.away))
       row.yoursAway = true;
-    if (yours.some((member) => member.account.cut))
+    if (yourCounted.some((member) => member.account.cut))
       row.yoursCut = true;
     return row;
   });
@@ -21184,7 +22158,7 @@ class Usage {
     const pricing = this.pricing.current();
     const fallback = this.settings?.codexFallback ?? null;
     const at = this.now();
-    const since = Math.floor((at - KEPT_DAYS * DAY2) / DAY2) * DAY2;
+    const since = Math.floor((at - KEPT_DAYS * DAY3) / DAY3) * DAY3;
     const sources = this.sources();
     let complete = true;
     try {
@@ -21193,15 +22167,24 @@ class Usage {
         try {
           slots = await source.slots(pricing, since);
         } catch (error) {
-          console.error(`usage of ${source.provider}:`, error);
+          console.error(`usage of ${source.provider}:`, error instanceof Error ? error.message : error);
         }
         const entry = this.entries.get(source.provider) ?? { slots: noSlots() };
-        if (slots) {
+        if (slots === null) {
+          if (this.entries.has(source.provider))
+            entry.slots = trimmed2(entry.slots, at);
+          else
+            continue;
+        } else if (slots) {
           entry.slots = slots;
-          entry.scanned = this.now();
+          const whole = source.wholeAt ? source.wholeAt() : this.now();
+          if (whole !== undefined)
+            entry.scanned = whole;
+          else
+            delete entry.scanned;
         } else {
           complete = false;
-          entry.slots = trimmed(entry.slots, at);
+          entry.slots = trimmed2(entry.slots, at);
         }
         this.entries.set(source.provider, entry);
       }
@@ -21232,7 +22215,7 @@ class Usage {
         return [];
       if (source.quiet && !entry.slots.used.size && !entry.slots.unknown.size)
         return [];
-      const identity = this.identity(source.provider) ?? entry.identity;
+      const identity = source.identity?.() ?? this.identity(source.provider) ?? entry.identity;
       if (identity !== entry.identity)
         entry.identity = identity;
       return [
@@ -21245,7 +22228,8 @@ class Usage {
           ...entry.scanned ? { scanned: entry.scanned } : {},
           slots: entry.slots,
           ...source.places ? { places: source.places() } : {},
-          ...source.billed ? { estimated: false } : {}
+          ...source.billed ? { estimated: false } : {},
+          ...source.accountWide ? { accountWide: true } : {}
         }
       ];
     });
@@ -21272,12 +22256,22 @@ class Usage {
         partial[service] = { ...of.some((row) => row.yoursAway) ? { away: true } : {}, ...of.some((row) => row.yoursCut) ? { cut: true } : {} };
     }
     const scanned = Math.max(0, ...this.own().map((account) => account.scanned ?? 0));
+    const pricing = this.pricing.current();
+    const grouped = (service, days) => service !== "cursor" ? days : days.map((day) => ({
+      ...day,
+      models: day.models.map((each) => {
+        const family = each.model === UNATTRIBUTED ? each.model : pricing.familyName(each.model, ["-fast"]);
+        return family === each.model ? each : { ...each, family };
+      })
+    }));
+    for (const service of Object.keys(totals))
+      totals[service] = grouped(service, totals[service]);
     return {
       zone: asked,
       services: this.services,
       ...scanned ? { scanned } : {},
       pricing: { codex: { fallback: this.settings?.codexFallback ?? null, chosen: this.settings?.chosen ?? false, choices: this.pricing.current().fallbackOptions("codex") } },
-      rows: rows.map(({ slots, yours: _, yoursAway: _away, yoursCut: _cut, ...row }) => ({ ...row, days: daysIn(slots, asked, now) })),
+      rows: rows.map(({ slots, yours: _, yoursAway: _away, yoursCut: _cut, ...row }) => ({ ...row, days: grouped(row.service, daysIn(slots, asked, now)) })),
       totals,
       ...Object.keys(partial).length ? { partial } : {}
     };
@@ -21312,14 +22306,14 @@ class Usage {
     if (!this.file)
       return;
     try {
-      const saved = JSON.parse(readFileSync27(this.file, "utf8"));
+      const saved = JSON.parse(readFileSync29(this.file, "utf8"));
       for (const [provider, kept] of Object.entries(saved?.accounts ?? {})) {
         if (!kept || typeof kept !== "object")
           continue;
         this.entries.set(provider, {
           ...typeof kept.identity === "string" && /^[0-9a-f]{16}$/.test(kept.identity) ? { identity: kept.identity } : {},
           ...typeof kept.scanned === "number" ? { scanned: kept.scanned } : {},
-          slots: trimmed(slotsFrom(kept.slots, 200000), this.now())
+          slots: trimmed2(slotsFrom(kept.slots, 200000), this.now())
         });
       }
     } catch {}
@@ -21330,9 +22324,9 @@ class Usage {
       return;
     const accounts = Object.fromEntries([...this.entries].map(([provider, entry]) => [provider, { ...entry.identity ? { identity: entry.identity } : {}, ...entry.scanned ? { scanned: entry.scanned } : {}, slots: keptSlots(entry.slots) }]));
     try {
-      mkdirSync20(dirname16(this.file), { recursive: true });
-      writeFileSync21(this.file + ".new", JSON.stringify({ accounts }), { mode: 384 });
-      renameSync16(this.file + ".new", this.file);
+      mkdirSync21(dirname16(this.file), { recursive: true });
+      writeFileSync22(this.file + ".new", JSON.stringify({ accounts }), { mode: 384 });
+      renameSync17(this.file + ".new", this.file);
     } catch {}
   }
 }
@@ -21365,7 +22359,7 @@ function placeOf(computer, folder, part) {
   try {
     real = realpathSync7(folder);
   } catch {}
-  const hash = createHash11("sha256").update(`kuvo-code usage place v2
+  const hash = createHash12("sha256").update(`kuvo-code usage place v2
 `).update(computer).update(`
 `).update(real);
   if (part !== undefined)
@@ -21373,7 +22367,7 @@ function placeOf(computer, folder, part) {
 `).update(part);
   return hash.digest("hex").slice(0, 16);
 }
-function thisComputer(platform = process.platform, read = (path) => readFileSync27(path, "utf8"), macUUID = () => uuidOf(ioreg()), name = hostname) {
+function thisComputer(platform = process.platform, read = (path) => readFileSync29(path, "utf8"), macUUID = () => uuidOf(ioreg()), name = hostname) {
   if (platform === "darwin") {
     const uuid = macUUID();
     if (uuid)
@@ -21412,14 +22406,14 @@ function claudeRoots(agent, env = process.env, home = homedir5()) {
   const roots = [...agent.conversationRoots?.() ?? []];
   if (!agent.instance.home) {
     const configured = env.CLAUDE_CONFIG_DIR?.trim();
-    const folders = configured ? configured.split(",").map((part) => part.trim()).filter(Boolean).map((part) => part.startsWith("~/") ? join33(home, part.slice(2)) : part) : [join33(env.XDG_CONFIG_HOME?.trim() || join33(home, ".config"), "claude"), join33(home, ".claude")];
+    const folders = configured ? configured.split(",").map((part) => part.trim()).filter(Boolean).map((part) => part.startsWith("~/") ? join35(home, part.slice(2)) : part) : [join35(env.XDG_CONFIG_HOME?.trim() || join35(home, ".config"), "claude"), join35(home, ".claude")];
     for (const folder of folders)
-      roots.push(basename11(folder) === "projects" ? folder : join33(folder, "projects"));
+      roots.push(basename11(folder) === "projects" ? folder : join35(folder, "projects"));
   }
   return [...new Set(roots)];
 }
 function claudeSources(folder, computer = ownComputer) {
-  const files = new JSONLFiles((line) => claudeLine(line).map(keptClaude), (entry) => entry[0], folder ? join33(folder, "claude-files") : undefined, 1, (entry) => entry[1] === null ? undefined : JSON.stringify(entry.slice(1)));
+  const files = new JSONLFiles((line) => claudeLine(line).map(keptClaude), (entry) => entry[0], folder ? join35(folder, "claude-files") : undefined, 1, (entry) => entry[1] === null ? undefined : JSON.stringify(entry.slice(1)));
   const last = new Map;
   return (agents) => agents.flatMap((agent) => {
     const parsed = parseProvider(agent.providerID);
@@ -21442,7 +22436,7 @@ function claudeSources(folder, computer = ownComputer) {
             found.set(file.path, file);
         const ordered = [...found.values()].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
         await files.refresh(ordered, since);
-        const listed = createHash11("sha256").update(ordered.map((file) => file.path).join(`
+        const listed = createHash12("sha256").update(ordered.map((file) => file.path).join(`
 `)).digest("hex");
         const before = last.get(agent.providerID);
         if (before && before.version === files.version && before.pricing === pricing && before.since === since && before.listed === listed)
@@ -21466,7 +22460,7 @@ class UsageSettings {
     if (!file)
       return;
     try {
-      const saved = JSON.parse(readFileSync27(file, "utf8"))?.codex;
+      const saved = JSON.parse(readFileSync29(file, "utf8"))?.codex;
       if (saved && typeof saved === "object" && "fallback" in saved) {
         this.chosen = true;
         if (typeof saved.fallback === "string" && saved.fallback && saved.fallback.length <= 200)
@@ -21480,9 +22474,9 @@ class UsageSettings {
     if (!this.file)
       return;
     try {
-      mkdirSync20(dirname16(this.file), { recursive: true });
-      writeFileSync21(this.file + ".new", JSON.stringify({ codex: { fallback: model } }), { mode: 384 });
-      renameSync16(this.file + ".new", this.file);
+      mkdirSync21(dirname16(this.file), { recursive: true });
+      writeFileSync22(this.file + ".new", JSON.stringify({ codex: { fallback: model } }), { mode: 384 });
+      renameSync17(this.file + ".new", this.file);
     } catch {}
   }
 }
@@ -21502,10 +22496,10 @@ function isLink(path) {
 }
 function codexHomes(agent, env = process.env, home = homedir5()) {
   const configured = env.CODEX_HOME?.trim();
-  const homes = agent.instance.home ? [agent.instance.home] : configured ? configured.split(",").map((part) => part.trim()).filter(Boolean).map((part) => part.startsWith("~/") ? join33(home, part.slice(2)) : part) : [join33(home, ".codex")];
+  const homes = agent.instance.home ? [agent.instance.home] : configured ? configured.split(",").map((part) => part.trim()).filter(Boolean).map((part) => part.startsWith("~/") ? join35(home, part.slice(2)) : part) : [join35(home, ".codex")];
   const real = new Set;
   return homes.filter((each) => !real.has(realOf(each)) && !!real.add(realOf(each))).map((each) => {
-    const folders = ["sessions", "archived_sessions"].map((name) => join33(each, name)).filter(isFolder);
+    const folders = ["sessions", "archived_sessions"].map((name) => join35(each, name)).filter(isFolder);
     return folders.length ? folders : [each];
   });
 }
@@ -21519,7 +22513,7 @@ function isFolder(path) {
 function codexSources(folder, fallback = () => {
   return;
 }, computer = ownComputer) {
-  const files = new JSONLFiles((line, state) => codexLine(line, state).map(keptCodex), (entry) => entry[0], folder ? join33(folder, "codex-files") : undefined, 1, (entry) => JSON.stringify(entry.slice(0, 8)), { initial: codexState, from: codexStateFrom });
+  const files = new JSONLFiles((line, state) => codexLine(line, state).map(keptCodex), (entry) => entry[0], folder ? join35(folder, "codex-files") : undefined, 1, (entry) => JSON.stringify(entry.slice(0, 8)), { initial: codexState, from: codexStateFrom });
   const last = new Map;
   return (agents) => {
     const codex = agents.filter((agent) => parseProvider(agent.providerID)?.kind === "codex");
@@ -21562,7 +22556,7 @@ function codexSources(folder, fallback = () => {
             }
           }
           await files.refresh(found, since);
-          const listed = createHash11("sha256").update(found.map((file) => file.path).join(`
+          const listed = createHash12("sha256").update(found.map((file) => file.path).join(`
 `)).digest("hex");
           const model = fallback();
           const before = last.get(agent.providerID);
@@ -21619,7 +22613,7 @@ function ownerOf(grok) {
   return owner;
 }
 function grokSources(folder, computer = ownComputer) {
-  const files = new JSONLFiles((line) => grokLine(line).map(keptGrok), (entry) => entry[0], folder ? join33(folder, "grok-files") : undefined, 1);
+  const files = new JSONLFiles((line) => grokLine(line).map(keptGrok), (entry) => entry[0], folder ? join35(folder, "grok-files") : undefined, 1);
   const last = new Map;
   return (agents) => {
     const owner = ownerOf(agents.filter((agent) => parseProvider(agent.providerID)?.kind === "grok" && agent.conversationRoots));
@@ -21645,7 +22639,7 @@ function grokSources(folder, computer = ownComputer) {
                 found.set(file.path, file);
           const ordered = [...found.values()].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
           await files.refresh(ordered, since);
-          const listed = createHash11("sha256").update(ordered.map((file) => file.path).join(`
+          const listed = createHash12("sha256").update(ordered.map((file) => file.path).join(`
 `)).digest("hex");
           const before = last.get(agent.providerID);
           if (before && before.version === files.version && before.pricing === pricing && before.since === since && before.listed === listed)
@@ -21729,6 +22723,65 @@ function engineHostedSources(folder, computer = ownComputer, log = (line) => con
     files: shared
   }));
   return () => sources;
+}
+function cursorClientOf(agent) {
+  if (parseProvider(agent.providerID)?.kind !== "cursor")
+    return;
+  const cursor = agent;
+  return cursor.cursor ? { client: cursor.cursor, unreadable: () => cursor.cursorKeyUnreadable?.() ?? false } : undefined;
+}
+function cursorSources(folder, elsewhere, history = new CursorHistory(folder ? join35(folder, "cursor-history") : undefined), now = Date.now) {
+  const last = new Map;
+  const wholeAt = new Map;
+  return (agents) => {
+    if (!cursorReachable())
+      return [];
+    const here = new Set(agents.map((agent) => agent.providerID));
+    for (const provider of [...last.keys()])
+      if (!here.has(provider))
+        last.delete(provider);
+    for (const provider of [...wholeAt.keys()])
+      if (!here.has(provider))
+        wholeAt.delete(provider);
+    return agents.flatMap((agent) => {
+      const found = cursorClientOf(agent);
+      if (!found || !found.client.key() && !found.unreadable())
+        return [];
+      const client = found.client;
+      const parsed = parseProvider(agent.providerID);
+      const source = {
+        provider: agent.providerID,
+        service: "cursor",
+        agent: { kind: "cursor", account: parsed.id },
+        ...agent.instance.label ? { label: agent.instance.label } : {},
+        accountWide: true,
+        wholeAt: () => wholeAt.get(agent.providerID),
+        identity: () => {
+          const raw = client.identity();
+          return raw ? identityOf(raw) : undefined;
+        },
+        slots: async (pricing, since) => {
+          const raw = client.identity();
+          if (elsewhere(agent.providerID, raw ? identityOf(raw) : undefined))
+            return null;
+          if (!client.key())
+            throw new Error("Cursor's sign-in can't be read just now.");
+          const read = await history.readWhole(client, now());
+          if (read.whole)
+            wholeAt.set(agent.providerID, now());
+          const days = read.days;
+          const said = createHash12("sha256").update(JSON.stringify([...days])).digest("hex");
+          const before = last.get(agent.providerID);
+          if (before && before.days === said && before.pricing === pricing && before.since === since)
+            return before.slots;
+          const slots = cursorSlots(days.values(), pricing, since);
+          last.set(agent.providerID, { days: said, pricing, since, slots });
+          return slots;
+        }
+      };
+      return [source];
+    });
+  };
 }
 
 // Packages/Box/src/agents/updates.ts
@@ -21847,11 +22900,11 @@ async function updateAll(agents, accounts, noted, known) {
 }
 
 // Packages/Box/src/agents/sessions.ts
-import { createHash as createHash12 } from "crypto";
+import { createHash as createHash13 } from "crypto";
 import { spawn as spawnProcess } from "child_process";
-import { readFileSync as readFileSync28, realpathSync as realpathSync8, statSync as statSync14 } from "fs";
+import { readFileSync as readFileSync30, realpathSync as realpathSync8, statSync as statSync14 } from "fs";
 import { homedir as homedir6 } from "os";
-import { dirname as dirname17, join as join34, resolve as resolve8 } from "path";
+import { dirname as dirname17, join as join36, resolve as resolve8 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
 
 // Packages/Box/src/agents/handover.ts
@@ -22894,15 +23947,15 @@ function hidesFromBlocks(blocks, ask) {
 }
 var fileActions = new Set(["read", "edit", "write", "patch", "list", "grep", "glob"]);
 function ownPlaces() {
-  const places = [process.env.KUVO_AGENTS_HOME, process.env.TMPDIR?.replace(/\/$/, ""), join34(homedir6(), ".claude", "plans")].filter((place) => Boolean(place));
+  const places = [process.env.KUVO_AGENTS_HOME, process.env.TMPDIR?.replace(/\/$/, ""), join36(homedir6(), ".claude", "plans")].filter((place) => Boolean(place));
   if (process.env.KUVO_AGENTS_HOME && !onMachine)
-    places.push(join34(dirname17(process.env.KUVO_AGENTS_HOME), "Attachments"));
+    places.push(join36(dirname17(process.env.KUVO_AGENTS_HOME), "Attachments"));
   return [...places, ...skillFolders()];
 }
 function outsidePaths(ask, directory, attached, own = ownPlaces(), owns) {
   if (!fileActions.has(ask.action))
     return [];
-  const paths = ask.resources.filter((resource) => resource && resource !== "*" && (resource.startsWith("/") || resource.startsWith("~/") || !/[*?[]/.test(resource))).map((resource) => resolve8(directory, resource.startsWith("~/") ? join34(homedir6(), resource.slice(2)) : resource));
+  const paths = ask.resources.filter((resource) => resource && resource !== "*" && (resource.startsWith("/") || resource.startsWith("~/") || !/[*?[]/.test(resource))).map((resource) => resolve8(directory, resource.startsWith("~/") ? join36(homedir6(), resource.slice(2)) : resource));
   const places = [directory, realFolder(directory), ...own];
   return paths.filter((path) => !within2(path, places) && !attached.has(path) && !owns?.(path));
 }
@@ -22914,7 +23967,7 @@ function realFolder(folder) {
   }
 }
 function outsideFolders(ask, paths) {
-  return [...new Set(paths.map((path) => join34(isFolder2(path, ask.action) ? path : dirname17(path), "*")))];
+  return [...new Set(paths.map((path) => join36(isFolder2(path, ask.action) ? path : dirname17(path), "*")))];
 }
 function outsideRefusable(ask, paths, folders) {
   return [...paths.filter((path) => !isFolder2(path, ask.action)), ...folders];
@@ -23208,7 +24261,7 @@ class Sessions {
     const directory = body.location.directory;
     const session = {
       id: newID("ses"),
-      projectID: "prj_" + createHash12("sha1").update(directory).digest("hex").slice(0, 16),
+      projectID: "prj_" + createHash13("sha1").update(directory).digest("hex").slice(0, 16),
       agent: typeof body.agent === "string" && body.agent ? body.agent : "build",
       model: body.model,
       cost: 0,
@@ -25183,7 +26236,7 @@ function withTextFiles(text, files) {
     let contents;
     if (!file.mime.startsWith("image/") && file.mime !== "application/pdf") {
       try {
-        const bytes = file.data ? Buffer.from(file.data, "base64") : file.path && statSync14(file.path).isFile() && statSync14(file.path).size <= textFileLimit ? readFileSync28(file.path) : undefined;
+        const bytes = file.data ? Buffer.from(file.data, "base64") : file.path && statSync14(file.path).isFile() && statSync14(file.path).size <= textFileLimit ? readFileSync30(file.path) : undefined;
         if (bytes && !bytes.includes(0))
           contents = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
       } catch {}
@@ -25480,10 +26533,10 @@ function followed(store, read, signal) {
 }
 
 // Packages/Box/src/agents/carry.ts
-import { createHash as createHash13 } from "crypto";
+import { createHash as createHash14 } from "crypto";
 import { createReadStream } from "fs";
 import { copyFile, lstat as lstat2, mkdir, readFile as readFile4, readdir as readdir2, rename, rm, stat as stat3, writeFile } from "fs/promises";
-import { basename as basename12, dirname as dirname18, isAbsolute as isAbsolute3, join as join35, normalize, sep as sep11 } from "path";
+import { basename as basename12, dirname as dirname18, isAbsolute as isAbsolute3, join as join37, normalize, sep as sep11 } from "path";
 var WORKING = 423;
 
 class CantCarry extends Error {
@@ -25494,13 +26547,13 @@ class CantCarry extends Error {
   }
 }
 async function hashOf(file) {
-  const hash = createHash13("sha256");
+  const hash = createHash14("sha256");
   for await (const chunk of createReadStream(file))
     hash.update(chunk);
   return hash.digest("hex");
 }
 async function plainFiles(from, link, at = "") {
-  const whole = at ? join35(from, at) : from;
+  const whole = at ? join37(from, at) : from;
   const kind = await lstat2(whole);
   if (kind.isFile())
     return [{ path: at, size: kind.size }];
@@ -25508,11 +26561,11 @@ async function plainFiles(from, link, at = "") {
     throw link(whole);
   const files = [];
   for (const name of (await readdir2(whole)).sort())
-    files.push(...await plainFiles(from, link, at ? join35(at, name) : name));
+    files.push(...await plainFiles(from, link, at ? join37(at, name) : name));
   return files;
 }
 var digestOf = (records, lanes, said = []) => {
-  const hash = createHash13("sha256");
+  const hash = createHash14("sha256");
   for (const record of records)
     hash.update(`r ${record.path} ${record.size} ${record.sha256}
 `);
@@ -25577,14 +26630,14 @@ class Carrying {
     const out = [];
     const take = async (from, into) => {
       for (const { path, size } of await plainFiles(from, link)) {
-        const whole = path ? join35(from, path) : from;
-        out.push({ from: whole, file: { path: path ? join35(into, path) : into, size, sha256: await hashOf(whole) } });
+        const whole = path ? join37(from, path) : from;
+        out.push({ from: whole, file: { path: path ? join37(into, path) : into, size, sha256: await hashOf(whole) } });
       }
     };
     for (const item of files.items)
-      await take(item.path, join35("lanes", String(at), "conversation", item.name));
+      await take(item.path, join37("lanes", String(at), "conversation", item.name));
     if (files.memory)
-      await take(files.memory, join35("lanes", String(at), "memory"));
+      await take(files.memory, join37("lanes", String(at), "memory"));
     return out;
   }
   async read(root, conversation, into) {
@@ -25602,12 +26655,12 @@ class Carrying {
       said.push(JSON.stringify([id, record.session.title ?? null, record.session.model ?? null, archived]));
       for (const name of ["session.json", "messages.json", "agent.json"]) {
         const file = this.store.fileOf(id, name);
-        const path = join35("sessions", id, name);
+        const path = join37("sessions", id, name);
         if (name === "messages.json")
           records.push({ path, size: (await stat3(file)).size, sha256: await hashOf(file) });
         if (into) {
-          await mkdir(dirname18(join35(into, path)), { recursive: true });
-          await copyFile(file, join35(into, path));
+          await mkdir(dirname18(join37(into, path)), { recursive: true });
+          await copyFile(file, join37(into, path));
         }
       }
       const slots = this.sessions.slotsOf(id);
@@ -25634,8 +26687,8 @@ class Carrying {
           left.push({ provider, paths: files.items.map((item) => item.path), ...files.memory && !files.memoryShared ? { memory: files.memory } : {}, directory: record.session.location.directory });
         if (into) {
           for (const { from, file } of list) {
-            await mkdir(dirname18(join35(into, file.path)), { recursive: true });
-            await copyFile(from, join35(into, file.path));
+            await mkdir(dirname18(join37(into, file.path)), { recursive: true });
+            await copyFile(from, join37(into, file.path));
           }
         }
         at++;
@@ -25695,7 +26748,7 @@ class Carrying {
       if (concrete)
         each.model = concrete;
     }
-    await writeFile(join35(into, "carry.json"), JSON.stringify(manifest), { mode: 384 });
+    await writeFile(join37(into, "carry.json"), JSON.stringify(manifest), { mode: 384 });
     return { sessions: manifest.sessions, lanes: manifest.lanes.map(({ list: _, ...lane }) => lane), digest: manifest.digest, left };
   }
   async concreteOf(model) {
@@ -25713,10 +26766,10 @@ class Carrying {
   async keep(root, into) {
     for (const { session } of this.family(root)) {
       this.store.save(session.id, true);
-      const folder = join35(into, session.id);
+      const folder = join37(into, session.id);
       await mkdir(folder, { recursive: true });
       for (const name of ["session.json", "messages.json"])
-        await copyFile(this.store.fileOf(session.id, name), join35(folder, name));
+        await copyFile(this.store.fileOf(session.id, name), join37(folder, name));
     }
   }
   async hostOf(provider) {
@@ -25785,7 +26838,7 @@ class Carrying {
         stillOn();
         const read = async (name, or) => {
           try {
-            return JSON.parse(await readFile4(join35(from, "sessions", id, name), "utf8"));
+            return JSON.parse(await readFile4(join37(from, "sessions", id, name), "utf8"));
           } catch (error) {
             if (or !== undefined)
               return or;
@@ -25802,7 +26855,7 @@ class Carrying {
           const { chat: _, ...kuvo } = session.metadata?.kuvo ?? {};
           session.metadata = { ...session.metadata ?? {}, kuvo: chat ? { ...kuvo, chat } : kuvo };
         }
-        session.projectID = "prj_" + createHash13("sha1").update(directory).digest("hex").slice(0, 16);
+        session.projectID = "prj_" + createHash14("sha1").update(directory).digest("hex").slice(0, 16);
         delete agent.snapshots;
         const lanesHere = manifest.lanes.filter((lane) => lane.session === id);
         const threads = agent.threads ?? {};
@@ -25818,15 +26871,15 @@ class Carrying {
             kept[here] = slot;
             const where = host.conversationPlace(slot.state, session);
             for (const file of lane.list) {
-              const conversation = join35("lanes", String(manifest.lanes.indexOf(lane)), "conversation") + sep11;
-              const memory = join35("lanes", String(manifest.lanes.indexOf(lane)), "memory");
-              const dest = file.path.startsWith(conversation) ? where.item(file.path.slice(conversation.length)) : file.path === memory ? where.memory ?? null : file.path.startsWith(memory + sep11) && where.memory ? join35(where.memory, file.path.slice(memory.length + 1)) : null;
+              const conversation = join37("lanes", String(manifest.lanes.indexOf(lane)), "conversation") + sep11;
+              const memory = join37("lanes", String(manifest.lanes.indexOf(lane)), "memory");
+              const dest = file.path.startsWith(conversation) ? where.item(file.path.slice(conversation.length)) : file.path === memory ? where.memory ?? null : file.path.startsWith(memory + sep11) && where.memory ? join37(where.memory, file.path.slice(memory.length + 1)) : null;
               if (!dest)
                 throw new CantCarry("its conversation didn't come whole");
               if (inUse.some((path) => dest === path || dest.startsWith(path + sep11)))
                 throw new CantCarry("its conversation is one here already");
               stillOn();
-              await undo.put(join35(from, file.path), dest, file, Boolean(where.memoryMerges && !file.path.startsWith(conversation)));
+              await undo.put(join37(from, file.path), dest, file, Boolean(where.memoryMerges && !file.path.startsWith(conversation)));
             }
             placed.push(lane);
           } else {
@@ -25858,7 +26911,7 @@ class Carrying {
   async readManifest(from) {
     let manifest;
     try {
-      manifest = JSON.parse(await readFile4(join35(from, "carry.json"), "utf8"));
+      manifest = JSON.parse(await readFile4(join37(from, "carry.json"), "utf8"));
     } catch {
       throw new CantCarry("its conversation didn't come whole");
     }
@@ -25876,11 +26929,11 @@ class Carrying {
   async checked(from, file) {
     let found;
     try {
-      found = await lstat2(join35(from, file.path));
+      found = await lstat2(join37(from, file.path));
     } catch {
       throw new CantCarry("a file of its conversation didn't come with it");
     }
-    if (!found.isFile() || found.size !== file.size || await hashOf(join35(from, file.path)) !== file.sha256)
+    if (!found.isFile() || found.size !== file.size || await hashOf(join37(from, file.path)) !== file.sha256)
       throw new CantCarry("a file of its conversation didn't come whole");
   }
   async undo(keep) {
@@ -25939,7 +26992,7 @@ class Undo {
     this.keep = keep;
   }
   get file() {
-    return join35(this.keep, "placed.json");
+    return join37(this.keep, "placed.json");
   }
   async read() {
     try {
@@ -25961,14 +27014,14 @@ class Undo {
     if (there && merges) {
       if (await hashOf(dest).catch(() => "") === file.sha256)
         return;
-      dest = join35(dirname18(dest), `moved-${file.sha256.slice(0, 8)}-${basename12(dest)}`);
+      dest = join37(dirname18(dest), `moved-${file.sha256.slice(0, 8)}-${basename12(dest)}`);
       there = await lstat2(dest).then(() => true, () => false);
       if (there)
         return;
     }
     const placed = merges ? { dest, sha256: file.sha256 } : { dest };
     if (there)
-      placed.replaced = join35(this.keep, "replaced", String(this.count++));
+      placed.replaced = join37(this.keep, "replaced", String(this.count++));
     this.list.placed.push(placed);
     await this.write();
     if (placed.replaced) {
@@ -26544,7 +27597,7 @@ function bare(call) {
   }
   return call;
 }
-function trimmed3(call) {
+function trimmed4(call) {
   const cut = (output) => output.map((item) => item?.type === "text" && length(item.text) > 4000 ? { ...item, text: sliceCharacters(item.text, 4000) + "\u2026" } : item);
   const state = call.state;
   if (state?.status === "completed")
@@ -26613,8 +27666,8 @@ function seatRules(folder, askFirst, denies) {
 }
 
 // Packages/Box/src/agents/groups/store.ts
-import { existsSync as existsSync17, mkdirSync as mkdirSync21, readdirSync as readdirSync18, readFileSync as readFileSync29, renameSync as renameSync17, rmSync as rmSync15, writeFileSync as writeFileSync22 } from "fs";
-import { join as join36 } from "path";
+import { existsSync as existsSync18, mkdirSync as mkdirSync22, readdirSync as readdirSync18, readFileSync as readFileSync31, renameSync as renameSync18, rmSync as rmSync15, writeFileSync as writeFileSync23 } from "fs";
+import { join as join38 } from "path";
 var version2 = 1;
 function isTurning(value) {
   return value && typeof value.bot === "string" && typeof value.seat === "string" && typeof value.agents === "boolean" && typeof value.prompt === "string" && typeof value.sent === "number" && (value.wrapUp === undefined || typeof value.wrapUp === "boolean");
@@ -26656,21 +27709,21 @@ function isMessages(value) {
 var forgottenFor = 3 * 86400000;
 var read2 = (file) => {
   try {
-    return JSON.parse(readFileSync29(file, "utf8"));
+    return JSON.parse(readFileSync31(file, "utf8"));
   } catch {
     return;
   }
 };
-var text3 = (file) => {
+var text4 = (file) => {
   try {
-    return readFileSync29(file, "utf8");
+    return readFileSync31(file, "utf8");
   } catch {
     return;
   }
 };
 function write(file, value) {
-  writeFileSync22(file + ".new", JSON.stringify(value, null, 2), { mode: 384 });
-  renameSync17(file + ".new", file);
+  writeFileSync23(file + ".new", JSON.stringify(value, null, 2), { mode: 384 });
+  renameSync18(file + ".new", file);
 }
 
 class GroupStore {
@@ -26681,10 +27734,10 @@ class GroupStore {
     this.root = root;
     this.bots = bots;
     this.agentsFile = agentsFile;
-    mkdirSync21(root, { recursive: true, mode: 448 });
+    mkdirSync22(root, { recursive: true, mode: 448 });
   }
   folder(id) {
-    return join36(this.root, id);
+    return join38(this.root, id);
   }
   load() {
     const all = new Map;
@@ -26702,39 +27755,39 @@ class GroupStore {
     return all;
   }
   read(id) {
-    const record = read2(join36(this.folder(id), "group.json"));
+    const record = read2(join38(this.folder(id), "group.json"));
     if (!record || typeof record.kuvo !== "number" || record.kuvo > version2 || !isGroup(record.group, id))
       return;
-    const messages = read2(join36(this.folder(id), "messages.json")) ?? [];
+    const messages = read2(join38(this.folder(id), "messages.json")) ?? [];
     if (!isMessages(messages))
       return;
     return { group: record.group, status: record.status === "held" ? "held" : "active", talking: record.talking === true, paused: record.paused === true, ...isTurning(record.turning) ? { turning: record.turning } : {}, messages };
   }
   saveGroup(kept) {
-    mkdirSync21(this.folder(kept.group.id), { recursive: true, mode: 448 });
-    write(join36(this.folder(kept.group.id), "group.json"), { kuvo: version2, status: kept.status, ...kept.talking ? { talking: true } : {}, ...kept.paused ? { paused: true } : {}, ...kept.turning ? { turning: kept.turning } : {}, group: kept.group });
+    mkdirSync22(this.folder(kept.group.id), { recursive: true, mode: 448 });
+    write(join38(this.folder(kept.group.id), "group.json"), { kuvo: version2, status: kept.status, ...kept.talking ? { talking: true } : {}, ...kept.paused ? { paused: true } : {}, ...kept.turning ? { turning: kept.turning } : {}, group: kept.group });
   }
   saveMessages(kept) {
-    mkdirSync21(this.folder(kept.group.id), { recursive: true, mode: 448 });
-    write(join36(this.folder(kept.group.id), "messages.json"), kept.messages);
+    mkdirSync22(this.folder(kept.group.id), { recursive: true, mode: 448 });
+    write(join38(this.folder(kept.group.id), "messages.json"), kept.messages);
   }
   setAwake(id, awake) {
-    const file = join36(this.folder(id), "awake");
-    if (awake && !existsSync17(file) && existsSync17(this.folder(id)))
-      writeFileSync22(file, "");
+    const file = join38(this.folder(id), "awake");
+    if (awake && !existsSync18(file) && existsSync18(this.folder(id)))
+      writeFileSync23(file, "");
     if (!awake)
       rmSync15(file, { force: true });
   }
   trash(id, trash) {
-    if (!existsSync17(this.folder(id)))
+    if (!existsSync18(this.folder(id)))
       return;
-    const into = join36(trash, `${new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "")}-group-${id}`);
-    mkdirSync21(into, { recursive: true, mode: 448 });
-    renameSync17(this.folder(id), join36(into, id));
+    const into = join38(trash, `${new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "")}-group-${id}`);
+    mkdirSync22(into, { recursive: true, mode: 448 });
+    renameSync18(this.folder(id), join38(into, id));
     emit("kuvo.group.trashed", { id, path: into });
   }
   settings() {
-    const value = read2(join36(this.root, "settings.json"));
+    const value = read2(join38(this.root, "settings.json"));
     if (!value || typeof value !== "object")
       return;
     return {
@@ -26747,8 +27800,8 @@ class GroupStore {
     };
   }
   writeSettings(settings) {
-    const kept = read2(join36(this.root, "settings.json"));
-    write(join36(this.root, "settings.json"), { ...kept && typeof kept === "object" ? kept : {}, kuvo: version2, ...settings });
+    const kept = read2(join38(this.root, "settings.json"));
+    write(join38(this.root, "settings.json"), { ...kept && typeof kept === "object" ? kept : {}, kuvo: version2, ...settings });
   }
   allBots() {
     let names = [];
@@ -26760,28 +27813,28 @@ class GroupStore {
   bot(id) {
     if (!/^bot_[A-Za-z0-9]+$/.test(id))
       return;
-    const folder = join36(this.bots, id);
-    const described = read2(join36(folder, "bot.json"));
-    const sessionID = text3(join36(folder, "session"))?.trim();
+    const folder = join38(this.bots, id);
+    const described = read2(join38(folder, "bot.json"));
+    const sessionID = text4(join38(folder, "session"))?.trim();
     if (!described?.name || !sessionID)
       return;
-    const job = read2(join36(folder, "job.json"));
-    const directory = text3(join36(folder, "directory"))?.trim() || join36(folder, "workspace");
+    const job = read2(join38(folder, "job.json"));
+    const directory = text4(join38(folder, "directory"))?.trim() || join38(folder, "workspace");
     return {
       id,
       name: String(described.name),
       job: typeof job?.line === "string" ? job.line : String(described.job ?? ""),
       instructions: typeof job?.details === "string" ? job.details : "",
-      memoryFile: join36(folder, "MEMORY.md"),
+      memoryFile: join38(folder, "MEMORY.md"),
       folder,
       sessionID,
       directory,
       model: described.model?.id && described.model?.providerID ? described.model : undefined,
       personality: typeof described.personality === "string" ? described.personality : undefined,
-      agents: text3(join36(folder, "via"))?.trim() === "bridge",
+      agents: text4(join38(folder, "via"))?.trim() === "bridge",
       ...described.look !== undefined ? { look: described.look } : {},
       ...typeof described.created === "string" ? { created: described.created } : {},
-      ...text3(join36(folder, "paused"))?.trim() === "moving" ? { moving: true } : {}
+      ...text4(join38(folder, "paused"))?.trim() === "moving" ? { moving: true } : {}
     };
   }
   peerMemory(bot) {
@@ -26793,7 +27846,7 @@ class GroupStore {
     return typeof at === "number" ? at : 0;
   }
   peerEntries(bot) {
-    const all = read2(join36(this.root, "peer-memory.json"));
+    const all = read2(join38(this.root, "peer-memory.json"));
     const entries = all && typeof all === "object" ? all[bot] : undefined;
     return entries && typeof entries === "object" ? entries : {};
   }
@@ -26809,7 +27862,7 @@ class GroupStore {
     });
   }
   changePeerMemory(bot, change) {
-    const all = read2(join36(this.root, "peer-memory.json")) ?? {};
+    const all = read2(join38(this.root, "peer-memory.json")) ?? {};
     const entries = { ...all[bot] ?? {} };
     change(entries);
     for (const [key, entry] of Object.entries(entries))
@@ -26819,10 +27872,10 @@ class GroupStore {
       delete all[bot];
     else
       all[bot] = entries;
-    write(join36(this.root, "peer-memory.json"), all);
+    write(join38(this.root, "peer-memory.json"), all);
   }
   peerWork() {
-    const all = read2(join36(this.root, "peer-work.json"));
+    const all = read2(join38(this.root, "peer-work.json"));
     return all && typeof all === "object" ? all : {};
   }
   keepPeerWork(task, work) {
@@ -26836,31 +27889,31 @@ class GroupStore {
   changePeerWork(change) {
     const all = this.peerWork();
     change(all);
-    write(join36(this.root, "peer-work.json"), all);
+    write(join38(this.root, "peer-work.json"), all);
   }
   pendingMemory() {
-    const value = read2(join36(this.root, "pending-memory.json"));
+    const value = read2(join38(this.root, "pending-memory.json"));
     if (!value || typeof value !== "object" || Array.isArray(value))
       return {};
     return Object.fromEntries(Object.entries(value).filter(([bot, chats]) => /^bot_[A-Za-z0-9]+$/.test(bot) && strings2(chats)));
   }
   setPendingMemory(pending) {
     if (Object.keys(pending).length === 0)
-      rmSync15(join36(this.root, "pending-memory.json"), { force: true });
+      rmSync15(join38(this.root, "pending-memory.json"), { force: true });
     else
-      write(join36(this.root, "pending-memory.json"), pending);
+      write(join38(this.root, "pending-memory.json"), pending);
   }
   peerTurns() {
-    const all = read2(join36(this.root, "peer-turns.json"));
+    const all = read2(join38(this.root, "peer-turns.json"));
     return all && typeof all === "object" ? all : {};
   }
   keepPeerTurns(turns) {
-    write(join36(this.root, "peer-turns.json"), turns);
+    write(join38(this.root, "peer-turns.json"), turns);
   }
   writeFile(path, contents) {
-    mkdirSync21(join36(path, ".."), { recursive: true });
-    writeFileSync22(path + ".new", contents, { mode: 384 });
-    renameSync17(path + ".new", path);
+    mkdirSync22(join38(path, ".."), { recursive: true });
+    writeFileSync23(path + ".new", contents, { mode: 384 });
+    renameSync18(path + ".new", path);
   }
   removeFile(path) {
     rmSync15(path, { force: true });
@@ -26868,7 +27921,7 @@ class GroupStore {
 }
 
 // Packages/Box/src/agents/groups/named.ts
-import { readFileSync as readFileSync30 } from "fs";
+import { readFileSync as readFileSync32 } from "fs";
 var start = "<named-agents>";
 var end = "</named-agents>";
 var heading = "Agents the user named with & in this message, by their address. Read one's conversation with read_conversation only when what the user asks needs what it knows or did, and write to it with send_message only to ask it something or hand it work; when the user only mentions one, do neither:";
@@ -26876,7 +27929,7 @@ function readDirectory(file) {
   if (!file)
     return { machine: null, agents: [] };
   try {
-    const value = JSON.parse(readFileSync30(file, "utf8"));
+    const value = JSON.parse(readFileSync32(file, "utf8"));
     const agents = Array.isArray(value?.agents) ? value.agents.filter((agent) => agent && typeof agent.session === "string" && agent.session.startsWith("ses_") && typeof agent.name === "string" && agent.name) : [];
     return { machine: typeof value?.machine === "string" ? value.machine : null, agents };
   } catch {
@@ -27476,18 +28529,18 @@ async function make(runner, store, given, here) {
 }
 
 // Packages/Box/src/agents/groups/post.ts
-import { existsSync as existsSync18, readFileSync as readFileSync32, renameSync as renameSync19, writeFileSync as writeFileSync24 } from "fs";
+import { existsSync as existsSync19, readFileSync as readFileSync34, renameSync as renameSync20, writeFileSync as writeFileSync25 } from "fs";
 
 // Packages/Box/src/shared/seats.ts
 var SEAT_MAIL_KINDS = ["turn", "state", "result", "steer", "stop", "drop", "work", "held", "report", "memory"];
 
 // Packages/Box/src/agents/usage/usage-peers.ts
-import { createHash as createHash14 } from "crypto";
-import { mkdirSync as mkdirSync22, readFileSync as readFileSync31, renameSync as renameSync18, writeFileSync as writeFileSync23 } from "fs";
+import { createHash as createHash15 } from "crypto";
+import { mkdirSync as mkdirSync23, readFileSync as readFileSync33, renameSync as renameSync19, writeFileSync as writeFileSync24 } from "fs";
 import { dirname as dirname19 } from "path";
 var isUsageMail = (value) => value !== null && typeof value === "object" && value.kind === "usage";
 var MINUTE3 = 60000;
-var DAY3 = 24 * 60 * MINUTE3;
+var DAY4 = 24 * 60 * MINUTE3;
 var TELL_AGAIN = 10 * MINUTE3;
 var PEER_AWAY = 25 * MINUTE3;
 var SKEW = MINUTE3;
@@ -27496,7 +28549,8 @@ var MOST_USES = 50000;
 var MOST_BYTES2 = 400000;
 var RECENT = 2 * 24 * 60 * MINUTE3;
 var SERVICE = /^[a-z0-9][a-z0-9-]{0,39}$/;
-var text4 = (value, most = 200) => typeof value === "string" && value ? value.slice(0, most) : undefined;
+var WHOLE_FRESH = 25 * MINUTE3;
+var text5 = (value, most = 200) => typeof value === "string" && value ? value.slice(0, most) : undefined;
 
 class UsagePeers {
   usage;
@@ -27524,13 +28578,33 @@ class UsagePeers {
     directory.listen(() => this.directorySaid());
     transport.onFollowed?.(() => this.told.clear());
   }
+  freshAt;
+  send(to, mail, durable) {
+    if (this.freshAt?.at !== mail.at)
+      this.freshAt = { at: mail.at, fresh: Object.fromEntries(this.usage.own().flatMap((account) => account.accountWide && account.scanned ? [[account.provider, account.scanned]] : [])) };
+    const fresh = this.freshAt.fresh;
+    this.transport.send(to, Object.keys(fresh).length ? { ...mail, fresh } : mail, durable);
+  }
+  readsWhole(service, identity) {
+    const self = this.directory.own()?.key;
+    if (!self || !this.directory.told)
+      return false;
+    const now = this.now();
+    for (const [key, kept] of this.peers) {
+      if (key >= self || this.vouched(key) || now - kept.heard > PEER_AWAY)
+        continue;
+      if (kept.accounts.some((account) => account.accountWide && account.service === service && account.identity === identity && account.scanned !== undefined && now - account.scanned < WHOLE_FRESH))
+        return true;
+    }
+    return false;
+  }
   rows(own) {
     const now = this.now();
     const self = this.directory.own();
     const boxes = [{ key: self?.key ?? "", name: self?.name ?? "", here: true, away: false, accounts: own }];
     const peers = [...this.peers.entries()].sort(([, a], [, b]) => a.name.localeCompare(b.name));
     for (const [key, kept] of peers)
-      boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY, vouched: this.vouched(key), accounts: kept.accounts.map((account) => ({ ...account, slots: trimmed(account.slots, now) })) });
+      boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY, vouched: this.vouched(key), accounts: kept.accounts.map((account) => ({ ...account, slots: trimmed2(account.slots, now) })) });
     return usageRows(boxes);
   }
   vouched(key) {
@@ -27548,11 +28622,11 @@ class UsagePeers {
     for (const { key } of this.directory.peerBoxes()) {
       const last = this.told.get(key);
       if (!last)
-        this.transport.send(key, { kind: "usage", at: now, accounts, digest, ask: true }, false);
+        this.send(key, { kind: "usage", at: now, accounts, digest, ask: true }, false);
       else if (last.digest !== digest && (changed || now - last.at >= TELL_AGAIN))
-        this.transport.send(key, { kind: "usage", at: now, accounts: recent(), from, digest }, false);
+        this.send(key, { kind: "usage", at: now, accounts: recent(), from, digest }, false);
       else if (now - last.at >= TELL_AGAIN)
-        this.transport.send(key, { kind: "usage", at: now, digest }, false);
+        this.send(key, { kind: "usage", at: now, digest }, false);
       else
         continue;
       this.told.set(key, { digest, at: now });
@@ -27566,7 +28640,7 @@ class UsagePeers {
     const now = this.now();
     const { accounts, digest } = this.shared();
     for (const { key } of this.directory.peerBoxes()) {
-      this.transport.send(key, { kind: "usage", at: now, accounts, digest, ...this.told.has(key) ? {} : { ask: true } }, false);
+      this.send(key, { kind: "usage", at: now, accounts, digest, ...this.told.has(key) ? {} : { ask: true } }, false);
       this.told.set(key, { digest, at: now });
     }
   }
@@ -27579,7 +28653,7 @@ class UsagePeers {
     this.refreshedElsewhere = now;
     const digest = this.lastDigest ?? this.shared().digest;
     for (const { key } of this.directory.peerBoxes())
-      this.transport.send(key, { kind: "usage", at: now, digest, refresh: true }, false);
+      this.send(key, { kind: "usage", at: now, digest, refresh: true }, false);
   }
   take(from, mail) {
     if (!isUsageMail(mail))
@@ -27589,8 +28663,9 @@ class UsagePeers {
     const now = this.now();
     const before = this.peers.get(from);
     const name = this.directory.peerBoxes().find((box) => box.key === from)?.name ?? before?.name ?? "another computer";
-    const digest = text4(mail.digest, 64);
+    const digest = text5(mail.digest, 64);
     const wasAway = !!before && now - before.heard > PEER_AWAY;
+    const skew = typeof mail.at === "number" && Number.isFinite(mail.at) && Math.abs(now - mail.at) >= SKEW ? now - mail.at : 0;
     let whole = !!before && !!digest && before.digest === digest;
     if (Array.isArray(mail.accounts)) {
       const off = typeof mail.at === "number" && Number.isFinite(mail.at) && Math.abs(now - mail.at) >= SKEW ? now - mail.at : 0;
@@ -27612,10 +28687,22 @@ class UsagePeers {
       if (wasAway)
         this.usage.peersChanged();
     }
+    const fresh = mail.fresh && typeof mail.fresh === "object" ? mail.fresh : undefined;
+    const kept = this.peers.get(from);
+    if (fresh && kept) {
+      for (const account of kept.accounts) {
+        const at = fresh[account.provider];
+        if (!account.accountWide || typeof at !== "number" || !Number.isFinite(at))
+          continue;
+        const moved = Math.min(at + skew, now);
+        if (moved > (account.scanned ?? 0))
+          account.scanned = moved;
+      }
+    }
     if (!whole && digest && mail.ask !== true && now - (this.askedBack.get(from) ?? -Infinity) >= MINUTE3) {
       this.askedBack.set(from, now);
       const mine = this.shared();
-      this.transport.send(from, { kind: "usage", at: now, ...mine, ask: true }, false);
+      this.send(from, { kind: "usage", at: now, ...mine, ask: true }, false);
       this.told.set(from, { digest: mine.digest, at: now });
     }
     if (mail.ask === true || wasAway)
@@ -27639,12 +28726,12 @@ class UsagePeers {
       return;
     this.answered.set(key, now);
     const mine = this.shared();
-    this.transport.send(key, { kind: "usage", at: now, ...mine }, false);
+    this.send(key, { kind: "usage", at: now, ...mine }, false);
     this.told.set(key, { digest: mine.digest, at: now });
   }
   lastDigest;
   shared() {
-    const start = Math.floor(Math.floor((this.now() - KEPT_DAYS * DAY3) / DAY3) * DAY3) / SLOT;
+    const start = Math.floor(Math.floor((this.now() - KEPT_DAYS * DAY4) / DAY4) * DAY4) / SLOT;
     const accounts = this.usage.own().slice(0, MOST_ACCOUNTS).flatMap((own) => {
       const taken = takenAccount(toldOf2(own), 0, Infinity);
       return taken ? [{ ...toldOf2(taken), slots: fromSlot(keptSlots(taken.slots), start), whole: start }] : [];
@@ -27701,11 +28788,11 @@ class UsagePeers {
     if (!this.file)
       return;
     try {
-      const saved = JSON.parse(readFileSync31(this.file, "utf8"));
+      const saved = JSON.parse(readFileSync33(this.file, "utf8"));
       for (const [key, kept] of Object.entries(saved.peers ?? {})) {
         if (!kept || typeof kept.heard !== "number" || !Array.isArray(kept.accounts))
           continue;
-        const digest = text4(kept.digest, 64);
+        const digest = text5(kept.digest, 64);
         this.peers.set(key, { name: typeof kept.name === "string" ? kept.name : "another computer", heard: kept.heard, ...digest ? { digest } : {}, ...kept.vouched === true ? { vouched: true } : {}, accounts: kept.accounts.flatMap((account) => takenAccount(account, 0, Infinity) ?? []) });
       }
     } catch {}
@@ -27714,16 +28801,16 @@ class UsagePeers {
     if (!this.file)
       return;
     try {
-      mkdirSync22(dirname19(this.file), { recursive: true });
+      mkdirSync23(dirname19(this.file), { recursive: true });
       const peers = Object.fromEntries([...this.peers].map(([key, kept]) => [key, { ...kept, accounts: kept.accounts.map(({ slots, ...account }) => ({ ...account, slots: keptSlots(slots) })) }]));
-      writeFileSync23(this.file + ".new", JSON.stringify({ peers }), { mode: 384 });
-      renameSync18(this.file + ".new", this.file);
+      writeFileSync24(this.file + ".new", JSON.stringify({ peers }), { mode: 384 });
+      renameSync19(this.file + ".new", this.file);
     } catch {}
   }
 }
 function digestOf2(accounts) {
   const canonical = accounts.map((account) => [account.provider, account.service, account.agent ?? null, account.account ?? null, account.label ?? null, account.identity ?? null, account.cut === true, account.places ?? [], account.slots.models, account.slots.used, account.slots.unknown ?? []]);
-  return createHash14("sha256").update(JSON.stringify(canonical)).digest("hex").slice(0, 32);
+  return createHash15("sha256").update(JSON.stringify(canonical)).digest("hex").slice(0, 32);
 }
 var toldOf2 = ({ slots, ...account }) => ({ ...account, slots: keptSlots(slots) });
 function fromSlot(slots, first) {
@@ -27762,22 +28849,23 @@ function takenAccount(given, off, now) {
   if (!given || typeof given !== "object")
     return null;
   const account = given;
-  const provider = text4(account.provider);
+  const provider = text5(account.provider);
   if (!provider || typeof account.service !== "string" || !SERVICE.test(account.service))
     return null;
   const scanned = typeof account.scanned === "number" && Number.isFinite(account.scanned) && account.scanned > 0 ? Math.min(account.scanned + off, now) : undefined;
   return {
     provider,
     service: account.service,
-    ...kinds.includes(account.agent) ? { agent: account.agent, ...text4(account.account) ? { account: text4(account.account) } : {} } : {},
-    ...text4(account.label, 100) ? { label: text4(account.label, 100) } : {},
+    ...kinds.includes(account.agent) ? { agent: account.agent, ...text5(account.account) ? { account: text5(account.account) } : {} } : {},
+    ...text5(account.label, 100) ? { label: text5(account.label, 100) } : {},
     ...typeof account.identity === "string" && /^[0-9a-f]{16}$/.test(account.identity) ? { identity: account.identity } : {},
     ...scanned ? { scanned } : {},
     slots: slotsFrom(account.slots, MOST_USES),
     ...account.cut === true ? { cut: true } : {},
     ...Number.isSafeInteger(account.whole) && account.whole > 0 ? { whole: account.whole } : {},
     ...Array.isArray(account.places) && account.places.length ? { places: account.places.filter((place) => typeof place === "string" && /^[0-9a-f]{16}$/.test(place)).slice(0, 20) } : {},
-    ...account.estimated === false ? { estimated: false } : {}
+    ...account.estimated === false ? { estimated: false } : {},
+    ...account.accountWide === true ? { accountWide: true } : {}
   };
 }
 
@@ -29363,7 +30451,7 @@ class GroupRunner {
       text: ampersands(result.text, this.everyone().map((each) => each.name)),
       time: stamp3(),
       kind: wrapUp ? "wrapUp" : "message",
-      ...result.steps.length ? { steps: result.steps.map(trimmed3) } : {}
+      ...result.steps.length ? { steps: result.steps.map(trimmed4) } : {}
     }, id);
     return "said";
   }
@@ -30566,8 +31654,8 @@ class PeerPost {
     this.clock = clock;
     let kept = [];
     try {
-      if (file && existsSync18(file))
-        kept = JSON.parse(readFileSync32(file, "utf8"));
+      if (file && existsSync19(file))
+        kept = JSON.parse(readFileSync34(file, "utf8"));
     } catch {}
     this.kept = Array.isArray(kept) ? kept.filter((line) => line && typeof line.id === "string" && typeof line.to === "string" && isSeatMail(line.mail)) : [];
   }
@@ -30592,8 +31680,8 @@ class PeerPost {
     if (!this.file)
       return;
     try {
-      writeFileSync24(this.file + ".new", JSON.stringify(this.kept), { mode: 384 });
-      renameSync19(this.file + ".new", this.file);
+      writeFileSync25(this.file + ".new", JSON.stringify(this.kept), { mode: 384 });
+      renameSync20(this.file + ".new", this.file);
     } catch {}
   }
   follow(signal) {
@@ -31682,8 +32770,8 @@ function updateUnderWay(run) {
 import { spawn as spawn6 } from "child_process";
 
 // Packages/Box/src/agents/store.ts
-import { mkdirSync as mkdirSync23, readdirSync as readdirSync19, readFileSync as readFileSync33, renameSync as renameSync20, rmSync as rmSync16, statSync as statSync16, writeFileSync as writeFileSync25 } from "fs";
-import { join as join37 } from "path";
+import { mkdirSync as mkdirSync24, readdirSync as readdirSync19, readFileSync as readFileSync35, renameSync as renameSync21, rmSync as rmSync16, statSync as statSync16, writeFileSync as writeFileSync26 } from "fs";
+import { join as join39 } from "path";
 
 class Store {
   root;
@@ -31691,18 +32779,18 @@ class Store {
   pending = new Map;
   constructor(root) {
     this.root = root;
-    mkdirSync23(root, { recursive: true });
+    mkdirSync24(root, { recursive: true });
     for (const id of readdirSync19(root)) {
       try {
-        const folder = join37(root, id);
-        const session = JSON.parse(readFileSync33(join37(folder, "session.json"), "utf8"));
+        const folder = join39(root, id);
+        const session = JSON.parse(readFileSync35(join39(folder, "session.json"), "utf8"));
         let messages = [];
         try {
-          messages = JSON.parse(readFileSync33(join37(folder, "messages.json"), "utf8"));
+          messages = JSON.parse(readFileSync35(join39(folder, "messages.json"), "utf8"));
         } catch {}
         let agent = {};
         try {
-          agent = JSON.parse(readFileSync33(join37(folder, "agent.json"), "utf8"));
+          agent = JSON.parse(readFileSync35(join39(folder, "agent.json"), "utf8"));
         } catch {}
         this.records.set(session.id, { session, messages, agent });
       } catch {}
@@ -31715,7 +32803,7 @@ class Store {
     return this.records.get(id);
   }
   fileOf(id, name) {
-    return join37(this.root, id, name);
+    return join39(this.root, id, name);
   }
   addWhole(record) {
     this.records.set(record.session.id, record);
@@ -31723,7 +32811,7 @@ class Store {
   }
   writtenAt(id) {
     try {
-      return statSync16(join37(this.root, id, "messages.json")).mtimeMs;
+      return statSync16(join39(this.root, id, "messages.json")).mtimeMs;
     } catch {
       return;
     }
@@ -31736,7 +32824,7 @@ class Store {
     this.records.delete(id);
     clearTimeout(this.pending.get(id));
     this.pending.delete(id);
-    rmSync16(join37(this.root, id), { recursive: true, force: true });
+    rmSync16(join39(this.root, id), { recursive: true, force: true });
   }
   save(id, now = false) {
     clearTimeout(this.pending.get(id));
@@ -31759,16 +32847,16 @@ class Store {
     if (!record)
       return;
     try {
-      const folder = join37(this.root, id);
-      mkdirSync23(folder, { recursive: true });
+      const folder = join39(this.root, id);
+      mkdirSync24(folder, { recursive: true });
       for (const [name, value] of [
         ["session.json", record.session],
         ["messages.json", record.messages],
         ["agent.json", record.agent]
       ]) {
-        const file = join37(folder, name);
-        writeFileSync25(file + ".new", JSON.stringify(value));
-        renameSync20(file + ".new", file);
+        const file = join39(folder, name);
+        writeFileSync26(file + ".new", JSON.stringify(value));
+        renameSync21(file + ".new", file);
       }
     } catch (error) {
       console.error(`session ${id} not written:`, error);
@@ -31948,7 +33036,7 @@ class HangWatch {
 var isEngine = (command) => /\bserve\b/.test(command) && !command.includes("kuvo-link");
 
 // Packages/Box/src/agents/limits-peers.ts
-import { mkdirSync as mkdirSync24, readFileSync as readFileSync34, renameSync as renameSync21, writeFileSync as writeFileSync26 } from "fs";
+import { mkdirSync as mkdirSync25, readFileSync as readFileSync36, renameSync as renameSync22, writeFileSync as writeFileSync27 } from "fs";
 import { dirname as dirname21 } from "path";
 var MINUTE4 = 60000;
 var TELL_AGAIN2 = 10 * MINUTE4;
@@ -32109,7 +33197,7 @@ class LimitsPeers {
     if (!this.file)
       return;
     try {
-      const saved = JSON.parse(readFileSync34(this.file, "utf8"));
+      const saved = JSON.parse(readFileSync36(this.file, "utf8"));
       for (const [key, kept] of Object.entries(saved.peers ?? {})) {
         if (!kept || typeof kept.heard !== "number" || !Array.isArray(kept.accounts))
           continue;
@@ -32121,19 +33209,32 @@ class LimitsPeers {
     if (!this.file)
       return;
     try {
-      mkdirSync24(dirname21(this.file), { recursive: true });
-      writeFileSync26(this.file + ".new", JSON.stringify({ peers: Object.fromEntries(this.peers) }), { mode: 384 });
-      renameSync21(this.file + ".new", this.file);
+      mkdirSync25(dirname21(this.file), { recursive: true });
+      writeFileSync27(this.file + ".new", JSON.stringify({ peers: Object.fromEntries(this.peers) }), { mode: 384 });
+      renameSync22(this.file + ".new", this.file);
     } catch {}
   }
 }
-var text5 = (value, most = 200) => typeof value === "string" && value ? value.slice(0, most) : undefined;
+var text6 = (value, most = 200) => typeof value === "string" && value ? value.slice(0, most) : undefined;
 var time = (value) => typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+var MOST_EXTRA = 1000;
+function takenExtra(extra) {
+  if (!extra || typeof extra !== "object" || Array.isArray(extra) || !text6(extra.id) || !text6(extra.name, 100) || !text6(extra.kind, 40))
+    return [];
+  if (extra.kind === "spent") {
+    if (typeof extra.amount !== "number" || !Number.isFinite(extra.amount) || !["usd", "credits", "requests"].includes(extra.unit))
+      return [];
+    return [{ id: text6(extra.id), name: text6(extra.name, 100), kind: "spent", amount: extra.amount, unit: extra.unit, ...time(extra.resetsAt) ? { resetsAt: extra.resetsAt } : {} }];
+  }
+  const plain = Object.fromEntries(Object.entries(extra).slice(0, 20).filter(([, value]) => typeof value === "string" && value.length <= 200 || typeof value === "number" && Number.isFinite(value) || typeof value === "boolean"));
+  const taken = { ...plain, id: text6(extra.id), name: text6(extra.name, 100), kind: text6(extra.kind, 40) };
+  return Buffer.byteLength(JSON.stringify(taken)) > MOST_EXTRA ? [] : [taken];
+}
 function takenAccount2(given, off, now) {
   if (!given || typeof given !== "object")
     return null;
   const account = given;
-  const provider = text5(account.provider);
+  const provider = text6(account.provider);
   if (!provider || typeof account.service !== "string" || !SERVICE2.test(account.service))
     return null;
   const moved = (value) => {
@@ -32142,17 +33243,17 @@ function takenAccount2(given, off, now) {
   };
   const windows = (Array.isArray(account.windows) ? account.windows : []).slice(0, 30).flatMap((window) => {
     const read = moved(window?.read);
-    if (!window || typeof window !== "object" || !text5(window.id) || typeof window.used !== "number" || !Number.isFinite(window.used) || read === undefined)
+    if (!window || typeof window !== "object" || !text6(window.id) || typeof window.used !== "number" || !Number.isFinite(window.used) || read === undefined)
       return [];
     const amount = window.amount;
     return [
       {
-        id: text5(window.id),
+        id: text6(window.id),
         used: Math.min(Math.max(window.used, 0), 1),
         ...time(window.resetsAt) ? { resetsAt: window.resetsAt } : {},
         ...time(window.minutes) ? { minutes: window.minutes } : {},
-        ...text5(window.model) ? { model: text5(window.model) } : {},
-        ...text5(window.name) ? { name: text5(window.name) } : {},
+        ...text6(window.model) ? { model: text6(window.model) } : {},
+        ...text6(window.name) ? { name: text6(window.name) } : {},
         ...amount && typeof amount === "object" && typeof amount.used === "number" && typeof amount.limit === "number" && ["requests", "usd", "credits"].includes(amount.unit) ? { amount: { used: amount.used, limit: amount.limit, unit: amount.unit } } : {},
         read,
         source: window.source === "turn" ? "turn" : "usage"
@@ -32160,21 +33261,23 @@ function takenAccount2(given, off, now) {
     ];
   });
   const balance = account.balance;
+  const extras = (Array.isArray(account.extras) ? account.extras : []).slice(0, 10).flatMap((extra) => takenExtra(extra));
   const problem = account.problem;
   const checked = moved(account.checked);
   const next = time(account.next) === undefined ? undefined : account.next + off;
   return {
     provider,
     service: account.service,
-    ...kinds.includes(account.agent) ? { agent: account.agent, ...text5(account.account) ? { account: text5(account.account) } : {} } : {},
-    ...text5(account.label, 100) ? { label: text5(account.label, 100) } : {},
+    ...kinds.includes(account.agent) ? { agent: account.agent, ...text6(account.account) ? { account: text6(account.account) } : {} } : {},
+    ...text6(account.label, 100) ? { label: text6(account.label, 100) } : {},
     ...typeof account.identity === "string" && /^[0-9a-f]{16}$/.test(account.identity) ? { identity: account.identity } : {},
-    ...text5(account.plan, 100) ? { plan: text5(account.plan, 100) } : {},
+    ...text6(account.plan, 100) ? { plan: text6(account.plan, 100) } : {},
     windows,
     ...balance && typeof balance === "object" && typeof balance.left === "number" && (balance.unit === "usd" || balance.unit === "credits") ? { balance: { left: balance.left, ...typeof balance.limit === "number" ? { limit: balance.limit } : {}, unit: balance.unit } } : {},
+    ...extras.length ? { extras } : {},
     ...checked ? { checked } : {},
     ...next ? { next } : {},
-    ...problem && typeof problem === "object" && PROBLEMS.has(problem.kind) && text5(problem.message, 500) ? { problem: { kind: problem.kind, message: text5(problem.message, 500), ...time(problem.until) ? { until: problem.until + off } : {} } } : {}
+    ...problem && typeof problem === "object" && PROBLEMS.has(problem.kind) && text6(problem.message, 500) ? { problem: { kind: problem.kind, message: text6(problem.message, 500), ...time(problem.until) ? { until: problem.until + off } : {} } } : {}
   };
 }
 
@@ -32200,9 +33303,9 @@ if (onMachine) {
   takeOwnFolders();
   if (home3)
     dropCarriedSignIns(home3);
-  process.env.KUVO_BIN = join38(machineHome, "bin");
-  process.env.KUVO_BOTS ??= join38(machineHome, "bots");
-  process.env.KUVO_WAKES ??= join38(machineHome, "wakes");
+  process.env.KUVO_BIN = join40(machineHome, "bin");
+  process.env.KUVO_BOTS ??= join40(machineHome, "bots");
+  process.env.KUVO_WAKES ??= join40(machineHome, "wakes");
   for (const name of ["OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG", "OPENCODE_CLIENT", "KUVO_AGENTS_PASSWORD", "KUVO_AGENTS_PORT", "KUVO_ENGINE_PORT", "KUVO_ENGINE_PID"])
     delete process.env[name];
 }
@@ -32211,14 +33314,14 @@ var renewSettle = process.env.KUVO_TEST_RENEW_SETTLE ? Number(process.env.KUVO_T
 var renewUptime = process.env.KUVO_TEST_RENEW_UPTIME ? Number(process.env.KUVO_TEST_RENEW_UPTIME) : undefined;
 for (const name of ["KUVO_TEST_RENEW_HOLD", "KUVO_TEST_RENEW_SETTLE", "KUVO_TEST_RENEW_UPTIME"])
   delete process.env[name];
-var temporary = process.env.TMPDIR?.replace(/\/$/, "") || join38(home3, "tmp");
-mkdirSync25(temporary, { recursive: true });
-rmSync17(join38(temporary, "antigravity"), { recursive: true, force: true });
+var temporary = process.env.TMPDIR?.replace(/\/$/, "") || join40(home3, "tmp");
+mkdirSync26(temporary, { recursive: true });
+rmSync17(join40(temporary, "antigravity"), { recursive: true, force: true });
 leftSignIns(temporary);
 try {
-  for (const name of readdirSync20(join38(home3, "antigravity")))
+  for (const name of readdirSync20(join40(home3, "antigravity")))
     if (name.startsWith(".install-"))
-      rmSync17(join38(home3, "antigravity", name), { recursive: true, force: true });
+      rmSync17(join40(home3, "antigravity", name), { recursive: true, force: true });
 } catch {}
 delete process.env.BUN_BE_BUN;
 process.env.KUVO_WAKE_VIA = "bridge";
@@ -32228,15 +33331,15 @@ process.on("uncaughtException", (error) => {
   console.error("uncaught:", error);
   process.exit(1);
 });
-var deps = new Deps(join38(home3, "runtime"), join38(home3, "cache"));
+var deps = new Deps(join40(home3, "runtime"), join40(home3, "cache"));
 if (onMachine) {
-  dropOwnPrograms(join38(home3, "runtime"));
+  dropOwnPrograms(join40(home3, "runtime"));
   useSavedLoginPath();
 }
-rmSync17(join38(home3, "cache", "install"), { recursive: true, force: true });
+rmSync17(join40(home3, "cache", "install"), { recursive: true, force: true });
 var context = { home: home3, temporary, deps };
 var roster = new Roster(new Accounts(home3), context);
-var store = new Store(join38(home3, "sessions"));
+var store = new Store(join40(home3, "sessions"));
 var auto = new Auto(home3);
 var link4 = new EngineLink;
 if (machineEngine)
@@ -32253,7 +33356,7 @@ function engineAgent(providerID) {
     engineAgents.set(providerID, agent = new EngineAgent(link4, providerID));
   return agent;
 }
-var sessions = new Sessions(store, roster, auto, engineAgent, (directory) => link4.policies(directory), (name, directory) => link4.agent(name, directory), new Snapshots(join38(home3, "snapshots")), (directory) => link4.titleModel(directory));
+var sessions = new Sessions(store, roster, auto, engineAgent, (directory) => link4.policies(directory), (name, directory) => link4.agent(name, directory), new Snapshots(join40(home3, "snapshots")), (directory) => link4.titleModel(directory));
 var restarting = false;
 var noteInside = () => {
   if (restarting)
@@ -32269,15 +33372,15 @@ setInterval(noteInside, 5000).unref?.();
 var self;
 var partGiven;
 var groups;
-var groupFolders = onMachine ? { root: join38(machineHome, "groups"), bots: process.env.KUVO_BOTS ?? join38(machineHome, "bots"), trash: join38(machineHome, "trash") } : process.env.KUVO_GROUPS && process.env.KUVO_BOTS && process.env.KUVO_TRASH ? { root: process.env.KUVO_GROUPS, bots: process.env.KUVO_BOTS, trash: process.env.KUVO_TRASH } : undefined;
+var groupFolders = onMachine ? { root: join40(machineHome, "groups"), bots: process.env.KUVO_BOTS ?? join40(machineHome, "bots"), trash: join40(machineHome, "trash") } : process.env.KUVO_GROUPS && process.env.KUVO_BOTS && process.env.KUVO_TRASH ? { root: process.env.KUVO_GROUPS, bots: process.env.KUVO_BOTS, trash: process.env.KUVO_TRASH } : undefined;
 var groupMemoryKey = process.env.KUVO_GROUPS_MEMORY_KEY || undefined;
-var post = new PeerPost(groupFolders ? join38(groupFolders.root, "peer-outbox.json") : undefined);
+var post = new PeerPost(groupFolders ? join40(groupFolders.root, "peer-outbox.json") : undefined);
 var directory = new LinkDirectory(post);
 var peers = { post, directory };
-var artifactsFolder = onMachine ? join38(machineHome, "artifacts") : process.env.KUVO_ARTIFACTS || undefined;
-var botsFolder = groupFolders?.bots ?? (onMachine ? join38(machineHome, "bots") : process.env.KUVO_BOTS || undefined);
-var agentsFile = onMachine ? join38(machineHome, "run", "agents.json") : process.env.KUVO_AGENTS_FILE || undefined;
-var runFolder = onMachine ? join38(machineHome, "run") : process.env.KUVO_RUN || undefined;
+var artifactsFolder = onMachine ? join40(machineHome, "artifacts") : process.env.KUVO_ARTIFACTS || undefined;
+var botsFolder = groupFolders?.bots ?? (onMachine ? join40(machineHome, "bots") : process.env.KUVO_BOTS || undefined);
+var agentsFile = onMachine ? join40(machineHome, "run", "agents.json") : process.env.KUVO_AGENTS_FILE || undefined;
+var runFolder = onMachine ? join40(machineHome, "run") : process.env.KUVO_RUN || undefined;
 notesBeside(runFolder);
 for (const name of ["KUVO_GROUPS", "KUVO_TRASH", "KUVO_GROUPS_MEMORY_KEY", "KUVO_AGENTS_FILE", "KUVO_ARTIFACTS", "KUVO_RUN", ...onMachine ? [] : ["KUVO_BOTS"]])
   delete process.env[name];
@@ -32329,32 +33432,34 @@ var places5 = {
     }
   }
 };
-var goals = new Goals(join38(home3, "goals.json"), places5);
+var goals = new Goals(join40(home3, "goals.json"), places5);
 setInterval(() => goals.resumeDue(), 60000).unref?.();
-var sideQuestions = new SideQuestions(join38(home3, "side-questions.json"), places5);
+var sideQuestions = new SideQuestions(join40(home3, "side-questions.json"), places5);
 var handoffs = new Handoffs(places5);
-var reviews = new Reviews(join38(home3, "reviews.json"), places5);
+var reviews = new Reviews(join40(home3, "reviews.json"), places5);
 var voice = new VoiceWords(places5);
 var engineAccounts = new EngineAccounts(() => link4.request("GET", "/api/credential"));
-var limits = new Limits(() => [...agentAccounts(roster.all()), ...engineAccounts.accounts()], join38(home3, "limits.json"), Date.now, () => engineAccounts.refresh(), () => engineAccounts.answered);
+var limits = new Limits(() => [...agentAccounts(roster.all()), ...engineAccounts.accounts()], join40(home3, "limits.json"), Date.now, () => engineAccounts.refresh(), () => engineAccounts.answered);
 limits.alsoServices = ENGINE_SERVICES;
-peers.limits = new LimitsPeers(limits, post, directory, join38(home3, "limits-peers.json"));
+peers.limits = new LimitsPeers(limits, post, directory, join40(home3, "limits-peers.json"));
 var noPriceFeeds = process.env.KUVO_TEST_PRICE_FEEDS === "off" || !isRealBridgeFolder(home3);
 delete process.env.KUVO_TEST_PRICE_FEEDS;
-var usageFolder = join38(home3, "usage");
-var usageSettings = new UsageSettings(join38(usageFolder, "settings.json"));
+var usageFolder = join40(home3, "usage");
+var usageSettings = new UsageSettings(join40(usageFolder, "settings.json"));
 var claudeUsage2 = claudeSources(usageFolder);
 var codexUsage = codexSources(usageFolder, () => usageSettings.codexFallback);
-var engineData = process.env.KUVO_ENGINE_DB_FOLDER || (onMachine && machineHome ? process.env.KUVO_ENGINE_DATA || join38(machineHome, "data", "opencode") : undefined);
+var engineData = process.env.KUVO_ENGINE_DB_FOLDER || (onMachine && machineHome ? process.env.KUVO_ENGINE_DATA || join40(machineHome, "data", "opencode") : undefined);
 var engineCodexUsage = engineCodexSource(engineData, () => engineAccounts.answered ? engineAccounts.accounts().some((account) => account.provider === "openai") : undefined, () => usage.has("openai"));
 var grokUsage = grokSources(usageFolder);
 var engineHostedUsage = engineHostedSources(engineData);
-var usage = new Usage(() => [...claudeUsage2(roster.all()), ...codexUsage(roster.all()), ...grokUsage(roster.all()), ...engineCodexUsage(), ...engineHostedUsage()], new PricingStore(join38(usageFolder, "pricing"), noPriceFeeds ? null : undefined), (provider) => limits.identity(provider), join38(usageFolder, "usage.json"));
+cursorEndpoints.live = !noPriceFeeds;
+var cursorUsage = cursorSources(usageFolder, (provider, identity) => limits.held(provider) || identity !== undefined && !!usage.peers?.readsWhole("cursor", identity));
+var usage = new Usage(() => [...claudeUsage2(roster.all()), ...codexUsage(roster.all()), ...grokUsage(roster.all()), ...engineCodexUsage(), ...engineHostedUsage(), ...cursorUsage(roster.all())], new PricingStore(join40(usageFolder, "pricing"), noPriceFeeds ? null : undefined), (provider) => limits.identity(provider), join40(usageFolder, "usage.json"));
 usage.settings = usageSettings;
 engineAccounts.onAnswered = () => void usage.tick();
 if (!engineData)
   usage.services = USAGE_SERVICES.filter((service) => service !== "opencode");
-peers.usage = new UsagePeers(usage, post, directory, join38(usageFolder, "peers.json"));
+peers.usage = new UsagePeers(usage, post, directory, join40(usageFolder, "peers.json"));
 var artifacts;
 var noted2;
 if (artifactsFolder) {
@@ -32441,7 +33546,7 @@ link4.whenReady().then(() => {
     console.error("group chats:", error);
   }
 });
-var record2 = onMachine ? join38(machineHome, "run", "bridge.json") : undefined;
+var record2 = onMachine ? join40(machineHome, "run", "bridge.json") : undefined;
 var writeRecord = (renewal, first = false) => {
   if (!record2)
     return;
@@ -32469,7 +33574,7 @@ renewal = onMachine && build ? new Renewal({
     stop();
   },
   told: (state) => writeRecord(state),
-  paused: () => updateUnderWay(join38(machineHome, "run")),
+  paused: () => updateUnderWay(join40(machineHome, "run")),
   ready: () => {
     const kept = keeperEngine(machineHome);
     return !kept || kept === basename13(dirname22(process.execPath));
@@ -32480,7 +33585,7 @@ renewal = onMachine && build ? new Renewal({
       return launchSaid.lets;
     const lets = launchLets(commandLineOf(process.ppid), () => {
       try {
-        return readFileSync35(join38(machineHome, "run", "agents.log"), "utf8");
+        return readFileSync37(join40(machineHome, "run", "agents.log"), "utf8");
       } catch {
         return;
       }
@@ -32516,7 +33621,7 @@ if (renewing)
     renewing.look();
   });
 if (runFolder)
-  new HangWatch({ name: "engine", run: runFolder, record: join38(runFolder, "engine.json"), isIt: isEngine }).start();
+  new HangWatch({ name: "engine", run: runFolder, record: join40(runFolder, "engine.json"), isIt: isEngine }).start();
 var stopping = false;
 function stop() {
   if (stopping)
@@ -32527,7 +33632,7 @@ function stop() {
   reviews.stopAll();
   cancelSignIns();
   try {
-    if (record2 && JSON.parse(readFileSync35(record2, "utf8")).pid === process.pid)
+    if (record2 && JSON.parse(readFileSync37(record2, "utf8")).pid === process.pid)
       rmSync17(record2, { force: true });
   } catch {}
   sessions.closeAll();
@@ -32550,4 +33655,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 8c14a51957389b6d1a320c689f94cdb5345c7505adc91d86aea676983054c0b0
+// Built from Packages/Box/src/agents 2f640facb05254e417ba456fe9e50d3dfa085c8dec627fcbdd0dd5f0fa76fa8d

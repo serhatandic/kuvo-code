@@ -17,7 +17,13 @@ extension UsageMenuBar {
         let providers = HostLimits.shared.phoneGroups(container.layout.displayGroups).compactMap { group, covers -> PhoneUsage.Provider? in
             let provider = group.provider
             guard let snapshot = store.snapshots[provider.id] else { return nil }
-            let lines = covers == nil ? snapshot.lines : snapshot.lines.filter { if case .progress = $0 { false } else { true } }
+            // (Not the meters, nor what the card has from the rows, Cursor's credits and on-demand spend:
+            // the phone draws each row's own, under its account.)
+            let fromRows = covers.map(HostLimits.shared.rowLines(for:)) ?? []
+            let lines = covers == nil ? snapshot.lines : snapshot.lines.filter { line in
+                if case .progress = line { return false }
+                return !fromRows.contains(line.label)
+            }
             return PhoneUsage.Provider(
                 id: provider.id,
                 name: snapshot.displayName,

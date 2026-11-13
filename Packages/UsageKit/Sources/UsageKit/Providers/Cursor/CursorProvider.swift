@@ -65,11 +65,24 @@ final class CursorProvider: ProviderRuntime {
     }
 
     func hasLocalCredentials() async -> Bool {
-        // Same source as `refresh()`: any auth state (state DB or keychain) counts.
-        await loadOffMainActor { [authStore] in authStore.loadAuthState() } != nil
+        // The host's boxes state Cursor's (fork addition): an account of it there counts.
+        if Self.hosted {
+            return HostLimits.shared.rows.contains { ProviderAccountID.family(of: $0.providerID) == "cursor" }
+                || !(HostHistory.shared.days["cursor"] ?? []).isEmpty
+        }
+        // COMPAT(0.7 cursor-box): the host's Cursor key, for a box from before.
+        return await loadOffMainActor { [authStore] in authStore.loadAuthState() } != nil
     }
 
+    /// The host's boxes read Cursor's plan and history themselves with Kuvo Code's own Cursor
+    /// sign-in, on every computer of yours (`HostLimits`, `HostHistory`, fork addition): this card
+    /// reads nothing of Cursor then.
+    static var hosted: Bool { HostLimits.shared.covers("cursor") }
+
     func refresh() async -> ProviderSnapshot {
+        if Self.hosted { return hostedSnapshot() }
+        // COMPAT(0.7 cursor-box): a box that doesn't state Cursor's yet: read with the host's key
+        // here, as before. Goes 3 months after 0.8.0 (#631 piece H1).
         guard let state = await loadOffMainActor({ [authStore] in authStore.loadAuthState() }) else {
             return ProviderSnapshot.error(provider: provider, error: CursorAuthError.notLoggedIn)
         }
@@ -244,6 +257,24 @@ final class CursorProvider: ProviderRuntime {
         lines.append(line)
     }
 
+    /// The card while the host states Cursor's (fork addition): its limits come in as it's drawn
+    /// (`HostLimits.applied`), its spend from the host's days, every account across your computers
+    /// (until the host answers, none: what it showed stays).
+    private func hostedSnapshot() -> ProviderSnapshot {
+        var lines: [MetricLine] = []
+        var usageHistory: ProviderUsageHistory?
+        if case .some(.some(let days)) = HostHistory.shared.days(for: provider.id) {
+            var note = CursorUsageMapper.historyNote
+            if let asOf = HostHistory.shared.asOfNote(for: provider.id) { note += ", \(asOf)" }
+            let entries = days.flatMap { day in
+                day.models.map { CursorSpendEntry(day: day.date, model: $0.name, family: $0.family ?? $0.name, tokens: $0.tokens, cost: $0.cost) }
+            }
+            let unknown = Dictionary(days.filter { !$0.unknown.isEmpty }.map { ($0.date, Set($0.unknown)) }, uniquingKeysWith: { $0.union($1) })
+            usageHistory = CursorUsageMapper.appendSpendLines(entries: entries, unknown: unknown, now: now(), note: note, to: &lines)
+        }
+        return snapshot(CursorMappedUsage(plan: nil, lines: lines), usageHistory: usageHistory)
+    }
+
     /// Spend history is best-effort and never affects the live Cursor usage mapping.
     private func appendSpendLines(to lines: inout [MetricLine], accessToken: String) async -> ProviderUsageHistory? {
         guard let session = CursorUsageClient.session(from: accessToken) else {
@@ -302,51 +333,14 @@ final class CursorProvider: ProviderRuntime {
 
     private func refreshAccessToken(authState: CursorAuthState) async throws -> String? {
         // A coding agent's sign-in: its API key exchanged for an access token, kept for this read.
-        if let apiKey = authState.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty {
-            // Cursor not answering, or answering otherwise, isn't the sign-in ending.
-            let response: HTTPResponse
-            do { response = try await usageClient.exchangeAPIKey(apiKey) } catch { throw CursorUsageError.connectionFailed }
-            if response.statusCode == 400 || response.statusCode == 401 { throw CursorAuthError.agentSignInEnded }
-            guard (200..<300).contains(response.statusCode) else { throw CursorUsageError.requestFailed(response.statusCode) }
-            guard let token = (ProviderParse.jsonObject(response.body)?["accessToken"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty else { throw CursorUsageError.invalidResponse }
-            return token
-        }
-        guard let refreshToken = authState.refreshToken?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty else {
-            return nil
-        }
-
-        let response = try await usageClient.refreshToken(refreshToken)
-        if response.statusCode == 400 || response.statusCode == 401 {
-            let body = ProviderParse.jsonObject(response.body)
-            if body?["shouldLogout"] as? Bool == true {
-                throw CursorAuthError.sessionExpired
-            }
-            throw CursorAuthError.tokenExpired
-        }
-        guard (200..<300).contains(response.statusCode),
-              let body = ProviderParse.jsonObject(response.body)
-        else {
-            return nil
-        }
-        if body["shouldLogout"] as? Bool == true {
-            throw CursorAuthError.sessionExpired
-        }
-        guard let accessToken = (body["access_token"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty else {
-            return nil
-        }
-        // Fail loudly, but do NOT interpolate the error: the Cursor token is persisted via a SQL
-        // statement that embeds the token, and a sqlite3 failure surfaces as stderr that could echo a
-        // fragment of that statement (JWTs aren't covered by log redaction). A generic error line keeps
-        // it loud without risking a token leak. The refreshed token still works for this session.
-        do {
-            let source = authState.source
-            try await loadOffMainActor { [authStore, accessToken, source] in
-                try authStore.saveAccessToken(accessToken, source: source)
-            }
-        } catch {
-            AppLog.error(LogTag.auth("cursor"), "failed to persist rotated access token to the Cursor state DB; using it for this session only")
-        }
-        return accessToken
+        guard let apiKey = authState.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty else { return nil }
+        // Cursor not answering, or answering otherwise, isn't the sign-in ending.
+        let response: HTTPResponse
+        do { response = try await usageClient.exchangeAPIKey(apiKey) } catch { throw CursorUsageError.connectionFailed }
+        if response.statusCode == 400 || response.statusCode == 401 { throw CursorAuthError.agentSignInEnded }
+        guard (200..<300).contains(response.statusCode) else { throw CursorUsageError.requestFailed(response.statusCode) }
+        guard let token = (ProviderParse.jsonObject(response.body)?["accessToken"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty else { throw CursorUsageError.invalidResponse }
+        return token
     }
 
     private func fetchPlanName(accessToken: String) async -> (String?, Bool) {

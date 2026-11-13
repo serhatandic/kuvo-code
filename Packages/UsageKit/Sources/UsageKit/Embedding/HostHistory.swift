@@ -18,11 +18,14 @@ public struct HostHistoryDay: Sendable, Hashable {
         public var name: String
         public var tokens: Int
         public var cost: Double
+        /// The row it shows under where it isn't its own name (Cursor's effort and speed variants).
+        public var family: String?
 
-        public init(name: String, tokens: Int, cost: Double) {
+        public init(name: String, tokens: Int, cost: Double, family: String? = nil) {
             self.name = name
             self.tokens = tokens
             self.cost = cost
+            self.family = family
         }
     }
 
@@ -128,11 +131,17 @@ public final class HostHistory {
     /// logins of yours show none (an empty history, so what they had before goes). Every account
     /// the host runs is in the main card's: none is counted on two cards.
     func scan(for providerID: String) -> LogUsageScan?? {
+        days(for: providerID).map { $0.map(Self.scan) }
+    }
+
+    /// A covered provider's days as the host states them, as `scan(for:)` takes them: nil for one it
+    /// doesn't cover, none inside until it has answered, and none for another login's card.
+    func days(for providerID: String) -> [HostHistoryDay]?? {
         let family = ProviderAccountID.family(of: providerID)
         guard covered.contains(family) else { return nil }
-        guard providerID == family else { return .some(Self.scan([])) }
+        guard providerID == family else { return .some([]) }
         guard answered else { return .some(nil) }
-        return .some(Self.scan(days[family] ?? []))
+        return .some(days[family] ?? [])
     }
 
     static func scan(_ days: [HostHistoryDay]) -> LogUsageScan {

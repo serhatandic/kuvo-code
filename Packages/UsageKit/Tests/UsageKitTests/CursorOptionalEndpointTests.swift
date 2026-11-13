@@ -250,11 +250,8 @@ final class CursorOptionalEndpointTests: XCTestCase {
         handler: @escaping @Sendable (HTTPRequest) async throws -> HTTPResponse
     ) -> CursorProvider {
         CursorProvider(
-            authStore: CursorAuthStore(
-                sqlite: KeyValueSQLite(values: [CursorAuthStore.accessTokenKey: accessToken]),
-                keychain: FakeKeychain()
-            ),
-            usageClient: CursorUsageClient(http: RoutingHTTPClient(handler: handler)),
+            authStore: cursorAgentStore(),
+            usageClient: CursorUsageClient(http: RoutingHTTPClient(handler: cursorExchanging(accessToken, handler))),
             now: { Date(timeIntervalSince1970: 1_800_000_000) },
             pricing: { TestPricing.bundled },
             usageHistoryStore: CursorUsageHistoryStore(directory: FileManager.default.temporaryDirectory

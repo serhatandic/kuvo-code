@@ -209,11 +209,12 @@ final class KeychainAccessorTests: XCTestCase {
         let accessor = SecurityKeychainAccessor(itemAccessor: inProcess, securityTool: securityTool)
 
         for service in [
-            "Claude Code-credentials", "gh:github.com", "cursor-access-token", "cursor-refresh-token", "gemini",
+            "Claude Code-credentials", "gh:github.com", "gemini",
         ] {
             XCTAssertEqual(try accessor.readGenericPassword(service: service), "security", service)
         }
-        for service in ["Codex Auth", "claude-swap"] {
+        // (Cursor's own app login is an outside one, never read now: #631 piece D1.)
+        for service in ["Codex Auth", "claude-swap", "cursor-access-token"] {
             XCTAssertEqual(try accessor.readGenericPassword(service: service), "in-process", service)
         }
     }
@@ -236,14 +237,14 @@ final class KeychainAccessorTests: XCTestCase {
 
     func testSecurityToolLoginIsSavedThroughTheSecurityTool() throws {
         let inProcess = StubItemAccessor()
-        let securityTool = StubItemAccessor(lookupAccount: "cursor-user")
+        let securityTool = StubItemAccessor(lookupAccount: "gh-user")
         let accessor = SecurityKeychainAccessor(itemAccessor: inProcess, securityTool: securityTool)
 
-        try accessor.writeGenericPassword(service: "cursor-access-token", value: "renewed")
+        try accessor.writeGenericPassword(service: "gh:github.com", value: "renewed")
 
         XCTAssertEqual(securityTool.requests, [
-            .init(operation: .lookup, service: "cursor-access-token", account: nil),
-            .init(operation: .update, service: "cursor-access-token", account: "cursor-user"),
+            .init(operation: .lookup, service: "gh:github.com", account: nil),
+            .init(operation: .update, service: "gh:github.com", account: "gh-user"),
         ])
         XCTAssertEqual(inProcess.requests, [])
     }
