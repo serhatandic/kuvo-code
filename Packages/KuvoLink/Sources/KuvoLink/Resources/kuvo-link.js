@@ -3,9 +3,9 @@
 // Packages/Box/src/link/main.ts
 import { spawn as spawn17 } from "node:child_process";
 import crypto57 from "node:crypto";
-import fs159 from "node:fs";
+import fs160 from "node:fs";
 import os22 from "node:os";
-import path163 from "node:path";
+import path164 from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 
 // Packages/Box/src/shared/text.ts
@@ -2291,8 +2291,10 @@ var FEATURES = [
   "sign-in.return",
   "skills",
   "skills.trash",
+  "typed",
   "update",
   "usage.history",
+  "usage.settings",
   "vault",
   "vault.same",
   "wakes",
@@ -24957,7 +24959,7 @@ function sendSeat(host, to, mail, id, link = readLink()) {
   }
   const payloads = seatPayloads(mail, id);
   if (!payloads) {
-    console.error(`kuvo-link: ${mail.kind === "usage" ? "this computer's usage" : `a group chat's ${String(mail?.kind ?? "mail")}`} for ${plainName(peer.name) || "another computer"} is too big to send, so it wasn't.`);
+    console.error(`kuvo-link: ${mail.kind === "usage" ? "this computer's usage" : mail.kind === "settings" ? "the usage panel's settings" : `a group chat's ${String(mail?.kind ?? "mail")}`} for ${plainName(peer.name) || "another computer"} is too big to send, so it wasn't.`);
     return "too big";
   }
   for (const payload of payloads) {
@@ -25009,11 +25011,13 @@ function seatPeers(link = readLink(), told = readPeerAgents()) {
   const peers = peersOf(link);
   const key = link ? ownKey(link) : null;
   const name = plainName(IS_MAC ? macLink.config?.name : link?.name) || os11.hostname();
+  const setup = followedSetup(link);
   return {
     ...key ? { self: { key, name } } : {},
     also: vouchedOf(link, told).map((box) => ({ key: box.key, name: plainName(box.name) || "another computer" })),
     boxes: peers.map((peer) => ({ key: peer.key, name: plainName(peer.name) || "another computer", seats: (told[peer.key]?.features ?? []).includes("groups.seats") })),
-    bots: peers.flatMap((peer) => (told[peer.key]?.list ?? []).filter((agent) => agent.kind === "bot" && agent.id).map((agent) => ({ id: agent.id, name: agent.name, job: agent.about ?? "", box: peer.key, session: agent.session, ...agent.look ? { look: agent.look } : {} })))
+    bots: peers.flatMap((peer) => (told[peer.key]?.list ?? []).filter((agent) => agent.kind === "bot" && agent.id).map((agent) => ({ id: agent.id, name: agent.name, job: agent.about ?? "", box: peer.key, session: agent.session, ...agent.look ? { look: agent.look } : {} }))),
+    ...setup ? { setup: setup.id } : sharedMachine(link) || link?.setup?.aside ? { setup: null } : {}
   };
 }
 var toldSeatPeers = "";
@@ -39855,7 +39859,7 @@ import fs130 from "node:fs";
 import path135 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "8436bdf62bb9";
+var BRIDGE_VERSION = "94f6a06d5909";
 
 // Packages/Box/src/link/rehome/outside.ts
 import { spawnSync as spawnSync9 } from "node:child_process";
@@ -42843,9 +42847,9 @@ function macTell(notice) {
 }
 
 // Packages/Box/src/link/mac/relay.ts
-import fs156 from "node:fs";
+import fs157 from "node:fs";
 import os20 from "node:os";
-import path159 from "node:path";
+import path160 from "node:path";
 
 // Packages/Box/src/link/peers/mail.ts
 var answeringAsk = null;
@@ -48112,6 +48116,844 @@ async function* autopilotRoute(context) {
   return yield* json(200, shown3(at.data));
 }
 
+// Packages/Box/src/link/areas/typed.ts
+import fs151 from "node:fs";
+import path156 from "node:path";
+
+// Packages/Box/src/link/typed/words.ts
+var SPACE = "\\t\\n\\u000b\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000";
+var SPACE_ONE = new RegExp(`^[${SPACE}]$`);
+var SPACE_ENDS = new RegExp(`^[${SPACE}]+|[${SPACE}]+$`, "g");
+var BLANK = "\\t \\u00a0\\u1680\\u2000-\\u200a\\u202f\\u205f\\u3000";
+var BLANK_ENDS = new RegExp(`^[${BLANK}]+|[${BLANK}]+$`, "g");
+var isSpace = (character) => character !== undefined && SPACE_ONE.test(character);
+var trim = (text) => text.replace(SPACE_ENDS, "");
+var trimBlanks = (text) => text.replace(BLANK_ENDS, "");
+var nextWord = (text, from) => {
+  let at = from;
+  while (at < text.length && isSpace(text[at]))
+    at++;
+  return at;
+};
+var wordEnd = (text, from) => {
+  let at = from;
+  while (at < text.length && !isSpace(text[at]))
+    at++;
+  return at;
+};
+var words4 = (text) => text.split(new RegExp(`[${SPACE}]+`)).filter(Boolean);
+var KEYWORDS = ["goal", "loop", "plan", "autopilot", "review", "btw", "handoff", "compact"];
+var KEYWORD_WORDS = {
+  goal: { title: "Goal", summary: "Keep working until a condition is met", argument: "what should be true when it’s done, like “all tests pass”" },
+  loop: { title: "Loop", summary: "Repeat a message on a schedule", argument: "what to do each time" },
+  plan: { title: "Plan", summary: "Explore and plan first, without changing files", argument: "what to plan (or nothing, to turn Plan on or off)" },
+  autopilot: { title: "Autopilot", summary: "Decide for itself; stop only for what needs you", argument: "what to do (or nothing, to turn Autopilot on or off)" },
+  review: { title: "Review", summary: "A second model reviews your uncommitted changes", argument: null },
+  btw: { title: "Side Question", summary: "A side question, kept out of this conversation", argument: "your question" },
+  handoff: { title: "Handoff", summary: "Go on in a fresh conversation from a summary", argument: "what to do next (or nothing)" },
+  compact: { title: "Compact", summary: "Summarize the conversation to free up context", argument: null }
+};
+var QUICK_REVIEW = "review-quick";
+function commandsOffered(own, keywords) {
+  return own.flatMap((command) => {
+    if (command.name === "goal")
+      return [];
+    if (!keywords.some((keyword) => keyword === command.name))
+      return [command];
+    return command.name === "review" ? [{ name: QUICK_REVIEW, description: "The engine’s own review, in this conversation" }] : [];
+  });
+}
+function parseKeyword(text) {
+  const trimmed = trim(text);
+  if (!trimmed.startsWith("/"))
+    return null;
+  const name = trimmed.slice(1, wordEnd(trimmed, 1));
+  const keyword = KEYWORDS.find((each) => each === name.toLowerCase());
+  if (!keyword)
+    return null;
+  return { keyword, rest: trim(trimmed.slice(1 + name.length)) };
+}
+function shellCommand(text) {
+  if (!text.startsWith("!"))
+    return null;
+  const command = trim(text.slice(1));
+  return command ? command : null;
+}
+function splitCommand(text) {
+  const trimmed = trim(text);
+  if (!trimmed.startsWith("/"))
+    return null;
+  const name = trimmed.slice(1, wordEnd(trimmed, 1));
+  if (!name)
+    return null;
+  return { name, arguments: trim(trimmed.slice(1 + name.length)) };
+}
+function parseCommand(text, commands) {
+  const split = splitCommand(text);
+  return split && commands.some((command) => command.name === split.name) ? split : null;
+}
+var CLEARING = new Set(["clear", "stop", "off", "reset", "none", "cancel"]);
+function parseGoal(text) {
+  const trimmed = trim(text);
+  if (!trimmed.toLowerCase().startsWith("/goal"))
+    return null;
+  const after = trimmed.slice("/goal".length);
+  if (after && !isSpace(after[0]))
+    return null;
+  const rest = trim(after);
+  const lower = rest.toLowerCase();
+  if (!lower)
+    return { kind: "show" };
+  if (lower === "pause")
+    return { kind: "pause" };
+  if (lower === "resume")
+    return { kind: "resume" };
+  if (CLEARING.has(lower))
+    return { kind: "clear" };
+  return { kind: "set", words: rest };
+}
+function parseRepeat(text) {
+  if (text === "weekdays")
+    return { unit: "weekdays" };
+  const match = /^([1-9][0-9]{0,5})([mhdw])$/.exec(text);
+  if (!match)
+    return null;
+  const count = Number(match[1]), unit = match[2];
+  const most = { m: 525600, h: 8760, d: 366, w: 52 }[unit];
+  if (count > most || unit === "m" && count < 5)
+    return null;
+  return { unit, count };
+}
+var repeatText2 = (every) => every.unit === "weekdays" ? "weekdays" : `${every.count}${every.unit}`;
+var keepsTimeOfDay = (every) => every.unit !== "m" && every.unit !== "h";
+var MINUTE_UNITS = ["m", "min", "mins", "minute", "minutes"];
+var HOUR_UNITS = ["h", "hr", "hrs", "hour", "hours"];
+var same3 = (a, b) => a.length === b.length && a.every((word, at) => word === b[at]);
+function clock(text) {
+  let said = text;
+  const half = said.endsWith("am") ? "am" : said.endsWith("pm") ? "pm" : null;
+  if (half)
+    said = said.slice(0, -2);
+  const parts = said.split(":").filter((part) => part !== "");
+  const int = (part) => part !== undefined && /^[+-]?[0-9]+$/.test(part) ? Number(part) : null;
+  const hour = int(parts[0]);
+  if (hour === null || parts.length > 2)
+    return null;
+  const minute = parts.length === 2 ? int(parts[1]) : 0;
+  if (minute === null || minute < 0 || minute >= 60 || hour < 0 || hour > 23 || half !== null && (hour < 1 || hour > 12))
+    return null;
+  if (half === "am")
+    return [hour === 12 ? 0 : hour, minute];
+  if (half === "pm")
+    return [hour === 12 ? 12 : hour + 12, minute];
+  return [hour, minute];
+}
+function scheduleOf(said) {
+  const is = (...each) => each.some((words) => same3(said, words));
+  if (is(["hourly"], ["every", "hour"]))
+    return { every: { unit: "h", count: 1 } };
+  if (is(["daily"], ["every", "day"], ["every", "morning"]))
+    return { every: { unit: "d", count: 1 }, hour: 9, minute: 0 };
+  if (is(["weekdays"], ["every", "weekday"]))
+    return { every: { unit: "weekdays" }, hour: 9, minute: 0 };
+  if (is(["weekly"], ["every", "week"]))
+    return { every: { unit: "w", count: 1 }, hour: 9, minute: 0 };
+  const spoken = said[0] === "every" ? said.slice(1) : said;
+  if (spoken.length === 1) {
+    const every = parseRepeat(spoken[0]);
+    if (every)
+      return keepsTimeOfDay(every) ? { every, hour: 9, minute: 0 } : { every };
+  }
+  if (spoken.length === 2 && /^[+]?[0-9]+$/.test(spoken[0]) && Number(spoken[0]) > 0) {
+    const n = Number(spoken[0]), unit = spoken[1];
+    if (MINUTE_UNITS.includes(unit)) {
+      const every = parseRepeat(`${n}m`);
+      if (every)
+        return { every };
+    }
+    if (HOUR_UNITS.includes(unit)) {
+      const every = parseRepeat(`${n}h`);
+      if (every)
+        return { every };
+    }
+  }
+  const at = said.indexOf("at");
+  if (at < 0 || at + 1 !== said.length - 1)
+    return null;
+  const time = clock(said[at + 1]);
+  if (!time)
+    return null;
+  const [hour, minute] = time;
+  const days = said.slice(0, at);
+  const are = (...each) => each.some((words) => same3(days, words));
+  if (are(["every", "morning"], ["mornings"], ["every", "day"], ["daily"]))
+    return { every: { unit: "d", count: 1 }, hour, minute };
+  if (are(["weekdays"], ["every", "weekday"], ["on", "weekdays"]))
+    return { every: { unit: "weekdays" }, hour, minute };
+  if (are(["every", "week"], ["weekly"]))
+    return { every: { unit: "w", count: 1 }, hour, minute };
+  if (days.length === 3 && days[0] === "every" && ["days", "day", "weeks", "week"].includes(days[2])) {
+    if (!/^[+-]?[0-9]+$/.test(days[1]))
+      return null;
+    const every = parseRepeat(`${Number(days[1])}${days[2].startsWith("day") ? "d" : "w"}`);
+    return every ? { every, hour, minute } : null;
+  }
+  return null;
+}
+function parseLoop(rest) {
+  const said = words4(rest);
+  for (let count = Math.min(said.length, 6);count >= 1; count--) {
+    if (count < said.length && said[count].toLowerCase() === "at")
+      continue;
+    const schedule = scheduleOf(said.slice(0, count).map((word) => word.toLowerCase()));
+    if (!schedule)
+      continue;
+    let index = 0;
+    for (let each = 0;each < count; each++)
+      index = wordEnd(rest, nextWord(rest, index));
+    return { schedule, message: trim(rest.slice(index)), scheduleLength: index, scheduleText: trim(rest.slice(0, index)) };
+  }
+  return { schedule: null, message: trim(rest), scheduleLength: 0, scheduleText: "" };
+}
+var DAY6 = 86400000;
+var isWeekend = (at, timeZone) => {
+  const { year, month, day } = wall(at, timeZone);
+  const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+  return weekday === 0 || weekday === 6;
+};
+function timeOfDay(today, days, hour, minute, timeZone) {
+  let at = instant(today.year, today.month, today.day + days, hour, minute, timeZone);
+  const asked = hour * 60 + minute;
+  const minutes = (moment) => {
+    const seen = wall(moment, timeZone);
+    return seen.hour * 60 + seen.minute;
+  };
+  if (minutes(at) !== asked)
+    while (minutes(at - 60000) > asked && minutes(at - 60000) < minutes(at))
+      at -= 60000;
+  return at;
+}
+function firstRun(schedule, now, timeZone = zone2()) {
+  if (!keepsTimeOfDay(schedule.every) || schedule.hour === undefined)
+    return now;
+  const today = wall(now, timeZone);
+  let days = 0;
+  let next = timeOfDay(today, days, schedule.hour, schedule.minute ?? 0, timeZone);
+  while (next <= now || schedule.every.unit === "weekdays" && isWeekend(next, timeZone)) {
+    days++;
+    next = timeOfDay(today, days, schedule.hour, schedule.minute ?? 0, timeZone);
+    if (days > 14)
+      return now + DAY6;
+  }
+  return next;
+}
+function firstWake(schedule, now, timeZone = zone2()) {
+  if (keepsTimeOfDay(schedule.every))
+    return firstRun(schedule, now, timeZone);
+  const every = schedule.every;
+  return now + every.count * (every.unit === "h" ? 3600000 : 60000);
+}
+var PRESETS = ["security", "performance", "accessibility"];
+var UNCOMMITTED = "changes not committed yet";
+var BRANCH = "this branch";
+var PROJECT2 = "the whole project";
+var WHAT_WORDS = [UNCOMMITTED, "uncommitted", BRANCH, "branch", "since ", "commits", "folder ", "a folder", PROJECT2, "whole project", "project", "something else"];
+var LOOK_FOR_WORDS = [...PRESETS.flatMap((preset) => [`for ${preset}`, preset]), "anything wrong", "something else"];
+function isWord(word, text, at = 0) {
+  if (text.length - at < word.length || text.slice(at, at + word.length).toLowerCase() !== word)
+    return false;
+  return at + word.length === text.length || isSpace(text[at + word.length]);
+}
+var isQuote = (character) => character === '"' || character === "“" || character === "”";
+function isRef(ref) {
+  if (ref.length < 1 || ref.length > 200 || ref.startsWith("-") || ref.includes(".."))
+    return false;
+  return /^[A-Za-z0-9._/~^@{}+-]+$/.test(ref);
+}
+var sameRef = (a, b) => !!a && !!b && a.id === b.id && a.providerID === b.providerID;
+function scopeAt(text, start) {
+  const phrases = [
+    [UNCOMMITTED, { kind: "uncommitted" }],
+    ["uncommitted", { kind: "uncommitted" }],
+    [BRANCH, { kind: "branch" }],
+    ["branch", { kind: "branch" }],
+    [PROJECT2, { kind: "project" }],
+    ["whole project", { kind: "project" }],
+    ["project", { kind: "project" }]
+  ];
+  for (const [phrase, scope] of phrases)
+    if (isWord(phrase, text, start))
+      return { scope, end: start + phrase.length, asking: null };
+  if (isWord("since", text, start)) {
+    const after = start + 5;
+    const at = nextWord(text, after);
+    if (at === text.length)
+      return { scope: null, end: text.length, asking: { list: "commit", typed: "" } };
+    const end = wordEnd(text, at);
+    const ref = text.slice(at, end);
+    if (!isRef(ref))
+      return null;
+    return { scope: { kind: "commits", from: ref + "^" }, end, asking: end === text.length ? { list: "commit", typed: ref } : null };
+  }
+  if (isWord("folder", text, start)) {
+    const at = nextWord(text, start + 6);
+    if (at === text.length)
+      return { scope: null, end: text.length, asking: { list: "folder", typed: "" } };
+    if (isQuote(text[at])) {
+      const inside = at + 1;
+      let close = inside;
+      while (close < text.length && !isQuote(text[close]))
+        close++;
+      if (close === text.length) {
+        const path = text.slice(inside);
+        return { scope: path ? { kind: "folder", path } : null, end: text.length, asking: { list: "folder", typed: path } };
+      }
+      return { scope: { kind: "folder", path: text.slice(inside, close) }, end: close + 1, asking: null };
+    }
+    const end = wordEnd(text, at);
+    const path = text.slice(at, end);
+    return { scope: { kind: "folder", path }, end, asking: end === text.length ? { list: "folder", typed: path } : null };
+  }
+  return null;
+}
+function presetAt(text, start) {
+  if (!isWord("for", text, start))
+    return null;
+  const after = nextWord(text, start + 3);
+  for (const preset of PRESETS)
+    if (isWord(preset, text, after))
+      return { preset, end: after + preset.length };
+  return null;
+}
+function searchReaders(query, readers) {
+  const wanted = words4(query.toLowerCase());
+  return readers.filter((reader) => {
+    const said = `${reader.name} ${reader.provider}`.toLowerCase();
+    return wanted.every((word) => said.includes(word));
+  });
+}
+function readerAtEnd(text, readers, preferred) {
+  const lower = text.toLowerCase();
+  const named = readers.filter((reader) => lower.endsWith(" with " + reader.name.toLowerCase()));
+  if (!named.length)
+    return null;
+  const longest = Math.max(...named.map((reader) => reader.name.length));
+  const candidates = named.filter((reader) => reader.name.length === longest);
+  const reader = candidates.find((each) => sameRef(each.ref, preferred)) ?? candidates[0];
+  return { reader, before: trimBlanks(text.slice(0, text.length - longest - " with ".length)) };
+}
+function parseReview(rest, readers, preferred = null) {
+  const read = { scope: null, described: null, preset: null, reader: null, focus: "", readerLength: 0, searching: null, asking: null, head: "", readerTyped: null };
+  let at = 0;
+  let drawn = 0;
+  let open = null;
+  let scopeRead = false;
+  while (true) {
+    const start = nextWord(rest, at);
+    if (start >= rest.length)
+      break;
+    const scope = scopeRead ? null : scopeAt(rest, start);
+    if (scope) {
+      scopeRead = true;
+      read.scope = scope.scope;
+      at = drawn = scope.end;
+      if (scope.asking) {
+        read.asking = scope.asking;
+        open = start;
+      }
+      continue;
+    }
+    const preset = read.preset ? null : presetAt(rest, start);
+    if (preset) {
+      read.preset = preset.preset;
+      at = drawn = preset.end;
+      continue;
+    }
+    if (!read.reader && read.searching === null && isWord("with", rest, start)) {
+      const from = nextWord(rest, start + 4);
+      const name = rest.slice(from);
+      const named = readers.filter((reader) => {
+        const length = reader.name.length;
+        if (!length || name.length < length || name.slice(0, length).toLowerCase() !== reader.name.toLowerCase())
+          return false;
+        return length === name.length || isSpace(name[length]);
+      });
+      if (named.length) {
+        const longest = Math.max(...named.map((reader) => reader.name.length));
+        const candidates = named.filter((reader) => reader.name.length === longest);
+        read.reader = candidates.find((each) => sameRef(each.ref, preferred)) ?? candidates[0];
+        const end = from + longest;
+        if (end === rest.length)
+          read.readerTyped = name.slice(0, longest);
+        at = drawn = end;
+        continue;
+      }
+      const query = trim(name);
+      if (readers.length && (!query || searchReaders(query, readers).length)) {
+        read.searching = query;
+        read.readerLength = drawn;
+        read.head = rest.slice(0, start);
+        read.asking = null;
+        return read;
+      }
+    }
+    break;
+  }
+  read.readerLength = drawn;
+  if (open !== null) {
+    read.head = rest.slice(0, open);
+    return read;
+  }
+  const tailStart = nextWord(rest, at);
+  const typed = rest.slice(tailStart);
+  read.head = rest.slice(0, tailStart);
+  if (read.head && !isSpace(read.head[read.head.length - 1]))
+    read.head += " ";
+  let written = trim(typed);
+  if (!read.reader) {
+    const named = readerAtEnd(written, readers, preferred);
+    if (named) {
+      read.reader = named.reader;
+      written = named.before;
+    }
+  }
+  const ownFocus = isWord("for", written);
+  read.focus = ownFocus ? trimBlanks(written.slice(3)) : written;
+  if (!read.scope && !read.preset && !read.reader && !ownFocus && written)
+    read.described = written;
+  const lower = typed.toLowerCase();
+  const ownWords = lower.startsWith("for ") && [...lower.slice(4)].every(isSpace);
+  if (!read.scope && WHAT_WORDS.some((word) => word.startsWith(lower)))
+    read.asking = { list: "what", typed };
+  else if (!read.preset && !ownWords && (!lower || LOOK_FOR_WORDS.some((word) => word.startsWith(lower))))
+    read.asking = { list: "lookFor", typed };
+  return read;
+}
+var scopeAsked = (command) => command.scope ?? (command.described !== null ? { kind: "described", words: command.described } : null);
+function focusAsked(command) {
+  const focus = command.described === null ? command.focus : "";
+  if (!command.preset)
+    return focus ? focus : null;
+  return focus ? `${command.preset}: ${focus}` : command.preset;
+}
+function reviewUnfinished(command) {
+  if (command.scope)
+    return null;
+  if (command.asking?.list === "commit" && command.asking.typed === "")
+    return "Write the commit to start with after “since”.";
+  if (command.asking?.list === "folder" && command.asking.typed === "")
+    return "Write the folder to review after “folder”.";
+  return null;
+}
+
+// Packages/Box/src/link/typed/decide.ts
+var SUBAGENT_GOAL = "A subagent’s conversation can’t have a goal of its own. Set it in the conversation it works for.";
+var GOALS_NOT_RUNNING = "Goals run in the agents bridge beside the engine on this conversation’s computer, and it isn’t running now. Try again in a moment.";
+var KEYWORD_UNAVAILABLE = "This runs in the agents bridge beside the engine on this conversation’s computer, and it isn’t running now. Try again in a moment.";
+var LOOP_NO_SCHEDULE = "Can’t tell how often from that. Start with one like “every 30 min” or “weekdays at 9”, or pick one from the list after /loop.";
+var LOOP_NO_MESSAGE = "Write what to do each time after how often, like “/loop every morning at 9 sum up the new issues”.";
+var REVIEW_PICK = "Pick who reads it from the list, or write a model’s name after “with”.";
+var REVIEW_FINISH = "Finish the model’s name, or pick it from the list.";
+function writtenBack(written) {
+  const typed = parseKeyword(written);
+  if (!typed)
+    return { text: written };
+  const goal = parseGoal(written);
+  return { text: written, beside: !goal || goal.kind === "set" ? typed.rest : "" };
+}
+function typedKeyword(text, keywords) {
+  const typed = parseKeyword(text);
+  return typed && typed.keyword !== "goal" && keywords.includes(typed.keyword) ? typed : null;
+}
+function runsAsTyped(text, commands, keywords) {
+  if (shellCommand(text) !== null || parseCommand(text, commands) !== null || parseGoal(text) !== null)
+    return true;
+  return typedKeyword(text, keywords) !== null;
+}
+function needsModel(text) {
+  if (shellCommand(text) !== null)
+    return false;
+  const goal = parseGoal(text);
+  return !goal || goal.kind === "set";
+}
+function decide2(text, facts) {
+  if (facts.refusal && needsModel(text))
+    return { restore: { text }, error: facts.refusal };
+  const commands = commandsOffered(facts.commands, facts.keywords);
+  if (facts.side && !runsAsTyped(text, commands, facts.keywords))
+    return { sideThread: true };
+  const goal = parseGoal(text);
+  if (goal)
+    return decideGoal(text, goal, facts);
+  const typed = typedKeyword(text, facts.keywords);
+  if (typed)
+    return { keyword: typed.keyword, ...decideKeyword(typed.keyword, typed.rest, text, facts) };
+  const split = splitCommand(text);
+  if (split && split.name === QUICK_REVIEW && commands.some((command) => command.name === QUICK_REVIEW))
+    return { command: { name: "review", arguments: split.arguments } };
+  const shell = shellCommand(text);
+  if (shell !== null)
+    return { shell };
+  const command = parseCommand(text, commands);
+  if (command)
+    return { command };
+  return { send: { text, quoted: true } };
+}
+function decideGoal(written, goal, facts) {
+  if (goal.kind === "show")
+    return { showGoal: true, ...facts.hasGoal ? {} : { restore: { text: "/goal " } } };
+  if (goal.kind === "set" && facts.botChat)
+    return { box: { do: "askBot", words: goal.words }, failed: writtenBack(written) };
+  if (facts.subagent)
+    return { restore: writtenBack(written), error: SUBAGENT_GOAL };
+  if (!facts.bridge)
+    return { restore: writtenBack(written), error: GOALS_NOT_RUNNING };
+  return { box: { do: "goal", command: goal }, failed: writtenBack(written) };
+}
+function decideKeyword(keyword, rest, written, facts) {
+  switch (keyword) {
+    case "goal":
+      return {};
+    case "plan":
+      if (!rest && !facts.files)
+        return { plan: "toggle" };
+      return { plan: "on", ...rest ? { send: { text: rest, typed: "/plan" } } : {} };
+    case "autopilot":
+      if (!rest && !facts.files)
+        return { toggleAutopilot: true };
+      return { box: { do: "autopilot" }, failed: writtenBack(written), ...rest ? { send: { text: rest, typed: "/autopilot" } } : {} };
+    case "compact":
+      return { compact: true };
+    case "loop": {
+      const loop = parseLoop(rest);
+      if (!loop.schedule)
+        return { restore: writtenBack(written), error: LOOP_NO_SCHEDULE };
+      if (!loop.message)
+        return { restore: writtenBack(written), error: LOOP_NO_MESSAGE };
+      const due = Math.floor(firstWake(loop.schedule, facts.now, facts.timeZone) / 1000);
+      return {
+        box: { do: "wake", due, every: repeatText2(loop.schedule.every), note: loop.message },
+        failed: writtenBack(written),
+        ...keepsTimeOfDay(loop.schedule.every) ? {} : { send: { text: loop.message, typed: `/loop ${loop.scheduleText}`, steer: true } }
+      };
+    }
+    case "btw":
+      if (!rest)
+        return { restore: { text: "/btw " } };
+      if (!facts.bridge)
+        return { restore: writtenBack(written), error: KEYWORD_UNAVAILABLE };
+      return { box: { do: "btw", question: rest }, failed: writtenBack(written) };
+    case "handoff":
+      if (!facts.bridge)
+        return { restore: writtenBack(written), error: KEYWORD_UNAVAILABLE };
+      return { box: { do: "handoff", next: rest || null }, failed: writtenBack(written) };
+    case "review": {
+      const review = parseReview(rest, facts.readers, facts.reviewer);
+      if (review.searching !== null)
+        return { restore: writtenBack(written), error: review.searching ? REVIEW_FINISH : REVIEW_PICK };
+      const unfinished = reviewUnfinished(review);
+      if (unfinished)
+        return { restore: writtenBack(written), error: unfinished };
+      if (!facts.bridge)
+        return { restore: writtenBack(written), error: KEYWORD_UNAVAILABLE };
+      const scope = scopeAsked(review);
+      return { box: { do: "review", model: review.reader?.ref ?? null, focus: focusAsked(review), scope: scope?.kind === "uncommitted" ? null : scope }, failed: writtenBack(written) };
+    }
+  }
+}
+
+// Packages/Box/src/link/areas/typed.ts
+var TYPED_ROUTE = /^kuvo\/sessions\/([^/]+)\/typed$/;
+function keywordsOffered(session, bridge) {
+  if (session.parentID)
+    return [];
+  return KEYWORDS.filter((keyword) => keyword === "goal" || keyword === "review" || keyword === "btw" || keyword === "handoff" ? bridge : true);
+}
+async function engineCommands(engine, folder, signal) {
+  if (!engine)
+    return [];
+  try {
+    const listed = await call(engine, "GET", "/api/command", undefined, within6(signal, 1e4), folder);
+    return Array.isArray(listed) ? listed.flatMap((each) => isObject(each) && typeof each.name === "string" ? [{ name: each.name, ...typeof each.description === "string" ? { description: each.description } : {} }] : []) : [];
+  } catch {
+    return null;
+  }
+}
+function startingAgent(agents) {
+  const modes = Array.isArray(agents) ? agents.flatMap((each) => isObject(each) && typeof each.id === "string" && each.id !== "plan" && each.mode !== "subagent" && each.hidden !== true ? [each.id] : []) : null;
+  if (!modes)
+    return "build";
+  return modes.length === 0 || modes.includes("build") ? "build" : modes[0];
+}
+async function planAgent(plan, data, engine, folder, signal) {
+  if (plan === "on" || data.agent !== "plan")
+    return "plan";
+  const agents = engine ? await call(engine, "GET", "/api/agent", undefined, within6(signal, 1e4), folder).catch(() => null) : null;
+  return startingAgent(agents);
+}
+var planning = new Map;
+function inTurn3(session, work) {
+  const before = planning.get(session) ?? Promise.resolve();
+  const mine = before.then(work, work);
+  const settled = mine.catch(() => {});
+  planning.set(session, settled);
+  settled.then(() => {
+    if (planning.get(session) === settled)
+      planning.delete(session);
+  });
+  return mine;
+}
+async function reviewReaders(engine, folder) {
+  if (!engine)
+    return [];
+  const lists = await listsHere(engine, null, folder).catch(() => null);
+  if (!lists?.engine)
+    return [];
+  const accounts = lists.engine.accounts;
+  return offeredHere(lists).filter((model) => !model.agents).map((model) => ({
+    name: model.name,
+    ref: { providerID: model.providerID, id: model.id },
+    provider: model.providerID === "opencode" ? "OpenCode Zen" : accounts.get(model.providerID)?.name ?? model.providerID
+  }));
+}
+var refOf2 = (value) => isObject(value) && typeof value.providerID === "string" && typeof value.id === "string" ? { providerID: value.providerID, id: value.id } : null;
+var within6 = (signal, ms) => signal ? AbortSignal.any([signal, AbortSignal.timeout(ms)]) : AbortSignal.timeout(ms);
+var STEP_PATIENCE = 30000;
+async function inTime2(work, ms) {
+  let timer;
+  const late = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error("Its computer didn’t answer in time. Try again in a moment.")), ms);
+  });
+  try {
+    return await Promise.race([work, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+var said6 = (error, otherwise) => error instanceof Error && error.message ? error.message : otherwise;
+async function routeAnswer(pieces) {
+  const answer = await collected(pieces);
+  const value = parsed(answer.body);
+  return { status: answer.status, value: isObject(value) ? value : {} };
+}
+async function doStep(step, session, place, context) {
+  const { request, readEngine, bridge } = context;
+  const signal = within6(context.signal, STEP_PATIENCE);
+  const agents = bridge();
+  const at = (path) => `/api/kuvo/${path}/${encodeURIComponent(session)}`;
+  switch (step.do) {
+    case "goal": {
+      if (!agents)
+        throw new Error(GOALS_NOT_RUNNING);
+      const { command } = step;
+      if (command.kind === "set")
+        return { goal: await call(agents, "PUT", at("goals"), { condition: command.words }, signal) };
+      if (command.kind === "pause")
+        return { goal: await call(agents, "POST", `${at("goals")}/pause`, undefined, signal) };
+      if (command.kind === "resume")
+        return { goal: await call(agents, "POST", `${at("goals")}/resume`, undefined, signal) };
+      await call(agents, "DELETE", at("goals"), undefined, signal);
+      return { goalCleared: true };
+    }
+    case "askBot": {
+      const outcome = await askGoal(session, step.words, () => targetsOf({ readEngine, bridge }));
+      if ("refused" in outcome)
+        throw new Error(outcome.refused.message);
+      return { askedBot: true };
+    }
+    case "autopilot": {
+      if (isAutopilot(place.data))
+        return {};
+      const route = `kuvo/sessions/${encodeURIComponent(session)}/autopilot`;
+      const answer = await inTime2(routeAnswer(autopilotRoute({ ...context, signal, route, request: { ...request, method: "PUT", path: route, body: Buffer.from(JSON.stringify({ autopilot: true })) } })), STEP_PATIENCE);
+      if (answer.status !== 200)
+        throw new Error(typeof answer.value.message === "string" ? answer.value.message : "Autopilot couldn’t be turned on. Try again.");
+      return { autopilot: answer.value };
+    }
+    case "wake": {
+      const route = `kuvo/wakes/${encodeURIComponent(session)}`;
+      const body = { due: step.due, every: step.every, note: step.note };
+      const answer = await routeAnswer(answerWakes(session, undefined, { ...request, method: "POST", path: route, body: Buffer.from(JSON.stringify(body)) }, readEngine, bridge, signal));
+      if (answer.status !== 200)
+        throw new Error(typeof answer.value.message === "string" ? answer.value.message : "The wake-up couldn’t be saved. Try again.");
+      return { wakeUp: body };
+    }
+    case "btw":
+    case "handoff":
+    case "review": {
+      if (!agents)
+        throw Object.assign(new Error("unavailable"), { unavailable: true });
+      if (step.do === "btw")
+        return { sideQuestion: await call(agents, "POST", at("btw"), { question: step.question }, signal) };
+      if (step.do === "handoff")
+        return { handoff: await call(agents, "POST", at("handoff"), { next: step.next ?? undefined }, signal) };
+      return { review: await call(agents, "POST", at("reviews"), { ...step.model ? { model: step.model } : {}, ...step.focus ? { focus: step.focus } : {}, ...step.scope ? { scope: step.scope } : {} }, signal) };
+    }
+  }
+}
+function answerOf3(decision, done, failure) {
+  const { box: _box, failed: _failed, restore, error, send, command, ...steps } = decision;
+  if (failure)
+    return { ...decision.keyword ? { keyword: decision.keyword } : {}, restore: failure.restore, error: failure.error };
+  return { ...steps, ...done, ...command ? { command } : {}, ...send ? { send } : {}, ...restore ? { restore } : {}, ...error ? { error } : {} };
+}
+var TYPED_SENT = path156.join(RUN, "typed-sent.json");
+var KEPT_MS2 = 60 * 60000;
+var KEPT_MOST = 1000;
+var KEPT_BYTES = 64 * 1024;
+function readKept6() {
+  try {
+    const read = JSON.parse(fs151.readFileSync(TYPED_SENT, "utf8"));
+    return isObject(read) ? read : {};
+  } catch {
+    return {};
+  }
+}
+function keptAnswer(key) {
+  const kept = readKept6()[key];
+  if (!isObject(kept) || typeof kept.at !== "number" || typeof kept.status !== "number" || typeof kept.body !== "string" || !isObject(kept.headers))
+    return null;
+  if (Date.now() - kept.at > KEPT_MS2)
+    return null;
+  return { status: kept.status, headers: kept.headers, body: Buffer.from(kept.body, "base64") };
+}
+function keepAnswer2(key, answer) {
+  if (answer.body.length > KEPT_BYTES)
+    return;
+  const now = Date.now();
+  const all = Object.entries(readKept6()).filter(([, kept]) => now - kept.at <= KEPT_MS2);
+  all.push([key, { at: now, status: answer.status, headers: answer.headers, body: answer.body.toString("base64") }]);
+  const kept = Object.fromEntries(all.slice(-KEPT_MOST));
+  const temporary = `${TYPED_SENT}.${process.pid}`;
+  try {
+    fs151.mkdirSync(RUN, { recursive: true, mode: 448 });
+    fs151.writeFileSync(temporary, JSON.stringify(kept), { mode: 384 });
+    fs151.renameSync(temporary, TYPED_SENT);
+  } catch {
+    fs151.rmSync(temporary, { force: true });
+  }
+}
+async function* typedRoute(context, match) {
+  const { request } = context;
+  const given = parsed(request.body);
+  const header = request.headers["idempotency-key"];
+  const named = isObject(given) && typeof given.id === "string" && given.id.trim() ? given.id : typeof header === "string" ? header : "";
+  const id = request.method.toUpperCase() === "POST" && named.trim() ? named.trim().slice(0, 200) : null;
+  if (!id)
+    return yield* typedAnswer(context, match);
+  const key = `typed
+${match[1]}
+${id}`;
+  const kept = keptAnswer(key);
+  if (kept)
+    return yield* answering(kept);
+  const answer = await sentOnce(key, async () => {
+    const answer = await collected(typedAnswer({ ...context, signal: undefined }, match));
+    if (answer.status >= 200 && answer.status < 300)
+      keepAnswer2(key, answer);
+    return answer;
+  });
+  return yield* answering(answer);
+}
+async function* typedAnswer(context, match) {
+  const { request, readEngine, bridge, signal, json } = context;
+  const method = request.method.toUpperCase();
+  if (method !== "GET" && method !== "POST")
+    return yield* json(405, { message: "Read what it offers with GET, or send what was typed with POST." });
+  let session = "";
+  try {
+    session = decodeURIComponent(match[1]);
+  } catch {}
+  if (!session)
+    return yield* json(404, { message: "There's no such conversation here." });
+  const given = parsed(request.body);
+  const body = isObject(given) ? given : {};
+  if (method === "POST" && typeof body.text !== "string")
+    return yield* json(400, { message: "Send what was typed (text)." });
+  const back = method === "POST" ? { restore: writtenBack(body.text) } : {};
+  const targets = targetsOf({ readEngine, bridge });
+  if (!targets.length)
+    return yield* json(503, { message: "The engine isn't running.", ...back });
+  let place;
+  try {
+    place = await placeOfSessionPatiently(session, targets);
+  } catch (error) {
+    return yield* json(503, { message: isRefused(error) ? "The engine isn't running." : BUSY, ...back });
+  }
+  if (!place)
+    return yield* json(404, { message: "There's no such conversation here.", ...back });
+  let engine = null;
+  try {
+    engine = readEngine();
+  } catch {}
+  if (!engine?.port)
+    engine = null;
+  const agents = bridge();
+  const data = place.data;
+  const folder = data.location?.directory ?? data.directory;
+  const keywords = keywordsOffered(data, agents !== null);
+  if (method === "GET") {
+    const commands = await engineCommands(engine, folder, signal);
+    return yield* json(200, {
+      keywords: keywords.map((name) => ({ name, ...KEYWORD_WORDS[name] })),
+      commands: commandsOffered(commands ?? [], keywords)
+    });
+  }
+  const text = body.text;
+  const slash = splitCommand(text) !== null;
+  const commands = slash ? await engineCommands(engine, folder, signal) : [];
+  const typed = parseKeyword(text);
+  const onAgents = agents !== null && place.target.port === agents.port;
+  const readers = typed?.keyword === "review" && !onAgents ? await reviewReaders(engine, folder) : [];
+  const hasGoal = parseGoal(text)?.kind === "show" && agents ? await call(agents, "GET", `/api/kuvo/goals/${encodeURIComponent(session)}`, undefined, within6(signal, 1e4)).then(() => true, () => false) : false;
+  const decision = decide2(text, {
+    keywords,
+    commands: commands ?? [],
+    files: body.files === true,
+    side: body.side === true,
+    refusal: typeof body.refusal === "string" && body.refusal.trim() ? body.refusal : null,
+    readers,
+    reviewer: refOf2(body.reviewer),
+    subagent: Boolean(data.parentID),
+    hasGoal,
+    botChat: botOfConversation(session) !== null,
+    bridge: agents !== null,
+    now: Date.now(),
+    timeZone: zone2()
+  });
+  if (commands === null && !decision.keyword && (decision.send || decision.sideThread))
+    return yield* json(503, { message: "The engine didn't answer. Try again in a moment.", restore: { text } });
+  let done = {};
+  let failure = null;
+  if (decision.box) {
+    try {
+      done = await doStep(decision.box, session, place, context);
+    } catch (error) {
+      const step = decision.box.do;
+      const unreached = !(isObject(error) && typeof error.status === "number");
+      const unavailable = isObject(error) && error.unavailable === true || (step === "btw" || step === "handoff" || step === "review") && unreached;
+      if (step === "goal" && unreached)
+        error = new Error(GOALS_NOT_RUNNING);
+      failure = unavailable ? { restore: writtenBack(text), error: KEYWORD_UNAVAILABLE } : { restore: decision.failed ?? { text }, error: said6(error, "It couldn’t be done. Try again.") };
+    }
+  }
+  const plan = !failure ? decision.plan : undefined;
+  const agent = plan ? await inTurn3(session, async () => {
+    const now = await call(place.target, "GET", `/api/session/${encodeURIComponent(session)}`, undefined, within6(signal, 1e4)).catch(() => null);
+    if (!now)
+      return null;
+    const chosen = await planAgent(plan, now, engine, folder, signal);
+    if (chosen === now.agent)
+      return chosen;
+    const switched = await call(place.target, "POST", `/api/session/${encodeURIComponent(session)}/agent`, { agent: chosen }, within6(signal, STEP_PATIENCE)).then(() => true, () => false);
+    return switched ? chosen : null;
+  }) : null;
+  if (plan && !agent)
+    return yield* json(200, { ...decision.keyword ? { keyword: decision.keyword } : {}, restore: writtenBack(text), error: "The mode couldn’t be changed: its engine didn’t take it. Try again." });
+  const { plan: _plan, ...answer } = answerOf3(decision, done, failure);
+  return yield* json(200, { ...answer, ...agent ? { agent } : {} });
+}
+
 // Packages/Box/src/link/areas/sandbox.ts
 var NOT_OPEN2 = "This computer's box isn't running its own process: try again in a moment.";
 var NOT_CALLING2 = "Only a conversation's own tool call can ask, and this one isn't running in it.";
@@ -48335,7 +49177,7 @@ async function* providerModelsRoute(context) {
 }
 
 // Packages/Box/src/link/areas/apply.ts
-import fs151 from "node:fs";
+import fs152 from "node:fs";
 var BUILT_IN_AGENTS2 = ["build", "plan", "general", "explore", "compaction", "title", "summary"];
 var isRules = (keys) => ["permissions", "policies"].includes(keys[keys.length - 1]);
 function keptOwn(change) {
@@ -48362,7 +49204,7 @@ function neededFor(change) {
 }
 function macOnlyServers(file = CATALOG_FILE) {
   try {
-    const catalog = JSON.parse(fs151.readFileSync(file, "utf8"));
+    const catalog = JSON.parse(fs152.readFileSync(file, "utf8"));
     const named = [...Array.isArray(catalog.macOnly) ? catalog.macOnly : [], ...(catalog.servers ?? []).filter((server) => server?.macOnly).map((server) => server.id)];
     return new Set(named.filter((id) => typeof id === "string"));
   } catch {
@@ -48568,7 +49410,7 @@ async function* movePlacesRoute(context) {
 }
 
 // Packages/Box/src/link/areas/work.ts
-import fs152 from "node:fs";
+import fs153 from "node:fs";
 var WORK_ROUTE = /^kuvo\/(?:work(?:\/events|\/oversight(?:\/events)?|\/background(?:\/events)?)?|bots\/([^/]+)\/stop-all)$/;
 var WORK_ASKS_ROUTE = /^kuvo\/work\/(?:settings|unanswering|asks(?:\/([^/]+))?)$/;
 var GOALS_ROUTE = /^kuvo\/work\/goals(?:\/([^/]+))?$/;
@@ -48768,7 +49610,7 @@ async function* appIconRoute(context) {
   const file = appIcon(id);
   let bytes = null;
   try {
-    bytes = file ? fs152.readFileSync(file) : null;
+    bytes = file ? fs153.readFileSync(file) : null;
   } catch {}
   if (!bytes)
     return yield* json(404, { message: "There's no icon for that app here." });
@@ -48777,8 +49619,8 @@ async function* appIconRoute(context) {
 }
 
 // Packages/Box/src/link/mac/routes.ts
-import fs153 from "node:fs";
-import path156 from "node:path";
+import fs154 from "node:fs";
+import path157 from "node:path";
 var macPhones = () => {
   const link = readLink();
   return {
@@ -48921,7 +49763,7 @@ async function* macLinkRoute(route, request, signal) {
         return yield* json(400, { message: "Send {letters, seen}." });
       const now = Date.now();
       try {
-        fs153.mkdirSync(SENDING, { recursive: true, mode: 448 });
+        fs154.mkdirSync(SENDING, { recursive: true, mode: 448 });
         for (const letter of Array.isArray(given.letters) ? given.letters.slice(0, 500) : []) {
           if (!isObject(letter) || !LETTER_ID.test(letter.id ?? "") || typeof letter.to !== "string" || typeof letter.text !== "string" || typeof letter.peer !== "string")
             continue;
@@ -48934,7 +49776,7 @@ async function* macLinkRoute(route, request, signal) {
             peer: letter.peer,
             ...typeof letter.answers === "string" ? { answers: letter.answers } : {}
           };
-          writePrivate(path156.join(SENDING, `${letter.id}.json`), JSON.stringify(kept));
+          writePrivate(path157.join(SENDING, `${letter.id}.json`), JSON.stringify(kept));
         }
         if (isObject(given.seen)) {
           locked(PEER_LOCK, () => {
@@ -48987,12 +49829,12 @@ async function* linkRoute(context) {
 }
 
 // Packages/Box/src/link/mac/app.ts
-import fs154 from "node:fs";
-import path157 from "node:path";
-var APP_FILE = () => path157.join(RUN, "app.json");
-var OPENING_FILE = () => path157.join(RUN, "app-opening.json");
-var FAILED_FILE = () => path157.join(RUN, "app-open-failed.json");
-var UPDATING_FILE = () => path157.join(RUN, "app-updating");
+import fs155 from "node:fs";
+import path158 from "node:path";
+var APP_FILE = () => path158.join(RUN, "app.json");
+var OPENING_FILE = () => path158.join(RUN, "app-opening.json");
+var FAILED_FILE = () => path158.join(RUN, "app-open-failed.json");
+var UPDATING_FILE = () => path158.join(RUN, "app-updating");
 var WAIT = 30000;
 var REST = 5 * 60000;
 var UPDATING_FOR = 2 * 60000;
@@ -49004,16 +49846,16 @@ var NEEDS_APP = "This tool needs Kuvo Code open on this Mac, and it isn't open n
 var NO_OPENER = "nothing that opens it is running on this Mac";
 function readJSON2(file) {
   try {
-    return JSON.parse(fs154.readFileSync(file, "utf8"));
+    return JSON.parse(fs155.readFileSync(file, "utf8"));
   } catch {
     return null;
   }
 }
 function bundleOf2(given) {
-  if (typeof given !== "string" || given.length > 1024 || given.includes("\x00") || !path157.isAbsolute(given))
+  if (typeof given !== "string" || given.length > 1024 || given.includes("\x00") || !path158.isAbsolute(given))
     return null;
   const bundle = given.replace(/\/+$/, "");
-  return bundle.endsWith(".app") && path157.normalize(bundle) === bundle ? bundle : null;
+  return bundle.endsWith(".app") && path158.normalize(bundle) === bundle ? bundle : null;
 }
 function toolsOf(given) {
   if (!isObject(given) || typeof given.url !== "string" || typeof given.token !== "string")
@@ -49047,7 +49889,7 @@ function readOpening() {
 }
 function updating2(now = Date.now()) {
   try {
-    return Math.abs(now - fs154.statSync(UPDATING_FILE()).mtimeMs) < UPDATING_FOR;
+    return Math.abs(now - fs155.statSync(UPDATING_FILE()).mtimeMs) < UPDATING_FOR;
   } catch {
     return false;
   }
@@ -49057,8 +49899,8 @@ function registerApp(given, now = Date.now()) {
   const record = { bundle: given.bundle ?? before?.bundle ?? null, tools: given.tools, at: now };
   writePrivate(APP_FILE(), JSON.stringify(record));
   if (record.tools) {
-    fs154.rmSync(FAILED_FILE(), { force: true });
-    fs154.rmSync(UPDATING_FILE(), { force: true });
+    fs155.rmSync(FAILED_FILE(), { force: true });
+    fs155.rmSync(UPDATING_FILE(), { force: true });
   }
   return record;
 }
@@ -49075,7 +49917,7 @@ function noteUpdating(now = Date.now()) {
   writePrivate(UPDATING_FILE(), String(now));
   const at = new Date(now);
   try {
-    fs154.utimesSync(UPDATING_FILE(), at, at);
+    fs155.utimesSync(UPDATING_FILE(), at, at);
   } catch {}
 }
 function appStatus(now = Date.now()) {
@@ -49101,7 +49943,7 @@ async function openApp(signal, ways = OPEN_WAYS) {
     let opening = readOpening();
     if (opening && stale(opening, now)) {
       if (JSON.stringify(readOpening()) === JSON.stringify(opening))
-        fs154.rmSync(OPENING_FILE(), { force: true });
+        fs155.rmSync(OPENING_FILE(), { force: true });
       opening = null;
     }
     if (!opening) {
@@ -49110,8 +49952,8 @@ async function openApp(signal, ways = OPEN_WAYS) {
         return failed.message;
       const mine = { at: now, by: process.pid };
       try {
-        fs154.mkdirSync(RUN, { recursive: true, mode: 448 });
-        fs154.writeFileSync(OPENING_FILE(), JSON.stringify(mine), { flag: "wx", mode: 384 });
+        fs155.mkdirSync(RUN, { recursive: true, mode: 448 });
+        fs155.writeFileSync(OPENING_FILE(), JSON.stringify(mine), { flag: "wx", mode: 384 });
       } catch (error) {
         if (error?.code === "EEXIST")
           continue;
@@ -49151,7 +49993,7 @@ async function openAndWait(mine, ways) {
     return said;
   } finally {
     if (JSON.stringify(readOpening()) === JSON.stringify(mine))
-      fs154.rmSync(OPENING_FILE(), { force: true });
+      fs155.rmSync(OPENING_FILE(), { force: true });
   }
 }
 async function hostOpens(bundle) {
@@ -49203,7 +50045,7 @@ function waitUntil(ready, deadline, signal) {
     const every = setInterval(look, 1000);
     const timer = setTimeout(done, Math.max(0, deadline - Date.now()));
     try {
-      watcher = fs154.watch(RUN, look);
+      watcher = fs155.watch(RUN, look);
       watcher.on("error", () => {});
     } catch {}
     signal?.addEventListener("abort", done, { once: true });
@@ -49343,15 +50185,15 @@ async function* keptKeysRoute({ request, json }) {
 }
 
 // Packages/Box/src/link/serve-kept.ts
-import fs155 from "node:fs";
-import path158 from "node:path";
-var SERVE_NEEDED = () => path158.join(RUN, "serve.needed");
-var SERVE_FILE = () => path158.join(RUN, "serve.json");
+import fs156 from "node:fs";
+import path159 from "node:path";
+var SERVE_NEEDED = () => path159.join(RUN, "serve.needed");
+var SERVE_FILE = () => path159.join(RUN, "serve.json");
 var SERVE_ROLE = /kuvo-link\.js serve(\s|$)/;
 var KEPT_ROLE = /kuvo-link\.js serve --kept(\s|$)/;
 function runningServe() {
   try {
-    const record = JSON.parse(fs155.readFileSync(SERVE_FILE(), "utf8"));
+    const record = JSON.parse(fs156.readFileSync(SERVE_FILE(), "utf8"));
     if (isObject(record) && Number.isInteger(record.pid) && runsAs(record.pid, record.kept === true ? KEPT_ROLE : SERVE_ROLE)) {
       return { pid: record.pid, port: Number(record.port), kept: record.kept === true };
     }
@@ -49381,11 +50223,11 @@ async function* serveRoute({ request, json }) {
       writePrivate(SERVE_NEEDED(), "");
       keepKeeper();
     } else {
-      fs155.rmSync(SERVE_NEEDED(), { force: true });
+      fs156.rmSync(SERVE_NEEDED(), { force: true });
     }
   }
   const running = runningServe();
-  return yield* json(200, { needed: fs155.existsSync(SERVE_NEEDED()), serving: running !== null });
+  return yield* json(200, { needed: fs156.existsSync(SERVE_NEEDED()), serving: running !== null });
 }
 
 // Packages/Box/src/link/server/router.ts
@@ -49427,6 +50269,7 @@ var ROUTES = [
   { when: (route) => SESSION_FOLDERS_ROUTE.test(route), answer: sessionFoldersRoute },
   { when: (route) => route === "kuvo/approval" || SESSION_APPROVAL_ROUTE.test(route) || SESSION_DECISIONS_ROUTE.test(route), answer: approvalRoute },
   { when: (route) => SESSION_AUTOPILOT_ROUTE.test(route), answer: autopilotRoute },
+  { when: (route) => route.match(TYPED_ROUTE), answer: typedRoute },
   { when: (route) => route.match(QUEUE_ROUTE), answer: queueRoute },
   { when: (route) => route.match(GLANCE_ROUTE), answer: glanceRoute },
   { when: (route) => route.match(LIST_ROUTE), answer: listRoute },
@@ -49508,7 +50351,7 @@ var boxAnswers = (route) => route === "kuvo/engine/restart" && keeperRuns();
 function keeperRuns() {
   let pid = 0;
   try {
-    pid = Number(JSON.parse(fs156.readFileSync(path159.join(RUN, "keeper.json"), "utf8"))?.pid);
+    pid = Number(JSON.parse(fs157.readFileSync(path160.join(RUN, "keeper.json"), "utf8"))?.pid);
   } catch {
     return false;
   }
@@ -49680,18 +50523,18 @@ function serveBox(password, handle = engineHandler(readEngineFile, { name: os21.
 
 // Packages/Box/src/link/uninstall.ts
 import { spawnSync as spawnSync11 } from "node:child_process";
-import fs157 from "node:fs";
-import path160 from "node:path";
+import fs158 from "node:fs";
+import path161 from "node:path";
 var LAUNCH_AGENT = "run.kuvo.code.machine";
 var REBOOT_TAG = "# kuvo-code: starts its engine again after a restart";
 function launchTools() {
-  if (REAL_BOX && located(K) === located(path160.join(accountHome(), ".kuvo-code"))) {
-    return { launchctl: "/bin/launchctl", crontab: "crontab", agents: path160.join(accountHome(), "Library", "LaunchAgents") };
+  if (REAL_BOX && located(K) === located(path161.join(accountHome(), ".kuvo-code"))) {
+    return { launchctl: "/bin/launchctl", crontab: "crontab", agents: path161.join(accountHome(), "Library", "LaunchAgents") };
   }
   const tools = IN_TEST_FOLDER ? process.env.KUVO_TEST_UNINSTALL_TOOLS : undefined;
-  if (!tools || !path160.isAbsolute(tools))
+  if (!tools || !path161.isAbsolute(tools))
     return null;
-  return { launchctl: path160.join(tools, "launchctl"), crontab: path160.join(tools, "crontab"), agents: path160.join(homeFolder(), "Library", "LaunchAgents") };
+  return { launchctl: path161.join(tools, "launchctl"), crontab: path161.join(tools, "crontab"), agents: path161.join(homeFolder(), "Library", "LaunchAgents") };
 }
 var run5 = (program, args, input) => spawnSync11(program, args, { input, encoding: "utf8", timeout: 30000, stdio: ["pipe", "pipe", "pipe"] });
 function crontab(tools) {
@@ -49708,7 +50551,7 @@ function starts() {
     return { launchAgent: false, crontab: false, checked: false };
   const table = crontab(tools);
   return {
-    launchAgent: process.platform === "darwin" && fs157.existsSync(path160.join(tools.agents, `${LAUNCH_AGENT}.plist`)),
+    launchAgent: process.platform === "darwin" && fs158.existsSync(path161.join(tools.agents, `${LAUNCH_AGENT}.plist`)),
     crontab: table !== null && table.includes(REBOOT_TAG),
     checked: true
   };
@@ -49716,7 +50559,7 @@ function starts() {
 var escaped = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 var RECORDS = [
   ["box.pid", /kuvo-start(-keeper)? keep(\s|$)/, "keeper"],
-  ["engine.json", new RegExp(`${escaped(path160.join(K, "engine"))}/`), "engine"],
+  ["engine.json", new RegExp(`${escaped(path161.join(K, "engine"))}/`), "engine"],
   ["agents.pid", /kuvo-agents/, "coding agents"],
   ["link.pid", /kuvo-link\.js run(\s|$)/, "link"],
   ["serve.json", SERVE_ROLE, "server"],
@@ -49725,7 +50568,7 @@ var RECORDS = [
 function recorded(file, role) {
   let text = "";
   try {
-    text = fs157.readFileSync(path160.join(RUN, file), "utf8");
+    text = fs158.readFileSync(path161.join(RUN, file), "utf8");
   } catch {
     return null;
   }
@@ -49740,15 +50583,15 @@ function running4() {
   return RECORDS.filter(([file, role]) => recorded(file, role) !== null).map(([, , what]) => what);
 }
 function ownKeeper() {
-  const keeper = path160.join(K, "bin", "kuvo-start");
+  const keeper = path161.join(K, "bin", "kuvo-start");
   let text = "";
   try {
-    text = fs157.readFileSync(keeper, "utf8");
+    text = fs158.readFileSync(keeper, "utf8");
   } catch {
     return null;
   }
   const named = text.match(/^K="\$HOME\/([^"/]+)"/m)?.[1];
-  return named === path160.basename(K) ? keeper : null;
+  return named === path161.basename(K) ? keeper : null;
 }
 function uninstallCheck() {
   const link = readLink();
@@ -49770,14 +50613,14 @@ function uninstall() {
   let crontabLine = false;
   const startsAgain = [];
   if (tools && process.platform === "darwin") {
-    const plist = path160.join(tools.agents, `${LAUNCH_AGENT}.plist`);
-    if (fs157.existsSync(plist)) {
+    const plist = path161.join(tools.agents, `${LAUNCH_AGENT}.plist`);
+    if (fs158.existsSync(plist)) {
       const uid = process.getuid?.() ?? 0;
       run5(tools.launchctl, ["bootout", `gui/${uid}/${LAUNCH_AGENT}`]);
       try {
-        fs157.rmSync(plist, { force: true });
+        fs158.rmSync(plist, { force: true });
       } catch {}
-      if (fs157.existsSync(plist))
+      if (fs158.existsSync(plist))
         startsAgain.push("its launch agent");
       else
         launchAgent = true;
@@ -49796,14 +50639,14 @@ function uninstall() {
         startsAgain.push("its line in your crontab");
     }
   }
-  fs157.mkdirSync(RUN, { recursive: true, mode: 448 });
+  fs158.mkdirSync(RUN, { recursive: true, mode: 448 });
   for (const file of ["serve.needed", "link.needed"])
-    fs157.rmSync(path160.join(RUN, file), { force: true });
-  fs157.writeFileSync(path160.join(RUN, "off"), "");
+    fs158.rmSync(path161.join(RUN, file), { force: true });
+  fs158.writeFileSync(path161.join(RUN, "off"), "");
   const keeper = ownKeeper();
   let stopped = true;
   if (keeper) {
-    const off = spawnSync11("sh", [keeper, "off"], { cwd: K, encoding: "utf8", timeout: 120000, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, HOME: path160.dirname(K) } });
+    const off = spawnSync11("sh", [keeper, "off"], { cwd: K, encoding: "utf8", timeout: 120000, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, HOME: path161.dirname(K) } });
     stopped = off.status === 0;
   }
   const told = [];
@@ -49832,13 +50675,13 @@ function uninstallCommand(args) {
     console.error("Usage: kuvo-link.js uninstall [--check]");
     return 2;
   }
-  if (APP_FOLDER || path160.basename(path160.dirname(path160.resolve(K))).toLowerCase().startsWith("run.kuvo.code")) {
+  if (APP_FOLDER || path161.basename(path161.dirname(path161.resolve(K))).toLowerCase().startsWith("run.kuvo.code")) {
     const message = "This Mac's box runs in Kuvo Code's own folder: remove Kuvo Code itself (its background work goes with it).";
     console.log(JSON.stringify({ result: "refused", message }));
     console.error(message);
     return 1;
   }
-  if (!fs157.existsSync(path160.join(K, "bin", "kuvo-start")) && !fs157.existsSync(RUN)) {
+  if (!fs158.existsSync(path161.join(K, "bin", "kuvo-start")) && !fs158.existsSync(RUN)) {
     const message = `There's no Kuvo Code box in ${K}.`;
     console.log(JSON.stringify({ result: "refused", message }));
     console.error(message);
@@ -49857,11 +50700,11 @@ function uninstallCommand(args) {
 
 // Packages/Box/src/link/helper.ts
 import { spawnSync as spawnSync12 } from "node:child_process";
-import fs158 from "node:fs";
-import path161 from "node:path";
+import fs159 from "node:fs";
+import path162 from "node:path";
 var HELPER_NAME = "Kuvo Code Box";
-var helperBundle = () => path161.join(K, "bin", `${HELPER_NAME}.app`);
-var helperProgram = () => path161.join(helperBundle(), "Contents", "MacOS", HELPER_NAME);
+var helperBundle = () => path162.join(K, "bin", `${HELPER_NAME}.app`);
+var helperProgram = () => path162.join(helperBundle(), "Contents", "MacOS", HELPER_NAME);
 var xml = (text) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 function helperPlist(app) {
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -49885,34 +50728,34 @@ function refusal3() {
     return "Only a Mac's own box in a home of its own runs under Kuvo Code Box.";
   if (!launchTools())
     return "Only the box in ~/.kuvo-code starts at login.";
-  if (!fs158.existsSync(helperProgram()))
+  if (!fs159.existsSync(helperProgram()))
     return `${HELPER_NAME} isn't in this box's bin: its release brings it.`;
   return null;
 }
 function helperStatus() {
   const tools = launchTools();
-  const plist = tools ? path161.join(tools.agents, `${LAUNCH_AGENT}.plist`) : null;
+  const plist = tools ? path162.join(tools.agents, `${LAUNCH_AGENT}.plist`) : null;
   let agent = false;
   try {
-    agent = plist !== null && fs158.readFileSync(plist, "utf8").includes(`<string>${xml(helperProgram())}</string>`);
+    agent = plist !== null && fs159.readFileSync(plist, "utf8").includes(`<string>${xml(helperProgram())}</string>`);
   } catch {}
   let loaded = null;
   if (tools && process.platform === "darwin") {
     const asked = spawnSync12(tools.launchctl, ["print", `gui/${process.getuid?.() ?? 0}/${LAUNCH_AGENT}`], { encoding: "utf8", timeout: 30000, stdio: ["ignore", "ignore", "ignore"] });
     loaded = asked.error ? null : asked.status === 0;
   }
-  return { helper: fs158.existsSync(helperProgram()), agent, loaded };
+  return { helper: fs159.existsSync(helperProgram()), agent, loaded };
 }
 function installHelperAgent({ load, app }) {
   const why = refusal3();
   if (why)
     return { written: false, loaded: false, message: why };
   const tools = launchTools();
-  const plist = path161.join(tools.agents, `${LAUNCH_AGENT}.plist`);
-  fs158.mkdirSync(tools.agents, { recursive: true });
+  const plist = path162.join(tools.agents, `${LAUNCH_AGENT}.plist`);
+  fs159.mkdirSync(tools.agents, { recursive: true });
   const temporary = `${plist}.${process.pid}.new`;
-  fs158.writeFileSync(temporary, helperPlist(app), { mode: 420 });
-  fs158.renameSync(temporary, plist);
+  fs159.writeFileSync(temporary, helperPlist(app), { mode: 420 });
+  fs159.renameSync(temporary, plist);
   if (!load)
     return { written: true, loaded: false, message: `${HELPER_NAME} starts this Mac's box at login.` };
   const domain = `gui/${process.getuid?.() ?? 0}`;
@@ -50045,7 +50888,7 @@ function keepGroupSettings(bridge = bridgeTarget, every = (round) => {
   });
 }
 // Packages/Box/src/link/places.ts
-import path162 from "node:path";
+import path163 from "node:path";
 function boxPlaces() {
   return {
     layout: APP_FOLDER ? "app" : "own",
@@ -50061,11 +50904,11 @@ function boxPlaces() {
     updates: UPDATES,
     search: SEARCH,
     apps: APPS,
-    browser: path162.join(K, "browser"),
-    trash: path162.join(K, "trash"),
-    temporary: path162.join(K, "t"),
+    browser: path163.join(K, "browser"),
+    trash: path163.join(K, "trash"),
+    temporary: path163.join(K, "t"),
     engineData: ENGINE_DATA,
-    engineConfig: ENGINE_CONFIG ?? path162.join(K, "config"),
+    engineConfig: ENGINE_CONFIG ?? path163.join(K, "config"),
     settingsFile: CONFIG_FILE,
     engineLayerFile: ENGINE_LAYER_FILE,
     defaultsPlugin: DEFAULTS_PLUGIN,
@@ -50098,9 +50941,9 @@ onLinkWritten((link) => {
     return;
   }
   if (needed(link))
-    fs159.writeFileSync(NEEDED_FILE, "", { mode: 384 });
+    fs160.writeFileSync(NEEDED_FILE, "", { mode: 384 });
   else
-    fs159.rmSync(NEEDED_FILE, { force: true });
+    fs160.rmSync(NEEDED_FILE, { force: true });
 });
 function machineWelcomed(host) {
   announce(host, readEngineFile, undefined, undefined, true).catch(() => {});
@@ -50118,19 +50961,19 @@ function updateIsWell() {
 async function run6() {
   let old = null;
   try {
-    old = Number(fs159.readFileSync(PID_FILE, "utf8"));
+    old = Number(fs160.readFileSync(PID_FILE, "utf8"));
     if (isBridge2(old))
       process.kill(old, "SIGTERM");
   } catch {}
-  fs159.mkdirSync(RUN, { recursive: true, mode: 448 });
+  fs160.mkdirSync(RUN, { recursive: true, mode: 448 });
   clearNotesLocks();
-  fs159.writeFileSync(PID_FILE, String(process.pid), { mode: 384 });
-  fs159.writeFileSync(VERSION_FILE, BRIDGE_VERSION, { mode: 384 });
+  fs160.writeFileSync(PID_FILE, String(process.pid), { mode: 384 });
+  fs160.writeFileSync(VERSION_FILE, BRIDGE_VERSION, { mode: 384 });
   const saved = savedLoginPath(K);
   if (saved)
-    process.env.PATH = joinPath(path163.join(K, "bin"), saved);
+    process.env.PATH = joinPath(path164.join(K, "bin"), saved);
   for (const folder of ["present", "connected"])
-    fs159.rmSync(path163.join(RUN, folder), { recursive: true, force: true });
+    fs160.rmSync(path164.join(RUN, folder), { recursive: true, force: true });
   try {
     keepJobs();
   } catch {}
@@ -50146,8 +50989,8 @@ async function run6() {
   });
   const cleanUp = () => {
     try {
-      if (fs159.readFileSync(PID_FILE, "utf8") === String(process.pid))
-        fs159.unlinkSync(PID_FILE);
+      if (fs160.readFileSync(PID_FILE, "utf8") === String(process.pid))
+        fs160.unlinkSync(PID_FILE);
     } catch {}
     process.exit(0);
   };
@@ -50158,7 +51001,7 @@ async function run6() {
   setInterval(() => {
     let owner = null;
     try {
-      owner = Number(fs159.readFileSync(PID_FILE, "utf8"));
+      owner = Number(fs160.readFileSync(PID_FILE, "utf8"));
     } catch {}
     const link = readLink();
     if (!needed(link)) {
@@ -50175,7 +51018,7 @@ async function run6() {
     await sleep(50);
   let held = [];
   try {
-    held = JSON.parse(fs159.readFileSync(HELD_FILE, "utf8"));
+    held = JSON.parse(fs160.readFileSync(HELD_FILE, "utf8"));
   } catch {}
   const hold = new NoticeHold({
     send: tellPhones,
@@ -50185,7 +51028,7 @@ async function run6() {
         if (entries.length)
           writePrivate(HELD_FILE, JSON.stringify(entries));
         else
-          fs159.rmSync(HELD_FILE, { force: true });
+          fs160.rmSync(HELD_FILE, { force: true });
       } catch {}
     }
   });
@@ -50256,7 +51099,7 @@ async function run6() {
     }, 50);
   };
   try {
-    fs159.mkdirSync(SENDING, { recursive: true, mode: 448 });
+    fs160.mkdirSync(SENDING, { recursive: true, mode: 448 });
   } catch {}
   let outboxWatch = watchFolders([SENDING], leftNow, { recursive: false });
   const forwardNow = () => {
@@ -50266,7 +51109,7 @@ async function run6() {
   };
   forwardsSoon.send = forwardNow;
   try {
-    fs159.mkdirSync(FORWARDS, { recursive: true, mode: 448 });
+    fs160.mkdirSync(FORWARDS, { recursive: true, mode: 448 });
   } catch {}
   let forwardsWatch = watchFolders([FORWARDS], forwardNow, { recursive: false });
   setInterval(() => {
@@ -50492,11 +51335,11 @@ async function keptServe() {
     console.error(`The box's server already runs (${other.pid}).`);
     return;
   }
-  if (!fs159.existsSync(SERVE_NEEDED())) {
+  if (!fs160.existsSync(SERVE_NEEDED())) {
     console.error("No client wants the box's server here (run/serve.needed).");
     return;
   }
-  fs159.mkdirSync(RUN, { recursive: true, mode: 448 });
+  fs160.mkdirSync(RUN, { recursive: true, mode: 448 });
   const password = crypto57.randomBytes(24).toString("hex");
   const server = serveBox(password, engineHandler(readEngineFile, { name: os22.hostname() }, readBridgeFile));
   await new Promise((resolve, reject) => {
@@ -50509,7 +51352,7 @@ async function keptServe() {
   } catch {}
   const mine = () => {
     try {
-      return JSON.parse(fs159.readFileSync(SERVE_FILE(), "utf8"))?.pid === process.pid;
+      return JSON.parse(fs160.readFileSync(SERVE_FILE(), "utf8"))?.pid === process.pid;
     } catch {
       return false;
     }
@@ -50517,7 +51360,7 @@ async function keptServe() {
   const leave = () => {
     try {
       if (mine())
-        fs159.rmSync(SERVE_FILE(), { force: true });
+        fs160.rmSync(SERVE_FILE(), { force: true });
     } catch {}
     process.exit(0);
   };
@@ -50527,7 +51370,7 @@ async function keptServe() {
   console.log(JSON.stringify({ url: `http://127.0.0.1:${port}` }));
   const every = !REAL_BOX && Number(process.env.KUVO_TEST_SERVE_EVERY) > 0 ? Number(process.env.KUVO_TEST_SERVE_EVERY) : 30000;
   setInterval(() => {
-    if (!fs159.existsSync(SERVE_NEEDED()) || !mine())
+    if (!fs160.existsSync(SERVE_NEEDED()) || !mine())
       leave();
   }, every);
 }
@@ -50546,7 +51389,7 @@ async function serve() {
     console.error('serve answers only with a password: on its stdin, {"password"}, or in OPENCODE_PASSWORD.');
     process.exit(2);
   }
-  fs159.mkdirSync(RUN, { recursive: true, mode: 448 });
+  fs160.mkdirSync(RUN, { recursive: true, mode: 448 });
   clearNotesLocks();
   if (IS_MAC)
     addMacDefaults();
@@ -50608,7 +51451,7 @@ async function serve() {
     } catch {}
   try {
     if (APP_FOLDER)
-      writePrivate(path163.join(RUN, SERVED_FILE), JSON.stringify({ app: MAC_APP_VERSION, bridge: BRIDGE_VERSION, at: Date.now() }));
+      writePrivate(path164.join(RUN, SERVED_FILE), JSON.stringify({ app: MAC_APP_VERSION, bridge: BRIDGE_VERSION, at: Date.now() }));
     else
       clearKept(K);
   } catch {}
@@ -50626,8 +51469,8 @@ async function serve() {
     if ((macLink.host?.unsent?.() ?? 0) > 0)
       console.error("Kuvo Code quit before what its link had for your phones and machines went out.");
     try {
-      if (OWN_HOME_MAC && JSON.parse(fs159.readFileSync(SERVE_FILE(), "utf8"))?.pid === process.pid)
-        fs159.rmSync(SERVE_FILE(), { force: true });
+      if (OWN_HOME_MAC && JSON.parse(fs160.readFileSync(SERVE_FILE(), "utf8"))?.pid === process.pid)
+        fs160.rmSync(SERVE_FILE(), { force: true });
     } catch {}
     process.exit(0);
   };
@@ -50706,7 +51549,7 @@ async function setup() {
   }
   let runningVersion = null;
   try {
-    runningVersion = fs159.readFileSync(VERSION_FILE, "utf8").trim();
+    runningVersion = fs160.readFileSync(VERSION_FILE, "utf8").trim();
   } catch {}
   const restart = old?.relay !== link.relay || old?.name !== link.name || runningVersion !== BRIDGE_VERSION;
   if (!isUpdating()) {
@@ -50795,7 +51638,7 @@ function selftest() {
   const ok = said.toString() === "hello" && payload.toString() === "welcome" && echoed.toString() === "ping" && mail.toString() === "mail" && responder.rs.equals(publicOf(phone)) && typeof WebSocket === "function" && typeof fetch === "function";
   return ok;
 }
-var main = process.argv[1] && fs159.realpathSync(process.argv[1]) === fs159.realpathSync(fileURLToPath4(import.meta.url));
+var main = process.argv[1] && fs160.realpathSync(process.argv[1]) === fs160.realpathSync(fileURLToPath4(import.meta.url));
 if (main) {
   const [mode, argument] = process.argv.slice(2);
   if (mode === "run")
@@ -50842,7 +51685,7 @@ if (main) {
     const offered = args.includes("--offered");
     const test = option("--key") && (option("--url") || from || offered) && !REAL_BOX ? { url: option("--url"), keys: [option("--key")], blocked: null } : {};
     const step = (running) => noteUpdate({ running });
-    const outcome = offered ? await takeOffer({ step, ...test }) : from && !path163.isAbsolute(from) ? { result: "failed", message: "Say which folder the release is in, as a full path." } : await update({ now: args.includes("--now"), from, step, ...test });
+    const outcome = offered ? await takeOffer({ step, ...test }) : from && !path164.isAbsolute(from) ? { result: "failed", message: "Say which folder the release is in, as a full path." } : await update({ now: args.includes("--now"), from, step, ...test });
     if (outcome && !(offered && outcome.result === "busy"))
       noteUpdate({ running: null, ...outcome.result === "updated" ? {} : { last: { at: Date.now(), ...outcome } } });
     if (outcome?.result === "updated") {

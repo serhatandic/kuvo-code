@@ -180,7 +180,7 @@ import Testing
         let moving = Task { try await workspace.moveToAgents(id, model: ModelRef(id: "sonnet", providerID: "claude-code")) }
         try await until { !bridge.requests("POST", "/api/session/import").isEmpty }
         old.draftText = "and a font size"
-        old.submitDraft(for: nil, queue: false, commands: [])
+        old.submitDraft(for: nil, queue: false)
         #expect(old.draftText == "and a font size", "it stays in the composer")
         #expect(old.failure != nil, "and says why")
         handing.open()

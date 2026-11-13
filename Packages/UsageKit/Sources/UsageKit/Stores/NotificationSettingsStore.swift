@@ -38,6 +38,20 @@ final class NotificationSettingsStore {
         self.closeToRunningOut = defaults.bool(forKey: Self.closeToRunningOutKey, default: false)
     }
 
+    /// Takes the stored toggles again (fork addition): the host put your other computers' there
+    /// (`HostSettings`).
+    func reload() {
+        let underTen = defaults.bool(forKey: Self.underTenKey, default: false)
+        let toClose = defaults.bool(forKey: Self.healthyToCloseKey, default: false)
+        let runningOut = defaults.bool(forKey: Self.closeToRunningOutKey, default: false)
+        if underTenPercent != underTen { underTenPercent = underTen }
+        if healthyToClose != toClose { healthyToClose = toClose }
+        if closeToRunningOut != runningOut { closeToRunningOut = runningOut }
+    }
+
+    /// The stored keys, for the host's shared settings (`HostSettings`).
+    static let storageKeys = (underTen: underTenKey, healthyToClose: healthyToCloseKey, closeToRunningOut: closeToRunningOutKey)
+
     /// The per-milestone toggles as the pure logic consumes them.
     var toggles: PaceNotificationToggles {
         PaceNotificationToggles(

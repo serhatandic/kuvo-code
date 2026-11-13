@@ -25,6 +25,8 @@ import { mailFor, ownKey, peersOf } from "./known";
 import type { ToldAgents } from "../../shared/records";
 import type { SeatLine as SharedLine, SeatMailKind, SeatPeers } from "../../shared/seats";
 import type { DocPart, PendingParts } from "../documents/parts";
+import { followedSetup } from "../setup/record";
+import { sharedMachine } from "../setup/settle";
 import type { LinkHost } from "../relay/host";
 import type { LinkState } from "../state";
 import type { MailSender, Peer } from "./known";
@@ -35,9 +37,12 @@ import type { MailSender, Peer } from "./known";
 /** A mail between two computers' bridges: its kind, and for what a bot remembers of a chat
  * (`memory`), whose and which chat's. The rest goes as it is. `limits`: the bridge's plan limits
  * (PROTOCOL.md, "Plan limits"), which go as `{"limits": …}`, not as a seat's; `usage`: what its
- * accounts used (PROTOCOL.md, "Usage history"), which goes as a seat's, in parts when it's big. */
+ * accounts used (PROTOCOL.md, "Usage history"), which goes as a seat's, in parts when it's big;
+ * `settings`: the usage panel's settings (PROTOCOL.md, "Usage settings"), as a seat's, only
+ * between your own computers (never to or from a box a peer vouches for; the bridge sends and
+ * takes them only within its setup, `SeatPeers.setup`). */
 export interface SeatMail {
-  kind: SeatMailKind | "limits" | "usage";
+  kind: SeatMailKind | "limits" | "usage" | "settings";
   memory?: { bot: string; chat: string; [field: string]: unknown };
   [field: string]: unknown;
 }
@@ -146,7 +151,7 @@ function sendSeat(host: SeatHost | null | undefined, to: string, mail: SeatMail,
   }
   const payloads = seatPayloads(mail, id);
   if (!payloads) {
-    console.error(`kuvo-link: ${mail.kind === "usage" ? "this computer's usage" : `a group chat's ${String(mail?.kind ?? "mail")}`} for ${plainName(peer.name) || "another computer"} is too big to send, so it wasn't.`);
+    console.error(`kuvo-link: ${mail.kind === "usage" ? "this computer's usage" : mail.kind === "settings" ? "the usage panel's settings" : `a group chat's ${String(mail?.kind ?? "mail")}`} for ${plainName(peer.name) || "another computer"} is too big to send, so it wasn't.`);
     return "too big";
   }
   for (const payload of payloads) {
@@ -196,6 +201,7 @@ export function seatPeers(link: LinkState | null = readLink(), told: Record<stri
   const peers = peersOf(link);
   const key = link ? ownKey(link) : null;
   const name = plainName(IS_MAC ? macLink.config?.name : link?.name) || os.hostname();
+  const setup = followedSetup(link);
   return {
     ...(key ? { self: { key, name } } : {}),
     // Boxes only a peer knows, for plan limits alone.
@@ -203,6 +209,10 @@ export function seatPeers(link: LinkState | null = readLink(), told: Record<stri
     boxes: peers.map(peer => ({ key: peer.key, name: plainName(peer.name) || "another computer", seats: (told[peer.key]?.features ?? []).includes("groups.seats") })),
     bots: peers.flatMap(peer => (told[peer.key]?.list ?? []).filter(agent => agent.kind === "bot" && agent.id)
       .map(agent => ({ id: agent.id!, name: agent.name, job: agent.about ?? "", box: peer.key, session: agent.session, ...(agent.look ? { look: agent.look } : {}) }))),
+    // (The usage panel's settings go only between its boxes: never a shared machine's. `null` only
+    // once that's settled, a machine Macs share or a setup set aside; else not said, as it can't
+    // say yet: one it can't follow yet, its keys not read as the link starts, or none made yet.)
+    ...(setup ? { setup: setup.id } : sharedMachine(link) || link?.setup?.aside ? { setup: null } : {}),
   };
 }
 

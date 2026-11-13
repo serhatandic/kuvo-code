@@ -406,6 +406,6 @@ private struct SubagentConversation: View {
         let machine = RemoteFolder.machine(of: model.session.location.directory).map { id in app.machines.list.first { $0.id == id }?.name ?? id }
         // (One with no model of its own runs on the one its box names.)
         let unavailable = isAgentsOwn ? nil : (model.session.model ?? model.modelState?.model).flatMap { catalog.refusal($0, on: machine, said: model.modelState) }
-        model.submitDraft(for: catalog.model(model.session.model), queue: false, commands: catalog.commands(in: model.session.location.directory), unavailable: unavailable)
+        model.submitDraft(for: catalog.model(model.session.model), queue: false, unavailable: unavailable)
     }
 }
