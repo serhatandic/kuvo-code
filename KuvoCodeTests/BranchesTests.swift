@@ -46,6 +46,7 @@ import Testing
         engine.on("POST", "/api/session/ses_timer/fork", json: ["data": session("ses_tried", "Timer cycle", created: 5)])
         engine.on("PATCH", "/api/session/ses_tried", json: ["data": [:]])
         await workspace.refresh()
+        try await engine.listed(for: workspace)
 
         let bridge = try await RealBridge.start(engine: engine, folder: folder)
         defer { bridge.stop() }
@@ -60,6 +61,9 @@ import Testing
         #expect(engine.requests("POST", "/api/session/ses_timer/fork").first?.body["before"] as? String == "msg_0002")
         let marked = try #require(engine.requests("PATCH", "/api/session/ses_tried").first?.body["metadata"] as? [String: Any])
         #expect((marked["kuvo"] as? [String: Any])?["branchedFrom"] as? String == "ses_timer", "its box marked where it came from")
+        // (Its box lists it, as its engine does.)
+        engine.lists(session("ses_tried", "Timer cycle", created: 5, extra: ["metadata": marked]))
+        try await until { workspace.projects.flatMap(\.sessions).contains { $0.id == "ses_tried" } }
         #expect(Branches.tree(workspace.projects.flatMap(\.sessions)).under["ses_timer"]?.map(\.id) == ["ses_tried"], "under the one it came from")
         #expect(workspace.projects.flatMap(\.sessions).map(\.id).contains("ses_tried"), "a conversation of its own, all the same")
         #expect(Branches.tree(workspace.projects.flatMap(\.sessions)).top.map(\.id) == ["ses_timer"], "not a row at the top")
@@ -75,12 +79,15 @@ import Testing
                                                                                 extra: ["metadata": ["kuvo.pinned": true, "kuvo": ["handoffFrom": "ses_old", "startedBy": "ses_lead", "beside": true, "kuvoAgent": "claude"]]])])
         engine.on("PATCH", "/api/session/ses_tried", json: ["data": [:]])
         await workspace.refresh()
+        try await engine.listed(for: workspace)
         let message = Message.User(id: "msg_0002", time: .init(created: 3), text: "Now test the long break.")
         try await workspace.fork("ses_timer", from: message)
 
         let marked = try #require(engine.requests("PATCH", "/api/session/ses_tried").first?.body["metadata"] as? [String: Any])
         #expect(marked["kuvo.pinned"] == nil, "it starts unpinned")
         #expect(marked["kuvo"] as? [String: String] == ["branchedFrom": "ses_timer", "kuvoAgent": "claude"])
+        engine.lists(session("ses_tried", "Timer cycle", created: 5, extra: ["metadata": marked]))
+        try await until { workspace.projects.flatMap(\.sessions).contains { $0.id == "ses_tried" } }
         #expect(Branches.tree(workspace.projects.flatMap(\.sessions)).under["ses_timer"]?.map(\.id) == ["ses_tried"])
     }
 
@@ -95,6 +102,7 @@ import Testing
         engine.on("POST", "/api/session/ses_timer/fork", json: ["data": session("ses_tried", "Timer cycle", created: 5)])
         engine.on("PATCH", "/api/session/ses_tried", json: ["data": [:]])
         await workspace.refresh()
+        try await engine.listed(for: workspace)
         let message = Message.User(id: "msg_0002", time: .init(created: 3), text: "Summarize the commits weekly\n\n<sent-with>\n\(SentWithKeyword.goalHeading)\n/goal\n</sent-with>")
         try await workspace.fork("ses_timer", from: message)
         #expect(Drafts.shared["ses_tried"].text == "/goal Summarize the commits weekly")
@@ -113,6 +121,7 @@ import Testing
             session("ses_review", "Review the timer tests", created: 25, extra: ["metadata": ["kuvo": ["startedBy": "ses_timer", "beside": true]]]),
         ])
         await workspace.refresh()
+        try await engine.listed(for: workspace)
 
         let tree = Branches.latestFirst(try #require(workspace.projects.first).sessions)
         #expect(tree.under["ses_timer"]?.map(\.id) == ["ses_review", "ses_carried", "ses_tried"], "newest first, one its agent started too")
@@ -137,6 +146,7 @@ import Testing
             session("ses_tried", "Try a state machine", created: 30, extra: ["metadata": ["kuvo": ["startedBy": "ses_timer"]]]),
         ])
         await workspace.refresh()
+        try await engine.listed(for: workspace)
 
         #expect(workspace.session("ses_foreman") != nil, "Mini's lead is in the sidebar's lists")
         let review = try #require(workspace.session("ses_review"))

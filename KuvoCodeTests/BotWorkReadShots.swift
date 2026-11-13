@@ -74,6 +74,9 @@ struct BotWorkReadShots {
         let app = AppModel()
         app.workspace.api = engine.api
         await app.workspace.refresh()
+        // (Its sidebar as this Mac's box lists these sessions.)
+        let follows = try await engine.listing.follow(app.workspace)
+        defer { follows.cancel() }
         let machine = app.machines.add("mini-local")
         machine.showStandIn("connected")
         defer { app.removeMachine(machine.machine.id) }

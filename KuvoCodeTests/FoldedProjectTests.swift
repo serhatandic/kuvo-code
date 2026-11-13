@@ -37,6 +37,7 @@ import Testing
             session("ses_quiet", created: 4, idle: 5, viewed: 6),
         ])
         await app.workspace.refresh()
+        try await engine.listed(for: app.workspace)
         #expect(mark == nil, "nothing under it calls you back")
 
         // One finishes while you look elsewhere: new.
@@ -45,6 +46,7 @@ import Testing
             session("ses_quiet", created: 4, idle: 9, viewed: 6),
         ])
         await app.workspace.refresh()
+        try await engine.listed(for: app.workspace)
         #expect(mark == .new)
 
         // Another goes to work: working, over the news.
@@ -53,6 +55,7 @@ import Testing
             session("ses_quiet", created: 4, idle: 9, viewed: 6),
         ], running: ["ses_read"])
         await app.workspace.refresh()
+        try await engine.listed(for: app.workspace)
         try await until { mark == .working }
 
         // And one asks you something: it needs you, over both.
@@ -67,6 +70,7 @@ import Testing
             session("ses_find", parent: "ses_timer", created: 2, idle: 4, viewed: 4),
         ])
         await app.workspace.refresh()
+        try await engine.listed(for: app.workspace)
         #expect(mark == nil, "its subagent finished before you were last in its session")
 
         // The subagent finishes again, after you looked; its session itself is read.
@@ -75,6 +79,7 @@ import Testing
             session("ses_find", parent: "ses_timer", created: 2, idle: 12, viewed: 4),
         ])
         await app.workspace.refresh()
+        try await engine.listed(for: app.workspace)
         #expect(app.workspace.hasNewSubSessions("ses_timer"))
         #expect(mark == .new, "the subagent's news shows on the folded project")
     }

@@ -105,6 +105,9 @@ struct SessionGlanceShots {
         app.catalog.api = engine.api
         await app.catalog.refresh()
         await app.workspace.refresh()
+        // (Its sidebar as this Mac's box lists these sessions.)
+        let follows = try await engine.listing.follow(app.workspace)
+        defer { follows.cancel() }
         app.workspace.askingInBrowser = ["ses_g2"]
         for (id, glance) in glances() { app.glances.show(glance, for: id) }
         UserDefaults.standard.set(Self.sidebar, forKey: "sessionsWidth")

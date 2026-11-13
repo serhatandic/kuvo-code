@@ -367,7 +367,7 @@ final class Workspace {
     @ObservationIgnored private var sessionListSaves: [String: Task<Void, Never>] = [:]
 
     /// Where `box`'s list goes on from: its last line's.
-    private func listCursor(_ box: String) -> String? {
+    func listCursor(_ box: String) -> String? {
         listCursors[box] ?? sessionLists[box]?.at
     }
 

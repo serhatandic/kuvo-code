@@ -27,7 +27,7 @@ import Testing
         shop = work.appending(path: "shop").path
         blog = work.appending(path: "blog").path
         for folder in [shop, blog] { try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true) }
-        for key in ["projectFolders", "projectSettings", "projectsOnBox.mac", "projectsOnBox.lab", "projectsUnsent", "worktrees", "removedWorktrees"] { UserDefaults.standard.removeObject(forKey: key) }
+        for key in ["projectFolders", "projectSettings", "projectsOnBox.mac", "projectsOnBox.lab", "projectsUnsent", "worktrees", "removedWorktrees", "removedWorktreesHandedOver.mac"] { UserDefaults.standard.removeObject(forKey: key) }
         try? FileManager.default.removeItem(at: BoxProcess.home)
         engine.on("PATCH", "/api/session/*", json: ["data": [:]])
         box = try await TestBox(engine: engine.url)
@@ -36,7 +36,7 @@ import Testing
     private func done() {
         box.stop()
         engine.stop()
-        for key in ["projectFolders", "projectSettings", "projectsOnBox.mac", "projectsOnBox.lab", "projectsUnsent", "worktrees", "removedWorktrees"] { UserDefaults.standard.removeObject(forKey: key) }
+        for key in ["projectFolders", "projectSettings", "projectsOnBox.mac", "projectsOnBox.lab", "projectsUnsent", "worktrees", "removedWorktrees", "removedWorktreesHandedOver.mac"] { UserDefaults.standard.removeObject(forKey: key) }
         try? FileManager.default.removeItem(at: BoxProcess.home)
         try? FileManager.default.removeItem(at: work)
     }
@@ -47,6 +47,8 @@ import Testing
         workspace.api = engine.api
         let box = box, url = engine.url
         workspace.boxes = { id in id == BoxClient.mac ? box.client(engine: url) : nil }
+        // (Its session list from these sessions, filed where the box files their folders: `listed(for:)`.)
+        engine.listing.answer(rest: box.client(engine: url).transport)
         return workspace
     }
 
@@ -228,8 +230,9 @@ import Testing
         engine.list([StubEngine.session("ses_shop", directory: shop, created: 20), StubEngine.session("ses_tree", directory: tree, created: 10)])
         let workspace = workspace()
         await workspace.refresh()
+        try await engine.listed(for: workspace)
         await workspace.loadProjects(on: BoxClient.mac)
-        #expect(workspace.projects.first { $0.directory == shop }?.sessions.map(\.id) == ["ses_shop", "ses_tree"])
+        try await until { workspace.projects.first { $0.directory == shop }?.sessions.map(\.id) == ["ses_shop", "ses_tree"] }
 
         #expect(try await workspace.removeProject(shop) == 0)
         let patched = Set(engine.requests("PATCH", "").compactMap { request -> String? in
@@ -250,8 +253,9 @@ import Testing
         engine.list([StubEngine.session("ses_shop", directory: shop, created: 20), StubEngine.session("ses_tree", directory: tree, created: 10)])
         let workspace = workspace()
         await workspace.refresh()
+        try await engine.listed(for: workspace)
         await workspace.loadProjects(on: BoxClient.mac)
-        #expect(workspace.projects.first { $0.directory == shop }?.sessions.map(\.id) == ["ses_shop", "ses_tree"])
+        try await until { workspace.projects.first { $0.directory == shop }?.sessions.map(\.id) == ["ses_shop", "ses_tree"] }
         #expect(!workspace.projects.contains { $0.directory == tree }, "the worktree isn't a project of its own")
     }
 
@@ -270,6 +274,7 @@ import Testing
         ])
         let workspace = workspace()
         await workspace.refresh()
+        try await engine.listed(for: workspace)
         #expect(workspace.projects.first { $0.directory == shop }?.sessions.map(\.id) == ["ses_tree", "ses_shop"])
         #expect(!workspace.projects.contains { $0.directory == tree }, "never a project named after the worktree")
         #expect(workspace.projects.first { $0.directory == blog }?.sessions.map(\.id) == ["ses_moved"], "moved out of it since: where it is now")
@@ -293,8 +298,9 @@ import Testing
         engine.list([StubEngine.session("ses_shop", directory: shop, created: 10), StubEngine.session("ses_web", title: "kuvo-web: Vercel Web Analytics", directory: blog, created: 20)])
         let workspace = workspace()
         await workspace.refresh()
+        try await engine.listed(for: workspace)
         await workspace.loadProjects(on: BoxClient.mac)
-        #expect(workspace.projects.first { $0.directory == shop }?.sessions.map(\.id) == ["ses_web", "ses_shop"])
+        try await until { workspace.projects.first { $0.directory == shop }?.sessions.map(\.id) == ["ses_web", "ses_shop"] }
         #expect(!workspace.projects.contains { $0.directory == blog }, "the other folder isn't a project of its own")
         #expect(try await onBox(workspace).map(\.directory) == [shop], "nor does its box keep one")
     }
@@ -308,6 +314,7 @@ import Testing
         engine.list([StubEngine.session("ses_shop", directory: shop, created: 20), StubEngine.session("ses_tree", directory: tree, created: 10)])
         let workspace = workspace()
         await workspace.refresh()
+        try await engine.listed(for: workspace)
         await workspace.loadProjects(on: BoxClient.mac)
         let told = OSAllocatedUnfairLock(initialState: false)
         withObservationTracking { _ = workspace.projects } onChange: { told.withLock { $0 = true } }
@@ -315,8 +322,10 @@ import Testing
         let records = ["worktrees": [["project": shop, "root": tree, "folder": tree, "branch": "kuvo/swift-wolf"]]]
         try JSONSerialization.data(withJSONObject: records).write(to: BoxProcess.home.appending(path: "box/worktrees.json"))
         await workspace.loadProjects(on: BoxClient.mac)
-        #expect(told.withLock { $0 }, "a view showing the projects is told")
-        #expect(workspace.projects.first { $0.directory == shop }?.sessions.map(\.id) == ["ses_shop", "ses_tree"])
+        // Its box's list says so as it changes.
+        engine.listing.push()
+        try await until { told.withLock { $0 } }
+        try await until { workspace.projects.first { $0.directory == shop }?.sessions.map(\.id) == ["ses_shop", "ses_tree"] }
     }
 
     /// Worktrees this Mac kept before its box kept them go to the box, so Remove Project there
@@ -329,8 +338,10 @@ import Testing
         engine.list([StubEngine.session("ses_shop", directory: shop, created: 20), StubEngine.session("ses_tree", directory: tree, created: 10)])
         let workspace = workspace()
         await workspace.refresh()
+        try await engine.listed(for: workspace)
         await workspace.loadProjects(on: BoxClient.mac)
-        #expect(workspace.projects.first { $0.directory == shop }?.sessions.map(\.id) == ["ses_shop", "ses_tree"])
+        engine.listing.push()
+        try await until { workspace.projects.first { $0.directory == shop }?.sessions.map(\.id) == ["ses_shop", "ses_tree"] }
 
         #expect(try await workspace.removeProject(shop) == 0)
         let patched = Set(engine.requests("PATCH", "").compactMap { request -> String? in
@@ -353,6 +364,7 @@ import Testing
         ])
         let workspace = workspace()
         await workspace.refresh()
+        try await engine.listed(for: workspace)
         await workspace.loadProjects(on: BoxClient.mac)
         workspace.saveProject(shop, settings: .init(name: "Shop"))
 
@@ -364,7 +376,7 @@ import Testing
         #expect(patched == ["ses_new", "ses_old"])
         #expect(["ses_new", "ses_old"].allSatisfy { workspace.session($0).map(Workspace.isArchived) == true })
         #expect(!workspace.projects.contains { $0.directory == shop })
-        #expect(workspace.projects.contains { $0.directory == blog }, "another project stays")
+        try await until { workspace.projects.contains { $0.directory == blog } }
         // Kept on the box with its name, for when one of its sessions comes back.
         #expect(try await onBox(workspace).first { $0.directory == shop } == .init(directory: shop, name: "Shop", folders: [], removed: true))
     }

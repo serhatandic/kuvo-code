@@ -306,11 +306,15 @@ import Testing
         await app.connect(engine).value
         let session = try #require(sessions(on: id).first)
         let answer = WakesThere()
-        SSHConnection.standIn = { [ssh] address, script in
+        SSHConnection.fedStandIn = { [ssh] address, script, input in
+            // (Its session list, read as the sidebar follows it: not one of the wake-ups' reads.)
+            let asked = input.flatMap { try? Data(contentsOf: $0) }.map { String(decoding: $0, as: UTF8.self) } ?? ""
+            if script.contains(" box route"), asked.contains("kuvo/sessions/list") { return "{\"status\":503,\"body\":\"{}\"}" }
             ssh.note(script, to: address)
             if script.contains(" box route") { return answer.routed }
             return script.contains("timezone") ? "" : nil
         }
+        defer { SSHConnection.fedStandIn = nil }
         await app.wakeUps.share(with: engine)
         let due = Wakes.name(due: .now.addingTimeInterval(7200), every: nil)
         answer.set(["sessions": [["session": session.id, "next": 1, "watching": false,

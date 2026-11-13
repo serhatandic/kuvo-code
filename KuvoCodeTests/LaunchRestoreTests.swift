@@ -81,6 +81,8 @@ import Testing
         // The first launch: the harbor picked, then quit.
         let first = launch()
         await first.app.workspace.refresh()
+        let firstFollows = try await engine.listing.follow(first.app.workspace)
+        defer { firstFollows.cancel() }
         try await until { first.app.tabs.selection != nil }
         first.app.tabs.choose(.session(harbor))
         // Kept by the window as it changes, as in the app.
@@ -100,6 +102,8 @@ import Testing
         #expect(!showsWelcome(next.window), "no welcome while the sessions are read")
 
         await next.app.workspace.refresh()
+        let nextFollows = try await engine.listing.follow(next.app.workspace)
+        defer { nextFollows.cancel() }
         try await until { next.app.workspace.isLoaded }
         next.window.contentView?.layoutSubtreeIfNeeded()
         #expect(next.app.tabs.selection == .session(harbor), "still the harbor, not the latest")
@@ -114,6 +118,8 @@ import Testing
         defer { quit(launched.window) }
         #expect(!showsWelcome(launched.window), "no welcome while the sessions are read")
         await launched.app.workspace.refresh()
+        let follows = try await engine.listing.follow(launched.app.workspace)
+        defer { follows.cancel() }
         try await until { launched.app.tabs.selection == .session(lamp) }
         #expect(!showsWelcome(launched.window))
 

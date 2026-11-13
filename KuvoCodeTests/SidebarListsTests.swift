@@ -74,16 +74,9 @@ import Testing
             defer { listing.push() }
             return sessions.change(request, body)
         }
-        following = Self.follow(workspace, listing)
+        workspace.api = Self.api
         await workspace.refresh()
-        try await until { workspace.isListed(BoxClient.mac) }
-    }
-
-    /// `workspace` with this Mac's box's list, followed as AppModel follows it.
-    private static func follow(_ workspace: Workspace, _ listing: ListingBox) -> Task<Void, Never> {
-        workspace.api = api
-        workspace.boxes = { id in id == BoxClient.mac ? BoxClient(box: BoxClient.mac, transport: listing) : nil }
-        return Task { await workspace.followSessionList(on: BoxClient.mac) }
+        following = try await listing.follow(workspace)
     }
 
     private func done() {
@@ -164,9 +157,10 @@ import Testing
         // (Its box files the worktree's sessions under its project.)
         listing.change { $0.filed[tree.root] = tree.project }
         let workspace = Workspace()
-        let following = Self.follow(workspace, listing)
-        defer { following.cancel() }
+        workspace.api = Self.api
         await workspace.refresh()
+        let following = try await listing.follow(workspace)
+        defer { following.cancel() }
         let web = ["s_tree", "s_web_new", "s_web_old"]
         try await until { workspace.projects.first { $0.directory == "/tmp/kuvo-tests/web" }?.sessions.map(\.id) == web }
 
