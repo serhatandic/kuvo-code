@@ -31,8 +31,11 @@ struct MessagePartsTests {
         #expect(Self.cases("read").count >= 10)
     }
 
-    @Test(arguments: cases("compose") + cases("read"))
-    func partsKeptWithAMessageReadAsTheBoxWroteThem(_ each: [String: Any]) throws {
+    @Test func partsKeptWithAMessageReadAsTheBoxWroteThem() throws {
+        for each in Self.cases("compose") + Self.cases("read") { try partsRead(each) }
+    }
+
+    private func partsRead(_ each: [String: Any]) throws {
         let parts = try #require(each["parts"])
         let metadata = try JSONDecoder().decode(JSONValue.self, from: JSONSerialization.data(withJSONObject: ["kuvo": ["parts": parts], "other": 1]))
         let read = try #require(MessageParts.kept(in: metadata), "\(each["about"] ?? "")")
@@ -41,8 +44,11 @@ struct MessagePartsTests {
         #expect(MessageParts.of(id: "msg_x", text: "the text as written", metadata: metadata) == read)
     }
 
-    @Test(arguments: cases("compose"))
-    func aClientSendsTheFieldsTheBoxTakes(_ each: [String: Any]) throws {
+    @Test func aClientSendsTheFieldsTheBoxTakes() throws {
+        for each in Self.cases("compose") { try sends(each) }
+    }
+
+    private func sends(_ each: [String: Any]) throws {
         let fields = try #require(each["fields"] as? [String: Any])
         let comments = (fields["comments"] as? [[String: Any]] ?? []).map {
             MessageParts.Comment(file: $0["file"] as! String, line: $0["line"] as! Int, side: $0["side"] as! String == "old" ? .old : .new, snippet: $0["snippet"] as! String, text: $0["text"] as! String)
