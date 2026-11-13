@@ -8,7 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
 import { processRuns } from "../../shared/platform";
-import { writePrivate } from "../files";
+import { locked } from "../files";
 import { sleep } from "../../shared/wait";
 import type { RehomeStatus, RehomeStep } from "../../shared/routes/box";
 
@@ -39,6 +39,10 @@ export interface RehomeRecord extends Partial<RehomeStatus> {
   /** What a move merged into a folder that was there (a session's files from the app's
    * `Attachments` into `attachments`, say): each as it was and where it went, for a move back. */
   merged?: { source: string; placed: string }[];
+  /** The move whose failure its tries count (its journal's `began`): counted once. */
+  counted?: number;
+  /** Moved back: it moves again only on Move Now, until a move's done. */
+  movedBack?: boolean;
 }
 
 const stateFile = (home: string) => path.join(rehomeFolder(home), "state.json");
@@ -54,9 +58,13 @@ export function readRecord(home: string): RehomeRecord {
 
 /** `state.json` changed: each field given, null taking it away where it's optional. */
 export function noteRecord(home: string, change: Partial<RehomeRecord>): RehomeRecord {
-  const next: RehomeRecord = { ...readRecord(home), ...change };
-  writePrivate(stateFile(home), JSON.stringify(next, null, 1));
-  return next;
+  fs.mkdirSync(rehomeFolder(home), { recursive: true, mode: 0o700 });
+  // (One change at a time, from the move, `--ready` and the route alike: none lost.)
+  return locked(`${stateFile(home)}.lock`, () => {
+    const next: RehomeRecord = { ...readRecord(home), ...change };
+    writeSynced(stateFile(home), JSON.stringify(next, null, 1));
+    return next;
+  });
 }
 
 /** How the move stands, as `kuvo/box/rehome` says it (the journal's step while one's under way). */
@@ -77,7 +85,7 @@ export function rehomeStatus(home: string, now = Date.now()): RehomeStatus {
     tries: typeof kept.tries === "number" ? kept.tries : 0,
     nextTry: typeof kept.nextTry === "number" ? kept.nextTry : null,
     waitingSince,
-    overdue: state === "waiting" && waitingSince !== null && now - waitingSince >= OVERDUE_AFTER,
+    overdue: (state === "waiting" || state === "failed") && waitingSince !== null && now - waitingSince >= OVERDUE_AFTER,
     failed: unreadable ? { at: now, step: null, message: new UnreadableJournal().message } : kept.failed ?? null,
     movedAt: typeof kept.movedAt === "number" ? kept.movedAt : null,
     keptUntil: typeof kept.keptUntil === "number" ? kept.keptUntil : null,
@@ -121,6 +129,9 @@ export interface Journal {
   kept: string;
   /** A move back's: the kept copy of the move it undoes, whose folders' modes it makes them with again. */
   keptBefore?: string;
+  /** When it began to clone: what's changed since where it moves from (written there meanwhile)
+   * only its copy would have, so it goes back. */
+  clonedAt?: number;
   /** Keep This Mac Awake was off in the app: the box's own setting says so too. */
   keepsAwakeOff?: boolean;
 }
@@ -162,17 +173,21 @@ export const moveUnderWay = (home: string): boolean => {
 
 /** The journal written whole, synced (its file, then its folder) before anything it says is done. */
 export function writeJournal(home: string, journal: Journal): void {
-  const file = journalFile(home);
+  writeSynced(journalFile(home), JSON.stringify(journal, null, 1));
+}
+
+/** `text` in `file`, whole: written beside it and synced, renamed into place, its folder synced. */
+function writeSynced(file: string, text: string): void {
   const temporary = `${file}.${process.pid}.tmp`;
   const fd = fs.openSync(temporary, "w", 0o600);
   try {
-    fs.writeSync(fd, JSON.stringify(journal, null, 1));
+    fs.writeSync(fd, text);
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);
   }
   fs.renameSync(temporary, file);
-  syncFolder(rehomeFolder(home));
+  syncFolder(path.dirname(file));
 }
 
 export function forgetJournal(home: string): void {
@@ -183,9 +198,13 @@ export function forgetJournal(home: string): void {
 
 /** Each act, one JSON line, synced before it's done (one cut short by a crash wasn't done). */
 export function journalAct(home: string, act: Act): void {
-  const fd = fs.openSync(actsFile(home), "a", 0o600);
+  const fd = fs.openSync(actsFile(home), "a+", 0o600);
   try {
-    fs.writeSync(fd, JSON.stringify(act) + "\n");
+    // (After a line a crash cut short, on a line of its own.)
+    const size = fs.fstatSync(fd).size;
+    const last = Buffer.alloc(1);
+    const torn = size > 0 && fs.readSync(fd, last, 0, 1, size - 1) === 1 && last[0] !== 10;
+    fs.writeSync(fd, (torn ? "\n" : "") + JSON.stringify(act) + "\n");
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);

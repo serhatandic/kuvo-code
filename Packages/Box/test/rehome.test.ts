@@ -8,6 +8,7 @@ import { join } from "node:path"
 import { BRIDGE_VERSION } from "../src/link/version"
 import { askRehome, rehomeReady } from "../src/link/rehome/move"
 import { rehomeStatus } from "../src/link/rehome/state"
+import { clearUpdateStaging } from "../src/link/updates/update"
 
 // Moving this Mac's box out of its app's folder into a home of its own (#333 piece 2a,
 // `kuvo-link.js rehome`), run as the keeper runs it: a process of its own, in a home folder of the
@@ -32,9 +33,9 @@ const put = (file: string, text: string) => {
 /** A Mac whose app's box ran in its folder (`S`, as the app's tests name it), with nothing in its
  * `~/.kuvo-code` yet but what `given` puts there. */
 let worlds = 0
-function world(given: (w: World) => void = () => {}): World {
+function world(given: (w: World) => void = () => {}, appFolder = "Support"): World {
   const home = join(root, `w${worlds++}`)
-  const S = join(home, "Support")
+  const S = join(home, appFolder)
   const w = { home, S, K: join(home, ".kuvo-code"), release: join(home, "release") }
   mkdirSync(join(home, "tmp"), { recursive: true })
   // The box's own folder.
@@ -170,7 +171,8 @@ test.if(mac)("the move puts this Mac's box in a home of its own, laid out as a m
   expect(read("attachments/ses_1/a 2.png")).toBe("app's a, the same name")
   // Its run state, not its processes' records; its files from its release, not the app's bin.
   expect(readdirSync(join(K, "run")).sort()).toEqual(["fence", "link.json", "mac-link.json", "setup-card.json"])
-  expect(readdirSync(join(K, "bin")).sort()).toEqual(["kuvo-link.js", "kuvo-start"])
+  // (With what the app put in its box's bin that the release doesn't bring: its catalog.)
+  expect(readdirSync(join(K, "bin")).sort()).toEqual(["kuvo-link.js", "kuvo-start", "mcp-catalog.json"])
   // The app's folder keeps only what's the app's; the originals are kept, for 30 days.
   expect(readdirSync(w.S).sort()).toEqual(["Browser", "bots.json"])
   const kept = moved.said!.status
@@ -282,8 +284,12 @@ test.if(mac)("a move back brings the box back into the app's folder as it is now
   // Used in its home meanwhile.
   put(join(w.K, "data", "opencode", "since"), "a session made since")
   put(join(w.K, "attachments", "ses_3", "d.png"), "sent since")
-  put(join(w.K, "run", "box.pid"), "999997")
+  // (Its keeper runs it, as it would: its own record is no refusal.)
+  const keeper = Bun.spawn(["/bin/sh", "-c", "read line", "kuvo-start"], { stdin: "pipe" })
+  put(join(w.K, "run", "box.pid"), String(keeper.pid))
   const back = rehome(w, ["--back"])
+  keeper.stdin.end()
+  await keeper.exited
   expect(back.status, JSON.stringify(back.said) + back.errors).toBe(0)
   expect(back.said).toMatchObject({ result: "back", status: { state: "back", way: "back", owed: ["keychain", "agent"] } })
   // As it was (its processes' records and the app's own bin aside, which the app makes anew as it
@@ -432,11 +438,14 @@ test.if(mac)("a move that can't finish clearing says it's stuck, starts nothing,
   // (Where it keeps the originals can't be written.)
   mkdirSync(join(w.K, "updates", "rehome", "kept"), { recursive: true, mode: 0o700 })
   chmodSync(join(w.K, "updates", "rehome", "kept"), 0o500)
-  const stuck = move(w)
-  expect(stuck.status).toBe(3)
-  expect(stuck.said).toMatchObject({ result: "stuck", status: { state: "clearing", step: "clear", failed: { step: "clear" } } })
-  expect(here(w)).toMatchObject({ verdict: "moving", use: "wait" })
-  chmodSync(join(w.K, "updates", "rehome", "kept"), 0o700)
+  try {
+    const stuck = move(w)
+    expect(stuck.status).toBe(3)
+    expect(stuck.said).toMatchObject({ result: "stuck", status: { state: "clearing", step: "clear", failed: { step: "clear" } } })
+    expect(here(w)).toMatchObject({ verdict: "moving", use: "wait" })
+  } finally {
+    chmodSync(join(w.K, "updates", "rehome", "kept"), 0o700)
+  }
   const resumed = rehome(w, ["--resume"])
   expect(resumed.status).toBe(0)
   expect(resumed.said).toMatchObject({ result: "done" })
@@ -499,3 +508,51 @@ test.if(mac)("a copy of the app that isn't the real one never reads or asks the 
   expect(ask({ method: "POST", path: "kuvo/box/rehome", body: { now: true } }).status).toBe(409)
   expect(existsSync(join(home, ".kuvo-code"))).toBe(false)
 }, 60_000)
+
+test.if(mac)("what goes wrong before a move begins says it failed, for the box where it was to start as it was", () => {
+  const w = world()
+  // (Asked without the app's box: nothing begins.)
+  const wrong = rehome(w, ["--release", w.release], { KUVO_HOME: w.K })
+  expect([wrong.status, wrong.said?.result]).toEqual([1, "failed"])
+  expect(readdirSync(w.S)).toContain("box")
+}, 60_000)
+
+test.if(mac)("what's written where it moves from as it moves, or a box that starts meanwhile, sends it back before it clears: nothing is left only in its kept copy", async () => {
+  const w = world()
+  const before = snapshot(w.S)
+  // You send a file as it clones: the app keeps it in its Attachments.
+  const sent = move(w, { KUVO_TEST_REHOME_WRITE_AT: "after-fix", KUVO_TEST_REHOME_WRITE_FILE: join(w.S, "Attachments", "ses_9", "new.png"), KUVO_TEST_REHOME_WRITE_TEXT: "sent meanwhile" })
+  expect([sent.status, sent.said?.result]).toEqual([1, "failed"])
+  expect(sent.said!.message).toContain("changed as it moved")
+  expect(readFileSync(join(w.S, "Attachments", "ses_9", "new.png"), "utf8")).toBe("sent meanwhile")
+  expect(Object.fromEntries(Object.entries(snapshot(w.S)).filter(([file]) => !file.startsWith("Attachments/ses_9") && file !== "Attachments"))).toEqual(Object.fromEntries(Object.entries(before).filter(([file]) => file !== "Attachments")))
+  expect(readdirSync(w.K)).toEqual(["updates"])
+
+  const started = world()
+  const engine = Bun.spawn(["/bin/sh", "-c", "read line", "opencode"], { stdin: "pipe" })
+  try {
+    const moved = move(started, { KUVO_TEST_REHOME_WRITE_AT: "after-fix", KUVO_TEST_REHOME_WRITE_FILE: join(started.S, "box", "run", "engine.json"), KUVO_TEST_REHOME_WRITE_TEXT: JSON.stringify({ pid: engine.pid, port: 1 }) })
+    expect(moved.said).toMatchObject({ result: "failed", status: { state: "failed", failed: { step: "fix" } } })
+    expect(moved.said!.message).toContain("Something started in the box as it moved (its engine)")
+    expect(readdirSync(started.S)).toContain("box")
+    expect(readdirSync(started.K)).toEqual(["updates"])
+  } finally {
+    engine.stdin.end()
+    await engine.exited
+  }
+}, 60_000)
+
+test.if(mac)("the real app's box isn't moved by a version that can't rewrite the paths its sessions name", () => {
+  const w = world(() => {}, "run.kuvo.code.demo")
+  const refused = move(w)
+  expect([refused.status, refused.said?.message]).toEqual([1, "This version of Kuvo Code can't move its box yet."])
+  expect(readdirSync(w.S)).toContain("box")
+}, 60_000)
+
+test("an update's tidying of its folder leaves a move's state and kept copies alone", () => {
+  const updates = join(root, "updates")
+  for (const file of ["rollback/restore.sh", "installed.json", "rehome/state.json", "rehome/kept/x/box/f", "1.2.3/bin/kuvo-link.js"]) put(join(updates, file), "x")
+  clearUpdateStaging(updates)
+  expect(readdirSync(updates).sort()).toEqual(["installed.json", "rehome", "rollback"])
+  expect(existsSync(join(updates, "rehome", "kept", "x", "box", "f"))).toBe(true)
+})

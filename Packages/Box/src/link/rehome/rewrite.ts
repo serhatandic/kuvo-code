@@ -3,6 +3,7 @@
 // One path map (old prefix → new) applied by one rewriter; a move back is the same map turned
 // around. Until 2b, nothing's rewritten: the move puts the box's folders in place as they are.
 
+import { IN_TEST_FOLDER } from "../home";
 import type { Placement } from "./state";
 
 /** One old prefix and the new one it becomes, longest first. */
@@ -25,9 +26,10 @@ export interface Rewriter {
   outside(map: PathMap, journal: (undo: { act: "rename"; from: string; to: string }) => void): void;
 }
 
-/** The rewriter until piece 2b: nothing rewritten, nothing refused. */
+/** The rewriter until piece 2b: nothing rewritten, and so no real box moved (its sessions would name
+ * folders it left): a test's alone. */
 export const NO_REWRITE: Rewriter = {
-  refuses: () => null,
+  refuses: () => (IN_TEST_FOLDER ? null : "This version of Kuvo Code can't move its box yet."),
   rewrite: () => {},
   check: () => {},
   outside: () => {},

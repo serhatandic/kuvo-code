@@ -10,7 +10,7 @@
 //   rehome <root> --settled keychain|agent                      what the app owed it, done
 
 import { appFolderOf, homeOfRoot, NOTHING_TO_MOVE, rehome, rehomeBack, rehomeReady, rehomeResume, settled, type RehomeOutcome } from "./move";
-import { rehomeStatus } from "./state";
+import { moveUnderWay, rehomeStatus } from "./state";
 
 /** Each result's exit status: 0, start what's there; 1, it didn't move, start the box where it was;
  * 3, stuck past the point it goes back from (`--resume`), start nothing; 4, another move holds the
@@ -64,9 +64,10 @@ export async function rehomeCommand(root: string | undefined, args: string[]): P
     say(outcome);
     return EXIT[outcome.result];
   } catch (error) {
-    // (Something unforeseen, before anything began or wherever it stopped: the journal says which,
-    // and `here` with it; nothing's started either way.)
-    say({ result: "stuck", message: error instanceof Error ? error.message : String(error), status: rehomeStatus(home) });
-    return EXIT.stuck;
+    // (Something unforeseen: stuck where a move is under way, by its journal, which `here` says
+    // too; else it never began, and the box where it was starts as it was.)
+    const result = moveUnderWay(home) ? "stuck" : "failed";
+    say({ result, message: error instanceof Error ? error.message : String(error), status: rehomeStatus(home) });
+    return EXIT[result];
   }
 }

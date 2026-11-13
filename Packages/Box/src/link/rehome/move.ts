@@ -15,7 +15,7 @@ import { processRuns } from "../../shared/platform";
 import type { RehomeStatus, RehomeStep } from "../../shared/routes/box";
 import { readAsks } from "../areas/asks";
 import { listOf, writePrivate } from "../files";
-import { IN_TEST_FOLDER, homeFolder, located } from "../home";
+import { IN_TEST_FOLDER, accountHome, homeFolder, located } from "../home";
 import { foundAt, runsAt } from "../setup/judge";
 import { agentsWorking } from "../updates/update";
 import { BRIDGE_VERSION } from "../version";
@@ -56,8 +56,15 @@ const inside = (file: string, folder: string) => file !== folder && file.startsW
 
 // A crash at a named point, for a test's folder alone (`KUVO_TEST_REHOME_STOP`): killed at once, as
 // a power cut or a kill would, with nothing after it run.
+// And, for a test, something written there meanwhile (`KUVO_TEST_REHOME_WRITE_AT`, `…_FILE`, `…_TEXT`),
+// as the app or a process that started would.
 function stopPoint(point: string): void {
-  if (IN_TEST_FOLDER && process.env.KUVO_TEST_REHOME_STOP === point) process.kill(process.pid, "SIGKILL");
+  if (!IN_TEST_FOLDER) return;
+  if (process.env.KUVO_TEST_REHOME_WRITE_AT === point && process.env.KUVO_TEST_REHOME_WRITE_FILE) {
+    fs.mkdirSync(path.dirname(process.env.KUVO_TEST_REHOME_WRITE_FILE), { recursive: true });
+    fs.writeFileSync(process.env.KUVO_TEST_REHOME_WRITE_FILE, process.env.KUVO_TEST_REHOME_WRITE_TEXT ?? "");
+  }
+  if (process.env.KUVO_TEST_REHOME_STOP === point) process.kill(process.pid, "SIGKILL");
 }
 
 // Running
@@ -83,8 +90,7 @@ export function runningIn(run: string, { keeper = true } = {}): string[] {
 
 // Disks
 
-// (`timeout` undefined for none: a clone of a big box takes as long as it takes.)
-const ran = (command: string, args: string[], timeout: number | undefined = 120_000) => {
+const ran = (command: string, args: string[], timeout = 120_000) => {
   const result = spawnSync(command, args, { encoding: "utf8", timeout, maxBuffer: 64 * 1024 * 1024 });
   return { status: result.status, output: `${result.stdout ?? ""}`, errors: `${result.stderr ?? ""}` };
 };
@@ -164,8 +170,12 @@ export function planBack({ appFolder, home }: Folders, merged: { source: string;
   };
   for (const name of listOf(home).sort()) {
     if (name === "bin") continue;
-    if (name === "updates") {
-      for (const each of listOf(path.join(home, name)).sort()) if (each !== "rehome") add(path.join(home, name, each), path.join(box, name, each));
+    // (`updates` an entry at a time, never the move's own; `trash` so too, never an earlier box the
+    // move set aside there, which stays where it was.)
+    if (name === "updates" || name === "trash") {
+      for (const each of listOf(path.join(home, name)).sort()) {
+        if (each !== "rehome" && !each.startsWith("earlier-box-")) add(path.join(home, name, each), path.join(box, name, each));
+      }
       continue;
     }
     const there = beside.get(name);
@@ -193,7 +203,10 @@ export function moveRefusal({ appFolder, home }: Folders, { appVersion, release,
   const running = checkRunning ? runningIn(path.join(box, "run"), { keeper: false }) : [];
   if (running.length) return `Something is running in this Mac's box (${running.join(", ")}): it moves once that's stopped.`;
   // (Asked whether it's ready, the files may not be said yet.)
-  if (release !== undefined && (!release || !exists(path.join(release, "bin", "kuvo-start")) || !exists(path.join(release, "bin", "kuvo-link.js")))) {
+  // (A copy of the app, a demo's or a test's, never moves into the real one's home.)
+  if (located(home) === located(path.join(accountHome(), ".kuvo-code")) && path.basename(appFolder) !== "run.kuvo.code") return "Only Kuvo Code itself moves its box into ~/.kuvo-code: a copy moves into a home of its own.";
+  const fileAt = (file: string) => { try { return fs.statSync(file).isFile(); } catch { return false; } };
+  if (release !== undefined && (!release || !fileAt(path.join(release, "bin", "kuvo-start")) || !fileAt(path.join(release, "bin", "kuvo-link.js")))) {
     return "The box's own files to put in its new home weren't given.";
   }
   // A box already in its home (#333 §3.7): no move, both keep running as they are. One its Mac
@@ -218,7 +231,8 @@ export function backRefusal({ appFolder, home }: Folders, { running: checkRunnin
   if (process.platform !== "darwin") return NOTHING_TO_MOVE;
   const state = readRecord(home);
   if (state.state !== "done" || state.way !== "move") return NOT_MOVED;
-  const running = checkRunning ? runningIn(path.join(home, "run")) : [];
+  // (Its keeper, which runs the move back, aside.)
+  const running = checkRunning ? runningIn(path.join(home, "run"), { keeper: false }) : [];
   if (running.length) return `Something is running in this Mac's box (${running.join(", ")}): it moves back once that's stopped.`;
   const old = path.join(appFolder, "box", "run");
   if (["setup-card.json", "link.json"].some(file => exists(path.join(old, file))) || runningIn(old).length) return "Kuvo Code has a box of its own in its folder again: this one can't move back beside it.";
@@ -254,6 +268,27 @@ const keptLike = (journal: Journal) => (folder: string): string | null => {
   return exists(was) ? was : null;
 };
 
+/** The first file in `files` (or in their folders) changed since `since` (ms), or null. A file's
+ * status time, which a write, a rename into its folder or a change of its mode moves. */
+function changedSince(files: string[], since: number): string | null {
+  const walk = (file: string): string | null => {
+    let kind: fs.Stats;
+    try { kind = fs.lstatSync(file); } catch { return null; }
+    if (kind.ctimeMs >= since) return file;
+    if (!kind.isDirectory()) return null;
+    for (const name of listOf(file)) {
+      const found = walk(path.join(file, name));
+      if (found) return found;
+    }
+    return null;
+  };
+  for (const file of files) {
+    const found = walk(file);
+    if (found) return found;
+  }
+  return null;
+}
+
 /** A free name beside `file` for one that's there already ("name 2.ext", …). */
 function freeName(file: string): string {
   const extension = path.extname(file), base = file.slice(0, file.length - extension.length);
@@ -280,10 +315,15 @@ function place(home: string, from: string, to: string, source: string, wins: boo
   if (merged || clash) stopPoint("in-merge");
 }
 
+/** As long as a clone may take: hours, for a box of millions of files, never a clone that hangs for
+ * good (with the box stopped). */
+const CLONE_LIMIT = 6 * 3600_000;
+
 /** `from` cloned to `to` (`cp -c`: APFS clones, links as links; a socket isn't a file and stays);
  * `installed` files copied, from wherever they are. */
 function clone(from: string, to: string, installed = false): void {
-  const result = ran("/bin/cp", [installed ? "-RPp" : "-cRPp", from, to], undefined);
+  // (The box's files whole, links followed: from the app, wherever it is.)
+  const result = ran("/bin/cp", [installed ? "-RLp" : "-cRPp", from, to], CLONE_LIMIT);
   if (result.status !== 0) throw new Error(`${from} couldn't be cloned: ${result.errors.trim().slice(0, 300)}`);
 }
 
@@ -306,6 +346,15 @@ function cloneAll(journal: Journal): void {
       }
     } else {
       clone(placement.from, placement.staged, placement.installed);
+    }
+    // The box's files: with those the app put in its box's `bin` that its release doesn't bring
+    // (its catalog of servers, its bots' words), as the box reads them there.
+    if (placement.installed && journal.way === "move") {
+      const old = path.join(journal.from, "box", "bin");
+      for (const name of listOf(old)) {
+        const kind = fs.lstatSync(path.join(old, name));
+        if (!exists(path.join(placement.staged, name)) && (kind.isFile() || kind.isDirectory())) clone(path.join(old, name), path.join(placement.staged, name));
+      }
     }
     for (const other of journal.placements) {
       if (inside(other.from, placement.from)) fs.rmSync(path.join(placement.staged, path.relative(placement.from, other.from)), { recursive: true, force: true });
@@ -353,8 +402,9 @@ const homeOf = (journal: Journal) => foldersOf(journal).home;
 
 function stepTo(journal: Journal, step: RehomeStep): void {
   if (!holdsLock(homeOf(journal))) throw new LockLost("Another move took its lock.");
+  // (The step it's at once the journal says so, never before.)
+  writeJournal(homeOf(journal), { ...journal, step });
   journal.step = step;
-  writeJournal(homeOf(journal), journal);
 }
 
 /** Its steps from where the journal is, to the end (a failure before `clear` throws, for the move to
@@ -388,6 +438,7 @@ function carryOn(journal: Journal, rewriter: Rewriter): void {
     stopPoint("after-install");
   }
   if (at("clone")) {
+    journal.clonedAt = Date.now();
     stepTo(journal, "clone");
     cloneAll(journal);
     settleBoxFiles(journal);
@@ -440,10 +491,16 @@ function carryOn(journal: Journal, rewriter: Rewriter): void {
   if (at("clear")) {
     if (stepIndex(journal.step) < stepIndex("clear")) {
       const run = journal.way === "move" ? path.join(journal.from, "box", "run") : path.join(home, "run");
-      const running = runningIn(run, { keeper: journal.way === "back" });
+      const running = runningIn(run, { keeper: false });
       if (running.length) throw new Error(`Something started in the box as it moved (${running.join(", ")}), so it went back.`);
+      // Nor anything written meanwhile where it moves from (a file the app kept as you sent it):
+      // only its copy would move.
+      const written = journal.way === "move" && journal.clonedAt ? changedSince(journal.placements.filter(each => !each.installed && !inside(each.from, path.join(journal.from, "opencode")) && !inside(each.from, path.join(journal.from, "engine"))).map(each => each.from), journal.clonedAt) : null;
+      if (written) throw new Error(`${written} changed as it moved, so it went back.`);
     }
     stepTo(journal, "clear");
+    // A move back: the files its keys were written to from your Keychain go, never kept.
+    if (journal.way === "back") for (const name of ["keys", "bot-keys"]) fs.rmSync(path.join(home, "box", name), { recursive: true, force: true });
     const root = journal.way === "move" ? journal.from : home;
     let cleared = 0;
     for (const file of journal.clearing) {
@@ -453,6 +510,8 @@ function carryOn(journal: Journal, rewriter: Rewriter): void {
       rename(home, file, exists(kept) ? freeName(kept) : kept);
       if (++cleared === 1) stopPoint("in-clear");
     }
+    // (Its trash, emptied going back, goes too: one that still holds an earlier box stays.)
+    if (journal.way === "back") try { fs.rmdirSync(path.join(home, "trash")); } catch {}
     stopPoint("after-clear");
   }
   finish(journal);
@@ -468,6 +527,8 @@ function finish(journal: Journal, now = Date.now()): void {
   noteRecord(home, {
     state: journal.way === "move" ? "done" : "back",
     way: journal.way,
+    // (Moved back, it moves again only on Move Now, however that goes: until a move's done.)
+    movedBack: journal.way === "back",
     movedAt: now,
     keptUntil: now + KEPT_FOR,
     kept: [...(record.kept ?? []).filter(each => each !== journal.kept), journal.kept],
@@ -493,8 +554,10 @@ function failed(journal: Journal, error: unknown, now = Date.now()): string {
   const message = error instanceof Error ? error.message : String(error);
   const record = readRecord(home);
   // A move back that didn't: the box stays moved, as it was (Move Back tried again by asking again).
+  // (Its try counted once, should it stop before the journal goes and be undone again.)
+  const counted = record.counted === journal.began;
   if (journal.way === "back") noteRecord(home, { state: "done", way: "move", failed: { at: now, step, message }, asked: null });
-  else noteRecord(home, { state: "failed", way: "move", tries: (record.tries ?? 0) + 1, nextTry: now + AFTER_A_FAILURE, failed: { at: now, step, message }, asked: null });
+  else noteRecord(home, { state: "failed", way: "move", tries: (record.tries ?? 0) + (counted ? 0 : 1), nextTry: now + AFTER_A_FAILURE, failed: { at: now, step, message }, asked: null, counted: journal.began });
   // (Then the journal: stopped before, it's undone again, which changes nothing.)
   forgetJournal(home);
   return message;
@@ -604,7 +667,7 @@ export async function rehomeBack(home: string, options: MoveOptions = {}): Promi
     const now = Date.now();
     if (refusal || !appFolder) {
       // (Move Back asked: answered, for the keeper not to ask again until it's asked again.)
-      if (record.state === "done" && record.way === "move") noteRecord(home, { failed: { at: now, step: "plan", message: refusal! }, asked: null });
+      if (record.state === "done" && record.way === "move") noteRecord(home, { failed: { at: now, step: "plan", message: refusal ?? NOT_MOVED }, asked: null });
       return { result: "refused", message: refusal ?? NOT_MOVED, status: rehomeStatus(home) };
     }
     return run({
@@ -662,7 +725,7 @@ export async function rehomeReady(home: string, appFolder: string | null, { appV
     return say(false, null, refusal);
   }
   if (moved) return say(false, null, "This Mac's box has moved.");
-  if (record.state === "back" && record.asked !== "now") return say(false, null, "It was moved back: it moves again only on Move Now.");
+  if (record.movedBack && record.asked !== "now") return say(false, null, "It was moved back: it moves again only on Move Now.");
   if (!appFolder) return say(false, null, "Only the app's own box, in its folder, moves.");
   const refusal = moveRefusal({ appFolder, home }, { appVersion, release, running: false });
   if (refusal) return say(false, null, refusal);
