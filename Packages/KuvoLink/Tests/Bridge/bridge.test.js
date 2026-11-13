@@ -1538,6 +1538,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "bots.job": ["GET", "kuvo/bots"],
     "bots.keys": ["GET", "kuvo/bots/bot_none/keys"],
     "bots.make": ["GET", "kuvo/bots/templates"],
+    // (A box in a home of its own: on a Mac's, kuvo/work/settings's keepsAwake.)
+    "box.ownHome": ["GET", "kuvo/work/settings"],
     branch: ["POST", "kuvo/agents/api/kuvo/branch/ses_none"],
     // (Its browser, set up by the box itself.)
     browser: ["GET", "kuvo/browser"],

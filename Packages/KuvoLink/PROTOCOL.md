@@ -1642,6 +1642,12 @@ folder you pick once per box, after asking you.
   kept in `box/work.json`. None until you pick one; `suggested` is `~/Developer` or `~/Projects`
   when there's one. PATCH `{projectsFolder}` takes a full path (`~` is fine) to a folder that's
   there, or null; 400 otherwise. The box makes projects only there, and never deletes one.
+- **Keeping this Mac awake** (`box.ownHome`): a Mac's box in a home of its own ("This Mac's box: a
+  home of its own") adds `keepsAwake` (whether it keeps the Mac from falling asleep while agents
+  work, on unless you turned it off) and `awakeNow` (whether it does now), and PATCH takes
+  `{keepsAwake: bool}`, alone or with `projectsFolder` (400 for anything but a bool, and then
+  neither is kept). The hold follows a change within ten seconds, so `awakeNow` in PATCH's answer
+  may not have yet. Other boxes say neither, and take `projectsFolder` alone.
 - **Tools**: `make_project` (`{name, git?, clone?, folder?}`: a folder named after it, lowercase with
   dashes, a new git repository there unless `git: false`, or a repository cloned from an https or
   ssh address; either way it has a commit at once (bridge 0.9.198: an empty `Initial commit` in a
@@ -4404,6 +4410,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `bots.job` | a bot's job as its box's record: `jobDetails` in `kuvo/bots`, `job` in `PATCH kuvo/bots/<id>` |
 | `bots.keys` | `kuvo/bots/<id>/keys…` |
 | `bots.make` | `kuvo/bots/templates` and `POST kuvo/bots` |
+| `box.ownHome` | a Mac's box can run in a home of its own, laid out as a machine's (`box/kind`, "This Mac's box: a home of its own"); there, `keepsAwake` and `awakeNow` in `kuvo/work/settings` |
 | `branch` | `kuvo/agents/api/kuvo/branch/<session>`: Branch from here, marked |
 | `browser` | a machine only: `kuvo/browser`, its browser set up by the box itself ("The browser on a machine") |
 | `btw` | `kuvo/agents/api/kuvo/btw…`: side questions ("Side questions, handoffs and reviews") |
@@ -4647,6 +4654,47 @@ temporary folder), never in its own folder. What integrations' servers keep (a s
 app's `integrations` folder (`KUVO_INTEGRATIONS`), as the engine runs them with it. The app puts the popular servers in its
 `bin/mcp-catalog.json` as it starts it, and those that use a Mac's own apps are listed and added
 there.
+
+#### A home of its own
+
+Every box can run in a home of its own, laid out as a machine's (#333), a Mac's too: its kind is
+what it records in `box/kind`, a word on a line (`mac` or `machine`; none, or another word, is a
+machine). The app's box in its own folder is a Mac's whatever's recorded there, as its keeper says
+(`KUVO_BOX=mac`), and is the only box that reaches beside its home, for what its app keeps there.
+Every other box names every place from its home (`kuvo-link.js`, `bin/kuvo-start` and
+`bin/kuvo-launch` read `box/kind`), whichever of its processes asks. A Mac's box in a home of its
+own keeps:
+
+- its engine's settings and skills in `config` (`config/opencode/opencode.json`, its own from the
+  start, as in the app's folder; never `box/opencode.json`), its engine's data in `data/opencode`,
+  what integrations' servers keep in `integrations`;
+- its chats in `chats`, every file sent with a message in `attachments`, its bots in `bots`, their
+  wake-ups in `wakes`, and the rest of the box's own as a machine keeps them (`box/`, `run/`,
+  `artifacts`, `trash`, `search`, `apps`, `browser`, `updates`, `t`); the coding agents' bridge
+  keeps `agents` and `groups` there, as on a machine;
+- the list of your machines in `machines.json` and the app's record of their bridges in
+  `phone-link.json`, which the app writes beside it;
+- its engine's settings as its own: its engine's start (`kuvo-launch`) reads nothing before them and
+  writes nothing over them, whatever a machine's start left in that home (`box/opencode.json`);
+- its keys in the Mac's Keychain, through its host ("Host interface"), as in the app's folder, from
+  every process of its own (`serve`, a client's `box route`) whatever its environment says. What
+  the engine reads them from, the box writes itself, where a machine keeps its keys
+  (`box/keys/<variable>`, a bot's own in `box/bot-keys`, each `0600`; its settings name them
+  `{file:~/.kuvo-code/box/keys/<variable>}`): each once its host kept or removed it (one its host
+  still keeps stays), under one lock across its processes (`run/.key-files.lock`); and, while
+  `serve` runs, as it starts and twice a day after (a minute later while its host can't list them),
+  each as its host has it then;
+- Keep This Mac Awake as its own setting (`keepsAwake` in `box/work.json`, on unless you turn it
+  off; `kuvo/work/settings`, "Work"): while a session works on its engine or with its coding agents,
+  `serve` holds the Mac from falling asleep by itself (`caffeinate -i`, tied to it), looking every
+  ten seconds; it lets go once none does, or the setting's off, and keeps the hold as it was while it
+  can't tell (its engine recorded but not answering). It says so in `run/work-awake.json` (`{"by":
+  <its pid>, "hold": <caffeinate's pid> | null}`), which every process's `awakeNow` reads. While
+  that `serve` runs, its `kuvo-start` holds nothing for it and lets go of a hold it had; until then
+  it holds the Mac awake on power as a machine's does.
+
+Nothing records `box/kind` yet: the move to `~/.kuvo-code` and what the app does for a box there
+come later (#333), so this Mac's box runs in the app's folder as above.
 
 #### Host interface
 

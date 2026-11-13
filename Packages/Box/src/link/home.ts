@@ -50,6 +50,33 @@ export function accountName(): string {
 
 export const K = process.env.KUVO_HOME || path.join(homeFolder(), ".kuvo-code");
 
+/** Where a box records what kind it is (`box/kind`: `mac` or `machine`, a word on a line), which
+ * `kuvo-start` reads too: none on a machine set up from a Mac, nor in this Mac's app's own folder. */
+export const KIND_FILE = path.join(K, "box", "kind");
+/** The kind this box recorded, or null for none (or a word it doesn't know). */
+export function recordedKind(file = KIND_FILE): "mac" | "machine" | null {
+  let word = "";
+  try { word = fs.readFileSync(file, "utf8").trim(); } catch {}
+  return word === "mac" || word === "machine" ? word : null;
+}
+// This Mac's box: the app's keeper says so as it starts it in the app's folder (BoxProcess,
+// `KUVO_BOX=mac`), which wins over anything recorded there (a `box/kind` a move back left); or a box
+// in a home of its own recorded it (`box/kind`), laid out as a machine's is (#333).
+export const IS_MAC = process.env.KUVO_BOX === "mac" || recordedKind() === "mac";
+/** This Mac's app's own folder, when its box lives in it (`<support>/box`, which the app's keeper
+ * starts it in, `KUVO_BOX=mac`): the one box that reaches beside its home, for what its app keeps
+ * there (its chats, the files you attach, its machines' bridges). Null for every box laid out in a
+ * home of its own: a machine's, and a Mac's in `~/.kuvo-code`, which name each folder from it. */
+export const APP_FOLDER = process.env.KUVO_BOX === "mac" ? path.dirname(path.resolve(K)) : null;
+/** A Mac's box in a home of its own: what its app did for it in its folder, it does itself (its
+ * integration keys' files, keeping the Mac awake while agents work). */
+export const OWN_HOME_MAC = IS_MAC && APP_FOLDER === null;
+// (The app's keeper names a folder of the app's: one whose folder around it is your home is a home
+// of its own, started as the app's by mistake, which would take your home for the app's folder.)
+if (APP_FOLDER && [homeFolder(), accountHome()].some(home => located(APP_FOLDER) === located(home))) {
+  throw new Error(`This Mac's box was started as the app's (KUVO_BOX=mac) in ${K}, a home of its own: its folder around it is your home, not the app's.`);
+}
+
 /** Your own data folder (`XDG_DATA_HOME`, else `~/.local/share`), as apps other than Kuvo Code's
  * read it: on a machine, the box's points into Kuvo Code's folder, and yours is what its launch
  * kept (`KUVO_OWN_XDG_DATA_HOME`, empty for none). */
@@ -84,11 +111,12 @@ export const SOCKET_KEY_FILE = path.join(RUN, "socket.key");
  * the agents are, both out of commands' sight (not in `run/fence`, which they read): a machine's in
  * its own folder. A socket's path is at most 104 bytes on macOS, so this Mac's app's are in Kuvo
  * Code's short folder in `/tmp` (one per box), which the sandbox refuses but each command's own; as
- * are those of a box on a Mac whose folder is too deep for them (a test's). */
+ * are those of a box on a Mac whose folder is too deep for them (a test's). A Mac's box in a home of
+ * its own goes by its folder's length, as a machine's does. */
 export const SSH_FOR = path.join(RUN, "ssh-for");
 const OWN_SSH_AGENTS = path.join(RUN, "ssh-agents");
 // (68 bytes, to be safe: what a socket's path leaves for its folder, with a slash and its name, vault/ssh.ts.)
-export const SSH_AGENTS = process.platform === "darwin" && (process.env.KUVO_BOX === "mac" || Buffer.byteLength(OWN_SSH_AGENTS) > 68)
+export const SSH_AGENTS = process.platform === "darwin" && (APP_FOLDER !== null || Buffer.byteLength(OWN_SSH_AGENTS) > 68)
   ? path.join("/private/tmp", `kuvo-ssh-${os.userInfo().uid}`, `agents-${crypto.createHash("sha256").update(K).digest("hex").slice(0, 8)}`)
   : OWN_SSH_AGENTS;
 /** What the engine tells its agents of the sandbox, as it's on here or not (fence/state.ts writes it),
@@ -180,9 +208,9 @@ export const CONFIG_LOCK = path.join(RUN, ".config.lock");
 // app's own kuvo-wake); a machine's, in its folder.
 export const BOTS = process.env.KUVO_BOTS || path.join(K, "bots");
 // Its chats (conversations of no project): where a Mac's app keeps them (KUVO_CHATS, beside its box),
-// a machine's in its folder. The one place a box names it (`kuvo/info`'s `chats`, the chat mark,
-// moves, the sandbox).
-export const CHATS = process.env.KUVO_CHATS || (process.env.KUVO_BOX === "mac" ? path.join(path.dirname(K), "Chats") : path.join(K, "chats"));
+// a box in a home of its own in its folder. The one place a box names it (`kuvo/info`'s `chats`, the
+// chat mark, moves, the sandbox).
+export const CHATS = process.env.KUVO_CHATS || (APP_FOLDER ? path.join(APP_FOLDER, "Chats") : path.join(K, "chats"));
 
 // This Mac's box: the Mac app's own Attachments folder (BoxProcess gives it, KUVO_MAC_ATTACHMENTS),
 // where it keeps the files its sessions sent a folder for each session, as the box keeps its own:
@@ -192,23 +220,29 @@ export const MAC_ATTACHMENTS = process.env.KUVO_MAC_ATTACHMENTS || null;
 /** Where sessions' files are kept, a folder each: this box's, and on this Mac's box, the Mac app's. */
 export const attachmentRoots = (): string[] => [path.join(K, "attachments"), ...(MAC_ATTACHMENTS ? [MAC_ATTACHMENTS] : [])];
 
-// This Mac's box (BoxProcess says so as it starts it, `KUVO_BOX=mac`): its bots are the Mac's own,
-// made with the kit its app gives it and told they run on this Mac; it names no machine, keeps no
-// notes for a Mac to take in, and goes by the Mac's own clock. Its settings are the app's engine's,
-// where they've always been (KUVO_ENGINE_CONFIG, the engine's XDG_CONFIG_HOME), its own from the
-// start; its keys are in the Mac's Keychain, which the engine reads from the files the app writes
-// them to (KUVO_KEYS); and the servers that use a Mac's own apps run here.
-export const IS_MAC = process.env.KUVO_BOX === "mac";
+// This Mac's box (`IS_MAC`, above): its bots are the Mac's own, made with the kit its app gives it
+// and told they run on this Mac; it names no machine, keeps no notes for a Mac to take in, and goes
+// by the Mac's own clock. Its settings are the engine's own, its own from the start: in the app's
+// engine's folder, where they've always been, in its app's folder (KUVO_ENGINE_CONFIG, the engine's
+// XDG_CONFIG_HOME), and in `config` in a home of its own. Its keys are in the Mac's Keychain, which
+// the engine reads from files: those the app writes them to (KUVO_KEYS) in its folder, the box's
+// own (`box/keys`, `box/bot-keys`) in a home of its own. And the servers that use a Mac's own apps
+// run here.
 // The versions of this Mac's app and of the engine it brings, as the app that started it says
 // (BoxProcess: KUVO_APP_VERSION, KUVO_ENGINE_VERSION), for what it says of itself with the app closed.
 export const MAC_APP_VERSION = process.env.KUVO_APP_VERSION || null;
 export const MAC_ENGINE_VERSION = process.env.KUVO_ENGINE_VERSION || null;
 // This box's computer, as what it says names it.
 export const HERE = IS_MAC ? "this Mac" : "this machine";
-// Where its engine's settings are: this Mac's app's engine's (a machine's are in `box`).
-export const ENGINE_CONFIG = process.env.KUVO_ENGINE_CONFIG;
-// (This Mac's box has them there, always: BoxProcess gives both.)
+// Where its engine's settings are: this Mac's app's engine's, or a Mac's box's own `config` in a home
+// of its own (a machine's are in `box`).
+export const ENGINE_CONFIG = process.env.KUVO_ENGINE_CONFIG || (OWN_HOME_MAC ? path.join(K, "config") : undefined);
+// (This Mac's box in its app's folder has them there, always: BoxProcess gives both.)
 if (IS_MAC && !ENGINE_CONFIG) throw new Error("This Mac's box was started without KUVO_ENGINE_CONFIG, the folder its engine's settings are in.");
+/** Whether the box writes the files its engine reads its integrations' keys from itself, as a
+ * machine's does (`box/keys`, a bot's own in `box/bot-keys`), while their values are kept on its host
+ * (this Mac's Keychain): a Mac's box in a home of its own, which no app writes them for (KUVO_KEYS). */
+export const writesKeyFiles = (): boolean => OWN_HOME_MAC && KEYS_ON_HOST && !APP_KEY_FILES;
 
 // This Mac's app's host interface, as it was given when the box started (`KUVO_HOST_URL`,
 // `KUVO_HOST_PASSWORD`), which it uses while there's no `run/host.json` (host-interface.ts): its
@@ -218,7 +252,10 @@ export const LAUNCH_HOST = process.env.KUVO_HOST_URL && process.env.KUVO_HOST_PA
   ? { url: process.env.KUVO_HOST_URL.replace(/\/+$/, ""), password: process.env.KUVO_HOST_PASSWORD } : null;
 // A box whose keys its app keeps (this Mac's, KUVO_KEYS_ON_HOST), without a way to reach it: its
 // keys can't be reached, rather than kept in files of its own instead of your Keychain.
-export const KEYS_ON_HOST = process.env.KUVO_KEYS_ON_HOST === "1" || Boolean(process.env.KUVO_HOST_URL);
+// A Mac's box in a home of its own keeps them on its host whichever process asks (`serve`, or a
+// client's `box route`), as its kind says, not its environment: all of them agree where a key is.
+// (#333's question 1: in the Keychain, through its host. Should they be files after all, this goes.)
+export const KEYS_ON_HOST = process.env.KUVO_KEYS_ON_HOST === "1" || Boolean(process.env.KUVO_HOST_URL) || OWN_HOME_MAC;
 delete process.env.KUVO_HOST_PASSWORD;
 // This Mac's vault's two secrets from its app, which no file holds (the host interface's password
 // is in `run/host.json`, which an agent's command can read): the host's vault secret, without

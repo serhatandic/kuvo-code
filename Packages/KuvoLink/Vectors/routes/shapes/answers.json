@@ -3074,6 +3074,9 @@
             "literal": "bots.make"
            },
            {
+            "literal": "box.ownHome"
+           },
+           {
             "literal": "branch"
            },
            {
@@ -3455,6 +3458,9 @@
            },
            {
             "literal": "bots.make"
+           },
+           {
+            "literal": "box.ownHome"
            },
            {
             "literal": "branch"
@@ -9741,7 +9747,9 @@
         "null"
        ]
       },
-      "suggested?": "string"
+      "suggested?": "string",
+      "keepsAwake?": "bool",
+      "awakeNow?": "bool"
      }
     }
    }
@@ -9757,7 +9765,9 @@
         "null"
        ]
       },
-      "suggested?": "string"
+      "suggested?": "string",
+      "keepsAwake?": "bool",
+      "awakeNow?": "bool"
      }
     },
     "400": {
