@@ -113,8 +113,9 @@ function machine() {
 
 // A release of 0.10.0 (engine 1.1.0), signed with `key`, served here, and kept in a folder as Kuvo
 // Code carries it (`folder`: boxes.json and the pack beside it). `tamper` changes what's packed;
-// `bundle` adds a Mac bundle by its files (`{name: text}`, in `bin/Kuvo Code Box.app`); `extra`
-// adds files to the pack that box.json doesn't name, `link` a link in the bundle.
+// `bundle` adds a Mac bundle by its files (`{name: text}`, in `bin/Kuvo Code Box.app`, named in
+// box.json's `bundles`); `extra` adds files to the pack that box.json doesn't name, `link` a link
+// in the bundle.
 const { privateKey, publicKey } = crypto.generateKeyPairSync("ed25519");
 const pinned = publicKey.export({ type: "spki", format: "der" }).subarray(-32).toString("base64");
 let served = {};
@@ -138,14 +139,16 @@ function release({ version = "0.10.0", released = new Date(Date.now() - 10 * 86_
   write(path.join(files, "bin", "kuvo-link.js"), fs.readFileSync(script, "utf8"), 0o600);
   write(path.join(files, "bin", "kuvo-wake"), "# the new wake-ups\n", 0o755);
   const box = { version, engine: "1.1.0", files: {} };
-  const named = ["bin/box-version", "bin/kuvo-start", "bin/kuvo-link.js", "bin/kuvo-wake"];
-  for (const [name, text] of Object.entries(bundle ?? {})) {
-    write(path.join(files, "bin", "Kuvo Code Box.app", name), text, name.includes("MacOS/") ? 0o755 : 0o644);
-    named.push(`bin/Kuvo Code Box.app/${name}`);
+  for (const file of ["bin/box-version", "bin/kuvo-start", "bin/kuvo-link.js", "bin/kuvo-wake"]) box.files[file] = sha256(fs.readFileSync(path.join(files, file)));
+  if (bundle) {
+    const listed = box.bundles = { "bin/Kuvo Code Box.app": {} };
+    for (const [name, text] of Object.entries(bundle)) {
+      write(path.join(files, "bin", "Kuvo Code Box.app", name), text, name.includes("MacOS/") ? 0o755 : 0o644);
+      listed["bin/Kuvo Code Box.app"][name] = sha256(Buffer.from(text));
+    }
   }
   for (const [name, text] of Object.entries(extra ?? {})) write(path.join(files, name), text);
   if (link) fs.symlinkSync("/etc/hosts", path.join(files, "bin", "Kuvo Code Box.app", "Contents", "hosts"));
-  for (const file of named) box.files[file] = sha256(fs.readFileSync(path.join(files, file)));
   write(path.join(files, "box.json"), JSON.stringify(box));
   const pack = path.join(scratch, `pack-${crypto.randomUUID()}.tgz`);
   spawnSync("tar", ["czf", pack, "-C", files, "."], { env: { ...process.env, COPYFILE_DISABLE: "1" } });
@@ -417,7 +420,7 @@ test("a machine with no bridge, updated by its `update` command: confirmed, and 
 // A release from a folder here (`kuvo/box/update {from}`): what Kuvo Code carries, offered as it
 // updates, checked as a downloaded one is, and taken at a quiet moment.
 const offer = (folder, options = {}) => link.offerUpdate(folder, { keys: [pinned], blocked: null, ...options });
-const take = (options = {}) => link.takeOffer({ run: given => link.update(given), keys: [pinned], blocked: null, upWithin: 5000, ...options });
+const take = (options = {}) => link.takeOffer({ keys: [pinned], blocked: null, upWithin: 5000, ...options });
 const offered = path.join(home, "updates", "offered");
 const boxVersion = () => fs.readFileSync(path.join(home, "bin", "box-version"), "utf8");
 
@@ -506,6 +509,17 @@ test("an offered release waits while something runs, and is taken once nothing d
   assert.equal(boxVersion(), "0.9.0");
   assert.equal(read(engineFile).version, "1.0.0", "its engine still runs");
   fs.rmSync(path.join(home, "run", "browser-asks.json"));
+  // Nor while it's blocked, its engine stopped on purpose, or an update before is on trial (its
+  // rollback would be lost): it waits, untouched, and says nothing of it.
+  const last = fs.existsSync(path.join(home, "run", "update.json")) ? read(path.join(home, "run", "update.json")).last : undefined;
+  assert.equal(await take({ blocked: "A Mac that connects to this machine has an older Kuvo Code" }), null);
+  for (const mark of ["update-trial", "stopped"]) {
+    fs.writeFileSync(path.join(home, "run", mark), "");
+    assert.equal(await take(), null, mark);
+    fs.rmSync(path.join(home, "run", mark));
+  }
+  assert.equal(link.offeredVersion(), "0.10.0");
+  assert.deepEqual(fs.existsSync(path.join(home, "run", "update.json")) ? read(path.join(home, "run", "update.json")).last : undefined, last);
   assert.equal((await take()).result, "updated");
   engines.add(read(engineFile).pid);
   assert.equal(link.confirmUpdate(), true);
@@ -520,10 +534,18 @@ test("an offered release that doesn't come up is taken back and goes; one the bo
   await waitFor(() => fs.existsSync(engineFile) && read(engineFile).version === "1.0.0", "the old engine runs again");
   engines.add(read(engineFile).pid);
   assert.equal(fs.existsSync(offered), false, "not tried again and again: Kuvo Code offers it again as it next opens");
+  // Offered again as Kuvo Code next opens: not that version for a day, so a release that never
+  // comes up here isn't tried at every open.
+  const { folder: again } = release({ breaks: true });
+  const rest = offer(again);
+  assert.equal(rest.status, 409);
+  assert.match(rest.message, /tried 0\.10\.0 lately/);
+  assert.equal(offer(again, { clock: () => Date.now() + 86_400_000 + 1000 }).status, 202, "a day on");
+  fs.rmSync(offered, { recursive: true });
 
   // Offered, then the box got there another way (the night's update): nothing to take.
-  assert.equal(offer(release().folder).status, 202);
-  fs.writeFileSync(path.join(home, "bin", "box-version"), "0.10.0");
+  assert.equal(offer(release({ version: "0.11.0" }).folder).status, 202);
+  fs.writeFileSync(path.join(home, "bin", "box-version"), "0.11.0");
   assert.equal(await take(), null);
   assert.equal(fs.existsSync(offered), false);
 });
@@ -544,15 +566,15 @@ test("a release's bundle (the box's helper) is swapped whole on a Mac, and left 
   assert.equal((await take()).result, "updated");
   engines.add(read(engineFile).pid);
   const installed = read(path.join(home, "updates", "installed.json")).files;
+  // Never noted as installed: the helper's own keeper may put its own back, which isn't drift.
+  assert.equal(Object.keys(installed).some(file => file.includes(".app")), false);
   if (process.platform === "darwin") {
     assert.equal(fs.readFileSync(path.join(bundle, "Contents", "MacOS", "Kuvo Code Box"), "utf8"), helper["Contents/MacOS/Kuvo Code Box"]);
     assert.equal(fs.statSync(path.join(bundle, "Contents", "MacOS", "Kuvo Code Box")).mode & 0o777, 0o755, "with its own mode");
     assert.equal(fs.readFileSync(path.join(bundle, "Contents", "_CodeSignature", "CodeResources"), "utf8"), "the new seal\n");
     assert.equal(fs.existsSync(path.join(bundle, "Contents", "Resources")), false, "whole: nothing of the old one left in it");
-    assert.ok(installed["bin/Kuvo Code Box.app/Contents/Info.plist"], "noted as installed");
   } else {
     assert.equal(fs.readFileSync(path.join(bundle, "Contents", "Info.plist"), "utf8"), "<plist>the old helper</plist>\n", "a Mac's alone");
-    assert.equal(Object.keys(installed).some(file => file.includes(".app/")), false, "nor noted as installed, so it's never drift");
   }
   assert.deepEqual(fs.readdirSync(path.join(home, "bin")).filter(name => name.includes(".app")), ["Kuvo Code Box.app"], "no copy left beside it");
   assert.equal(link.confirmUpdate(), true);
@@ -571,16 +593,19 @@ test("a release whose bundle doesn't come up puts the bundle back as it was; one
   assert.equal(fs.statSync(path.join(bundle, "Contents", "MacOS", "Kuvo Code Box")).mode & 0o777, 0o755);
   assert.deepEqual(fs.readdirSync(path.join(home, "bin")).filter(name => name.includes(".app")), ["Kuvo Code Box.app"]);
 
-  // A new bundle where there was none goes again, as it came.
+  // A new bundle where there was none goes again, as it came. (Each offered again a day after the
+  // one before didn't come up.)
+  let day = 0;
+  const later = () => ({ clock: (at => () => at)(Date.now() + ++day * 86_400_001) });
   fs.rmSync(bundle, { recursive: true });
-  assert.equal(offer(release({ breaks: true, bundle: helper }).folder).status, 202);
+  assert.equal(offer(release({ breaks: true, bundle: helper }).folder, later()).status, 202);
   assert.equal((await take()).result, "failed");
   await waitFor(() => fs.existsSync(engineFile) && read(engineFile).version === "1.0.0", "the old engine runs again");
   engines.add(read(engineFile).pid);
   assert.equal(fs.existsSync(bundle), false);
 
   for (const odd of [{ extra: { "bin/Kuvo Code Box.app/Contents/MacOS/unnamed": "not in box.json" } }, { link: true }, { bundle: { ".hidden/x": "y" } }]) {
-    assert.equal(offer(release({ bundle: helper, ...odd }).folder).status, 202, "the pack is as its signed manifest says");
+    assert.equal(offer(release({ bundle: helper, ...odd }).folder, later()).status, 202, "the pack is as its signed manifest says");
     const outcome = await take();
     assert.equal(outcome.result, "failed", JSON.stringify(odd));
     assert.match(outcome.message, /aren't what it says|outside the box/);
@@ -625,6 +650,26 @@ test("`kuvo-link.js update --from` takes a release from a folder there", async (
   assert.equal(fs.existsSync(path.join(home, "bin", "Kuvo Code Box.app")), process.platform === "darwin");
 });
 
+test("`kuvo-link.js update --offered` takes the offered release in a process of its own, and with no bridge to start again confirms it itself", async () => {
+  machine();
+  const cli = async (...args) => {
+    const updating = spawn(process.execPath, [script, "update", ...args, "--key", pinned], { env: process.env, stdio: ["ignore", "pipe", "inherit"] });
+    let said = "";
+    updating.stdout.setEncoding("utf8");
+    updating.stdout.on("data", chunk => { said += chunk; });
+    await new Promise(resolve => updating.once("close", resolve));
+    return JSON.parse(said);
+  };
+  assert.equal((await cli("--offered")).result, "current", "nothing offered: nothing to do");
+  assert.equal(offer(release().folder).status, 202);
+  assert.equal((await cli("--offered")).result, "updated");
+  engines.add(read(engineFile).pid);
+  assert.equal(boxVersion(), "0.10.0");
+  assert.equal(fs.existsSync(offered), false);
+  assert.equal(fs.existsSync(path.join(home, "run", "update-trial")), false, "confirmed, by itself");
+  assert.equal(read(path.join(home, "run", "update.json")).last.to, "0.10.0");
+});
+
 test("scripts/pack-box.sh packs a built app's box release with its helper, signed, and a box takes it from the app's folder", async () => {
   machine();
   release();
@@ -656,6 +701,15 @@ test("scripts/pack-box.sh packs a built app's box release with its helper, signe
   const manifest = link.verifyBoxes(fs.readFileSync(path.join(out, "boxes.json"), "utf8"), [pinned]);
   assert.equal(manifest.version, "0.10.0");
   assert.equal(manifest.pack.url, "https://example.invalid/releases/download/v0.10.0/box-0.10.0.tar.gz");
+  // What's packed: the helper under `bundles`, so a box from before bundles, which refuses a file
+  // in `files` outside its own rule, still takes the release (leaving the helper out).
+  const unpacked = path.join(scratch, `unpacked-${crypto.randomUUID()}`);
+  fs.mkdirSync(unpacked);
+  assert.equal(spawnSync("tar", ["xzf", path.join(out, "box-0.10.0.tar.gz"), "-C", unpacked]).status, 0);
+  const packedBox = read(path.join(unpacked, "box.json"));
+  const before = /^(bin\/[A-Za-z0-9._-]+|bin\/runtime\/[A-Za-z0-9._-]+|config\/opencode\/plugins\/[A-Za-z0-9._-]+)$/;
+  assert.deepEqual(Object.keys(packedBox.files).filter(file => !before.test(file)), []);
+  assert.deepEqual(Object.keys(packedBox.bundles["bin/Kuvo Code Box.app"]).sort(), Object.keys(helper).sort());
 
   assert.deepEqual(offer(out), { status: 202, version: "0.10.0" });
   assert.equal((await take()).result, "updated");

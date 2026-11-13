@@ -28,13 +28,15 @@ esac
 work=$(mktemp -d "${TMPDIR:-/tmp}/kuvo-box-release.XXXXXXXX")
 trap 'rm -rf "$work"' EXIT
 box="$work/box"
-"$APP/Contents/MacOS/Kuvo Code" --write-box-files "$box"
+# (Never with the key: the app only writes files.)
+env -u KUVO_BOX_SIGNING_KEY "$APP/Contents/MacOS/Kuvo Code" --write-box-files "$box"
 test "$(cat "$box/bin/box-version")" = "$VERSION" || { echo "The app's box files are $(cat "$box/bin/box-version")'s, not $VERSION's." >&2; exit 1; }
 for file in kuvo-link.js kuvo-browser.js kuvo-agents.js kuvo-start kuvo-launch; do
     test -s "$box/bin/$file" || { echo "The app's box files have no $file." >&2; exit 1; }
 done
 
-# Its helper bundles, whole, and named in box.json file by file, as a box checks and swaps them.
+# Its helper bundles, whole, and named in box.json's `bundles` file by file, as a box checks and
+# swaps them (a box from before bundles passes them over).
 for helper in "$APP/Contents/Helpers/"*.app; do
     [ -d "$helper" ] || continue
     cp -Rp "$helper" "$box/bin/"
@@ -44,28 +46,36 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 const box = process.argv[2];
-// As a box takes them (Packages/Box/src/link/updates/update.ts, BUNDLE_FILE): no part starting
-// with a dot, no links, nothing but folders and files.
-const allowed = /^(bin\/[A-Za-z0-9][A-Za-z0-9._ -]*\.app)\/(?:[A-Za-z0-9_][A-Za-z0-9._+ -]*\/)*[A-Za-z0-9_][A-Za-z0-9._+ -]*$/;
+// As a box takes them (Packages/Box/src/link/updates/update.ts, BUNDLE and BUNDLE_PART): no part
+// starting with a dot, no links, nothing but folders and files.
+const bundleName = /^bin\/[A-Za-z0-9][A-Za-z0-9._ -]*\.app$/;
+const part = /^(?:[A-Za-z0-9_][A-Za-z0-9._+ -]*\/)*[A-Za-z0-9_][A-Za-z0-9._+ -]*$/;
 const record = path.join(box, "box.json");
 const manifest = JSON.parse(fs.readFileSync(record, "utf8"));
-for (const bundle of fs.readdirSync(path.join(box, "bin")).filter(name => name.endsWith(".app"))) {
-  for (const entry of fs.readdirSync(path.join(box, "bin", bundle), { recursive: true, encoding: "utf8" })) {
-    const file = `bin/${bundle}/${entry}`, stat = fs.lstatSync(path.join(box, file));
+for (const name of fs.readdirSync(path.join(box, "bin")).filter(name => name.endsWith(".app")).sort()) {
+  const bundle = `bin/${name}`;
+  if (!bundleName.test(bundle)) {
+    console.error(`A box can't take a bundle named ${name}.`);
+    process.exit(1);
+  }
+  const files = {};
+  for (const entry of fs.readdirSync(path.join(box, bundle), { recursive: true, encoding: "utf8" }).sort()) {
+    const stat = fs.lstatSync(path.join(box, bundle, entry));
     if (stat.isDirectory()) continue;
-    if (!stat.isFile() || !allowed.test(file)) {
-      console.error(`A box can't take ${file} in a bundle: only plain files, named without a leading dot.`);
+    if (!stat.isFile() || !part.test(entry)) {
+      console.error(`A box can't take ${bundle}/${entry} in a bundle: only plain files, named without a leading dot.`);
       process.exit(1);
     }
-    manifest.files[file] = crypto.createHash("sha256").update(fs.readFileSync(path.join(box, file))).digest("hex");
+    files[entry] = crypto.createHash("sha256").update(fs.readFileSync(path.join(box, bundle, entry))).digest("hex");
   }
+  (manifest.bundles ??= {})[bundle] = files;
 }
 fs.writeFileSync(record, JSON.stringify(manifest, null, 2) + "\n");
 EOF
 
 pack="$OUT/box-$VERSION.tar.gz"
-# The same bytes wherever it's packed: no owners, and on a Mac no extended attributes or
-# AppleDouble files.
+# No owners, and on a Mac no extended attributes or AppleDouble files (so a helper's signature has
+# to be in its files, as a Mach-O program's is).
 if tar --version 2>/dev/null | grep -q bsdtar; then
     COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata --uid 0 --gid 0 -czf "$pack.new" -C "$box" .
 else

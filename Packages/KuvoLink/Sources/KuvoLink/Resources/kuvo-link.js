@@ -1,7 +1,7 @@
 // Built from Packages/Box/src by scripts/build-box.sh: change those, then run it. Never edit this file.
 
 // Packages/Box/src/link/main.ts
-import { spawn as spawn14 } from "node:child_process";
+import { spawn as spawn15 } from "node:child_process";
 import crypto55 from "node:crypto";
 import fs149 from "node:fs";
 import os21 from "node:os";
@@ -7486,7 +7486,7 @@ import fs42 from "node:fs";
 import path44 from "node:path";
 
 // Packages/Box/src/link/areas/engine.ts
-import { spawn as spawn4 } from "node:child_process";
+import { spawn as spawn5 } from "node:child_process";
 import fs35 from "node:fs";
 import path36 from "node:path";
 
@@ -7579,7 +7579,7 @@ function phoneSeenLately(file = SEEN_FILE, now = Date.now()) {
 }
 
 // Packages/Box/src/link/updates/update.ts
-import { spawnSync as spawnSync6 } from "node:child_process";
+import { spawn as spawn4, spawnSync as spawnSync6 } from "node:child_process";
 import crypto11 from "node:crypto";
 import fs34 from "node:fs";
 import os7 from "node:os";
@@ -7630,8 +7630,9 @@ var ED25519_SPKI = Buffer.from("302a300506032b6570032100", "hex");
 var RELEASE_AGE = 3 * 86400000;
 var MAC_MEMORY = 30 * 86400000;
 var BOX_FILE = /^(bin\/[A-Za-z0-9._-]+|bin\/runtime\/[A-Za-z0-9._-]+|config\/opencode\/plugins\/[A-Za-z0-9._-]+)$/;
-var BUNDLE_FILE = /^(bin\/[A-Za-z0-9][A-Za-z0-9._ -]*\.app)\/(?:[A-Za-z0-9_][A-Za-z0-9._+ -]*\/)*[A-Za-z0-9_][A-Za-z0-9._+ -]*$/;
-var bundleOf2 = (file) => BUNDLE_FILE.exec(file)?.[1] ?? null;
+var BUNDLE = /^bin\/[A-Za-z0-9][A-Za-z0-9._ -]*\.app$/;
+var BUNDLE_PART = /^(?:[A-Za-z0-9_][A-Za-z0-9._+ -]*\/)*[A-Za-z0-9_][A-Za-z0-9._+ -]*$/;
+var OFFER_REST = 86400000;
 var OFFERED = path35.join(UPDATES, "offered");
 var RELEASE_VERSION = /^\d+\.\d+\.\d+(-beta\.\d+)?$/;
 function versionOrder(version) {
@@ -7904,27 +7905,35 @@ async function update({ now = false, from, keys = UPDATE_KEYS, url = UPDATE_URL,
     const box = JSON.parse(fs34.readFileSync(path35.join(stage, "files", "box.json"), "utf8"));
     if (box?.version !== manifest.version || box.engine !== manifest.engine || !isObject(box.files))
       throw new Error("The release's files aren't what it says.");
-    const named = installOrder(Object.keys(box.files));
-    for (const file of named) {
-      if (!(BOX_FILE.test(file) || bundleOf2(file)) || file.split("/").includes(".."))
+    const files = installOrder(Object.keys(box.files));
+    const matches = (file, sha) => fs34.lstatSync(file, { throwIfNoEntry: false })?.isFile() === true && hexSHA256(fs34.readFileSync(file)) === sha;
+    for (const file of files) {
+      if (!BOX_FILE.test(file) || file.split("/").includes(".."))
         throw new Error("The release names a file outside the box.");
-      if (!fs34.lstatSync(path35.join(stage, "files", file), { throwIfNoEntry: false })?.isFile())
-        throw new Error("The release's files aren't what it says.");
-      if (hexSHA256(fs34.readFileSync(path35.join(stage, "files", file))) !== box.files[file])
+      if (!matches(path35.join(stage, "files", file), box.files[file]))
         throw new Error("The release's files aren't what it says.");
     }
-    const bundles = [...new Set(named.map(bundleOf2).filter((bundle) => bundle !== null))];
+    if (box.bundles !== undefined && !isObject(box.bundles))
+      throw new Error("The release's files aren't what it says.");
+    const bundles = Object.keys(box.bundles ?? {}).sort();
     for (const bundle of bundles) {
+      const listed = box.bundles[bundle];
+      if (!BUNDLE.test(bundle) || files.includes(bundle) || !isObject(listed))
+        throw new Error("The release names a file outside the box.");
+      for (const [inner, sha] of Object.entries(listed)) {
+        if (!BUNDLE_PART.test(inner))
+          throw new Error("The release names a file outside the box.");
+        if (!matches(path35.join(stage, "files", bundle, inner), sha))
+          throw new Error("The release's files aren't what it says.");
+      }
       for (const entry of fs34.readdirSync(path35.join(stage, "files", bundle), { recursive: true, encoding: "utf8" })) {
         const stat = fs34.lstatSync(path35.join(stage, "files", bundle, entry));
-        if (!stat.isDirectory() && !(stat.isFile() && box.files[`${bundle}/${entry}`] !== undefined))
+        if (!stat.isDirectory() && !(stat.isFile() && listed[entry] !== undefined))
           throw new Error("The release's files aren't what it says.");
       }
     }
-    const installed = process.platform === "darwin" ? box.files : Object.fromEntries(Object.entries(box.files).filter(([file]) => !bundleOf2(file)));
     if (process.platform !== "darwin")
       bundles.length = 0;
-    const files = named.filter((file) => !bundleOf2(file));
     if (!files.includes("bin/box-version") || fs34.readFileSync(path35.join(stage, "files", "bin", "box-version"), "utf8").trim() !== manifest.version)
       throw new Error("The release's files aren't what it says.");
     for (const tool of OWN_TOOLS) {
@@ -8005,7 +8014,7 @@ async function update({ now = false, from, keys = UPDATE_KEYS, url = UPDATE_URL,
     step("starting");
     if (!await cameUp(manifest.engine, withAgents, upWithin))
       throw new Error("The new version didn't come up.");
-    writePrivate(path35.join(UPDATES, "installed.json"), JSON.stringify({ version: box.version, files: installed }));
+    writePrivate(path35.join(UPDATES, "installed.json"), JSON.stringify({ version: box.version, files: box.files }));
     noteUpdate({ trial: { from: before, to: manifest.version, at: clock(), healthy: true } });
     return { result: "updated", version: manifest.version };
   } catch (error) {
@@ -8218,7 +8227,7 @@ function offeredVersion() {
   }
 }
 var dropOffer = () => fs34.rmSync(OFFERED, { recursive: true, force: true });
-function offerUpdate(from, { keys = UPDATE_KEYS, blocked = updatesBlocked() } = {}) {
+function offerUpdate(from, { keys = UPDATE_KEYS, blocked = updatesBlocked(), clock = Date.now } = {}) {
   if (typeof from !== "string" || !path35.isAbsolute(from))
     return { status: 400, message: "Say which folder the release is in (from), as a full path." };
   if (!keys.length)
@@ -8243,6 +8252,9 @@ function offerUpdate(from, { keys = UPDATE_KEYS, blocked = updatesBlocked() } = 
   const offered = offeredVersion();
   if (offered && newerVersion(offered, manifest.version))
     return { status: 409, message: `A newer release (${offered}) waits to be taken already.` };
+  const failed = updateState().offerFailed;
+  if (failed?.version === manifest.version && clock() - failed.at < OFFER_REST)
+    return { status: 409, message: `It tried ${manifest.version} lately and went back to what it had: it takes it again tomorrow.` };
   let pack;
   try {
     pack = readRelease(path35.join(from, name), 1e8);
@@ -8260,20 +8272,32 @@ function offerUpdate(from, { keys = UPDATE_KEYS, blocked = updatesBlocked() } = 
   fs34.renameSync(partial, OFFERED);
   return { status: 202, version: manifest.version };
 }
-async function takeOffer({ run = startUpdate, ...options } = {}) {
+async function offerDue({ blocked = updatesBlocked() } = {}) {
   if (!fs34.existsSync(OFFERED))
-    return null;
-  const offered = offeredVersion();
-  if (!offered || !newerVersion(offered, boxVersion() ?? "0.0.0")) {
+    return false;
+  const offered = offeredVersion(), before = boxVersion();
+  if (!offered || before && !newerVersion(offered, before)) {
     dropOffer();
-    return null;
+    return false;
   }
-  if (updating || isUpdating() || await boxBusy())
+  return !blocked && !!before && !updating && !isUpdating() && !updateOnTrial() && !fs34.existsSync(path35.join(RUN, "stopped")) && !await boxBusy();
+}
+async function takeOffer(options = {}) {
+  if (!await offerDue(options))
     return null;
-  const outcome = await run({ ...options, from: OFFERED });
-  if (outcome && outcome.result !== "busy" && outcome.result !== "blocked")
+  const version = offeredVersion();
+  const outcome = await update({ ...options, from: OFFERED });
+  if (outcome.result === "failed")
+    noteUpdate({ offerFailed: { version, at: (options.clock ?? Date.now)() } });
+  if (outcome.result !== "busy" && outcome.result !== "blocked")
     dropOffer();
   return outcome;
+}
+async function startOfferedUpdate() {
+  if (!await offerDue())
+    return false;
+  spawn4(process.execPath, [...OWN_RUNTIME, SCRIPT, "update", "--offered"], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
+  return true;
 }
 async function* boxUpdateRoute({ request, json }) {
   if (request.method.toUpperCase() !== "POST")
@@ -8284,7 +8308,7 @@ async function* boxUpdateRoute({ request, json }) {
   const offered = offerUpdate(isObject(given) ? given.from : undefined);
   if (offered.status !== 202)
     return yield* json(offered.status, { message: offered.message });
-  takeOffer().catch(() => {});
+  startOfferedUpdate().catch(() => {});
   return yield* json(202, updateStatus());
 }
 
@@ -8325,7 +8349,7 @@ async function engineControl(command) {
   const workspace = path36.join(K, "workspace");
   const options = { cwd: fs35.existsSync(workspace) ? workspace : K, env: environment };
   try {
-    const child = spawn4("sh", [start, command], { ...options, detached: true, stdio: "ignore" });
+    const child = spawn5("sh", [start, command], { ...options, detached: true, stdio: "ignore" });
     lastToolRun = { child, ended: new Promise((resolve) => {
       child.on("exit", resolve);
       child.on("error", resolve);
@@ -8560,7 +8584,7 @@ import path43 from "node:path";
 import path42 from "node:path";
 
 // Packages/Box/src/link/keeper.ts
-import { spawn as spawn5 } from "node:child_process";
+import { spawn as spawn6 } from "node:child_process";
 import fs41 from "node:fs";
 import path41 from "node:path";
 
@@ -9870,7 +9894,7 @@ function keepKeeper() {
   delete environment.BUN_BE_BUN;
   delete environment.BUN_RUNTIME_TRANSPILER_CACHE_PATH;
   try {
-    spawn5("sh", [start], { cwd: K, env: environment, detached: true, stdio: "ignore" }).unref();
+    spawn6("sh", [start], { cwd: K, env: environment, detached: true, stdio: "ignore" }).unref();
   } catch {}
 }
 function runningBridge() {
@@ -9883,7 +9907,7 @@ function runningBridge() {
 }
 function startBridge() {
   const workspace = path41.join(K, "workspace");
-  const child = spawn5(process.execPath, [...OWN_RUNTIME, SCRIPT, "run"], {
+  const child = spawn6(process.execPath, [...OWN_RUNTIME, SCRIPT, "run"], {
     detached: true,
     stdio: "ignore",
     cwd: fs41.existsSync(workspace) ? workspace : K,
@@ -20834,7 +20858,7 @@ import path76 from "node:path";
 import fs75 from "node:fs";
 
 // Packages/Box/src/link/github/graphql.ts
-import { execFile as execFile8, spawn as spawn6 } from "node:child_process";
+import { execFile as execFile8, spawn as spawn7 } from "node:child_process";
 import crypto27 from "node:crypto";
 import fs74 from "node:fs";
 import os8 from "node:os";
@@ -21108,7 +21132,7 @@ ${reader.keyOf(ask)}`;
     if (due.length && !recent(reader.file + ".lock", HOLD) && !recent(started, 1e4)) {
       try {
         writePrivate(started, "");
-        const child = spawn6(process.execPath, [...OWN_RUNTIME, SCRIPT, "box", "github-read", reader.name], { detached: true, stdio: ["pipe", "ignore", "ignore"], cwd: K, env: process.env });
+        const child = spawn7(process.execPath, [...OWN_RUNTIME, SCRIPT, "box", "github-read", reader.name], { detached: true, stdio: ["pipe", "ignore", "ignore"], cwd: K, env: process.env });
         child.stdin?.end(JSON.stringify(due));
         child.unref();
       } catch {}
@@ -25013,7 +25037,7 @@ import fs92 from "node:fs";
 import path93 from "node:path";
 
 // Packages/Box/src/link/areas/integrations.ts
-import { spawn as spawn7 } from "node:child_process";
+import { spawn as spawn8 } from "node:child_process";
 import fs91 from "node:fs";
 import path92 from "node:path";
 
@@ -25333,7 +25357,7 @@ function reconnectLater(engine, id, later) {
   if (!engine)
     return;
   if (answeringOnce() && later === soon) {
-    spawn7(process.execPath, [...OWN_RUNTIME, SCRIPT, "box", "reconnect", id], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
+    spawn8(process.execPath, [...OWN_RUNTIME, SCRIPT, "box", "reconnect", id], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
     return;
   }
   later(() => reconnectEverywhere(engine, id), 2000);
@@ -25703,7 +25727,7 @@ async function* botKeysRoute(context) {
 }
 
 // Packages/Box/src/link/moves/bundle.ts
-import { spawn as spawn8 } from "node:child_process";
+import { spawn as spawn9 } from "node:child_process";
 import crypto35 from "node:crypto";
 import fs93 from "node:fs";
 import path94 from "node:path";
@@ -25715,7 +25739,7 @@ var folderOf3 = (kind, thing) => kind === "bot" ? path94.join(BOTS, thing) : kin
 var directoryOf = (kind, thing) => kind === "bot" ? path94.join(BOTS, thing, "workspace") : CHATS;
 function run2(program, args) {
   return new Promise((resolve, reject) => {
-    const child = spawn8(program, args, { stdio: ["ignore", "ignore", "pipe"], env: { ...process.env, COPYFILE_DISABLE: "1" } });
+    const child = spawn9(program, args, { stdio: ["ignore", "ignore", "pipe"], env: { ...process.env, COPYFILE_DISABLE: "1" } });
     let said = "";
     child.stderr.on("data", (chunk) => {
       said += chunk;
@@ -34019,7 +34043,7 @@ async function stillShown(places, ids) {
 }
 
 // Packages/Box/src/link/work/backups.ts
-import { execFile as execFile11, spawn as spawn9 } from "node:child_process";
+import { execFile as execFile11, spawn as spawn10 } from "node:child_process";
 import crypto45 from "node:crypto";
 import fs114 from "node:fs";
 import path118 from "node:path";
@@ -34046,8 +34070,8 @@ async function gitPipe(given, input, receiving) {
     return REFUSED2;
   return new Promise((resolve) => {
     const options = { env: ENV, stdio: ["pipe", "pipe", "pipe"] };
-    const sender = spawn9("git", from, options);
-    const taker = spawn9("git", to, options);
+    const sender = spawn10("git", from, options);
+    const taker = spawn10("git", to, options);
     let error = "";
     sender.stderr.on("data", (chunk) => {
       error += chunk;
@@ -34408,7 +34432,7 @@ import fs117 from "node:fs";
 import path120 from "node:path";
 
 // Packages/Box/src/link/fence/outside.ts
-import { spawn as spawn11 } from "node:child_process";
+import { spawn as spawn12 } from "node:child_process";
 import crypto46 from "node:crypto";
 import fs116 from "node:fs";
 import os13 from "node:os";
@@ -34505,7 +34529,7 @@ function askBook(prefix, no) {
 }
 
 // Packages/Box/src/link/run-command.ts
-import { spawn as spawn10 } from "node:child_process";
+import { spawn as spawn11 } from "node:child_process";
 import fs115 from "node:fs";
 var PRIVATE = ["BUN_BE_BUN", "BUN_RUNTIME_TRANSPILER_CACHE_PATH"];
 var MOST_KEPT2 = 4 * 1024 * 1024;
@@ -34569,7 +34593,7 @@ process.once("exit", () => {
 function runCommand(command, folder, env, timeout, signal, name = String(Math.random()), ended) {
   return new Promise((resolve) => {
     const shell = env.SHELL && fs115.existsSync(env.SHELL) ? env.SHELL : "/bin/sh";
-    const child = spawn10(shell, ["-lc", command], { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
+    const child = spawn11(shell, ["-lc", command], { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
     if (child.pid)
       running2.set(name, { pid: child.pid, ended });
     let output = Buffer.alloc(0);
@@ -34659,7 +34683,7 @@ async function stopsFor(session, command, minutes = 3, signal) {
     return [];
   const tagged = `kuvo-sandbox ${session} ${commandSum(command)}`;
   const read = await new Promise((resolve) => {
-    const child = spawn11("/usr/bin/log", ["show", "--last", `${minutes}m`, "--style", "ndjson", "--predicate", `sender == "Sandbox" AND eventMessage CONTAINS "${tagged}"`], { stdio: ["ignore", "pipe", "ignore"] });
+    const child = spawn12("/usr/bin/log", ["show", "--last", `${minutes}m`, "--style", "ndjson", "--predicate", `sender == "Sandbox" AND eventMessage CONTAINS "${tagged}"`], { stdio: ["ignore", "pipe", "ignore"] });
     let out = "";
     const timer = setTimeout(() => child.kill("SIGKILL"), 20000);
     signal?.addEventListener("abort", () => child.kill("SIGKILL"), { once: true });
@@ -35074,7 +35098,7 @@ import fs120 from "node:fs";
 import path123 from "node:path";
 
 // Packages/Box/src/link/areas/changes.ts
-import { execFile as execFile12, execFileSync as execFileSync3, spawn as spawn12 } from "node:child_process";
+import { execFile as execFile12, execFileSync as execFileSync3, spawn as spawn13 } from "node:child_process";
 import fs119 from "node:fs";
 import os14 from "node:os";
 import path122 from "node:path";
@@ -35161,7 +35185,7 @@ async function git2(folder, given, changing = false, more = {}, program = "git",
   return new Promise((resolve) => {
     const out = [];
     const said = [];
-    const child = spawn12(program, args, { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn13(program, args, { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"] });
     child.stdout.on("data", (piece) => out.push(piece));
     child.stderr.on("data", (piece) => said.push(piece));
     child.on("error", () => resolve({ ok: false, out: Buffer.alloc(0), said: `${program} isn’t there.` }));
@@ -36148,7 +36172,7 @@ async function atWork3(target) {
 }
 
 // Packages/Box/src/link/browser/install.ts
-import { execFileSync as execFileSync4, spawn as spawn13 } from "node:child_process";
+import { execFileSync as execFileSync4, spawn as spawn14 } from "node:child_process";
 import crypto48 from "node:crypto";
 import fs122 from "node:fs";
 import os15 from "node:os";
@@ -38942,7 +38966,7 @@ function startBrowserInstall({ now = false, repair = false } = {}) {
   if (decided.outcome === null && SCRIPT) {
     note2({ state: "checking", progress: undefined, message: undefined });
     const flags = [...now ? ["--now"] : [], ...decided.repair ? ["--repair"] : []];
-    const child = spawn13(process.execPath, [...OWN_RUNTIME, SCRIPT, "browser", "install", ...flags], { detached: true, stdio: "ignore", cwd: K, env: process.env });
+    const child = spawn14(process.execPath, [...OWN_RUNTIME, SCRIPT, "browser", "install", ...flags], { detached: true, stdio: "ignore", cwd: K, env: process.env });
     const here = runtimeHere();
     child.on("error", (error) => note2({ state: "failed", id: "id" in here ? here.id : undefined, retryAt: Date.now() + 60000, failures: (readRecord2().failures ?? 0) + 1, message: `The browser's setup couldn't start (${error.message}). It tries again in a minute.` }));
     child.unref();
@@ -38970,7 +38994,7 @@ import fs123 from "node:fs";
 import path126 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "8c6df1cd85fe";
+var BRIDGE_VERSION = "5d1635854d2d";
 
 // Packages/Box/src/link/rehome/rewrite.ts
 var NO_REWRITE = {
@@ -46834,7 +46858,7 @@ async function run5() {
     try {
       checkDrift();
     } catch {}
-    takeOffer().catch(() => {});
+    startOfferedUpdate().catch(() => {});
     const night = updateNight();
     if (!night || updateState().night === night || !UPDATE_KEYS.length)
       return;
@@ -46999,7 +47023,7 @@ async function box(command) {
         return say({ status: 409, message: blocked });
       if (isUpdating())
         return say({ status: 409, message: "It's updating already." });
-      spawn14(process.execPath, [...OWN_RUNTIME, fileURLToPath3(import.meta.url), "update", "--now"], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
+      spawn15(process.execPath, [...OWN_RUNTIME, fileURLToPath3(import.meta.url), "update", "--now"], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
       return say({ status: 202, ...updateStatus(), updating: "checking" });
     }
     case "route": {
@@ -47399,10 +47423,12 @@ if (main) {
     const args = process.argv.slice(3);
     const option = (name) => args.indexOf(name) >= 0 ? args[args.indexOf(name) + 1] : undefined;
     const from = option("--from");
-    const test = (option("--url") || from) && option("--key") && !REAL_BOX;
-    const outcome = from && !path151.isAbsolute(from) ? { result: "failed", message: "Say which folder the release is in, as a full path." } : await update({ now: args.includes("--now"), from, step: (running) => noteUpdate({ running }), ...test ? { url: option("--url"), keys: [option("--key")], blocked: null } : {} });
-    noteUpdate({ running: null, ...outcome.result === "updated" ? {} : { last: { at: Date.now(), ...outcome } } });
-    if (outcome.result === "updated") {
+    const test = option("--key") && !REAL_BOX ? { url: option("--url"), keys: [option("--key")], blocked: null } : {};
+    const step = (running) => noteUpdate({ running });
+    const outcome = args.includes("--offered") ? await takeOffer({ step, ...test }) : from && !path151.isAbsolute(from) ? { result: "failed", message: "Say which folder the release is in, as a full path." } : await update({ now: args.includes("--now"), from, step, ...test });
+    if (outcome)
+      noteUpdate({ running: null, ...outcome.result === "updated" ? {} : { last: { at: Date.now(), ...outcome } } });
+    if (outcome?.result === "updated") {
       const pid = runningBridge();
       if (pid)
         process.kill(pid, "SIGTERM");
@@ -47411,7 +47437,7 @@ if (main) {
         await upgradeIntegrations().catch(() => {});
       }
     }
-    console.log(JSON.stringify(outcome));
+    console.log(JSON.stringify(outcome ?? { result: "current", message: "No offered release is due." }));
   } else if (mode === "browser") {
     const args = process.argv.slice(3);
     if (argument === "install") {
@@ -47529,7 +47555,6 @@ export {
   branchSlug,
   bridgeAsk,
   bridgeClock,
-  bundleOf2 as bundleOf,
   callAs,
   callsBack,
   canonicalPath,
@@ -47684,6 +47709,7 @@ export {
   noteStopped,
   noticeFor,
   noticeJSON,
+  offerDue,
   offerUpdate,
   offeredVersion,
   openMail,
