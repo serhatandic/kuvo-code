@@ -8,7 +8,8 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { isObject } from "../../shared/json";
 import { plainName } from "../../shared/text";
-import { BOTS, IS_MAC, K } from "../home";
+import { accountHome, APP_FOLDER, BOTS, homeFolder, K, OWN_HOME_MAC } from "../home";
+import { APP_TEMPORARY_PATTERN } from "../fence/policy";
 import { categoryNamed } from "./categories";
 import { takeNumber, type Primary } from "./numbers";
 import {
@@ -16,7 +17,7 @@ import {
   type Book, type Item, type ItemEvent, type KeptFile, type Source, type Who,
 } from "./store";
 import { nameOf, refOf } from "./view";
-import { doneOnGitHub, seenOf } from "./github";
+import { doneByRead, seenOf } from "./github";
 import { frozen } from "../moves/records";
 
 /** A session is linked to this many items at most: linking one more drops its oldest link. */
@@ -68,6 +69,17 @@ const real = (place: string): string | null => {
 };
 const within = (file: string, folder: string) => file === folder || file.startsWith(folder.endsWith(path.sep) ? folder : folder + path.sep);
 
+/** Whether `file` (where it really is) is in this Mac's app's folders, for a Mac's box in a home of its
+ * own, whose home isn't in them: any copy's, in your Library (`~/Library/<Application Support,
+ * Caches…>/run.kuvo.code…`) or its temporary folder (`/private/var/folders/…/run.kuvo.code…`), as the
+ * sandbox keeps them (fence/policy.ts, `kuvoPatterns`). */
+function inMacApp(file: string): boolean {
+  if (!OWN_HOME_MAC || process.platform !== "darwin") return false;
+  if (new RegExp(APP_TEMPORARY_PATTERN, "i").test(file)) return true;
+  return [...new Set([homeFolder(), accountHome()].map(each => real(each) ?? each))]
+    .some(home => within(file, path.join(home, "Library")) && /^run\.kuvo\.code/i.test(path.relative(path.join(home, "Library"), file).split(path.sep)[1] ?? ""));
+}
+
 /** A file an agent named, read into `staging` (outside the queue's lock): checked where it really
  * is (links followed) to be a plain file of a size the queue keeps, in one of `places`, with no
  * hidden folder or file on the way; then opened without following a link or waiting on it, and
@@ -81,9 +93,9 @@ export function stageFile(given: string, places: FilePlaces, staging: string): S
   // Kuvo Code's own folders (on a Mac, the app's around its box's): never, unless the conversation's
   // own folder is itself in them (a bot's, a chat's), and then only what's in that folder. A project
   // that holds them (one at the home folder) doesn't make them its own.
-  const boxes = [real(K), real(BOTS), IS_MAC ? real(path.dirname(path.resolve(K))) : null].filter((each): each is string => Boolean(each));
+  const boxes = [real(K), real(BOTS), APP_FOLDER ? real(APP_FOLDER) : null].filter((each): each is string => Boolean(each));
   const ownOK = own !== null && root === own && boxes.some(box => within(own, box));
-  if (!root || (!ownOK && boxes.some(box => within(file, box)))) refuse(`${given} isn't in this conversation's folder, its project or a temporary folder: only files from there are kept with an item.`);
+  if (!root || (!ownOK && (boxes.some(box => within(file, box)) || inMacApp(file)))) refuse(`${given} isn't in this conversation's folder, its project or a temporary folder: only files from there are kept with an item.`);
   if (path.relative(root!, file).split(path.sep).some(part => part.startsWith("."))) refuse(`${given} is hidden (a name starting with a dot): it isn't kept with an item.`);
   const checked = fs.lstatSync(file);
   if (!checked.isFile()) refuse(`${given} isn't a file.`);
@@ -278,7 +290,7 @@ export function applyFileOps(acting: Acting): void {
 }
 
 // (An issue or a pull request closed on GitHub is Done, whatever category it's kept in.)
-const openIn = (book: Book, owner: string) => book.queue(owner).items.filter(item => !item.removed && item.category !== "done" && !(item.source && doneOnGitHub(seenOf(item.source)?.value?.state))).length;
+const openIn = (book: Book, owner: string) => book.queue(owner).items.filter(item => !item.removed && item.category !== "done" && !(item.source && doneByRead(seenOf(item.source)))).length;
 
 /** A new item in `owner`'s queue: numbered now if there's a number to give, else once one comes;
  * an outside source's (`source`, an issue or a pull request) never. */
@@ -334,7 +346,9 @@ export function changeItem(book: Book, item: Item, fields: Fields, acting: Actin
     const category = categoryFor(fields.category);
     // (An issue's or a pull request's Done is GitHub's: never set, nor left, here.)
     if (item.source && category === "done") refuseDone(nameOf(item));
-    if (item.source && doneOnGitHub(seenOf(item.source)?.value?.state)) refuse(`${nameOf(item)} is closed on GitHub, so it's Done: it's back in its place once it's reopened there.`);
+    if (item.source && doneByRead(seenOf(item.source))) refuse(seenOf(item.source)!.gone
+      ? `${nameOf(item)} is gone from GitHub (or gh here can no longer see it), so it's Done: it's back in its place once GitHub shows it again.`
+      : `${nameOf(item)} is closed on GitHub, so it's Done: it's back in its place once it's reopened there.`);
     if (category !== item.category) {
       item.category = category;
       item.order = placeIn(book.items(), category, { top: fields.top === true });

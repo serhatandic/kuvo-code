@@ -3074,6 +3074,9 @@
             "literal": "bots.make"
            },
            {
+            "literal": "box.ownHome"
+           },
+           {
             "literal": "branch"
            },
            {
@@ -3215,6 +3218,9 @@
             "literal": "queue"
            },
            {
+            "literal": "queue.once"
+           },
+           {
             "literal": "queue.waits"
            },
            {
@@ -3263,6 +3269,9 @@
             "literal": "setup"
            },
            {
+            "literal": "setup.mainOnly"
+           },
+           {
             "literal": "shell.stop"
            },
            {
@@ -3276,6 +3285,9 @@
            },
            {
             "literal": "update"
+           },
+           {
+            "literal": "usage.history"
            },
            {
             "literal": "vault"
@@ -3451,6 +3463,9 @@
             "literal": "bots.make"
            },
            {
+            "literal": "box.ownHome"
+           },
+           {
             "literal": "branch"
            },
            {
@@ -3592,6 +3607,9 @@
             "literal": "queue"
            },
            {
+            "literal": "queue.once"
+           },
+           {
             "literal": "queue.waits"
            },
            {
@@ -3640,6 +3658,9 @@
             "literal": "setup"
            },
            {
+            "literal": "setup.mainOnly"
+           },
+           {
             "literal": "shell.stop"
            },
            {
@@ -3653,6 +3674,9 @@
            },
            {
             "literal": "update"
+           },
+           {
+            "literal": "usage.history"
            },
            {
             "literal": "vault"
@@ -9729,7 +9753,9 @@
         "null"
        ]
       },
-      "suggested?": "string"
+      "suggested?": "string",
+      "keepsAwake?": "bool",
+      "awakeNow?": "bool"
      }
     }
    }
@@ -9745,7 +9771,9 @@
         "null"
        ]
       },
-      "suggested?": "string"
+      "suggested?": "string",
+      "keepsAwake?": "bool",
+      "awakeNow?": "bool"
      }
     },
     "400": {
@@ -10917,6 +10945,7 @@
          "keptIn?": "string",
          "struck?": "bool",
          "closesOn?": "string",
+         "doneAs?": "string",
          "handing?": {
           "object": {
            "to": "string",
@@ -11121,6 +11150,7 @@
          "keptIn?": "string",
          "struck?": "bool",
          "closesOn?": "string",
+         "doneAs?": "string",
          "handing?": {
           "object": {
            "to": "string",
@@ -11332,6 +11362,7 @@
          "keptIn?": "string",
          "struck?": "bool",
          "closesOn?": "string",
+         "doneAs?": "string",
          "handing?": {
           "object": {
            "to": "string",
@@ -11536,6 +11567,7 @@
          "keptIn?": "string",
          "struck?": "bool",
          "closesOn?": "string",
+         "doneAs?": "string",
          "handing?": {
           "object": {
            "to": "string",
@@ -11942,6 +11974,7 @@
         "keptIn?": "string",
         "struck?": "bool",
         "closesOn?": "string",
+        "doneAs?": "string",
         "handing?": {
          "object": {
           "to": "string",
@@ -12211,6 +12244,7 @@
         "keptIn?": "string",
         "struck?": "bool",
         "closesOn?": "string",
+        "doneAs?": "string",
         "handing?": {
          "object": {
           "to": "string",
@@ -12411,6 +12445,7 @@
         "keptIn?": "string",
         "struck?": "bool",
         "closesOn?": "string",
+        "doneAs?": "string",
         "handing?": {
          "object": {
           "to": "string",
@@ -12611,6 +12646,7 @@
         "keptIn?": "string",
         "struck?": "bool",
         "closesOn?": "string",
+        "doneAs?": "string",
         "handing?": {
          "object": {
           "to": "string",

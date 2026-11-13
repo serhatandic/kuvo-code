@@ -22,6 +22,7 @@ import { readPersonalities } from "../personalities/library";
 import { macLink, readLink, updateLink } from "../state";
 import { macKeys, macLinkCheck, saveMacConfig, tellGone } from "./link";
 import { noteKeyNow } from "../setup/lead";
+import { addElsewhere, mainElsewhere } from "../setup/main-only";
 import { macSendOutbox } from "./peers";
 import type { SignedDoc } from "../../shared/documents";
 import type { Peer } from "../peers/known";
@@ -235,6 +236,13 @@ export async function* macLinkRoute(route: string, request: LinkRequest, signal:
 // This Mac's box's link, for its app alone (PROTOCOL.md, "This Mac's box: the relay").
 export async function* linkRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
   const { request, signal, route, json } = context;
+  // Your computers as an app says them, on a member of a setup: only its main computer's app says
+  // who's in it, so an app here (one from before, or one attached to this box) never publishes a
+  // list of its own; it's told where to add and remove them (PROTOCOL.md, "Your setup").
+  if (route === "kuvo/link/peers" && (request.fromApp || request.fromMac)) {
+    const main = mainElsewhere(readLink());
+    if (main) return yield* json(409, addElsewhere(main));
+  }
   if (!IS_MAC || !request.fromApp) return yield* json(403, { message: "Only Kuvo Code on this computer can do that." });
   return yield* macLinkRoute(route, request, signal);
 }

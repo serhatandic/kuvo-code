@@ -36,6 +36,7 @@ import { keeperEngine } from "../shared/engines"
 import { writeSecret } from "../shared/files"
 import { leftSignIns } from "./signin"
 import { commandLineOf } from "../shared/platform"
+import { isRealBridgeFolder } from "../shared/account"
 import { updateUnderWay } from "../shared/updating"
 import { spawn } from "node:child_process"
 import { bundleBuild } from "../shared/bundle"
@@ -58,6 +59,9 @@ import { HangWatch, isEngine } from "../shared/hang"
 import { notesBeside } from "./notes"
 import { agentAccounts, Limits } from "./limits"
 import { LimitsPeers } from "./limits-peers"
+import { PricingStore } from "./usage/pricing"
+import { claudeSources, Usage } from "./usage/usage"
+import { UsagePeers } from "./usage/usage-peers"
 import { ENGINE_SERVICES, EngineAccounts } from "./engine-limits"
 
 const version = "1"
@@ -286,6 +290,16 @@ const limits = new Limits(() => [...agentAccounts(roster.all()), ...engineAccoun
 limits.alsoServices = ENGINE_SERVICES
 // Shared with your other computers' boxes: each account read once across them, and listed on each.
 peers.limits = new LimitsPeers(limits, post, directory, join(home, "limits-peers.json"))
+// What each account used, by the quarter hour, from its agent's logs here, priced; shared the same
+// way. Prices come from the web only to a real box's bridge: never in a test, however it started
+// this (the Mac app's tests start it through the app; test-safety.js also says
+// KUVO_TEST_PRICE_FEEDS=off).
+const noPriceFeeds = process.env.KUVO_TEST_PRICE_FEEDS === "off" || !isRealBridgeFolder(home)
+delete process.env.KUVO_TEST_PRICE_FEEDS
+const usageFolder = join(home, "usage")
+const claudeUsage = claudeSources(usageFolder)
+const usage = new Usage(() => claudeUsage(roster.all()), new PricingStore(join(usageFolder, "pricing"), noPriceFeeds ? null : undefined), (provider) => limits.identity(provider), join(usageFolder, "usage.json"))
+peers.usage = new UsagePeers(usage, post, directory, join(usageFolder, "peers.json"))
 
 // What every conversation here makes, recorded as it's made: the engine's and this bridge's own.
 // One that fails to start leaves the rest of the bridge as it is.
@@ -336,11 +350,12 @@ if (artifactsFolder) {
 // agent started then would run outside the sandbox until it stops.
 await untilSandboxDecided()
 limits.start()
+usage.start()
 const carrying = new Carrying(sessions, store, (provider) => sessions.agent(provider), (kind) => roster.all().filter((agent) => parseProvider(agent.providerID)?.kind === kind))
 let server: ReturnType<typeof Bun.serve>
 /** Making way for a newer bridge in its place, on a machine (below). */
 let renewal: Renewal | undefined
-const answer = handler({ roster, sessions, auto, link, password, version, build, groups, peers, goals, sideQuestions, handoffs, places, reviews, voice, artifacts, noted, restartOutside, carrying, limits })
+const answer = handler({ roster, sessions, auto, link, password, version, build, groups, peers, goals, sideQuestions, handoffs, places, reviews, voice, artifacts, noted, restartOutside, carrying, limits, usage })
 /** Requests being answered now (but the event feed's, which stays open): a newer bridge waits for them. */
 let answering = 0
 try {

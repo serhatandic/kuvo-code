@@ -65,8 +65,13 @@ import Testing
                     return StubWeb.json(["version": 1, "data": chats.keys.sorted().map { key in
                         ["group": chats[key]!.group, "status": chats[key]!.status, "state": ["discussing": false, "paused": false], "last": chats[key]!.messages.last as Any]
                     }])
-                case ("PUT", "settings", _):
+                // Your clock (`routes.ts`: the Mac sends only that, to `clock`).
+                case ("PUT", "clock", _):
                     return StubWeb.json([:])
+                // Any other id that isn't a chat's: no such chat, never taken for one, as the box
+                // answers. (Its other settings paths the Mac doesn't send.)
+                case (_, let id?, _) where !id.hasPrefix("grp_"):
+                    return StubWeb.json(["message": "No such chat."], status: 404)
                 case ("GET", let id?, nil):
                     return chats[id] == nil ? StubWeb.json(["message": "No such chat."], status: 404) : StubWeb.json(["data": read(id)])
                 case ("PUT", let id?, nil):
@@ -155,6 +160,7 @@ import Testing
         await app.boxGroups.connected(nil)
         await app.boxGroups.connected("box")
 
+        #expect(here.actions.first == "PUT clock" && there.actions.first == "PUT clock", "your clock, before its chats are read")
         #expect(Set(app.chats.list.map(\.id)) == ["grp_mac0000001", "grp_box0000001"])
         #expect(app.chats.machine(of: "grp_box0000001") == "box" && app.chats.machine(of: "grp_mac0000001") == nil)
         #expect(app.chats.messages(in: "grp_box0000001").map(\.text) == ["Morning."])

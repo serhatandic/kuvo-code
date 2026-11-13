@@ -45,6 +45,8 @@ export interface LimitsDirectory {
   own(): { key: string; name: string } | undefined
   /** Told each time the link says who they are. */
   listen(listener: () => void): void
+  /** Whether a box is one of your computers (a peer), not one a peer vouches for. */
+  isPeer?(key: string): boolean
 }
 
 interface Kept {

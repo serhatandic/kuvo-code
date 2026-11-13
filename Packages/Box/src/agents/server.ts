@@ -15,6 +15,7 @@ import { handoffRoutes, type Handoffs } from "./handoff"
 import { reviewRoutes, type Reviews } from "./reviews"
 import { voiceRoutes, type VoiceWords } from "./voice"
 import { limitsRoutes, type Limits } from "./limits"
+import { usageRoutes, type Usage } from "./usage/usage"
 import { isOutdated, type Maintenance } from "./maintenance"
 import { forgetUpdate, inUpdateAll, programUpdate, updateAll, updateProgram } from "./updates"
 import { refreshLoginPath } from "./proc"
@@ -66,6 +67,8 @@ export interface Context {
   carrying?: Carrying
   /** Your plans' limits for each account here (limits.ts). */
   limits?: Limits
+  /** What your accounts used, by the day (usage/usage.ts). */
+  usage?: Usage
 }
 
 const attempts = new Map<string, { agent: Agent; attempt: SignInAttempt; created: number; expires: number }>()
@@ -550,6 +553,7 @@ export function handler(context: Context) {
       if (area === "kuvo" && a === "reviews") return await reviewRoutes(context.reviews, method, parts.slice(3), body)
       if (area === "kuvo" && a === "voice") return await voiceRoutes(context.voice, method, parts.slice(3))
       if (area === "kuvo" && a === "limits") return await limitsRoutes(context.limits, method, parts.slice(3))
+      if (area === "kuvo" && a === "usage") return await usageRoutes(context.usage, method, parts.slice(3), url.searchParams)
       if (area === "kuvo" && a === "groups") return await groupRoutes(context.groups?.runner, context.groups?.store, method, parts.slice(3), body)
       // The same, as a client reads and changes them (`kuvo/groups`, which the box's link passes on).
       if (area === "kuvo" && a === "link" && b === "groups") return await linkRoutes(context.groups?.runner, context.groups?.store, method, parts.slice(4), body, request.signal)

@@ -256,3 +256,18 @@ test("an engine that isn't answering says nothing of its sessions, rather than s
 test("a session this box doesn't have is left out", async () => {
   assert.deepEqual(await glance(["ses_gone"]), {});
 });
+
+test("what the glance kept before one reader read GitHub for all ({at, pull}) is read as it was, and kept in today's shape from the next read on", async () => {
+  const file = path.join(home, "run", "glance", "github.json");
+  const pull = { number: 40, url: "https://github.com/kuvo-test/app/pull/40", state: "open", additions: 3, deletions: 1, branch: "kuvo/timer" };
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ reads: { "github.com/kuvo-test/app@kuvo/timer": { at: clock, pull } }, hosts: {} }));
+  assert.deepEqual((await glance(["ses_tree"])).ses_tree.pull, { number: 40, url: pull.url, state: "open", additions: 3, deletions: 1 });
+  assert.equal(queries().length, 0, "fresh as it was kept: GitHub isn't asked");
+  github({ p0: { pullRequests: { nodes: [pr(40, { state: "MERGED" })] } } });
+  clock += 6 * 60_000;
+  assert.equal((await glance(["ses_tree"])).ses_tree.pull.state, "merged");
+  const kept = JSON.parse(fs.readFileSync(file, "utf8")).reads["github.com/kuvo-test/app@kuvo/timer"];
+  assert.equal(kept.value.state, "merged");
+  assert.equal("pull" in kept, false, "the old shape isn't written");
+});

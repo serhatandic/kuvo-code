@@ -420,6 +420,147 @@ test("a message that arrived whole reaches its conversation though the phone tha
   assert.deepEqual(fs.readFileSync(videoPath), video);
 });
 
+test("a message sent again under the same id after the phone's link dropped goes to its conversation once, and each send hears it went (#144)", { timeout: 30_000 }, async t => {
+  // An engine slow to take the first (a busy computer), counting every message it's sent.
+  const prompts = [];
+  let takeIt;
+  const taken = new Promise(resolve => { takeIt = resolve; });
+  let firstArrived;
+  const arrived = new Promise(resolve => { firstArrived = resolve; });
+  const server = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", chunk => { body += chunk; });
+    request.on("end", async () => {
+      const sent = /^\/api\/session\/([^/]+)\/prompt$/.exec(request.url);
+      if (!sent) { response.writeHead(404); return response.end("{}"); }
+      const prompt = JSON.parse(body);
+      prompts.push(prompt);
+      firstArrived();
+      await taken;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ data: { id: prompt.id, sessionID: sent[1], type: "user" } }));
+    });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const target = () => ({ pid: process.pid, port: server.address().port, password: "s3cret", version: "2.0.32" });
+  const handle = link.engineHandler(target, {}, () => null);
+  const hostKey = link.newKey();
+  const host = new link.LinkHost({ key: hostKey, hello: { v: 1, kind: "machine", name: "m", app: "0" }, authorize: () => true, handle });
+  const phone = phoneFor(host, hostKey);
+  const picture = Buffer.alloc(300_000, 7);
+  const message = Buffer.from(JSON.stringify({ id: "msg_once", text: "what's on this screen?", delivery: "steer", files: [{ name: "screen.png", uri: `data:image/png;base64,${picture.toString("base64")}` }] }));
+  const prompt = id => ({ t: "req", id, m: "POST", p: "api/session/ses_once/prompt", h: { "content-type": "application/json", "idempotency-key": "msg_once" } });
+  const kept = () => {
+    const folder = path.join(home, "attachments", "ses_once");
+    return fs.existsSync(folder) ? fs.readdirSync(folder, { recursive: true }).filter(name => fs.statSync(path.join(folder, name)).isFile()).length : 0;
+  };
+
+  // Here whole, then the link drops before the answer comes back.
+  await phone.open({});
+  phone.send(prompt(1), message);
+  await arrived;
+  await phone.close();
+  // Sent again on a new session, while the first is still on its way to the conversation.
+  await phone.open({});
+  phone.send(prompt(1), message);
+  const again = phone.response();
+  takeIt();
+  const answered = await again;
+  assert.equal(answered.head.s, 200);
+  assert.equal(JSON.parse(answered.body).data.id, "msg_once");
+  // And again once it went: the same answer, with the conversation not asked a second time.
+  phone.send(prompt(2), message);
+  const late = await phone.response();
+  assert.equal(late.head.s, 200);
+  assert.equal(JSON.parse(late.body).data.id, "msg_once");
+  assert.equal(prompts.length, 1);
+  assert.equal(prompts[0].id, "msg_once");
+  assert.equal(kept(), 1);
+
+  // Another message (its own id) still goes.
+  phone.send(prompt(3), Buffer.from(JSON.stringify({ id: "msg_other", text: "and this one?", delivery: "steer" })));
+  assert.equal((await phone.response()).head.s, 200);
+  assert.deepEqual(prompts.map(sent => sent.id), ["msg_once", "msg_other"]);
+});
+
+test("a message the engine is slow to answer is waited for, not said busy, and a repeat meanwhile waits with it: the engine's asked once (#144)", { timeout: 30_000 }, async t => {
+  // An engine that holds the first until it's let go (busy for longer than the box waits on a
+  // queue change), counting every message it's sent.
+  const prompts = [];
+  let answerIt;
+  const answered = new Promise(resolve => { answerIt = resolve; });
+  let firstArrived;
+  const arrived = new Promise(resolve => { firstArrived = resolve; });
+  const server = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", chunk => { body += chunk; });
+    request.on("end", async () => {
+      if (!/\/prompt$/.test(request.url)) { response.writeHead(404); return response.end("{}"); }
+      prompts.push(JSON.parse(body).id);
+      firstArrived();
+      await answered;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{}");
+    });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  // (However short the box's patience with a queue change, a message isn't cut off by it.)
+  const patience = link.SENDING_PATIENCE.ms;
+  link.SENDING_PATIENCE.ms = 1;
+  t.after(() => { link.SENDING_PATIENCE.ms = patience; });
+  const target = () => ({ pid: process.pid, port: server.address().port, password: "s3cret", version: "2.0.32" });
+  const handle = link.engineHandler(target, {}, () => null);
+  const hostKey = link.newKey();
+  const host = new link.LinkHost({ key: hostKey, hello: { v: 1, kind: "machine", name: "m", app: "0" }, authorize: () => true, handle });
+  const phone = phoneFor(host, hostKey);
+  await phone.open({});
+  const message = Buffer.from(JSON.stringify({ id: "msg_slow", text: "hello", delivery: "steer" }));
+  const prompt = id => ({ t: "req", id, m: "POST", p: "api/session/ses_slow/prompt", h: { "content-type": "application/json", "idempotency-key": "msg_slow" } });
+  phone.send(prompt(1), message);
+  await arrived;
+  // Its link dropped, it's sent again while the engine still works on the first.
+  await phone.close();
+  await phone.open({});
+  phone.send(prompt(1), message);
+  const again = phone.response();
+  answerIt();
+  const heard = await again;
+  assert.equal(heard.head.s, 200);
+  assert.equal(JSON.parse(heard.body).busy, undefined);
+  assert.deepEqual(prompts, ["msg_slow"]);
+});
+
+test("a message sent again after the conversation refused it is tried again (#144)", { timeout: 30_000 }, async t => {
+  // An engine that can't take it the first time (starting again), then can.
+  const prompts = [];
+  const server = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", chunk => { body += chunk; });
+    request.on("end", () => {
+      if (!/\/prompt$/.test(request.url)) { response.writeHead(404); return response.end("{}"); }
+      prompts.push(JSON.parse(body).id);
+      response.writeHead(prompts.length === 1 ? 503 : 200, { "content-type": "application/json" });
+      response.end(prompts.length === 1 ? JSON.stringify({ message: "starting" }) : "{}");
+    });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const target = () => ({ pid: process.pid, port: server.address().port, password: "s3cret", version: "2.0.32" });
+  const handle = link.engineHandler(target, {}, () => null);
+  const hostKey = link.newKey();
+  const host = new link.LinkHost({ key: hostKey, hello: { v: 1, kind: "machine", name: "m", app: "0" }, authorize: () => true, handle });
+  const phone = phoneFor(host, hostKey);
+  await phone.open({});
+  const message = Buffer.from(JSON.stringify({ id: "msg_retried", text: "hello", delivery: "steer" }));
+  phone.send({ t: "req", id: 1, m: "POST", p: "api/session/ses_retried/prompt", h: { "content-type": "application/json" } }, message);
+  assert.equal((await phone.response()).head.s, 503);
+  phone.send({ t: "req", id: 2, m: "POST", p: "api/session/ses_retried/prompt", h: { "content-type": "application/json" } }, message);
+  assert.equal((await phone.response()).head.s, 200);
+  assert.deepEqual(prompts, ["msg_retried", "msg_retried"]);
+});
+
 test("a Mac's files for a machine take the phone's path: kept on the machine's box, and only what the model reads goes as a file, with no word of a phone", async t => {
   const prompted = {};
   const server = http.createServer((request, response) => {
@@ -1397,6 +1538,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "bots.job": ["GET", "kuvo/bots"],
     "bots.keys": ["GET", "kuvo/bots/bot_none/keys"],
     "bots.make": ["GET", "kuvo/bots/templates"],
+    // (A box in a home of its own: on a Mac's, kuvo/work/settings's keepsAwake.)
+    "box.ownHome": ["GET", "kuvo/work/settings"],
     branch: ["POST", "kuvo/agents/api/kuvo/branch/ses_none"],
     // (Its browser, set up by the box itself.)
     browser: ["GET", "kuvo/browser"],
@@ -1453,6 +1596,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     projects: ["GET", "kuvo/projects"],
     "providers.models": ["GET", "kuvo/providers/models"],
     queue: ["GET", "kuvo/sessions/ses_none/queue"],
+    // (queue/add taking a message once by its id, sent again.)
+    "queue.once": ["POST", "kuvo/sessions/ses_none/queue/add"],
     "queue.waits": ["POST", "kuvo/sessions/ses_none/queue/add"],
     reviews: ["GET", "kuvo/agents/api/kuvo/reviews"],
     "reviews.parts": ["GET", "kuvo/agents/api/kuvo/reviews"],
@@ -1474,11 +1619,13 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "sessions.start": ["POST", "kuvo/sessions"],
     // (Your setup, and who's its main computer.)
     setup: ["GET", "kuvo/setup"],
+    "setup.mainOnly": ["GET", "kuvo/setup"],
     "shell.stop": ["POST", "kuvo/shell/sh_none/stop"],
     "sign-in.return": ["GET", "kuvo/sign-in/return"],
     skills: ["GET", "kuvo/skills"],
     "skills.trash": ["GET", "kuvo/skill-trash"],
     update: ["GET", "kuvo/update"],
+    "usage.history": ["GET", "kuvo/agents/api/kuvo/usage"],
     vault: ["GET", "kuvo/vault/tools"],
     wakes: ["GET", "kuvo/wakes"],
     "wakes.edit": ["POST", "kuvo/wakes/ses_none/pause"],
@@ -1646,6 +1793,37 @@ test("a phone paired with a machine gets a link there for another phone, which p
   assert.equal((await as("DELETE", "kuvo/phones/pair")).status, 200);
   assert.equal(link.authorizePhone(crypto.randomBytes(32), { pair: again, name: "Late" }, undefined), false);
   assert.equal((await as("GET", "kuvo/phones/pair")).status, 405);
+  fs.rmSync(path.join(home, "run", "link.json"), { force: true });
+});
+
+test("a machine pairs phones by itself while it leads its own setup, and not as a member, even one set aside: it names its main computer", async () => {
+  fs.mkdirSync(path.join(home, "run"), { recursive: true });
+  const mine = crypto.randomBytes(32);
+  const main = link.publicOf(link.newKey()).toString("base64url");
+  const setup = { id: `set_${crypto.randomBytes(16).toString("base64url")}`, epoch: 1, sign: link.signingKeyOf(link.newSigningSeed()) };
+  const base = { secret: crypto.randomBytes(32).toString("base64url"), key: link.newKey().toString("base64url"), relay: "wss://relay.test", name: "lab",
+    phones: [{ key: mine.toString("base64url"), name: "Mine", added: 1, from: "pair", pairing: "a" }] };
+  const handle = link.engineHandler(() => { throw new Error("none"); }, {}, () => null);
+  const as = async (method, p) => {
+    const parts = [];
+    for await (const part of handle({ method, path: p, headers: {}, body: Buffer.alloc(0) }, { key: mine }, undefined)) parts.push(part);
+    const text = Buffer.concat(parts.filter(part => part.body).map(part => part.body)).toString();
+    return { status: parts[0].head.status, json: text ? JSON.parse(text) : undefined };
+  };
+  // Its own setup's main computer (a box you run alone): as before.
+  link.writeLink({ ...base, setup: { ...setup, primary: link.publicOf(Buffer.from(base.key, "base64url")).toString("base64url"), role: "primary" } });
+  assert.equal((await as("POST", "kuvo/phones/pair")).status, 200);
+  // A member, its setup set aside (a machine two Macs share): still that Mac's to pair from.
+  link.writeLink({ ...base, macs: [main], macNames: { [main]: "Studio" }, setup: { ...setup, primary: main, role: "member", aside: true } });
+  assert.deepEqual(await as("POST", "kuvo/phones/pair"), { status: 409, json: { message: "Pair new phones from Studio.", primary: main } });
+  assert.equal(link.readLink().pairing, undefined);
+  // A link it made before it was a member pairs no one now, and is done with.
+  const token = crypto.randomBytes(16).toString("base64url");
+  link.updateLink(current => ({ ...current, pairing: { token, expires: Date.now() + 60_000 } }));
+  const late = crypto.randomBytes(32);
+  assert.equal(link.authorizePhone(late, { pair: token, name: "Late" }, undefined), false);
+  assert.equal(link.readLink().pairing, undefined);
+  assert.ok(!link.readLink().phones.some(phone => phone.key === late.toString("base64url")));
   fs.rmSync(path.join(home, "run", "link.json"), { force: true });
 });
 

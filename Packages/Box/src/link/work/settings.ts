@@ -5,7 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
-import { textOf, writePrivate } from "../files";
+import { locked, textOf, writePrivate } from "../files";
 import { BOX, homeFolder } from "../home";
 
 export const WORK_SETTINGS_FILE = path.join(BOX, "work.json");
@@ -56,18 +56,43 @@ export function setProjectsFolder(given: unknown, file = WORK_SETTINGS_FILE): { 
   return checked;
 }
 
+// One change at a time, from any of this box's processes: each keeps what another changed.
 function writeSettings(change: Record<string, unknown>, file: string) {
-  let kept: Record<string, unknown> = {};
-  try {
-    const read = JSON.parse(textOf(file) ?? "");
-    if (isObject(read)) kept = read;
-  } catch {}
-  writePrivate(file, JSON.stringify({ ...kept, ...change }, null, 2));
+  locked(`${file}.lock`, () => {
+    let kept: Record<string, unknown> = {};
+    try {
+      const read = JSON.parse(textOf(file) ?? "");
+      if (isObject(read)) kept = read;
+    } catch {}
+    writePrivate(file, JSON.stringify({ ...kept, ...change }, null, 2));
+  });
 }
 
-/** The settings as clients read them: the folder (null for none) and, without one, one to offer. */
-export function workSettings(file = WORK_SETTINGS_FILE): { projectsFolder: string | null; suggested?: string } {
+/** Keep This Mac Awake, as this box keeps it: on unless you turned it off (a Mac's box in a home of
+ * its own goes by it, work/awake.ts). */
+export function keepsAwakeSetting(file = WORK_SETTINGS_FILE): boolean {
+  try {
+    const kept = JSON.parse(textOf(file) ?? "");
+    return !(isObject(kept) && kept.keepsAwake === false);
+  } catch {
+    return true;
+  }
+}
+
+export const KEEPS_AWAKE_REFUSED = "Say whether to keep this Mac awake while agents work: keepsAwake, true or false.";
+
+/** Keep This Mac Awake on or off, or why not. */
+export function setKeepsAwake(given: unknown, file = WORK_SETTINGS_FILE): { keepsAwake: boolean } | { refused: string } {
+  if (typeof given !== "boolean") return { refused: KEEPS_AWAKE_REFUSED };
+  writeSettings({ keepsAwake: given }, file);
+  return { keepsAwake: given };
+}
+
+/** The settings as clients read them: the folder (null for none) and, without one, one to offer;
+ * and on a box that keeps its Mac awake itself (`awake`), whether it does while agents work, and
+ * whether it is now. */
+export function workSettings(file = WORK_SETTINGS_FILE, awake?: { now: boolean }): { projectsFolder: string | null; suggested?: string; keepsAwake?: boolean; awakeNow?: boolean } {
   const folder = projectsFolder(file);
   const suggested = folder ? null : suggestedFolder();
-  return { projectsFolder: folder, ...(suggested ? { suggested } : {}) };
+  return { projectsFolder: folder, ...(suggested ? { suggested } : {}), ...(awake ? { keepsAwake: keepsAwakeSetting(file), awakeNow: awake.now } : {}) };
 }
