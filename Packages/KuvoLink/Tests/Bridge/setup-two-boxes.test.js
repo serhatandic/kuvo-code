@@ -161,13 +161,13 @@ before(async () => {
   assert.notEqual((await ask("PUT", "kuvo/link/config", { phones: false, machines: true, relay: relay.url, name: "Studio Mac", app: "0.9.0", features: ["mac", "work.elsewhere", "work-queue", "work-queue.elsewhere"] })).json?.state, "failed");
   const setup = await ask("GET", "kuvo/link/setup");
   const result = spawnSync(process.execPath, [script, "setup"], {
-    input: JSON.stringify({ relay: relay.url, name: "lab", mac: link.publicOf(macKey).toString("base64url"), macSign: setup.json.macSign, docs: setup.json.docs, id: "lab" }),
+    input: JSON.stringify({ relay: relay.url, name: "lab", mac: link.publicOf(macKey).toString("base64url"), macSign: setup.json.macSign, docs: setup.json.docs, id: "lab.example" }),
     env: machineEnv,
     encoding: "utf8",
   });
   assert.equal(result.status, 0, result.stderr);
   lab = JSON.parse(result.stdout.trim().split("\n").at(-1));
-  assert.equal((await ask("PUT", "kuvo/link/peers", { peers: [{ key: lab.key, sign: lab.sign, address: lab.address, name: "lab", id: "lab" }], moved: [] })).status, 200);
+  assert.equal((await ask("PUT", "kuvo/link/peers", { peers: [{ key: lab.key, sign: lab.sign, address: lab.address, name: "lab", id: "lab.example" }], moved: [] })).status, 200);
   link.runMacLink();
   link.runMacPeers();
 });
@@ -242,4 +242,49 @@ test("this Mac leads a setup and its machine takes it: kuvo/setup says the same 
   assert.deepEqual(Object.values(read(path.join(macHome, "run", "work-queue", "numbers.json")).given).map(each => each.from), [71]);
   assert.match((await onLab("queue_add", { title: "Second" })).text, /#71/);
   assert.equal(read(path.join(machineHome, "run", "work-queue", "numbers.json")).primary, macPub);
+});
+
+// Only the main computer adds and pairs (PROTOCOL.md, "Your setup"): lab, a member now, names this
+// Mac for each, pairs no phone and lets no app say who's in the setup; it still tells a phone the
+// setup's machines it reaches directly, as this Mac's `kuvo/hosts` does.
+test("a member pairs no phone and adds no computer, naming the main computer, and lists the setup's machines for a phone", { timeout: 120_000 }, async t => {
+  signal = t.signal;
+  await eventually(() => read(path.join(machineHome, "run", "link.json"))?.setup?.role === "member");
+  const named = { primary: macPub };
+  const linkFile = path.join(machineHome, "run", "link.json");
+
+  // A phone asking lab for a pairing link, and `kuvo-link.js pair` run there.
+  assert.deepEqual(labRoute("POST", "kuvo/phones/pair"), { status: 409, json: { message: "Pair new phones from Studio Mac.", ...named } });
+  const cli = spawnSync(process.execPath, [script, "pair", relay.url], { env: machineEnv, encoding: "utf8" });
+  assert.equal(cli.status, 3, cli.stderr);
+  assert.equal(cli.stdout, "");
+  assert.match(cli.stderr, /^Pair new phones from Studio Mac\.$/m);
+  assert.ok(cli.stderr.includes(`If Studio Mac is gone for good, \`kuvo-link.js leave ${macPub}\` takes this computer out of its setup: your other computers, and phones paired with Studio Mac, no longer reach it here.`), cli.stderr);
+  // (A key that isn't one of its Macs: nothing let go, and said so.)
+  const wrong = spawnSync(process.execPath, [script, "leave", lab.key], { env: machineEnv, encoding: "utf8" });
+  assert.deepEqual([wrong.status, wrong.stderr.trim()], [1, "That isn't one of the Macs that set this computer up."]);
+  assert.equal(read(linkFile).setup.primary, macPub);
+  assert.equal(read(linkFile).pairing, undefined);
+
+  // Adding, changing or removing computers there, and an app there saying who's in the setup.
+  const elsewhere = { status: 409, json: { message: "Add and remove computers from Studio Mac.", ...named } };
+  assert.deepEqual(labRoute("POST", "kuvo/machines"), elsewhere);
+  assert.deepEqual(labRoute("DELETE", "kuvo/hosts/lab"), elsewhere);
+  assert.deepEqual(labRoute("POST", "kuvo/machines/lab.example/uninstall"), elsewhere);
+  assert.deepEqual(labRoute("PUT", "kuvo/link/peers"), elsewhere);
+  assert.equal(read(linkFile).setup.primary, macPub);
+  // (What a Mac's app answers that isn't adding or removing one: none here, as before.)
+  assert.equal(labRoute("POST", "kuvo/machines/lab.example/home").status, 404);
+
+  // What an older phone asks a Mac, asked of lab: the setup's machines, from its document.
+  assert.deepEqual(labRoute("GET", "kuvo/hosts"), { status: 200, json: { hosts: [{ kind: "machine", name: "lab", address: lab.address, key: lab.key, relay: relay.url, machine: "lab.example", anotherMac: false, removed: false }] } });
+
+  // Its main computer let go, as the hint says: out of the setup, and it pairs phones itself.
+  const left = spawnSync(process.execPath, [script, "leave", macPub], { env: machineEnv, encoding: "utf8" });
+  assert.deepEqual([left.status, left.stderr.trim()], [0, "Studio Mac is let go: this computer is no longer one of its computers."]);
+  assert.equal(read(linkFile).setup, undefined);
+  const paired = spawnSync(process.execPath, [script, "pair", relay.url], { env: machineEnv, encoding: "utf8" });
+  assert.equal(paired.status, 0, paired.stderr);
+  assert.match(paired.stdout, /^kuvo-link:/);
+  assert.ok(read(linkFile).pairing?.token);
 });

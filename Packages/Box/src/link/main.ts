@@ -67,6 +67,7 @@ import { watchFolders } from "./follow";
 import { pushRows } from "./work/elsewhere";
 import { pushNumbers } from "./work-queue/numbers";
 import { noteSetupNow } from "./setup/lead";
+import { macName, mainElsewhere, pairElsewhere } from "./setup/main-only";
 import { writeCard } from "./setup/card";
 import { hereNow } from "./setup/judge";
 import { pushQueues } from "./work-queue/across";
@@ -901,6 +902,16 @@ export function leave(mac: unknown): boolean {
 }
 
 function pair(relay: string | undefined): void {
+  // Only your setup's main computer pairs phones: a member names it, and pairs none (exit 3).
+  const main = mainElsewhere(readLink());
+  if (main) {
+    console.error(pairElsewhere(main).message);
+    // (Until a takeover can be made: a main computer that's gone for good is let go here, as
+    // removing this computer from it would. What that costs is said with it.)
+    const name = main.name || "it";
+    console.error(`If ${name} is gone for good, \`kuvo-link.js leave ${main.key}\` takes this computer out of its setup: your other computers, and phones paired with ${name}, no longer reach it here. Then it pairs phones itself, or names another main computer.`);
+    process.exit(3);
+  }
   const link = updateLink(current => {
     const next = current ?? { secret: crypto.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), name: os.hostname(), phones: [] };
     next.sign ??= newSigningSeed();
@@ -941,7 +952,15 @@ if (main) {
   else if (mode === "pair") pair(argument);
   else if (mode === "box") await box(argument);
   else if (mode === "serve") await serve();
-  else if (mode === "leave") leave(argument);
+  else if (mode === "leave") {
+    // (A Mac removing this machine runs it over SSH, and reads nothing it says.)
+    const name = typeof argument === "string" ? macName(readLink(), argument) : "";
+    if (!leave(argument)) {
+      console.error("That isn't one of the Macs that set this computer up.");
+      process.exit(1);
+    }
+    console.error(`${name || "That Mac"} is let go: this computer is no longer one of its computers.`);
+  }
   // Kuvo Code as it opens on a Mac, before it starts a box (PROTOCOL.md, "Your setup", "Already in a
   // setup?"): whether it uses its own box, or the one already on this Mac, in place. `here <root>`,
   // root the machines' folder's name in the home folder (`.kuvo-code`, or a test's own), with

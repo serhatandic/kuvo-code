@@ -3266,6 +3266,9 @@
             "literal": "setup"
            },
            {
+            "literal": "setup.mainOnly"
+           },
+           {
             "literal": "shell.stop"
            },
            {
@@ -3644,6 +3647,9 @@
            },
            {
             "literal": "setup"
+           },
+           {
+            "literal": "setup.mainOnly"
            },
            {
             "literal": "shell.stop"

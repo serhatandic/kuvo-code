@@ -1617,6 +1617,7 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "sessions.start": ["POST", "kuvo/sessions"],
     // (Your setup, and who's its main computer.)
     setup: ["GET", "kuvo/setup"],
+    "setup.mainOnly": ["GET", "kuvo/setup"],
     "shell.stop": ["POST", "kuvo/shell/sh_none/stop"],
     "sign-in.return": ["GET", "kuvo/sign-in/return"],
     skills: ["GET", "kuvo/skills"],
@@ -1789,6 +1790,37 @@ test("a phone paired with a machine gets a link there for another phone, which p
   assert.equal((await as("DELETE", "kuvo/phones/pair")).status, 200);
   assert.equal(link.authorizePhone(crypto.randomBytes(32), { pair: again, name: "Late" }, undefined), false);
   assert.equal((await as("GET", "kuvo/phones/pair")).status, 405);
+  fs.rmSync(path.join(home, "run", "link.json"), { force: true });
+});
+
+test("a machine pairs phones by itself while it leads its own setup, and not as a member, even one set aside: it names its main computer", async () => {
+  fs.mkdirSync(path.join(home, "run"), { recursive: true });
+  const mine = crypto.randomBytes(32);
+  const main = link.publicOf(link.newKey()).toString("base64url");
+  const setup = { id: `set_${crypto.randomBytes(16).toString("base64url")}`, epoch: 1, sign: link.signingKeyOf(link.newSigningSeed()) };
+  const base = { secret: crypto.randomBytes(32).toString("base64url"), key: link.newKey().toString("base64url"), relay: "wss://relay.test", name: "lab",
+    phones: [{ key: mine.toString("base64url"), name: "Mine", added: 1, from: "pair", pairing: "a" }] };
+  const handle = link.engineHandler(() => { throw new Error("none"); }, {}, () => null);
+  const as = async (method, p) => {
+    const parts = [];
+    for await (const part of handle({ method, path: p, headers: {}, body: Buffer.alloc(0) }, { key: mine }, undefined)) parts.push(part);
+    const text = Buffer.concat(parts.filter(part => part.body).map(part => part.body)).toString();
+    return { status: parts[0].head.status, json: text ? JSON.parse(text) : undefined };
+  };
+  // Its own setup's main computer (a box you run alone): as before.
+  link.writeLink({ ...base, setup: { ...setup, primary: link.publicOf(Buffer.from(base.key, "base64url")).toString("base64url"), role: "primary" } });
+  assert.equal((await as("POST", "kuvo/phones/pair")).status, 200);
+  // A member, its setup set aside (a machine two Macs share): still that Mac's to pair from.
+  link.writeLink({ ...base, macs: [main], macNames: { [main]: "Studio" }, setup: { ...setup, primary: main, role: "member", aside: true } });
+  assert.deepEqual(await as("POST", "kuvo/phones/pair"), { status: 409, json: { message: "Pair new phones from Studio.", primary: main } });
+  assert.equal(link.readLink().pairing, undefined);
+  // A link it made before it was a member pairs no one now, and is done with.
+  const token = crypto.randomBytes(16).toString("base64url");
+  link.updateLink(current => ({ ...current, pairing: { token, expires: Date.now() + 60_000 } }));
+  const late = crypto.randomBytes(32);
+  assert.equal(link.authorizePhone(late, { pair: token, name: "Late" }, undefined), false);
+  assert.equal(link.readLink().pairing, undefined);
+  assert.ok(!link.readLink().phones.some(phone => phone.key === late.toString("base64url")));
   fs.rmSync(path.join(home, "run", "link.json"), { force: true });
 });
 
