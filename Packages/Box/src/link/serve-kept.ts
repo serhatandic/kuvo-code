@@ -38,16 +38,16 @@ export function stopKeptServe() {
   if (running?.kept && running.pid !== process.pid) try { process.kill(running.pid, "SIGTERM"); } catch {}
 }
 
-/** `kuvo/box/serve`: whether a client wants the box's server kept running here (`GET`), and asking
+/** `kuvo/box/serve`: whether a client wants the box's server kept running here (`GET`, for any client), and asking
  * for it or letting it go (`POST {needed}`, from Kuvo Code itself). Asked for, the keeper's started
  * should it have gone; it starts the server within its next round (15 s at most). A Mac's own box
  * answers 409: its app's keeper, or its helper, runs its server. */
 export async function* serveRoute({ request, json }: RouteContext): AsyncGenerator<AnswerPiece> {
   const method = request.method.toUpperCase();
   if (method !== "GET" && method !== "POST") return yield* json(405, {});
-  if (!request.fromApp && !request.fromMac) return yield* json(403, { message: "Only Kuvo Code asks for the box's server." });
   if (IS_MAC) return yield* json(409, { message: "This Mac's box has its server run by Kuvo Code itself." });
   if (method === "POST") {
+    if (!request.fromApp && !request.fromMac) return yield* json(403, { message: "Only Kuvo Code asks for the box's server." });
     const given = parsed(request.body);
     if (!isObject(given) || typeof given.needed !== "boolean") return yield* json(400, { message: "Say whether it's needed (needed: true or false)." });
     if (given.needed) {

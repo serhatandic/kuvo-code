@@ -5058,7 +5058,7 @@ can't (a machine, or nothing to move back).
 in its folder, whose keeper does this) is where its app registers, and its agents browse in the
 app's panel through it, with no Chromium of its own. A machine's box answers `409` to both routes.
 
-- **`kuvo/box/app`**, from Kuvo Code itself (`403` from a phone). `POST {tools: {url, token}, bundle}`
+- **`kuvo/box/app`**: `POST` from Kuvo Code itself (`403` from a phone), `{tools: {url, token}, bundle}`
   as the app opens: where its panel's tools answer (MCP over HTTP, on `127.0.0.1`, `localhost` or
   `[::1]` only, to `Authorization: Bearer <token>`), and where it's installed (a whole path to its
   `.app`). `{tools: null}` as it quits, its place kept. `{updating: true}` as it quits to install an
@@ -6887,7 +6887,8 @@ running while it has something to answer: a phone paired, a pairing waiting, or 
 starts the keeper when it isn't running. A Mac quitting or disconnecting leaves all of it running.
 
 **Kept for clients** (`box.serve`, #333 piece 3). While a client wants the box's own server here
-(`run/serve.needed`: `POST kuvo/box/serve {needed: true}`, from Kuvo Code itself, which starts the
+(`run/serve.needed`: `POST kuvo/box/serve {needed: true}`, from Kuvo Code itself (`403` from a
+phone), which starts the
 keeper too if it isn't running; `{needed: false}` lets it go), the keeper keeps `kuvo-link.js serve
 --kept` running, as it keeps the link, starting it again within a round (15 s) when it ends. It
 answers clients' routes as `serve` does, streams included, at `127.0.0.1`, with a password of its

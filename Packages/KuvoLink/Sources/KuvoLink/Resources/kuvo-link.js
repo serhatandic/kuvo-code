@@ -38776,7 +38776,7 @@ import fs123 from "node:fs";
 import path126 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "ee17a69a27d8";
+var BRIDGE_VERSION = "a822c8c85e9e";
 
 // Packages/Box/src/link/rehome/rewrite.ts
 var NO_REWRITE = {
@@ -46331,12 +46331,12 @@ async function* appRoute({ request, json }) {
   const method = request.method.toUpperCase();
   if (method !== "GET" && method !== "POST")
     return yield* json(405, {});
-  if (!request.fromApp && !request.fromMac)
-    return yield* json(403, { message: "Only Kuvo Code on this Mac registers its app." });
   if (!OWN_HOME_MAC)
     return yield* json(409, { message: ONLY_MAC });
   if (method === "GET")
     return yield* json(200, appStatus());
+  if (!request.fromApp && !request.fromMac)
+    return yield* json(403, { message: "Only Kuvo Code on this Mac registers its app." });
   const given = parsed(request.body);
   if (!isObject(given))
     return yield* json(400, { message: "Say where its tools answer (tools), or that it quits (tools: null)." });
@@ -46395,11 +46395,11 @@ async function* serveRoute({ request, json }) {
   const method = request.method.toUpperCase();
   if (method !== "GET" && method !== "POST")
     return yield* json(405, {});
-  if (!request.fromApp && !request.fromMac)
-    return yield* json(403, { message: "Only Kuvo Code asks for the box's server." });
   if (IS_MAC)
     return yield* json(409, { message: "This Mac's box has its server run by Kuvo Code itself." });
   if (method === "POST") {
+    if (!request.fromApp && !request.fromMac)
+      return yield* json(403, { message: "Only Kuvo Code asks for the box's server." });
     const given = parsed(request.body);
     if (!isObject(given) || typeof given.needed !== "boolean")
       return yield* json(400, { message: "Say whether it's needed (needed: true or false)." });

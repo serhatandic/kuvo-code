@@ -1538,10 +1538,16 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "bots.job": ["GET", "kuvo/bots"],
     "bots.keys": ["GET", "kuvo/bots/bot_none/keys"],
     "bots.make": ["GET", "kuvo/bots/templates"],
+    // (This Mac's app, registered with a Mac's box in a home of its own: a machine says it has none.)
+    "box.app": ["GET", "kuvo/box/app"],
     // (A box in a home of its own: on a Mac's, kuvo/work/settings's keepsAwake.)
     "box.ownHome": ["GET", "kuvo/work/settings"],
     // (Moving this Mac's box into a home of its own: how it stands, here nothing.)
     "box.rehome": ["GET", "kuvo/box/rehome"],
+    // (Its server kept for clients while one wants it.)
+    "box.serve": ["GET", "kuvo/box/serve"],
+    // (A command, `kuvo-link.js uninstall`, not a route: kuvo/info names it.)
+    "box.uninstall": ["GET", "kuvo/info"],
     branch: ["POST", "kuvo/agents/api/kuvo/branch/ses_none"],
     // (Its browser, set up by the box itself.)
     browser: ["GET", "kuvo/browser"],

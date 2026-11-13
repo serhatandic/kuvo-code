@@ -265,15 +265,15 @@ const OPEN_WAYS: OpenWays = { open: hostOpens, now: () => Date.now(), until: wai
 
 const ONLY_MAC = "Only a Mac's box in a home of its own has its app register with it.";
 
-/** `kuvo/box/app`: how this Mac's app stands (`GET`), and its registration (`POST`, from Kuvo Code
+/** `kuvo/box/app`: how this Mac's app stands (`GET`, for any client), and its registration (`POST`, from Kuvo Code
  * itself): `{tools: {url, token}, bundle}` as it opens, `{tools: null}` as it quits, `{updating:
  * true}` as it quits to install an update. */
 export async function* appRoute({ request, json }: RouteContext): AsyncGenerator<AnswerPiece> {
   const method = request.method.toUpperCase();
   if (method !== "GET" && method !== "POST") return yield* json(405, {});
-  if (!request.fromApp && !request.fromMac) return yield* json(403, { message: "Only Kuvo Code on this Mac registers its app." });
   if (!OWN_HOME_MAC) return yield* json(409, { message: ONLY_MAC });
   if (method === "GET") return yield* json(200, appStatus());
+  if (!request.fromApp && !request.fromMac) return yield* json(403, { message: "Only Kuvo Code on this Mac registers its app." });
   const given = parsed(request.body);
   if (!isObject(given)) return yield* json(400, { message: "Say where its tools answer (tools), or that it quits (tools: null)." });
   if (given.updating === true) {
