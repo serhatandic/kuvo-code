@@ -342,7 +342,8 @@ test.skipIf(!canFence || process.platform !== "linux")("on Linux, a .git swapped
     const unshare = UNSHARE.find(each => existsSync(each))!
     const fence = join(kuvo, "run", "fence")
     const id = (flag: string) => Bun.spawnSync(["id", flag]).stdout.toString().trim()
-    // (Asked once: each try is a process of its own, and asking inside one spawns three more.)
+    // (Asked once: the three id() calls were blocking spawns in the test's own process, three per
+    // try, and they held up the sixteen starts each round.)
     const uid = id("-u"), gid = id("-g"), user = id("-un")
     symlinkSync(apps, join(raced.work, ".git-swap"))
     // (What swaps them, as fast as it can: renameat2's RENAME_EXCHANGE, through Bun's own FFI.)
@@ -392,9 +393,10 @@ for (let round = 1; round % 65536 || symbols.getppid() === parent; round++) symb
     const racing: Record<string, number> = {}
     const held: Record<string, number> = {}
     // (Each try is a sandbox start and a repository kept, which on a small machine takes a moment:
-    // eight turns of ten rounds of sixteen at once still cover each start, the mount table's check
-    // tested on its own above being what catches a bad one; and after each turn's racing, eight
-    // commands run while the swapper is stopped.)
+    // eight turns of ten rounds of sixteen at once still cover each start. What keeps git's files
+    // is mounting each folder from inside itself and each file by its path; the mount-table check
+    // tested on its own above backs those mounts up. After each turn's racing, eight commands run
+    // while the swapper is stopped.)
     const turns = 8, rounds = 10, heldEach = 8
     for (let turn = 0; turn < turns; turn++) {
       for (const [end, count] of Object.entries(await tries(rounds))) racing[end] = (racing[end] ?? 0) + count
