@@ -455,8 +455,9 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
         // something, or no account for it there at all.
         const said = stateOf(model, lists);
         const why = said?.runs ? "is being retired on that computer"
-          : said?.missing === "gone" ? "is no longer among its provider's models on that computer"
-          : said?.missing ? "can't run on that computer now (its account there needs a sign-in, a key or its agent installed)"
+          // (Gone from an account there; an agent's account not there at all is no account.)
+          : said?.missing === "gone" && (said.account || !onAgents(model)) ? "is no longer among its provider's models on that computer"
+          : said?.missing && said.missing !== "gone" ? "can't run on that computer now (its account there needs a sign-in, a key or its agent installed)"
           : "has no account on that computer";
         const yours = `yours (${model.providerID}/${model.id}) ${why}`;
         modelNote = starting.why === "default" ? `It runs on the default model there: ${yours}.` : `It runs on ${chosen.providerID}/${chosen.id} there: ${yours}, nor can its default model run.`;

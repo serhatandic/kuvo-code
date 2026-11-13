@@ -1026,3 +1026,14 @@ test("a lead whose model is being retired on this computer starts on the default
   assert.equal(eng.seen.made.at(-1).model, undefined);
   assert.match(answerOf(call).note.words, /It runs on the default model there: yours \(p\/old\) is being retired on that computer\./);
 });
+
+test("a lead on a coding agent's account this computer doesn't have starts on the default, told it has no account here, not that the model is gone", async () => {
+  confirmFullAccess();
+  eng = await engine({ ses_user: { title: "The user's own" } }, engineLists());
+  write(path.join(run, "engine.json"), eng.target);
+  const agents = await engine({}, { "/api/model": [], "/api/integration": [codexAccount], "/api/kuvo/auto": { lists: [] } });
+  const call = startCall({}, { model: { providerID: "codex-cli@work", id: "gpt-5.5" } });
+  await take(call, mini.peer, agents.target);
+  assert.equal(eng.seen.made.at(-1).model, undefined);
+  assert.match(answerOf(call).note.words, /It runs on the default model there: yours \(codex-cli@work\/gpt-5\.5\) has no account on that computer\./);
+});

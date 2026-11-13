@@ -18938,7 +18938,7 @@ async function startSession(given, by, place) {
       const chosen = starting.model;
       if (starting.why !== "wanted" && model) {
         const said = stateOf(model, lists);
-        const why = said?.runs ? "is being retired on that computer" : said?.missing === "gone" ? "is no longer among its provider's models on that computer" : said?.missing ? "can't run on that computer now (its account there needs a sign-in, a key or its agent installed)" : "has no account on that computer";
+        const why = said?.runs ? "is being retired on that computer" : said?.missing === "gone" && (said.account || !onAgents(model)) ? "is no longer among its provider's models on that computer" : said?.missing && said.missing !== "gone" ? "can't run on that computer now (its account there needs a sign-in, a key or its agent installed)" : "has no account on that computer";
         const yours = `yours (${model.providerID}/${model.id}) ${why}`;
         modelNote = starting.why === "default" ? `It runs on the default model there: ${yours}.` : `It runs on ${chosen.providerID}/${chosen.id} there: ${yours}, nor can its default model run.`;
       }
@@ -40725,7 +40725,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "d68e784daa17";
+var BRIDGE_VERSION = "c8f10d299c2a";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

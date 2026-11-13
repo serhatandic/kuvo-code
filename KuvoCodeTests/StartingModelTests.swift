@@ -290,7 +290,8 @@ import Testing
 
     /// The model picked last is one Codex has since kept out of its picker: its box says a new
     /// conversation starts on it, and the chip names it (by the name its box gives) with Send on,
-    /// though it isn't offered in the picker and this Mac's own lists don't have it.
+    /// though it isn't offered in the picker and this Mac's own lists of Codex's (loaded) don't
+    /// have it. (Before, it was unavailable: "Choose a Model", and Send waited.)
     @Test func aModelCodexHidesRunsWhereItsBoxSaysSo() async throws {
         defer { StubWeb.stop() }
         let mini = ModelRef(id: "gpt-5.1-codex-mini", providerID: "codex-cli")
@@ -304,6 +305,22 @@ import Testing
             }
         })
         try await engine(accounts: [Self.account("openai", signedIn: true)], models: [Self.model("openai", "luna")], defaultModel: Self.model("openai", "luna"))
+        // Codex signed in, its picker's list (as this Mac reads it) without the one it hides.
+        let bridge = "http://127.0.0.1:47981"
+        StubWeb.handle(bridge + "/api/integration") { _, _ in
+            StubWeb.json(["data": [[
+                "id": "codex-cli", "name": "Codex", "methods": [["type": "oauth", "id": "chatgpt", "label": "ChatGPT"]],
+                "connections": [["type": "credential", "credentialID": "cred_codex", "method": "oauth"]],
+                "metadata": ["source": "agent", "agent": "codex-cli", "accountID": "default", "installed": true],
+            ]]])
+        }
+        let listed = StubWeb.json(["data": [Self.model("codex-cli", "gpt-5.5")]])
+        StubWeb.handle(bridge + "/api/model") { _, _ in listed }
+        let agents = OutsideAgents()
+        catalog.outsideAgents = agents
+        agents.connect(ServerEndpoint(url: URL(string: bridge)!, password: "test"), folderPrefix: "")
+        defer { agents.disconnect() }
+        await catalog.refreshAgents(fresh: true)
         _ = catalog.startingModel(mini)
         try await until { catalog.offeredSaid != nil }
         #expect(catalog.startingModel(mini) == mini)

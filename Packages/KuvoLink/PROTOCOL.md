@@ -1399,11 +1399,11 @@ start on a model by the same rule.
   has answered, a client offers none of a side not said yet, and a new conversation is on the model
   named, as it is. Clients draw it from ClientSessions' `OfferedModels`, and start a new conversation
   on `starting` (the Mac for the model picked last there; the phone, which keeps none, for none
-  named: the default, else the first that runs). A box without `models.offered` leaves the Mac
-  deciding from its accounts and models as it did before; the phone, which never meets one in a
-  release, says to update Kuvo Code there rather than offer nothing.
+  named: the default, else the first that runs, a coding agent's too, which its box starts there). A box without `models.offered` (answering 404, or a
+  machine's bridge 403) leaves the Mac deciding from its accounts and models as it did before; the
+  phone says to update Kuvo Code there rather than offer nothing.
 - An engine provider counts as ready when the engine lists it so (`api/provider`), as it does for a
-  key of its own in its settings or environment (`OPENAI_API_KEY` where it runs): its models are
+  key of its own in its settings or environment (`OPENAI_API_KEY` in the computer's environment): its models are
   offered though Accounts shows no sign-in, as they run. Without one, a provider whose plan goes
   through a coding agent (OpenAI, xAI) still needs its key ("A session's model").
 
