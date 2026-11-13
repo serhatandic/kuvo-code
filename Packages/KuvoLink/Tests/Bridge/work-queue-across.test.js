@@ -1209,6 +1209,10 @@ test("one item for each issue, wherever it's restored: a deleted one stays delet
   assert.equal(mailTo(lab).map(each => each.workQueue.handed).find(Boolean).ok, true);
   const again = await route("POST", `kuvo/work-queue/items/${deleted.id}/restore`);
   assert.deepEqual([again.status, again.body.message], [400, 'Another item is gh:kuvo-test/app#12 now, in the queue of "Sign-in": one item for each issue, so this one stays deleted.']);
+  // The same when the Mac's box hands the restore on for its client (#341).
+  sent.length = 0;
+  await takeFrom(mac, { act: { id: `wqa_${crypto.randomBytes(16).toString("base64url")}`, method: "POST", action: "restore", item: deleted.id, at: Date.now() } });
+  assert.deepEqual(mailTo(mac)[0].workQueue.acted.value, { message: 'Another item is gh:kuvo-test/app#12 now, in the queue of "Sign-in": one item for each issue, so this one stays deleted.' });
   assert.equal((await view("all")).items.filter(each => each.source?.ref === "gh:kuvo-test/app#12").length, 1);
 });
 
