@@ -364,8 +364,8 @@ export class Usage {
     return true
   }
 
-  /** Which fallback model estimated which of this box's own accounts' use, as last told. */
-  private ownEstimates?: string
+  /** Codex's fallback model as this box's use was last told with. */
+  private ownFallback?: string | null
 
   /** What this box's own accounts used, as last told: a round that read nothing new tells no one. */
   private ownSaid = ""
@@ -377,15 +377,15 @@ export class Usage {
    */
   private changed(own: boolean) {
     if (own) {
-      const accounts = this.own()
-      const mine = JSON.stringify(accounts.map(({ scanned: _, slots, ...account }) => ({ ...account, slots: keptSlots(slots) })))
-      // Which fallback model estimated what: not in the digest, and older days' only as first told.
-      const estimates = JSON.stringify(accounts.map((account) => [account.provider, [...account.slots.fallback].map(([slot, models]) => [slot, [...models].sort()]).sort(([a], [b]) => (a as number) - (b as number))]))
+      const mine = JSON.stringify(this.own().map(({ scanned: _, slots, ...account }) => ({ ...account, slots: keptSlots(slots) })))
+      // Another fallback model chosen: which one estimated what isn't in the digest, and the older
+      // days your other computers keep say the one they were told, so all of it goes again.
+      const fallback = this.settings?.codexFallback ?? null
       // (A round is minutes from the last: what changed goes at once; else, now and then, that nothing did.)
-      if (this.ownEstimates !== undefined && estimates !== this.ownEstimates) this.peers?.tellAll()
+      if (this.ownFallback !== undefined && fallback !== this.ownFallback) this.peers?.tellAll()
       else this.peers?.tell(mine !== this.ownSaid)
       this.ownSaid = mine
-      this.ownEstimates = estimates
+      this.ownFallback = fallback
     }
     const now = JSON.stringify(this.rows().map(({ scanned: _, slots, yours, boxes, ...row }) => ({ ...row, boxes: boxes.map(({ scanned: _, ...box }) => box), slots: keptSlots(slots), yours: keptSlots(yours) })))
     if (now === this.said) return
@@ -639,7 +639,9 @@ export function codexHomes(agent: Agent, env: NodeJS.ProcessEnv = process.env, h
     : configured
       ? configured.split(",").map((part) => part.trim()).filter(Boolean).map((part) => (part.startsWith("~/") ? join(home, part.slice(2)) : part))
       : [join(home, ".codex")]
-  return [...new Set(homes)].map((each) => {
+  // (One home named twice, by a link to it too: once.)
+  const real = new Set<string>()
+  return homes.filter((each) => !real.has(realOf(each)) && !!real.add(realOf(each))).map((each) => {
     const folders = ["sessions", "archived_sessions"].map((name) => join(each, name)).filter(isFolder)
     return folders.length ? folders : [each]
   })

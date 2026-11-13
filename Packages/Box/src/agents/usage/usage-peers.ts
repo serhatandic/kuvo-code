@@ -142,12 +142,22 @@ export class UsagePeers {
   }
 
   /**
-   * What this box's accounts used, all of it, to each of them, now: which fallback model estimated
-   * which use changed, which the digest doesn't hold (`digestOf`) and their older slots keep as told.
+   * What this box's accounts used, all of it, to each of them, now: another fallback model was
+   * chosen, which the digest doesn't hold (`digestOf`) and their older slots keep as told.
    */
   tellAll() {
-    this.told.clear()
-    this.tell(true)
+    if (!this.transport.followed || !this.directory.told) {
+      // (Told all of it as soon as it can be.)
+      this.told.clear()
+      return
+    }
+    const now = this.now()
+    const { accounts, digest } = this.shared()
+    // (Not asking for theirs: nothing of theirs changed.)
+    for (const { key } of this.directory.peerBoxes()) {
+      this.transport.send(key, { kind: "usage", at: now, accounts, digest }, false)
+      this.told.set(key, { digest, at: now })
+    }
   }
 
   /** A client pulled to refresh here: each peer reads its own now, and tells (at most once a minute). */

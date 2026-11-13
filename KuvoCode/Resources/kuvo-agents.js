@@ -20948,19 +20948,18 @@ class Usage {
     this.settings.setCodexFallback(model);
     return true;
   }
-  ownEstimates;
+  ownFallback;
   ownSaid = "";
   changed(own) {
     if (own) {
-      const accounts = this.own();
-      const mine = JSON.stringify(accounts.map(({ scanned: _, slots, ...account }) => ({ ...account, slots: keptSlots(slots) })));
-      const estimates = JSON.stringify(accounts.map((account) => [account.provider, [...account.slots.fallback].map(([slot, models]) => [slot, [...models].sort()]).sort(([a], [b]) => a - b)]));
-      if (this.ownEstimates !== undefined && estimates !== this.ownEstimates)
+      const mine = JSON.stringify(this.own().map(({ scanned: _, slots, ...account }) => ({ ...account, slots: keptSlots(slots) })));
+      const fallback = this.settings?.codexFallback ?? null;
+      if (this.ownFallback !== undefined && fallback !== this.ownFallback)
         this.peers?.tellAll();
       else
         this.peers?.tell(mine !== this.ownSaid);
       this.ownSaid = mine;
-      this.ownEstimates = estimates;
+      this.ownFallback = fallback;
     }
     const now = JSON.stringify(this.rows().map(({ scanned: _, slots, yours, boxes, ...row }) => ({ ...row, boxes: boxes.map(({ scanned: _, ...box }) => box), slots: keptSlots(slots), yours: keptSlots(yours) })));
     if (now === this.said)
@@ -21159,7 +21158,8 @@ function isLink(path) {
 function codexHomes(agent, env = process.env, home = homedir5()) {
   const configured = env.CODEX_HOME?.trim();
   const homes = agent.instance.home ? [agent.instance.home] : configured ? configured.split(",").map((part) => part.trim()).filter(Boolean).map((part) => part.startsWith("~/") ? join32(home, part.slice(2)) : part) : [join32(home, ".codex")];
-  return [...new Set(homes)].map((each) => {
+  const real = new Set;
+  return homes.filter((each) => !real.has(realOf(each)) && !!real.add(realOf(each))).map((each) => {
     const folders = ["sessions", "archived_sessions"].map((name) => join32(each, name)).filter(isFolder);
     return folders.length ? folders : [each];
   });
@@ -27085,8 +27085,16 @@ class UsagePeers {
     }
   }
   tellAll() {
-    this.told.clear();
-    this.tell(true);
+    if (!this.transport.followed || !this.directory.told) {
+      this.told.clear();
+      return;
+    }
+    const now = this.now();
+    const { accounts, digest } = this.shared();
+    for (const { key } of this.directory.peerBoxes()) {
+      this.transport.send(key, { kind: "usage", at: now, accounts, digest }, false);
+      this.told.set(key, { digest, at: now });
+    }
   }
   refreshElsewhere() {
     if (!this.transport.followed || !this.directory.told)
@@ -32063,4 +32071,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents ad0ad796b6c1752b3a4be1f54fdeb2b43767446eb9c732230a15e455909ca0ae
+// Built from Packages/Box/src/agents 7953a31a5f095c12735bcd0e122f599bb31772980aa2b0afecb6e1a01a00b4be

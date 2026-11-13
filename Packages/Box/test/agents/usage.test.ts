@@ -18,7 +18,7 @@ import type { Clock } from "../../src/agents/groups/peer"
 import { claudeLine, dedupClaude } from "../../src/agents/usage/claude-log"
 import { claudeSlots, daysIn } from "../../src/agents/usage/history"
 import { bundledPricing, catalogFromCompact, Pricing, PricingStore, supplementFrom, type PricingFetch } from "../../src/agents/usage/pricing"
-import { claudeSources, codexSources, thisComputer, Usage, usageRoutes, uuidOf } from "../../src/agents/usage/usage"
+import { claudeSources, codexSources, thisComputer, Usage, usageRoutes, UsageSettings, uuidOf } from "../../src/agents/usage/usage"
 import { isRealBridgeFolder } from "../../src/shared/account"
 import { digestOf, UsagePeers, type UsageMail } from "../../src/agents/usage/usage-peers"
 
@@ -328,8 +328,14 @@ class PeerBox {
   parts: PeerParts
   private following = new AbortController()
   agents: Agent[]
-  /** Codex's fallback model here (`UsageSettings`). */
-  fallback?: string
+  /** Codex's fallback model here, as the box keeps it (`UsageSettings`). */
+  readonly settings = new UsageSettings()
+  get fallback() {
+    return this.settings.codexFallback
+  }
+  set fallback(model: string | undefined) {
+    this.settings.setCodexFallback(model ?? null)
+  }
 
   constructor(
     readonly key: string,
@@ -349,6 +355,7 @@ class PeerBox {
     const sources = claudeSources(join(home, "usage"), computer === undefined ? undefined : () => computer)
     const codex = codexSources(join(home, "usage"), () => this.fallback, computer === undefined ? undefined : () => computer)
     this.usage = new Usage(() => [...sources(this.agents), ...codex(this.agents)], new PricingStore(undefined, null), identity, join(home, "usage", "usage.json"), now)
+    this.usage.settings = this.settings
     this.peers = new UsagePeers(this.usage, this.post, this.directory, join(home, "usage", "peers.json"), now, most)
     this.parts = { post: this.post, directory: this.directory, usage: this.peers }
     relay.boxes.set(key, this)
@@ -518,7 +525,11 @@ describe("across your computers", () => {
     const pricing = new PricingStore(undefined, null).current()
     const rates = (model: string) => JSON.stringify(pricing.fallbackRates(model, "codex"))
     const choices = pricing.fallbackOptions("codex")
-    const [first, second] = choices.flatMap((one) => choices.filter((other) => other > one && rates(other) === rates(one)).map((other) => [one, other])).find(Boolean) ?? [choices[0]!, choices[1]!]
+    // (Two priced the same, so their dollars and digest are the same: only telling all of it again shows the change.)
+    const pair = choices.flatMap((one) => choices.filter((other) => other > one && rates(other) === rates(one)).map((other) => [one, other] as const))[0]
+    expect(pair).toBeDefined()
+    const [first, second] = pair!
+    const switched = relay.sent.length
     dev.fallback = first
     await dev.usage.refresh()
     await relay.settled()
@@ -528,6 +539,16 @@ describe("across your computers", () => {
     await dev.usage.refresh()
     await relay.settled()
     expect(mac.usage.view("UTC").totals.codex!.map((each) => [each.date, each.fallback])).toEqual([["2026-11-12", [second]], ["2026-11-06", [second]]])
+    // Told once each way it changed, all of it, not asking the Mac for its own; the Mac sent nothing back.
+    expect(relay.sent.slice(switched).filter((each) => each.mail.accounts && each.mail.from === undefined).map((each) => [each.from, each.mail.ask ?? false])).toEqual(first === choice ? [["dev-key", false]] : [["dev-key", false], ["dev-key", false]])
+    expect(relay.sent.slice(switched).filter((each) => each.from === "mac-key")).toEqual([])
+    // A round with more estimated use, the same model: two days' slots, as ever.
+    appendFileSync(join(codexHome, "sessions", "rollout-a.jsonl"), JSON.stringify({ timestamp: "2026-11-12T11:31:00Z", type: "event_msg", payload: { type: "token_count", info: { last_token_usage: { input_tokens: 5, output_tokens: 5, total_tokens: 10 } } } }) + "\n")
+    const later = relay.sent.length
+    at += MINUTE
+    await dev.usage.refresh()
+    await relay.settled()
+    expect(relay.sent.slice(later).map((each) => [each.from, typeof each.mail.from])).toEqual([["dev-key", "number"]])
     mac.stop()
     dev.stop()
   })

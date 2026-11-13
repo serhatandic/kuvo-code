@@ -4046,7 +4046,8 @@ a machine's `~/.kuvo-code`, never a test's): estimates, not your bill. A client 
   since its bridge or link started, and to one that asks; after a read that changed what they used
   (not only when they were read), only the last two days' slots, `from` the first slot they're
   from, the receiver keeping its older ones as told before; every ten minutes otherwise, `digest`
-  alone, saying what it told is as it was. `digest` is a hash of all of it (each account's
+  alone, saying what it told is as it was; all of it again, without `ask`, when another Codex
+  fallback model is chosen (which model estimated what isn't in `digest`). `digest` is a hash of all of it (each account's
   `provider`, `service`, `agent`, `account`, `label`, `identity`, `cut` and slots as kept); a
   receiver whose own, put together, isn't that asks for all of it (`ask`, at most once a minute),
   and is answered at once. Each account is `{provider, service, agent?, account?, label?,
