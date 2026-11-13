@@ -123,18 +123,34 @@ test("answering a bot's question takes it off its goal's list at once, and what 
   const [goal] = (await route("GET", "kuvo/work/goals")).body.goals;
   assert.equal((await route("POST", `kuvo/work/goals/${goal.id}`, { action: "start" })).status, 200);
 
+  // Its first turn, on the goal's start, is stopped (the engine's interrupt) once it's under way, with
+  // what it set going in the background: that turn works through the goal for minutes, which isn't
+  // what this checks, and on Interactive the bot may end it asking a call of its own (a brand, say),
+  // so it never goes idle by itself. (Not before it's under way: a question asked then would join
+  // that turn.) Stopped before the box's watch starts, so the box doesn't hold the conversation's
+  // queue as after your Stop.
+  await waitFor(async () => {
+    const page = (await api("GET", `api/session/${session}/message?limit=50`)).json?.data ?? [];
+    const running = await api("GET", "api/session/active");
+    assert.equal(running.status, 200, "the engine says what's at work");
+    const active = Object.keys(running.json.data);
+    if (page.some(each => each.type === "idle") && active.length === 0) return true;
+    for (const each of active.length ? active : [session]) await api("POST", `api/session/${each}/interrupt`);
+    return false;
+  }, "the bot's first turn to stop");
+
   // The box's watch over the engine's events, as it runs.
   const stop = new AbortController();
   atEnd(() => stop.abort());
   link.watchEvents(() => target, () => true, stop.signal, () => {}, { work: "engine" });
 
-  // Its turn on starting done, it asks you, on the free model, with its question tool.
-  await waitFor(async () => { const page = (await api("GET", `api/session/${session}/message?limit=50`)).json?.data ?? []; return page.length === 0 || page.some(each => each.type === "idle"); }, "the bot's first turn");
+  // It asks you, on the free model, with its question tool.
   await api("POST", `api/session/${session}/prompt`, { id: "msg_goalaskslive00001", delivery: "steer",
     text: "Use your question tool now to ask me one question, \"Go with LeafCheck, or change it?\", with the choices \"Go with LeafCheck\" and \"Change it\". Write nothing else." });
   const [form] = await waitFor(async () => {
     const forms = (await api("GET", `api/session/${session}/form`)).json?.data ?? [];
-    if (forms.length > 0) return forms;
+    const ours = forms.find(each => JSON.stringify(each.fields ?? []).includes("LeafCheck"));
+    if (ours) return [ours];
     // Its turn ended without asking: what the model said, say a free model's limit.
     const page = (await api("GET", `api/session/${session}/message?limit=50`)).json?.data ?? [];
     const ended = page.findIndex(each => each.type === "idle");
