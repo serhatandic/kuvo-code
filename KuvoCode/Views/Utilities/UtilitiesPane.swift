@@ -37,8 +37,9 @@ struct UtilitiesPane: View {
                     .scrollIndicators(.never)
             }
         }
-        .task(id: followsQueue ? queueKey : nil) {
-            if followsQueue { await app.workQueues.follow(queueKey) }
+        // (Whole while its tab shows, so GitHub is read for what you see; its count, a glance.)
+        .task(id: followsQueue ? QueueFollow(key: queueKey, glance: !showsQueue) : nil) {
+            if followsQueue { await app.workQueues.follow(queueKey, glance: !showsQueue) }
         }
     }
 
@@ -152,6 +153,8 @@ struct UtilitiesPane: View {
     private var queueKey: WorkQueues.Key { app.workQueues.key(for: utilities) }
 
     private var followsQueue: Bool { utilities.visibleTabs.contains { $0.kind == .workQueue } }
+    private var showsQueue: Bool { utilities.selected?.kind == .workQueue }
+    private struct QueueFollow: Hashable { let key: WorkQueues.Key; let glance: Bool }
 
     private func icon(for tab: Utilities.Tab) -> TabGlyph {
         switch tab.kind {

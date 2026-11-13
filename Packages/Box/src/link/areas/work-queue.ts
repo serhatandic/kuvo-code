@@ -21,7 +21,7 @@ import { readLink } from "../state";
 import { allItems, changeQueues, FILE_NAME, filesOf, matching, OWNER, queueFollowers, readAll, WORK_QUEUE, type Item } from "../work-queue/store";
 import { readSeen, SEEN_FILE } from "../work-queue/github";
 import { callQueueTool, QUEUE_INSTRUCTIONS, QUEUE_TOOLS } from "../work-queue/tools";
-import { factsOf, inView, linkedTo, nameOf, overseenBy, ownersOf, refOf, summaryOf, wholeOf, type Facts, type ItemSummary } from "../work-queue/view";
+import { factsOf, inView, linkedTo, nameOf, overseenBy, ownersOf, refOf, summaryOf, titlesHere, wholeOf, type Facts, type ItemSummary } from "../work-queue/view";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import type { Target } from "../../shared/records";
 
@@ -270,9 +270,11 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
     }, { handing: true }), json);
   }
   if (action === "restore" && method === "POST") {
+    // (Another item its issue: named by its conversation's title, as you know it.)
+    const titled = await titlesHere(new Set(allItems().filter(each => each.source && !each.removed).map(each => each.owner)), targets, signal ?? undefined);
     return yield* changed(inBook((item, book) => {
       if (!item.removed) throw new Refusal("It isn't deleted.");
-      refuseLiveElsewhere(item, book.items());
+      refuseLiveElsewhere(item, book.items(), titled);
       restoreItem(book, item, YOU, now);
     }), json);
   }

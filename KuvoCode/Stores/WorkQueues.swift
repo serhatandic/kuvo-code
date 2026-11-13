@@ -116,19 +116,30 @@ final class WorkQueues {
     // MARK: Views
 
     /// A view as it changes, until the task following it ends: this Mac's box tells each change as
-    /// it's made; a machine's is asked again every few seconds.
+    /// it's made; a machine's is asked again every few seconds. One stream for each view, however
+    /// many follow it: a glance (`glance=1`, for which its box reads nothing from GitHub) while
+    /// every one of them only shows chips or counts, and whole while the Work Queue tab shows it,
+    /// as the phone's.
     @ObservationIgnored private var streams: [Key: Task<Void, Never>] = [:]
     @ObservationIgnored private var subscribers: [Key: Int] = [:]
+    @ObservationIgnored private var showing: [Key: Int] = [:]
+    @ObservationIgnored private var glances: [Key: Bool] = [:]
 
-    func follow(_ key: Key) async {
+    func follow(_ key: Key, glance: Bool = false) async {
         guard !key.owner.isEmpty else { return }
         subscribers[key, default: 0] += 1
-        if streams[key] == nil { streams[key] = Task { await stream(key) } }
+        if !glance { showing[key, default: 0] += 1 }
+        streamAsFollowed(key)
         defer {
             subscribers[key, default: 1] -= 1
+            if !glance { showing[key, default: 1] -= 1 }
             if subscribers[key] == 0 {
                 streams.removeValue(forKey: key)?.cancel()
                 subscribers[key] = nil
+                showing[key] = nil
+                glances[key] = nil
+            } else {
+                streamAsFollowed(key)
             }
         }
         // Cancellation of the view's task ends its subscription; the final subscriber stops SSE.
@@ -136,7 +147,16 @@ final class WorkQueues {
         for await _ in lifetime {}
     }
 
-    private func stream(_ key: Key) async {
+    /// `key`'s stream as its followers want it: started, or started again as a glance or not.
+    private func streamAsFollowed(_ key: Key) {
+        let glance = (showing[key] ?? 0) == 0
+        if streams[key] != nil, glances[key] == glance { return }
+        streams[key]?.cancel()
+        glances[key] = glance
+        streams[key] = Task { await stream(key, glance: glance) }
+    }
+
+    private func stream(_ key: Key, glance: Bool) async {
         let me = UUID()
         following[key] = me
         defer { if following[key] == me { following[key] = nil } }
@@ -150,7 +170,7 @@ final class WorkQueues {
             var wait: Duration = BoxClient.streams(key.box) ? .seconds(2) : .seconds(4)
             if let client = client(key.box) {
                 do {
-                    for try await line in client.follow("kuvo/work-queue/events?owner=\(query(key.owner))") {
+                    for try await line in client.follow("kuvo/work-queue/events?owner=\(query(key.owner))" + (glance ? "&glance=1" : "")) {
                         guard following[key] == me, let view = try? JSONDecoder().decode(WorkQueueView.self, from: line) else { continue }
                         failed = 0
                         take(view, for: key)
@@ -162,13 +182,13 @@ final class WorkQueues {
                         wait = .seconds(300)
                     } else {
                         var fell = false
-                        if failed >= 2 { fell = await fallBack(key) }
+                        if failed >= 2 { fell = await fallBack(key, glance: glance) }
                         if !fell, views[key] == nil { failures[key] = refusal.message }
                     }
                 } catch {
                     failed += 1
                     var fell = false
-                    if failed >= 2 { fell = await fallBack(key) }
+                    if failed >= 2 { fell = await fallBack(key, glance: glance) }
                     if !fell, views[key] == nil { failures[key] = error.localizedDescription }
                 }
             }
@@ -188,10 +208,10 @@ final class WorkQueues {
     /// which every computer tells what it keeps, rather than what it said last as if it were now.
     /// This Mac's own items in it say so ("on" this Mac), as another box's view says of them: what
     /// you do to them goes to this Mac's box, and they're never taken for the machine's.
-    private func fallBack(_ key: Key) async -> Bool {
+    private func fallBack(_ key: Key, glance: Bool) async -> Bool {
         let thisMac = BoxClient.thisMac
         guard !BoxClient.isThisMac(key.box), following[key] != nil, let client = client(thisMac),
-              var view = try? await client.value(WorkQueueView.self, "GET", "kuvo/work-queue?owner=\(query(key.owner))") else { return false }
+              var view = try? await client.value(WorkQueueView.self, "GET", "kuvo/work-queue?owner=\(query(key.owner))" + (glance ? "&glance=1" : "")) else { return false }
         let here = WorkComputer(key: known.mac ?? "", name: PhoneLink.computerName, kind: "mac", id: thisMac)
         for index in view.items.indices where view.items[index].computer == nil { view.items[index].computer = here }
         for index in view.removed.indices where view.removed[index].computer == nil { view.removed[index].computer = here }
@@ -560,7 +580,9 @@ private struct WorkChipContext: ViewModifier {
     @Environment(AppModel.self) private var app
     func body(content: Content) -> some View {
         content.environment(\.workChipQueue, key)
-            .task(id: key) { if let key { await app.workQueues.follow(key) } }
+            // (Its chips and counts only: a glance, which reads nothing from GitHub; their refs
+            // are read as they show, `refs`.)
+            .task(id: key) { if let key { await app.workQueues.follow(key, glance: true) } }
     }
 }
 extension View {

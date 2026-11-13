@@ -3837,8 +3837,9 @@ before (a linked item is its owner's to change). A client shows them first, as "
   and on every other computer that told of its own (the panel's All). An item on another computer
   has `computer`. `kuvo/work-queue/events?owner=` is the same as NDJSON: a line now and one each
   time it changes (a change here or by another process, another computer telling of its queue, or a
-  linked session starting or stopping work). With `glance=1` (a client that shows only a count,
-  the phone's •••), either reads no issue or pull request from GitHub: each is as last read.
+  linked session starting or stopping work). With `glance=1` (a client that shows only a count or
+  chips: the phone's •••, a conversation's chips on a Mac; a client follows whole only while the
+  Work Queue itself shows), either reads no issue or pull request from GitHub: each is as last read.
 - `GET kuvo/work-queue/items/<id or number>` → `{item}`, whole (an issue's `gh:` ref names it too,
   but its "/" can't go in a path through every client: a client asks by the `id` its chip has). `…/files/<name>` → its bytes. An
   item on another computer answers as that one told it, with `computer` and an empty `body`,

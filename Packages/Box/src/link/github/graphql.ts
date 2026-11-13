@@ -36,17 +36,35 @@ const PER_QUERY = 50;
 export type Unread = "missing" | "signed-out" | "failed";
 
 /** What GitHub answered: its `data`, with nulls for what it couldn't find or may not see; and the
- * aliases it couldn't answer for another reason (`held`: an organization's SAML sign-on or IP
- * allow list, say), whose nulls say nothing of whether they're there. */
-export interface Answered { data: Record<string, unknown>; held?: Set<string> }
+ * aliases whose nulls say nothing of whether they're there (`held`: GitHub wouldn't answer for them,
+ * an organization's SAML sign-on or IP allow list, say, or didn't say why), with what it said
+ * (`said`, its first error's words). */
+export interface Answered { data: Record<string, unknown>; held?: Set<string>; said?: string }
 
-/** The aliases GitHub's `errors` name for anything but not finding them. */
-function heldOf(errors: unknown): Set<string> | undefined {
+/** The aliases of `data` GitHub's answer says nothing of whether they're there: only one its
+ * `errors` say it didn't find (`NOT_FOUND`), or that came back as something (not what was asked
+ * for: an issue that's a discussion now), is missing; one named for anything else, or null with no
+ * word why, is held, and every one is when an error names none (a timeout, GitHub's own trouble). */
+function heldOf(data: Record<string, unknown>, errors: unknown): Pick<Answered, "held" | "said"> {
   const held = new Set<string>();
+  const missing = new Set<string>();
+  let all = false;
+  let said: string | undefined;
   for (const error of Array.isArray(errors) ? errors : []) {
-    if (isObject(error) && error.type !== "NOT_FOUND" && Array.isArray(error.path) && typeof error.path[0] === "string") held.add(error.path[0]);
+    if (!isObject(error)) continue;
+    const alias = Array.isArray(error.path) && typeof error.path[0] === "string" ? error.path[0] : null;
+    if (error.type === "NOT_FOUND") {
+      if (alias) missing.add(alias);
+      continue;
+    }
+    said ??= typeof error.message === "string" ? error.message : undefined;
+    if (alias) held.add(alias);
+    else all = true;
   }
-  return held.size ? held : undefined;
+  for (const [alias, value] of Object.entries(data)) {
+    if (all || (value == null && !missing.has(alias))) held.add(alias);
+  }
+  return held.size ? { held, ...(said ? { said } : {}) } : {};
 }
 
 /** `gh api graphql` on `host`: what it answered, or why it couldn't ask. */
@@ -61,8 +79,7 @@ export function askGitHub(host: string, query: string, timeout = 30_000): Promis
       try {
         const answer = JSON.parse(String(stdout));
         if (isObject(answer) && isObject(answer.data)) {
-          const held = heldOf(answer.errors);
-          return resolve({ data: answer.data, ...(held ? { held } : {}) });
+          return resolve({ data: answer.data, ...heldOf(answer.data, answer.errors) });
         }
       } catch {}
       const code = (error as NodeJS.ErrnoException | null)?.code;

@@ -354,6 +354,40 @@ import Textual
         #expect(!FileManager.default.fileExists(atPath: asked.path), "GitHub isn't asked while its host is held off")
     }
 
+    /// A conversation's chips follow its queue as a glance: its box reads nothing from GitHub for
+    /// them however long it's open; the Work Queue tab showing it reads GitHub for what you see
+    /// (#541).
+    @Test func chipsFollowTheQueueWithoutReadingGitHubAndTheTabReadsIt() async throws {
+        // GitHub's `gh`, standing in: it says each time it's asked, and answers nothing.
+        let bin = AppInfo.testRoot.appending(path: "gh-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: bin) }
+        let asked = bin.appending(path: "asked")
+        try "#!/bin/sh\necho asked >> '\(asked.path)'\nexit 1\n".write(to: bin.appending(path: "gh"), atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bin.appending(path: "gh").path)
+        let machine = try await MachineTestBox(name: "lab", environment: ["PATH": "\(bin.path):/usr/bin:/bin"])
+        defer { machine.stop() }
+        use(machine)
+        var issue = Self.item(250, "Upload retries", order: 1)
+        issue["source"] = ["kind": "github", "ref": "gh:kuvo-test/app#12", "url": "https://github.com/kuvo-test/app/issues/12", "host": "github.com", "id": "I_kw12"]
+        try keep([issue], for: "ses_lead", on: machine)
+        // Read an hour ago: due to be read again.
+        let then = Date.now.timeIntervalSince1970 * 1000 - 3_600_000
+        let read: [String: Any] = ["at": then, "value": ["kind": "github", "id": "I_kw12", "number": 12, "title": "Upload retries drop the file name", "url": "https://github.com/kuvo-test/app/issues/12", "state": "open"]]
+        try JSONSerialization.data(withJSONObject: ["reads": ["github.com/kuvo-test/app#12": read], "hosts": [:] as [String: Any]])
+            .write(to: machine.folder.appending(path: "run/work-queue/seen.json"))
+        let key = WorkQueues.Key(box: BoxClient.mac, owner: "ses_lead")
+
+        let chips = Task { await app.workQueues.follow(key, glance: true) }
+        defer { chips.cancel() }
+        try await until { app.workQueues.views[key]?.items.first?.title == "Upload retries drop the file name" }
+        #expect(!FileManager.default.fileExists(atPath: asked.path), "chips alone read nothing from GitHub")
+
+        let tab = Task { await app.workQueues.follow(key) }
+        defer { tab.cancel() }
+        try await until { FileManager.default.fileExists(atPath: asked.path) }
+    }
+
     @Test func anItemOnAnotherComputerSaysWhereItIsAndItsPageAndWhatYouDoToItGoThere() async throws {
         let studio = try await MachineTestBox(name: "studio")
         defer { studio.stop() }

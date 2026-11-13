@@ -253,6 +253,9 @@ export async function readIssue(at: IssueAt): Promise<{ read: IssueRead; body: s
   // (Under the reader's lock and back-off, as every read of GitHub here.)
   const answer = await readOne(ISSUES, at, `query { ${nodeQuery(at, "p0", true)} }`, data => issueReadOf(data.p0));
   if ("unread" in answer) return { refused: unreadWords(answer.unread) };
+  // (Not that it isn't there: GitHub wouldn't say, as an organization's SAML sign-on or IP allow
+  // list keeps it from gh's sign-in.)
+  if (answer.held?.size) return { refused: `GitHub wouldn't answer for ${refText(at)} to gh on ${HERE}${answer.said ? `: ${answer.said}` : "."}` };
   const read = issueReadOf(answer.data.p0);
   if (!read) return { refused: `GitHub has no issue or pull request ${refText(at)} that gh on ${HERE} may see (gh auth status says which account it uses).` };
   const node = isObject(answer.data.p0) && isObject(answer.data.p0.issueOrPullRequest) ? answer.data.p0.issueOrPullRequest : {};

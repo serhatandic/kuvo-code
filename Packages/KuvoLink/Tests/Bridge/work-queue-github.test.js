@@ -403,6 +403,35 @@ test("only what GitHub didn't find is gone: one it wouldn't answer for (an organ
   assert.equal(queries().length, 2);
 });
 
+test("an answer that doesn't say an issue isn't there leaves it as it was: a null with no word why, or an error that names none (GitHub timing out)", async () => {
+  github(issue(12));
+  await tool("queue_add", { issue: "gh:kuvo-test/app#12" });
+  github(issue(14));
+  await tool("queue_add", { issue: "gh:kuvo-test/app#14" });
+  const asIt = ref => (items => items.find(item => item.source.ref === ref));
+  // GitHub's own trouble: an error naming nothing, with what it could answer.
+  fs.writeFileSync(answer, JSON.stringify({ data: { p0: null, p1: { issueOrPullRequest: null } }, errors: [{ message: "Something went wrong while executing your query. This may be the result of a timeout." }] }));
+  ageReads();
+  let items = (await view()).items;
+  for (const ref of ["gh:kuvo-test/app#12", "gh:kuvo-test/app#14"]) {
+    const item = asIt(ref)(items);
+    assert.deepEqual([item.category, item.seen.state, item.seen.gone, item.struck], ["next", "open", undefined, undefined], `${ref}: GitHub didn't say it's gone`);
+  }
+  // A null with no word why beside one read: that one as read, the other as it was.
+  fs.writeFileSync(answer, JSON.stringify({ data: { p0: null, p1: { issueOrPullRequest: issue(14, { title: "Retries keep the name" }) } } }));
+  ageReads();
+  items = (await view()).items;
+  assert.deepEqual([asIt("gh:kuvo-test/app#12")(items).seen.gone, asIt("gh:kuvo-test/app#12")(items).category], [undefined, "next"]);
+  assert.equal(asIt("gh:kuvo-test/app#14")(items).title, "Retries keep the name");
+});
+
+test("an issue GitHub wouldn't answer for isn't said to be missing as an agent adds it: GitHub's own words say why", async () => {
+  fs.writeFileSync(answer, JSON.stringify({ data: { p0: null }, errors: [{ type: "FORBIDDEN", path: ["p0"], message: "Resource protected by organization SAML enforcement. You must grant your OAuth token access to this organization." }] }));
+  const added = await tool("queue_add", { issue: "gh:kuvo-test/app#20" });
+  assert.equal(added.isError, true);
+  assert.match(added.text, /^GitHub wouldn't answer for gh:kuvo-test\/app#20 to gh on .*: Resource protected by organization SAML enforcement\./);
+});
+
 test("a deleted item doesn't stand for its issue while another item is that issue: its ref names the live one", async () => {
   github(issue(12));
   await tool("queue_add", { issue: "gh:kuvo-test/app#12" });

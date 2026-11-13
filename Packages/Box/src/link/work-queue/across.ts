@@ -85,7 +85,13 @@ export async function tellingNow(targets: Target[], link: LinkState | null, sign
   const all = allItems().filter(item => OWNER.test(item.owner) && !item.removed);
   // (An issue closed on GitHub is Done here too: among the latest Done, not the open ones.)
   const isDone = (item: Item) => item.category === "done" || Boolean(item.source && doneByRead(seenOf(item.source)));
-  const done = all.filter(isDone).sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0)).slice(0, MOST_TOLD_DONE);
+  // (When it was Done: an issue Done on GitHub, when it was closed there or, gone, since when, as
+  // clients show it; it has no Done time of its own here.)
+  const doneTime = (item: Item) => {
+    const read = item.source ? seenOf(item.source) : undefined;
+    return read?.value && doneByRead(read) ? read.value.closedAt ?? read.at : item.doneAt ?? 0;
+  };
+  const done = all.filter(isDone).sort((a, b) => doneTime(b) - doneTime(a)).slice(0, MOST_TOLD_DONE);
   const items = [...all.filter(item => !isDone(item)).sort((a, b) => b.updated.at - a.updated.at).slice(0, MOST_TOLD - done.length), ...done];
   const { owners, titles } = await ownersOf("all", items, facts, targets, cache);
   const told = items.map(item => toldItem(item, facts.working, titles));

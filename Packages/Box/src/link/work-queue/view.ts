@@ -194,6 +194,13 @@ export async function ownersOf(owner: string, items: Item[], facts: Facts, targe
   return { owners, titles: named };
 }
 
+/** `owners`, conversations here, by their titles (a bot's by its name), for words you read: a
+ * refusal names the one that has an issue by what you call it, not its address. */
+export async function titlesHere(owners: Iterable<string>, targets: Target[], signal?: AbortSignal): Promise<(owner: string) => string | undefined> {
+  const named = await sessionsNamed(owners, await factsOf(targets, signal), targets).catch(() => new Map<string, { title: string }>());
+  return owner => named.get(owner)?.title;
+}
+
 /** How long ago `at` was, in words, as tools say it. */
 export function agoWords(at: number, now = Date.now()): string {
   const minutes = Math.max(0, Math.round((now - at) / 60_000));

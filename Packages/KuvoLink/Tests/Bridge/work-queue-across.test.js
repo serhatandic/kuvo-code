@@ -845,7 +845,7 @@ test("one item for each issue, wherever it's handed: one handed here that anothe
   await takeFrom(lab, { hand: { id: "wqh_sameissue00000001", to: "ses_child", from: "ses_farlead", by: { user: true }, at: Date.now(), item, files: [] } });
   const [answer] = mailTo(lab).map(each => each.workQueue.handed);
   assert.equal(answer.ok, false);
-  assert.equal(answer.why, "gh:kuvo-test/app#12 is in the Work Queue there already, in the queue of ses_lead: one item for each issue");
+  assert.equal(answer.why, 'gh:kuvo-test/app#12 is in the Work Queue there already, in the queue of "Lead": one item for each issue', "by its title, as you know it");
   assert.deepEqual((await view("all")).items.filter(each => each.source?.ref.toLowerCase() === "gh:kuvo-test/app#12").map(each => each.id), [mine.id], "still one");
 
   // Lab told it has gh:kuvo-test/app#13 in ses_far's queue: this box's item for it isn't handed there.
@@ -874,7 +874,7 @@ test("one item for each issue, wherever it's restored: a deleted one stays delet
   await takeFrom(lab, { hand: { id: "wqh_afterdelete000001", to: "ses_child", from: "ses_farlead", by: { user: true }, at: Date.now(), item, files: [] } });
   assert.equal(mailTo(lab).map(each => each.workQueue.handed).find(Boolean).ok, true);
   const again = await route("POST", `kuvo/work-queue/items/${deleted.id}/restore`);
-  assert.deepEqual([again.status, again.body.message], [400, "Another item is gh:kuvo-test/app#12 now, in the queue of ses_child: one item for each issue, so this one stays deleted."]);
+  assert.deepEqual([again.status, again.body.message], [400, 'Another item is gh:kuvo-test/app#12 now, in the queue of "Sign-in": one item for each issue, so this one stays deleted.']);
   assert.equal((await view("all")).items.filter(each => each.source?.ref === "gh:kuvo-test/app#12").length, 1);
 });
 
@@ -913,6 +913,34 @@ test("what this box tells of an issue goes again only once it changes, never bec
   const closed = mailTo(lab);
   assert.equal(closed.length, 1);
   assert.deepEqual([closed[0].workQueue.told.items[0].seen.state, closed[0].workQueue.told.items[0].category], ["completed", "done"]);
+});
+
+test("closed and gone issues are among the latest Done told to your other computers, by when GitHub closed them or they went, not left out behind a hundred older ones", async () => {
+  ghIssue(12, { state: "CLOSED" });
+  await tool("queue_add", { issue: "gh:kuvo-test/app#12" }, "ses_lead");
+  ghIssue(13);
+  await tool("queue_add", { issue: "gh:kuvo-test/app#13" }, "ses_lead");
+  // #13 deleted on GitHub since: missing where it was, and by its id.
+  write(ghAnswer, { data: { p0: { issueOrPullRequest: null } }, errors: [{ type: "NOT_FOUND", path: ["p0", "issueOrPullRequest"], message: "Could not resolve." }] });
+  write(ghAnswerID, { data: { p0: null }, errors: [{ type: "NOT_FOUND", path: ["p0"], message: "Could not resolve." }] });
+  const seenFile = path.join(queues, "seen.json");
+  const kept = read(seenFile);
+  const gone = kept.reads[Object.keys(kept.reads).find(key => key.endsWith("#13"))];
+  gone.at = gone.checked = Date.now() - 3_600_000;
+  write(seenFile, kept);
+  const shown = (await view("ses_lead")).items.find(item => item.source?.ref === "gh:kuvo-test/app#13");
+  assert.equal(shown.seen.gone, true);
+  // A hundred Done before either, in the same queue.
+  const file = path.join(queues, "queues", "ses_lead.json");
+  const whole = read(file);
+  const { source: _, ...plain } = whole.items.find(item => item.source?.ref === "gh:kuvo-test/app#13");
+  const before = Date.parse("2026-11-01T00:00:00Z");
+  whole.items.push(...Array.from({ length: 100 }, (__, index) => ({ ...plain, id: `wqi_done${String(index).padStart(16, "0")}`, title: `Done ${index}`, category: "done", doneAt: before, number: 5000 + index, order: 5000 + index })));
+  write(file, whole);
+  await link.pushQueues(host, link.readLink(), targets, Date.now());
+  const told = mailTo(lab).flatMap(mail => mail.workQueue?.told?.items ?? []);
+  assert.deepEqual(told.map(item => item.source?.ref).filter(Boolean).sort(), ["gh:kuvo-test/app#12", "gh:kuvo-test/app#13"]);
+  assert.equal(told.length, 100, "the latest hundred Done");
 });
 
 test("an issue another computer told of, never read here and moved since, is found by the id its item knows: at once where that computer found it gone or elsewhere, else once it's missing where it was", async () => {
