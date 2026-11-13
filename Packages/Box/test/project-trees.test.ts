@@ -15,8 +15,12 @@ const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-project-trees-")))
 afterAll(() => rmSync(root, { recursive: true, force: true }))
 
 const ENV = { ...process.env, GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "t@example.com", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" }
+// (A commit ends by starting git's own upkeep in the background (`git maintenance run --auto` since
+// 2.50, `git gc --auto` before it), which prunes worktree entries with no `gitdir` in them: the entry
+// this file makes after a commit could go before its FIFO is in place. A test wants none of it:
+// `gc.auto` stops the older path, `maintenance.auto` the newer.)
 function git(folder: string, ...args: string[]) {
-  const ran = spawnSync("git", ["-c", "init.defaultBranch=main", "-c", "core.hooksPath=/dev/null", ...args], { cwd: folder, env: ENV, encoding: "utf8" })
+  const ran = spawnSync("git", ["-c", "init.defaultBranch=main", "-c", "core.hooksPath=/dev/null", "-c", "maintenance.auto=false", "-c", "gc.auto=0", ...args], { cwd: folder, env: ENV, encoding: "utf8" })
   if (ran.status !== 0) throw new Error(ran.stderr)
 }
 function repository(name: string, ...trees: string[]): string {
@@ -51,10 +55,11 @@ test.skipIf(process.platform === "win32")("a FIFO where git keeps a worktree's f
   const fifo = repository("fifo")
   mkdirSync(join(fifo, ".git", "worktrees", "stuck"), { recursive: true })
   const made = spawnSync("mkfifo", [join(fifo, ".git", "worktrees", "stuck", "gitdir")])
-  expect(made.status).toBe(0)
+  expect(made.status, made.error?.message ?? made.stderr?.toString() ?? "").toBe(0)
   expect(await linkedWorktrees(fifo)).toEqual([])
   // And a folder whose `.git` is one.
   mkdirSync(join(root, "fake"))
-  expect(spawnSync("mkfifo", [join(root, "fake", ".git")]).status).toBe(0)
+  const dotGit = spawnSync("mkfifo", [join(root, "fake", ".git")])
+  expect(dotGit.status, dotGit.error?.message ?? dotGit.stderr?.toString() ?? "").toBe(0)
   expect(await repositoryOf(join(root, "fake"))).toBeNull()
 }, 10_000)
