@@ -233,7 +233,6 @@ final class BoxPlanLimits {
     func setAgentsUseResets(_ on: Bool, provider: String, machine: String?) async throws {
         guard let api = apis[machine ?? ""] else { throw BoxNotRunning() }
         struct Always: Encodable { var provider: String; var always: Bool }
-        struct Kept: Decodable {}
         _ = try await api.client.send(try api.client.request("PUT", BoxLimits.bridgeAlwaysPath, body: Always(provider: provider, always: on)), as: DataEnvelope<Kept>.self)
         read(machine ?? "")
     }
@@ -254,3 +253,6 @@ final class BoxPlanLimits {
         return sources.map { $0.name ?? $0.box }.filter { seen.insert($0).inserted }.joined(separator: ", ")
     }
 }
+
+/// An answer with nothing in it (`{data: {}}`).
+private nonisolated struct Kept: Decodable, Sendable {}
