@@ -1113,10 +1113,18 @@ final class PhoneLink {
         continuation.finish()
     }
 
-    nonisolated static func boxUnavailable() -> AsyncThrowingStream<LinkResponsePart, Error> {
+    /// Whether this Mac's box has said why it isn't running (it couldn't start, it keeps stopping):
+    /// until then, one that isn't up is starting (`BoxProcess.failure`).
+    nonisolated static let boxFailing = OSAllocatedUnfairLock<Bool>(initialState: false)
+
+    /// What a route of this Mac's box answers while it isn't up: `starting` (`reason`), as it
+    /// starts with the app or again after an update, until it says why it isn't running.
+    nonisolated static func boxUnavailable(starting: Bool = !boxFailing.withLock { $0 }) -> AsyncThrowingStream<LinkResponsePart, Error> {
         AsyncThrowingStream { continuation in
+            var said = ["message": "Kuvo Code’s background service on this Mac isn’t running. Try again in a moment."]
+            if starting { said["reason"] = "starting" }
             continuation.yield(.head(status: 503, headers: ["content-type": "application/json"]))
-            continuation.yield(.body(Self.message("Kuvo Code’s background service on this Mac isn’t running. Try again in a moment.")))
+            continuation.yield(.body((try? JSONEncoder().encode(said)) ?? Data()))
             continuation.finish()
         }
     }

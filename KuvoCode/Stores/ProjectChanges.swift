@@ -144,6 +144,9 @@ final class ProjectChanges {
         }
         let place = place(directory)
         let found = await Git.found(at: place, scope: scope, base: base)
+        // This Mac's box starting (with the app, or again after an update): still loading, or what
+        // showed stays, until it answers or says why it can't.
+        if case .starting = found { return }
         // A machine's box out of reach for a moment: what showed stays, rather than reading as no
         // repository. Out of reach from the start: said so.
         if case .unreachable = found {
@@ -257,6 +260,8 @@ nonisolated enum Git {
         case notRepository
         /// Its box couldn't be asked (the connection, not what it answered).
         case unreachable
+        /// This Mac's box is starting, and will answer.
+        case starting
         /// Its box answered, but not with the changes (git couldn't say, an older box).
         case refused
     }
@@ -277,9 +282,9 @@ nonisolated enum Git {
         do {
             found = try await place.client.value(Answer.self, "POST", "kuvo/git/changes", body: asked)
         } catch let refusal as BoxRefusal where refusal.status == 503 {
-            // Not up (this Mac's background service starting again, say): out of reach, not a
-            // folder without git.
-            return .unreachable
+            // Not up: starting (with the app, or again after an update), or out of reach (it
+            // couldn't start); never a folder without git.
+            return refusal.reason == "starting" ? .starting : .unreachable
         } catch is BoxRefusal {
             return .refused
         } catch is DecodingError {

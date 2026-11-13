@@ -3651,9 +3651,10 @@ final class Workspace {
     /// engine sees it end and tells the agent, with what it printed. The engine's own stop deletes
     /// the output too, and the agent hears the command was never found, so the box does that only
     /// when it can't send the signal.
-    /// How it went: "signal" or "removed", or nil when it couldn't be stopped (none such runs there).
+    /// How it went: "signal" or "removed"; why not, in words to show (`BoxRefusal`): none such runs
+    /// there any more, or its box couldn't be asked or said no.
     @discardableResult
-    func stopShellJob(_ job: ShellJob, in session: String) async -> String? {
+    func stopShellJob(_ job: ShellJob, in session: String) async throws -> String {
         let directory = self.session(session)?.location.directory ?? ""
         struct Stopped: Decodable { var stopped: String }
         // As JavaScript's `encodeURIComponent` writes them, as the engine reads its folder.
@@ -3661,11 +3662,24 @@ final class Workspace {
         let id = job.id.addingPercentEncoding(withAllowedCharacters: plain) ?? job.id
         // The engine looks for it in the session's folder, as its box names it.
         let folder = Self.onBox(directory).addingPercentEncoding(withAllowedCharacters: plain) ?? directory
-        guard let client = boxes?(Self.box(of: directory)),
-              let (status, data) = try? await client.send("POST", "kuvo/shell/\(id)/stop", body: try? JSONSerialization.data(withJSONObject: ["session": session]),
-                                                          headers: directory.isEmpty ? [:] : ["x-opencode-directory": folder]),
-              (200..<300).contains(status) else { return nil }
-        return (try? JSONDecoder().decode(Stopped.self, from: data))?.stopped
+        let command = job.command.count > 60 ? job.command.prefix(59) + "…" : job.command
+        let machine = RemoteFolder.machine(of: directory)
+        let notAnswered = "Kuvo Code’s background service on this Mac didn’t answer. Try again in a moment."
+        guard let client = boxes?(Self.box(of: directory)) else { throw BoxRefusal(status: 503, message: "Couldn’t stop “\(command)”. \(notAnswered)") }
+        let status: Int, data: Data
+        do {
+            (status, data) = try await client.send("POST", "kuvo/shell/\(id)/stop", body: try? JSONSerialization.data(withJSONObject: ["session": session]),
+                                                   headers: directory.isEmpty ? [:] : ["x-opencode-directory": folder])
+        } catch {
+            throw BoxRefusal(status: 503, message: "Couldn’t stop “\(command)”. \(machine == nil ? notAnswered : error.localizedDescription)")
+        }
+        guard (200..<300).contains(status) else {
+            let refused = BoxRefusal(status: status, data: data)
+            // None such runs there (`404 {}`): it ended meanwhile.
+            let said = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["message"] as? String
+            throw BoxRefusal(status: status, message: status == 404 && said == nil ? "“\(command)” isn’t running any more." : "Couldn’t stop “\(command)”. \(refused.message)")
+        }
+        return (try? JSONDecoder().decode(Stopped.self, from: data))?.stopped ?? "signal"
     }
 
     /// Hears a conversation go on Autopilot, from any client: what it has waiting on you here stops waiting.

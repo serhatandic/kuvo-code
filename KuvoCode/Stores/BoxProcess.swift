@@ -25,7 +25,9 @@ final class BoxProcess {
     /// Where it's reached while it runs.
     private(set) var endpoint: ServerEndpoint?
     /// Why it isn't running: it can't start, or it keeps stopping, and says if it's tried again.
-    private(set) var failure: String?
+    private(set) var failure: String? {
+        didSet { if (oldValue == nil) != (failure == nil) { PhoneLink.boxFailing.withLock { [failing = failure != nil] in $0 = failing } } }
+    }
     /// Whether its last start was refused because what it runs isn't what it was (`BoxIntegrity`):
     /// then nothing else runs the box's script with the engine's Bun either.
     @ObservationIgnored private(set) var refused = false

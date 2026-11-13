@@ -45,19 +45,41 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: ran.path(percentEncoded: false)), "the repository's fsmonitor ran")
     }
 
-    /// This Mac's background service not running (starting again after an update, say): Changes
-    /// says it can't reach it, as for a machine that's away, rather than reading the project as a
-    /// folder without git.
-    @Test func thisMacsBoxNotRunningReadsAsOutOfReach() async throws {
+    /// This Mac's background service starting (with the app, or again after an update): Changes
+    /// keeps loading, rather than flash that it can't reach it; once it says it can't start, Changes
+    /// says it can't reach it, as for a machine that's away, never reading the project as a folder
+    /// without git.
+    @Test func thisMacsBoxStartingKeepsLoadingAndOneThatCantStartReadsAsOutOfReach() async throws {
         try repo.write("README.md", "Hello\nWorld\n")
-        let changes = ProjectChanges(directory: repo.path) { id in
-            BoxClient(box: id, transport: LocalBox { _ in PhoneLink.boxUnavailable() })
+        let starting = ProjectChanges(directory: repo.path) { id in
+            BoxClient(box: id, transport: LocalBox { _ in PhoneLink.boxUnavailable(starting: true) })
         }
-        await changes.refresh()
-        #expect(changes.shown == .waiting)
-        #expect(changes.isRepository, "not read as a folder without git")
-        #expect(await changes.perform(.stage, on: ChangedFile(path: "README.md", status: .modified, url: repo.url.appending(path: "README.md"), root: repo.path))
+        await starting.refresh()
+        #expect(!starting.isLoaded, "still loading")
+        #expect(starting.shown == .list)
+        #expect(starting.isRepository)
+
+        let down = ProjectChanges(directory: repo.path) { id in
+            BoxClient(box: id, transport: LocalBox { _ in PhoneLink.boxUnavailable(starting: false) })
+        }
+        await down.refresh()
+        #expect(down.shown == .waiting)
+        #expect(down.isRepository, "not read as a folder without git")
+        #expect(await down.perform(.stage, on: ChangedFile(path: "README.md", status: .modified, url: repo.url.appending(path: "README.md"), root: repo.path))
             == "Kuvo Code’s background service on this Mac isn’t running. Try again in a moment.")
+    }
+
+    /// Merge into… while an older background service runs on after an update (until the work under
+    /// way ends): says so in plain words, rather than asking to connect to this Mac.
+    @Test func mergeIntoWhileAnOlderBackgroundServiceRunsOnSaysItsFinishingAnUpdate() async throws {
+        let older = BoxClient(box: BoxClient.mac, transport: LocalBox { _ in
+            AsyncThrowingStream { $0.yield(.head(status: 404, headers: [:])); $0.yield(.body(Data("{}".utf8))); $0.finish() }
+        })
+        let tree = Workspace.Worktree(project: repo.path, root: repo.path + "-tree", branch: "kuvo/feature", base: "main")
+        let outcome = await tree.mergeBack(at: GitPlace(client: older, path: tree.root, machine: nil), author: [:])
+        #expect(outcome == .failed("Kuvo Code on this Mac is finishing an update. Merge into… works again once the work that’s running now ends; try again then."))
+        let machine = await tree.mergeBack(at: GitPlace(client: older, path: tree.root, machine: "build-box"), author: [:])
+        #expect(machine == .failed("build-box needs a newer Kuvo Code to merge. It updates by itself overnight, or connect to it from this Mac."))
     }
 
     /// Commit is what you asked for: its hooks run, and one that says no stops it, in its words.

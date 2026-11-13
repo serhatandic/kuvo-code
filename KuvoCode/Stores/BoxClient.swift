@@ -56,8 +56,12 @@ struct BoxClient: Sendable {
 
     /// A box's routes by its id, as the app reaches them (`AppModel.box`, which sets this as it
     /// starts): for a store made where the app's model isn't at hand (the Changes panel's). Until
-    /// then, a machine's only: this Mac's isn't reached.
-    @MainActor static var routes: (String) -> BoxClient = { id in
+    /// then, `unwired`.
+    @MainActor static var routes: (String) -> BoxClient = { unwired($0) }
+
+    /// A box's routes with no app's model to reach them through (before it starts, or once it's
+    /// gone): a machine's over SSH; this Mac's (`mac`) isn't reached, never a host named "mac".
+    nonisolated static func unwired(_ id: String) -> BoxClient {
         guard id == mac else { return .machine(id) }
         return BoxClient(box: id, transport: LocalBox { _ in AsyncThrowingStream { $0.finish(throwing: URLError(.cannotConnectToHost)) } })
     }

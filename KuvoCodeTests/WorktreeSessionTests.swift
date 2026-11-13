@@ -197,12 +197,30 @@ import Testing
             guard request.value(forHTTPHeaderField: "x-opencode-directory")?.removingPercentEncoding == folder else { return StubWeb.json([:], status: 404) }
             return StubWeb.json(["data": ["id": "sh_left", "status": "running", "command": "sleep 600", "pid": started]])
         })
-        let stopped = await workspace.stopShellJob(ShellJob(id: "sh_left", status: "running", command: "sleep 600"), in: session.id)
+        let stopped = try? await workspace.stopShellJob(ShellJob(id: "sh_left", status: "running", command: "sleep 600"), in: session.id)
         #expect(stopped == "signal")
         if stopped != "signal" { kill(-pid, SIGKILL) }
         var status: Int32 = 0
         waitpid(pid, &status, 0)
         #expect(status & 0x7f == SIGTERM, "ended by its SIGTERM")
+
+        // One that's ended since, or a box that can't be asked: Stop says so, rather than nothing.
+        StubWeb.route(Self.engine + "/api/shell/sh_gone", sent: { _, _ in StubWeb.json([:], status: 404) })
+        do {
+            try await workspace.stopShellJob(ShellJob(id: "sh_gone", status: "running", command: "npm run dev"), in: session.id)
+            Issue.record("stopped one that isn't running")
+        } catch {
+            #expect(error.localizedDescription == "“npm run dev” isn’t running any more.")
+        }
+        let boxes = workspace.boxes
+        workspace.boxes = { id in BoxClient(box: id, transport: LocalBox { _ in PhoneLink.boxUnavailable(starting: false) }) }
+        defer { workspace.boxes = boxes }
+        do {
+            try await workspace.stopShellJob(ShellJob(id: "sh_gone", status: "running", command: "npm run dev"), in: session.id)
+            Issue.record("stopped with no box to ask")
+        } catch {
+            #expect(error.localizedDescription == "Couldn’t stop “npm run dev”. Kuvo Code’s background service on this Mac isn’t running. Try again in a moment.")
+        }
     }
 
     /// The project's folder switched to another branch since: Merge says so rather than merging

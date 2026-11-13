@@ -2962,7 +2962,13 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
 - Changes (`git`, bridge 0.9.94): a project's changes as the Changes panel shows and works them,
   by the box's own git in its own folders, so a machine's work with the Mac closed and from a
   phone. Every client asks the box the folder is on, a Mac for its own folders too, and runs no
-  git of its own for them. A client parses the diff itself. Scopes: `uncommitted` (the default), `unstaged`,
+  git of its own for them. (A Mac's own box not up answers `503 {"message", "reason":
+  "starting"}` while it starts, with the app or again after an update, and `503 {"message"}`
+  once it can't: a client keeps loading for the first, and says it can't reach it for the
+  second.) Commit, push and Merge into… run your hooks and sign-ins with none of the box's own
+  variables (`BUN_*`, `KUVO_*`, `OPENCODE_*`), and on a Mac with your login shell's environment
+  as it is now (read again once a minute old), as a terminal would; on Linux, the one the box
+  started with. A client parses the diff itself. Scopes: `uncommitted` (the default), `unstaged`,
   `staged`, `branch`. `404 {"message"}` for a folder that isn't there, `400` for a scope or a
   file that makes no sense (a file is a path in the repository, never absolute or climbing out).
   - `POST kuvo/git/changes {"directory", "scope"?, "base"?}` → `{"repository": false}` outside a
@@ -3008,7 +3014,8 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     checked out (a new branch pushed and tracked) → `200 {}`, or `422 {"message"}` with git's words.
   - `POST kuvo/git/merge {"directory", "into"?, "author"?}` (`git.merge`, bridge 0.9.143): Merge
     into…, what's committed on a worktree's branch (`directory`, a folder in one of the box's
-    worktrees) merged into `into` (its `base` in `kuvo/worktrees`), in the project's folder, which
+    worktrees, or in a git worktree it has no record of, whose project is its repository's own
+    folder) merged into `into` (its `base` in `kuvo/worktrees`), in the project's folder, which
     must have `into` checked out → `200 {"into"}`. Without `into` (boxes after #341; before, `400`),
     the worktree's `base`, else the branch the project's folder has checked out; `into` in the
     answer says which. `author` as for a commit, for a merge commit. `409
@@ -6498,3 +6505,7 @@ can go three months after 0.8.0 ships.
   Kuvo Code's own tools that every box answers since `agent-tools.own` ("Agents' tools"): the newer
   app runs those calls with its own `kuvo-link.js box route`, once each, meanwhile.
   <!-- compat: beta.1 agent-tools-own -->
+- Its keeper's box, the same, has no Merge into… (`kuvo/git/merge`, 404), as a machine's box not
+  updated since an older Mac set it up hasn't (nor, from before #341, one without `into`, 400):
+  the newer app says Merge into… works again once the work under way ends there, or once the
+  machine updates. <!-- compat: beta.1 merge-older-box -->
